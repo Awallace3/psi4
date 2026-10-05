@@ -324,9 +324,12 @@ Isotropic Casimir--Polder dispersion
      (omitted orders, former sites, the opposite complete or ``INCOMPLETE``
      variant) are deleted from that wavefunction. Every other variable,
      including other ``ATOMIC``/``ATOM`` names and global variables, is left
-     alone, and a refused or failed call changes none of them. With ``wfn``,
-     labels that contain whitespace or collide when upper-cased are refused
-     before anything is logged or written. Nothing
+     alone. A call refused, or failing, before publication changes none of
+     them; publication itself is not transactional, so a failure while
+     variables are being set can leave a partial set. With ``wfn``, labels
+     that contain whitespace, collide when upper-cased, or are ``TOTAL`` or
+     ``INCOMPLETE`` in any case are refused before anything is logged or
+     written. Nothing
      reads the variables back. In the tables, a row's ``complete`` is true
      only if every order in it is complete, and the rank-pair union over site
      pairs can list one pair as both included and missing. A contraction that

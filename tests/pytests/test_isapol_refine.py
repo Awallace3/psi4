@@ -709,11 +709,15 @@ def test_refused_or_failed_calls_leave_the_last_publication(l2h1_nodes):
     aliased = tuple(R.RefinementSite(label, s.site_type, s.origin_bohr, s.frame, s.rank_limit)
                     for label, s in zip(('O', 'h', 'H'), built['model'].sites))
     alias_nodes, alias_weights = refined_nodes(n_freq=2, sites=aliased)
+    reserved = tuple(R.RefinementSite(label, s.site_type, s.origin_bohr, s.frame, s.rank_limit)
+                     for label, s in zip(('O', 'InComplete', 'H2'), built['model'].sites))
+    reserved_nodes, reserved_weights = refined_nodes(n_freq=2, sites=reserved)
     labels = nodes[0].model.parameter_labels
     mixed, _ = refined_nodes(declared=lambda k: labels if k == 1 else None)
     lines = []
     log = _lg.StageLog(1, writer=lines.append)
-    calls = [((alias_nodes, alias_weights), 'collide'), ((mixed, weights), 'declared model'),
+    calls = [((alias_nodes, alias_weights), 'collide'), ((reserved_nodes, reserved_weights), 'reserved'),
+             ((mixed, weights), 'declared model'),
              ((nodes[::-1], weights[::-1]), 'strictly increasing')]
     for (call_nodes, call_weights), match in calls:
         with pytest.raises(ValueError, match=match):
@@ -727,7 +731,9 @@ def test_refused_or_failed_calls_leave_the_last_publication(l2h1_nodes):
 
 
 @pytest.mark.parametrize('labels,match', [(('O', 'h', 'H'), 'collide'),
-                                          (('O', 'H 1', 'H2'), 'whitespace')])
+                                          (('O', 'H 1', 'H2'), 'whitespace'),
+                                          (('O', 'Total', 'H2'), 'reserved'),
+                                          (('TOTAL', 'H1', 'incomplete'), 'reserved')])
 def test_publication_refuses_aliasing_labels_but_the_model_keeps_them(labels, match):
     built = case('l2h1')
     sites = tuple(R.RefinementSite(label, s.site_type, s.origin_bohr, s.frame, s.rank_limit)

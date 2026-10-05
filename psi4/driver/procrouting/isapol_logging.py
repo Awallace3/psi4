@@ -203,12 +203,15 @@ def check_publication_labels(labels):
     """Refuse site labels that cannot name distinct QCVariables.
 
     QCVariable keys are upper-cased and space-separated, so labels whose
-    upper-cased forms collide, or that contain whitespace, would alias each
-    other's keys.  Only publication is restricted; the model keeps its labels.
+    upper-cased forms collide, that contain whitespace, or that spell the
+    reserved key words ``TOTAL`` or ``INCOMPLETE`` would alias other keys.
+    Only publication is restricted; the model keeps its labels.
     """
     for label in labels:
         if any(ch.isspace() for ch in label):
             raise ValueError(f'site label {label!r} contains whitespace and cannot name a QCVariable')
+        if label.upper() in ('TOTAL', 'INCOMPLETE'):
+            raise ValueError(f'site label {label!r} is a reserved QCVariable key word')
     folded = [label.upper() for label in labels]
     if len(set(folded)) != len(folded):
         raise ValueError(f'site labels {tuple(labels)!r} collide when upper-cased as QCVariable names')
