@@ -618,6 +618,114 @@ def test_reused_wavefunction_never_holds_both_suffix_variants(l2h1_nodes):
     assert not any(k.endswith('INCOMPLETE') and 'C6' in k for k in _dispersion_keys(wfn))
 
 
+def _owned(wfn):
+    """The report-owned QCVariables, arrays as nested lists."""
+    def owned(k):
+        return k.startswith('ATOMIC REFINED DISPERSION ') or (
+            k.startswith('ATOM ') and ' REFINED DISPERSION COEFFICIENT' in k)
+    out = {k: v for k, v in wfn.scalar_variables().items() if owned(k)}
+    out.update({k: np.asarray(v).tolist() for k, v in wfn.array_variables().items() if owned(k)})
+    return out
+
+
+def _expected_namespace(record):
+    """Exactly the names and values one publication of ``record`` emits."""
+    stem, out = 'ATOMIC REFINED DISPERSION', {}
+    orders = [c.order for c in record.pairs[0].coefficients]
+
+    def put(key, complete, value):
+        out[key.upper() if complete else key.upper() + ' INCOMPLETE'] = value
+
+    for p in record.pairs:
+        for c in p.coefficients:
+            put(f'{stem} C{c.order} {p.label_a} {p.label_b}', c.unrestricted_complete, c.value)
+            if p.site_a == p.site_b:
+                put(f'ATOM {p.label_a} C{c.order} REFINED DISPERSION COEFFICIENT',
+                    c.unrestricted_complete, c.value)
+    for i, n in enumerate(orders):
+        total = 0.0
+        for p in record.pairs:
+            total += p.coefficients[i].value
+        put(f'{stem} C{n} TOTAL', all(p.coefficients[i].unrestricted_complete
+                                      for p in record.pairs), total)
+    out.update({f'{stem} SITE PAIRS': float(len(record.pairs)), f'{stem} MAX ORDER': float(orders[-1]),
+                f'{stem} QUADRATURE NODES': float(len(record.cp_weights)),
+                f'{stem} ANCHOR SHIFT MAXABS': record.anchor_shift_maxabs,
+                f'{stem} QUADRATURE FREQUENCIES': [list(record.frequencies)],
+                f'{stem} CP WEIGHTS': [list(record.cp_weights)]})
+    return out
+
+
+UNRELATED = {'UNRELATED SENTINEL': 1.5, 'ATOMIC DISPERSION C6 TOTAL': 3.25,
+             'ATOM O C6 DISPERSION COEFFICIENT': 4.5, 'ATOMIC REFINED POLARIZABILITY O': 5.5,
+             'ATOM O CHARGE': -0.75}
+
+
+def _namespace_wfn():
+    wfn = _water_wfn()
+    for key, value in UNRELATED.items():
+        wfn.set_variable(key, value)
+    return wfn
+
+
+def test_publication_keeps_only_the_latest_report_namespace(l2h1_nodes):
+    """Omitted orders and former sites vanish; everything else on the wfn survives."""
+    nodes, weights = l2h1_nodes
+    wfn = _namespace_wfn()
+    core.set_variable('UNRELATED GLOBAL SENTINEL', 2.0)
+    before = dict(core.scalar_variables()), {k: np.asarray(v).tolist()
+                                             for k, v in core.array_variables().items()}
+    common = dict(cp_weights=weights, quadrature_provenance=QUADRATURE, wfn=wfn)
+    r12 = R.refined_isotropic_dispersion(nodes, max_order=12, **common)
+    assert _owned(wfn) == _expected_namespace(r12)
+    assert sum((' C10 ' in k or ' C12 ' in k) for k in _owned(wfn)) == 26
+    r8 = R.refined_isotropic_dispersion(nodes, max_order=8, **common)
+    assert _owned(wfn) == _expected_namespace(r8)
+    assert not any((' C10 ' in k or ' C12 ' in k) for k in _owned(wfn))
+    assert wfn.variable('ATOMIC REFINED DISPERSION MAX ORDER') == 8.0
+    built = case('l2h1')
+    sites = tuple(R.RefinementSite(label, s.site_type, s.origin_bohr, s.frame, s.rank_limit)
+                  for label, s in zip(('O', 'HA', 'HB'), built['model'].sites))
+    renamed, renamed_weights = refined_nodes(n_freq=2, sites=sites)
+    rr = R.refined_isotropic_dispersion(renamed, cp_weights=renamed_weights,
+                                        quadrature_provenance=QUADRATURE, wfn=wfn)
+    assert _owned(wfn) == _expected_namespace(rr)
+    assert not any(' H1' in k or ' H2' in k for k in _owned(wfn))
+    for key, value in UNRELATED.items():
+        assert wfn.variable(key) == value, key
+    after = dict(core.scalar_variables()), {k: np.asarray(v).tolist()
+                                            for k, v in core.array_variables().items()}
+    assert after == before
+    core.del_variable('UNRELATED GLOBAL SENTINEL')
+
+
+def test_refused_or_failed_calls_leave_the_last_publication(l2h1_nodes):
+    nodes, weights = l2h1_nodes
+    wfn = _namespace_wfn()
+    R.refined_isotropic_dispersion(nodes, cp_weights=weights, quadrature_provenance=QUADRATURE,
+                                   max_order=10, wfn=wfn)
+    published = _owned(wfn)
+    built = case('l2h1')
+    aliased = tuple(R.RefinementSite(label, s.site_type, s.origin_bohr, s.frame, s.rank_limit)
+                    for label, s in zip(('O', 'h', 'H'), built['model'].sites))
+    alias_nodes, alias_weights = refined_nodes(n_freq=2, sites=aliased)
+    labels = nodes[0].model.parameter_labels
+    mixed, _ = refined_nodes(declared=lambda k: labels if k == 1 else None)
+    lines = []
+    log = _lg.StageLog(1, writer=lines.append)
+    calls = [((alias_nodes, alias_weights), 'collide'), ((mixed, weights), 'declared model'),
+             ((nodes[::-1], weights[::-1]), 'strictly increasing')]
+    for (call_nodes, call_weights), match in calls:
+        with pytest.raises(ValueError, match=match):
+            R.refined_isotropic_dispersion(call_nodes, cp_weights=call_weights,
+                                           quadrature_provenance=QUADRATURE, log=log, wfn=wfn)
+        assert _owned(wfn) == published, match
+        for key, value in UNRELATED.items():
+            assert wfn.variable(key) == value, key
+    text = ''.join(lines)
+    assert text.count('Stage FAILED: isotropic dispersion') == 1 and log.stages == ()
+
+
 @pytest.mark.parametrize('labels,match', [(('O', 'h', 'H'), 'collide'),
                                           (('O', 'H 1', 'H2'), 'whitespace')])
 def test_publication_refuses_aliasing_labels_but_the_model_keeps_them(labels, match):

@@ -199,19 +199,6 @@ def _set(wfn, key, value):
     wfn.set_variable(key, value)
 
 
-def _set_marked(wfn, key, complete, value):
-    """Publish ``key`` or ``key INCOMPLETE``, deleting the opposite variant.
-
-    A reused wavefunction must never hold both a complete-looking and an
-    INCOMPLETE value for one current coefficient.
-    """
-    if wfn is None:
-        return
-    current, opposite = (key, key + ' INCOMPLETE') if complete else (key + ' INCOMPLETE', key)
-    wfn.del_variable(opposite)
-    wfn.set_variable(current, value)
-
-
 def check_publication_labels(labels):
     """Refuse site labels that cannot name distinct QCVariables.
 
@@ -292,33 +279,66 @@ def _dispersion_tables(log, dispersion, *, labels_a, labels_b, frequencies, orde
     return same, totals
 
 
+def _report_owned(key, stem, atom_stem):
+    """Whether ``key`` is a report-owned name.
+
+    That is ``<stem> ...`` or ``ATOM <label> C<n> <atom_stem>[ INCOMPLETE]``.
+    """
+    key = key.upper()
+    if key.startswith(stem.upper() + ' '):
+        return True
+    parts = key.split(' ')
+    tail = ' '.join(parts[3:])
+    return (len(parts) > 3 and parts[0] == 'ATOM' and parts[2][:1] == 'C' and parts[2][1:].isdigit()
+            and tail in (atom_stem.upper(), atom_stem.upper() + ' INCOMPLETE'))
+
+
 def _publish_dispersion(wfn, dispersion, *, labels_a, labels_b, frequencies, orders,
-                        same, totals, stem, atom_stem):
-    """Optional QCVariables, with incomplete orders explicitly marked."""
+                        same, totals, stem, atom_stem, extra=()):
+    """Optional QCVariables, with incomplete orders explicitly marked.
+
+    The report owns every ``<stem> ...`` and ``ATOM <label> C<n> <atom_stem>``
+    name: they describe the latest successful publication only.  The full set
+    is planned first; owned names outside it (omitted orders, former sites,
+    the opposite complete/INCOMPLETE variant) are deleted, then the plan is
+    written.  Every other variable is left alone.
+    """
     if wfn is None:
         return
     check_publication_labels(labels_a)
     check_publication_labels(labels_b)
+
+    def marked(key, complete):
+        return key if complete else key + ' INCOMPLETE'
+
+    plan = []
     for p in dispersion.pairs:
         a, b = labels_a[p.site_a], labels_b[p.site_b]
         for c in p.coefficients:
-            _set_marked(wfn, f'{stem} C{c.order} {a} {b}', c.unrestricted_complete, float(c.value))
+            plan.append((marked(f'{stem} C{c.order} {a} {b}', c.unrestricted_complete), float(c.value)))
     for p in same:
         label = labels_a[p.site_a]
         for c in p.coefficients:
-            _set_marked(wfn, f'ATOM {label} C{c.order} {atom_stem}', c.unrestricted_complete,
-                        float(c.value))
+            plan.append((marked(f'ATOM {label} C{c.order} {atom_stem}', c.unrestricted_complete),
+                         float(c.value)))
     for n in orders:
         value, complete = totals[n]
-        _set_marked(wfn, f'{stem} C{n} TOTAL', complete, float(value))
-    _set(wfn, f'{stem} SITE PAIRS', float(len(dispersion.pairs)))
-    _set(wfn, f'{stem} MAX ORDER', float(max(orders)) if orders else 0.)
-    _set(wfn, f'{stem} QUADRATURE NODES', float(len(dispersion.cp_weights)))
+        plan.append((marked(f'{stem} C{n} TOTAL', complete), float(value)))
+    plan.append((f'{stem} SITE PAIRS', float(len(dispersion.pairs))))
+    plan.append((f'{stem} MAX ORDER', float(max(orders)) if orders else 0.))
+    plan.append((f'{stem} QUADRATURE NODES', float(len(dispersion.cp_weights))))
     if dispersion.cp_weights:
-        _set(wfn, f'{stem} QUADRATURE FREQUENCIES',
-             _matrix(np.asarray(frequencies, dtype=float).reshape(1, -1)))
-        _set(wfn, f'{stem} CP WEIGHTS',
-             _matrix(np.asarray(dispersion.cp_weights, dtype=float).reshape(1, -1)))
+        plan.append((f'{stem} QUADRATURE FREQUENCIES',
+                     _matrix(np.asarray(frequencies, dtype=float).reshape(1, -1))))
+        plan.append((f'{stem} CP WEIGHTS',
+                     _matrix(np.asarray(dispersion.cp_weights, dtype=float).reshape(1, -1))))
+    plan.extend(extra)
+    current = {key.upper() for key, _ in plan}
+    for key in list(wfn.scalar_variables()) + list(wfn.array_variables()):
+        if _report_owned(key, stem, atom_stem) and key.upper() not in current:
+            wfn.del_variable(key)
+    for key, value in plan:
+        wfn.set_variable(key, value)
 
 
 def report_rank_pair_inventory(log, dispersion, level=2):
@@ -415,6 +435,6 @@ def report_refined_dispersion(log, wfn, dispersion):
     _publish_dispersion(wfn, dispersion, labels_a=labels, labels_b=labels,
                         frequencies=dispersion.frequencies, orders=orders, same=same,
                         totals=totals, stem='ATOMIC REFINED DISPERSION',
-                        atom_stem='REFINED DISPERSION COEFFICIENT')
-    _set(wfn, 'ATOMIC REFINED DISPERSION ANCHOR SHIFT MAXABS',
-         float(dispersion.anchor_shift_maxabs))
+                        atom_stem='REFINED DISPERSION COEFFICIENT',
+                        extra=(('ATOMIC REFINED DISPERSION ANCHOR SHIFT MAXABS',
+                                float(dispersion.anchor_shift_maxabs)),))

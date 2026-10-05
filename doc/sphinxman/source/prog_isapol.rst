@@ -318,11 +318,15 @@ Isotropic Casimir--Polder dispersion
      ``ATOM <label> C<n> REFINED DISPERSION COEFFICIENT``, with the suffix
      ``INCOMPLETE`` on every incomplete order, plus the pair count,
      maximum order, quadrature nodes, frequencies, CP weights and largest
-     anchor shift. Publishing a value deletes its opposite complete or
-     ``INCOMPLETE`` variant on that wavefunction; other variables, including
-     keys of orders or labels the current call does not emit, are left as
-     they are. With ``wfn``, labels that contain whitespace or collide when
-     upper-cased are refused before anything is logged or written. Nothing
+     anchor shift. These report-owned names (``ATOMIC REFINED DISPERSION ...``
+     and ``ATOM <label> C<n> REFINED DISPERSION COEFFICIENT ...``) describe
+     the latest successful publication only: owned names it does not emit
+     (omitted orders, former sites, the opposite complete or ``INCOMPLETE``
+     variant) are deleted from that wavefunction. Every other variable,
+     including other ``ATOMIC``/``ATOM`` names and global variables, is left
+     alone, and a refused or failed call changes none of them. With ``wfn``,
+     labels that contain whitespace or collide when upper-cased are refused
+     before anything is logged or written. Nothing
      reads the variables back. In the tables, a row's ``complete`` is true
      only if every order in it is complete, and the rank-pair union over site
      pairs can list one pair as both included and missing. A contraction that
