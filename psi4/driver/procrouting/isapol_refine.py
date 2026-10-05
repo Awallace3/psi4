@@ -791,6 +791,9 @@ def _dispersion_nodes(refinements):
         if (other.model.site_types != first.site_types
                 or other.model.parameter_labels != first.parameter_labels):
             raise ValueError('every node must share one declared variable set')
+        if other.model.declared_variables != first.declared_variables:
+            raise ValueError('every node must share one declared model; a supplied .pdef '
+                             'variable list and a cutoff-derived one are different models')
         for name in ('weight_type', 'weight_coefficient', 'cutoff'):
             if getattr(other.model, name) != getattr(first, name):
                 raise ValueError(f'every node must share one penalty scheme; {name} differs')
@@ -883,6 +886,8 @@ def refined_isotropic_dispersion(refinements, *, cp_weights, quadrature_provenan
                   f'weight={first.weight_type}/{first.weight_coefficient!r}; '
                   f'cutoff={first.cutoff!r}; anchors_sha256={anchor_sha256}; '
                   f'{first.provenance}')
+    if wfn is not None:
+        _lg.check_publication_labels(tuple(site.label for site in first.sites))
     log = _lg.silent() if log is None else log
     log.stage('isotropic dispersion from refined tensors (Casimir-Polder)',
               _lg.refined_dispersion_parameters(
@@ -890,35 +895,40 @@ def refined_isotropic_dispersion(refinements, *, cp_weights, quadrature_provenan
                   quadrature_provenance=quadrature_provenance, site_ranks=site_ranks,
                   resolved_site_ranks=resolved, anchor_sha256=anchor_sha256))
 
-    model_sites = []
-    for index, site in enumerate(first.sites):
-        column = [available[0][index].index(rank) for rank in resolved[index]]
-        table = np.array([[scalars[node][index][j] for j in column]
-                          for node in range(len(nodes))], dtype=float)
-        isosite = core.IsaIsotropicSite()
-        isosite.label, isosite.origin = site.label, list(map(float, site.origin_bohr))
-        isosite.ranks = list(resolved[index])
-        isosite.polarizabilities = core.Matrix.from_array(np.ascontiguousarray(table))
-        model_sites.append(isosite)
-    isomodel = core.IsaIsotropicModel(list(frequencies), model_sites, provenance)
-    result = core.isa_isotropic_dispersion(isomodel, isomodel, weights.tolist(), max_order)
-    labels = tuple(site.label for site in first.sites)
-    pairs = tuple(_lw.DispersionPair(
-        p.site_a, p.site_b, labels[p.site_a], labels[p.site_b],
-        tuple(_lw.Coefficient(c.order, c.value, tuple(map(tuple, c.included_rank_pairs)),
-                              tuple(map(tuple, c.missing_rank_pairs)), c.complete)
-              for c in p.coefficients)) for p in result.pairs)
-    record = RefinedIsotropicDispersion(
-        labels=labels,
-        origins_bohr=tuple(tuple(map(float, site.origin_bohr)) for site in first.sites),
-        frequencies=frequencies, cp_weights=tuple(map(float, weights)),
-        quadrature_provenance=quadrature_provenance, site_ranks=resolved, pairs=pairs,
-        anchor_shift_maxabs=max(float(r.anchor_shift_maxabs) for r in nodes),
-        anchor_sha256=anchor_sha256, weight_type=first.weight_type,
-        weight_coefficient=first.weight_coefficient,
-        refinement_status=nodes[0].refinement_status,
-        solver_status=tuple(str(r.status).rsplit('.', 1)[-1] for r in nodes),
-        provenance=provenance)
-    _lg.report_refined_dispersion(log, wfn, record)
+    try:
+        model_sites = []
+        for index, site in enumerate(first.sites):
+            column = [available[0][index].index(rank) for rank in resolved[index]]
+            table = np.array([[scalars[node][index][j] for j in column]
+                              for node in range(len(nodes))], dtype=float)
+            isosite = core.IsaIsotropicSite()
+            isosite.label, isosite.origin = site.label, list(map(float, site.origin_bohr))
+            isosite.ranks = list(resolved[index])
+            isosite.polarizabilities = core.Matrix.from_array(np.ascontiguousarray(table))
+            model_sites.append(isosite)
+        isomodel = core.IsaIsotropicModel(list(frequencies), model_sites, provenance)
+        result = core.isa_isotropic_dispersion(isomodel, isomodel, weights.tolist(), max_order)
+        labels = tuple(site.label for site in first.sites)
+        pairs = tuple(_lw.DispersionPair(
+            p.site_a, p.site_b, labels[p.site_a], labels[p.site_b],
+            tuple(_lw.Coefficient(c.order, c.value, tuple(map(tuple, c.included_rank_pairs)),
+                                  tuple(map(tuple, c.missing_rank_pairs)), c.complete)
+                  for c in p.coefficients)) for p in result.pairs)
+        record = RefinedIsotropicDispersion(
+            labels=labels,
+            origins_bohr=tuple(tuple(map(float, site.origin_bohr)) for site in first.sites),
+            frequencies=frequencies, cp_weights=tuple(map(float, weights)),
+            quadrature_provenance=quadrature_provenance, site_ranks=resolved, pairs=pairs,
+            anchor_shift_maxabs=max(float(r.anchor_shift_maxabs) for r in nodes),
+            anchor_sha256=anchor_sha256, weight_type=first.weight_type,
+            weight_coefficient=first.weight_coefficient,
+            refinement_status=nodes[0].refinement_status,
+            solver_status=tuple(str(r.status).rsplit('.', 1)[-1] for r in nodes),
+            provenance=provenance)
+        _lg.report_refined_dispersion(log, wfn, record)
+    except Exception as error:
+        # Close the stage as failed, so a later stage cannot report it complete.
+        log.stage_failed(error)
+        raise
     log.stage_end()
     return record

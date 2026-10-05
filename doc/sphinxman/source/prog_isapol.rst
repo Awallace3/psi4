@@ -300,8 +300,11 @@ Isotropic Casimir--Polder dispersion
      (1 to ``rank_limit``) and scalars of one PFIT ``RefinementResult``.
      ``isapol_refine.refined_isotropic_dispersion(refinements, cp_weights=...,
      quadrature_provenance=...)`` takes one result per quadrature node, in
-     node order, all on the identical site set, variable set and penalty
-     scheme, and contracts that refined model with itself. ``site_ranks``
+     node order, all on the identical site set, variable set, declared
+     variable list (``declared_variables``) and penalty scheme, and contracts
+     that refined model with itself. The weights are used as declared: nothing
+     checks that they belong to the nodes' grid, and ``quadrature_provenance``
+     is a declaration. ``site_ranks``
      defaults to every refined rank; a declared rank above a site's
      ``rank_limit`` is refused rather than zero-filled. It returns an
      immutable ``RefinedIsotropicDispersion`` of ``isapol_lw.DispersionPair``
@@ -315,7 +318,16 @@ Isotropic Casimir--Polder dispersion
      ``ATOM <label> C<n> REFINED DISPERSION COEFFICIENT``, with the suffix
      ``INCOMPLETE`` on every incomplete order, plus the pair count,
      maximum order, quadrature nodes, frequencies, CP weights and largest
-     anchor shift. Nothing reads them back.
+     anchor shift. Publishing a value deletes its opposite complete or
+     ``INCOMPLETE`` variant on that wavefunction; other variables, including
+     keys of orders or labels the current call does not emit, are left as
+     they are. With ``wfn``, labels that contain whitespace or collide when
+     upper-cased are refused before anything is logged or written. Nothing
+     reads the variables back. In the tables, a row's ``complete`` is true
+     only if every order in it is complete, and the rank-pair union over site
+     pairs can list one pair as both included and missing. A contraction that
+     fails is closed in the log as ``Stage FAILED`` and re-raised, with no
+     variable written.
    * Limits: the C_n inherit the LW orientation dependence above through the
      rank 2 and higher scalars (C8 and up), and the conditioning of the PFIT
      solver through the refined scalars. Reproducing CamCASP's printed C_n

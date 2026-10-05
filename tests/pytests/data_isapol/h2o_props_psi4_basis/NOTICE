@@ -1,3 +1,11 @@
+PREFACE (Psi4 test data)
+
+This directory ships only this notice. It is kept because the Casimir-Polder
+fixtures camcasp_casimir_h2o_vdz_l3.json and _l4.json cite it for the CamCASP
+MIT notice reproduced in full below. The first part of the notice is
+historical context from an earlier basis-record extraction: the O/H basis
+records and the manifest it describes are not shipped here.
+
 REFERENCE BASIS DATA / SOURCE NOTICES
 
 Only O/H numeric records are shipped, not whole CamCASP basis files.

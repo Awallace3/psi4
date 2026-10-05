@@ -155,6 +155,15 @@ class StageLog:
         self._open, self._started = None, None
         self.line('Stage complete: %s (%.2f s)' % (name, seconds), level=level)
 
+    def stage_failed(self, error, level=1):
+        """Close the open stage as FAILED; it is printed, never added to :attr:`stages`."""
+        if self._open is None:
+            return
+        name, seconds = self._open, time.time() - self._started
+        self._open, self._started = None, None
+        self.line('Stage FAILED: %s (%.2f s): %s: %s' % (name, seconds, type(error).__name__, error),
+                  level=level)
+
 
 def silent():
     """The default log: accepts every call, writes nothing, records timings."""
@@ -188,6 +197,34 @@ def _set(wfn, key, value):
     if wfn is None:
         return
     wfn.set_variable(key, value)
+
+
+def _set_marked(wfn, key, complete, value):
+    """Publish ``key`` or ``key INCOMPLETE``, deleting the opposite variant.
+
+    A reused wavefunction must never hold both a complete-looking and an
+    INCOMPLETE value for one current coefficient.
+    """
+    if wfn is None:
+        return
+    current, opposite = (key, key + ' INCOMPLETE') if complete else (key + ' INCOMPLETE', key)
+    wfn.del_variable(opposite)
+    wfn.set_variable(current, value)
+
+
+def check_publication_labels(labels):
+    """Refuse site labels that cannot name distinct QCVariables.
+
+    QCVariable keys are upper-cased and space-separated, so labels whose
+    upper-cased forms collide, or that contain whitespace, would alias each
+    other's keys.  Only publication is restricted; the model keeps its labels.
+    """
+    for label in labels:
+        if any(ch.isspace() for ch in label):
+            raise ValueError(f'site label {label!r} contains whitespace and cannot name a QCVariable')
+    folded = [label.upper() for label in labels]
+    if len(set(folded)) != len(folded):
+        raise ValueError(f'site labels {tuple(labels)!r} collide when upper-cased as QCVariable names')
 
 
 # ---------------------------------------------------------------- request ----
@@ -260,20 +297,20 @@ def _publish_dispersion(wfn, dispersion, *, labels_a, labels_b, frequencies, ord
     """Optional QCVariables, with incomplete orders explicitly marked."""
     if wfn is None:
         return
+    check_publication_labels(labels_a)
+    check_publication_labels(labels_b)
     for p in dispersion.pairs:
         a, b = labels_a[p.site_a], labels_b[p.site_b]
         for c in p.coefficients:
-            key = f'{stem} C{c.order} {a} {b}'
-            _set(wfn, key if c.unrestricted_complete else key + ' INCOMPLETE', float(c.value))
+            _set_marked(wfn, f'{stem} C{c.order} {a} {b}', c.unrestricted_complete, float(c.value))
     for p in same:
         label = labels_a[p.site_a]
         for c in p.coefficients:
-            key = f'ATOM {label} C{c.order} {atom_stem}'
-            _set(wfn, key if c.unrestricted_complete else key + ' INCOMPLETE', float(c.value))
+            _set_marked(wfn, f'ATOM {label} C{c.order} {atom_stem}', c.unrestricted_complete,
+                        float(c.value))
     for n in orders:
         value, complete = totals[n]
-        key = f'{stem} C{n} TOTAL'
-        _set(wfn, key if complete else key + ' INCOMPLETE', float(value))
+        _set_marked(wfn, f'{stem} C{n} TOTAL', complete, float(value))
     _set(wfn, f'{stem} SITE PAIRS', float(len(dispersion.pairs)))
     _set(wfn, f'{stem} MAX ORDER', float(max(orders)) if orders else 0.)
     _set(wfn, f'{stem} QUADRATURE NODES', float(len(dispersion.cp_weights)))

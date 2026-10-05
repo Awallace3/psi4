@@ -422,12 +422,14 @@ QUADRATURE = _lw.Provenance('CasimirGrid(4, 0.5)', '0' * 64, 'test_isapol_refine
                             'Gauss-Legendre imaginary-frequency nodes, static point first')
 
 
-def refined_nodes(name='l2h1', n_freq=4, **overrides):
+def refined_nodes(name='l2h1', n_freq=4, *, sites=None, declared=lambda k: None, **overrides):
     """One refinement per ``CasimirGrid(n_freq, 0.5)`` node, static point first.
 
     The anchors (hence the variable set) are the case's at every node; the data
     are the forward map of the case's source model scaled by ``1/(1+omega^2)``,
-    so the refined scalars genuinely vary along the grid.
+    so the refined scalars genuinely vary along the grid.  ``sites`` replaces
+    the case's sites (e.g. relabeled); ``declared(k)`` is node k's
+    ``declared_variables``.
     """
     built = case(name)
     spec = dict(CASES[name], **overrides)
@@ -435,10 +437,12 @@ def refined_nodes(name='l2h1', n_freq=4, **overrides):
     nodes = []
     for k in range(n_freq + 1):
         omega = grid.omega(k)
-        model = R.refinement_model(built['model'].sites, built['anchors'], frequency_au=omega,
-                                   cutoff=1.0e-4, weight_type=spec['weight_type'],
+        model = R.refinement_model(sites or built['model'].sites, built['anchors'],
+                                   frequency_au=omega, cutoff=1.0e-4,
+                                   weight_type=spec['weight_type'],
                                    weight_coefficient=spec['weight_coefficient'],
-                                   provenance=f'test_isapol_refine case {name}')
+                                   provenance=f'test_isapol_refine case {name}',
+                                   declared_variables=declared(k))
         source = [t / (1.0 + omega * omega) for t in built['source']]
         targets = R.pack_lower_triangle(R.point_to_point_response(built['fields'], model, source))
         nodes.append(R.refine(model, built['points'], targets, fields=built['fields'],
@@ -576,6 +580,107 @@ def test_refined_dispersion_reaches_a_complete_c12_at_rank_four():
     assert o_h.included_rank_pairs == ((4, 1),)
     value, _ = oracle_coefficient(nodes, weights, 0, 0, 12, record.site_ranks)
     assert o_o.value == pytest.approx(value, rel=1e-13, abs=0.0)
+
+
+def _water_wfn():
+    mol = psi4.geometry('units bohr\nsymmetry c1\nno_com\nno_reorient\n'
+                        'O 0 0 0\nH -1.45365196 0 -1.12168732\nH 1.45365196 0 -1.12168732\n')
+    wfn = core.Wavefunction.build(mol, 'sto-3g')
+    wfn.set_variable('UNRELATED SENTINEL', 1.5)
+    return wfn
+
+
+def _dispersion_keys(wfn):
+    return {k for k in wfn.variables() if 'REFINED DISPERSION' in k}
+
+
+def test_reused_wavefunction_never_holds_both_suffix_variants(l2h1_nodes):
+    """Complete -> INCOMPLETE -> complete on one wavefunction: only current keys survive."""
+    nodes, weights = l2h1_nodes
+    wfn = _water_wfn()
+    keys = ('ATOMIC REFINED DISPERSION C6 TOTAL', 'ATOMIC REFINED DISPERSION C6 O O',
+            'ATOM O C6 REFINED DISPERSION COEFFICIENT')
+    # Declaring only rank 2 on O drops the (1,1) term from every O-containing C6.
+    for site_ranks, complete in ((None, True), (((2,), (1,), (1,)), False), (None, True)):
+        record = R.refined_isotropic_dispersion(nodes, cp_weights=weights, max_order=6,
+                                                quadrature_provenance=QUADRATURE,
+                                                site_ranks=site_ranks, wfn=wfn)
+        total = 0.0
+        for p in record.pairs:
+            total += p.coefficients[0].value
+        values = (total, record.pairs[0].coefficients[0].value, record.pairs[0].coefficients[0].value)
+        assert record.pairs[0].coefficients[0].unrestricted_complete is complete
+        for key, value in zip(keys, values):
+            current, opposite = (key, key + ' INCOMPLETE') if complete else (key + ' INCOMPLETE', key)
+            assert wfn.variable(current) == value, current
+            assert not wfn.has_variable(opposite), opposite
+        assert wfn.variable('UNRELATED SENTINEL') == 1.5
+    assert not any(k.endswith('INCOMPLETE') and 'C6' in k for k in _dispersion_keys(wfn))
+
+
+@pytest.mark.parametrize('labels,match', [(('O', 'h', 'H'), 'collide'),
+                                          (('O', 'H 1', 'H2'), 'whitespace')])
+def test_publication_refuses_aliasing_labels_but_the_model_keeps_them(labels, match):
+    built = case('l2h1')
+    sites = tuple(R.RefinementSite(label, s.site_type, s.origin_bohr, s.frame, s.rank_limit)
+                  for label, s in zip(labels, built['model'].sites))
+    nodes, weights = refined_nodes(n_freq=2, sites=sites)
+    wfn = _water_wfn()
+    wfn.set_variable('ATOMIC REFINED DISPERSION C6 TOTAL', -7.0)
+    lines = []
+    log = _lg.StageLog(2, writer=lines.append)
+    with pytest.raises(ValueError, match=match):
+        R.refined_isotropic_dispersion(nodes, cp_weights=weights, quadrature_provenance=QUADRATURE,
+                                       log=log, wfn=wfn)
+    # Refused before any log stage or write; prior wavefunction data untouched.
+    assert lines == [] and log.stages == ()
+    assert _dispersion_keys(wfn) == {'ATOMIC REFINED DISPERSION C6 TOTAL'}
+    assert wfn.variable('ATOMIC REFINED DISPERSION C6 TOTAL') == -7.0
+    assert wfn.variable('UNRELATED SENTINEL') == 1.5
+    record = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                            quadrature_provenance=QUADRATURE)
+    assert record.labels == labels and len(record.pairs) == 9
+
+
+def test_declared_and_cutoff_derived_nodes_are_different_models(l2h1_nodes):
+    nodes, weights = l2h1_nodes
+    labels = nodes[0].model.parameter_labels
+    mixed, _ = refined_nodes(declared=lambda k: labels if k == 1 else None)
+    with pytest.raises(ValueError, match='declared model'):
+        R.refined_isotropic_dispersion(mixed, cp_weights=weights, quadrature_provenance=QUADRATURE)
+    explicit, _ = refined_nodes(declared=lambda k: labels)
+    assert all(n.model.declared_variables == labels for n in explicit)
+    derived = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                             quadrature_provenance=QUADRATURE)
+    replayed = R.refined_isotropic_dispersion(explicit, cp_weights=weights,
+                                              quadrature_provenance=QUADRATURE)
+    assert replayed.pairs == derived.pairs
+
+
+def test_failed_contraction_closes_its_stage_as_failed(l2h1_nodes):
+    """Reversed nodes are refused by the kernel; the log says so and nothing is published."""
+    nodes, weights = l2h1_nodes
+    lines = []
+    log = _lg.StageLog(1, writer=lines.append)
+    wfn = _water_wfn()
+    with pytest.raises(ValueError, match='strictly increasing'):
+        R.refined_isotropic_dispersion(nodes[::-1], cp_weights=weights[::-1],
+                                       quadrature_provenance=QUADRATURE, log=log, wfn=wfn)
+    text = ''.join(lines)
+    assert 'Stage FAILED: isotropic dispersion from refined tensors (Casimir-Polder)' in text
+    assert 'strictly increasing' in text
+    assert log.stages == ()
+    assert _dispersion_keys(wfn) == set() and wfn.variable('UNRELATED SENTINEL') == 1.5
+    log.stage('next')
+    log.stage_end()
+    R.refined_isotropic_dispersion(nodes, cp_weights=weights, quadrature_provenance=QUADRATURE,
+                                   log=log)
+    text = ''.join(lines)
+    assert [name for name, _ in log.stages] == [
+        'next', 'isotropic dispersion from refined tensors (Casimir-Polder)']
+    assert text.count('Stage complete: isotropic dispersion') == 1
+    assert text.index('Stage FAILED') < text.index('Stage complete: next') \
+        < text.index('Stage complete: isotropic dispersion')
 
 
 def _replace_node(nodes, index, node):
