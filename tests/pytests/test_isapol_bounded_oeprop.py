@@ -260,3 +260,106 @@ def test_live_oeprop_publishes_latest_result_and_clears_it_on_refusal(sealed_wat
     with pytest.raises(ValueError, match='No native'):
         psi4.atomic_property_result(wfn)
     assert not _owned(wfn) and wfn.variable('UNRELATED SENTINEL') == 5.
+
+
+def test_preset_preparation_failure_is_closed_failed(water):
+    """A refusal while preparing the preset closes that stage FAILED; it can never be reported complete."""
+    messages = []
+    log = StageLog(1, writer=messages.append)
+    with pytest.raises(ValueError, match='atom order'):
+        psi4.oeprop(water, 'ATOMIC_REFINED_DISPERSION', atomic_backend='BOUNDED_DF', preset='benzene', log=log)
+    log.stage('next')
+    log.stage_end()
+    text = ''.join(messages)
+    assert 'Stage FAILED: Bounded preset preparation' in text
+    assert 'Stage complete: Bounded preset preparation' not in text
+    assert [name for name, _ in log.stages] == ['next']
+
+
+def _raise_at(marker):
+    def writer(text):
+        if marker in text:
+            raise RuntimeError(f'injected failure at {marker}')
+    return writer
+
+
+@pytest.mark.parametrize('failure', ['totals stage', 'resource item', 'partial setter'])
+def test_failure_after_publication_clears_only_the_owned_namespace(sealed_water, tmp_path, monkeypatch, failure):
+    """Any oeprop failure, including one after the coefficients were published, leaves no owned data behind."""
+    from psi4.driver.procrouting.isapol_native import Quadrature
+    wfn = sealed_water
+    small = dict(atomic_backend='BOUNDED_DF', preset='water', npoints=32, radial_points=20, spherical_points=50,
+                 rank_limit=1, hydrogen_rank_limit=1, localization_rank_limit=1, weight_type=4,
+                 weight_coefficient=1e-5, max_order=8, quadrature=Quadrature.from_casimir(core.CasimirGrid(2, .5)),
+                 scratch_directory=tmp_path)
+    psi4.oeprop(wfn, 'ATOMIC_REFINED_DISPERSION', **small, log=StageLog(0))
+    assert _owned(wfn)
+    unrelated = {'UNRELATED SENTINEL': 5., 'ATOMIC DISPERSION C6 TOTAL': 3., 'ATOM O CHARGE': 4.}
+    for key, value in unrelated.items():
+        wfn.set_variable(key, value)
+    core.set_variable('ATOMIC REFINED DISPERSION C6 TOTAL', 7.)  # globals are never owned
+    core.set_variable('ATOMIC REFINED DISPERSION CP WEIGHTS', core.Matrix.from_array(np.ones((1, 2))))
+    seen = []
+    if failure == 'partial setter':
+        setter = core.Wavefunction.set_variable
+
+        def partial(self, key, value):
+            if _report_owned(key, *api.REFINED_DISPERSION_NAMESPACE):
+                seen.append(key)
+                if len(seen) == 5:
+                    raise RuntimeError('injected failure in setter')
+            return setter(self, key, value)
+
+        monkeypatch.setattr(core.Wavefunction, 'set_variable', partial)
+        log = StageLog(0)
+    else:
+        marker = 'Stage: Bounded resource totals' if failure == 'totals stage' else 'peak planned numeric bytes'
+        inner = _raise_at(marker)
+
+        def writer(text):
+            if marker in text:
+                seen.extend(_owned(wfn))  # published before the failure
+            inner(text)
+
+        log = StageLog(1, writer=writer)
+    try:
+        with pytest.raises(RuntimeError, match='injected failure'):
+            psi4.oeprop(wfn, 'ATOMIC_REFINED_DISPERSION', **small, log=log)
+        assert seen  # the failure really came after (some) publication
+        with pytest.raises(ValueError, match='No native'):
+            psi4.atomic_property_result(wfn)
+        assert not _owned(wfn) and not list(tmp_path.iterdir())
+        assert {key: wfn.variable(key) for key in unrelated} == unrelated
+        assert core.variable('ATOMIC REFINED DISPERSION C6 TOTAL') == 7.
+        assert core.has_array_variable('ATOMIC REFINED DISPERSION CP WEIGHTS')
+    finally:
+        monkeypatch.undo()
+        for key in unrelated:
+            wfn.del_variable(key)
+        core.del_variable('ATOMIC REFINED DISPERSION C6 TOTAL')
+        core.del_array_variable('ATOMIC REFINED DISPERSION CP WEIGHTS')
+
+
+def test_direct_api_keeps_last_success_semantics(sealed_water, tmp_path, monkeypatch):
+    """Only the oeprop route clears on failure; a direct publishing call that fails leaves the last success."""
+    from psi4.driver.procrouting import isapol_bounded as driver
+    from psi4.driver.procrouting.isapol_native import Quadrature
+    wfn = sealed_water
+    small = dict(npoints=32, radial_points=20, spherical_points=50, rank_limit=1, hydrogen_rank_limit=1,
+                 localization_rank_limit=1, weight_type=4, weight_coefficient=1e-5, max_order=8,
+                 quadrature=Quadrature.from_casimir(core.CasimirGrid(2, .5)), scratch_directory=tmp_path)
+    psi4.oeprop(wfn, 'ATOMIC_REFINED_DISPERSION', atomic_backend='BOUNDED_DF', preset='water', **small,
+                log=StageLog(0))
+    before = {key: wfn.variable(key) for key in _owned(wfn) if wfn.has_scalar_variable(key)}
+    captured = {}
+    monkeypatch.setattr(api, 'bounded_properties', lambda wfn, recipe, **kw: captured.update(kw, recipe=recipe))
+    psi4.oeprop(wfn, 'ATOMIC_REFINED_DISPERSION', atomic_backend='BOUNDED_DF', preset='water', **small,
+                log=StageLog(0))
+    monkeypatch.undo()
+    recipe = captured.pop('recipe')
+    driver.bounded_properties(wfn, recipe, **captured)
+    assert {key: wfn.variable(key) for key in before} == before
+    monkeypatch.setattr(driver, 'refine_streamed', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('late')))
+    with pytest.raises(RuntimeError, match='late'):
+        driver.bounded_properties(wfn, recipe, **captured)
+    assert {key: wfn.variable(key) for key in before} == before

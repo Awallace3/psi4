@@ -295,6 +295,14 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                 # small model; do not carry full nonlocal/LW input snapshots into
                 # that phase's independently planned workspace.
                 del raw, tensors, local, anchors
+                if node == 1:
+                    # The variable set is fixed here for every node, so the
+                    # parameter cap is admitted before any targets or later solves.
+                    log.stage('Refinement model admission', (('parameters', model.parameter_count),
+                              ('limit', MAX_PARAMETERS), ('declared variables', len(model.declared_variables))))
+                    if model.parameter_count > MAX_PARAMETERS:
+                        raise ValueError(f'bounded refinement supports at most {MAX_PARAMETERS} parameters')
+                log.stage(f'Point-response targets: {tag}', (('points', npoint),))
                 ledger.admit('point-response targets', _target_bytes(p, npoint),
                              2*p*p*npoint+2*p*npoint*npoint)
                 packed[:, node-1] = fitted_point_targets(auxiliary, points, [coefficient],
@@ -303,8 +311,6 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                 del coefficient, model
             solver.release()
             count, channels = models[0].parameter_count, models[0].channel_count
-            if count > MAX_PARAMETERS:
-                raise ValueError(f'bounded refinement supports at most {MAX_PARAMETERS} parameters')
             log.stage('Complete-cloud PFIT',
                       (('parameters', count), ('rows per pass', row_count),
                        ('frequencies', nf), ('passes', 2), ('weight type', weight_type),

@@ -259,9 +259,13 @@ PSI Variables by Alpha
    count, the largest order, the Casimir-Polder node count, the nodes
    [E_h] and weights (1, nodes) including the Jacobian and 1/(2 pi), and the
    largest PFIT shift from the anchors. Every ``ATOMIC REFINED DISPERSION`` and
-   ``ATOM A Cn REFINED DISPERSION COEFFICIENT`` name is removed when an
-   ``ATOMIC_*`` :py:func:`~psi4.driver.oeprop` request starts and written only
-   by a successful ``ATOMIC_REFINED_DISPERSION`` request.
+   ``ATOM A Cn REFINED DISPERSION COEFFICIENT`` name is written by an
+   ``ATOMIC_REFINED_DISPERSION`` :py:func:`~psi4.driver.oeprop` request, and
+   also by a direct ``isapol_bounded.bounded_properties`` or
+   ``isapol_refine.refined_isotropic_dispersion`` call that publishes to a
+   wavefunction. The oeprop route removes them when an ``ATOMIC_*`` request
+   starts and when it fails; a failed direct call keeps the latest (possibly
+   partial) publication. See :ref:`sec:isapol`.
 
 .. psivar:: BRUECKNER CONVERGED
 

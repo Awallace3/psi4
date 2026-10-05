@@ -160,11 +160,16 @@ sites give a complete C6 and an ``INCOMPLETE`` C8.
 Every ``ATOMIC_*`` request first forgets the previous result: the attached
 record and every report-owned ``ATOMIC REFINED DISPERSION ...`` and
 ``ATOM <label> C<n> REFINED DISPERSION COEFFICIENT ...`` name are removed
-before anything is validated. A refused or failed request therefore leaves
-neither a stale record nor stale coefficients, and
-``psi4.atomic_property_result`` raises. Every other variable, including the
-unrefined ``ATOMIC DISPERSION`` names, other ``ATOM`` names and global
-variables, is left alone. A stage that fails is closed in the output as
+before anything is validated, and again if the request raises at any point,
+including after the coefficients were published (for example while the final
+resource totals are reported, or part-way through publication). A refused or
+failed request therefore leaves neither a stale record nor stale
+coefficients, and ``psi4.atomic_property_result`` raises. If that cleanup
+itself fails, its error propagates (chained to the original) and owned names
+may remain. Every other variable, including the unrefined
+``ATOMIC DISPERSION`` names, other ``ATOM`` names and global variables, is
+left alone.
+A stage that fails is closed in the output as
 ``Stage FAILED: <stage> (<s>): <error>`` and the error is re-raised. A
 property request without any ``ATOMIC_*`` name and without ``atomic_backend``
 is ordinary :py:func:`~psi4.driver.oeprop` and touches none of this.
@@ -334,7 +339,11 @@ For an already converged ``wfn`` and those explicit declarations:
 
 ``bounded_properties`` writes nothing to the wavefunction unless
 ``publish_qcvariables=True``, which the oeprop route sets for
-``ATOMIC_REFINED_DISPERSION``.
+``ATOMIC_REFINED_DISPERSION``. Called directly it keeps the stage-06
+publication semantics: names describe the latest successful publication, and
+a call that fails leaves the previous publication, or a partial one if the
+failure occurs while or after publishing. Only the oeprop route clears them on
+failure.
 
 The numerical settings above are a declaration, not transferable defaults or a
 claim of agreement for an arbitrary molecule. In particular, different kernel
@@ -345,8 +354,11 @@ unrefined tensors remain distinct under ``refined_tensors`` and
 ``local_tensors``.
 
 The bounded route permits at most 2000 fit points, 64 sites and 64
-fit variables, refinement and localization ranks 1 to 3 (refinement at most
-the localization rank), and ``max_order`` 6, 8, 10 or 12, subject to its stricter numerical/work admission checks. It
+fit variables (the variable set is fixed at the first node and admitted
+there, before any point targets or later frequencies), refinement and
+localization ranks 1 to 3 (refinement at most the localization rank), and
+``max_order`` 6, 8, 10 or 12, subject to its stricter numerical/work admission
+checks. It
 includes every packed point pair and both solver passes. Its private
 disk-staged operands are created in a fresh temporary directory, hash-checked
 when read and removed on success or failure. ``scratch_directory`` optionally

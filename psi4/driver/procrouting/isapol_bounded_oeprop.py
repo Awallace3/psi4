@@ -16,7 +16,7 @@ Unchanged option defaults do not leak into the preset.
 import numpy as np
 from psi4 import core
 from . import isapol_logging as _lg
-from .isapol_bounded import bounded_properties, BoundedResources
+from .isapol_bounded import bounded_properties, BoundedResources, _closes_failed_stage
 from .isapol_native import Quadrature
 from .isapol_basis import BasisRecipe, ShellRecipe
 from .isapol_native_propagator import KernelSmoothing
@@ -172,55 +172,66 @@ def run(wfn, tasks, *, preset, **kwargs):
         raise ValueError('BOUNDED_DF accepts only ATOMIC_REFINED_POLARIZABILITIES and ATOMIC_REFINED_DISPERSION')
     if not isinstance(wfn, core.Wavefunction):
         raise TypeError('BOUNDED_DF requires a live Psi4 Wavefunction')
-    v = settings(preset, kwargs)
-    log = v['log'] if v['log'] is not None else _lg.StageLog(v['verbosity'])
-    if not isinstance(log, _lg.StageLog):
-        raise TypeError('log must be a StageLog')
-    log.stage('Bounded preset preparation', (('preset', preset), ('distribution', v['distribution']),
-                                             ('response', v['response'])))
-    mol = wfn.molecule()
-    sites, bonds = preset_sites(mol, preset, v['rank_limit'], v['hydrogen_rank_limit'])
-    if v['sites'] is not None:
-        sites = v['sites']
-    if v['bonds'] is not None:
-        bonds = v['bonds']
-    v['scf_correction'], v['expected_grac_shift'] = resolve_correction(
-        wfn, v['scf_correction'], v['expected_grac_shift'])
-    recipe = v['auxiliary_recipe']
-    if recipe is None:
-        basis = core.BasisSet.build(mol, 'DF_BASIS_SCF', v['auxiliary_basis'], puream=0)
-        shells = []
-        for i in range(basis.nshell()):
-            s = basis.shell(i)
-            shells.append(ShellRecipe(int(basis.shell_to_center(i)), int(s.am),
-                tuple(s.exp(k) for k in range(s.nprimitive)), tuple(s.coef(k) for k in range(s.nprimitive))))
-        recipe = BasisRecipe(v['auxiliary_basis'], 'Psi4 basis DATA, native normalized',
-                             'Cartesian', tuple(map(tuple, mol.geometry().np)), tuple(shells))
-    grid = v['response_grid']
-    if grid is None:
-        options = core.IsaGridOptions()
-        options.radial_points, options.spherical_points = v['radial_points'], v['spherical_points']
-        native_grid = core.IsaGrid(mol.clone(), options)
-        grid = np.column_stack((native_grid.x(), native_grid.y(), native_grid.z(), native_grid.w()))
-        del native_grid  # Do not retain a second full grid during the bounded solve.
-    lattice = v['lattice_options']
-    if lattice is None:
-        lattice = core.FitPointsOptions()
-        lattice.npoints, lattice.seed = v['npoints'], v['seed']
-        lattice.lolim, lattice.hilim = v['lower_limit'], v['upper_limit']
-    if v['resources'] is None:
-        v['resources'] = default_resources()
-    quadrature = v['quadrature'] if v['quadrature'] is not None else Quadrature.from_casimir(core.CasimirGrid(10, .5))
-    log.items([(k, v[k]) for k in OPTION_MAP]+[('declared_variables', 'cutoff-derived'
-               if v['declared_variables'] is None else len(v['declared_variables'])),
-               ('numeric byte budget', v['resources'].max_bytes)])
-    log.stage_end()
-    keys = ('smoothing', 'shell_cutoff', 'charge_penalty', 'anchor_metric_damping',
-            'localization_rank_limit', 'weight_type', 'weight_coefficient', 'cutoff',
-            'resources', 'scf_correction', 'expected_grac_shift', 'max_order', 'scratch_directory',
-            'distribution', 'distributed_moments', 'response', 'fdds')
-    result = bounded_properties(wfn, recipe, caller_converged=True,
-        sites=sites, bonds=bonds, quadrature=quadrature, response_grid=grid,
-        lattice_options=lattice, declared_variables=v['declared_variables'], log=log,
-        publish_qcvariables='ATOMIC_REFINED_DISPERSION' in tasks, **{k:v[k] for k in keys})
-    wfn._native_atomic_property_result = result
+    try:
+        v = settings(preset, kwargs)
+        log = v['log'] if v['log'] is not None else _lg.StageLog(v['verbosity'])
+        if not isinstance(log, _lg.StageLog):
+            raise TypeError('log must be a StageLog')
+        with _closes_failed_stage(log):
+            log.stage('Bounded preset preparation', (('preset', preset), ('distribution', v['distribution']),
+                                                     ('response', v['response'])))
+            mol = wfn.molecule()
+            sites, bonds = preset_sites(mol, preset, v['rank_limit'], v['hydrogen_rank_limit'])
+            if v['sites'] is not None:
+                sites = v['sites']
+            if v['bonds'] is not None:
+                bonds = v['bonds']
+            v['scf_correction'], v['expected_grac_shift'] = resolve_correction(
+                wfn, v['scf_correction'], v['expected_grac_shift'])
+            recipe = v['auxiliary_recipe']
+            if recipe is None:
+                basis = core.BasisSet.build(mol, 'DF_BASIS_SCF', v['auxiliary_basis'], puream=0)
+                shells = []
+                for i in range(basis.nshell()):
+                    s = basis.shell(i)
+                    shells.append(ShellRecipe(int(basis.shell_to_center(i)), int(s.am),
+                        tuple(s.exp(k) for k in range(s.nprimitive)), tuple(s.coef(k) for k in range(s.nprimitive))))
+                recipe = BasisRecipe(v['auxiliary_basis'], 'Psi4 basis DATA, native normalized',
+                                     'Cartesian', tuple(map(tuple, mol.geometry().np)), tuple(shells))
+            grid = v['response_grid']
+            if grid is None:
+                options = core.IsaGridOptions()
+                options.radial_points, options.spherical_points = v['radial_points'], v['spherical_points']
+                native_grid = core.IsaGrid(mol.clone(), options)
+                grid = np.column_stack((native_grid.x(), native_grid.y(), native_grid.z(), native_grid.w()))
+                del native_grid  # Do not retain a second full grid during the bounded solve.
+            lattice = v['lattice_options']
+            if lattice is None:
+                lattice = core.FitPointsOptions()
+                lattice.npoints, lattice.seed = v['npoints'], v['seed']
+                lattice.lolim, lattice.hilim = v['lower_limit'], v['upper_limit']
+            if v['resources'] is None:
+                v['resources'] = default_resources()
+            quadrature = v['quadrature']
+            if quadrature is None:
+                quadrature = Quadrature.from_casimir(core.CasimirGrid(10, .5))
+            log.items([(k, v[k]) for k in OPTION_MAP]+[('declared_variables', 'cutoff-derived'
+                       if v['declared_variables'] is None else len(v['declared_variables'])),
+                       ('numeric byte budget', v['resources'].max_bytes)])
+            log.stage_end()
+        keys = ('smoothing', 'shell_cutoff', 'charge_penalty', 'anchor_metric_damping',
+                'localization_rank_limit', 'weight_type', 'weight_coefficient', 'cutoff',
+                'resources', 'scf_correction', 'expected_grac_shift', 'max_order', 'scratch_directory',
+                'distribution', 'distributed_moments', 'response', 'fdds')
+        result = bounded_properties(wfn, recipe, caller_converged=True,
+            sites=sites, bonds=bonds, quadrature=quadrature, response_grid=grid,
+            lattice_options=lattice, declared_variables=v['declared_variables'], log=log,
+            publish_qcvariables='ATOMIC_REFINED_DISPERSION' in tasks, **{k:v[k] for k in keys})
+        wfn._native_atomic_property_result = result
+    except Exception:
+        # The oeprop route is all-or-nothing in its owned namespace: whatever
+        # failed (preparation, the chain, or reporting after publication), drop
+        # the attached result and refined-dispersion variables, then re-raise.
+        # A failure of this cleanup itself propagates, chained to the original.
+        invalidate(wfn)
+        raise

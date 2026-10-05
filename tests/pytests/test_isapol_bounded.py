@@ -101,8 +101,13 @@ def test_live_chain_completes_in_order_and_cleans_checkpoints(small_water, tmp_p
                  'isotropic dispersion from refined tensors (Casimir-Polder)', 'Bounded resource totals'):
         assert f'Stage complete: {name}' in text
     for node in range(1, 4):
-        for name in ('Original H2H1 response', 'Production LW localization'):
+        for name in ('Original H2H1 response', 'Production LW localization', 'Point-response targets'):
             assert f'Stage complete: {name}: node {node}/3' in text
+    # The fixed variable set is admitted once, between node 1's LW and its targets.
+    assert text.count('Stage complete: Refinement model admission') == 1
+    assert (text.index('Stage complete: Production LW localization: node 1/3')
+            < text.index('Stage complete: Refinement model admission')
+            < text.index('Stage: Point-response targets: node 1/3'))
     assert 'Stage FAILED' not in text and 'Pairwise isotropic dispersion coefficients' in text
     # Admission order: response, cloud, then per node solve -> LW -> targets, then PFIT.
     names = _stage_names(result)
@@ -265,7 +270,7 @@ def test_stale_scf_seal_is_refused_before_any_scratch(small_water, tmp_path):
 
 @pytest.mark.parametrize('target,stage', [
     ('backend._kernel', 'Full-grid ALDA kernel'),
-    ('driver.fitted_point_targets', 'Production LW localization: node 1/3'),
+    ('driver.fitted_point_targets', 'Point-response targets: node 1/3'),
     ('driver.refine_streamed', 'Complete-cloud PFIT'),
 ])
 @pytest.mark.parametrize('small_water', ['water'], indirect=True)
@@ -284,6 +289,34 @@ def test_failures_close_their_stage_publish_nothing_and_clean_scratch(small_wate
                                   log=StageLog(3, writer=messages.append))
     text = ''.join(messages)
     assert f'Stage FAILED: {stage}' in text and f'Stage complete: {stage}' not in text
+    assert not _owned_names(wfn) and not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_parameter_cap_is_admitted_at_node_one_before_any_targets(small_water, tmp_path, monkeypatch):
+    """The variable set is fixed at node 1, so a model over the cap stops before targets or later solves."""
+    wfn, recipe, args = small_water
+    count = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path,
+                                      log=StageLog(0)).refinements[0].model.parameter_count
+    solves, targets = [], []
+    solve, fitted = backend.BoundedResponse.solve, driver.fitted_point_targets
+    monkeypatch.setattr(backend.BoundedResponse, 'solve',
+                        lambda self, omega: solves.append(omega) or solve(self, omega))
+    monkeypatch.setattr(driver, 'fitted_point_targets', lambda *a, **k: targets.append(1) or fitted(*a, **k))
+    monkeypatch.setattr(driver, 'MAX_PARAMETERS', count)  # at the cap: admitted, full sweep
+    driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, log=StageLog(0))
+    assert (len(solves), len(targets)) == (3, 3)
+    solves.clear(), targets.clear()
+    monkeypatch.setattr(driver, 'MAX_PARAMETERS', count-1)
+    messages = []
+    with pytest.raises(ValueError, match=f'at most {count-1} parameters'):
+        driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, publish_qcvariables=True,
+                                  log=StageLog(1, writer=messages.append))
+    text = ''.join(messages)
+    assert (len(solves), len(targets)) == (1, 0)
+    assert 'Stage FAILED: Refinement model admission' in text
+    assert 'Stage complete: Production LW localization: node 1/3' in text
+    assert 'Stage FAILED: Production LW localization' not in text and 'Point-response targets' not in text
     assert not _owned_names(wfn) and not list(tmp_path.iterdir())
 
 
@@ -381,4 +414,3 @@ def test_public_declaration_refusals(small_water, tmp_path, key, value, error, m
         driver.bounded_properties(wfn, recipe, **dict(args, **{key: value}), scratch_directory=tmp_path,
                                   publish_qcvariables=True, log=StageLog(0))
     assert not list(tmp_path.iterdir()) and not _owned_names(wfn)
-
