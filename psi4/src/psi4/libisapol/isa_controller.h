@@ -1,0 +1,87 @@
+/* Psi4: Copyright (c) 2007-2026 The Psi4 Developers.
+ * SPDX-License-Identifier: LGPL-3.0-only
+ */
+#ifndef PSI4_LIBISAPOL_ISA_CONTROLLER_H
+#define PSI4_LIBISAPOL_ISA_CONTROLLER_H
+#include "isa_sweep.h"
+namespace psi { namespace isapol {
+/// Explicit ordinary-A, W-convergence controller. No DIIS, symmetry or decoupled
+/// subiterations are implemented, and neither is CamCASP's self-consistent
+/// postconvergence tail LOOP (perform_tail_iterations / Tail-Iterations, driven by
+/// num_tail_iterations, which the reference protocol never enables). The SINGLE
+/// postconvergence tail refit that CamCASP always performs IS implemented; see
+/// IsaAControllerResult::final_tails.
+struct IsaAControllerOptions {
+    IsaAFitOptions fit;
+    // Performance only: zero forces the independent uncached path. Hard ceiling
+    // is 192 MiB; admission includes conservative point-workspace headroom.
+    size_t cache_max_bytes = 192 * 1024 * 1024;
+    double convergence = 1.e-9;
+    // Activation thresholds follow CamCASP's declared module defaults:
+    // wEps_EpsNorm = 1e-5, PositiveW_EpsNorm = 1e-5, TailFix_EpsNorm = 1e-6
+    // (stockholder.F90). These are declared model parameters, not tolerances.
+    double w_eps_activation = 1.e-5, positive_activation = 1.e-5, tail_activation = 1.e-6;
+    double mixing = 0.0;
+    int mixing_skip = 20, tail_iteration_limit = 20, max_iterations = 120;
+    bool fix_tails = true;
+    std::vector<double> tail_cutoffs;  ///< Explicit bohr radii, not inferred Slater tables
+    std::vector<bool> tail_allowed, convergence_included;  ///< Empty means all sites
+};
+/// Restart cursor for the SAME controller settings, bases, density and grids.
+/// saved_shape_charges follow reference pre-mixing bookkeeping, not necessarily
+/// integrals of the stored mixed Gaussian coefficients.
+struct IsaAControllerState {
+    IsaSweepState coefficients;
+    std::vector<IsaExponentialTail> tails;
+    std::vector<double> saved_shape_charges;
+    int iteration = 0;
+    double active_w_eps = 0.0, active_positive_lambda = 0.0, max_delta = 0.0;
+    bool apply_tails = false, converged = false;
+};
+struct IsaAControllerStep {
+    IsaAControllerState next;
+    IsaNoTailSweepResult raw_sweep;
+    std::vector<double> deltas, shape_charges;
+    std::vector<bool> atom_converged;
+    std::vector<IsaTailFitResult> tail_fits;
+};
+struct IsaAControllerResult {
+    /// Restart cursor. Its tails are the LAST IN-LOOP fit, which by the documented
+    /// source lag came from the second-to-last shape, so they are NOT the tails any
+    /// downstream stage should sample. Use final_tails for that.
+    IsaAControllerState state;
+    std::vector<IsaAControllerStep> history;
+    std::string termination;
+    /// Postconvergence tail refit from the FINAL shape coefficients; downstream
+    /// stages must use these. As in CamCASP (stockholder.F90:1353/:1401, :4710-4713)
+    /// the refit runs on both converged and nonconverged exits, ungated by the tail
+    /// fix, and falls back to the in-loop tail exponent. Empty tail_cutoffs leaves
+    /// these equal to state.tails.
+    std::vector<IsaExponentialTail> final_tails;
+    std::vector<IsaTailFitResult> final_tail_fits;
+};
+class IsaAController {
+   public:
+    IsaAController(const std::vector<IsaExplicitBasis>& atomic,
+                   const std::vector<IsaExplicitBasis>& shape,
+                   const std::vector<std::vector<int>>& shell_maps, const IsaFixedDensity& density,
+                   const std::vector<IsaNoTailGrid>& grids, const IsaAControllerOptions& options);
+    /// Inspect the actual performance-policy decision without exposing cached buffers.
+    bool prepared_cache_enabled() const { return !prepared_.empty(); }
+    /// Independent rerunnable snapshot, omitting transient preparation. The original is unchanged.
+    std::shared_ptr<IsaAController> without_prepared_cache() const;
+    IsaAControllerState initialize(const IsaSweepState& coefficients) const;
+    IsaAControllerStep step(const IsaAControllerState& old) const;
+    IsaAControllerResult run(const IsaAControllerState& initial) const;
+   private:
+    void validate(const IsaAControllerState& state) const;
+    IsaASweep sweep_;
+    std::vector<IsaExplicitBasis> shapes_;
+    std::vector<int> atomic_sizes_;
+    std::vector<std::shared_ptr<Matrix>> overlaps_;
+    std::vector<IsaNoTailGrid> grids_;
+    IsaAControllerOptions options_;
+    std::vector<IsaAFitData> prepared_;
+};
+} }
+#endif

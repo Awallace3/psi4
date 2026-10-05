@@ -12,6 +12,9 @@ tests and the Casimir–Polder dispersion tests. They exercise CamCASP 6.0.051 c
 | `camcasp_casimir_h2o_vdz_l3.json` | The decoded CASIMIR stage of the `tests/H2O_props/psi4` declaration (`SCFcode psi4`, cc-pVDZ, PBE0, `AC NONE`, ALDA+CHF, constrained-NN DF, 100×400 grid; prefix `water_L3`, localization rank limit 3): the printed isotropic `00 00 0` row of each type-pair block of `water_L3_casimir.out`, a census of its recoupled rows, the declared stage settings, and the rank isotropics `tr(α_ll)/(2l+1)` of `water_L3_0f10.pol`, the localized file that stage read. Read by `../test_isapol_primary_casimir_reference.py` and `../test_isapol_casimir_rank4_truncation.py`. sha256 `3cfc05970c8e7182b16d1227a3e6c5ca0309d20425338276be59ad7aa801b1c2`. |
 | `camcasp_casimir_h2o_vdz_l4.json` | The same reference response localized at rank limit 4 (`water_L4`), a different declared model; same layout. Read by `../test_isapol_casimir_rank4_truncation.py`. sha256 `23abdd9183fc59ba54541807e262ce837fffcc11f9a72df1b4f540f14a1ba8a6`. |
 | `h2o_props_psi4_basis/NOTICE` | The CamCASP MIT notice (and the MolSSI-BSE notice) that the two Casimir fixtures' `notice` fields point to. Only the notice is shipped; no basis records are, as a Psi4 preface at its top states. The notice text below the preface is unchanged from the candidate. |
+| `camcasp_isa_fit_water.npz` | Frozen ISA-A fits for O/H1/H2 at three active option settings, on identical water grid/density/shape/basis samples: modified metrics, RHS, solved coefficients and integrated populations from source-extracted CamCASP Fortran arithmetic. Read by `../test_isapol_fit.py`. sha256 `83e0aa187e5fea6a5fbdda41e9211057771f38798375884dbdd0fa42fec86a66`. |
+| `camcasp_isa_fit_edges.npz` | Source-extracted synthetic fitting checks: signed samples, exact denominator cutoff with nonzero damping, automatic ridge eligibility and nonzero exponent-cap contributions. Not a physical density or basis. sha256 `2a723f13bb0d966312c5715dab3e81865f9a9c6f88dd2e6fc98207deac928f9e`. |
+| `camcasp_isa_fit_water.json` | Provenance of the two ISA-fit fixtures: source/generator/data hashes, the actual density/basis definitions and limitations. It is a fit-kernel oracle (matched samples), not converged molecular ISA or Drho-C parity. |
 | `orient_local/` | Retained ORIENT/CamCASP water declarations (sites, frames, frequency headers, manifest) for the LW tests and the `oracle/extract_lw_*.py` parsers; see its README for attribution. |
 
 `oracle/griddump` emits the first two, linking directly against CamCASP's
@@ -28,6 +31,12 @@ commit is on a public remote and `latticedump` is untracked, so regenerating
 the clouds from this repository alone has not been demonstrated; the tests
 check against this committed copy and the Maclaren stream values in
 `../test_isapol.py`.
+
+The three ISA-fit files are byte-identical to the copies in the same unpublished
+candidate. The JSON names the CamCASP (MIT) source files and hashes the fit was
+extracted from; its `regenerate` script (`oracle/make_isa_fit_fixture.py`) and the
+local core path it records are not tracked here, so regeneration from this
+repository alone has not been demonstrated.
 
 The grid is deliberately small. On the local non-FMA build, the full production grid
 (`n_r = 80`, `n_a = 590`, 139 830 points) also matches bit for bit in every coordinate,

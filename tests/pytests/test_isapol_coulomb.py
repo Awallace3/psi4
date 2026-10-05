@@ -1,4 +1,4 @@
-"""Analytic native Libint2 AUX checks; not native Drho-C/end-to-end acceptance."""
+"""Analytic native Libint2 AUX checks, including the analytic Drho-C fit; not end-to-end acceptance."""
 from math import erf, exp, pi, sqrt
 import itertools
 import numpy as np
@@ -438,6 +438,33 @@ def test_orbital_role_fails_closed_for_cartesian_and_atomic_metric():
     with pytest.raises(ValueError,match='Atomic overlap'): main.overlap()
     aux=basis([(0,0,[1.],[1.])],[[0.,0.,0.]])
     with pytest.raises(ValueError,match='Orbital'): core.IsaAuxCoulomb(aux).three_center(aux)
+
+
+@pytest.mark.parametrize('penalty',[.25,1000.])
+@pytest.mark.parametrize('aux_coefficient',[1.,-.7])
+def test_native_drho_c_analytic_finite_penalty(penalty,aux_coefficient):
+    a,b=.7,.9
+    aux=basis([(0,0,[a],[aux_coefficient])],[[0.,0.,0.]])
+    main=basis([(0,0,[b],[1.])],[[0.,0.,0.]],role=core.IsaBasisRole.Orbital,
+               representation=core.IsaBasisRepresentation.Spherical)
+    c=(2*b/pi)**.75
+    p=core.IsaAuxCoulomb(aux)
+    result=p.fit_drho_c(main,core.Matrix.from_array(np.array([[c]])),penalty)
+    q=aux_coefficient*(pi/a)**1.5
+    j=aux_coefficient**2*ss(a,a,[0.]*3,[0.]*3)
+    raw=2*c*c*aux_coefficient*ss(a,2*b,[0.]*3,[0.]*3)
+    metric=j+(penalty*q)*q
+    rhs=raw+penalty*2*q
+    expected=rhs/metric
+    np.testing.assert_allclose(result.raw_rhs,[raw],rtol=5e-14)
+    np.testing.assert_allclose(result.metric.np,[[metric]],rtol=5e-14)
+    np.testing.assert_allclose(result.coefficients,[expected],rtol=5e-14)
+    assert result.fitted_electrons==pytest.approx(q*expected,rel=5e-14)
+    assert abs(result.fitted_electrons-2)>1e-8  # Not silently rescaled.
+    assert result.relative_residual<1e-14
+    density=core.IsaFixedDensity(aux,result.coefficients)
+    np.testing.assert_allclose(density.evaluate([[0.,0.,0.],[1.,0.,0.]],[0]),
+                               [expected*aux_coefficient,expected*aux_coefficient*exp(-a)],rtol=5e-14)
 
 
 @pytest.mark.parametrize('penalty',[0.,float('nan'),float('inf')])

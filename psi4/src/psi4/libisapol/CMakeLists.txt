@@ -9,6 +9,10 @@ list(APPEND sources
   aux_coulomb.cc
   orbital_coulomb.cc
   isa_grid.cc
+  isa_fit.cc
+  isa_shape.cc
+  isa_sweep.cc
+  isa_controller.cc
   tables.cc
   pfit.cc
   fit_points.cc

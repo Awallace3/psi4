@@ -4,3 +4,6 @@
 !camcasp_fit_points.npz
 !camcasp_casimir_h2o_vdz_l3.json
 !camcasp_casimir_h2o_vdz_l4.json
+!camcasp_isa_fit_water.npz
+!camcasp_isa_fit_water.json
+!camcasp_isa_fit_edges.npz
