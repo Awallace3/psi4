@@ -10,8 +10,9 @@ explicit native FDDS on request), the targets and refinement are the stage-05
 stage-06 ``refined_isotropic_dispersion``. This module owns only their order,
 the shared resource ledger and the result record.
 
-Distributions are the analytic DF-centre producer (default) and supplied
-``DistributedMoments``. No ISA or MBIS partition is performed or inferred.
+Distributions are the analytic DF-centre producer (default), supplied
+``DistributedMoments`` and an explicitly declared, experimental ISA-A partition.
+No partition is inferred from another, and no MBIS partition is available.
 """
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -22,11 +23,11 @@ from psi4 import core
 
 from . import isapol_logging as _lg, isapol_lw as lw, isapol_refine as refine
 from .isapol_bounded_response import BoundedResources, BoundedResponse
-from .isapol_distribution import DistributedMoments
+from .isapol_distribution import DistributedMoments, isa_moments, validate_isa_inputs
 from .isapol_pfit_stream import PackedDesignRows, fitted_point_targets, refine_streamed
 
 #: Distributions this orchestrator dispatches; every other name is refused.
-DISTRIBUTIONS = ('df_centre_analytic', 'supplied')
+DISTRIBUTIONS = ('df_centre_analytic', 'isa', 'supplied')
 #: Bounded lattice and refinement sizes (complete cloud, every point pair).
 MAX_FIT_POINTS = 2000
 MAX_PARAMETERS = 64
@@ -99,7 +100,7 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                        scf_correction, expected_grac_shift=None,
                        declared_variables=None, max_order=10, scratch_directory=None, log=None,
                        distributed_moments=None, response='reference_h2h1', fdds=None,
-                       publish_qcvariables=False):
+                       publish_qcvariables=False, partition_recipe=None, partition_grid=None):
     """Run the complete native chain under one explicit resource contract.
 
     Scientific scope: canonical restricted C1 PBE0, NONE or FIXED_GRAC, plain
@@ -116,7 +117,13 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
 
     ``distribution='df_centre_analytic'`` charges each AUX function to its own
     centre; ``distribution='supplied'`` takes caller ``distributed_moments``
-    under the same identity checks. Neither changes a response or LW gate.
+    under the same identity checks. ``distribution='isa'`` (experimental)
+    requires an explicit ``partition_recipe`` (PartitionRecipe) and a full
+    molecular ``partition_grid`` (finite float64 rows x,y,z,weight); a fresh
+    native ISA-A iteration on the live wavefunction produces Q, and it is
+    refused before any response work if the iteration does not converge.
+    No choice changes a response or LW gate. ISA's numeric/work plan is
+    conservative, not an RSS or CPU cap.
 
     A successful live SCF seal is required even for NONE; SCF is never run here.
     ``lattice_options`` is an explicit core.FitPointsOptions (at most 2000
@@ -139,7 +146,9 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
             raise TypeError('explicit BoundedResources required')
         if distribution not in DISTRIBUTIONS:
             raise ValueError(f'distribution must be one of {DISTRIBUTIONS}; '
-                             'no ISA or MBIS partition is available here')
+                             'no MBIS partition is available here')
+        if distribution != 'isa' and (partition_recipe is not None or partition_grid is not None):
+            raise ValueError('partition_recipe and partition_grid require distribution=isa')
         if distribution == 'supplied':
             if not isinstance(distributed_moments, DistributedMoments):
                 raise TypeError('supplied distribution requires DistributedMoments')
@@ -189,7 +198,11 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
             value.label, value.origin, value.rank = site.label, list(site.origin_bohr), 4
             multipole_sites.append(value)
         origins = np.asarray([s.origin_bohr for s in sites])
-        input_bytes = distributed_moments.values.nbytes if distribution == 'supplied' else 0
+        if distribution == 'isa':
+            # Stale or mismatched recipes are refused before scratch or response work.
+            validate_isa_inputs(wfn, partition_recipe, auxiliary_recipe, multipole_sites, 4, partition_grid)
+        input_bytes = (distributed_moments.values.nbytes if distribution == 'supplied' else
+                       partition_grid.nbytes if distribution == 'isa' else 0)
         # The runner validates the shared declarations (AUX/site/geometry centres,
         # grid finiteness, correction, smoothing, fit scalars, response selection).
         runner = BoundedResponse(wfn, auxiliary_recipe, multipole_sites, caller_converged=caller_converged,
@@ -212,7 +225,14 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                           declared_variables=declared_variables, model=solver.model,
                           response=response, lw_residual_policy=solver.lw_residual_policy,
                           lw_disclosure=solver.lw_disclosure)
-            solver.prepare(None if distribution == 'df_centre_analytic' else (lambda ledger: distributed_moments))
+            def produce_moments(ledger):
+                if distribution == 'supplied':
+                    return distributed_moments
+                log.stage('Native ISA partition and response-AUX moments')
+                return isa_moments(wfn, partition_recipe, auxiliary_recipe, multipole_sites, 4,
+                                   caller_converged=caller_converged, integration_grid=partition_grid,
+                                   ledger=ledger)
+            solver.prepare(None if distribution == 'df_centre_analytic' else produce_moments)
             source['partition'] = solver.partition
             if solver.provenance is not None:
                 source['response_provenance'] = solver.provenance

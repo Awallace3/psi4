@@ -52,8 +52,10 @@ iteration or an asymptotic correction of its own inside a property request.
 
 By default the distributed response uses CamCASP's ``DistPolAlgorithm = DF``
 rule: each auxiliary fitting function is charged wholly to its own centre.
-No stockholder partition is inferred, and none is available here: a request for
-an ISA or MBIS distribution is refused.
+No stockholder partition is inferred. An experimental ISA-A partition runs only
+when it is requested explicitly with a complete recipe (see
+`Distribution and response choices`_); a request for an MBIS distribution is
+refused.
 
 .. warning:: Every setting below **names a model, not a tolerance.**  The
    auxiliary basis, the response grid, the kernel smoothing, the localization
@@ -214,7 +216,8 @@ keywords are listed below.
 Additional keyword arguments accept ``auxiliary_recipe``, ``response_grid``,
 ``quadrature``, ``lattice_options``, ``smoothing``, ``shell_cutoff``,
 ``sites``, ``bonds``, ``declared_variables``, ``distribution``,
-``distributed_moments``, ``response``, ``fdds``, ``resources``,
+``distributed_moments``, ``partition_recipe``, ``partition_grid``,
+``response``, ``fdds``, ``resources``,
 ``max_order``, ``scratch_directory`` and ``log``.  Object
 arguments replace the corresponding generated object; scalar generation options
 then have no effect on that object.  Unknown keyword arguments are rejected.
@@ -250,8 +253,41 @@ origins, global axes, uniform rank 4 and the exact ordered response-AUX recipe
 identity. Dimensions, finite values, site/basis identity and any density-state
 fingerprint are checked; the common contraction is
 ``anchor_fit.coefficients @ Q.T``. The PFIT point targets come from the fitted
-response coefficients and do not depend on Q. Neither distribution changes a
-response or LW gate, and no other distribution is accepted.
+response coefficients and do not depend on Q.
+
+``distribution='isa'`` runs a fresh native ISA-A partition of the live
+wavefunction's density. It requires a complete
+``isapol_native_partition.PartitionRecipe`` as ``partition_recipe`` and a full
+molecular quadrature as ``partition_grid`` (finite float64 rows
+``x,y,z,weight`` in atomic units). There is no preset or default recipe and no
+fallback to another distribution. The recipe declares the density-fit AUX,
+the per-site AtomAux and shape bases, the Fit-3 exponential tail cutoffs, the
+iteration grid and every controller setting. ``partition_grid`` separately
+declares the quadrature on which the frozen final shapes integrate Q against
+the **response** AUX, which may differ from the recipe's density-fit AUX. A
+recipe whose sites, origins or AUX centres do not match the live wavefunction,
+or an invalid grid, is refused before any scratch or response work. If the
+ISA-A iteration does not converge, the request fails before the response. The
+partition provenance and its diagnostics (iterations, final tails, Drho
+metric condition, grid charge error, Q charge-row error, recipe and grid
+hashes) appear in ``r.provenance['partition']``. The ISA numeric/work plan
+is conservative, not an RSS or CPU cap.
+
+No distribution changes a response or LW gate, and no other distribution is
+accepted.
+
+.. warning:: ISA is **experimental**. The ISA-A iteration is checked for
+   convergence, but convergence of the site properties with respect to the Q
+   grid is not established: with the Fit-3 tails (retained unchanged), site C6
+   moves by up to :math:`2.5 \times 10^{-4}` relative between the tested Q grids.
+   The partition provenance says so: ``status='experimental'``,
+   ``iteration_converged=True`` and ``property_grid_convergence='not_established'``
+   in ``r.provenance['partition']['diagnostics']``.
+
+The tracked ``tests/pytests/isapol_water_recipe.py`` declares the only tested
+recipe, for water (O,H,H) built from native |PSIfour| aug-cc-pVTZ-RI data with
+explicit 1.5 bohr tails. It is a regression recipe, not a general preset; see
+:ref:`sec:prog_isapol` for its measured limits.
 
 ``response='reference_h2h1'`` (the default) solves the original
 :math:`H_2 H_1 + \omega^2 I` equation at every node and localizes under the

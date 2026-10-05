@@ -90,6 +90,66 @@ Distributed moments (Q)
      rank and auxiliary identity. ``anchor_legs(C)`` is the only supported
      contraction, ``C @ Q.T``.
 
+Experimental ISA-A partition
+   ``psi4.driver.procrouting.isapol_native_partition`` declares an ISA-A
+   (iterated stockholder, CamCASP ``ISA-A`` with Fit-3 exponential tails)
+   partition entirely through frozen recipes: ``SiteRecipe`` (primitive
+   co-centred AtomAux and s-only shape bases, zero-based shell map, explicit
+   tail cutoff in bohr), ``GridRecipe`` (the native ``IsaGrid`` with tabulated
+   Bragg--Slater radii, all sites on the full molecular grid), ``ControllerRecipe``
+   (every controller and fit setting, no defaults) and ``PartitionRecipe``
+   (track, molecular density-fit AUX, atomic initialization, Drho profile).
+   ``native_partition(wfn, recipe, caller_converged=True)`` adapts the MAIN
+   basis (``adapt_main``), fits the density with the charge-constrained
+   Drho-C fit (``IsaAuxCoulomb.fit_drho_c``, penalty 1000, no rescaling), and
+   runs the native controller. Nonconvergence returns an inspectable result
+   with no Q. The result holds read-only copies of the grid, weights and
+   density samples; native objects own copies of their inputs.
+
+   Native classes (``libisapol/isa_fit``, ``isa_shape``, ``isa_sweep``,
+   ``isa_controller``), bound in ``psi4.core``:
+
+   * ``IsaFixedDensity``: an owned molecular-AUX density expansion.
+     ``IsaShapeMap``: an exact shape-shell to AtomAux-shell map.
+     ``IsaAFitProvider``/``IsaAFitSamples``/``isa_a_fit_step``: one frozen
+     ISA-A update, with an LU (DGESV) solve. ``isa_overlap_change`` is the
+     W/RHO overlap-angle diagnostic.
+   * ``IsaGaussianShape``/``IsaExponentialTail``: the effective s-Gaussian
+     shape and its Func-1/Fit-3 tail (log-slope matching plus exterior-charge
+     conservation, not amplitude continuity). The interior is never clipped
+     under an active tail; the no-tail branch uses ``max(w, 0)``.
+   * ``IsaASweep``: one synchronous sweep over all sites.
+     ``IsaAController``: ordinary A/W convergence, with no DIIS or symmetry,
+     and CamCASP's single postconvergence tail refit. Downstream stages sample
+     ``final_tails``; ``state.tails`` lags one shape update. An optional
+     immutable preparation cache is capped at 192 MiB, and the cacheless path
+     gives the same trajectory.
+
+   ``isapol_distribution.isa_moments`` runs this iteration
+   (``build_multipoles=False``), samples the frozen final shapes on the
+   caller's integration grid and integrates the stockholder ratio against the
+   response AUX with ``IsaPartitionedMultipoles``. It admits
+   ``isa_resource_plan`` on the shared ledger before any native work. The plan
+   is conservative and not an RSS cap. It records ``status='experimental'``.
+   The bounded orchestrator calls it for ``distribution='isa'``.
+
+   The only tested recipe is the water regression recipe in
+   ``tests/pytests/isapol_water_recipe.py`` (PBE0/aug-cc-pVTZ, aug-cc-pVTZ-RI
+   Cartesian AUX, 100x200 partition grid). Its measured limits, serial unless
+   stated:
+
+   * The iteration converges in 50 sweeps (largest change 9.0e-10). The Drho-C
+     metric condition is 6.4e15 and the partition grid integrates the fitted
+     density to 8.3e-6 electrons.
+   * The 100x200 grid is refused as a Q grid: its Q charge rows err by 2.0e-4
+     and LW refuses the postcondition. The 200x590 and 300x974 Q grids pass
+     (charge-row errors 1.3e-7 and 4.4e-9), and their site C6 differ by up to
+     2.5e-4 relative. Each has its own regression.
+   * The regression's ``rtol=2e-6`` covers the thread spread: C6 moves 1.93e-6
+     relative between 1 and 8 threads. The stored values are the 8-thread ones.
+     It does not cover ``MKL_CBWR=COMPATIBLE``, where C6 moves 5.8e-6 and the
+     regression fails.
+
 LW localization, multipole transforms and frequency grid
    These consume supplied tensors only. No response, partition or external
    CamCASP/ORIENT program is involved. LW is the Lillestolen--Wheatley

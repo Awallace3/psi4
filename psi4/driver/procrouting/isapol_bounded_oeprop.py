@@ -68,6 +68,7 @@ def settings(preset, overrides):
         max_order=10,  # localize.py Casimir maxN = 4*wsmlimit+2
         quadrature=None, response_grid=None, lattice_options=None, auxiliary_recipe=None,
         sites=None, bonds=None, distribution='df_centre_analytic', distributed_moments=None,
+        partition_recipe=None, partition_grid=None,  # explicit experimental ISA only
         declared_variables=None,  # process_data.F90:2040-2150 cutoff-derived pdef
         response='reference_h2h1', fdds=None,  # explicit native FDDS only on request
         scratch_directory=None,
@@ -164,8 +165,10 @@ def run(wfn, tasks, *, preset, **kwargs):
     The two supported refined tasks execute the full common chain. Read its
     BoundedProperties record with psi4.atomic_property_result(wfn). Requesting
     ATOMIC_REFINED_DISPERSION also publishes the refined-dispersion
-    QCVariables. The distribution is analytic DF-centre, or explicitly
-    ``distribution='supplied'`` with ``distributed_moments``; the response is
+    QCVariables. The distribution is analytic DF-centre, explicitly
+    ``distribution='supplied'`` with ``distributed_moments``, or the
+    experimental ``distribution='isa'`` with an explicit ``partition_recipe``
+    and ``partition_grid`` (no preset recipe exists); the response is
     the reference H2H1 unless ``response='native_fdds'`` and ``fdds`` are given.
     """
     if not tasks or any(task not in TASKS for task in tasks) or len(set(tasks)) != len(tasks):
@@ -222,7 +225,8 @@ def run(wfn, tasks, *, preset, **kwargs):
         keys = ('smoothing', 'shell_cutoff', 'charge_penalty', 'anchor_metric_damping',
                 'localization_rank_limit', 'weight_type', 'weight_coefficient', 'cutoff',
                 'resources', 'scf_correction', 'expected_grac_shift', 'max_order', 'scratch_directory',
-                'distribution', 'distributed_moments', 'response', 'fdds')
+                'distribution', 'distributed_moments', 'response', 'fdds',
+                'partition_recipe', 'partition_grid')
         result = bounded_properties(wfn, recipe, caller_converged=True,
             sites=sites, bonds=bonds, quadrature=quadrature, response_grid=grid,
             lattice_options=lattice, declared_variables=v['declared_variables'], log=log,
