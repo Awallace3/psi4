@@ -20,10 +20,16 @@ The inputs are built from dyadic rationals and integer direction vectors, using
 only ``+ - * /`` and ``sqrt``, so they are bit-identical on any IEEE-754
 platform and do not depend on a random-number stream.
 """
+import hashlib
+import math
+
 import numpy as np
 import pytest
 
+import psi4
 from psi4 import core
+from psi4.driver.procrouting import isapol_logging as _lg
+from psi4.driver.procrouting import isapol_lw as _lw
 from psi4.driver.procrouting import isapol_refine as R
 
 pytestmark = [pytest.mark.smoke]
@@ -373,6 +379,263 @@ def test_excluded_components_are_zero_not_carried_over():
     assert zeros
     for i, j in zeros:
         assert refined_o[i, j] == 0.0
+
+
+def test_isotropic_scalars_reduce_each_rank_block():
+    """``alpha_l = trace(alpha_ll)/(2l+1)``, per site, rank1 upward.
+
+    This is the reduction the isotropic Casimir-Polder sum consumes, and it is
+    the same one ``isapol_lw`` applies to the *unrefined* localized tensors; the
+    point of having it here is that a refined model can be fed to the dispersion
+    kernel without the caller re-deriving the packing.  The expectation below is
+    recomputed from ``refined_tensors`` independently of the helper.
+    """
+    built = case('l2h1')
+    result = solve(built)
+    ranks, scalars = R.isotropic_scalars(result)
+    assert ranks == ((1, 2), (1,), (1,))
+    for site_ranks, site_scalars, tensor in zip(ranks, scalars, result.refined_tensors):
+        assert len(site_scalars) == len(site_ranks)
+        for l, value in zip(site_ranks, site_scalars):
+            block = np.asarray(tensor)[l * l:(l + 1) ** 2, l * l:(l + 1) ** 2]
+            assert block.shape == (2 * l + 1, 2 * l + 1)
+            assert value == np.trace(block) / (2 * l + 1)
+    # Rank0 is a refinement variable but not a polarizability the sum runs
+    # over, so no site reports it even though every tensor carries the block.
+    assert all(0 not in site_ranks for site_ranks in ranks)
+    assert result.refined_tensors[0][0, 0] != 0.0
+    # COPY-equivalent sites share one block, hence one set of scalars.
+    assert scalars[1] == scalars[2]
+    # The refinement moved the model: the scalars are not the anchors'.
+    anchor_o = built['anchors'][0]
+    assert scalars[0][0] != np.trace(anchor_o[1:4, 1:4]) / 3.0
+
+
+def test_isotropic_scalars_requires_a_refinement_result():
+    with pytest.raises(ValueError):
+        R.isotropic_scalars(solve(case('l2h1')).refined_tensors)
+
+
+# ---------------------------------------------- dispersion from refined tensors
+
+QUADRATURE = _lw.Provenance('CasimirGrid(4, 0.5)', '0' * 64, 'test_isapol_refine',
+                            'Gauss-Legendre imaginary-frequency nodes, static point first')
+
+
+def refined_nodes(name='l2h1', n_freq=4, **overrides):
+    """One refinement per ``CasimirGrid(n_freq, 0.5)`` node, static point first.
+
+    The anchors (hence the variable set) are the case's at every node; the data
+    are the forward map of the case's source model scaled by ``1/(1+omega^2)``,
+    so the refined scalars genuinely vary along the grid.
+    """
+    built = case(name)
+    spec = dict(CASES[name], **overrides)
+    grid = core.CasimirGrid(n_freq, 0.5)
+    nodes = []
+    for k in range(n_freq + 1):
+        omega = grid.omega(k)
+        model = R.refinement_model(built['model'].sites, built['anchors'], frequency_au=omega,
+                                   cutoff=1.0e-4, weight_type=spec['weight_type'],
+                                   weight_coefficient=spec['weight_coefficient'],
+                                   provenance=f'test_isapol_refine case {name}')
+        source = [t / (1.0 + omega * omega) for t in built['source']]
+        targets = R.pack_lower_triangle(R.point_to_point_response(built['fields'], model, source))
+        nodes.append(R.refine(model, built['points'], targets, fields=built['fields'],
+                              target_origin=core.IsaPfitTargetOrigin.SyntheticAnalyticTest,
+                              source_id='test_isapol_refine',
+                              generation_record=f'scaled forward map, node {k}'))
+    return tuple(nodes), [grid.cp_weight(k) for k in range(n_freq + 1)]
+
+
+def oracle_coefficient(nodes, weights, a, b, order, ranks):
+    """``binomial(2la+2lb, 2la) sum_f w_f alpha_a,la(f) alpha_b,lb(f)`` from the tensors."""
+    def scalar(node, site, l):
+        block = np.asarray(node.refined_tensors[site])[l * l:(l + 1) ** 2, l * l:(l + 1) ** 2]
+        return np.trace(block) / (2 * l + 1)
+    value, missing = 0.0, []
+    for la in range(1, order // 2 - 1):
+        lb = order // 2 - 1 - la
+        if la not in ranks[a] or lb not in ranks[b]:
+            missing.append((la, lb))
+            continue
+        integral = 0.0
+        for node, w in zip(nodes, weights):
+            if w != 0.0:
+                integral += w * scalar(node, a, la) * scalar(node, b, lb)
+        value += math.comb(2 * la + 2 * lb, 2 * la) * integral
+    return value, tuple(missing)
+
+
+@pytest.fixture(scope='module')
+def l2h1_nodes():
+    return refined_nodes()
+
+
+def test_refined_dispersion_matches_an_independent_contraction(l2h1_nodes):
+    """Every ordered site pair and order, against the closed form on the tensors."""
+    nodes, weights = l2h1_nodes
+    record = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                            quadrature_provenance=QUADRATURE)
+    assert record.labels == ('O', 'H1', 'H2')
+    assert record.frequencies == tuple(n.model.frequency_au for n in nodes)
+    assert record.frequencies[0] == 0.0 and record.cp_weights[0] == 0.0
+    assert record.site_ranks == ((1, 2), (1,), (1,))
+    assert record.solver_status == ('Solved',) * len(nodes)
+    assert [(p.site_a, p.site_b) for p in record.pairs] == [(a, b) for a in range(3) for b in range(3)]
+    digest = hashlib.sha256(''.join(n.model.anchor_sha256 for n in nodes).encode()).hexdigest()
+    assert record.anchor_sha256 == digest
+    for pair in record.pairs:
+        assert [c.order for c in pair.coefficients] == [6, 8, 10, 12]
+        for c in pair.coefficients:
+            value, missing = oracle_coefficient(nodes, weights, pair.site_a, pair.site_b,
+                                                c.order, record.site_ranks)
+            assert c.value == pytest.approx(value, rel=1e-13, abs=0.0)
+            assert c.missing_rank_pairs == missing
+            assert c.unrestricted_complete == (not missing)
+    by_pair = {(p.label_a, p.label_b): p.coefficients for p in record.pairs}
+    # Only O carries rank 2: O-O C8 is complete, O-H C8 is not, C12 never is.
+    assert by_pair['O', 'O'][1].unrestricted_complete
+    assert not by_pair['O', 'H1'][1].unrestricted_complete
+    assert not any(p.coefficients[3].unrestricted_complete for p in record.pairs)
+    # COPY-equivalent hydrogens share one variable set, hence identical rows.
+    assert [c.value for c in by_pair['O', 'H1']] == [c.value for c in by_pair['O', 'H2']]
+
+
+def test_refined_dispersion_declared_ranks_truncate_rather_than_zero_fill(l2h1_nodes):
+    nodes, weights = l2h1_nodes
+    full = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                          quadrature_provenance=QUADRATURE, max_order=8)
+    dipole = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                            quadrature_provenance=QUADRATURE, max_order=8,
+                                            site_ranks=((1,), (1,), (1,)))
+    assert [c.order for c in full.pairs[0].coefficients] == [6, 8]
+    assert dipole.site_ranks == ((1,), (1,), (1,))
+    assert full.pairs[0].coefficients[0].value == dipole.pairs[0].coefficients[0].value
+    assert full.pairs[0].coefficients[1].unrestricted_complete
+    assert dipole.pairs[0].coefficients[1].missing_rank_pairs == ((1, 2), (2, 1))
+    assert dipole.pairs[0].coefficients[1].value == 0.0
+
+
+def test_refined_dispersion_report_and_optional_qcvariables(l2h1_nodes):
+    """Reporting changes no number; incomplete orders publish only as INCOMPLETE."""
+    nodes, weights = l2h1_nodes
+    lines = []
+    log = _lg.StageLog(2, writer=lines.append)
+    mol = psi4.geometry('units bohr\nsymmetry c1\nno_com\nno_reorient\n'
+                        'O 0 0 0\nH -1.45365196 0 -1.12168732\nH 1.45365196 0 -1.12168732\n')
+    wfn = core.Wavefunction.build(mol, 'sto-3g')
+    record = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                            quadrature_provenance=QUADRATURE, log=log, wfn=wfn)
+    quiet = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                           quadrature_provenance=QUADRATURE)
+    assert record.pairs == quiet.pairs
+    text = ''.join(lines)
+    for heading in ('Casimir-Polder quadrature', 'Atomic (same-site) isotropic dispersion',
+                    'Pairwise isotropic dispersion coefficients', 'Rank pairs absent',
+                    'Rank pairs entering each order', 'Sum over all ordered site pairs',
+                    'provenance: ' + QUADRATURE.description):
+        assert heading in text, heading
+    assert [name for name, _ in log.stages] == [
+        'isotropic dispersion from refined tensors (Casimir-Polder)']
+
+    def total(order):
+        value = 0.0  # in pair order; builtin sum() compensates and differs by an ulp
+        for p in record.pairs:
+            value += p.coefficients[(order - 6) // 2].value
+        return value
+
+    stem = 'ATOMIC REFINED DISPERSION'
+    assert wfn.variable(f'{stem} C6 TOTAL') == total(6)
+    assert wfn.variable(f'{stem} C12 TOTAL INCOMPLETE') == total(12)
+    assert not wfn.has_variable(f'{stem} C12 TOTAL')
+    assert wfn.variable(f'{stem} C8 O O') == record.pairs[0].coefficients[1].value
+    assert wfn.has_variable(f'{stem} C8 O H1 INCOMPLETE')
+    assert not wfn.has_variable(f'{stem} C8 O H1')
+    assert wfn.variable('ATOM O C6 REFINED DISPERSION COEFFICIENT') == \
+        record.pairs[0].coefficients[0].value
+    assert wfn.has_variable('ATOM H1 C8 REFINED DISPERSION COEFFICIENT INCOMPLETE')
+    assert wfn.variable(f'{stem} SITE PAIRS') == 9.0
+    assert wfn.variable(f'{stem} MAX ORDER') == 12.0
+    assert wfn.variable(f'{stem} QUADRATURE NODES') == len(weights)
+    np.testing.assert_array_equal(np.asarray(wfn.array_variable(f'{stem} CP WEIGHTS')),
+                                  [weights])
+    np.testing.assert_array_equal(np.asarray(wfn.array_variable(f'{stem} QUADRATURE FREQUENCIES')),
+                                  [record.frequencies])
+    assert wfn.variable(f'{stem} ANCHOR SHIFT MAXABS') == record.anchor_shift_maxabs
+
+
+def test_refined_dispersion_reaches_a_complete_c12_at_rank_four():
+    """O at rank 4 supplies (1,4) and (4,1): the O-O C12 sum closes, O-H does not."""
+    nodes, weights = refined_nodes('rank4', n_freq=2)
+    record = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                            quadrature_provenance=QUADRATURE)
+    o_o, o_h = record.pairs[0].coefficients[3], record.pairs[1].coefficients[3]
+    assert o_o.unrestricted_complete and o_o.included_rank_pairs == ((1, 4), (2, 3), (3, 2), (4, 1))
+    assert o_h.missing_rank_pairs == ((1, 4), (2, 3), (3, 2))
+    assert o_h.included_rank_pairs == ((4, 1),)
+    value, _ = oracle_coefficient(nodes, weights, 0, 0, 12, record.site_ranks)
+    assert o_o.value == pytest.approx(value, rel=1e-13, abs=0.0)
+
+
+def _replace_node(nodes, index, node):
+    return nodes[:index] + (node,) + nodes[index + 1:]
+
+
+@pytest.mark.parametrize('fault,match', [
+    ('empty', 'non-empty sequence'),
+    ('tensors', 'non-empty sequence'),
+    ('repeated', 'distinct'),
+    ('sites', 'identical declared site set'),
+    ('penalty', 'weight_coefficient differs'),
+    ('provenance', 'Provenance'),
+    ('order7', 'max_order'),
+    ('order14', 'max_order'),
+    ('order_bool', 'max_order'),
+    ('weights_short', 'one CP weight'),
+    ('weights_negative', 'non-negative'),
+    ('weights_nan', 'finite'),
+    ('weights_zero', 'not all zero'),
+    ('static_weight', 'static node'),
+    ('ranks_count', 'one rank tuple per site'),
+    ('ranks_above_limit', 'exceeds the refinement rank limit'),
+    ('ranks_order', 'strictly increasing'),
+    ('ranks_type', 'integer ranks'),
+])
+def test_refined_dispersion_refusals(l2h1_nodes, fault, match):
+    nodes, weights = l2h1_nodes
+    kwargs = dict(cp_weights=list(weights), quadrature_provenance=QUADRATURE)
+    if fault == 'empty':
+        nodes = ()
+    elif fault == 'tensors':
+        nodes = tuple(n.refined_tensors for n in nodes)
+    elif fault == 'repeated':
+        nodes = _replace_node(nodes, 2, nodes[1])
+    elif fault == 'sites':
+        nodes = _replace_node(nodes, 1, solve(case('rank4')))
+    elif fault == 'penalty':
+        nodes = _replace_node(nodes, 1, refined_nodes(weight_coefficient=2.0e-3)[0][1])
+    elif fault == 'provenance':
+        kwargs['quadrature_provenance'] = QUADRATURE.description
+    elif fault.startswith('order'):
+        kwargs['max_order'] = {'order7': 7, 'order14': 14, 'order_bool': True}[fault]
+    elif fault == 'weights_short':
+        kwargs['cp_weights'] = weights[:-1]
+    elif fault == 'weights_negative':
+        kwargs['cp_weights'][1] = -1.0
+    elif fault == 'weights_nan':
+        kwargs['cp_weights'][1] = float('nan')
+    elif fault == 'weights_zero':
+        kwargs['cp_weights'] = [0.0] * len(weights)
+    elif fault == 'static_weight':
+        kwargs['cp_weights'][0] = 1.0
+    else:
+        kwargs['site_ranks'] = {'ranks_count': ((1,), (1,)),
+                                'ranks_above_limit': ((1, 2), (1, 2), (1,)),
+                                'ranks_order': ((2, 1), (1,), (1,)),
+                                'ranks_type': ((1.0,), (1,), (1,))}[fault]
+    with pytest.raises(ValueError, match=match):
+        R.refined_isotropic_dispersion(nodes, **kwargs)
 
 
 # ------------------------------------------------------- declared variable list

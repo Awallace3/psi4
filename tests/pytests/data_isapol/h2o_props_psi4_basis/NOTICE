@@ -1,0 +1,76 @@
+REFERENCE BASIS DATA / SOURCE NOTICES
+
+Only O/H numeric records are shipped, not whole CamCASP basis files.
+MAIN: Dunning, J. Chem. Phys. 90, 1007 (1989); Kendall, Dunning and
+Harrison, J. Chem. Phys. 96, 6796 (1992). Original EMSL Basis Set Exchange.
+Full expected contractions verified against MolSSI-BSE aug-cc-pVTZ v0;
+ordered as CamCASP expected data. Native Psi4 O contractions omit terms
+on separately present unit shells: same linear span, not literal equality.
+RI AUX: Weigend, Koehn, Haettig, J. Chem. Phys. 116, 3175 (2002).
+O/H numeric records and order verified against MolSSI-BSE aug-cc-pVTZ-RIFIT
+v1 (2019-01-08; Turbomole 7.3). BSE spherical metadata is NOT adopted:
+the traced protocol explicitly chooses Cartesian GAMINT.
+BSE README explicitly releases its basis-set library under BSD-3-Clause:
+https://github.com/MolSSI-BSE/basis_set_exchange (README.md, LICENSE).
+BSE citation: Pritchard et al., J. Chem. Inf. Model. 59, 4814 (2019),
+doi:10.1021/acs.jcim.9b00725. API/source hashes are pinned in the manifest.
+No assumption is made that all CamCASP bundled data/components are MIT.
+
+CamCASP permitted source-derived normalization/dispatch provenance:
+Anthony Stone / Alston Misquitta. The applicable notice retained from the
+owned CamCASP fixture is reproduced in full below. It is not a license
+assertion about ORIENT, RRF, or third-party basis databases.
+
+MIT License
+
+Copyright (c) 2019 Anthony Stone
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+MolSSI-BSE BSD 3-Clause notice (retained independently for numeric data):
+
+Copyright (c) 2020 The Molecular Sciences Software Institute, Virginia Tech
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+1. Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+contributors may be used to endorse or promote products derived
+from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.

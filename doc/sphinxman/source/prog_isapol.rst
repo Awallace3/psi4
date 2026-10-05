@@ -270,8 +270,78 @@ Point-response fitting (PFIT)
      sites whose local anchors disagree. A refined tensor is a different model
      from the unrefined LW tensor of the same site.
 
-The ISA and MBIS partitions (density partitions, not orbital rotations) and
-dispersion are built on top of these blocks and are added separately.
+Isotropic Casimir--Polder dispersion
+   Supplied or refined local polarizabilities are reduced to per-rank scalars
+   alpha_l = tr(alpha_ll)/(2l+1) and contracted into isotropic site-site C_n
+   (Eh bohr^n). No localization, isotropization or symmetrization happens here.
+
+   * ``psi4.core.IsaIsotropicModel(frequencies, sites, provenance)`` is an
+     owned snapshot of supplied scalars. Each ``IsaIsotropicSite`` has a unique
+     label, a finite origin, explicit strictly increasing ``ranks`` in 1 to 4,
+     and a one-block ``Matrix`` with one row per frequency and one column per
+     rank. Frequencies are finite, nonnegative and strictly increasing; a
+     nonempty provenance is required. Signed values are kept.
+   * ``psi4.core.isa_isotropic_dispersion(model_a, model_b, cp_weights,
+     max_order=12)`` returns, for every ordered A x B site pair and every even
+     order n from 6 to ``max_order`` (6, 8, 10 or 12),
+     C_n = sum over la + lb = n/2 - 1 of binomial(2la+2lb, 2la)
+     sum_f w_f alphaA_la(f) alphaB_lb(f). ``cp_weights`` already include the
+     Jacobian and 1/(2 pi), as ``CasimirGrid.cp_weight`` does. The A and B
+     grids must match exactly (no interpolation), the static node must carry
+     zero weight, at least one weight must be positive, and nonfinite
+     products, sums or coefficients are refused. Odd orders are not formed.
+   * A rank a site does not carry is never read as zero. Each coefficient lists
+     its ``included_rank_pairs`` and ``missing_rank_pairs`` and is
+     ``complete`` only when none are missing. C12 needs (1,4), (2,3), (3,2)
+     and (4,1); a rank-3 model reports (1,4) and (4,1) missing, as CamCASP's
+     own rank-3 and rank-4 CASIMIR runs also omit them (it builds no
+     isotropic rank-4 term at ``Dispersion 12``).
+   * ``isapol_refine.isotropic_scalars(result)`` gives the per-site ranks
+     (1 to ``rank_limit``) and scalars of one PFIT ``RefinementResult``.
+     ``isapol_refine.refined_isotropic_dispersion(refinements, cp_weights=...,
+     quadrature_provenance=...)`` takes one result per quadrature node, in
+     node order, all on the identical site set, variable set and penalty
+     scheme, and contracts that refined model with itself. ``site_ranks``
+     defaults to every refined rank; a declared rank above a site's
+     ``rank_limit`` is refused rather than zero-filled. It returns an
+     immutable ``RefinedIsotropicDispersion`` of ``isapol_lw.DispersionPair``
+     and ``isapol_lw.Coefficient`` records. A refined C_n is a different model
+     from an unrefined LW C_n.
+   * Reporting is optional and changes no number. A ``StageLog`` passed as
+     ``log`` prints the quadrature, the same-site and pairwise C_n, the rank
+     pairs entering and missing from each order, and the sum over all ordered
+     site pairs. A wavefunction passed as ``wfn`` receives QCVariables
+     ``ATOMIC REFINED DISPERSION C<n> <A> <B>``, ``... C<n> TOTAL`` and
+     ``ATOM <label> C<n> REFINED DISPERSION COEFFICIENT``, with the suffix
+     ``INCOMPLETE`` on every incomplete order, plus the pair count,
+     maximum order, quadrature nodes, frequencies, CP weights and largest
+     anchor shift. Nothing reads them back.
+   * Limits: the C_n inherit the LW orientation dependence above through the
+     rank 2 and higher scalars (C8 and up), and the conditioning of the PFIT
+     solver through the refined scalars. Reproducing CamCASP's printed C_n
+     from CamCASP's own localized scalars checks this contraction, not a
+     native response chain.
+
+   A supplied single-oscillator model needs nothing beyond these blocks; its
+   C6 approaches the London value 3 a^2 w0 / 4::
+
+      import numpy as np
+      from psi4 import core
+
+      grid = core.CasimirGrid(10, 0.5)
+      nodes = [grid.omega(k) for k in range(grid.n_freq() + 1)]
+      weights = [grid.cp_weight(k) for k in range(grid.n_freq() + 1)]
+      a, w0 = 2.67, 1.0
+      site = core.IsaIsotropicSite()
+      site.label, site.origin, site.ranks = 'Ne', [0., 0., 0.], [1]
+      site.polarizabilities = core.Matrix.from_array(
+          np.array([[a * w0**2 / (w0**2 + x**2)] for x in nodes]))
+      model = core.IsaIsotropicModel(nodes, [site], 'supplied oscillator')
+      result = core.isa_isotropic_dispersion(model, model, weights, 6)
+      c6 = result.pairs[0].coefficients[0]  # order 6, complete
+
+The ISA and MBIS partitions (density partitions, not orbital rotations) are
+built on top of these blocks and are added separately.
 
 Deferred to later stages
    These candidate APIs have no consumer here. Each is added, from candidate
@@ -285,6 +355,3 @@ Deferred to later stages
      constructor ``IsaPartitionedMultipoles(values, sites, representation,
      provenance)``, which takes a finished Q (``'fitted_density_coefficients'``
      or ``'direct_ov'`` columns) and sites without samples, as given.
-   * Dispersion: the ``isapol_lw.Coefficient`` and ``DispersionPair``
-     result records, and the refined-tensor reduction
-     ``isapol_refine.isotropic_scalars``.
