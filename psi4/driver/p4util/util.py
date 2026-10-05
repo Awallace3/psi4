@@ -35,6 +35,7 @@ __all__ = [
     "libint2_configuration",
     "libint2_print_out",
     "oeprop",
+    "atomic_property_result",
     "set_memory",
 ]
 
@@ -63,6 +64,12 @@ def oeprop(wfn: core.Wavefunction, *args: List[str], **kwargs):
     :type title: str
     :param title: label prepended to all psivars computed
 
+    :param atomic_backend: optional explicit ``BOUNDED_DF`` backend for the two
+        ATOMIC_REFINED_* tasks. Requires ``preset='water'`` or ``'benzene'``;
+        kwargs override changed Psi4 options and preset values. This model
+        does not run SCF. ATOMIC_* properties are refused without it. Access the
+        owned BoundedProperties result with :func:`atomic_property_result`.
+
     :examples:
 
     >>> # [1] Moments with specific label
@@ -70,6 +77,23 @@ def oeprop(wfn: core.Wavefunction, *args: List[str], **kwargs):
     >>> oeprop(wfn, 'DIPOLE', 'QUADRUPOLE', title='H3O+ SCF')
 
     """
+    # Reserve the whole ATOMIC_* namespace. Invalidate the latest atomic result
+    # and its published refined-dispersion variables at request entry,
+    # including rejected names and mixed requests.
+    atomic_names = tuple(prop.upper() for prop in args
+                         if isinstance(prop, str) and prop.upper().startswith('ATOMIC_'))
+    if atomic_names or 'atomic_backend' in kwargs:
+        from ..procrouting import isapol_bounded_oeprop
+        if isinstance(wfn, core.Wavefunction):
+            isapol_bounded_oeprop.invalidate(wfn)
+        if 'atomic_backend' in kwargs:
+            if kwargs['atomic_backend'] != 'BOUNDED_DF':
+                raise ValidationError('Unknown atomic_backend; supported explicit backend is BOUNDED_DF')
+            isapol_bounded_oeprop.run(wfn, tuple(prop.upper() for prop in args),
+                                      **{k: v for k, v in kwargs.items() if k != 'atomic_backend'})
+            return
+        raise ValidationError("ATOMIC_* properties require atomic_backend='BOUNDED_DF': "
+                              + ', '.join(atomic_names))
     oe = core.OEProp(wfn)
     if 'title' in kwargs:
         oe.set_title(kwargs['title'])
@@ -85,6 +109,16 @@ def oeprop(wfn: core.Wavefunction, *args: List[str], **kwargs):
             free_atom_volumes(wfn)
 
     oe.compute()
+
+
+def atomic_property_result(wfn: core.Wavefunction):
+    """Access the owned latest atomic oeprop result, including diagnostics.
+
+    ``oeprop`` continues to return None. Large labeled tensors live here rather
+    than in padded QCVariables. No calculation or hidden SCF is performed.
+    """
+    from ..procrouting.isapol_bounded_oeprop import atomic_property_result as accessor
+    return accessor(wfn)
 
 
 def cubeprop(wfn: core.Wavefunction, **kwargs):

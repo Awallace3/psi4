@@ -312,6 +312,113 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- Tolerance for pseudoinversion of grid point overlap matrix (Parrish 2012 eq. 30) !expert -*/
     options.add_double("LS_THC_S_EPSILON", 1.0E-10);
 
+    /*- Cartesian molecular auxiliary basis of the BOUNDED_DF DF-centre partition and its
+        response fit. Never inferred from BASIS or DF_BASIS_SCF: a different name is a
+        different declared model. oeprop(..., atomic_backend='BOUNDED_DF') reads this only
+        when it has been explicitly set; otherwise the preset value applies
+        (aug-cc-pVTZ-RI). -*/
+    options.add_str_i("ATOMIC_PROPERTY_AUXILIARY_BASIS", "cc-pVDZ-JKFIT");
+    /*- Which SCF asymptotic correction the caller DECLARES the incoming orbitals already
+        carry. This is an acceptance policy, never a producer: no value of it runs SCF or
+        an asymptotic-correction iteration. NONE admits unmodified canonical orbitals and
+        refuses any GRAC state. FIXED_GRAC admits already-converged canonical fixed-GRAC
+        orbitals (alpha=0.5, beta=40, X=LB*0.75, C=VWN*1) whose shift is declared in
+        ATOMIC_SCF_EXPECTED_GRAC_SHIFT.
+        When unset, BOUNDED_DF follows the SCF: FIXED_GRAC at the functional's own
+        attached shift if it has one, otherwise NONE. -*/
+    options.add_str("ATOMIC_SCF_ASYMPTOTIC_CORRECTION", "NONE", "NONE FIXED_GRAC");
+    /*- Expected fixed GRAC shift in Hartree, explicitly positive for FIXED_GRAC. Zero is
+        an undeclared sentinel, not an automatically computed IP/HOMO shift. When unset,
+        BOUNDED_DF takes the shift attached to the SCF functional. -*/
+    options.add_double("ATOMIC_SCF_EXPECTED_GRAC_SHIFT", 0.0);
+    /*- Radial points of the BOUNDED_DF ALDA kernel quadrature, separate from the SCF
+        grid. oeprop(..., atomic_backend='BOUNDED_DF') reads this only when it has been
+        explicitly set; otherwise the preset value applies (100). -*/
+    options.add_int("ATOMIC_RESPONSE_RADIAL_POINTS", 99);
+    /*- Angular points of the BOUNDED_DF ALDA kernel quadrature, separate from the SCF
+        grid. oeprop(..., atomic_backend='BOUNDED_DF') reads this only when it has been
+        explicitly set; otherwise the preset value applies (200). -*/
+    options.add_int("ATOMIC_RESPONSE_SPHERICAL_POINTS", 590);
+    /*- Uniform rank the LW localization runs at, 1 to 3: the reference protocol's
+        ``Limit``. Below the site rank the restriction is exact, because multipole
+        translation is rank-raising. A localization at one limit is a different model from
+        one at another. oeprop(..., atomic_backend='BOUNDED_DF') reads this only when it
+        has been explicitly set; otherwise the preset value applies (2). -*/
+    options.add_int("ATOMIC_LOCALIZATION_RANK_LIMIT", 3);
+
+    /*- The reference protocol's ``Lambda``: the rank-1 charge penalty ``A += lambda q
+        q^T`` of the constrained transition-density fit. An OV transition density has
+        exactly zero charge, so raising lambda converges the constraint; it still changes
+        the fitted density, so runs at different lambda are different declared models.
+        oeprop(..., atomic_backend='BOUNDED_DF') reads this only when it has been
+        explicitly set; otherwise the preset value applies (1000). -*/
+    options.add_double("ATOMIC_OV_CHARGE_PENALTY", 1.0);
+    /*- The reference protocol's ``Eta`` (``ConstraintType = 1``) for the fitted anchor
+        legs: every Coulomb-metric element whose two auxiliary functions sit on different
+        centres is scaled by ``1-eta`` before the charge penalty is added. It changes the
+        fitted density at every eta, so it is a model declaration, never a tolerance or a
+        conditioning repair. oeprop(..., atomic_backend='BOUNDED_DF') reads this only when
+        it has been explicitly set; otherwise the preset value applies (0.0005). -*/
+    options.add_double("ATOMIC_OV_METRIC_DAMPING", 0.0);
+
+    /*- Number of accepted points on the random refinement lattice, the reference
+        protocol's ``SET Lattice ... Random N``. Psi4 reproduces CamCASP's Maclaren
+        lagged-Fibonacci draw draw-for-draw, so the cloud is a declared model input: a run
+        at another count is a different model, not a better-converged one. oeprop(...,
+        atomic_backend='BOUNDED_DF') reads this only when it has been explicitly set;
+        otherwise the preset value applies (2000). -*/
+    options.add_int("ATOMIC_REFINEMENT_POINTS", 500);
+    /*- Seed of the refinement lattice generator, the protocol's ``Seed``. A run at
+        another seed is a different declared model, never a repeat measurement.
+        oeprop(..., atomic_backend='BOUNDED_DF') reads this only when it has been
+        explicitly set; otherwise the preset value applies (1). -*/
+    options.add_int("ATOMIC_REFINEMENT_SEED", 1);
+    /*- Inner radius of the refinement lattice shell, the protocol's ``LoLim``, in
+        MULTIPLES OF THE VAN DER WAALS RADIUS and not in bohr. oeprop(...,
+        atomic_backend='BOUNDED_DF') reads this only when it has been explicitly set;
+        otherwise the preset value applies (2.0). -*/
+    options.add_double("ATOMIC_REFINEMENT_LOWER_LIMIT", 2.0);
+    /*- Outer radius of the refinement lattice shell, the protocol's ``HiLim``, in
+        MULTIPLES OF THE VAN DER WAALS RADIUS and not in bohr. Must exceed
+        ATOMIC_REFINEMENT_LOWER_LIMIT. oeprop(..., atomic_backend='BOUNDED_DF') reads this
+        only when it has been explicitly set; otherwise the preset value applies (4.0).
+        -*/
+    options.add_double("ATOMIC_REFINEMENT_UPPER_LIMIT", 4.0);
+    /*- PFIT point weighting, the reference protocol's ``weight`` index. It selects which
+        points the refinement objective believes, so it is a model declaration.
+        oeprop(..., atomic_backend='BOUNDED_DF') reads this only when it has been
+        explicitly set; otherwise the preset value applies (3). -*/
+    options.add_int("ATOMIC_REFINEMENT_WEIGHT_TYPE", 4);
+    /*- PFIT anchor penalty coefficient, the protocol's ``weightcoeff``. It scales how
+        strongly each refined rank-1 variable is held to its unrefined anchor; the shipped
+        CamCASP default moved from 1e-5 to 1e-3 between releases and alone shifts
+        site-pair C6 by tens of percent. oeprop(..., atomic_backend='BOUNDED_DF') reads
+        this only when it has been explicitly set; otherwise the preset value applies
+        (1e-3). -*/
+    options.add_double("ATOMIC_REFINEMENT_WEIGHT_COEFFICIENT", 1.0e-3);
+    /*- PFIT solver rank/conditioning cutoff, the protocol's ``with cutoff``. oeprop(...,
+        atomic_backend='BOUNDED_DF') reads this only when it has been explicitly set;
+        otherwise the preset value applies (1e-4). -*/
+    options.add_double("ATOMIC_REFINEMENT_CUTOFF", 1.0e-4);
+    /*- Uniform rank the refinement runs at, the protocol's ``Limit rank to``, 1 to 3. It
+        may not exceed ATOMIC_LOCALIZATION_RANK_LIMIT. oeprop(...,
+        atomic_backend='BOUNDED_DF') reads this only when it has been explicitly set;
+        otherwise the preset value applies (2). -*/
+    options.add_int("ATOMIC_REFINEMENT_RANK_LIMIT", 2);
+    /*- Refinement rank on hydrogen sites, the protocol's ``Limit rank to ... for sites H1
+        H2``, 1 to 3, and equally bounded by ATOMIC_LOCALIZATION_RANK_LIMIT. oeprop(...,
+        atomic_backend='BOUNDED_DF') reads this only when it has been explicitly set;
+        otherwise the preset value applies (2, the protocol's hlimit=limit). -*/
+    options.add_int("ATOMIC_REFINEMENT_HYDROGEN_RANK_LIMIT", 1);
+
+    /*- Verbosity of the atomic-property narrative written to the output file: 0 is
+        silent, 1 prints each stage with its parameters plus the final property tables, 2
+        adds iteration tables and per-stage diagnostics, 3 adds per-frequency detail.
+        Reporting only; it changes no result. Large intermediates are never printed and
+        remain available through psi4.atomic_property_result(wfn). BOUNDED_DF reads it
+        only when explicitly set. -*/
+    options.add_int("ATOMIC_PROPERTY_PRINT", 1);
+
     /// MBIS Options (libmints/oeprop.cc)
 
     /*- Maximum Number of MBIS Iterations -*/
