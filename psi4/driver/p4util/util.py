@@ -68,7 +68,7 @@ def oeprop(wfn: core.Wavefunction, *args: List[str], **kwargs):
         ATOMIC_REFINED_* tasks. Requires ``preset='water'`` or ``'benzene'``;
         kwargs override changed Psi4 options and preset values. This model
         does not run SCF. ATOMIC_* properties are refused without it. Access the
-        owned BoundedProperties result with :func:`atomic_property_result`.
+        owned BoundedProperties result with ``psi4.atomic_property_result(wfn)``.
 
     :examples:
 

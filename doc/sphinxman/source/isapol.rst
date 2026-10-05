@@ -80,7 +80,7 @@ is refused.
    +-----------------------------------+--------------------------------------------------------------------------------+
    | Keyword                           | What it produces                                                               |
    +===================================+================================================================================+
-   | ATOMIC_REFINED_POLARIZABILITIES   | PFIT-refined local site polarizabilities at every Casimir |w--w| Polder node.   |
+   | ATOMIC_REFINED_POLARIZABILITIES   | PFIT-refined local site polarizabilities at every Casimir |w--w| Polder node.  |
    +-----------------------------------+--------------------------------------------------------------------------------+
    | ATOMIC_REFINED_DISPERSION         | The refined isotropic site-pair :math:`C_n` contracted from them.              |
    +-----------------------------------+--------------------------------------------------------------------------------+
