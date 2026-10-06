@@ -104,7 +104,42 @@ Experimental ISA-A partition
    Drho-C fit (``IsaAuxCoulomb.fit_drho_c``, penalty 1000, no rescaling), and
    runs the native controller. Nonconvergence returns an inspectable result
    with no Q. The result holds read-only copies of the grid, weights and
-   density samples; native objects own copies of their inputs.
+   density samples; native objects own copies of their inputs. This direct
+   factory trusts ``caller_converged`` and does not check the SCF convergence
+   seal; ``isa_moments`` and the bounded and oeprop routes require the seal.
+
+   The Drho-C system is very ill-conditioned (condition estimate about 6e15
+   for the water recipe), so a plain LU solution depends on the LAPACK path:
+   on identical water operands, 1 and 8 threads gave coefficients 1.1e-3 apart
+   (relative). ``fit_drho_c`` therefore takes ``max_refinement_iterations``
+   (default 0: plain DGESV, unchanged), and ``native_partition`` uses 10
+   (``DRHO_REFINEMENT_ITERATIONS``). Each iteration computes the residual
+   b - A x exactly with an integer long accumulator, rounds it once to
+   binary64, and solves for the correction on the existing LU factors. A, b,
+   the penalty, pivoting and DGESV are unchanged.
+
+   * Refinement stops when the last correction is at most 2u max|x|. That
+     bounds the last step only. It is not a forward-error guarantee; no general
+     theory covers this conditioning.
+   * It fails closed, with no fallback to the plain LU coefficients. Stagnation
+     (a step larger than half the previous one), the iteration cap, nonfinite or
+     overflowing values, and a calling thread that is not in round-to-nearest
+     with gradual underflow all refuse, and the ISA stage then fails. Another
+     recipe may therefore refuse where plain LU returned coefficients.
+   * ``IsaDrhoCResult`` reports ``refinement_iterations`` and
+     ``refinement_displacement`` (how far refinement moved the LU solution; not
+     an error estimate).
+   * The residual's integer arithmetic does not depend on threads, BLAS,
+     rounding mode or FMA. The correction solves do, and the FP-environment
+     check covers only the calling thread, not vendor LAPACK worker threads.
+   * ``isa_resource_plan`` charges the refinement explicitly, in the plan's
+     abstract work units.
+
+   ISA results changed with this refinement. Up to stage08 commit
+   ``ee95fd9717`` they matched the unpublished extraction candidate bitwise;
+   they now differ from it and from CamCASP's default (plain LU) Drho-C fit.
+   CamCASP's ``LU ITERATIONS`` option is similar in kind, but its residual
+   precision was not checked, so no parity with it is claimed.
 
    Native classes (``libisapol/isa_fit``, ``isa_shape``, ``isa_sweep``,
    ``isa_controller``), bound in ``psi4.core``:
@@ -135,20 +170,34 @@ Experimental ISA-A partition
 
    The only tested recipe is the water regression recipe in
    ``tests/pytests/isapol_water_recipe.py`` (PBE0/aug-cc-pVTZ, aug-cc-pVTZ-RI
-   Cartesian AUX, 100x200 partition grid). Its measured limits, serial unless
-   stated:
+   Cartesian AUX, 100x200 partition grid). Its measured limits, on one host
+   (AMD Zen2, oneMKL), serial unless stated:
 
-   * The iteration converges in 50 sweeps (largest change 9.0e-10). The Drho-C
-     metric condition is 6.4e15 and the partition grid integrates the fitted
-     density to 8.3e-6 electrons.
+   * The ISA iteration converges in 50 sweeps (largest change 9.0e-10), and
+     the partition grid integrates the fitted density to 8.3e-6 electrons. The
+     Drho-C condition number is a LAPACK estimate on the same metric bytes:
+     6.4e15 with ``MKL_CBWR`` unset, 5.9e15 under ``COMPATIBLE``.
+   * Refinement converges in 5 to 6 iterations and moves the plain LU
+     coefficients by 2.6e-4 to 2.0e-3 relative. On the frozen water operands
+     it agrees with a 100-digit solution to 3e-24 relative (2e-23 at 8
+     threads). In one process the refined coefficients agree within 7e-18
+     between 1 and 8 threads. Between ``MKL_CBWR`` modes they still differ by
+     2e-6: each mode's SCF gives operands that differ in the last bits, and
+     the conditioning amplifies that.
    * The 100x200 grid is refused as a Q grid: its Q charge rows err by 2.0e-4
      and LW refuses the postcondition. The 200x590 and 300x974 Q grids pass
      (charge-row errors 1.3e-7 and 4.4e-9), and their site C6 differ by up to
      2.5e-4 relative. Each has its own regression.
-   * The regression's ``rtol=2e-6`` covers the thread spread: C6 moves 1.93e-6
-     relative between 1 and 8 threads. The stored values are the 8-thread ones.
-     It does not cover ``MKL_CBWR=COMPATIBLE``, where C6 moves 5.8e-6 and the
-     regression fails.
+   * The stored regression values predate refinement: they are 8-thread
+     plain-LU values. Refined H-H C6 lies about 1e-6 below them. That is 0.53
+     of the ``rtol=2e-6`` band with ``MKL_CBWR`` unset and 0.43 under
+     ``COMPATIBLE`` (both grids; at most 0.56 at 8 threads). C6 now moves 5e-8
+     between 1 and 8 threads.
+   * The static parameter at index 4 (``H1_10_11c_A``, a small off-diagonal H
+     polarizability that does not enter C6) sits 4e-8 to 4.1e-7 from its
+     stored value across these paths. The shift arises downstream of Q, so
+     refinement does not remove it. It has an empirical absolute band of 1e-6;
+     the other parameters keep ``rtol=2e-6``, ``atol=2e-7``.
 
 LW localization, multipole transforms and frequency grid
    These consume supplied tensors only. No response, partition or external
