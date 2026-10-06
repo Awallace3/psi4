@@ -68,7 +68,7 @@ def settings(preset, overrides):
         max_order=10,  # localize.py Casimir maxN = 4*wsmlimit+2
         quadrature=None, response_grid=None, lattice_options=None, auxiliary_recipe=None,
         sites=None, bonds=None, distribution='df_centre_analytic', distributed_moments=None,
-        partition_recipe=None, partition_grid=None,  # explicit experimental ISA only
+        partition_recipe=None, partition_grid=None,  # explicit ISA (recipe+grid) or MBIS (grid)
         declared_variables=None,  # process_data.F90:2040-2150 cutoff-derived pdef
         response='reference_h2h1', fdds=None,  # explicit native FDDS only on request
         scratch_directory=None,
@@ -168,7 +168,8 @@ def run(wfn, tasks, *, preset, **kwargs):
     QCVariables. The distribution is analytic DF-centre, explicitly
     ``distribution='supplied'`` with ``distributed_moments``, or the
     experimental ``distribution='isa'`` with an explicit ``partition_recipe``
-    and ``partition_grid`` (no preset recipe exists); the response is
+    and ``partition_grid`` (no preset recipe exists), or ``distribution='mbis'``
+    with only ``partition_grid`` (native MBIS under the MBIS_* options); the response is
     the reference H2H1 unless ``response='native_fdds'`` and ``fdds`` are given.
     """
     if not tasks or any(task not in TASKS for task in tasks) or len(set(tasks)) != len(tasks):

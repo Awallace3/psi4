@@ -8,10 +8,11 @@ ordered effective functions of a declared response BasisRecipe, not necessarily
 ISA's density-fit AUX. Q maps fitted *density* coefficients to moments; it
 contains neither an electronic minus sign nor a response/neutrality correction.
 
-Producers: the analytic DF-centre rule and an explicitly declared, experimental
-ISA-A partition (``isa_moments``). Neither is inferred from the other. The ISA
-iteration, SCF seal and state modules load only when an ISA function is called,
-so the DF-centre contract stays independent of them.
+Producers: the analytic DF-centre rule, an explicitly declared, experimental
+ISA-A partition (``isa_moments``) and the native all-shell MBIS partition
+(``mbis_moments``). None is inferred from another. The ISA iteration, SCF seal
+and state modules load only when an ISA or MBIS function is called, so the
+DF-centre contract stays independent of them.
 """
 from dataclasses import dataclass
 import hashlib
@@ -270,4 +271,225 @@ def isa_moments(wfn, recipe, auxiliary, sites, rank, *, caller_converged, integr
         final_tails=tuple((t.defined, t.amplitude, t.exponent, t.cutoff) for t in result.trajectory.final_tails))
     return DistributedMoments(values, tuple(s.label for s in sites),
         tuple(tuple(s.origin) for s in sites), rank, auxiliary, 'isa', provenance, True,
+        state_id, tuple(diagnostics.items()))
+
+
+MBIS_OPTIONS = ('MBIS_RADIAL_POINTS', 'MBIS_SPHERICAL_POINTS', 'MBIS_PRUNING_SCHEME',
+                'MBIS_MAXITER', 'MBIS_D_CONVERGENCE')
+#: Global DFT grid options the native MBIS DFTGrid also reads (cubature.cc
+#: DFTGrid::buildGridFromOptions); recorded, never changed here.
+MBIS_GRID_OPTIONS = ('DFT_RADIAL_SCHEME', 'DFT_NUCLEAR_SCHEME', 'DFT_GRID_NAME', 'DFT_BLOCK_SCHEME',
+                     'DFT_BLOCK_MAX_POINTS', 'DFT_BLOCK_MIN_POINTS', 'DFT_BS_RADIUS_ALPHA',
+                     'DFT_PRUNING_ALPHA', 'DFT_WEIGHTS_TOLERANCE', 'DFT_BLOCK_MAX_RADIUS',
+                     'DFT_BASIS_TOLERANCE', 'MAX_RADIAL_MOMENT')
+MBIS_SNAPSHOT = ('MBIS SHELL COUNTS', 'MBIS SHELL POPULATIONS', 'MBIS SHELL WIDTHS')
+MBIS_MAX_SHELLS = 7
+MBIS_SCRATCH_BYTES = 256*1024**2
+_MBIS_REGION_PRUNING = ('ROBUST', 'TREUTLER')
+_MBIS_FUNCTION_PRUNING = ('NONE', 'FLAT', 'P_GAUSSIAN', 'D_GAUSSIAN', 'P_SLATER', 'D_SLATER',
+                          'LOG_GAUSSIAN', 'LOG_SLATER')
+
+
+def _mbis_settings():
+    """Validated native MBIS settings; refused before any grid or SCF-state work.
+
+    Fewer than two MBIS_MAXITER performs no shell update and can never converge.
+    The plan needs a point-count bound: region pruning uses at most
+    max(MBIS_SPHERICAL_POINTS, 50) points per radial shell (its fixed inner
+    regions are Lebedev orders 7 and 11), and function pruning at most the
+    requested sphere when DFT_PRUNING_ALPHA >= 0. A named DFT grid replaces the
+    MBIS grid entirely, so it has no such bound and is refused.
+    """
+    values = {name: core.get_global_option(name) for name in MBIS_OPTIONS+MBIS_GRID_OPTIONS}
+    for name in ('MBIS_RADIAL_POINTS', 'MBIS_SPHERICAL_POINTS'):
+        if type(values[name]) is not int or values[name] < 1:
+            raise ValueError(f'{name} must be a positive integer')
+    if type(values['MBIS_MAXITER']) is not int or values['MBIS_MAXITER'] < 2:
+        raise ValueError('MBIS_MAXITER must allow at least one shell update (>= 2)')
+    threshold = values['MBIS_D_CONVERGENCE']
+    if not np.isfinite(threshold) or threshold <= 0:
+        raise ValueError('MBIS_D_CONVERGENCE must be finite and positive')
+    scheme = values['MBIS_PRUNING_SCHEME']
+    if values['DFT_GRID_NAME']:
+        raise ValueError('MBIS point-count bound unavailable: DFT_GRID_NAME replaces the MBIS grid')
+    if scheme in _MBIS_REGION_PRUNING:
+        sphere = max(values['MBIS_SPHERICAL_POINTS'], 50)
+    elif scheme in _MBIS_FUNCTION_PRUNING and values['DFT_PRUNING_ALPHA'] >= 0:
+        sphere = values['MBIS_SPHERICAL_POINTS']
+    else:
+        raise ValueError(f'MBIS point-count bound unavailable for pruning {scheme} '
+                         f"with DFT_PRUNING_ALPHA={values['DFT_PRUNING_ALPHA']}")
+    return values, sphere
+
+
+def validate_mbis_inputs(wfn, auxiliary, sites, rank, integration_grid):
+    """Sites, response AUX, Q grid and native MBIS settings; no native work."""
+    basis_identity(auxiliary)
+    geometry = tuple(map(tuple, np.asarray(wfn.molecule().geometry())))
+    if tuple(tuple(s.origin) for s in sites) != geometry or auxiliary.centres != geometry:
+        raise ValueError('MBIS site/response AUX/wavefunction identity mismatch')
+    _validate_rank_and_grid('MBIS', rank, integration_grid)
+    _mbis_settings()
+
+
+def mbis_resource_plan(wfn, auxiliary, integration_grid, rank):
+    """Conservative numeric/work plans for native MBIS and for Q, not RSS or time caps.
+
+    Both stages hold the owned copy of the integration grid. Native: every
+    point of the bounded grid (``_mbis_settings``) carries 16 doubles of grid
+    storage and the function's own 7 per-point and 7 per-atom-point vectors
+    (coordinates, weights, density, distances, displacements, proatom and
+    promolecule densities with their next iterates, partitioned density); 8
+    basis-squared density copies; every MBIS_MAXITER-1 update over seven shells.
+    Q: log-domain proatoms and their temporaries, stockholder shapes, CPython
+    list conversions at 64-bit object sizes, the native sample copies for
+    every site, and Q with its owned copies. Each stage adds a fixed 256 MiB
+    allowance for DFTGrid, point-function, OpenMP, integrator and OEProp
+    internals that are not individually known. Work counts source-level scalar
+    operations with exp/log/pow charged 16 each; it is not a time bound.
+    Interpreter allocator overhead and vendor workspaces are excluded.
+    """
+    values, sphere = _mbis_settings()
+    ns, b = wfn.molecule().natom(), wfn.basisset().nbf()
+    g = ns*values['MBIS_RADIAL_POINTS']*sphere
+    updates = values['MBIS_MAXITER']-1
+    h, p, q = len(integration_grid), _width(auxiliary), ns*(rank+1)**2
+    grid_copy = 32*h
+    native = 8*(g*(24+8*ns)+8*b*b)+grid_copy+MBIS_SCRATCH_BYTES
+    moments = max(4, values['MAX_RADIAL_MOMENT'])-1
+    native_work = (2*g*b*b+g*ns*(MBIS_MAX_SHELLS*64+256+32*moments)
+                   +updates*g*ns*(MBIS_MAX_SHELLS*128+16))
+    sampling = 8*h*(64+16*ns)+32*p*q+grid_copy+MBIS_SCRATCH_BYTES
+    sampling_work = h*ns*(MBIS_MAX_SHELLS*64+64)+4*h*q*p
+    return (int(native), int(native_work)), (int(sampling), int(sampling_work))
+
+
+def run_native_mbis(wfn):
+    """Fresh native MBIS_CHARGES attempt; returns the validated, owned all-shell snapshot.
+
+    Deliberately not psi4.oeprop: MBIS_VOLUME_RATIOS runs free-atom SCFs in
+    Python that can fail before native entry and leave an older snapshot live.
+    The snapshot is invalidated here and again at native entry, and native MBIS
+    sets MBIS CONVERGED last, after all postprocessing, so only this attempt's
+    success can be read. Unsupported ECP/ghost inputs are native refusals.
+    """
+    wfn.set_scalar_variable('MBIS CONVERGED', 0.)
+    for name in MBIS_SNAPSHOT:
+        if wfn.has_array_variable(name):
+            wfn.del_array_variable(name)
+    oe = core.OEProp(wfn)
+    oe.add('MBIS_CHARGES')
+    try:
+        oe.compute()
+    except Exception as exc:
+        raise RuntimeError(f'native MBIS failed ({exc}); Q unavailable') from exc
+    nat = wfn.molecule().natom()
+    if (not wfn.has_scalar_variable('MBIS CONVERGED') or wfn.scalar_variable('MBIS CONVERGED') != 1
+            or not all(wfn.has_array_variable(n) for n in MBIS_SNAPSHOT)):
+        raise RuntimeError('native MBIS did not publish a converged all-shell snapshot; Q unavailable')
+    counts, populations, widths = (np.array(wfn.array_variable(n).np, dtype=float) for n in MBIS_SNAPSHOT)
+    if (counts.shape != (nat, 1) or populations.shape != (nat, MBIS_MAX_SHELLS)
+            or widths.shape != (nat, MBIS_MAX_SHELLS)):
+        raise RuntimeError('native MBIS snapshot has inconsistent dimensions')
+    counts = counts[:, 0]
+    if not np.all((counts == np.round(counts)) & (counts >= 1) & (counts <= MBIS_MAX_SHELLS)):
+        raise RuntimeError('native MBIS shell counts must be integers 1..7')
+    counts = counts.astype(int)
+    active = np.arange(MBIS_MAX_SHELLS)[None, :] < counts[:, None]
+    for array in (populations, widths):
+        if (not np.isfinite(array).all() or not np.all(array[active] > 0)
+                or np.any(array[~active] != 0)):
+            raise RuntimeError('native MBIS shells must be finite and positive, with zero padding')
+    residual = wfn.scalar_variable('MBIS DENSITY RESIDUAL')
+    iterations = wfn.scalar_variable('MBIS ITERATIONS')
+    electrons = (wfn.scalar_variable('MBIS GRID ELECTRONS')
+                 if wfn.has_scalar_variable('MBIS GRID ELECTRONS') else float('nan'))
+    threshold = core.get_global_option('MBIS_D_CONVERGENCE')
+    if not (np.isfinite(residual) and 0 <= residual < threshold and np.isfinite(electrons) and electrons > 0
+            and iterations == int(iterations) and 1 <= iterations < core.get_global_option('MBIS_MAXITER')):
+        raise RuntimeError('native MBIS convergence diagnostics are inconsistent with its snapshot')
+    return dict(counts=tuple(int(c) for c in counts),
+                populations=tuple(map(tuple, populations.tolist())),
+                widths_bohr=tuple(map(tuple, widths.tolist())),
+                iterations=int(iterations), density_residual=float(residual), threshold=float(threshold),
+                grid_electrons=float(electrons), population_sum=float(populations.sum()))
+
+
+def mbis_log_proatoms(snapshot, origins, points):
+    """ln rho_A^0(r), rho_A^0 = sum_s N_s exp(-|r-R_A|/sigma_s)/(8 pi sigma_s^3), all shells.
+
+    Summed as a log-sum-exp, so no proatom underflows to zero at any distance;
+    a nonfinite logarithm (an absurdly distant point) is refused.
+    """
+    points = np.asarray(points, dtype=float)
+    result = np.empty((len(origins), len(points)))
+    for a, (count, origin) in enumerate(zip(snapshot['counts'], origins)):
+        n = np.asarray(snapshot['populations'][a][:count], dtype=float)
+        sigma = np.asarray(snapshot['widths_bohr'][a][:count], dtype=float)
+        if not (len(n) == count >= 1 and np.isfinite(n).all() and np.isfinite(sigma).all()
+                and np.all(n > 0) and np.all(sigma > 0)):
+            raise ValueError('MBIS shells must be finite and positive')
+        distance = np.linalg.norm(points-np.asarray(origin), axis=1)
+        terms = np.log(n/(8*np.pi*sigma**3))[:, None]-distance[None, :]/sigma[:, None]
+        result[a] = np.logaddexp.reduce(terms, axis=0)
+    if not np.isfinite(result).all():
+        raise ValueError('nonfinite MBIS proatom logarithm; integration grid too distant')
+    return result
+
+
+def mbis_moments(wfn, auxiliary, sites, rank, *, caller_converged, integration_grid, ledger):
+    """Fresh native MBIS -> frozen all-shell proatoms -> stockholder response-AUX Q.
+
+    No ISA recipe or iteration is involved. Weights are
+    w_A = exp(l_A - max_B l_B)/sum_C exp(l_C - max_B l_B) with l = ln rho^0, so
+    the integrator's denominator lies in [1, nsites] at every grid point: there
+    are no denominator exclusions (cutoff 0 is declared), no clipping and no
+    neutrality projection. A weight below ~1e-308 relative to the dominant
+    proatom underflows to exactly zero; those counts are reported. Far from the
+    molecule the site with the most diffuse shell takes the whole weight. The
+    integration grid and the snapshot are copied on entry, so later caller or
+    wavefunction changes cannot alter Q or its recorded identities.
+    """
+    from .isapol_native import _context
+    from .isapol_native_correction import require_scf_seal
+    validate_mbis_inputs(wfn, auxiliary, sites, rank, integration_grid)
+    if caller_converged is not True:
+        raise ValueError('MBIS requires caller_converged=True')
+    require_scf_seal(wfn)
+    state_id = _context(wfn)
+    native_plan, sampling_plan = mbis_resource_plan(wfn, auxiliary, integration_grid, rank)
+    ledger.admit('native MBIS partition', *native_plan)
+    ledger.admit('MBIS stockholder response-AUX Q', *sampling_plan)
+    integration_grid = _owned(integration_grid)
+    settings = _mbis_settings()[0]
+    options = tuple((name, settings[name]) for name in MBIS_OPTIONS)
+    grid_options = tuple((name, settings[name]) for name in MBIS_GRID_OPTIONS)
+    snapshot = run_native_mbis(wfn)
+    if _context(wfn) != state_id:
+        raise RuntimeError('native MBIS changed the wavefunction state')
+    points, weights = integration_grid[:, :3].tolist(), integration_grid[:, 3].tolist()
+    log_proatoms = mbis_log_proatoms(snapshot, [s.origin for s in sites], integration_grid[:, :3])
+    sampled = np.exp(log_proatoms-log_proatoms.max(axis=0))
+    del log_proatoms
+    weight_sum_error = float(np.max(np.abs((sampled/sampled.sum(axis=0)).sum(axis=0)-1)))
+    provenance = ('native Psi4 MBIS (Verstraelen et al. JCTC 2016), all converged shells; '
+                  + ', '.join(f'{k}={v}' for k, v in options)
+                  + '; frozen ground-state log-domain stockholder weights on explicit response-AUX grid')
+    q, values, charge_error = _stockholder_q(auxiliary, sites, rank, points, weights, sampled,
+                                             provenance, 0.)
+    if any(q.excluded_denominators) or any(q.negative_ratios):
+        raise RuntimeError('MBIS weights produced excluded or negative stockholder ratios')
+    diagnostics = dict(q_shape=values.shape, q_charge_row_error=charge_error,
+        weight_sum_error=weight_sum_error, underflowed_weights=tuple(int(n) for n in (sampled == 0).sum(axis=1)),
+        iterations=snapshot['iterations'], density_residual=snapshot['density_residual'],
+        density_threshold=snapshot['threshold'], grid_electrons=snapshot['grid_electrons'],
+        population_sum=snapshot['population_sum'], shell_counts=snapshot['counts'],
+        shell_populations=snapshot['populations'], shell_widths_bohr=snapshot['widths_bohr'],
+        native_options=options, native_grid_options=grid_options,
+        integration_grid_points=len(integration_grid),
+        integration_grid_sha256=hashlib.sha256(integration_grid.tobytes()).hexdigest(),
+        denominator_cutoff=0., excluded_denominators=tuple(q.excluded_denominators),
+        negative_ratios=tuple(q.negative_ratios))
+    return DistributedMoments(values, tuple(s.label for s in sites),
+        tuple(tuple(s.origin) for s in sites), rank, auxiliary, 'mbis', provenance, True,
         state_id, tuple(diagnostics.items()))

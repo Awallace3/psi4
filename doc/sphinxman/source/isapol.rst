@@ -53,9 +53,9 @@ iteration or an asymptotic correction of its own inside a property request.
 By default the distributed response uses CamCASP's ``DistPolAlgorithm = DF``
 rule: each auxiliary fitting function is charged wholly to its own centre.
 No stockholder partition is inferred. An experimental ISA-A partition runs only
-when it is requested explicitly with a complete recipe (see
-`Distribution and response choices`_); a request for an MBIS distribution is
-refused.
+when it is requested explicitly with a complete recipe, and an MBIS partition
+only when it is requested explicitly with its integration grid (see
+`Distribution and response choices`_).
 
 .. warning:: Every setting below **names a model, not a tolerance.**  The
    auxiliary basis, the response grid, the kernel smoothing, the localization
@@ -272,6 +272,38 @@ partition provenance and its diagnostics (iterations, final tails, Drho
 metric condition, grid charge error, Q charge-row error, recipe and grid
 hashes) appear in ``r.provenance['partition']``. The ISA numeric/work plan
 is conservative, not an RSS or CPU cap.
+
+``distribution='mbis'`` runs a fresh native MBIS attempt (``MBIS_CHARGES``,
+under the |globals__mbis_radial_points|, |globals__mbis_spherical_points|,
+|globals__mbis_pruning_scheme|, |globals__mbis_maxiter| and
+|globals__mbis_d_convergence| options) on the live wavefunction and needs only
+``partition_grid``, with the same meaning as for ISA. It takes no
+``partition_recipe`` or ``distributed_moments`` and never runs ISA. It does not
+use ``MBIS_VOLUME_RATIOS``, whose free-atom SCFs could fail before the native
+attempt. Q is built only from that attempt's complete converged shell model
+(:psivar:`MBIS CONVERGED`); every shell enters each proatom
+:math:`\rho_A^0(r)=\sum_s N_{As} e^{-r/\sigma_{As}}/(8\pi\sigma_{As}^3)`, and
+the stockholder weights :math:`\rho_A^0/\sum_B \rho_B^0` are formed in the log
+domain. No point is excluded, nothing is clipped and no neutrality projection
+is applied; a weight more than about :math:`10^{-308}` below the dominant
+proatom underflows to zero and is counted, and far from the molecule the site
+with the most diffuse shell takes the whole weight. Settings that cannot
+converge (fewer than two ``MBIS_MAXITER``, a nonpositive or nonfinite
+threshold) or that leave the MBIS grid size unbounded (a named
+``DFT_GRID_NAME``, or function pruning with a negative ``DFT_PRUNING_ALPHA``)
+are refused before any native or response work. Native MBIS refuses ghost
+sites and ECPs; spin-polarized wavefunctions fail the canonical PBE0 check. If
+native MBIS fails, the request fails before the response. The attempt also
+updates the wavefunction's ordinary MBIS variables. The diagnostics in
+``r.provenance['partition']`` record the shell model, iterations, residual,
+grid electrons, the native MBIS and inherited ``DFT_*`` grid options, the
+underflow counts and the Q grid hash. The MBIS numeric/work plan is
+conservative, not an RSS or CPU cap.
+
+MBIS and ISA are different density models, so their site properties differ;
+neither is a reference for the other. The MBIS result is checked only for
+self-consistency with the native model, not against CamCASP or another MBIS
+program.
 
 No distribution changes a response or LW gate, and no other distribution is
 accepted.

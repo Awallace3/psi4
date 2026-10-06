@@ -11,8 +11,8 @@ stage-06 ``refined_isotropic_dispersion``. This module owns only their order,
 the shared resource ledger and the result record.
 
 Distributions are the analytic DF-centre producer (default), supplied
-``DistributedMoments`` and an explicitly declared, experimental ISA-A partition.
-No partition is inferred from another, and no MBIS partition is available.
+``DistributedMoments``, an explicitly declared, experimental ISA-A partition and
+the native all-shell MBIS partition. No partition is inferred from another.
 """
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -23,11 +23,13 @@ from psi4 import core
 
 from . import isapol_logging as _lg, isapol_lw as lw, isapol_refine as refine
 from .isapol_bounded_response import BoundedResources, BoundedResponse
-from .isapol_distribution import DistributedMoments, isa_moments, validate_isa_inputs
+from .isapol_distribution import (
+    DistributedMoments, isa_moments, mbis_moments, validate_isa_inputs, validate_mbis_inputs,
+)
 from .isapol_pfit_stream import PackedDesignRows, fitted_point_targets, refine_streamed
 
 #: Distributions this orchestrator dispatches; every other name is refused.
-DISTRIBUTIONS = ('df_centre_analytic', 'isa', 'supplied')
+DISTRIBUTIONS = ('df_centre_analytic', 'isa', 'mbis', 'supplied')
 #: Bounded lattice and refinement sizes (complete cloud, every point pair).
 MAX_FIT_POINTS = 2000
 MAX_PARAMETERS = 64
@@ -122,8 +124,12 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
     molecular ``partition_grid`` (finite float64 rows x,y,z,weight); a fresh
     native ISA-A iteration on the live wavefunction produces Q, and it is
     refused before any response work if the iteration does not converge.
-    No choice changes a response or LW gate. ISA's numeric/work plan is
-    conservative, not an RSS or CPU cap.
+    ``distribution='mbis'`` needs only ``partition_grid``: a fresh native
+    MBIS_CHARGES attempt (the MBIS_* options) on the live wavefunction gives
+    the all-shell proatoms whose stockholder weights produce Q; it takes no
+    PartitionRecipe, never runs ISA and is refused before any response work
+    if native MBIS fails. No choice changes a response or LW gate. The ISA and
+    MBIS numeric/work plans are conservative, not RSS or CPU caps.
 
     A successful live SCF seal is required even for NONE; SCF is never run here.
     ``lattice_options`` is an explicit core.FitPointsOptions (at most 2000
@@ -145,10 +151,11 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
         if not isinstance(resources, BoundedResources):
             raise TypeError('explicit BoundedResources required')
         if distribution not in DISTRIBUTIONS:
-            raise ValueError(f'distribution must be one of {DISTRIBUTIONS}; '
-                             'no MBIS partition is available here')
-        if distribution != 'isa' and (partition_recipe is not None or partition_grid is not None):
-            raise ValueError('partition_recipe and partition_grid require distribution=isa')
+            raise ValueError(f'distribution must be one of {DISTRIBUTIONS}')
+        if distribution != 'isa' and partition_recipe is not None:
+            raise ValueError('partition_recipe requires distribution=isa')
+        if distribution not in ('isa', 'mbis') and partition_grid is not None:
+            raise ValueError('partition_grid requires distribution=isa or mbis')
         if distribution == 'supplied':
             if not isinstance(distributed_moments, DistributedMoments):
                 raise TypeError('supplied distribution requires DistributedMoments')
@@ -201,8 +208,10 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
         if distribution == 'isa':
             # Stale or mismatched recipes are refused before scratch or response work.
             validate_isa_inputs(wfn, partition_recipe, auxiliary_recipe, multipole_sites, 4, partition_grid)
+        elif distribution == 'mbis':
+            validate_mbis_inputs(wfn, auxiliary_recipe, multipole_sites, 4, partition_grid)
         input_bytes = (distributed_moments.values.nbytes if distribution == 'supplied' else
-                       partition_grid.nbytes if distribution == 'isa' else 0)
+                       partition_grid.nbytes if distribution in ('isa', 'mbis') else 0)
         # The runner validates the shared declarations (AUX/site/geometry centres,
         # grid finiteness, correction, smoothing, fit scalars, response selection).
         runner = BoundedResponse(wfn, auxiliary_recipe, multipole_sites, caller_converged=caller_converged,
@@ -228,6 +237,11 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
             def produce_moments(ledger):
                 if distribution == 'supplied':
                     return distributed_moments
+                if distribution == 'mbis':
+                    log.stage('Native MBIS partition and response-AUX moments')
+                    return mbis_moments(wfn, auxiliary_recipe, multipole_sites, 4,
+                                        caller_converged=caller_converged, integration_grid=partition_grid,
+                                        ledger=ledger)
                 log.stage('Native ISA partition and response-AUX moments')
                 return isa_moments(wfn, partition_recipe, auxiliary_recipe, multipole_sites, 4,
                                    caller_converged=caller_converged, integration_grid=partition_grid,
