@@ -216,11 +216,13 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         elif "-D4(I)" in name.upper():
             core.print_out(r"SAPT(DFT)-D4(I): -D4(I) for dispersion")
             # D4(I) uses intermolecular atom-pair summation together with the
-            # SAPT functional's dedicated (I) damping-parameter record.
+            # SAPT functional's dedicated (I) damping-parameter record. For HF
+            # monomers that is the intermolecular SAPT0 fit, not the
+            # supermolecular "hf" record.
             e_disp_param_name = (
                 f"sapt({sapt_dft_functional.lower()})(i)"
                 if sapt_dft_functional.lower() != "hf"
-                else "hf"
+                else "sapt0-d4(i)"
             )
             if sapt_dft_functional.lower() not in supported_functionals_edisp:
                 raise ValueError(
