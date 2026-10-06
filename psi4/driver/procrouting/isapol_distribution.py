@@ -167,8 +167,8 @@ def isa_resource_plan(wfn, recipe, auxiliary, integration_grid, rank):
     unit), for every iteration up to the cap whatever the observed count: 256 per
     residual product term (d*(d+1) per residual, about 190 counted), 16384 per
     row for rounding and the update (about 8500 counted, worst case), and 16d**2
-    plus 64d for the triangular correction solves; plus 8d**2+64d once for the
-    finiteness scans and copies. These are operation counts, not a time bound.
+    plus 64d for the triangular correction solves; plus 16d**2+64d once for the
+    finiteness scans and copies (about 8d**2+40d counted). These are operation counts, not a time bound.
     Python object/container overhead and vendor integral/BLAS workspace are not
     numerically capped. Large recipes can be refused even if they would converge
     early; this adapter does not claim an exact work bound for arbitrary shells.
@@ -188,7 +188,7 @@ def isa_resource_plan(wfn, recipe, auxiliary, integration_grid, rank):
             +16*d*b**3+8*d**3+4*h*q*p)
     if refinement:
         numeric += 8*(4*d+134)
-    work += 8*d*d+64*d+refinement*(256*d*(d+1)+16384*d+16*d*d+64*d)
+    work += 16*d*d+64*d+refinement*(256*d*(d+1)+16384*d+16*d*d+64*d)
     return int(numeric), int(work)
 
 
