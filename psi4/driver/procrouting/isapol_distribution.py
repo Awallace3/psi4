@@ -157,10 +157,15 @@ def isa_resource_plan(wfn, recipe, auxiliary, integration_grid, rank):
     the uncached path, all max_iterations history metrics, copied grids and Q,
     MAIN/Drho buffers, plus 256 MiB scratch. Lebedev rounding is bounded by
     2*requested+6 (the native grid clamps at 5294). No per-iteration refund.
+    Drho-C refinement is charged explicitly, not taken from the scratch term or
+    the d**3 solve term: 3d doubles and the 134-digit accumulator, and per
+    iteration 16 work units per residual product term, 600 per row finalization
+    and 4d**2 for the correction solve (abstract units, like the other terms).
     Python object/container overhead and vendor integral/BLAS workspace are not
     numerically capped. Large recipes can be refused even if they would converge
     early; this adapter does not claim an exact work bound for arbitrary shells.
     """
+    from .isapol_native_partition import DRHO_REFINEMENT_ITERATIONS as refinement
     ns = len(recipe.sites)
     g = ns*(recipe.grid.radial_points-1)*min(5294, 2*recipe.grid.spherical_points+6)
     h, p, d = len(integration_grid), _width(auxiliary), _width(recipe.auxiliary)
@@ -173,6 +178,8 @@ def isa_resource_plan(wfn, recipe, auxiliary, integration_grid, rank):
                  +h*(32*ns+16)+8*p*q+16*d*d+8*d*b*b+64*b*b)+256*1024**2
     work = (it*(8*g*(a2+ns*s)+8*sum(k**3 for k in a))
             +16*d*b**3+8*d**3+4*h*q*p)
+    numeric += 8*(3*d+134)
+    work += refinement*(16*d*(d+1)+600*d+4*d*d)
     return int(numeric), int(work)
 
 

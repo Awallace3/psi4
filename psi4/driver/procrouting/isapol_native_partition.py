@@ -10,6 +10,11 @@ import numpy as np
 from psi4 import core
 from .isapol_basis import BasisRecipe, MainAdaptation, adapt_main, _text, _finite, _owned
 
+# The Drho-C LU solve is refined with an exact residual on the same factors (the
+# native fit_drho_c default stays 0, plain LU). Nonconvergence refuses; there is
+# no fallback to the plain LU coefficients.
+DRHO_REFINEMENT_ITERATIONS = 10
+
 
 @dataclass(frozen=True)
 class SiteRecipe:
@@ -302,7 +307,8 @@ def native_partition(wfn, recipe, *, caller_converged, build_multipoles=True):
         g.shape_sites = list(range(len(recipe.sites)))
         grids.append(g)
     coulomb = core.IsaAuxCoulomb(auxiliary)
-    drho = coulomb.fit_drho_c(main.basis, core.Matrix.from_array(main.occupied), 1000.)
+    drho = coulomb.fit_drho_c(main.basis, core.Matrix.from_array(main.occupied), 1000.,
+                              max_refinement_iterations=DRHO_REFINEMENT_ITERATIONS)
     density = core.IsaFixedDensity(auxiliary, drho.coefficients)
     samples = density.evaluate(pts.tolist(), list(range(len(geometry))))
     controller = core.IsaAController(atomic, shapes, [s.shell_map for s in recipe.sites], density, grids, options)
