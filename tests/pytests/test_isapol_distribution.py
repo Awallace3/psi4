@@ -2,6 +2,7 @@
 from dataclasses import replace
 import hashlib
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -338,3 +339,40 @@ def test_isa_nonconvergence_and_admission(molecular_water, monkeypatch):
     with pytest.raises(ValueError, match='caller_converged'):
         dist.isa_moments(wfn, recipe, recipe.auxiliary, sites, 4, caller_converged=False,
                          integration_grid=grid, ledger=_Ledger(resources()))
+
+
+def test_isa_plan_charges_drho_refinement_once_and_to_the_cap(molecular_water, monkeypatch):
+    _, wfn, recipe, grid = molecular_water
+    # The plan's d is the dimension the ISA stage actually solves, and refinement
+    # there stops within the cap the plan charges.
+    main = isa.adapt_main(wfn, caller_converged=True)
+    coulomb = core.IsaAuxCoulomb(recipe.auxiliary.build('MolecularAux'))
+    drho = coulomb.fit_drho_c(main.basis, core.Matrix.from_array(main.occupied), 1000.,
+                              max_refinement_iterations=isa.DRHO_REFINEMENT_ITERATIONS)
+    assert len(drho.rhs) == len(drho.coefficients) == dist._width(recipe.auxiliary)
+    assert 1 <= drho.refinement_iterations <= isa.DRHO_REFINEMENT_ITERATIONS
+    def plan(cap, auxiliary):
+        monkeypatch.setattr(isa, 'DRHO_REFINEMENT_ITERATIONS', cap)
+        # The plan reads only these recipe fields; a smaller AUX need not partition.
+        shaped = SimpleNamespace(sites=recipe.sites, grid=recipe.grid,
+                                 controller=recipe.controller, auxiliary=auxiliary)
+        return dist.isa_resource_plan(wfn, shaped, recipe.auxiliary, grid, 4)
+    smaller = replace(recipe.auxiliary, shells=recipe.auxiliary.shells[:-3])
+    charged = {}
+    for auxiliary in (recipe.auxiliary, smaller):
+        d = dist._width(auxiliary)
+        base, one, ten, cap = (plan(k, auxiliary) for k in (0, 1, 10, 32))
+        # Bytes are held once for every iteration count, and cover what
+        # isa_refined_lu_solve owns: x, the plain LU x, the correction (each
+        # residual is written into it) and the 134-digit int64 accumulator.
+        held = one[0]-base[0]
+        assert ten[0]-base[0] == cap[0]-base[0] == held >= 8*3*d+8*134
+        # Work is charged for every iteration up to the cap, not the observed count.
+        step = one[1]-base[1]
+        assert ten[1]-base[1] == 10*step and cap[1]-base[1] == 32*step
+        charged[d] = held, step
+    (d1, (held1, step1)), (d2, (held2, step2)) = sorted(charged.items(), reverse=True)
+    # Both charges grow with the solve dimension: bytes linearly, work with the
+    # d*(d+1) residual product terms.
+    assert d1 > d2 and held1-held2 >= 8*3*(d1-d2)
+    assert step1-step2 >= 256*(d1*(d1+1)-d2*(d2+1))

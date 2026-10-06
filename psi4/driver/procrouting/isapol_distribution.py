@@ -158,9 +158,17 @@ def isa_resource_plan(wfn, recipe, auxiliary, integration_grid, rank):
     MAIN/Drho buffers, plus 256 MiB scratch. Lebedev rounding is bounded by
     2*requested+6 (the native grid clamps at 5294). No per-iteration refund.
     Drho-C refinement is charged explicitly, not taken from the scratch term or
-    the d**3 solve term: 3d doubles and the 134-digit accumulator, and per
-    iteration 16 work units per residual product term, 600 per row finalization
-    and 4d**2 for the correction solve (abstract units, like the other terms).
+    the d**3 solve term. Bytes: 4d doubles and the 134-digit accumulator when
+    refinement is enabled, held once for all iterations: the solver owns three
+    d-vectors (x, the plain LU x, and one correction into which each residual is
+    written) and a stack accumulator; the fourth vector is margin.
+    Work, in source-level scalar operations (each arithmetic, bitwise, shift,
+    compare, select, branch, cast, element load or store and loop step is one
+    unit), for every iteration up to the cap whatever the observed count: 256 per
+    residual product term (d*(d+1) per residual, about 190 counted), 16384 per
+    row for rounding and the update (about 8500 counted, worst case), and 16d**2
+    plus 64d for the triangular correction solves; plus 8d**2+64d once for the
+    finiteness scans and copies. These are operation counts, not a time bound.
     Python object/container overhead and vendor integral/BLAS workspace are not
     numerically capped. Large recipes can be refused even if they would converge
     early; this adapter does not claim an exact work bound for arbitrary shells.
@@ -178,8 +186,9 @@ def isa_resource_plan(wfn, recipe, auxiliary, integration_grid, rank):
                  +h*(32*ns+16)+8*p*q+16*d*d+8*d*b*b+64*b*b)+256*1024**2
     work = (it*(8*g*(a2+ns*s)+8*sum(k**3 for k in a))
             +16*d*b**3+8*d**3+4*h*q*p)
-    numeric += 8*(3*d+134)
-    work += refinement*(16*d*(d+1)+600*d+4*d*d)
+    if refinement:
+        numeric += 8*(4*d+134)
+    work += 8*d*d+64*d+refinement*(256*d*(d+1)+16384*d+16*d*d+64*d)
     return int(numeric), int(work)
 
 

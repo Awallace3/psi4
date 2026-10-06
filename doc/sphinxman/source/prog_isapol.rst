@@ -132,8 +132,11 @@ Experimental ISA-A partition
    * The residual's integer arithmetic does not depend on threads, BLAS,
      rounding mode or FMA. The correction solves do, and the FP-environment
      check covers only the calling thread, not vendor LAPACK worker threads.
-   * ``isa_resource_plan`` charges the refinement explicitly, in the plan's
-     abstract work units.
+   * ``isa_resource_plan`` charges the refinement explicitly: the solver's
+     buffers once (four d-vectors and the accumulator, one vector of margin),
+     and the work of every iteration up to the cap of 10, counted in
+     source-level scalar operations (256 per residual product term, 16384 per
+     row). These are operation counts, not a time bound.
 
    ISA results changed with this refinement. Up to stage08 commit
    ``ee95fd9717`` they matched the unpublished extraction candidate bitwise;
