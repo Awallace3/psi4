@@ -23,10 +23,20 @@ set {
 
 if psi4.core.get_option("scf", "orbital_optimizer_package") != "INTERNAL":  # KP-CONV
     psi4.set_options({"d_convergence": 3e-8})
-set scf_properties ['MBIS_CHARGES', 'MBIS_VOLUME_RATIOS']
 
+# A real ECP wavefunction; native MBIS must reject it before any shell update.
+e, wfn = energy("scf/def2-svp", molecule=mol, return_wfn=True)
+compare(True, wfn.basisset().has_ECP(), "Wavefunction carries an ECP")
+
+rejected = False
 try:
-    energy("mp2/def2-svp", molecule=hi)
-    compare_values(0, 1, "MBIS should have raised an error for ECP-containing basis sets.")
-except Exception:
-    compare_values(1, 1, "Expected error caught: MBIS correctly rejects ECP systems.")
+    oeprop(wfn, "MBIS_CHARGES")
+except RuntimeError as err:
+    if "MBIS incompatible with ECP" not in str(err):
+        raise
+    rejected = True
+compare(True, rejected, "MBIS correctly rejects ECP systems")
+compare_values(0.0, wfn.variable("MBIS CONVERGED"), 12, "Rejected attempt is not converged")
+compare_values(0.0, wfn.variable("MBIS ITERATIONS"), 12, "Rejected before any shell update")
+for name in ("MBIS SHELL COUNTS", "MBIS SHELL POPULATIONS", "MBIS SHELL WIDTHS"):
+    compare(False, wfn.has_array_variable(name), f"No {name} after rejection")
