@@ -1019,7 +1019,7 @@ no_com"""
     au2kcal = psi4.constants.hartree2kcalmol
     ref_d4 = -0.0341589
     ref_d4m = -0.0306317
-    ref_d4mi = -0.0307515
+    ref_d4mi = -0.0300562
     fEref_d4m = {
         "Disp": 0.0,
         "EDisp": -0.03075154988953616,
