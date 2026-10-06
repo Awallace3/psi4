@@ -7,3 +7,6 @@
 !camcasp_isa_fit_water.npz
 !camcasp_isa_fit_water.json
 !camcasp_isa_fit_edges.npz
+!drhoc_water_operands.npz
+!drhoc_water_reference.json
+!make_drhoc_water_reference.py

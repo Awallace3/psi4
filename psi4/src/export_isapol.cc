@@ -70,6 +70,15 @@ py::array_t<double> grid_column(const IsaGrid& grid, const double* data) {
     return py::array_t<double>(static_cast<py::ssize_t>(grid.npoints()), data);
 }
 
+/// Owned float64 C-contiguous copy of a test-hook operand with the given rank.
+py::array_t<double, py::array::c_style> drhoc_hook_copy(const py::object& value, int ndim, const char* name) {
+    auto copy = py::module_::import("numpy").attr("array")(value, "dtype"_a = "float64", "order"_a = "C",
+                                                           "copy"_a = true);
+    auto array = copy.cast<py::array_t<double, py::array::c_style>>();
+    if (array.ndim() != ndim) throw std::invalid_argument(std::string(name) + " has the wrong number of dimensions");
+    return array;
+}
+
 
 namespace lw_binding_private {
 
@@ -592,7 +601,12 @@ void export_isapol(py::module& m) {
         .def_readonly("coefficients", &IsaDrhoCResult::coefficients)
         .def_readonly("charge_penalty", &IsaDrhoCResult::charge_penalty)
         .def_readonly("relative_residual", &IsaDrhoCResult::relative_residual)
-        .def_readonly("fitted_electrons", &IsaDrhoCResult::fitted_electrons);
+        .def_readonly("fitted_electrons", &IsaDrhoCResult::fitted_electrons)
+        .def_readonly("refinement_iterations", &IsaDrhoCResult::refinement_iterations,
+                      "Corrections applied by LU refinement (0 when none was requested)")
+        .def_readonly("refinement_displacement", &IsaDrhoCResult::refinement_displacement,
+                      "max|x - x_LU| / max|x|: how far refinement moved the plain LU solution; "
+                      "an observed change, not an error estimate");
     py::class_<IsaAuxCoulomb>(m, "IsaAuxCoulomb", "Native Libint2 Coulomb metric and analytic charges; explicit Cartesian or spherical molecular AUX (different declared bases)")
         .def(py::init<const IsaExplicitBasis&>(), "auxiliary"_a)
         .def("charges", &IsaAuxCoulomb::charges)
@@ -603,12 +617,37 @@ void export_isapol(py::module& m) {
         .def("point_potentials", &IsaAuxCoulomb::point_potentials,
              "points"_a, "max_bytes"_a=512UL*1024*1024)
         .def("closed_shell_rhs", &IsaAuxCoulomb::closed_shell_rhs, "orbital"_a, "occupied_coefficients"_a)
-        .def("fit_drho_c", &IsaAuxCoulomb::fit_drho_c, "orbital"_a, "occupied_coefficients"_a, "charge_penalty"_a=1000.)
+        .def("fit_drho_c", &IsaAuxCoulomb::fit_drho_c, "orbital"_a, "occupied_coefficients"_a, "charge_penalty"_a=1000.,
+             "max_refinement_iterations"_a=0)
         .def("native_auxiliary", &IsaAuxCoulomb::native_auxiliary,
              "(raw Cartesian BasisSet, T): fresh caller-owned copies of the twin behind metric() and the "
              "declared map, metric = T J_raw T^T. The BasisSet is a read-only input (e.g. FDDS_Monomer with "
              "aux_transform=T, or IntegralFactory); do not modify it. Its ghost-centre molecule is not "
              "update_geometry()-safe, so do not pass it to MintsHelper(basis), which empties it.");
+    m.def("_isa_exact_residual",
+          [](const py::object& a, const py::object& x, const py::object& b) {
+              const auto av = drhoc_hook_copy(a, 2, "A"), xv = drhoc_hook_copy(x, 1, "x"), bv = drhoc_hook_copy(b, 1, "b");
+              const auto n = static_cast<std::size_t>(av.shape(0));
+              if (av.shape(1) != av.shape(0) || static_cast<std::size_t>(xv.shape(0)) != n ||
+                  static_cast<std::size_t>(bv.shape(0)) != n)
+                  throw std::invalid_argument("A must be n x n and x, b of length n");
+              return isa_exact_residual(av.data(), xv.data(), bv.data(), n);
+          },
+          "A"_a, "x"_a, "b"_a,
+          "Diagnostic test hook, not a supported API; may change without notice. "
+          "Correctly rounded b - A x (list) from the Drho-C exact residual.");
+    m.def("_isa_refined_lu_solve",
+          [](const py::object& a, const py::object& b, int max_iterations) {
+              const auto av = drhoc_hook_copy(a, 2, "A"), bv = drhoc_hook_copy(b, 1, "b");
+              const auto n = static_cast<std::size_t>(av.shape(0));
+              if (av.shape(1) != av.shape(0) || static_cast<std::size_t>(bv.shape(0)) != n)
+                  throw std::invalid_argument("A must be n x n and b of length n");
+              auto solve = isa_refined_lu_solve(av.data(), bv.data(), n, max_iterations);
+              return py::make_tuple(solve.x, solve.iterations, solve.displacement);
+          },
+          "A"_a, "b"_a, "max_iterations"_a,
+          "Diagnostic test hook, not a supported API; may change without notice. "
+          "(x, iterations, displacement) from the Drho-C LU solve and refinement.");
     py::class_<IsaShapeMap>(m, "IsaShapeMap", "Validated zero-based shape-shell to AtomAux-shell map; exact descriptors")
         .def(py::init<const IsaExplicitBasis&, const IsaExplicitBasis&, const std::vector<int>&>(),
              "atomic"_a, "shape"_a, "shell_map"_a)
