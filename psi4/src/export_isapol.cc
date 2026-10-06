@@ -605,8 +605,9 @@ void export_isapol(py::module& m) {
         .def_readonly("refinement_iterations", &IsaDrhoCResult::refinement_iterations,
                       "Corrections applied by LU refinement (0 when none was requested)")
         .def_readonly("refinement_displacement", &IsaDrhoCResult::refinement_displacement,
-                      "max|x - x_LU| / max|x|: how far refinement moved the plain LU solution; "
-                      "an observed change, not an error estimate");
+                      "How far refinement moved the plain LU solution, as the largest coefficient "
+                      "change over the largest coefficient magnitude; an observed change, not an "
+                      "error estimate");
     py::class_<IsaAuxCoulomb>(m, "IsaAuxCoulomb", "Native Libint2 Coulomb metric and analytic charges; explicit Cartesian or spherical molecular AUX (different declared bases)")
         .def(py::init<const IsaExplicitBasis&>(), "auxiliary"_a)
         .def("charges", &IsaAuxCoulomb::charges)
