@@ -2832,15 +2832,24 @@ def fdisp0(
     total_memory = core.get_memory() // 8  # Convert bytes to doubles
 
     # The (r,s) pairs of a compute block are contracted as one matrix
-    # V[(r,a),(s,b)] (see the main loop below), which needs nine work arrays of
-    # nrb*na x nsb*nb doubles: V, T, I, T2, V2 and the energy denominator, plus
-    # W, IW, W2 for the (s,a) x (r,b) half of the exchange term.  Those GEMMs
+    # V[(r,a),(s,b)] (see the main loop below), which needs seven work arrays
+    # of nrb*na x nsb*nb doubles: V, T, I, T2, V2 and the energy denominator,
+    # plus W2 for the (s,a) x (r,b) half of the exchange term.  Those GEMMs
     # are only part of the block's cost, so FDISP_BLOCK caps the compute block
     # at the whole-kernel optimum, independently of how much of the DF tensors
     # memory lets us hold at once.
     blk_r = min(FDISP_BLOCK, nr)
     blk_s = min(FDISP_BLOCK, ns)
-    overhead += 9 * blk_r * blk_s * na * nb
+    overhead += 7 * blk_r * blk_s * na * nb
+    # The slab _localize_columns stages each packed buffer through, sized to
+    # fit in the two work arrays (W, IW) that localizing the factors made
+    # unnecessary, so the total stays within what nine arrays used to take.
+    # The exception is the one-orbital floor: when a block's two arrays hold
+    # less than one orbital's columns (2*blk_r*blk_s*na*nb < nk*max(na, nb)),
+    # the slab is one orbital, nk*max(na, nb) doubles.
+    lo_slab = max(1, min(FDISP_BLOCK, max(nr, ns),
+                         2 * blk_r * blk_s * na * nb // ((2 * nQ + 2) * max(na, nb))))
+    overhead += (2 * nQ + 2) * lo_slab * max(na, nb)
 
     # Available memory for dispersion calculation
     rem = total_memory - overhead
@@ -3002,7 +3011,7 @@ def fdisp0(
             # numpy's lazily faulted np.zeros did for the v1 port.  A zeroed
             # tensor is first touched by this thread alone, and the block's
             # GEMMs then all read from one socket's memory.
-            pool = _fdisp_pool(8 * (6 * M * N + 3 * Ms * Nr))
+            pool = _fdisp_pool(8 * (6 * M * N + Ms * Nr))
             b = dict(
                 V=_fdisp_carve(pool, [M, N], "Vrs"),
                 T=_fdisp_carve(pool, [M, N], "Trs"),
@@ -3010,18 +3019,16 @@ def fdisp0(
                 T2=_fdisp_carve(pool, [M, N], "T2rs"),
                 V2=_fdisp_carve(pool, [M, N], "V2rs"),
                 D=_fdisp_carve(pool, [M, N], "Drs"),
-                W=_fdisp_carve(pool, [Ms, Nr], "Wsr"),
-                IW=_fdisp_carve(pool, [Ms, Nr], "IWsr"),
                 W2=_fdisp_carve(pool, [Ms, Nr], "W2sr"),
             )
             b["Dv"] = b["D"].reshape_view([na, nrb, nb, nsb])
             b["T2v"] = b["T2"].reshape_view([na, nrb, nb, nsb])
             b["V2v"] = b["V2"].reshape_view([na, nrb, nb, nsb])
             b["W2v"] = b["W2"].reshape_view([na, nsb, nb, nrb])
-            # The contract-b operands of _to_lo with the column index split
-            # into (b, y); b is the faster half of a column-major column index.
-            for k, rows, ncol in (("T", M, nsb), ("V", M, nsb), ("I", M, nsb),
-                                  ("W", Ms, nrb), ("IW", Ms, nrb)):
+            # The contract-b operands of _to_lo and _from_lo with the column
+            # index split into (b, y); b is the faster half of a column-major
+            # column index.
+            for k, rows, ncol in (("T", M, nsb), ("V2", M, nsb), ("I", M, nsb)):
                 b[k + "3"] = b[k].reshape_view([rows, nb, ncol])
             _bufs[key] = b
         return _bufs[key]
@@ -3039,6 +3046,47 @@ def fdisp0(
         ncol = nrow_blk * ncol_blk * nb
         ein.linalg.gemm(1.0, UA, b[i].reshape_view([na, ncol]), 0.0,
                         b[y].reshape_view([na, ncol]), trans_a=True)
+
+    def _from_lo(b, x, i, y, nrow_blk, ncol_blk):
+        """The inverse of _to_lo: Y = UA X UB^T, back from the LO basis to MO.
+
+        UA and UB are orthogonal (IBO rotations within the active occupied
+        space), so the inverse is the transpose.
+        """
+        ein.einsum("mcy <- mby ; cb", b[i + "3"], b[x + "3"], UB, c_pf=0.0, ab_pf=1.0)
+        ncol = nrow_blk * ncol_blk * nb
+        ein.linalg.gemm(1.0, UA, b[i].reshape_view([na, ncol]), 0.0,
+                        b[y].reshape_view([na, ncol]))
+
+    # Localizing the DF factors rather than the products:
+    #
+    #     UA^T (AF^T FA) UB  =  (AF UA)^T (FA UB) ,
+    #
+    # so transforming each packed buffer's orbital columns once, as it is
+    # staged, lets their GEMMs produce V2, X2 and W2 directly, and no MO copy
+    # of the factors is kept.  Only the amplitudes need the MO basis, where the
+    # denominator is diagonal: V is rotated back (_from_lo) and T forward
+    # (_to_lo), two transforms per block where there were four, at no memory
+    # cost.  This is the reassociation ComputeGraph's
+    # ContractionPlanning reports for the captured block, which it cannot
+    # apply itself because the chain runs through rank-4 views.
+    lo_tmp = _ein_zeros(nk, lo_slab * max(na, nb), name="LO slab")
+
+    def _localize_columns(buf, n_o, nblk, U):
+        """buf[:, (o,x)] <- sum_o' buf[:, (o',x)] U[o',o] for x < nblk, in place.
+
+        Done a slab of columns at a time through lo_tmp: a column range of a
+        column-major buffer is contiguous, so each slab is one memcpy out and
+        one batched GEMM back.
+        """
+        tmpn = np.asarray(lo_tmp)
+        bufn = np.asarray(buf)
+        for x0 in range(0, nblk, lo_slab):
+            nc = min(lo_slab, nblk - x0)
+            c0, c1 = x0 * n_o, (x0 + nc) * n_o
+            tmpn[:, :c1 - c0] = bufn[:, c0:c1]
+            ein.einsum("Qcx <- Qox ; oc", buf[:, c0:c1].reshape_view([nk, n_o, nc]),
+                       lo_tmp[:, :c1 - c0].reshape_view([nk, n_o, nc]), U, c_pf=0.0, ab_pf=1.0)
 
     def _np2(m):
         """A DF block's numpy buffer as (nrow, nQ); fill_tensor may leave it 3-D."""
@@ -3089,6 +3137,8 @@ def fdisp0(
         AFarn[:M, 2 * nQ + 1] = SBarn[:, rsl].T.reshape(-1)
         BCbrn[:Nr, 2 * nQ] = Qbrn[:, rsl].T.reshape(-1)
         BCbrn[:Nr, 2 * nQ + 1] = Sbrn[:, rsl].T.reshape(-1)
+        _localize_columns(AFar, na, nrblock, UA)
+        _localize_columns(BCbr, nb, nrblock, UB)
 
         for sstart in range(0, ns, max_s):
             nsblock = min(max_s, ns - sstart)
@@ -3110,6 +3160,8 @@ def fdisp0(
             FAbsn[:N, 2 * nQ + 1] = Qbsn[:, ssl].T.reshape(-1)
             BCasn[:Ms, 2 * nQ] = Sasn[:, ssl].T.reshape(-1)
             BCasn[:Ms, 2 * nQ + 1] = Qasn[:, ssl].T.reshape(-1)
+            _localize_columns(FAbs, nb, nsblock, UB)
+            _localize_columns(BCas, na, nsblock, UA)
 
             # => RS inner loop <= //
             for r0 in range(0, nrblock, blk_r):
@@ -3127,14 +3179,16 @@ def fdisp0(
                     b = _work(nrb, nsb)
                     V, T, I = b["V"], b["T"], b["I"]
                     T2, V2, D = b["T2"], b["V2"], b["D"]
-                    W, IW, W2 = b["W"], b["IW"], b["W2"]
+                    W2 = b["W2"]
 
                     # => Amplitudes, Disp20 <= //
 
-                    # V[(r,a),(s,b)] = sum_Q Aar[(r,a),Q] Abs[(s,b),Q]
+                    # V2[(r,a),(s,b)] = sum_Q Aar[(r,a),Q] Abs[(s,b),Q], from the
+                    # localized factors, so in the LO basis; V is its MO image.
                     ein.linalg.gemm(1.0, AFar[0:nQ, ra0:ra1],
-                                    FAbs[nQ:2 * nQ, sb0:sb1], 0.0, V,
+                                    FAbs[nQ:2 * nQ, sb0:sb1], 0.0, V2,
                                     trans_a=True)
+                    _from_lo(b, "V2", "I", "V", nrb, nsb)
 
                     # Amplitudes T = V / (ea + eb - er - es).  outer_sum is
                     # einsums' own MP2-denominator primitive and builds the
@@ -3147,16 +3201,16 @@ def fdisp0(
 
                     # Transform to localized orbital basis and accumulate
                     _to_lo(b, "T", "I", "T2", nrb, nsb)
-                    _to_lo(b, "V", "I", "V2", nrb, nsb)
                     ein.einsum("ab <- arbs ; arbs", E_disp20_comp,
                                b["T2v"], b["V2v"], c_pf=1.0, ab_pf=4.0)
 
                     # => Exch-Disp20 <= //
 
-                    # (r,a) x (s,b) half: Aar.Fbs + Far.Abs + Qar.SAbs + SBar.Qbs
+                    # (r,a) x (s,b) half: Aar.Fbs + Far.Abs + Qar.SAbs + SBar.Qbs,
+                    # from the localized factors, so it lands in V2 already in
+                    # the LO basis (see _localize_columns).
                     ein.linalg.gemm(1.0, AFar[:, ra0:ra1], FAbs[:, sb0:sb1],
-                                    0.0, V, trans_a=True)
-                    _to_lo(b, "V", "I", "V2", nrb, nsb)
+                                    0.0, V2, trans_a=True)
                     ein.einsum("ab <- arbs ; arbs", E_exch_disp20_comp,
                                b["T2v"], b["V2v"], c_pf=1.0, ab_pf=-2.0)
 
@@ -3166,8 +3220,7 @@ def fdisp0(
                     # reduced against T2 through a transposed index map rather
                     # than permuted into the (r,a) x (s,b) one.
                     ein.linalg.gemm(1.0, BCas[:, sa0:sa1], BCbr[:, rb0:rb1],
-                                    0.0, W, trans_a=True)
-                    _to_lo(b, "W", "IW", "W2", nsb, nrb)
+                                    0.0, W2, trans_a=True)
                     ein.einsum("ab <- arbs ; asbr", E_exch_disp20_comp,
                                b["T2v"], b["W2v"], c_pf=1.0, ab_pf=-2.0)
 
