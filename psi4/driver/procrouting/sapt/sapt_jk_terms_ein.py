@@ -139,6 +139,35 @@ def _fdisp_pool(nbytes: int):
     return _FDISP_POOL
 
 
+# Smallest carve, in bytes, the pool has refused; larger ones skip the pool.
+_FDISP_POOL_REFUSED = None
+
+
+def _fdisp_carve(pool, dims, name: str):
+    """An uninitialized ``dims`` tensor from ``pool``, or a zeroed one if the pool cannot carve it.
+
+    mimalloc 3.5 will not carve a single block above about 224 MiB from a pool's
+    arena ("could not carve ... even from a fresh arena"); 3.3 will.  A block
+    buffer that large needs na * nb above about 51000 at the default block edge.
+    The zeroed tensor gives the same results, without the first-touch placement.
+    Each refusal also costs the pool an arena, of which mimalloc allows a
+    process only so many, so a size that failed once is not tried again.
+    """
+    global _FDISP_POOL_REFUSED
+    nbytes = 8 * dims[0] * dims[1]
+    if _FDISP_POOL_REFUSED is None or nbytes < _FDISP_POOL_REFUSED:
+        try:
+            return pool.empty(dims, name=name)
+        except RuntimeError as exc:
+            if "could not carve" not in str(exc):
+                raise
+            if _FDISP_POOL_REFUSED is None:
+                core.print_out(f"    fdisp0: einsums MemoryPool could not carve a {nbytes / 2**20:.0f} MiB block buffer; "
+                               "using zeroed tensors for buffers that large.\n")
+            _FDISP_POOL_REFUSED = nbytes if _FDISP_POOL_REFUSED is None else min(_FDISP_POOL_REFUSED, nbytes)
+    return _ein_zeros(*dims, name=name)
+
+
 def _ein_clone(x, name: str = "clone", scale: float = 1.0):
     """A fresh einsums tensor holding ``scale * x``, whatever ``x`` is."""
     out = ein.array(_arr(x), name=name)
@@ -2975,15 +3004,15 @@ def fdisp0(
             # GEMMs then all read from one socket's memory.
             pool = _fdisp_pool(8 * (6 * M * N + 3 * Ms * Nr))
             b = dict(
-                V=pool.empty([M, N], name="Vrs"),
-                T=pool.empty([M, N], name="Trs"),
-                I=pool.empty([M, N], name="Irs"),
-                T2=pool.empty([M, N], name="T2rs"),
-                V2=pool.empty([M, N], name="V2rs"),
-                D=pool.empty([M, N], name="Drs"),
-                W=pool.empty([Ms, Nr], name="Wsr"),
-                IW=pool.empty([Ms, Nr], name="IWsr"),
-                W2=pool.empty([Ms, Nr], name="W2sr"),
+                V=_fdisp_carve(pool, [M, N], "Vrs"),
+                T=_fdisp_carve(pool, [M, N], "Trs"),
+                I=_fdisp_carve(pool, [M, N], "Irs"),
+                T2=_fdisp_carve(pool, [M, N], "T2rs"),
+                V2=_fdisp_carve(pool, [M, N], "V2rs"),
+                D=_fdisp_carve(pool, [M, N], "Drs"),
+                W=_fdisp_carve(pool, [Ms, Nr], "Wsr"),
+                IW=_fdisp_carve(pool, [Ms, Nr], "IWsr"),
+                W2=_fdisp_carve(pool, [Ms, Nr], "W2sr"),
             )
             b["Dv"] = b["D"].reshape_view([na, nrb, nb, nsb])
             b["T2v"] = b["T2"].reshape_view([na, nrb, nb, nsb])
