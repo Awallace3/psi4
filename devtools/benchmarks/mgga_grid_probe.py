@@ -90,7 +90,7 @@ def worker(a):
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     os.chdir(out)
-    result = dict(ok=False, functional=a.functional, package=str(a.package),
+    result = dict(ok=False, functional=a.functional, fragment=a.fragment, package=str(a.package),
                   protocol="Same seed orbitals; actual C-API cuEST grid capture. "
                            "CPU collocation on each grid at basis tolerance 1e-20; "
                            "native LibXC on both native and captured density ingredients.")
@@ -107,11 +107,18 @@ def worker(a):
         result["geometry"] = geometry("benzene")
         psi4.set_options(baseline)
         mol = psi4.geometry(result["geometry"])
+        if a.fragment == "A":
+            mol = mol.extract_subsets(1, 2)
+        elif a.fragment == "B":
+            mol = mol.extract_subsets(2, 1)
+        mol.update_geometry()
+        result["molecule"] = mol.to_string(dtype="psi4")
         energy, seed = psi4.energy(a.functional, molecule=mol, return_wfn=True)
         ca, da = seed.Ca().np.copy(), seed.Da().np.copy()
         cocc = seed.Ca_subset("AO", "OCC").np.copy()
         overlap = psi4.core.MintsHelper(seed.basisset()).ao_overlap().np.copy()
         nocc = seed.nalpha()
+        result.update(nbf=seed.basisset().nbf(), nelectron=2*nocc)
         np.testing.assert_allclose(cocc.T @ overlap @ cocc, np.eye(nocc), atol=1e-10, rtol=0)
         result["seed_energy_hartree"] = energy
         np.savez(out/"seed.npz", ca=ca, da=da, cocc_ao=cocc, overlap_ao=overlap)
@@ -212,6 +219,7 @@ def worker(a):
 
 
 def campaign(a):
+    assert len(set(a.fragments)) == len(a.fragments), "Duplicate fragment selection"
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     package = a.host_package.resolve()
@@ -225,7 +233,7 @@ def campaign(a):
                     shim=str(a.shim.resolve()), shim_sha256=digest(a.shim),
                     source_sha256=digest(script.with_name("mgga_capture.cc")),
                     script_sha256=digest(script), records=[],
-                    preload_sha256=preload_hashes,
+                    preload_sha256=preload_hashes, fragments=a.fragments,
                     commit=subprocess.check_output(
                         ["git", "-C", str(script.parent), "rev-parse", "HEAD"], text=True).strip(),
                     gpu=subprocess.check_output(
@@ -233,23 +241,26 @@ def campaign(a):
                         text=True))
     assert "H200" in manifest["gpu"]
     atomic_json(out/"manifest.json", manifest)
-    for functional in ("m06", "m06-l"):
+    import itertools
+    for functional, fragment in itertools.product(("m06", "m06-l"), a.fragments):
+        name = functional if fragment == "AB" else f"{functional}-{fragment}"
         child_env = dict(env, LD_PRELOAD=":".join(map(str, preloads)))
         child_env.pop("MGGA_CAPTURE_DIR", None)
-        cmd = [sys.executable, str(script), "--worker", "--output", str(out/functional),
-               "--package", str(package), "--functional", functional]
-        with (out/f"{functional}.log").open("w") as log:
+        cmd = [sys.executable, str(script), "--worker", "--output", str(out/name),
+               "--package", str(package), "--functional", functional, "--fragment", fragment]
+        with (out/f"{name}.log").open("w") as log:
             try:
                 code = subprocess.run(cmd, env=child_env, stdout=log,
                                       stderr=subprocess.STDOUT, timeout=1200).returncode
             except subprocess.TimeoutExpired:
                 code = 124
-        file = out/functional/"result.json"
+        file = out/name/"result.json"
         record = process_result(json.loads(file.read_text()) if file.exists()
                                 else dict(ok=False, error="Missing result.json"), code)
-        manifest["records"].append(dict(functional=functional, returncode=code, result=record))
+        manifest["records"].append(dict(functional=functional, fragment=fragment,
+                                        returncode=code, result=record))
         atomic_json(out/"manifest.json", manifest)
-        print(functional, "exit", code, "error", record.get("error"), flush=True)
+        print(name, "exit", code, "error", record.get("error"), flush=True)
     assert digest(a.shim) == manifest["shim_sha256"]
     assert all(digest(Path(p)) == h for p, h in preload_hashes.items()), "Runtime changed"
     assert all(digest(Path(p)) == h for p, h in pin["sha256"].items()), "Build changed"
@@ -267,5 +278,7 @@ if __name__ == "__main__":
     for key in ("package", "host-package", "cuda-package", "cuda-lib-dir", "shim"):
         p.add_argument("--"+key, type=Path)
     p.add_argument("--functional")
+    p.add_argument("--fragment", choices=("AB", "A", "B"), default="AB")
+    p.add_argument("--fragments", choices=("AB", "A", "B"), nargs="+", default=["AB"])
     a = p.parse_args()
     raise SystemExit(worker(a) if a.worker else campaign(a))
