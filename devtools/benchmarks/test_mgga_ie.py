@@ -1,8 +1,14 @@
 import unittest
-from mgga_ie import delta, options, summarize, FRAGMENTS
+from mgga_ie import delta, options, summarize, process_result, FRAGMENTS
 
 
 class Tests(unittest.TestCase):
+    def test_failed_teardown_invalidates_result(self):
+        record = process_result(dict(ok=True, energy_hartree=-1), -11)
+        self.assertFalse(record["ok"])
+        self.assertTrue(record["calculation_reported_ok"])
+        self.assertEqual(record["process_returncode"], -11)
+
     def test_counterpoise_sign(self):
         self.assertAlmostEqual(delta(dict(AB=-20.1, A=-10., B=-10.)), -.1)
 

@@ -91,6 +91,51 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def build_environment(build, package, cuda_lib_dir):
+    env = dict(os.environ, PYTHONPATH=str(package.parent), PYTHONNOUSERSITE="1")
+    if build == "cuda":
+        env["LD_LIBRARY_PATH"] = str(cuda_lib_dir) + ":" + env.get("LD_LIBRARY_PATH", "")
+    return env
+
+
+def provenance(package, env):
+    """Pin staged drivers, basis data and resolved XC/cuEST libraries, not just core."""
+    core = next(package.glob("core*.so"))
+    ldd = subprocess.check_output(["ldd", str(core)], env=env, text=True)
+    assert "not found" not in ldd, ldd
+    files = {core, package / "metadata.py"}
+    files.update(package.glob("driver/**/*.py"))
+    basis = package.parents[1] / "share/psi4/basis"
+    assert basis.is_dir(), basis
+    files.update(p for p in basis.rglob("*") if p.is_file())
+    cache = package.parents[2] / "CMakeCache.txt"
+    if cache.exists():
+        files.add(cache)
+    libraries = {}
+    for line in ldd.splitlines():
+        words = line.split()
+        if "=>" in words and any(k in words[0].lower() for k in ("libxc", "cuest")):
+            path = Path(words[words.index("=>") + 1]).resolve()
+            assert path.is_file(), path
+            libraries[words[0]] = str(path)
+            files.add(path)
+    assert any("libxc" in name.lower() for name in libraries), libraries
+    source = package.parents[3]
+    commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    return dict(source=str(source), source_checkout_commit=commit, linked_libraries=libraries,
+                note="Checkout commit is not by itself the compiled source identity; staged file hashes identify this tested build.",
+                sha256={str(p): digest(p) for p in sorted(files)})
+
+
+def process_result(record, returncode):
+    record = dict(record, process_returncode=returncode)
+    if returncode:
+        record["calculation_reported_ok"] = record.get("ok", False)
+        record["ok"] = False
+        record["process_error"] = f"Process exited with code {returncode}"
+    return record
+
+
 def summarize(results):
     rows = []
     for build, system, functional in itertools.product(["host", "cuda"], [c[0] for c in CASES], FUNCTIONALS):
@@ -124,12 +169,14 @@ def campaign(a):
     builds = {"host": a.host_package.resolve(), "cuda": a.cuda_package.resolve()}
     binaries = {b: next(p.glob("core*.so")) for b, p in builds.items()}
     hashes = {b: digest(p) for b, p in binaries.items()}
+    build_provenance = {b: provenance(p, build_environment(b, p, a.cuda_lib_dir))
+                        for b, p in builds.items()}
     cases = CASES[:1] if a.preflight else CASES
     functionals = ["m06"] if a.preflight else FUNCTIONALS
     expected_count = len(cases)*len(functionals)*len(builds)*len(ROUTES)*len(FRAGMENTS)
     manifest = dict(job=os.getenv("SLURM_JOB_ID"), cases=cases, functionals=functionals,
                     routes=ROUTES, fragments=FRAGMENTS, packages={b:str(p) for b,p in builds.items()},
-                    binary_sha256=hashes, harness_commit=subprocess.check_output(
+                    binary_sha256=hashes, build_provenance=build_provenance, harness_commit=subprocess.check_output(
                         ["git", "-C", str(script.parent), "rev-parse", "HEAD"], text=True).strip(),
                     script_sha256=digest(script), geometry_sha256={s:hashlib.sha256(geometry(s).encode()).hexdigest() for s,_ in CASES},
                     protocol="E_AB - E_A(ghost B) - E_B(ghost A), fixed geometry; no D4, no SAPT, no GRAC. "
@@ -149,9 +196,7 @@ def campaign(a):
         for functional, build, route, fragment in itertools.product(functionals, builds, ROUTES, FRAGMENTS):
             name = f"{system}-{functional}-{build}-{route}-{fragment}"
             work = out / name
-            env = dict(os.environ, PYTHONPATH=str(builds[build].parent), PYTHONNOUSERSITE="1")
-            if build == "cuda":
-                env["LD_LIBRARY_PATH"] = str(a.cuda_lib_dir) + ":" + env.get("LD_LIBRARY_PATH", "")
+            env = build_environment(build, builds[build], a.cuda_lib_dir)
             cmd = [sys.executable, str(script), "--worker", "--output", str(work),
                    "--package", str(builds[build]), "--system", system, "--basis", basis,
                    "--functional", functional, "--route", route, "--fragment", fragment,
@@ -166,11 +211,13 @@ def campaign(a):
             manifest["records"].append(record)
             file = work / "result.json"
             if file.exists():
-                results[(build,system,functional,route,fragment)] = json.loads(file.read_text())
+                results[(build,system,functional,route,fragment)] = process_result(json.loads(file.read_text()), code)
             print(name, "exit", code, flush=True)
             atomic_json(out / "manifest.json", manifest)
             atomic_json(out / "comparisons.json", comparisons_for_selection())
     assert hashes == {b:digest(p) for b,p in binaries.items()}, "Binary changed during campaign"
+    for pin in build_provenance.values():
+        assert all(digest(Path(p)) == expected for p, expected in pin["sha256"].items()), "Build inputs changed during campaign"
     comparisons = comparisons_for_selection()
     completed = (len(results) == expected_count and all(r["ok"] for r in results.values())
                  and all(r["returncode"] == 0 for r in manifest["records"]))
