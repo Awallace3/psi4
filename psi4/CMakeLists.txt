@@ -376,6 +376,7 @@ install(
     ../tests/pytests/test_gauxc_writer
     ../tests/pytests/test_molden_writer
     ../tests/pytests/test_psi4_qcschema
+    ../tests/pytests/data_isapol
   DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4/tests/
   )
 

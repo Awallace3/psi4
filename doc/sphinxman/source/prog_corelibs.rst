@@ -35,6 +35,7 @@ Programming with the Core Libraries
 .. toctree::
    optionshandling
    prog_blas
+   prog_isapol
    variables
 
 ..   prog_basissets
