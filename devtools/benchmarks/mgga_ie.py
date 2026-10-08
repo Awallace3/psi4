@@ -173,6 +173,11 @@ def campaign(a):
                         for b, p in builds.items()}
     cases = CASES[:1] if a.preflight else CASES
     functionals = ["m06"] if a.preflight else FUNCTIONALS
+    if a.systems:
+        cases = [case for case in cases if case[0] in a.systems]
+    if a.functionals:
+        functionals = [f for f in functionals if f in a.functionals]
+    assert cases and functionals
     expected_count = len(cases)*len(functionals)*len(builds)*len(ROUTES)*len(FRAGMENTS)
     manifest = dict(job=os.getenv("SLURM_JOB_ID"), cases=cases, functionals=functionals,
                     routes=ROUTES, fragments=FRAGMENTS, packages={b:str(p) for b,p in builds.items()},
@@ -231,6 +236,8 @@ if __name__ == "__main__":
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--worker", action="store_true")
     p.add_argument("--preflight", action="store_true")
+    p.add_argument("--systems", nargs="+", choices=[s for s, _ in CASES])
+    p.add_argument("--functionals", nargs="+", choices=FUNCTIONALS)
     for key in ("package", "host-package", "cuda-package", "cuda-lib-dir"):
         p.add_argument("--"+key, type=Path)
     for key in ("system", "basis", "functional", "route", "fragment", "expected-xc"):
