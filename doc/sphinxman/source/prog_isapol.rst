@@ -87,9 +87,65 @@ Distributed moments (Q)
      rank and auxiliary identity. ``anchor_legs(C)`` is the only supported
      contraction, ``C @ Q.T``.
 
+LW localization, multipole transforms and frequency grid
+   These consume supplied tensors only. No response, partition or external
+   CamCASP/ORIENT program is involved. LW is the Lillestolen--Wheatley
+   localization (Lillestolen and Wheatley, *J. Phys. Chem. A* **111**, 11141
+   (2007); CamCASP user's guide section 8.2.1, where LS is the older
+   Le Sueur--Stone method). The implementation follows ORIENT's LW routine
+   and reproduces its output.
+
+   * ``psi4.core.isa_multipole_translation(rank, d)`` returns T(d) with
+     R(x+d) = T(d) R(x), where d is the source-minus-target displacement in
+     bohr. ``psi4.core.isa_multipole_rotation(rank, F)`` returns D(F) with
+     R(F x) = D(F) R(x), where the columns of F are the local axes in global
+     coordinates; F must be proper orthogonal to 1e-12. Both work in real
+     Racah order, ranks 0 to 4.
+   * ``psi4.core.isa_localize_lw`` localizes one frequency of a supplied
+     ordered site-pair response, given as N*N blocks (16x16 for rank 3 or
+     25x25 for rank 4), over an explicit zero-based bond graph. The
+     frequency must be finite and nonnegative. It returns an owned
+     ``IsaLocalizedResponse``, whose local tensors exclude rank 0.
+     ``residual_tolerance`` (1e-6) is a postcondition gate on the residuals
+     LW controls, not an iteration criterion. ``input_sum_rule_tolerance``
+     gates the supplied charge-flow sum-rule defect: negative inherits the
+     residual tolerance, positive sets its own threshold, and infinity
+     reports the defect without gating it. Nothing is repaired, symmetrized
+     or retried. ``isa_lw_graph_math`` exposes the graph Laplacian and its
+     pseudoinverse.
+
+     .. warning:: LW localization is not rotationally covariant. Rotating the
+        whole molecule (origins and tensors together) can change the local LW
+        tensors and the rank 2 and higher isotropic polarizabilities that
+        later feed C8 and C10. ORIENT behaves the same way. Rank-1
+        isotropic values were unchanged in the cases sampled, but no
+        orientation independence of C6 is guaranteed. Passing the
+        ``production`` residual gate means the input and residual checks
+        passed; it is not a guarantee of physical accuracy or of rotational
+        invariance. The multipole translations and rotations themselves are
+        exact.
+   * ``psi4.driver.procrouting.isapol_lw.supplied_nonlocal_properties`` is the
+     typed driver. It requires an explicit ``Provenance``, an explicit
+     truncation for rank-4 input, and strictly increasing imaginary-axis frequencies;
+     frames are optional. It returns an immutable ``LocalProperties``. The
+     residual policies are:
+
+     - ``production`` (the default): one combined 1e-6 gate.
+     - ``reported_input_sum_rule``: 1e-6 on what LW controls. The supplied
+       sum-rule defect is measured and reported, not gated.
+
+     ``localization_rank_limit`` (1 to 4, default 3) declares the
+     localization rank. Different limits give different models, but the
+     results agree exactly on the ranks they share.
+   * ``psi4.core.CasimirGrid(n_freq, omega0=0.3)`` is CamCASP's
+     Gauss--Legendre imaginary-frequency quadrature. ``n_freq`` is even, from 2
+     to 10. Index 0 is the static point (zero frequency, zero weight).
+     ``cp_weight`` includes the mapping Jacobian and the 1/(2 pi) of the
+     Casimir--Polder integral. The ISA-Pol protocols use ``omega0=0.5``.
+
 The ISA and MBIS partitions (density partitions, not orbital rotations),
-response, Lamb--Wilkinson localization, point-response fitting and dispersion
-are built on top of these blocks and are added separately.
+response, point-response fitting and dispersion are built on top of these
+blocks and are added separately.
 
 Deferred to later stages
    These candidate APIs have no consumer here. Each is added, from candidate
@@ -105,6 +161,8 @@ Deferred to later stages
      or ``'direct_ov'`` columns) and sites without samples, as given. Also ``IsaExplicitBasis.screening_s_overlap``
      (CamCASP's signed ``screening_s_ovr`` shell surrogate for ALDA screening)
      and ``shell_layout``.
+   * Dispersion: the ``isapol_lw.Coefficient`` and ``DispersionPair``
+     result records.
    * Point-response fitting: ``isapol_vdw_radius`` (``vdw_radius``), the
      double-precision ``MODULE radii`` Bondi table that the fit-point lattice
      reads. ``isapol_vdw_radius_bondi`` is the float32 ``AtomProp`` copy.
