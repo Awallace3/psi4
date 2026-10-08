@@ -55,22 +55,39 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
                                  std::map<std::string, SharedMatrix> matrix_cache,
                                  std::map<std::string, SharedVector> vector_cache, 
                                  bool is_hybrid)
-    : primary_(primary), auxiliary_(auxiliary), matrix_cache_(matrix_cache), vector_cache_(vector_cache), is_hybrid_(is_hybrid) {
+    : FDDS_Dispersion(primary, auxiliary, matrix_cache, vector_cache, is_hybrid, false) {}
 
-    // ==> Check incoming cache <==
-    std::vector<std::string> matrix_cache_check = {"Cocc_A", "Cvir_A", "Cocc_B", "Cvir_B"};
-    for (auto key : matrix_cache_check) {
-        if (matrix_cache_.find(key) == matrix_cache_.end()) {
-            outfile->Printf("FDDS_Dispersion: Missing matrix_cache key %s\n", key.c_str());
-            throw PSIEXCEPTION("FDDS_Dispersion: Missing values in the matrix_cache!");
-        }
+FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
+                               std::map<std::string, SharedMatrix> matrix_cache,
+                               std::map<std::string, SharedVector> vector_cache, bool is_hybrid, bool single_monomer)
+    : primary_(primary), auxiliary_(auxiliary), matrix_cache_(matrix_cache), vector_cache_(vector_cache),
+      is_hybrid_(is_hybrid), single_monomer_(single_monomer) {
+    if (!primary_ || !auxiliary_ || primary_->nbf() == 0 || auxiliary_->nbf() == 0) {
+        throw PSIEXCEPTION("FDDS: nonempty primary and auxiliary bases are required.");
     }
-
-    std::vector<std::string> vector_cache_check = {"eps_occ_A", "eps_vir_A", "eps_occ_B", "eps_vir_B"};
-    for (auto key : vector_cache_check) {
-        if (vector_cache_.find(key) == vector_cache_.end()) {
-            outfile->Printf("FDDS_Dispersion: Missing vector_cache key %s\n", key.c_str());
-            throw PSIEXCEPTION("FDDS_Dispersion: Missing values in the vector_cache!");
+    const std::vector<std::string> monomers = single_monomer_ ? std::vector<std::string>{"A"}
+                                                           : std::vector<std::string>{"A", "B"};
+    for (const auto& monomer : monomers) {
+        for (const std::string space : {"occ", "vir"}) {
+            const auto ck = "C" + space + "_" + monomer;
+            const auto ek = "eps_" + space + "_" + monomer;
+            if (!matrix_cache_.count(ck) || !matrix_cache_.at(ck) ||
+                !vector_cache_.count(ek) || !vector_cache_.at(ek)) {
+                throw PSIEXCEPTION("FDDS: missing orbital data: " + ck + " / " + ek);
+            }
+            const auto& C = matrix_cache_.at(ck);
+            const auto& eps = vector_cache_.at(ek);
+            if (C->nirrep() != 1 || eps->nirrep() != 1 || C->nrow() != primary_->nbf() ||
+                C->ncol() == 0 || C->ncol() != eps->dim(0)) {
+                throw PSIEXCEPTION("FDDS: orbital dimensions must be C1, nbf by nmo, with matching nonempty energies.");
+            }
+            for (int p = 0; p < C->nrow(); ++p)
+                for (int i = 0; i < C->ncol(); ++i)
+                    if (!std::isfinite(C->get(p, i)))
+                        throw PSIEXCEPTION("FDDS: orbital coefficients must be finite.");
+            for (int i = 0; i < eps->dim(0); ++i)
+                if (!std::isfinite(eps->get(i)))
+                    throw PSIEXCEPTION("FDDS: orbital energies must be finite.");
         }
     }
 
@@ -148,8 +165,10 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
     std::vector<SharedMatrix> Cstack_vec;
     Cstack_vec.push_back(matrix_cache_["Cocc_A"]);
     Cstack_vec.push_back(matrix_cache_["Cvir_A"]);
-    Cstack_vec.push_back(matrix_cache_["Cocc_B"]);
-    Cstack_vec.push_back(matrix_cache_["Cvir_B"]);
+    if (!single_monomer_) {
+        Cstack_vec.push_back(matrix_cache_["Cocc_B"]);
+        Cstack_vec.push_back(matrix_cache_["Cvir_B"]);
+    }
 
     size_t doubles = Process::environment.get_memory() * 0.8 / sizeof(double);
     size_t max_MO = 0;
@@ -171,17 +190,21 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
     // Define spaces
     dfh_->add_space("a", Cstack_vec[0]);
     dfh_->add_space("r", Cstack_vec[1]);
-    dfh_->add_space("b", Cstack_vec[2]);
-    dfh_->add_space("s", Cstack_vec[3]);
+    if (!single_monomer_) {
+        dfh_->add_space("b", Cstack_vec[2]);
+        dfh_->add_space("s", Cstack_vec[3]);
+    }
 
     // add transformations
     dfh_->add_transformation("arQ", "a", "r", "pqQ");
-    dfh_->add_transformation("bsQ", "b", "s", "pqQ");
+    if (!single_monomer_) dfh_->add_transformation("bsQ", "b", "s", "pqQ");
     if (is_hybrid_) {
         dfh_->add_transformation("raQ", "r", "a", "pqQ");
-        dfh_->add_transformation("sbQ", "s", "b", "pqQ");
         dfh_->add_transformation("Qar", "a", "r", "Qpq");
-        dfh_->add_transformation("Qbs", "b", "s", "Qpq");
+        if (!single_monomer_) {
+            dfh_->add_transformation("sbQ", "s", "b", "pqQ");
+            dfh_->add_transformation("Qbs", "b", "s", "Qpq");
+        }
     }
 
     // transform
@@ -202,15 +225,19 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
 
         dfh_->add_space("a", Cstack_vec[0]);
         dfh_->add_space("r", Cstack_vec[1]);
-        dfh_->add_space("b", Cstack_vec[2]);
-        dfh_->add_space("s", Cstack_vec[3]);
+        if (!single_monomer_) {
+            dfh_->add_space("b", Cstack_vec[2]);
+            dfh_->add_space("s", Cstack_vec[3]);
+        }
 
         dfh_->add_transformation("aaR", "a", "a", "pqQ");
         dfh_->add_transformation("arR", "a", "r", "pqQ");
         dfh_->add_transformation("rrR", "r", "r", "pqQ");
-        dfh_->add_transformation("bbR", "b", "b", "pqQ");
-        dfh_->add_transformation("bsR", "b", "s", "pqQ");
-        dfh_->add_transformation("ssR", "s", "s", "pqQ");
+        if (!single_monomer_) {
+            dfh_->add_transformation("bbR", "b", "b", "pqQ");
+            dfh_->add_transformation("bsR", "b", "s", "pqQ");
+            dfh_->add_transformation("ssR", "s", "s", "pqQ");
+        }
         dfh_->set_release_core_AO_before_metric(true);
         dfh_->transform();
     }
@@ -221,19 +248,19 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
         // QR Factorization of (ar|Q)
         timer_on("FDDS: QR");
         R_A_ = QR("A");
-        R_B_ = QR("B");
+        if (!single_monomer_) R_B_ = QR("B");
         timer_off("FDDS: QR");
 
         // form (ar|(Q)X|Q) = (ar'|a'r) (a'r'|(Q)|Q)
         timer_on("FDDS: Form X");
         form_X("A");
-        form_X("B");
+        if (!single_monomer_) form_X("B");
         timer_off("FDDS: Form X");
 
         // form (ar|(Q)Y|Q) = (aa'|rr') (a'r'|(Q)|Q)
         timer_on("FDDS: Form Y");
         form_Y("A");
-        form_Y("B");
+        if (!single_monomer_) form_Y("B");
         timer_off("FDDS: Form Y");
     }
 
@@ -241,7 +268,22 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
 
 FDDS_Dispersion::~FDDS_Dispersion() {}
 
+void FDDS_Dispersion::check_monomer(const std::string& monomer, bool needs_hybrid) const {
+    if (monomer != "A" && (monomer != "B" || single_monomer_)) {
+        throw PSIEXCEPTION("FDDS: requested monomer is not prepared.");
+    }
+    if (needs_hybrid && !is_hybrid_) {
+        throw PSIEXCEPTION("FDDS: exchange intermediates require hybrid preparation.");
+    }
+}
+
 std::vector<SharedMatrix> FDDS_Dispersion::project_densities(std::vector<SharedMatrix> densities) {
+    for (const auto& density : densities) {
+        if (!density || density->nirrep() != 1 || density->nrow() != primary_->nbf() ||
+            density->ncol() != primary_->nbf()) {
+            throw PSIEXCEPTION("FDDS: densities must be C1 nbf by nbf matrices.");
+        }
+    }
     // Perform the contraction
     // (PQS) (S|R)^-1 (R|pq) Dpq -> PQ
 
@@ -440,6 +482,9 @@ std::vector<SharedMatrix> FDDS_Dispersion::project_densities(std::vector<SharedM
 }
 
 SharedMatrix FDDS_Dispersion::form_unc_amplitude(std::string monomer, double omega) {
+    check_monomer(monomer);
+    if (!std::isfinite(omega) || omega < 0.0)
+        throw PSIEXCEPTION("FDDS: imaginary frequency must be finite and nonnegative.");
     // ==> Configuration <==
     SharedVector eps_occ, eps_vir;
     std::string ovQ_tensor_name;
@@ -547,6 +592,9 @@ SharedMatrix FDDS_Dispersion::form_unc_amplitude(std::string monomer, double ome
 }
 
 std::map<std::string, SharedMatrix> FDDS_Dispersion::form_aux_matrices(std::string monomer, double omega){
+    check_monomer(monomer, true);
+    if (!std::isfinite(omega) || omega < 0.0)
+        throw PSIEXCEPTION("FDDS: imaginary frequency must be finite and nonnegative.");
 
     // => Configuration <= //
     SharedVector eps_occ, eps_vir;
@@ -701,6 +749,7 @@ std::map<std::string, SharedMatrix> FDDS_Dispersion::form_aux_matrices(std::stri
 }
 
 void FDDS_Dispersion::form_X(std::string monomer) {
+    check_monomer(monomer, true);
 
     // => Configuration <= //
 
@@ -820,6 +869,7 @@ void FDDS_Dispersion::form_X(std::string monomer) {
 }
 
 void FDDS_Dispersion::form_Y(std::string monomer) {
+    check_monomer(monomer, true);
 
     // => Configuration <= //
 
@@ -868,7 +918,7 @@ void FDDS_Dispersion::form_Y(std::string monomer) {
     if (rem < 0) 
         throw PSIEXCEPTION("Too little static memory for FDDS_Dispersion::form_Y()");
 
-    size_t kov = nvir / nocc + 1; // Ratio of v/o, take ceiling for worst case
+    size_t kov = std::max(size_t{1}, nvir / nocc) + 1; // Keep virtual blocks nonempty when v < o.
     size_t maxo = rem / ((kov * kov + 4 * kov + 1) * nocc * naux);
     size_t maxv = maxo * (kov - 1); 
     maxo = (maxo > nocc ? nocc : maxo);
@@ -944,6 +994,7 @@ void FDDS_Dispersion::form_Y(std::string monomer) {
 }
 
 SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
+    check_monomer(monomer, true);
 
     // => Configuration <= //
 
@@ -973,6 +1024,7 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
     size_t nbf = primary_->nbf();
     size_t naux = auxiliary_->nbf();    
     size_t nov = nocc * nvir;
+    size_t nq = std::min(nov, naux);
 
     // => Meomry Check <= //
 
@@ -988,7 +1040,7 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
 
     // => Target <= //
     auto Q = std::make_shared<Matrix>("Q", nov, naux);
-    auto tau = std::make_shared<Vector>("tau", naux);
+    auto tau = std::make_shared<Vector>("tau", nq);
     auto R = std::make_shared<Matrix>("R", naux, naux);
 
     // => Pointers <= //
@@ -1000,31 +1052,32 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
 
     // => Work Buffer <= //
 
-    double lwork_tmp;
-    C_DGEQRF(nov, naux, Qarp[0], nov, taup, &lwork_tmp, -1);
-    size_t lwork = (size_t) lwork_tmp;
+    double lwork_tmp, qwork_tmp;
+    if (C_DGEQRF(nov, naux, Qarp[0], nov, taup, &lwork_tmp, -1) != 0)
+        throw PSIEXCEPTION("FDDS: DGEQRF workspace query failed.");
+    if (C_DORGQR(nov, nq, nq, Qarp[0], nov, taup, &qwork_tmp, -1) != 0)
+        throw PSIEXCEPTION("FDDS: DORGQR workspace query failed.");
+    size_t lwork = (size_t) std::max(lwork_tmp, qwork_tmp);
     auto work = std::make_shared<Vector>("work", lwork);
     double* workp = work->pointer();
 
     // Householder QR
-    C_DGEQRF(nov, naux, Qarp[0], nov, taup, workp, lwork);
+    if (C_DGEQRF(nov, naux, Qarp[0], nov, taup, workp, lwork) != 0)
+        throw PSIEXCEPTION("FDDS: DGEQRF failed.");
 
-    // Save R
+    // Pad the economy factors with zeros: (ar|P) = Q R for tall and wide inputs.
     R->zero();
-    for (size_t row = 0; row < naux; row++)
+    for (size_t row = 0; row < nq; row++)
         for (size_t col = row; col < naux; col++) {
             Rp[row][col] = Qarp[col][row]; 
         }
 
-    // Transpose and Invert R
-    // Only transpose, invert using np.linalg.pinv on numpy side; LAPACK subroutine DTRTRI is not stable
-    // Return R as is
-
-    // Save Q as (ar|Q|Q)
-    C_DORGQR(nov, naux, naux, Qarp[0], nov, taup, workp, lwork);
+    // Return R uninverted; the driver applies its existing pseudoinverse policy.
+    if (C_DORGQR(nov, nq, nq, Qarp[0], nov, taup, workp, lwork) != 0)
+        throw PSIEXCEPTION("FDDS: DORGQR failed.");
     size_t nar, nra;
-    // Q = Qar->transpose();
-    for (size_t nQ = 0; nQ < naux; nQ++) 
+    Q->zero();
+    for (size_t nQ = 0; nQ < nq; nQ++)
         for (size_t na = 0; na < nocc; na++) 
             for (size_t nr = 0; nr < nvir; nr++) {
                 nar = na * nvir + nr;
@@ -1036,7 +1089,7 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
 
     // Save transposed Q (ra|Q|Q)
     
-    for (size_t nQ = 0; nQ < naux; nQ++) 
+    for (size_t nQ = 0; nQ < nq; nQ++)
         for (size_t na = 0; na < nocc; na++) 
             for (size_t nr = 0; nr < nvir; nr++) {
                 nar = na * nvir + nr;
