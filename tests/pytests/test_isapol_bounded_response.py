@@ -938,6 +938,22 @@ def test_fdds_lifecycle(small_water, tmp_path):
         runner.__enter__()
 
 
+@pytest.mark.parametrize('response', ['reference_h2h1', 'native_fdds'])
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_release_keeps_caller_reservations(small_water, tmp_path, response):
+    """A caller allowance reserved after prepare (e.g. retained PFIT targets) survives release."""
+    wfn, recipe, args = small_water
+    extra = {} if response == 'reference_h2h1' else _fdds()
+    caller = 123457
+    with _runner(wfn, recipe, args, tmp_path, **extra) as runner:
+        runner.prepare()
+        runner.ledger.reserved += caller
+        runner.solve(args['quadrature'].frequencies[1])
+        runner.release()
+        assert runner.ledger.reserved == runner._retained+caller
+    assert _nothing_left(tmp_path)
+
+
 class _Forbidden:
     """Stands in for FDDS_Monomer: the static preflight passes through, construction fails the test."""
     requirement = staticmethod(core.FDDS_Monomer.requirement)

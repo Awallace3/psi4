@@ -895,7 +895,9 @@ class BoundedResponse:
             self._operator.close()
             self._operator = None
         if self._fdds is not None:
+            # Return only this runner's holdings; caller reservations made
+            # after prepare (as for the reference operator) stay reserved.
+            self.ledger.reserved -= sum(self._held.values())-self._retained
             self._fdds = self._fdds_kernel = self._moments = None
             self._held = dict(retained=self._retained)
-            self.ledger.reserved = self._retained
         self._released = True

@@ -64,5 +64,6 @@ A complete list of standard keywords is provided in Appendix
    relativistic
    optking
    oeprop
+   isapol
    thermo
    tdscf

@@ -37,7 +37,10 @@ https://gitlab.com/anthonyjstone/camcasp) with permission. Most of it
 reproduces CamCASP's arithmetic bit for bit, so the library builds with
 ``-ffp-contract=off``. That agreement was verified only on the local non-FMA
 build; cross-platform bitwise identity is not claimed. This section covers the
-building blocks used for distributed moments. No end-user property keyword uses them yet.
+building blocks used for distributed moments. The end-user route through
+:py:func:`~psi4.driver.oeprop` (``atomic_backend='BOUNDED_DF'``) and the
+public ``isapol_bounded.bounded_properties`` orchestration are described in
+:ref:`sec:isapol`.
 Units are bohr and atomic units throughout, on global Cartesian axes.
 
 Explicit bases
@@ -359,8 +362,26 @@ Isotropic Casimir--Polder dispersion
       result = core.isa_isotropic_dispersion(model, model, weights, 6)
       c6 = result.pairs[0].coefficients[0]  # order 6, complete
 
+Property orchestration
+   ``isapol_bounded.bounded_properties`` is the single place that chains these
+   blocks: the BoundedResponse runner, LW localization under the runner's
+   declared residual policy, ``fitted_point_targets`` per node into one packed
+   target array, ``refine_streamed`` over the complete cloud, and
+   ``refined_isotropic_dispersion``. Its user contract is in
+   :ref:`sec:isapol`. The cutoff-derived variable list of the first (static)
+   node is declared at every node, node 1 included, so the stage-06 contraction
+   sees one declared model; the explicit list reproduces node 1's cutoff scan
+   exactly, which is checked; the parameter cap is admitted in a
+   ``Refinement model admission`` stage at node 1, before any targets, and
+   each node's targets have their own stage. A failed stage is closed as
+   ``Stage FAILED`` and re-raised, with scratch removed and no result
+   returned. Published variables follow the non-transactional, last-success
+   semantics above on the direct API; the oeprop route additionally removes
+   them when the request raises an ``Exception`` (not on an interrupt).
+
 The ISA and MBIS partitions (density partitions, not orbital rotations) are
-built on top of these blocks and are added separately.
+built on top of these blocks and are added separately; until then a request
+for either distribution is refused.
 
 Deferred to later stages
    These candidate APIs have no consumer here. Each is added, from candidate
