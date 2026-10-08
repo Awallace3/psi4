@@ -13,6 +13,7 @@ list(APPEND sources
   pfit.cc
   fit_points.cc
   t_functions.cc
+  isotropic_dispersion.cc
   )
 
 # Keep the heavy Libint2 engine implementation out of the Gaussian-kernel unity TU.

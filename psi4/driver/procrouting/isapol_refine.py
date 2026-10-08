@@ -43,6 +43,9 @@ import numpy as np
 
 from psi4 import core
 
+from . import isapol_logging as _lg
+from . import isapol_lw as _lw
+
 #: Racah component names, CamCASP ``comp_name`` (process_data.F90:1938-1942).
 COMPONENT_NAMES = ('00', '10', '11c', '11s',
                    '20', '21c', '21s', '22c', '22s',
@@ -486,6 +489,33 @@ def block_diagonal_tensor(model, per_site_tensors):
     return matrix
 
 
+def isotropic_scalars(result):
+    """``alpha_l = trace(alpha_ll)/(2l+1)`` per site of a refinement, l = 1..limit.
+
+    The same reduction :func:`isapol_lw.supplied_nonlocal_properties` applies to
+    unrefined tensors, over the Racah packing (00, 10, 11c, 11s, 20, ...).  Rank 0
+    is absent: the isotropic dispersion contract starts at rank 1.
+
+    Returns ``(ranks_per_site, scalars_per_site)``: for site ``s``,
+    ``ranks_per_site[s]`` is ``(1, ..., rank_limit)`` and ``scalars_per_site[s]``
+    the matching ``alpha_l``.  A site with ``rank_limit == 0`` yields two empty
+    tuples and cannot enter a dispersion model; that is reported, not repaired.
+    """
+    if not isinstance(result, RefinementResult):
+        raise ValueError('isotropic_scalars requires a RefinementResult')
+    ranks, scalars = [], []
+    for site, tensor in zip(result.model.sites, result.refined_tensors):
+        array = np.asarray(tensor, dtype=float)
+        if array.shape != (site.component_count,) * 2:
+            raise ValueError('refined tensor shape disagrees with the site rank limit')
+        site_ranks = tuple(range(1, site.rank_limit + 1))
+        ranks.append(site_ranks)
+        scalars.append(tuple(
+            float(np.trace(array[l * l:(l + 1) ** 2, l * l:(l + 1) ** 2]) / (2 * l + 1))
+            for l in site_ranks))
+    return tuple(ranks), tuple(scalars)
+
+
 def point_to_point_response(fields, model, per_site_tensors):
     """Forward map ``v(i,j) = sum_s T(i,s) . alpha_s . T(j,s)``.
 
@@ -707,3 +737,198 @@ def refinement_result(model, result):
         anchor_shift_maxabs=float(shift), status=result.status,
         diagnostics=result.diagnostics, result=result,
         refinement_status='PFIT_refined_against_point_to_point_response')
+
+
+# ------------------------------------------ dispersion from refined tensors ----
+
+#: Orders the isotropic Casimir-Polder kernel admits; odd orders are refused.
+DISPERSION_ORDERS = (6, 8, 10, 12)
+
+
+@dataclass(frozen=True)
+class RefinedIsotropicDispersion:
+    """Isotropic C_n contracted from PFIT-refined tensors.
+
+    Provenance and QCVariable names distinguish it from the unrefined model.
+    ``site_ranks`` is the resolved per-site rank tuple actually contracted.
+    """
+    labels: tuple
+    origins_bohr: tuple = field(repr=False)
+    frequencies: tuple
+    cp_weights: tuple = field(repr=False)
+    quadrature_provenance: object
+    site_ranks: tuple
+    pairs: tuple = field(repr=False)
+    anchor_shift_maxabs: float
+    anchor_sha256: str
+    weight_type: int
+    weight_coefficient: float
+    refinement_status: str
+    solver_status: tuple
+    provenance: str
+    units: str = 'C_n: Eh bohr^n; cp_weights includes the Jacobian and 1/(2*pi) exactly once'
+    origin: str = 'Psi4_isotropic_dispersion_from_PFIT_refined_tensors'
+    model_status: str = ('refined against a point-to-point response; NOT comparable with '
+                         'the unrefined LW C_n, which is a different model')
+
+    def __post_init__(self):
+        for name in ('labels', 'frequencies', 'cp_weights', 'site_ranks', 'pairs',
+                     'solver_status'):
+            object.__setattr__(self, name, tuple(getattr(self, name)))
+
+
+def _dispersion_nodes(refinements):
+    """Validate a per-frequency refinement sequence as one model on one grid."""
+    nodes = tuple(refinements)
+    if not nodes or not all(isinstance(r, RefinementResult) for r in nodes):
+        raise ValueError('a non-empty sequence of RefinementResult is required, '
+                         'one per frequency node')
+    first = nodes[0].model
+    for other in nodes[1:]:
+        if other.model.sites != first.sites:
+            raise ValueError('every node must refine the identical declared site set; '
+                             'a C_n contracted across two site sets is not one model')
+        if (other.model.site_types != first.site_types
+                or other.model.parameter_labels != first.parameter_labels):
+            raise ValueError('every node must share one declared variable set')
+        if other.model.declared_variables != first.declared_variables:
+            raise ValueError('every node must share one declared model; a supplied .pdef '
+                             'variable list and a cutoff-derived one are different models')
+        for name in ('weight_type', 'weight_coefficient', 'cutoff'):
+            if getattr(other.model, name) != getattr(first, name):
+                raise ValueError(f'every node must share one penalty scheme; {name} differs')
+    frequencies = tuple(float(r.model.frequency_au) for r in nodes)
+    if not all(np.isfinite(frequencies)) or any(x < 0. for x in frequencies):
+        raise ValueError('frequency nodes must be finite and non-negative')
+    if len(set(frequencies)) != len(frequencies):
+        raise ValueError('frequency nodes must be distinct; a repeated node is not a grid')
+    return nodes, first, frequencies
+
+
+def _dispersion_site_ranks(first, declared, available):
+    """Resolve the per-site rank tuple actually contracted.
+
+    ``None`` means every rank the site was refined at, read off that site's own
+    declared ``rank_limit`` -- not a fixed ``(1, 2)`` or ``(1, 2, 3)``.  A rank
+    above the limit is refused rather than zero-filled: those components are
+    absent by declaration, and reading their zeros would drop terms from the
+    C_n sum while still reporting the order complete.
+    """
+    if declared is None:
+        resolved = tuple(tuple(site) for site in available)
+    else:
+        resolved = tuple(tuple(site) for site in declared)
+        if len(resolved) != len(first.sites):
+            raise ValueError('site_ranks must declare one rank tuple per site, in site order')
+        for site, ranks in zip(first.sites, resolved):
+            if not ranks or any(type(r) is not int for r in ranks):
+                raise ValueError('each site must declare a non-empty tuple of integer ranks')
+            if any(r < 1 or r > MAX_RANK for r in ranks):
+                raise ValueError(f'declarable dispersion ranks are 1..{MAX_RANK}')
+            if any(b <= a for a, b in zip(ranks, ranks[1:])):
+                raise ValueError('site ranks must be strictly increasing')
+            if any(r > site.rank_limit for r in ranks):
+                raise ValueError(
+                    f'declared rank exceeds the refinement rank limit of site {site.label} '
+                    f'({site.rank_limit}); those components are absent by declaration, '
+                    'not zero-valued physics')
+    for site, ranks in zip(first.sites, resolved):
+        if not ranks:
+            raise ValueError(f'site {site.label} was refined at rank limit 0 and has no '
+                             'polarizability of any dispersion rank; it cannot enter a '
+                             'dispersion model')
+    return resolved
+
+
+def refined_isotropic_dispersion(refinements, *, cp_weights, quadrature_provenance,
+                                 max_order=12, site_ranks=None, log=None, wfn=None):
+    """Isotropic C_n from one refinement per Casimir-Polder frequency node.
+
+    ``refinements`` holds one result per node, all on the identical site set and
+    penalty scheme; their ``frequency_au`` values form the grid, taken in the
+    given order (NOT sorted, since ``cp_weights`` follow that order).
+
+    Contraction is ``core.isa_isotropic_dispersion`` on refined
+    ``trace(alpha_ll)/(2l+1)``, a different model from the unrefined C_n,
+    published under ``ATOMIC REFINED DISPERSION ...``.  Non-``Solved`` nodes are
+    contracted and their status recorded, not dropped.
+
+    ``log`` and ``wfn`` are reporting outputs only; nothing reads ``wfn`` back.
+    """
+    nodes, first, frequencies = _dispersion_nodes(refinements)
+    if not isinstance(quadrature_provenance, _lw.Provenance):
+        raise ValueError('explicit quadrature Provenance required')
+    if type(max_order) is not int or max_order not in DISPERSION_ORDERS:
+        raise ValueError('max_order must be 6, 8, 10 or 12')
+    weights = np.asarray(cp_weights, dtype=float).ravel()
+    if weights.shape != (len(nodes),):
+        raise ValueError('one CP weight per refinement node is required')
+    if not np.all(np.isfinite(weights)) or np.any(weights < 0.) or not np.any(weights > 0.):
+        raise ValueError('CP weights must be finite, non-negative and not all zero')
+    if any(x == 0. and w != 0. for x, w in zip(frequencies, weights)):
+        raise ValueError('the static node carries zero CP weight by construction; '
+                         'a nonzero one is refused')
+
+    available, scalars = [], []
+    for node in nodes:
+        node_ranks, node_scalars = isotropic_scalars(node)
+        available.append(node_ranks)
+        scalars.append(node_scalars)
+    if any(node_ranks != available[0] for node_ranks in available[1:]):
+        raise ValueError('every node must expose the identical per-site rank inventory')
+    resolved = _dispersion_site_ranks(first, site_ranks, available[0])
+
+    digest = hashlib.sha256()
+    for node in nodes:
+        digest.update(node.model.anchor_sha256.encode())
+    anchor_sha256 = digest.hexdigest()
+    provenance = (f'Psi4_PFIT_refined; nodes={len(nodes)}; variables={first.parameter_count}; '
+                  f'weight={first.weight_type}/{first.weight_coefficient!r}; '
+                  f'cutoff={first.cutoff!r}; anchors_sha256={anchor_sha256}; '
+                  f'{first.provenance}')
+    if wfn is not None:
+        _lg.check_publication_labels(tuple(site.label for site in first.sites))
+    log = _lg.silent() if log is None else log
+    log.stage('isotropic dispersion from refined tensors (Casimir-Polder)',
+              _lg.refined_dispersion_parameters(
+                  refinements=nodes, max_order=max_order, cp_weights=weights,
+                  quadrature_provenance=quadrature_provenance, site_ranks=site_ranks,
+                  resolved_site_ranks=resolved, anchor_sha256=anchor_sha256))
+
+    try:
+        model_sites = []
+        for index, site in enumerate(first.sites):
+            column = [available[0][index].index(rank) for rank in resolved[index]]
+            table = np.array([[scalars[node][index][j] for j in column]
+                              for node in range(len(nodes))], dtype=float)
+            isosite = core.IsaIsotropicSite()
+            isosite.label, isosite.origin = site.label, list(map(float, site.origin_bohr))
+            isosite.ranks = list(resolved[index])
+            isosite.polarizabilities = core.Matrix.from_array(np.ascontiguousarray(table))
+            model_sites.append(isosite)
+        isomodel = core.IsaIsotropicModel(list(frequencies), model_sites, provenance)
+        result = core.isa_isotropic_dispersion(isomodel, isomodel, weights.tolist(), max_order)
+        labels = tuple(site.label for site in first.sites)
+        pairs = tuple(_lw.DispersionPair(
+            p.site_a, p.site_b, labels[p.site_a], labels[p.site_b],
+            tuple(_lw.Coefficient(c.order, c.value, tuple(map(tuple, c.included_rank_pairs)),
+                                  tuple(map(tuple, c.missing_rank_pairs)), c.complete)
+                  for c in p.coefficients)) for p in result.pairs)
+        record = RefinedIsotropicDispersion(
+            labels=labels,
+            origins_bohr=tuple(tuple(map(float, site.origin_bohr)) for site in first.sites),
+            frequencies=frequencies, cp_weights=tuple(map(float, weights)),
+            quadrature_provenance=quadrature_provenance, site_ranks=resolved, pairs=pairs,
+            anchor_shift_maxabs=max(float(r.anchor_shift_maxabs) for r in nodes),
+            anchor_sha256=anchor_sha256, weight_type=first.weight_type,
+            weight_coefficient=first.weight_coefficient,
+            refinement_status=nodes[0].refinement_status,
+            solver_status=tuple(str(r.status).rsplit('.', 1)[-1] for r in nodes),
+            provenance=provenance)
+        _lg.report_refined_dispersion(log, wfn, record)
+    except Exception as error:
+        # Close the stage as failed, so a later stage cannot report it complete.
+        log.stage_failed(error)
+        raise
+    log.stage_end()
+    return record
