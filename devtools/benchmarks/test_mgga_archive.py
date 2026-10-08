@@ -5,7 +5,7 @@ import unittest
 
 from mgga_archive import consolidate, replay
 from mgga_ie import summarize
-from mgga_probe import PROFILES
+from mgga_probe import PROFILES, validate_integrated_density, validate_mo_metadata
 
 
 class ArchiveTests(unittest.TestCase):
@@ -51,6 +51,32 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(PROFILES["baseline"], {})
         self.assertTrue(all(len(changes) == 1 for label, changes in PROFILES.items()
                             if label != "baseline"))
+
+    def test_bare_hf_metadata_is_rejected(self):
+        class HF:
+            def nirrep(self):
+                return 1
+            def nmo(self):
+                return 0
+            def nmopi(self):
+                return [0]
+        with self.assertRaisesRegex(AssertionError, "MO metadata"):
+            validate_mo_metadata(HF(), (384, 384))
+
+    def test_initialized_hf_metadata_is_accepted(self):
+        class HF:
+            def nirrep(self):
+                return 1
+            def nmo(self):
+                return 384
+            def nmopi(self):
+                return [384]
+        validate_mo_metadata(HF(), (384, 384))
+
+    def test_bad_electron_normalization_is_rejected(self):
+        with self.assertRaisesRegex(AssertionError, "electron normalization"):
+            validate_integrated_density({"RHO_A": 3322.3156391566563}, 84)
+        validate_integrated_density({"RHO_A": 83.9999915815304}, 84)
 
 
 if __name__ == "__main__":

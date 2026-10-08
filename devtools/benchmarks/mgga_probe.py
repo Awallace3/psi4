@@ -25,6 +25,22 @@ PROFILES = {
 }
 
 
+def validate_mo_metadata(target, shape):
+    """Reject bare, uninitialized HF objects before occupied AO extraction."""
+    assert target.nirrep() == 1, "Replay requires C1"
+    assert target.nmo() == shape[1] and target.nmopi()[0] == shape[1], (
+        "Uninitialized/inconsistent MO metadata: C_subset_helper source stride "
+        "must equal the Ca column dimension", target.nmo(), target.nmopi()[0], shape)
+
+
+def validate_integrated_density(quad, nelectron):
+    # Both restricted routes store the total density in RHO_A (and RHO_B).
+    # This generous quadrature tolerance is an invariant check, not IE accuracy.
+    assert abs(quad["RHO_A"] - nelectron) < 1e-3, (
+        "Invalid electron normalization; do not interpret XC differences",
+        quad["RHO_A"], nelectron)
+
+
 def worker(a):
     import numpy as np
     import psi4
@@ -57,12 +73,15 @@ def worker(a):
         nocc = seed.nalpha()
         assert seed.nirrep() == 1 and nocc == seed.nbeta()
         np.testing.assert_allclose(da, ca[:, :nocc] @ ca[:, :nocc].T, atol=1e-12, rtol=0)
+        cocc_ao = seed.Ca_subset("AO", "OCC").np.copy()
+        overlap_ao = psi4.core.MintsHelper(seed.basisset()).ao_overlap().np.copy()
+        np.testing.assert_allclose(cocc_ao.T @ overlap_ao @ cocc_ao,
+                                   np.eye(nocc), atol=1e-10, rtol=0)
         record.update(seed_energy_hartree=float(energy), nbf=seed.nso(), nocc=nocc,
                       seed_xc_energy_hartree=seed.variable("DFT XC ENERGY"),
                       density_sha256=hashlib.sha256(da.tobytes()).hexdigest(),
                       orbitals_sha256=hashlib.sha256(ca.tobytes()).hexdigest())
-        np.savez(out / "seed.npz", ca=ca, da=da)
-        basis = seed.basisset()
+        np.savez(out / "seed.npz", ca=ca, da=da, cocc_ao=cocc_ao, overlap_ao=overlap_ao)
         baseline_cpu = None
         for profile, changes in PROFILES.items():
             pair = {}
@@ -74,16 +93,28 @@ def worker(a):
                 # RHF::form_V sets both D and occupied C. VBase.set_D alone
                 # cannot drive cuEST, and set_Cocc is not exposed to Python.
                 func = psi4.driver.dft.build_superfunctional(a.functional, True)[0]
-                base = psi4.core.Wavefunction.build(mol, basis)
-                target = psi4.core.RHF(base, func)
+                # A bare Wavefunction.build has nmopi=0 until form_Shalf.
+                # Ca_subset uses that metadata as a source stride, so copying
+                # the Ca array alone can silently upload the wrong AO orbitals.
+                # Inherit the fully initialized seed's metadata and transform.
+                target = psi4.core.RHF(seed, func)
+                validate_mo_metadata(target, ca.shape)
                 target.force_occpi(psi4.core.Dimension([nocc]), psi4.core.Dimension([0]))
                 target.Ca().np[:] = ca
                 target.Da().np[:] = da
+                target.epsilon_a().np[:] = seed.epsilon_a().np
+                uploaded = target.Ca_subset("AO", "OCC").np.copy()
+                np.testing.assert_allclose(uploaded, cocc_ao, atol=1e-12, rtol=0)
+                np.testing.assert_allclose(uploaded.T @ overlap_ao @ uploaded,
+                                           np.eye(nocc), atol=1e-10, rtol=0)
+                np.testing.assert_allclose(uploaded @ uploaded.T,
+                                           seed.Da_subset("AO").np, atol=1e-12, rtol=0)
                 target.form_V()
                 quad = dict(target.V_potential().quadrature_values())
                 potential = target.Va().np.copy()
                 assert np.isfinite(potential).all()
                 assert np.isfinite(quad["FUNCTIONAL"])
+                validate_integrated_density(quad, 2*nocc)
                 np.testing.assert_array_equal(target.Ca().np, ca)
                 np.testing.assert_array_equal(target.Da().np, da)
                 timers = psi4.core.get_timer_records()
@@ -94,12 +125,14 @@ def worker(a):
                 expected = "native-host" if route == "cpu" else a.expected_xc
                 assert observed == expected, (observed, expected)
                 probe = dict(profile=profile, route=route, options=config,
-                             quadrature=quad, xc_route=observed, timers=timers)
+                             quadrature=quad, xc_route=observed, timers=timers,
+                             ao_orbital_replay_validated=True, nmo=target.nmo(),
+                             integrated_density_error=quad["RHO_A"]-2*nocc)
                 pair[route] = (quad, potential)
                 np.save(out / f"{profile}-{route}-v.npy", potential)
                 record["probes"].append(probe)
                 target.V_potential().finalize()
-                del target, func, base
+                del target, func
                 atomic_json(out / "result.json", record)
             cpu_q, cpu_v = pair["cpu"]
             gpu_q, gpu_v = pair["gpu-xc"]
