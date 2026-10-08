@@ -18,7 +18,7 @@ commit=$2
 run=$3
 extra=("${@:4}")
 driver=${MGGA_DRIVER:-mgga_ie.py}
-case "$driver" in mgga_ie.py|mgga_probe.py) ;; *) echo "Invalid MGGA_DRIVER" >&2; exit 2;; esac
+case "$driver" in mgga_ie.py|mgga_probe.py|mgga_grid_probe.py) ;; *) echo "Invalid MGGA_DRIVER" >&2; exit 2;; esac
 root=/storage/project/r-cs207-0/awallace43
 test "$(git -C "$harness" rev-parse HEAD)" = "$commit"
 test -z "$(git -C "$harness" status --porcelain --untracked-files=no)"
@@ -37,6 +37,22 @@ host="$root/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage/lib
 cuda="$root/gits/psi4.saptdft_cuest/build_cuda_libxc/stage/lib/psi4"
 cuda_lib="$root/software/libxc-7.1.2-cuda/lib64"
 mkdir -p "$run/metadata"
+if [[ $driver == mgga_grid_probe.py ]]; then
+    source /etc/profile.d/z00_lmod_pace.sh
+    module load gcc/12.3.0 cuda/12.6.1
+    command -v nvcc >/dev/null
+    cuda_home=${CUDA_HOME:-$(dirname "$(dirname "$(command -v nvcc)")")}
+    export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$cuda_home/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    test ! -e "$run/mgga_capture.so"
+    g++ -std=c++17 -O2 -fPIC -shared \
+        -I"$CONDA_PREFIX/include" -I"$cuda_home/include" \
+        "$harness/devtools/benchmarks/mgga_capture.cc" \
+        -L"$CONDA_PREFIX/lib" -L"$cuda_home/lib64" -lcuest -lcudart -ldl \
+        -o "$run/mgga_capture.so"
+    extra+=(--shim "$run/mgga_capture.so")
+    g++ --version > "$run/metadata/compiler.txt"
+    sha256sum "$run/mgga_capture.so" > "$run/metadata/capture-shim.sha256"
+fi
 cd "$run"
 {
     date -Iseconds
