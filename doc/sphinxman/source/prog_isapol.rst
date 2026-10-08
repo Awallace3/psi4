@@ -202,6 +202,64 @@ Experimental ISA-A partition
      refinement does not remove it. It has an empirical absolute band of 1e-6;
      the other parameters keep ``rtol=2e-6``, ``atol=2e-7``.
 
+MBIS partition
+   ``psi4.core.OEProp`` (``MBIS_CHARGES``) runs the native MBIS solver
+   (``PopulationAnalysisCalc::compute_mbis_multipoles`` in
+   ``libmints/oeprop.cc``) and stores the converged model of its latest
+   **native** attempt on the wavefunction: :psivar:`MBIS SHELL COUNTS`,
+   :psivar:`MBIS SHELL POPULATIONS` and :psivar:`MBIS SHELL WIDTHS` (bohr), with
+   :psivar:`MBIS CONVERGED`, :psivar:`MBIS ITERATIONS`,
+   :psivar:`MBIS DENSITY RESIDUAL` and :psivar:`MBIS GRID ELECTRONS`. The
+   attempt removes the shell arrays and clears the flag at entry, and publishes
+   them, flag last, only after all postprocessing succeeds. Ordinary MBIS
+   equations, results and the four-multipole return are unchanged. Nonfinite
+   or nonpositive shell updates, residuals, densities, postprocessed values and
+   free-atom volumes, a nonpositive threshold, ghost sites and ECPs fail the
+   attempt; the MBIS timer is released on failure, so a retry in the same
+   process works. The valence and volume variables are not cleared, so a
+   consumer must check the flag rather than them. A Python
+   ``MBIS_VOLUME_RATIOS`` request can fail in its free-atom SCFs before the
+   native attempt starts, which then leaves the previous snapshot in place.
+
+   ``isapol_distribution.mbis_moments`` therefore calls the native attempt
+   itself (``run_native_mbis``) and accepts only a converged snapshot with
+   integer counts 1..7, finite positive active populations and widths, zero
+   padding, a residual below the threshold and at least one update. It forms
+   ``mbis_log_proatoms`` over all shells, normalizes the weights through
+   ``IsaPartitionedMultipoles`` with denominator cutoff 0 and checks that the
+   density seal is unchanged. Grid and snapshot are copied on entry.
+   ``mbis_resource_plan`` admits two ledger stages before the native attempt.
+   The native stage bounds the MBIS grid by ``natom * MBIS_RADIAL_POINTS *
+   max(MBIS_SPHERICAL_POINTS, 50)`` (region pruning's fixed inner Lebedev
+   orders 7 and 11 can exceed a small requested sphere) and charges every
+   per-point vector, density copies and every ``MBIS_MAXITER - 1`` update over
+   seven shells. The Q stage charges the log-domain proatoms, CPython list
+   conversions, native sample copies and Q. Each stage adds a fixed 256 MiB
+   allowance for DFTGrid, point-function, OpenMP, integrator and OEProp
+   internals, which are not individually known; neither stage is an RSS, time
+   or total-thread bound.
+
+   Water regression (``tests/pytests/test_isapol_distribution.py``,
+   PBE0/aug-cc-pVTZ, default MBIS options 75/302/ROBUST/500/1e-8, the ISA
+   regression's response/LW/PFIT settings; one host, AMD Zen2, oneMKL):
+
+   * Native MBIS converges in 74 updates (residual 8.56e-9). O has two shells,
+     each H one; grid electrons and the population sum agree to 1e-13.
+   * The 100x200 Q grid is refused: its Q charge rows err by 2.0e-4 (the
+     O core shell has :math:`\sigma = 0.057` bohr) and LW refuses the
+     postcondition. The declared 200x590 acceptance grid gives charge-row error
+     1.3e-7. Going to 300x974 moves C6 by at most 2e-9 relative; that is a
+     convergence probe, not a test.
+   * In one process, native MBIS and Q are bitwise identical at 1, 4 and 8
+     threads; downstream of Q, C6 moves at most 5e-8 relative with threads.
+   * C6 and the static parameters keep ``rtol=2e-6`` (parameters also
+     ``atol=2e-7``), with no per-parameter band. Index 4 (``H1_10_11c_A``,
+     the small off-diagonal H polarizability that also needs a band for ISA)
+     has the least margin: serial, it uses 0.01 of its band with ``MKL_CBWR``
+     unset and 0.87 under ``COMPATIBLE``; at 4 or 8 threads under
+     ``COMPATIBLE`` it moves 2.3e-7 from its stored value, outside the band.
+     The regression runs serially.
+
 LW localization, multipole transforms and frequency grid
    These consume supplied tensors only. No response, partition or external
    CamCASP/ORIENT program is involved. LW is the Lillestolen--Wheatley
@@ -491,9 +549,8 @@ Property orchestration
    semantics above on the direct API; the oeprop route additionally removes
    them when the request raises an ``Exception`` (not on an interrupt).
 
-The ISA and MBIS partitions (density partitions, not orbital rotations) are
-built on top of these blocks and are added separately; until then a request
-for either distribution is refused.
+The ISA and MBIS partitions are density partitions, not orbital rotations;
+both feed the same blocks through Q.
 
 Deferred to later stages
    These candidate APIs have no consumer here. Each is added, from candidate
