@@ -206,9 +206,72 @@ Bounded DF response
      diagnostics and a SHA-256 of the final state, streamed without full-matrix
      copies). The seal changes no SCF arithmetic.
 
-The ISA and MBIS partitions (density partitions, not orbital rotations),
-point-response fitting and dispersion are built on top of these blocks and
-are added separately.
+Point-response fitting (PFIT)
+   PFIT refines supplied local polarizability anchors against a supplied
+   point-to-point response, CamCASP's ``pfit``. Targets follow its sign
+   convention, v_pq = -d(phi_induced at R_p)/d(q at R_q) in Eh/e^2 with no
+   energy 1/2, packed at ``i*(i+1)//2 + j`` for every ``j <= i``. Every problem
+   declares where its targets came from (``IsaPfitTargetOrigin``); the solver
+   checks that declaration's form but cannot verify it.
+
+   * ``psi4.core.FitPoints(molecule, FitPointsOptions)`` is CamCASP's
+     ``RANDOM`` lattice: candidates drawn uniformly in a cube about the
+     unweighted nuclear centroid and kept between ``lolim`` and ``hilim``
+     van der Waals radii (defaults 2000 points, 2 and 4, seed 1). It draws
+     from ``MaclarenRng``, CamCASP's ``sdprnd``/``dprand``, and reads the
+     double-precision ``MODULE radii`` table (``isapol_vdw_radius``), not the
+     float32 ``AtomProp`` copy (``isapol_vdw_radius_bondi``). Both the stream
+     and the clouds reproduce CamCASP bit for bit on the local build. Unlike
+     CamCASP, which draws without limit, a cloud still short after
+     ``FitPoints.max_candidates`` (1,000,000) candidate draws is refused, as
+     are nonfinite or negative cutoffs and molecules with only ghost atoms;
+     completed clouds are unchanged. The point arrays and ``MaclarenRng.take``
+     allocate without a ``max_bytes`` plan.
+   * ``psi4.core.isa_t_functions(rank, point, site, frame, damping=0)`` is one
+     row of pfit's T matrix: the irregular solid harmonics
+     (``isa_irregular_solid_harmonics``; rank 0 is 1/r) of the point in the
+     site's local axes, in the Racah order above. ``frame`` follows
+     ``isa_multipole_rotation``. Tang--Toennies damping
+     (``isa_t_function_damping``) is optional and off by default.
+   * ``isapol_refine.refinement_model(sites, anchor_tensors, ...)`` builds
+     CamCASP's ``.pdef`` variable list and ``Penalties`` block: one set of
+     variables per ``site_type`` (the COPY equivalence, read off the first site
+     of the type), upper-triangle components whose reference anchor exceeds
+     ``cutoff``, and penalty strengths from ``weight_type`` and
+     ``weight_coefficient``. ``declared_variables`` replays a supplied variable
+     list instead. ``refine`` solves one target densely (``core.isa_pfit_solve``,
+     at most 512 points) and returns per-site refined tensors; components
+     outside the model are exactly zero.
+   * ``isapol_pfit_stream.refine_streamed(models, points, packed, ...)`` fits
+     several targets (typically one per frequency) over one complete cloud.
+     ``PackedDesignRows`` replays the shared design rows in bounded blocks, and
+     ``core.isa_pfit_solve_rows_multi`` traverses them twice in total and
+     refuses a second pass whose content differs. Each result is the dense fit
+     of its column up to the fit's conditioning: StreamingQR agrees to
+     rounding, while the default ``NormalEquationsDSYSV`` differs by about
+     cond(H) times rounding (1e-8 relative, up to 9e-7 per parameter, at the
+     cond(H) ~ 3e9 seen on test clouds). Supplied ``fields`` are used as given,
+     in both ``refine`` and here; ``damping`` applies only to computed fields.
+   * ``isapol_pfit_stream.fitted_point_targets(auxiliary, points, C)`` turns
+     p x p fitted AUX coefficient responses (for example a bounded response
+     node's ``target_response``) into packed targets -P^T C P, where
+     ``IsaAuxCoulomb.point_potentials`` gives the exact AUX Coulomb potentials
+     P at the points. Such targets are declared ``NativeFittedPointResponse``
+     with ``fitted_density_coefficients`` and the AUX identity.
+   * Resources: ``PackedDesignRows`` and ``fitted_point_targets`` check their
+     planned numerical buffers against ``max_bytes`` before allocating, and
+     the native solver checks its own against
+     ``IsaPfitOptions.maximum_work_bytes``. These are plans, not measured RSS;
+     caller-owned inputs, Libint workspace and interpreter overhead are not
+     charged. A fit that is not ``Solved`` withholds its parameters, so
+     ``refine`` raises ``RuntimeError`` and ``refine_streamed`` ``ValueError``.
+   * The fit is not iterated, and anchors are neither symmetrized nor repaired.
+     ``copy_anchor_discrepancy`` reports, rather than repairs, COPY-equivalent
+     sites whose local anchors disagree. A refined tensor is a different model
+     from the unrefined LW tensor of the same site.
+
+The ISA and MBIS partitions (density partitions, not orbital rotations) and
+dispersion are built on top of these blocks and are added separately.
 
 Deferred to later stages
    These candidate APIs have no consumer here. Each is added, from candidate
@@ -223,7 +286,5 @@ Deferred to later stages
      provenance)``, which takes a finished Q (``'fitted_density_coefficients'``
      or ``'direct_ov'`` columns) and sites without samples, as given.
    * Dispersion: the ``isapol_lw.Coefficient`` and ``DispersionPair``
-     result records.
-   * Point-response fitting: ``isapol_vdw_radius`` (``vdw_radius``), the
-     double-precision ``MODULE radii`` Bondi table that the fit-point lattice
-     reads. ``isapol_vdw_radius_bondi`` is the float32 ``AtomProp`` copy.
+     result records, and the refined-tensor reduction
+     ``isapol_refine.isotropic_scalars``.
