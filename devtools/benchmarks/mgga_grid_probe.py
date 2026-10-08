@@ -151,6 +151,9 @@ def worker(a):
         cpu_tight, _, _ = native_evaluation(psi4, seed, a.functional, cpu_points, cpu_weights)
         same_grid, same_density, native = native_evaluation(
             psi4, seed, a.functional, coordinates, weights, raw)
+        native_integrated = float(2*np.dot(weights, native[:, 0]))
+        validate_integrated_density({"RHO_A": native_integrated}, 2*nocc)
+        result["native_integrated_density_on_cuest_grid"] = native_integrated
         np.save(capture/"native-ingredients.npy", native)
         cpu_energy = measurements["cpu"]["quadrature"]["FUNCTIONAL"]
         result["energy_decomposition_hartree"] = dict(
