@@ -15,6 +15,28 @@ from mgga_ie import (atomic_json, build_environment, digest, geometry, options,
 from mgga_probe import validate_integrated_density, validate_mo_metadata
 
 
+def preload_paths(prefix, shim):
+    # Site GCC may embed DT_RPATH in a preload object, overriding LD_LIBRARY_PATH
+    # before Python imports Psi4. Load the tested environment's runtimes first.
+    return [Path(prefix)/"lib/libgcc_s.so.1", Path(prefix)/"lib/libstdc++.so.6",
+            Path(shim)]
+
+
+def runtime_maps(prefix):
+    expected = {name: (Path(prefix)/"lib"/name).resolve()
+                for name in ("libgcc_s.so.1", "libstdc++.so.6")}
+    found = {name: set() for name in expected}
+    for line in Path("/proc/self/maps").read_text().splitlines():
+        path = line.split()[-1]
+        if path.startswith("/"):
+            for name in expected:
+                if Path(path).name.startswith(name):
+                    found[name].add(Path(path).resolve())
+    assert all(found[name] == {path} for name, path in expected.items()), (
+        "Unexpected C++ runtime selection", expected, found)
+    return {name: str(path) for name, path in expected.items()}
+
+
 def restricted_ingredients(raw):
     """cuEST one-spin rho/grad/tau -> native restricted functional inputs."""
     return dict(RHO_A=2*raw[:, 0],
@@ -65,8 +87,6 @@ def native_evaluation(psi4, seed, functional, coordinates, weights, raw=None):
 
 
 def worker(a):
-    import psi4
-
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     os.chdir(out)
@@ -75,6 +95,8 @@ def worker(a):
                            "CPU collocation on each grid at basis tolerance 1e-20; "
                            "native LibXC on both native and captured density ingredients.")
     try:
+        import psi4
+        result["runtime_maps"] = runtime_maps(os.environ["CONDA_PREFIX"])
         assert Path(psi4.__file__).resolve().parent == a.package.resolve()
         assert not os.getenv("MGGA_CAPTURE_DIR")
         psi4.core.set_output_file(str(out/"psi4.out"), False)
@@ -196,10 +218,14 @@ def campaign(a):
     env = build_environment("host", package, a.cuda_lib_dir)
     pin = provenance(package, env)
     script = Path(__file__).resolve()
+    preloads = preload_paths(os.environ["CONDA_PREFIX"], a.shim.resolve())
+    assert all(p.is_file() for p in preloads), preloads
+    preload_hashes = {str(p.resolve()): digest(p) for p in preloads}
     manifest = dict(job=os.getenv("SLURM_JOB_ID"), package=str(package), provenance=pin,
                     shim=str(a.shim.resolve()), shim_sha256=digest(a.shim),
                     source_sha256=digest(script.with_name("mgga_capture.cc")),
                     script_sha256=digest(script), records=[],
+                    preload_sha256=preload_hashes,
                     commit=subprocess.check_output(
                         ["git", "-C", str(script.parent), "rev-parse", "HEAD"], text=True).strip(),
                     gpu=subprocess.check_output(
@@ -208,7 +234,7 @@ def campaign(a):
     assert "H200" in manifest["gpu"]
     atomic_json(out/"manifest.json", manifest)
     for functional in ("m06", "m06-l"):
-        child_env = dict(env, LD_PRELOAD=str(a.shim.resolve()))
+        child_env = dict(env, LD_PRELOAD=":".join(map(str, preloads)))
         child_env.pop("MGGA_CAPTURE_DIR", None)
         cmd = [sys.executable, str(script), "--worker", "--output", str(out/functional),
                "--package", str(package), "--functional", functional]
@@ -225,6 +251,7 @@ def campaign(a):
         atomic_json(out/"manifest.json", manifest)
         print(functional, "exit", code, "error", record.get("error"), flush=True)
     assert digest(a.shim) == manifest["shim_sha256"]
+    assert all(digest(Path(p)) == h for p, h in preload_hashes.items()), "Runtime changed"
     assert all(digest(Path(p)) == h for p, h in pin["sha256"].items()), "Build changed"
     complete = all(r["result"]["ok"] for r in manifest["records"])
     atomic_json(out/"COMPLETE.json", dict(calculations_complete=complete,

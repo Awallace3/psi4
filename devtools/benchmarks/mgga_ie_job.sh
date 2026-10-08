@@ -48,10 +48,12 @@ if [[ $driver == mgga_grid_probe.py ]]; then
         -I"$CONDA_PREFIX/include" -I"$cuda_home/include" \
         "$harness/devtools/benchmarks/mgga_capture.cc" \
         -L"$CONDA_PREFIX/lib" -L"$cuda_home/lib64" -lcuest -lcudart -ldl \
+        -Wl,--enable-new-dtags,-rpath,"$CONDA_PREFIX/lib" \
         -o "$run/mgga_capture.so"
     extra+=(--shim "$run/mgga_capture.so")
     g++ --version > "$run/metadata/compiler.txt"
     sha256sum "$run/mgga_capture.so" > "$run/metadata/capture-shim.sha256"
+    readelf -d "$run/mgga_capture.so" > "$run/metadata/capture-dynamic.txt"
 fi
 cd "$run"
 {
