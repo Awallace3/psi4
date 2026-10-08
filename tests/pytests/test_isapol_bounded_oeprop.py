@@ -113,7 +113,7 @@ def test_explicit_options_and_keyword_precedence():
     core.clean_options()
 
 
-@pytest.mark.parametrize('keyword', ['npointz', 'partition_recipe', 'partition_grid'])
+@pytest.mark.parametrize('keyword', ['npointz', 'partition_grd'])
 def test_bad_keywords_and_preset_fail(keyword):
     with pytest.raises(TypeError, match=keyword):
         api.settings('water', {keyword: 32})

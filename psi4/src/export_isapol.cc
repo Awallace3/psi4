@@ -34,6 +34,10 @@
 #include "psi4/libisapol/pfit.h"
 #include "psi4/libisapol/fit_points.h"
 #include "psi4/libisapol/isa_grid.h"
+#include "psi4/libisapol/isa_fit.h"
+#include "psi4/libisapol/isa_shape.h"
+#include "psi4/libisapol/isa_sweep.h"
+#include "psi4/libisapol/isa_controller.h"
 #include "psi4/libisapol/explicit_basis.h"
 #include "psi4/libisapol/partitioned_response.h"
 #include "psi4/libisapol/multipole_transform.h"
@@ -64,6 +68,15 @@ namespace {
 /// Zero-copy-free view of one of IsaGrid's coordinate arrays as a numpy array.
 py::array_t<double> grid_column(const IsaGrid& grid, const double* data) {
     return py::array_t<double>(static_cast<py::ssize_t>(grid.npoints()), data);
+}
+
+/// Owned float64 C-contiguous copy of a test-hook operand with the given rank.
+py::array_t<double, py::array::c_style> drhoc_hook_copy(const py::object& value, int ndim, const char* name) {
+    auto copy = py::module_::import("numpy").attr("array")(value, "dtype"_a = "float64", "order"_a = "C",
+                                                           "copy"_a = true);
+    auto array = copy.cast<py::array_t<double, py::array::c_style>>();
+    if (array.ndim() != ndim) throw std::invalid_argument(std::string(name) + " has the wrong number of dimensions");
+    return array;
 }
 
 
@@ -588,7 +601,13 @@ void export_isapol(py::module& m) {
         .def_readonly("coefficients", &IsaDrhoCResult::coefficients)
         .def_readonly("charge_penalty", &IsaDrhoCResult::charge_penalty)
         .def_readonly("relative_residual", &IsaDrhoCResult::relative_residual)
-        .def_readonly("fitted_electrons", &IsaDrhoCResult::fitted_electrons);
+        .def_readonly("fitted_electrons", &IsaDrhoCResult::fitted_electrons)
+        .def_readonly("refinement_iterations", &IsaDrhoCResult::refinement_iterations,
+                      "Corrections applied by LU refinement (0 when none was requested)")
+        .def_readonly("refinement_displacement", &IsaDrhoCResult::refinement_displacement,
+                      "How far refinement moved the plain LU solution, as the largest coefficient "
+                      "change over the largest coefficient magnitude; an observed change, not an "
+                      "error estimate");
     py::class_<IsaAuxCoulomb>(m, "IsaAuxCoulomb", "Native Libint2 Coulomb metric and analytic charges; explicit Cartesian or spherical molecular AUX (different declared bases)")
         .def(py::init<const IsaExplicitBasis&>(), "auxiliary"_a)
         .def("charges", &IsaAuxCoulomb::charges)
@@ -599,12 +618,188 @@ void export_isapol(py::module& m) {
         .def("point_potentials", &IsaAuxCoulomb::point_potentials,
              "points"_a, "max_bytes"_a=512UL*1024*1024)
         .def("closed_shell_rhs", &IsaAuxCoulomb::closed_shell_rhs, "orbital"_a, "occupied_coefficients"_a)
-        .def("fit_drho_c", &IsaAuxCoulomb::fit_drho_c, "orbital"_a, "occupied_coefficients"_a, "charge_penalty"_a=1000.)
+        .def("fit_drho_c", &IsaAuxCoulomb::fit_drho_c, "orbital"_a, "occupied_coefficients"_a, "charge_penalty"_a=1000.,
+             "max_refinement_iterations"_a=0)
         .def("native_auxiliary", &IsaAuxCoulomb::native_auxiliary,
              "(raw Cartesian BasisSet, T): fresh caller-owned copies of the twin behind metric() and the "
              "declared map, metric = T J_raw T^T. The BasisSet is a read-only input (e.g. FDDS_Monomer with "
              "aux_transform=T, or IntegralFactory); do not modify it. Its ghost-centre molecule is not "
              "update_geometry()-safe, so do not pass it to MintsHelper(basis), which empties it.");
+    m.def("_isa_exact_residual",
+          [](const py::object& a, const py::object& x, const py::object& b) {
+              const auto av = drhoc_hook_copy(a, 2, "A"), xv = drhoc_hook_copy(x, 1, "x"), bv = drhoc_hook_copy(b, 1, "b");
+              const auto n = static_cast<std::size_t>(av.shape(0));
+              if (av.shape(1) != av.shape(0) || static_cast<std::size_t>(xv.shape(0)) != n ||
+                  static_cast<std::size_t>(bv.shape(0)) != n)
+                  throw std::invalid_argument("A must be n x n and x, b of length n");
+              return isa_exact_residual(av.data(), xv.data(), bv.data(), n);
+          },
+          "A"_a, "x"_a, "b"_a,
+          "Diagnostic test hook, not a supported API; may change without notice. "
+          "Correctly rounded b - A x (list) from the Drho-C exact residual.");
+    m.def("_isa_refined_lu_solve",
+          [](const py::object& a, const py::object& b, int max_iterations) {
+              const auto av = drhoc_hook_copy(a, 2, "A"), bv = drhoc_hook_copy(b, 1, "b");
+              const auto n = static_cast<std::size_t>(av.shape(0));
+              if (av.shape(1) != av.shape(0) || static_cast<std::size_t>(bv.shape(0)) != n)
+                  throw std::invalid_argument("A must be n x n and b of length n");
+              auto solve = isa_refined_lu_solve(av.data(), bv.data(), n, max_iterations);
+              return py::make_tuple(solve.x, solve.iterations, solve.displacement);
+          },
+          "A"_a, "b"_a, "max_iterations"_a,
+          "Diagnostic test hook, not a supported API; may change without notice. "
+          "(x, iterations, displacement) from the Drho-C LU solve and refinement.");
+    py::class_<IsaShapeMap>(m, "IsaShapeMap", "Validated zero-based shape-shell to AtomAux-shell map; exact descriptors")
+        .def(py::init<const IsaExplicitBasis&, const IsaExplicitBasis&, const std::vector<int>&>(),
+             "atomic"_a, "shape"_a, "shell_map"_a)
+        .def_property_readonly("function_indices", &IsaShapeMap::function_indices)
+        .def("project", &IsaShapeMap::project, "atomic_coefficients"_a,
+             "New raw shape coefficient vector, before mixing/DIIS or tails");
+    py::class_<IsaExponentialTail>(m, "IsaExponentialTail", "Explicit Func-1 parameters; signed amplitude permitted")
+        .def(py::init<>())
+        .def_readwrite("defined", &IsaExponentialTail::defined)
+        .def_readwrite("amplitude", &IsaExponentialTail::amplitude)
+        .def_readwrite("exponent", &IsaExponentialTail::exponent)
+        .def_readwrite("cutoff", &IsaExponentialTail::cutoff);
+    py::class_<IsaTailFitResult>(m, "IsaTailFitResult")
+        .def_property_readonly("tail", [](const IsaTailFitResult& r) { return r.tail; })
+        .def_readonly("used_previous_exponent", &IsaTailFitResult::used_previous_exponent)
+        .def_readonly("gaussian_tail_charge", &IsaTailFitResult::gaussian_tail_charge)
+        .def_readonly("ionization_potential", &IsaTailFitResult::ionization_potential)
+        .def_readonly("status", &IsaTailFitResult::status);
+    py::class_<IsaGaussianShape>(m, "IsaGaussianShape", "Owned effective s-Gaussian expansion; explicit Func-1/Fit-3 tail policy")
+        .def(py::init<const IsaExplicitBasis&, const std::vector<double>&>(), "basis"_a, "coefficients"_a)
+        .def("value", &IsaGaussianShape::value, "radius"_a)
+        .def("exterior_charge", &IsaGaussianShape::exterior_charge, "radius"_a)
+        .def("fit_tail", &IsaGaussianShape::fit_tail, "cutoff"_a, "previous"_a = IsaExponentialTail())
+        .def("sample", &IsaGaussianShape::sample, "points"_a, "tail"_a = IsaExponentialTail(), "apply_tail"_a = false);
+    py::class_<IsaFixedDensity>(m, "IsaFixedDensity", "Owned supplied molecular AUX expansion, not native Drho-C fitting")
+        .def(py::init<const IsaExplicitBasis&, const std::vector<double>&>(), "basis"_a, "coefficients"_a)
+        .def("evaluate", &IsaFixedDensity::evaluate, "points"_a, "sites"_a,
+             "Signed density samples; explicit zero-based active sites, empty screens all");
+    py::class_<IsaAFitOptions>(m, "IsaAFitOptions", "Active settings for one frozen ISA-A update")
+        .def(py::init<>())
+        .def_readwrite("w_eps", &IsaAFitOptions::w_eps)
+        .def_readwrite("s_block_only", &IsaAFitOptions::s_block_only)
+        .def_readwrite("damping", &IsaAFitOptions::damping)
+        .def_readwrite("positive_lambda", &IsaAFitOptions::positive_lambda)
+        .def_readwrite("positive_max_alpha", &IsaAFitOptions::positive_max_alpha)
+        .def_readwrite("positive_auto", &IsaAFitOptions::positive_auto)
+        .def_readwrite("density_cutoff", &IsaAFitOptions::density_cutoff);
+    py::class_<IsaAFitData>(m, "IsaAFitData", "Explicit samples and weighted metric; no basis construction or activation scheduling")
+        .def(py::init<>())
+        .def_readwrite("weights", &IsaAFitData::weights)
+        .def_readwrite("density", &IsaAFitData::density)
+        .def_readwrite("shape", &IsaAFitData::shape)
+        .def_readwrite("shape_sum", &IsaAFitData::shape_sum)
+        .def_readwrite("radius_squared", &IsaAFitData::radius_squared)
+        .def_readwrite("basis_values", &IsaAFitData::basis_values)
+        .def_readwrite("overlap", &IsaAFitData::overlap, "Already W-Eps-weighted overlap, before damping/ridge")
+        .def_readwrite("previous", &IsaAFitData::previous)
+        .def_readwrite("angular_momenta", &IsaAFitData::angular_momenta)
+        .def_readwrite("exponents", &IsaAFitData::exponents,
+                       "Positive primitive exponent per function, including non-s. Caller must supply an uncontracted basis.");
+    py::class_<IsaAFitResult>(m, "IsaAFitResult", "One fitted update, not a converged ISA partition")
+        .def_property_readonly("metric", [](const IsaAFitResult& r) { return r.metric->clone(); })
+        .def_property_readonly("rhs", [](const IsaAFitResult& r) { return r.rhs->clone(); })
+        .def_property_readonly("coefficients", [](const IsaAFitResult& r) { return r.coefficients->clone(); })
+        .def_readonly("population", &IsaAFitResult::population)
+        .def_readonly("relative_residual", &IsaAFitResult::relative_residual)
+        .def_readonly("excluded_points", &IsaAFitResult::excluded_points);
+    py::class_<IsaAFitSamples>(m, "IsaAFitSamples", "Explicit quadrature and already screened/tail-processed old shapes")
+        .def(py::init<>())
+        .def_readwrite("points", &IsaAFitSamples::points)
+        .def_readwrite("weights", &IsaAFitSamples::weights)
+        .def_readwrite("shape", &IsaAFitSamples::shape)
+        .def_readwrite("shape_sum", &IsaAFitSamples::shape_sum)
+        .def_readwrite("previous", &IsaAFitSamples::previous)
+        .def_readwrite("density_sites", &IsaAFitSamples::density_sites);
+    py::class_<IsaAFitProvider>(m, "IsaAFitProvider", "Owned primitive AtomAux and explicit fixed molecular-AUX density")
+        .def(py::init<const IsaExplicitBasis&, const IsaFixedDensity&>(), "atomic"_a, "density"_a)
+        .def("assemble", &IsaAFitProvider::assemble, "samples"_a, "options"_a = IsaAFitOptions(),
+             "Fresh fit data; subsequent solve must use identical weighting settings")
+        .def("fit", &IsaAFitProvider::fit, "samples"_a, "options"_a = IsaAFitOptions(),
+             "Assemble and perform one frozen fit using the same options, not an ISA iteration");
+    py::class_<IsaNoTailGrid>(m, "IsaNoTailGrid", "Explicit atom grid with distinct shape and molecular-density neighbour indices")
+        .def(py::init<>())
+        .def_readwrite("points", &IsaNoTailGrid::points)
+        .def_readwrite("weights", &IsaNoTailGrid::weights)
+        .def_readwrite("density_sites", &IsaNoTailGrid::density_sites)
+        .def_readwrite("shape_sites", &IsaNoTailGrid::shape_sites);
+    py::class_<IsaSweepState>(m, "IsaSweepState", "Explicit atomic/shape expansions in sweep atom order")
+        .def(py::init<>())
+        .def_readwrite("atomic_coefficients", &IsaSweepState::atomic_coefficients)
+        .def_readwrite("shape_coefficients", &IsaSweepState::shape_coefficients);
+    py::class_<IsaNoTailSweepResult>(m, "IsaNoTailSweepResult")
+        .def_property_readonly("next", [](const IsaNoTailSweepResult& r) { return r.next; })
+        .def_property_readonly("fits", [](const IsaNoTailSweepResult& r) { return r.fits; })
+        .def_readonly("clipped_shape_points", &IsaNoTailSweepResult::clipped_shape_points);
+    py::class_<IsaASweep>(m, "IsaASweep", "Owned synchronous sweep with explicit no-tail or supplied-tail sampling")
+        .def(py::init<const std::vector<IsaExplicitBasis>&, const std::vector<IsaExplicitBasis>&,
+                     const std::vector<std::vector<int>>&, const IsaFixedDensity&>(),
+             "atomic"_a, "shape"_a, "shell_maps"_a, "density"_a)
+        .def("run", &IsaASweep::run, "old"_a, "grids"_a, "options"_a = IsaAFitOptions())
+        .def("run_with_tails", &IsaASweep::run_with_tails, "old"_a, "grids"_a, "tails"_a,
+             "apply_tail"_a, "options"_a = IsaAFitOptions());
+    py::class_<IsaAControllerOptions>(m, "IsaAControllerOptions", "Ordinary A / W convergence, no DIIS or symmetry; explicit tail cutoffs")
+        .def(py::init<>())
+        .def_readwrite("fit", &IsaAControllerOptions::fit)
+        .def_readwrite("convergence", &IsaAControllerOptions::convergence)
+        .def_readwrite("w_eps_activation", &IsaAControllerOptions::w_eps_activation)
+        .def_readwrite("positive_activation", &IsaAControllerOptions::positive_activation)
+        .def_readwrite("tail_activation", &IsaAControllerOptions::tail_activation)
+        .def_readwrite("mixing", &IsaAControllerOptions::mixing)
+        .def_readwrite("mixing_skip", &IsaAControllerOptions::mixing_skip)
+        .def_readwrite("cache_max_bytes", &IsaAControllerOptions::cache_max_bytes)
+        .def_readwrite("tail_iteration_limit", &IsaAControllerOptions::tail_iteration_limit)
+        .def_readwrite("max_iterations", &IsaAControllerOptions::max_iterations)
+        .def_readwrite("fix_tails", &IsaAControllerOptions::fix_tails)
+        .def_readwrite("tail_cutoffs", &IsaAControllerOptions::tail_cutoffs)
+        .def_readwrite("tail_allowed", &IsaAControllerOptions::tail_allowed)
+        .def_readwrite("convergence_included", &IsaAControllerOptions::convergence_included);
+    py::class_<IsaAControllerState>(m, "IsaAControllerState", "Restart cursor for identical controller inputs/settings")
+        .def(py::init<>())
+        .def_readwrite("coefficients", &IsaAControllerState::coefficients)
+        .def_readwrite("tails", &IsaAControllerState::tails)
+        .def_readwrite("saved_shape_charges", &IsaAControllerState::saved_shape_charges)
+        .def_readwrite("iteration", &IsaAControllerState::iteration)
+        .def_readwrite("active_w_eps", &IsaAControllerState::active_w_eps)
+        .def_readwrite("active_positive_lambda", &IsaAControllerState::active_positive_lambda)
+        .def_readwrite("max_delta", &IsaAControllerState::max_delta)
+        .def_readwrite("apply_tails", &IsaAControllerState::apply_tails)
+        .def_readwrite("converged", &IsaAControllerState::converged);
+    py::class_<IsaAControllerStep>(m, "IsaAControllerStep")
+        .def_property_readonly("next", [](const IsaAControllerStep& r) { return r.next; })
+        .def_property_readonly("raw_sweep", [](const IsaAControllerStep& r) { return r.raw_sweep; })
+        .def_readonly("deltas", &IsaAControllerStep::deltas)
+        .def_readonly("shape_charges", &IsaAControllerStep::shape_charges)
+        .def_readonly("atom_converged", &IsaAControllerStep::atom_converged)
+        .def_readonly("tail_fits", &IsaAControllerStep::tail_fits);
+    py::class_<IsaAControllerResult>(m, "IsaAControllerResult")
+        .def_property_readonly("state", [](const IsaAControllerResult& r) { return r.state; })
+        .def_readonly("history", &IsaAControllerResult::history)
+        .def_readonly("termination", &IsaAControllerResult::termination)
+        .def_readonly("final_tails", &IsaAControllerResult::final_tails,
+                      "Postconvergence refit from the FINAL shapes; the tails downstream stages sample. "
+                      "state.tails is the lagged restart cursor, not these.")
+        .def_readonly("final_tail_fits", &IsaAControllerResult::final_tail_fits);
+    py::class_<IsaAController, std::shared_ptr<IsaAController>>(m, "IsaAController", "Explicit-input ordinary-A controller, not native wavefunction-to-property parity")
+        .def(py::init<const std::vector<IsaExplicitBasis>&, const std::vector<IsaExplicitBasis>&,
+                     const std::vector<std::vector<int>>&, const IsaFixedDensity&,
+                     const std::vector<IsaNoTailGrid>&, const IsaAControllerOptions&>(),
+             "atomic"_a, "shape"_a, "shell_maps"_a, "density"_a, "grids"_a, "options"_a)
+        .def_property_readonly("prepared_cache_enabled", &IsaAController::prepared_cache_enabled,
+                               "Whether the bounded immutable preparation was admitted")
+        .def("without_prepared_cache", &IsaAController::without_prepared_cache,
+             "Return an independent rerunnable controller without retained preparation")
+        .def("initialize", &IsaAController::initialize, "coefficients"_a)
+        .def("step", &IsaAController::step, "old"_a)
+        .def("run", &IsaAController::run, "initial"_a);
+    m.def("isa_a_fit_step", &isa_a_fit_step, "data"_a, "options"_a = IsaAFitOptions(),
+          "Fit one atom against frozen samples. Inputs are not mutated/retained; result matrices are copies.");
+    m.def("isa_overlap_change", &isa_overlap_change, "current"_a, "previous"_a, "overlap"_a,
+          "Normalized overlap-angle change using an unweighted metric; insensitive to amplitude scaling.");
+
     py::class_<IsaGridOptions>(m, "IsaGridOptions", "Options controlling the ISA integration grid")
         .def(py::init<>())
         .def_readwrite("radial_points", &IsaGridOptions::radial_points,

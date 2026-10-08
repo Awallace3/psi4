@@ -1,6 +1,14 @@
-"""Analytic native Libint2 AUX checks; not native Drho-C/end-to-end acceptance."""
+"""Analytic native Libint2 AUX checks, the analytic Drho-C fit, and exact-residual Drho-C refinement against rational, Hilbert and frozen-water references; not end-to-end acceptance."""
+from fractions import Fraction
 from math import erf, exp, pi, sqrt
+import hashlib
 import itertools
+import json
+import os
+import platform
+import struct
+import subprocess
+import sys
 import numpy as np
 import pytest
 from psi4 import core
@@ -440,6 +448,33 @@ def test_orbital_role_fails_closed_for_cartesian_and_atomic_metric():
     with pytest.raises(ValueError,match='Orbital'): core.IsaAuxCoulomb(aux).three_center(aux)
 
 
+@pytest.mark.parametrize('penalty',[.25,1000.])
+@pytest.mark.parametrize('aux_coefficient',[1.,-.7])
+def test_native_drho_c_analytic_finite_penalty(penalty,aux_coefficient):
+    a,b=.7,.9
+    aux=basis([(0,0,[a],[aux_coefficient])],[[0.,0.,0.]])
+    main=basis([(0,0,[b],[1.])],[[0.,0.,0.]],role=core.IsaBasisRole.Orbital,
+               representation=core.IsaBasisRepresentation.Spherical)
+    c=(2*b/pi)**.75
+    p=core.IsaAuxCoulomb(aux)
+    result=p.fit_drho_c(main,core.Matrix.from_array(np.array([[c]])),penalty)
+    q=aux_coefficient*(pi/a)**1.5
+    j=aux_coefficient**2*ss(a,a,[0.]*3,[0.]*3)
+    raw=2*c*c*aux_coefficient*ss(a,2*b,[0.]*3,[0.]*3)
+    metric=j+(penalty*q)*q
+    rhs=raw+penalty*2*q
+    expected=rhs/metric
+    np.testing.assert_allclose(result.raw_rhs,[raw],rtol=5e-14)
+    np.testing.assert_allclose(result.metric.np,[[metric]],rtol=5e-14)
+    np.testing.assert_allclose(result.coefficients,[expected],rtol=5e-14)
+    assert result.fitted_electrons==pytest.approx(q*expected,rel=5e-14)
+    assert abs(result.fitted_electrons-2)>1e-8  # Not silently rescaled.
+    assert result.relative_residual<1e-14
+    density=core.IsaFixedDensity(aux,result.coefficients)
+    np.testing.assert_allclose(density.evaluate([[0.,0.,0.],[1.,0.,0.]],[0]),
+                               [expected*aux_coefficient,expected*aux_coefficient*exp(-a)],rtol=5e-14)
+
+
 @pytest.mark.parametrize('penalty',[0.,float('nan'),float('inf')])
 def test_native_drho_rejects_invalid_penalty(penalty):
     aux=basis([(0,0,[1.],[1.])],[[0.,0.,0.]])
@@ -550,3 +585,235 @@ def test_native_integrals_ignore_ambient_screening_options():
         for k,(value,changed) in saved.items():
             core.set_global_option(k,value)
             if not changed: core.revoke_global_option_changed(k)
+
+
+# Drho-C exact residual and LU refinement. core._isa_exact_residual and
+# core._isa_refined_lu_solve are test hooks into the production routines, not API.
+_DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data_isapol')
+_U = 2.**-53
+_DBL_MAX = sys.float_info.max
+
+
+def _bits(values):
+    return [struct.unpack('<Q', struct.pack('<d', float(v)))[0] for v in values]
+
+
+def _oracle_residual(A, x, b):
+    """Correctly rounded b - A x from exact rationals (float(Fraction) rounds half-even)."""
+    return [float(Fraction(bi) - sum(Fraction(a)*Fraction(xj) for a, xj in zip(row, x)))
+            for row, bi in zip(A, b)]
+
+
+def _random_system(seed, n, spread):
+    rng = np.random.default_rng(seed)
+    def draw(*shape):
+        return rng.choice([-1., 1.], shape)*np.ldexp(rng.uniform(1., 2., shape), rng.integers(-spread, spread+1, shape))
+    return draw(n, n), draw(n), draw(n)
+
+
+def _residual_cases():
+    A, x, b = _random_system(20261006, 40, 300)
+    tiny = 2.**-1074
+    return {
+        'random 40x40, exponents +-300': (A, x, b),
+        'catastrophic cancellation': ([[1., 1.], [1., -1.]], [2.**60, 1+2.**-52], [2.**60, 2.**60]),
+        'subnormal inputs and results': ([[tiny, 0.], [2.**-1060, 0.]], [3., 3.], [2.**-1073, 2.**-1058]),
+        'products below 2^-1074': ([[tiny, 0.], [tiny, tiny]], [2.**-3, 1.5], [0., 0.]),
+        'half-way subnormal ties': ([[tiny, 0.], [0., tiny]], [.5, 1.5], [0., 0.]),
+        'signed zeros': ([[-0., 0.], [0., -0.]], [0., -0.], [-0., 0.]),
+        'half-way normal ties': ([[1., 0.], [0., 1.]], [-1., -1.], [2.**53, 2.**53+2]),
+        'products beyond binary64 range cancel': ([[_DBL_MAX, -_DBL_MAX], [_DBL_MAX, -_DBL_MAX]], [2., 2.], [1., -0.]),
+    }
+
+
+@pytest.mark.parametrize('case', list(_residual_cases()))
+def test_exact_residual_matches_rational_oracle_bitwise(case):
+    A, x, b = _residual_cases()[case]
+    got = core._isa_exact_residual(A, x, b)
+    assert _bits(got) == _bits(_oracle_residual(np.asarray(A).tolist(), list(x), list(b)))
+
+
+def test_exact_residual_known_values_and_term_order():
+    assert core._isa_exact_residual([[1., 1.], [1., -1.]], [2.**60, 1+2.**-52], [2.**60, 2.**60]) == \
+        [-(1+2.**-52), 1+2.**-52]  # naive binary64 evaluation gives [0, 0]
+    tiny = 2.**-1074
+    assert _bits(core._isa_exact_residual([[tiny, 0.], [0., tiny]], [.5, 1.5], [0., 0.])) == _bits([-0., -2*tiny])
+    assert _bits(core._isa_exact_residual([[-0., 0.], [0., -0.]], [0., -0.], [-0., 0.])) == _bits([0., 0.])
+    A, x, b = _random_system(20261007, 40, 300)
+    order = np.random.default_rng(1).permutation(40)
+    assert _bits(core._isa_exact_residual(A, x, b)) == _bits(core._isa_exact_residual(A[:, order], x[order], b))
+
+
+def test_exact_residual_refuses_overflow_and_invalid_input():
+    with pytest.raises(ValueError, match='overflow'):
+        core._isa_exact_residual([[_DBL_MAX, _DBL_MAX], [1., 0.]], [2., 2.], [0., 0.])
+    good = ([[1., 2.], [3., 4.]], [1., 1.], [0., 0.])
+    for position in range(3):
+        for bad in (float('nan'), float('inf'), -float('inf')):
+            args = [np.array(v, dtype=float) for v in good]
+            args[position].flat[0] = bad
+            with pytest.raises(ValueError, match='finite'):
+                core._isa_exact_residual(*args)
+    for args in (([[1., 2.]], [1., 1.], [0.]), ([[1.]], [1., 1.], [0.]), ([[1.]], [1.], [0., 0.]),
+                 (np.zeros((0, 0)), [], []), ([1.], [1.], [0.])):
+        with pytest.raises(ValueError):
+            core._isa_exact_residual(*args)
+
+
+def test_refined_solve_refuses_invalid_input():
+    for iterations in (-1, 33):
+        with pytest.raises(ValueError, match='iterations'):
+            core._isa_refined_lu_solve([[2.]], [1.], iterations)
+    with pytest.raises(TypeError):
+        core._isa_refined_lu_solve([[2.]], [1.], 1.5)
+    with pytest.raises(ValueError, match='constrained metric'):
+        core._isa_refined_lu_solve([[float('nan')]], [1.], 10)
+    with pytest.raises(ValueError, match='constrained RHS'):
+        core._isa_refined_lu_solve([[2.]], [float('inf')], 0)
+    for args in (([[1., 2.]], [1.]), ([[1.]], [1., 1.]), (np.zeros((0, 0)), [])):
+        with pytest.raises(ValueError):
+            core._isa_refined_lu_solve(*args, 10)
+    with pytest.raises(ValueError, match='LU solve failed'):
+        core._isa_refined_lu_solve([[0., 0.], [0., 0.]], [1., 1.], 10)
+
+
+def test_refined_solve_zero_solution_converges_in_one_step():
+    x, iterations, displacement = core._isa_refined_lu_solve([[2., 1.], [1., 3.]], [0., 0.], 10)
+    assert x == [0., 0.] and iterations == 1 and displacement == 0.
+
+
+def test_native_drho_c_refinement_on_the_analytic_fit():
+    a, b, penalty = .7, .9, 1000.
+    aux = basis([(0, 0, [a], [1.])], [[0., 0., 0.]])
+    main = basis([(0, 0, [b], [1.])], [[0., 0., 0.]], role=core.IsaBasisRole.Orbital,
+                 representation=core.IsaBasisRepresentation.Spherical)
+    occupied = core.Matrix.from_array(np.array([[(2*b/pi)**.75]]))
+    p = core.IsaAuxCoulomb(aux)
+    default, plain, refined = (p.fit_drho_c(main, occupied, penalty), p.fit_drho_c(main, occupied, penalty, 0),
+                               p.fit_drho_c(main, occupied, penalty, max_refinement_iterations=10))
+    for name in ('coefficients', 'raw_rhs', 'rhs', 'charges'):
+        assert _bits(getattr(plain, name)) == _bits(getattr(default, name))
+    assert (plain.relative_residual, plain.fitted_electrons) == (default.relative_residual, default.fitted_electrons)
+    assert default.refinement_iterations == 0 and default.refinement_displacement == 0.
+    q = (pi/a)**1.5
+    expected = (2*(2*b/pi)**1.5*ss(a, 2*b, [0.]*3, [0.]*3)+penalty*2*q)/(ss(a, a, [0.]*3, [0.]*3)+penalty*q*q)
+    np.testing.assert_allclose(refined.coefficients, [expected], rtol=5e-14)
+    assert 1 <= refined.refinement_iterations <= 3 and refined.refinement_displacement < 1e-14
+    assert _bits(refined.metric.np.ravel()) == _bits(default.metric.np.ravel())
+    for iterations in (-1, 33):
+        with pytest.raises(ValueError, match='iterations'):
+            p.fit_drho_c(main, occupied, penalty, max_refinement_iterations=iterations)
+
+
+def _exact_solution(A, b):
+    """Exact rational solution of the stored binary64 system (Gaussian elimination)."""
+    n = len(b)
+    rows = [[Fraction(v) for v in row] + [Fraction(bi)] for row, bi in zip(A, b)]
+    for k in range(n):
+        pivot = next(i for i in range(k, n) if rows[i][k] != 0)
+        rows[k], rows[pivot] = rows[pivot], rows[k]
+        for i in range(k+1, n):
+            factor = rows[i][k]/rows[k][k]
+            rows[i] = [v-factor*w for v, w in zip(rows[i], rows[k])]
+    x = [Fraction(0)]*n
+    for i in reversed(range(n)):
+        x[i] = (rows[i][n]-sum(rows[i][j]*x[j] for j in range(i+1, n)))/rows[i][i]
+    return np.array([float(v) for v in x])
+
+
+def _hilbert(n):
+    return [[1./(i+j+1) for j in range(n)] for i in range(n)]
+
+
+def test_refined_solve_hilbert10_reaches_the_exact_solution():
+    # Regression target (kappa ~ 1.6e13), not a forward-error guarantee.
+    A, b = _hilbert(10), [1.]*10
+    reference = _exact_solution(A, b)
+    x, iterations, _ = core._isa_refined_lu_solve(A, b, 10)
+    assert 1 <= iterations <= 10
+    assert np.max(np.abs(np.array(x)-reference)) <= 8*_U*np.max(np.abs(reference))
+
+
+def test_refined_solve_hilbert13_converges_accurately_or_refuses():
+    # kappa ~ 1e18 > 1/u: either documented refusal is acceptable; a converged
+    # result outside the bound is not.
+    A, b = _hilbert(13), [1.]*13
+    try:
+        x, _, _ = core._isa_refined_lu_solve(A, b, 32)
+    except ValueError as error:
+        assert 'stagnated' in str(error) or 'iteration cap' in str(error)
+        return
+    reference = _exact_solution(A, b)
+    assert np.max(np.abs(np.array(x)-reference)) <= 8*_U*np.max(np.abs(reference))
+
+
+def _water_operands():
+    record = json.load(open(os.path.join(_DATA, 'drhoc_water_reference.json')))
+    with np.load(os.path.join(_DATA, 'drhoc_water_operands.npz')) as data:
+        A, b = data['A'], data['b']
+    for name, array in (('A', A), ('b', b)):
+        assert hashlib.sha256(np.ascontiguousarray(array, dtype='<f8').tobytes()).hexdigest() == \
+            record['operand_sha256'][name]
+    return A, b, np.array([float(v) for v in record['solution_100_digits']])
+
+
+def test_refined_solve_frozen_water_reaches_the_100_digit_reference():
+    # Regression target on the frozen water Drho-C operands (kappa ~ 6e15), not a guarantee.
+    A, b, reference = _water_operands()
+    x, iterations, _ = core._isa_refined_lu_solve(A, b, 10)
+    assert 1 <= iterations <= 10
+    assert np.max(np.abs(np.array(x)-reference)) <= 8*_U*np.max(np.abs(reference))
+    rows = np.random.default_rng(246).choice(len(b), 16, replace=False)
+    assert _bits(np.array(core._isa_exact_residual(A, reference, b))[rows]) == \
+        _bits(_oracle_residual(A[rows].tolist(), reference.tolist(), b[rows].tolist()))
+
+
+def test_refined_solve_same_process_threads_agree():
+    hilbert = (np.array(_hilbert(10)), np.ones(10))
+    water = _water_operands()[:2]
+    saved = core.get_num_threads()
+    try:
+        for A, b in (hilbert, water):
+            core.set_num_threads(1)
+            x1 = np.array(core._isa_refined_lu_solve(A, b, 10)[0])
+            core.set_num_threads(8)
+            x8 = np.array(core._isa_refined_lu_solve(A, b, 10)[0])
+            assert np.max(np.abs(x1-x8)) <= 8*_U*np.max(np.abs(x1))
+    finally:
+        core.set_num_threads(saved)
+
+
+_GLIBC_FE_UPWARD = {'x86_64': 0x800, 'aarch64': 0x400000}
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux') or platform.machine() not in _GLIBC_FE_UPWARD
+                    or platform.libc_ver()[0] != 'glibc',
+                    reason='the fesetround(FE_UPWARD) refusal is exercised only on x86-64/aarch64 glibc')
+def test_refinement_refuses_directed_rounding_but_residual_is_unaffected(tmp_path):
+    A, x, b = _random_system(20261008, 12, 40)
+    expected = _bits(_oracle_residual(A.tolist(), x.tolist(), b.tolist()))
+    script = tmp_path / 'upward.py'
+    script.write_text(f'''
+import ctypes, struct
+from psi4 import core
+libm = ctypes.CDLL('libm.so.6')
+assert libm.fesetround({_GLIBC_FE_UPWARD[platform.machine()]}) == 0
+r = core._isa_exact_residual({A.tolist()!r}, {x.tolist()!r}, {b.tolist()!r})
+assert [struct.unpack('<Q', struct.pack('<d', v))[0] for v in r] == {expected!r}
+core._isa_refined_lu_solve([[2., 1.], [1., 3.]], [1., 2.], 0)
+try:
+    core._isa_refined_lu_solve([[2., 1.], [1., 3.]], [1., 2.], 1)
+except ValueError as error:
+    assert 'round-to-nearest' in str(error), error
+else:
+    raise SystemExit('directed rounding was not refused')
+assert libm.fesetround(0) == 0
+core._isa_refined_lu_solve([[2., 1.], [1., 3.]], [1., 2.], 1)
+print('UPWARD-OK')
+''')
+    env = dict(os.environ)
+    env['PYTHONPATH'] = os.pathsep.join([os.path.dirname(os.path.dirname(os.path.abspath(core.__file__)))] +
+                                        [p for p in env.get('PYTHONPATH', '').split(os.pathsep) if p])
+    done = subprocess.run([sys.executable, str(script)], cwd=tmp_path, env=env, capture_output=True, text=True,
+                          timeout=300)
+    assert done.returncode == 0 and 'UPWARD-OK' in done.stdout, done.stdout + done.stderr

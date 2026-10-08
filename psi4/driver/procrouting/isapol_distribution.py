@@ -7,11 +7,17 @@ for dipoles), global Cartesian axes and bohr origins. Columns are the exact
 ordered effective functions of a declared response BasisRecipe, not necessarily
 ISA's density-fit AUX. Q maps fitted *density* coefficients to moments; it
 contains neither an electronic minus sign nor a response/neutrality correction.
+
+Producers: the analytic DF-centre rule and an explicitly declared, experimental
+ISA-A partition (``isa_moments``). Neither is inferred from the other. The ISA
+iteration, SCF seal and state modules load only when an ISA function is called,
+so the DF-centre contract stays independent of them.
 """
 from dataclasses import dataclass
 import hashlib
 
 import numpy as np
+from psi4 import core
 
 from .isapol_basis import BasisRecipe, _owned
 from .isapol_df_multipoles import analytic_df_centre_multipoles
@@ -120,3 +126,148 @@ def analytic_df_moments(auxiliary, sites, rank):
     return DistributedMoments(result.values, result.labels, result.origins, rank, auxiliary,
                               'df_centre_analytic', result.provenance, True,
                               diagnostics=tuple(result.diagnostics.items()))
+
+
+def _validate_rank_and_grid(model, rank, integration_grid):
+    if type(rank) is not int or not 0 <= rank <= 4:
+        raise ValueError('distributed moment rank must be 0..4')
+    if (not isinstance(integration_grid, np.ndarray) or integration_grid.dtype != np.float64
+            or integration_grid.ndim != 2 or integration_grid.shape[1] != 4
+            or not len(integration_grid) or not np.isfinite(integration_grid).all()):
+        raise ValueError(f'{model} requires an explicit finite float64 full integration grid (rows,4)')
+
+
+def validate_isa_inputs(wfn, recipe, auxiliary, sites, rank, integration_grid):
+    from . import isapol_native_partition as isa
+    if not isinstance(recipe, isa.PartitionRecipe):
+        raise TypeError('ISA requires an explicit PartitionRecipe')
+    geometry = tuple(map(tuple, np.asarray(wfn.molecule().geometry())))
+    if (tuple(s.label for s in recipe.sites) != tuple(s.label for s in sites)
+            or tuple(s.origin for s in recipe.sites) != geometry
+            or tuple(tuple(s.origin) for s in sites) != geometry
+            or auxiliary.centres != geometry or recipe.auxiliary.centres != geometry):
+        raise ValueError('ISA recipe/site/response AUX/wavefunction identity mismatch')
+    _validate_rank_and_grid('ISA', rank, integration_grid)
+
+
+def isa_resource_plan(wfn, recipe, auxiliary, integration_grid, rank):
+    """Conservative numeric/work estimates, not RSS or integral-engine CPU caps.
+
+    Charge full-grid atomic collocation even when native cache admission chooses
+    the uncached path, all max_iterations history metrics, copied grids and Q,
+    MAIN/Drho buffers, plus 256 MiB scratch. Lebedev rounding is bounded by
+    2*requested+6 (the native grid clamps at 5294). No per-iteration refund.
+    Drho-C refinement is charged explicitly, not taken from the scratch term or
+    the d**3 solve term. Bytes: 4d doubles and the 134-digit accumulator when
+    refinement is enabled, held once for all iterations: the solver owns three
+    d-vectors (x, the plain LU x, and one correction into which each residual is
+    written) and a stack accumulator; the fourth vector is margin.
+    Work, in source-level scalar operations (each arithmetic, bitwise, shift,
+    compare, select, branch, cast, element load or store and loop step is one
+    unit), for every iteration up to the cap whatever the observed count: 256 per
+    residual product term (d*(d+1) per residual, about 190 counted), 16384 per
+    row for rounding and the update (about 8500 counted, worst case), and 16d**2
+    plus 64d for the triangular correction solves; plus 16d**2+64d once for the
+    finiteness scans and copies (about 8d**2+40d counted). These are operation counts, not a time bound.
+    Python object/container overhead and vendor integral/BLAS workspace are not
+    numerically capped. Large recipes can be refused even if they would converge
+    early; this adapter does not claim an exact work bound for arbitrary shells.
+    """
+    from .isapol_native_partition import DRHO_REFINEMENT_ITERATIONS as refinement
+    ns = len(recipe.sites)
+    g = ns*(recipe.grid.radial_points-1)*min(5294, 2*recipe.grid.spherical_points+6)
+    h, p, d = len(integration_grid), _width(auxiliary), _width(recipe.auxiliary)
+    a = [_width(s.atomic) for s in recipe.sites]
+    s = sum(_width(site.shape) for site in recipe.sites)
+    b, it = wfn.basisset().nbf(), recipe.controller.max_iterations
+    a2 = sum(k*k for k in a)
+    q = ns*(rank+1)**2
+    numeric = 8*(g*(sum(a)+40*ns+40)+(it+12)*(a2+16*sum(a)+16*s)
+                 +h*(32*ns+16)+8*p*q+16*d*d+8*d*b*b+64*b*b)+256*1024**2
+    work = (it*(8*g*(a2+ns*s)+8*sum(k**3 for k in a))
+            +16*d*b**3+8*d**3+4*h*q*p)
+    if refinement:
+        numeric += 8*(4*d+134)
+    work += 16*d*d+64*d+refinement*(256*d*(d+1)+16384*d+16*d*d+64*d)
+    return int(numeric), int(work)
+
+
+def _stockholder_q(auxiliary, sites, rank, points, weights, sampled, provenance, cutoff):
+    """Integrate w_A = shape_A/sum_B shape_B against the response AUX at every point.
+
+    The native integrator forms the ratio and excludes points whose denominator
+    is at most ``cutoff``. The charge-row error compares the site-summed charge
+    rows with the analytic AUX charges; it measures Q quadrature, not the model.
+    """
+    total = np.sum(sampled, axis=0).tolist()
+    qsites = []
+    for site, shape in zip(sites, sampled):
+        samples = core.IsaMultipoleSamples()
+        samples.points, samples.weights = points, weights
+        samples.shape, samples.shape_sum = shape.tolist(), total
+        samples.auxiliary_sites = list(range(len(sites)))
+        item = core.IsaMultipoleSite()
+        item.label, item.origin, item.rank, item.samples = site.label, site.origin, rank, samples
+        qsites.append(item)
+    response_aux = auxiliary.build('MolecularAux')
+    q = core.IsaPartitionedMultipoles(response_aux, qsites, provenance, cutoff)
+    values = np.asarray(q.values)
+    charge_error = float(np.max(np.abs(values[::(rank+1)**2].sum(axis=0)
+                                      - np.asarray(core.IsaAuxCoulomb(response_aux).charges()))))
+    return q, values, charge_error
+
+
+# The ISA-A iteration is checked for convergence; Q-grid convergence of the site
+# properties is not (site C6 moves ~1e-4 between tested grids at the Fit-3 switch).
+ISA_EXPERIMENTAL = ('EXPERIMENTAL: converged ISA-A iteration; site-property Q-grid convergence '
+                    'not established (Fit-3 tail switch)')
+
+
+def isa_moments(wfn, recipe, auxiliary, sites, rank, *, caller_converged, integration_grid, ledger):
+    """Fresh native ISA iteration -> final-tail shapes -> response-AUX Q.
+
+    The recipe's grid controls iteration; integration_grid independently declares
+    the full molecular Q quadrature. All sites contribute at every point. Native
+    signed-tail, Gaussian clipping and denominator cutoff semantics are retained.
+    The integration grid is snapshotted on entry, so the sampled points and the
+    recorded grid identity cannot diverge from a later caller mutation.
+    """
+    from . import isapol_native_partition as isa
+    from .isapol_native import _context
+    from .isapol_native_correction import require_scf_seal
+    validate_isa_inputs(wfn, recipe, auxiliary, sites, rank, integration_grid)
+    if caller_converged is not True:
+        raise ValueError('ISA requires caller_converged=True')
+    require_scf_seal(wfn)
+    state_id = _context(wfn)
+    ledger.admit('ISA iteration and response-AUX Q',
+                 *isa_resource_plan(wfn, recipe, auxiliary, integration_grid, rank))
+    integration_grid = _owned(integration_grid)
+    result = isa.native_partition(wfn, recipe, caller_converged=True, build_multipoles=False)
+    if not result.converged:
+        raise RuntimeError(f'ISA-A did not converge: {result.trajectory.termination}; Q unavailable')
+    points, weights = integration_grid[:, :3].tolist(), integration_grid[:, 3].tolist()
+    shapes = [s.shape.build('Shape') for s in recipe.sites]
+    sampled = isa.final_shape_samples(shapes, result.trajectory.state, recipe.sites, points,
+                                  tails=result.trajectory.final_tails)
+    provenance = (result.provenance + '; frozen ground-state shapes integrated on explicit response-AUX grid; '
+                  + ISA_EXPERIMENTAL)
+    q, values, charge_error = _stockholder_q(auxiliary, sites, rank, points, weights, sampled,
+                                             provenance, recipe.controller.density_cutoff)
+    diagnostics = dict(status='experimental', iteration_converged=True,
+        property_grid_convergence='not_established',
+        q_shape=values.shape, q_charge_row_error=charge_error,
+        iterations=result.trajectory.state.iteration, max_delta=result.trajectory.state.max_delta,
+        termination=result.trajectory.termination, drho_metric_condition=result.drho_metric_condition,
+        drho_relative_residual=result.drho.relative_residual,
+        grid_charge_error=float(result.grid_weights @ result.density_samples - result.drho.fitted_electrons),
+        iteration_grid_points=len(result.grid_points), integration_grid_points=len(integration_grid),
+        recipe_sha256=hashlib.sha256(repr(recipe).encode()).hexdigest(),
+        density_auxiliary_sha256=basis_identity(recipe.auxiliary),
+        integration_grid_sha256=hashlib.sha256(integration_grid.tobytes()).hexdigest(),
+        denominator_cutoff=recipe.controller.density_cutoff,
+        excluded_denominators=tuple(q.excluded_denominators), negative_ratios=tuple(q.negative_ratios),
+        final_tails=tuple((t.defined, t.amplitude, t.exponent, t.cutoff) for t in result.trajectory.final_tails))
+    return DistributedMoments(values, tuple(s.label for s in sites),
+        tuple(tuple(s.origin) for s in sites), rank, auxiliary, 'isa', provenance, True,
+        state_id, tuple(diagnostics.items()))

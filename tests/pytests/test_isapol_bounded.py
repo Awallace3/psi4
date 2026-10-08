@@ -389,8 +389,10 @@ def test_fdds_metric_refusal_propagates_unchanged(small_water, tmp_path, monkeyp
 
 
 @pytest.mark.parametrize('key,value,error,match', [
-    ('distribution', 'isa', ValueError, 'no ISA or MBIS'),
-    ('distribution', 'mbis', ValueError, 'no ISA or MBIS'),
+    ('distribution', 'isa', TypeError, 'explicit PartitionRecipe'),
+    ('distribution', 'mbis', ValueError, 'no MBIS'),
+    ('partition_recipe', 'recipe', ValueError, 'require distribution=isa'),
+    ('partition_grid', 'grid', ValueError, 'require distribution=isa'),
     ('distribution', 'supplied', TypeError, 'DistributedMoments'),
     ('distributed_moments', 'q', ValueError, 'requires distribution=supplied'),
     ('caller_converged', False, ValueError, 'caller_converged'),
