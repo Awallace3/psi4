@@ -144,10 +144,15 @@ class Libint2TwoElectronInt : public TwoBodyAOInt {
 
 class Libint2ERI : public Libint2TwoElectronInt {
    public:
+    /// build_sieve=false gives an unscreened instance for callers that compute every
+    /// quartet they need through compute_shell: no sieve, sieved shell-pair data or
+    /// sieve engine is built, the SCREENING option is not used, and shell_significant()
+    /// is always true. Such an instance cannot build a sieve later: initialize_sieve() throws.
     Libint2ERI(const IntegralFactory *integral, double screening_threshold, int deriv = 0, bool use_shell_pairs = false,
-               bool needs_exchange = false);
+               bool needs_exchange = false, bool build_sieve = true);
     ~Libint2ERI() override;
     Libint2ERI *clone() const override { return new Libint2ERI(*this); }
+    void initialize_sieve() override;
 
    protected:
     void libint2_wrapper0(const libint2::Shell &sh1, const libint2::Shell &sh2, const libint2::Shell &sh3,
@@ -159,6 +164,10 @@ class Libint2ERI : public Libint2TwoElectronInt {
     void libint2_wrapper2(const libint2::Shell &sh1, const libint2::Shell &sh2, const libint2::Shell &sh3,
                           const libint2::Shell &sh4, const libint2::ShellPair *sp12 = nullptr,
                           const libint2::ShellPair *sp34 = nullptr) override;
+
+   private:
+    /// The (xx|xx) sieve engine holds max_nprim^4 primitive records; unscreened instances skip it.
+    bool has_schwarz_engine_ = false;
 };
 
 class Libint2ErfERI : public Libint2TwoElectronInt {
