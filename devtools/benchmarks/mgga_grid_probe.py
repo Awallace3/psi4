@@ -194,8 +194,14 @@ def worker(a):
             functional_adapter_effect=captured-same_density,
             total=captured-cpu_energy)
         difference = raw-native
+        active = weights != 0
+        result["zero_weight_points"] = int(np.sum(~active))
+        result["ingredient_error_note"] = (
+            "All-point maxima may occur at exactly zero integration weight; "
+            "use nonzero-weight maxima and weighted norms for XC equivalence.")
         result["ingredient_errors"] = {
             name: dict(max_abs=float(np.max(np.abs(difference[:, k]))),
+                       max_abs_nonzero_weight=float(np.max(np.abs(difference[active, k]))),
                        weighted_l1=float(np.dot(np.abs(weights), np.abs(difference[:, k]))),
                        relative_l1=float(np.dot(np.abs(weights), np.abs(difference[:, k])) /
                                          max(np.dot(np.abs(weights), np.abs(native[:, k])), 1e-300)))
