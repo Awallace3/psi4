@@ -655,6 +655,7 @@ void SuperFunctional::allocate() {
         vv_values_["GRID_WX"] = std::make_shared<Vector>("W_X_GRID", max_points_);
         vv_values_["GRID_WY"] = std::make_shared<Vector>("W_Y_GRID", max_points_);
         vv_values_["GRID_WZ"] = std::make_shared<Vector>("W_Z_GRID", max_points_);
+        vv_values_["DE_DW"] = std::make_shared<Vector>("DE_DW", max_points_);
     }
 }
 std::map<std::string, SharedVector>& SuperFunctional::compute_functional(
@@ -933,6 +934,8 @@ double SuperFunctional::compute_vv10_kernel(const std::map<std::string, SharedVe
     double* x_grid = vv_values_["GRID_WX"]->pointer();
     double* y_grid = vv_values_["GRID_WY"]->pointer();
     double* z_grid = vv_values_["GRID_WZ"]->pointer();
+    // dE/dw_i = rho_i (beta + sum_j w_j rho_j Phi_ij), for the grid-weight part of the gradient
+    double* de_dw = vv_values_["DE_DW"]->pointer();
     std::fill(x_grid, x_grid + l_npoints, 0.0);
     std::fill(y_grid, y_grid + l_npoints, 0.0);
     std::fill(z_grid, z_grid + l_npoints, 0.0);
@@ -955,6 +958,7 @@ double SuperFunctional::compute_vv10_kernel(const std::map<std::string, SharedVe
         vv10_e += l_w[i] * l_rho[i] * vv10_beta;
         v_rho[i] = vv10_beta;
         v_gamma[i] = 0.0;
+        de_dw[i] = l_rho[i] * vv10_beta;
 
         if (l_rho[i] < l_thresh) continue;
 
@@ -1042,6 +1046,7 @@ double SuperFunctional::compute_vv10_kernel(const std::map<std::string, SharedVe
 
         // Sum it all together
         vv10_e += 0.5 * l_w[i] * l_rho[i] * phi;
+        de_dw[i] += l_rho[i] * phi;
         v_rho[i] += phi + l_rho[i] * (kappa_dn * U + w0_drho * W);
         v_gamma[i] += l_rho[i] * w0_dgamma * W;
         if (do_grad) {
