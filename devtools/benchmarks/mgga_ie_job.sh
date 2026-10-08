@@ -17,6 +17,8 @@ harness=$1
 commit=$2
 run=$3
 extra=("${@:4}")
+driver=${MGGA_DRIVER:-mgga_ie.py}
+case "$driver" in mgga_ie.py|mgga_probe.py) ;; *) echo "Invalid MGGA_DRIVER" >&2; exit 2;; esac
 root=/storage/project/r-cs207-0/awallace43
 test "$(git -C "$harness" rev-parse HEAD)" = "$commit"
 test -z "$(git -C "$harness" status --porcelain --untracked-files=no)"
@@ -54,7 +56,7 @@ child=
 terminated=0
 trap 'terminated=1; [[ -z $child ]] || kill -TERM "$child" 2>/dev/null || true' TERM
 srun /usr/bin/env TMPDIR="$TMPDIR" SCRATCH="$TMPDIR" PSI_SCRATCH="$TMPDIR" \
-    "$CONDA_PREFIX/bin/python" "$harness/devtools/benchmarks/mgga_ie.py" \
+    "$CONDA_PREFIX/bin/python" "$harness/devtools/benchmarks/$driver" \
     --output "$run/results-$SLURM_JOB_ID" --host-package "$host" --cuda-package "$cuda" \
     --cuda-lib-dir "$cuda_lib" "${extra[@]}" &
 child=$!
