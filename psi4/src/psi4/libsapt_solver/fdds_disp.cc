@@ -1014,7 +1014,7 @@ void FDDS_Dispersion::form_Y_impl(std::shared_ptr<DFHelper> exch_dfh, std::share
             too_little_memory("FDDS_Dispersion::form_Y()", "nthread * nocc * nvir of fixed storage", fixed, doubles,
                               true));
 
-    size_t kov = nvir / nocc + 1; // Ratio of v/o, take ceiling for worst case
+    size_t kov = std::max(size_t{1}, nvir / nocc) + 1; // Keep virtual blocks nonempty when v < o.
     const size_t per_occ = (kov * kov + 4 * kov + 1) * nocc * naux;
     size_t maxo = rem / per_occ;
     size_t maxv = maxo * (kov - 1); 
@@ -1125,6 +1125,7 @@ SharedMatrix FDDS_Dispersion::QR_impl(std::shared_ptr<DFHelper> dfh, std::string
     size_t nbf = primary_->nbf();
     size_t naux = auxiliary_->nbf();    
     size_t nov = nocc * nvir;
+    size_t nq = std::min(nov, naux);
 
     // => Meomry Check <= //
 
@@ -1141,7 +1142,7 @@ SharedMatrix FDDS_Dispersion::QR_impl(std::shared_ptr<DFHelper> dfh, std::string
 
     // => Target <= //
     auto Q = std::make_shared<Matrix>("Q", nov, naux);
-    auto tau = std::make_shared<Vector>("tau", naux);
+    auto tau = std::make_shared<Vector>("tau", nq);
     auto R = std::make_shared<Matrix>("R", naux, naux);
 
     // => Pointers <= //
@@ -1153,31 +1154,32 @@ SharedMatrix FDDS_Dispersion::QR_impl(std::shared_ptr<DFHelper> dfh, std::string
 
     // => Work Buffer <= //
 
-    double lwork_tmp;
-    C_DGEQRF(nov, naux, Qarp[0], nov, taup, &lwork_tmp, -1);
-    size_t lwork = (size_t) lwork_tmp;
+    double lwork_tmp, qwork_tmp;
+    if (C_DGEQRF(nov, naux, Qarp[0], nov, taup, &lwork_tmp, -1) != 0)
+        throw PSIEXCEPTION("FDDS: DGEQRF workspace query failed.");
+    if (C_DORGQR(nov, nq, nq, Qarp[0], nov, taup, &qwork_tmp, -1) != 0)
+        throw PSIEXCEPTION("FDDS: DORGQR workspace query failed.");
+    size_t lwork = (size_t) std::max(lwork_tmp, qwork_tmp);
     auto work = std::make_shared<Vector>("work", lwork);
     double* workp = work->pointer();
 
     // Householder QR
-    C_DGEQRF(nov, naux, Qarp[0], nov, taup, workp, lwork);
+    if (C_DGEQRF(nov, naux, Qarp[0], nov, taup, workp, lwork) != 0)
+        throw PSIEXCEPTION("FDDS: DGEQRF failed.");
 
-    // Save R
+    // Pad the economy factors with zeros: (ar|P) = Q R for tall and wide inputs (from 54a1077cf5).
     R->zero();
-    for (size_t row = 0; row < naux; row++)
+    for (size_t row = 0; row < nq; row++)
         for (size_t col = row; col < naux; col++) {
             Rp[row][col] = Qarp[col][row]; 
         }
 
-    // Transpose and Invert R
-    // Only transpose, invert using np.linalg.pinv on numpy side; LAPACK subroutine DTRTRI is not stable
-    // Return R as is
-
-    // Save Q as (ar|Q|Q)
-    C_DORGQR(nov, naux, naux, Qarp[0], nov, taup, workp, lwork);
+    // Return R uninverted; the driver applies its existing pseudoinverse policy.
+    if (C_DORGQR(nov, nq, nq, Qarp[0], nov, taup, workp, lwork) != 0)
+        throw PSIEXCEPTION("FDDS: DORGQR failed.");
     size_t nar, nra;
-    // Q = Qar->transpose();
-    for (size_t nQ = 0; nQ < naux; nQ++) 
+    Q->zero();
+    for (size_t nQ = 0; nQ < nq; nQ++)
         for (size_t na = 0; na < nocc; na++) 
             for (size_t nr = 0; nr < nvir; nr++) {
                 nar = na * nvir + nr;
@@ -1189,7 +1191,7 @@ SharedMatrix FDDS_Dispersion::QR_impl(std::shared_ptr<DFHelper> dfh, std::string
 
     // Save transposed Q (ra|Q|Q)
     
-    for (size_t nQ = 0; nQ < naux; nQ++) 
+    for (size_t nQ = 0; nQ < nq; nQ++)
         for (size_t na = 0; na < nocc; na++) 
             for (size_t nr = 0; nr < nvir; nr++) {
                 nar = na * nvir + nr;
