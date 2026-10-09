@@ -229,7 +229,7 @@ density-derived, :math:`(a_1, a_2)` vary with both functional and basis set.
 
 For unlisted combinations, supply :math:`(a_1, a_2)` through
 |scf__xdm_dispersion_parameters|. The full table is in
-``psi4/driver/procrouting/empirical_disp/xdm_params.py``.
+``psi4/driver/procrouting/xdm_params.py``.
 
 Counterpoise-based XDM energies and gradients are not implemented. Requests
 with ``bsse_type='cp'`` or ``'vmfc'`` raise ``NotImplementedError``, including
@@ -265,37 +265,19 @@ dispersion correction or a functional that includes VV10 nonlocal correlation.
 Ghost Atoms
 ~~~~~~~~~~~
 
-XDM excludes ghost atoms from dispersion coefficients and pairwise energies.
-Ghost atoms can contribute to the SCF density, but CP interaction energies are
-not implemented. The ``XDM C6 COEFFICIENTS`` matrix returned
-in the wavefunction has shape ``(N_real, N_real)`` where ``N_real`` is
-the number of non-ghost atoms::
-
-   mol = psi4.geometry("""
-   0 1
-   Gh(O)  -1.551  -0.115  0.000
-   Gh(H)  -1.934   0.763  0.000
-   Gh(H)  -0.600   0.041  0.000
-   --
-   0 1
-   O   1.351   0.111  0.000
-   H   1.680  -0.374 -0.759
-   H   1.680  -0.374  0.759
-   units angstrom
-   """)
-   set basis sto-3g
-   set xdm_dispersion_parameters [0.5, 1.0]
-   e, wfn = energy('b3lyp-xdm', return_wfn=True)
-   # XDM C6 matrix is (3, 3) for the 3 real atoms
-   print(wfn.variable('XDM C6 COEFFICIENTS').shape)
+XDM calculations with ghost atoms are not implemented. How the ghost
+centers' basis-function density should enter the Hirshfeld partition and the
+pair sum is not yet settled: each obvious choice biases the counterpoise
+monomer's dispersion coefficients, and the bias accumulates over the many
+dimers of a lattice-energy sum. A molecule containing ``Gh()`` atoms, or a
+request with ``bsse_type='cp'`` or ``'vmfc'``, raises ``NotImplementedError``.
 
 
 PSI Variables
 ~~~~~~~~~~~~~
 
 After an XDM-corrected computation, the following PSI variables are set. All
-matrix variables have shape ``(N_real, N_real)`` as described under **Ghost
-Atoms**.
+matrix variables have shape ``(N_atom, N_atom)``.
 
 .. table:: PSI variables set by the XDM module
 
@@ -376,15 +358,16 @@ In mixed many-body ``levels`` and CBS specifications, only XDM levels or CBS
 components use finite differences; non-XDM components retain analytic
 gradients when available. A structured or callable ``dft_functional`` whose
 dispersion metadata has ``type: "xdm"`` follows the same routing. Explicitly
-requesting an analytic derivative with ``dertype=1`` is rejected; omit
-``dertype`` or use ``dertype=0``.
+requesting an analytic derivative with ``dertype=1`` (or ``'gradient'``) is
+rejected; omit ``dertype`` or use ``dertype=0`` (or ``'energy'``).
 
-Finite-difference XDM gradients automatically use Psi4's standard ``(1, 0)``
-SCF convergence criteria. Each XDM CBS component receives the same criteria
-before its finite-difference tasks are constructed. An explicit
-module-qualified CBS stage option such as ``scf__e_convergence`` takes
-precedence; an unqualified ``e_convergence`` does not suppress the tighter
-SCF-local finite-difference criterion.
+Finite-difference XDM gradients use Psi4's standard ``(1, 0)`` SCF
+convergence criteria, exactly as any other finite-difference gradient: the
+tighter defaults apply only when the user has not set ``e_convergence`` or
+``d_convergence``, either globally or for the SCF module. Each XDM CBS
+component receives the same criteria before its finite-difference tasks are
+constructed, and a CBS stage option such as ``scf__e_convergence`` takes
+precedence.
 
 Analytic XDM gradients are *not* implemented.  Because every XDM ingredient
 --- the exchange-hole multipole moments, the Hirshfeld atomic volumes, the

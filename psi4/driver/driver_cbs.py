@@ -167,7 +167,7 @@ from .driver_cbs_helper import (  # lgtm[py/unused-import]
 from .driver_util import UpgradeHelper
 from .p4util.exceptions import ValidationError
 from .procrouting.interface_cfour import cfour_psivar_list
-from .procrouting.proc_table import procedures
+from .procrouting.xdm_params import has_xdm_suffix
 from .task_base import AtomicComputer, BaseComputer, EnergyGradientHessianWfnReturn
 
 if TYPE_CHECKING:
@@ -1576,7 +1576,7 @@ class CompositeComputer(BaseComputer):
             for delta in data['metadata'][1:]:
                 metadata_methods.update((delta["wfn"], delta["wfn_lo"]))
             for metadata_method in metadata_methods:
-                if metadata_method not in VARH and "-xdm" in metadata_method:
+                if metadata_method not in VARH and has_xdm_suffix(metadata_method):
                     VARH[metadata_method] = {metadata_method: "CURRENT ENERGY"}
 
             if data['metadata'][0]["wfn"] not in VARH.keys():
@@ -1602,13 +1602,6 @@ class CompositeComputer(BaseComputer):
                 if job["f_options"] is not False:
                     stage_keywords = dict(job["f_options"].items())
                     keywords = {**keywords, **stage_keywords}
-
-                function_kwargs = keywords.setdefault("function_kwargs", {})
-                functional = data.get("dft_functional", function_kwargs.pop("dft_functional", None))
-                job_uses_custom_functional = functional is not None and job["f_wfn"].lower() == "scf"
-                if job_uses_custom_functional:
-                    function_kwargs["dft_functional"] = functional
-
                 task_data = {
                     "molecule": self.molecule,
                     "driver": self.driver,
@@ -1616,19 +1609,14 @@ class CompositeComputer(BaseComputer):
                     "basis": job["f_basis"],
                     "keywords": keywords or {},
                 }
-                job_uses_xdm = "-xdm" in job["f_wfn"].lower()
-                job_uses_xdm = job_uses_xdm or (job_uses_custom_functional and data.get("dft_functional_uses_xdm", False))
-                if self.driver == "gradient" and job_uses_xdm:
+                if self.driver == "gradient" and has_xdm_suffix(job["f_wfn"]):
+                    # XDM has no analytic gradient; difference the XDM-corrected energy instead
                     from .driver_findif import FiniteDifferenceComputer
+                    from .procrouting.proc_table import procedures
 
                     if job["f_wfn"] in procedures["energy"]:
                         task_data["keywords"] = driver_util.apply_convergence_criterion_defaults(
-                            driver_util.negotiate_convergence_criterion(
-                                (1, 0),
-                                job["f_wfn"],
-                                return_optstash=False,
-                                scf_local_options_only=True,
-                            ),
+                            driver_util.negotiate_convergence_criterion((1, 0), job["f_wfn"], return_optstash=False),
                             task_data["keywords"])
                     task = FiniteDifferenceComputer(
                         **task_data,

@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2024 The Psi4 Developers.
+ * Copyright (c) 2007-2026 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -86,8 +86,8 @@ class PSI_API XDMDispersion {
     /// Integrate Hirshfeld-weighted atomic properties from the wavefunction.
     std::vector<AtomicData> integrate_properties(std::shared_ptr<Wavefunction> wfn);
 
-    /// Compute pairwise BJ-damped dispersion energy.
-    double pairwise_energy(std::shared_ptr<Molecule> mol, const std::vector<AtomicData>& atoms, double hf_fraction);
+    /// Compute pairwise BJ-damped dispersion energy; stores the pair matrices on wfn.
+    double pairwise_energy(std::shared_ptr<Wavefunction> wfn, const std::vector<AtomicData>& atoms, double hf_fraction);
 };
 
 }  // namespace xdm

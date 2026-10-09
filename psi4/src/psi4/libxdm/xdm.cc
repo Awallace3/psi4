@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2024 The Psi4 Developers.
+ * Copyright (c) 2007-2026 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -91,7 +91,7 @@ double XDMDispersion::compute_energy(std::shared_ptr<Wavefunction> wfn, double h
     }
     validate_xdm_hf_fraction(functional_name_, hf_fraction);
     auto atoms = integrate_properties(wfn);
-    return pairwise_energy(wfn->molecule(), atoms, hf_fraction);
+    return pairwise_energy(wfn, atoms, hf_fraction);
 }
 
 // ============================================================================
@@ -139,6 +139,12 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     for (int a = 0; a < natom; a++) {
         const double effective_z = mol->Z(a);
         const int true_z = mol->true_atomic_number(a);
+        if (effective_z == 0.0) {
+            // How ghost centers should enter the Hirshfeld promolecule and the
+            // pair sum is unresolved; see the counterpoise note in xdm.rst.
+            throw PSIEXCEPTION("XDM: ghost atoms are not supported (atom " + std::to_string(a + 1) + ", " +
+                               mol->symbol(a) + "). Counterpoise-corrected XDM is not implemented.");
+        }
         if (effective_z > 0.0 && std::abs(effective_z - true_z) > 1.0e-8) {
             throw PSIEXCEPTION(
                 "XDM: effective-core potentials are not supported because all-electron densities are required (atom " +
@@ -408,8 +414,9 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
 // Pairwise BJ-damped dispersion energy
 // ============================================================================
 
-double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::vector<AtomicData>& atoms,
+double XDMDispersion::pairwise_energy(std::shared_ptr<Wavefunction> wfn, const std::vector<AtomicData>& atoms,
                                       double hf_fraction) {
+    auto mol = wfn->molecule();
     int natom = mol->natom();
 
     std::vector<int> real_atoms;
@@ -518,12 +525,11 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
         }
     }
 
-    // Store coefficient matrices as QC variables
-    Process::environment.arrays["XDM C6 COEFFICIENTS"] = c6_mat;
-    Process::environment.arrays["XDM C8 COEFFICIENTS"] = c8_mat;
-    Process::environment.arrays["XDM C10 COEFFICIENTS"] = c10_mat;
-    Process::environment.arrays["XDM RC COEFFICIENTS"] = rc_mat;
-    Process::environment.arrays["XDM PAIRWISE ENERGY"] = e_disp_pairs;
+    wfn->set_array_variable("XDM C6 COEFFICIENTS", c6_mat);
+    wfn->set_array_variable("XDM C8 COEFFICIENTS", c8_mat);
+    wfn->set_array_variable("XDM C10 COEFFICIENTS", c10_mat);
+    wfn->set_array_variable("XDM RC COEFFICIENTS", rc_mat);
+    wfn->set_array_variable("XDM PAIRWISE ENERGY", e_disp_pairs);
 
     outfile->Printf("\n");
     outfile->Printf("  XDM Dispersion Energy: %20.12f [Eh]\n\n", e_disp);

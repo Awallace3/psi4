@@ -35,6 +35,7 @@ import re
 from psi4 import core
 
 from ...p4util.exceptions import ValidationError
+from ..xdm_params import is_xdm_dispersion
 from . import dft_builder
 
 
@@ -147,7 +148,7 @@ def build_superfunctional(name, restricted, npoints=None, deriv=1):
     if (core.has_option_changed("SCF", "NL_DISPERSION_PARAMETERS") and core.has_option_changed("SCF", "DFT_VV10_B")):
         raise ValidationError("SCF: Decide between NL_DISPERSION_PARAMETERS and DFT_VV10_B !!")
 
-    if isinstance(sup[1], dict) and sup[1].get("type") == "xdm" and sup[0].vv10_b() > 0.0:
+    if is_xdm_dispersion(sup[1]) and sup[0].vv10_b() > 0.0:
         raise ValidationError("SCF: XDM cannot be combined with a functional that includes VV10 nonlocal correlation.")
 
     # Check SCF_TYPE

@@ -57,11 +57,11 @@ units angstrom
 
 @pytest.mark.xdm
 def test_h2o_ghosts():
-    """Ensure XDM pairwise outputs size correctly with and without ghosts.
+    """Ghost atoms are rejected; a plain monomer sizes the pairwise outputs by its atoms.
 
-    Runs a ghost-containing fragment calculation and a normal water monomer, then
-    confirms the XDM C6 matrix shape reflects only real atoms. Also confirms
-    the XDM energy matches the reference
+    How ghost centers should enter the Hirshfeld promolecule and the pair sum
+    is unresolved, so XDM refuses Gh() atoms both at planning time and in the
+    C++ module (for routes that bypass the task planner).
     """
 
     m = psi4.geometry("""
@@ -78,28 +78,17 @@ units angstrom
     """)
     psi4.set_options({
         "basis": "sto-3g",
-        "DFT_SPHERICAL_POINTS": 590,
-        "DFT_RADIAL_POINTS": 99,
         "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
     })
-    e_m, wfn_m = psi4.energy("b3lyp-xdm", molecule=m, return_wfn=True)
-    disp_corr = wfn_m.variables()["DISPERSION CORRECTION ENERGY"]
-    ref_disp_corr = -0.00474203021866958
-    assert np.isclose(disp_corr, ref_disp_corr,
-                      atol=1e-6), (f"Expected dispersion correction {ref_disp_corr}, got {disp_corr}")
-    assert wfn_m.variables()["XDM C6 COEFFICIENTS"].shape == (3, 3)
-    for variable in (
-            "XDM C6 COEFFICIENTS",
-            "XDM C8 COEFFICIENTS",
-            "XDM C10 COEFFICIENTS",
-            "XDM RC COEFFICIENTS",
-    ):
-        coefficients = wfn_m.variables()[variable].np
-        assert np.all(np.isfinite(coefficients))
-        assert np.all(np.diag(coefficients) > 0.0)
-    pairwise_energy = wfn_m.variables()["XDM PAIRWISE ENERGY"].np
-    assert np.allclose(np.diag(pairwise_energy), 0.0, atol=0.0)
-    assert np.isclose(pairwise_energy.sum(), disp_corr, atol=1.0e-12)
+    with pytest.raises(NotImplementedError, match="XDM with ghost atoms is not implemented"):
+        psi4.energy("b3lyp-xdm", molecule=m)
+    with pytest.raises(NotImplementedError, match="XDM with ghost atoms is not implemented"):
+        psi4.gradient("b3lyp-xdm", molecule=m)
+    # The C++ module refuses ghosts too, for callers that bypass the task planner.
+    _, wfn = psi4.energy("b3lyp", molecule=m, return_wfn=True)
+    with pytest.raises(RuntimeError, match="XDM: ghost atoms are not supported"):
+        psi4.core.XDMDispersion.build("b3lyp", 0.5, 1.0).compute_energy(wfn, 0.2)
+
     m = psi4.geometry("""
 0 1
 O    1.35062500   0.11146900   0.00000000
@@ -262,23 +251,34 @@ def test_xdm_rejects_unknown_parameter_keys():
 
 
 @pytest.mark.xdm
-def test_xdm_callable_basis_guess_skips_dispersion():
+def test_xdm_dict_basis_guess_skips_dispersion():
+    """The basis-guess castup SCF runs without XDM; only the final SCF gets the correction."""
     mol = psi4.geometry("0 1\nH 0 0 0\nH 0 0 1.5\nunits angstrom")
     psi4.set_options({
         "basis": "aug-cc-pvdz",
         "BASIS_GUESS": "sto-3g",
         "DFT_SPHERICAL_POINTS": 110,
         "DFT_RADIAL_POINTS": 50,
+        "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
     })
 
-    def callable_xdm(name, npoints, deriv, restricted):
-        superfunctional = psi4.core.SuperFunctional.XC_build("XC_HYB_GGA_XC_B3LYP", restricted)
-        superfunctional.set_name("B3LYP-XDM")
-        return superfunctional, {"type": "xdm", "params": {"xdm_model": "kb49"}}
+    dict_xdm = {
+        "name": "custom-b3lyp-xdm",
+        "xc_functionals": {
+            "HYB_GGA_XC_B3LYP": {}
+        },
+        "dispersion": {
+            "type": "xdm",
+            "params": {
+                "xdm_model": "kb49"
+            }
+        },
+    }
 
-    energy = psi4.energy("scf", molecule=mol, dft_functional=callable_xdm)
+    energy, wfn = psi4.energy("scf", molecule=mol, dft_functional=dict_xdm, return_wfn=True)
     psi4.set_options({"BASIS_GUESS": False})
     assert np.isfinite(energy)
+    assert wfn.variable("DISPERSION CORRECTION ENERGY") < 0.0
 
 
 @pytest.mark.xdm
@@ -594,7 +594,7 @@ units angstrom
 
 @pytest.mark.xdm
 def test_xdm_cbs_components_use_findif_convergence():
-    """CBS XDM components use the same tightened convergence criteria as direct finite differences."""
+    """CBS XDM components use the same convergence criteria as direct finite differences."""
 
     mol = psi4.geometry("""
 0 1
@@ -634,13 +634,72 @@ symmetry c1
     xdm_tasks = [task for task in cbs_plan.task_list if task.method.lower() == "b3lyp-xdm"]
     assert xdm_tasks and all(isinstance(task, FiniteDifferenceComputer) for task in xdm_tasks)
     assert any(task.method.lower() == "mp2" and isinstance(task, AtomicComputer) for task in cbs_plan.task_list)
+    # The user's global e_convergence governs the SCF too; only the unset d_convergence is tightened.
     assert direct_plan.keywords["E_CONVERGENCE"] == pytest.approx(1.0e-6)
-    assert direct_plan.keywords["SCF__E_CONVERGENCE"] == pytest.approx(1.0e-8)
+    assert "SCF__E_CONVERGENCE" not in direct_plan.keywords
     assert direct_plan.keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
     for task in xdm_tasks:
         assert task.keywords["E_CONVERGENCE"] == pytest.approx(1.0e-6)
-        assert task.keywords["SCF__E_CONVERGENCE"] == direct_plan.keywords["SCF__E_CONVERGENCE"]
+        assert "SCF__E_CONVERGENCE" not in task.keywords
         assert task.keywords["SCF__D_CONVERGENCE"] == direct_plan.keywords["SCF__D_CONVERGENCE"]
+
+
+@pytest.mark.xdm
+@pytest.mark.parametrize("method", ["scf", "b3lyp-xdm"])
+def test_findif_gradient_respects_global_convergence(method):
+    """A global convergence setting is never overridden by the finite-difference defaults, XDM or not."""
+
+    mol = psi4.geometry("""
+0 1
+O
+H 1 0.96
+H 1 0.96 2 104.5
+symmetry c1
+    """)
+    psi4.set_options({
+        "basis": "sto-3g",
+        "d_convergence": 1.0e-12,
+        "e_convergence": 1.0e-4,
+        "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
+    })
+
+    from psi4.driver.driver_findif import FiniteDifferenceComputer
+    from psi4.driver.task_planner import task_planner
+
+    findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
+    plan = task_planner("gradient", method, mol, dertype=0, **findif_kwargs)
+    assert isinstance(plan, FiniteDifferenceComputer)
+    assert "SCF__D_CONVERGENCE" not in plan.keywords
+    assert "SCF__E_CONVERGENCE" not in plan.keywords
+    assert plan.keywords["D_CONVERGENCE"] == pytest.approx(1.0e-12)
+    assert plan.keywords["E_CONVERGENCE"] == pytest.approx(1.0e-4)
+
+
+@pytest.mark.xdm
+def test_xdm_gradient_dertype_spellings():
+    """Energy-level dertype spellings select finite differences; analytic spellings are refused."""
+
+    mol = psi4.geometry("""
+0 1
+O
+H 1 0.96
+H 1 0.96 2 104.5
+symmetry c1
+    """)
+    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
+
+    from psi4.driver.driver_findif import FiniteDifferenceComputer
+    from psi4.driver.task_planner import task_planner
+
+    findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
+    for dertype in (None, 0, "energy", "ENERGY", "none"):
+        plan = task_planner("gradient", "b3lyp-xdm", mol, dertype=dertype, **findif_kwargs)
+        assert isinstance(plan, FiniteDifferenceComputer), dertype
+    for dertype in (1, "gradient", "first"):
+        with pytest.raises(NotImplementedError, match="Analytic XDM gradients are not implemented"):
+            task_planner("gradient", "b3lyp-xdm", mol, dertype=dertype, **findif_kwargs)
+    with pytest.raises(psi4.ValidationError, match="dertype"):
+        task_planner("gradient", "b3lyp-xdm", mol, dertype="bogus", **findif_kwargs)
 
 
 @pytest.mark.xdm
@@ -753,16 +812,9 @@ symmetry c1
         )
 
 
-def test_empirical_dispersion_compatibility_import():
-    from psi4.driver.procrouting.empirical_dispersion import EmpiricalDispersion as compatibility_class
-    from psi4.driver.procrouting.empirical_disp.empirical_dispersion import EmpiricalDispersion
-
-    assert compatibility_class is EmpiricalDispersion
-
-
 @pytest.mark.xdm
 def test_xdm_uses_wavefunction_exchange_fraction():
-    from psi4.driver.procrouting.empirical_disp.empirical_dispersion import XDMDispersionFunctor
+    from psi4.driver.procrouting.empirical_dispersion import XDMDispersionFunctor
 
     class Functional:
 
@@ -777,8 +829,11 @@ def test_xdm_uses_wavefunction_exchange_fraction():
         def functional(self):
             return Functional()
 
-        def set_array_variable(self, name, value):
+        def set_variable(self, name, value):
             pass
+
+        def array_variable(self, name):
+            return psi4.core.Matrix(1, 1)
 
     class Recorder:
 
@@ -806,9 +861,9 @@ def test_xdm_runtime_exchange_changes_free_volume():
     xdm = psi4.core.XDMDispersion.build("b3lyp", 0.5, 1.0)
 
     xdm.compute_energy(wfn, 0.20)
-    standard_c6 = psi4.core.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
+    standard_c6 = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
     xdm.compute_energy(wfn, 0.50)
-    modified_c6 = psi4.core.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
+    modified_c6 = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
 
     assert not np.isclose(standard_c6, modified_c6, rtol=1.0e-10, atol=1.0e-12)
 
@@ -907,7 +962,7 @@ def test_xdm_public_api_validation():
 
 @pytest.mark.xdm
 def test_xdm_rejects_partial_explicit_parameters():
-    from psi4.driver.procrouting.empirical_disp.empirical_dispersion import XDMDispersionFunctor
+    from psi4.driver.procrouting.empirical_dispersion import XDMDispersionFunctor
 
     with pytest.raises(psi4.p4util.ValidationError, match="a1 and a2_ang must be provided together"):
         XDMDispersionFunctor("b3lyp", basis_name="aug-cc-pvdz", a1=9.0)
@@ -998,7 +1053,7 @@ units angstrom
         psi4.properties("b3lyp-xdm", properties=["dipole"], molecule=mol)
 
     # No internal route may use an incomplete analytic XDM derivative.
-    from psi4.driver.procrouting.empirical_disp.empirical_dispersion import XDMDispersionFunctor
+    from psi4.driver.procrouting.empirical_dispersion import XDMDispersionFunctor
 
     functor = XDMDispersionFunctor(functional_name="b3lyp", a1=0.5, a2_ang=1.0)
     with pytest.raises(NotImplementedError, match="Analytic XDM gradients are not implemented"):

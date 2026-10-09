@@ -33,8 +33,10 @@ from qcelemental.util import which
 
 from . import interface_cfour, proc, proc_data, sapt
 from .dft import build_superfunctional_from_dictionary, functional_available, functionals
+from .xdm_params import is_xdm_dispersion
 
 # never import wrappers or aliases into this file
+
 
 # ADVICE upon adding to the `procedures` dict:
 # * (1) add entry to `procedures` below. See ADVICE in psi4/driver/procrouting/proc.py on run_ vs. select_
@@ -251,18 +253,12 @@ for key in functionals:
 
 # Will complete modelchem spec with basis='(auto)' for following methods
 integrated_basis_methods = [
-    'g2',
-    'gaussian-2',
-    'hf3c',
-    'hf-3c',
-    'pbeh3c',
-    'pbeh-3c',
-    'b973c',
-    'b97-3c',
-    'r2scan3c',
-    'r2scan-3c',
-    'wb97x3c',
-    'wb97x-3c',
+    'g2', 'gaussian-2',
+    'hf3c', 'hf-3c',
+    'pbeh3c', 'pbeh-3c',
+    'b973c', 'b97-3c',
+    'r2scan3c', 'r2scan-3c',
+    'wb97x3c', 'wb97x-3c',
     'sns-mp2',
 ]
 
@@ -295,7 +291,7 @@ for key in functionals:
     # XDM registers for energy only. Every XDM ingredient is a functional of the
     # converged density, so there is no analytic derivative; leaving gradient/hessian
     # unregistered makes the driver negotiate a finite difference of XDM energies.
-    if functionals[key].get("dispersion", {}).get("type") == "xdm":
+    if is_xdm_dispersion(functionals[key].get("dispersion")):
         continue
 
     ssuper = build_superfunctional_from_dictionary(functionals[key], 1, 1, True)[0]
@@ -312,7 +308,7 @@ for key in functionals:
         procedures['gradient'][key] = proc.select_scf_gradient
 
     # Hessians
-    if not ssuper.is_gga():  # N.B. this eliminates both GGA and m-GGA, as the latter contains GGA terms
+    if not ssuper.is_gga(): # N.B. this eliminates both GGA and m-GGA, as the latter contains GGA terms
         procedures['hessian'][key] = proc.run_scf_hessian
 
 # Integrate CFOUR with driver routines
