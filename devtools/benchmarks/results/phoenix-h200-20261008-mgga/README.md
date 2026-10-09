@@ -18,7 +18,7 @@ All r²SCAN IEs pass either threshold.
 | M06 | 6.07148141e-6 | 0.00380991211 | Pass at 1e-5 |
 | r²SCAN | 8.34184e-7 (rounded) | 0.000523458145 | Pass at 1e-5 |
 | PW6B95 | unavailable | unavailable | 12 incomplete comparisons; CPU ghost failures |
-| ωB97M-V | pending focused campaign | pending | Added to default functional list; VV10 retained |
+| ωB97M-V | 1.17121814e-7 (water preflight only) | 0.00007349 (rounded) | Water 4/4 complete pass; final three-system campaign pending |
 
 GPU-JK-only maximum |ΔIE| is 7.35440153e-10 Eh and maximum underlying
 |ΔE| is 1.15437615e-9 Eh. Full cuEST XC maximum underlying |ΔE| is
@@ -71,6 +71,30 @@ include SCF setup/finalization, exclude Python startup/import and scheduler
 wait, and can include different iteration counts.
 PW6B95 has no defensible complete-IE speedup without matched converged references.
 
+## ωB97M-V water preflight
+
+Job **13904944** completed (job/batch/srun exit 0; elapsed 2:49) after
+explicit user-approved in-place move from embers to inferno.
+All 18 workers passed and final staged provenance was verified.
+These measurements are distinct from the M06-family/r²SCAN ranges above.
+
+| Build | Full-XC ΔIE / Eh | CPU CP / s | GPU CP / s | Full-XC CP speedup |
+|---|---:|---:|---:|---:|
+| host LibXC | −1.17115491e-7 | 25.6448 | 4.8413 | **5.30×** |
+| historical CUDA LibXC | −1.17121814e-7 | 29.9292 | 4.9040 | **6.10×** |
+
+All four water comparisons (including GPU-JK-only) pass at 1e-5 Eh;
+GPU-JK-only max |ΔIE| is 1.17986914e-7 Eh, not the near-roundoff values
+seen for the other three functionals. The returned functional is MGGA/LRC/VV10,
+ω=0.3, with finite nonzero VV10 in every fragment/route.
+
+The final follow-up makes self-consistent VV10 explicit (`DFT_VV10_POSTSCF=False`,
+50×146 VV10 grid, rho cutoff 1e-8), records α/β/b/C, and checks the returned
+SCF energy includes the five components including VV10. Water will be repeated
+alongside benzene and peptide under that final harness pin; the preflight is
+not silently spliced into a differently declared final protocol.
+Sixteen local unit tests, Python compile and shell syntax checks pass.
+
 ## Provenance
 
 Original matrix: job 13884503, interrupted after 184 workers (160 success,
@@ -83,6 +107,6 @@ document reproducible original-protocol failures, not an impossibility theorem.
 
 Archived raw records, independent replay and JSON/Markdown/HTML reports:
 `~/docs/saptdft/cuest/mgga-ie/` on the experiment workstation.
-The ωB97M-V follow-up will record staged driver/core/library/basis hashes,
+The ωB97M-V follow-up records staged driver/core/library/basis hashes,
 harness commit, geometry hashes, GPU identity, all worker exit codes, both IE
 thresholds, component energies, and dimer/complete-IE speedups.

@@ -28,7 +28,9 @@ def options(basis, route):
                 cuest_xc=route == "gpu-xc", cuest_mixed_precision=False,
                 cuest_sad=False, guess="sad", e_convergence=11, d_convergence=10,
                 maxiter=200, fail_on_maxiter=True, dft_radial_points=99,
-                dft_spherical_points=590, dft_pruning_scheme="robust")
+                dft_spherical_points=590, dft_pruning_scheme="robust",
+                dft_vv10_postscf=False, dft_vv10_radial_points=50,
+                dft_vv10_spherical_points=146, dft_vv10_rho_cutoff=1e-8)
 
 
 def delta(energies):
@@ -40,16 +42,34 @@ def validate_functional(wfn, name):
     functional = wfn.functional()
     metadata = dict(name=functional.name(), meta=functional.is_meta(),
                     needs_vv10=functional.needs_vv10(), x_lrc=functional.is_x_lrc(),
-                    x_omega=functional.x_omega())
+                    x_omega=functional.x_omega(), x_alpha=functional.x_alpha(),
+                    x_beta=functional.x_beta(), needs_grac=functional.needs_grac())
     assert metadata["meta"], "Not a meta-GGA"
     if metadata["needs_vv10"]:
         metadata["vv10_energy_hartree"] = float(wfn.variable("DFT VV10 ENERGY"))
+        metadata.update(vv10_b=functional.vv10_b(), vv10_c=functional.vv10_c())
         assert math.isfinite(metadata["vv10_energy_hartree"])
     if name.lower() == "wb97m-v":
         assert metadata["needs_vv10"] and metadata["x_lrc"], "wB97M-V must retain VV10 and range separation"
         assert metadata["x_omega"] > 0
         assert abs(metadata["vv10_energy_hartree"]) > 1e-14, "VV10 energy was not included"
+        assert not metadata["needs_grac"]
+        for key, expected in dict(x_omega=.3, x_alpha=.15, x_beta=.85,
+                                  vv10_b=6., vv10_c=.01).items():
+            assert math.isclose(metadata[key], expected, rel_tol=0, abs_tol=1e-10), (key, metadata)
     return metadata
+
+
+def validate_energy_components(wfn, energy):
+    components = {key: float(wfn.variable(key)) for key in (
+        "NUCLEAR REPULSION ENERGY", "ONE-ELECTRON ENERGY", "TWO-ELECTRON ENERGY",
+        "DFT XC ENERGY", "DFT VV10 ENERGY")}
+    assert all(math.isfinite(v) for v in components.values())
+    assert math.isclose(energy, math.fsum(components.values()), rel_tol=0, abs_tol=1e-9), \
+        "Returned energy does not include all SCF components, including VV10"
+    assert math.isclose(energy, float(wfn.variable("DFT FUNCTIONAL TOTAL ENERGY")),
+                        rel_tol=0, abs_tol=1e-9)
+    return components
 
 
 def worker(a):
@@ -72,6 +92,11 @@ def worker(a):
             # Older CUDA build predates this switch; its atomic SAD is CPU-only.
             record["options"].pop("cuest_sad")
         psi4.set_options(record["options"])
+        record["vv10_runtime_options"] = {
+            key: psi4.core.get_option("SCF", key) for key in (
+                "DFT_VV10_POSTSCF", "DFT_VV10_RADIAL_POINTS",
+                "DFT_VV10_SPHERICAL_POINTS", "DFT_VV10_RHO_CUTOFF")}
+        assert record["vv10_runtime_options"]["DFT_VV10_POSTSCF"] is False
         mol = psi4.geometry(record["geometry"])
         assert mol.nfragments() == 2
         if a.fragment == "A":
@@ -87,6 +112,7 @@ def worker(a):
                       nbf=wfn.basisset().nbf(), meta=wfn.functional().is_meta(),
                       timer_records=psi4.core.get_timer_records())
         record["functional_metadata"] = validate_functional(wfn, a.functional)
+        record["energy_components_hartree"] = validate_energy_components(wfn, float(energy))
         if wfn.has_variable("SCF ITERATIONS"):
             record["scf_iterations"] = int(wfn.variable("SCF ITERATIONS"))
         assert math.isfinite(energy)

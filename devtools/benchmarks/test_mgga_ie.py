@@ -1,11 +1,13 @@
 import unittest
-from mgga_ie import delta, options, summarize, process_result, FRAGMENTS, FUNCTIONALS, validate_functional
+from mgga_ie import (delta, options, summarize, process_result, FRAGMENTS, FUNCTIONALS,
+                     validate_functional, validate_energy_components)
 
 
 class Tests(unittest.TestCase):
     def test_wb97mv_is_in_default_matrix(self):
         self.assertIn("wb97m-v", FUNCTIONALS)
         self.assertNotIn("dft_vv10_b", options("aug-cc-pvdz", "gpu-xc"))
+        self.assertFalse(options("aug-cc-pvdz", "cpu")["dft_vv10_postscf"])
 
     def test_wb97mv_requires_vv10_and_range_separation(self):
         class Functional:
@@ -14,6 +16,11 @@ class Tests(unittest.TestCase):
             def needs_vv10(self): return self.vv10
             def is_x_lrc(self): return self.lrc
             def x_omega(self): return .3
+            def x_alpha(self): return .15
+            def x_beta(self): return .85
+            def vv10_b(self): return 6.
+            def vv10_c(self): return .01
+            def needs_grac(self): return False
             vv10, lrc = True, True
         class Wavefunction:
             def functional(self): return f
@@ -27,6 +34,16 @@ class Tests(unittest.TestCase):
             f.vv10, f.lrc = vv10, lrc
             with self.assertRaises(AssertionError):
                 validate_functional(Wavefunction(), "wb97m-v")
+
+    def test_total_energy_requires_vv10_component(self):
+        parts = {"NUCLEAR REPULSION ENERGY": 2., "ONE-ELECTRON ENERGY": -30.,
+                 "TWO-ELECTRON ENERGY": 10., "DFT XC ENERGY": -2.02,
+                 "DFT VV10 ENERGY": .02, "DFT FUNCTIONAL TOTAL ENERGY": -20.}
+        class Wavefunction:
+            def variable(self, key): return parts[key]
+        self.assertEqual(validate_energy_components(Wavefunction(), -20.)["DFT VV10 ENERGY"], .02)
+        with self.assertRaisesRegex(AssertionError, "including VV10"):
+            validate_energy_components(Wavefunction(), -20.02)
 
     def test_cp_speedup_uses_all_three_calculations(self):
         results = {}
