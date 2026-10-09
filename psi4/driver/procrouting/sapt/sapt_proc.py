@@ -330,6 +330,18 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         raise ValidationError("SAPT_DFT_GRAC_SHIFT_ONLY=true contradicts SAPT_DFT_GRAC_COMPUTE=NONE.")
     if shift_only and not do_dft:
         raise ValidationError("SAPT_DFT_GRAC_SHIFT_ONLY requires a non-HF SAPT_DFT_FUNCTIONAL.")
+    do_ddft_gradient = core.get_option("SAPT", "SAPT_DFT_DDFT_GRADIENT")
+    if do_ddft_gradient and not (do_delta_dft and do_dft):
+        raise ValidationError(
+            "SAPT_DFT_DDFT_GRADIENT requires the delta DFT dimer SCF: set SAPT_DFT_DO_DDFT "
+            "and a non-HF SAPT_DFT_FUNCTIONAL."
+        )
+    if do_ddft_gradient and functional_needs_vv10:
+        # Fail before any SCF: RV::compute_gradient throws for VV10 functionals.
+        raise ValidationError(
+            f"SAPT_DFT_DDFT_GRADIENT: Psi4 has no analytic VV10 gradient, so the "
+            f"{sapt_dft_functional} dimer gradient is unavailable."
+        )
     if not do_dft:
         do_mon_grac_shift_A = do_mon_grac_shift_B = False
 
@@ -880,6 +892,20 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         )
         data["DFT DIMER ENERGY"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Dimer DFT")
+
+        if do_ddft_gradient:
+            # Analytic gradient of the delta DFT dimer energy, at the same
+            # GRAC-free options as its SCF.
+            core.timer_on("SAPT(DFT):Dimer DFT Gradient")
+            if hasattr(dft_wfn_dimer, "_disp_functor"):
+                disp_grad = dft_wfn_dimer._disp_functor.compute_gradient(dft_wfn_dimer.molecule(), dft_wfn_dimer)
+                dft_wfn_dimer.set_variable("-D Gradient", disp_grad)
+            dft_dimer_grad = core.scfgrad(dft_wfn_dimer)
+            dft_wfn_dimer.set_gradient(dft_dimer_grad)
+            for wfn in [dft_wfn_dimer, dimer_wfn]:
+                wfn.set_variable("SAPT(DFT) DFT DIMER GRADIENT", dft_dimer_grad)  # P::e SAPT
+            core.set_variable("SAPT(DFT) DFT DIMER GRADIENT", dft_dimer_grad)
+            core.timer_off("SAPT(DFT):Dimer DFT Gradient")
 
         core.timer_on("SAPT(DFT):Monomer A DFT")
         run_scf(

@@ -2258,6 +2258,66 @@ symmetry c1
     assert abs(disp[True] - disp[False]) > 1e-3 * abs(disp[False]), disp
 
 
+@pytest.mark.saptdft
+def test_saptdft_ddft_gradient():
+    """
+    SAPT_DFT_DDFT_GRADIENT stores the analytic gradient of the delta DFT dimer
+    energy, which must match a plain dimer DFT gradient in the same basis.
+    """
+    molecule = psi4.geometry(
+        _sapt_testing_mols["neutral_water_dimer"]
+        + """
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    options = {
+        "basis": "cc-pvdz",
+        "scf_type": "df",
+        "e_convergence": 1e-10,
+        "d_convergence": 1e-10,
+    }
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options(options)
+    reference = psi4.gradient("pbe0", molecule=molecule)
+
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options(
+        {
+            **options,
+            "sapt_dft_functional": "pbe0",
+            "sapt_dft_grac_shift_a": 0.1307,
+            "sapt_dft_grac_shift_b": 0.1307,
+            "sapt_dft_do_ddft": True,
+            "sapt_dft_ddft_gradient": True,
+        }
+    )
+    _, wfn = psi4.energy("sapt(dft)", molecule=molecule, return_wfn=True)
+    grad = wfn.variable("SAPT(DFT) DFT DIMER GRADIENT")
+    assert compare_values(reference, grad, 6, "delta DFT dimer gradient")
+    assert compare_values(grad, psi4.core.variable("SAPT(DFT) DFT DIMER GRADIENT"), 12, "core gradient")
+
+
+@pytest.mark.saptdft
+def test_saptdft_ddft_gradient_rejects_vv10():
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.geometry(_sapt_testing_mols["neutral_water_dimer"])
+    psi4.set_options(
+        {
+            "basis": "cc-pvdz",
+            "sapt_dft_functional": "wb97m-v",
+            "sapt_dft_grac_shift_a": 0.136,
+            "sapt_dft_grac_shift_b": 0.136,
+            "sapt_dft_ddft_gradient": True,
+        }
+    )
+    with pytest.raises(psi4.ValidationError, match="no analytic VV10 gradient"):
+        psi4.energy("dft-vv10(sapt)")
+
 if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(12)
