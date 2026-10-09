@@ -9,6 +9,7 @@ add_subdirectory(solvent)
 
 list(APPEND sources
   empirical_dispersion
+  xdm_params
   interface_cfour
   proc_table
   roa

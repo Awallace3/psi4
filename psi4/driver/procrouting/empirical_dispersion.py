@@ -27,7 +27,7 @@
 #
 
 import collections
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import qcengine as qcng
@@ -37,6 +37,7 @@ from psi4 import core
 
 from .. import p4util
 from ..p4util.exceptions import ValidationError, UpgradeHelper
+from .xdm_params import available_xdm_bases, get_xdm_bj_params, normalize_xdm_model
 
 _engine_can_do = collections.OrderedDict([
     # engine order establishes default for each disp
@@ -175,6 +176,9 @@ class EmpiricalDispersion():
         Whether to request atomic pairwise analysis.
 
     """
+    #: Geometry-only correction, evaluated before the SCF (cf. XDMDispersionFunctor).
+    post_scf = False
+
     def __init__(self, *, name_hint: str = None, level_hint: str = None, param_tweaks: Union[Dict, List] = None, engine: str = None, gcp_engine: str = None, save_pairwise_disp: bool = False):
         from .dft import dashcoeff_supplement
         self.dashcoeff_supplement = dashcoeff_supplement
@@ -430,3 +434,155 @@ class EmpiricalDispersion():
             wfn.set_variable('DISPERSION CORRECTION HESSIAN', H)
         optstash.restore()
         return core.Matrix.from_array(H)
+
+
+class XDMDispersionFunctor():
+    """Lightweight wrapper for XDM (exchange-hole dipole moment) dispersion correction.
+
+    Unlike other empirical dispersion corrections (D2, D3, D4), XDM requires a
+    converged wavefunction (electron density), so it must be computed post-SCF.
+
+    Attributes
+    ----------
+    engine : str
+        Always 'xdm'.
+    fctldash : str
+        Functional name with -XDM(<model>) suffix.
+    dashlevel : str
+        Always 'xdm'.
+
+    Parameters
+    ----------
+    functional_name
+        Name of the DFT functional (used for free-atom volume lookup).
+    basis_name
+        Name of the basis set (used for BJ parameter lookup together with functional).
+    a1
+        Explicit a1 BJ damping parameter (overrides lookup).
+    a2_ang
+        Explicit a2 BJ damping parameter in angstrom (overrides lookup).
+    model
+        XDM damping-parameter model label (``kb49`` or ``los-ii``).
+    expected_x_omega
+        Range-separation parameter of the fitted reference functional, or None if
+        that functional is not range-separated. A wavefunction whose functional
+        differs is rejected in :py:meth:`compute_energy`.
+    expected_x_beta
+        Long-range exact-exchange fraction of the fitted reference functional,
+        checked like `expected_x_omega`.
+
+    """
+
+    #: Density-dependent correction, evaluated on the converged SCF density.
+    post_scf = True
+
+    def __init__(self,
+                 functional_name: str,
+                 basis_name: Optional[str] = None,
+                 a1: Optional[float] = None,
+                 a2_ang: Optional[float] = None,
+                 model: str = "kb49",
+                 expected_x_omega: Optional[float] = None,
+                 expected_x_beta: Optional[float] = None):
+        self._xdm_model = normalize_xdm_model(model)
+        self.engine = "xdm"
+        self.fctldash = f"{functional_name}-xdm({self._xdm_model})"
+        self.dashlevel = f"xdm({self._xdm_model})"
+        self._functional_name = functional_name
+        self._basis_name = basis_name
+        self._a1 = a1
+        self._a2_ang = a2_ang
+        self._expected_x_omega = expected_x_omega
+        self._expected_x_beta = expected_x_beta
+
+        if (a1 is None) != (a2_ang is None):
+            raise ValidationError("XDM explicit damping parameters a1 and a2_ang must be provided together.")
+
+        if a1 is not None and a2_ang is not None:
+            self.xdm = core.XDMDispersion.build(functional_name, a1, a2_ang)
+            return
+
+        if basis_name is None:
+            raise ValidationError("XDM requires a basis name or explicit a1, a2 parameters.")
+
+        try:
+            fitted_a1, fitted_a2_ang = get_xdm_bj_params(functional_name, basis_name, model=self._xdm_model)
+        except KeyError:
+            lookup_key = f"{functional_name.lower()}/{basis_name.lower()}"
+            fitted_bases = available_xdm_bases(functional_name, self._xdm_model)
+            hint = (f" Bases fitted for {functional_name.lower()} with model {self._xdm_model}: {fitted_bases}."
+                    if fitted_bases else
+                    f" No basis is fitted for {functional_name.lower()} with model {self._xdm_model}.")
+            raise ValidationError("XDMDispersion: No fitted BJ parameters for "
+                                  f"{lookup_key} with model {self._xdm_model}. "
+                                  "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS." + hint)
+
+        self.xdm = core.XDMDispersion.build(functional_name, fitted_a1, fitted_a2_ang)
+
+    def print_out(self):
+        """Format XDM dispersion parameters for output file."""
+        text = []
+        text.append("   => {}: XDM Dispersion <=".format(self.fctldash.upper()))
+        text.append('')
+        text.append('    Exchange-Hole Dipole Moment (XDM) with Becke-Johnson Damping')
+        text.append('    A. D. Becke and E. R. Johnson, J. Chem. Phys. 127, 154108 (2007)')
+        text.append('')
+        text.append("    %6s = %14.6f" % ("a1", self.xdm.a1()))
+        text.append("    %6s = %14.6f [bohr]" % ("a2", self.xdm.a2()))
+        text.append("    NOTE: XDM requires a converged density and is computed post-SCF.")
+        text.append('\n')
+        core.print_out('\n'.join(text))
+
+    def compute_energy(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> float:
+        """Compute XDM dispersion energy from a converged wavefunction.
+
+        Parameters
+        ----------
+        molecule
+            System (unused for XDM, but kept for API compatibility).
+        wfn
+            Converged wavefunction with density matrix. Required.
+
+        Returns
+        -------
+        float
+            Dispersion energy [Eh].
+
+        """
+        if wfn is None:
+            raise ValidationError("XDM dispersion requires a converged wavefunction (density matrix).")
+
+        functional = wfn.functional()
+        if functional is None:
+            raise ValidationError("XDM dispersion requires a DFT wavefunction with functional metadata.")
+        range_mismatch = (self._expected_x_omega is not None and abs(functional.x_omega() - self._expected_x_omega)
+                          >= 1.0e-10) or (self._expected_x_beta is not None
+                                          and abs(functional.x_beta() - self._expected_x_beta) >= 1.0e-10)
+        if range_mismatch or (self._expected_x_omega is None and functional.is_x_lrc()):
+            raise ValidationError(
+                "XDM does not support modified range-separation parameters or unknown range-separated functionals.")
+        # Also stores the XDM coefficient and pair-energy arrays on wfn
+        ene = self.xdm.compute_energy(wfn, functional.x_alpha())
+        for obj in [core, wfn]:
+            obj.set_variable('DISPERSION CORRECTION ENERGY', ene)
+            obj.set_variable('XDM ENERGY', ene)
+        core.set_variable(f"{self.fctldash.upper()} DISPERSION CORRECTION ENERGY", ene)
+        for var_name in [
+                'XDM C6 COEFFICIENTS', 'XDM C8 COEFFICIENTS', 'XDM C10 COEFFICIENTS', 'XDM RC COEFFICIENTS',
+                'XDM PAIRWISE ENERGY'
+        ]:
+            core.set_variable(var_name, wfn.array_variable(var_name))
+
+        return ene
+
+    def compute_gradient(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> core.Matrix:
+        """Reject analytic XDM derivatives.
+
+        Every XDM ingredient (moments, Hirshfeld volumes, polarizabilities, C6/C8/C10,
+        R_vdW) is a functional of the converged density, so an analytic gradient needs
+        the response of all of them. Differentiating only the pair distances R_ij is not
+        the derivative of the energy. XDM gradients are obtained instead by finite
+        differences of the full XDM energy via psi4.gradient().
+        """
+        raise NotImplementedError("Analytic XDM gradients are not implemented. XDM gradients are evaluated by "
+                                  "finite differences of the XDM-corrected energy; call psi4.gradient() instead.")
