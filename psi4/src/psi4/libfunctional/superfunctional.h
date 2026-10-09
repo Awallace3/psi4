@@ -88,6 +88,11 @@ class SuperFunctional {
     double grac_shift_;
     double grac_alpha_;
     double grac_beta_;
+    // Include the switching-function gradient term of the indirect matrix elements
+    // (Cencek & Szalewicz, JCP 139, 024104 (2013), Eq. 17); needs the density Hessian
+    bool grac_density_hessian_;
+    // Stretch the bulk potential by the shift instead of splicing in LB94 (ibid. Sec. IV)
+    bool grac_stretch_;
 
     // => VV10 parameters corrections <= //
     bool needs_vv10_;
@@ -235,6 +240,8 @@ class SuperFunctional {
     void set_grac_shift(double grac_shift);
     void set_grac_alpha(double grac_alpha);
     void set_grac_beta(double grac_beta);
+    void set_grac_density_hessian(bool val);
+    void set_grac_stretch(bool val);
     void set_density_tolerance(double cut);
     void print_density_threshold(std::string out_fname = "outfile", int print = 1) const;
     void py_print_density_threshold() const { print_density_threshold("outfile", 1); }
@@ -261,6 +268,8 @@ class SuperFunctional {
     double grac_shift() const { return grac_shift_; }
     double grac_alpha() const { return grac_alpha_; }
     double grac_beta() const { return grac_beta_; }
+    bool grac_density_hessian() const { return grac_density_hessian_; }
+    bool grac_stretch() const { return grac_stretch_; }
     double density_tolerance() const { return density_tolerance_; }
 
     bool needs_xc() const { return ((c_functionals_.size() + x_functionals_.size()) > 0); }
