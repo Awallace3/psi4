@@ -982,6 +982,9 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         core.print_out(
             "         VV10: running CP-corrected monomer SCFs in dimer basis\n\n"
         )
+        # The monomer B GRAC shift is still set globally here, and the dimer
+        # SCF ran unshifted; the CP monomers must match the dimer.
+        core.set_global_option("DFT_GRAC_SHIFT", 0.0)
         core.timer_on("SAPT(DFT):VV10 Monomer A CP")
         monomerA_cp = sapt_dimer.extract_subsets(1, 2)
         dft_wfn_monomerA_cp = run_scf(
