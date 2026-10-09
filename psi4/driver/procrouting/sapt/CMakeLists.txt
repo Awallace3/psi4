@@ -1,6 +1,7 @@
 
 list(APPEND sources
   fisapt_proc
+  saptdft_checkpoint
   sapt_jk_terms
   sapt_mp2_terms
   sapt_proc

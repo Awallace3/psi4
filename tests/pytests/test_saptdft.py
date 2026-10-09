@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import pytest
 import psi4
+from psi4.driver import schema_wrapper
 from qcelemental import constants
 from psi4 import compare_values
 import numpy as np
@@ -11,6 +14,29 @@ from psi4.driver.procrouting.sapt import sapt_proc
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
+
+
+def _saptdft_default_qcschema_protocols():
+    return {
+        "schema_name": "qcschema_atomic_protocols",
+        "error_correction": {"default_policy": True, "policies": None},
+        "native_files": "none",
+        "stdout": True,
+        "wavefunction": "none",
+    }
+
+
+
+def _saptdft_runtime_only_qcschema_extras():
+    return {
+        "current_qcvars_only": False,
+        "extra_infiles": {},
+        "wfn_qcvars_only": False,
+    }
+
+
+
+from fsaptdft_checkpoint_worker import run as _run_saptdft_checkpoint_worker
 
 
 @pytest.fixture
@@ -1296,6 +1322,195 @@ no_com
         8,
         f"Enuc use_einsums={use_einsums}",
     )
+
+
+@pytest.mark.saptdft
+def test_qcschema_checkpoint_identity_restarts_with_direct_api(tmp_path):
+    checkpoint_dir = tmp_path / "qcschema-final"
+    qcschema_proc, qcschema = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="qcschema",
+    )
+    assert qcschema_proc.returncode == 0, qcschema_proc.stderr or qcschema_proc.stdout
+    assert qcschema["status"] == "ok"
+    assert Path(checkpoint_dir, "saptdft_state.json").exists()
+
+    restarted_proc, restarted = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        guard_jk=True,
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    compare_values(qcschema["sapt_total_energy"], restarted["sapt_total_energy"], 8, "QCSchema/direct checkpoint identity")
+
+
+@pytest.mark.saptdft
+def test_qcschema_checkpoint_identity_ignores_default_protocols_and_runtime_extras(tmp_path):
+    checkpoint_dir = tmp_path / "qcschema-default-protocols"
+    qcschema_proc, qcschema = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="qcschema",
+        qcschema_protocols=_saptdft_default_qcschema_protocols(),
+        qcschema_extras=_saptdft_runtime_only_qcschema_extras(),
+    )
+    assert qcschema_proc.returncode == 0, qcschema_proc.stderr or qcschema_proc.stdout
+    assert qcschema["status"] == "ok"
+
+    restarted_proc, restarted = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        guard_jk=True,
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    compare_values(qcschema["sapt_total_energy"], restarted["sapt_total_energy"], 8, "QCSchema default protocols/extras identity")
+
+
+@pytest.mark.saptdft
+def test_qcschema_checkpoint_identity_rejects_nondefault_protocol_and_extra_mismatch(tmp_path):
+    checkpoint_dir = tmp_path / "qcschema-protocol-extra-mismatch"
+    qcschema_proc, qcschema = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="qcschema",
+        qcschema_protocols={"stdout": False},
+        qcschema_extras={"user_tag": "alpha"},
+    )
+    assert qcschema_proc.returncode == 0, qcschema_proc.stderr or qcschema_proc.stdout
+    assert qcschema["status"] == "ok"
+
+    restarted_proc, restarted = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="qcschema_restart_with_guards",
+        qcschema_protocols={"stdout": False},
+        qcschema_extras={"user_tag": "beta"},
+    )
+    assert restarted_proc.returncode != 0
+    assert restarted["status"] == "error"
+    assert restarted["error_type"] in {"FailedOperation", "ValidationError"}
+    assert "extras.user_tag" in restarted["error"] or "protocols.stdout" in restarted["error"]
+
+
+@pytest.mark.saptdft
+def test_qcschema_raw_molecule_checkpoint_restarts_with_direct_api(tmp_path):
+    checkpoint_dir = tmp_path / "qcschema-raw-final"
+    qcschema_proc, qcschema = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="qcschema",
+        scenario="raw_identity",
+    )
+    assert qcschema_proc.returncode == 0, qcschema_proc.stderr or qcschema_proc.stdout
+    assert qcschema["status"] == "ok"
+
+    restarted_proc, restarted = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        scenario="raw_identity",
+        guard_jk=True,
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    assert restarted["guarded_call_count"] == 0
+    compare_values(qcschema["sapt_total_energy"], restarted["sapt_total_energy"], 8, "raw QCSchema/direct checkpoint identity")
+
+
+@pytest.mark.saptdft
+def test_direct_checkpoint_restarts_with_raw_qcschema_input(tmp_path):
+    checkpoint_dir = tmp_path / "direct-raw-qcschema-final"
+    stopped_proc, stopped = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="stop",
+        stop_after="final",
+        scenario="raw_identity",
+    )
+    assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
+    assert stopped["status"] == "stopped"
+
+    restarted_proc, restarted = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="qcschema_restart_with_guards",
+        scenario="raw_identity",
+        guard_jk=True,
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    assert restarted["guarded_call_count"] == 0
+    compare_values(stopped["sapt_total_energy"], restarted["sapt_total_energy"], 8, "direct/raw-QCSchema checkpoint identity")
+
+
+@pytest.mark.saptdft
+def test_run_qcschema_does_not_inject_private_checkpoint_identity_for_hf(monkeypatch):
+    seen = {}
+    original_energy = schema_wrapper.methods_dict_["energy"]
+
+    def wrapped_energy(method, **kwargs):
+        seen["has_private_handoff"] = psi4.driver.p4util.SAPTDFT_IDENTITY_ATOMIC_INPUT_KEY in kwargs
+        return original_energy(method, **kwargs)
+
+    monkeypatch.setitem(schema_wrapper.methods_dict_, "energy", wrapped_energy)
+    ret = psi4.schema_wrapper.run_qcschema(
+        {
+            "schema_name": "qcschema_atomic_input",
+            "schema_version": 2,
+            "molecule": {
+                "symbols": ["He", "He"],
+                "geometry": [0.0, 0.0, 0.0, 0.0, 0.0, 2.5],
+                "molecular_charge": 0,
+                "molecular_multiplicity": 1,
+                "fragments": [[0, 1]],
+                "fragment_charges": [0],
+                "fragment_multiplicities": [1],
+            },
+            "specification": {
+                "driver": "energy",
+                "model": {"method": "hf", "basis": "sto-3g"},
+                "keywords": {},
+                "protocols": {},
+                "extras": {},
+            },
+        }
+    )
+
+    assert ret.success
+    assert seen["has_private_handoff"] is False
+
+
+@pytest.mark.saptdft
+def test_saptdft_checkpoint_rejects_external_potentials(tmp_path):
+    mol = psi4.geometry(
+        """
+0 1
+Ne 0.0 0.0 0.0
+--
+0 1
+Ne 0.0 0.0 3.0
+units angstrom
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    chargefield = np.array([[0.5, 0.0, 0.0, 4.0]])
+    chargefield[:, 1:] /= qcel.constants.bohr2angstroms
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "sapt_dft_functional": "hf",
+            "sapt_dft_do_disp": False,
+            "sapt_dft_do_fsapt": "none",
+            "sapt_dft_use_einsums": False,
+        }
+    )
+
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match="external_potentials"):
+        psi4.energy(
+            "sapt(dft)",
+            molecule=mol,
+            checkpoint_dir=str(tmp_path),
+            external_potentials={"A": chargefield},
+        )
+
+    assert not (tmp_path / "saptdft_state.lock").exists()
 
 
 @pytest.mark.saptdft
