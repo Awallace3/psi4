@@ -26,6 +26,8 @@
 # @END LICENSE
 #
 
+import os
+
 import numpy as np
 
 from psi4 import core
@@ -1126,6 +1128,52 @@ sapt_dft_grac_convergence_tier_options = {
 }
 
 
+def _grac_cation_ground_state(dft_functional, mol_cation, jk_obj, wfn_given, scf_kwargs):
+    """Converge the GRAC cation from the neutral orbitals (GUESS READ) and from SAD, and keep the
+    lower energy. Either guess alone can land on an excited cation state: from SAD, wB97X ethene
+    converges to its second ionization (13.0 eV, against 10.4 eV from the neutral orbitals) and
+    n-pentane sits 0.2-0.35 eV high; from the neutral orbitals, wB97X pyridine lands 0.05 eV above
+    the SAD state, its n/pi cation states being nearly degenerate.
+    """
+    nelec_cation = wfn_given.nalpha() + wfn_given.nbeta() - 1
+    best = None
+    read_file = core.Wavefunction.build(mol_cation, core.get_global_option("BASIS")).get_scratch_filename(180)
+    for guess in ("READ", "SAD"):
+        core.set_local_option("SCF", "GUESS", guess)
+        if guess == "READ":
+            wfn_given.to_file(read_file)
+        try:
+            wfn = run_scf(dft_functional.lower(), molecule=mol_cation, jk=jk_obj, **scf_kwargs)
+        except ConvergenceError:
+            core.print_out(f"  GRAC cation from the {guess} guess did not converge.\n")
+            continue
+        except ValidationError as err:
+            # e.g. BASIS_GUESS cannot be combined with GUESS READ
+            core.print_out(f"  GRAC cation: {guess} guess unavailable ({err}).\n")
+            continue
+        finally:
+            if guess == "READ" and os.path.isfile(read_file + ".npy"):
+                os.remove(read_file + ".npy")
+        energy = wfn.energy()
+        # A same-reference READ (open-shell neutral, UKS -> UKS) keeps the guess's electron count, and would
+        # converge back to the neutral; refuse anything that is not one electron short. No energy test: an
+        # anion unbound in a small basis (OH-/STO-3G) legitimately sits above its detached neutral.
+        if wfn.nalpha() + wfn.nbeta() != nelec_cation:
+            core.print_out(f"  GRAC cation from the {guess} guess rejected: {wfn.nalpha()}a/{wfn.nbeta()}b electrons, "
+                           f"E = {energy:.10f} [Eh].\n")
+            wfn = None
+            continue
+        core.print_out(f"  GRAC cation energy from the {guess} guess: {energy:.10f} [Eh]\n")
+        if best is None or energy < best[0]:
+            best = (energy, guess, wfn)  # drop the losing wavefunction before the next SCF
+        wfn = None
+    if best is None:
+        raise ConvergenceError("GRAC cation SCF", core.get_option("SCF", "MAXITER"))
+    energy, guess, wfn_cation = best
+    core.print_out(f"  GRAC cation: using the {guess} guess state ({energy:.10f} [Eh]).\n")
+    return wfn_cation
+
+
 def compute_GRAC_shift(
     molecule: core.Molecule,
     sapt_dft_grac_convergence_tier: str,
@@ -1171,8 +1219,10 @@ def compute_GRAC_shift(
         ["SCF", "LEVEL_SHIFT_CUTOFF"],
         ["SCF", "SCF_INITIAL_ACCELERATOR"],
         ["SCF", "ORBITAL_OPTIMIZER_PACKAGE"],
+        ["SCF", "GUESS"],
         ["BASIS"],
     )
+    neutral_guess = core.get_option("SCF", "GUESS")
 
     monomer_label = label
     label = f"Monomer {label}"
@@ -1234,13 +1284,12 @@ def compute_GRAC_shift(
                 core.print_out(
                     f"\n\n  ==> GRAC {label} Electron Removed Molecule: charge={mol_cation.molecular_charge()} mult={mol_cation.multiplicity()} <==\n\n"
                 )
-                wfn_cation = run_scf(
-                    dft_functional.lower(),
-                    molecule=mol_cation,
-                    jk=jk_obj,
-                    **scf_kwargs,
+                wfn_cation = _grac_cation_ground_state(
+                    dft_functional, mol_cation, jk_obj, wfn_given, scf_kwargs
                 )
+                core.set_local_option("SCF", "GUESS", neutral_guess)
             except ConvergenceError:
+                core.set_local_option("SCF", "GUESS", neutral_guess)
                 # A failed attempt's wavefunctions are still bound in this
                 # function's scope, so without dropping them here they stay
                 # resident -- grid data, collocation cache and all -- while the
