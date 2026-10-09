@@ -1209,6 +1209,18 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("SAPT_DFT_USE_EINSUMS", true);
         /*- Enables the hybrid xc kernel in dispersion? !expert -*/
         options.add_bool("SAPT_DFT_DO_HYBRID", true);
+        /*- Include the long-range exact exchange (x_beta wK) of a range-separated
+        functional in the coupled induction (CPKS) response kernel? False drops only
+        that term and keeps the functional's own short-range xc kernel and any global
+        x_alpha K. Intended for reproducing response codes without a range-separated
+        kernel. !expert -*/
+        options.add_bool("SAPT_DFT_IND_LR_EXCH_KERNEL", true);
+        /*- Include the long-range exact exchange of a range-separated functional in
+        the FDDS dispersion kernel? False uses (1 - x_alpha) full-range ALDA exchange
+        plus x_alpha K, with no erfc-attenuated LDA and no wK; for LC-wPBE (x_alpha = 0)
+        this is the pure ALDA kernel of Cencek & Szalewicz, JCP 139, 024104 (2013).
+        !expert -*/
+        options.add_bool("SAPT_DFT_DISP_LR_EXCH_KERNEL", true);
         /*- Compute the Delta-DFT correction? -*/
         options.add_bool("SAPT_DFT_DO_DDFT", false);
         /*- Compute the analytic nuclear gradient of the delta DFT dimer energy right after the

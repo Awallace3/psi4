@@ -2259,6 +2259,53 @@ symmetry c1
 
 
 @pytest.mark.saptdft
+def test_saptdft_lr_exch_kernel_options():
+    """
+    SAPT_DFT_IND_LR_EXCH_KERNEL / SAPT_DFT_DISP_LR_EXCH_KERNEL false drop only the
+    long-range exact exchange of an LRC functional from the response kernels.
+    Induction: coupled Ind20/Exch-Ind20 change; first-order and uncoupled terms do not.
+    Dispersion: for LC-wPBE
+    (x_alpha = 0) the kernel becomes pure full-range ALDA, i.e. SAPT_DFT_DO_HYBRID false.
+    """
+    keys = ["ELST10,R", "EXCH10", "IND20,U", "EXCH-IND20,U", "IND20,R", "EXCH-IND20,R", "DISP20", "DISP20,U"]
+    res = {}
+    for label, extra in [("default", {}),
+                         ("no_lr", {"sapt_dft_ind_lr_exch_kernel": False, "sapt_dft_disp_lr_exch_kernel": False}),
+                         ("alda", {"sapt_dft_do_hybrid": False})]:
+        psi4.core.clean()
+        psi4.core.clean_variables()
+        psi4.core.clean_options()
+        psi4.geometry("""
+He 0 0 0
+--
+He 0 0 3.0
+units angstrom
+symmetry c1
+""")
+        psi4.set_options({
+            "basis": "aug-cc-pvdz",
+            "df_basis_scf": "aug-cc-pv5z-ri",
+            "scf_type": "df",
+            "sapt_dft_functional": "lc-wpbe",
+            "sapt_dft_grac_shift_a": 0.0,
+            "sapt_dft_grac_shift_b": 0.0,
+            "e_convergence": 1e-10,
+            "d_convergence": 1e-9,
+            **extra,
+        })
+        psi4.energy("sapt(dft)")
+        res[label] = {k: psi4.variable(k) for k in keys}
+    d, n, a = res["default"], res["no_lr"], res["alda"]
+    for k in ["ELST10,R", "EXCH10", "IND20,U", "EXCH-IND20,U", "DISP20,U"]:
+        assert compare_values(d[k], n[k], 10, f"{k} unaffected")
+    for k in ["IND20,R", "EXCH-IND20,R"]:
+        assert abs(n[k] - d[k]) > 1e-3 * abs(d[k]), (k, d[k], n[k])
+    assert compare_values(d["IND20,R"], a["IND20,R"], 10, "SAPT_DFT_DO_HYBRID does not touch induction")
+    assert compare_values(a["DISP20"], n["DISP20"], 9, "no-LR FDDS kernel is pure ALDA for x_alpha = 0")
+    assert abs(n["DISP20"] - d["DISP20"]) > 1e-3 * abs(d["DISP20"])
+
+
+@pytest.mark.saptdft
 def test_saptdft_ddft_gradient():
     """
     SAPT_DFT_DDFT_GRADIENT stores the analytic gradient of the delta DFT dimer

@@ -26,6 +26,7 @@
 # @END LICENSE
 #
 
+import contextlib
 import os
 
 import numpy as np
@@ -1154,6 +1155,34 @@ sapt_dft_grac_convergence_tier_options = {
 }
 
 
+@contextlib.contextmanager
+def _without_lr_exchange_kernel(wfns, active):
+    """Zero x_beta on the LRC monomer functionals for the duration of the block.
+
+    RHF::twoel_Hx_full adds -x_beta wK to the CPKS Hessian product; x_beta enters nothing
+    else there (the xc kernel comes from the functional's own components and the GRAC
+    potential is fixed at initialization), so this removes exactly the long-range
+    exact-exchange term from the coupled induction kernel. Restored on exit, also on error.
+    """
+    saved = [(wfn.functional(), wfn.functional().x_beta()) for wfn in wfns if wfn.functional().is_x_lrc()]
+    if not active or not saved:
+        yield
+        return
+    core.print_out("\n   Coupled induction kernel: long-range exact exchange (x_beta wK) omitted"
+                   " (SAPT_DFT_IND_LR_EXCH_KERNEL false)\n")
+    try:
+        for func, _ in saved:
+            func.set_lock(False)
+            func.set_x_beta(0.0)
+            func.set_lock(True)
+        yield
+    finally:
+        for func, beta in saved:
+            func.set_lock(False)
+            func.set_x_beta(beta)
+            func.set_lock(True)
+
+
 def _grac_cation_ground_state(dft_functional, mol_cation, jk_obj, wfn_given, scf_kwargs):
     """Converge the GRAC cation from the neutral orbitals (GUESS READ) and from SAD, and keep the
     lower energy. Either guess alone can land on an excited cation state: from SAD, wB97X ethene
@@ -1650,15 +1679,17 @@ def sapt_dft(
     # Induction
     core.timer_on("SAPT(DFT):ind")
     if induction_type == "CPKS" or (induction_type == "CPHF" and not do_dft):
-        ind = jk_terms.induction(
-            cache,
-            sapt_jk,
-            True,
-            sapt_jk_B=sapt_jk_B,
-            maxiter=core.get_option("SAPT", "MAXITER"),
-            conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
-            Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
-        )
+        keep_lr = core.get_option("SAPT", "SAPT_DFT_IND_LR_EXCH_KERNEL")
+        with _without_lr_exchange_kernel([wfn_A, wfn_B], active=do_dft and not keep_lr):
+            ind = jk_terms.induction(
+                cache,
+                sapt_jk,
+                True,
+                sapt_jk_B=sapt_jk_B,
+                maxiter=core.get_option("SAPT", "MAXITER"),
+                conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
+                Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
+            )
         data.update(ind)
     else:
         core.print_out(f"\n   SAPT(DFT) induction skipped ({induction_type}).\n")
@@ -1819,7 +1850,11 @@ def sapt_dft(
         # Hybrid xc kernel check
         do_hybrid = core.get_option("SAPT", "SAPT_DFT_DO_HYBRID")
         is_x_hybrid = wfn_B.functional().is_x_hybrid()
-        is_x_lrc = wfn_B.functional().is_x_lrc()
+        # SAPT_DFT_DISP_LR_EXCH_KERNEL false treats an LRC functional as its global part only:
+        # (1 - x_alpha) full-range ALDA + x_alpha K, no erfc-LDA and no wK.
+        is_x_lrc = wfn_B.functional().is_x_lrc() and core.get_option("SAPT", "SAPT_DFT_DISP_LR_EXCH_KERNEL")
+        if wfn_B.functional().is_x_lrc() and not is_x_lrc:
+            core.print_out("   FDDS kernel: long-range exact exchange omitted (SAPT_DFT_DISP_LR_EXCH_KERNEL false)\n")
         hybrid_specified = core.has_option_changed("SAPT", "SAPT_DFT_DO_HYBRID")
         if do_hybrid:
             # An LRC functional with no global exact exchange (LC-wPBE, wB97: x_alpha = 0,
