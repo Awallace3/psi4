@@ -616,6 +616,11 @@ class ManyBodyComputer(ManyBodyComputerQCNG):
 
         findif_number = {label: res.extras["qcvars"].get("FINDIF NUMBER") for label, res in component_results.items()}
 
+        # XDM subsystems run with ghost fragments need their partners' ghost-centre
+        # moments superposed before the counterpoise subtraction.
+        from .procrouting.empirical_disp.xdm_counterpoise import superpose_ghost_moments
+        superpose_ghost_moments(component_results, component_properties)
+
         # print("\n<<<  (RRR 2) Psi4 ManyBodyComputer.get_results component_properties  >>>")
         # pprint.pprint(component_properties, width=200)
 

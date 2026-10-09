@@ -231,12 +231,15 @@ For unlisted combinations, supply :math:`(a_1, a_2)` through
 |scf__xdm_dispersion_parameters|. The full table is in
 ``psi4/driver/procrouting/empirical_disp/xdm_params.py``.
 
-Counterpoise-based XDM energies and gradients are not implemented. Requests
-with ``bsse_type='cp'`` or ``'vmfc'`` raise ``NotImplementedError``, including
-when nested in a CBS specification or in many-body ``levels``. Use ``'nocp'``
-for a two-body interaction energy::
+Counterpoise-corrected XDM energies are supported with ``bsse_type='cp'``
+and ``'vmfc'``; see **Ghost Atoms** for how ghost centres are treated::
 
-   energy('b3lyp-xdm', bsse_type='nocp')
+   energy('b3lyp-xdm', bsse_type=['cp', 'nocp'])
+
+Counterpoise-corrected XDM gradients, and counterpoise XDM energies through a
+CBS specification, raise ``NotImplementedError``. Parameter sets fitted to
+no-CP interaction energies (the KB49 table above) are not refitted for
+counterpoise use.
 
 
 Custom Parameters
@@ -265,11 +268,37 @@ dispersion correction or a functional that includes VV10 nonlocal correlation.
 Ghost Atoms
 ~~~~~~~~~~~
 
-XDM excludes ghost atoms from dispersion coefficients and pairwise energies.
-Ghost atoms can contribute to the SCF density, but CP interaction energies are
-not implemented. The ``XDM C6 COEFFICIENTS`` matrix returned
-in the wavefunction has shape ``(N_real, N_real)`` where ``N_real`` is
-the number of non-ghost atoms::
+Ghost atoms are part of the Hirshfeld promolecule but not of the pair sum.
+Each ghost centre keeps the share of the density its free atom would claim, so
+a counterpoise monomer partitions its own density the way the parent cluster
+does, and its real atoms do not absorb the density that ghost basis functions
+place on the partner. (Dropping ghosts from the promolecule hands that tail to
+the real atoms, where the :math:`r^4`- and :math:`r^6`-weighted moments inflate
+:math:`C_{10}` and :math:`R_c`. The resulting XDM interaction energy grows too
+attractive with separation.)
+
+That alone does not make a counterpoise interaction energy decay correctly. In
+the cluster, each atom of monomer A also picks up part of the partner's density
+:math:`\int h_a \rho_B`. That pickup is weighted by up to :math:`r^6` in
+:math:`\langle M_3^2 \rangle` and changes the damping radius of every A--A
+pair. It is absent from the counterpoise monomer, so
+:math:`E_{AB} - E_A - E_B` keeps an intramonomer term that decays much more
+slowly than :math:`R^{-6}`. With large-:math:`a_1` parameter sets it changes
+the sign of the dispersion interaction energy at long range.
+
+The many-body driver therefore superposes fragment moments. For a subsystem
+computed with ghost fragments, it adds to each real atom the moments that each
+ghost fragment's own counterpoise job deposited on that atom's centre. It then
+re-evaluates the pair sum, so the subtraction leaves only intermolecular pairs
+and real density deformation. On benzene-dimer and water-dimer scans to 15 Å,
+this counterpoise dispersion interaction energy tracks the intermolecular
+pair sum and decays as :math:`R^{-6}`. The corrections appear in the output
+under ``XDM Counterpoise: Superposed Ghost-Centre Moments``.
+
+A single calculation with ``Gh()`` atoms has no partner density to superpose,
+so it reports the bare counterpoise-monomer energy. The ``XDM C6 COEFFICIENTS``
+matrix returned in the wavefunction has shape ``(N_real, N_real)``, where
+``N_real`` is the number of non-ghost atoms::
 
    mol = psi4.geometry("""
    0 1
@@ -293,9 +322,9 @@ the number of non-ghost atoms::
 PSI Variables
 ~~~~~~~~~~~~~
 
-After an XDM-corrected computation, the following PSI variables are set. All
-matrix variables have shape ``(N_real, N_real)`` as described under **Ghost
-Atoms**.
+After an XDM-corrected computation, the following PSI variables are set. The
+coefficient and pair-energy matrices have shape ``(N_real, N_real)`` as
+described under **Ghost Atoms**.
 
 .. table:: PSI variables set by the XDM module
 
@@ -316,6 +345,13 @@ Atoms**.
    | ``XDM RC COEFFICIENTS``               | Pairwise critical radii :math:`R_{c,ij}`                  |
    +---------------------------------------+-----------------------------------------------------------+
    | ``XDM PAIRWISE ENERGY``               | Symmetric pair energies; matrix sums to total energy      |
+   +---------------------------------------+-----------------------------------------------------------+
+   | ``XDM ATOMIC PROPERTIES``             | ``(N_atom, 8)``, ghosts included: true Z, real flag,      |
+   |                                       | charge, volume, :math:`\langle M_1^2\rangle`,             |
+   |                                       | :math:`\langle M_2^2\rangle`,                             |
+   |                                       | :math:`\langle M_3^2\rangle`, polarizability              |
+   +---------------------------------------+-----------------------------------------------------------+
+   | ``XDM DAMPING PARAMETERS``            | ``(1, 2)``: :math:`a_1` and :math:`a_2` [bohr]            |
    +---------------------------------------+-----------------------------------------------------------+
 
 These can be accessed from the wavefunction object::
@@ -416,4 +452,5 @@ that grid noise does not contaminate the difference, for example::
 
 XDM Hessians and property calculations are not implemented and raise
 ``NotImplementedError``.  Counterpoise-corrected gradients are blocked
-for the same reason as counterpoise-corrected energies.
+because the counterpoise superposition of ghost-centre moments has no
+derivative implementation.

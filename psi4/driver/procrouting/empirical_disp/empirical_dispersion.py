@@ -503,6 +503,7 @@ class XDMDispersionFunctor():
 
         if a1 is not None and a2_ang is not None:
             self.xdm = core.XDMDispersion.build(functional_name, a1, a2_ang)
+            self._damping = (self.xdm.a1(), self.xdm.a2())
             return
 
         if basis_name is None:
@@ -521,6 +522,7 @@ class XDMDispersionFunctor():
                                   "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS." + hint)
 
         self.xdm = core.XDMDispersion.build(functional_name, fitted_a1, fitted_a2_ang)
+        self._damping = (self.xdm.a1(), self.xdm.a2())
 
     def print_out(self):
         """Format XDM dispersion parameters for output file."""
@@ -569,10 +571,13 @@ class XDMDispersionFunctor():
         if self.fctldash:
             core.set_variable(f"{self.fctldash.upper()} DISPERSION CORRECTION ENERGY", ene)
 
+        # [a1, a2 (bohr)], so the many-body driver can re-evaluate this task's pair sum.
+        wfn.set_array_variable("XDM DAMPING PARAMETERS", core.Matrix.from_array(np.array([self._damping])))
+
         # Copy XDM coefficient arrays from process environment to wavefunction
         for var_name in [
                 'XDM C6 COEFFICIENTS', 'XDM C8 COEFFICIENTS', 'XDM C10 COEFFICIENTS', 'XDM RC COEFFICIENTS',
-                'XDM PAIRWISE ENERGY'
+                'XDM PAIRWISE ENERGY', 'XDM ATOMIC PROPERTIES'
         ]:
             if core.has_array_variable(var_name):
                 wfn.set_array_variable(var_name, core.array_variable(var_name))

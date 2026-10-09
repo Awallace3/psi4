@@ -84,7 +84,8 @@ units angstrom
     })
     e_m, wfn_m = psi4.energy("b3lyp-xdm", molecule=m, return_wfn=True)
     disp_corr = wfn_m.variables()["DISPERSION CORRECTION ENERGY"]
-    ref_disp_corr = -0.00474203021866958
+    # Ghosts are in the Hirshfeld promolecule; only the pair sum excludes them.
+    ref_disp_corr = -0.004840010759573224
     assert np.isclose(disp_corr, ref_disp_corr,
                       atol=1e-6), (f"Expected dispersion correction {ref_disp_corr}, got {disp_corr}")
     assert wfn_m.variables()["XDM C6 COEFFICIENTS"].shape == (3, 3)
@@ -124,7 +125,7 @@ units angstrom
 
 @pytest.mark.xdm
 def test_h2o_nh3_xdm_nocp():
-    """Validate no-CP XDM interaction energies and reject CP."""
+    """Validate no-CP XDM interaction energies; CP gradients and CP through CBS stay rejected."""
 
     dimer = psi4.geometry("""0 1
 N -1.578718 -0.046611 0.000000
@@ -144,25 +145,22 @@ units angstrom
     for bsse_type in ["cp", "vmfc", ["nocp", "vmfc"]]:
         with pytest.raises(
                 NotImplementedError,
-                match="Counterpoise-based XDM energies are not implemented",
-        ):
-            psi4.energy("b3lyp-xdm", molecule=dimer, bsse_type=bsse_type)
-
-    for bsse_type in ["cp", "vmfc", ["nocp", "vmfc"]]:
-        with pytest.raises(
-                NotImplementedError,
-                match="Counterpoise-based XDM energies are not implemented",
+                match="Counterpoise-based XDM gradients are not implemented",
         ):
             psi4.gradient("b3lyp-xdm", molecule=dimer, bsse_type=bsse_type)
 
     from psi4.driver.task_planner import task_planner
+    from psi4.driver.driver_nbody import ManyBodyComputer
 
     findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
-    with pytest.raises(NotImplementedError, match="Counterpoise-based XDM energies are not implemented"):
+    for bsse_type in ["cp", "vmfc", ["nocp", "vmfc"]]:
+        plan = task_planner("energy", "b3lyp-xdm", dimer, bsse_type=bsse_type)
+        assert isinstance(plan, ManyBodyComputer)
+    with pytest.raises(NotImplementedError, match="through composite \\(CBS\\) methods are not implemented"):
         task_planner("energy", "b3lyp-xdm/cc-pv[d,t]z", dimer, bsse_type="cp")
-    with pytest.raises(NotImplementedError, match="Counterpoise-based XDM energies are not implemented"):
+    with pytest.raises(NotImplementedError, match="Counterpoise-based XDM gradients are not implemented"):
         task_planner("gradient", "b3lyp-xdm/cc-pv[d,t]z", dimer, bsse_type="cp", **findif_kwargs)
-    with pytest.raises(NotImplementedError, match="Counterpoise-based XDM energies are not implemented"):
+    with pytest.raises(NotImplementedError, match="Counterpoise-based XDM gradients are not implemented"):
         task_planner("gradient", "b3lyp", dimer, bsse_type="cp", levels={1: "b3lyp-xdm"}, **findif_kwargs)
 
     e_los_ii = psi4.energy("b3lyp-xdm(los-ii)", molecule=dimer, bsse_type="nocp")
@@ -471,8 +469,8 @@ units angstrom
     plan = task_planner("gradient", "scf", dimer, dft_functional=callable_xdm, **findif_kwargs)
     assert isinstance(plan, FiniteDifferenceComputer)
 
-    with pytest.raises(NotImplementedError, match="Counterpoise-based XDM energies are not implemented"):
-        task_planner("energy", "scf", dimer, dft_functional=callable_xdm, bsse_type="cp")
+    plan = task_planner("energy", "scf", dimer, dft_functional=callable_xdm, bsse_type="cp")
+    assert isinstance(plan, ManyBodyComputer)
 
     plan = task_planner("gradient", "b3lyp-xdm/sto-3g", dimer, **findif_kwargs)
     assert isinstance(plan, FiniteDifferenceComputer)
@@ -1047,3 +1045,101 @@ def test_xdm_gradient_produces_attraction():
     assert np.isclose(d_xdm - d_b3lyp, fd_disp,
                       atol=5e-6), (f"XDM-minus-B3LYP gradient {d_xdm - d_b3lyp:.4e} does not match "
                                    f"d(DISPERSION CORRECTION ENERGY)/dR {fd_disp:.4e}")
+
+
+def _water_dimer_8a(ghost=None):
+    """Water dimer from the S22 geometry with monomer B pushed to R(O-O) = 8 A.
+
+    ``ghost`` = "A" or "B" makes that monomer ghost atoms; "isoA" drops monomer B.
+    """
+    a = [("O", -1.551007, -0.114520, 0.0), ("H", -1.934259, 0.762503, 0.0), ("H", -0.599677, 0.040712, 0.0)]
+    b = [("O", 1.350625, 0.111469, 0.0), ("H", 1.680398, -0.373741, -0.758561),
+         ("H", 1.680398, -0.373741, 0.758561)]
+    xa, xb = np.array([x[1:] for x in a]), np.array([x[1:] for x in b])
+    u = (xb[0] - xa[0]) / np.linalg.norm(xb[0] - xa[0])
+    xb = xb - xb[0] + xa[0] + 8.0 * u
+
+    def block(atoms, xyz, as_ghost):
+        return "\n".join(f"{'Gh(' + s + ')' if as_ghost else s} {x:.8f} {y:.8f} {z:.8f}"
+                         for (s, *_), (x, y, z) in zip(atoms, xyz))
+
+    tail = "\nunits angstrom\nno_com\nno_reorient\nsymmetry c1\n"
+    if ghost == "isoA":
+        return "0 1\n" + block(a, xa, False) + tail
+    return ("0 1\n" + block(a, xa, ghost == "A") + "\n--\n0 1\n" + block(b, xb, ghost == "B") + tail)
+
+
+@pytest.mark.xdm
+def test_xdm_counterpoise_ghost_superposition():
+    """Counterpoise XDM keeps ghosts in the Hirshfeld promolecule and superposes partner moments.
+
+    Long-range regression for the CP ghost treatment (see xdm.rst, "Ghost Atoms"). Uses the
+    large-a1 KB49 noCP parameters for B3LYP/aug-cc-pVDZ, where the superposition artefact is
+    largest. At R(O-O) = 8 A, measured (kJ/mol): noCP -0.0125, intermolecular pair sum -0.0122,
+    superposed CP -0.0095; dropping ghosts from the promolecule gave -0.0219, and ghosts in the
+    promolecule without superposition gave -0.0001 (and changes sign by 9 A).
+    """
+    psi4.set_options({
+        "basis": "aug-cc-pvdz",
+        "scf_type": "df",
+        "e_convergence": 1.0e-10,
+        "d_convergence": 1.0e-8,
+        "XDM_DISPERSION_PARAMETERS": [0.7259, 1.3140],
+    })
+    kj = psi4.constants.hartree2kJmol
+
+    def run(ghost):
+        mol = psi4.geometry(_water_dimer_8a(ghost))
+        _, wfn = psi4.energy("b3lyp-xdm", molecule=mol, return_wfn=True)
+        return mol, wfn
+
+    _, wfn_iso = run("isoA")
+    mol_cp, wfn_cp = run("B")
+    _, wfn_cpb = run("A")
+    mol_dim, wfn_dim = run(None)
+
+    props_cp = wfn_cp.variable("XDM ATOMIC PROPERTIES").np
+    props_cpb = wfn_cpb.variable("XDM ATOMIC PROPERTIES").np
+    assert props_cp.shape == (6, 8)
+    assert np.array_equal(props_cp[:, 1], [1, 1, 1, 0, 0, 0])
+    # The ghost centres hold part of the monomer's density tail: they are in the promolecule.
+    assert np.all(props_cp[3:, 2] > 0.0)
+    assert compare_values(10.0, props_cp[:, 2].sum(), 4, "CP monomer electrons over real + ghost centres")
+
+    # The bare CP monomer partitions its own density like the isolated monomer.
+    c6_iso = wfn_iso.variable("XDM C6 COEFFICIENTS").np.sum()
+    c6_cp = wfn_cp.variable("XDM C6 COEFFICIENTS").np.sum()
+    assert abs(c6_cp / c6_iso - 1.0) < 5.0e-3, f"CP monomer C6 {c6_cp} vs isolated {c6_iso}"
+
+    # Re-evaluating the stored properties reproduces the job's own XDM energy.
+    xdm = psi4.core.XDMDispersion(0.7259, 1.3140 / psi4.constants.bohr2angstroms, "b3lyp")
+    coords = psi4.core.Matrix.from_array(mol_cp.geometry().np)
+    assert compare_values(wfn_cp.variable("DISPERSION CORRECTION ENERGY"),
+                          xdm.energy_from_properties(coords, psi4.core.Matrix.from_array(props_cp)), 12,
+                          "energy_from_properties reproduces the CP monomer XDM energy")
+
+    # Superposing the partner's ghost-centre moments onto each CP monomer, by hand.
+    e_superposed = 0.0
+    for own, partner in ((props_cp, props_cpb), (props_cpb, props_cp)):
+        superposed = own.copy()
+        superposed[:, 2:] += partner[:, 2:]
+        e_superposed += xdm.energy_from_properties(coords, psi4.core.Matrix.from_array(superposed))
+    disp_by_hand = (wfn_dim.variable("DISPERSION CORRECTION ENERGY") - e_superposed) * kj
+
+    # Many-body driver: CP and noCP XDM interaction energies, with the B3LYP part removed.
+    dimer = psi4.geometry(_water_dimer_8a())
+    psi4.energy("b3lyp-xdm", molecule=dimer, bsse_type=["cp", "nocp"])
+    ie_xdm_cp = psi4.variable("CP-CORRECTED INTERACTION ENERGY")
+    ie_xdm_nocp = psi4.variable("NOCP-CORRECTED INTERACTION ENERGY")
+    psi4.energy("b3lyp", molecule=dimer, bsse_type=["cp", "nocp"])
+    disp_cp = (ie_xdm_cp - psi4.variable("CP-CORRECTED INTERACTION ENERGY")) * kj
+    disp_nocp = (ie_xdm_nocp - psi4.variable("NOCP-CORRECTED INTERACTION ENERGY")) * kj
+
+    # The many-body CP subtraction uses the superposed monomer energies.
+    assert compare_values(disp_by_hand, disp_cp, 4, "many-body CP XDM IE vs hand superposition [kJ/mol]")
+    pairwise = wfn_dim.variable("XDM PAIRWISE ENERGY").np
+    inter = 2.0 * pairwise[:3, 3:].sum() * kj
+
+    assert disp_cp < 0.0
+    assert abs(disp_cp - disp_nocp) < 5.0e-3, f"CP {disp_cp:.5f} vs noCP {disp_nocp:.5f} kJ/mol"
+    assert 0.6 < disp_cp / inter < 1.4, f"CP {disp_cp:.5f} vs intermolecular pair sum {inter:.5f} kJ/mol"
