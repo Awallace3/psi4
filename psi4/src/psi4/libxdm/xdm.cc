@@ -139,18 +139,16 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     for (int a = 0; a < natom; a++) {
         const double effective_z = mol->Z(a);
         const int true_z = mol->true_atomic_number(a);
-        if (effective_z == 0.0) {
-            // How ghost centers should enter the Hirshfeld promolecule and the
-            // pair sum is unresolved; see the counterpoise note in xdm.rst.
-            throw PSIEXCEPTION("XDM: ghost atoms are not supported (atom " + std::to_string(a + 1) + ", " +
-                               mol->symbol(a) + "). Counterpoise-corrected XDM is not implemented.");
-        }
         if (effective_z > 0.0 && std::abs(effective_z - true_z) > 1.0e-8) {
             throw PSIEXCEPTION(
                 "XDM: effective-core potentials are not supported because all-electron densities are required (atom " +
                 std::to_string(a + 1) + ", " + mol->symbol(a) + ").");
         }
-        atomic_nums[a] = effective_z > 0.0 ? true_z : 0;
+        // Ghost centres stay in the Hirshfeld promolecule: dropping them hands the
+        // ghost-basis density tail to the real atoms, whose r^4/r^6-weighted
+        // moments then inflate C10 and Rc at long range. Only the pair sum
+        // excludes ghosts.
+        atomic_nums[a] = true_z;
         if (atomic_nums[a] > FTOT_NELEM) {
             throw PSIEXCEPTION("XDM: no tabulated free-atom density for atom " + std::to_string(a + 1) + " (" +
                                mol->symbol(a) + ", Z = " + std::to_string(atomic_nums[a]) +
@@ -402,8 +400,9 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     outfile->Printf("\n  ==> XDM Atomic Properties <==\n\n");
     outfile->Printf("    %5s %8s %12s %12s %12s %12s %12s\n", "Atom", "Z", "Charge", "Volume", "M1^2", "M2^2", "M3^2");
     for (int a = 0; a < natom; a++) {
-        outfile->Printf("    %5d %8d %12.6f %12.6f %12.6f %12.6f %12.6f\n", a + 1, atomic_nums[a], atom_data[a].charge,
-                        atom_data[a].vol, atom_data[a].mm1, atom_data[a].mm2, atom_data[a].mm3);
+        outfile->Printf("    %5d %5d%-3s %12.6f %12.6f %12.6f %12.6f %12.6f\n", a + 1, atomic_nums[a],
+                        mol->Z(a) > 0.0 ? "" : " Gh", atom_data[a].charge, atom_data[a].vol, atom_data[a].mm1,
+                        atom_data[a].mm2, atom_data[a].mm3);
     }
     outfile->Printf("\n");
 
@@ -419,36 +418,69 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Wavefunction> wfn, const s
     auto mol = wfn->molecule();
     int natom = mol->natom();
 
-    std::vector<int> real_atoms;
-    real_atoms.reserve(natom);
+    // Per-centre properties. Ghost centres are part of the Hirshfeld promolecule, so
+    // their rows carry the moments of the density they hold; only real rows enter the
+    // pair sum, but the ghost rows let a counterpoise driver superpose fragments.
+    auto props = std::make_shared<Matrix>("XDM ATOMIC PROPERTIES", natom, XDM_NPROP);
+    auto coords = std::make_shared<Matrix>("XDM COORDINATES", natom, 3);
     for (int i = 0; i < natom; i++) {
-        if (mol->Z(i) > 0.0) real_atoms.push_back(i);
-    }
-    int nreal = static_cast<int>(real_atoms.size());
-
-    // Compute effective atomic polarizabilities
-    std::vector<double> atpol(natom, 0.0);
-    for (int i = 0; i < natom; i++) {
-        if (mol->Z(i) <= 0.0) continue;
         int Z = mol->true_atomic_number(i);
-
-        double alpha_free = get_free_polarizability(Z);
-        double vol_free = get_free_volume(Z, functional_name_, hf_fraction);
-
-        if (vol_free > 1.0e-10 && atoms[i].vol > 1.0e-10) {
-            atpol[i] = atoms[i].vol * alpha_free / vol_free;
+        double atpol = 0.0;
+        if (Z >= 1) {
+            double alpha_free = get_free_polarizability(Z);
+            double vol_free = get_free_volume(Z, functional_name_, hf_fraction);
+            if (vol_free > 1.0e-10 && atoms[i].vol > 1.0e-10) {
+                atpol = atoms[i].vol * alpha_free / vol_free;
+            }
         }
+        props->set(i, XDM_PROP_Z, Z);
+        props->set(i, XDM_PROP_REAL, mol->Z(i) > 0.0 ? 1.0 : 0.0);
+        props->set(i, XDM_PROP_CHARGE, atoms[i].charge);
+        props->set(i, XDM_PROP_VOLUME, atoms[i].vol);
+        props->set(i, XDM_PROP_M1, atoms[i].mm1);
+        props->set(i, XDM_PROP_M2, atoms[i].mm2);
+        props->set(i, XDM_PROP_M3, atoms[i].mm3);
+        props->set(i, XDM_PROP_POLARIZABILITY, atpol);
+        coords->set(i, 0, mol->x(i));
+        coords->set(i, 1, mol->y(i));
+        coords->set(i, 2, mol->z(i));
     }
 
     // Print polarizabilities
     outfile->Printf("  ==> XDM Atomic Polarizabilities <==\n\n");
     outfile->Printf("    %5s %8s %16s\n", "Atom", "Z", "Polarizability");
     for (int i = 0; i < natom; i++) {
-        outfile->Printf("    %5d %8d %16.6f\n", i + 1, static_cast<int>(std::lround(mol->Z(i))), atpol[i]);
+        outfile->Printf("    %5d %8d %16.6f\n", i + 1, static_cast<int>(std::lround(mol->Z(i))),
+                        props->get(i, XDM_PROP_POLARIZABILITY));
     }
     outfile->Printf("\n");
 
-    // Compute pairwise dispersion
+    wfn->set_array_variable("XDM ATOMIC PROPERTIES", props);
+    return pair_sum(*coords, *props, wfn.get());
+}
+
+double XDMDispersion::energy_from_properties(SharedMatrix coords, SharedMatrix props) const {
+    if (!coords || !props) {
+        throw std::invalid_argument("XDM energy_from_properties requires coordinates and properties.");
+    }
+    if (coords->nirrep() != 1 || props->nirrep() != 1 || coords->colspi(0) != 3 ||
+        props->colspi(0) != XDM_NPROP || coords->rowspi(0) != props->rowspi(0)) {
+        throw std::invalid_argument("XDM energy_from_properties expects (natom, 3) coordinates [bohr] and (natom, " +
+                                    std::to_string(XDM_NPROP) + ") properties.");
+    }
+    return pair_sum(*coords, *props, nullptr);
+}
+
+double XDMDispersion::pair_sum(const Matrix& coords, const Matrix& props, Wavefunction* wfn) const {
+    int natom = coords.rowspi(0);
+
+    std::vector<int> real_atoms;
+    real_atoms.reserve(natom);
+    for (int i = 0; i < natom; i++) {
+        if (props.get(i, XDM_PROP_REAL) > 0.5) real_atoms.push_back(i);
+    }
+    int nreal = static_cast<int>(real_atoms.size());
+
     double e_disp = 0.0, e_disp_tmp = 0.0;
 
     // Create matrices to store pairwise coefficients
@@ -462,24 +494,29 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Wavefunction> wfn, const s
     double** c10p = c10_mat->pointer();
     double** rcp = rc_mat->pointer();
 
-    outfile->Printf("  ==> XDM Pairwise Coefficients <==\n\n");
-    outfile->Printf("    %4s %4s %6s %6s %12s %16s %16s %16s %12s %12s %12s\n", "i", "j", "mol_i", "mol_j", "dij", "C6",
-                    "C8", "C10", "Rc", "Rvdw", "E_disp");
+    if (wfn) {
+        outfile->Printf("  ==> XDM Pairwise Coefficients <==\n\n");
+        outfile->Printf("    %4s %4s %6s %6s %12s %16s %16s %16s %12s %12s %12s\n", "i", "j", "mol_i", "mol_j", "dij",
+                        "C6", "C8", "C10", "Rc", "Rvdw", "E_disp");
+    }
 
     for (int ii = 0; ii < nreal; ii++) {
         int i = real_atoms[ii];
+        double m1i = props.get(i, XDM_PROP_M1), m2i = props.get(i, XDM_PROP_M2), m3i = props.get(i, XDM_PROP_M3);
+        double pi = props.get(i, XDM_PROP_POLARIZABILITY);
         for (int jj = ii; jj < nreal; jj++) {
             int j = real_atoms[jj];
+            double m1j = props.get(j, XDM_PROP_M1), m2j = props.get(j, XDM_PROP_M2), m3j = props.get(j, XDM_PROP_M3);
+            double pj = props.get(j, XDM_PROP_POLARIZABILITY);
 
             // Dispersion coefficients
-            double denom = atoms[i].mm1 * atpol[j] + atoms[j].mm1 * atpol[i];
+            double denom = m1i * pj + m1j * pi;
             if (denom < 1.0e-30) continue;
-            double fac = atpol[i] * atpol[j] / denom;
+            double fac = pi * pj / denom;
 
-            double c6 = fac * atoms[i].mm1 * atoms[j].mm1;
-            double c8 = 1.5 * fac * (atoms[i].mm1 * atoms[j].mm2 + atoms[i].mm2 * atoms[j].mm1);
-            double c10 = 2.0 * fac * (atoms[i].mm1 * atoms[j].mm3 + atoms[i].mm3 * atoms[j].mm1) +
-                         4.2 * fac * atoms[i].mm2 * atoms[j].mm2;
+            double c6 = fac * m1i * m1j;
+            double c8 = 1.5 * fac * (m1i * m2j + m2i * m1j);
+            double c10 = 2.0 * fac * (m1i * m3j + m3i * m1j) + 4.2 * fac * m2i * m2j;
 
             // Critical radius (BJ damping)
             double rc = (std::sqrt(c8 / c6) + std::sqrt(std::sqrt(c10 / c6)) + std::sqrt(c10 / c8)) / 3.0;
@@ -497,9 +534,9 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Wavefunction> wfn, const s
             if (ii == jj) continue;
 
             // Interatomic distance
-            double xij = mol->x(j) - mol->x(i);
-            double yij = mol->y(j) - mol->y(i);
-            double zij = mol->z(j) - mol->z(i);
+            double xij = coords.get(j, 0) - coords.get(i, 0);
+            double yij = coords.get(j, 1) - coords.get(i, 1);
+            double zij = coords.get(j, 2) - coords.get(i, 2);
             double d = std::sqrt(xij * xij + yij * yij + zij * zij);
 
             if (d < 1.0e-10) continue;
@@ -520,19 +557,23 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Wavefunction> wfn, const s
             e_disp_pairs->set(ii, jj, 0.5 * e_disp_tmp);
             e_disp_pairs->set(jj, ii, 0.5 * e_disp_tmp);
 
-            outfile->Printf("    %4d %4d %6d %6d %12.6f %16.9E %16.9E %16.9E %12.6f %12.6f %12.6f\n", ii + 1, jj + 1,
-                            i + 1, j + 1, d, c6, c8, c10, rc, rvdw, e_disp_tmp);
+            if (wfn) {
+                outfile->Printf("    %4d %4d %6d %6d %12.6f %16.9E %16.9E %16.9E %12.6f %12.6f %12.6f\n", ii + 1,
+                                jj + 1, i + 1, j + 1, d, c6, c8, c10, rc, rvdw, e_disp_tmp);
+            }
         }
     }
 
-    wfn->set_array_variable("XDM C6 COEFFICIENTS", c6_mat);
-    wfn->set_array_variable("XDM C8 COEFFICIENTS", c8_mat);
-    wfn->set_array_variable("XDM C10 COEFFICIENTS", c10_mat);
-    wfn->set_array_variable("XDM RC COEFFICIENTS", rc_mat);
-    wfn->set_array_variable("XDM PAIRWISE ENERGY", e_disp_pairs);
+    if (wfn) {
+        wfn->set_array_variable("XDM C6 COEFFICIENTS", c6_mat);
+        wfn->set_array_variable("XDM C8 COEFFICIENTS", c8_mat);
+        wfn->set_array_variable("XDM C10 COEFFICIENTS", c10_mat);
+        wfn->set_array_variable("XDM RC COEFFICIENTS", rc_mat);
+        wfn->set_array_variable("XDM PAIRWISE ENERGY", e_disp_pairs);
 
-    outfile->Printf("\n");
-    outfile->Printf("  XDM Dispersion Energy: %20.12f [Eh]\n\n", e_disp);
+        outfile->Printf("\n");
+        outfile->Printf("  XDM Dispersion Energy: %20.12f [Eh]\n\n", e_disp);
+    }
 
     return e_disp;
 }

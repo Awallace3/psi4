@@ -98,16 +98,6 @@ def _negotiate_derivative_type(driver, method, user_dertype, uses_xdm):
     return negotiate_derivative_type(driver, method, user_dertype, verbose=1)
 
 
-def _reject_unsupported_xdm_bsse(molecule: core.Molecule, bsse_type) -> None:
-    """XDM is not yet defined in the presence of ghost atoms, so counterpoise is refused."""
-
-    bsse_types = [bsse_type] if isinstance(bsse_type, str) else (bsse_type or [])
-    if any(item.lower() in ("cp", "vmfc") for item in bsse_types):
-        raise NotImplementedError("Counterpoise-based XDM energies are not implemented.")
-    if any(molecule.Z(at) == 0.0 for at in range(molecule.natom())):
-        raise NotImplementedError("XDM with ghost atoms is not implemented; remove the Gh() atoms.")
-
-
 def expand_cbs_methods(method: str, basis: str, driver: DriverEnum, **kwargs) -> Tuple[str, str, Dict]:
     """Sort out the user input method string into recognized fields. Handles cases like:
 
@@ -218,8 +208,16 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
     )
     task_uses_xdm = dft_uses_xdm or cbs_kwargs_uses_xdm or _container_uses_xdm((method, cbsmeta))
     uses_xdm = task_uses_xdm or _container_uses_xdm(kwargs.get("levels", {}))
-    if uses_xdm:
-        _reject_unsupported_xdm_bsse(molecule, current_manybody_kwargs.get("bsse_type"))
+    xdm_counterpoise = False
+    if current_manybody_kwargs.get("bsse_type") is not None:
+        bsse_type = current_manybody_kwargs["bsse_type"]
+        bsse_types = [bsse_type] if isinstance(bsse_type, str) else bsse_type
+        xdm_counterpoise = uses_xdm and any(item.lower() in {"cp", "vmfc"} for item in bsse_types)
+        # Counterpoise XDM energies superpose ghost-centre moments across subsystem
+        # tasks after they run (procrouting/xdm_counterpoise.py). That correction
+        # has no derivative, so gradients would silently miss it.
+        if xdm_counterpoise and driver != "energy":
+            raise NotImplementedError(f"Counterpoise-based XDM {driver}s are not implemented; use bsse_type='nocp'.")
 
     # XDM has no analytic derivatives: gradients are finite differences of the
     # full XDM energy (see proc_table, where XDM registers for energy only).
@@ -245,6 +243,11 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
             packet.update({'method': method, 'basis': basis})
             # cbsmeta carries over between levels; only a "cbs" level actually uses it
             level_uses_xdm = dft_uses_xdm or _container_uses_xdm((method, cbsmeta if method == "cbs" else None))
+            if xdm_counterpoise and level_uses_xdm and method == "cbs":
+                # Composite results do not carry the per-atom XDM moments the
+                # counterpoise superposition needs.
+                raise NotImplementedError("Counterpoise-based XDM energies through composite (CBS) methods are "
+                                          "not implemented.")
 
             # Tell the task builder which level to add a task list for
             # * see https://github.com/psi4/psi4/pull/1351#issuecomment-549948276 for discussion of where build_tasks logic should live

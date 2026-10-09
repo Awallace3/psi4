@@ -326,6 +326,8 @@ void export_functional(py::module &m) {
                     "Build from functional name with explicit a1 and a2 (a2 in angstrom).")
         .def("compute_energy", &xdm::XDMDispersion::compute_energy, "wfn"_a, "hf_fraction"_a,
              "Compute XDM dispersion energy from a converged wavefunction.")
+        .def("energy_from_properties", &xdm::XDMDispersion::energy_from_properties, "coords"_a, "props"_a,
+             "Pairwise XDM energy over the real rows of an ``XDM ATOMIC PROPERTIES`` array; coords in bohr.")
         .def("a1", &xdm::XDMDispersion::a1, "Get a1 BJ damping parameter.")
         .def("a2", &xdm::XDMDispersion::a2, "Get a2 BJ damping parameter (bohr).")
         .def("functional_name", &xdm::XDMDispersion::functional_name, "Get functional name.");

@@ -53,6 +53,19 @@ struct AtomicData {
     double charge = 0.0;  ///< Integrated electron count (for verification)
 };
 
+/// Columns of the ``XDM ATOMIC PROPERTIES`` array, one row per centre (ghosts included).
+enum XDMProperty {
+    XDM_PROP_Z = 0,               ///< true atomic number (also for ghosts)
+    XDM_PROP_REAL = 1,            ///< 1 for real atoms, 0 for ghosts (only real atoms enter the pair sum)
+    XDM_PROP_CHARGE = 2,          ///< Hirshfeld-integrated electron count
+    XDM_PROP_VOLUME = 3,          ///< Hirshfeld volume, <r^3>
+    XDM_PROP_M1 = 4,              ///< <M1^2>
+    XDM_PROP_M2 = 5,              ///< <M2^2>
+    XDM_PROP_M3 = 6,              ///< <M3^2>
+    XDM_PROP_POLARIZABILITY = 7,  ///< volume-scaled atomic polarizability
+    XDM_NPROP = 8
+};
+
 /// XDM dispersion correction with Becke-Johnson damping.
 ///
 /// Computes the exchange-hole dipole moment (XDM) dispersion energy from a
@@ -74,6 +87,13 @@ class PSI_API XDMDispersion {
     /// Compute XDM dispersion energy from a converged wavefunction.
     double compute_energy(std::shared_ptr<Wavefunction> wfn, double hf_fraction);
 
+    /// Pairwise XDM energy from per-centre properties, without printing or setting variables.
+    /// @param coords  (natom, 3) Cartesian coordinates [bohr]
+    /// @param props   (natom, XDM_NPROP) properties as in ``XDM ATOMIC PROPERTIES``; only rows
+    ///                flagged real enter the sum, so a counterpoise driver can add a partner
+    ///                fragment's ghost-centre moments to a monomer and re-evaluate it.
+    double energy_from_properties(SharedMatrix coords, SharedMatrix props) const;
+
     double a1() const { return a1_; }
     double a2() const { return a2_; }
     std::string functional_name() const { return functional_name_; }
@@ -86,8 +106,12 @@ class PSI_API XDMDispersion {
     /// Integrate Hirshfeld-weighted atomic properties from the wavefunction.
     std::vector<AtomicData> integrate_properties(std::shared_ptr<Wavefunction> wfn);
 
-    /// Compute pairwise BJ-damped dispersion energy; stores the pair matrices on wfn.
+    /// Compute pairwise BJ-damped dispersion energy; stores the property and pair arrays on wfn.
     double pairwise_energy(std::shared_ptr<Wavefunction> wfn, const std::vector<AtomicData>& atoms, double hf_fraction);
+
+    /// BJ-damped pair sum over the real rows of ``props``. A non-null ``wfn`` prints the pair table
+    /// and stores the coefficient arrays on it.
+    double pair_sum(const Matrix& coords, const Matrix& props, Wavefunction* wfn) const;
 };
 
 }  // namespace xdm
