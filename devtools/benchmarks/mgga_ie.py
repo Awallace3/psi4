@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small, fresh-process SCF counterpoise IE parity matrix; no SAPT or dispersion."""
+"""Fresh-process meta-GGA SCF CP matrix; no SAPT/GRAC/D4, retain intrinsic VV10."""
 import argparse
 import hashlib
 import itertools
@@ -15,10 +15,11 @@ import traceback
 from saptdft_cuest_grac import geometry, atomic_json
 
 CASES = [("water", "aug-cc-pvdz"), ("benzene", "aug-cc-pvdz"), ("peptide", "6-31+g**")]
-FUNCTIONALS = ["m06-l", "m06", "pw6b95", "r2scan"]
+FUNCTIONALS = ["m06-l", "m06", "pw6b95", "r2scan", "wb97m-v"]
 ROUTES = ["cpu", "gpu-jk", "gpu-xc"]
 FRAGMENTS = ["AB", "A", "B"]
 EH_TO_KCAL = 627.5094740631
+IE_TOLERANCE = 1e-5
 
 
 def options(basis, route):
@@ -32,6 +33,23 @@ def options(basis, route):
 
 def delta(energies):
     return energies["AB"] - energies["A"] - energies["B"]
+
+
+def validate_functional(wfn, name):
+    """Prove wB97M-V was not silently replaced by a semilocal-only functional."""
+    functional = wfn.functional()
+    metadata = dict(name=functional.name(), meta=functional.is_meta(),
+                    needs_vv10=functional.needs_vv10(), x_lrc=functional.is_x_lrc(),
+                    x_omega=functional.x_omega())
+    assert metadata["meta"], "Not a meta-GGA"
+    if metadata["needs_vv10"]:
+        metadata["vv10_energy_hartree"] = float(wfn.variable("DFT VV10 ENERGY"))
+        assert math.isfinite(metadata["vv10_energy_hartree"])
+    if name.lower() == "wb97m-v":
+        assert metadata["needs_vv10"] and metadata["x_lrc"], "wB97M-V must retain VV10 and range separation"
+        assert metadata["x_omega"] > 0
+        assert abs(metadata["vv10_energy_hartree"]) > 1e-14, "VV10 energy was not included"
+    return metadata
 
 
 def worker(a):
@@ -68,7 +86,9 @@ def worker(a):
         record.update(energy_hartree=float(energy), wall_s=time.perf_counter()-start,
                       nbf=wfn.basisset().nbf(), meta=wfn.functional().is_meta(),
                       timer_records=psi4.core.get_timer_records())
-        assert record["meta"], "Not a meta-GGA"
+        record["functional_metadata"] = validate_functional(wfn, a.functional)
+        if wfn.has_variable("SCF ITERATIONS"):
+            record["scf_iterations"] = int(wfn.variable("SCF ITERATIONS"))
         assert math.isfinite(energy)
         psi4.core.close_outfile()
         text = (out / "psi4.out").read_text()
@@ -146,6 +166,10 @@ def summarize(results):
                 assert len({r["nbf"] for r in rs.values()}) == 1, "CP basis mismatch"
                 es = {f: r["energy_hartree"] for f, r in rs.items()}
                 routes[route] = dict(energies=es, ie_hartree=delta(es))
+                walls = {f: r.get("wall_s") for f, r in rs.items()}
+                if all(isinstance(w, (int, float)) and math.isfinite(w) and w > 0
+                       for w in walls.values()):
+                    routes[route].update(wall_s=walls, cp_wall_s=math.fsum(walls.values()))
         for route in ROUTES[1:]:
             row = dict(build=build, system=system, functional=functional, route=route,
                        complete="cpu" in routes and route in routes)
@@ -157,7 +181,15 @@ def summarize(results):
                            delta_ie_hartree=diff, delta_ie_kcal_mol=diff*EH_TO_KCAL,
                            signed_total_errors_hartree=errors,
                            max_total_error_hartree=max(map(abs, errors.values())),
-                           within_ie_1e_6_Eh=abs(diff) <= 1e-6)
+                           within_ie_1e_6_Eh=abs(diff) <= 1e-6,
+                           within_ie_1e_5_Eh=abs(diff) <= IE_TOLERANCE)
+                if "wall_s" in cpu and "wall_s" in gpu:
+                    row.update(cpu_fragment_wall_s=cpu["wall_s"],
+                               gpu_fragment_wall_s=gpu["wall_s"],
+                               cpu_cp_wall_s=cpu["cp_wall_s"], gpu_cp_wall_s=gpu["cp_wall_s"],
+                               cp_speedup=cpu["cp_wall_s"]/gpu["cp_wall_s"],
+                               dimer_speedup=cpu["wall_s"]["AB"]/gpu["wall_s"]["AB"],
+                               timing_scope="Wall around psi4.energy; CP=sum(AB,A,B); excludes Python startup/import.")
             rows.append(row)
     return rows
 
@@ -184,9 +216,11 @@ def campaign(a):
                     binary_sha256=hashes, build_provenance=build_provenance, harness_commit=subprocess.check_output(
                         ["git", "-C", str(script.parent), "rev-parse", "HEAD"], text=True).strip(),
                     script_sha256=digest(script), geometry_sha256={s:hashlib.sha256(geometry(s).encode()).hexdigest() for s,_ in CASES},
-                    protocol="E_AB - E_A(ghost B) - E_B(ghost A), fixed geometry; no D4, no SAPT, no GRAC. "
+                    protocol="E_AB - E_A(ghost B) - E_B(ghost A), fixed geometry; no D4, no SAPT, no GRAC; "
+                    "retain functional-intrinsic VV10, including for wB97M-V. "
                     "Each build compared to its own native CPU reference; historical CUDA build is not a source-matched ablation.",
-                    tolerance="Report all errors; flag |IE GPU-CPU| > 1e-6 Eh, not a universal support certification.",
+                    tolerance="User acceptance |IE GPU-CPU| <= 1e-5 Eh; retain 1e-6 diagnostic flag.",
+                    ie_tolerance_hartree=IE_TOLERANCE, worker_timeout_s=a.worker_timeout,
                     gpu=subprocess.check_output(["nvidia-smi","--query-gpu=name,uuid,driver_version","--format=csv,noheader"],text=True),
                     records=[])
     assert "H200" in manifest["gpu"]
@@ -208,7 +242,8 @@ def campaign(a):
                    "--expected-xc", "cuda-libxc" if build == "cuda" else "cuest-host-libxc"]
             with (out / f"{name}.log").open("w") as log:
                 try:
-                    p = subprocess.run(cmd, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=240)
+                    p = subprocess.run(cmd, env=env, stdout=log, stderr=subprocess.STDOUT,
+                                       timeout=a.worker_timeout)
                     code = p.returncode
                 except subprocess.TimeoutExpired:
                     code = 124
@@ -227,7 +262,8 @@ def campaign(a):
     completed = (len(results) == expected_count and all(r["ok"] for r in results.values())
                  and all(r["returncode"] == 0 for r in manifest["records"]))
     atomic_json(out / "COMPLETE.json", dict(calculations_complete=completed, count=len(results),
-        expected=expected_count, all_ie_within_tolerance=all(r.get("within_ie_1e_6_Eh",False) for r in comparisons)))
+        expected=expected_count, final_provenance_verified=True, ie_tolerance_hartree=IE_TOLERANCE,
+        all_ie_within_tolerance=all(r.get("within_ie_1e_5_Eh",False) for r in comparisons)))
     return 0 if completed else 1
 
 
@@ -236,6 +272,7 @@ if __name__ == "__main__":
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--worker", action="store_true")
     p.add_argument("--preflight", action="store_true")
+    p.add_argument("--worker-timeout", type=float, default=240)
     p.add_argument("--systems", nargs="+", choices=[s for s, _ in CASES])
     p.add_argument("--functionals", nargs="+", choices=FUNCTIONALS)
     for key in ("package", "host-package", "cuda-package", "cuda-lib-dir"):
@@ -243,4 +280,6 @@ if __name__ == "__main__":
     for key in ("system", "basis", "functional", "route", "fragment", "expected-xc"):
         p.add_argument("--"+key)
     args = p.parse_args()
+    if not math.isfinite(args.worker_timeout) or args.worker_timeout <= 0:
+        p.error("--worker-timeout must be finite and positive")
     sys.exit(worker(args) if args.worker else campaign(args))

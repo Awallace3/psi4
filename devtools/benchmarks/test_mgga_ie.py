@@ -1,8 +1,49 @@
 import unittest
-from mgga_ie import delta, options, summarize, process_result, FRAGMENTS
+from mgga_ie import delta, options, summarize, process_result, FRAGMENTS, FUNCTIONALS, validate_functional
 
 
 class Tests(unittest.TestCase):
+    def test_wb97mv_is_in_default_matrix(self):
+        self.assertIn("wb97m-v", FUNCTIONALS)
+        self.assertNotIn("dft_vv10_b", options("aug-cc-pvdz", "gpu-xc"))
+
+    def test_wb97mv_requires_vv10_and_range_separation(self):
+        class Functional:
+            def name(self): return "wB97M-V"
+            def is_meta(self): return True
+            def needs_vv10(self): return self.vv10
+            def is_x_lrc(self): return self.lrc
+            def x_omega(self): return .3
+            vv10, lrc = True, True
+        class Wavefunction:
+            def functional(self): return f
+            def variable(self, key):
+                self_key = "DFT VV10 ENERGY"
+                assert key == self_key
+                return energy
+        f, energy = Functional(), .02
+        self.assertEqual(validate_functional(Wavefunction(), "wb97m-v")["vv10_energy_hartree"], .02)
+        for vv10, lrc, energy in ((False, True, .02), (True, False, .02), (True, True, 0)):
+            f.vv10, f.lrc = vv10, lrc
+            with self.assertRaises(AssertionError):
+                validate_functional(Wavefunction(), "wb97m-v")
+
+    def test_cp_speedup_uses_all_three_calculations(self):
+        results = {}
+        for route, walls in (("cpu", [10, 20, 30]), ("gpu-xc", [2, 4, 6])):
+            for fragment, energy, wall in zip(FRAGMENTS, [-20.1, -10., -10.], walls):
+                shift = 6e-6 if route == "gpu-xc" and fragment == "AB" else 0
+                results[("host", "water", "wb97m-v", route, fragment)] = dict(
+                    ok=True, nbf=10, energy_hartree=energy+shift, wall_s=wall)
+        row = next(r for r in summarize(results) if r["complete"])
+        self.assertEqual(row["cpu_cp_wall_s"], 60)
+        self.assertEqual(row["gpu_cp_wall_s"], 12)
+        self.assertEqual(row["cp_speedup"], 5)
+        self.assertFalse(row["within_ie_1e_6_Eh"])
+        self.assertTrue(row["within_ie_1e_5_Eh"])
+        results[("host", "water", "wb97m-v", "gpu-xc", "B")]["ok"] = False
+        self.assertFalse(any(r["complete"] for r in summarize(results)))
+
     def test_failed_teardown_invalidates_result(self):
         record = process_result(dict(ok=True, energy_hartree=-1), -11)
         self.assertFalse(record["ok"])
