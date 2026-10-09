@@ -66,6 +66,8 @@ void SuperFunctional::common_init() {
     grac_shift_ = 0.0;
     grac_alpha_ = 0.5;
     grac_beta_ = 40.0;
+    grac_density_hessian_ = false;
+    grac_stretch_ = false;
 
     needs_vv10_ = false;
     vv10_b_ = 0.0;
@@ -137,6 +139,8 @@ std::shared_ptr<SuperFunctional> SuperFunctional::build_polarized() {
         sup->grac_shift_ = grac_shift_;
         sup->grac_alpha_ = grac_alpha_;
         sup->grac_beta_ = grac_beta_;
+        sup->grac_density_hessian_ = grac_density_hessian_;
+        sup->grac_stretch_ = grac_stretch_;
         sup->set_grac_x_functional(grac_x_functional_->build_polarized());
         sup->set_grac_c_functional(grac_c_functional_->build_polarized());
     }
@@ -182,6 +186,8 @@ std::shared_ptr<SuperFunctional> SuperFunctional::build_worker() {
         sup->grac_shift_ = grac_shift_;
         sup->grac_alpha_ = grac_alpha_;
         sup->grac_beta_ = grac_beta_;
+        sup->grac_density_hessian_ = grac_density_hessian_;
+        sup->grac_stretch_ = grac_stretch_;
         sup->set_grac_x_functional(grac_x_functional_->build_worker());
         sup->set_grac_c_functional(grac_c_functional_->build_worker());
     }
@@ -409,6 +415,14 @@ void SuperFunctional::set_grac_alpha(double grac_alpha) {
 void SuperFunctional::set_grac_beta(double grac_beta) {
     can_edit();
     grac_beta_ = grac_beta;
+}
+void SuperFunctional::set_grac_density_hessian(bool val) {
+    can_edit();
+    grac_density_hessian_ = val;
+}
+void SuperFunctional::set_grac_stretch(bool val) {
+    can_edit();
+    grac_stretch_ = val;
 }
 void SuperFunctional::set_grac_shift(double grac_shift) {
     can_edit();
@@ -738,10 +752,11 @@ std::map<std::string, SharedVector>& SuperFunctional::compute_functional(
              ++it) {
             ::memset((void*)((*it).second->pointer()), '\0', sizeof(double) * npoints);
         }
-        if (grac_x_functional_) {
+        // The stretch-only splice keeps the bulk potential and needs no asymptotic functional.
+        if (grac_x_functional_ && !grac_stretch_) {
             grac_x_functional_->compute_functional(vals, ac_values_, npoints, 1);
         }
-        if (grac_c_functional_) {
+        if (grac_c_functional_ && !grac_stretch_) {
             grac_c_functional_->compute_functional(vals, ac_values_, npoints, 1);
         }
 
@@ -753,30 +768,87 @@ std::map<std::string, SharedVector>& SuperFunctional::compute_functional(
             double* v_gamma = values_["V_GAMMA_AA"]->pointer();
 
             double* grac_v_rho = ac_values_["V_RHO_A"]->pointer();
-            double* grac_v_gamma = ac_values_["V_GAMMA_AA"]->pointer();
 
             const double galpha = -1.0 * grac_alpha_;
             const double gbeta = grac_beta_;
             const double gshift = grac_shift_;
             const double pow43 = 4.0 / 3.0;
-            double denx;
 
-#pragma omp simd
-            for (size_t i = 0; i < npoints; i++) {
-                if (rho[i] < 1.e-16) {
-                    denx = 1.e2;  // Will force grac_fx to 1
-                } else {
-                    denx = std::pow(sigma[i], 0.5) / std::pow(rho[i], pow43);
+            // Cencek & Szalewicz, JCP 139, 024104 (2013).  Psi4 shifts the bulk down by the
+            // shift instead of the asymptotic part up (their Eq. 8); the two differ by a
+            // constant and give the same orbitals and orbital-energy differences.
+            if (grac_stretch_) {
+                // Sec. IV: a range-separated hybrid with full long-range exact exchange already
+                // decays as -1/r, so only stretch it: v = v_b - (1 - f) shift.  The bulk
+                // gradient and tau terms are untouched, so Eq. 17 has nothing to act on.
+                for (size_t i = 0; i < npoints; i++) {
+                    double denx = (rho[i] < 1.e-16) ? 1.e2 : std::pow(sigma[i], 0.5) / std::pow(rho[i], pow43);
+                    double grac_fx = 1.0 / (1.0 + std::exp(galpha * (denx - gbeta)));
+                    v_rho[i] -= (1.0 - grac_fx) * gshift;
                 }
+            } else if (grac_density_hessian_) {
+                // Indirect (integration-by-parts) matrix elements of (1 - f) v_b need the extra
+                // term of Eq. 17 when f depends on the density gradient:
+                //   <i| (1-f) v_b |j> = int (1-f) [v_rho phi_i phi_j + 2 v_gamma grad(rho).grad(phi_i phi_j)]
+                //                       - int 2 v_gamma (grad(rho).grad(f)) phi_i phi_j,
+                // with grad(f) = alpha f (1-f) grad(g) and g = |grad rho| / rho^(4/3).
+                auto need = [&vals](const char* key) {
+                    auto it = vals.find(key);
+                    if (it == vals.end() || !it->second) {
+                        throw PSIEXCEPTION("GRAC: DFT_GRAC_DENSITY_HESSIAN needs the density Hessian, which was not computed.");
+                    }
+                    return it->second->pointer();
+                };
+                double* rho_x = need("RHO_AX");
+                double* rho_y = need("RHO_AY");
+                double* rho_z = need("RHO_AZ");
+                double* rho_xx = need("RHO_AXX");
+                double* rho_xy = need("RHO_AXY");
+                double* rho_xz = need("RHO_AXZ");
+                double* rho_yy = need("RHO_AYY");
+                double* rho_yz = need("RHO_AYZ");
+                double* rho_zz = need("RHO_AZZ");
+                for (size_t i = 0; i < npoints; i++) {
+                    double denx = (rho[i] < 1.e-16) ? 1.e2 : std::pow(sigma[i], 0.5) / std::pow(rho[i], pow43);
+                    double grac_fx = 1.0 / (1.0 + std::exp(galpha * (denx - gbeta)));
+                    double sr_grac_fx = (1.0 - grac_fx);
 
-                double grac_fx = 1.0 / (1.0 + std::exp(galpha * (denx - gbeta)));
+                    double grad_rho_grad_f = 0.0;
+                    if (rho[i] >= 1.e-16 && sigma[i] > 0.0) {
+                        const double gx = rho_x[i], gy = rho_y[i], gz = rho_z[i];
+                        const double gHg = gx * (rho_xx[i] * gx + rho_xy[i] * gy + rho_xz[i] * gz) +
+                                           gy * (rho_xy[i] * gx + rho_yy[i] * gy + rho_yz[i] * gz) +
+                                           gz * (rho_xz[i] * gx + rho_yz[i] * gy + rho_zz[i] * gz);
+                        const double s = std::sqrt(sigma[i]);
+                        const double r43 = std::pow(rho[i], pow43);
+                        // grad(rho).grad(g) = (grad rho . H . grad rho) / (|grad rho| rho^4/3) - 4/3 |grad rho|^3 / rho^7/3
+                        const double grad_rho_grad_g = gHg / (s * r43) - pow43 * s * sigma[i] / (rho[i] * r43);
+                        grad_rho_grad_f = grac_alpha_ * grac_fx * sr_grac_fx * grad_rho_grad_g;
+                    }
 
-                double sr_grac_fx = (1.0 - grac_fx);
-                v_rho[i] = sr_grac_fx * (v_rho[i] - gshift) + (grac_fx * grac_v_rho[i]);
-                v_gamma[i] = sr_grac_fx * v_gamma[i];
+                    v_rho[i] = sr_grac_fx * (v_rho[i] - gshift) + (grac_fx * grac_v_rho[i]) -
+                               2.0 * v_gamma[i] * grad_rho_grad_f;
+                    v_gamma[i] = sr_grac_fx * v_gamma[i];
+                }
+            } else {
+                double denx;
+#pragma omp simd
+                for (size_t i = 0; i < npoints; i++) {
+                    if (rho[i] < 1.e-16) {
+                        denx = 1.e2;  // Will force grac_fx to 1
+                    } else {
+                        denx = std::pow(sigma[i], 0.5) / std::pow(rho[i], pow43);
+                    }
 
-                // We neglect the gradient of denx with v_gamma, as it requires the laplacian and
-                // there is virtually no difference. See DOI: 10.1002/cphc.200700504
+                    double grac_fx = 1.0 / (1.0 + std::exp(galpha * (denx - gbeta)));
+
+                    double sr_grac_fx = (1.0 - grac_fx);
+                    v_rho[i] = sr_grac_fx * (v_rho[i] - gshift) + (grac_fx * grac_v_rho[i]);
+                    v_gamma[i] = sr_grac_fx * v_gamma[i];
+
+                    // This omits the switching-gradient term of Eq. 17 of Cencek & Szalewicz
+                    // (2013); set DFT_GRAC_DENSITY_HESSIAN to include it.
+                }
             }
         }
 

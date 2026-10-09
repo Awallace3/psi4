@@ -1906,6 +1906,17 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_str("DFT_GRAC_X_FUNC", "XC_GGA_X_LB");
         /*- The gradient regularized asymptotic correction functional corr form. !expert -*/
         options.add_str("DFT_GRAC_C_FUNC", "XC_LDA_C_VWN");
+        /*- Include the switching-function gradient term of the GRAC potential matrix elements (Eq. 17 of
+        Cencek and Szalewicz, J. Chem. Phys. 139, 024104 (2013)). The gradient-dependent switch makes
+        the damped GGA term carry an extra
+        :math:`-2\,\partial F/\partial\gamma\,\nabla\rho\cdot\nabla f` that needs the density Hessian.
+        Off by default, which reproduces the historical Psi4 (and pre-2.9.0 ORCA) potential. !expert -*/
+        options.add_bool("DFT_GRAC_DENSITY_HESSIAN", false);
+        /*- How the GRAC asymptotic potential is spliced in. ``ASYMPTOTIC`` switches to LB94 exchange
+        (scaled by the missing long-range exact exchange) plus VWN correlation. ``STRETCH`` keeps the
+        bulk potential everywhere and only removes the shift where the switch is on, the Sec. IV splice
+        of Cencek and Szalewicz for range-separated hybrids with 100% long-range exact exchange. !expert -*/
+        options.add_str("DFT_GRAC_SPLICE", "ASYMPTOTIC", "ASYMPTOTIC STRETCH");
         /*- Number of spherical points (A :ref:`Lebedev Points <table:lebedevorder>` number). -*/
         options.add_int("DFT_SPHERICAL_POINTS", 302);
         /*- Number of radial points. -*/

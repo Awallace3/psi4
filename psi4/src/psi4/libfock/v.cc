@@ -697,9 +697,24 @@ void VBase::set_grac_shift(double grac_shift) {
             grac_x_func->set_alpha(1.0 - functional_->x_alpha());
         }
 
+        // Cencek & Szalewicz, JCP 139, 024104 (2013): STRETCH is their Sec. IV splice for a
+        // range-separated hybrid, which already decays as -1/r through the exact exchange.
+        const bool grac_stretch = options_.get_str("DFT_GRAC_SPLICE") == "STRETCH";
+        if (grac_stretch && !(functional_->is_x_lrc() &&
+                              std::fabs(functional_->x_alpha() + functional_->x_beta() - 1.0) < 1.0e-10)) {
+            throw PSIEXCEPTION(
+                "GRAC: DFT_GRAC_SPLICE STRETCH needs a range-separated hybrid with 100% long-range exact "
+                "exchange; any other functional would not decay as -1/r.");
+        }
+        // Their Eq. 17; only the LB94 splice damps the gradient term, so only it needs the Hessian.
+        const bool grac_hessian = options_.get_bool("DFT_GRAC_DENSITY_HESSIAN") && !grac_stretch &&
+                                  functional_->ansatz() >= 1;
+
         functional_->set_lock(false);
         functional_->set_grac_alpha(grac_alpha);
         functional_->set_grac_beta(grac_beta);
+        functional_->set_grac_density_hessian(grac_hessian);
+        functional_->set_grac_stretch(grac_stretch);
         functional_->set_grac_x_functional(grac_x_func);
         functional_->set_grac_c_functional(grac_c_func);
         functional_->allocate();
@@ -708,10 +723,15 @@ void VBase::set_grac_shift(double grac_shift) {
             functional_workers_[i]->set_lock(false);
             functional_workers_[i]->set_grac_alpha(grac_alpha);
             functional_workers_[i]->set_grac_beta(grac_beta);
+            functional_workers_[i]->set_grac_density_hessian(grac_hessian);
+            functional_workers_[i]->set_grac_stretch(grac_stretch);
             functional_workers_[i]->set_grac_x_functional(grac_x_func->build_worker());
             functional_workers_[i]->set_grac_c_functional(grac_c_func->build_worker());
             functional_workers_[i]->allocate();
             functional_workers_[i]->set_lock(true);
+        }
+        if (grac_hessian) {
+            for (auto& pworker : point_workers_) pworker->set_density_hessian(true);
         }
         grac_initialized_ = true;
     }
@@ -1360,8 +1380,11 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
     int max_points = grid_->max_points();
 
     // Setup the pointers
+    const bool grac_hessian = functional_->needs_grac() && functional_->grac_density_hessian();
     for (size_t i = 0; i < num_threads_; i++) {
         point_workers_[i]->set_pointers(D_AO_[0]);
+        // Another routine may have lowered the derivative level since set_grac_shift.
+        if (grac_hessian && point_workers_[i]->deriv() < 2) point_workers_[i]->set_density_hessian(true);
     }
 
     // Per thread temporaries

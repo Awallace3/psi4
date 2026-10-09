@@ -118,6 +118,8 @@ class PointFunctions : public BasisFunctions {
 
     /// Ansatz (0 - LSDA, 1 - GGA, 2 - Meta-GGA)
     int ansatz_;
+    /// Also build the density Hessian RHO_AXX ... RHO_AZZ (GGA and up, needs deriv >= 2)
+    bool density_hessian_ = false;
     /// Map of value names to Vectors containing values
     std::map<std::string, std::shared_ptr<Vector>> point_values_;
 
@@ -163,6 +165,13 @@ class PointFunctions : public BasisFunctions {
         deriv_ = ansatz;
         allocate();
     }
+    /// Request the density Hessian (the GRAC switching-gradient term); raises deriv to 2
+    void set_density_hessian(bool val) {
+        density_hessian_ = val;
+        if (val && deriv_ < 2) deriv_ = 2;
+        allocate();
+    }
+    bool density_hessian() const { return density_hessian_; }
     virtual void set_pointers(SharedMatrix Da_occ_AO) = 0;
     virtual void set_pointers(SharedMatrix Da_occ_AO, SharedMatrix Db_occ_AO) = 0;
 

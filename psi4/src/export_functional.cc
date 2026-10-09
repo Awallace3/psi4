@@ -155,6 +155,8 @@ void export_functional(py::module &m) {
         .def("grac_shift", &SuperFunctional::grac_shift, "Shift of the bulk potenital.")
         .def("grac_alpha", &SuperFunctional::grac_alpha, "GRAC Alpha.")
         .def("grac_beta", &SuperFunctional::grac_beta, "GRAC Beta.")
+        .def("grac_density_hessian", &SuperFunctional::grac_density_hessian, "Does GRAC include the Eq. 17 switching-gradient term.")
+        .def("grac_stretch", &SuperFunctional::grac_stretch, "Does GRAC stretch the bulk potential instead of splicing LB94.")
         .def("density_tolerance", &SuperFunctional::density_tolerance, "Density threshold for LibXC.")
         .def("is_gga", &SuperFunctional::is_gga, "Is this a GGA?")
         .def("is_meta", &SuperFunctional::is_meta, "Is this a MGGA?")
