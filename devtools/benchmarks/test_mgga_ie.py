@@ -1,6 +1,7 @@
 import unittest
 from mgga_ie import (delta, options, summarize, process_result, FRAGMENTS, FUNCTIONALS,
-                     validate_functional, validate_energy_components)
+                     validate_functional, validate_energy_components,
+                     validate_vv10_runtime_options)
 
 
 class Tests(unittest.TestCase):
@@ -8,6 +9,16 @@ class Tests(unittest.TestCase):
         self.assertIn("wb97m-v", FUNCTIONALS)
         self.assertNotIn("dft_vv10_b", options("aug-cc-pvdz", "gpu-xc"))
         self.assertFalse(options("aug-cc-pvdz", "cpu")["dft_vv10_postscf"])
+
+    def test_runtime_boolean_accepts_psi4_integer_zero(self):
+        # Captured from all 54 failed workers: get_option returns integer 0.
+        captured = {"DFT_VV10_POSTSCF": 0, "DFT_VV10_RADIAL_POINTS": 50,
+                    "DFT_VV10_SPHERICAL_POINTS": 146, "DFT_VV10_RHO_CUTOFF": 1e-8}
+        validate_vv10_runtime_options(captured)
+        validate_vv10_runtime_options(dict(captured, DFT_VV10_POSTSCF=False))
+        for value in (True, 1, None, "false"):
+            with self.assertRaisesRegex(AssertionError, "Self-consistent VV10"):
+                validate_vv10_runtime_options(dict(captured, DFT_VV10_POSTSCF=value))
 
     def test_wb97mv_requires_vv10_and_range_separation(self):
         class Functional:

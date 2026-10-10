@@ -72,6 +72,13 @@ def validate_energy_components(wfn, energy):
     return components
 
 
+def validate_vv10_runtime_options(runtime_options):
+    postscf = runtime_options["DFT_VV10_POSTSCF"]
+    # Psi4's option binding may expose booleans as integer 0/1.
+    assert type(postscf) in (bool, int) and postscf == 0, \
+        "Self-consistent VV10 required (POSTSCF must be disabled)"
+
+
 def worker(a):
     import psi4
     out = a.output.resolve()
@@ -96,7 +103,7 @@ def worker(a):
             key: psi4.core.get_option("SCF", key) for key in (
                 "DFT_VV10_POSTSCF", "DFT_VV10_RADIAL_POINTS",
                 "DFT_VV10_SPHERICAL_POINTS", "DFT_VV10_RHO_CUTOFF")}
-        assert record["vv10_runtime_options"]["DFT_VV10_POSTSCF"] is False
+        validate_vv10_runtime_options(record["vv10_runtime_options"])
         mol = psi4.geometry(record["geometry"])
         assert mol.nfragments() == 2
         if a.fragment == "A":

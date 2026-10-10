@@ -20,7 +20,7 @@ All r²SCAN IEs pass either threshold.
 | PW6B95 | unavailable | unavailable | 12 incomplete comparisons; CPU ghost failures |
 | ωB97M-V | 1.17121814e-7 (water preflight only) | 0.00007349 (rounded) | Water 4/4 complete pass; final three-system campaign pending |
 
-GPU-JK-only maximum |ΔIE| is 7.35440153e-10 Eh and maximum underlying
+For M06-L/M06/r²SCAN, GPU-JK-only maximum |ΔIE| is 7.35440153e-10 Eh and maximum underlying
 |ΔE| is 1.15437615e-9 Eh. Full cuEST XC maximum underlying |ΔE| is
 6.14938076e-5 Eh: IE agreement includes cancellation of larger total errors.
 
@@ -93,7 +93,17 @@ The final follow-up makes self-consistent VV10 explicit (`DFT_VV10_POSTSCF=False
 SCF energy includes the five components including VV10. Water will be repeated
 alongside benzene and peptide under that final harness pin; the preflight is
 not silently spliced into a differently declared final protocol.
-Sixteen local unit tests, Python compile and shell syntax checks pass.
+The first explicit-option final jobs 13911317/13911319/13911321 failed before
+SCF because the harness compared Psi4's integer-zero boolean option with
+`is False`. All 54 runtime records report the intended disabled value 0;
+no energies were computed. They are preserved as setup failures, not
+unsupported-functional or convergence failures.
+
+A captured-option regression reproduces the error and passes after accepting
+both boolean False and integer 0 while rejecting enabled/unknown values.
+The corrected gate accepts all 54 captured records.
+Seventeen local unit tests, Python compile and shell syntax checks pass.
+The corrected retry retains the same physical VV10/SCF protocol.
 
 ## Provenance
 
