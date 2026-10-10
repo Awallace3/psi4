@@ -18,7 +18,12 @@ All r²SCAN IEs pass either threshold.
 | M06 | 6.07148141e-6 | 0.00380991211 | Pass at 1e-5 |
 | r²SCAN | 8.34184e-7 (rounded) | 0.000523458145 | Pass at 1e-5 |
 | PW6B95 | unavailable | unavailable | 12 incomplete comparisons; CPU ghost failures |
-| ωB97M-V | 1.17121814e-7 (water preflight only) | 0.00007349 (rounded) | Water 4/4 complete pass; final three-system campaign pending |
+| ωB97M-V | 6.68662210e-6 | 0.00419591872 | 11 complete comparisons pass; six full-XC rows complete; one GPU-JK control timeout |
+
+Together, **47/47 complete comparisons pass at 1e-5 Eh**, out of 60 possible.
+Thirteen remain incomplete: twelve PW6B95 and one ωB97M-V GPU-JK control.
+All **24/24 full-XC comparisons for M06-L/M06/r²SCAN/ωB97M-V** pass.
+This is not a claim that incomplete comparisons pass.
 
 For M06-L/M06/r²SCAN, GPU-JK-only maximum |ΔIE| is 7.35440153e-10 Eh and maximum underlying
 |ΔE| is 1.15437615e-9 Eh. Full cuEST XC maximum underlying |ΔE| is
@@ -88,9 +93,9 @@ GPU-JK-only max |ΔIE| is 1.17986914e-7 Eh, not the near-roundoff values
 seen for the other three functionals. The returned functional is MGGA/LRC/VV10,
 ω=0.3, with finite nonzero VV10 in every fragment/route.
 
-The final follow-up makes self-consistent VV10 explicit (`DFT_VV10_POSTSCF=False`,
+The final follow-up made self-consistent VV10 explicit (`DFT_VV10_POSTSCF=False`,
 50×146 VV10 grid, rho cutoff 1e-8), records α/β/b/C, and checks the returned
-SCF energy includes the five components including VV10. Water will be repeated
+SCF energy includes the five components including VV10. Water was repeated
 alongside benzene and peptide under that final harness pin; the preflight is
 not silently spliced into a differently declared final protocol.
 The first explicit-option final jobs 13911317/13911319/13911321 failed before
@@ -104,6 +109,60 @@ both boolean False and integer 0 while rejecting enabled/unknown values.
 The corrected gate accepts all 54 captured records.
 Seventeen local unit tests, Python compile and shell syntax checks pass.
 The corrected retry retains the same physical VV10/SCF protocol.
+
+## Final ωB97M-V full-XC results
+
+Corrected jobs **13940495 (water), 13940497 (benzene), 13940499 (peptide)**,
+explicitly approved inferno, harness **45c7902013948221e18219a50f3a18dc934ba772**.
+All six full-XC comparisons have successful CPU/GPU AB/A/B endpoints and
+pass the **1e-5 Eh** IE criterion. Values below use final data, not preflight
+repeats. Host and historical CUDA builds are compared to their own CPU reference
+within each job's allocation.
+
+| System | Build | CPU CP / s | Full-GPU CP / s | CP speedup | GPU−CPU IE / Eh |
+|---|---|---:|---:|---:|---:|
+| water | host LibXC | 22.918 | 4.192 | **5.47×** | −1.17112e-7 |
+| water | historical CUDA LibXC | 23.634 | 4.182 | **5.65×** | −1.17133e-7 |
+| benzene | host LibXC | 515.743 | 16.265 | **31.71×** | −6.68518e-6 |
+| benzene | historical CUDA LibXC | 567.608 | 13.677 | **41.50×** | −6.68662e-6 |
+| peptide | host LibXC | 439.199 | 15.154 | **28.98×** | +6.07809e-7 |
+| peptide | historical CUDA LibXC | 503.757 | 12.519 | **40.24×** | +6.07303e-7 |
+
+The actual shared runtime configuration is MGGA/LRC/VV10, ω=0.3,
+α=0.15, β=0.85 (total LR HF=1), b=6, C=0.01, self-consistent VV10,
+50×146 NL grid and rho cutoff 1e-8. The 53 successful workers have finite
+nonzero VV10 and checked total-energy components; maximum component-sum
+drift is 8.52651e-14 Eh. Staged hash maps match across all three jobs, all
+final provenance checks pass, and independent worker replay exactly reproduces
+the stored complete and incomplete comparison rows.
+
+**The all-route campaign is partial:** water/peptide completed all 18 workers;
+benzene completed 17/18. Its host **GPU-JK-only AB control** hit the
+300-second worker timeout, return code 124, and has no final result JSON.
+Last recorded iteration 20 has ΔE=+5.47402e-11 Eh and density residual
+1.05636e-12; that is not a certified converged final energy. Its IE/speedup
+remain absent. No full-XC endpoint was lost, so the benzene full-XC rows above
+are valid. Do not equate an incomplete extra control with full-XC failure.
+
+All 11 complete ωB97M-V rows pass. Known GPU-JK-only max |ΔIE| is
+3.56294e-7 Eh and max underlying |ΔE| is 1.12376e-5 Eh; the earlier
+three-functional near-roundoff statement does not apply to range-separated
+ωB97M-V. Its differences were not mechanism-decomposed or attributed to a
+specific density-fitting error.
+
+Rounded dimer total energies / Eh (complete full-XC endpoints):
+
+| System | Build | CPU E_AB | Full-GPU E_AB |
+|---|---|---:|---:|
+| water | host | −152.833773631394 | −152.833784887710 |
+| water | historical CUDA | −152.833773630238 | −152.833784887724 |
+| benzene | host | −464.336419367889 | −464.336431787057 |
+| benzene | historical CUDA | −464.336419119947 | −464.336431787046 |
+| peptide | host | −496.875039056492 | −496.875042247467 |
+| peptide | historical CUDA | −496.875039090925 | −496.875042248328 |
+
+Machine-readable final values, manifest/staged-map digests and limitations:
+[`wb97mv-results.json`](wb97mv-results.json).
 
 ## Provenance
 

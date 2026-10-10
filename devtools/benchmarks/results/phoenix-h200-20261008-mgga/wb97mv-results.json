@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "functional": "wB97M-V",
+  "harness_commit_under_test": "45c7902013948221e18219a50f3a18dc934ba772",
+  "ie_acceptance_hartree": 0.00001,
+  "coverage": {
+    "expected_comparisons": 12,
+    "complete": 11,
+    "complete_pass_at_1e_5": 11,
+    "full_gpu_xc_complete": 6,
+    "full_gpu_xc_pass_at_1e_5": 6,
+    "gpu_jk_only_complete": 5,
+    "incomplete": 1,
+    "successful_workers": 53,
+    "timeout_workers": 1
+  },
+  "protocol": {
+    "reference": "restricted SCF",
+    "scf_type": "DF",
+    "mixed_precision": false,
+    "guess": "CPU SAD",
+    "cpu_threads": 8,
+    "gpu": "NVIDIA H200",
+    "basis": {"water": "aug-cc-pVDZ", "benzene": "aug-cc-pVDZ", "peptide": "spherical 6-31+G**"},
+    "auxiliary_basis": "def2-universal-jkfit",
+    "nbf": {"water": 82, "benzene": 384, "peptide": 250},
+    "xc_grid": "99x590 ROBUST",
+    "vv10_grid": "50x146",
+    "vv10_rho_cutoff": 1e-8,
+    "vv10_postscf": false,
+    "omega": 0.3,
+    "alpha": 0.15,
+    "beta": 0.85,
+    "vv10_b": 6.0,
+    "vv10_c": 0.01,
+    "energy_convergence": 1e-11,
+    "density_convergence": 1e-10,
+    "maxiter": 200,
+    "worker_timeout_s": 300,
+    "added_empirical_dispersion": false,
+    "sapt": false,
+    "grac": false
+  },
+  "jobs": {"water": "13940495", "benzene": "13940497", "peptide": "13940499"},
+  "qos": "explicitly user-approved inferno",
+  "audit": {
+    "independent_replay_matches_stored_comparisons": true,
+    "final_staged_provenance_verified_each_job": true,
+    "staged_inputs_identical_across_jobs": true,
+    "functional_and_runtime_checks_passed_all_successful_workers": true,
+    "vv10_nonzero_all_successful_workers": true,
+    "maximum_energy_component_sum_drift_hartree": 8.526512829121202e-14,
+    "manifest_sha256": {
+      "water": "e78d53aa40a226fb48cf37d944864566595c30fef0d5c1d48de2823a121c98dc",
+      "benzene": "633fd6c3241e2a59592e049f224a7784aa1048854e8ecdff6ced0e49579dff02",
+      "peptide": "2ac3d293c4483090a885446faf8c03237a26dc4db18fd669bc42c18be305aa63"
+    },
+    "staged_hash_map_digest_method": "SHA256 of JSON sha256 map with sort_keys=True and separators=(',',':'), UTF-8",
+    "staged_hash_map_digest": {
+      "host": "57fee59ee9e9be2387024c04ca93eda5f9c8073744d6bfe789daed6160d7a907",
+      "cuda": "26ac68113e22cc6250975b740adab67c3db4bff40b5250d4e522bc8cf353bc8e"
+    }
+  },
+  "timing_scope": "Sum wall_s around psi4.energy for successful AB/A/B, compared within each build's same allocation. Includes SCF setup/finalization, excludes Python startup/import and scheduler wait; n=1, not a repeated benchmark.",
+  "full_gpu_xc": [
+    {"system": "water", "build": "host", "cpu_cp_wall_s": 22.918228995999016, "gpu_cp_wall_s": 4.191761564999979, "cp_speedup": 5.467445760121409, "cpu_ie_hartree": -0.007881179088201407, "gpu_ie_hartree": -0.007881296200594079, "delta_ie_hartree": -1.171123926724249e-7, "dimer_speedup": 6.265735294288795, "cpu_dimer_energy_hartree_rounded": -152.833773631394, "gpu_dimer_energy_hartree_rounded": -152.833784887710},
+    {"system": "water", "build": "cuda", "cpu_cp_wall_s": 23.63435033999849, "gpu_cp_wall_s": 4.1822720269992715, "cp_speedup": 5.651079171183383, "cpu_ie_hartree": -0.007881179090517776, "gpu_ie_hartree": -0.007881296223416712, "delta_ie_hartree": -1.1713289893577894e-7, "dimer_speedup": 5.948824227283349, "cpu_dimer_energy_hartree_rounded": -152.833773630238, "gpu_dimer_energy_hartree_rounded": -152.833784887724},
+    {"system": "benzene", "build": "host", "cpu_cp_wall_s": 515.7430624240005, "gpu_cp_wall_s": 16.264845879999484, "cp_speedup": 31.709065442679552, "cpu_ie_hartree": -0.0050965876427540024, "gpu_ie_hartree": -0.005103272827227556, "delta_ie_hartree": -6.685184473553818e-6, "dimer_speedup": 34.976524926232166, "cpu_dimer_energy_hartree_rounded": -464.336419367889, "gpu_dimer_energy_hartree_rounded": -464.336431787057},
+    {"system": "benzene", "build": "cuda", "cpu_cp_wall_s": 567.6077674550006, "gpu_cp_wall_s": 13.677115535000667, "cp_speedup": 41.50054636903913, "cpu_ie_hartree": -0.005096586440743067, "gpu_ie_hartree": -0.0051032730628435274, "delta_ie_hartree": -6.686622100460227e-6, "dimer_speedup": 43.02970777564637, "cpu_dimer_energy_hartree_rounded": -464.336419119947, "gpu_dimer_energy_hartree_rounded": -464.336431787046},
+    {"system": "peptide", "build": "host", "cpu_cp_wall_s": 439.1994590060003, "gpu_cp_wall_s": 15.15441856399957, "cp_speedup": 28.98161068675711, "cpu_ie_hartree": -0.013688034358295909, "gpu_ie_hartree": -0.01368742654958055, "delta_ie_hartree": 6.078087153582601e-7, "dimer_speedup": 30.78076532715542, "cpu_dimer_energy_hartree_rounded": -496.875039056492, "gpu_dimer_energy_hartree_rounded": -496.875042247467},
+    {"system": "peptide", "build": "cuda", "cpu_cp_wall_s": 503.75724186800016, "gpu_cp_wall_s": 12.519085095999799, "cp_speedup": 40.23914191852285, "cpu_ie_hartree": -0.013688034503786639, "gpu_ie_hartree": -0.013687427200608226, "delta_ie_hartree": 6.073031784126215e-7, "dimer_speedup": 41.17825726919781, "cpu_dimer_energy_hartree_rounded": -496.875039090925, "gpu_dimer_energy_hartree_rounded": -496.875042248328}
+  ],
+  "incomplete_control": {
+    "job": "13940497",
+    "name": "benzene-wb97m-v-host-gpu-jk-AB",
+    "process_returncode": 124,
+    "timeout_s": 300,
+    "final_result_json": false,
+    "last_recorded_iteration": 20,
+    "last_recorded_energy_change_hartree": 5.47402e-11,
+    "last_recorded_density_residual": 1.05636e-12,
+    "note": "Not a converged final energy; no IE or speedup published for this control. Full-XC benzene rows have successful independent CPU and GPU AB/A/B endpoints."
+  },
+  "combined_original_and_wb97mv_coverage": {"possible_comparisons": 60, "complete": 47, "complete_pass_at_1e_5": 47, "incomplete": 13, "incomplete_pw6b95": 12, "incomplete_wb97mv_control": 1},
+  "limitations": [
+    "Historical host and CUDA builds are not source matched; speedup difference is not a controlled device-LibXC ablation.",
+    "Restricted SCF energy coverage only; no general unrestricted, derivative, response or universal functional-support claim.",
+    "The M06-family quadrature mechanism was independently demonstrated; no equivalent mechanism decomposition was performed for wB97M-V.",
+    "Prior water preflight repeats and all setup-failed attempts are excluded from final complete-case counts.",
+    "Original archived matrix did not reach final unchanged-provenance verification; new wB97M-V jobs did.",
+    "Single time-to-convergence measurements can include different iteration counts and hardware variability."
+  ]
+}
