@@ -1236,3 +1236,69 @@ def test_xdm_counterpoise_ghost_superposition():
     assert disp_cp < 0.0
     assert abs(disp_cp - disp_nocp) < 5.0e-3, f"CP {disp_cp:.5f} vs noCP {disp_nocp:.5f} kJ/mol"
     assert 0.6 < disp_cp / inter < 1.4, f"CP {disp_cp:.5f} vs intermolecular pair sum {inter:.5f} kJ/mol"
+
+
+@pytest.mark.xdm
+@pytest.mark.sapt
+def test_sapt_dft_xdm_counterpoise_superposition():
+    """dft-xdm(sapt) takes its XDM IE from the delta-DFT densities with superposed CP monomers.
+
+    The dimer and both dimer-basis monomers of the delta-DFT segment are XDM-evaluated; each
+    monomer carries the partner monomer's ghost-centre moments. The result must equal the same
+    construction from standalone b3lyp-xdm jobs, and differ from the bare CP subtraction.
+    """
+    dimer = """
+0 1
+O  -1.551007  -0.114520   0.000000
+H  -1.934259   0.762503   0.000000
+H  -0.599677   0.040712   0.000000
+--
+0 1
+O   1.350625   0.111469   0.000000
+H   1.680398  -0.373741  -0.758561
+H   1.680398  -0.373741   0.758561
+units angstrom
+no_com
+no_reorient
+symmetry c1
+"""
+    a1, a2_ang = 0.7259, 1.3140
+    psi4.set_options({
+        "basis": "aug-cc-pvdz",
+        "scf_type": "df",
+        "e_convergence": 1.0e-10,
+        "d_convergence": 1.0e-10,
+        "sapt_dft_functional": "b3lyp",
+        "sapt_dft_grac_shift_a": 0.1307,
+        "sapt_dft_grac_shift_b": 0.1307,
+        "XDM_DISPERSION_PARAMETERS": [a1, a2_ang],
+    })
+    mol = psi4.geometry(dimer)
+    psi4.energy("dft-xdm(sapt)", molecule=mol)
+    xdm_ie = psi4.variable("SAPT(DFT) XDM IE")
+    sapt_disp = psi4.variable("SAPT DISP ENERGY")
+    for option in ("SAPT_DFT_DO_DISP", "SAPT_DFT_DO_DDFT", "SAPT_DFT_D_TYPE"):
+        assert not psi4.core.has_option_changed("SAPT", option), f"dft-xdm(sapt) leaked its {option} override"
+
+    psi4.core.clean()
+    props, xdm_e = {}, {}
+    for label, sub in (("D", mol), ("A", mol.extract_subsets(1, 2)), ("B", mol.extract_subsets(2, 1))):
+        _, wfn = psi4.energy("b3lyp-xdm", molecule=sub, return_wfn=True)
+        xdm_e[label] = wfn.variable("DISPERSION CORRECTION ENERGY")
+        props[label] = wfn.variable("XDM ATOMIC PROPERTIES").np.copy()
+        psi4.core.clean()
+
+    xdm = psi4.core.XDMDispersion(a1, a2_ang / psi4.constants.bohr2angstroms, "b3lyp")
+    coords = psi4.core.Matrix.from_array(mol.geometry().np)
+
+    def superposed(own, partner):
+        p = props[own].copy()
+        p[:, 2:] += props[partner][:, 2:]
+        return xdm.energy_from_properties(coords, psi4.core.Matrix.from_array(p))
+
+    ie_superposed = xdm_e["D"] - superposed("A", "B") - superposed("B", "A")
+    ie_bare = xdm_e["D"] - xdm_e["A"] - xdm_e["B"]
+
+    assert compare_values(ie_superposed, xdm_ie, 8, "dft-xdm(sapt) XDM IE vs standalone CP superposition")
+    assert abs(ie_bare - xdm_ie) > 1.0e-5, "the ghost superposition correction was not applied"
+    assert xdm_ie < 0.0 and sapt_disp < 0.0

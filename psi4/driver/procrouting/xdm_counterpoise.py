@@ -48,7 +48,7 @@ artefact and leaves only the intermolecular pairs and the true density
 deformation.
 """
 
-from typing import Any, Dict, Mapping, Tuple
+from typing import Any, Dict, Mapping, Sequence, Tuple
 
 import numpy as np
 
@@ -72,6 +72,25 @@ def _xdm_task_data(result) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     if props.shape[0] != coords.shape[0]:
         raise ValidationError("XDM counterpoise: per-atom properties do not match the task molecule.")
     return coords, props, np.asarray(params, dtype=float).ravel()
+
+
+def ghost_superposition_correction(xdm: core.XDMDispersion, coords: np.ndarray, props: np.ndarray,
+                                   partner_props: Sequence[np.ndarray]) -> float:
+    """XDM energy change [Eh] from adding partner jobs' ghost-centre moments to ``props``.
+
+    ``props`` and every entry of ``partner_props`` are ``XDM ATOMIC PROPERTIES`` arrays
+    on the same centres (same atom order, bohr ``coords``); each partner is the
+    counterpoise job of one ghost fragment of ``props``'s job, in the same basis.
+    """
+    superposed = props.copy()
+    for partner in partner_props:
+        if partner.shape != props.shape or not np.array_equal(partner[:, 0], props[:, 0]):
+            raise ValidationError("XDM counterpoise: partner properties are not on the same centres.")
+        superposed[:, _ADDITIVE_COLUMNS] += partner[:, _ADDITIVE_COLUMNS]
+    coords_m = core.Matrix.from_array(coords)
+    e_bare = xdm.energy_from_properties(coords_m, core.Matrix.from_array(props))
+    e_superposed = xdm.energy_from_properties(coords_m, core.Matrix.from_array(superposed))
+    return e_superposed - e_bare
 
 
 def superpose_ghost_moments(component_results: Mapping[str, Any],
@@ -104,19 +123,16 @@ def superpose_ghost_moments(component_results: Mapping[str, Any],
         ghosts = sorted(set(bas) - set(frag))
         if not ghosts:
             continue
-        superposed = props.copy()
+        partner_props = []
         for ghost in ghosts:
             partner = by_key.get((mc, (ghost, ), bas))
             if partner is None:
                 raise ValidationError(f"XDM counterpoise: task {label} needs fragment {ghost} computed alone in the "
                                       f"basis of fragments {list(bas)} to superpose its density, and none was run.")
-            superposed[:, _ADDITIVE_COLUMNS] += tasks[partner][3][1][:, _ADDITIVE_COLUMNS]
+            partner_props.append(tasks[partner][3][1])
 
         xdm = core.XDMDispersion(float(params[0]), float(params[1]), "")
-        coords_m = core.Matrix.from_array(coords)
-        e_bare = xdm.energy_from_properties(coords_m, core.Matrix.from_array(props))
-        e_superposed = xdm.energy_from_properties(coords_m, core.Matrix.from_array(superposed))
-        correction = e_superposed - e_bare
+        correction = ghost_superposition_correction(xdm, coords, props, partner_props)
         component_properties[label]["energy"] = component_properties[label]["energy"] + correction
         corrections[label] = correction
 

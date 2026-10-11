@@ -264,7 +264,8 @@ superposition::
    energy('b3lyp-xdm(los-ii)', bsse_type='cp')
 
 KB49 has no counterpoise fit, so counterpoise ``-XDM`` and ``-XDM(KB49)``
-energies require |scf__xdm_dispersion_parameters|. Because the cluster
+energies require |scf__xdm_dispersion_parameters|, as does ``dft-xdm(sapt)``,
+whose delta-DFT monomers are counterpoise subsystems. Because the cluster
 tasks are shared, requesting ``'nocp'`` together with ``'cp'`` or ``'vmfc'``
 also requires explicit parameters; otherwise run them separately. When
 running counterpoise subsystem jobs outside the many-body driver (for

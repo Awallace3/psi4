@@ -224,6 +224,10 @@ def print_sapt_dft_summary(
         empirical_disp_key = "D4 IE"
     elif "D3 IE" in data:
         empirical_disp_key = "D3 IE"
+    elif "XDM IE" in data:
+        empirical_disp_key = "XDM IE"
+    # -D corrections are labelled with their G prefix; XDM is not a -D correction.
+    empirical_disp_label = f"G{empirical_disp_key}" if empirical_disp_key in ("D4 IE", "D3 IE") else empirical_disp_key
 
     if empirical_disp_key and not do_disp and do_delta_dft:
         disp = (
@@ -235,11 +239,11 @@ def print_sapt_dft_summary(
         ret += print_sapt_var("  delta DFT,r (2)", data["Delta DFT Correction"]) + "\n"
         subtract_delta_hf_for_total_dispersion = -data.get("Delta HF Correction", 0.0)
         ret += print_sapt_var("  -delta HF,r (2)", subtract_delta_hf_for_total_dispersion) + "\n"
-        ret += print_sapt_var(f"  G{empirical_disp_key}", data[empirical_disp_key]) + "\n"
+        ret += print_sapt_var(f"  {empirical_disp_label}", data[empirical_disp_key]) + "\n"
     elif empirical_disp_key and not do_disp:
         disp = data[empirical_disp_key]
         ret += print_sapt_var("Dispersion", disp) + "\n"
-        ret += print_sapt_var(f"  G{empirical_disp_key}", data[empirical_disp_key]) + "\n"
+        ret += print_sapt_var(f"  {empirical_disp_label}", data[empirical_disp_key]) + "\n"
     if "Delta DFT Correction" in list(data):
         ret += "      ---------------" + "\n"
         ret += print_sapt_var("  delta DFT,r (2)", data["Delta DFT Correction"]) + "\n"
