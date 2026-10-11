@@ -429,7 +429,7 @@ def _np_read(
     filename: str,
     prefix: str = "",
 ) -> Union[core.Matrix, core.Vector]:
-    """Reads the data from a NumPy compressed or uncompressed file using :func:`numpy.load`.
+    """Reads the data from a NumPy compressed or uncompressed file using :py:func:`numpy.load`.
 
     Parameters
     ----------
@@ -698,7 +698,9 @@ core.Dimension.__iter__ = _dimension_iter
 # General functions for NumPy array manipulation
 def block_diagonal_array(*args: List[np.ndarray]) -> np.ndarray:
     """
-    Convert square NumPy array to a single block diagonal array. Mimic of SciPy's :func:`scipy.linalg.block_diag`.
+    Convert square NumPy array to a single block diagonal array. Mimic of SciPy's
+    `scipy.linalg.block_diag
+    <https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.block_diag.html>`_.
 
     Parameters
     ----------

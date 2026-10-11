@@ -27,3 +27,4 @@
 #
 
 from . import empirical_dispersion
+from .empirical_dispersion import EmpiricalDispersion

@@ -39,6 +39,7 @@ PRAGMA_WARNING_IGNORE_DEPRECATED_DECLARATIONS
 PRAGMA_WARNING_POP
 #include "psi4/libmints/typedefs.h"
 #include "psi4/libmints/dimension.h"
+#include "psi4/libpsi4util/memory_ledger.h"
 
 #include "psi4/libfock/SplitJK.h"
 
@@ -241,6 +242,9 @@ class PSI_API JK {
     int bench_;
     /// Memory available, in doubles, defaults to 256 MB (32 M doubles)
     size_t memory_;
+    /// What this object's integral store is costing the process right now, reported so that
+    /// an SCF started while this JK is alive is not handed the same memory a second time.
+    MemoryClaim integrals_claim_;
     /// Number of OpenMP threads (defaults to 1 in no OpenMP, Process::environment.get_n_threads() otherwise)
     int omp_nthread_;
     /// Integral cutoff (defaults to 0.0)
@@ -396,6 +400,13 @@ class PSI_API JK {
     // TODO: investigate if JK::memory_estimate and all of its derived variants could be made const
     // Probably requires refactoring DFHelper and MemDFJK first.
     virtual size_t memory_estimate() = 0;
+    /// The memory this object was granted, in doubles
+    size_t memory() const { return memory_; }
+    /// What this object's integral store is holding right now, in doubles, as reported to
+    /// the process memory ledger.  The difference from memory() is what it may still
+    /// allocate on each build: a MemDFJK on its disk algorithm holds nothing in core and
+    /// sizes its integral blocks and work buffers from the whole grant on every build.
+    virtual size_t memory_held() const { return integrals_claim_.held(); }
 
     // => Knobs <= //
 
@@ -894,6 +905,8 @@ class PSI_API DiskDFJK : public JK {
 
     std::string name() override { return "DiskDFJK"; }
     size_t memory_estimate() override;
+    /// Re-report the (Q|mn) blocks to the process memory ledger from the buffers that exist now
+    void report_integrals_claim();
 
     /// Auxiliary basis set
     std::shared_ptr<BasisSet> auxiliary_;
@@ -956,7 +969,13 @@ class PSI_API DiskDFJK : public JK {
     /// Common initialization
     void common_init();
 
-    bool is_core();
+    /// @brief Determine if we should perform the JK build in-memory (aka. in-core), considering the amount of memory
+    /// required vs. available, and honoring SCF_SUBTYPE. If no, an altarnative, disk-based subalgorithm may be used.
+    /// Virtual so subclasses with a restricted set of subalgorithms (e.g. CDJK, which has no out-of-core path)
+    /// participate in the decision made by preiterations() and iaia().
+    /// @return True if the JK build is to proceed in-memory, false if disk-IO is required.
+    virtual bool is_core();
+
     size_t memory_temp() const;
     int max_rows() const;
     int max_nocc() const;
@@ -1065,10 +1084,16 @@ class PSI_API CDJK : public DiskDFJK {
 
     // => Required Algorithm-Specific Methods <= //
 
-    virtual bool is_core() { return true; }
+    
+    /// @brief CD has no out-of-core algorithm: validates SCF_SUBTYPE, then forces in-core.
+    /// @return Always true.
+    bool is_core() override;
 
     // => J and K <= //
     void initialize_JK_core() override;
+
+    /// @brief Unreachable by construction: CDJK::is_core() either returns true or throws, so DiskDFJK::preiterations()
+    /// can never select the disk path for a CDJK object.
     void initialize_JK_disk() override;
     void manage_JK_core() override;
 
@@ -1130,6 +1155,7 @@ class PSI_API MemDFJK : public JK {
 
     std::string name() override { return "MemDFJK"; }
     size_t memory_estimate() override;
+    size_t memory_held() const override;
 
     /// This class wraps a DFHelper object
     std::shared_ptr<DFHelper> dfh_;

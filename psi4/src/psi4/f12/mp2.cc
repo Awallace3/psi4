@@ -34,7 +34,6 @@
 
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/dimension.h"
-#include "psi4/libmints/matrix.h"
 #include "psi4/libmints/mintshelper.h"
 
 #include <Einsums/TensorAlgebra.hpp>
@@ -67,7 +66,9 @@ void MP2F12::common_init() {
     f12_read_ints_ = options_.get_bool("F12_READ_INTS");
 
     std::vector<OrbitalSpace> bs_ = {};
-    nobs_ = reference_wavefunction_->basisset()->nbf();
+    // Number of orbitals, not basis functions: the two differ when linear
+    // dependencies have been removed from the orbital basis.
+    nobs_ = reference_wavefunction_->nmo();
     nocc_ = reference_wavefunction_->doccpi()[0];
     nvir_ = nobs_ - nocc_;
     nfrzn_ = reference_wavefunction_->frzcpi()[0];
@@ -376,7 +377,8 @@ double MP2F12::compute_energy() {
     if (print_ > 1) {
         einsums::profile::report("timer_mp2f12.dat", false);
     }
-    einsums::profile::finalize();
+// TODO undo comment when understand how to avoid double-finalize with pyeinsums
+//    einsums::profile::finalize();
     timer_off("MP2-F12 Compute Energy");
 
     // Typically you would build a new wavefunction and populate it with data
@@ -811,7 +813,8 @@ double DiskMP2F12::compute_energy() {
     if (print_ > 1) {
         einsums::profile::report("timer_mp2f12.dat", false);
     }
-    einsums::profile::finalize();
+// TODO undo comment when understand how to avoid double-finalize with pyeinsums
+//    einsums::profile::finalize();
 
     // Typically you would build a new wavefunction and populate it with data
     return E_mp2f12_;

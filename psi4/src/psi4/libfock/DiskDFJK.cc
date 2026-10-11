@@ -166,7 +166,9 @@ SharedVector DiskDFJK::iaia(SharedMatrix Ci, SharedMatrix Ca) {
     E_left_ = std::make_shared<Matrix>("E_left", nso, maxrows * nocc);
     E_right_ = std::make_shared<Matrix>("E_right", nvir, maxrows * nocc);
 
-    // Disk overhead
+    // Disk overhead. Note: this re-evaluates the (virtual) is_core() rather than using the
+    // is_core_ flag cached by preiterations(); the two agree unless memory_ or subalgo_
+    // changed in between.
     psio_address addr = PSIO_ZERO;
     if (!is_core()) {
         Qmn_ = std::make_shared<Matrix>("(Q|mn) Block", maxrows, num_nm);
@@ -288,7 +290,7 @@ void DiskDFJK::print_header() const {
     }
 }
 bool DiskDFJK::is_core() {
-    auto do_core = is_core_;
+    bool do_core = false;
 
     // determine do_core either automatically...
     if (subalgo_ == "AUTO") {
@@ -313,7 +315,9 @@ bool DiskDFJK::is_core() {
             do_core = true;
         }
     } else {
-        throw PSIEXCEPTION("Invalid SCF_SUBTYPE option! The choices for SCF_SUBTYPE are AUTO, INCORE, and OUT_OF_CORE.");
+        throw PSIEXCEPTION(
+            "Invalid SCF_SUBTYPE option in DiskDFJK! Valid choices of SCF_SUBTYPE for the DiskDFJK implementation of "
+            "density-fitted JK are AUTO, INCORE, and OUT_OF_CORE.");
     }
 
     return do_core;
@@ -452,7 +456,8 @@ void DiskDFJK::preiterations() {
         }
     }
 
-    // Core or disk?
+    // Core or disk? Virtual dispatch: CDJK overrides is_core() to validate SCF_SUBTYPE and force the in-core
+    // subalgorithm, so the disk branches below are DF-only.
     is_core_ = is_core();
 
     if (is_core_)
@@ -466,6 +471,8 @@ void DiskDFJK::preiterations() {
         else
             initialize_wK_disk();
     }
+
+    report_integrals_claim();
 }
 
 void DiskDFJK::compute_JK() {
@@ -509,6 +516,16 @@ void DiskDFJK::postiterations() {
     Qmn_.reset();
     Qlmn_.reset();
     Qrmn_.reset();
+    report_integrals_claim();
+}
+void DiskDFJK::report_integrals_claim() {
+    // Measure the blocks rather than recompute their intended sizes: the same members
+    // hold the whole (Q|mn) in the core subalgorithm and one disk chunk otherwise.
+    size_t held = 0;
+    for (const auto& block : {Qmn_, Qlmn_, Qrmn_}) {
+        if (block) held += (size_t)block->nrow() * (size_t)block->ncol();
+    }
+    integrals_claim_.set(held);
 }
 void DiskDFJK::initialize_JK_core() {
     size_t three_memory = ((size_t)auxiliary_->nbf()) * n_function_pairs_;
