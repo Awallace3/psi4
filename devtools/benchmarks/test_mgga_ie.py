@@ -1,10 +1,80 @@
 import unittest
 from mgga_ie import (delta, options, summarize, process_result, FRAGMENTS, FUNCTIONALS,
                      validate_functional, validate_energy_components,
-                     validate_vv10_runtime_options)
+                     validate_vv10_runtime_options, CONTROL_FUNCTIONALS,
+                     ALL_FUNCTIONALS, select_matrix)
 
 
 class Tests(unittest.TestCase):
+    def test_lower_rungs_are_explicit_controls_not_new_defaults(self):
+        self.assertEqual(CONTROL_FUNCTIONALS, ["svwn", "blyp", "b3lyp", "pbe0", "wb97x"])
+        self.assertEqual(ALL_FUNCTIONALS, FUNCTIONALS + CONTROL_FUNCTIONALS)
+        self.assertEqual(select_matrix()[1], FUNCTIONALS)
+        cases, functionals = select_matrix(systems=["water"], functionals=CONTROL_FUNCTIONALS)
+        self.assertEqual(cases, [("water", "aug-cc-pvdz")])
+        self.assertEqual(functionals, CONTROL_FUNCTIONALS)
+        self.assertEqual(select_matrix(preflight=True)[1], ["m06"])
+        for args in (dict(systems=[]), dict(functionals=[]),
+                     dict(systems=["unknown"]), dict(functionals=["unknown"])):
+            with self.assertRaises(AssertionError):
+                select_matrix(**args)
+
+    def test_lower_rung_metadata_and_exchange_are_validated(self):
+        class Functional:
+            def name(self): return name.upper()
+            def is_meta(self): return self.meta
+            def is_gga(self): return self.gga
+            def ansatz(self): return 2 if self.meta else 1 if self.gga else 0
+            def is_x_hybrid(self): return self.alpha > 0
+            def needs_vv10(self): return self.vv10
+            def is_x_lrc(self): return self.lrc
+            def x_omega(self): return .3 if self.lrc else 0.
+            def x_alpha(self): return self.alpha
+            def x_beta(self): return self.beta
+            def needs_grac(self): return self.grac
+            def vv10_b(self): return 6.
+            def vv10_c(self): return .01
+            meta, vv10, grac = False, False, False
+        class Wavefunction:
+            def functional(self): return f
+            def variable(self, key): return -.02
+        f = Functional()
+        for name, gga, alpha, beta, lrc, rung in (
+                ("svwn", False, 0., 0., False, 1),
+                ("blyp", True, 0., 0., False, 2),
+                ("b3lyp", True, .2, 0., False, 4),
+                ("pbe0", True, .25, 0., False, 4),
+                ("wb97x", True, .157706, .842294, True, 4)):
+            f.gga, f.alpha, f.beta, f.lrc = gga, alpha, beta, lrc
+            self.assertEqual(validate_functional(Wavefunction(), name)["rung"], rung)
+            if name in ("svwn", "blyp"):
+                f.beta = 1.  # Inactive blank-SuperFunctional default at omega=0.
+                self.assertEqual(validate_functional(Wavefunction(), name)["rung"], rung)
+                f.beta = beta
+            for attr, wrong in (("meta", True), ("gga", not gga),
+                                ("lrc", not lrc), ("vv10", True), ("grac", True),
+                                ("alpha", alpha + .1)):
+                old = getattr(f, attr)
+                setattr(f, attr, wrong)
+                with self.assertRaises(AssertionError, msg=(name, attr)):
+                    validate_functional(Wavefunction(), name)
+                setattr(f, attr, old)
+
+    def test_lower_rung_counterpoise_and_speedup_are_summarized(self):
+        results = {}
+        for functional in CONTROL_FUNCTIONALS:
+            for route, scale in (("cpu", 1.), ("gpu-jk", .9), ("gpu-xc", .2)):
+                for fragment, energy, wall in zip(FRAGMENTS, [-20.1, -10., -10.], [10, 20, 30]):
+                    shift = 6e-6 if route == "gpu-xc" and fragment == "AB" else 0.
+                    results[("host", "water", functional, route, fragment)] = dict(
+                        ok=True, nbf=10, energy_hartree=energy+shift, wall_s=wall*scale)
+        complete = [r for r in summarize(results) if r["complete"]]
+        self.assertEqual(len(complete), 10)
+        for row in complete:
+            self.assertTrue(row["within_ie_1e_5_Eh"])
+            if row["route"] == "gpu-xc":
+                self.assertEqual(row["cp_speedup"], 5.)
+
     def test_wb97mv_is_in_default_matrix(self):
         self.assertIn("wb97m-v", FUNCTIONALS)
         self.assertNotIn("dft_vv10_b", options("aug-cc-pvdz", "gpu-xc"))
@@ -24,6 +94,9 @@ class Tests(unittest.TestCase):
         class Functional:
             def name(self): return "wB97M-V"
             def is_meta(self): return True
+            def is_gga(self): return True
+            def is_x_hybrid(self): return True
+            def ansatz(self): return 2
             def needs_vv10(self): return self.vv10
             def is_x_lrc(self): return self.lrc
             def x_omega(self): return .3

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fresh-process meta-GGA SCF CP matrix; no SAPT/GRAC/D4, retain intrinsic VV10."""
+"""Fresh-process DFT-rung SCF CP matrix; no SAPT/GRAC/D4, retain intrinsic VV10."""
 import argparse
 import hashlib
 import itertools
@@ -16,10 +16,36 @@ from saptdft_cuest_grac import geometry, atomic_json
 
 CASES = [("water", "aug-cc-pvdz"), ("benzene", "aug-cc-pvdz"), ("peptide", "6-31+g**")]
 FUNCTIONALS = ["m06-l", "m06", "pw6b95", "r2scan", "wb97m-v"]
+CONTROL_FUNCTIONALS = ["svwn", "blyp", "b3lyp", "pbe0", "wb97x"]
+ALL_FUNCTIONALS = FUNCTIONALS + CONTROL_FUNCTIONALS
+CONTROL_EXPECTATIONS = {
+    # Blank SuperFunctional can retain beta=1; at omega=0 it contributes no
+    # exchange. Record that inactive value, rather than require arbitrary zero.
+    "svwn": dict(gga=False, x_hybrid=False, x_lrc=False, x_alpha=0., x_omega=0.),
+    "blyp": dict(gga=True, x_hybrid=False, x_lrc=False, x_alpha=0., x_omega=0.),
+    "b3lyp": dict(gga=True, x_hybrid=True, x_lrc=False, x_alpha=.2, x_beta=0., x_omega=0.),
+    "pbe0": dict(gga=True, x_hybrid=True, x_lrc=False, x_alpha=.25, x_beta=0., x_omega=0.),
+    "wb97x": dict(gga=True, x_hybrid=True, x_lrc=True, x_alpha=.157706,
+                  x_beta=.842294, x_omega=.3),
+}
 ROUTES = ["cpu", "gpu-jk", "gpu-xc"]
 FRAGMENTS = ["AB", "A", "B"]
 EH_TO_KCAL = 627.5094740631
 IE_TOLERANCE = 1e-5
+
+
+def select_matrix(preflight=False, systems=None, functionals=None):
+    """Explicit controls extend the matrix without changing its MGGA defaults."""
+    cases = CASES[:1] if preflight else list(CASES)
+    selected = ["m06"] if preflight else list(FUNCTIONALS)
+    if systems is not None:
+        assert systems and set(systems) <= {s for s, _ in CASES}, "Unknown/empty systems"
+        cases = [case for case in cases if case[0] in systems]
+    if functionals is not None:
+        assert functionals and set(functionals) <= set(ALL_FUNCTIONALS), "Unknown/empty functionals"
+        selected = [f for f in ALL_FUNCTIONALS if f in functionals]
+    assert cases and selected
+    return cases, selected
 
 
 def options(basis, route):
@@ -38,13 +64,31 @@ def delta(energies):
 
 
 def validate_functional(wfn, name):
-    """Prove wB97M-V was not silently replaced by a semilocal-only functional."""
+    """Verify actual rung/exchange physics, including intact intrinsic VV10."""
     functional = wfn.functional()
     metadata = dict(name=functional.name(), meta=functional.is_meta(),
+                    gga=functional.is_gga(), ansatz=functional.ansatz(),
+                    x_hybrid=functional.is_x_hybrid(),
                     needs_vv10=functional.needs_vv10(), x_lrc=functional.is_x_lrc(),
                     x_omega=functional.x_omega(), x_alpha=functional.x_alpha(),
                     x_beta=functional.x_beta(), needs_grac=functional.needs_grac())
-    assert metadata["meta"], "Not a meta-GGA"
+    name = name.lower()
+    assert name in ALL_FUNCTIONALS, "Unknown functional"
+    assert metadata["name"].lower().replace("-", "") == name.replace("-", ""), \
+        "Returned functional name does not match requested functional"
+    assert metadata["meta"] == (name in FUNCTIONALS), "Wrong meta-GGA classification"
+    assert metadata["ansatz"] == (2 if metadata["meta"] else 1 if metadata["gga"] else 0)
+    metadata["rung"] = (4 if metadata["x_hybrid"] or metadata["x_lrc"] else
+                        3 if metadata["meta"] else 2 if metadata["gga"] else 1)
+    if name in CONTROL_EXPECTATIONS:
+        assert not metadata["needs_vv10"] and not metadata["needs_grac"], \
+            "Lower-rung controls must not contain VV10 or GRAC"
+        for key, expected in CONTROL_EXPECTATIONS[name].items():
+            if isinstance(expected, bool):
+                assert metadata[key] == expected, (name, key, metadata)
+            else:
+                assert math.isclose(metadata[key], expected, rel_tol=0, abs_tol=1e-10), \
+                    (name, key, metadata)
     if metadata["needs_vv10"]:
         metadata["vv10_energy_hartree"] = float(wfn.variable("DFT VV10 ENERGY"))
         metadata.update(vv10_b=functional.vv10_b(), vv10_c=functional.vv10_c())
@@ -191,7 +235,7 @@ def process_result(record, returncode):
 
 def summarize(results):
     rows = []
-    for build, system, functional in itertools.product(["host", "cuda"], [c[0] for c in CASES], FUNCTIONALS):
+    for build, system, functional in itertools.product(["host", "cuda"], [c[0] for c in CASES], ALL_FUNCTIONALS):
         routes = {}
         for route in ROUTES:
             rs = {f: results.get((build, system, functional, route, f)) for f in FRAGMENTS}
@@ -236,19 +280,15 @@ def campaign(a):
     hashes = {b: digest(p) for b, p in binaries.items()}
     build_provenance = {b: provenance(p, build_environment(b, p, a.cuda_lib_dir))
                         for b, p in builds.items()}
-    cases = CASES[:1] if a.preflight else CASES
-    functionals = ["m06"] if a.preflight else FUNCTIONALS
-    if a.systems:
-        cases = [case for case in cases if case[0] in a.systems]
-    if a.functionals:
-        functionals = [f for f in functionals if f in a.functionals]
-    assert cases and functionals
+    cases, functionals = select_matrix(a.preflight, a.systems, a.functionals)
     expected_count = len(cases)*len(functionals)*len(builds)*len(ROUTES)*len(FRAGMENTS)
     manifest = dict(job=os.getenv("SLURM_JOB_ID"), cases=cases, functionals=functionals,
                     routes=ROUTES, fragments=FRAGMENTS, packages={b:str(p) for b,p in builds.items()},
                     binary_sha256=hashes, build_provenance=build_provenance, harness_commit=subprocess.check_output(
                         ["git", "-C", str(script.parent), "rev-parse", "HEAD"], text=True).strip(),
                     script_sha256=digest(script), geometry_sha256={s:hashlib.sha256(geometry(s).encode()).hexdigest() for s,_ in CASES},
+                    expected_control_metadata={f: CONTROL_EXPECTATIONS[f] for f in functionals
+                                               if f in CONTROL_EXPECTATIONS},
                     protocol="E_AB - E_A(ghost B) - E_B(ghost A), fixed geometry; no D4, no SAPT, no GRAC; "
                     "retain functional-intrinsic VV10, including for wB97M-V. "
                     "Each build compared to its own native CPU reference; historical CUDA build is not a source-matched ablation.",
@@ -307,7 +347,7 @@ if __name__ == "__main__":
     p.add_argument("--preflight", action="store_true")
     p.add_argument("--worker-timeout", type=float, default=240)
     p.add_argument("--systems", nargs="+", choices=[s for s, _ in CASES])
-    p.add_argument("--functionals", nargs="+", choices=FUNCTIONALS)
+    p.add_argument("--functionals", nargs="+", choices=ALL_FUNCTIONALS)
     for key in ("package", "host-package", "cuda-package", "cuda-lib-dir"):
         p.add_argument("--"+key, type=Path)
     for key in ("system", "basis", "functional", "route", "fragment", "expected-xc"):
