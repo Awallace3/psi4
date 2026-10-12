@@ -30,7 +30,10 @@ interaction-energy certification.
   No hidden warm SCF/reuse. CUDA initialization/setup inside the energy call
   remains part of that call; caches/OS effects remain in observed repeat spread.
 
-`scf_wall_s` surrounds `psi4.energy` or `mf.kernel` and includes their own
+**Headline `calculation_wall_s`** spans post-import runtime configuration,
+device initialization, molecule/basis construction and converged energy in
+both engines. It ends before result validation/provenance work.
+`scf_wall_s` additionally surrounds `psi4.energy` or `mf.kernel` and includes their own
 SCF setup/initialization. PySCF molecule/object creation is separately timed;
 Psi4's driver does more setup inside its energy call. These are honest API-call
 boundaries, **not exactly identical pure iterative SCF boundaries**.
@@ -47,7 +50,11 @@ GPU4PySCF's extra diagnostic wraps DF setup, J/K, grid, XC and diagonalization,
 with CUDA synchronization at each boundary. It **adds overhead** and is excluded
 from headline medians. Timers are inclusive/nested: **never sum them blindly**.
 Native PySCF textual timing diagnostics are also preserved in `pyscf.out`.
+Actual LibXC component names/IDs and weights are validated against the same
+explicit configuration in both workers, not just exact-exchange fractions.
 
+The controller and workers validate exactly one visible CUDA GPU and the same
+selected UUID; NVML monitoring is restricted to that UUID.
 `gpu-samples.csv` provides 1-second allocation-level utilization, GPU-memory and
 power observations, **not exact per-worker peak device memory**. Worker Unix
 timestamps permit correlation. Host `maxrss_kib` is per fresh worker.
@@ -56,7 +63,9 @@ CuPy's final reserved pool is not reported as peak memory.
 `summary.json`/CSV retain failed/missing repeats. Process nonzero exits invalidate
 results even after a successful-looking JSON write. Ratios require complete
 unprofiled repeats and equal AO/auxiliary dimensions and exchange parameters.
-`psi4_over_pyscf_scf_time > 1` means GPU4PySCF was faster.
+`psi4_over_pyscf_calculation_time > 1` means GPU4PySCF was faster on the common
+calculation boundary. The additional SCF/API ratio has asymmetric setup scope
+and must not be presented as equivalent pure iterative throughput.
 `energy_review` flags |Δ total energy| > 1e-4 Eh as a diagnostic, **not**
 certification. Never apply the former 1e-5 Eh IE tolerance to these total energies.
 Different quadratures/DF implementations and LibXC versions can contribute.
@@ -69,6 +78,10 @@ prior rung campaign; do not pretend its compiled revision is this harness HEAD.
 The manifest pins staged core, Python drivers, basis data and LibXC, verifies
 them unchanged, and workers record actual mapped shared libraries.
 This comparison worktree owns the harness, not a rebuilt Psi4 binary.
+Each campaign archives/hashes the harness, captures both installed pip locks,
+and pins PySCF/GPU4PySCF source, basis and extension files. Actual mapped library
+paths are recorded. Transitive CUDA/CuPy/cuTENSOR binaries are version-locked,
+not exhaustively hashed; this is not a hermetic container.
 
 The new dedicated `gpu4pyscf_compare` conda environment uses Python 3.11,
 GPU4PySCF 1.8.1, PySCF 2.14.0, CuPy 13.4.1/cuTENSOR 2.2.0, CUDA 12.6.1 module.

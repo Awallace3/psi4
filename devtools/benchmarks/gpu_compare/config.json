@@ -2,11 +2,11 @@
   "schema": 1,
   "systems": ["peptide", "nanotube", "protein83", "protein157"],
   "functionals": {
-    "svwn": {"rung": "lda", "psi4": "svwn", "pyscf": "LDA_X,LDA_C_VWN_RPA"},
-    "pbe": {"rung": "gga", "psi4": "pbe", "pyscf": "PBE"},
-    "m06-l": {"rung": "mgga", "psi4": "m06-l", "pyscf": "M06L"},
-    "b3lyp": {"rung": "hybrid", "psi4": "b3lyp", "pyscf": "HYB_GGA_XC_B3LYP"},
-    "wb97x": {"rung": "range-separated", "psi4": "wb97x", "pyscf": "WB97X"}
+    "svwn": {"rung": "lda", "psi4": "svwn", "pyscf": "LDA_X,LDA_C_VWN_RPA", "components": {"LDA_X": 1.0, "LDA_C_VWN_RPA": 1.0}},
+    "pbe": {"rung": "gga", "psi4": "pbe", "pyscf": "PBE", "components": {"GGA_X_PBE": 1.0, "GGA_C_PBE": 1.0}},
+    "m06-l": {"rung": "mgga", "psi4": "m06-l", "pyscf": "M06L", "components": {"MGGA_X_M06_L": 1.0, "MGGA_C_M06_L": 1.0}},
+    "b3lyp": {"rung": "hybrid", "psi4": "b3lyp", "pyscf": "HYB_GGA_XC_B3LYP", "components": {"HYB_GGA_XC_B3LYP": 1.0}},
+    "wb97x": {"rung": "range-separated", "psi4": "wb97x", "pyscf": "WB97X", "components": {"HYB_GGA_XC_WB97X": 1.0}}
   },
   "basis": "cc-pvdz",
   "auxbasis": "def2-universal-jkfit",

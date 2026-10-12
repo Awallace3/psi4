@@ -18,9 +18,11 @@ class CompareTests(unittest.TestCase):
     def record(self, engine, **kwargs):
         r = dict(engine=engine, system="peptide", functional="pbe", profile=False,
                  ok=True, process_returncode=0, scf_wall_s=2 if engine == "psi4" else 1,
+                 calculation_wall_s=3 if engine == "psi4" else 2,
                  process_wall_s=4, scf_iterations=15, energy_hartree=-100,
                  nbf=210, naux=600, functional_metadata=dict(
-                     omega=0, short_range_exchange=0, long_range_exchange=0))
+                     omega=0, short_range_exchange=0, long_range_exchange=0,
+                     components=self.c["functionals"]["pbe"]["components"]))
         r.update(kwargs)
         return r
 
@@ -32,6 +34,7 @@ class CompareTests(unittest.TestCase):
         self.assertTrue(row["complete"])
         self.assertTrue(row["comparison_eligible"])
         self.assertEqual(row["psi4_over_pyscf_scf_time"], 2)
+        self.assertEqual(row["psi4_over_pyscf_calculation_time"], 1.5)
 
     def test_teardown_failure_is_not_success(self):
         row = self.row([self.record("psi4"), self.record("pyscf", process_returncode=-11)])
@@ -57,6 +60,32 @@ class CompareTests(unittest.TestCase):
     def test_missing_repeat_remains_incomplete(self):
         self.c["repeats"] = 3
         self.assertFalse(self.row([self.record(e) for e in m.ENGINES])["complete"])
+
+    def test_components_mismatch_suppresses_ratio(self):
+        p = self.record("pyscf")
+        p["functional_metadata"]["components"] = {"LDA_X": 1}
+        row = self.row([self.record("psi4"), p])
+        self.assertFalse(row["comparison_eligible"])
+        self.assertNotIn("psi4_over_pyscf_calculation_time", row)
+
+    def test_vwn_variants_cannot_pass_component_validation(self):
+        with self.assertRaises(AssertionError):
+            m.verify_components({"LDA_X": 1, "LDA_C_VWN": 1},
+                                self.c["functionals"]["svwn"]["components"])
+
+    def test_malformed_result_is_a_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "result.json"
+            p.write_text("{not json")
+            r = m.load_result(p, dict(engine="pyscf"))
+            self.assertFalse(r["ok"])
+            self.assertEqual(r["engine"], "pyscf")
+
+    def test_wrong_worker_identity_is_a_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "result.json"
+            p.write_text(json.dumps(dict(engine="psi4", ok=False)))
+            self.assertFalse(m.load_result(p, dict(engine="pyscf"))["ok"])
 
     def test_energy_review_is_separate(self):
         row = self.row([self.record("psi4"), self.record("pyscf", energy_hartree=-99)])

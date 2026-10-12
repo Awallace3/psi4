@@ -3,6 +3,7 @@
 import argparse
 from collections import defaultdict
 import contextlib
+import ctypes
 import csv
 import hashlib
 import importlib.metadata
@@ -92,6 +93,44 @@ def runtime_libraries():
     return sorted(paths)
 
 
+def cuda_identity():
+    """Use the process's already loaded CUDA runtime, not NVML's index order."""
+    paths = [p for p in runtime_libraries() if "/libcudart.so" in p]
+    assert len(set(paths)) == 1, ("Ambiguous CUDA runtime", paths)
+    rt = ctypes.CDLL(paths[0])
+    device, count = ctypes.c_int(), ctypes.c_int()
+    assert rt.cudaGetDeviceCount(ctypes.byref(count)) == 0 and count.value == 1, \
+        "Exactly one visible CUDA GPU is required"
+    assert rt.cudaGetDevice(ctypes.byref(device)) == 0 and device.value == 0
+    uuid = (ctypes.c_ubyte * 16)()
+    assert rt.cudaDeviceGetUuid(ctypes.byref(uuid), device) == 0
+    value = bytes(uuid).hex()
+    return dict(uuid="GPU-" + "-".join((value[:8], value[8:12], value[12:16],
+                                      value[16:20], value[20:])),
+                logical_device=device.value, visible_count=count.value, runtime=paths[0])
+
+
+def verify_components(actual, expected):
+    assert set(actual) == set(expected), ("XC components differ", actual, expected)
+    assert all(math.isclose(actual[k], expected[k], rel_tol=0, abs_tol=1e-12)
+               for k in expected), ("XC component weights differ", actual, expected)
+
+
+def load_result(path, expected):
+    """Malformed output and stale/wrong identities are failed measurements."""
+    try:
+        r = json.loads(path.read_text())
+        assert isinstance(r, dict)
+        assert all(r.get(k) == v for k, v in expected.items()), "Result identity mismatch"
+        if r.get("ok"):
+            assert all(math.isfinite(r[k]) for k in
+                       ("calculation_wall_s", "scf_wall_s", "energy_hartree"))
+            assert all(k in r for k in ("scf_iterations", "nbf", "naux", "functional_metadata"))
+        return r
+    except (OSError, ValueError, AssertionError, TypeError, KeyError) as exc:
+        return dict(expected, ok=False, error=f"Invalid/missing worker result: {exc}")
+
+
 class Timings:
     """Inclusive, synchronized diagnostic boundaries; NOT headline timings."""
     def __init__(self, sync):
@@ -113,6 +152,7 @@ class Timings:
 
 
 def run_pyscf(a, c, atom, r):
+    import_start = time.perf_counter()
     import warnings
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
@@ -123,10 +163,13 @@ def run_pyscf(a, c, atom, r):
         from gpu4pyscf.dft import rks
         # Prefer failure to a CPU or CuPy contraction fallback.
         from gpu4pyscf.lib import cutensor
+    r["imports_wall_s"] = time.perf_counter() - import_start
     r["import_warnings"] = [str(w.message) for w in captured]
     assert not any("using cupy as the tensor contraction engine" in w.lower()
                    for w in r["import_warnings"]), "cuTENSOR fallback"
     assert Path(gpu4pyscf.__file__).resolve().is_relative_to(a.gpu_env.resolve())
+    r["versions"] = versions()
+    calculation_start = time.perf_counter()
     lib.num_threads(c["threads"])
     cp.cuda.Device(0).use()
     sync = cp.cuda.runtime.deviceSynchronize
@@ -160,7 +203,14 @@ def run_pyscf(a, c, atom, r):
     # Psi4 SVWN and B3LYP use VWN-RPA. Name the exact LibXC components,
     # rather than confuse those with the distinct VWN5 variants.
     omega, alpha, hyb = mf._numint.rsh_and_hybrid_coeff(mf.xc, spin=0)
+    from pyscf.dft import libxc
+    _, parsed = libxc.parse_xc(mf.xc)
+    expected = c["functionals"][a.functional]["components"]
+    ids = {int(libxc.XC_CODES[name]): name for name in expected}
+    components = {ids.get(int(fid), f"UNKNOWN_ID_{fid}"): float(weight) for fid, weight in parsed}
+    verify_components(components, expected)
     r["functional_metadata"] = dict(xc=mf.xc, omega=float(omega),
+                                    components=components,
                                     long_range_exchange=float(alpha if omega else hyb),
                                     short_range_exchange=float(hyb),
                                     xc_type=mf._numint._xc_type(mf.xc))
@@ -183,7 +233,9 @@ def run_pyscf(a, c, atom, r):
     scf_start = time.perf_counter()
     energy = mf.kernel()
     sync()
+    calculation_elapsed = time.perf_counter() - calculation_start
     r.update(scf_wall_s=time.perf_counter() - scf_start,
+             calculation_wall_s=calculation_elapsed,
              energy_hartree=float(energy), converged=bool(mf.converged),
              scf_iterations=len(history), iteration_history=history,
              nbf=int(mol.nao_nr()), naux=int(mf.with_df.auxmol.nao_nr()),
@@ -192,12 +244,25 @@ def run_pyscf(a, c, atom, r):
              cupy_pool_peak_note="End-of-run pool reservation is NOT peak device memory",
              cupy_pool_reserved_bytes=int(cp.get_default_memory_pool().total_bytes()))
     assert r["converged"], "SCF did not converge"
+    r["gpu"] = cuda_identity()
+    r["effective_grid"] = dict(radial_method=str(mf.grids.radi_method),
+        partition=str(mf.grids.becke_scheme), radii_adjust=str(mf.grids.radii_adjust),
+        prune=str(mf.grids.prune), small_rho_cutoff=float(mf.small_rho_cutoff))
+    r["effective_df"] = dict(linear_dep_threshold=float(df.LINEAR_DEP_THR),
+                            direct_scf_tol=float(mf.direct_scf_tol))
+    if a.profile:
+        assert timers.data["xc"]["calls"] > 0
+        assert any(timers.data[k]["calls"] > 0 for k in ("jk", "j_inclusive")), \
+            "No J/K calls captured"
     mol.stdout.close()
 
 
 def run_psi4(a, c, atom, r):
+    import_start = time.perf_counter()
     import psi4
+    r["imports_wall_s"] = time.perf_counter() - import_start
     assert Path(psi4.__file__).resolve().parent == a.psi_package.resolve()
+    calculation_start = time.perf_counter()
     psi4.core.set_output_file(str(Path.cwd() / "psi4.out"), False)
     psi4.set_memory(f'{c["memory_gib"]} GiB')
     psi4.set_num_threads(c["threads"])
@@ -218,16 +283,21 @@ def run_psi4(a, c, atom, r):
     energy, wfn = psi4.energy(c["functionals"][a.functional]["psi4"],
                              molecule=mol, return_wfn=True)
     elapsed = time.perf_counter() - start
+    calculation_elapsed = time.perf_counter() - calculation_start
     f = wfn.functional()
+    components = {component.name().removeprefix("XC_"): float(component.alpha())
+                  for component in list(f.x_functionals()) + list(f.c_functionals())}
+    verify_components(components, c["functionals"][a.functional]["components"])
     r.update(module=psi4.__file__, version=psi4.__version__, options=opts,
              energy_hartree=float(energy), scf_wall_s=elapsed, converged=True,
+             calculation_wall_s=calculation_elapsed,
              nbf=wfn.basisset().nbf(),
              naux=wfn.get_basisset("DF_BASIS_SCF").nbf(),
              scf_iterations=int(wfn.variable("SCF ITERATIONS")),
              timer_records=psi4.core.get_timer_records(),
              functional_metadata=dict(name=f.name(), meta=bool(f.is_meta()),
                  gga=bool(f.is_gga()), omega=float(f.x_omega()),
-                 components=[component.name() for component in f.x_functionals() + f.c_functionals()],
+                 components=components,
                  short_range_exchange=float(f.x_alpha()),
                  long_range_exchange=float(f.x_alpha() + f.x_beta())
                     if f.is_x_lrc() else float(f.x_alpha())))
@@ -238,6 +308,11 @@ def run_psi4(a, c, atom, r):
     assert any("CUDA LibXC Functional" in n for n in names), \
         "CUDA LibXC timer missing: host-functional build is not this benchmark's GPU arm"
     r["xc_route"] = "cuda-libxc"
+    r["gpu"] = cuda_identity()
+    r["effective_grid"] = {key: psi4.core.get_option("SCF", key) for key in
+        ("DFT_RADIAL_SCHEME", "DFT_NUCLEAR_SCHEME", "DFT_PRUNING_SCHEME",
+         "DFT_DENSITY_TOLERANCE", "DFT_BASIS_TOLERANCE")}
+    r["effective_grid"]["note"] = "Nominal options may be bypassed by cuEST; actual points are not guaranteed identical"
 
 
 def worker(a):
@@ -252,12 +327,6 @@ def worker(a):
              hostname=os.uname().nodename, python=sys.executable)
     try:
         atom = xyz(a.xyz, a.system)
-        import_start = time.perf_counter()
-        if a.engine == "psi4":
-            import psi4
-        else:
-            import cupy
-        r["initial_import_wall_s"] = time.perf_counter() - import_start
         {"psi4": run_psi4, "pyscf": run_pyscf}[a.engine](a, c, atom, r)
         assert r["nbf"] == NBF[a.system], ("cc-pVDZ nbf mismatch", r["nbf"])
         assert math.isfinite(r["energy_hartree"])
@@ -289,7 +358,7 @@ def summarize(records, c, systems):
                                    failures=[r.get("error", r.get("process_returncode"))
                                              for r in group if r not in good])
                 if complete:
-                    for field in ("scf_wall_s", "process_wall_s", "scf_iterations", "energy_hartree"):
+                    for field in ("calculation_wall_s", "scf_wall_s", "process_wall_s", "scf_iterations", "energy_hartree"):
                         values = [r[field] for r in good]
                         row[engine][field] = dict(median=statistics.median(values),
                                                  min=min(values), max=max(values))
@@ -298,6 +367,8 @@ def summarize(records, c, systems):
                 p, g = row["psi4"], row["pyscf"]
                 row["psi4_over_pyscf_scf_time"] = (
                     p["scf_wall_s"]["median"] / g["scf_wall_s"]["median"])
+                row["psi4_over_pyscf_calculation_time"] = (
+                    p["calculation_wall_s"]["median"] / g["calculation_wall_s"]["median"])
                 row["energy_delta_pyscf_minus_psi4_eh"] = (
                     g["energy_hartree"]["median"] - p["energy_hartree"]["median"])
                 row["energy_review"] = abs(row["energy_delta_pyscf_minus_psi4_eh"]) > c[
@@ -309,16 +380,22 @@ def summarize(records, c, systems):
                     groups["pyscf"][0]["functional_metadata"][key],
                     rel_tol=0, abs_tol=1e-9) for key in
                     ("omega", "short_range_exchange", "long_range_exchange"))
+                row["functional_components_equal"] = all(r["functional_metadata"]["components"] ==
+                    c["functionals"][functional]["components"] for r in groups["psi4"] + groups["pyscf"])
                 row["comparison_eligible"] = (row["nbf_equal"] and row["naux_equal"]
-                                              and row["functional_parameters_equal"])
+                                              and row["functional_parameters_equal"]
+                                              and row["functional_components_equal"])
                 if not row["comparison_eligible"]:
                     row.pop("psi4_over_pyscf_scf_time")
+                    row.pop("psi4_over_pyscf_calculation_time")
             rows.append(row)
     return rows
 
 
 def engine_env(engine, a):
     env = dict(os.environ, PYTHONNOUSERSITE="1")
+    for key in ("LD_PRELOAD", "PSIDATADIR", "PYSCF_CONFIG_FILE", "PYSCF_EXT_PATH"):
+        env.pop(key, None)
     # Never allow Psi4's CUDA13 libraries into the CUDA12 PySCF process.
     root = a.psi_env if engine == "psi4" else a.gpu_env
     env["LD_LIBRARY_PATH"] = ":".join(map(str, [root / "lib",
@@ -335,6 +412,15 @@ def engine_env(engine, a):
 def campaign(a):
     a.output.mkdir(parents=True, exist_ok=False)
     (a.output / "results").mkdir()
+    (a.output / "harness").mkdir()
+    for p in HERE.glob("*"):
+        if p.is_file():
+            (a.output / "harness" / p.name).write_bytes(p.read_bytes())
+    for engine in ENGINES:
+        root = a.psi_env if engine == "psi4" else a.gpu_env
+        lock = subprocess.check_output([str(root / "bin/python"), "-m", "pip", "freeze", "--all"],
+                                       env=engine_env(engine, a), text=True)
+        (a.output / f"{engine}-pip-freeze.txt").write_text(lock)
     c = json.loads(a.config.read_text())
     c["repeats"] = a.repeats
     c["threads"] = a.threads
@@ -366,11 +452,16 @@ def campaign(a):
             provenance_files.update(p for p in root.rglob("*")
                                     if p.is_file() and (p.suffix in (".py", ".so")))
     fingerprints = {str(p): digest(p) for p in sorted(provenance_files)}
+    harness_fingerprints = {str(p): digest(p) for p in HERE.iterdir() if p.is_file()}
+    device = json.loads(subprocess.check_output(
+        [str(a.gpu_env / "bin/python"), str(HERE / "compare.py"), "device"],
+        env=engine_env("pyscf", a), text=True))
     manifest = dict(schema=1, config=c, commit=subprocess.check_output(
         ["git", "-C", str(HERE), "rev-parse", "HEAD"], text=True).strip(),
         job_id=os.getenv("SLURM_JOB_ID"), qos=os.getenv("SLURM_JOB_QOS"),
         partition=os.getenv("SLURM_JOB_PARTITION"), command=sys.argv,
-        gpu=subprocess.check_output(["nvidia-smi", "--query-gpu=name,uuid,driver_version,memory.total",
+        gpu_identity=device, harness_sha256=harness_fingerprints,
+        gpu=subprocess.check_output(["nvidia-smi", "-i", device["uuid"], "--query-gpu=name,uuid,driver_version,memory.total",
                                      "--format=csv"], text=True),
         systems=systems, staged_build_sha256=fingerprints,
         psi4_linkage=ldd,
@@ -379,7 +470,7 @@ def campaign(a):
     atomic_json(a.output / "manifest.json", manifest)
     records = []
     monitor_log = (a.output / "gpu-samples.csv").open("w")
-    monitor = subprocess.Popen(["nvidia-smi", "--query-gpu=timestamp,uuid,utilization.gpu,memory.used,power.draw",
+    monitor = subprocess.Popen(["nvidia-smi", "-i", device["uuid"], "--query-gpu=timestamp,uuid,utilization.gpu,memory.used,power.draw",
                                 "--format=csv", "-lms", "1000"], stdout=monitor_log,
                                stderr=subprocess.STDOUT)
     try:
@@ -423,17 +514,22 @@ def campaign(a):
                                     os.killpg(proc.pid, signal.SIGKILL)
                                     proc.wait()
                                 raise
-                        r = json.loads((out / "result.json").read_text()) if (out / "result.json").exists() else dict(
-                            ok=False, error="Worker produced no result", engine=engine,
-                            system=system, functional=functional, profile=profile, repeat=repeat)
+                        r = load_result(out / "result.json", dict(engine=engine,
+                            system=system, functional=functional, profile=profile, repeat=repeat))
                         r.update(process_returncode=rc, process_wall_s=time.perf_counter() - start,
                                  started_unix_s=started_unix_s, ended_unix_s=time.time(), output=str(out))
                         if rc:
                             r["ok"] = False
+                        if r.get("ok") and r["gpu"]["uuid"] != device["uuid"]:
+                            r.update(ok=False, error="Worker ran on a different GPU UUID")
                         records.append(r)
                         atomic_json(a.output / "records.json", records)
                         atomic_json(a.output / "summary.json", summarize(records, c, systems))
                         print(name, "OK" if r["ok"] else "FAILED", r.get("error", ""), flush=True)
+    except BaseException as exc:
+        atomic_json(a.output / "FAILED.json", dict(error=str(exc), traceback=traceback.format_exc(),
+                    interrupted=isinstance(exc, KeyboardInterrupt), completed_workers=len(records)))
+        raise
     finally:
         monitor.terminate()
         with contextlib.suppress(subprocess.TimeoutExpired):
@@ -442,7 +538,7 @@ def campaign(a):
             monitor.kill()
             monitor.wait()
         monitor_log.close()
-    unchanged = all(digest(p) == sha for p, sha in fingerprints.items())
+    unchanged = all(digest(p) == sha for p, sha in {**fingerprints, **harness_fingerprints}.items())
     rows = summarize(records, c, systems)
     complete = (unchanged and all(r["ok"] for r in records)
                 and all(r["complete"] and r["comparison_eligible"] for r in rows))
@@ -450,7 +546,8 @@ def campaign(a):
         final_build_hashes_unchanged=unchanged, energy_review_is_not_accuracy_certification=True))
     with (a.output / "summary.csv").open("w", newline="") as f:
         columns = ["system", "functional", "rung", "complete", "comparison_eligible",
-                   "psi4_over_pyscf_scf_time", "energy_delta_pyscf_minus_psi4_eh", "energy_review"]
+                   "psi4_over_pyscf_calculation_time", "psi4_over_pyscf_scf_time",
+                   "energy_delta_pyscf_minus_psi4_eh", "energy_review"]
         writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
@@ -460,6 +557,7 @@ def campaign(a):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="action", required=True)
+    sub.add_parser("device")
     w = sub.add_parser("worker")
     w.add_argument("--engine", choices=ENGINES, required=True)
     w.add_argument("--system", choices=ATOMS, required=True)
@@ -484,6 +582,11 @@ def main():
         parser.add_argument("--config", type=Path, default=HERE / "config.json")
         parser.add_argument("--output", type=Path, required=True)
     a = p.parse_args()
+    if a.action == "device":
+        import cupy
+        cupy.cuda.Device(0).use()
+        print(json.dumps(cuda_identity()))
+        return 0
     for key, value in vars(a).items():
         if isinstance(value, Path):
             setattr(a, key, value.resolve())
