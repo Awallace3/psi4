@@ -1909,6 +1909,12 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add("DFT_DISPERSION_PARAMETERS", new ArrayType());
         /*- Two finite parameters ``[a1, a2]`` for XDM Becke--Johnson damping; ``a2`` is in angstrom. -*/
         options.add("XDM_DISPERSION_PARAMETERS", new ArrayType());
+        /*- Look up the XDM damping parameters fitted to counterpoise-corrected
+        interaction energies. The many-body driver sets this for every task of a
+        ``bsse_type='cp'`` or ``'vmfc'`` computation; set it by hand only for
+        counterpoise subsystem jobs run outside that driver. Ignored when
+        |scf__xdm_dispersion_parameters| is set. -*/
+        options.add_bool("XDM_COUNTERPOISE", false);
         /*- Parameters defining the -NL/-V dispersion correction. First b, then C -*/
         options.add("NL_DISPERSION_PARAMETERS", new ArrayType());
         /*- Number of spherical points (A :ref:`Lebedev Points <table:lebedevorder>` number) for VV10 NL integration.

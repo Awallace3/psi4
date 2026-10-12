@@ -1465,6 +1465,7 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
                                                                       a1=a1,
                                                                       a2_ang=a2_ang,
                                                                       model=xdm_model,
+                                                                      counterpoise=core.get_option("SCF", "XDM_COUNTERPOISE"),
                                                                       expected_x_omega=expected_x_omega,
                                                                       expected_x_beta=expected_x_beta)
         elif isinstance(name, dict):

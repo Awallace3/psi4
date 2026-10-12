@@ -42,6 +42,7 @@ from qcelemental.models.v2 import DriverEnum
 from psi4 import core
 
 from . import p4util
+from .p4util.exceptions import ValidationError
 from .constants import pp
 from .driver_findif import FiniteDifferenceComputer
 from .driver_nbody import ManyBodyComputer
@@ -218,6 +219,16 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
         # has no derivative, so gradients would silently miss it.
         if xdm_counterpoise and driver != "energy":
             raise NotImplementedError(f"Counterpoise-based XDM {driver}s are not implemented; use bsse_type='nocp'.")
+        if uses_xdm:
+            # Counterpoise and no-CP XDM energies take differently fitted damping
+            # parameters, but share the full-cluster tasks.
+            if (xdm_counterpoise and any(item.lower() == "nocp" for item in bsse_types)
+                    and not core.has_option_changed("SCF", "XDM_DISPERSION_PARAMETERS")):
+                raise ValidationError(
+                    "XDM uses different damping parameters for counterpoise and no-CP energies; run "
+                    "bsse_type='nocp' separately from 'cp'/'vmfc', or set XDM_DISPERSION_PARAMETERS.")
+            keywords.pop("SCF__XDM_COUNTERPOISE", None)
+            keywords["XDM_COUNTERPOISE"] = xdm_counterpoise
 
     # XDM has no analytic derivatives: gradients are finite differences of the
     # full XDM energy (see proc_table, where XDM registers for energy only).

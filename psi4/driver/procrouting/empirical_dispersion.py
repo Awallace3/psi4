@@ -463,6 +463,9 @@ class XDMDispersionFunctor():
         Explicit a2 BJ damping parameter in angstrom (overrides lookup).
     model
         XDM damping-parameter model label (``kb49`` or ``los-ii``).
+    counterpoise
+        Look up the model's counterpoise-fitted parameters instead of its no-CP
+        fit. Set for every task of a ``bsse_type="cp"``/``"vmfc"`` computation.
     expected_x_omega
         Range-separation parameter of the fitted reference functional, or None if
         that functional is not range-separated. A wavefunction whose functional
@@ -482,6 +485,7 @@ class XDMDispersionFunctor():
                  a1: Optional[float] = None,
                  a2_ang: Optional[float] = None,
                  model: str = "kb49",
+                 counterpoise: bool = False,
                  expected_x_omega: Optional[float] = None,
                  expected_x_beta: Optional[float] = None):
         self._xdm_model = normalize_xdm_model(model)
@@ -507,15 +511,19 @@ class XDMDispersionFunctor():
             raise ValidationError("XDM requires a basis name or explicit a1, a2 parameters.")
 
         try:
-            fitted_a1, fitted_a2_ang = get_xdm_bj_params(functional_name, basis_name, model=self._xdm_model)
+            fitted_a1, fitted_a2_ang = get_xdm_bj_params(functional_name,
+                                                         basis_name,
+                                                         model=self._xdm_model,
+                                                         counterpoise=counterpoise)
         except KeyError:
             lookup_key = f"{functional_name.lower()}/{basis_name.lower()}"
-            fitted_bases = available_xdm_bases(functional_name, self._xdm_model)
-            hint = (f" Bases fitted for {functional_name.lower()} with model {self._xdm_model}: {fitted_bases}."
+            fit = "counterpoise" if counterpoise else "no-CP"
+            fitted_bases = available_xdm_bases(functional_name, self._xdm_model, counterpoise=counterpoise)
+            hint = (f" Bases with {fit} fits for {functional_name.lower()} with model {self._xdm_model}: {fitted_bases}."
                     if fitted_bases else
-                    f" No basis is fitted for {functional_name.lower()} with model {self._xdm_model}.")
+                    f" No basis has a {fit} fit for {functional_name.lower()} with model {self._xdm_model}.")
             raise ValidationError("XDMDispersion: No fitted BJ parameters for "
-                                  f"{lookup_key} with model {self._xdm_model}. "
+                                  f"{lookup_key} with model {self._xdm_model} ({fit}). "
                                   "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS." + hint)
 
         self.xdm = core.XDMDispersion.build(functional_name, fitted_a1, fitted_a2_ang)

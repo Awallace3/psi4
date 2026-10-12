@@ -180,16 +180,39 @@ _XDM_LOS_II_PARAMS_ANGSTROM: Dict[str, Tuple[float, float]] = {
     "pbe0/aug-cc-pvdz": (0.068267, 3.963874),
 }
 
+_XDM_LOS_II_CP_PARAMS_ANGSTROM: Dict[str, Tuple[float, float]] = {
+    # Fitted to counterpoise-corrected DFT IE with ghost-centre moment
+    # superposition (bsse_type="cp") against the same LoS-II reference;
+    # least squares on per-dimer residuals, 4556 (b3lyp) / 4558 (pbe0) dimers.
+
+    # b3lyp/aug-cc-pvdz RMSE 0.262, MAE: 0.144 kcal/mol on LoS-II
+    "b3lyp/aug-cc-pvdz": (0.3880, 2.1781),
+    # pbe0/aug-cc-pvdz RMSE 0.347, MAE: 0.179 kcal/mol on LoS-II
+    "pbe0/aug-cc-pvdz": (0.1592, 3.3865),
+}
+
 _XDM_MODEL_ALIASES: Dict[str, str] = {
     "": "kb49",
     "kb49": "kb49",
     "los-ii": "los-ii",
 }
 
-_XDM_PARAM_TABLES: Dict[str, Dict[str, Tuple[float, float]]] = {
-    "kb49": _XDM_BJ_PARAMS_ANGSTROM,
-    "los-ii": _XDM_LOS_II_PARAMS_ANGSTROM,
+# Each model holds separate fits for plain (no-CP) and counterpoise energies; the
+# counterpoise table is used for every task of a bsse_type="cp"/"vmfc" computation.
+_XDM_PARAM_TABLES: Dict[str, Dict[str, Dict[str, Tuple[float, float]]]] = {
+    "kb49": {
+        "nocp": _XDM_BJ_PARAMS_ANGSTROM,
+        "cp": {}
+    },
+    "los-ii": {
+        "nocp": _XDM_LOS_II_PARAMS_ANGSTROM,
+        "cp": _XDM_LOS_II_CP_PARAMS_ANGSTROM
+    },
 }
+
+
+def _bsse_label(counterpoise: bool) -> str:
+    return "cp" if counterpoise else "nocp"
 
 
 def normalize_xdm_model(model: str) -> str:
@@ -203,17 +226,17 @@ def normalize_xdm_model(model: str) -> str:
 
 
 def available_xdm_functionals(model: str = "kb49") -> List[str]:
-    """Functional names with fitted XDM damping parameters under ``model``."""
+    """Functional names with fitted XDM damping parameters (CP or no-CP) under ``model``."""
 
-    table = _XDM_PARAM_TABLES[normalize_xdm_model(model)]
-    return sorted({key.split("/", 1)[0] for key in table})
+    tables = _XDM_PARAM_TABLES[normalize_xdm_model(model)]
+    return sorted({key.split("/", 1)[0] for table in tables.values() for key in table})
 
 
-def available_xdm_bases(functional_name: str, model: str = "kb49") -> List[str]:
+def available_xdm_bases(functional_name: str, model: str = "kb49", *, counterpoise: bool = False) -> List[str]:
     """Basis names with fitted (a1, a2) for ``functional_name`` under ``model``."""
 
     func = functional_name.lower()
-    table = _XDM_PARAM_TABLES[normalize_xdm_model(model)]
+    table = _XDM_PARAM_TABLES[normalize_xdm_model(model)][_bsse_label(counterpoise)]
     return sorted(key.split("/", 1)[1] for key in table if key.split("/", 1)[0] == func)
 
 
@@ -222,6 +245,7 @@ def get_xdm_bj_params(
     basis_name: str,
     *,
     model: str = "kb49",
+    counterpoise: bool = False,
 ) -> Tuple[float, float]:
     """Return (a1, a2_angstrom) for a functional/basis XDM model.
 
@@ -234,14 +258,13 @@ def get_xdm_bj_params(
     model
         XDM damping-parameter model. Supported values are ``kb49`` and
         ``los-ii``.
+    counterpoise
+        Select the parameters fitted to counterpoise-corrected interaction
+        energies instead of the no-CP fit.
     """
 
-    func = functional_name.lower()
-    basis = basis_name.lower()
-    key = f"{func}/{basis}"
-    normalized_model = normalize_xdm_model(model)
-
-    table = _XDM_PARAM_TABLES[normalized_model]
+    key = f"{functional_name.lower()}/{basis_name.lower()}"
+    table = _XDM_PARAM_TABLES[normalize_xdm_model(model)][_bsse_label(counterpoise)]
     if key in table:
         return table[key]
 
