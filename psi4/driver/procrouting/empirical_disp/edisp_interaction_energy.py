@@ -327,10 +327,10 @@ def sapt_dft_xdm_interaction_energy(
         xdm_functor = empirical_dispersion.XDMDispersionFunctor(
             functional_name=xdm_functional_name, a1=a1, a2_ang=a2_ang, model=xdm_model)
     else:
-        xdm_functor = empirical_dispersion.XDMDispersionFunctor(
-            functional_name=xdm_functional_name, basis_name=core.get_global_option("BASIS"), model=xdm_model)
-        core.print_out("    NOTE: XDM damping parameters come from the noCP-fitted table for this functional, basis,\n"
-                       "          and model. Set XDM_DISPERSION_PARAMETERS for counterpoise-fitted values.\n\n")
+        xdm_functor = empirical_dispersion.XDMDispersionFunctor(functional_name=xdm_functional_name,
+                                                                basis_name=core.get_global_option("BASIS"),
+                                                                model=xdm_model,
+                                                                counterpoise=True)
 
     core.print_out("         " + "Supermolecular XDM Interaction Energy E_IE = E_IJ - E_I - E_J".center(58) + "\n")
     core.print_out("         " + "(counterpoise monomers carry superposed ghost-centre moments)".center(58) + "\n\n")

@@ -153,9 +153,17 @@ units angstrom
     from psi4.driver.driver_nbody import ManyBodyComputer
 
     findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
-    for bsse_type in ["cp", "vmfc", ["nocp", "vmfc"]]:
+    for bsse_type, counterpoise in [("cp", True), ("vmfc", True), ("nocp", False)]:
         plan = task_planner("energy", "b3lyp-xdm", dimer, bsse_type=bsse_type)
         assert isinstance(plan, ManyBodyComputer)
+        assert all(task.keywords["XDM_COUNTERPOISE"] is counterpoise for task in plan.task_list.values())
+    # CP and noCP take different damping parameters but share the dimer task.
+    with pytest.raises(psi4.ValidationError, match="run bsse_type='nocp' separately"):
+        task_planner("energy", "b3lyp-xdm", dimer, bsse_type=["nocp", "vmfc"])
+    # KB49 has no counterpoise fit; the subtask's error reaches the driver through QCEngine.
+    from qcengine.exceptions import InputError
+    with pytest.raises(InputError, match=re.escape("No fitted BJ parameters for b3lyp/aug-cc-pvdz with model kb49 (counterpoise)")):
+        psi4.energy("b3lyp-xdm", molecule=dimer, bsse_type="cp")
     with pytest.raises(NotImplementedError, match="through composite \\(CBS\\) methods are not implemented"):
         task_planner("energy", "b3lyp-xdm/cc-pv[d,t]z", dimer, bsse_type="cp")
     with pytest.raises(NotImplementedError, match="Counterpoise-based XDM gradients are not implemented"):
@@ -165,6 +173,12 @@ units angstrom
 
     e_los_ii = psi4.energy("b3lyp-xdm(los-ii)", molecule=dimer, bsse_type="nocp")
     assert compare_values(e_los_ii, -0.0010595757, 8, "No-CP XDM(LoS-II) energy")
+
+    # bsse_type="cp" routes every task to the LoS-II counterpoise fit.
+    e_los_ii_cp = psi4.energy("b3lyp-xdm(los-ii)", molecule=dimer, bsse_type="cp")
+    psi4.set_options({"XDM_DISPERSION_PARAMETERS": [0.3880, 2.1781]})
+    e_explicit_cp = psi4.energy("b3lyp-xdm(los-ii)", molecule=dimer, bsse_type="cp")
+    assert compare_values(e_explicit_cp, e_los_ii_cp, 10, "CP XDM(LoS-II) uses the counterpoise fit")
 
     psi4.set_options({
         "basis": "sto-3g",
@@ -204,6 +218,20 @@ units angstrom
     assert compare_values(e_alias, e_kb49, 10, "-XDM alias equals -XDM(KB49)")
     assert not np.isclose(e_los_ii, e_kb49, rtol=0.0, atol=1.0e-8)
 
+    # XDM_COUNTERPOISE routes the same model to its counterpoise fit.
+    psi4.set_options({"XDM_COUNTERPOISE": True})
+    e_los_ii_cp = psi4.energy("b3lyp-xdm(los-ii)", molecule=mol)
+    assert not np.isclose(e_los_ii_cp, e_los_ii, rtol=0.0, atol=1.0e-8)
+    with pytest.raises(psi4.ValidationError, match=re.escape("with model kb49 (counterpoise)")):
+        psi4.energy("b3lyp-xdm", molecule=mol)
+
+    from psi4.driver.procrouting.empirical_disp.xdm_params import get_xdm_bj_params
+    assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz", model="los-ii") == (0.362043, 2.452093)
+    assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz", model="los-ii", counterpoise=True) == (0.3880, 2.1781)
+    assert get_xdm_bj_params("pbe0", "aug-cc-pvdz", model="LOS-II", counterpoise=True) == (0.1592, 3.3865)
+    with pytest.raises(KeyError):
+        get_xdm_bj_params("b3lyp", "aug-cc-pvdz", counterpoise=True)
+
 
 @pytest.mark.xdm
 def test_xdm_unsupported_functional():
@@ -221,7 +249,7 @@ units angstrom
         "DFT_SPHERICAL_POINTS": 590,
         "DFT_RADIAL_POINTS": 99,
     })
-    err_msg = ("XDMDispersion: No fitted BJ parameters for hf/sto-3g with model kb49. "
+    err_msg = ("XDMDispersion: No fitted BJ parameters for hf/sto-3g with model kb49 (no-CP). "
                "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS.")
     with pytest.raises(
             psi4.p4util.ValidationError,

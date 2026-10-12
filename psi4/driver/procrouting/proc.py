@@ -1486,6 +1486,8 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
                 _disp_functor = empirical_dispersion.XDMDispersionFunctor(functional_name=func_name,
                                                                           basis_name=basis_name,
                                                                           model=xdm_model,
+                                                                          counterpoise=core.get_option(
+                                                                              "SCF", "XDM_COUNTERPOISE"),
                                                                           expected_x_omega=expected_x_omega,
                                                                           expected_x_beta=expected_x_beta)
         elif isinstance(name, dict):

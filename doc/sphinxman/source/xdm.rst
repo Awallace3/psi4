@@ -138,9 +138,12 @@ Grimme correction.  For example::
    energy('b3lyp-xdm')
 
 ``-XDM`` selects the KB49 damping model. Use ``-XDM(KB49)`` explicitly or
-``-XDM(LOS-II)`` for the LoS-II refit, which is fitted only for the three
-functional/basis combinations in :ref:`table:xdmlosiiparams`. Any other
-combination requires |scf__xdm_dispersion_parameters|.
+``-XDM(LOS-II)`` for the LoS-II refit, which is fitted only for the
+functional/basis combinations in :ref:`table:xdmlosiiparams` and
+:ref:`table:xdmlosiicpparams`. Each model keeps separate no-CP and
+counterpoise fits; the counterpoise set is selected automatically for
+``bsse_type='cp'`` and ``'vmfc'`` (see below). Any other combination
+requires |scf__xdm_dispersion_parameters|.
 
 The dispersion correction is available after a calculation in the
 PSI variable :psivar:`DISPERSION CORRECTION ENERGY`.
@@ -227,6 +230,18 @@ density-derived, :math:`(a_1, a_2)` vary with both functional and basis set.
    | PBE0 / aug-cc-pVDZ            | 0.068267 | 3.963874  |
    +-------------------------------+----------+-----------+
 
+.. _`table:xdmlosiicpparams`:
+
+.. table:: LoS-II counterpoise XDM BJ damping parameters, used with ``bsse_type='cp'`` (a1, a2 in angstrom)
+
+   +-------------------------------+----------+-----------+
+   | Functional / Basis            | a1       | a2 (Ang)  |
+   +===============================+==========+===========+
+   | B3LYP / aug-cc-pVDZ           | 0.3880   | 2.1781    |
+   +-------------------------------+----------+-----------+
+   | PBE0 / aug-cc-pVDZ            | 0.1592   | 3.3865    |
+   +-------------------------------+----------+-----------+
+
 For unlisted combinations, supply :math:`(a_1, a_2)` through
 |scf__xdm_dispersion_parameters|. The full table is in
 ``psi4/driver/procrouting/empirical_disp/xdm_params.py``.
@@ -237,9 +252,25 @@ and ``'vmfc'``; see **Ghost Atoms** for how ghost centres are treated::
    energy('b3lyp-xdm', bsse_type=['cp', 'nocp'])
 
 Counterpoise-corrected XDM gradients, and counterpoise XDM energies through a
-CBS specification, raise ``NotImplementedError``. Parameter sets fitted to
-no-CP interaction energies (the KB49 table above) are not refitted for
-counterpoise use.
+CBS specification, raise ``NotImplementedError``.
+
+Counterpoise and no-CP interaction energies use different damping
+parameters. For ``bsse_type='cp'`` or ``'vmfc'`` the many-body driver sets
+|scf__xdm_counterpoise| on every task, and the parameters come from the
+model's counterpoise fit (:ref:`table:xdmlosiicpparams`), made against
+counterpoise-corrected LoS-II interaction energies with ghost-centre
+superposition::
+
+   energy('b3lyp-xdm(los-ii)', bsse_type='cp')
+
+KB49 has no counterpoise fit, so counterpoise ``-XDM`` and ``-XDM(KB49)``
+energies require |scf__xdm_dispersion_parameters|, as does ``dft-xdm(sapt)``,
+whose delta-DFT monomers are counterpoise subsystems. Because the cluster
+tasks are shared, requesting ``'nocp'`` together with ``'cp'`` or ``'vmfc'``
+also requires explicit parameters; otherwise run them separately. When
+running counterpoise subsystem jobs outside the many-body driver (for
+example, as individual QCFractal singlepoints), set
+|scf__xdm_counterpoise| yourself.
 
 
 Custom Parameters
