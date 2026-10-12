@@ -1,0 +1,106 @@
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location("compare", ROOT / "compare.py")
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+
+
+class CompareTests(unittest.TestCase):
+    def setUp(self):
+        self.c = json.loads((ROOT / "config.json").read_text())
+        self.c["repeats"] = 1
+
+    def record(self, engine, **kwargs):
+        r = dict(engine=engine, system="peptide", functional="pbe", profile=False,
+                 ok=True, process_returncode=0, scf_wall_s=2 if engine == "psi4" else 1,
+                 process_wall_s=4, scf_iterations=15, energy_hartree=-100,
+                 nbf=210, naux=600, functional_metadata=dict(
+                     omega=0, short_range_exchange=0, long_range_exchange=0))
+        r.update(kwargs)
+        return r
+
+    def row(self, records):
+        return next(r for r in m.summarize(records, self.c, ["peptide"]) if r["functional"] == "pbe")
+
+    def test_complete_ratio(self):
+        row = self.row([self.record(e) for e in m.ENGINES])
+        self.assertTrue(row["complete"])
+        self.assertTrue(row["comparison_eligible"])
+        self.assertEqual(row["psi4_over_pyscf_scf_time"], 2)
+
+    def test_teardown_failure_is_not_success(self):
+        row = self.row([self.record("psi4"), self.record("pyscf", process_returncode=-11)])
+        self.assertFalse(row["complete"])
+        self.assertNotIn("psi4_over_pyscf_scf_time", row)
+
+    def test_instrumentation_excluded(self):
+        row = self.row([self.record(e) for e in m.ENGINES] + [
+            self.record("pyscf", profile=True, scf_wall_s=100)])
+        self.assertEqual(row["psi4_over_pyscf_scf_time"], 2)
+
+    def test_aux_mismatch_suppresses_ratio(self):
+        row = self.row([self.record("psi4"), self.record("pyscf", naux=601)])
+        self.assertFalse(row["comparison_eligible"])
+        self.assertNotIn("psi4_over_pyscf_scf_time", row)
+
+    def test_functional_mismatch_suppresses_ratio(self):
+        p = self.record("pyscf")
+        p["functional_metadata"]["omega"] = .3
+        row = self.row([self.record("psi4"), p])
+        self.assertFalse(row["comparison_eligible"])
+
+    def test_missing_repeat_remains_incomplete(self):
+        self.c["repeats"] = 3
+        self.assertFalse(self.row([self.record(e) for e in m.ENGINES])["complete"])
+
+    def test_energy_review_is_separate(self):
+        row = self.row([self.record("psi4"), self.record("pyscf", energy_hartree=-99)])
+        self.assertTrue(row["complete"])
+        self.assertTrue(row["energy_review"])
+
+    def test_no_pruning_and_native_fp64(self):
+        opts = m.psi_options(self.c)
+        self.assertEqual(opts["dft_pruning_scheme"], "none")
+        self.assertFalse(opts["cuest_mixed_precision"])
+
+    def test_vwn_rpa_explicit(self):
+        self.assertEqual(self.c["functionals"]["b3lyp"]["pyscf"], "HYB_GGA_XC_B3LYP")
+        self.assertEqual(self.c["functionals"]["svwn"]["pyscf"], "LDA_X,LDA_C_VWN_RPA")
+        self.assertEqual(set(x["rung"] for x in self.c["functionals"].values()),
+                         {"lda", "gga", "mgga", "hybrid", "range-separated"})
+
+    def test_xyz_size_guard(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.xyz"
+            p.write_text("1\ncharge=0 mult=1\nH 0 0 0\n")
+            with self.assertRaises(AssertionError):
+                m.xyz(p, "peptide")
+
+    def test_real_suite_geometry_counts(self):
+        suite = Path("/home/awallace43/data/timing_test_suite/geometries")
+        if not suite.is_dir():
+            self.skipTest("Local timing suite unavailable")
+        for system, n in m.ATOMS.items():
+            atom = m.xyz(suite / f"{system}.xyz", system)
+            atoms = [line.split()[0] for line in atom.splitlines()]
+            self.assertEqual(len(atoms), n)
+            self.assertEqual(sum(5 if e == "H" else 14 for e in atoms), m.NBF[system])
+
+    def test_nested_timer_counts_are_not_fabricated(self):
+        class Obj:
+            def f(self):
+                return 7
+        obj = Obj()
+        t = m.Timings(lambda: None)
+        t.wrap(obj, "f", "f")
+        self.assertEqual(obj.f(), 7)
+        self.assertEqual(t.data["f"]["calls"], 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

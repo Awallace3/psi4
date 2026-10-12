@@ -1,0 +1,8 @@
+# CUDA 12 route; do not install in p4cuest_sapt or another shared environment.
+# CuPy/cuTENSOR pair recommended by GPU4PySCF upstream.
+gpu4pyscf-cuda12x==1.8.1
+gpu4pyscf-libxc-cuda12x==0.8.1
+cupy-cuda12x==13.4.1
+cutensor-cu12==2.2.0
+pyscf==2.14.0
+packaging==24.2
