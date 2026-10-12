@@ -170,6 +170,16 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
 #endif
     /*- Whether to enable NVIDIA cuEST GPU acceleration (requires CUDA and cuEST libraries) -*/
     options.add_bool("USE_CUEST", false);
+    /*- Whether |globals__use_cuest| also uses cuEST for the density-fitted
+    atomic J/K builds in SAD, SADNO, and Huckel guesses. Requires a spherical
+    SAD fitting basis and positive integral tolerance. Non-DF
+    |scf__sad_scf_type| choices retain the CPU direct builder. Explicit CPU
+    screening modes other than SCHWARZ, a custom DF fitting condition, and
+    Cartesian fitting functions retain CPU atomic J/K. Set false to compare
+    CPU atomic guesses with GPU molecular
+    SCF; tiny atoms may be faster on CPU because of GPU setup/transfer costs.
+    No effect unless |globals__use_cuest| is true. -*/
+    options.add_bool("CUEST_SAD", true);
     /*- Whether |globals__use_cuest| also routes the DFT exchange-correlation
     quadrature through cuEST.  When false, cuEST still builds the density-fitted
     J/K matrices -- the dominant cost -- while the XC grid, its CPU blocking, and
@@ -181,21 +191,25 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     with either setting.  GRAC analytic gradients, the XC response kernels used by
     TDDFT and CPHF properties, Fock derivatives, analytic XC Hessians, and the SAP
     guess have no cuEST implementation and raise rather than falling back, so set
-    this false to run them alongside cuEST J/K.  No effect unless
+    this false to run them alongside cuEST J/K.  DFT with OpenOrbitalOptimizer
+    also rejects cuEST XC; use the internal orbital optimizer or set this false.
+    No effect unless
     |globals__use_cuest| is true. -*/
     options.add_bool("CUEST_XC", true);
-    /*- Whether to allow GPU calculations to use mixed precision emulation (requires CUDA and cuEST libraries) -*/
+    /*- Whether to allow GPU calculations to use mixed precision emulation (requires CUDA and cuEST libraries).
+    False forces native FP64; true restores cuEST's default math mode, which permits
+    emulation but may select native FP64 for a particular operation. -*/
     options.add_bool("CUEST_MIXED_PRECISION", true);
     /*- Tune # of Ozaki Slices in emulated DF K computations (requires CUDA and cuEST libraries) -*/
     options.add_int("CUEST_DFK_SLICES", 5);
     /*- Tune # of Ozaki Moduli in emulated DF K computations (requires CUDA and cuEST libraries) -*/
     options.add_int("CUEST_DFK_MODULI", 8);
-    /*- Size below which the SAPT tensor code keeps its matrix multiplications on
-    the CPU even though |globals__use_cuest| is on.  A chain of multiplications is
-    sent to cuBLAS only if one of its links is at least as large as the product of
-    two matrices of this dimension; smaller ones lose more to the PCIe transfer
-    than they gain on the GPU.  Set to 0 to send every chain to the GPU, which is
-    useful for checking the two paths against each other.  No effect unless
+    /*- Work threshold for the SAPT einsums matrix-chain cuBLAS fast path.
+    A chain is eligible when its largest link has $m k n$ at least this value
+    cubed, where the link multiplies an $m \times k$ matrix by a $k \times n$ matrix.
+    This is a transfer-overhead heuristic, not a bound on every matrix dimension.
+    Set to 0 to send every otherwise eligible chain to the GPU for CPU/GPU
+    comparisons. Chains requesting nonzero GEMM beta remain on CPU. No effect unless
     |globals__use_cuest| is true. -*/
     options.add_int("CUEST_GEMM_MIN_DIM", 256);
 
@@ -1246,12 +1260,12 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     not counted twice. Rows shared between A and B are never trimmed, since
     the dimer field must stay the sum of the monomer fields. -*/
     options.add_bool("SAPT_DFT_GRAC_USE_EXT_POT", false);
-    /*- Seed the GRAC cation SCF with the converged neutral monomer's orbitals
-    instead of a fresh SAD guess. Same geometry and basis, one electron fewer,
-    so the neutral orbitals are a much closer start and the cation converges in
-    noticeably fewer iterations. Off by default: the neutral's occupied set can
-    bias the cation toward the same state the tiered convergence fallbacks in
-    |sapt__sapt_dft_grac_compute| exist to escape. -*/
+    /*- Seed the GRAC electron-removed SCF with the converged given monomer's
+    orbitals instead of a fresh SAD guess. The given monomer may already be
+    charged; the target has one fewer electron in the same geometry and basis.
+    Seeding can reduce the iteration count but can also bias which cation SCF
+    solution is reached, so it is off by default. Fresh guesses in the
+    |sapt__sapt_dft_grac_compute| convergence tiers can explore other solutions. -*/
     options.add_bool("SAPT_DFT_GRAC_SEED_CATION", false);
         /*- To ensure that the GRAC shift is computed with a sufficiently large
           basis set, the user can specify a larger basis set for the GRAC

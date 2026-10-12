@@ -476,12 +476,15 @@ class PSI_API JK {
     */
     virtual void set_wcombine(bool wcombine);
     bool get_wcombine() { return wcombine_; }
+    /// True if K contains the preweighted alpha/r + beta*erf(omega*r)/r
+    /// operator, with no separate wK result. Not the MemDFJK wcombine layout.
+    virtual bool returns_combined_exchange() const { return false; }
 
     /**
     * Set the omega value for wK
     * @param omega range-separation parameter
     */
-    void set_omega(double omega) { omega_ = omega; }
+    virtual void set_omega(double omega) { omega_ = omega; }
     double get_omega() { return omega_; }
 
     /**
@@ -1369,4 +1372,3 @@ class PSI_API CompositeJK : public JK {
 }
 
 #endif
-
