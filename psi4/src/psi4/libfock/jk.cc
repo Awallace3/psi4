@@ -338,6 +338,10 @@ void JK::compute_D() {
     } else {
         for (size_t N = 0; N < D_.size(); N++) {
             if (D_[N]->symmetry() != (C_left_[N]->symmetry() ^ C_right_[N]->symmetry())) same = false;
+            // A response batch may switch between dense AO and blocked SO
+            // coefficients without changing its length or total symmetry.
+            if (D_[N]->rowspi() != C_left_[N]->rowspi() ||
+                D_[N]->colspi() != C_right_[N]->rowspi()) same = false;
         }
     }
 
@@ -379,6 +383,8 @@ void JK::allocate_JK() {
     } else {
         for (size_t N = 0; N < D_.size(); N++) {
             if (D_[N]->symmetry() != J_[N]->symmetry()) same = false;
+            if (J_[N]->rowspi() != D_[N]->rowspi() ||
+                J_[N]->colspi() != D_[N]->rowspi()) same = false;
         }
     }
 

@@ -27,6 +27,7 @@
  */
 
 #include "uhf.h"
+#include "cpscf_gemm.h"
 
 #include <algorithm>
 #include <cmath>
@@ -493,7 +494,10 @@ std::vector<SharedMatrix> UHF::onel_Hx(std::vector<SharedMatrix> x_vec) {
     SharedMatrix Fa, Fb, Cao, Cbo, Cav, Cbv;
     std::vector<SharedMatrix> ret;
     for (size_t i = 0; i < x_vec.size() / 2; i++) {
-        if (c1_input_[i]) {
+        if (c1_input_[2 * i] != c1_input_[2 * i + 1]) {
+            throw PSIEXCEPTION("UHF::onel_Hx alpha/beta rotations must use the same basis representation.");
+        }
+        if (c1_input_[2 * i]) {
             if ((x_vec[2 * i]->rowspi() != Caocc_ao->colspi()) || (x_vec[2 * i]->colspi() != Cavir_ao->colspi())) {
                 throw PSIEXCEPTION("SCF::onel_Hx incoming rotation matrices must have shape (occ x vir).");
             }
@@ -519,27 +523,18 @@ std::vector<SharedMatrix> UHF::onel_Hx(std::vector<SharedMatrix> x_vec) {
             Cbv = Cbvir_so;
         }
         // Alpha
-        SharedMatrix tmp1 = linalg::triplet(Cao, Fa, Cao, true, false, false);
-        SharedMatrix result = linalg::doublet(tmp1, x_vec[2 * i], false, false);
-
-        SharedMatrix tmp2 = linalg::triplet(x_vec[2 * i], Cav, Fa, false, true, false);
-        result->gemm(false, false, -1.0, tmp2, Cav, 1.0);
-
-        ret.push_back(result);
+        ret.push_back(cpscf::onel(options_, Cao, Cav, Fa, x_vec[2 * i]));
 
         // Beta
-        tmp1 = linalg::triplet(Cbo, Fb, Cbo, true, false, false);
-        result = linalg::doublet(tmp1, x_vec[2 * i + 1], false, false);
-
-        tmp2 = linalg::triplet(x_vec[2 * i + 1], Cbv, Fb, false, true, false);
-        result->gemm(false, false, -1.0, tmp2, Cbv, 1.0);
-
-        ret.push_back(result);
+        ret.push_back(cpscf::onel(options_, Cbo, Cbv, Fb, x_vec[2 * i + 1]));
     }
 
     return ret;
 }
 std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool combine, std::string return_basis) {
+    if (!jk_) {
+        throw PSIEXCEPTION("UHF::twoel_Hx: JK object is not initialized, please set option SAVE_JK to True.");
+    }
     if ((x_vec.size() % 2) != 0) {
         throw PSIEXCEPTION("UHF::twoel_Hx expect incoming vector to alternate A/B");
     }
@@ -566,7 +561,8 @@ std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool co
         Cavir_ao = Ca_subset("AO", "VIR");
         Cbocc_ao = Cb_subset("AO", "OCC");
         Cbvir_ao = Cb_subset("AO", "VIR");
-    } else {
+    }
+    if (needs_so) {
         Caocc_so = Ca_subset("SO", "OCC");
         Cavir_so = Ca_subset("SO", "VIR");
         Cbocc_so = Cb_subset("SO", "OCC");
@@ -584,7 +580,10 @@ std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool co
     // We actually want to compute all alpha then all beta, its smart enough to figure out the half transform
     SharedMatrix Cao, Cbo, Cav, Cbv;
     for (size_t i = 0; i < nvecs; i++) {
-        if (c1_input_[i]) {
+        if (c1_input_[2 * i] != c1_input_[2 * i + 1]) {
+            throw PSIEXCEPTION("UHF::twoel_Hx alpha/beta rotations must use the same basis representation.");
+        }
+        if (c1_input_[2 * i]) {
             if ((x_vec[2 * i]->rowspi() != Caocc_ao->colspi()) || (x_vec[2 * i]->colspi() != Cavir_ao->colspi())) {
                 throw PSIEXCEPTION("SCF::twoel_Hx incoming rotation matrices must have shape (occ x vir).");
             }
@@ -600,12 +599,12 @@ std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool co
 
         Cl.push_back(Cao);
 
-        SharedMatrix R = linalg::doublet(Cav, x_vec[2 * i], false, true);
+        SharedMatrix R = cpscf::doublet(options_, Cav, x_vec[2 * i], false, true);
         R->scale(-1.0);
         Cr.push_back(R);
     }
     for (size_t i = 0; i < nvecs; i++) {
-        if (c1_input_[i]) {
+        if (c1_input_[2 * i + 1]) {
             if ((x_vec[2 * i + 1]->rowspi() != Cbocc_ao->colspi()) ||
                 (x_vec[2 * i + 1]->colspi() != Cbvir_ao->colspi())) {
                 throw PSIEXCEPTION("SCF::twoel_Hx incoming rotation matrices must have shape (occ x vir).");
@@ -622,7 +621,7 @@ std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool co
         }
         Cl.push_back(Cbo);
 
-        SharedMatrix R = linalg::doublet(Cbv, x_vec[2 * i + 1], false, true);
+        SharedMatrix R = cpscf::doublet(options_, Cbv, x_vec[2 * i + 1], false, true);
         R->scale(-1.0);
         Cr.push_back(R);
     }
@@ -640,8 +639,8 @@ std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool co
         std::vector<SharedMatrix> Dx;
         // Gotta reorder the wizardry
         for (size_t i = 0; i < nvecs; i++) {
-            auto Dx_a = linalg::doublet(Cl[i], Cr[i], false, true);
-            auto Dx_b = linalg::doublet(Cl[nvecs + i], Cr[nvecs + i], false, true);
+            auto Dx_a = cpscf::doublet(options_, Cl[i], Cr[i], false, true);
+            auto Dx_b = cpscf::doublet(options_, Cl[nvecs + i], Cr[nvecs + i], false, true);
             Vx.push_back(std::make_shared<Matrix>("Vax temp", Dx_a->rowspi(), Dx_a->colspi(), Dx_a->symmetry()));
             Vx.push_back(std::make_shared<Matrix>("Vbx temp", Dx_b->rowspi(), Dx_b->colspi(), Dx_b->symmetry()));
             Dx.push_back(Dx_a);
@@ -654,8 +653,8 @@ std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool co
     for (const auto& pert : external_cpscf_perturbations_) {
         if (print_ > 1) outfile->Printf("Adding external CPSCF contribution %s.\n", pert.first.c_str());
         for (size_t i = 0; i < nvecs; i++) {
-            auto Dx_a = linalg::doublet(Cl[i], Cr[i], false, true);
-            auto Dx_b = linalg::doublet(Cl[nvecs + i], Cr[nvecs + i], false, true);
+            auto Dx_a = cpscf::doublet(options_, Cl[i], Cr[i], false, true);
+            auto Dx_b = cpscf::doublet(options_, Cl[nvecs + i], Cr[nvecs + i], false, true);
             V_ext_pert.push_back(pert.second(Dx_a));
             V_ext_pert.push_back(pert.second(Dx_b));
         }
@@ -676,15 +675,16 @@ std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool co
     }
 #endif
 
-#ifdef USING_cuEST
-    // cuEST constructs K & wK at the same time, so we must set them to 1.0 here as well
-    if (options_.get_bool("USE_CUEST")) {
+    const bool combined_exchange = jk_->returns_combined_exchange();
+    const bool use_k = functional_->is_x_hybrid() ||
+                       (combined_exchange && functional_->is_x_lrc());
+    const bool use_wk = functional_->is_x_lrc() && !combined_exchange;
+    if (combined_exchange) {
         alpha = 1.0;
-        beta = 1.0;
     }
-#endif
 
     std::vector<SharedMatrix> ret;
+    std::vector<size_t> ret_input;
     if (combine) {
         for (size_t i = 0; i < nvecs; i++) {
             // Scale the Xa -> alpha Coulomb terms.
@@ -697,14 +697,14 @@ std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool co
                 J[i]->axpy(2.0, Vx[2 * i]);
                 J[nvecs + i]->axpy(2.0, Vx[2 * i + 1]);
             }
-            if (functional_->is_x_hybrid()) {
+            if (use_k) {
                 J[i]->axpy(-alpha, K[i]);
                 J[i]->axpy(-alpha, K[i]->transpose());
 
                 J[nvecs + i]->axpy(-alpha, K[nvecs + i]);
                 J[nvecs + i]->axpy(-alpha, K[nvecs + i]->transpose());
             }
-            if (functional_->is_x_lrc()) {
+            if (use_wk) {
                 J[i]->axpy(-beta, wK[i]);
                 J[i]->axpy(-beta, wK[i]->transpose());
 
@@ -717,6 +717,8 @@ std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool co
             }
             ret.push_back(J[i]);
             ret.push_back(J[nvecs + i]);
+            ret_input.push_back(2 * i);
+            ret_input.push_back(2 * i + 1);
         }
     } else {
         if (jk_->get_wcombine()) {
@@ -740,20 +742,26 @@ std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool co
             }
             ret.push_back(J[i]);
             ret.push_back(J[nvecs + i]);
-            if (functional_->is_x_hybrid()) {
+            ret_input.push_back(2 * i);
+            ret_input.push_back(2 * i + 1);
+            if (use_k) {
                 K[i]->scale(alpha);
                 K[nvecs + i]->scale(alpha);
-                if (functional_->is_x_lrc()) {
+                if (use_wk) {
                     K[i]->axpy(beta, wK[i]);
                     K[nvecs + i]->axpy(beta, wK[nvecs + i]);
                 }
                 ret.push_back(K[i]);
                 ret.push_back(K[nvecs + i]);
-            } else if (functional_->is_x_lrc()) {
+                ret_input.push_back(2 * i);
+                ret_input.push_back(2 * i + 1);
+            } else if (use_wk) {
                 wK[i]->scale(beta);
                 wK[nvecs + i]->scale(beta);
                 ret.push_back(wK[i]);
                 ret.push_back(wK[nvecs + i]);
+                ret_input.push_back(2 * i);
+                ret_input.push_back(2 * i + 1);
             }
         }
     }
@@ -762,13 +770,15 @@ std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool co
     if (return_basis == "SO") {
         /* pass */
     } else if (return_basis == "MO") {
-        for (size_t i = 0; i < nvecs; i++) {
-            if (c1_input_[i]) {
-                ret[2 * i] = linalg::triplet(Caocc_ao, ret[2 * i], Cavir_ao, true, false, false);
-                ret[2 * i + 1] = linalg::triplet(Cbocc_ao, ret[2 * i + 1], Cbvir_ao, true, false, false);
+        for (size_t i = 0; i < ret.size(); i++) {
+            const auto input = ret_input[i];
+            const bool alpha_spin = input % 2 == 0;
+            if (c1_input_[input]) {
+                ret[i] = cpscf::triplet(options_, alpha_spin ? Caocc_ao : Cbocc_ao, ret[i],
+                                       alpha_spin ? Cavir_ao : Cbvir_ao, true, false, false);
             } else {
-                ret[2 * i] = linalg::triplet(Caocc_so, ret[2 * i], Cavir_so, true, false, false);
-                ret[2 * i + 1] = linalg::triplet(Cbocc_so, ret[2 * i + 1], Cbvir_so, true, false, false);
+                ret[i] = cpscf::triplet(options_, alpha_spin ? Caocc_so : Cbocc_so, ret[i],
+                                       alpha_spin ? Cavir_so : Cbvir_so, true, false, false);
             }
         }
     } else {
