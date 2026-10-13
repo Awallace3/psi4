@@ -29,8 +29,13 @@ module load gcc/12.3.0 cuda/12.6.1
 # Site GCC_ROOT overrides the conda GCC driver's relocated cc1/sysroot lookup.
 # This is job-local only; never change either installed compiler environment.
 unset GCC_ROOT
+# Conda compiler hooks read optional backup variables without defaults.
+# Relax nounset only during activation; do not change installed environments.
+set +u
 source "$(dirname "$(dirname "$env")")/etc/profile.d/conda.sh"
 conda activate "$env"
+set -u
+unset GCC_ROOT
 export LD_LIBRARY_PATH="$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 command -v nvcc
 {

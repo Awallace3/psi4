@@ -13,12 +13,17 @@
 set -euo pipefail
 : "${CUEST_FDDS_PIN:?set immutable FDDS validation commit}"
 root=/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-validation-20261012-v3
+# A separately git-pinned harness may fix activation without moving scientific
+# source/tests. Record that harness independently in the allocation artifacts.
+payload_root="${CUEST_FDDS_PAYLOAD_ROOT:-$root}"
 env=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt
 out=/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261012-validation-03/results-$SLURM_JOB_ID
 mkdir -p "$out"
 child=
 trap 'trap - TERM INT; if [[ -n "$child" ]]; then kill -TERM "$child" || true; wait "$child" || true; fi; exit 143' TERM INT
-srun bash "$root/devtools/benchmarks/fdds_validate.sh" "$root" "$env" "$CUEST_FDDS_PIN" "$out" &
+git -C "$payload_root" rev-parse HEAD > "$out/harness-commit.txt"
+test -z "$(git -C "$payload_root" status --porcelain --untracked-files=no)"
+srun bash "$payload_root/devtools/benchmarks/fdds_validate.sh" "$root" "$env" "$CUEST_FDDS_PIN" "$out" &
 child=$!
 set +e
 wait "$child"
