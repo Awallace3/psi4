@@ -1,5 +1,36 @@
 # FDDS cuEST implementation handoff
 
+## Authorized v3 GPU submission (pending, not validated)
+
+- Final focused read-only review reported no new correctness defect. Exactly
+  one new allocation was submitted: **13992504**, `gts-cs207-chemx`,
+  `gpu-h200`, explicit free `embers`, one H200/8 CPUs/64 GiB/two hours.
+  SLURM accepted it as PENDING; no GPU execution evidence yet.
+- Immutable scientific source/tests:
+  `8810da5743cc7350e7620ecb708cdd3e47baa739`, isolated checkout
+  `/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-validation-20261012-v3`,
+  own `build_fdds_validation`. Required **52 executed tests, zero skips,
+  failures or errors** (41 native + 11 GPU), plus VERIFIED.json/COMPLETED.
+- Separately git-pinned harness:
+  `e60b32507b3069192032705b1d4161dd38886511`, checkout ending
+  `psi4.fdds-validation-20261012-v3-harness`. This fixes only job activation:
+  installed conda compiler hooks read unset HOST/CONDA_BACKUP_GXX under nounset.
+  Nounset is relaxed only for conda activation, then restored; GCC_ROOT is
+  unset after module load and activation. No shared environment was changed.
+  The scientific checkout remains exactly at 8810da5743.
+- Live submission headroom **37/50**; unique job-name/comment/run duplicate
+  checks passed. Dry-run accepted gpu-h200; absolute cc1/cc1plus frontends
+  resolved in p4cuest_sapt. Compile/link/run probes repeat inside allocation.
+- Run directory:
+  `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261012-validation-03`.
+  Audit `results-13992504/{commit.txt,harness-commit.txt,compiler.txt,import.json,fdds.xml,fdds.log,VERIFIED.json,COMPLETED}`
+  and configure/build logs after terminal notification, including actual QOS
+  prolog, staged import/core/library hashes, executed GPU route/error/timings.
+- Automatic watcher **bba95ab46**, standard watch_jobs.sh at 300 s, 48-hour
+  watcher deadline. Submission marker `fdds-v3-submission.json` is atomic.
+  No GPU numerical/speedup claim. Existing FDDS **13991729** and coordinator
+  **13991128**, their frozen checkouts/builds/dependencies, remain untouched.
+
 ## CPU review fixes complete (not GPU validation)
 
 - Fix commits: `c90fc65bcc` (checked one/five empty-output budgets and recovery),
@@ -32,9 +63,9 @@
   assigned at the latest status check, frozen at pre-review pin
   `099706616a818041f56072c3b2471d6c04451cc8`; its 20-test suite will **not**
   validate these review fixes. Job/checkout/dependencies are untouched.
-  Prospective v3/run-03 templates now require 52 executed tests (41 native +
-  11 GPU); no new checkout/job was created or submitted. Coordinate a fresh
-  source pin/run before submission; do not silently duplicate/cancel jobs.
+  At CPU handoff, prospective v3/run-03 templates required 52 executed tests
+  (41 native + 11 GPU) and were not yet submitted. The subsequent authorized
+  isolated v3 submission is recorded above; no existing job was cancelled.
 - `fdds-review-fixes-complete.json` is generated atomically only after final
   handoff commit and the green CPU gate; it certifies CPU review-fix completion
   only, not GPU correctness, performance, or merge approval.
