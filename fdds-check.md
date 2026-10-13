@@ -1,5 +1,47 @@
 # FDDS cuEST implementation handoff
 
+## v3 terminal audit: FAILED, not a GPU correctness pass
+
+- **13992504** scientific pin `8810da5743cc7350e7620ecb708cdd3e47baa739`,
+  harness `e60b32507b3069192032705b1d4161dd38886511`; actual prolog/epilog
+  confirm authorized **inferno**, H200 on `atl1-1-03-019-14-0`.
+  SLURM job/batch FAILED `143:0`, payload CANCELLED `0:15`, elapsed
+  **01:57:57**, start/end Oct 13 09:08:24–11:06:21 Eastern.
+- Build/configuration and compiler C/C++ probes succeeded. Exact staged import
+  and both git pins were checked. Core `1.12a1.dev726` SHA256:
+  `3fe5a446db657ecb82c6557973eab85f08c161729ab16d047df7c16fb9d61c73`.
+  Actual resolved libraries: libcuest 0.2.2 (conda 0.2.2.2),
+  CUDA runtime **13.3.29**, cuBLAS **13.6.0.2**, Libxc 7.0.0.
+  Site nvcc was 12.6.1, but CMake detected CUDA toolkit major 13 and import
+  ldd resolved the conda CUDA 13 libraries; do not label this CUDA-12 runtime.
+  Device NVIDIA H200, driver 615.71.09.
+- **51 completed progress outcomes: 50 passes, 1 failure, 0 reported errors
+  or skips; 52 tests started, final case unfinished.** There is no finalized
+  JUnit: `fdds.xml`, `VERIFIED.json`, `COMPLETED` are all absent.
+  Counts are reconstructed only from pytest progress tokens, excluding the
+  literal F in printed FDDS lines, by local `audit.py`; no synthetic JUnit.
+  The failed completed case is unequal nonhybrid GPU contributions; traceback
+  was not emitted before interruption, so the failing assertion/cause is not
+  established. Final SAPT GPU case entered Psi4's debugger-wait fault handler
+  (PID3340286); its first CPU control returned, but no GPU SAPT result appeared.
+  A later TERM stopped the job near its pre-wall-limit signal; accounting says
+  FAILED rather than TIMEOUT. No crash stack is available; do not attribute
+  this to FDDS or cuEST lifecycle without diagnosis.
+- Completed equal nonhybrid and equal/unequal hybrid GPU contribution samples
+  print zero CPU/GPU errors. Completed integrated equal/unequal nonhybrid/hybrid
+  samples print zero energy differences and actual cuEST FDDS timers.
+  Integrated CPU/forced-GPU absolute elapsed seconds: equal nonhybrid
+  0.011079/0.012633, equal hybrid 0.016547/0.021600, unequal nonhybrid
+  0.010599/0.012759, unequal hybrid 0.016543/0.021534.
+  These are tiny correctness fixtures, **not throughput/speedup evidence**.
+  After-real-JK HOST pointer mode and full SAPT GPU correctness remain unproven.
+- Preserved local evidence:
+  `build_fdds_cpu/gpu-13992504/{accounting.txt,accounting-detailed.txt,remote-evidence.tar.gz,audit.py,audit.json,logs/,results-13992504/}`.
+  Audit JSON includes hashes of every copied result/log. Source/test/harness
+  checkouts are clean and retained unchanged; no retry/new allocation submitted.
+  Atomic `fdds-validation-13992504-terminal.json` records this failed outcome.
+  Existing pre-review13991729 and coordinator13991128 remain untouched.
+
 ## Authorized v3 GPU submission (pending, not validated)
 
 - Subsequent explicit user approval selected **v3 only** for paid inferno.
