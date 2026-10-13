@@ -172,3 +172,49 @@ Markdown and self-contained HTML. Summary comparison ignores presentation order
 because sorted JSON config keys lose the original functional insertion order.
 The report preserves timing ranges, host RSS and whole-device memory samples.
 Its palette/type follows the existing cuEST report style, without external assets.
+
+### Not comparable to the October 4 SAPT total
+
+The October 4 report's Protein83 **140.10 s** is a complete
+SAPT(DFT)-D4(I)/PBE0 calculation with iterative GRAC, normally nine SCF solves,
+6-31+G** (922 dimer AOs), and **host** LibXC in every arm.
+Its GRAC stages alone take 90.47 s; the two final corrected DFT stages
+take 35.17 s combined. The new comparison instead times one uncorrected
+supermolecular DFT solve, cc-pVDZ (766 AOs), and CUDA LibXC.
+Both reports use seconds, but neither their workload boundaries nor their
+scientific builds match. Do not interpret their headline ratio as a controlled
+before/after acceleration. See `outputs/gpu-dft-oct4-comparison.md` for
+source-backed stage accounting and the remaining comparability differences.
+
+## Augmented triple-zeta follow-up
+
+The user explicitly authorized one **new inferno interactive H200 allocation**
+for preflight and production, including Protein157, with five-minute progress
+checks. `config-aug-cc-pvtz.json` changes the orbital basis to spherical
+aug-cc-pVTZ and the internal host budget to 160 GiB (256G requested host memory),
+retaining the same def2-universal-jkfit auxiliary basis, functional definitions,
+99×590 nominal grids and convergence targets. Retaining the auxiliary basis
+isolates the primary-basis change; this is not a certification of auxiliary
+completeness for augmented triple-zeta.
+
+| System | Primary AOs | Auxiliary functions | Unscreened packed DF tensor upper bound |
+|---|---:|---:|---:|
+| peptide | 782 | 1010 | 2.3 GiB |
+| nanotube | 1564 | 2238 | 20.4 GiB |
+| Protein83 | 2806 | 3735 | 109.6 GiB |
+| Protein157 | 5382 | 7265 | 784.1 GiB |
+
+The last column is `8 * Naux * Nao * (Nao+1) / 2`, **not** a forecast of
+allocated GPU memory. Screening, blocking, direct J paths and host storage
+can change actual memory substantially. Largest-system hybrid and
+range-separated paths require feasibility checks; do not silently change basis,
+precision, DF parameters or GPU route to obtain a successful timing.
+
+`interactive_step.sh` checks the live reservation's account/QoS/state,
+the pinned clean checkout, and unique phase output paths before running
+the isolated payload using absolute `/usr/bin/env` and `/bin/bash`.
+`COMPARE_CONFIG`, `COMPARE_FUNCTIONALS`, `COMPARE_REPEATS`,
+`COMPARE_PROFILES=0`, and `COMPARE_FAIL_FAST=1` support focused preflight.
+Every selected functional and configuration is copied/hash-pinned.
+Production failures remain explicit; fail-fast avoids spending extra repeats
+on an already failing large-basis path. No unsupported-basis counts are accepted.

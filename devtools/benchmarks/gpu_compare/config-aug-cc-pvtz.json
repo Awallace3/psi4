@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "systems": ["peptide", "nanotube", "protein83", "protein157"],
+  "functionals": {
+    "svwn": {"rung": "lda", "psi4": "svwn", "pyscf": "LDA_X,LDA_C_VWN_RPA", "components": {"LDA_X": 1.0, "LDA_C_VWN_RPA": 1.0}},
+    "pbe": {"rung": "gga", "psi4": "pbe", "pyscf": "PBE", "components": {"GGA_X_PBE": 1.0, "GGA_C_PBE": 1.0}},
+    "m06-l": {"rung": "mgga", "psi4": "m06-l", "pyscf": "M06L", "components": {"MGGA_X_M06_L": 1.0, "MGGA_C_M06_L": 1.0}},
+    "b3lyp": {"rung": "hybrid", "psi4": "b3lyp", "pyscf": "HYB_GGA_XC_B3LYP", "components": {"HYB_GGA_XC_B3LYP": 1.0}},
+    "wb97x": {"rung": "range-separated", "psi4": "wb97x", "pyscf": "WB97X", "components": {"HYB_GGA_XC_WB97X": 1.0}}
+  },
+  "basis": "aug-cc-pvtz",
+  "auxbasis": "def2-universal-jkfit",
+  "radial_points": 99,
+  "angular_points": 590,
+  "pruning": "none",
+  "energy_convergence": 1e-9,
+  "orbital_gradient_convergence": 1e-7,
+  "max_iterations": 200,
+  "integral_tolerance": 1e-12,
+  "df_fitting_condition": 1e-12,
+  "threads": 8,
+  "memory_gib": 160,
+  "repeats": 3,
+  "worker_timeout_s": 1800,
+  "energy_review_threshold_eh": 1e-4,
+  "cuest_mixed_precision": false
+}

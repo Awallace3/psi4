@@ -24,6 +24,16 @@ ENGINES = ("psi4", "pyscf")
 ATOMS = {"peptide": 24, "nanotube": 42, "protein83": 83, "protein157": 157}
 # Spherical cc-pVDZ: H=5, C/N/O=14.
 NBF = {"peptide": 210, "nanotube": 444, "protein83": 766, "protein157": 1478}
+NBF_BY_BASIS = {
+    "cc-pvdz": NBF,
+    # Spherical aug-cc-pVTZ: H=23, C/N/O=46.
+    "aug-cc-pvtz": {"peptide": 782, "nanotube": 1564, "protein83": 2806, "protein157": 5382},
+}
+
+
+def expected_nbf(c, system):
+    """Reject unsupported basis/count assumptions before costly GPU work."""
+    return NBF_BY_BASIS[c["basis"].lower()][system]
 
 
 def digest(path):
@@ -356,9 +366,10 @@ def worker(a):
              geometry_sha256=digest(a.xyz), config=c, job_id=os.getenv("SLURM_JOB_ID"),
              hostname=os.uname().nodename, python=sys.executable)
     try:
+        expected = expected_nbf(c, a.system)
         atom = xyz(a.xyz, a.system)
         {"psi4": run_psi4, "pyscf": run_pyscf}[a.engine](a, c, atom, r)
-        assert r["nbf"] == NBF[a.system], ("cc-pVDZ nbf mismatch", r["nbf"])
+        assert r["nbf"] == expected, ("Basis nbf mismatch", c["basis"], r["nbf"], expected)
         assert math.isfinite(r["energy_hartree"])
         r["runtime_libraries"] = runtime_libraries()
         r["ok"] = True
@@ -403,7 +414,8 @@ def summarize(records, c, systems):
                     g["energy_hartree"]["median"] - p["energy_hartree"]["median"])
                 row["energy_review"] = abs(row["energy_delta_pyscf_minus_psi4_eh"]) > c[
                     "energy_review_threshold_eh"]
-                row["nbf_equal"] = {r["nbf"] for r in groups["psi4"] + groups["pyscf"]} == {NBF[system]}
+                row["nbf_equal"] = {r["nbf"] for r in groups["psi4"] + groups["pyscf"]} == {
+                    expected_nbf(c, system)}
                 row["naux_equal"] = len({r["naux"] for r in groups["psi4"] + groups["pyscf"]}) == 1
                 row["functional_parameters_equal"] = all(math.isclose(
                     groups["psi4"][0]["functional_metadata"][key],
@@ -452,6 +464,11 @@ def campaign(a):
                                        env=engine_env(engine, a), text=True)
         (a.output / f"{engine}-pip-freeze.txt").write_text(lock)
     c = json.loads(a.config.read_text())
+    for system in a.systems:
+        expected_nbf(c, system)
+    if a.functionals:
+        assert len(set(a.functionals)) == len(a.functionals), "Duplicate functionals"
+        c["functionals"] = {name: c["functionals"][name] for name in a.functionals}
     c["repeats"] = a.repeats
     c["threads"] = a.threads
     atomic_json(a.output / "config.json", c)
@@ -556,6 +573,8 @@ def campaign(a):
                         atomic_json(a.output / "records.json", records)
                         atomic_json(a.output / "summary.json", summarize(records, c, systems))
                         print(name, "OK" if r["ok"] else "FAILED", r.get("error", ""), flush=True)
+                        if a.stop_on_worker_failure and not r["ok"]:
+                            raise RuntimeError(f"Stopping after failed worker {name}; records preserved")
     except BaseException as exc:
         atomic_json(a.output / "FAILED.json", dict(error=str(exc), traceback=traceback.format_exc(),
                     interrupted=isinstance(exc, KeyboardInterrupt), completed_workers=len(records)))
@@ -608,6 +627,10 @@ def main():
     c.add_argument("--threads", type=int, default=8)
     c.add_argument("--repeats", type=int, default=3)
     c.add_argument("--profiles", action="store_true")
+    c.add_argument("--functionals", nargs="+",
+                   help="Subset for focused preflight; selection is pinned in campaign config")
+    c.add_argument("--stop-on-worker-failure", action="store_true",
+                   help="Do not spend repeats on a known failing large-basis route")
     for parser in (w, c):
         parser.add_argument("--config", type=Path, default=HERE / "config.json")
         parser.add_argument("--output", type=Path, required=True)

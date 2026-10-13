@@ -36,7 +36,7 @@ export COMPARE_PSI_ENV="${COMPARE_PSI_ENV:-/storage/project/r-cs207-0/awallace43
 export COMPARE_GPU_ENV="${COMPARE_GPU_ENV:-/storage/project/r-cs207-0/awallace43/miniconda/envs/gpu4pyscf_compare}"
 export COMPARE_PSI_PACKAGE="${COMPARE_PSI_PACKAGE:-/storage/project/r-cs207-0/awallace43/gits/psi4.saptdft_cuest/build_cuda_libxc/stage/lib/psi4}"
 export COMPARE_PSI_CUDA_LIB="${COMPARE_PSI_CUDA_LIB:-/storage/project/r-cs207-0/awallace43/software/libxc-7.1.2-cuda/lib64}"
-srun bash "$repo/devtools/benchmarks/gpu_compare/payload.sh" "$mode" "$@" &
+srun /bin/bash "$repo/devtools/benchmarks/gpu_compare/payload.sh" "$mode" "$@" &
 child=$!
 set +e
 wait "$child"; status=$?

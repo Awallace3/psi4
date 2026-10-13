@@ -100,6 +100,23 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(opts["dft_pruning_scheme"], "none")
         self.assertFalse(opts["cuest_mixed_precision"])
 
+    def test_augmented_basis_count_and_ratio(self):
+        self.c["basis"] = "aug-cc-pvtz"
+        row = self.row([self.record(e, nbf=782) for e in m.ENGINES])
+        self.assertTrue(row["comparison_eligible"])
+        self.assertEqual(m.expected_nbf(self.c, "protein157"), 5382)
+
+    def test_old_basis_cannot_pass_augmented_basis_validation(self):
+        self.c["basis"] = "aug-cc-pvtz"
+        row = self.row([self.record(e) for e in m.ENGINES])
+        self.assertFalse(row["comparison_eligible"])
+        self.assertNotIn("psi4_over_pyscf_calculation_time", row)
+
+    def test_unsupported_basis_is_rejected(self):
+        self.c["basis"] = "not-a-supported-basis"
+        with self.assertRaises(KeyError):
+            m.expected_nbf(self.c, "protein83")
+
     def test_vwn_rpa_explicit(self):
         self.assertEqual(self.c["functionals"]["b3lyp"]["pyscf"], "HYB_GGA_XC_B3LYP")
         self.assertEqual(self.c["functionals"]["svwn"]["pyscf"], "LDA_X,LDA_C_VWN_RPA")
@@ -122,6 +139,8 @@ class CompareTests(unittest.TestCase):
             atoms = [line.split()[0] for line in atom.splitlines()]
             self.assertEqual(len(atoms), n)
             self.assertEqual(sum(5 if e == "H" else 14 for e in atoms), m.NBF[system])
+            self.assertEqual(sum(23 if e == "H" else 46 for e in atoms),
+                             m.NBF_BY_BASIS["aug-cc-pvtz"][system])
 
     def test_nested_timer_counts_are_not_fabricated(self):
         class Obj:

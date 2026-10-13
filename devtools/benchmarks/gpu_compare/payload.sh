@@ -56,10 +56,18 @@ else
     systems=("$@")
     (( ${#systems[@]} > 0 )) || systems=(peptide nanotube protein83 protein157)
     repeats="${COMPARE_REPEATS:-3}"
-    profiles=(--profiles)
+    profiles=()
+    [[ "${COMPARE_PROFILES:-1}" == 0 ]] || profiles=(--profiles)
 fi
+extra=()
+if [[ -n "${COMPARE_FUNCTIONALS:-}" ]]; then
+    read -r -a functionals <<< "$COMPARE_FUNCTIONALS"
+    extra+=(--functionals "${functionals[@]}")
+fi
+[[ "${COMPARE_FAIL_FAST:-0}" == 0 ]] || extra+=(--stop-on-worker-failure)
 exec "$COMPARE_GPU_ENV/bin/python" "$root/compare.py" campaign \
     --systems "${systems[@]}" --repeats "$repeats" "${profiles[@]}" \
+    --config "${COMPARE_CONFIG:-$root/config.json}" "${extra[@]}" \
     --threads "$OMP_NUM_THREADS" \
     --data "$TMPDIR/inputs" --output "$COMPARE_RUN/campaign" \
     --psi-env "$COMPARE_PSI_ENV" --psi-package "$COMPARE_PSI_PACKAGE" \
