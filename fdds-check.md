@@ -2,6 +2,15 @@
 
 ## Authorized v3 GPU submission (pending, not validated)
 
+- Subsequent explicit user approval selected **v3 only** for paid inferno.
+  Same job **13992504** was updated to `QOS=inferno` with the unchanged
+  `TimeLimit=02:00:00`, verified by scontrol; state was still PENDING.
+  No duplicate submission, cancellation, source/payload change or environment
+  mutation. Jobs 13991729 and 13991128 remain untouched. Original submission
+  below was free embers; final audit must check the actual inferno prolog.
+  Remote QoS-change evidence: run-root `inferno-switch-accounting.txt`.
+  Atomic submission marker updated with effective and initial QoS; watcher
+  bba95ab46 continues on the same job.
 - Final focused read-only review reported no new correctness defect. Exactly
   one new allocation was submitted: **13992504**, `gts-cs207-chemx`,
   `gpu-h200`, explicit free `embers`, one H200/8 CPUs/64 GiB/two hours.
