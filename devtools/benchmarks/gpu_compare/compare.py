@@ -114,12 +114,16 @@ def cuda_identity(runtime=None):
     assert rt.cudaGetDeviceCount(ctypes.byref(count)) == 0 and count.value == 1, \
         "Exactly one visible CUDA GPU is required"
     assert rt.cudaGetDevice(ctypes.byref(device)) == 0 and device.value == 0
-    uuid = (ctypes.c_ubyte * 16)()
-    assert rt.cudaDeviceGetUuid(ctypes.byref(uuid), device) == 0
-    value = bytes(uuid).hex()
-    return dict(uuid="GPU-" + "-".join((value[:8], value[8:12], value[12:16],
-                                      value[16:20], value[20:])),
-                logical_device=device.value, visible_count=count.value, runtime=paths[0])
+    # cudaDeviceGetUuid is not exported by the CUDA13 runtime. Resolve the
+    # selected CUDA ordinal to PCI bus first, then query NVML by that bus.
+    pci = ctypes.create_string_buffer(64)
+    assert rt.cudaDeviceGetPCIBusId(pci, len(pci), device) == 0
+    bus = pci.value.decode()
+    uuid = subprocess.check_output(["nvidia-smi", "-i", bus, "--query-gpu=uuid",
+                                    "--format=csv,noheader"], text=True).strip()
+    assert uuid.startswith("GPU-") and "\n" not in uuid
+    return dict(uuid=uuid, pci_bus_id=bus, logical_device=device.value,
+                visible_count=count.value, runtime=paths[0])
 
 
 def verify_components(actual, expected):
@@ -161,6 +165,20 @@ class Timings:
                 self.data[label]["calls"] += 1
                 self.data[label]["wall_s"] += time.perf_counter() - start
         setattr(obj, name, measured)
+
+    def wrap_class(self, cls, name, label):
+        """Copied range-separated DF objects must invoke build on themselves."""
+        original = getattr(cls, name)
+        def measured(instance, *args, **kwargs):
+            self.sync()
+            start = time.perf_counter()
+            try:
+                return original(instance, *args, **kwargs)
+            finally:
+                self.sync()
+                self.data[label]["calls"] += 1
+                self.data[label]["wall_s"] += time.perf_counter() - start
+        setattr(cls, name, measured)
 
 
 def run_pyscf(a, c, atom, r):
@@ -238,7 +256,7 @@ def run_pyscf(a, c, atom, r):
         timers.wrap(mf, "get_j", "j_inclusive")
         timers.wrap(mf, "get_k", "k_inclusive")
         timers.wrap(mf._numint, "nr_rks", "xc")
-        timers.wrap(mf.with_df, "build", "df_setup")
+        timers.wrap_class(type(mf.with_df), "build", "df_setup")
         timers.wrap(mf, "eig", "diagonalization")
         timers.wrap(mf.grids, "build", "grid_setup")
     sync()

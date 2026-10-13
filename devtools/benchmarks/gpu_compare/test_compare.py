@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import subprocess
+import copy
 import unittest
 
 ROOT = Path(__file__).resolve().parent
@@ -169,6 +170,22 @@ class CompareTests(unittest.TestCase):
             getDevice = staticmethod(lambda: 0)
         with self.assertRaises(AssertionError):
             m.cuda_identity(Runtime())
+
+    def test_df_profile_build_targets_copied_range_object(self):
+        class DF:
+            def build(self):
+                self.tensor = self.omega
+                return self
+        seed = DF()
+        seed.omega = 0
+        timers = m.Timings(lambda: None)
+        timers.wrap_class(DF, "build", "df_setup")
+        ranged = copy.copy(seed)
+        ranged.omega = .3
+        self.assertIs(ranged.build(), ranged)
+        self.assertEqual(ranged.tensor, .3)
+        self.assertFalse(hasattr(seed, "tensor"))
+        self.assertEqual(timers.data["df_setup"]["calls"], 1)
 
 
 if __name__ == "__main__":
