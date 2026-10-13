@@ -1,5 +1,28 @@
 # FDDS cuEST implementation handoff
 
+## Focused diagnostic allocation (pending)
+
+- Authorized one short explicit free-embers job **14006185**, H200/4 CPUs/
+  16 GiB/15 minutes, account gts-cs207-chemx. Dry-run accepted gpu-h200;
+  live headroom was 49/50 and unique name/comment/run checks passed.
+  Effective submission QoS verified `embers`, initial state PENDING.
+- Scientific/build pin remains `8810da5743cc7350e7620ecb708cdd3e47baa739`;
+  existing v3 package is used read-only without rebuild. Diagnostic driver
+  pin `da356228a300f80d323524d29d97a3435888d4c1`, distinct from original
+  build harness `e60b32507b3069192032705b1d4161dd38886511`.
+- Driver checkout: `/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-diagnosis-20261013-v1`;
+  run: `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261013-diagnosis-01`.
+  Separate processes select only unequal nonhybrid contributions (120 s)
+  and the SAPT GPU case under batch GDB (240 s), each with 15 s kill grace.
+  GDB stops SIGSEGV and requests the debugger-attachment breakpoint, then
+  captures thread backtraces. GDB exit zero never certifies a test pass.
+  Faulthandler enabled; scratch and pytest temp outputs persist in run.
+- Core/import and actual linked-library hashes will be recorded inside
+  allocation and checked against the preserved failed core SHA256.
+  Watcher **bd8e1e8fa**, 300 s intervals, 48-hour watcher deadline.
+  No test/scientific change yet; diagnosis-complete marker waits for evidence
+  and subsequent confirmed fixes/CPU gates. No full suite or paid retry.
+
 ## v3 terminal audit: FAILED, not a GPU correctness pass
 
 - **13992504** scientific pin `8810da5743cc7350e7620ecb708cdd3e47baa739`,
