@@ -135,3 +135,40 @@ test that reproduces the historical output. No numerical results exist for
 that job. Recovery uses `campaign peptide` with the existing installed
 environment, a fresh run directory and one timing repeat plus a separate
 instrumented repeat. This is still a preflight, not the full timing matrix.
+
+## Completed consolidated comparison (2026-10-13)
+
+At the user's request, production stopped at Protein83 (not Protein157) and
+used one explicitly authorized inferno H200 allocation, `14000107`.
+All 120 workers succeeded: three systems × five functionals × two engines ×
+three independent timings plus one diagnostic. All 15 comparisons are eligible,
+and staged build hashes remained unchanged. The paid allocation was released
+after scientific completion with user approval; monitoring is disabled.
+
+Psi4's common calculation-time advantage was 1.34–2.85× overall and
+1.36–2.31× on Protein83. Maximum absolute total-energy difference was
+3.0011e-5 Eh (Protein83/ωB97X), below the 1e-4 Eh review threshold.
+GPU4PySCF's Protein83 profiles are XC-dominated and take more iterations.
+Neither time-to-convergence nor inclusive diagnostic clocks establish an
+identical-grid, identical-iteration, kernel-only speedup.
+
+Immutable campaign:
+`/storage/project/r-cs207-0/awallace43/runs/gpu-dft-compare/20261013T113848Z-interactive-inferno/production/campaign`.
+Production harness commit: `9595a76753`. Compact results and prior failed
+diagnostics are separately archived locally under
+`.pi/gpu_compare/archive/20261013-inferno/`.
+
+Render the audited fixed three-system campaign (requires an unused output directory):
+
+```bash
+python devtools/benchmarks/gpu_compare/report.py \
+  --campaign .pi/gpu_compare/archive/20261013-inferno/production/campaign \
+  --output .lavish/gpu-dft-comparison-20261013
+```
+
+The renderer checks completion, worker identities/exit codes, GPU UUID and
+config hashes, then independently replays the summary before writing JSON,
+Markdown and self-contained HTML. Summary comparison ignores presentation order
+because sorted JSON config keys lose the original functional insertion order.
+The report preserves timing ranges, host RSS and whole-device memory samples.
+Its palette/type follows the existing cuEST report style, without external assets.
