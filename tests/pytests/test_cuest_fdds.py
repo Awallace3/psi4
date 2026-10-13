@@ -66,31 +66,41 @@ def _timer_calls():
                if "cuEST FDDS: contractions" in k)
 
 
-@pytest.mark.parametrize("hybrid", [False, True])
-def test_fdds_native_contractions(fdds_factory, hybrid):
-    obj = fdds_factory(hybrid)
-    omega = .37
+def _reference_contractions(obj, hybrid, monomer, dimensions, cache, omega):
+    o, v = dimensions
     q = obj.metric().np.shape[0]
-    ovq = obj.get_tensor_pqQ("arQ", (3, 7, q)).to_array().reshape(-1, q)
-    gaps = np.linspace(.1, 1., 7)[None, :] - np.linspace(-1., -.5, 3)[:, None]
+    suffix = "arQ" if monomer == "A" else "bsQ"
+    ovq = obj.get_tensor_pqQ(suffix, (o, v, q)).to_array().reshape(-1, q)
+    gaps = cache["eps_vir_" + monomer].np[None, :] - cache["eps_occ_" + monomer].np[:, None]
     ld = (-4. * gaps / (gaps**2 + omega**2)).reshape(-1, 1)
-    expected = ovq.T @ (ovq * (ld if hybrid else -ld))
-    got = _values(obj, hybrid, "A", omega)
-    np.testing.assert_allclose(got["amp"], expected, rtol=0, atol=2.e-12)
-    errors = {"amp": float(np.max(np.abs(got["amp"] - expected)))}
+    refs = {"amp": ovq.T @ (ovq * (ld if hybrid else -ld))}
     if hybrid:
-        x = obj.get_tensor_pqQ("XarQ", (3, 7, q)).to_array().reshape(-1, q)
-        y = obj.get_tensor_pqQ("YarQ", (3, 7, q)).to_array().reshape(-1, q)
-        qx = obj.get_tensor_pqQ("QXarQ", (3, 7, q)).to_array().reshape(-1, q)
-        qy = obj.get_tensor_pqQ("QYarQ", (3, 7, q)).to_array().reshape(-1, q)
+        x = obj.get_tensor_pqQ("X" + suffix, (o, v, q)).to_array().reshape(-1, q)
+        y = obj.get_tensor_pqQ("Y" + suffix, (o, v, q)).to_array().reshape(-1, q)
+        qx = obj.get_tensor_pqQ("QX" + suffix, (o, v, q)).to_array().reshape(-1, q)
+        qy = obj.get_tensor_pqQ("QY" + suffix, (o, v, q)).to_array().reshape(-1, q)
         yl = (y - x) * (-4. / (gaps**2 + omega**2)).reshape(-1, 1)
-        refs = {"K1LD": (ovq * ld).T @ (qx + qy),
-                "K2LD": (ovq * ld).T @ (qy - qx),
-                "K2L": ovq.T @ yl, "K21L": yl.T @ (qx + qy)}
+        refs.update({"K1LD": (ovq * ld).T @ (qx + qy),
+                     "K2LD": (ovq * ld).T @ (qy - qx),
+                     "K2L": ovq.T @ yl, "K21L": yl.T @ (qx + qy)})
+    return refs
+
+
+@pytest.mark.parametrize("hybrid", [False, True])
+@pytest.mark.parametrize("occupied", [(3, 3), (2, 3)], ids=["equal", "unequal"])
+def test_fdds_native_contractions(fdds_factory, hybrid, occupied):
+    obj = fdds_factory(hybrid, occupied=occupied)
+    omega = .37
+    cache = fdds_factory.inputs[2]
+    for monomer in ("A", "B"):
+        refs = _reference_contractions(obj, hybrid, monomer, fdds_factory.dimensions[monomer], cache, omega)
+        got = _values(obj, hybrid, monomer, omega)
+        errors = {}
         for k, ref in refs.items():
-            np.testing.assert_allclose(got[k], ref, rtol=0, atol=2.e-11)
+            np.testing.assert_allclose(got[k], ref, rtol=0, atol=2.e-12 if k == "amp" else 2.e-11)
             errors[k] = float(np.max(np.abs(got[k] - ref)))
-    print(f"FDDS native hybrid={hybrid} max_abs_errors={errors}")
+        print(f"FDDS native hybrid={hybrid} monomer={monomer} dimensions={fdds_factory.dimensions[monomer]} "
+              f"max_abs_errors={errors}")
     assert obj.gpu_contraction_blocks() == 0
     with pytest.raises(RuntimeError, match="Monomer must be A or B"):
         _values(obj, hybrid, "C", omega)
@@ -209,10 +219,11 @@ def test_fdds_memory_guard(fdds_factory, hybrid):
 
 
 @pytest.mark.parametrize("hybrid", [False, True])
-def test_fdds_integrated_native_energy(fdds_factory, hybrid):
+@pytest.mark.parametrize("occupied", [(3, 3), (2, 3)], ids=["equal", "unequal"])
+def test_fdds_integrated_native_energy(fdds_factory, hybrid, occupied):
     """CPU-only builds exercise the full ALDA/coupling/quadrature interface."""
     from psi4.driver.procrouting.sapt.sapt_mp2_terms import df_fdds_dispersion
-    fdds_factory()
+    fdds_factory(occupied=occupied)
     primary, auxiliary, cache = fdds_factory.inputs
     psi4.core.clean_timers()
     start = time.perf_counter()
@@ -221,7 +232,7 @@ def test_fdds_integrated_native_energy(fdds_factory, hybrid):
     assert set(result) == {"Disp20,FDDS (unc)", "Disp20"}
     assert all(np.isfinite(v) and v < 0. for v in result.values())
     assert _timer_calls() == 0
-    print(f"FDDS native integrated hybrid={hybrid} elapsed={time.perf_counter() - start:.6f}s "
+    print(f"FDDS native integrated hybrid={hybrid} occupied={occupied} elapsed={time.perf_counter() - start:.6f}s "
           f"energy={result}")
 
 
@@ -229,10 +240,11 @@ def test_fdds_integrated_native_energy(fdds_factory, hybrid):
 @uusing("cuda_cc8")
 @pytest.mark.cuest
 @pytest.mark.parametrize("hybrid", [False, True])
-def test_fdds_gpu_contributions(fdds_factory, hybrid):
-    obj = fdds_factory(hybrid)
-    # Force a 2+1 occupied split, including a partial tail. Host and GPU use
-    # the same memory budget. These low budgets apply only after DF setup.
+@pytest.mark.parametrize("occupied", [(3, 3), (2, 3)], ids=["equal", "unequal"])
+def test_fdds_gpu_contributions(fdds_factory, hybrid, occupied):
+    obj = fdds_factory(hybrid, occupied=occupied)
+    # Force B's 2+1 occupied split, including a partial tail. Unequal A uses
+    # 1+1 blocks. Host/GPU share the budget, applied only after DF setup.
     q, v, o = 10, 7, 3
     fixed = 2 * o * v + 6 * q * q if hybrid else o * v + q * q
     per_occ = 7 * v * q if hybrid else v * q
@@ -253,7 +265,7 @@ def test_fdds_gpu_contributions(fdds_factory, hybrid):
         routed = enabled and threshold == 0
         assert obj.gpu_contraction_blocks() - before == (12 if routed else 0)
         assert _timer_calls() == (6 if routed else 0)
-        print(f"FDDS hybrid={hybrid} enabled={enabled} threshold={threshold} elapsed={elapsed:.6f}s "
+        print(f"FDDS hybrid={hybrid} occupied={occupied} enabled={enabled} threshold={threshold} elapsed={elapsed:.6f}s "
               f"max_abs_errors={errors}")
 
 
@@ -295,10 +307,11 @@ def test_fdds_gpu_negative_threshold(fdds_factory):
 @uusing("cuda_cc8")
 @pytest.mark.cuest
 @pytest.mark.parametrize("hybrid", [False, True])
-def test_fdds_integrated_gpu_energy(fdds_factory, hybrid):
+@pytest.mark.parametrize("occupied", [(3, 3), (2, 3)], ids=["equal", "unequal"])
+def test_fdds_integrated_gpu_energy(fdds_factory, hybrid, occupied):
     """Actual ALDA kernel, hybrid terms, pseudoinverse and default quadrature."""
     from psi4.driver.procrouting.sapt.sapt_mp2_terms import df_fdds_dispersion
-    fdds_factory()
+    fdds_factory(occupied=occupied)
     primary, auxiliary, cache = fdds_factory.inputs
     results = []
     for enabled, threshold in ((False, 0), (True, 10**9), (True, 0)):
@@ -316,7 +329,7 @@ def test_fdds_integrated_gpu_energy(fdds_factory, hybrid):
         timings = {k: v["wall_time"] for k, v in psi4.core.get_timer_dict().items()
                    if any(t in k for t in ("Form FDDS object", "Form xc kernel", "Time Integration",
                                            "cuEST FDDS: contractions"))}
-        print(f"FDDS integrated hybrid={hybrid} enabled={enabled} threshold={threshold} "
+        print(f"FDDS integrated hybrid={hybrid} occupied={occupied} enabled={enabled} threshold={threshold} "
               f"elapsed={elapsed:.6f}s energy={result} abs_errors={errors} timers={timings}")
     for result in results[1:]:
         for k in result:
@@ -378,6 +391,8 @@ def test_saptdft_fdds_native_xc_gpu(tmp_path):
     for enabled, threshold in ((False, 0), (True, 10**9), (True, 0)):
         path = tmp_path / f"sapt-{enabled}-{threshold}.out"
         result = _run_saptdft_fdds(enabled, threshold, path)
+        # Forced FDDS checks the shared handle's actual HOST pointer mode after
+        # the real cuEST J/K builds; an incompatible mode raises, not CPU retry.
         assert _timer_calls() == (20 if enabled and threshold == 0 else 0)
         results.append(result)
         assert "Disp20" in path.read_text()

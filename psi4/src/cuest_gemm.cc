@@ -201,6 +201,13 @@ struct CuestFDDSContractions::Impl {
         if (!q || !rows || q > std::numeric_limits<int>::max() || rows > std::numeric_limits<int>::max())
             throw PSIEXCEPTION("cuEST FDDS: nonempty BLAS-int dimensions required");
         cuest_common::ensure_cuest_initialized();
+        // cuEST also receives this shared handle. Our alpha/beta addresses are
+        // host pointers: check the actual mode after any prior J/K use, without
+        // changing handle ownership/state or silently retrying on the CPU.
+        cublasPointerMode_t pointer_mode;
+        check_cublas(cublasGetPointerMode(cublas_handle, &pointer_mode), "FDDS cublasGetPointerMode");
+        if (pointer_mode != CUBLAS_POINTER_MODE_HOST)
+            throw PSIEXCEPTION("cuEST FDDS: shared cuBLAS handle requires HOST pointer mode.");
         check_cublas(cublasGetStream(cublas_handle, &stream), "FDDS cublasGetStream");
         const size_t ni = hybrid ? 5 : 1;
         inputs.reserve(ni);
