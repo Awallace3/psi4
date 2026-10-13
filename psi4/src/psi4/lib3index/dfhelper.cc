@@ -3085,12 +3085,13 @@ size_t DFHelper::get_tensor_size(std::string name) {
     return std::get<0>(s) * std::get<1>(s) * std::get<2>(s);
 }
 std::tuple<size_t, size_t, size_t> DFHelper::get_tensor_shape(std::string name) {
-    if (transf_.find(name) == transf_.end()) {
-        std::stringstream error;
-        error << "DFHelper:get_tensor_size: " << name << " not found.";
-        throw PSIEXCEPTION(error.str().c_str());
-    }
-    return sizes_[std::get<1>(files_[name])];
+    // Persisted/disk tensors remain registered after clear_transformations(),
+    // and add_disk_tensor() never enters transf_. Query the storage registry,
+    // using the same effective shape as fill_tensor(), without inserting keys.
+    check_file_key(name);
+    const auto& filename = std::get<1>(files_.at(name));
+    const auto transposed = tsizes_.find(filename);
+    return transposed != tsizes_.end() ? transposed->second : sizes_.at(filename);
 }
 void DFHelper::build_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright, std::vector<SharedMatrix> D,
                         std::vector<SharedMatrix> J, std::vector<SharedMatrix> K, std::vector<SharedMatrix> wK,

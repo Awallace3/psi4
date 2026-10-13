@@ -146,6 +146,57 @@ def test_fdds_empty_output_budget_and_recovery(fdds_factory, hybrid, empty, empt
     assert obj.gpu_contraction_blocks() == 0
 
 
+def _tensor_helper(obj, method, name, dimensions, path):
+    if method == "get":
+        return obj.get_tensor_pqQ(name, dimensions)
+    return obj.print_tensor_pqQ(name, str(path), dimensions)
+
+
+@pytest.mark.parametrize("hybrid", [False, True])
+@pytest.mark.parametrize("empty_space", ["occ", "vir"])
+@pytest.mark.parametrize("method", ["get", "print"])
+def test_fdds_all_empty_tensor_helpers(fdds_factory, tmp_path, hybrid, empty_space, method):
+    obj = fdds_factory(hybrid, empty=True, empty_space=empty_space)
+    o, v = fdds_factory.dimensions["A"]
+    path = tmp_path / "empty-tensor.txt"
+    with pytest.raises(RuntimeError, match="no DFHelper tensors"):
+        _tensor_helper(obj, method, "arQ", (o, v, 10), path)
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("hybrid", [False, True])
+@pytest.mark.parametrize("method", ["get", "print"])
+def test_fdds_tensor_helper_preflight(fdds_factory, tmp_path, hybrid, method):
+    obj = fdds_factory(hybrid, empty="A")
+    path = tmp_path / "tensor.txt"
+    with pytest.raises(RuntimeError, match="not found"):
+        # Missing tensor must win even over an absurd requested allocation.
+        _tensor_helper(obj, method, "arQ", (2**63, 2, 10), path)
+    assert not path.exists()
+    with pytest.raises(RuntimeError, match="overflow"):
+        _tensor_helper(obj, method, "bsQ", (2**63, 2, 10), path)
+    with pytest.raises(RuntimeError, match="dimensions"):
+        _tensor_helper(obj, method, "bsQ", (3, 6, 10), path)
+    with pytest.raises(RuntimeError, match="nonempty"):
+        _tensor_helper(obj, method, "bsQ", (0, 7, 10), path)
+    with pytest.raises(RuntimeError, match="Too little memory"):
+        try:
+            psi4.core.set_memory_bytes(8)
+            _tensor_helper(obj, method, "bsQ", (3, 7, 10), path)
+        finally:
+            psi4.core.set_memory_bytes(500 * 1024**2)
+    assert not path.exists()
+    # Real disk tensors from hybrid preprocessing must remain available.
+    name = "QYbsQ" if hybrid else "bsQ"
+    got = _tensor_helper(obj, method, name, (3, 7, 10), path)
+    if method == "get":
+        assert got.np.shape == (3, 7, 10)
+        assert np.isfinite(got.np).all()
+    else:
+        reference = obj.get_tensor_pqQ(name, (3, 7, 10)).np.flatten()
+        np.testing.assert_allclose(np.loadtxt(path), reference, rtol=0, atol=1.e-14)
+
+
 @pytest.mark.parametrize("hybrid", [False, True])
 def test_fdds_memory_guard(fdds_factory, hybrid):
     obj = fdds_factory(hybrid)

@@ -1257,11 +1257,28 @@ SharedMatrix FDDS_Dispersion::get_tensor_pqQ(std::string name, std::tuple<size_t
 
     // Debug helper
     // Returns as (pq|Q)
+    if (!dfh_)
+        throw PSIEXCEPTION("FDDS_Dispersion::get_tensor_pqQ: no DFHelper tensors on an all-empty object.");
+    // Check existence before allocating anything, including hybrid disk tensors.
+    const auto stored = dfh_->get_tensor_shape(name);
     size_t np = std::get<0>(dimensions);
     size_t nq = std::get<1>(dimensions);
     size_t nQ = std::get<2>(dimensions);
+    const size_t rows = checked_product(np, nq);
+    const size_t elements = checked_product(rows, nQ);
+    checked_product(elements, sizeof(double));
+    if (!np || !nq || !nQ)
+        throw PSIEXCEPTION("FDDS_Dispersion::get_tensor_pqQ: nonempty tensor dimensions required.");
+    if (np > std::get<0>(stored) || nq != std::get<1>(stored) || nQ != std::get<2>(stored))
+        throw PSIEXCEPTION("FDDS_Dispersion::get_tensor_pqQ: requested dimensions do not match the stored tensor.");
+    if (rows > std::numeric_limits<int>::max() || nQ > std::numeric_limits<int>::max())
+        throw PSIEXCEPTION("FDDS_Dispersion::get_tensor_pqQ: dimensions exceed the supported Matrix layout.");
+    const size_t doubles = available_doubles();
+    if (elements > doubles)
+        throw PSIEXCEPTION(too_little_memory("FDDS_Dispersion::get_tensor_pqQ()",
+                                             "np * nq * nQ of tensor storage", elements, doubles));
 
-    auto M = std::make_shared<Matrix>(name, np * nq, nQ);
+    auto M = std::make_shared<Matrix>(name, rows, nQ);
 
     dfh_->fill_tensor(name, M, {0, np});
 
@@ -1276,11 +1293,13 @@ void FDDS_Dispersion::print_tensor_pqQ(std::string tensor_name, std::string file
     size_t nq = std::get<1>(dimensions);
     size_t nQ = std::get<2>(dimensions);
 
-    auto M = std::make_shared<Matrix>(tensor_name, np * nq, nQ);
-    dfh_->fill_tensor(tensor_name, M, {0, np});
+    // Share all missing-helper/tensor, layout, overflow and budget preflights.
+    // Open the output only after successful validation and tensor retrieval.
+    auto M = get_tensor_pqQ(tensor_name, dimensions);
+    const size_t rows = checked_product(np, nq);
     double** Mp = M->pointer();
     auto Mout = std::make_shared<PsiOutStream>(file_name);
-    for (size_t row = 0; row < np * nq; row++)
+    for (size_t row = 0; row < rows; row++)
         for (size_t col = 0; col < nQ; col++)
             Mout->Printf("%.15e\n", Mp[row][col]); 
 }
