@@ -6,7 +6,9 @@ source /etc/profile.d/z00_lmod_pace.sh
 module load cuda/12.6.1
 command -v nvcc
 export PYTHONNOUSERSITE=1
-unset PYTHONPATH
+# --psiapi emits PYTHONPATH=...:$PYTHONPATH; an empty exported value is
+# intentional route isolation and remains safe under this script's set -u.
+export PYTHONPATH=""
 export LD_LIBRARY_PATH="$COMPARE_GPU_ENV/lib:${CUDA_HOME:-${CUDA_PATH:-/usr/local/cuda}}/lib64"
 cuda12_lib="${CUDA_HOME:-${CUDA_PATH:-/usr/local/cuda}}/lib64"
 [[ -d "$cuda12_lib" ]]

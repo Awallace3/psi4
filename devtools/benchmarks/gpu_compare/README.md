@@ -124,3 +124,14 @@ bash -n devtools/benchmarks/gpu_compare/payload.sh
 ```
 
 Installation reference: https://github.com/pyscf/gpu4pyscf
+
+## Pilot startup recovery
+
+Setup job `13981566` ran on H200/embers, installed the dedicated GPU environment
+and passed `pip check`, then failed before any SCF because `--psiapi` emits an
+expansion of `$PYTHONPATH` and the wrapper had unset it under `set -u`.
+The corrected wrapper exports an empty value instead, with a shell regression
+test that reproduces the historical output. No numerical results exist for
+that job. Recovery uses `campaign peptide` with the existing installed
+environment, a fresh run directory and one timing repeat plus a separate
+instrumented repeat. This is still a preflight, not the full timing matrix.

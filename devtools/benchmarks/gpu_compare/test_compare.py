@@ -1,7 +1,9 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parent
@@ -129,6 +131,27 @@ class CompareTests(unittest.TestCase):
         t.wrap(obj, "f", "f")
         self.assertEqual(obj.f(), 7)
         self.assertEqual(t.data["f"]["calls"], 1)
+
+    def test_psiapi_setup_accepts_unset_pythonpath_under_nounset(self):
+        payload = (ROOT / "payload.sh").read_text()
+        path_setup = payload.split("export PYTHONNOUSERSITE=1\n", 1)[1].split(
+            "export LD_LIBRARY_PATH=", 1)[0]
+        psiapi_setup = payload.split('psi_exe=', 1)[1].split(
+            'mkdir -p "$TMPDIR/inputs/geometries"', 1)[0]
+        with tempfile.TemporaryDirectory() as d:
+            stage = Path(d) / "stage"
+            (stage / "bin").mkdir(parents=True)
+            exe = stage / "bin/psi4"
+            # The actual historical staged binary emits this same expansion.
+            exe.write_text("#!/bin/bash\nprintf '%s\\n' 'export PATH=/stage/bin:$PATH PYTHONPATH=/stage/lib:$PYTHONPATH'\n")
+            exe.chmod(0o755)
+            env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+            env.update(COMPARE_PSI_PACKAGE=str(stage / "lib/psi4"),
+                       COMPARE_PSI_ENV=d, COMPARE_PSI_CUDA_LIB=d)
+            script = path_setup + "psi_exe=" + psiapi_setup + '\n[[ "$PYTHONPATH" == /stage/lib:* ]]'
+            p = subprocess.run(["bash", "-euc", script], env=env,
+                               capture_output=True, text=True)
+            self.assertEqual(p.returncode, 0, p.stderr)
 
 
 if __name__ == "__main__":
