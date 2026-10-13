@@ -655,6 +655,34 @@ energy contribution is included in the printed SAPT(DFT) summary and stored in
 the dispersion QCVariable.
 
 
+cuEST coupled-perturbed response
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With ``USE_CUEST true`` and density-fitted J/K, RHF/UHF coupled-perturbed
+Hessian actions use cuEST's nonsymmetric exchange builder for the distinct
+occupied and rotated-virtual coefficients. Its ``K`` is already weighted by
+the functional's full- and long-range exchange fractions; response assembly
+uses that combined operator once, including pure long-range hybrids.
+For a compatible bare-K plan borrowed from SAPT, response scales the result
+to the functional's weight without changing the shared plan. An incompatible
+range-separated mixture raises an error rather than using incorrect weights.
+
+Eligible dense one-irrep orbital transforms use FP64 cuBLAS on the shared
+cuEST stream. Multi-factor products retain intermediate matrices on the GPU.
+``CUEST_GEMM_MIN_DIM`` applies the same largest-link work threshold as the
+SAPT tensor chains (default 256; zero forces eligible nonempty products).
+Small, empty, and symmetry-blocked products retain native BLAS. The timer
+``cuEST CPSCF: cuBLAS`` identifies executed GPU transforms.
+
+For LDA/GGA CPKS, set ``CUEST_XC false`` **before SCF** to retain the native
+CPU XC response grid and kernel. GPU XC response is not implemented.
+Native MGGA and VV10 response kernels remain unsupported and raise errors;
+this acceleration does not add CPKS support for M06, r²SCAN, or wB97M-V.
+The iterative solver, XC integration, and inter-build matrices remain on
+the host: this is not a wholly device-resident CPSCF solver, and enabling
+the backend does not guarantee a speedup for small systems.
+
+
 Approximate SAPT Decomposition of DFT-D Methods
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
