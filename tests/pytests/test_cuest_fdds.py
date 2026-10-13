@@ -30,14 +30,19 @@ def fdds_factory():
     rng = np.random.default_rng(729)
     c, _ = np.linalg.qr(rng.normal(size=(primary.nbf(), primary.nbf())))
 
-    def make(hybrid=False, empty=False):
+    def make(hybrid=False, empty=False, empty_space="occ", occupied=(3, 3)):
         mc, vc = {}, {}
-        for monomer in ("A", "B"):
-            occ = 0 if empty is True or empty == monomer else 3
+        make.dimensions = {}
+        for index, monomer in enumerate(("A", "B")):
+            nominal_occ = occupied[index]
+            is_empty = empty is True or empty == monomer
+            occ = 0 if is_empty and empty_space == "occ" else nominal_occ
+            vir = 0 if is_empty and empty_space == "vir" else primary.nbf() - nominal_occ
             mc["Cocc_" + monomer] = psi4.core.Matrix.from_array(c[:, :occ])
-            mc["Cvir_" + monomer] = psi4.core.Matrix.from_array(c[:, 3:])
+            mc["Cvir_" + monomer] = psi4.core.Matrix.from_array(c[:, nominal_occ:nominal_occ + vir])
             vc["eps_occ_" + monomer] = psi4.core.Vector.from_array(np.linspace(-1., -.5, occ))
-            vc["eps_vir_" + monomer] = psi4.core.Vector.from_array(np.linspace(.1, 1., primary.nbf() - 3))
+            vc["eps_vir_" + monomer] = psi4.core.Vector.from_array(np.linspace(.1, 1., vir))
+            make.dimensions[monomer] = occ, vir
         cache = {**mc, **vc}
         for monomer in ("A", "B"):
             co = mc["Cocc_" + monomer]
@@ -113,6 +118,31 @@ def test_fdds_empty_native(fdds_factory, hybrid, empty):
             assert np.isfinite(obj.form_unc_amplitude(monomer, .1).np).all()
             if hybrid:
                 assert all(np.isfinite(m.np).all() for m in obj.form_aux_matrices(monomer, .1).values())
+    assert obj.gpu_contraction_blocks() == 0
+
+
+@pytest.mark.parametrize("hybrid", [False, True])
+@pytest.mark.parametrize("empty", [True, "A", "B"])
+@pytest.mark.parametrize("empty_space", ["occ", "vir"])
+def test_fdds_empty_output_budget_and_recovery(fdds_factory, hybrid, empty, empty_space):
+    obj = fdds_factory(hybrid, empty=empty, empty_space=empty_space)
+    q = obj.metric().np.shape[0]
+    for monomer in ("A", "B") if empty is True else (empty,):
+        try:
+            psi4.core.set_memory_bytes(8)
+            with pytest.raises(RuntimeError, match="Too little memory"):
+                obj.form_unc_amplitude(monomer, .1)
+            with pytest.raises(RuntimeError, match="Too little memory"):
+                obj.form_aux_matrices(monomer, .1)
+            # Enough for one Q x Q output, but not the five auxiliary outputs.
+            psi4.core.set_memory_bytes(int(2 * q * q * 8 / .8))
+            assert not obj.form_unc_amplitude(monomer, .1).np.any()
+            with pytest.raises(RuntimeError, match="Too little memory"):
+                obj.form_aux_matrices(monomer, .1)
+        finally:
+            psi4.core.set_memory_bytes(500 * 1024**2)
+        assert not obj.form_unc_amplitude(monomer, .1).np.any()
+        assert all(not m.np.any() for m in obj.form_aux_matrices(monomer, .1).values())
     assert obj.gpu_contraction_blocks() == 0
 
 

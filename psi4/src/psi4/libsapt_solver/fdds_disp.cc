@@ -600,12 +600,16 @@ SharedMatrix FDDS_Dispersion::form_unc_amplitude(std::string monomer, double ome
     size_t nvir = eps_vir->dim(0);
     size_t naux = auxiliary_->nbf();
 
-    if (!nocc || !nvir || !naux) return std::make_shared<Matrix>("UNC Amplitude", naux, naux);
-
     // Check on memory real quick
     size_t doubles = available_doubles();
-    const size_t qv = checked_product(naux, nvir);
     const size_t qq = checked_product(naux, naux);
+    if (!nocc || !nvir || !naux) {
+        if (qq > doubles)
+            throw PSIEXCEPTION(too_little_memory("FDDS_Dispersion::form_unc_amplitude()",
+                                                 "naux^2 of empty-result storage", qq, doubles));
+        return std::make_shared<Matrix>("UNC Amplitude", naux, naux);
+    }
+    const size_t qv = checked_product(naux, nvir);
     const size_t ov = checked_product(nocc, nvir);
     size_t mem_size = checked_sum(checked_sum(checked_product(2, qv), qq), ov);
     if (mem_size > doubles) {
@@ -734,9 +738,15 @@ std::map<std::string, SharedMatrix> FDDS_Dispersion::form_aux_matrices(std::stri
     size_t nvir = eps_vir->dim(0);
     size_t naux = auxiliary_->nbf();
     size_t nov = checked_product(nocc, nvir);
+    size_t doubles = available_doubles();
+    const size_t qq = checked_product(naux, naux);
 
     std::map<std::string, SharedMatrix> ret;
     if (!nov || !naux) {
+        const size_t result_storage = checked_product(5, qq);
+        if (result_storage > doubles)
+            throw PSIEXCEPTION(too_little_memory("FDDS_Dispersion::form_aux_matrices()",
+                                                 "5 * naux^2 of empty-result storage", result_storage, doubles));
         for (const auto& name : {"amp", "K1LD", "K2LD", "K2L", "K21L"})
             ret[name] = std::make_shared<Matrix>(name, naux, naux);
         return ret;
@@ -744,8 +754,7 @@ std::map<std::string, SharedMatrix> FDDS_Dispersion::form_aux_matrices(std::stri
 
     // => Blocking <= //
 
-    size_t doubles = available_doubles();
-    const size_t fixed = checked_sum(checked_product(2, nov), checked_product(6, checked_product(naux, naux)));
+    const size_t fixed = checked_sum(checked_product(2, nov), checked_product(6, qq));
     const size_t per_occ = checked_product(7, checked_product(nvir, naux));
     if (doubles < fixed)
         throw PSIEXCEPTION(too_little_memory("FDDS_Dispersion::form_aux_matrices()",
