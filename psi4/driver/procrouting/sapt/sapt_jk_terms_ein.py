@@ -2724,7 +2724,7 @@ def fdisp0(
 _HAVE_CUEST_GEMM = hasattr(core, "cuest_chain_gemm")
 
 
-def _chain_gemm_work(tensors: list, transposes: list[str]) -> int:
+def _chain_gemm_work(tensors: list[core.Matrix], transposes: list[str]) -> int:
     """Return the largest ``m * k * n`` among the links of a gemm chain.
 
     Follows the same shape rules as :func:`chain_gemm_einsums` itself: only the
@@ -2736,22 +2736,22 @@ def _chain_gemm_work(tensors: list, transposes: list[str]) -> int:
         rows, cols = cols, rows
     largest = 0
     for i in range(len(tensors) - 1):
-        b_rows, b_cols = tensors[i + 1].shape
-        if transposes[i + 1] == "T":
-            b_rows, b_cols = b_cols, b_rows
+        b_cols = tensors[i + 1].shape[0 if transposes[i + 1] == "T" else 1]
         largest = max(largest, rows * cols * b_cols)
         cols = b_cols
     return largest
 
 
-def _use_cuest_gemm(tensors: list, transposes: list[str], prefactors_C: list[float]) -> bool:
+def _use_cuest_gemm(
+    tensors: list[core.Matrix], transposes: list[str], prefactors_C: list[float] | None
+) -> bool:
     """Whether a gemm chain is worth sending to cuBLAS.
 
-    A chain has to earn the two PCIe transfers that bracket it, so small ones
-    stay on the CPU; ``CUEST_GEMM_MIN_DIM`` sets the crossover, expressed as the
-    dimension of a square product.  ``prefactors_C`` is the other bar: the GPU
-    path always accumulates into a fresh matrix, so a caller that actually wants
-    a non-zero beta gets the einsums path.
+    Operand uploads and requested-product downloads can outweigh small GEMMs.
+    The heuristic requires the largest link's ``m * k * n`` to be at least
+    ``CUEST_GEMM_MIN_DIM ** 3``; it is not a timing estimate for the whole chain.
+    The GPU interface supports only beta=0. Nonzero ``prefactors_C`` retain the
+    CPU path, although its freshly zeroed outputs also have nothing to accumulate.
     """
     if not _HAVE_CUEST_GEMM or len(tensors) < 2:
         return False
@@ -2771,25 +2771,28 @@ def chain_gemm_einsums(
     return_tensors: list[bool] = None,
 ) -> core.Matrix | list[core.Matrix]:
     """
-    Computes a chain of einsum matrix multiplications
+    Multiply input matrices left to right using einsums or the cuBLAS fast path.
 
     Parameters
     ----------
     tensors : list[core.Matrix]
         List of tensors to be contracted.
     transposes : list[str], optional
-        List of transpose operations for each tensor, where "N" means no transpose and "T" means transpose.
+        One operation per input tensor: "N" or "T". Computed intermediates are
+        never transposed again.
     prefactors_C : list[float], optional
-        List of prefactors for the resulting tensors in the chain.
+        One GEMM beta per multiplication link. Each output starts at zero, so
+        these do not accumulate an earlier product. Nonzero values select CPU einsums.
     prefactors_AB : list[float], optional
-        List of prefactors for the tensors being multiplied in the chain.
+        One GEMM alpha per multiplication link (length ``len(tensors) - 1``).
+        Each alpha scales that link's product, including all preceding products.
     return_tensors : list[bool], optional
         List indicating which intermediate tensors should be returned. If None,
         only the final tensor is returned. Note that these are only
         intermediate tensors and final tensor; hence, the length of this list
         should be one less than the number of tensors.
     """
-    # initialization "computed_tensors" with the first tensor of the chain
+    # The initial left operand is an input; subsequent ones are computed products.
     computed_tensors = [tensors[0]]
     N = len(tensors)
     if transposes is None:
@@ -2800,18 +2803,16 @@ def chain_gemm_einsums(
         prefactors_AB = [1.0] * (N - 1)
 
     if _use_cuest_gemm(tensors, transposes, prefactors_C):
-        # One upload, one download: the running product stays on the device for
-        # the whole chain rather than round-tripping through host memory at
-        # every link.  prefactors_C is deliberately not forwarded -- C is
-        # allocated and zeroed immediately before each gemm below, so beta only
-        # ever multiplies zero, and _use_cuest_gemm has already refused any
-        # chain that asks for something else.
+        # Upload each input operand and download only requested products.
+        # Running intermediates stay on the device. The eligibility check has
+        # already restricted this call to beta=0, as required by the GPU API.
         if return_tensors is None:
-            flags = [False] * (N - 2) + [True]
-            return core.cuest_chain_gemm(tensors, transposes, prefactors_AB, flags)[0]
-        flags = [bool(r) for r in return_tensors][: N - 1]
-        flags += [False] * (N - 1 - len(flags))
-        return core.cuest_chain_gemm(tensors, transposes, prefactors_AB, flags)
+            return_flags = [False] * (N - 2) + [True]
+        else:
+            return_flags = [bool(r) for r in return_tensors][: N - 1]
+            return_flags += [False] * (N - 1 - len(return_flags))
+        products = core.cuest_chain_gemm(tensors, transposes, prefactors_AB, return_flags)
+        return products[0] if return_tensors is None else products
 
     try:
         for i in range(len(tensors) - 1):

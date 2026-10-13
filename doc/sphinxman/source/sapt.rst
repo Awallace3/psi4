@@ -601,6 +601,74 @@ uncoupled exchange-dispersion energy directly.
              an older version of |PSIfour| to produce a different value of
              exchange-dispersion energy from the latest version.
 
+Two-stage XC grids
+~~~~~~~~~~~~~~~~~~
+
+SAPT(DFT)'s monomer and automatic-GRAC SCFs use the same optional XC grid
+switching as ordinary DFT through ``scf_helper``. Set both
+|scf__dft_radial_points_initial| and |scf__dft_spherical_points_initial|
+positive to enable it. The normal DFT options always define the **final**
+grid, including its pruning scheme or named grid. The initial grid inherits
+the radial and pruning schemes but uses explicit point counts, not the final
+grid name. Defaults are unchanged when both initial counts are zero.
+
+For example, for a benchmark using a 99-by-590 final grid::
+
+    set {
+        dft_radial_points 99
+        dft_spherical_points 590
+        dft_radial_points_initial 50
+        dft_spherical_points_initial 302
+        dft_grid_switch_factor 10.0
+    }
+
+The unpruned nominal point-count ratio here is 0.258; initial 65-by-302
+instead gives 0.336. These are trial settings, not validated accuracy
+recommendations, and pruning, ghost atoms, and point removal alter actual
+grid sizes.
+
+Both the energy change and orbital residual must pass the initial trigger:
+|scf__dft_grid_switch_factor| times their respective SCF tolerances (default
+10, i.e. one decade looser). Switching discards old DIIS history and
+grid-dependent collocation caches/workers and rebuilds cuEST integration
+plans when applicable. At least one further final-grid iteration is mandatory,
+even if the initial grid already passed final tolerances; convergence on the
+final grid is still required. COSX final-iteration caps cannot truncate an
+XC-switching calculation before that convergence. OpenOrbitalOptimizer falls
+back to the internal iterator for switching. A failed switched SCF cannot
+be finalized by setting ``FAIL_ON_MAXITER false``.
+
+``SCF DFT INITIAL GRID ITERATIONS`` and ``SCF DFT FINAL GRID ITERATIONS`` on
+each switched wavefunction record the iteration counts. Standalone response
+potentials use the normal final-grid settings.
+
+To investigate XC costs, set |globals__cuest_xc_timing| true. ``XC micro:``
+timers separate individual cuEST API calls (including workspace queries),
+workspace allocation/release, CUDA transfers/allocations and XC kernels,
+and LibXC evaluations by component and API. Host functional wrappers include
+packing/accumulation while their nested API timers isolate LibXC, including
+GRAC's potential-only components. Host worker timers measure per-thread
+seconds, **not additive wall time**. Device API boundaries synchronize to
+measure completed work, so profiling perturbs execution; turn it off for
+production speed comparisons. These timings are not device-occupancy metrics.
+
+``devtools/saptdft_grid_sweep.py`` runs fresh-process small-dimer controls,
+switching trials, and progressively reduced final grids. Its JSON output
+separates switching error against a fixed-grid control at the same final size
+from quadrature error against 99-by-590. Use ``--iterative-grac`` to check
+computed shifts as well as SAPT components, and check all relevant components
+rather than relying on cancellation in the total. No universal minimum safe
+grid size is assumed. The default is an electrostatics/exchange screen with
+DFT induction and dispersion disabled; ``--full-sapt`` enables CPKS induction
+and dispersion for complete interaction-energy checks. ``--compact`` selects
+four representative grid configurations.
+
+``devtools/saptdft_xc_profile.py`` exports the full timer hierarchy and
+microtimers to JSON for a small GRAC/PBE0 SCF. Use ``--use-cuest`` only with a
+GPU build inside an allocation; otherwise it profiles CPU LibXC. Explicit
+grid/plan cleanup is profiled, but destructor cleanup remains unprofiled and
+best-effort so a profiling synchronization failure cannot mask another error.
+
 Induction treatments
 ~~~~~~~~~~~~~~~~~~~~
 
@@ -654,7 +722,6 @@ induction, dispersion, and total), and the corresponding -D3/-D4 interaction
 energy contribution is included in the printed SAPT(DFT) summary and stored in
 the dispersion QCVariable.
 
-
 cuEST coupled-perturbed response
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -681,6 +748,60 @@ this acceleration does not add CPKS support for M06, r²SCAN, or wB97M-V.
 The iterative solver, XC integration, and inter-build matrices remain on
 the host: this is not a wholly device-resident CPSCF solver, and enabling
 the backend does not guarantee a speedup for small systems.
+
+
+cuEST SAD routing and SCF lifecycle timings
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In builds with cuEST support, ``USE_CUEST true`` and ``SCF_TYPE DF`` route
+molecular J/K through cuEST. With |globals__cuest_sad| (default true), the
+density-fitted atomic J/K builds used by SAD, SADNO, HUCKEL, and MODHUCKEL
+guesses also use cuEST, including the internal and OpenOrbitalOptimizer SAD
+solvers. The atomic calculations retain bare HF exchange and their original
+occupations and convergence criteria. The SAD fitting basis must be spherical;
+the driver constructs it that way even for Cartesian orbital functions.
+Explicit non-DF |scf__sad_scf_type| settings retain the CPU direct builder.
+The default GPU route uses cuEST pair screening. Explicit CPU screening modes
+other than ``SCHWARZ``, nonpositive integral tolerance, custom
+``DF_FITTING_CONDITION``, or Cartesian fitting functions retain CPU atomic
+J/K rather than silently ignoring those contracts. GPU runtime failures are
+reported as errors, not retried on CPU.
+``CUEST_SAD false`` keeps atomic J/K on CPU without disabling molecular GPU
+J/K. This is an important comparison control: tiny atomic calculations may
+cost more to initialize and transfer than the GPU saves. With ``SAD_PRINT``
+enabled, ``SAD J/K backend`` identifies the selected atomic builder.
+
+The hierarchical ``timer.dat`` report includes ``SCF: Driver`` and nested
+regions for wavefunction construction, functional setup, native constructors,
+auxiliary/SAD basis construction, initialization, iterations, finalization,
+properties, and checkpoint writes. Initialization separates JK factory,
+memory estimates, JK initialization, and collocation-cache construction;
+finalization separates native cleanup, variable publication, and cache release.
+Passed-in JK objects are still reused: no ``SCF: JK initialize`` call is
+recorded for such a reuse. The existing ``HF: Guess`` / ``SAD Guess`` timers
+measure the atomic-guess work; nested atomic timers remain suppressed.
+
+These regions include both Python and native work. Compute exclusive time by
+subtracting only immediate children; summing nested timers double counts work.
+Neither an SCF residual nor a GPU-backed wall-time region measures interpreter
+time or device occupancy. For those questions use native-aware sampling and
+GPU tracing alongside the timer tree. Set ``BENCH 1`` to print cuEST's detailed
+per-build J/K timing line; normal runs omit that high-frequency output.
+
+Repeated atoms reuse parsed basis-file entries within a single basis
+construction. Each assignment receives independent shell data, and the cache
+ends with that construction, so custom definitions and pure/cartesian choices
+are re-read on subsequent builds. This reduces host setup work on both CPU
+and GPU routes without retaining whole basis objects across SCFs.
+
+Benchmark paired fresh-process CPU/GPU runs on the same source, hardware
+allocation, precision, basis, grid, and convergence settings. Report absolute
+time as well as speedup, using several repeats and a size ladder: small systems
+test correctness and overhead, while larger peptide/nanotube and protein-like
+systems test throughput and memory scaling. Keep GRAC seeding, delta-HF,
+dispersion and induction choices fixed. In particular, ``INDUCTION_TYPE NONE``
+with delta-HF enabled still includes the three HF SCFs, but not explicit
+CPHF/CPKS response.
 
 
 Approximate SAPT Decomposition of DFT-D Methods

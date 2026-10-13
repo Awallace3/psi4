@@ -28,6 +28,8 @@
 
 #include "functional.h"
 #include "LibXCfunctional.h"
+#include "xc_timing.h"
+#include "psi4/libpsi4util/process.h"
 
 #include "psi4/libmints/vector.h"
 #include "psi4/psi4-dec.h"
@@ -60,6 +62,7 @@ bool LibXCFunctional::available(const std::string& xc_name) {
 }
 
 LibXCFunctional::LibXCFunctional(std::string xc_name, bool unpolarized) {
+    microtiming_ = Process::environment.options.get_bool("CUEST_XC_TIMING");
     xc_func_name_ = xc_name;
     func_id_ = xc_functional_get_number(xc_name.c_str());
     unpolarized_ = unpolarized;
@@ -428,6 +431,13 @@ std::vector<std::tuple<std::string, int, double>> LibXCFunctional::get_mix_data(
 }
 void LibXCFunctional::compute_functional(const std::map<std::string, SharedVector>& in,
                                          const std::map<std::string, SharedVector>& out, int npoints, int deriv) {
+    const int timing_rank = xc_timing::worker_rank();
+    std::unique_ptr<xc_timing::Scope> component_timer;
+    if (microtiming_) {
+        component_timer = std::make_unique<xc_timing::Scope>(
+            (name_ + " / wrapper").c_str(), false, timing_rank);
+    }
+    // API timers isolate LibXC itself, including potential-only GRAC components.
     // Uncomment below to enable the parallel_timer calls (which must individually be uncommented).
     /*
             int rank = 0;
@@ -650,13 +660,13 @@ void LibXCFunctional::compute_functional(const std::map<std::string, SharedVecto
 
             // Compute
             if (meta_) {
-                xc_mgga_exc_vxc(xc_functional_.get(), npoints, rho_ap, gamma_aap, flapl.data(), tau_ap, fvp,
-                                fv_rho.data(), fv_gamma.data(), fv_lapl.data(), fv_tau.data());
+                xc_timing::call(microtiming_, microtiming_ ? (name_ + " / xc_mgga_exc_vxc").c_str() : "", [&]() { xc_mgga_exc_vxc(xc_functional_.get(), npoints, rho_ap, gamma_aap, flapl.data(), tau_ap, fvp,
+                                fv_rho.data(), fv_gamma.data(), fv_lapl.data(), fv_tau.data()); }, false, timing_rank);
             } else if (gga_) {
-                xc_gga_exc_vxc(xc_functional_.get(), npoints, rho_ap, gamma_aap, fvp, fv_rho.data(), fv_gamma.data());
+                xc_timing::call(microtiming_, microtiming_ ? (name_ + " / xc_gga_exc_vxc").c_str() : "", [&]() { xc_gga_exc_vxc(xc_functional_.get(), npoints, rho_ap, gamma_aap, fvp, fv_rho.data(), fv_gamma.data()); }, false, timing_rank);
 
             } else {
-                xc_lda_exc_vxc(xc_functional_.get(), npoints, rho_ap, fvp, fv_rho.data());
+                xc_timing::call(microtiming_, microtiming_ ? (name_ + " / xc_lda_exc_vxc").c_str() : "", [&]() { xc_lda_exc_vxc(xc_functional_.get(), npoints, rho_ap, fvp, fv_rho.data()); }, false, timing_rank);
             }
             // printf("%s | %lf %lf\n", xc_func_name_.c_str(), fv_rho[0], fv_gamma[0]);
 
@@ -726,8 +736,8 @@ void LibXCFunctional::compute_functional(const std::map<std::string, SharedVecto
                 std::vector<double> fv2_rho_gamma(npoints);
                 std::vector<double> fv2_gamma2(npoints);
 
-                xc_gga_fxc(xc_functional_.get(), npoints, rho_ap, gamma_aap, fv2_rho2.data(), fv2_rho_gamma.data(),
-                           fv2_gamma2.data());
+                xc_timing::call(microtiming_, microtiming_ ? (name_ + " / xc_gga_fxc").c_str() : "", [&]() { xc_gga_fxc(xc_functional_.get(), npoints, rho_ap, gamma_aap, fv2_rho2.data(), fv2_rho_gamma.data(),
+                           fv2_gamma2.data()); }, false, timing_rank);
 
                 C_DAXPY(npoints, alpha_, fv2_rho2.data(), 1, v_rho_a_rho_a, 1);
                 C_DAXPY(npoints, alpha_, fv2_gamma2.data(), 1, v_gamma_aa_gamma_aa, 1);
@@ -736,7 +746,7 @@ void LibXCFunctional::compute_functional(const std::map<std::string, SharedVecto
             } else {
                 std::vector<double> fv2_rho2(npoints);
 
-                xc_lda_fxc(xc_functional_.get(), npoints, rho_ap, fv2_rho2.data());
+                xc_timing::call(microtiming_, microtiming_ ? (name_ + " / xc_lda_fxc").c_str() : "", [&]() { xc_lda_fxc(xc_functional_.get(), npoints, rho_ap, fv2_rho2.data()); }, false, timing_rank);
 
                 C_DAXPY(npoints, alpha_, fv2_rho2.data(), 1, v_rho_a_rho_a, 1);
             }
@@ -816,15 +826,15 @@ void LibXCFunctional::compute_functional(const std::map<std::string, SharedVecto
             }
 
             if (meta_) {
-                xc_mgga_exc_vxc(xc_functional_.get(), npoints, frho.data(), fgamma.data(), flapl.data(), ftau.data(),
-                                fvp, fv_rho.data(), fv_gamma.data(), fv_lapl.data(), fv_tau.data());
+                xc_timing::call(microtiming_, microtiming_ ? (name_ + " / xc_mgga_exc_vxc").c_str() : "", [&]() { xc_mgga_exc_vxc(xc_functional_.get(), npoints, frho.data(), fgamma.data(), flapl.data(), ftau.data(),
+                                fvp, fv_rho.data(), fv_gamma.data(), fv_lapl.data(), fv_tau.data()); }, false, timing_rank);
 
             } else if (gga_) {
-                xc_gga_exc_vxc(xc_functional_.get(), npoints, frho.data(), fgamma.data(), fvp, fv_rho.data(),
-                               fv_gamma.data());
+                xc_timing::call(microtiming_, microtiming_ ? (name_ + " / xc_gga_exc_vxc").c_str() : "", [&]() { xc_gga_exc_vxc(xc_functional_.get(), npoints, frho.data(), fgamma.data(), fvp, fv_rho.data(),
+                               fv_gamma.data()); }, false, timing_rank);
 
             } else {
-                xc_lda_exc_vxc(xc_functional_.get(), npoints, frho.data(), fvp, fv_rho.data());
+                xc_timing::call(microtiming_, microtiming_ ? (name_ + " / xc_lda_exc_vxc").c_str() : "", [&]() { xc_lda_exc_vxc(xc_functional_.get(), npoints, frho.data(), fvp, fv_rho.data()); }, false, timing_rank);
             }
 
             // Re-apply
@@ -895,8 +905,8 @@ void LibXCFunctional::compute_functional(const std::map<std::string, SharedVecto
                 std::vector<double> fv2_rhogamma(npoints * 6);
                 std::vector<double> fv2_gamma2(npoints * 6);
 
-                xc_gga_fxc(xc_functional_.get(), npoints, frho.data(), fgamma.data(), fv2_rho2.data(),
-                           fv2_rhogamma.data(), fv2_gamma2.data());
+                xc_timing::call(microtiming_, microtiming_ ? (name_ + " / xc_gga_fxc").c_str() : "", [&]() { xc_gga_fxc(xc_functional_.get(), npoints, frho.data(), fgamma.data(), fv2_rho2.data(),
+                           fv2_rhogamma.data(), fv2_gamma2.data()); }, false, timing_rank);
 
                 for (size_t i = 0; i < npoints; i++) {
                     // v2rho2(3)       = (u_u, u_d, d_d)
@@ -924,7 +934,7 @@ void LibXCFunctional::compute_functional(const std::map<std::string, SharedVecto
             } else {
                 std::vector<double> fv2_rho2(npoints * 3);
 
-                xc_lda_fxc(xc_functional_.get(), npoints, frho.data(), fv2_rho2.data());
+                xc_timing::call(microtiming_, microtiming_ ? (name_ + " / xc_lda_fxc").c_str() : "", [&]() { xc_lda_fxc(xc_functional_.get(), npoints, frho.data(), fv2_rho2.data()); }, false, timing_rank);
 
                 for (size_t i = 0; i < npoints; i++) {
                     // v2rho2(3)       = (u_u, u_d, d_d)

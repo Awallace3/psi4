@@ -261,6 +261,8 @@ void export_functional(py::module &m) {
                     })
         .def("initialize", &VBase::initialize, "doctsring")
         .def("finalize", &VBase::finalize, "doctsring")
+        .def("set_grid", &VBase::set_grid, "Rebuild the XC potential on the Initial or Final grid.")
+        .def("initial_grid", &VBase::initial_grid, "Whether this potential uses the initial SCF grid.")
         .def("basis", &VBase::basis, "Returns the internal basis set.")
         .def("functional", &VBase::functional, "Returns the interal superfunctional.")
         .def("properties", &VBase::properties, "Returns the properties computer.")

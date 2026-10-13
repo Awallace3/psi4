@@ -1048,6 +1048,11 @@ bool RHF::stability_analysis() {
 std::shared_ptr<RHF> RHF::c1_deep_copy(std::shared_ptr<BasisSet> basis) {
     auto wfn = Wavefunction::c1_deep_copy(basis);
     auto hf_wfn = std::make_shared<RHF>(wfn, functional_, wfn->options(), wfn->psio());
+    // Construction may select the initial SCF grid. A copy is not a new SCF:
+    // preserve the source phase for subsequent potential/response evaluation.
+    if (potential_ && hf_wfn->potential_ && !potential_->initial_grid()) {
+        hf_wfn->potential_->set_grid("Final");
+    }
     // now just have to copy the matrices that RHF initializes
     // include only those that are not temporary (some deleted in finalize())
     if (Ca_) {
@@ -1077,7 +1082,12 @@ std::shared_ptr<RHF> RHF::c1_deep_copy(std::shared_ptr<BasisSet> basis) {
 void RHF::setup_potential() {
     if (functional_->needs_xc()) {
         potential_ = std::make_shared<RV>(functional_, basisset_, options_);
-        potential_->initialize();
+        if (options_.get_int("DFT_RADIAL_POINTS_INITIAL") != 0 ||
+            options_.get_int("DFT_SPHERICAL_POINTS_INITIAL") != 0) {
+            potential_->set_grid("Initial");
+        } else {
+            potential_->initialize();
+        }
     } else {
         potential_ = nullptr;
     }
