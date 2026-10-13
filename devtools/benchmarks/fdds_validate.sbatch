@@ -8,13 +8,13 @@
 #SBATCH --mem=64G
 #SBATCH --time=02:00:00
 #SBATCH --signal=TERM@120
-#SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261012-validation-01/logs/%x-%j.out
-#SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261012-validation-01/logs/%x-%j.err
+#SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261012-validation-02/logs/%x-%j.out
+#SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261012-validation-02/logs/%x-%j.err
 set -euo pipefail
 : "${CUEST_FDDS_PIN:?set immutable FDDS validation commit}"
-root=/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-validation-20261012-v1
+root=/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-validation-20261012-v2
 env=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt
-out=/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261012-validation-01/results-$SLURM_JOB_ID
+out=/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261012-validation-02/results-$SLURM_JOB_ID
 mkdir -p "$out"
 child=
 trap 'trap - TERM INT; if [[ -n "$child" ]]; then kill -TERM "$child" || true; wait "$child" || true; fi; exit 143' TERM INT

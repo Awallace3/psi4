@@ -7,6 +7,9 @@
 - Implementation: `9fd3a2aa620ffe7bf96522dafde18b0999000d40`.
 - Allocation compiler isolation: `738aa3efc9` (module GCC_ROOT unset, explicit
   conda activation, absolute cc1/cc1plus checks, C/C++ compile/link/run probes).
+- Exception/partial-empty safety fixes: `5f63ef56c9`.
+- Test-accessor fix: `be4d7bba6e` (`Matrix.nrow()` is not a Python API;
+  use `Matrix.np.shape[0]`).
 - New seam: `CuestFDDSContractions` in `psi4/src/cuest_gemm.{h,cc}`;
   used by `FDDS_Dispersion::form_unc_amplitude` and `form_aux_matrices`.
   Row-major `(ov,Q)` blocks, shared cuEST cuBLAS handle/stream, FP64.
@@ -38,22 +41,32 @@
   `/home/awallace43/miniconda3/envs/p4_ci`, Release, Ninja, `ENABLE_cuEST=OFF`,
   `ENABLE_Einsums=OFF`, `BUILD_SHARED_LIBS=ON`, 12 build workers.
   Logs: `fdds-cpu-configure.log`, `fdds-cpu-build.log` (untracked).
-  Configure and build succeeded; native tests/import provenance still pending.
+  Configure and build succeeded. First native run: 13 passed, two test-only
+  accessor failures, 27 GPU tests deselected; 15.00 s. Corrected native suite
+  is rebuilding/rerunning. The final CPU suite includes thirteen FDDS cases
+  (including integrated energies and full SAPT) plus ten native CPSCF cases.
+  No scientific
+  numerical assertion failed in that initial run.
 - Local GPU validation is **not** attempted: known NVML driver/library mismatch.
 - Own Phoenix checkout:
-  `/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-validation-20261012-v1`.
+  `/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-validation-20261012-v2`
+  for the corrected retry; v1 checkout/pin is retained unchanged.
   Build: `build_fdds_validation`; dependency environment `p4cuest_sapt`
   (read-only), cuEST conda 0.2.2.2, site CUDA 12.6.1, conda GCC 14.3.
   Existing lifecycle stage supplies only read-only installed Einsums.
 - Validation payload: `devtools/benchmarks/fdds_validate.sh`, batch script
   `fdds_validate.sbatch`. One H200, 8 CPUs, 64 GiB, two hours, explicitly free
   `embers`, account `gts-cs207-chemx`.
-  Run root: `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261012-validation-01`.
-  Dry run accepted gpu-h200; submission/job ID still pending.
-- Suite expectation: **17 executed tests, zero failures/errors/skips** in an
+  Retry run root: `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261012-validation-02`.
+  Initial job **13991223**, pin `5f63ef56c9bc8740f0f98107a42298b513bbff43`,
+  was queued on free embers/gpu-h200 with Priority. User explicitly approved
+  cancellation/replacement to avoid spending an allocation on the known test
+  typo. It was cancelled without changing its frozen checkout.
+  Retry submission is gated on corrected CPU tests passing; new job ID pending.
+- Suite expectation: **20 executed tests, zero failures/errors/skips** in an
   H200 allocation; `VERIFIED.json` and `COMPLETED` required.
-  Ten native tests cover formulas, missing keys, symmetric/asymmetric empty
-  inputs and host-memory guards/recovery;
+  Thirteen native tests cover formulas, missing keys, symmetric/asymmetric
+  empty inputs, host-memory guards/recovery, full integrated FDDS and SAPT;
   seven GPU tests cover both monomers/all five hybrid contributions, 2+1
   occupied blocks, CPU/disabled/huge-threshold/forced controls, error preflight,
   default-quadrature integrated FDDS and full SVWN He-dimer SAPT(DFT).
@@ -64,6 +77,8 @@
   not representative throughput benchmarks. **No speedup claim.**
 - Coordinator's response checkout/build/job and historical SCF packages were
   not modified, cancelled, rebuilt or retested.
+  This includes v2 job 13980976 and v3 job 13991128/pin
+  `ae8cedca770e1bc1a7a6091d313cfc6dec8887d9`.
 
 ## Next completion steps
 

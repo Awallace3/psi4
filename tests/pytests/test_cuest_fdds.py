@@ -72,6 +72,7 @@ def test_fdds_native_contractions(fdds_factory, hybrid):
     expected = ovq.T @ (ovq * (ld if hybrid else -ld))
     got = _values(obj, hybrid, "A", omega)
     np.testing.assert_allclose(got["amp"], expected, rtol=0, atol=2.e-12)
+    errors = {"amp": float(np.max(np.abs(got["amp"] - expected)))}
     if hybrid:
         x = obj.get_tensor_pqQ("XarQ", (3, 7, q)).to_array()
         y = obj.get_tensor_pqQ("YarQ", (3, 7, q)).to_array()
@@ -83,6 +84,8 @@ def test_fdds_native_contractions(fdds_factory, hybrid):
                 "K2L": ovq.T @ yl, "K21L": yl.T @ (qx + qy)}
         for k, ref in refs.items():
             np.testing.assert_allclose(got[k], ref, rtol=0, atol=2.e-11)
+            errors[k] = float(np.max(np.abs(got[k] - ref)))
+    print(f"FDDS native hybrid={hybrid} max_abs_errors={errors}")
     assert obj.gpu_contraction_blocks() == 0
     with pytest.raises(RuntimeError, match="Monomer must be A or B"):
         _values(obj, hybrid, "C", omega)
@@ -124,6 +127,23 @@ def test_fdds_memory_guard(fdds_factory, hybrid):
     assert all(np.isfinite(v).all() for v in _values(obj, hybrid, "A", .1).values())
 
 
+@pytest.mark.parametrize("hybrid", [False, True])
+def test_fdds_integrated_native_energy(fdds_factory, hybrid):
+    """CPU-only builds exercise the full ALDA/coupling/quadrature interface."""
+    from psi4.driver.procrouting.sapt.sapt_mp2_terms import df_fdds_dispersion
+    fdds_factory()
+    primary, auxiliary, cache = fdds_factory.inputs
+    psi4.core.clean_timers()
+    start = time.perf_counter()
+    result = df_fdds_dispersion(primary, auxiliary, cache, hybrid, .25 if hybrid else 0.,
+                                do_print=False)
+    assert set(result) == {"Disp20,FDDS (unc)", "Disp20"}
+    assert all(np.isfinite(v) and v < 0. for v in result.values())
+    assert _timer_calls() == 0
+    print(f"FDDS native integrated hybrid={hybrid} elapsed={time.perf_counter() - start:.6f}s "
+          f"energy={result}")
+
+
 @uusing("cuest")
 @uusing("cuda_cc8")
 @pytest.mark.cuest
@@ -142,15 +162,18 @@ def test_fdds_gpu_contributions(fdds_factory, hybrid):
         psi4.core.clean_timers()
         before = obj.gpu_contraction_blocks()
         start = time.perf_counter()
+        errors = {k: 0. for k in next(iter(ref.values()))}
         for (m, w), expected in ref.items():
             got = _values(obj, hybrid, m, w)
             for k in expected:
                 np.testing.assert_allclose(got[k], expected[k], rtol=0, atol=2.e-11)
+                errors[k] = max(errors[k], float(np.max(np.abs(got[k] - expected[k]))))
         elapsed = time.perf_counter() - start
         routed = enabled and threshold == 0
         assert obj.gpu_contraction_blocks() - before == (12 if routed else 0)
         assert _timer_calls() == (6 if routed else 0)
-        print(f"FDDS hybrid={hybrid} enabled={enabled} threshold={threshold} elapsed={elapsed:.6f}s")
+        print(f"FDDS hybrid={hybrid} enabled={enabled} threshold={threshold} elapsed={elapsed:.6f}s "
+              f"max_abs_errors={errors}")
 
 
 @uusing("cuest")
@@ -219,20 +242,13 @@ def test_fdds_integrated_gpu_energy(fdds_factory, hybrid):
             assert abs(result[k] - results[0][k]) < 1.e-10
 
 
-@uusing("cuest")
-@uusing("cuda_cc8")
-@pytest.mark.cuest
-@pytest.mark.saptdft
-def test_saptdft_fdds_native_xc_gpu(tmp_path):
-    """Small full SAPT(DFT), native supported LDA response, no GPU-XC claim."""
-    results = []
-    for enabled, threshold in ((False, 0), (True, 10**9), (True, 0)):
-        psi4.core.clean()
-        psi4.core.clean_options()
-        psi4.set_num_threads(1)
-        psi4.set_memory("500 MiB")
-        path = tmp_path / f"sapt-{enabled}-{threshold}.out"
-        psi4.core.set_output_file(str(path), False)
+def _run_saptdft_fdds(enabled, threshold, path):
+    psi4.core.clean()
+    psi4.core.clean_options()
+    psi4.set_num_threads(1)
+    psi4.set_memory("500 MiB")
+    psi4.core.set_output_file(str(path), False)
+    try:
         psi4.geometry("""
             0 1
             He 0 0 0
@@ -253,13 +269,38 @@ def test_saptdft_fdds_native_xc_gpu(tmp_path):
                           "cuest_gemm_min_dim": threshold})
         psi4.core.clean_timers()
         psi4.energy("sapt(dft)")
-        keys = ("SAPT DISP ENERGY", "SAPT TOTAL ENERGY")
+        keys = ("SAPT ELST ENERGY", "SAPT EXCH ENERGY", "SAPT IND ENERGY",
+                "SAPT DISP ENERGY", "SAPT TOTAL ENERGY", "CURRENT ENERGY")
         result = {k: psi4.variable(k) for k in keys}
+        assert all(np.isfinite(v) for v in result.values())
+        print(f"SAPT(DFT) enabled={enabled} threshold={threshold} values={result}")
+        return result
+    finally:
+        psi4.core.close_outfile()
+
+
+@pytest.mark.saptdft
+def test_saptdft_fdds_native_xc_cpu(tmp_path):
+    path = tmp_path / "sapt-cpu.out"
+    _run_saptdft_fdds(False, 0, path)
+    assert _timer_calls() == 0
+    assert "Disp20" in path.read_text()
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+@pytest.mark.saptdft
+def test_saptdft_fdds_native_xc_gpu(tmp_path):
+    """Small full SAPT(DFT), native supported LDA response, no GPU-XC claim."""
+    results = []
+    for enabled, threshold in ((False, 0), (True, 10**9), (True, 0)):
+        path = tmp_path / f"sapt-{enabled}-{threshold}.out"
+        result = _run_saptdft_fdds(enabled, threshold, path)
         assert _timer_calls() == (20 if enabled and threshold == 0 else 0)
         results.append(result)
-        psi4.core.close_outfile()
         assert "Disp20" in path.read_text()
-        print(f"SAPT(DFT) enabled={enabled} threshold={threshold} values={result}")
+        print(f"SAPT(DFT) abs_errors={ {k: abs(result[k] - results[0][k]) for k in result} }")
     for result in results[1:]:
         for k in result:
             assert abs(result[k] - results[0][k]) <= 1.e-5
