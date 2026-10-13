@@ -65,7 +65,7 @@ def _timer_calls():
 def test_fdds_native_contractions(fdds_factory, hybrid):
     obj = fdds_factory(hybrid)
     omega = .37
-    q = obj.metric().nrow()
+    q = obj.metric().np.shape[0]
     ovq = obj.get_tensor_pqQ("arQ", (3, 7, q)).to_array()
     gaps = np.linspace(.1, 1., 7)[None, :] - np.linspace(-1., -.5, 3)[:, None]
     ld = (-4. * gaps / (gaps**2 + omega**2)).reshape(-1, 1)
