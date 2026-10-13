@@ -171,8 +171,9 @@ units angstrom
     with pytest.raises(NotImplementedError, match="Counterpoise-based XDM gradients are not implemented"):
         task_planner("gradient", "b3lyp", dimer, bsse_type="cp", levels={1: "b3lyp-xdm"}, **findif_kwargs)
 
+    # No-CP subsystems integrate on input-frame grids (DFT_GRID_ORIENTATION=INPUT, set by the planner).
     e_los_ii = psi4.energy("b3lyp-xdm(los-ii)", molecule=dimer, bsse_type="nocp")
-    assert compare_values(e_los_ii, -0.0010595757, 8, "No-CP XDM(LoS-II) energy")
+    assert compare_values(e_los_ii, -0.0010581148, 8, "No-CP XDM(LoS-II) energy")
 
     # bsse_type="cp" routes every task to the LoS-II counterpoise fit.
     e_los_ii_cp = psi4.energy("b3lyp-xdm(los-ii)", molecule=dimer, bsse_type="cp")
@@ -187,7 +188,7 @@ units angstrom
         "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
     })
     e_nocp = psi4.energy("b3lyp-xdm", molecule=dimer, bsse_type="nocp")
-    assert compare_values(e_nocp, -0.0006344572, 8, "No-CP XDM energy")
+    assert compare_values(e_nocp, -0.0006344356, 8, "No-CP XDM energy")
 
 
 @pytest.mark.xdm

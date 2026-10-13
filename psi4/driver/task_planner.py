@@ -229,6 +229,14 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
                     "bsse_type='nocp' separately from 'cp'/'vmfc', or set XDM_DISPERSION_PARAMETERS.")
             keywords.pop("SCF__XDM_COUNTERPOISE", None)
             keywords["XDM_COUNTERPOISE"] = xdm_counterpoise
+        # A no-CP subsystem is computed without its partners, so its standard-orientation DFT grid is rotated
+        # differently from the full cluster's and the quadrature error no longer cancels in the interaction
+        # energy (~1e-3 Eh for hexamine molecules 25 A apart). Subsystems keep the parent frame, so grids on
+        # the input axes are identical atom by atom.
+        if (any(item.lower() == "nocp" for item in bsse_types)
+                and not core.has_option_changed("SCF", "DFT_GRID_ORIENTATION")):
+            keywords.pop("SCF__DFT_GRID_ORIENTATION", None)
+            keywords["DFT_GRID_ORIENTATION"] = "INPUT"
 
     # XDM has no analytic derivatives: gradients are finite differences of the
     # full XDM energy (see proc_table, where XDM registers for energy only).
