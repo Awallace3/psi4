@@ -26,8 +26,29 @@ grep -q H200 "$out/gpu.txt"
 git -C "$root" rev-parse HEAD > "$out/commit.txt"
 source /etc/profile.d/z00_lmod_pace.sh
 module load gcc/12.3.0 cuda/12.6.1
+# Site GCC_ROOT overrides the conda GCC driver's relocated cc1/sysroot lookup.
+# This is job-local only; never change either installed compiler environment.
+unset GCC_ROOT
+source "$(dirname "$(dirname "$env")")/etc/profile.d/conda.sh"
+conda activate "$env"
 export LD_LIBRARY_PATH="$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 command -v nvcc
+{
+    for pair in "cc:cc1" "c++:cc1plus"; do
+        compiler="$env/bin/x86_64-conda-linux-gnu-${pair%:*}"
+        backend=$("$compiler" "-print-prog-name=${pair#*:}")
+        [[ "$backend" = /* && -x "$backend" ]]
+        printf '%s -> %s\n' "$compiler" "$(realpath "$backend")"
+        "$compiler" --version
+    done
+    # Also check assembler/linker/sysroot, not just frontend discovery.
+    printf 'int main(void) { return 0; }\n' |
+        "$env/bin/x86_64-conda-linux-gnu-cc" -x c -o "$out/compiler-c-probe" -
+    printf 'int main() { return 0; }\n' |
+        "$env/bin/x86_64-conda-linux-gnu-c++" -x c++ -o "$out/compiler-cxx-probe" -
+    "$out/compiler-c-probe"
+    "$out/compiler-cxx-probe"
+} > "$out/compiler.txt" 2>&1
 # Existing installed Einsums dependency only; this directory is read-only.
 deps=/storage/project/r-cs207-0/awallace43/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage
 "$env/bin/cmake" -S "$root" -B "$build" -G Ninja \
