@@ -1,5 +1,44 @@
 # FDDS cuEST implementation handoff
 
+## CPU review fixes complete (not GPU validation)
+
+- Fix commits: `c90fc65bcc` (checked one/five empty-output budgets and recovery),
+  `efde54e03b` (exported helper null/tensor/shape/overflow/budget preflight),
+  `8810da5743` (unequal nonempty monomers and checked cuBLAS HOST pointer mode).
+  The DFHelper shape-query change is metadata-only: persisted/disk tensors are
+  queried through the storage registry, even after clearing transformations.
+- Latest CPU-tested source/tests:
+  `8810da5743cc7350e7620ecb708cdd3e47baa739`.
+  Own Release CPU stage rebuilt; **51 passed, 0 failures/errors/skips, 31 GPU
+  cases deliberately deselected, 18.48 s** (41 FDDS/SAPT + 10 native CPSCF).
+  Same outside-source-root command as below, with `--junitxml=full-cpu.xml`.
+  Evidence: `build_fdds_cpu/review-fixes/{full-cpu.xml,full-cpu.log,full-provenance.txt,full-build.log}`.
+  Version `1.12a1.dev726`; asserted staged import path unchanged. New core SHA256:
+  `5c199ad6f2e92c489ba13ddaa334a6215d400eee397ecfa530781907ce657069`.
+- Maximum independent native contraction error (both monomers, equal/unequal):
+  **7.105427357601002e-15**. Unequal A=(2 occ,8 vir), B=(3 occ,7 vir).
+  Native integrated FDDS samples: equal nonhybrid/hybrid 0.012004/0.038873 s;
+  unequal 0.011409/0.020241 s. No SCF in those timings; no speedup conclusion.
+  Physical SVWN He-dimer dispersion/total energies remain exactly as below.
+- Review regressions: budget red 12 failed then green 12 passed (2.10 s);
+  unguarded helper probe entered Psi4's debugger-wait fault handler and timed
+  out, guarded helper/oracle subset 14 passed (2.10 s); unequal subset 4 passed
+  (1.65 s). Earlier logs/XML/provenance are retained unchanged.
+- HOST pointer mode is checked without mutating handle state; actual after-JK
+  execution and new CUDA compilation remain **unverified** in this CPU-only build.
+  Capacity-driven reduction/fallback and post-enqueue fault injection still
+  lack runtime coverage. No user-facing fault-injection option was added.
+- Existing GPU job **13991729** remains **PENDING (Priority)**, no allocation
+  assigned at the latest status check, frozen at pre-review pin
+  `099706616a818041f56072c3b2471d6c04451cc8`; its 20-test suite will **not**
+  validate these review fixes. Job/checkout/dependencies are untouched.
+  Prospective v3/run-03 templates now require 52 executed tests (41 native +
+  11 GPU); no new checkout/job was created or submitted. Coordinate a fresh
+  source pin/run before submission; do not silently duplicate/cancel jobs.
+- `fdds-review-fixes-complete.json` is generated atomically only after final
+  handoff commit and the green CPU gate; it certifies CPU review-fix completion
+  only, not GPU correctness, performance, or merge approval.
+
 ## Branch and implementation
 
 - Branch: `saptdft_cuest_disp`, based on response commit
@@ -10,7 +49,7 @@
 - Exception/partial-empty safety fixes: `5f63ef56c9`.
 - Test-accessor fix: `be4d7bba6e` (`Matrix.nrow()` is not a Python API;
   use `Matrix.np.shape[0]`).
-- Final CPU-tested source/tests and corrected GPU pin:
+- Pre-review CPU-tested source/tests and existing GPU pin:
   `099706616a818041f56072c3b2471d6c04451cc8`. Also reshapes DFHelper's preserved
   `(occ,vir,Q)` NumPy metadata to `(ov,Q)` for the independent reference.
 - New seam: `CuestFDDSContractions` in `psi4/src/cuest_gemm.{h,cc}`;
@@ -36,7 +75,7 @@
   No new MGGA/VV10/GPU-XC response support. Native HF/LDA/GGA response requires
   `CUEST_XC=false` before SCF.
 
-## Validation status (CPU passed; GPU pending, not a GPU correctness pass)
+## Preserved pre-review evidence (GPU pending, not a GPU correctness pass)
 
 - Static checks passed: `git diff --check`, `bash -n` for validation scripts,
   Python syntax compilation of `tests/pytests/test_cuest_fdds.py`.
@@ -76,8 +115,9 @@
   Build: `build_fdds_validation`; dependency environment `p4cuest_sapt`
   (read-only), cuEST conda 0.2.2.2, site CUDA 12.6.1, conda GCC 14.3.
   Existing lifecycle stage supplies only read-only installed Einsums.
-- Validation payload: `devtools/benchmarks/fdds_validate.sh`, batch script
-  `fdds_validate.sbatch`. One H200, 8 CPUs, 64 GiB, two hours, explicitly free
+- Frozen v2 validation payload: `devtools/benchmarks/fdds_validate.sh`, batch
+  script `fdds_validate.sbatch` at pin 099706616a (current branch templates
+  prepare a separate v3 instead). One H200, 8 CPUs, 64 GiB, two hours, explicitly free
   `embers`, account `gts-cs207-chemx`.
   Retry run root: `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261012-validation-02`.
   Initial job **13991223**, pin `5f63ef56c9bc8740f0f98107a42298b513bbff43`,
