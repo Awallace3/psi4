@@ -195,7 +195,13 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     sent to cuBLAS only if one of its links is at least as large as the product of
     two matrices of this dimension; smaller ones lose more to the PCIe transfer
     than they gain on the GPU.  Set to 0 to send every chain to the GPU, which is
-    useful for checking the two paths against each other.  No effect unless
+    useful for checking the two paths against each other.  Also controls dense
+    CPSCF products and FDDS occupied-block contractions: FDDS routes when
+    naux^2 times the occupied-virtual block size is at least this dimension
+    cubed.  FDDS accumulators stay on device across blocks; device capacity can
+    shrink the block or select native BLAS before allocation.  Zero forces
+    eligible nonempty blocks, not unsupported layouts or out-of-memory work.
+    No effect unless
     |globals__use_cuest| is true. -*/
     options.add_int("CUEST_GEMM_MIN_DIM", 256);
 

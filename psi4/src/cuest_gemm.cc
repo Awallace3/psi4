@@ -56,6 +56,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -93,6 +94,8 @@ class DeviceBuffer {
 
     explicit DeviceBuffer(size_t elements, const char* what) {
         if (elements == 0) return;
+        if (elements > std::numeric_limits<size_t>::max() / sizeof(double))
+            throw PSIEXCEPTION("cuEST GEMM: device allocation size overflow");
         cudaError_t err = cudaMalloc((void**)&ptr_, elements * sizeof(double));
         if (err != cudaSuccess) {
             std::ostringstream msg;
@@ -167,6 +170,102 @@ struct Link {
 };
 
 }  // namespace
+
+namespace {
+size_t fdds_product(size_t a, size_t b) {
+    if (b && a > std::numeric_limits<size_t>::max() / b)
+        throw PSIEXCEPTION("cuEST FDDS: size overflow");
+    return a * b;
+}
+}
+
+size_t CuestFDDSContractions::capacity(size_t naux, size_t requested_rows, bool hybrid) {
+    if (!naux || !requested_rows || naux > std::numeric_limits<int>::max()) return 0;
+    const size_t fixed = fdds_product(fdds_product(naux, naux), hybrid ? 5 : 1);
+    const size_t per_row = fdds_product(naux, hybrid ? 5 : 1);
+    cuest_common::ensure_cuest_initialized();
+    size_t free = 0, total = 0;
+    check_cuda(cudaMemGetInfo(&free, &total), "FDDS device memory preflight");
+    const size_t budget = (free / sizeof(double) / 5) * 4;
+    if (fixed >= budget) return 0;
+    return std::min({requested_rows, (budget - fixed) / per_row,
+                     static_cast<size_t>(std::numeric_limits<int>::max())});
+}
+
+struct CuestFDDSContractions::Impl {
+    size_t q, max_rows;
+    bool is_hybrid;
+    cudaStream_t stream = nullptr;
+    std::vector<DeviceBuffer> inputs, sums;
+    Impl(size_t naux, size_t rows, bool hybrid) : q(naux), max_rows(rows), is_hybrid(hybrid) {
+        if (!q || !rows || q > std::numeric_limits<int>::max() || rows > std::numeric_limits<int>::max())
+            throw PSIEXCEPTION("cuEST FDDS: nonempty BLAS-int dimensions required");
+        cuest_common::ensure_cuest_initialized();
+        check_cublas(cublasGetStream(cublas_handle, &stream), "FDDS cublasGetStream");
+        const size_t ni = hybrid ? 5 : 1;
+        inputs.reserve(ni);
+        sums.reserve(ni);
+        for (size_t i = 0; i < ni; ++i) {
+            inputs.emplace_back(fdds_product(rows, q), "FDDS block");
+            sums.emplace_back(fdds_product(q, q), "FDDS accumulator");
+            check_cuda(cudaMemsetAsync(sums.back().get(), 0, fdds_product(fdds_product(q, q), sizeof(double)),
+                                      stream), "FDDS accumulator zero");
+        }
+    }
+    void upload(const std::vector<const double*>& pointers, size_t rows) {
+        if (!rows || rows > max_rows || pointers.size() != inputs.size())
+            throw PSIEXCEPTION("cuEST FDDS: invalid input block");
+        for (size_t i = 0; i < pointers.size(); ++i) {
+            if (!pointers[i]) throw PSIEXCEPTION("cuEST FDDS: null input");
+            check_cuda(cudaMemcpyAsync(inputs[i].get(), pointers[i], fdds_product(fdds_product(rows, q), sizeof(double)),
+                                       cudaMemcpyHostToDevice, stream), "FDDS block upload");
+        }
+    }
+    void product(size_t out, size_t left, size_t right, size_t rows) {
+        const double one = 1.0;
+        // Row-major left^T right -> column-major right^T left.
+        check_cublas(cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, q, q, rows, &one,
+                                 inputs[right].get(), q, inputs[left].get(), q, &one, sums[out].get(), q),
+                     "FDDS cublasDgemm");
+    }
+};
+
+CuestFDDSContractions::CuestFDDSContractions(size_t q, size_t rows, bool hybrid)
+    : impl_(new Impl(q, rows, hybrid)) {}
+CuestFDDSContractions::~CuestFDDSContractions() = default;
+
+void CuestFDDSContractions::uncoupled(const double* ovQ, size_t rows) {
+    if (impl_->is_hybrid) throw PSIEXCEPTION("cuEST FDDS: wrong contraction mode");
+    impl_->upload({ovQ}, rows);
+    impl_->product(0, 0, 0, rows);
+    // Host scratch is reused by DFHelper on the next iteration. Async pageable
+    // uploads are not a lifetime guarantee; explicitly drain before returning.
+    check_cuda(cudaStreamSynchronize(impl_->stream), "FDDS block synchronization");
+}
+
+void CuestFDDSContractions::hybrid(const double* ld, const double* ovQ, const double* qx,
+                                  const double* qy, const double* yl, size_t rows) {
+    if (!impl_->is_hybrid) throw PSIEXCEPTION("cuEST FDDS: wrong contraction mode");
+    impl_->upload({ld, ovQ, qx, qy, yl}, rows);
+    impl_->product(0, 0, 1, rows);
+    impl_->product(1, 0, 2, rows);
+    impl_->product(2, 0, 3, rows);
+    impl_->product(3, 1, 4, rows);
+    impl_->product(4, 4, 2, rows);
+    check_cuda(cudaStreamSynchronize(impl_->stream), "FDDS block synchronization");
+}
+
+void CuestFDDSContractions::finish(const std::vector<SharedMatrix>& outputs) {
+    if (outputs.size() != impl_->sums.size()) throw PSIEXCEPTION("cuEST FDDS: invalid outputs");
+    for (const auto& m : outputs)
+        if (!m || m->nirrep() != 1 || m->symmetry() || m->rowdim() != impl_->q || m->coldim() != impl_->q)
+            throw PSIEXCEPTION("cuEST FDDS: outputs must be dense Q x Q");
+    for (size_t i = 0; i < outputs.size(); ++i)
+        check_cuda(cudaMemcpyAsync(outputs[i]->get_pointer(0), impl_->sums[i].get(),
+                                   fdds_product(fdds_product(impl_->q, impl_->q), sizeof(double)),
+                                   cudaMemcpyDeviceToHost, impl_->stream), "FDDS accumulator download");
+    check_cuda(cudaStreamSynchronize(impl_->stream), "FDDS final synchronization");
+}
 
 /*! Multiply a list of matrices left to right on the GPU.
  *

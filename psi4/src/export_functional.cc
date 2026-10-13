@@ -322,6 +322,8 @@ void export_functional(py::module &m) {
         .def("metric", &sapt::FDDS_Dispersion::metric, "Obtains the FDDS metric.")
         .def("metric_inv", &sapt::FDDS_Dispersion::metric_inv, "Obtains the FDDS metric_inv.")
         .def("aux_overlap", &sapt::FDDS_Dispersion::aux_overlap, "Obtains the FDDS aux_overlap.")
+        .def("gpu_contraction_blocks", &sapt::FDDS_Dispersion::gpu_contraction_blocks,
+             "Number of occupied blocks actually contracted by cuBLAS in this FDDS object.")
         .def("project_densities", &sapt::FDDS_Dispersion::project_densities,
              "Projects a density from the primary AO to auxiliary AO space.")
         .def("form_unc_amplitude", &sapt::FDDS_Dispersion::form_unc_amplitude,

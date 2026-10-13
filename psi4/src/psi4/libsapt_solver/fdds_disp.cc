@@ -42,6 +42,10 @@
 #include "psi4/libpsi4util/memory_ledger.h"
 
 #include <iomanip>
+#include <limits>
+#ifdef USING_cuEST
+#include "cuest_gemm.h"
+#endif
 
 // OMP
 #ifdef _OPENMP
@@ -105,6 +109,48 @@ size_t available_doubles() {
     return (size_t)(0.8 * (double)(total > held ? total - held : 0));
 }
 
+size_t checked_product(size_t a, size_t b) {
+    if (b && a > std::numeric_limits<size_t>::max() / b)
+        throw PSIEXCEPTION("FDDS contraction size overflow");
+    return a * b;
+}
+
+size_t checked_sum(size_t a, size_t b) {
+    if (a > std::numeric_limits<size_t>::max() - b)
+        throw PSIEXCEPTION("FDDS contraction size overflow");
+    return a + b;
+}
+
+#ifdef USING_cuEST
+// No CUDA calls until the opt-in and transfer/work threshold checks pass.
+// Device capacity can reduce the host block, never increase its memory budget.
+std::unique_ptr<CuestFDDSContractions> gpu_contractions(size_t q, size_t v, size_t& occupied_block, bool hybrid) {
+    auto& options = Process::environment.options;
+    if (!options.get_bool("USE_CUEST") || !q || !v || !occupied_block) return nullptr;
+    const int threshold = options.get_int("CUEST_GEMM_MIN_DIM");
+    if (threshold < 0) throw PSIEXCEPTION("CUEST_GEMM_MIN_DIM must be nonnegative.");
+    const size_t rows = checked_product(occupied_block, v);
+    const long double cutoff = static_cast<long double>(threshold) * threshold * threshold;
+    if (static_cast<long double>(q) * q * rows < cutoff) return nullptr;
+    const size_t capacity = CuestFDDSContractions::capacity(q, rows, hybrid);
+    const size_t block = std::min(occupied_block, capacity / v);
+    if (!block || static_cast<long double>(q) * q * block * v < cutoff) {
+        outfile->Printf("  cuEST FDDS: device capacity/threshold requires native contractions.\n");
+        return nullptr;
+    }
+    occupied_block = block;
+    return std::unique_ptr<CuestFDDSContractions>(new CuestFDDSContractions(q, block * v, hybrid));
+}
+
+struct GpuContractionTimer {
+    bool active;
+    explicit GpuContractionTimer(bool active) : active(active) {
+        if (active) timer_on("cuEST FDDS: contractions");
+    }
+    ~GpuContractionTimer() { if (active) timer_off("cuEST FDDS: contractions"); }
+};
+#endif
+
 }  // namespace
 
 FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
@@ -121,6 +167,8 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
             outfile->Printf("FDDS_Dispersion: Missing matrix_cache key %s\n", key.c_str());
             throw PSIEXCEPTION("FDDS_Dispersion: Missing values in the matrix_cache!");
         }
+        const auto& m = matrix_cache_.at(key);
+        gpu_layout_supported_ = gpu_layout_supported_ && m->nirrep() == 1 && m->symmetry() == 0;
     }
 
     std::vector<std::string> vector_cache_check = {"eps_occ_A", "eps_vir_A", "eps_occ_B", "eps_vir_B"};
@@ -198,6 +246,20 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
     aux_overlap_ = std::make_shared<Matrix>("Auxiliary Overlap", naux, naux);
     overlap->compute(aux_overlap_);
     timer_off("Form JS");
+
+    // No occupied-virtual pairs: avoid zero-dimensional DFHelper transforms.
+    // Both public contraction interfaces return zero Q x Q matrices.
+    const auto empty_monomer = [&](const std::string& monomer) {
+        return !vector_cache_.at("eps_occ_" + monomer)->dim(0) ||
+               !vector_cache_.at("eps_vir_" + monomer)->dim(0);
+    };
+    if (empty_monomer("A") && empty_monomer("B")) {
+        if (is_hybrid_) {
+            R_A_ = std::make_shared<Matrix>("R_A", naux, naux);
+            R_B_ = std::make_shared<Matrix>("R_B", naux, naux);
+        }
+        return;
+    }
 
     // ==> Form 3-index object <==
 
@@ -526,9 +588,14 @@ SharedMatrix FDDS_Dispersion::form_unc_amplitude(std::string monomer, double ome
     size_t nvir = eps_vir->dim(0);
     size_t naux = auxiliary_->nbf();
 
+    if (!nocc || !nvir || !naux) return std::make_shared<Matrix>("UNC Amplitude", naux, naux);
+
     // Check on memory real quick
     size_t doubles = available_doubles();
-    size_t mem_size = 2 * naux * nvir + naux * naux + nvir * nocc;
+    const size_t qv = checked_product(naux, nvir);
+    const size_t qq = checked_product(naux, naux);
+    const size_t ov = checked_product(nocc, nvir);
+    size_t mem_size = checked_sum(checked_sum(checked_product(2, qv), qq), ov);
     if (mem_size > doubles) {
         throw PSIEXCEPTION(too_little_memory("FDDS_Dispersion::form_unc_amplitude()",
                                              "2 * naux * nvir + naux^2 + nvir * nocc", mem_size, doubles));
@@ -559,11 +626,15 @@ SharedMatrix FDDS_Dispersion::form_unc_amplitude(std::string monomer, double ome
 
     // ==> Contract <==
 
-    size_t dmem = doubles - naux * naux - nvir * nocc;
-    size_t bsize = dmem / (naux * nvir);
+    size_t dmem = doubles - qq - ov;
+    size_t bsize = dmem / qv;
     if (bsize > nocc) {
         bsize = nocc;
     }
+#ifdef USING_cuEST
+    auto gpu = gpu_layout_supported_ ? gpu_contractions(naux, nvir, bsize, false) : nullptr;
+    GpuContractionTimer gpu_timer{bool(gpu)};
+#endif
     size_t nblocks = 1 + ((nocc - 1) / bsize);
 
     // printf("dmem:    %zu\n", dmem);
@@ -600,9 +671,20 @@ SharedMatrix FDDS_Dispersion::form_unc_amplitude(std::string monomer, double ome
             }
         }
 
-        ret->gemm(true, false, 1.0, tmp, tmp, 1.0);
+#ifdef USING_cuEST
+        if (gpu) {
+            gpu->uncoupled(tmpp[0], osize * nvir);
+            ++gpu_contraction_blocks_;
+        } else
+#endif
+        {
+            ret->gemm(true, false, 1.0, tmp, tmp, 1.0);
+        }
         bcount += osize;
     }
+#ifdef USING_cuEST
+    if (gpu) gpu->finish({ret});
+#endif
 
     return ret;
 }
@@ -639,25 +721,35 @@ std::map<std::string, SharedMatrix> FDDS_Dispersion::form_aux_matrices(std::stri
     size_t nocc = eps_occ->dim(0);
     size_t nvir = eps_vir->dim(0);
     size_t naux = auxiliary_->nbf();
-    size_t nov = nocc * nvir;
+    size_t nov = checked_product(nocc, nvir);
+
+    std::map<std::string, SharedMatrix> ret;
+    if (!nov || !naux) {
+        for (const auto& name : {"amp", "K1LD", "K2LD", "K2L", "K21L"})
+            ret[name] = std::make_shared<Matrix>(name, naux, naux);
+        return ret;
+    }
 
     // => Blocking <= //
 
     size_t doubles = available_doubles();
-    const size_t fixed = 2 * nocc * nvir + 6 * naux * naux;
-    const size_t per_occ = 7 * nvir * naux;
-    long long int rem = doubles - (long long int)fixed;
-    if (rem < 0)
+    const size_t fixed = checked_sum(checked_product(2, nov), checked_product(6, checked_product(naux, naux)));
+    const size_t per_occ = checked_product(7, checked_product(nvir, naux));
+    if (doubles < fixed)
         throw PSIEXCEPTION(too_little_memory("FDDS_Dispersion::form_aux_matrices()",
                                              "2 * nocc * nvir + 6 * naux^2 of fixed storage", fixed, doubles));
 
-    size_t maxo = rem / per_occ;
+    size_t maxo = (doubles - fixed) / per_occ;
     maxo = (maxo > nocc ? nocc : maxo);
     if (maxo < 1)
         throw PSIEXCEPTION(too_little_memory("FDDS_Dispersion::form_aux_matrices()",
                                              "the fixed storage plus one occupied block, "
                                              "2 * nocc * nvir + 6 * naux^2 + 7 * nvir * naux",
-                                             fixed + per_occ, doubles));
+                                             checked_sum(fixed, per_occ), doubles));
+#ifdef USING_cuEST
+    auto gpu = gpu_layout_supported_ ? gpu_contractions(naux, nvir, maxo, true) : nullptr;
+    GpuContractionTimer gpu_timer{bool(gpu)};
+#endif
 
     // => Scalars <= //
 
@@ -691,12 +783,8 @@ std::map<std::string, SharedMatrix> FDDS_Dispersion::form_aux_matrices(std::stri
     auto YarQL = std::make_shared<Matrix>("YarQL", maxo * nvir, naux);
 
     // => Target <= //    
-    std::map<std::string, SharedMatrix> ret;
-    ret["amp"] = std::make_shared<Matrix>("amp", naux, naux); // Uncoupled amplitude
-    ret["K1LD"] = std::make_shared<Matrix>("K1LD", naux, naux);
-    ret["K2LD"] = std::make_shared<Matrix>("K2LD", naux, naux);
-    ret["K2L"] = std::make_shared<Matrix>("K2L", naux, naux);
-    ret["K21L"] = std::make_shared<Matrix>("K21L", naux, naux);
+    for (const auto& name : {"amp", "K1LD", "K2LD", "K2L", "K21L"})
+        ret[name] = std::make_shared<Matrix>(name, naux, naux);
 
     // Zero out matrices
     
@@ -757,13 +845,24 @@ std::map<std::string, SharedMatrix> FDDS_Dispersion::form_aux_matrices(std::stri
             }
         }
 
+#ifdef USING_cuEST
+        if (gpu) {
+            gpu->hybrid(arQLDp[0], arQp[0], QXarQp[0], QYarQp[0], YarQLp[0], navir);
+            ++gpu_contraction_blocks_;
+        } else
+#endif
+        {
         C_DGEMM('T', 'N', naux, naux, navir, 1.0, arQLDp[0], naux, arQp[0], naux, 1.0, ampp[0], naux);
         C_DGEMM('T', 'N', naux, naux, navir, 1.0, arQLDp[0], naux, QXarQp[0], naux, 1.0, K1LDp[0], naux);
         C_DGEMM('T', 'N', naux, naux, navir, 1.0, arQLDp[0], naux, QYarQp[0], naux, 1.0, K2LDp[0], naux);
         C_DGEMM('T', 'N', naux, naux, navir, 1.0, arQp[0], naux, YarQLp[0], naux, 1.0, K2Lp[0], naux);
         C_DGEMM('T', 'N', naux, naux, navir, 1.0, YarQLp[0], naux, QXarQp[0], naux, 1.0, K21Lp[0], naux);
+        }
 
     }
+#ifdef USING_cuEST
+    if (gpu) gpu->finish({ret["amp"], ret["K1LD"], ret["K2LD"], ret["K2L"], ret["K21L"]});
+#endif
     
     return ret;
 }

@@ -150,6 +150,33 @@ For SAPT(DFT), the SAPT expansion is truncated at the same level of SAPT0, but t
 .. math:: \chi_{coup}\left(\mathbf{r},\mathbf{r}'|\omega\right) = \chi_0\left(\mathbf{r},\mathbf{r}'|\omega\right) + \int d\omega d\mathbf{r}_1 d\mathbf{r}_2 \chi_0\left(\mathbf{r},\mathbf{r}_1|\omega\right)\left[\frac{1}{r_{12}} + f_{xc}\left(\mathbf{r}_1,\mathbf{r}_2,\omega\right)\right]\chi\left(\mathbf{r}_2,\mathbf{r}'|\omega\right)
 
 
+With a cuEST-enabled build, |globals__use_cuest| also enables FP64 cuBLAS
+contractions of FDDS occupied-virtual blocks. This covers the uncoupled
+auxiliary amplitude and all five hybrid auxiliary matrices (``amp``, ``K1LD``,
+``K2LD``, ``K2L``, ``K21L``), in both SAPT tensor drivers. The output sums remain
+on device across occupied blocks, with one final download per monomer and
+frequency. |globals__cuest_gemm_min_dim| controls routing, using
+``naux**2 * block_occ * nvir >= CUEST_GEMM_MIN_DIM**3``. Zero forces eligible
+nonempty contractions for validation; the default avoids small transfers.
+``FDDS_Dispersion.gpu_contraction_blocks()`` counts blocks actually completed
+on GPU, and the ``cuEST FDDS: contractions`` timer includes blocked contraction
+work and transfers (including host preparation).
+
+Host blocking still observes the FDDS process-memory budget. Device preflight
+reserves at most 80% of currently free device memory, reducing the occupied
+block if necessary. If even one occupied block and the fixed output matrices
+cannot fit, native BLAS is selected before allocation. CUDA/cuBLAS failures
+raise; they do not silently retry on CPU. CPU-only builds and disabled,
+empty, small or unsupported-layout work retain native contractions.
+
+This is not an all-GPU FDDS solver: DFHelper/integral preparation, density
+projection, ALDA kernel evaluation, hybrid QR and X/Y preparation, Python
+coupling/pseudoinverses, quadrature, and exchange-dispersion remain on CPU.
+No dispersion equations, cutoffs, quadrature or QCVariables change. For the
+existing native HF/LDA/GGA CPHF/CPKS induction response, set
+|globals__cuest_xc| false **before SCF**. This FDDS acceleration does not add
+MGGA, VV10 or GPU-XC response kernels.
+
 The :math:`\delta_{HF}^{(2)}` and :math:`\delta_{HF}^{(3)}` terms take into
 account higher-order induction effects and are included in the definition
 of SAPT terms. They are computed from the Hartree--Fock supermolecular interaction energy

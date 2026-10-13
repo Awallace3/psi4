@@ -69,6 +69,9 @@ class FDDS_Dispersion {
     // QR factorization result
     SharedMatrix R_A_, R_B_;
 
+    size_t gpu_contraction_blocks_ = 0;
+    bool gpu_layout_supported_ = true;
+
    public:
     /**
      * Constructs the FDDS_Dispersion object.
@@ -83,6 +86,9 @@ class FDDS_Dispersion {
                     bool is_hybrid);
 
     ~FDDS_Dispersion();
+
+    /// Completed cuBLAS occupied-block contractions (not a capability flag).
+    size_t gpu_contraction_blocks() const { return gpu_contraction_blocks_; }
 
     /**
      * Projects the densities from primary AO space to auxiliary AO space
