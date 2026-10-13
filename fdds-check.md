@@ -14,6 +14,9 @@
   Hybrid inputs upload once per block; only final sums download.
   Stream synchronization protects host scratch reuse. RAII cleans device
   allocations on errors; CUDA/cuBLAS errors propagate without CPU retries.
+  Read-only safety review confirmed row-major mappings and capacity accounting;
+  follow-up fixes drain queued transfers before exception rethrow and handle
+  one-empty/one-nonempty monomers individually (including hybrid setup).
 - Opt-in `USE_CUEST`, existing `CUEST_GEMM_MIN_DIM` threshold (default 256).
   CPU-only/disabled/small/empty/unsupported-layout paths remain native.
   Device preflight can shrink blocks or choose CPU before allocation.
@@ -35,7 +38,7 @@
   `/home/awallace43/miniconda3/envs/p4_ci`, Release, Ninja, `ENABLE_cuEST=OFF`,
   `ENABLE_Einsums=OFF`, `BUILD_SHARED_LIBS=ON`, 12 build workers.
   Logs: `fdds-cpu-configure.log`, `fdds-cpu-build.log` (untracked).
-  Configure succeeded; build/tests/import provenance still pending.
+  Configure and build succeeded; native tests/import provenance still pending.
 - Local GPU validation is **not** attempted: known NVML driver/library mismatch.
 - Own Phoenix checkout:
   `/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-validation-20261012-v1`.
@@ -47,9 +50,10 @@
   `embers`, account `gts-cs207-chemx`.
   Run root: `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261012-validation-01`.
   Dry run accepted gpu-h200; submission/job ID still pending.
-- Suite expectation: **12 executed tests, zero failures/errors/skips** in an
+- Suite expectation: **17 executed tests, zero failures/errors/skips** in an
   H200 allocation; `VERIFIED.json` and `COMPLETED` required.
-  Five native tests cover formulas, empty inputs and host-memory guards;
+  Ten native tests cover formulas, missing keys, symmetric/asymmetric empty
+  inputs and host-memory guards/recovery;
   seven GPU tests cover both monomers/all five hybrid contributions, 2+1
   occupied blocks, CPU/disabled/huge-threshold/forced controls, error preflight,
   default-quadrature integrated FDDS and full SVWN He-dimer SAPT(DFT).

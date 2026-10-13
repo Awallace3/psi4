@@ -253,7 +253,8 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
         return !vector_cache_.at("eps_occ_" + monomer)->dim(0) ||
                !vector_cache_.at("eps_vir_" + monomer)->dim(0);
     };
-    if (empty_monomer("A") && empty_monomer("B")) {
+    const bool empty_A = empty_monomer("A"), empty_B = empty_monomer("B");
+    if (empty_A && empty_B) {
         if (is_hybrid_) {
             R_A_ = std::make_shared<Matrix>("R_A", naux, naux);
             R_B_ = std::make_shared<Matrix>("R_B", naux, naux);
@@ -288,19 +289,27 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
     dfh_->print_header();
 
     // Define spaces
-    dfh_->add_space("a", Cstack_vec[0]);
-    dfh_->add_space("r", Cstack_vec[1]);
-    dfh_->add_space("b", Cstack_vec[2]);
-    dfh_->add_space("s", Cstack_vec[3]);
+    if (!empty_A) {
+        dfh_->add_space("a", Cstack_vec[0]);
+        dfh_->add_space("r", Cstack_vec[1]);
+    }
+    if (!empty_B) {
+        dfh_->add_space("b", Cstack_vec[2]);
+        dfh_->add_space("s", Cstack_vec[3]);
+    }
 
     // add transformations
-    dfh_->add_transformation("arQ", "a", "r", "pqQ");
-    dfh_->add_transformation("bsQ", "b", "s", "pqQ");
+    if (!empty_A) dfh_->add_transformation("arQ", "a", "r", "pqQ");
+    if (!empty_B) dfh_->add_transformation("bsQ", "b", "s", "pqQ");
     if (is_hybrid_) {
-        dfh_->add_transformation("raQ", "r", "a", "pqQ");
-        dfh_->add_transformation("sbQ", "s", "b", "pqQ");
-        dfh_->add_transformation("Qar", "a", "r", "Qpq");
-        dfh_->add_transformation("Qbs", "b", "s", "Qpq");
+        if (!empty_A) {
+            dfh_->add_transformation("raQ", "r", "a", "pqQ");
+            dfh_->add_transformation("Qar", "a", "r", "Qpq");
+        }
+        if (!empty_B) {
+            dfh_->add_transformation("sbQ", "s", "b", "pqQ");
+            dfh_->add_transformation("Qbs", "b", "s", "Qpq");
+        }
     }
 
     // transform
@@ -325,17 +334,20 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
         dfh_->set_metric_pow(-0.5);
         dfh_->initialize();
 
-        dfh_->add_space("a", Cstack_vec[0]);
-        dfh_->add_space("r", Cstack_vec[1]);
-        dfh_->add_space("b", Cstack_vec[2]);
-        dfh_->add_space("s", Cstack_vec[3]);
-
-        dfh_->add_transformation("aaR", "a", "a", "pqQ");
-        dfh_->add_transformation("arR", "a", "r", "pqQ");
-        dfh_->add_transformation("rrR", "r", "r", "pqQ");
-        dfh_->add_transformation("bbR", "b", "b", "pqQ");
-        dfh_->add_transformation("bsR", "b", "s", "pqQ");
-        dfh_->add_transformation("ssR", "s", "s", "pqQ");
+        if (!empty_A) {
+            dfh_->add_space("a", Cstack_vec[0]);
+            dfh_->add_space("r", Cstack_vec[1]);
+            dfh_->add_transformation("aaR", "a", "a", "pqQ");
+            dfh_->add_transformation("arR", "a", "r", "pqQ");
+            dfh_->add_transformation("rrR", "r", "r", "pqQ");
+        }
+        if (!empty_B) {
+            dfh_->add_space("b", Cstack_vec[2]);
+            dfh_->add_space("s", Cstack_vec[3]);
+            dfh_->add_transformation("bbR", "b", "b", "pqQ");
+            dfh_->add_transformation("bsR", "b", "s", "pqQ");
+            dfh_->add_transformation("ssR", "s", "s", "pqQ");
+        }
         dfh_->set_release_core_AO_before_metric(true);
         dfh_->transform();
     }
@@ -345,20 +357,20 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
     if (is_hybrid_) {
         // QR Factorization of (ar|Q)
         timer_on("FDDS: QR");
-        R_A_ = QR("A");
-        R_B_ = QR("B");
+        R_A_ = empty_A ? std::make_shared<Matrix>("R_A", naux, naux) : QR("A");
+        R_B_ = empty_B ? std::make_shared<Matrix>("R_B", naux, naux) : QR("B");
         timer_off("FDDS: QR");
 
         // form (ar|(Q)X|Q) = (ar'|a'r) (a'r'|(Q)|Q)
         timer_on("FDDS: Form X");
-        form_X("A");
-        form_X("B");
+        if (!empty_A) form_X("A");
+        if (!empty_B) form_X("B");
         timer_off("FDDS: Form X");
 
         // form (ar|(Q)Y|Q) = (aa'|rr') (a'r'|(Q)|Q)
         timer_on("FDDS: Form Y");
-        form_Y("A");
-        form_Y("B");
+        if (!empty_A) form_Y("A");
+        if (!empty_B) form_Y("B");
         timer_off("FDDS: Form Y");
     }
 
@@ -852,11 +864,11 @@ std::map<std::string, SharedMatrix> FDDS_Dispersion::form_aux_matrices(std::stri
         } else
 #endif
         {
-        C_DGEMM('T', 'N', naux, naux, navir, 1.0, arQLDp[0], naux, arQp[0], naux, 1.0, ampp[0], naux);
-        C_DGEMM('T', 'N', naux, naux, navir, 1.0, arQLDp[0], naux, QXarQp[0], naux, 1.0, K1LDp[0], naux);
-        C_DGEMM('T', 'N', naux, naux, navir, 1.0, arQLDp[0], naux, QYarQp[0], naux, 1.0, K2LDp[0], naux);
-        C_DGEMM('T', 'N', naux, naux, navir, 1.0, arQp[0], naux, YarQLp[0], naux, 1.0, K2Lp[0], naux);
-        C_DGEMM('T', 'N', naux, naux, navir, 1.0, YarQLp[0], naux, QXarQp[0], naux, 1.0, K21Lp[0], naux);
+            C_DGEMM('T', 'N', naux, naux, navir, 1.0, arQLDp[0], naux, arQp[0], naux, 1.0, ampp[0], naux);
+            C_DGEMM('T', 'N', naux, naux, navir, 1.0, arQLDp[0], naux, QXarQp[0], naux, 1.0, K1LDp[0], naux);
+            C_DGEMM('T', 'N', naux, naux, navir, 1.0, arQLDp[0], naux, QYarQp[0], naux, 1.0, K2LDp[0], naux);
+            C_DGEMM('T', 'N', naux, naux, navir, 1.0, arQp[0], naux, YarQLp[0], naux, 1.0, K2Lp[0], naux);
+            C_DGEMM('T', 'N', naux, naux, navir, 1.0, YarQLp[0], naux, QXarQp[0], naux, 1.0, K21Lp[0], naux);
         }
 
     }

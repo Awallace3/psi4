@@ -236,23 +236,35 @@ CuestFDDSContractions::~CuestFDDSContractions() = default;
 
 void CuestFDDSContractions::uncoupled(const double* ovQ, size_t rows) {
     if (impl_->is_hybrid) throw PSIEXCEPTION("cuEST FDDS: wrong contraction mode");
-    impl_->upload({ovQ}, rows);
-    impl_->product(0, 0, 0, rows);
-    // Host scratch is reused by DFHelper on the next iteration. Async pageable
-    // uploads are not a lifetime guarantee; explicitly drain before returning.
-    check_cuda(cudaStreamSynchronize(impl_->stream), "FDDS block synchronization");
+    try {
+        impl_->upload({ovQ}, rows);
+        impl_->product(0, 0, 0, rows);
+        // Host scratch is reused by DFHelper on the next iteration. Async pageable
+        // uploads are not a lifetime guarantee; explicitly drain before returning.
+        check_cuda(cudaStreamSynchronize(impl_->stream), "FDDS block synchronization");
+    } catch (...) {
+        // Earlier uploads may still reference the caller's host scratch.
+        // Drain before that scratch can unwind; preserve the original error.
+        cudaStreamSynchronize(impl_->stream);
+        throw;
+    }
 }
 
 void CuestFDDSContractions::hybrid(const double* ld, const double* ovQ, const double* qx,
                                   const double* qy, const double* yl, size_t rows) {
     if (!impl_->is_hybrid) throw PSIEXCEPTION("cuEST FDDS: wrong contraction mode");
-    impl_->upload({ld, ovQ, qx, qy, yl}, rows);
-    impl_->product(0, 0, 1, rows);
-    impl_->product(1, 0, 2, rows);
-    impl_->product(2, 0, 3, rows);
-    impl_->product(3, 1, 4, rows);
-    impl_->product(4, 4, 2, rows);
-    check_cuda(cudaStreamSynchronize(impl_->stream), "FDDS block synchronization");
+    try {
+        impl_->upload({ld, ovQ, qx, qy, yl}, rows);
+        impl_->product(0, 0, 1, rows);
+        impl_->product(1, 0, 2, rows);
+        impl_->product(2, 0, 3, rows);
+        impl_->product(3, 1, 4, rows);
+        impl_->product(4, 4, 2, rows);
+        check_cuda(cudaStreamSynchronize(impl_->stream), "FDDS block synchronization");
+    } catch (...) {
+        cudaStreamSynchronize(impl_->stream);
+        throw;
+    }
 }
 
 void CuestFDDSContractions::finish(const std::vector<SharedMatrix>& outputs) {
@@ -260,11 +272,17 @@ void CuestFDDSContractions::finish(const std::vector<SharedMatrix>& outputs) {
     for (const auto& m : outputs)
         if (!m || m->nirrep() != 1 || m->symmetry() || m->rowdim() != impl_->q || m->coldim() != impl_->q)
             throw PSIEXCEPTION("cuEST FDDS: outputs must be dense Q x Q");
-    for (size_t i = 0; i < outputs.size(); ++i)
-        check_cuda(cudaMemcpyAsync(outputs[i]->get_pointer(0), impl_->sums[i].get(),
-                                   fdds_product(fdds_product(impl_->q, impl_->q), sizeof(double)),
-                                   cudaMemcpyDeviceToHost, impl_->stream), "FDDS accumulator download");
-    check_cuda(cudaStreamSynchronize(impl_->stream), "FDDS final synchronization");
+    try {
+        for (size_t i = 0; i < outputs.size(); ++i)
+            check_cuda(cudaMemcpyAsync(outputs[i]->get_pointer(0), impl_->sums[i].get(),
+                                       fdds_product(fdds_product(impl_->q, impl_->q), sizeof(double)),
+                                       cudaMemcpyDeviceToHost, impl_->stream), "FDDS accumulator download");
+        check_cuda(cudaStreamSynchronize(impl_->stream), "FDDS final synchronization");
+    } catch (...) {
+        // Keep every destination alive even if a later copy failed to enqueue.
+        cudaStreamSynchronize(impl_->stream);
+        throw;
+    }
 }
 
 /*! Multiply a list of matrices left to right on the GPU.

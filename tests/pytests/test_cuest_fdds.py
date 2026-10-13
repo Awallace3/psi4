@@ -31,9 +31,9 @@ def fdds_factory():
     c, _ = np.linalg.qr(rng.normal(size=(primary.nbf(), primary.nbf())))
 
     def make(hybrid=False, empty=False):
-        occ = 0 if empty else 3
         mc, vc = {}, {}
         for monomer in ("A", "B"):
+            occ = 0 if empty is True or empty == monomer else 3
             mc["Cocc_" + monomer] = psi4.core.Matrix.from_array(c[:, :occ])
             mc["Cvir_" + monomer] = psi4.core.Matrix.from_array(c[:, 3:])
             vc["eps_occ_" + monomer] = psi4.core.Vector.from_array(np.linspace(-1., -.5, occ))
@@ -86,13 +86,30 @@ def test_fdds_native_contractions(fdds_factory, hybrid):
     assert obj.gpu_contraction_blocks() == 0
     with pytest.raises(RuntimeError, match="Monomer must be A or B"):
         _values(obj, hybrid, "C", omega)
+    primary, auxiliary, cache = fdds_factory.inputs
+    mc = {k: cache[k] for k in ("Cocc_A", "Cvir_A", "Cocc_B", "Cvir_B")}
+    vc = {k: cache[k] for k in ("eps_occ_A", "eps_vir_A", "eps_occ_B", "eps_vir_B")}
+    with pytest.raises(RuntimeError, match="Missing values in the matrix_cache"):
+        psi4.core.FDDS_Dispersion(primary, auxiliary, {k: v for k, v in mc.items() if k != "Cocc_A"}, vc, hybrid)
+    with pytest.raises(RuntimeError, match="Missing values in the vector_cache"):
+        psi4.core.FDDS_Dispersion(primary, auxiliary, mc, {k: v for k, v in vc.items() if k != "eps_occ_A"}, hybrid)
 
 
-def test_fdds_empty_native(fdds_factory):
-    obj = fdds_factory(empty=True)
-    assert not obj.form_unc_amplitude("A", .1).np.any()
-    # Early empty return must not read missing hybrid disk tensors.
-    assert all(not m.np.any() for m in obj.form_aux_matrices("A", .1).values())
+@pytest.mark.parametrize("hybrid", [False, True])
+@pytest.mark.parametrize("empty", [True, "A", "B"])
+def test_fdds_empty_native(fdds_factory, hybrid, empty):
+    obj = fdds_factory(hybrid, empty=empty)
+    for monomer in ("A", "B"):
+        if empty is True or empty == monomer:
+            assert not obj.form_unc_amplitude(monomer, .1).np.any()
+            # Early return must not read missing hybrid disk tensors.
+            assert all(not m.np.any() for m in obj.form_aux_matrices(monomer, .1).values())
+            if hybrid:
+                assert not getattr(obj, "R_" + monomer)().np.any()
+        else:
+            assert np.isfinite(obj.form_unc_amplitude(monomer, .1).np).all()
+            if hybrid:
+                assert all(np.isfinite(m.np).all() for m in obj.form_aux_matrices(monomer, .1).values())
     assert obj.gpu_contraction_blocks() == 0
 
 
@@ -103,6 +120,8 @@ def test_fdds_memory_guard(fdds_factory, hybrid):
     with pytest.raises(RuntimeError, match="Too little memory"):
         _values(obj, hybrid, "A", .1)
     assert obj.gpu_contraction_blocks() == 0
+    psi4.core.set_memory_bytes(500 * 1024**2)
+    assert all(np.isfinite(v).all() for v in _values(obj, hybrid, "A", .1).values())
 
 
 @uusing("cuest")
@@ -138,13 +157,23 @@ def test_fdds_gpu_contributions(fdds_factory, hybrid):
 @uusing("cuda_cc8")
 @pytest.mark.cuest
 def test_fdds_gpu_empty_and_preflight(fdds_factory):
-    obj = fdds_factory(empty=True)
-    psi4.set_options({"use_cuest": True, "cuest_gemm_min_dim": 0})
-    psi4.core.clean_timers()
-    assert not obj.form_unc_amplitude("A", .1).np.any()
-    assert all(not m.np.any() for m in obj.form_aux_matrices("A", .1).values())
-    assert obj.gpu_contraction_blocks() == 0
-    assert _timer_calls() == 0
+    for hybrid in (False, True):
+        for empty in (True, "A", "B"):
+            psi4.set_options({"use_cuest": False})
+            obj = fdds_factory(hybrid, empty=empty)
+            psi4.set_options({"use_cuest": True, "cuest_gemm_min_dim": 0})
+            psi4.core.clean_timers()
+            for monomer in ("A", "B"):
+                if empty is True or empty == monomer:
+                    assert all(not m.np.any() for m in obj.form_aux_matrices(monomer, .1).values())
+                    assert not obj.form_unc_amplitude(monomer, .1).np.any()
+            assert obj.gpu_contraction_blocks() == 0
+            assert _timer_calls() == 0
+            if empty is not True:
+                other = "B" if empty == "A" else "A"
+                assert all(np.isfinite(v).all() for v in _values(obj, hybrid, other, .1).values())
+                assert obj.gpu_contraction_blocks() > 0
+                assert _timer_calls() == 1
 
 
 @uusing("cuest")
