@@ -28,8 +28,22 @@ grep -q H200 "$out/gpu.txt"
 git -C "$root" rev-parse HEAD > "$out/commit.txt"
 source /etc/profile.d/z00_lmod_pace.sh
 module load gcc/12.3.0 cuda/12.6.1
+# Site GCC_ROOT redirects conda GCC's internal frontends to the site GCC.
+# Activation and LD_LIBRARY_PATH alone do not undo that module override.
+unset GCC_ROOT
 export LD_LIBRARY_PATH="$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 command -v nvcc
+{
+    "$env/bin/x86_64-conda-linux-gnu-cc" --version
+    "$env/bin/x86_64-conda-linux-gnu-c++" --version
+    for frontend in cc1 cc1plus; do
+        compiler="$env/bin/x86_64-conda-linux-gnu-cc"
+        [[ "$frontend" == cc1plus ]] && compiler="$env/bin/x86_64-conda-linux-gnu-c++"
+        resolved=$("$compiler" -print-prog-name="$frontend")
+        test -x "$resolved"
+        printf '%s=%s\n' "$frontend" "$resolved"
+    done
+} > "$out/compiler.txt"
 # Use installed dependencies read-only; never rebuild a historical test package.
 deps=/storage/project/r-cs207-0/awallace43/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage
 "$env/bin/cmake" -S "$root" -B "$build" -G Ninja \
