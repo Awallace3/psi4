@@ -43,7 +43,7 @@
 - Own local CPU build: `build_fdds_cpu`, dependency environment
   `/home/awallace43/miniconda3/envs/p4_ci`, Release, Ninja, `ENABLE_cuEST=OFF`,
   `ENABLE_Einsums=OFF`, `BUILD_SHARED_LIBS=ON`, 12 build workers.
-  Logs: `fdds-cpu-configure.log`, `fdds-cpu-build.log` (untracked).
+  Logs: `build_fdds_cpu/logs/fdds-cpu-{configure,build,rebuild*}.log` (untracked).
   Configure/build passed. Final command (from `build_fdds_cpu/fdds-tests-v3`):
   `python -m pytest <root>/tests/pytests/test_cuest_fdds.py <root>/tests/pytests/test_cuest_cphf.py -m 'not cuest' -q -s --junitxml=cpu.xml`.
   **23 passed, 0 failed/errors/skipped, 27 GPU tests deliberately deselected,
