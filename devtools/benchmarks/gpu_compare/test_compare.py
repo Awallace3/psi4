@@ -153,6 +153,23 @@ class CompareTests(unittest.TestCase):
                                capture_output=True, text=True)
             self.assertEqual(p.returncode, 0, p.stderr)
 
+    def test_statically_linked_cupy_runtime_identity(self):
+        class Runtime:
+            getDeviceCount = staticmethod(lambda: 1)
+            getDevice = staticmethod(lambda: 0)
+            getDeviceProperties = staticmethod(lambda _: {
+                "uuid": bytes.fromhex("951a11c240ee3fcbf71f49849e744cb1")})
+            runtimeGetVersion = staticmethod(lambda: 12080)
+        self.assertEqual(m.cuda_identity(Runtime())["uuid"],
+                         "GPU-951a11c2-40ee-3fcb-f71f-49849e744cb1")
+
+    def test_multiple_visible_gpus_are_rejected(self):
+        class Runtime:
+            getDeviceCount = staticmethod(lambda: 2)
+            getDevice = staticmethod(lambda: 0)
+        with self.assertRaises(AssertionError):
+            m.cuda_identity(Runtime())
+
 
 if __name__ == "__main__":
     unittest.main()

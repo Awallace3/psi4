@@ -93,8 +93,20 @@ def runtime_libraries():
     return sorted(paths)
 
 
-def cuda_identity():
+def cuda_identity(runtime=None):
     """Use the process's already loaded CUDA runtime, not NVML's index order."""
+    if runtime is not None:
+        # CuPy wheels can statically link cudart inside their extension, so a
+        # valid runtime need not appear as libcudart.so in /proc/self/maps.
+        count, device = runtime.getDeviceCount(), runtime.getDevice()
+        assert count == 1 and device == 0, "Exactly one visible CUDA GPU is required"
+        raw = bytes(runtime.getDeviceProperties(device)["uuid"])
+        assert len(raw) == 16, ("Invalid CUDA device UUID", raw)
+        value = raw.hex()
+        return dict(uuid="GPU-" + "-".join((value[:8], value[8:12], value[12:16],
+                    value[16:20], value[20:])), logical_device=device,
+                    visible_count=count, runtime="cupy.cuda.runtime",
+                    cuda_runtime=runtime.runtimeGetVersion())
     paths = [p for p in runtime_libraries() if "/libcudart.so" in p]
     assert len(set(paths)) == 1, ("Ambiguous CUDA runtime", paths)
     rt = ctypes.CDLL(paths[0])
@@ -244,7 +256,7 @@ def run_pyscf(a, c, atom, r):
              cupy_pool_peak_note="End-of-run pool reservation is NOT peak device memory",
              cupy_pool_reserved_bytes=int(cp.get_default_memory_pool().total_bytes()))
     assert r["converged"], "SCF did not converge"
-    r["gpu"] = cuda_identity()
+    r["gpu"] = cuda_identity(cp.cuda.runtime)
     r["effective_grid"] = dict(radial_method=str(mf.grids.radi_method),
         partition=str(mf.grids.becke_scheme), radii_adjust=str(mf.grids.radii_adjust),
         prune=str(mf.grids.prune), small_rho_cutoff=float(mf.small_rho_cutoff))
@@ -585,7 +597,7 @@ def main():
     if a.action == "device":
         import cupy
         cupy.cuda.Device(0).use()
-        print(json.dumps(cuda_identity()))
+        print(json.dumps(cuda_identity(cupy.cuda.runtime)))
         return 0
     for key, value in vars(a).items():
         if isinstance(value, Path):
