@@ -66,7 +66,7 @@ def test_fdds_native_contractions(fdds_factory, hybrid):
     obj = fdds_factory(hybrid)
     omega = .37
     q = obj.metric().np.shape[0]
-    ovq = obj.get_tensor_pqQ("arQ", (3, 7, q)).to_array()
+    ovq = obj.get_tensor_pqQ("arQ", (3, 7, q)).to_array().reshape(-1, q)
     gaps = np.linspace(.1, 1., 7)[None, :] - np.linspace(-1., -.5, 3)[:, None]
     ld = (-4. * gaps / (gaps**2 + omega**2)).reshape(-1, 1)
     expected = ovq.T @ (ovq * (ld if hybrid else -ld))
@@ -74,10 +74,10 @@ def test_fdds_native_contractions(fdds_factory, hybrid):
     np.testing.assert_allclose(got["amp"], expected, rtol=0, atol=2.e-12)
     errors = {"amp": float(np.max(np.abs(got["amp"] - expected)))}
     if hybrid:
-        x = obj.get_tensor_pqQ("XarQ", (3, 7, q)).to_array()
-        y = obj.get_tensor_pqQ("YarQ", (3, 7, q)).to_array()
-        qx = obj.get_tensor_pqQ("QXarQ", (3, 7, q)).to_array()
-        qy = obj.get_tensor_pqQ("QYarQ", (3, 7, q)).to_array()
+        x = obj.get_tensor_pqQ("XarQ", (3, 7, q)).to_array().reshape(-1, q)
+        y = obj.get_tensor_pqQ("YarQ", (3, 7, q)).to_array().reshape(-1, q)
+        qx = obj.get_tensor_pqQ("QXarQ", (3, 7, q)).to_array().reshape(-1, q)
+        qy = obj.get_tensor_pqQ("QYarQ", (3, 7, q)).to_array().reshape(-1, q)
         yl = (y - x) * (-4. / (gaps**2 + omega**2)).reshape(-1, 1)
         refs = {"K1LD": (ovq * ld).T @ (qx + qy),
                 "K2LD": (ovq * ld).T @ (qy - qx),
