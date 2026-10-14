@@ -127,7 +127,9 @@ def worker(args):
         "SAPT_DFT_GRAC_SEED_CATION": False, "SAPT_DFT_INDUCTION_TYPE": "NONE",
         "SAPT_DFT_DO_DHF": True, "SAPT_DFT_USE_EINSUMS": True,
         "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
-        "USE_CUEST": True, "CUEST_XC": True, "CUEST_SAD": True,
+        "USE_CUEST": args.variant != "cpu", "CUEST_XC": args.variant != "cpu",
+        "CUEST_SAD": args.variant != "cpu",
+        "CUEST_PCM": False,
         "CUEST_MIXED_PRECISION": False, "CUEST_XC_TIMING": False,
         "E_CONVERGENCE": 9, "D_CONVERGENCE": 8, "MAXITER": 150,
         "DFT_RADIAL_POINTS": final[0], "DFT_SPHERICAL_POINTS": final[1],
@@ -143,10 +145,15 @@ def worker(args):
                   memory=args.memory, threads=args.threads, geometry=geometry, ok=False,
                   geometry_sha256=hashlib.sha256(geometry.encode()).hexdigest(),
                   package=psi4.__file__, version=psi4.__version__, job_id=os.getenv("SLURM_JOB_ID"),
-                  backend=args.variant, scientific_commit=args.scientific_commit)
+                  backend=args.variant, scientific_commit=args.scientific_commit,
+                  pid=os.getpid(), cuda_visible_devices=os.getenv("CUDA_VISIBLE_DEVICES"))
     start = None
     try:
         psi4.set_options(opts)
+        result["effective_route_options"] = {
+            k: psi4.core.get_global_option(k) for k in ("USE_CUEST", "CUEST_XC", "CUEST_SAD", "CUEST_PCM")}
+        result["effective_scf_route_options"] = {
+            k: psi4.core.get_option("SCF", k) for k in ("USE_CUEST", "CUEST_XC", "CUEST_SAD")}
         mol = psi4.geometry(geometry)
         result["nbf"] = psi4.core.BasisSet.build(mol, "BASIS", SYSTEMS[args.system]).nbf()
         assert result["nbf"] == dict(water=48, peptide=250, nanotube=548, protein83=922)[args.system]
@@ -166,9 +173,19 @@ def worker(args):
                       timers=timers, **timer_regions(timers))
         psi4.core.close_outfile()
         text = (out / "psi4.out").read_text()
-        assert "cuESTJK: GPU-Accelerated" in text
-        assert not any(s in text for s in ("MemDFJK: Density-Fitted", "DiskDFJK: Density-Fitted"))
-        assert "SAD J/K backend: cuESTJK" in text
+        if args.variant == "cpu":
+            assert "cuESTJK: GPU-Accelerated" not in text and "SAD J/K backend: cuESTJK" not in text
+            assert not any("cuEST XC:" in k for k in timers), "CPU run used a GPU XC path"
+            assert "MemDFJK: Density-Fitted" in text, "CPU in-core DF builder not observed"
+            assert "DiskDFJK: Density-Fitted" not in text, "CPU run fell back to disk DF"
+            assert "Device memory, " not in text, "CPU run created a cuEST device workspace"
+            assert not any("cuEST" in k for k in timers), "CPU run recorded an accelerator region"
+            result["functional_separately_timed"] = False
+        else:
+            assert "cuESTJK: GPU-Accelerated" in text
+            assert not any(s in text for s in ("MemDFJK: Density-Fitted", "DiskDFJK: Density-Fitted"))
+            assert "SAD J/K backend: cuESTJK" in text
+            result["functional_separately_timed"] = True
         result["initial_iterations"] = len(re.findall(r"@\S+ iter .*XC-INITIAL", text))
         result["final_iterations"] = len(re.findall(r"@\S+ iter .*XC-FINAL", text))
         result["all_iterations"] = len(re.findall(r"@\S+ iter ", text))
@@ -181,6 +198,13 @@ def worker(args):
             result.setdefault("wall_s", time.perf_counter() - start)
     finally:
         psi4.core.close_outfile()
+        maps = Path("/proc/self/maps")
+        if maps.exists():
+            paths = {line.split()[-1] for line in maps.read_text().splitlines()
+                     if "/libxc.so" in line and line.split()[-1].startswith("/")}
+            result["mapped_libxc_sha256"] = {
+                path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+                for path in sorted(paths) if Path(path).is_file()}
         atomic(out / "result.json", result)
     return 0 if result["ok"] else 1
 
@@ -261,7 +285,7 @@ def main():
     p.add_argument("--threads", type=int, default=8)
     p.add_argument("--memory", default="112 GiB")
     p.add_argument("--case-timeout", type=float, default=900)
-    p.add_argument("--variant", choices=["host", "cuda"], required=True)
+    p.add_argument("--variant", choices=["cpu", "host", "cuda"], required=True)
     p.add_argument("--scientific-commit", required=True)
     p.add_argument("--expected-package", required=True)
     p.add_argument("--worker", action="store_true")
