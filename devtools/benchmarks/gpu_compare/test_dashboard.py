@@ -55,6 +55,23 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('font:20px/1.6', page)
         self.assertIn('font-size:17px', page)
 
+    def test_failed_grid_count_can_be_recovered_from_constructed_grid_log(self):
+        directory = self.base / "results" / "failed"
+        directory.mkdir(parents=True)
+        (directory / "pyscf.out").write_text("tot grids = 4848128\n")
+        count, source = dashboard.grid_count(
+            {"engine": "pyscf", "output": "/remote/campaign/results/failed"}, self.base)
+        self.assertEqual(count, 4848128)
+        self.assertEqual(source, "constructed grid (log)")
+
+    def test_host_zero_grid_cannot_be_recovered_as_actual_cuest_grid(self):
+        directory = self.base / "results" / "psi4"
+        directory.mkdir(parents=True)
+        (directory / "psi4.out").write_text("Total Points = 0\n")
+        count, source = dashboard.grid_count(
+            {"engine": "psi4", "output": "/remote/results/psi4"}, self.base)
+        self.assertIsNone(count)
+
 
 if __name__ == "__main__":
     unittest.main()

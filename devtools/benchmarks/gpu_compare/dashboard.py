@@ -5,9 +5,23 @@ from datetime import datetime, timezone
 import html
 import json
 from pathlib import Path
+import re
 import statistics
 
 from memory_report import campaign_rows
+
+
+def grid_count(record, base):
+    if record.get("grid_points") is not None:
+        return record["grid_points"], "worker record"
+    if record["engine"] == "pyscf" and record.get("output"):
+        # Archive paths are local; never read the recorded remote absolute path.
+        path = base / "results" / Path(record["output"]).name / "pyscf.out"
+        if path.exists():
+            counts = re.findall(r"\btot grids\s*=\s*(\d+)", path.read_text())
+            if counts:
+                return int(counts[-1]), "constructed grid (log)"
+    return None, "not exported"
 
 
 def data_for(campaigns):
@@ -36,7 +50,8 @@ def data_for(campaigns):
                 def peak(key):
                     return max((r[key] for r in observations if r[key] is not None), default=None)
                 times = [r["calculation_wall_s"] for r in good]
-                grids = sorted({r["grid_points"] for r in group if r.get("grid_points") is not None})
+                grid_info = [grid_count(r, base) for r in group]
+                grids = sorted({n for n, _ in grid_info if n is not None})
                 # No paths, geometry, environment manifests or private identifiers are published.
                 item[engine] = dict(passed=len(good), attempted=len(group),
                     calculation_s=statistics.median(times) if times else None,
@@ -44,6 +59,9 @@ def data_for(campaigns):
                     peak_rss_gib=peak("peak_rss_gib"),
                     rss_coverage=sum(r["peak_rss_gib"] is not None for r in observations),
                     grid_storage_points=grids[0] if len(grids) == 1 else None,
+                    grid_count_source=("constructed grid (log)" if any(
+                        src == "constructed grid (log)" for _, src in grid_info)
+                        else "worker record" if grids else "not exported"),
                     sampled_gpu_device_peak_gib=(peak("sampled_gpu_device_peak_mib") / 1024
                                                 if peak("sampled_gpu_device_peak_mib") is not None else None))
             comparisons.append(item)
@@ -57,7 +75,11 @@ def render(rows):
     for r in rows:
         cells = [r["basis"], r["system"], r["functional"], num(r.get("nbf"), 0)]
         p, g = r["psi4"], r["pyscf"]
-        cells += [num(p.get("grid_storage_points"), 0), num(g.get("grid_storage_points"), 0)]
+        for e in (p, g):
+            label = num(e.get("grid_storage_points"), 0)
+            if e.get("grid_count_source") == "constructed grid (log)":
+                label += "<small>constructed; log recovery</small>"
+            cells.append(label)
         status = "unmatched grids"
         if p["passed"] != p["attempted"] or g["passed"] != g["attempted"]:
             status = "failed arm"
