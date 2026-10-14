@@ -285,6 +285,38 @@ paths and GPU UUIDs are omitted. It uses the existing cuEST report style.
 The page checks for **republished snapshots** every 15 seconds; it does not
 query SLURM and is not a live cluster monitor. The current header accurately
 records that the augmented-basis allocation expired without production.
+The page defaults to dark mode with larger type and shows NBF and the recorded
+PySCF grid storage length. Actual cuEST device-grid counts are currently
+unavailable, not zero; PySCF storage counts may include zero-weight padding.
+Every historical timing ratio is explicitly provisional because the actual
+quadratures have not been matched.
+
+### Required next grid-controlled protocol
+
+Before further performance interpretation, export **both native-default**
+quadratures from the actual GPU XC paths (not an empty Psi4 host grid):
+coordinates in Bohr, total integration weights, grid options/element-level
+radial and angular rules, pruning/partition/radii conventions, stored-point
+count and nonzero-weight count. Pin raw exports and geometry with hashes.
+Compare coordinates and weights independently of point ordering, distinguishing
+zero-weight alignment padding from the effective quadrature.
+
+Then identify the smaller default by measured nonzero-weight point count and
+run both engines on that **same exported quadrature**, verifying its consumed
+coordinates/weights after any sorting or padding. Native-default comparisons
+and common-grid comparisons must remain separate, with the same basis, DF,
+precision and convergence targets. If the cuEST SDK cannot ingest an arbitrary
+external grid, matching nominal options is not an equivalent substitute.
+Report that limitation explicitly or implement/validate the required adapter.
+An export hook, if it requires a new Psi4 build, changes the scientific build
+identity and must be pinned and revalidated before a timing campaign.
+
+The installed Phoenix SDK exposes `cuestXCIntegrationGridCompute` (GPU point
+coordinates), `cuestXCIntegrationWeightCompute` (total angular × radial × Becke
+weights), and `CUEST_MOLECULARGRID_NUM_POINT`. The historical Python worker
+did not expose its opaque cuEST plan; reconstructing a different host grid would
+not be a valid audit. Export/import feasibility investigation is in progress;
+no grid-controlled campaign has been run.
 
 Regenerate and publish through the existing tailnet-only `/docs/` mount:
 

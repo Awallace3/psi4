@@ -44,6 +44,16 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn("GPU-f824", page)
         self.assertIn("failed arm", page)
         self.assertIn("not a SLURM poll", page)
+        self.assertIn("all ratios are provisional", page)
+        self.assertIn("PySCF stored grid points", page)
+        self.assertIn("Grid-controlled comparison pending", page)
+
+    def test_default_dark_theme_and_larger_type(self):
+        page = dashboard.render(dashboard.data_for([self.base]))
+        self.assertIn('<html lang="en" class="dark">', page)
+        self.assertIn('aria-pressed="true">Light theme', page)
+        self.assertIn('font:20px/1.6', page)
+        self.assertIn('font-size:17px', page)
 
 
 if __name__ == "__main__":

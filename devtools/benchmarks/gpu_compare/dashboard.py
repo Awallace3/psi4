@@ -22,6 +22,9 @@ def data_for(campaigns):
                         functional=summary["functional"], rung=summary["rung"],
                         energy_delta_eh=summary.get("energy_delta_pyscf_minus_psi4_eh"),
                         energy_review=summary.get("energy_review", False))
+            counts = sorted({r["nbf"] for r in records if r.get("nbf") is not None and
+                             (r["system"], r["functional"]) == (item["system"], item["functional"])})
+            item["nbf"] = counts[0] if len(counts) == 1 else None
             for engine in ("psi4", "pyscf"):
                 group = [r for r in records if not r["profile"] and
                          (r["system"], r["functional"], r["engine"]) ==
@@ -33,12 +36,14 @@ def data_for(campaigns):
                 def peak(key):
                     return max((r[key] for r in observations if r[key] is not None), default=None)
                 times = [r["calculation_wall_s"] for r in good]
+                grids = sorted({r["grid_points"] for r in group if r.get("grid_points") is not None})
                 # No paths, geometry, environment manifests or private identifiers are published.
                 item[engine] = dict(passed=len(good), attempted=len(group),
                     calculation_s=statistics.median(times) if times else None,
                     time_min=min(times) if times else None, time_max=max(times) if times else None,
                     peak_rss_gib=peak("peak_rss_gib"),
                     rss_coverage=sum(r["peak_rss_gib"] is not None for r in observations),
+                    grid_storage_points=grids[0] if len(grids) == 1 else None,
                     sampled_gpu_device_peak_gib=(peak("sampled_gpu_device_peak_mib") / 1024
                                                 if peak("sampled_gpu_device_peak_mib") is not None else None))
             comparisons.append(item)
@@ -50,9 +55,10 @@ def render(rows):
         return "N/A" if value is None else f"{value:.{digits}f}"
     table = []
     for r in rows:
-        cells = [r["basis"], r["system"], r["functional"]]
+        cells = [r["basis"], r["system"], r["functional"], num(r.get("nbf"), 0)]
         p, g = r["psi4"], r["pyscf"]
-        status = "paired"
+        cells += [num(p.get("grid_storage_points"), 0), num(g.get("grid_storage_points"), 0)]
+        status = "unmatched grids"
         if p["passed"] != p["attempted"] or g["passed"] != g["attempted"]:
             status = "failed arm"
         elif r["energy_review"]:
@@ -66,44 +72,54 @@ def render(rows):
         cells += [num(p["peak_rss_gib"], 3), num(g["peak_rss_gib"], 3),
                   num(p["sampled_gpu_device_peak_gib"]), num(g["sampled_gpu_device_peak_gib"])]
         cells.append("N/A" if r["energy_delta_eh"] is None else f"{r['energy_delta_eh']:+.2e}")
-        cells.append(f"<span class='{'warn' if status != 'paired' else 'ok'}'>{status}</span>")
+        cells.append(f"<span class='warn'>{status}</span>")
         table.append(f"<tr data-basis='{html.escape(r['basis'])}' data-system='{html.escape(r['system'])}'>"
                      + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    return """<!doctype html><html lang="en"><head><meta charset="utf-8">
+    return """<!doctype html><html lang="en" class="dark"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>GPU DFT comparison · timings and memory</title><style>
 :root{color-scheme:light;--page:#f3f6f6;--panel:#fff;--ink:#142731;--muted:#49616e;--line:#c5d4da;--ok:#176346;--warn:#9b283b}
 html.dark{color-scheme:dark;--page:#071014;--panel:#0d1a20;--ink:#eaf2f6;--muted:#a8bbc5;--line:#29434e;--ok:#72d7aa;--warn:#ff8fa3}
-*{box-sizing:border-box}body{background:var(--page);color:var(--ink);margin:0;font:16px/1.6 Candara,"Trebuchet MS",sans-serif}
-main{max-width:1550px;margin:auto;padding:36px 28px 70px}h1{font:clamp(36px,5vw,64px)/1.1 Georgia,serif;letter-spacing:-.035em;margin:24px 0}
-h2{font:28px Georgia,serif}header{border-bottom:2px solid var(--ink);padding-bottom:24px}.toolbar,.filters{display:flex;gap:20px;align-items:center;flex-wrap:wrap}.toolbar{justify-content:space-between}
-.eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.15em}small{display:block;font-size:11px;color:var(--muted)}
+*{box-sizing:border-box}body{background:var(--page);color:var(--ink);margin:0;font:20px/1.6 Candara,"Trebuchet MS",sans-serif}
+main{max-width:1800px;margin:auto;padding:36px 28px 70px}h1{font:clamp(44px,5vw,76px)/1.1 Georgia,serif;letter-spacing:-.035em;margin:24px 0}
+h2{font:34px Georgia,serif}header{border-bottom:2px solid var(--ink);padding-bottom:24px}.toolbar,.filters{display:flex;gap:20px;align-items:center;flex-wrap:wrap}.toolbar{justify-content:space-between}
+.eyebrow{font-size:14px;text-transform:uppercase;letter-spacing:.15em}small{display:block;font-size:14px;color:var(--muted)}
 button,select{font:inherit;padding:7px 12px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px}
-.status{border-left:4px solid var(--warn);background:var(--panel);padding:12px 18px}.metrics{display:flex;gap:32px;flex-wrap:wrap}.metrics b{display:block;font:38px Georgia,serif}
+.status{border-left:4px solid var(--warn);background:var(--panel);padding:12px 18px}.metrics{display:flex;gap:32px;flex-wrap:wrap}.metrics b{display:block;font:46px Georgia,serif}
 section{padding:22px 0;border-bottom:1px solid var(--line)}.scroll{overflow:auto;margin-top:20px}
-table{border-collapse:collapse;width:100%;background:var(--panel);font-size:13px}th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}th{color:var(--muted);font-size:11px}td:nth-child(n+4){font-family:Consolas,monospace}.ok{color:var(--ok)}.warn{color:var(--warn)}li{margin:8px 0}
+table{border-collapse:collapse;width:100%;background:var(--panel);font-size:17px}th,td{padding:13px 12px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}th{color:var(--muted);font-size:14px}td:nth-child(n+4){font-family:Consolas,monospace}.ok{color:var(--ok)}.warn{color:var(--warn)}li{margin:8px 0}
 @media(max-width:700px){main{padding:22px 16px}.metrics{gap:20px}}@media print{button,.filters{display:none}}
 </style></head><body><main><header><div class="toolbar"><span class="eyebrow">Phoenix · H200 · GPU4PySCF vs Psi4 cuEST + CUDA LibXC</span>
-<button id="theme">Dark theme</button></div><h1>Timing is only half<br>the comparison.</h1>
+<button id="theme" aria-pressed="true">Light theme</button></div><h1>Timing is only half<br>the comparison.</h1>
 <p>Calculation wall time, resident CPU memory, and observed GPU memory across cc-pVDZ and aug-cc-pVTZ.</p>
 <p class="status"><b>No allocation currently active.</b> cc-pVDZ production is complete.
 aug-cc-pVTZ stopped after preflight: Protein157/Psi4 exceeded H200 memory;
 Protein83/GPU4PySCF ωB97X failed in range-separated DF batching.
 The six-hour reservation expired; augmented-basis production repeats were never launched.</p>
+<p class="status"><b>Grid-controlled comparison pending.</b> Matching nominal 99×590 options did not
+establish identical coordinates or weights. Existing timing ratios are exploratory, not
+apples-to-apples grid-controlled performance results. Native-default grids and a shared smaller-default
+grid still need explicit export and testing.</p>
 <div class="metrics"><div><b>120 / 120</b><small>cc-pVDZ production workers passed</small></div>
 <div><b>12 / 14</b><small>aug-cc-pVTZ preflight workers passed</small></div>
 <div><b>133 / 134</b><small>archived workers with recorded peak RSS</small></div></div>
 <p><small>Published """ + stamp + """ · <span id="refresh">Checks for republished page snapshots every 15 seconds; does not poll SLURM.</span></small></p></header>
 <section><h2>Per-functional results</h2><p>Seconds; memory in GiB. cc-pVDZ: median of three independent timing runs.
 aug-cc-pVTZ: <b>one preflight run per arm</b>. Profiles excluded.
-Ratio = GPU4PySCF/Psi4 time (&gt;1 favors Psi4); review-flagged ratios are provisional.</p>
+Ratio = GPU4PySCF/Psi4 time (&gt;1 favors Psi4); <b>all ratios are provisional because actual grids were not matched.</b></p>
 <div class="filters"><label>Basis <select id="basis"><option value="all">Both bases</option><option>cc-pvdz</option><option>aug-cc-pvtz</option></select></label>
 <label>System <select id="system"><option value="all">All systems</option><option>peptide</option><option>nanotube</option><option>protein83</option><option>protein157</option></select></label></div>
-<div class="scroll"><table><thead><tr><th>Basis</th><th>System</th><th>Functional</th><th>Psi4 / s</th><th>GPU4PySCF / s</th>
+<div class="scroll"><table><thead><tr><th>Basis</th><th>System</th><th>Functional</th><th>NBF</th>
+<th>Psi4 grid points</th><th>PySCF stored grid points</th><th>Psi4 / s</th><th>GPU4PySCF / s</th>
 <th>Py/P4 ratio</th><th>Psi4 RSS</th><th>PySCF RSS</th><th>Psi4 GPU*</th><th>PySCF GPU*</th><th>ΔE Py−P4 / Eh</th><th>Review status</th></tr></thead><tbody>""" + "".join(table) + """</tbody></table></div>
 <p><small>* Largest 1-second whole-device observation during worker intervals—not exact process allocation peak.
 RSS = largest worker peak resident set across unprofiled attempts. N/A is missing data, not zero.</small></p></section>
+<section><h2>Grid point-count audit</h2><p>PySCF's recorded count is the stored coordinate/weight-array
+length and can include zero-weight alignment padding; it is not yet a nonzero-weight count.
+Psi4's actual cuEST device-grid count was not exported in these worker records.
+The host-side printed “Total Points = 0” is <b>not</b> an empty integration grid and must not be used
+as its grid count. Unavailable values are N/A. Nominal 99×590×atoms is not substituted for actual counts.</p></section>
 <section><h2>Failures and numerical review</h2><ul>
 <li><b>Protein157/Psi4, aug-cc-pVTZ/PBE:</b> device-buffer request <b>364.065 GiB</b>, free 138.043 GiB.
 Failed during integral setup before RSS serialization. The request is not an allocated GPU peak; recorded RSS is unavailable.</li>
