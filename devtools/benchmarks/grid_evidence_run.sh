@@ -14,10 +14,10 @@ for pair in "$root:$harness_pin" "$science:$science_pin"; do
     test "$(git -C "${pair%:*}" rev-parse HEAD)" = "${pair##*:}"
     test -z "$(git -C "${pair%:*}" status --porcelain --untracked-files=no)"
 done
-test -f "$validation/metadata/COMPLETED"
-test -f "$validation/host/VERIFIED"
-test -f "$validation/cuda/VERIFIED"
 mkdir -p "$out"
+"$env/bin/python" "$root/devtools/benchmarks/grid_workload_gate.py" \
+    --validation "$validation" --science "$science" --pin "$science_pin" \
+    --output "$out/supported-workload.json"
 export PATH="$env/bin:$PATH" PYTHONNOUSERSITE=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS" OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"

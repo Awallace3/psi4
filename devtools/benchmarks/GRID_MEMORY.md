@@ -211,8 +211,17 @@ accounting, nonzero child exits, and GPU host-placeholder metadata. The earlier
 recorded boundaries, including JK initialization and both initial/final
 `form_G` states. This validates the hooks, not GPU accounting.
 
-`grid_memory_run.sh` requires both validated backend receipts and matching
-core hashes. It runs one diagnostic per grid arm for water, nanotube and
+`grid_memory_run.sh` requires the separate induction-NONE scoped gate and
+matching core hashes. The original validation14044088 remains **FAILED**:
+both 36-test GPU suites and the ordinary/iterative-GRAC water sweeps passed,
+but all full-SAPT controls reached the explicit unsupported cuEST XC
+`compute_Vx`/CPKS response guard. No full-SAPT validation is claimed.
+`grid_workload_gate.py` recomputes switching and 75×302 accuracy from raw
+components, rejects missing/skipped tests or any unrelated full-SAPT failure,
+and records input hashes and this exclusion in a new receipt. It never
+changes the original job's artifacts or writes a false COMPLETED marker.
+
+The campaign runs one diagnostic per grid arm for water, nanotube and
 protein83, separately for host/CUDA LibXC (30 fresh processes). Water gates
 the larger cases, and missing grid/boundary metadata is an error. Explicitly
 unavailable GPU point counts are accepted; host point counts must be positive.
