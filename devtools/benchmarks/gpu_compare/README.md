@@ -272,3 +272,34 @@ RSS coverage; JSON/CSV retain all 134 workers including profiles and failures.
 The main cc-pVDZ renderer also displays per-functional CPU/GPU memory.
 Protein157/Psi4's 364.065-GiB failed allocation request is not an observed
 allocated GPU peak.
+
+## Tailscale results page
+
+Reusable dashboard:
+https://cos-4a16505.tail7d58ac.ts.net/docs/plots/gpu-dft-comparison/gpu-dft-results/results.html
+
+It consolidates both bases' per-functional timings, worker peak RSS and
+sampled GPU memory, plus failed arms and numerical review flags. Only derived
+share-safe values are published; raw geometries, environment manifests, machine
+paths and GPU UUIDs are omitted. It uses the existing cuEST report style.
+The page checks for **republished snapshots** every 15 seconds; it does not
+query SLURM and is not a live cluster monitor. The current header accurately
+records that the augmented-basis allocation expired without production.
+
+Regenerate and publish through the existing tailnet-only `/docs/` mount:
+
+```bash
+python3 devtools/benchmarks/gpu_compare/dashboard.py \
+  --campaign .pi/gpu_compare/archive/20261013-inferno/production/campaign \
+  --campaign .pi/gpu_compare/archive/20261013-aug-cc-pvtz/peptide_pbe/campaign \
+  --campaign .pi/gpu_compare/archive/20261013-aug-cc-pvtz/protein83_all/campaign \
+  --campaign .pi/gpu_compare/archive/20261013-aug-cc-pvtz/protein157_pbe/campaign \
+  --output .lavish/gpu-dft-results/results.html
+python3 /home/awallace43/.pi/agent/skills/python-plot-tailscale/scripts/plot_gallery.py \
+  --name gpu-dft-comparison --src .lavish/gpu-dft-results --glob '*.html' \
+  --title 'GPU DFT comparison: timing and memory'
+```
+
+When adding a new campaign, update the dashboard's status/count header too;
+the current header describes these four fixed archived campaign directories.
+Do not change tailscale serving/Funnel settings to publish updates.
