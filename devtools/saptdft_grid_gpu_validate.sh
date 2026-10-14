@@ -72,6 +72,11 @@ fi
     "-DCUDAToolkit_ROOT=$software/toolchains/cuda13" \
     "-DCMAKE_C_FLAGS=-I$software/toolchains/cuda13/targets/x86_64-linux/include" \
     "-DCMAKE_CXX_FLAGS=-I$software/toolchains/cuda13/targets/x86_64-linux/include" \
+    "-DCMAKE_BUILD_RPATH=$libxc/lib64;$env/lib;$deps/lib" \
+    "-DCMAKE_INSTALL_RPATH=$libxc/lib64;$env/lib;$deps/lib" \
+    -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON \
+    -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--enable-new-dtags \
+    -DCMAKE_MODULE_LINKER_FLAGS=-Wl,--enable-new-dtags \
     "-DCMAKE_PREFIX_PATH=$libxc;$env;$deps" \
     "-DPython_EXECUTABLE=$env/bin/python" \
     "-DLAPACK_LIBRARIES=$env/lib/libmkl_rt.so" "-DLAPACK_INCLUDE_DIRS=$env/include" \
