@@ -1,5 +1,6 @@
 """Real blocked FDDS contractions; no SCF/GPU-JK differences in the fixtures."""
 import time
+import math
 
 import numpy as np
 import pytest
@@ -64,6 +65,47 @@ def _values(obj, hybrid, monomer, omega):
 def _timer_calls():
     return sum(v["n_calls"] for k, v in psi4.core.get_timer_dict().items()
                if "cuEST FDDS: contractions" in k)
+
+def _contribution_budget(naux, dimensions, hybrid):
+    """Small host budget; predict whole-occupied blocking before device limits."""
+    fixed = {}
+    per_occ = {}
+    for monomer, (o, v) in dimensions.items():
+        fixed[monomer] = (2 * o * v + 6 * naux**2) if hybrid else (o * v + naux**2)
+        per_occ[monomer] = (7 if hybrid else 1) * v * naux
+    # Keep B's 2+1 occupied split, but also satisfy each monomer's preflight:
+    # uncoupled requires TWO q*v blocks even when A has only two occupied rows;
+    # hybrid requires one seven-buffer block. Unequal uncoupled A is one block.
+    minimum = max(fixed[m] + (1 if hybrid else 2) * per_occ[m] for m in dimensions)
+    doubles = max(fixed["B"] + 2 * per_occ["B"], minimum) + 1
+    memory_bytes = math.ceil(doubles * 8 / .8)
+    available = int(.8 * (memory_bytes // 8))
+    blocks = {}
+    for monomer, (o, _) in dimensions.items():
+        block_size = min(o, (available - fixed[monomer]) // per_occ[monomer])
+        blocks[monomer] = math.ceil(o / block_size)
+    return memory_bytes, blocks
+
+
+@pytest.mark.parametrize("hybrid", [False, True])
+@pytest.mark.parametrize("occupied", [(3, 3), (2, 3)], ids=["equal", "unequal"])
+def test_fdds_contribution_fixture_budget(fdds_factory, hybrid, occupied):
+    """The GPU comparison's CPU reference must fit both real monomer shapes."""
+    obj = fdds_factory(hybrid, occupied=occupied)
+    q = obj.metric().np.shape[0]
+    memory_bytes, blocks = _contribution_budget(q, fdds_factory.dimensions, hybrid)
+    psi4.core.set_memory_bytes(memory_bytes)
+    for monomer in ("A", "B"):
+        got = _values(obj, hybrid, monomer, .37)
+        refs = _reference_contractions(obj, hybrid, monomer,
+                                       fdds_factory.dimensions[monomer],
+                                       fdds_factory.inputs[2], .37)
+        for name in refs:
+            np.testing.assert_allclose(got[name], refs[name], rtol=0,
+                                       atol=2.e-12 if name == "amp" else 2.e-11)
+    assert blocks == ({"A": 1, "B": 2} if occupied == (2, 3) and not hybrid
+                      else {"A": 2, "B": 2})
+    assert obj.gpu_contraction_blocks() == 0
 
 
 def _reference_contractions(obj, hybrid, monomer, dimensions, cache, omega):
@@ -243,13 +285,11 @@ def test_fdds_integrated_native_energy(fdds_factory, hybrid, occupied):
 @pytest.mark.parametrize("occupied", [(3, 3), (2, 3)], ids=["equal", "unequal"])
 def test_fdds_gpu_contributions(fdds_factory, hybrid, occupied):
     obj = fdds_factory(hybrid, occupied=occupied)
-    # Force B's 2+1 occupied split, including a partial tail. Unequal A uses
-    # 1+1 blocks. Host/GPU share the budget, applied only after DF setup.
-    q, v, o = 10, 7, 3
-    fixed = 2 * o * v + 6 * q * q if hybrid else o * v + q * q
-    per_occ = 7 * v * q if hybrid else v * q
-    psi4.core.set_memory_bytes(int((fixed + 2 * per_occ + 1) * 8 / .8))
-    ref = {(m, w): _values(obj, hybrid, m, w) for m in ("A", "B") for w in (.0, .37, 2.)}
+    q = obj.metric().np.shape[0]
+    memory_bytes, blocks = _contribution_budget(q, fdds_factory.dimensions, hybrid)
+    psi4.core.set_memory_bytes(memory_bytes)
+    frequencies = (.0, .37, 2.)
+    ref = {(m, w): _values(obj, hybrid, m, w) for m in ("A", "B") for w in frequencies}
     for enabled, threshold in ((True, 10**9), (False, 0), (True, 0)):
         psi4.set_options({"use_cuest": enabled, "cuest_gemm_min_dim": threshold})
         psi4.core.clean_timers()
@@ -263,7 +303,8 @@ def test_fdds_gpu_contributions(fdds_factory, hybrid, occupied):
                 errors[k] = max(errors[k], float(np.max(np.abs(got[k] - expected[k]))))
         elapsed = time.perf_counter() - start
         routed = enabled and threshold == 0
-        assert obj.gpu_contraction_blocks() - before == (12 if routed else 0)
+        assert obj.gpu_contraction_blocks() - before == (sum(blocks.values()) * len(frequencies)
+                                                        if routed else 0)
         assert _timer_calls() == (6 if routed else 0)
         print(f"FDDS hybrid={hybrid} occupied={occupied} enabled={enabled} threshold={threshold} elapsed={elapsed:.6f}s "
               f"max_abs_errors={errors}")

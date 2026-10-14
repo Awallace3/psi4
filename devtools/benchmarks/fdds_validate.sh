@@ -107,7 +107,7 @@ from xml.etree import ElementTree
 import json
 suite = ElementTree.parse("fdds.xml").find("testsuite")
 counts = dict(suite.attrib)
-assert int(suite.get("tests")) == 52, counts
+assert int(suite.get("tests")) == 56, counts
 assert all(int(suite.get(k, "0")) == 0 for k in ("errors", "failures", "skipped")), counts
 Path("VERIFIED.json").write_text(json.dumps(counts, indent=2) + "\n")
 print(json.dumps(counts, indent=2))

@@ -1,5 +1,27 @@
 # FDDS cuEST implementation handoff
 
+## Confirmed fixture correction (CPU evidence; GPU diagnosis pending)
+
+- Local direct replay of the original unequal/nonhybrid test stopped in
+  CPU reference construction with the FDDS host-memory exception, before
+  any GPU comparison. This independently confirms the B-only-budget defect:
+  262 available doubles versus A's required 276. Evidence
+  `build_fdds_cpu/diagnosis-local/fixture-budget-red.log`.
+- New real-interface regression first went red (**2 passed/1 failed**, fail-fast,
+  1.65 s), then all four equal/unequal nonhybrid/hybrid cases passed
+  (**4 passed, zero errors/failures/skips**, 1.581 s) after the fixture fix.
+  Evidence `build_fdds_cpu/diagnosis-local/budget-{red,green}.{log,xml}`.
+- Comparison budget now satisfies both monomer preflights and preserves B's
+  two-block partial tail. Block assertions derive from monomer dimensions and
+  the host occupied-block contract: unequal nonhybrid is **9** GPU blocks over
+  three frequencies, not 12; other cases remain 12. Numerical tolerances
+  unchanged. New four-case native budget regression also checks independent
+  contraction references; prospective full GPU suite expands to **56**.
+- Frozen diagnostic job14006185 still uses original source/tests to obtain the
+  requested GPU traceback/GDB stack; it is not repointed to these changes.
+  Native crash cause remains unknown, no full GPU rerun submitted, and no
+  diagnosis-complete marker or full-GPU pass claimed yet.
+
 ## Focused diagnostic allocation (pending)
 
 - Authorized one short explicit free-embers job **14006185**, H200/4 CPUs/
