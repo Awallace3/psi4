@@ -23,9 +23,13 @@ TMPDIR=$(mktemp -d "$TMPDIR/grid-$variant-$SLURM_JOB_ID.XXXXXX")
 export TMPDIR SCRATCH="$TMPDIR" PSI_SCRATCH="$TMPDIR"
 source /etc/profile.d/z00_lmod_pace.sh
 module load gcc/12.3.0 cuda/12.6.1
-unset GCC_ROOT
+# The CUDA12 module injects CPATH. GCC demotes an -Icuda13 directory that
+# duplicates -isystem cuda13, so CPATH silently wins despite CUDAToolkit_ROOT.
+# Compiler and dependency paths below are explicit; do not inherit site headers.
+unset GCC_ROOT CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH LIBRARY_PATH
 deps=/storage/project/r-cs207-0/awallace43/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage
 software=/storage/project/r-cs207-0/awallace43/software
+export CUDA_HOME="$software/toolchains/cuda13" CUDA_PATH="$software/toolchains/cuda13"
 libxc="$env"
 cc="$env/bin/x86_64-conda-linux-gnu-cc"
 cxx="$env/bin/x86_64-conda-linux-gnu-c++"
@@ -66,17 +70,23 @@ else
     test ! -e "$build/CMakeCache.txt"
     printf '%s\n' "$pin" > "$build/grid-commit.txt"
 fi
+inner="$build/psi4-core-prefix/src/psi4-core-build"
+# This recovery reuses only its own terminal build. Gate the existing effective
+# include order under the *same module environment* before another full build.
+# Fresh builds instead run this gate after generating compile_commands below.
+controller=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if [[ -f "$inner/compile_commands.json" ]]; then
+    "$env/bin/python" "$controller/saptdft_cuda_abi_probe.py" \
+        --compile-database "$inner/compile_commands.json" --runtime "$env/lib/libcudart.so" \
+        --output "$out/abi-before-build" > "$out/abi-before-build.log" 2>&1
+fi
 "$env/bin/cmake" -S "$root" -B "$build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     "-DCMAKE_C_COMPILER=$cc" "-DCMAKE_CXX_COMPILER=$cxx" \
     "-DCUDAToolkit_ROOT=$software/toolchains/cuda13" \
-    "-DCMAKE_C_FLAGS=-I$software/toolchains/cuda13/targets/x86_64-linux/include" \
-    "-DCMAKE_CXX_FLAGS=-I$software/toolchains/cuda13/targets/x86_64-linux/include" \
-    "-DCMAKE_BUILD_RPATH=$libxc/lib64;$env/lib;$deps/lib" \
-    "-DCMAKE_INSTALL_RPATH=$libxc/lib64;$env/lib;$deps/lib" \
-    -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON \
+    "-DCMAKE_C_FLAGS=-I$software/toolchains/cuda13/targets/x86_64-linux/include -DPSI4_CUDA13_HEADER_ENV=1" \
+    "-DCMAKE_CXX_FLAGS=-I$software/toolchains/cuda13/targets/x86_64-linux/include -DPSI4_CUDA13_HEADER_ENV=1" \
     -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--enable-new-dtags \
-    -DCMAKE_MODULE_LINKER_FLAGS=-Wl,--enable-new-dtags \
     "-DCMAKE_PREFIX_PATH=$libxc;$env;$deps" \
     "-DPython_EXECUTABLE=$env/bin/python" \
     "-DLAPACK_LIBRARIES=$env/lib/libmkl_rt.so" "-DLAPACK_INCLUDE_DIRS=$env/include" \
@@ -89,6 +99,9 @@ fi
     -DCMAKE_INSIST_FIND_PACKAGE_cuEST=ON -Dpsi4_CMAKE_UNITY_BUILD=ON \
     "${cuda_args[@]}" > "$out/configure.log" 2>&1
 "$env/bin/cmake" --build "$build" -j "$OMP_NUM_THREADS" > "$out/build.log" 2>&1
+"$env/bin/python" "$controller/saptdft_cuda_abi_probe.py" \
+    --compile-database "$inner/compile_commands.json" --runtime "$env/lib/libcudart.so" \
+    --output "$out/abi-after-build" > "$out/abi-after-build.log" 2>&1
 # A CUDA 12 header can otherwise silently compile against a CUDA 13 runtime.
 # The latter no longer exports cudaGetDeviceProperties_v2. Test before import.
 if readelf --dyn-syms --wide "$build"/stage/lib/psi4/core*.so | grep ' UND cudaGetDeviceProperties_v2'; then
