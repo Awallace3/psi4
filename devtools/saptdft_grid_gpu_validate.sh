@@ -146,7 +146,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 suite = ElementTree.parse("regressions.xml").find("testsuite")
 counts = dict(suite.attrib)
-assert int(suite.get("tests")) == 34, counts
+assert int(suite.get("tests")) == 36, counts
 assert all(int(suite.get(k, "0")) == 0 for k in ("errors", "failures", "skipped")), counts
 Path("REGRESSIONS_VERIFIED.json").write_text(json.dumps(counts, indent=2) + "\n")
 PY

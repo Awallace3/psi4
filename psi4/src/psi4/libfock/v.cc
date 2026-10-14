@@ -4594,57 +4594,34 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
         // only the first irrep block for a symmetry-adapted Va_/Vb_.
         assert (nbf == nbf_);
 
-        XC_CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
-            cuest_handle,
-            cuest_xcint_plan_,
-            ansatz_type,
-            density_compute_parameters,
-            &variable_buffersize_descriptor,
-            &temporary_workspace_descriptor,
-            d_Cocc_noccs_[0],
-            d_Coccs_AO_,
-            d_rho_a
-            ));
-        temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
-        XC_CHECK_CUEST(cuestXCDensityCompute(
-            cuest_handle,
-            cuest_xcint_plan_,
-            ansatz_type,
-            density_compute_parameters,
-            &variable_buffersize_descriptor,
-            temporary_workspace,
-            d_Cocc_noccs_[0],
-            d_Coccs_AO_,
-            d_rho_a
-            ));
-        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
-        temporary_workspace = nullptr;
-
-        XC_CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
-            cuest_handle,
-            cuest_xcint_plan_,
-            ansatz_type,
-            density_compute_parameters,
-            &variable_buffersize_descriptor,
-            &temporary_workspace_descriptor,
-            d_Cocc_noccs_[1],
-            d_Coccs_AO_ + d_Cocc_noccs_[0] * nbf,
-            d_rho_b
-            ));
-        temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
-        XC_CHECK_CUEST(cuestXCDensityCompute(
-            cuest_handle,
-            cuest_xcint_plan_,
-            ansatz_type,
-            density_compute_parameters,
-            &variable_buffersize_descriptor,
-            temporary_workspace,
-            d_Cocc_noccs_[1],
-            d_Coccs_AO_ + d_Cocc_noccs_[0] * nbf,
-            d_rho_b
-            ));
-        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
-        temporary_workspace = nullptr;
+        double* spin_densities[] = {d_rho_a, d_rho_b};
+        uint64_t occupied_offset = 0;
+        for (size_t spin = 0; spin < 2; ++spin) {
+            const uint64_t nocc = d_Cocc_noccs_[spin];
+            if (nocc == 0) {
+                // cuEST rejects a zero-column coefficient matrix. An empty
+                // spin channel has exactly zero density and all derivatives,
+                // including tau; do not ask the library to collocate it.
+                if (XC_DEVICE_CALL(cudaMemset(spin_densities[spin], 0,
+                                               npoints * ncomponents * sizeof(double))) != cudaSuccess) {
+                    throw PSIEXCEPTION("cudaMemset failed for empty spin density in UV::compute_V");
+                }
+            } else {
+                double* coefficients = d_Coccs_AO_ + occupied_offset;
+                XC_CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
+                    cuest_handle, cuest_xcint_plan_, ansatz_type, density_compute_parameters,
+                    &variable_buffersize_descriptor, &temporary_workspace_descriptor,
+                    nocc, coefficients, spin_densities[spin]));
+                temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+                XC_CHECK_CUEST(cuestXCDensityCompute(
+                    cuest_handle, cuest_xcint_plan_, ansatz_type, density_compute_parameters,
+                    &variable_buffersize_descriptor, temporary_workspace,
+                    nocc, coefficients, spin_densities[spin]));
+                XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
+                temporary_workspace = nullptr;
+            }
+            occupied_offset += nocc * nbf;
+        }
         XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCDENSITYCOMPUTE_PARAMETERS, density_compute_parameters));
 
         double* d_Vxc_grid_a = nullptr;

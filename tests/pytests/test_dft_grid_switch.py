@@ -226,14 +226,17 @@ def test_cuest_switching_and_microtiming(grac):
 @pytest.mark.parametrize("postscf", [False, True])
 def test_cuest_vv10_survives_switch(postscf):
     options(scf_type="df", use_cuest=True, cuest_xc=True, cuest_mixed_precision=False,
-            dft_vv10_postscf=postscf, e_convergence=12, d_convergence=10)
+            dft_vv10_postscf=postscf, e_convergence=12, d_convergence=10,
+            cuest_xc_timing=True)
     mol = psi4.geometry(WATER)
     expected = psi4.energy("b97m-v", molecule=mol)
-    options(dft_radial_points_initial=35, dft_spherical_points_initial=110,
+    # options() defaults to PK: explicitly preserve the same GPU DF builder.
+    options(scf_type="df", dft_radial_points_initial=35, dft_spherical_points_initial=110,
             e_convergence=12, d_convergence=10, cuest_xc_timing=True)
     actual, wfn = psi4.energy("b97m-v", molecule=mol, return_wfn=True)
     assert actual == pytest.approx(expected, abs=2.e-9)
     assert not wfn.V_potential().initial_grid()
+    assert psi4.core.get_option("SCF", "SCF_TYPE") == "DF"
     assert wfn.V_potential().quadrature_values()["VV10"] != 0.0
     assert wfn.variable("SCF DFT FINAL GRID ITERATIONS") >= 1
     paths = psi4.core.get_timer_dict()
@@ -261,3 +264,23 @@ def test_cuest_other_rungs_match_fixed_gpu_grid(method, reference, geometry):
     assert actual == pytest.approx(expected, abs=2.e-9)
     assert wfn.variable("SCF DFT FINAL GRID ITERATIONS") >= 1
     assert not wfn.V_potential().initial_grid()
+
+
+@pytest.mark.cuest
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.parametrize("method", ["pbe", "tpss"])
+def test_cuest_empty_spin_density_all_components(method):
+    """Zero the empty spin's gradient/tau as well as its LDA density."""
+    options(reference="uks", scf_type="df", use_cuest=True, cuest_xc=True,
+            cuest_mixed_precision=False, cuest_xc_timing=True)
+    mol = psi4.geometry("0 2\nH 0 0 0\nsymmetry c1")
+    expected = psi4.energy(method, molecule=mol)
+    options(reference="uks", scf_type="df",
+            dft_radial_points_initial=35, dft_spherical_points_initial=110)
+    actual, wfn = psi4.energy(method, molecule=mol, return_wfn=True)
+    assert actual == pytest.approx(expected, abs=2.e-9)
+    quadrature = wfn.V_potential().quadrature_values()
+    assert quadrature["RHO_A"] > 0.0
+    assert quadrature["RHO_B"] == pytest.approx(0.0, abs=1.e-14)
+    assert wfn.variable("SCF DFT FINAL GRID ITERATIONS") >= 1
