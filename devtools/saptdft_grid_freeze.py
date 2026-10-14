@@ -34,6 +34,9 @@ def main():
     parser.add_argument("--branch", required=True)
     parser.add_argument("--worktree", required=True)
     parser.add_argument("--manifest", required=True)
+    parser.add_argument("--base", help="Optional checkpoint parent; original HEAD still remains untouched")
+    parser.add_argument("--include", action="append", default=[], help="Additional explicit runtime/input files")
+    parser.add_argument("--message", default="Checkpoint opt-in XC grid switching and diagnostic microtiming")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     worktree = Path(args.worktree).resolve()
@@ -61,15 +64,15 @@ def main():
                     status=git("status", "--porcelain"))
 
     before = state()
+    base = git("rev-parse", args.base or before["head"])
     with tempfile.TemporaryDirectory(prefix="psi4-grid-freeze-") as tmp:
         env = dict(os.environ, GIT_INDEX_FILE=str(Path(tmp) / "index"))
-        git("read-tree", before["head"], env=env)
+        git("read-tree", base, env=env)
         git("add", "-u", env=env)
-        git("add", "-f", "--", *EXTRA_FILES, env=env)
+        git("add", "-f", "--", *EXTRA_FILES, *args.include, env=env)
         tree = git("write-tree", env=env)
-        files = git("diff", "--name-only", "--cached", before["head"], env=env).splitlines()
-        pin = git("commit-tree", tree, "-p", before["head"], "-m",
-                  "Checkpoint opt-in XC grid switching and diagnostic microtiming", env=env)
+        files = git("diff", "--name-only", "--cached", base, env=env).splitlines()
+        pin = git("commit-tree", tree, "-p", base, "-m", args.message, env=env)
     assert state() == before, "Source worktree changed while freezing; do not publish"
     # All-zero expected old object atomically refuses an existing destination.
     git("update-ref", ref, pin, "0" * len(pin))
@@ -78,7 +81,7 @@ def main():
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(json.dumps(dict(
         source=str(root), worktree=str(worktree), branch=args.branch,
-        base_commit=before["head"], commit=pin, tree=tree,
+        base_commit=base, commit=pin, tree=tree,
         source_state=before, checkpoint_files=files,
         excluded_untracked=["cphf-check.md", "mgga-check.md"],
         preserved_source_state=True,
