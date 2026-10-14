@@ -69,6 +69,9 @@ fi
 "$env/bin/cmake" -S "$root" -B "$build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     "-DCMAKE_C_COMPILER=$cc" "-DCMAKE_CXX_COMPILER=$cxx" \
+    "-DCUDAToolkit_ROOT=$software/toolchains/cuda13" \
+    "-DCMAKE_C_FLAGS=-I$software/toolchains/cuda13/targets/x86_64-linux/include" \
+    "-DCMAKE_CXX_FLAGS=-I$software/toolchains/cuda13/targets/x86_64-linux/include" \
     "-DCMAKE_PREFIX_PATH=$libxc;$env;$deps" \
     "-DPython_EXECUTABLE=$env/bin/python" \
     "-DLAPACK_LIBRARIES=$env/lib/libmkl_rt.so" "-DLAPACK_INCLUDE_DIRS=$env/include" \
@@ -81,6 +84,12 @@ fi
     -DCMAKE_INSIST_FIND_PACKAGE_cuEST=ON -Dpsi4_CMAKE_UNITY_BUILD=ON \
     "${cuda_args[@]}" > "$out/configure.log" 2>&1
 "$env/bin/cmake" --build "$build" -j "$OMP_NUM_THREADS" > "$out/build.log" 2>&1
+# A CUDA 12 header can otherwise silently compile against a CUDA 13 runtime.
+# The latter no longer exports cudaGetDeviceProperties_v2. Test before import.
+if readelf --dyn-syms --wide "$build"/stage/lib/psi4/core*.so | grep ' UND cudaGetDeviceProperties_v2'; then
+    echo 'CUDA header/runtime mismatch: core still requires the CUDA 12 device-properties ABI' >&2
+    exit 1
+fi
 eval "$("$build/stage/bin/psi4" --psiapi)"
 export EXPECTED_PSI4_PACKAGE="$build/stage/lib/psi4"
 export CUEST_DEPENDENCY_ENV="$env" EXPECTED_LIBXC_PREFIX="$libxc" GRID_VARIANT="$variant"
