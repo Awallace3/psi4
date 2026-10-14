@@ -94,6 +94,46 @@ class CompareTests(unittest.TestCase):
             p.write_text(json.dumps(dict(engine="psi4", ok=False)))
             self.assertFalse(m.load_result(p, dict(engine="pyscf"))["ok"])
 
+    def test_cuda_major_and_mixed_runtime_rejected(self):
+        for engine, major in (("psi4", 13), ("pyscf", 12)):
+            record = dict(engine=engine, gpu={"cuda_runtime": major * 1000 + 60},
+                          runtime_libraries=[f"/cuda/libcudart.so.{major}.0"])
+            m.validate_cuda_route(record)
+            with self.assertRaises(RuntimeError):
+                m.validate_cuda_route(dict(record, gpu={"cuda_runtime": (25-major) * 1000}))
+            with self.assertRaises(RuntimeError):
+                m.validate_cuda_route(dict(record, runtime_libraries=["/cuda/libcudart.so.11"]))
+
+    def test_observer_entry_interrupt_reaps_spawned_supervisor(self):
+        procs = []
+        popen = subprocess.Popen
+        def spawn(*args, **kwargs):
+            proc = popen(*args, **kwargs)
+            procs.append(proc)
+            return proc
+        observer = SimpleNamespace(
+            __enter__=None, summary=lambda: {"peak_rss_kib": None})
+        class BrokenObserver:
+            exited = False
+            def __enter__(self):
+                raise KeyboardInterrupt("TERM during observer entry")
+            def __exit__(self, *args):
+                self.exited = True
+            def summary(self):
+                return {"peak_rss_kib": None}
+        observer = BrokenObserver()
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+                m.subprocess, "Popen", side_effect=spawn), patch.object(
+                m, "MemoryMonitor", return_value=observer):
+            record, interrupted = m.observed_worker(
+                [sys.executable, "-c", "import time; time.sleep(60)"], os.environ.copy(),
+                Path(directory), "signal-window", {"engine": "psi4"}, "GPU-unused", 120,
+                Path(sys.executable))
+        self.assertIsInstance(interrupted, KeyboardInterrupt)
+        self.assertTrue(observer.exited)
+        self.assertTrue(all(proc.poll() is not None for proc in procs))
+        self.assertFalse(record["ok"])
+
     def test_energy_review_is_separate(self):
         row = self.row([self.record("psi4"), self.record("pyscf", energy_hartree=-99)])
         self.assertTrue(row["complete"])
@@ -205,6 +245,18 @@ class CompareTests(unittest.TestCase):
         self.assertTrue(row["comparison_eligible"])
         self.assertEqual(m.expected_nbf(self.c, "protein157"), 5382)
 
+    def test_cc_pvtz_basis_count_and_ratio(self):
+        self.c["basis"] = "cc-pvtz"
+        row = self.row([self.record(e, nbf=496) for e in m.ENGINES])
+        self.assertTrue(row["comparison_eligible"])
+        self.assertEqual(m.expected_nbf(self.c, "protein83"), 1786)
+        self.assertEqual(m.expected_nbf(self.c, "protein157"), 3430)
+
+    def test_shared_cuest_preserves_native_psi_grid_construction(self):
+        self.c["grid_mode"] = "shared-cuest"
+        opts = m.psi_options(self.c)
+        self.assertFalse(any(key.startswith("dft_") for key in opts))
+
     def test_old_basis_cannot_pass_augmented_basis_validation(self):
         self.c["basis"] = "aug-cc-pvtz"
         row = self.row([self.record(e) for e in m.ENGINES])
@@ -240,6 +292,8 @@ class CompareTests(unittest.TestCase):
             self.assertEqual(sum(5 if e == "H" else 14 for e in atoms), m.NBF[system])
             self.assertEqual(sum(23 if e == "H" else 46 for e in atoms),
                              m.NBF_BY_BASIS["aug-cc-pvtz"][system])
+            self.assertEqual(sum(14 if e == "H" else 30 for e in atoms),
+                             m.NBF_BY_BASIS["cc-pvtz"][system])
 
     def test_nested_timer_counts_are_not_fabricated(self):
         class Obj:

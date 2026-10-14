@@ -4,6 +4,8 @@ from pathlib import Path
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
+import hashlib
 
 import grids
 
@@ -108,6 +110,51 @@ class GridTests(unittest.TestCase):
             self.assertEqual(compared["smaller_nonzero_grid"], "pyscf")
             self.assertFalse(compared["native_default_comparison"])
             self.assertIsNone(compared["smaller_native_default_grid"])
+
+    def test_basis_control_requires_explicit_basis_difference_permission(self):
+        with tempfile.TemporaryDirectory() as directory:
+            left, right = [Path(directory) / name for name in ("left.npz", "right.npz")]
+            for path, basis in [(left, "cc-pvtz"), (right, "aug-cc-pvtz")]:
+                grids.export_grid(path, self.coords, self.weights, dict(self.identity, basis=basis),
+                                  phase="xc-entry", settings={"level": 3})
+            with self.assertRaisesRegex(ValueError, "basis"):
+                grids.compare_exports(left, right)
+            comparison = grids.compare_exports(left, right, allow_basis_difference=True)
+            self.assertTrue(comparison["identical_nonzero_quadrature"])
+
+    def test_alignment_padding_preserves_weights_and_duplicate_points(self):
+        coords, weights, padding = grids.prepare_fixed_arrays(self.coords, self.weights, 128)
+        self.assertEqual(padding, 125)
+        self.assertEqual(weights.size, 128)
+        self.assertTrue(self.np.all(weights[3:] == 0))
+        self.assertEqual(self.fingerprint(coords, weights)["nonzero_pairs_multiset_sha256"],
+                         self.fingerprint()["nonzero_pairs_multiset_sha256"])
+
+    def test_fixed_installation_disables_pruning_and_prevents_regeneration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "grid.npz"
+            grids.export_grid(path, self.coords, self.weights, self.identity,
+                              phase="xc-entry", settings={"level": 3})
+            config = dict(shared_grid=str(path),
+                          shared_grid_source_points=3,
+                          shared_grid_fingerprint=self.fingerprint()["nonzero_pairs_multiset_sha256"],
+                          shared_grid_file_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                          shared_grid_metadata_sha256=hashlib.sha256(path.with_suffix(".json").read_bytes()).hexdigest())
+            grid = SimpleNamespace(alignment=128)
+            grid.reset = lambda: None
+            mf = SimpleNamespace(grids=grid, small_rho_cutoff=1e-7)
+            fake_cupy = SimpleNamespace(asarray=self.np.asarray, asnumpy=self.np.asarray, float64=self.np.float64)
+            with patch.dict("sys.modules", cupy=fake_cupy), patch.object(
+                    grids, "load_grid", side_effect=AssertionError("Do not reopen verified snapshots")):
+                grids.install_pyscf_shared_grid(mf, config, self.identity)
+            self.assertEqual(mf.small_rho_cutoff, 0)
+            self.assertEqual(grid.weights.size, 128)
+            self.assertEqual(grid._shared_grid_padding, 125)
+            with self.assertRaisesRegex(RuntimeError, "regenerate"):
+                grid.build()
+            config["shared_grid_file_sha256"] = "changed"
+            with patch.dict("sys.modules", cupy=fake_cupy), self.assertRaisesRegex(ValueError, "changed"):
+                grids.install_pyscf_shared_grid(mf, config, self.identity)
 
 
 class GridSettingsTests(unittest.TestCase):

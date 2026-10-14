@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TOPIC · YYYY-MM-DD</title>
+<script>/* before paint: persisted theme, dark when unset */
+document.documentElement.dataset.theme = localStorage.getItem('docs-theme') || 'dark';</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+<!-- Only when the page has code panes: -->
+<link id="hljs-dark" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/styles/github-dark.min.css">
+<link id="hljs-light" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/styles/github.min.css" disabled>
+<script defer src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/highlight.min.js"></script>
+<style>
+:root {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface-1: #1a1a19; --surface-2: #232321;
+  --text-primary: #ffffff; --text-secondary: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+  --good: #0ca30c; --bad: #e66767;
+  --eq-learned: #3ccf7a; --eq-frozen: #7fa88f; --eq-new-bg: rgba(201,133,0,0.16); --eq-new-ring: #c98500;
+  --diff-add: rgba(46,160,67,0.18); --diff-del: rgba(248,81,73,0.18);
+  --diff-add-hi: rgba(46,160,67,0.40); --diff-del-hi: rgba(248,81,73,0.40);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --page: #f9f9f7; --surface-1: #fcfcfb; --surface-2: #f0efea;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
+  --good: #006300; --bad: #b3261e;
+  --eq-learned: #0f8a45; --eq-frozen: #6b8f79; --eq-new-bg: rgba(237,161,0,0.16); --eq-new-ring: #b07800;
+  --diff-add: rgba(46,160,67,0.14); --diff-del: rgba(207,34,46,0.12);
+  --diff-add-hi: rgba(46,160,67,0.32); --diff-del-hi: rgba(207,34,46,0.28);
+}
+:root { --toc-w: 272px; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--page); color: var(--text-primary);
+  font: 17px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--s1); }
+code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+:not(pre) > code { font-size: 15px; background: var(--surface-1); border: 1px solid var(--ring); border-radius: 4px; padding: 0 4px; }
+
+/* ── layout: sidebar ToC | content ─────────────────────────────── */
+.layout { display: grid; grid-template-columns: var(--toc-w) minmax(0, 1fr); min-height: 100vh; }
+.toc { position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 24px 16px 24px 20px;
+  border-right: 1px solid var(--ring); background: var(--page); }
+.toc .title { font-weight: 650; font-size: 16px; line-height: 1.3; margin: 0 0 2px; }
+.toc .meta { font-size: 14px; color: var(--muted); margin: 0 0 16px; }
+.toc nav a { display: block; font-size: 15.5px; line-height: 1.35; color: var(--text-secondary); text-decoration: none;
+  padding: 5px 8px; border-radius: 6px; border-left: 2px solid transparent; }
+.toc nav a:hover { background: var(--surface-1); color: var(--text-primary); }
+.toc nav a.active { color: var(--text-primary); background: var(--surface-1); border-left-color: var(--s1); }
+.toc nav a.sub { padding-left: 20px; font-size: 14.5px; }
+/* ToC summary: the full claim behind a concise heading; shown on hover and for the current section */
+.toc nav .sum { display: block; font-size: 13.5px; line-height: 1.4; color: var(--muted); max-height: 0; opacity: 0; overflow: hidden;
+  transition: max-height .2s ease, opacity .2s ease, margin .2s ease; }
+.toc nav a:hover .sum, .toc nav a.active .sum, .toc nav a.open .sum { max-height: 10em; opacity: 1; margin-top: 4px; }
+.toc .tools { margin-top: 18px; display: flex; gap: 6px; }
+.menu-btn { display: none; }
+main { padding: 30px 40px 96px; min-width: 0; }
+@media (min-width: 1500px) { main { padding-right: var(--toc-w); } }  /* right margin mirrors the ToC */
+h1 { font-size: 27px; line-height: 1.25; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 15px; margin: 0 0 22px; }
+h2 { font-size: 22px; margin: 44px 0 8px; padding-top: 12px; border-top: 1px solid var(--ring); scroll-margin-top: 16px; }
+h3 { font-size: 18px; margin: 22px 0 6px; scroll-margin-top: 16px; }
+p, li { max-width: 82ch; color: var(--text-secondary); }
+strong { color: var(--text-primary); }
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .toc { position: fixed; z-index: 50; top: 0; left: 0; width: min(300px, 86vw); transform: translateX(-102%);
+    transition: transform .18s ease; box-shadow: 0 8px 32px rgba(0,0,0,.4); }
+  body.toc-open .toc { transform: none; }
+  .menu-btn { display: inline-flex; position: sticky; top: 8px; z-index: 40; margin: 8px 0 0 10px; }
+  main { padding: 8px 16px 80px; }
+}
+
+/* ── controls ──────────────────────────────────────────────────── */
+button, select { font: 14.5px system-ui, sans-serif; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--axis);
+  background: var(--surface-1); color: var(--text-primary); cursor: pointer; }
+button:hover { background: var(--grid); }
+button[aria-pressed="true"] { border-color: var(--s1); background: color-mix(in srgb, var(--s1) 18%, var(--surface-1)); }
+.controls { display: flex; flex-wrap: wrap; gap: 12px 22px; align-items: end; margin: 2px 0 10px; }
+.ctl { display: flex; flex-direction: column; min-width: 180px; }
+.ctl label { font-size: 14.5px; color: var(--text-secondary); display: flex; justify-content: space-between; gap: 10px; }
+.ctl label b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.ctl input[type=range] { width: 100%; accent-color: var(--s1); }
+.presets { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ── figures ───────────────────────────────────────────────────── */
+.fig { position: relative; background: var(--surface-1); border: 1px solid var(--ring); border-radius: 10px; padding: 14px 16px; margin: 14px 0; }
+.fig-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 8px; }
+.fig-head .t { font-weight: 600; font-size: 16px; }
+.fig-head .expand { margin-left: auto; }
+.fig.expanded { position: fixed; inset: 2vh 2vw; z-index: 60; margin: 0; overflow: auto; box-shadow: 0 0 0 100vmax rgba(0,0,0,.6); }
+.fig.expanded svg.chart { max-height: 82vh; }
+.cap { font-size: 15px; color: var(--muted); margin: 8px 0 0; max-width: none; }
+.tag { font: 600 12px/1 ui-monospace, Menlo, monospace; letter-spacing: .06em; text-transform: uppercase;
+  padding: 3px 6px; border-radius: 4px; border: 1px solid; white-space: nowrap; }
+.tag.measured { color: var(--s3); border-color: color-mix(in srgb, var(--s3) 50%, transparent); }
+.tag.illustrative { color: var(--s4); border-color: color-mix(in srgb, var(--s4) 50%, transparent); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 14.5px; color: var(--text-secondary); margin: 0 0 6px; }
+.sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+svg.chart { width: 100%; height: auto; display: block; }
+svg.chart text { font: 13.5px system-ui, sans-serif; fill: var(--muted); }
+svg.chart .gridline { stroke: var(--grid); }
+svg.chart .axis { stroke: var(--axis); }
+#tip { position: fixed; pointer-events: none; z-index: 80; display: none; background: var(--surface-2); border: 1px solid var(--ring);
+  border-radius: 8px; padding: 7px 10px; font-size: 14px; max-width: 420px; font-variant-numeric: tabular-nums; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+details.data { margin-top: 10px; }
+details.data > summary { cursor: pointer; font-size: 14.5px; color: var(--muted); }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 15px; width: 100%; }
+th, td { padding: 4px 9px; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { color: var(--text-secondary); font-weight: 600; font-size: 14.5px; }
+th:first-child, td:first-child { text-align: left; }
+
+/* ── equations: hue = role, box = changed vs baseline ──────────── */
+.eq { background: var(--surface-1); border: 1px solid var(--ring); border-radius: 10px; padding: 10px 16px; margin: 12px 0; overflow-x: auto; }
+.eq-legend { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 14.5px; color: var(--text-secondary); margin: 0 0 4px; }
+.learned { color: var(--eq-learned); }
+.frozen { color: var(--eq-frozen); }
+.eq-new { background: var(--eq-new-bg); outline: 1px solid var(--eq-new-ring); border-radius: 3px; padding: 0 2px; }
+
+/* ── glossary: every term hoverable ────────────────────────────── */
+dl.gloss { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; max-width: 110ch; color: var(--text-secondary); }
+dl.gloss dt { color: var(--text-primary); } dl.gloss dd { margin: 0; }
+.term, .katex [data-g] { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: help; }
+.katex [data-g] { text-decoration: none; border-bottom: 1px dotted var(--muted); }
+#tip .gt { color: var(--text-primary); font-weight: 600; margin-right: 6px; }
+
+/* ── code panes ────────────────────────────────────────────────── */
+.codepane { border: 1px solid var(--ring); border-radius: 10px; overflow: hidden; margin: 14px 0; background: var(--surface-1); }
+.codepane .bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--ring); background: var(--surface-2); font-size: 14.5px; }
+.codepane .bar .path { font-family: ui-monospace, Menlo, monospace; color: var(--text-primary); }
+.codepane .bar .rev { font-family: ui-monospace, Menlo, monospace; color: var(--muted); }
+.codepane .bar .sp { margin-left: auto; }
+.codepane .body { resize: vertical; overflow: auto; height: 420px; min-height: 120px; }
+.codepane .split { display: grid; grid-template-columns: minmax(0, var(--l, 50%)) 7px minmax(0, 1fr); align-items: start; }
+.codepane .split > .side { overflow-x: auto; }
+.codepane .gutter { align-self: stretch; cursor: col-resize; background: var(--ring); border-left: 3px solid var(--surface-1); border-right: 3px solid var(--surface-1); }
+.codepane .gutter:hover, .codepane.dragging .gutter { background: var(--s1); }
+.codepane.dragging { user-select: none; }
+.codepane.wrap table.code td:last-child { white-space: pre-wrap; overflow-wrap: anywhere; }
+.codepane.expanded { position: fixed; inset: 2vh 2vw; z-index: 60; margin: 0; box-shadow: 0 0 0 100vmax rgba(0,0,0,.6); display: flex; flex-direction: column; }
+.codepane.expanded .body { height: auto !important; flex: 1; resize: none; }
+.codepane table.code { font: 14.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; width: 100%; border-collapse: collapse; }
+.codepane table.code td { border: 0; padding: 0 8px; text-align: left; white-space: pre; vertical-align: top; }
+.codepane td.ln { width: 1%; color: var(--muted); user-select: none; text-align: right; opacity: .7; }
+.codepane td.sg { width: 1%; color: var(--muted); user-select: none; padding: 0 2px; }
+.codepane tr.add td { background: var(--diff-add); } .codepane tr.del td { background: var(--diff-del); }
+.codepane tr.add td.ln, .codepane tr.add td.sg { background: var(--diff-add-hi); }
+.codepane tr.del td.ln, .codepane tr.del td.sg { background: var(--diff-del-hi); }
+.codepane tr.pad td { background: repeating-linear-gradient(45deg, transparent 0 6px, var(--ring) 6px 7px); }
+.codepane tr.fold td { background: var(--surface-2); color: var(--muted); cursor: pointer; text-align: center; padding: 2px; }
+.codepane .hljs { background: transparent; padding: 0; }
+.codepane tr.hl td { background: color-mix(in srgb, var(--s4) 15%, transparent); }
+.codepane tr.hl td.ln { color: var(--s4); opacity: 1; font-weight: 700; }
+.codepane tr.flash td { animation: flash 1.6s ease-out; }
+@keyframes flash { from { background: color-mix(in srgb, var(--s1) 45%, transparent); } }
+/* decision points under a pane: what the reader should check, with line links */
+.checks { border-left: 3px solid var(--s4); background: var(--surface-1); border-radius: 0 8px 8px 0; padding: 8px 16px; margin: 10px 0 20px; }
+.checks > b { font-size: 14.5px; color: var(--s4); }
+.checks ul { margin: 4px 0 0; padding-left: 20px; } .checks li { max-width: none; margin: 3px 0; }
+a[data-line] { font-family: ui-monospace, Menlo, monospace; font-size: .9em; text-decoration: none; border-bottom: 1px dashed; }
+footer { margin-top: 56px; font-size: 14px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="toc" id="toc">
+  <p class="title">TOPIC</p>
+  <p class="meta">PROJECT · YYYY-MM-DD</p>
+  <nav id="tocNav"></nav><!-- filled from h2/h3[id] -->
+  <div class="tools"><button id="themeBtn" type="button">Light / dark</button></div>
+</aside>
+
+<main>
+<button class="menu-btn" id="menuBtn" type="button" aria-controls="toc">☰ Contents</button>
+<h1>TOPIC</h1>
+<p class="sub">PROJECT · YYYY-MM-DD</p>
+
+<h2 id="s1" data-summary="One sentence stating the claim this section establishes; shown in the ToC on hover.">1 · Concise claim</h2>
+<p>Up to three sentences that tell the reader what to look at in the figure below.</p>
+
+<div class="fig" id="fig-demo">
+  <div class="fig-head"><span class="t">Figure title</span><span class="tag illustrative">illustrative</span>
+    <button class="expand" type="button">⤢ Expand</button></div>
+  <div class="controls">
+    <div class="ctl"><label>parameter a <b id="aVal"></b></label><input id="aRange" type="range" min="0.1" max="3" step="0.01" value="1"></div>
+    <div class="presets"><button data-a="0.384" type="button">arm e2 (0.384)</button><button data-a="1.536" type="button">arm I3 (1.536)</button></div>
+  </div>
+  <div class="legend" id="lgDemo"></div>
+  <svg class="chart" id="chDemo" viewBox="0 0 960 340" role="img" aria-label="DESCRIBE"></svg>
+  <p class="cap">One line: what is plotted, units, what “good” looks like.</p>
+  <details class="data"><summary>Data</summary><div class="tablewrap" id="tblDemo"></div></details>
+</div>
+
+<h2 id="s2" data-summary="The full model with learned terms coloured and the change vs baseline boxed.">2 · Model</h2>
+<div class="eq">
+  <div class="eq-legend">
+    <span><span class="learned">■</span> learned in this fit</span>
+    <span><span class="frozen">■</span> frozen upstream network</span>
+    <span><span class="eq-new">&nbsp;box&nbsp;</span> new vs BASELINE</span>
+    <span>uncoloured: geometry, constants</span>
+    <span>hover any symbol or acronym; all in the <a href="#glossary">glossary</a></span>
+  </div>
+  $$E = \sum_{i\lt j} \frac{\htmlClass{frozen}{\htmlData{g=q}{q_i}}\,\htmlClass{frozen}{\htmlData{g=q}{q_j}}}{r_{ij}}
+      + \htmlClass{eq-new}{\htmlClass{learned}{s}\,\htmlData{g=ct}{E_{\rm CT}}}$$
+</div>
+
+<h2 id="s3" data-summary="The code change that produced the result, as a diff.">3 · The change</h2>
+<div class="codepane" data-lang="python" data-path="pkg/module.py" data-rev="main@abc1234 → feat@def5678">
+<script type="text/plain" class="before">def f(x):
+    return x * 2
+</script>
+<script type="text/plain" class="after">def f(x, s=1.0):
+    return s * x * 2
+</script>
+</div>
+
+<h2 id="glossary" data-summary="Every symbol and acronym on the page; each is also defined on hover.">Glossary</h2>
+<dl class="gloss">
+  <dt data-g="q">\(q_i\)</dt><dd>atomic charge (e)</dd>
+  <dt data-g="ct" data-match="CT">CT, \(E_{\rm CT}\)</dt><dd>charge transfer, and its energy</dd>
+</dl>
+
+<footer>Generated from WORKTREE@SHA on YYYY-MM-DD.</footer>
+</main>
+</div>
+<div id="tip"></div>
+
+<script type="application/json" id="data">{"demo": []}</script>
+<script>
+const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const DATA = JSON.parse($('#data').textContent);
+
+/* theme */
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t; localStorage.setItem('docs-theme', t);
+  const d = $('#hljs-dark'), l = $('#hljs-light'); if (d && l) { d.disabled = t !== 'dark'; l.disabled = t === 'dark'; }
+  window.dispatchEvent(new Event('themechange'));
+}
+$('#themeBtn').onclick = () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+applyTheme(document.documentElement.dataset.theme);
+
+/* sidebar ToC + scroll-spy + hamburger */
+const heads = $$('main h2[id], main h3[id]');
+$('#tocNav').innerHTML = heads.map(h => `<a href="#${h.id}" class="${h.tagName === 'H3' ? 'sub' : ''}"><span class="h">${h.textContent}</span>${h.dataset.summary ? `<span class="sum">${h.dataset.summary}</span>` : ''}</a>`).join('');
+const links = Object.fromEntries($$('#tocNav a').map(a => [a.hash.slice(1), a]));
+const io = new IntersectionObserver(es => es.forEach(e => {
+  if (e.isIntersecting) { $$('#tocNav a').forEach(a => a.classList.remove('active')); links[e.target.id]?.classList.add('active'); }
+}), { rootMargin: '0px 0px -75% 0px' });
+heads.forEach(h => io.observe(h));
+$('#menuBtn').onclick = e => { e.stopPropagation(); document.body.classList.toggle('toc-open'); };
+$('#tocNav').onclick = () => document.body.classList.remove('toc-open');
+document.addEventListener('click', e => { if (!e.target.closest('#toc')) document.body.classList.remove('toc-open'); });
+
+/* figure expand (Esc closes); charts re-render on resize */
+$$('.fig .expand').forEach(b => b.onclick = () => {
+  const f = b.closest('.fig'), on = f.classList.toggle('expanded');
+  b.textContent = on ? '✕ Close' : '⤢ Expand'; window.dispatchEvent(new Event('resize'));
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') $$('.fig.expanded .expand, .codepane.expanded .expand').forEach(b => b.click()); });
+
+/* tooltip: tip(evt, html) on hover, tip() to hide */
+function tip(e, html) {
+  const t = $('#tip'); if (!e) { t.style.display = 'none'; return; }
+  t.innerHTML = html; t.style.display = 'block';
+  const x = Math.min(e.clientX + 14, innerWidth - t.offsetWidth - 8), y = Math.min(e.clientY + 14, innerHeight - t.offsetHeight - 8);
+  t.style.left = x + 'px'; t.style.top = y + 'px';
+}
+
+/* table under every figure */
+function table(el, cols, rows, fmt = v => typeof v === 'number' ? v.toFixed(3) : v) {
+  el.innerHTML = `<table><tr>${cols.map(c => `<th>${c}</th>`).join('')}</tr>${rows.map(r => `<tr>${r.map(v => `<td>${fmt(v)}</td>`).join('')}</tr>`).join('')}</table>`;
+}
+
+/* minimal SVG line chart: series = [{name, color, pts:[[x,y],…]}] */
+function lineChart(svg, series, { xlab = '', ylab = '', xfmt = v => v.toFixed(1), yfmt = v => v.toFixed(2) } = {}) {
+  const W = +svg.viewBox.baseVal.width, H = +svg.viewBox.baseVal.height, m = { l: 58, r: 16, t: 12, b: 42 };
+  const all = series.flatMap(s => s.pts), xs = all.map(p => p[0]), ys = all.map(p => p[1]);
+  const [x0, x1] = [Math.min(...xs), Math.max(...xs)], [y0, y1] = [Math.min(0, ...ys), Math.max(...ys)];
+  const X = x => m.l + (x - x0) / (x1 - x0 || 1) * (W - m.l - m.r), Y = y => H - m.b - (y - y0) / (y1 - y0 || 1) * (H - m.t - m.b);
+  const ticks = (a, b, n = 5) => Array.from({ length: n + 1 }, (_, i) => a + (b - a) * i / n);
+  let s = '';
+  ticks(y0, y1).forEach(v => s += `<line class="gridline" x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${m.l - 8}" y="${Y(v) + 4}" text-anchor="end">${yfmt(v)}</text>`);
+  ticks(x0, x1).forEach(v => s += `<text x="${X(v)}" y="${H - m.b + 18}" text-anchor="middle">${xfmt(v)}</text>`);
+  s += `<line class="axis" x1="${m.l}" x2="${W - m.r}" y1="${H - m.b}" y2="${H - m.b}"/>`;
+  s += `<text x="${(m.l + W - m.r) / 2}" y="${H - 6}" text-anchor="middle">${xlab}</text><text transform="translate(14 ${(m.t + H - m.b) / 2}) rotate(-90)" text-anchor="middle">${ylab}</text>`;
+  series.forEach((sr, k) => {
+    s += `<path d="${sr.pts.map((p, i) => (i ? 'L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(p[1]).toFixed(1)).join('')}" fill="none" stroke="${sr.color}" stroke-width="2"/>`;
+    sr.pts.forEach((p, i) => s += `<circle data-k="${k}" data-i="${i}" cx="${X(p[0])}" cy="${Y(p[1])}" r="7" fill="transparent"/>`);
+  });
+  svg.innerHTML = s;
+  svg.onmousemove = e => { const c = e.target.closest('circle'); if (!c) return tip();
+    const sr = series[c.dataset.k], p = sr.pts[c.dataset.i]; tip(e, `<b style="color:${sr.color}">${sr.name}</b><br>${xlab} ${xfmt(p[0])}: ${yfmt(p[1])}`); };
+  svg.onmouseleave = () => tip();
+  const lg = svg.parentElement.querySelector('.legend');
+  if (lg) lg.innerHTML = series.map(sr => `<span><span class="sw" style="background:${sr.color}"></span>${sr.name}</span>`).join('');
+}
+
+/* demo figure: slider + presets bound to real arms */
+function renderDemo() {
+  const a = +$('#aRange').value; $('#aVal').textContent = a.toFixed(3);
+  const u = Array.from({ length: 60 }, (_, i) => 0.1 + i * 0.05);
+  const series = [
+    { name: 'λ3', color: css('--s1'), pts: u.map(x => [x, 1 - Math.exp(-a * x ** 3)]) },
+    { name: 'λ5', color: css('--s2'), pts: u.map(x => [x, 1 - (1 + a * x ** 3) * Math.exp(-a * x ** 3)]) },
+  ];
+  lineChart($('#chDemo'), series, { xlab: 'u', ylab: 'λ' });
+  table($('#tblDemo'), ['u', 'λ3', 'λ5'], u.filter((_, i) => i % 6 === 0).map((x, i) => [x.toFixed(2), series[0].pts[i * 6][1], series[1].pts[i * 6][1]]));
+}
+$('#aRange').oninput = renderDemo;
+$$('#fig-demo .presets button').forEach(b => b.onclick = () => { $('#aRange').value = b.dataset.a; renderDemo(); });
+window.addEventListener('themechange', renderDemo);
+renderDemo();
+
+/* code panes: <div class="codepane" data-lang data-path data-rev> with script.before / script.after
+   (only script.after, or no class → plain highlighted pane). Toggle split / unified; long unchanged runs fold. */
+function lineDiff(a, b) {
+  const n = a.length, m = b.length, L = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = []; let i = 0, j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) out.push({ t: 'eq', a: i++, b: j++ });
+    else if (i < n && (j === m || L[i + 1][j] >= L[i][j + 1])) out.push({ t: 'del', a: i++ });
+    else out.push({ t: 'add', b: j++ });
+  }
+  return out;
+}
+function hl(code, lang) {
+  if (!window.hljs) return code.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  return hljs.getLanguage(lang) ? hljs.highlight(code, { language: lang, ignoreIllegals: true }).value : hljs.highlightAuto(code).value;
+}
+function foldRuns(ops, ctx = 3, min = 10, pin = () => false) {
+  const keep = ops.map(o => o.t !== 'eq' || pin(o)), out = [];
+  ops.forEach((o, k) => { if (keep[k]) for (let d = -ctx; d <= ctx; d++) if (ops[k + d]?.t === 'eq') ops[k + d].near = true; });
+  let run = [];
+  const flush = () => { if (run.length >= min) out.push({ t: 'fold', hidden: run }); else out.push(...run); run = []; };
+  ops.forEach(o => { if (o.t === 'eq' && !o.near) run.push(o); else { flush(); out.push(o); } });
+  flush(); return out;
+}
+function renderPane(p) {
+  const lang = p.dataset.lang || '', before = p.querySelector('script.before')?.textContent, after = (p.querySelector('script.after') || p.querySelector('script')).textContent;
+  const A = before ? hl(before.replace(/\n$/, ''), lang).split('\n') : null, B = hl(after.replace(/\n$/, ''), lang).split('\n');
+  const rawA = before?.replace(/\n$/, '').split('\n'), rawB = after.replace(/\n$/, '').split('\n');
+  /* data-start / data-start-before: file line of the first shown line; data-hl="346,362-363": highlighted (after-side) lines */
+  const sB = +(p.dataset.start || 1), sA = +(p.dataset.startBefore || p.dataset.start || 1);
+  const HL = new Set((p.dataset.hl || '').split(',').filter(Boolean).flatMap(r => { const [a, b = a] = r.split('-').map(Number); return Array.from({ length: b - a + 1 }, (_, i) => a + i); }));
+  const ops = A ? foldRuns(lineDiff(rawA, rawB), 3, 10, o => HL.has(o.b + sB)) : B.map((_, i) => ({ t: 'eq', b: i }));
+  const row = (cls, ln, sg, html, after = true) => `<tr class="${cls}${after && HL.has(ln) ? ' hl' : ''}"><td class="ln">${ln ?? ''}</td><td class="sg">${sg}</td><td>${html ?? ''}</td></tr>`;
+  const foldRow = (o, k, span) => `<tr class="fold" data-k="${k}"><td colspan="${span}">⋯ ${o.hidden.length} unchanged lines</td></tr>`;
+  const unified = () => `<table class="code">${ops.map((o, k) => o.t === 'fold' ? foldRow(o, k, 3)
+    : o.t === 'add' ? row('add', o.b + sB, '+', B[o.b]) : o.t === 'del' ? row('del', o.a + sA, '−', A[o.a], false) : row('', o.b + sB, ' ', B[o.b])).join('')}</table>`;
+  const split = () => {
+    let l = '', r = '';
+    for (let k = 0; k < ops.length;) {
+      const o = ops[k];
+      if (o.t === 'fold') { l += foldRow(o, k, 3); r += foldRow(o, k, 3); k++; continue; }
+      if (o.t === 'eq') { l += row('', o.a + sA, '', A[o.a], false); r += row('', o.b + sB, '', B[o.b]); k++; continue; }
+      const dels = [], adds = []; while (ops[k] && ops[k].t !== 'eq' && ops[k].t !== 'fold') (ops[k].t === 'del' ? dels : adds).push(ops[k++]);
+      for (let q = 0; q < Math.max(dels.length, adds.length); q++) {
+        l += dels[q] ? row('del', dels[q].a + sA, '−', A[dels[q].a], false) : row('pad', '', '', '', false);
+        r += adds[q] ? row('add', adds[q].b + sB, '+', B[adds[q].b]) : row('pad', '', '', '', false);
+      }
+    }
+    return `<div class="split"><div class="side"><table class="code">${l}</table></div><div class="side"><table class="code">${r}</table></div></div>`;
+  };
+  let mode = p.dataset.mode || 'split';
+  if (p.dataset.wrap !== 'off') p.classList.add('wrap');
+  p.innerHTML = `<div class="bar"><span class="path">${p.dataset.path || ''}</span><span class="rev">${p.dataset.rev || ''}</span><span class="sp"></span>
+    ${A ? '<button type="button" data-m="split">Split</button><button type="button" data-m="unified">Unified</button>' : ''}
+    <button type="button" class="wrapb">Wrap</button><button type="button" class="copy">Copy</button><button type="button" class="expand">⤢ Expand</button></div><div class="body"></div>`;
+  const body = p.querySelector('.body');
+  /* split sides: wrapped lines change row heights, so pair rows across sides */
+  let userSized = false;  /* auto-fit the body to its content until the reader drags the resize handle */
+  const fit = () => { if (!userSized && !p.classList.contains('expanded'))
+    body.style.height = Math.min(Math.max(body.firstElementChild.offsetHeight + 4, 120), innerHeight * 0.7) + 'px'; };
+  const align = () => {
+    const sides = p.querySelectorAll('.split .side table');
+    if (sides.length === 2) {
+      const [L, Rt] = [...sides].map(t => [...t.rows]); L.concat(Rt).forEach(r => r.style.height = '');
+      L.forEach((r, i) => { const h = Math.max(r.offsetHeight, Rt[i].offsetHeight); r.style.height = Rt[i].style.height = h + 'px'; });
+    }
+    fit();
+  };
+  const draw = () => {
+    body.innerHTML = !A || mode === 'unified' ? unified() : split().replace('</div><div class="side">', '</div><div class="gutter" title="Drag to resize; double-click to reset"></div><div class="side">');
+    p.querySelectorAll('[data-m]').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === mode));
+    /* hanging indent: wrapped continuation lines sit 2 columns inside the line's own indentation */
+    body.querySelectorAll('table.code tr:not(.fold) td:last-child').forEach(td => {
+      const n = td.textContent.match(/^[ \t]*/)[0].replace(/\t/g, '    ').length + 2;
+      td.style.paddingLeft = `calc(8px + ${n}ch)`; td.style.textIndent = `-${n}ch`; });
+    p.querySelector('.wrapb').setAttribute('aria-pressed', p.classList.contains('wrap'));
+    const sides = [...body.querySelectorAll('.side')];  /* horizontal scroll moves both sides together */
+    sides.forEach(sd => sd.onscroll = () => sides.forEach(o => { if (o !== sd && o.scrollLeft !== sd.scrollLeft) o.scrollLeft = sd.scrollLeft; }));
+    const g = body.querySelector('.gutter');
+    if (g) {
+      g.ondblclick = () => { p.style.removeProperty('--l'); align(); };
+      g.onpointerdown = e => {
+        g.setPointerCapture(e.pointerId); p.classList.add('dragging');
+        const box = body.querySelector('.split').getBoundingClientRect();
+        g.onpointermove = ev => { p.style.setProperty('--l', Math.min(90, Math.max(10, (ev.clientX - box.left) / box.width * 100)) + '%'); align(); };
+        g.onpointerup = () => { g.onpointermove = null; p.classList.remove('dragging'); };
+      };
+    }
+    align();
+  };
+  p.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { mode = b.dataset.m; draw(); });
+  p.querySelector('.wrapb').onclick = () => { p.classList.toggle('wrap'); draw(); };
+  p.querySelector('.expand').onclick = e => { const on = p.classList.toggle('expanded'); e.target.textContent = on ? '✕ Close' : '⤢ Expand'; align(); };
+  p.querySelector('.copy').onclick = e => { navigator.clipboard.writeText(after); e.target.textContent = 'Copied'; setTimeout(() => e.target.textContent = 'Copy', 1200); };
+  body.addEventListener('click', e => { const f = e.target.closest('tr.fold'); if (!f) return;
+    const k = +f.dataset.k; ops.splice(k, 1, ...ops[k].hidden); draw(); });
+  body.addEventListener('pointerdown', e => { const r = body.getBoundingClientRect(); if (e.clientY > r.bottom - 18 && e.clientX > r.right - 18) userSized = true; });
+  let lastW = 0; new ResizeObserver(() => { if (body.clientWidth !== lastW) { lastW = body.clientWidth; align(); } }).observe(body);
+  draw();
+}
+/* <a data-pane="paneId" data-line="169">L169</a>: scroll that pane to the (after-side) line and flash it */
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[data-line]'); if (!a) return; e.preventDefault();
+  const p = document.getElementById(a.dataset.pane), body = p?.querySelector('.body'); if (!body) return;
+  const rows = [...p.querySelectorAll('table.code')].at(-1).rows, tr = [...rows].find(r => r.cells[0]?.textContent === a.dataset.line);
+  p.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); if (!tr) return;
+  body.scrollTo({ top: tr.offsetTop - body.clientHeight / 3, behavior: 'smooth' });
+  tr.classList.remove('flash'); void tr.offsetWidth; tr.classList.add('flash');
+});
+window.addEventListener('DOMContentLoaded', () => {
+  $$('.codepane').forEach(renderPane);
+  renderMathInElement(document.body, {
+    delimiters: [{ left: '$$', right: '$$', display: true }, { left: '\\(', right: '\\)', display: false }],
+    trust: ctx => ctx.command === '\\htmlClass' || ctx.command === '\\htmlData', strict: false,
+  });
+  glossary();
+});
+
+/* glossary: <dl class="gloss"><dt data-g="key" data-match="CP|noCP">…</dt><dd>…</dd>.
+   Math symbols opt in with \htmlData{g=key}{…}; plain-text data-match terms are wrapped automatically
+   (first occurrence per block). Hovering either shows the definition. */
+function glossary() {
+  const G = {};
+  $$('dl.gloss dt[data-g]').forEach(dt => G[dt.dataset.g] = { t: dt.innerHTML, d: dt.nextElementSibling?.innerHTML || '', m: dt.dataset.match });
+  const terms = Object.entries(G).flatMap(([k, g]) => (g.m || '').split('|').filter(Boolean).map(w => [w, k])).sort((a, b) => b[0].length - a[0].length);
+  if (terms.length) {
+    const esc = w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`(?<![\\w-])(${terms.map(t => esc(t[0])).join('|')})(?![\\w-])`, 'g'), key = Object.fromEntries(terms);
+    const skip = 'code, pre, script, style, svg, .katex, h1, h2, h3, .codepane, dl.gloss, button, a, .term, .toc, #tip, .fig-head, th';
+    const blocks = $$('main p, main li, main td, main .cap, main .legend span, main summary, main dd');
+    blocks.forEach(blk => {
+      if (blk.closest(skip)) return;
+      const seen = new Set(), walker = document.createTreeWalker(blk, NodeFilter.SHOW_TEXT), nodes = [];
+      while (walker.nextNode()) if (!walker.currentNode.parentElement.closest(skip)) nodes.push(walker.currentNode);
+      nodes.forEach(n => {
+        const txt = n.nodeValue; re.lastIndex = 0; if (!re.test(txt)) return;
+        const frag = document.createDocumentFragment(); let last = 0; re.lastIndex = 0;
+        for (const m of txt.matchAll(re)) {
+          const k = key[m[1]]; if (seen.has(k)) continue; seen.add(k);
+          frag.append(txt.slice(last, m.index));
+          const s = document.createElement('span'); s.className = 'term'; s.dataset.g = k; s.textContent = m[1]; frag.append(s);
+          last = m.index + m[1].length;
+        }
+        if (last) { frag.append(txt.slice(last)); n.replaceWith(frag); }
+      });
+    });
+  }
+  const show = e => { const el = e.target.closest('[data-g]'); if (!el || el.closest('dl.gloss') || !G[el.dataset.g]) return false;
+    const g = G[el.dataset.g]; tip(e, `<span class="gt">${g.t}</span>${g.d}`); return true; };
+  document.addEventListener('mouseover', e => { if (e.target.closest('[data-g]')) show(e); });
+  document.addEventListener('mousemove', e => { if (e.target.closest('[data-g]')) show(e); });
+  document.addEventListener('mouseout', e => { if (e.target.closest('[data-g]') && !e.relatedTarget?.closest?.('[data-g]')) tip(); });
+}
+</script>
+</body>
+</html>

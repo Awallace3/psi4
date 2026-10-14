@@ -12,6 +12,7 @@ import math
 import os
 from pathlib import Path
 import resource
+import re
 import signal
 import statistics
 import subprocess
@@ -19,7 +20,7 @@ import sys
 import time
 import traceback
 from memory import MemoryMonitor, stop_supervisor
-from grids import apply_pyscf_grid_settings, export_grid, grid_fingerprint
+from grids import apply_pyscf_grid_settings, export_grid, grid_fingerprint, install_pyscf_shared_grid
 
 HERE = Path(__file__).resolve().parent
 ENGINES = ("psi4", "pyscf")
@@ -28,6 +29,8 @@ ATOMS = {"peptide": 24, "nanotube": 42, "protein83": 83, "protein157": 157}
 NBF = {"peptide": 210, "nanotube": 444, "protein83": 766, "protein157": 1478}
 NBF_BY_BASIS = {
     "cc-pvdz": NBF,
+    # Spherical cc-pVTZ: H=14, C/N/O=30.
+    "cc-pvtz": {"peptide": 496, "nanotube": 1004, "protein83": 1786, "protein157": 3430},
     # Spherical aug-cc-pVTZ: H=23, C/N/O=46.
     "aug-cc-pvtz": {"peptide": 782, "nanotube": 1564, "protein83": 2806, "protein157": 5382},
 }
@@ -81,7 +84,7 @@ def psi_options(c):
         opts.update(dft_radial_points=c["radial_points"],
                     dft_spherical_points=c["angular_points"],
                     dft_pruning_scheme="none", dft_nuclear_scheme="becke")
-    elif mode != "native-default":
+    elif mode not in ("native-default", "shared-cuest"):
         raise ValueError(f"Unsupported grid mode: {mode}")
     return opts
 
@@ -113,7 +116,8 @@ def audit_psi4_grid(psi4, record, enabled):
     This extra device/host work is for diagnostic workers only. Never recreate a
     host grid after SCF and present it as the grid consumed by cuEST.
     """
-    if not enabled:
+    shared = record.get("grid_mode") == "shared-cuest"
+    if not enabled and not shared:
         yield
         return
     if not hasattr(psi4.core.VBase, "export_cuest_grid"):
@@ -122,7 +126,12 @@ def audit_psi4_grid(psi4, record, enabled):
 
     def audited_iterations(wfn, *args, **kwargs):
         import numpy as np
-        if "grid_exports" not in record:
+        if shared:
+            points = wfn.V_potential().cuest_grid_points()
+            record["grid_points"] = points
+            if points != record["config"]["shared_grid_source_points"]:
+                raise RuntimeError("Actual cuEST grid size differs from the shared source")
+        if enabled and "grid_exports" not in record:
             potential = wfn.V_potential()
             coords, weights = potential.export_cuest_grid()
             settings = {
@@ -148,15 +157,18 @@ def audit_psi4_grid(psi4, record, enabled):
 
 def capture_pyscf_grid(grid, record, phase, density_cutoff):
     import cupy as cp
-    padding = None
+    padding = getattr(grid, "_shared_grid_padding", None)
     if getattr(grid, "atm_idx", None) is not None:
         padding = int(cp.count_nonzero(grid.atm_idx == -1).item())
-    info = export_grid(f"{phase}-grid.npz", cp.asnumpy(grid.coords), cp.asnumpy(grid.weights),
-                       grid_identity(record), phase=phase, known_padding_points=padding,
-                       settings=dict(level=int(grid.level), atom_grid=grid.atom_grid,
+    settings = dict(level=int(grid.level), atom_grid=grid.atom_grid,
                            alignment=int(grid.alignment), prune=str(grid.prune),
                            radial_method=str(grid.radi_method), partition=str(grid.becke_scheme),
-                           radii_adjust=str(grid.radii_adjust), small_rho_cutoff=float(density_cutoff)))
+                           radii_adjust=str(grid.radii_adjust), small_rho_cutoff=float(density_cutoff))
+    if record.get("grid_mode") == "shared-cuest":
+        settings["fixed_grid_note"] = (
+            "Imported cuEST total weights; native generation/pruning/partition options unused")
+    info = export_grid(f"{phase}-grid.npz", cp.asnumpy(grid.coords), cp.asnumpy(grid.weights),
+                       grid_identity(record), phase=phase, known_padding_points=padding, settings=settings)
     record.setdefault("grid_exports", {})[phase] = info
     record["grid_points"] = info["stored_points"]
     return info
@@ -207,6 +219,8 @@ def cuda_identity(runtime=None):
     assert rt.cudaGetDeviceCount(ctypes.byref(count)) == 0 and count.value == 1, \
         "Exactly one visible CUDA GPU is required"
     assert rt.cudaGetDevice(ctypes.byref(device)) == 0 and device.value == 0
+    version = ctypes.c_int()
+    assert rt.cudaRuntimeGetVersion(ctypes.byref(version)) == 0
     # cudaDeviceGetUuid is not exported by the CUDA13 runtime. Resolve the
     # selected CUDA ordinal to PCI bus first, then query NVML by that bus.
     pci = ctypes.create_string_buffer(64)
@@ -216,7 +230,17 @@ def cuda_identity(runtime=None):
                                     "--format=csv,noheader"], text=True).strip()
     assert uuid.startswith("GPU-") and "\n" not in uuid
     return dict(uuid=uuid, pci_bus_id=bus, logical_device=device.value,
-                visible_count=count.value, runtime=paths[0])
+                visible_count=count.value, runtime=paths[0], cuda_runtime=version.value)
+
+
+def validate_cuda_route(record):
+    expected = 13 if record["engine"] == "psi4" else 12
+    if record["gpu"]["cuda_runtime"] // 1000 != expected:
+        raise RuntimeError(f"Expected CUDA{expected} worker runtime")
+    for path in record["runtime_libraries"]:
+        match = re.search(r"libcudart\.so\.(\d+)", path)
+        if match and int(match[1]) != expected:
+            raise RuntimeError(f"Mixed/wrong CUDA worker runtime: {path}")
 
 
 def verify_components(actual, expected):
@@ -318,7 +342,14 @@ def run_pyscf(a, c, atom, r):
     mf = rks.RKS(mol, xc=c["functionals"][a.functional]["pyscf"]).density_fit(
         auxbasis=c["auxbasis"], only_dfj=False)
     assert mf.__class__.__module__.startswith("gpu4pyscf.")
-    apply_pyscf_grid_settings(mf, c)
+    if c.get("grid_mode") == "shared-cuest":
+        grid_start = time.perf_counter()
+        r["shared_grid_source"] = install_pyscf_shared_grid(mf, c, r)
+        sync()
+        r["grid_import_wall_s"] = time.perf_counter() - grid_start
+        r["grid_points"] = int(mf.grids.weights.size)
+    else:
+        apply_pyscf_grid_settings(mf, c)
     mf.conv_tol = c["energy_convergence"]
     mf.conv_tol_grad = c["orbital_gradient_convergence"]
     mf.max_cycle = c["max_iterations"]
@@ -391,6 +422,7 @@ def run_pyscf(a, c, atom, r):
              scf_iterations=len(history), iteration_history=history,
              nbf=int(mol.nao_nr()), naux=int(mf.with_df.auxmol.nao_nr()),
              grid_points=int(mf.grids.weights.size),
+             grid_nonzero_weight_points=int(cp.count_nonzero(mf.grids.weights).item()),
              diagnostic_timers=dict(timers.data),
              cupy_pool_peak_note="End-of-run pool reservation is NOT peak device memory",
              cupy_pool_reserved_bytes=int(cp.get_default_memory_pool().total_bytes()))
@@ -400,6 +432,8 @@ def run_pyscf(a, c, atom, r):
         alignment=int(mf.grids.alignment), radial_method=str(mf.grids.radi_method),
         partition=str(mf.grids.becke_scheme), radii_adjust=str(mf.grids.radii_adjust),
         prune=str(mf.grids.prune), small_rho_cutoff=float(mf.small_rho_cutoff))
+    if c.get("grid_mode") == "shared-cuest":
+        r["effective_grid"]["note"] = "Imported final cuEST mesh; listed native generation options were not applied"
     r["effective_df"] = dict(linear_dep_threshold=float(df.LINEAR_DEP_THR),
                             direct_scf_tol=float(mf.direct_scf_tol))
     if a.profile:
@@ -495,6 +529,7 @@ def worker(a):
         assert r["nbf"] == expected, ("Basis nbf mismatch", c["basis"], r["nbf"], expected)
         assert math.isfinite(r["energy_hartree"])
         r["runtime_libraries"] = runtime_libraries()
+        validate_cuda_route(r)
         r["ok"] = True
     except Exception as exc:
         r.update(error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
@@ -574,11 +609,16 @@ def engine_env(engine, a):
         env.pop(key, None)
     # Never allow Psi4's CUDA13 libraries into the CUDA12 PySCF process.
     root = a.psi_env if engine == "psi4" else a.gpu_env
-    env["LD_LIBRARY_PATH"] = ":".join(map(str, [root / "lib",
-        a.psi_cuda_lib if engine == "psi4" else a.cuda12_lib]))
+    libraries = [root / "lib", a.psi_cuda_lib if engine == "psi4" else a.cuda12_lib]
+    if engine == "psi4" and getattr(a, "psi_xc_lib", None):
+        libraries.insert(1, a.psi_xc_lib)
+    env["LD_LIBRARY_PATH"] = ":".join(map(str, libraries))
     env["PYTHONPATH"] = str(a.psi_package.parent) if engine == "psi4" else ""
     if engine == "pyscf":
         env["CUDA_PATH"] = str(a.cuda12_lib.parent)
+        env["CUDA_HOME"] = str(a.cuda12_lib.parent)
+    else:
+        env["CUDA_PATH"] = env["CUDA_HOME"] = str(a.psi_cuda_lib.parent)
     env["OMP_NUM_THREADS"] = str(a.threads)
     env["MKL_NUM_THREADS"] = str(a.threads)
     env["OPENBLAS_NUM_THREADS"] = str(a.threads)
@@ -592,24 +632,43 @@ def observed_worker(cmd, env, output, name, identity, uuid, timeout, supervisor_
                "--usage", str(usage_path), "--"] + cmd
     start, started_unix_s = time.perf_counter(), time.time()
     interrupted = None
+    proc, mem, entered = None, None, False
     with (output / f"{name}.log").open("w") as log:
-        proc = subprocess.Popen(wrapped, env=env, stdout=log,
-                                stderr=subprocess.STDOUT, start_new_session=True)
-        with MemoryMonitor(proc.pid, usage_path, output / f"{name}.memory.csv", uuid) as mem:
+        try:
+            # A TERM raised inside Popen before the assignment could otherwise
+            # orphan its new detached session. Unblock only after we own its PID.
+            blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
             try:
-                rc = proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
+                proc = subprocess.Popen(wrapped, env=env, stdout=log,
+                                        stderr=subprocess.STDOUT, start_new_session=True)
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+            mem = MemoryMonitor(proc.pid, usage_path, output / f"{name}.memory.csv", uuid)
+            with mem:
+                entered = True
+                try:
+                    rc = proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    stop_supervisor(proc, usage_path)
+                    rc = 124
+                except BaseException as exc:
+                    interrupted = exc
+                    rc = stop_supervisor(proc, usage_path) or 143
+        except BaseException as exc:
+            interrupted = exc
+            rc = (stop_supervisor(proc, usage_path) or 143) if proc is not None else 1
+        finally:
+            if proc is not None and proc.poll() is None:
                 stop_supervisor(proc, usage_path)
-                rc = 124
-            except BaseException as exc:
-                interrupted = exc
-                rc = stop_supervisor(proc, usage_path) or 143
-            process_elapsed, ended_unix_s = time.perf_counter() - start, time.time()
+            if mem is not None and not entered:
+                mem.__exit__(None, None, None)
+        process_elapsed, ended_unix_s = time.perf_counter() - start, time.time()
     out = output / "results" / name
     record = load_result(out / "result.json", identity)
     record.update(process_returncode=rc, process_wall_s=process_elapsed,
                   started_unix_s=started_unix_s, ended_unix_s=ended_unix_s,
-                  output=str(out), memory=mem.summary())
+                  output=str(out), memory=mem.summary() if mem is not None else dict(
+                      peak_rss_kib=None, collection_error="Observer construction failed"))
     if rc or interrupted:
         record["ok"] = False
     if interrupted:

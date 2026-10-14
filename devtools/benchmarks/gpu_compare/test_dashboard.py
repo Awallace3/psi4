@@ -50,10 +50,31 @@ class DashboardTests(unittest.TestCase):
 
     def test_default_dark_theme_and_larger_type(self):
         page = dashboard.render(dashboard.data_for([self.base]))
-        self.assertIn('<html lang="en" class="dark">', page)
+        self.assertIn('<html lang="en" class="dark" data-theme="dark">', page)
         self.assertIn('aria-pressed="true">Light theme', page)
         self.assertIn('font:20px/1.6', page)
         self.assertIn('font-size:17px', page)
+
+    def test_measured_plots_with_embedded_data_and_no_external_assets(self):
+        page = dashboard.render(dashboard.data_for([self.base]))
+        for identifier in ("time-plot", "rss-plot", "gpu-plot"):
+            self.assertIn(f'id="{identifier}"', page)
+        self.assertNotIn("cdn.jsdelivr.net", page)
+        self.assertIn('id="functional"', page)
+        self.assertIn('value=\'pbe\' selected', page)
+        self.assertIn('tag measured', page)
+        text = page.split('<script type="application/json" id="data">', 1)[1].split("</script>", 1)[0]
+        data = json.loads(text)
+        self.assertIsNone(data[0]["psi4"]["calculation_s"])
+        self.assertIsNone(data[0]["psi4"]["peak_rss_gib"])
+        self.assertEqual(data[0]["pyscf"]["calculation_s"], 161.3)
+        self.assertNotIn("secret", text)
+
+    def test_template_demo_content_is_not_published(self):
+        page = dashboard.render(dashboard.data_for([self.base]))
+        self.assertNotIn("renderDemo()", page)
+        self.assertNotIn("WORKTREE@SHA", page)
+        self.assertNotIn('id="fig-demo"', page)
 
     def test_failed_grid_count_can_be_recovered_from_constructed_grid_log(self):
         directory = self.base / "results" / "failed"

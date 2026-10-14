@@ -4,6 +4,7 @@ No point cloud or raw geometry from these files belongs in the served dashboard.
 Keep duplicates, negative weights and zero-weight entries in the original export.
 """
 import hashlib
+import io
 import json
 from pathlib import Path
 
@@ -15,7 +16,7 @@ def validate_identity(identity):
     for key in IDENTITY_FIELDS:
         if not isinstance(identity.get(key), str) or not identity[key]:
             raise ValueError(f"Missing/invalid grid provenance: {key}")
-    if identity["grid_mode"] not in ("nominal", "native-default"):
+    if identity["grid_mode"] not in ("nominal", "native-default", "shared-cuest"):
         raise ValueError("Unknown grid provenance mode")
 
 
@@ -86,23 +87,39 @@ def export_grid(path, coords, weights, identity, *, phase, settings, known_paddi
     return info
 
 
-def compare_exports(left, right):
+def load_grid(path):
+    """Load private mesh and verify its fingerprint rather than trusting a header."""
+    path = Path(path)
+    return load_grid_bytes(path.read_bytes(), path.with_suffix(".json").read_bytes())
+
+
+def load_grid_bytes(raw, metadata):
+    """Decode the same byte snapshots that the caller hashes."""
+    import numpy as np
+    with np.load(io.BytesIO(raw), allow_pickle=False) as data:
+        coords, weights = grid_arrays(data["coords_bohr"], data["total_weights_bohr3"])
+    info = json.loads(metadata)
+    validate_identity(info["identity"])
+    if not isinstance(info.get("effective_settings"), dict) or not info["effective_settings"]:
+        raise ValueError("Missing effective grid settings")
+    fingerprint = grid_fingerprint(coords, weights)
+    if any(info.get(key) != value for key, value in fingerprint.items()):
+        raise ValueError("Grid artifact fingerprint mismatch")
+    return coords, weights, info
+
+
+def compare_exports(left, right, *, allow_basis_difference=False):
     """Do not infer equality from equal settings, counts, file names or headers."""
     import numpy as np
     arrays, metadata = [], []
     for path in (Path(left), Path(right)):
-        with np.load(path, allow_pickle=False) as data:
-            coords, weights = grid_arrays(data["coords_bohr"], data["total_weights_bohr3"])
-        info = json.loads(path.with_suffix(".json").read_text())
-        validate_identity(info["identity"])
-        if not isinstance(info.get("effective_settings"), dict) or not info["effective_settings"]:
-            raise ValueError("Missing effective grid settings")
+        coords, weights, info = load_grid(path)
         fingerprint = grid_fingerprint(coords, weights)
-        if any(info.get(key) != value for key, value in fingerprint.items()):
-            raise ValueError("Grid artifact fingerprint mismatch")
         arrays.append(fingerprint)
         metadata.append(info)
     for key in ("system", "functional", "geometry_sha256", "basis"):
+        if key == "basis" and allow_basis_difference:
+            continue
         if metadata[0]["identity"][key] != metadata[1]["identity"][key]:
             raise ValueError(f"Grid identity mismatch: {key}")
     same = arrays[0]["nonzero_pairs_multiset_sha256"] == arrays[1]["nonzero_pairs_multiset_sha256"]
@@ -111,6 +128,7 @@ def compare_exports(left, right):
     native_defaults = all(info["identity"]["grid_mode"] == "native-default" for info in metadata)
     return dict(
         identical_nonzero_quadrature=same,
+        basis_difference_permitted=allow_basis_difference,
         comparison_rule="exact float64 coordinate/total-weight multiset; order and zero-weight padding ignored",
         native_default_comparison=native_defaults,
         smaller_nonzero_grid=smaller,
@@ -131,6 +149,55 @@ def apply_pyscf_grid_settings(mf, config):
     mf.grids.atom_grid = (config["radial_points"], config["angular_points"])
     mf.grids.prune = None
     mf.small_rho_cutoff = 0.0
+
+
+def prepare_fixed_arrays(coords, weights, alignment):
+    """Pad with zero weights only; never drop, deduplicate or repartition points."""
+    import numpy as np
+    coords, weights = grid_arrays(coords, weights)
+    if not isinstance(alignment, int) or alignment < 1:
+        raise ValueError("Invalid grid alignment")
+    padding = (-weights.size) % alignment
+    if padding:
+        coords = np.vstack((coords, np.broadcast_to(coords[-1], (padding, 3))))
+        weights = np.concatenate((weights, np.zeros(padding)))
+    return coords, weights, padding
+
+
+def install_pyscf_shared_grid(mf, config, identity):
+    """Energy-only fixed quadrature; screening caches derive from these coordinates."""
+    import cupy as cp
+    path = Path(config["shared_grid"])
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != config["shared_grid_file_sha256"]:
+        raise ValueError("Shared grid file changed")
+    metadata = path.with_suffix(".json").read_bytes()
+    if hashlib.sha256(metadata).hexdigest() != config["shared_grid_metadata_sha256"]:
+        raise ValueError("Shared grid provenance changed")
+    coords, weights, info = load_grid_bytes(raw, metadata)
+    for key in ("system", "functional", "geometry_sha256"):
+        if info["identity"][key] != identity[key]:
+            raise ValueError(f"Shared grid identity mismatch: {key}")
+    if info["identity"]["engine"] != "psi4":
+        raise ValueError("This control requires an actual exported Psi4/cuEST source grid")
+    if (info["stored_points"] != config["shared_grid_source_points"] or
+            info["nonzero_pairs_multiset_sha256"] != config["shared_grid_fingerprint"]):
+        raise ValueError("Shared grid differs from the audited source")
+    coords, weights, padding = prepare_fixed_arrays(coords, weights, int(mf.grids.alignment))
+    # Disable pruning before installation; never apply nuclear weights twice.
+    mf.small_rho_cutoff = 0.0
+    mf.grids.reset()
+    mf.grids.coords = cp.asarray(coords, dtype=cp.float64)
+    mf.grids.weights = cp.asarray(weights, dtype=cp.float64)
+    mf.grids._shared_grid_padding = padding
+    # initialize_grids sees coords != None and must not call build().
+    def no_rebuild(*args, **kwargs):
+        raise RuntimeError("Attempted to regenerate the frozen shared quadrature")
+    mf.grids.build = no_rebuild
+    observed = grid_fingerprint(cp.asnumpy(mf.grids.coords), cp.asnumpy(mf.grids.weights))
+    if observed["nonzero_pairs_multiset_sha256"] != info["nonzero_pairs_multiset_sha256"]:
+        raise RuntimeError("Fixed-grid installation changed the quadrature")
+    return info
 
 
 if __name__ == "__main__":

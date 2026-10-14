@@ -53,6 +53,14 @@ def supervise(usage, command):
 
     signal.signal(signal.SIGTERM, terminate)
     signal.signal(signal.SIGINT, terminate)
+    # The controller masks signals during spawn/PID ownership. Masks survive
+    # exec, so unblock only after our cleanup handlers are installed.
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGINT})
+    if received is not None:
+        save_json(usage, dict(state="EXITED", child_pid=None, child_returncode=None,
+                             maxrss_kib=None, signal_received=received,
+                             source="Interrupted before worker launch; RSS unavailable"))
+        return 128 + received
     child = subprocess.Popen(command, start_new_session=True)
     if received is not None:
         signal_group(child.pid, signal.SIGTERM)

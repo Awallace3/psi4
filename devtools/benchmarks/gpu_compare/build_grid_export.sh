@@ -1,15 +1,18 @@
 #!/bin/bash
-# Run on a compute node under explicit embers QoS, not on a login node.
-# Usage: /bin/bash build_grid_export.sh ABS_REPO COMMIT ABS_RUN
+# Run on a compute node under explicit QoS, not on a login node.
+# Usage: /bin/bash build_grid_export.sh ABS_REPO COMMIT ABS_RUN [embers|inferno]
+# inferno is permitted only for a specifically user-authorized submission.
 # The historical CUDA-LibXC stage is read-only and is never rebuilt here.
 set -euo pipefail
 repo=${1:?absolute comparison worktree}
 commit=${2:?pinned commit}
 run=${3:?absolute unique build run}
+expected_qos=${4:-embers}
+[[ "$expected_qos" == embers || "$expected_qos" == inferno ]]
 [[ "$repo" == /* && "$run" == /* && "$run" != "$repo" ]]
 export SLURM_JOB_QOS
 SLURM_JOB_QOS=$(squeue -h -j "${SLURM_JOB_ID:?}" -o '%q')
-[[ "$SLURM_JOB_QOS" == embers ]] || { echo "Expected an embers compute allocation" >&2; exit 2; }
+[[ "$SLURM_JOB_QOS" == "$expected_qos" ]] || { echo "Unexpected allocation QoS" >&2; exit 2; }
 [[ "$(git -C "$repo" rev-parse HEAD)" == "$commit" ]]
 [[ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]]
 [[ ! -e "$run/build" && ! -e "$run/build-manifest.json" ]]

@@ -291,6 +291,17 @@ unavailable, not zero; PySCF storage counts may include zero-weight padding.
 Every historical timing ratio is explicitly provisional because the actual
 quadratures have not been matched.
 
+The page now includes interactive measured SVG plots for calculation walltime
+(with min–max repeat whiskers), peak CPU RSS and sampled whole-device GPU memory.
+Filters apply to both plots and the NBF/grid table; the initial view selects PBE
+across both bases. Every mark has an exact-value tooltip and each plot has an
+expandable data table. Missing timings/RSS are N/A, not zero; dashed GPU-memory
+bars mark failed attempts, not complete-SCF capacity. These remain **historical,
+unmatched-grid observations**, not controlled speedup or memory-efficiency claims.
+The figure-first shell follows the docs-html template, uses larger 20px body
+type and preserves dark/light themes and a mobile contents menu without CDN
+dependencies. The new page checks only republished snapshots, not cluster state.
+
 ### Required next grid-controlled protocol
 
 Exporter implementation is in progress on this branch. The historical staged
@@ -372,6 +383,59 @@ weights), and `CUEST_MOLECULARGRID_NUM_POINT`. The historical Python worker
 did not expose its opaque cuEST plan; reconstructing a different host grid would
 not be a valid audit. Export/import feasibility investigation is in progress;
 no grid-controlled campaign has been run.
+
+### Triple-zeta augmentation control
+
+`tz_job.sh` and `tz_control.py` prepare a new, separate control: **cc-pVTZ
+versus aug-cc-pVTZ**, peptide/PBE preflight followed by Protein83 across all
+five rungs. Their AO counts are 496/782 and 1786/2806, respectively.
+This isolates augmentation without also changing double- to triple-zeta.
+The internal host budget is 160 GiB, with 256G requested and one H200.
+
+For each system/functional, a diagnostic cc-pVTZ Psi4 solve exports its actual
+native-default cuEST coordinates and total weights. Both engines also export
+native defaults for **each basis**; the private native-default comparisons record
+both measured point counts and identify the smaller active mesh. Missing native
+exports prevent the campaign from being marked complete; the native meshes
+themselves need not be equal.
+The control freezes the **cuEST source mesh**, not necessarily the smaller
+native default. GPU4PySCF imports its final weights directly, disables
+density pruning and permits zero-weight alignment padding only.
+
+Four successful diagnostic SCFs (two bases × two engines) and exact nonzero
+coordinate/total-weight multiset comparisons are mandatory before any timing
+repeat for that functional. Equal counts alone fail this gate. The subsequent
+fresh timing workers do not export meshes: Psi4 queries the actual device point
+count, while GPU4PySCF verifies and installs the same hash-pinned raw mesh.
+Full-array verification is therefore diagnostic-arm evidence, not a claim
+that every unprofiled cuEST XC entry was copied and hashed.
+The controller preserves every failure, including a range-separated DF
+batching assertion; a failed gate leaves timings explicitly skipped, not zero.
+
+The chemistry clock includes fixed-grid import/verification for GPU4PySCF;
+`grid_import_wall_s` records that setup cost separately. Neither this asymmetry,
+different guesses/convergence norms, nor unchanged DF implementation differences
+justify calling these clocks identical kernel-throughput measurements.
+Peak RSS and independent sampled process/device GPU memory accompany workers,
+including failures. Profile memory/export overhead is excluded from timing-arm
+headlines. Numerical energy differences still need scientific review.
+
+The GPU wrapper verifies the new compiled build artifact and runs **both**
+allocated-GPU exporter tests (skips fail the gate), then the peptide control
+before the Protein83 panel. Use a new detached harness checkout rather than
+advancing the source checkout pinned by exporter build job14043163.
+Submit with explicit `--qos=embers`, `--signal=TERM@120`, unique logs/results,
+and five-minute state monitoring by default. On 2026-10-14 the user explicitly
+approved cancelling/replacing embers build14043163 with one new inferno CPU
+build (2h) and one inferno H200 control job (4h), charged to `gts-cs207`.
+This approval does not extend to additional recovery jobs. The build wrapper's
+fourth argument records the authorized QoS; defaults remain embers.
+The control wrapper's sixth argument likewise records the intended QoS and its
+seventh independently pins the build job ID. It requires the compiled commit
+to equal its immutable harness/source commit and copies the build manifest.
+If queuing behind the build, use `afterany` with artifact verification, never
+an `afterok` chain. Prepared scripts and passing local unit tests do not mean
+that the GPU exporter or fixed-grid integration has been validated.
 
 Regenerate and publish through the existing tailnet-only `/docs/` mount:
 
