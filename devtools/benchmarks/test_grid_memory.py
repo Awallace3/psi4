@@ -87,6 +87,22 @@ def test_potential_grid_transition_metadata_does_not_require_wfn():
     data = Boundaries.describe(potential)
     assert data["initial_grid"] is False
     assert data["grid_points"] == 4321 and data["nbf"] == 50
+    assert data["grid_points_source"] == "host-grid"
+
+
+def test_gpu_host_placeholder_is_unknown_not_zero():
+    def must_not_read():
+        raise AssertionError("Host grid arrays are not GPU metadata")
+    grid = SimpleNamespace(npoints=must_not_read, max_points=must_not_read,
+                           max_functions=must_not_read, collocation_size=must_not_read)
+    potential = SimpleNamespace(
+        initial_grid=lambda: True, grid=lambda: grid, nblocks=lambda: 0,
+        basis=lambda: SimpleNamespace(nbf=lambda: 922))
+    data = Boundaries.describe(potential)
+    assert data["grid_points"] is None
+    assert data["grid_points_source"] == "gpu-count-not-exposed"
+    assert data["max_host_block_points"] is None and data["host_collocation_size"] is None
+    assert "grid_metadata_error" not in data
 
 
 @pytest.mark.parametrize("memory,exit_code,expected_ok", [

@@ -83,7 +83,11 @@ from pathlib import Path
 root = Path(sys.argv[1])
 rows = [json.loads(line) for line in (root/"memory/boundaries.jsonl").read_text().splitlines()]
 assert any(r["phase"] == "jk_initialize" for r in rows), "JK boundary hook missing"
-assert any(r.get("grid_points", 0) > 0 for r in rows), "Actual GPU grid count unavailable"
+assert any(r.get("nbf", 0) > 0 and "initial_grid" in r for r in rows), "Grid phase metadata missing"
+# Host-grid npoints() is deliberately zero for a GPU-resident grid. Preserve
+# that API limitation as unknown, never invent a count or call it zero points.
+assert any(r.get("grid_points_source") == "gpu-count-not-exposed" or
+           (r.get("grid_points") or 0) > 0 for r in rows), "Grid metadata source missing"
 if sys.argv[2] != "fixed99" and sys.argv[2] != "fixed75":
     assert any(r["phase"] == "xc_set_grid" and r["event"] == "leave"
                and r.get("initial_grid") is False for r in rows), "Final switch hook missing"
@@ -113,6 +117,7 @@ for p in sorted(root.glob("*/*/memory/summary.json")):
 report = dict(diagnostic_only=True, eligible_for_speedup_bars=False,
               expected_cases=30, cases=cases,
               complete=len(cases) == 30 and all(r["ok"] for r in cases),
+              gpu_grid_point_counts="Not exposed by the pinned binary; host-grid zero is recorded as null, not an actual count.",
               scope="Fixed geometry/basis within each system; cross-system NBF is not an independent basis scan.")
 (root/"memory-evidence.json").write_text(json.dumps(report, indent=2) + "\n")
 if not report["complete"]:

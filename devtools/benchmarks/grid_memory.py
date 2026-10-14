@@ -146,12 +146,18 @@ class Boundaries:
             potential = wfn if is_potential else wfn.V_potential()
             if potential is not None:
                 grid = potential.grid()
+                blocks = potential.nblocks()
+                # GPU grid construction deliberately leaves the host block
+                # arrays/counters empty. A host npoints()==0 is not an empty
+                # integration grid and must not be reported as its real size.
+                host_grid = blocks > 0
                 data.update(initial_grid=potential.initial_grid(),
-                            grid_points=grid.npoints(),
-                            grid_blocks=potential.nblocks(),
-                            max_block_points=grid.max_points(),
-                            max_block_functions=grid.max_functions(),
-                            collocation_size_reported=grid.collocation_size())
+                            grid_points=grid.npoints() if host_grid else None,
+                            grid_points_source="host-grid" if host_grid else "gpu-count-not-exposed",
+                            host_grid_blocks=blocks,
+                            max_host_block_points=grid.max_points() if host_grid else None,
+                            max_host_block_functions=grid.max_functions() if host_grid else None,
+                            host_collocation_size=grid.collocation_size() if host_grid else None)
         except Exception as exc:
             data["grid_metadata_error"] = str(exc)
         return data

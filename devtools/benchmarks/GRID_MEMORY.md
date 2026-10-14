@@ -168,8 +168,12 @@ Artifacts:
   process-tree residency in MiB, host RSS/HWM snapshots and current phase.
 - `boundaries.jsonl`: JK initialization, SCF initialization/finalization,
   RHF/UHF `form_G`, and Python-requested XC grid changes. Wavefunction
-  metadata includes NBF, Naux, retained grid points and block extents where
-  available. No wavefunction references are retained.
+  metadata includes NBF, Naux, grid state, and host grid points/block extents
+  where available. GPU grids bypass host block construction: their host
+  counters are placeholders, not GPU point counts. These traces record
+  `grid_points=null`, `grid_points_source="gpu-count-not-exposed"` and null
+  host block/collocation sizes instead of treating zero as an actual count.
+  No wavefunction references are retained.
 - `summary.json`: sampled overall and per-phase peaks; unavailable accounting
   and failed samples are explicitly reported, never substituted with zero
   or device-wide totals.
@@ -190,6 +194,9 @@ Limitations:
   modified scientific binary is introduced by these hooks.
 - Class-method hooks need a real Psi4 smoke test in addition to unit tests;
   GPU accounting needs a compute-node check, not login-node discovery.
+- The current Python API does not expose cuEST's actual GPU point count.
+  Do not infer retained points from host counters or nominal radial/angular
+  products. Exact GPU counts require a separate source-level query.
 
 If sampled traces leave the binding peak unresolved, the next targeted probe
 should log exact workspace descriptor bytes and allocation/free lifetimes at
@@ -198,15 +205,17 @@ Never silently present sampled residency as an exact allocator ledger.
 
 ## Validation and staged campaign
 
-Local validation: **15 unit/supervisor tests passed**, including unavailable
-accounting and nonzero child exits. Real CPU Psi4 switching passed with 49
+Local validation: **16 unit/supervisor tests passed**, including unavailable
+accounting, nonzero child exits, and GPU host-placeholder metadata. The earlier
+15-test version also passed on Phoenix. Real CPU Psi4 switching passed with 49
 recorded boundaries, including JK initialization and both initial/final
 `form_G` states. This validates the hooks, not GPU accounting.
 
 `grid_memory_run.sh` requires both validated backend receipts and matching
 core hashes. It runs one diagnostic per grid arm for water, nanotube and
 protein83, separately for host/CUDA LibXC (30 fresh processes). Water gates
-the larger cases, and missing grid/boundary metadata is an error.
+the larger cases, and missing grid/boundary metadata is an error. Explicitly
+unavailable GPU point counts are accepted; host point counts must be positive.
 The aggregate is `memory-evidence.json`; diagnostic child results are
 explicitly marked ineligible for speedup bars.
 
