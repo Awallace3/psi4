@@ -2,6 +2,7 @@
 """Fresh true-CPU / GPU comparisons: same grids, allocation, threads and workload."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -10,7 +11,9 @@ import subprocess
 import sys
 import tempfile
 
-import grid_evidence as grid
+_spec = importlib.util.spec_from_file_location("paired_grid_worker", Path(__file__).with_name("grid_evidence.py"))
+grid = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(grid)
 
 ARMS = ("fixed99", "aggressive99", "coarse75")
 ROUTES = ("cpu", "host", "cuda")

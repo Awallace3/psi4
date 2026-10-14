@@ -1,8 +1,11 @@
 import copy
+import importlib.util
 from pathlib import Path
 import unittest
 
-import cpu_gpu_grids as paired
+spec = importlib.util.spec_from_file_location("paired_grid_campaign", Path(__file__).with_name("cpu_gpu_grids.py"))
+paired = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(paired)
 
 
 class PairedTests(unittest.TestCase):
