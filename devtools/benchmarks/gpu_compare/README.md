@@ -218,3 +218,57 @@ the isolated payload using absolute `/usr/bin/env` and `/bin/bash`.
 Every selected functional and configuration is copied/hash-pinned.
 Production failures remain explicit; fail-fast avoids spending extra repeats
 on an already failing large-basis path. No unsupported-basis counts are accepted.
+
+## CPU and GPU memory accounting
+
+Both engines now run under a fresh, stdlib-only resource supervisor
+(`memory.py`). After reaping its child, it writes Linux
+`RUSAGE_CHILDREN.ru_maxrss` in **KiB**, even when the worker exits nonzero or
+is killed by a signal. This is the largest **individual child process** RSS
+high-water mark, not summed process-tree memory; the worker's existing
+`RUSAGE_SELF` field is also preserved. CPU RSS does not include device memory.
+A whole-job/cgroup kill can prevent the supervisor's final write; missing
+RSS is explicitly unavailable, never zero.
+
+An independent controller thread records a flushed per-worker `*.memory.csv`
+at a nominal **1-second** interval:
+
+- Sum of `/proc` RSS for the worker and descendants (may double-count shared
+  pages); before the child identity file exists, the supervisor tree is used.
+- NVML compute-process GPU memory filtered by worker-tree PIDs and the
+  validated GPU UUID, including cached allocator pools.
+- Whole-device used memory on that UUID, separately labeled.
+
+`*.usage.json` and the record's `memory` object retain RSS source, CPU/GPU
+observed peaks, sample counts and collection errors. Unsupported GPU process
+queries/namespace restrictions must be reviewed; sampled peaks are lower
+bounds and are not exact allocator high-water marks. `memory` summaries include
+failed workers and coverage counts, independently of timing eligibility.
+CPU and GPU sampling use independent threads, so a slow NVML query cannot
+block RSS observations. Device and process queries retain independent results;
+per-metric successful sample counts and historical-fallback sources are reported.
+Interrupted attempts are persisted before the controller re-raises its signal
+exception. The supervisor terminates the worker's separate process group,
+including lingering descendants, before another attempt is allowed to start.
+Sample queries can perturb execution; both arms use the same observer.
+Common chemistry clocks remain unchanged; process clocks additionally include
+supervisor startup/exit, but exclude sampler shutdown latency.
+Previous runs used only worker RSS and allocation-level NVML samples, so their
+exact failed-worker RSS and process-attributed GPU peaks cannot be recovered.
+
+Historical data from both bases are reported without modifying raw results:
+
+```bash
+python3 devtools/benchmarks/gpu_compare/memory_report.py \
+  --campaign .pi/gpu_compare/archive/20261013-inferno/production/campaign \
+  --campaign .pi/gpu_compare/archive/20261013-aug-cc-pvtz/peptide_pbe/campaign \
+  --campaign .pi/gpu_compare/archive/20261013-aug-cc-pvtz/protein83_all/campaign \
+  --campaign .pi/gpu_compare/archive/20261013-aug-cc-pvtz/protein157_pbe/campaign \
+  --output outputs/gpu-dft-memory-20261014
+```
+
+That Markdown report displays **peak RSS** and observed GPU device peaks with
+RSS coverage; JSON/CSV retain all 134 workers including profiles and failures.
+The main cc-pVDZ renderer also displays per-functional CPU/GPU memory.
+Protein157/Psi4's 364.065-GiB failed allocation request is not an observed
+allocated GPU peak.

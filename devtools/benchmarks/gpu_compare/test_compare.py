@@ -5,7 +5,10 @@ from pathlib import Path
 import tempfile
 import subprocess
 import copy
+import sys
+import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("compare", ROOT / "compare.py")
@@ -94,6 +97,58 @@ class CompareTests(unittest.TestCase):
         row = self.row([self.record("psi4"), self.record("pyscf", energy_hartree=-99)])
         self.assertTrue(row["complete"])
         self.assertTrue(row["energy_review"])
+
+    def test_memory_summary_retains_failed_worker_and_missing_values(self):
+        records = [self.record("psi4", process_returncode=1,
+                              memory={"peak_rss_kib": 123, "sampled_gpu_process_peak_mib": None}),
+                   self.record("pyscf", memory={"peak_rss_kib": 456,
+                                                "sampled_gpu_process_peak_mib": 10})]
+        row = self.row(records)
+        self.assertFalse(row["complete"])
+        self.assertEqual(row["psi4"]["memory"]["peak_rss_kib"]["max"], 123)
+        self.assertEqual(row["psi4"]["memory"]["sampled_gpu_process_peak_mib"]["missing"], 1)
+
+    def test_controller_interruption_preserves_attempt_and_peak_rss(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            ready = base / "ready"
+            command = [sys.executable, "-c",
+                       f"from pathlib import Path;import time;x=bytearray(32*1024**2);"
+                       f"Path({str(ready)!r}).touch();time.sleep(100)"]
+            real_popen = subprocess.Popen
+            def popen(*args, **kwargs):
+                proc = real_popen(*args, **kwargs)
+                wait = proc.wait
+                first = True
+                def interrupted_wait(*args, **kwargs):
+                    nonlocal first
+                    if first:
+                        first = False
+                        deadline = time.monotonic() + 5
+                        while not ready.exists() and time.monotonic() < deadline:
+                            time.sleep(.01)
+                        if not ready.exists():
+                            raise RuntimeError("Fixture did not start")
+                        raise KeyboardInterrupt("scheduler TERM fixture")
+                    return wait(*args, **kwargs)
+                proc.wait = interrupted_wait
+                return proc
+            identity = dict(engine="psi4", system="peptide", functional="pbe",
+                            profile=False, repeat=0)
+            with patch.object(m.subprocess, "Popen", side_effect=popen), \
+                 patch("memory.gpu_sample", return_value=dict(
+                     gpu_device_mib=100, gpu_process_mib=90, error="")):
+                record, interrupted = m.observed_worker(
+                    command, os.environ.copy(), base, "attempt", identity, "gpu", 20, sys.executable)
+            self.assertFalse(record["ok"])
+            self.assertGreater(record["memory"]["peak_rss_kib"], 32*1024)
+            records = []
+            with self.assertRaises(KeyboardInterrupt):
+                m.persist_attempt(base, records, record, self.c, ["peptide"], interrupted)
+            saved = json.loads((base / "records.json").read_text())
+            self.assertEqual(len(saved), 1)
+            self.assertIn("controller_interrupted", saved[0])
+            self.assertEqual(saved[0]["memory"]["peak_rss_kib"], record["memory"]["peak_rss_kib"])
 
     def test_no_pruning_and_native_fp64(self):
         opts = m.psi_options(self.c)

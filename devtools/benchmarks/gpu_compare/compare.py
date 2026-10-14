@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 import traceback
+from memory import MemoryMonitor, stop_supervisor
 
 HERE = Path(__file__).resolve().parent
 ENGINES = ("psi4", "pyscf")
@@ -403,6 +404,17 @@ def summarize(records, c, systems):
                         values = [r[field] for r in good]
                         row[engine][field] = dict(median=statistics.median(values),
                                                  min=min(values), max=max(values))
+                if any("memory" in r for r in group):
+                    # Include failures: their memory observations are useful capacity evidence.
+                    row[engine]["memory"] = {}
+                    for field in ("peak_rss_kib", "sampled_tree_rss_peak_kib",
+                                  "sampled_gpu_process_peak_mib", "sampled_gpu_device_peak_mib"):
+                        values = [r.get("memory", {}).get(field) for r in group]
+                        known = [v for v in values if v is not None]
+                        row[engine]["memory"][field] = dict(
+                            observed=len(known), missing=len(values) - len(known),
+                            median=statistics.median(known) if known else None,
+                            max=max(known) if known else None)
             row["complete"] = bool(groups["psi4"] and groups["pyscf"])
             if row["complete"]:
                 p, g = row["psi4"], row["pyscf"]
@@ -449,6 +461,46 @@ def engine_env(engine, a):
     env["MKL_NUM_THREADS"] = str(a.threads)
     env["OPENBLAS_NUM_THREADS"] = str(a.threads)
     return env
+
+
+def observed_worker(cmd, env, output, name, identity, uuid, timeout, supervisor_python):
+    """Return even an interrupted attempt; caller persists it before re-raising."""
+    usage_path = output / f"{name}.usage.json"
+    wrapped = [str(supervisor_python), str(HERE / "memory.py"),
+               "--usage", str(usage_path), "--"] + cmd
+    start, started_unix_s = time.perf_counter(), time.time()
+    interrupted = None
+    with (output / f"{name}.log").open("w") as log:
+        proc = subprocess.Popen(wrapped, env=env, stdout=log,
+                                stderr=subprocess.STDOUT, start_new_session=True)
+        with MemoryMonitor(proc.pid, usage_path, output / f"{name}.memory.csv", uuid) as mem:
+            try:
+                rc = proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                stop_supervisor(proc, usage_path)
+                rc = 124
+            except BaseException as exc:
+                interrupted = exc
+                rc = stop_supervisor(proc, usage_path) or 143
+            process_elapsed, ended_unix_s = time.perf_counter() - start, time.time()
+    out = output / "results" / name
+    record = load_result(out / "result.json", identity)
+    record.update(process_returncode=rc, process_wall_s=process_elapsed,
+                  started_unix_s=started_unix_s, ended_unix_s=ended_unix_s,
+                  output=str(out), memory=mem.summary())
+    if rc or interrupted:
+        record["ok"] = False
+    if interrupted:
+        record["controller_interrupted"] = f"{type(interrupted).__name__}: {interrupted}"
+    return record, interrupted
+
+
+def persist_attempt(output, records, record, config, systems, interrupted=None):
+    records.append(record)
+    atomic_json(output / "records.json", records)
+    atomic_json(output / "summary.json", summarize(records, config, systems))
+    if interrupted:
+        raise interrupted
 
 
 def campaign(a):
@@ -538,40 +590,13 @@ def campaign(a):
                         if profile:
                             cmd.append("--profile")
                         env = engine_env(engine, a)
-                        start = time.perf_counter()
-                        started_unix_s = time.time()
-                        with (a.output / f"{name}.log").open("w") as log:
-                            proc = subprocess.Popen(cmd, env=env, stdout=log,
-                                                    stderr=subprocess.STDOUT, start_new_session=True)
-                            try:
-                                rc = proc.wait(timeout=c["worker_timeout_s"])
-                            except subprocess.TimeoutExpired:
-                                os.killpg(proc.pid, signal.SIGTERM)
-                                try:
-                                    proc.wait(timeout=30)
-                                except subprocess.TimeoutExpired:
-                                    os.killpg(proc.pid, signal.SIGKILL)
-                                    proc.wait()
-                                rc = 124
-                            except BaseException:
-                                os.killpg(proc.pid, signal.SIGTERM)
-                                try:
-                                    proc.wait(timeout=30)
-                                except subprocess.TimeoutExpired:
-                                    os.killpg(proc.pid, signal.SIGKILL)
-                                    proc.wait()
-                                raise
-                        r = load_result(out / "result.json", dict(engine=engine,
-                            system=system, functional=functional, profile=profile, repeat=repeat))
-                        r.update(process_returncode=rc, process_wall_s=time.perf_counter() - start,
-                                 started_unix_s=started_unix_s, ended_unix_s=time.time(), output=str(out))
-                        if rc:
-                            r["ok"] = False
+                        r, interrupted = observed_worker(cmd, env, a.output, name,
+                            dict(engine=engine, system=system, functional=functional,
+                                 profile=profile, repeat=repeat), device["uuid"],
+                            c["worker_timeout_s"], a.gpu_env / "bin/python")
                         if r.get("ok") and r["gpu"]["uuid"] != device["uuid"]:
                             r.update(ok=False, error="Worker ran on a different GPU UUID")
-                        records.append(r)
-                        atomic_json(a.output / "records.json", records)
-                        atomic_json(a.output / "summary.json", summarize(records, c, systems))
+                        persist_attempt(a.output, records, r, c, systems, interrupted)
                         print(name, "OK" if r["ok"] else "FAILED", r.get("error", ""), flush=True)
                         if a.stop_on_worker_failure and not r["ok"]:
                             raise RuntimeError(f"Stopping after failed worker {name}; records preserved")

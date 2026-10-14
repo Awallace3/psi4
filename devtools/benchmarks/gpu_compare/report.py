@@ -150,6 +150,18 @@ def markdown(data):
         out.append(f"| {r['functional']} | {p['psi4_jk']['wall_s']:.3f} | "
                    f"{p['pyscf_jk']['wall_s']:.3f} | {p['psi4_xc']['wall_s']:.3f} | "
                    f"{p['pyscf_xc']['wall_s']:.3f} | {p['psi4_xc']['calls']} / {p['pyscf_xc']['calls']} |")
+    out += ["", "## Per-comparison CPU and GPU memory", "",
+            "Peak worker RSS: maximum across three unprofiled repeats per engine. "
+            "GPU: largest 1-second whole-device observation within those worker intervals, "
+            "not exact process allocation peak. All values in GiB; profiles excluded.", "",
+            "| System | Functional | Psi4 peak RSS | PySCF peak RSS | Psi4 sampled GPU device peak | PySCF sampled GPU device peak |",
+            "|---|---|---:|---:|---:|---:|"]
+    for r in data["rows"]:
+        cpu = [f"{max(r[e]['maxrss_gib_range']):.3f}" for e in ("psi4", "pyscf")]
+        gpu = [f"{r[e]['sampled_whole_device_max_mib'] / 1024:.3f}"
+               if r[e]["sampled_whole_device_max_mib"] is not None else "N/A"
+               for e in ("psi4", "pyscf")]
+        out.append(f"| {r['system']} | {r['functional']} | " + " | ".join(cpu + gpu) + " |")
     out += ["", "GPU4PySCF spends most of its Protein83 diagnostic SCF clock in XC "
             "(approximately 68–92%). It also performs more XC calls and SCF iterations. "
             "Per-call XC is still slower in these diagnostic boundaries, but grids, "
@@ -198,6 +210,7 @@ def markdown(data):
 def html_report(data):
     table_rows = []
     profile_rows = []
+    memory_rows = []
     for r in data["rows"]:
         p, g = r["psi4"], r["pyscf"]
         fmt = lambda x: f"{x['median']:.3f} <small>[{x['min']:.3f}–{x['max']:.3f}]</small>"
@@ -205,6 +218,12 @@ def html_report(data):
             f"<td>{fmt(p['calculation_wall_s'])}</td><td>{fmt(g['calculation_wall_s'])}</td>"
             f"<td class='win'>{r['psi4_speedup']:.2f}×</td><td>{p['scf_iterations']['median']} / "
             f"{g['scf_iterations']['median']}</td><td>{r['energy_delta_pyscf_minus_psi4_eh']:+.2e}</td></tr>")
+        values = [f"{max(r[e]['maxrss_gib_range']):.3f}" for e in ("psi4", "pyscf")]
+        values += [f"{r[e]['sampled_whole_device_max_mib'] / 1024:.3f}"
+                   if r[e]["sampled_whole_device_max_mib"] is not None else "N/A"
+                   for e in ("psi4", "pyscf")]
+        memory_rows.append(f"<tr><td>{r['system']}</td><td>{r['functional']}</td>" +
+                           "".join(f"<td>{v}</td>" for v in values) + "</tr>")
         if r["system"] == "protein83":
             t = r["profile"]
             profile_rows.append(f"<tr><td>{r['functional']}</td>"
@@ -251,6 +270,12 @@ Do not sum nested timers. Psi4 XC = full RV: Form V, not just CUDA functional ev
 <p class="callout">GPU4PySCF's diagnostic clock is XC-dominated and takes more iterations.
 Per-call XC is also slower in these measured boundaries, but different quadratures,
 screening, solver norms and instrumentation prevent attributing this ratio to a single kernel.</p></section>
+<section><h2>CPU and GPU memory</h2><p>GiB. Peak RSS is the maximum across three unprofiled workers.
+GPU values are 1-second whole-device observed peaks within those worker intervals—not exact
+per-process device allocation high-water marks. Profiles excluded.</p><div class="table-wrap">
+<table><thead><tr><th>System</th><th>Functional</th><th>Psi4 peak RSS</th><th>PySCF peak RSS</th>
+<th>Psi4 GPU device</th><th>PySCF GPU device</th></tr></thead><tbody>""" + "".join(memory_rows) + """</tbody>
+</table></div></section>
 <section><h2>What this does—and does not—establish</h2><ul>
 <li>Post-import common calculation boundary includes runtime/device setup, molecule/basis
 construction and converged energy; excludes validation/provenance bookkeeping.</li>
