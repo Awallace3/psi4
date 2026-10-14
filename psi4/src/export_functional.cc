@@ -265,6 +265,11 @@ void export_functional(py::module &m) {
         .def("functional", &VBase::functional, "Returns the interal superfunctional.")
         .def("properties", &VBase::properties, "Returns the properties computer.")
         .def("grid", &VBase::grid, "Returns the grid object.")
+        .def("cuest_grid_points", &VBase::cuest_grid_points,
+             "Returns the actual device-grid count; requires an initialized cuEST XC plan.")
+        .def("export_cuest_grid", &VBase::export_cuest_grid,
+             "Copies the live cuEST XC plan's coordinates (bohr) and total weights (bohr^3) "
+             "to owned host matrices. Diagnostic operation; call before finalize().")
         .def("get_block", &VBase::get_block, "Returns the requested BlockOPoints.")
         .def("nblocks", &VBase::nblocks, "Total number of blocks.")
         .def("quadrature_values", &VBase::quadrature_values, "Returns the quadrature values.")

@@ -54,6 +54,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <numeric>
+#include <limits>
 #include <sstream>
 #include <cstdio>
 #include <string>
@@ -1368,6 +1369,85 @@ void VBase::print_header() const {
 }
 std::shared_ptr<BlockOPoints> VBase::get_block(int block) { return grid_->blocks()[block]; }
 size_t VBase::nblocks() { return grid_->blocks().size(); }
+size_t VBase::cuest_grid_points() const {
+#ifdef USING_cuEST
+    if (!grid_ || !cuest_xcint_plan_ || !grid_->cuest_grid()) {
+        throw PSIEXCEPTION("cuEST grid diagnostics require an initialized cuEST XC plan.");
+    }
+    uint64_t npoints = 0;
+    CHECK_CUEST(cuestQuery(cuest_handle, CUEST_MOLECULARGRID, grid_->cuest_grid(),
+                          CUEST_MOLECULARGRID_NUM_POINT, &npoints, sizeof(npoints)));
+    if (npoints > std::numeric_limits<size_t>::max()) {
+        throw PSIEXCEPTION("cuEST grid size exceeds the host address range.");
+    }
+    return static_cast<size_t>(npoints);
+#else
+    throw PSIEXCEPTION("cuEST grid diagnostics require a cuEST-enabled build.");
+#endif
+}
+
+std::vector<SharedMatrix> VBase::export_cuest_grid() const {
+#ifdef USING_cuEST
+    const size_t npoints = cuest_grid_points();
+    // Matrix dimensions are int, and its row offsets must also remain representable.
+    if (npoints == 0 || npoints > static_cast<size_t>(std::numeric_limits<int>::max()) / 3 ||
+        npoints > std::numeric_limits<size_t>::max() / (3 * sizeof(double))) {
+        throw PSIEXCEPTION("cuEST grid cannot be represented by host diagnostic matrices.");
+    }
+    auto coords = std::make_shared<Matrix>("cuEST XC coordinates (bohr)", static_cast<int>(npoints), 3);
+    auto weights = std::make_shared<Matrix>("cuEST XC total weights (bohr^3)", static_cast<int>(npoints), 1);
+    // Keep diagnostic allocations separate from the persistent XC workspace.
+    // In particular, an exception must not leak GPU memory or destroy the live plan.
+    struct ExportResources {
+        double* points = nullptr;
+        double* weights = nullptr;
+        cuestXCIntegrationGridComputeParameters_t point_params = nullptr;
+        cuestXCIntegrationWeightComputeParameters_t weight_params = nullptr;
+        cuestWorkspace_t* workspace = nullptr;
+        ~ExportResources() {
+            if (workspace) cuest_common::freeWorkspace(workspace);
+            if (point_params) cuestParametersDestroy(CUEST_XCINTEGRATIONGRIDCOMPUTE_PARAMETERS, point_params);
+            if (weight_params) cuestParametersDestroy(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, weight_params);
+            if (points) cudaFree(points);
+            if (weights) cudaFree(weights);
+        }
+    } resources;
+    const auto check_cuda = [](cudaError_t status) {
+        if (status != cudaSuccess) {
+            throw PSIEXCEPTION("cuEST grid export failed: " + std::string(cudaGetErrorString(status)));
+        }
+    };
+    check_cuda(cudaMalloc(reinterpret_cast<void**>(&resources.points), 3 * npoints * sizeof(double)));
+    check_cuda(cudaMalloc(reinterpret_cast<void**>(&resources.weights), npoints * sizeof(double)));
+    CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONGRIDCOMPUTE_PARAMETERS,
+                                      reinterpret_cast<void**>(&resources.point_params)));
+    CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS,
+                                      reinterpret_cast<void**>(&resources.weight_params)));
+    cuestWorkspaceDescriptor_t descriptor{};
+    CHECK_CUEST(cuestXCIntegrationGridComputeWorkspaceQuery(cuest_handle, cuest_xcint_plan_,
+                resources.point_params, &descriptor, resources.points));
+    resources.workspace = cuest_common::allocateWorkspace(&descriptor);
+    CHECK_CUEST(cuestXCIntegrationGridCompute(cuest_handle, cuest_xcint_plan_, resources.point_params,
+                                             resources.workspace, resources.points));
+    check_cuda(cudaMemcpy(coords->pointer()[0], resources.points, 3 * npoints * sizeof(double),
+                           cudaMemcpyDeviceToHost));
+    cuest_common::freeWorkspace(resources.workspace);
+    resources.workspace = nullptr;
+    CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(cuest_handle, cuest_xcint_plan_,
+                CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL, resources.weight_params,
+                &descriptor, resources.weights));
+    resources.workspace = cuest_common::allocateWorkspace(&descriptor);
+    CHECK_CUEST(cuestXCIntegrationWeightCompute(cuest_handle, cuest_xcint_plan_,
+                CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL, resources.weight_params,
+                resources.workspace, resources.weights));
+    check_cuda(cudaMemcpy(weights->pointer()[0], resources.weights, npoints * sizeof(double),
+                           cudaMemcpyDeviceToHost));
+    return {coords, weights};
+#else
+    throw PSIEXCEPTION("cuEST grid diagnostics require a cuEST-enabled build.");
+#endif
+}
+
 void VBase::finalize() {
     // The collocation cache is keyed by grid block index, so it must never
     // outlive the grid it was built from.

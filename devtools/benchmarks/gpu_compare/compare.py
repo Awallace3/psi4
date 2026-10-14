@@ -19,6 +19,7 @@ import sys
 import time
 import traceback
 from memory import MemoryMonitor, stop_supervisor
+from grids import apply_pyscf_grid_settings, export_grid, grid_fingerprint
 
 HERE = Path(__file__).resolve().parent
 ENGINES = ("psi4", "pyscf")
@@ -65,7 +66,7 @@ def xyz(path, system):
 
 
 def psi_options(c):
-    return dict(
+    opts = dict(
         basis=c["basis"], puream=True, reference="rhf", scf_type="df",
         df_basis_scf=c["auxbasis"], use_cuest=True, cuest_xc=True,
         cuest_mixed_precision=c["cuest_mixed_precision"], guess="sad",
@@ -74,10 +75,91 @@ def psi_options(c):
         maxiter=c["max_iterations"], fail_on_maxiter=True,
         ints_tolerance=c["integral_tolerance"],
         df_fitting_condition=c["df_fitting_condition"],
-        dft_radial_points=c["radial_points"],
-        dft_spherical_points=c["angular_points"], dft_pruning_scheme="none",
-        dft_nuclear_scheme="becke",
     )
+    mode = c.get("grid_mode", "nominal")
+    if mode == "nominal":
+        opts.update(dft_radial_points=c["radial_points"],
+                    dft_spherical_points=c["angular_points"],
+                    dft_pruning_scheme="none", dft_nuclear_scheme="becke")
+    elif mode != "native-default":
+        raise ValueError(f"Unsupported grid mode: {mode}")
+    return opts
+
+
+def grid_identity(record):
+    return {**{key: record[key] for key in
+               ("engine", "system", "functional", "geometry_sha256")},
+            "basis": record["config"]["basis"], "grid_mode": record["grid_mode"],
+            "config_sha256": record["config_sha256"], "build_sha256": record["grid_build_sha256"]}
+
+
+def require_grid_export(record):
+    """Missing hooks must fail the requested audit, not silently pass an SCF."""
+    phase = "live-plan-before-scf" if record["engine"] == "psi4" else "xc-entry"
+    info = record.get("grid_exports", {}).get(phase, {})
+    if (not isinstance(info.get("stored_points"), int) or info["stored_points"] <= 0 or
+            info.get("stored_points") != record.get("grid_points") or
+            not info.get("nonzero_weight_points")):
+        raise RuntimeError(f"Requested grid export was not validated: {phase}")
+    if record["engine"] == "pyscf" and (
+            not record.get("grid_xc_entries_checked") or not record.get("grid_endpoints_equal")):
+        raise RuntimeError("Requested GPU4PySCF grid consumption checks were not completed")
+
+
+@contextlib.contextmanager
+def audit_psi4_grid(psi4, record, enabled):
+    """Export a live plan before the Python iterator can finalize it.
+
+    This extra device/host work is for diagnostic workers only. Never recreate a
+    host grid after SCF and present it as the grid consumed by cuEST.
+    """
+    if not enabled:
+        yield
+        return
+    if not hasattr(psi4.core.VBase, "export_cuest_grid"):
+        raise RuntimeError("Grid audit needs an instrumented cuEST build; historical stage has no exporter")
+    original = psi4.core.HF.iterations
+
+    def audited_iterations(wfn, *args, **kwargs):
+        import numpy as np
+        if "grid_exports" not in record:
+            potential = wfn.V_potential()
+            coords, weights = potential.export_cuest_grid()
+            settings = {
+                key: psi4.core.get_option("SCF", key) for key in
+                ("DFT_RADIAL_POINTS", "DFT_SPHERICAL_POINTS", "DFT_RADIAL_SCHEME",
+                 "DFT_NUCLEAR_SCHEME", "DFT_PRUNING_SCHEME", "DFT_GRID_NAME")}
+            settings["partition_note"] = "Nominal nuclear option; cuEST generates its own total weights"
+            info = export_grid("xc-grid.npz", np.asarray(coords), np.asarray(weights),
+                               grid_identity(record), phase="live-plan-before-scf", settings=settings)
+            if info["stored_points"] != potential.cuest_grid_points():
+                raise RuntimeError("Export size differs from the actual cuEST grid")
+            record["grid_exports"] = {"live-plan-before-scf": info}
+            record["grid_points"] = info["stored_points"]
+            record["grid_effective_options_at_export"] = settings
+        return original(wfn, *args, **kwargs)
+
+    psi4.core.HF.iterations = audited_iterations
+    try:
+        yield
+    finally:
+        psi4.core.HF.iterations = original
+
+
+def capture_pyscf_grid(grid, record, phase, density_cutoff):
+    import cupy as cp
+    padding = None
+    if getattr(grid, "atm_idx", None) is not None:
+        padding = int(cp.count_nonzero(grid.atm_idx == -1).item())
+    info = export_grid(f"{phase}-grid.npz", cp.asnumpy(grid.coords), cp.asnumpy(grid.weights),
+                       grid_identity(record), phase=phase, known_padding_points=padding,
+                       settings=dict(level=int(grid.level), atom_grid=grid.atom_grid,
+                           alignment=int(grid.alignment), prune=str(grid.prune),
+                           radial_method=str(grid.radi_method), partition=str(grid.becke_scheme),
+                           radii_adjust=str(grid.radii_adjust), small_rho_cutoff=float(density_cutoff)))
+    record.setdefault("grid_exports", {})[phase] = info
+    record["grid_points"] = info["stored_points"]
+    return info
 
 
 def versions():
@@ -210,6 +292,13 @@ def run_pyscf(a, c, atom, r):
                    for w in r["import_warnings"]), "cuTENSOR fallback"
     assert Path(gpu4pyscf.__file__).resolve().is_relative_to(a.gpu_env.resolve())
     r["versions"] = versions()
+    if getattr(a, "export_grid", False):
+        package = Path(gpu4pyscf.__file__).resolve().parent
+        paths = [package / "dft" / name for name in ("rks.py", "gen_grid.py", "numint.py")]
+        paths += list((package / "lib").glob("libgdft*.so"))
+        r["grid_build_files"] = {str(path): digest(path) for path in paths}
+        r["grid_build_sha256"] = hashlib.sha256(json.dumps(
+            r["grid_build_files"], sort_keys=True).encode()).hexdigest()
     calculation_start = time.perf_counter()
     lib.num_threads(c["threads"])
     cp.cuda.Device(0).use()
@@ -229,9 +318,7 @@ def run_pyscf(a, c, atom, r):
     mf = rks.RKS(mol, xc=c["functionals"][a.functional]["pyscf"]).density_fit(
         auxbasis=c["auxbasis"], only_dfj=False)
     assert mf.__class__.__module__.startswith("gpu4pyscf.")
-    mf.grids.atom_grid = (c["radial_points"], c["angular_points"])
-    mf.grids.prune = None
-    mf.small_rho_cutoff = 0.0
+    apply_pyscf_grid_settings(mf, c)
     mf.conv_tol = c["energy_convergence"]
     mf.conv_tol_grad = c["orbital_gradient_convergence"]
     mf.max_cycle = c["max_iterations"]
@@ -270,12 +357,35 @@ def run_pyscf(a, c, atom, r):
         timers.wrap_class(type(mf.with_df), "build", "df_setup")
         timers.wrap(mf, "eig", "diagonalization")
         timers.wrap(mf.grids, "build", "grid_setup")
+    audit_grid = getattr(a, "export_grid", False)
+    original_nr_rks = mf._numint.nr_rks
+    if audit_grid:
+        def audited_nr_rks(mol, grid, *args, **kwargs):
+            if "grid_exports" not in r:
+                capture_pyscf_grid(grid, r, "xc-entry", mf.small_rho_cutoff)
+            else:
+                current = grid_fingerprint(cp.asnumpy(grid.coords), cp.asnumpy(grid.weights))
+                if current["ordered_pairs_sha256"] != r["grid_exports"]["xc-entry"]["ordered_pairs_sha256"]:
+                    raise RuntimeError("GPU4PySCF grid changed at a subsequent XC entry")
+            r["grid_xc_entries_checked"] = r.get("grid_xc_entries_checked", 0) + 1
+            return original_nr_rks(mol, grid, *args, **kwargs)
+        mf._numint.nr_rks = audited_nr_rks
     sync()
     scf_start = time.perf_counter()
-    energy = mf.kernel()
+    try:
+        energy = mf.kernel()
+    finally:
+        mf._numint.nr_rks = original_nr_rks
     sync()
     calculation_elapsed = time.perf_counter() - calculation_start
-    r.update(scf_wall_s=time.perf_counter() - scf_start,
+    scf_elapsed = time.perf_counter() - scf_start
+    if audit_grid:
+        final_grid = capture_pyscf_grid(mf.grids, r, "post-scf", mf.small_rho_cutoff)
+        first_grid = r["grid_exports"]["xc-entry"]
+        r["grid_endpoints_equal"] = (
+            first_grid["ordered_pairs_sha256"] == final_grid["ordered_pairs_sha256"])
+        assert r["grid_endpoints_equal"], "Grid changed after the recorded first XC entry"
+    r.update(scf_wall_s=scf_elapsed,
              calculation_wall_s=calculation_elapsed,
              energy_hartree=float(energy), converged=bool(mf.converged),
              scf_iterations=len(history), iteration_history=history,
@@ -286,7 +396,8 @@ def run_pyscf(a, c, atom, r):
              cupy_pool_reserved_bytes=int(cp.get_default_memory_pool().total_bytes()))
     assert r["converged"], "SCF did not converge"
     r["gpu"] = cuda_identity(cp.cuda.runtime)
-    r["effective_grid"] = dict(radial_method=str(mf.grids.radi_method),
+    r["effective_grid"] = dict(level=int(mf.grids.level), atom_grid=mf.grids.atom_grid,
+        alignment=int(mf.grids.alignment), radial_method=str(mf.grids.radi_method),
         partition=str(mf.grids.becke_scheme), radii_adjust=str(mf.grids.radii_adjust),
         prune=str(mf.grids.prune), small_rho_cutoff=float(mf.small_rho_cutoff))
     r["effective_df"] = dict(linear_dep_threshold=float(df.LINEAR_DEP_THR),
@@ -303,6 +414,10 @@ def run_psi4(a, c, atom, r):
     import psi4
     r["imports_wall_s"] = time.perf_counter() - import_start
     assert Path(psi4.__file__).resolve().parent == a.psi_package.resolve()
+    if getattr(a, "export_grid", False):
+        core = next(a.psi_package.glob("core*.so"))
+        r["grid_build_files"] = {str(core): digest(core)}
+        r["grid_build_sha256"] = r["grid_build_files"][str(core)]
     calculation_start = time.perf_counter()
     psi4.core.set_output_file(str(Path.cwd() / "psi4.out"), False)
     psi4.set_memory(f'{c["memory_gib"]} GiB')
@@ -321,8 +436,9 @@ def run_psi4(a, c, atom, r):
     r["setup_wall_s"] = time.perf_counter() - start
     psi4.core.clean_timers()
     start = time.perf_counter()
-    energy, wfn = psi4.energy(c["functionals"][a.functional]["psi4"],
-                             molecule=mol, return_wfn=True)
+    with audit_psi4_grid(psi4, r, getattr(a, "export_grid", False)):
+        energy, wfn = psi4.energy(c["functionals"][a.functional]["psi4"],
+                                 molecule=mol, return_wfn=True)
     elapsed = time.perf_counter() - start
     calculation_elapsed = time.perf_counter() - calculation_start
     f = wfn.functional()
@@ -367,9 +483,15 @@ def worker(a):
              geometry_sha256=digest(a.xyz), config=c, job_id=os.getenv("SLURM_JOB_ID"),
              hostname=os.uname().nodename, python=sys.executable)
     try:
+        r["grid_mode"] = c.get("grid_mode", "nominal")
+        r["grid_export_diagnostic"] = getattr(a, "export_grid", False)
+        assert not r["grid_export_diagnostic"] or a.profile, \
+            "Grid export overhead must not enter unprofiled timing/memory comparisons"
         expected = expected_nbf(c, a.system)
         atom = xyz(a.xyz, a.system)
         {"psi4": run_psi4, "pyscf": run_pyscf}[a.engine](a, c, atom, r)
+        if r["grid_export_diagnostic"]:
+            require_grid_export(r)
         assert r["nbf"] == expected, ("Basis nbf mismatch", c["basis"], r["nbf"], expected)
         assert math.isfinite(r["energy_hartree"])
         r["runtime_libraries"] = runtime_libraries()
@@ -504,6 +626,8 @@ def persist_attempt(output, records, record, config, systems, interrupted=None):
 
 
 def campaign(a):
+    if a.export_grids and not a.profiles:
+        raise ValueError("--export-grids requires separate --profiles diagnostic workers")
     a.output.mkdir(parents=True, exist_ok=False)
     (a.output / "results").mkdir()
     (a.output / "harness").mkdir()
@@ -516,6 +640,8 @@ def campaign(a):
                                        env=engine_env(engine, a), text=True)
         (a.output / f"{engine}-pip-freeze.txt").write_text(lock)
     c = json.loads(a.config.read_text())
+    if a.native_default_grids:
+        c["grid_mode"] = "native-default"
     for system in a.systems:
         expected_nbf(c, system)
     if a.functionals:
@@ -589,6 +715,8 @@ def campaign(a):
                                "--psi-package", str(a.psi_package), "--gpu-env", str(a.gpu_env)]
                         if profile:
                             cmd.append("--profile")
+                            if a.export_grids:
+                                cmd.append("--export-grid")
                         env = engine_env(engine, a)
                         r, interrupted = observed_worker(cmd, env, a.output, name,
                             dict(engine=engine, system=system, functional=functional,
@@ -638,6 +766,8 @@ def main():
     w.add_argument("--functional", required=True)
     w.add_argument("--repeat", type=int, required=True)
     w.add_argument("--profile", action="store_true")
+    w.add_argument("--export-grid", action="store_true",
+                   help="Export the actual XC mesh; requires --profile and an instrumented Psi4 build")
     w.add_argument("--xyz", type=Path, required=True)
     w.add_argument("--psi-package", type=Path, required=True)
     w.add_argument("--gpu-env", type=Path, required=True)
@@ -652,6 +782,10 @@ def main():
     c.add_argument("--threads", type=int, default=8)
     c.add_argument("--repeats", type=int, default=3)
     c.add_argument("--profiles", action="store_true")
+    c.add_argument("--native-default-grids", action="store_true",
+                   help="Leave each program's radial/angular/pruning/density grid defaults untouched")
+    c.add_argument("--export-grids", action="store_true",
+                   help="Export actual meshes only in the separate --profiles diagnostic repeat")
     c.add_argument("--functionals", nargs="+",
                    help="Subset for focused preflight; selection is pinned in campaign config")
     c.add_argument("--stop-on-worker-failure", action="store_true",

@@ -8,6 +8,7 @@ import copy
 import sys
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
@@ -154,6 +155,49 @@ class CompareTests(unittest.TestCase):
         opts = m.psi_options(self.c)
         self.assertEqual(opts["dft_pruning_scheme"], "none")
         self.assertFalse(opts["cuest_mixed_precision"])
+
+    def test_native_psi4_grid_options_are_not_overridden(self):
+        self.c["grid_mode"] = "native-default"
+        opts = m.psi_options(self.c)
+        self.assertFalse(any(key.startswith("dft_") for key in opts))
+        self.assertTrue(opts["use_cuest"])
+        self.assertTrue(opts["cuest_xc"])
+        self.assertEqual(opts["basis"], "cc-pvdz")
+
+    def test_unknown_psi4_grid_mode_rejected(self):
+        self.c["grid_mode"] = "equal-count"
+        with self.assertRaises(ValueError):
+            m.psi_options(self.c)
+
+    def test_historical_stage_cannot_silently_export_empty_host_grid(self):
+        psi4 = SimpleNamespace(core=SimpleNamespace(VBase=type("VBase", (), {})))
+        with self.assertRaisesRegex(RuntimeError, "instrumented"):
+            with m.audit_psi4_grid(psi4, {}, True):
+                self.fail("Missing exporter should be fatal")
+
+    def test_successful_energy_without_export_hook_cannot_pass_audit(self):
+        with self.assertRaisesRegex(RuntimeError, "Requested grid export"):
+            m.require_grid_export(dict(engine="psi4", ok=True, energy_hartree=-100))
+
+    def test_zero_point_export_cannot_pass_audit(self):
+        record = dict(engine="psi4", grid_points=0,
+                      grid_exports={"live-plan-before-scf": dict(stored_points=0, nonzero_weight_points=0)})
+        with self.assertRaisesRegex(RuntimeError, "Requested grid export"):
+            m.require_grid_export(record)
+
+    def test_psi4_iterator_restored_after_audit_failure(self):
+        class HF:
+            def iterations(self):
+                raise RuntimeError("iteration failure")
+        original = HF.iterations
+        psi4 = SimpleNamespace(core=SimpleNamespace(
+            HF=HF, VBase=SimpleNamespace(export_cuest_grid=lambda: None),
+            get_option=lambda *args: "test"))
+        # Already exported: isolate the wrapper's error/restore behavior.
+        with self.assertRaisesRegex(RuntimeError, "iteration failure"):
+            with m.audit_psi4_grid(psi4, {"grid_exports": {}}, True):
+                HF().iterations()
+        self.assertIs(HF.iterations, original)
 
     def test_augmented_basis_count_and_ratio(self):
         self.c["basis"] = "aug-cc-pvtz"

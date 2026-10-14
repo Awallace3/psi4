@@ -293,6 +293,61 @@ quadratures have not been matched.
 
 ### Required next grid-controlled protocol
 
+Exporter implementation is in progress on this branch. The historical staged
+binary has **not** acquired these interfaces, and no native-default grid audit
+has been run on a GPU yet. A separate instrumented build must be validated and
+identified as a new compiled implementation; do not replace the historical
+stage or mix its timings with a rebuild's timings.
+
+`VBase.cuest_grid_points()` queries the actual molecular device grid;
+`VBase.export_cuest_grid()` exports owned `(N, 3)` coordinates and `(N, 1)`
+**total** weights from the live XC plan, before `finalize()` destroys it.
+`test_cuest_grid_export.py` checks count/shape, translated-atom Gaussian
+integration (units and layout), ownership, repeatability and lifetime.
+This test still needs a compiled cuEST build and allocated CUDA device.
+
+The controller's `--native-default-grids` removes its quadrature overrides
+from both engines, including the GPU4PySCF density cutoff override.
+`--export-grids --profiles` exports only the separate diagnostic repeat:
+Psi4 before SCF iterations release the plan, GPU4PySCF at the first numerical
+integration entry **after** native initialization/density pruning and again
+after SCF. Subsequent XC entries must match the first mesh's ordered fingerprint;
+the final capture additionally checks endpoint equality. A requested export that
+never executes is a failed audit, even if the SCF energy succeeds.
+Export overhead and host/device staging memory must not enter
+unprofiled timing or memory comparisons. The original 99×590 mode remains
+the default for replay; native-default runs must be named separately.
+
+Raw immutable `*.npz` meshes and adjacent fingerprint JSON belong only in
+private campaign artifacts, **not** the served gallery. Compare them with:
+
+```bash
+python3 devtools/benchmarks/gpu_compare/grids.py \
+  /private/psi4/xc-grid.npz /private/pyscf/xc-entry-grid.npz
+```
+
+The comparison validates content against recorded fingerprints and required
+geometry/basis/functional identity, with grid mode, config/build fingerprints
+and effective settings recorded in each artifact. A smaller **native-default**
+grid is only identified when both exports declare native-default mode.
+Its exact nonzero coordinate/weight
+multiset hash ignores order and zero-weight padding but preserves duplicates
+and negative weights. Stored, zero-weight and nonzero-weight counts remain
+separate; a nonzero-weight count is not automatically a generated physical-point
+count. A mesh audit does not alone certify a completed SCF run.
+
+Installed-interface review on Phoenix found only radial-shell/atom-grid
+construction in cuEST's public molecular-grid creation interface; no documented
+arbitrary molecular point/total-weight importer was found. Molecular-grid
+parameter attributes are reserved, so Psi4's nominal nuclear-scheme option does
+not establish the partition used by cuEST. GPU4PySCF's installed initialization
+checks for existing coordinates, and its AO screening derives from those
+coordinates, making fixed arrays a feasible candidate there; it still needs
+an allocated-GPU consumption test. **Both engines on the smaller native grid
+are not implemented or verified yet.** If GPU4PySCF's native grid is smaller,
+an unsupported cuEST import is a blocker, not permission to substitute host XC
+or claim that lower matched settings constitute an identical grid.
+
 Before further performance interpretation, export **both native-default**
 quadratures from the actual GPU XC paths (not an empty Psi4 host grid):
 coordinates in Bohr, total integration weights, grid options/element-level

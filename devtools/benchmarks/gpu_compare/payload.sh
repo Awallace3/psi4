@@ -65,6 +65,8 @@ if [[ -n "${COMPARE_FUNCTIONALS:-}" ]]; then
     extra+=(--functionals "${functionals[@]}")
 fi
 [[ "${COMPARE_FAIL_FAST:-0}" == 0 ]] || extra+=(--stop-on-worker-failure)
+[[ "${COMPARE_NATIVE_DEFAULT_GRIDS:-0}" == 0 ]] || extra+=(--native-default-grids)
+[[ "${COMPARE_EXPORT_GRIDS:-0}" == 0 ]] || extra+=(--export-grids)
 exec "$COMPARE_GPU_ENV/bin/python" "$root/compare.py" campaign \
     --systems "${systems[@]}" --repeats "$repeats" "${profiles[@]}" \
     --config "${COMPARE_CONFIG:-$root/config.json}" "${extra[@]}" \

@@ -174,6 +174,11 @@ class PSI_API VBase {
     std::shared_ptr<SuperFunctional> functional() const { return functional_; }
     std::vector<std::shared_ptr<PointFunctions>> properties() const { return point_workers_; }
     std::shared_ptr<DFTGrid> grid() const { return grid_; }
+    /// Device-grid size, not MolecularGrid's empty host-block count.
+    size_t cuest_grid_points() const;
+    /// Owned (N, 3) coordinates in bohr and (N, 1) total weights in bohr^3.
+    /// Requires an initialized cuEST XC plan; diagnostic export, not a grid setter.
+    std::vector<SharedMatrix> export_cuest_grid() const;
     std::shared_ptr<BlockOPoints> get_block(int block);
     size_t nblocks();
     std::map<std::string, double>& quadrature_values() { return quad_values_; }
