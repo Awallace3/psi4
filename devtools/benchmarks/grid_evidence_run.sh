@@ -41,6 +41,9 @@ for variant in host cuda; do
         [[ "$variant" == cuda ]] && libxc=/storage/project/r-cs207-0/awallace43/software/libxc-7.1.2-cuda/lib64:
         export LD_LIBRARY_PATH="$libxc$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         build="$science/build_grid_$variant"
+        # Python stdin adds cwd ahead of --psiapi PYTHONPATH. Never import
+        # from the source checkout: it has no staged native core.
+        cd "$out"
         eval "$("$build/stage/bin/psi4" --psiapi)"
         export EXPECTED_PSI4_PACKAGE="$build/stage/lib/psi4"
         export VALIDATION_RECEIPT="$validation/$variant/import.json"
@@ -55,7 +58,6 @@ r = json.loads(Path(os.environ["VALIDATION_RECEIPT"]).read_text())
 assert hashlib.sha256(Path(psi4.core.__file__).read_bytes()).hexdigest() == r["core_sha256"]
 print(json.dumps(r, indent=2))
 PY
-        cd "$out"
         "$env/bin/python" "$root/devtools/benchmarks/grid_evidence.py" \
             --output "$out/$variant" --variant "$variant" --threads "$OMP_NUM_THREADS" \
             --memory "112 GiB" --repeats 3 --scientific-commit "$science_pin" \

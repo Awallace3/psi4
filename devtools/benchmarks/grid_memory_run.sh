@@ -41,6 +41,8 @@ for variant in host cuda; do
         [[ "$variant" == cuda ]] && libxc=/storage/project/r-cs207-0/awallace43/software/libxc-7.1.2-cuda/lib64:
         export LD_LIBRARY_PATH="$libxc$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         build="$science/build_grid_$variant"
+        # Avoid source-checkout shadowing in the stdin provenance import.
+        cd "$out"
         eval "$("$build/stage/bin/psi4" --psiapi)"
         export EXPECTED_PSI4_PACKAGE="$build/stage/lib/psi4"
         export VALIDATION_RECEIPT="$validation/$variant/import.json"
