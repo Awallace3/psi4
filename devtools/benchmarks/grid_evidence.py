@@ -23,6 +23,8 @@ ARMS = {
     "fixed75": ((75, 302), None),
     "coarse75": ((75, 302), (35, 194)),
 }
+EXTRA_ARMS = {"aggressive99": ((99, 590), (35, 194))}
+ALL_ARMS = {**ARMS, **EXTRA_ARMS}
 SYSTEMS = {"water": "cc-pvdz", "peptide": "6-31+g**",
            "nanotube": "6-31+g**", "protein83": "6-31+g**"}
 COMPONENTS = [f"SAPT {key} ENERGY" for key in ("ELST", "EXCH", "IND", "DISP", "TOTAL")]
@@ -62,22 +64,25 @@ def timer_regions(timers):
     }
 
 
-def summarize(rows, repeats=3, tolerance=1.e-5):
+def summarize(rows, repeats=3, tolerance=1.e-5, arms=None):
     """Include only complete matched groups; retain all errors/failures separately."""
+    configs = ARMS if arms is None else {arm: ALL_ARMS[arm] for arm in arms}
+    assert "fixed99" in configs
+    assert "fixed75" in configs or all(final != (75, 302) for final, _ in configs.values())
     groups = []
     for system in dict.fromkeys(row["system"] for row in rows):
         by_arm = {arm: [r for r in rows if r["system"] == system and r["arm"] == arm]
-                  for arm in ARMS}
+                  for arm in configs}
         if not all(len(v) == repeats and all(r.get("ok") for r in v) for v in by_arm.values()):
             continue
         assert all(r["options"]["CUEST_XC_TIMING"] is False for v in by_arm.values() for r in v)
         for key in ("geometry_sha256", "backend", "scientific_commit", "threads", "memory", "package"):
             assert len({r.get(key) for v in by_arm.values() for r in v}) == 1, f"Unmatched {key}"
-        controls = {arm: by_arm[arm] for arm in ("fixed99", "fixed75")}
+        controls = {arm: by_arm[arm] for arm in ("fixed99", "fixed75") if arm in by_arm}
         base_median = statistics.median(r["wall_s"] for r in controls["fixed99"])
         arms = []
         for arm, runs in by_arm.items():
-            same = "fixed75" if arm in ("fixed75", "coarse75") else "fixed99"
+            same = "fixed75" if configs[arm][0] == (75, 302) else "fixed99"
             # Worst over all cross-repeat comparisons, not cherry-picked paired runs.
             def errors(ref):
                 return {key: max(abs(a["components"][key] - b["components"][key])
@@ -88,7 +93,7 @@ def summarize(rows, repeats=3, tolerance=1.e-5):
             median = statistics.median(samples)
             representative = min(runs, key=lambda r: abs(r["wall_s"] - median))
             arms.append(dict(
-                arm=arm, final=ARMS[arm][0], initial=ARMS[arm][1],
+                arm=arm, final=configs[arm][0], initial=configs[arm][1],
                 n=len(runs), median_s=median, min_s=min(samples), max_s=max(samples),
                 speedup=base_median / median, switching_error_eh=switching,
                 final_grid_error_eh=quadrature, agreement_pass=max(quadrature.values()) <= tolerance,
@@ -115,7 +120,7 @@ def worker(args):
     psi4.core.set_output_file(str(out / "psi4.out"), False)
     psi4.set_memory(args.memory)
     psi4.set_num_threads(args.threads)
-    final, initial = ARMS[args.arm]
+    final, initial = ALL_ARMS[args.arm]
     opts = {
         "BASIS": SYSTEMS[args.system], "SCF_TYPE": "DF", "REFERENCE": "RHF",
         "SAPT_DFT_FUNCTIONAL": "PBE0", "SAPT_DFT_GRAC_COMPUTE": "ITERATIVE",
@@ -186,7 +191,8 @@ def campaign(args):
     manifest = dict(command=sys.argv, scientific_commit=args.scientific_commit,
                     harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                     geometries_sha256=hashlib.sha256(Path(__file__).with_name("grid_geometries.json").read_bytes()).hexdigest(),
-                    systems=args.systems, arms=ARMS, repeats=args.repeats, backend=args.variant,
+                    systems=args.systems, arms={arm: ALL_ARMS[arm] for arm in args.arms},
+                    repeats=args.repeats, backend=args.variant,
                     job_id=os.getenv("SLURM_JOB_ID"),
                     timing="fresh-process energy() wall, imports/geometry/basis counts excluded; serial rotated arms",
                     microprofiling=False, memory_sampler=False, records=[])
@@ -194,7 +200,7 @@ def campaign(args):
     rows = []
     for system in args.systems:
         for repeat in range(args.repeats):
-            order = list(ARMS)
+            order = list(args.arms)
             if repeat % 2:
                 order.reverse()
             shift = (repeat + 1 if repeat % 2 else repeat // 2) % len(order)
@@ -229,11 +235,11 @@ def campaign(args):
                 rows.append(row)
                 manifest["records"].append(dict(name=name, returncode=rc, result=str(p)))
                 atomic(out / "campaign.json", manifest)
-                atomic(out / "evidence.json", summarize(rows, args.repeats))
+                atomic(out / "evidence.json", summarize(rows, args.repeats, arms=args.arms))
                 print("END", name, "rc", rc, "wall", row.get("wall_s"), flush=True)
                 if rc or not row["ok"]:
                     return 1
-    data = summarize(rows, args.repeats)
+    data = summarize(rows, args.repeats, arms=args.arms)
     data["campaign"] = manifest
     atomic(out / "evidence.json", data)
     assert len(data["groups"]) == len(args.systems)
@@ -248,7 +254,8 @@ def main():
     p.add_argument("--output", required=True)
     p.add_argument("--systems", nargs="+", choices=SYSTEMS, default=list(SYSTEMS))
     p.add_argument("--system", choices=SYSTEMS, default="water")
-    p.add_argument("--arm", choices=ARMS, default="fixed99")
+    p.add_argument("--arm", choices=ALL_ARMS, default="fixed99")
+    p.add_argument("--arms", nargs="+", choices=ALL_ARMS, default=list(ARMS))
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--repeat", type=int, default=1)
     p.add_argument("--threads", type=int, default=8)
@@ -261,6 +268,10 @@ def main():
     args = p.parse_args()
     if args.repeats < 1 or args.threads < 1:
         p.error("repeats and threads must be positive")
+    if len(set(args.arms)) != len(args.arms) or "fixed99" not in args.arms:
+        p.error("arms must be unique and include fixed99")
+    if any(ALL_ARMS[a][0] == (75, 302) for a in args.arms) and "fixed75" not in args.arms:
+        p.error("75-final arms require the matched fixed75 control")
     return worker(args) if args.worker else campaign(args)
 
 

@@ -57,6 +57,23 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(grid.timer_regions(d)["xc_s"], 4)
         self.assertEqual(grid.timer_regions(d)["functional_s"], 2)
 
+    def test_aggressive_final99_has_matched_controls(self):
+        selected = ["fixed99", "quarter99", "aggressive99"]
+        rows = [r for r in self.rows() if r["arm"] in selected]
+        rows += [dict(r, arm="aggressive99", wall_s=r["wall_s"] - 1)
+                 for r in rows if r["arm"] == "quarter99"]
+        data = grid.summarize(rows, arms=selected)
+        self.assertEqual(len(data["groups"]), 1)
+        arm = data["groups"][0]["arms"][-1]
+        self.assertEqual(arm["initial"], (35, 194))
+        self.assertEqual(arm["final"], (99, 590))
+        self.assertTrue(arm["agreement_pass"])
+        self.assertEqual(grid.summarize(rows[:-1], arms=selected)["groups"], [])
+
+    def test_selected_75_requires_fixed75(self):
+        with self.assertRaises(AssertionError):
+            grid.summarize(self.rows(), arms=["fixed99", "coarse75"])
+
 
 if __name__ == "__main__":
     unittest.main()

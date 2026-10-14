@@ -58,10 +58,15 @@ r = json.loads(Path(os.environ["VALIDATION_RECEIPT"]).read_text())
 assert hashlib.sha256(Path(psi4.core.__file__).read_bytes()).hexdigest() == r["core_sha256"]
 print(json.dumps(r, indent=2))
 PY
+        selected_arms=()
+        if [[ -n "${GRID_EVIDENCE_ARMS:-}" ]]; then
+            read -r -a selected_arms <<< "$GRID_EVIDENCE_ARMS"
+            selected_arms=(--arms "${selected_arms[@]}")
+        fi
         "$env/bin/python" "$root/devtools/benchmarks/grid_evidence.py" \
             --output "$out/$variant" --variant "$variant" --threads "$OMP_NUM_THREADS" \
             --memory "112 GiB" --repeats 3 --scientific-commit "$science_pin" \
-            --expected-package "$EXPECTED_PSI4_PACKAGE" > "$out/$variant.log" 2>&1
+            --expected-package "$EXPECTED_PSI4_PACKAGE" "${selected_arms[@]}" > "$out/$variant.log" 2>&1
     )
 done
 test "$(git -C "$science" rev-parse HEAD)" = "$science_pin"
