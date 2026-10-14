@@ -17,6 +17,14 @@
   three frequencies, not 12; other cases remain 12. Numerical tolerances
   unchanged. New four-case native budget regression also checks independent
   contraction references; prospective full GPU suite expands to **56**.
+- Full expanded native FDDS+CPSCF gate at test-driver pin
+  `2a6b3b63da2bee8b6718b81f18e6579c5e5e4346`: **55 passed, zero failures,
+  errors or skips, 18.239 s** (45 native FDDS + 10 native CPSCF; GPU cases
+  deliberately deselected). Evidence
+  `build_fdds_cpu/diagnosis-local/{full-native.xml,full-native.log,full-native-provenance.json}`.
+  Scientific C++ unchanged, so the existing CPU-only binary at scientific
+  pin8810da5743 was used without rebuild; core SHA256 and native-only ldd
+  provenance are recorded explicitly. This is not GPU validation.
 - Frozen diagnostic job14006185 still uses original source/tests to obtain the
   requested GPU traceback/GDB stack; it is not repointed to these changes.
   Native crash cause remains unknown, no full GPU rerun submitted, and no
