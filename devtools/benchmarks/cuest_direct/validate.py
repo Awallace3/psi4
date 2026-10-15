@@ -12,11 +12,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--commit", required=True)
+    parser.add_argument("--compiled-commit", help="Pinned core source, defaults to harness commit")
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     manifest = json.loads((args.build / "build-manifest.json").read_text())
-    assert manifest["commit"] == args.commit
+    compiled_commit = args.compiled_commit or args.commit
+    assert manifest["commit"] == compiled_commit
     assert manifest["cuest_direct_jk_available"], "Direct API compile/link probe failed"
     assert subprocess.check_output(["git", "-C", str(args.repo), "rev-parse", "HEAD"],
                                    text=True).strip() == args.commit
@@ -74,7 +76,8 @@ def main():
     success = result == 0 and len(cases) >= 18 and not failures and not skips
     report = dict(
         success=success, pytest_exit=int(result), tests=len(cases), failures=failures, skips=skips,
-        commit=args.commit, build_job=manifest["job_id"], job=os.environ["SLURM_JOB_ID"],
+        harness_commit=args.commit, compiled_commit=compiled_commit,
+        build_job=manifest["job_id"], job=os.environ["SLURM_JOB_ID"],
         qos=os.environ["SLURM_JOB_QOS"], gpu=gpu, core_sha256=manifest["core_sha256"],
         cuest_library_sha256=manifest["cuest_library_sha256"], linkage=linkage,
         protocol="CPU DIRECT vs cuEST four-center DIRECT; CPU XC isolates JK numerics. "

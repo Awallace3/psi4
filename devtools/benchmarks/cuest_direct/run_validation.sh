@@ -1,17 +1,21 @@
 #!/bin/bash
-# Usage: /bin/bash run_validation.sh ABS_REPO COMMIT ABS_BUILD ABS_OUTPUT
-# Submit only inside a one-H200 embers allocation; build artifacts gate execution.
+# Usage: /bin/bash run_validation.sh ABS_REPO COMMIT ABS_BUILD ABS_OUTPUT [QOS] [COMPILED_COMMIT]
+# Defaults to embers. Any inferno submission requires explicit per-job approval.
+# Build artifacts gate execution; a newer validation-only harness may use a pinned older core.
 set -euo pipefail
 umask 027
 repo=${1:?absolute pinned source}
 commit=${2:?commit}
 build=${3:?absolute build output}
 out=${4:?unique GPU validation output}
+expected_qos=${5:-embers}
+compiled_commit=${6:-$commit}
+[[ "$expected_qos" == embers || "$expected_qos" == inferno ]]
 [[ "$repo" == /* && "$build" == /* && "$out" == /* ]]
 [[ -r "$build/build-manifest.json" && ! -e "$out" ]]
 export SLURM_JOB_QOS
 SLURM_JOB_QOS=$(squeue -h -j "${SLURM_JOB_ID:?}" -o '%q')
-[[ "$SLURM_JOB_QOS" == embers ]] || { echo "New debug work requires embers" >&2; exit 2; }
+[[ "$SLURM_JOB_QOS" == "$expected_qos" ]] || { echo "Unexpected allocation QoS" >&2; exit 2; }
 env_root=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt
 cuda=/storage/project/r-cs207-0/awallace43/software/toolchains/cuda13
 xc=/storage/project/r-cs207-0/awallace43/software/libxc-7.1.2-cuda
@@ -35,7 +39,7 @@ on_term() {
 }
 trap on_term TERM
 setsid /usr/bin/time -v "$env_root/bin/python" "$repo/devtools/benchmarks/cuest_direct/validate.py" \
-    --repo "$repo" --commit "$commit" --build "$build" --out "$out" &
+    --repo "$repo" --commit "$commit" --compiled-commit "$compiled_commit" --build "$build" --out "$out" &
 child=$!
 set +e
 wait "$child"

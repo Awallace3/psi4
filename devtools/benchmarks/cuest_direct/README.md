@@ -65,6 +65,12 @@ A separate one-H200 `embers` job, gated by that build manifest, runs:
   ABS_REPO COMMIT ABS_BUILD ABS_NEW_GPU_OUTPUT
 ```
 
+The runner defaults to `embers` and verifies the allocation QoS. Only after
+explicit approval for that particular paid job may a submitter pass `inferno`
+as the fifth argument. An optional sixth argument pins a separately recorded
+compiled-source commit when a newer validation-only harness uses an unchanged
+core; both commits and the core/SDK hashes appear in the report.
+
 `validate.py` verifies source, core and SDK hashes, actual H200 and runtime
 linkage; runs ordinary DFT `energy()` comparisons across LDA/GGA/mGGA/hybrid/RSH,
 RHF/UHF, Cartesian/spherical/symmetry cases, low-level matrix checks and existing
