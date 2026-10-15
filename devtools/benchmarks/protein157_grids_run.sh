@@ -31,8 +31,8 @@ nvidia-smi --query-gpu=name,uuid,driver_version,memory.total --format=csv,nohead
 grep -q H200 "$out/gpu.txt"
 lscpu > "$out/cpu.txt"
 scontrol show job -o "$SLURM_JOB_ID" > "$out/allocation.txt"
-grep -q 'Account=gts-cs207-chemx ' "$out/allocation.txt"
-grep -q 'QOS=embers ' "$out/allocation.txt"
+grep -q 'Account=gts-cs207 ' "$out/allocation.txt"
+grep -q 'QOS=inferno ' "$out/allocation.txt"
 cd "$out"
 "$env/bin/python" "$root/devtools/benchmarks/grid_workload_gate.py" \
     --validation "$validation" --science "$science" --pin "$science_pin" \
