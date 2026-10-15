@@ -9,7 +9,7 @@ parent branch, report or PR.
 
 - Implementation, tests and Phoenix payloads are committed and pushed.
 - Local CPU build/tests pass. **No GPU evidence yet**: Phoenix jobs are queued
-  (embers, low priority). Correctness on the cuEST grid is **not claimed** until
+  (inferno since 2026-10-15). Correctness on the cuEST grid is **not claimed** until
   the GPU jobs below pass.
 
 ## Commits
@@ -125,22 +125,27 @@ PROBE_CPU_SMOKE=1 python -P devtools/cuest_xc_response_probe.py OUT contract tim
 - Run root `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-cpks/c477c22060-20261015/`
   (`JOBS.txt`, per-link `job.sbatch`, `logs/`, `metadata/{runtime.env,COMPLETED|FAILED}`, `out/`).
   (`…/3cc9d44ebb-20261015/` holds only a `--test-only` log; unused.)
-- Account `gts-cs207-chemx`, QoS `embers` (explicit); effective QoS/partition is
-  written to each link's `metadata/runtime.env` from `scontrol`.
+- **Route change 2026-10-15:** the user approved inferno for this task ("use inferno
+  for this task"). In-place `scontrol update QOS=inferno` was rejected ("Requested
+  time limit is invalid"), so the embers jobs 14081580–14081583 were cancelled
+  before starting (record: `JOBS-embers-cancelled.txt`) and the same `job.sbatch`
+  files, edited to `--account=gts-cs207 --qos=inferno`, were resubmitted.
+  `inferno_account.sh` split: all on `gts-cs207` (worst case $0.79 per build,
+  $5.69 per H100 link). Effective QoS/partition is in each link's
+  `metadata/runtime.env`.
 
 | Job | Link | Route | Wall | Status |
 |---|---|---|---|---|
-| 14081580 | build-host | cpu-small, 24 c, 96 G | 4 h | queued (Priority) |
-| 14081581 | build-cuda | cpu-small, 24 c, 96 G | 4 h | queued (Priority) |
-| 14081582 | gpu-host: tests + probe `contract timing sapt quick` | A100\|H100\|H200, 8 c, 64 G | 6 h | afterany:14081580 |
-| 14081583 | gpu-cuda: tests + probe `contract timing sapt` | H100\|H200, 8 c, 64 G | 6 h | afterany:14081581 |
+| 14085247 | build-host | gts-cs207 / cpu-small / inferno, 24 c, 96 G | 4 h | queued |
+| 14085248 | build-cuda | gts-cs207 / cpu-small / inferno, 24 c, 96 G | 4 h | queued |
+| 14085249 | gpu-host: tests + probe `contract timing sapt quick` | gts-cs207 / A100\|H100\|H200 / inferno, 8 c, 64 G | 6 h | afterany:14085247 |
+| 14085250 | gpu-cuda: tests + probe `contract timing sapt` | gts-cs207 / H100\|H200 / inferno, 8 c, 64 G | 6 h | afterany:14085248 |
 
-`--test-only` start estimates at submission: builds 2026-10-15 22:48; gpu-host
-2026-10-19 (A100); gpu-cuda 2026-10-28 (H100). Embers priority ~12–29 vs ~250k
-for inferno. Inferno is **not** approved for this task.
+`--test-only` estimates at resubmission (conservative): builds 2026-10-16 01:10;
+gpu-host 2026-10-18 (A100); gpu-cuda 2026-10-27 (H100).
 
-Watcher: `scripts/watch_jobs.sh -i 1800 phoenix2 14081580 14081581 14081582 14081583`,
-local harness background task, log `~/docs/saptdft/cuest/cpks/watch-c477c22060.log`.
+Watcher: `scripts/watch_jobs.sh -i 1800 phoenix2 14085247 14085248 14085249 14085250`,
+local harness background task, log `~/docs/saptdft/cuest/cpks/watch-c477c22060-inferno.log`.
 
 Each GPU link writes `out/{gpu.txt,import.json (package path, core SHA256, linked
 libxc/cuest/cudart), cphf.xml/log, regressions.xml/log, tests_summary.json,
@@ -150,7 +155,7 @@ probe all exit 0. Build links write `out/{configure,build}.log`, `abi-after-buil
 
 ## Resume
 
-1. `scripts/job_status.sh phoenix2 14081580 14081581 14081582 14081583`.
+1. `scripts/job_status.sh phoenix2 14085247 14085248 14085249 14085250`.
 2. For each finished link: check `metadata/COMPLETED`, `out/VERIFIED` (GPU) or
    `out/BUILD_OK` (build); read `out/tests_summary.json` and `out/probe/contract.json`.
    Confirm `import.json` package path is the run's build and the variant's libxc.
