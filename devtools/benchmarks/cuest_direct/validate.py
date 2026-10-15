@@ -13,6 +13,8 @@ def main():
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--compiled-commit", help="Pinned core source, defaults to harness commit")
+    parser.add_argument("--expected-gpu", default="H200", choices=["H200", "H100"],
+                        help="Hopper device expected for this correctness allocation")
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
@@ -41,7 +43,7 @@ def main():
     assert str(library.parent) in cuest_line, linkage
     gpu = subprocess.check_output(
         ["nvidia-smi", "--query-gpu=name,uuid,memory.total,driver_version", "--format=csv,noheader"], text=True)
-    assert "H200" in gpu, gpu
+    assert args.expected_gpu in gpu, gpu
     psi4.set_memory("4 GiB")
     psi4.set_num_threads(int(os.environ["SLURM_CPUS_PER_TASK"]))
     out = args.out.resolve()
@@ -78,7 +80,8 @@ def main():
         success=success, pytest_exit=int(result), tests=len(cases), failures=failures, skips=skips,
         harness_commit=args.commit, compiled_commit=compiled_commit,
         build_job=manifest["job_id"], job=os.environ["SLURM_JOB_ID"],
-        qos=os.environ["SLURM_JOB_QOS"], gpu=gpu, core_sha256=manifest["core_sha256"],
+        qos=os.environ["SLURM_JOB_QOS"], gpu=gpu, expected_gpu=args.expected_gpu,
+        core_sha256=manifest["core_sha256"],
         cuest_library_sha256=manifest["cuest_library_sha256"], linkage=linkage,
         protocol="CPU DIRECT vs cuEST four-center DIRECT; CPU XC isolates JK numerics. "
                  "Separate CUDA-XC smoke and existing DF-JK regressions. Native CPU/device grids "

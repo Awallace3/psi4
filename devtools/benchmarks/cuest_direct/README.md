@@ -71,7 +71,12 @@ as the fifth argument. An optional sixth argument pins a separately recorded
 compiled-source commit when a newer validation-only harness uses an unchanged
 core; both commits and the core/SDK hashes appear in the report.
 
-`validate.py` verifies source, core and SDK hashes, actual H200 and runtime
+The optional seventh argument selects `H200` (default) or `H100`. Both are
+Hopper/sm90 devices, compatible with this build's CUDA XC code. H100 is suitable
+for focused numerical debugging if the H200 queue is blocked; do not combine
+its timings with an H200 performance panel.
+
+`validate.py` verifies source, core and SDK hashes, actual requested GPU and runtime
 linkage; runs ordinary DFT `energy()` comparisons across LDA/GGA/mGGA/hybrid/RSH,
 RHF/UHF, Cartesian/spherical/symmetry cases, low-level matrix checks and existing
 DF regressions; rejects skips/failures and retains each chemistry output plus
