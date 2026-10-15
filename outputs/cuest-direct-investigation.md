@@ -69,11 +69,21 @@ isolated cuEST 0.2.50 CUDA 13 library plus CUDA-enabled LibXC.
 - Run: `/storage/project/r-cs207-0/awallace43/runs/cuest-direct/20261015-7896a4b-r1`.
 - Manifest: `build-stage/build-manifest.json` beneath that run.
 
-**Allocated-GPU numerical validation has NOT run.** A test-only free H200
-request was estimated for October 29. Fresh approval is pending for one
-30-minute inferno H200 validation job, at most $0.71 on `gts-cs207`; no new paid
-GPU test has been submitted. The adapter must not be treated as a validated
-direct GPU route until the numerical tests pass.
+**Allocated-GPU numerical validation has NOT run.** Free H100 job **14081007**
+is submitted on `gts-cs207-chemx/gpu-h100/embers`, 1 H100, 4 cores, 32 GiB,
+30-minute limit. Five-minute monitoring is active. Both H200/H100 test-only
+routes estimated roughly two-week queues even on inferno, so the paid-job
+recommendation was withdrawn; no paid GPU job was submitted. Actual start time
+may change with backfill.
+
+The GPU harness source is pinned independently to
+`f4289f3debe49fe78f24cfd00d0c815b6413850a`; the compiled source/core remains the
+immutable build above. Test output will be `validation-h100-r1` beneath the
+same run, and logs are `logs/test-h100-14081007.{out,err}`. H100 timings must not
+be mixed into H200 performance comparisons.
+
+The adapter must not be treated as a validated direct GPU route until the
+numerical tests pass.
 
 The Phoenix validation runner records exact hashes, runtime
 linkage, GPU identity, per-test chemistry logs, JUnit and `validation.json`.
