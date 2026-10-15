@@ -43,6 +43,58 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(row["psi4_over_pyscf_scf_time"], 2)
         self.assertEqual(row["psi4_over_pyscf_calculation_time"], 1.5)
 
+    def test_full_process_headline_includes_imports_and_rejects_missing_clock(self):
+        self.c["headline_timing"] = "full_process_wall_s"
+        records = [self.record("psi4", full_process_wall_s=10),
+                   self.record("pyscf", full_process_wall_s=20)]
+        row = self.row(records)
+        self.assertEqual(row["headline_timing"], "full_process_wall_s")
+        self.assertEqual(row["psi4_over_pyscf_headline_time"], .5)
+        self.assertEqual(row["psi4"]["full_process_wall_s"]["median"], 10)
+        del records[0]["full_process_wall_s"]
+        self.assertFalse(self.row(records)["complete"])
+
+    def test_matching_nbf_does_not_mask_retained_dimension_mismatch(self):
+        self.c["overlap_eigenvalue_cutoff"] = 1e-7
+        policy = dict(method="canonical", absolute_eigenvalue_cutoff=1e-7)
+        row = self.row([self.record("psi4", nmo=209, overlap_policy=policy),
+                        self.record("pyscf", nmo=193, overlap_policy=policy)])
+        self.assertFalse(row["comparison_eligible"])
+        self.assertNotIn("psi4_over_pyscf_headline_time", row)
+
+    def test_memory_required_without_losing_chemistry_status(self):
+        self.c["require_memory_observations"] = True
+        records = [self.record(e, memory=dict(peak_rss_kib=123,
+                   sampled_gpu_device_peak_mib=100,
+                   sampled_gpu_process_peak_mib=None)) for e in m.ENGINES]
+        self.assertTrue(self.row(records)["complete"])
+        self.assertFalse(self.row(records)["psi4"]["gpu_process_attribution_available"])
+        records[0]["memory"]["sampled_gpu_device_peak_mib"] = None
+        row = self.row(records)
+        self.assertFalse(row["complete"])
+        self.assertTrue(row["chemistry_and_timing_complete"])
+        self.assertNotIn("psi4_over_pyscf_calculation_time", row)
+        records[0]["memory"]["sampled_gpu_device_peak_mib"] = 100
+        records[0]["memory"]["peak_rss_kib"] = None
+        self.assertFalse(self.row(records)["complete"])
+
+    def test_equal_timed_ranks_must_also_match_pinned_audit(self):
+        audit = dict(nmo=209, references={"proof": "hash"})
+        self.c["audited_overlap"] = audit
+        records = [self.record(e, nmo=208, config=dict(audited_overlap=audit))
+                   for e in m.ENGINES]
+        self.assertFalse(self.row(records)["comparison_eligible"])
+        for record in records:
+            record["nmo"] = 209
+        self.assertTrue(self.row(records)["comparison_eligible"])
+        records[0]["config"] = {}
+        self.assertFalse(self.row(records)["comparison_eligible"])
+
+    def test_stored_df_claim_requires_route_evidence(self):
+        self.c["df_mode"] = "stored-df"
+        row = self.row([self.record("psi4"), self.record("pyscf", stored_df_verified=False)])
+        self.assertFalse(row["comparison_eligible"])
+
     def test_teardown_failure_is_not_success(self):
         row = self.row([self.record("psi4"), self.record("pyscf", process_returncode=-11)])
         self.assertFalse(row["complete"])

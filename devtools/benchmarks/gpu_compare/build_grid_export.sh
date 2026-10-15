@@ -24,6 +24,7 @@ xc=/storage/project/r-cs207-0/awallace43/software/libxc-7.1.2-cuda
 source /etc/profile.d/z00_lmod_pace.sh
 module load cmake
 unset GCC_ROOT CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH LIBRARY_PATH
+unset LD_PRELOAD
 export PATH="$env_root/bin:$cuda/bin:$PATH" PYTHONNOUSERSITE=1
 export CUDA_HOME="$cuda" CUDA_PATH="$cuda"
 export LD_LIBRARY_PATH="$xc/lib64:$cuda/lib64:$env_root/lib"
@@ -87,8 +88,10 @@ assert hasattr(psi4.core.VBase, "export_cuest_grid")
 assert hasattr(psi4.core.VBase, "cuest_grid_points")
 core = next(package.glob("core*.so"))
 linkage = subprocess.check_output(["ldd", str(core)], text=True)
+dynamic = subprocess.check_output(["readelf", "-d", str(core)], text=True)
 assert "not found" not in linkage, linkage
-assert "/software/libxc-7.1.2-cuda/" in linkage, linkage
+xc_line = next(line for line in linkage.splitlines() if line.strip().startswith("libxc.so"))
+assert "/software/libxc-7.1.2-cuda/" in xc_line, linkage
 assert "libcudart.so.13" in linkage, linkage
 assert subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip() == commit
 assert not subprocess.check_output(
@@ -96,7 +99,7 @@ assert not subprocess.check_output(
 manifest = dict(
     commit=commit, version=psi4.__version__, job_id=os.environ["SLURM_JOB_ID"],
     qos=os.environ["SLURM_JOB_QOS"], package=str(package), core_sha256=hashlib.sha256(core.read_bytes()).hexdigest(),
-    linkage=linkage, gpu_test_run=False,
+    linkage=linkage, dynamic_section=dynamic, gpu_test_run=False,
     note="New instrumented comparison implementation; historical stage unchanged. CUDA grid export still requires allocated-GPU validation.",
 )
 with (run / "build-manifest.json").open("x") as stream:

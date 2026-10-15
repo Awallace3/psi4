@@ -167,6 +167,12 @@ foreach(_al ${_addons})
     endif()
 endforeach()
 
+# CUDA and host-only Libxc can share a SONAME. An earlier conda/addon
+# directory would then load the host library even with CUDA headers/target
+# selected at configure time (DT_RPATH precedes LD_LIBRARY_PATH).
+if(Libxc_ENABLE_CUDA)
+    list(PREPEND psi4_RPATH "$<TARGET_FILE_DIR:Libxc::xc>")
+endif()
 list(REMOVE_DUPLICATES psi4_RPATH)
 message(STATUS "Psi4 rpath: ${psi4_RPATH}")
 

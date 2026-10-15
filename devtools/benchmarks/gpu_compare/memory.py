@@ -61,6 +61,7 @@ def supervise(usage, command):
                              maxrss_kib=None, signal_received=received,
                              source="Interrupted before worker launch; RSS unavailable"))
         return 128 + received
+    worker_start = time.perf_counter()
     child = subprocess.Popen(command, start_new_session=True)
     if received is not None:
         signal_group(child.pid, signal.SIGTERM)
@@ -77,12 +78,14 @@ def supervise(usage, command):
                     signal_group(child.pid, signal.SIGKILL)
                     rc = child.wait()
                 break
+    full_process_wall_s = time.perf_counter() - worker_start
     # A descendant may ignore TERM even though the direct child has exited.
     # Do not let such work survive into the next benchmark attempt.
     signal_group(child.pid, signal.SIGKILL)
     peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
     save_json(usage, dict(child_pid=child.pid, state="EXITED", child_returncode=rc,
                          maxrss_kib=peak, signal_received=received,
+                         full_process_wall_s=full_process_wall_s,
                          source="Linux RUSAGE_CHILDREN.ru_maxrss: largest individual child peak, not tree sum"))
     return 128 + received if received else (rc if rc >= 0 else 128 - rc)
 

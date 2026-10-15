@@ -11,10 +11,12 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import itertools
 
 from compare import (HERE, ENGINES, atomic_json, digest, engine_env,
                      expected_nbf, observed_worker, summarize, xyz)
 from grids import compare_exports
+from protocol import compare_overlap_exports
 
 
 def matching_audit(source, candidate):
@@ -42,6 +44,7 @@ def timing_gate(proofs):
     return (set(proofs) == {"cc-pvtz", "aug-cc-pvtz"} and
             all(set(engines) == set(ENGINES) and
                 all(proof.get("verified") and proof.get("identical_nonzero_quadrature")
+                    and proof.get("overlap_rank_spectrum_verified")
                     for proof in engines.values())
                 for engines in proofs.values()))
 
@@ -68,14 +71,21 @@ def attempt(a, base, config_path, engine, system, functional, label, profile, re
         cmd += ["--profile", "--export-grid"]
     config = json.loads(config_path.read_text())
     expected = dict(engine=engine, system=system, functional=functional, repeat=repeat, profile=profile,
+                    df_mode=config.get("df_mode", "native-strategy"),
                     config_sha256=a._config_pins[config_path],
                     geometry_sha256=a._geometry_pins[system])
     if digest(config_path) != expected["config_sha256"]:
         raise RuntimeError("Configuration changed after creation")
+    audit = config.get("audited_overlap")
+    if not profile and audit:
+        if not all(digest(Path(path)) == sha for path, sha in audit["references"].items()):
+            raise RuntimeError("Diagnostic audit artifact changed before timing")
     record, interrupted = observed_worker(cmd, engine_env(engine, a), base, label, expected,
         gpu["uuid"], config["worker_timeout_s"], a.gpu_env / "bin/python")
     if record.get("ok") and record.get("gpu", {}).get("uuid") != gpu["uuid"]:
         record.update(ok=False, error="Different GPU selected")
+    if record.get("ok") and not profile and audit and record.get("nmo") != audit["nmo"]:
+        record.update(ok=False, error="Timed retained orbital dimension differs from audited rank")
     atomic_json(base / f"{label}.record.json", record)
     if interrupted:
         raise interrupted
@@ -100,8 +110,10 @@ def control(a):
     a._config_pins = {}
     a._geometry_pins = {}
     config.update(grid_mode="native-default", threads=a.threads, repeats=a.repeats)
+    config.update(overlap_eigenvalue_cutoff=1e-7, headline_timing="full_process_wall_s",
+                  require_memory_observations=True)
     if a.preflight:
-        config["functionals"] = {"pbe": config["functionals"]["pbe"]}
+        config["functionals"] = {name: config["functionals"][name] for name in ("pbe", "wb97x")}
     for system in a.systems:
         source = a.data / "geometries" / f"{system}.xyz"
         xyz(source, system)
@@ -139,25 +151,28 @@ def control(a):
         (a.output / f"{engine}-pip-freeze.txt").write_text(lock)
     atomic_json(a.output / "manifest.json", dict(
         config=config, systems=a.systems, gpu=gpu, job_id=os.environ["SLURM_JOB_ID"],
+        df_modes=a.df_modes,
         command=sys.argv, linkage=linkage, pins={str(path): sha for path, sha in pins.items()},
         geometry_sha256={path.name: digest(path) for path in (a.output / "inputs/geometries").glob("*.xyz")},
         grid_protocol="shared actual cuEST native-default mesh, not necessarily smaller native default",
         account=os.getenv("SLURM_JOB_ACCOUNT"), qos=os.getenv("SLURM_JOB_QOS"),
         partition=os.getenv("SLURM_JOB_PARTITION"),
-        timing_note="Common fresh-process chemistry clocks include setup. PySCF grid_import_wall_s is explicit; no claim of identical setup algorithms." ))
+        timing_note="Headline is fresh worker launch-to-reap, including interpreter startup, imports, grid and DF construction, SCF, validation and teardown. Internal clocks are diagnostics only." ))
     results = []
     for system in a.systems:
-        for functional in config["functionals"]:
-            case = a.output / system / functional
+        for functional, df_mode in itertools.product(config["functionals"], a.df_modes):
+            case = a.output / system / functional / df_mode
             source_base = case / "native-source"
             source_base.mkdir(parents=True)
-            native = dict(config, basis="cc-pvtz", functionals={functional: config["functionals"][functional]})
+            native = dict(config, basis="cc-pvtz", df_mode=df_mode,
+                          functionals={functional: config["functionals"][functional]})
             native_path = source_base / "config.json"
             atomic_json(native_path, native)
             a._config_pins[native_path] = digest(native_path)
             source_record, source_output = attempt(a, source_base, native_path, "psi4", system,
                                                    functional, "source", True, 0, gpu)
-            item = dict(system=system, functional=functional, complete=False, basis_runs={})
+            item = dict(system=system, functional=functional, df_mode=df_mode,
+                        headline_timing="full_process_wall_s", complete=False, basis_runs={})
             try:
                 source_info = validate_source_record(source_record)
             except RuntimeError as exc:
@@ -214,9 +229,35 @@ def control(a):
                             proofs[engine] = dict(verified=True, **matching_audit(source_mesh, candidate))
                         except (OSError, ValueError, RuntimeError) as exc:
                             proofs[engine] = dict(verified=False, error=str(exc))
+                overlap_proof = dict(verified=False, error="Both audit SCFs must succeed")
+                if all(record.get("ok") for record in records):
+                    try:
+                        overlap_proof = compare_overlap_exports(
+                            base / "results/psi4-audit/overlap-spectrum.npz",
+                            base / "results/pyscf-audit/overlap-spectrum.npz")
+                    except (OSError, ValueError, RuntimeError) as exc:
+                        overlap_proof = dict(verified=False, error=str(exc))
+                for proof in proofs.values():
+                    proof["overlap_rank_spectrum_verified"] = overlap_proof["verified"]
+                atomic_json(base / "overlap-proof.json", overlap_proof)
+                if overlap_proof["verified"]:
+                    audit_paths = [base / "overlap-proof.json", base / "grid-proof.json"]
+                    audit_paths += [base / "results" / f"{engine}-audit" / f"overlap-spectrum.{ext}"
+                                    for engine in ENGINES for ext in ("npz", "json")]
                 all_proofs[basis] = proofs
                 atomic_json(base / "grid-proof.json", proofs)
                 atomic_json(base / "records.json", records)
+                if overlap_proof["verified"]:
+                    pins.update({path: digest(path) for path in audit_paths})
+                    # Freeze a separate timed config; the diagnostic config and
+                    # its spectrum metadata must remain immutable.
+                    shared = dict(shared, audited_overlap=dict(
+                        nmo=overlap_proof["nmo"], nbf=overlap_proof["nbf"],
+                        cutoff=overlap_proof["cutoff"],
+                        references={str(path): pins[path] for path in audit_paths}))
+                    config_path = base / "config-timed.json"
+                    atomic_json(config_path, shared)
+                    a._config_pins[config_path] = digest(config_path)
                 cohorts.append((basis, base, config_path, shared, records))
             # Four successful actual-mesh audits required BEFORE spending timing repeats.
             audited = timing_gate(all_proofs)
@@ -239,7 +280,7 @@ def control(a):
                 summary[0]["actual_grid_audit_verified"] = audited
                 if not audited:
                     summary[0]["comparison_eligible"] = False
-                    summary[0]["timings_skipped_reason"] = "Four-arm actual-mesh audit did not pass"
+                    summary[0]["timings_skipped_reason"] = "Four-arm actual-mesh / retained-rank-and-spectrum audit did not pass"
                 atomic_json(base / "summary.json", summary)
                 item["basis_runs"][basis] = summary[0]
             item["grid_audits_verified"] = audited
@@ -268,6 +309,8 @@ def main():
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--preflight", action="store_true")
+    parser.add_argument("--df-modes", choices=("native-strategy", "stored-df"),
+                        nargs="+", default=["native-strategy", "stored-df"])
     args = parser.parse_args()
     for key, value in vars(args).items():
         if isinstance(value, Path):

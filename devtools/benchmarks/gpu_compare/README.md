@@ -433,6 +433,62 @@ fourth argument records the authorized QoS; defaults remain embers.
 The control wrapper's sixth argument likewise records the intended QoS and its
 seventh independently pins the build job ID. It requires the compiled commit
 to equal its immutable harness/source commit and copies the build manifest.
+
+#### Revised stored-DF/full-process protocol
+
+After the user requested an explicitly stored-DF comparison and imports-inclusive
+timing, the revised controller runs **two separately labeled DF cohorts**:
+`native-strategy` and `stored-df`. Both use the shared actual cuEST quadrature
+and matched orbital-overlap policy; the native-strategy label refers only to
+DF storage/evaluation, not to leaving every program option at its default.
+
+In GPU4PySCF's stored cohort, `with_df.use_gpu_memory=True` and an explicit
+`with_df.build()` construct the FP64 CDERI tensor **inside the timed worker**,
+before `kernel()`. It must actually reside on the selected GPU. Direct DF-J
+contractions are forbidden; stored-tensor contractions are counted and required.
+Lazy RSH DF tensors are explicitly built with the contraction's requested omega,
+inside its range-Coulomb context, before consumption; their residency is inspected
+too. Peptide PBE **and WB97X** preflights gate the larger panel.
+No host spill, CPU/exact-JK fallback,
+or smaller auxiliary basis silently rescues a failed allocation. The default
+cohort does not prebuild; its observed direct/stored call counts are preserved.
+Psi4 retains its cuEST persistent-plan path in both cohorts.
+
+Both engines explicitly use canonical orthogonalization with an absolute
+overlap eigenvalue cutoff of **1e-7**. Each worker records actual retained NMO,
+not just AO count; diagnostic workers export the full overlap eigenvalue
+spectrum. Per-basis cross-engine audits require the same cutoff/rank and
+matching spectra before timing repeats. This checks the observed 1-vs-17
+orbital deletion discrepancy; it is not a full AO-projector/density certificate.
+Timed configs pin the basis-specific audited rank and hashes/paths of diagnostic
+proofs and spectra. Every timed worker must reproduce that rank; agreement only
+between the timed engines is insufficient. Unprofiled Psi4 mesh identity still
+relies on pinned deterministic generation plus a live device-point count, not
+independent full-array export during each timed worker.
+The separate 1e-12 auxiliary-metric settings remain separate.
+
+**New headline: `full_process_wall_s`.** A fresh external supervisor measures
+worker launch through exit/reaping: Python startup, all imports, initialization,
+basis/grid construction/import, DF tensor construction, converged SCF, worker
+validation, JSON writing and interpreter/CUDA teardown. It excludes supervisor
+startup and the external memory observer's shutdown. Missing measurements fail
+closed: no substitution of a post-import chemistry clock. Existing
+`calculation_wall_s`, `scf_wall_s`, `imports_wall_s` and `df_prebuild_wall_s` remain
+diagnostics, not new headline timings. Fresh processes do not imply cold OS
+filesystem caches. Both full-lifetime peak RSS and independent GPU-memory
+samples remain active during imports and teardown.
+Completion additionally requires a valid supervisor peak RSS and at least one
+whole-device GPU-memory observation for every successful timing worker. Missing
+measurements never become zero. GPU process attribution is reported separately:
+namespace/query unavailability does not invalidate an available whole-device
+observation, which is explicitly not worker-attributed. Chemistry/timing success
+is retained separately when memory coverage prevents benchmark completion.
+
+Historical reports still use their explicitly labeled post-import clocks and
+unmatched grids; do not relabel old results as this revised protocol.
+The preceding jobs14056196/14056197 failed at the LibXC import/artifact gate;
+no shared-grid chemistry results were produced. The user authorized one
+additional inferno CPU build and one H200 job for this revision after validation.
 If queuing behind the build, use `afterany` with artifact verification, never
 an `afterok` chain. Prepared scripts and passing local unit tests do not mean
 that the GPU exporter or fixed-grid integration has been validated.

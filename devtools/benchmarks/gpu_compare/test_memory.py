@@ -31,6 +31,14 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(data["child_returncode"], 1)
         self.assertGreater(data["maxrss_kib"], 32*1024)
 
+    def test_full_process_clock_includes_imports_and_exit_handlers(self):
+        (self.root / "expensive_import.py").write_text("import time\ntime.sleep(.15)\n")
+        p, data = self.supervise(
+            f"import sys;sys.path.insert(0,{str(self.root)!r});"
+            "import expensive_import;import atexit,time;atexit.register(time.sleep,.15)")
+        self.assertEqual(p.returncode, 0)
+        self.assertGreaterEqual(data["full_process_wall_s"], .30)
+
     def test_sigkill_worker_still_has_peak_rss(self):
         p, data = self.supervise(
             "import os,signal;x=bytearray(32*1024**2);os.kill(os.getpid(),signal.SIGKILL)")

@@ -21,6 +21,7 @@ import time
 import traceback
 from memory import MemoryMonitor, stop_supervisor
 from grids import apply_pyscf_grid_settings, export_grid, grid_fingerprint, install_pyscf_shared_grid
+from protocol import overlap_cutoff, configure_pyscf_overlap, capture_overlap, pyscf_df_policy
 
 HERE = Path(__file__).resolve().parent
 ENGINES = ("psi4", "pyscf")
@@ -80,6 +81,9 @@ def psi_options(c):
         df_fitting_condition=c["df_fitting_condition"],
     )
     mode = c.get("grid_mode", "nominal")
+    cutoff = overlap_cutoff(c)
+    if cutoff is not None:
+        opts.update(s_orthogonalization="canonical", s_tolerance=cutoff)
     if mode == "nominal":
         opts.update(dft_radial_points=c["radial_points"],
                     dft_spherical_points=c["angular_points"],
@@ -358,6 +362,7 @@ def run_pyscf(a, c, atom, r):
     mf.diis_space = 8
     from gpu4pyscf.df import df
     df.LINEAR_DEP_THR = c["df_fitting_condition"]
+    configure_pyscf_overlap(c, r)
     r["df_metric_note"] = "PySCF uses Cholesky then absolute eigenvalue cutoff; Psi4/cuEST fitting is not algebraically identical"
     # Psi4 SVWN and B3LYP use VWN-RPA. Name the exact LibXC components,
     # rather than confuse those with the distinct VWN5 variants.
@@ -402,14 +407,17 @@ def run_pyscf(a, c, atom, r):
             return original_nr_rks(mol, grid, *args, **kwargs)
         mf._numint.nr_rks = audited_nr_rks
     sync()
-    scf_start = time.perf_counter()
     try:
-        energy = mf.kernel()
+        with pyscf_df_policy(mf, c, r, sync):
+            sync()
+            scf_start = time.perf_counter()
+            energy = mf.kernel()
+            sync()
+            scf_elapsed = time.perf_counter() - scf_start
     finally:
         mf._numint.nr_rks = original_nr_rks
     sync()
     calculation_elapsed = time.perf_counter() - calculation_start
-    scf_elapsed = time.perf_counter() - scf_start
     if audit_grid:
         final_grid = capture_pyscf_grid(mf.grids, r, "post-scf", mf.small_rho_cutoff)
         first_grid = r["grid_exports"]["xc-entry"]
@@ -426,6 +434,9 @@ def run_pyscf(a, c, atom, r):
              diagnostic_timers=dict(timers.data),
              cupy_pool_peak_note="End-of-run pool reservation is NOT peak device memory",
              cupy_pool_reserved_bytes=int(cp.get_default_memory_pool().total_bytes()))
+    diagnostic_overlap = a.profile and overlap_cutoff(c) is not None
+    capture_overlap(cp.asnumpy(mf.get_ovlp()) if diagnostic_overlap else None,
+                    int(mf.mo_coeff.shape[1]), r, diagnostic_overlap)
     assert r["converged"], "SCF did not converge"
     r["gpu"] = cuda_identity(cp.cuda.runtime)
     r["effective_grid"] = dict(level=int(mf.grids.level), atom_grid=mf.grids.atom_grid,
@@ -465,6 +476,8 @@ def run_psi4(a, c, atom, r):
     else:
         opts["cuest_sad"] = False
     psi4.set_options(opts)
+    if overlap_cutoff(c) is not None:
+        r["overlap_policy"] = dict(method="canonical", absolute_eigenvalue_cutoff=overlap_cutoff(c))
     start = time.perf_counter()
     mol = psi4.geometry("0 1\n" + atom + "\nunits angstrom\nsymmetry c1\nno_reorient\nno_com")
     r["setup_wall_s"] = time.perf_counter() - start
@@ -492,6 +505,9 @@ def run_psi4(a, c, atom, r):
                  short_range_exchange=float(f.x_alpha()),
                  long_range_exchange=float(f.x_alpha() + f.x_beta())
                     if f.is_x_lrc() else float(f.x_alpha())))
+    diagnostic_overlap = a.profile and overlap_cutoff(c) is not None
+    capture_overlap(wfn.S() if diagnostic_overlap else None, wfn.nmo(), r, diagnostic_overlap)
+    r["df_strategy"] = "cuest-persistent-plan"
     psi4.core.close_outfile()
     text = Path("psi4.out").read_text()
     assert "cuESTJK: GPU-Accelerated" in text, "cuEST JK not observed"
@@ -513,6 +529,7 @@ def worker(a):
     os.chdir(a.output)
     r = dict(ok=False, engine=a.engine, system=a.system, functional=a.functional,
              rung=c["functionals"][a.functional]["rung"], profile=a.profile,
+             df_mode=c.get("df_mode", "native-strategy"),
              repeat=a.repeat, config_sha256=digest(a.config),
              geometry_sha256=digest(a.xyz), config=c, job_id=os.getenv("SLURM_JOB_ID"),
              hostname=os.uname().nodename, python=sys.executable)
@@ -540,24 +557,46 @@ def worker(a):
 
 
 def summarize(records, c, systems):
+    headline = c.get("headline_timing", "calculation_wall_s")
+    if headline not in ("calculation_wall_s", "full_process_wall_s"):
+        raise ValueError("Unknown headline timing boundary")
     rows = []
     for system in systems:
         for functional in c["functionals"]:
             row = dict(system=system, functional=functional,
                        rung=c["functionals"][functional]["rung"])
+            revised = "headline_timing" in c or "df_mode" in c or overlap_cutoff(c) is not None
+            if revised:
+                row.update(headline_timing=headline, df_mode=c.get("df_mode", "native-strategy"))
             groups = {}
             for engine in ENGINES:
                 group = [r for r in records if r["system"] == system
                          and r["functional"] == functional and r["engine"] == engine
                          and not r["profile"]]
-                good = [r for r in group if r.get("ok") and r.get("process_returncode") == 0]
+                good = [r for r in group if r.get("ok") and r.get("process_returncode") == 0
+                        and isinstance(r.get(headline), (int, float)) and
+                        math.isfinite(r[headline]) and r[headline] > 0]
                 complete = len(good) == c["repeats"]
                 groups[engine] = good if complete else []
                 row[engine] = dict(planned=c["repeats"], succeeded=len(good),
                                    failures=[r.get("error", r.get("process_returncode"))
                                              for r in group if r not in good])
+                if c.get("require_memory_observations"):
+                    def observed(r, field, positive=False):
+                        value = r.get("memory", {}).get(field)
+                        return (isinstance(value, (int, float)) and math.isfinite(value)
+                                and (value > 0 if positive else value >= 0))
+                    row[engine]["chemistry_and_timing_complete"] = complete
+                    row[engine]["memory_complete"] = complete and all(
+                        observed(r, "peak_rss_kib", True) and
+                        observed(r, "sampled_gpu_device_peak_mib") for r in good)
+                    row[engine]["gpu_process_attribution_available"] = complete and all(
+                        observed(r, "sampled_gpu_process_peak_mib") for r in good)
                 if complete:
-                    for field in ("calculation_wall_s", "scf_wall_s", "process_wall_s", "scf_iterations", "energy_hartree"):
+                    fields = ["calculation_wall_s", "scf_wall_s", "process_wall_s", "scf_iterations", "energy_hartree"]
+                    if headline == "full_process_wall_s":
+                        fields.append(headline)
+                    for field in fields:
                         values = [r[field] for r in good]
                         row[engine][field] = dict(median=statistics.median(values),
                                                  min=min(values), max=max(values))
@@ -573,6 +612,10 @@ def summarize(records, c, systems):
                             median=statistics.median(known) if known else None,
                             max=max(known) if known else None)
             row["complete"] = bool(groups["psi4"] and groups["pyscf"])
+            if c.get("require_memory_observations"):
+                row["chemistry_and_timing_complete"] = row["complete"]
+                row["memory_complete"] = all(row[e]["memory_complete"] for e in ENGINES)
+                row["complete"] &= row["memory_complete"]
             if row["complete"]:
                 p, g = row["psi4"], row["pyscf"]
                 row["psi4_over_pyscf_scf_time"] = (
@@ -596,9 +639,32 @@ def summarize(records, c, systems):
                 row["comparison_eligible"] = (row["nbf_equal"] and row["naux_equal"]
                                               and row["functional_parameters_equal"]
                                               and row["functional_components_equal"])
+                if overlap_cutoff(c) is not None:
+                    all_good = groups["psi4"] + groups["pyscf"]
+                    row["retained_dimensions_equal"] = (
+                        len({r.get("nmo") for r in all_good}) == 1 and
+                        all(isinstance(r.get("nmo"), int) and r["nmo"] > 0 for r in all_good))
+                    row["overlap_policies_equal"] = all(
+                        r.get("overlap_policy") == dict(method="canonical",
+                            absolute_eigenvalue_cutoff=overlap_cutoff(c)) for r in all_good)
+                    row["comparison_eligible"] &= row["retained_dimensions_equal"] and row["overlap_policies_equal"]
+                if c.get("audited_overlap"):
+                    audit = c["audited_overlap"]
+                    all_good = groups["psi4"] + groups["pyscf"]
+                    row["timed_rank_matches_audit"] = all(
+                        r.get("nmo") == audit["nmo"] and
+                        r.get("config", {}).get("audited_overlap") == audit for r in all_good)
+                    row["audited_overlap"] = audit
+                    row["comparison_eligible"] &= row["timed_rank_matches_audit"]
+                if c.get("df_mode") == "stored-df":
+                    row["stored_df_verified"] = all(r.get("stored_df_verified") is True for r in groups["pyscf"])
+                    row["comparison_eligible"] &= row["stored_df_verified"]
+                if revised:
+                    row["psi4_over_pyscf_headline_time"] = p[headline]["median"] / g[headline]["median"]
                 if not row["comparison_eligible"]:
-                    row.pop("psi4_over_pyscf_scf_time")
-                    row.pop("psi4_over_pyscf_calculation_time")
+                    for key in list(row):
+                        if key.startswith("psi4_over_pyscf_"):
+                            row.pop(key)
             rows.append(row)
     return rows
 
@@ -669,6 +735,18 @@ def observed_worker(cmd, env, output, name, identity, uuid, timeout, supervisor_
                   started_unix_s=started_unix_s, ended_unix_s=ended_unix_s,
                   output=str(out), memory=mem.summary() if mem is not None else dict(
                       peak_rss_kib=None, collection_error="Observer construction failed"))
+    try:
+        record["full_process_wall_s"] = json.loads(usage_path.read_text()).get("full_process_wall_s")
+    except (OSError, ValueError):
+        record["full_process_wall_s"] = None
+    record["full_process_timing_scope"] = (
+        "Supervisor monotonic launch-to-reap of fresh worker; Python startup, imports, "
+        "configuration, grid/DF setup, SCF, validation, result writing and teardown; "
+        "excludes supervisor startup and observer teardown")
+    if record.get("config", {}).get("headline_timing") == "full_process_wall_s" and (
+            not isinstance(record["full_process_wall_s"], (int, float)) or
+            not math.isfinite(record["full_process_wall_s"]) or record["full_process_wall_s"] <= 0):
+        record.update(ok=False, error="Full-process timing unavailable; no chemistry-clock substitution permitted")
     if rc or interrupted:
         record["ok"] = False
     if interrupted:

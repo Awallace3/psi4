@@ -33,7 +33,8 @@ class ControlTests(unittest.TestCase):
         self.assertNotIn("BUG_STARTED", result.stdout)
 
     def test_four_arm_gate_fails_closed(self):
-        proof = dict(verified=True, identical_nonzero_quadrature=True)
+        proof = dict(verified=True, identical_nonzero_quadrature=True,
+                     overlap_rank_spectrum_verified=True)
         proofs = {basis: {engine: dict(proof) for engine in ("psi4", "pyscf")}
                   for basis in ("cc-pvtz", "aug-cc-pvtz")}
         self.assertTrue(timing_gate(proofs))
@@ -41,6 +42,9 @@ class ControlTests(unittest.TestCase):
             for engine in proofs[basis]:
                 changed = copy.deepcopy(proofs)
                 changed[basis][engine]["identical_nonzero_quadrature"] = False
+                self.assertFalse(timing_gate(changed))
+                changed = copy.deepcopy(proofs)
+                changed[basis][engine]["overlap_rank_spectrum_verified"] = False
                 self.assertFalse(timing_gate(changed))
                 del changed[basis][engine]
                 self.assertFalse(timing_gate(changed))

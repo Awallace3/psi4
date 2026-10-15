@@ -1,5 +1,8 @@
 {
-  "schema": 2,
+  "schema": 3,
+  "headline_timing": "full_process_wall_s",
+  "require_memory_observations": true,
+  "overlap_eigenvalue_cutoff": 1e-7,
   "systems": ["peptide", "protein83"],
   "functionals": {
     "svwn": {"rung": "lda", "psi4": "svwn", "pyscf": "LDA_X,LDA_C_VWN_RPA", "components": {"LDA_X": 1.0, "LDA_C_VWN_RPA": 1.0}},

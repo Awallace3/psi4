@@ -1,5 +1,6 @@
 #!/bin/bash
-# One allocated H200: validate exporter, peptide PBE control, Protein83 panel.
+# One H200: exporter tests, peptide PBE/WB97X, Protein83; native + stored-DF.
+# Headline is full worker lifetime, including imports and DF preconstruction.
 # Usage: bash tz_job.sh ABS_REPO COMMIT ABS_BUILD ABS_RUN ABS_DATA QOS BUILD_JOB_ID
 # Submit with explicit embers, 8 CPUs, 256G, gpu:h200:1, TERM@120.
 set -euo pipefail
@@ -96,8 +97,8 @@ args=(--psi-env "$psi_env" --psi-package "$psi_package"
     --data "$TMPDIR/inputs" --threads "$OMP_NUM_THREADS")
 run_child "$gpu_env/bin/python" "$root/tz_control.py" "${args[@]}" \
     --preflight --systems peptide --repeats 1 --output "$run/peptide-preflight"
-# Exit 0 from peptide requires actual matching meshes and successful SCFs in all
-# four arms. Do not spend Protein83 production if the fixed-grid path is broken.
+# Exit 0 requires matching meshes, overlap audits, memory observations and SCFs
+# in all four arms for PBE and WB97X, including the lazy RSH stored-tensor route.
 run_child "$gpu_env/bin/python" "$root/tz_control.py" "${args[@]}" \
     --systems protein83 --repeats 3 --output "$run/protein83-panel"
 (( terminated == 0 ))
