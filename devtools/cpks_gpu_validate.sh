@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # GPU validation of one cpks_gpu_build.sh build: regression tests, then the probe.
+# GPUs: H100/H200 for the CUDA LibXC build, also A100 for the host-LibXC build.
 # Arguments: worktree, environment, commit, build output (with BUILD_OK), output,
 #            variant (host|cuda), probe sections (e.g. "contract timing sapt").
 set -euo pipefail
@@ -40,7 +41,12 @@ else
     export LD_LIBRARY_PATH="$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
 nvidia-smi --query-gpu=name,uuid,driver_version,compute_cap --format=csv,noheader | tee "$out/gpu.txt"
-grep -Eq 'H100|H200' "$out/gpu.txt"
+# CUDA LibXC is built for sm_90 only; the host-LibXC build has no device code of its own.
+if [[ "$variant" == cuda ]]; then
+    grep -Eq 'H100|H200' "$out/gpu.txt"
+else
+    grep -Eq 'A100|H100|H200' "$out/gpu.txt"
+fi
 printf '%s\n' "$pin" > "$out/commit.txt"
 eval "$("$build/stage/bin/psi4" --psiapi)"
 export EXPECTED_PSI4_PACKAGE="$build/stage/lib/psi4"
