@@ -58,9 +58,24 @@ symbol, switching SDKs in the same build cache) and runtime-loader regressions
 for LibXC and cuEST with conflicting SONAMEs.
 
 New GPU-test Python and shell entry points pass syntax checks.
-**Actual Psi4 C++ compilation and allocated-GPU numerical validation are not
-yet complete.** The adapter must not be treated as a validated direct GPU route
-until those pass. The Phoenix validation runner records exact hashes, runtime
+Phoenix CPU build **14080574** (`gts-cs207-chemx/cpu-small/embers`, 8 cores,
+48 GiB, 2-hour limit) completed with exit 0 in **9m38s**. The staged Psi4 imports,
+the direct API compile/link probe is true, and runtime linkage resolves the
+isolated cuEST 0.2.50 CUDA 13 library plus CUDA-enabled LibXC.
+
+- Compiled source: `7896a4bd12905b050f0ba2f70a4c40d787b509b1`.
+- Core SHA256: `311f1be6fd80cfad502f1605e48d8b7ecf66f966e9e7a535efd6f3f0630f39b3`.
+- Linked cuEST SHA256: `65c9e559201ee589cb742b919cc1c5d80c45aa480b64aede17ac96aff9e4963c`.
+- Run: `/storage/project/r-cs207-0/awallace43/runs/cuest-direct/20261015-7896a4b-r1`.
+- Manifest: `build-stage/build-manifest.json` beneath that run.
+
+**Allocated-GPU numerical validation has NOT run.** A test-only free H200
+request was estimated for October 29. Fresh approval is pending for one
+30-minute inferno H200 validation job, at most $0.71 on `gts-cs207`; no new paid
+GPU test has been submitted. The adapter must not be treated as a validated
+direct GPU route until the numerical tests pass.
+
+The Phoenix validation runner records exact hashes, runtime
 linkage, GPU identity, per-test chemistry logs, JUnit and `validation.json`.
 
 Existing stored-DF comparison build/job outputs remain immutable and are not
