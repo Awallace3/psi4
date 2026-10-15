@@ -1,10 +1,58 @@
 """Explicit overlap and DF policies for the controlled comparison."""
 import contextlib
+import hashlib
 import inspect
 import json
 import math
 from pathlib import Path
 import time
+
+
+def molecular_geometry(atom, config):
+    """Explicit shared Bohr coordinates; do not use engine-dependent constants."""
+    factor = config.get("geometry_angstrom_per_bohr")
+    if factor is None:
+        return atom, "Angstrom"  # Historical replay only.
+    if not math.isfinite(factor) or factor <= 0:
+        raise ValueError("Geometry conversion factor must be finite and positive")
+    lines = []
+    for line in atom.splitlines():
+        symbol, *values = line.split()
+        coords = [float(value) / factor for value in values]
+        if len(coords) != 3 or not all(math.isfinite(x) for x in coords):
+            raise ValueError("Invalid geometry coordinates")
+        lines.append(symbol + " " + " ".join(format(x, ".17g") for x in coords))
+    return "\n".join(lines), "Bohr"
+
+
+def capture_geometry(coordinates, atom, record):
+    """Verify live engine coordinates, not only the hash of an Angstrom file."""
+    if record["config"].get("geometry_angstrom_per_bohr") is None:
+        return
+    import numpy as np
+    converted, _ = molecular_geometry(atom, record["config"])
+    expected = np.array([[float(x) for x in line.split()[1:]]
+                         for line in converted.splitlines()], dtype="<f8")
+    actual = np.array(coordinates, dtype="<f8", copy=True)
+    if actual.shape != expected.shape or not np.array_equal(actual, expected):
+        raise RuntimeError("Live Bohr coordinates differ from the shared geometry")
+    actual[actual == 0] = 0.0
+    record["geometry_bohr_sha256"] = hashlib.sha256(actual.tobytes(order="C")).hexdigest()
+    record["geometry_policy"] = dict(input_unit="Bohr",
+        angstrom_per_bohr=record["config"]["geometry_angstrom_per_bohr"],
+        live_coordinates_verified=True)
+
+
+def verify_compiled_sources(repo, compiled_commit, harness_commit):
+    """Allow harness-only evolution, never silently change compiled Psi4 inputs."""
+    import subprocess
+    head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    if head != harness_commit:
+        raise RuntimeError("Harness checkout changed")
+    subprocess.run(["git", "-C", str(repo), "diff", "--exit-code",
+        compiled_commit, harness_commit, "--", "psi4/", "cmake/", "external/",
+        "CMakeLists.txt", "tests/pytests/test_cuest_grid_export.py"], check=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
 def overlap_cutoff(config):
@@ -48,6 +96,8 @@ def capture_overlap(matrix, nmo, record, diagnostic):
                 minimum_eigenvalue=float(eigenvalues[0]),
                 cutoff_distance=float(np.min(np.abs(eigenvalues-cutoff))),
                 rule="absolute overlap eigenvalue > cutoff; no auxiliary-metric truncation implied")
+    if record["config"].get("geometry_angstrom_per_bohr") is not None:
+        info["geometry_bohr_sha256"] = record["geometry_bohr_sha256"]
     with Path("overlap-spectrum.npz").open("xb") as stream:
         np.savez(stream, eigenvalues=eigenvalues)
     with Path("overlap-spectrum.json").open("x") as stream:
@@ -74,6 +124,10 @@ def compare_overlap_exports(left, right):
     for key in ("basis", "system", "functional", "geometry_sha256", "nbf", "nmo", "cutoff"):
         if metadata[0][key] != metadata[1][key]:
             raise ValueError(f"Overlap comparison mismatch: {key}")
+    if any("geometry_bohr_sha256" in info for info in metadata):
+        if (not metadata[0].get("geometry_bohr_sha256") or
+                metadata[0].get("geometry_bohr_sha256") != metadata[1].get("geometry_bohr_sha256")):
+            raise ValueError("Overlap comparison mismatch: live Bohr coordinates")
     if not np.allclose(values[0], values[1], atol=1e-9, rtol=1e-10):
         raise ValueError("Cross-engine overlap eigenvalue spectra differ")
     return dict(verified=True, nbf=metadata[0]["nbf"], nmo=metadata[0]["nmo"],

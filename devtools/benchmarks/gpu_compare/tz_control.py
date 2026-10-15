@@ -111,7 +111,8 @@ def control(a):
     a._geometry_pins = {}
     config.update(grid_mode="native-default", threads=a.threads, repeats=a.repeats)
     config.update(overlap_eigenvalue_cutoff=1e-7, headline_timing="full_process_wall_s",
-                  require_memory_observations=True)
+                  require_memory_observations=True,
+                  geometry_angstrom_per_bohr=0.52917721067)
     if a.preflight:
         config["functionals"] = {name: config["functionals"][name] for name in ("pbe", "wb97x")}
     for system in a.systems:

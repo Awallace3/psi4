@@ -65,18 +65,21 @@ run_child() {
 run_child "$gpu_env/bin/python" - "$build" "$repo" "$psi_package" "$commit" "$expected_qos" "$build_job" "$run" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
 build, repo, package = map(pathlib.Path, sys.argv[1:4])
+sys.path.insert(0, str(repo / "devtools/benchmarks/gpu_compare"))
+from protocol import verify_compiled_sources
 manifest = json.loads((build / "build-manifest.json").read_text())
 assert manifest["qos"] == sys.argv[5]
-assert manifest["commit"] == sys.argv[4] and manifest["job_id"] == sys.argv[6]
+assert manifest["job_id"] == sys.argv[6]
 assert pathlib.Path(manifest["package"]).resolve() == package.resolve()
 core = next(package.glob("core*.so"))
 assert hashlib.sha256(core.read_bytes()).hexdigest() == manifest["core_sha256"]
-subprocess.run(["git", "-C", str(repo), "diff", "--exit-code", manifest["commit"], "HEAD",
-                "--", "psi4/src/psi4/libfock/v.cc", "psi4/src/psi4/libfock/v.h",
-                "psi4/src/export_functional.cc", "tests/pytests/test_cuest_grid_export.py"], check=True)
+verify_compiled_sources(repo, manifest["commit"], sys.argv[4])
 print("Compiled exporter verified", manifest["commit"], flush=True)
 with (pathlib.Path(sys.argv[7]) / "compiled-build-manifest.json").open("x") as stream:
     json.dump(manifest, stream, indent=2)
+with (pathlib.Path(sys.argv[7]) / "harness-build-identity.json").open("x") as stream:
+    json.dump(dict(harness_commit=sys.argv[4], compiled_commit=manifest["commit"],
+                   compiled_inputs_unchanged=True), stream, indent=2)
 PY
 psi_exe="${psi_package%/lib/psi4}/bin/psi4"
 [[ -x "$psi_exe" ]]

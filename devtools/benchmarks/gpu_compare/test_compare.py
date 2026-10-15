@@ -95,6 +95,19 @@ class CompareTests(unittest.TestCase):
         row = self.row([self.record("psi4"), self.record("pyscf", stored_df_verified=False)])
         self.assertFalse(row["comparison_eligible"])
 
+    def test_common_input_file_does_not_mask_live_coordinate_mismatch(self):
+        self.c["geometry_angstrom_per_bohr"] = .52917721067
+        policy = dict(input_unit="Bohr", angstrom_per_bohr=.52917721067,
+                      live_coordinates_verified=True)
+        records = [self.record(e, geometry_bohr_sha256="same", geometry_policy=policy)
+                   for e in m.ENGINES]
+        self.assertTrue(self.row(records)["comparison_eligible"])
+        records[1]["geometry_bohr_sha256"] = "different"
+        self.assertFalse(self.row(records)["comparison_eligible"])
+        records[1]["geometry_bohr_sha256"] = "same"
+        records[1]["geometry_policy"] = {}
+        self.assertFalse(self.row(records)["comparison_eligible"])
+
     def test_teardown_failure_is_not_success(self):
         row = self.row([self.record("psi4"), self.record("pyscf", process_returncode=-11)])
         self.assertFalse(row["complete"])

@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -52,6 +53,52 @@ class ProtocolTests(unittest.TestCase):
         for cutoff in (float("nan"), -1, 0):
             with self.assertRaises(ValueError):
                 protocol.overlap_cutoff({"overlap_eigenvalue_cutoff": cutoff})
+
+    def test_common_bohr_input_and_live_coordinate_fingerprint(self):
+        atom = "H 0 -0.0 0.52917721067\nH 1.05835442134 0 0"
+        config = dict(geometry_angstrom_per_bohr=0.52917721067)
+        converted, units = protocol.molecular_geometry(atom, config)
+        self.assertEqual(units, "Bohr")
+        coords = np.array([[float(x) for x in line.split()[1:]]
+                           for line in converted.splitlines()])
+        np.testing.assert_array_equal(coords, [[0, 0, 1], [2, 0, 0]])
+        records = [dict(config=config), dict(config=config)]
+        protocol.capture_geometry(coords, atom, records[0])
+        protocol.capture_geometry(coords + 0.0, atom, records[1])
+        self.assertEqual(records[0]["geometry_bohr_sha256"], records[1]["geometry_bohr_sha256"])
+        with self.assertRaisesRegex(RuntimeError, "coordinates"):
+            protocol.capture_geometry(coords * (0.52917721067 / 0.52917721092), atom,
+                                      dict(config=config))
+        self.assertEqual(protocol.molecular_geometry(atom, {}), (atom, "Angstrom"))
+        for factor in (0, -1, float("inf"), float("nan")):
+            with self.assertRaises(ValueError):
+                protocol.molecular_geometry(atom, dict(geometry_angstrom_per_bohr=factor))
+
+    def test_build_reuse_requires_unchanged_compiled_inputs_not_just_exporter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            def git(*args):
+                return subprocess.check_output(["git", "-C", str(repo), *args],
+                    text=True, stderr=subprocess.PIPE).strip()
+            git("init", "-q")
+            git("config", "user.email", "test@example.invalid")
+            git("config", "user.name", "Test")
+            (repo / "psi4").mkdir()
+            (repo / "psi4/other.cc").write_text("compiled source\n")
+            git("add", ".")
+            git("commit", "-qm", "compiled")
+            compiled = git("rev-parse", "HEAD")
+            (repo / "harness.py").write_text("new harness\n")
+            git("add", ".")
+            git("commit", "-qm", "harness only")
+            protocol.verify_compiled_sources(repo, compiled, git("rev-parse", "HEAD"))
+            (repo / "psi4/other.cc").write_text("different compiled source\n")
+            git("add", ".")
+            git("commit", "-qm", "compiled change outside exporter")
+            with self.assertRaises(subprocess.CalledProcessError):
+                protocol.verify_compiled_sources(repo, compiled, git("rev-parse", "HEAD"))
+            with self.assertRaisesRegex(RuntimeError, "checkout changed"):
+                protocol.verify_compiled_sources(repo, compiled, compiled)
 
     def test_stored_df_prebuilt_and_used_no_direct_or_host_fallback(self):
         built = []

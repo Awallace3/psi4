@@ -431,8 +431,11 @@ build (2h) and one inferno H200 control job (4h), charged to `gts-cs207`.
 This approval does not extend to additional recovery jobs. The build wrapper's
 fourth argument records the authorized QoS; defaults remain embers.
 The control wrapper's sixth argument likewise records the intended QoS and its
-seventh independently pins the build job ID. It requires the compiled commit
-to equal its immutable harness/source commit and copies the build manifest.
+seventh independently pins the build job ID. The revised wrapper can reuse a
+validated build for harness-only changes, but requires unchanged `psi4/`,
+`cmake/`, `external/`, root CMake and exporter-test inputs between the compiled
+and harness commits. It preserves the compiled manifest/core hash and records
+both commit identities separately; it never rebuilds the historical stage.
 
 #### Revised stored-DF/full-process protocol
 
@@ -467,6 +470,18 @@ relies on pinned deterministic generation plus a live device-point count, not
 independent full-array export during each timed worker.
 The separate 1e-12 auxiliary-metric settings remain separate.
 
+Both workers now receive the same explicit **Bohr coordinates**, converted once
+from the input XYZ using pinned `geometry_angstrom_per_bohr=0.52917721067`
+(Psi4's CODATA2014 convention). Installed PySCF uses0.52917721092 when converting
+Angstrom input. Those different constants caused the first shared-grid preflight
+to fail its spectrum audit despite matching retained ranks. A CPU-only PySCF2.14
+replay changing only that conversion matches the saved Psi4 spectra within
+2.5e-14, with the original spectrum tolerance unchanged. Live molecule coordinates
+must equal the common Bohr input exactly; normalized coordinate hashes are
+recorded and compared, including in overlap artifacts. An identical Angstrom
+file hash alone is insufficient. Historical configs without this policy retain
+their original unit conversion for replay.
+
 **New headline: `full_process_wall_s`.** A fresh external supervisor measures
 worker launch through exit/reaping: Python startup, all imports, initialization,
 basis/grid construction/import, DF tensor construction, converged SCF, worker
@@ -492,6 +507,13 @@ additional inferno CPU build and one H200 job for this revision after validation
 If queuing behind the build, use `afterany` with artifact verification, never
 an `afterok` chain. Prepared scripts and passing local unit tests do not mean
 that the GPU exporter or fixed-grid integration has been validated.
+Subsequently, build14071936 and both exporter tests in H20014071937 passed.
+The shared peptide mesh was exactly equal across both engines, but the
+overlap-conversion discrepancy and a list-versus-dict stored-tensor verifier
+bug stopped preflight: no clean timing repeats or Protein83 panel ran.
+See `outputs/gpu-dft-preflight-20261015.md` and the local CPU-only replay helper
+`diagnose_overlap_units.py`. A new GPU run is still required to accept the
+corrected combined protocol; no additional paid job is implicitly authorized.
 
 Regenerate and publish through the existing tailnet-only `/docs/` mount:
 

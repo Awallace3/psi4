@@ -21,7 +21,8 @@ import time
 import traceback
 from memory import MemoryMonitor, stop_supervisor
 from grids import apply_pyscf_grid_settings, export_grid, grid_fingerprint, install_pyscf_shared_grid
-from protocol import overlap_cutoff, configure_pyscf_overlap, capture_overlap, pyscf_df_policy
+from protocol import (overlap_cutoff, configure_pyscf_overlap, capture_overlap, pyscf_df_policy,
+                      molecular_geometry, capture_geometry)
 
 HERE = Path(__file__).resolve().parent
 ENGINES = ("psi4", "pyscf")
@@ -339,10 +340,12 @@ def run_pyscf(a, c, atom, r):
              cuda_driver=cp.cuda.runtime.driverGetVersion(),
              cutensor_module=cutensor.__file__)
     start = time.perf_counter()
-    mol = gto.M(atom=atom, basis=c["basis"], unit="Angstrom", charge=0,
+    engine_atom, engine_unit = molecular_geometry(atom, c)
+    mol = gto.M(atom=engine_atom, basis=c["basis"], unit=engine_unit, charge=0,
                 spin=0, cart=False, verbose=4,
                 output=str(Path.cwd() / "pyscf.out"),
                 max_memory=c["memory_gib"] * 1024)
+    capture_geometry(mol.atom_coords(unit="Bohr"), atom, r)
     mf = rks.RKS(mol, xc=c["functionals"][a.functional]["pyscf"]).density_fit(
         auxbasis=c["auxbasis"], only_dfj=False)
     assert mf.__class__.__module__.startswith("gpu4pyscf.")
@@ -479,7 +482,10 @@ def run_psi4(a, c, atom, r):
     if overlap_cutoff(c) is not None:
         r["overlap_policy"] = dict(method="canonical", absolute_eigenvalue_cutoff=overlap_cutoff(c))
     start = time.perf_counter()
-    mol = psi4.geometry("0 1\n" + atom + "\nunits angstrom\nsymmetry c1\nno_reorient\nno_com")
+    engine_atom, engine_unit = molecular_geometry(atom, c)
+    mol = psi4.geometry("0 1\n" + engine_atom + "\nunits " + engine_unit.lower() +
+                         "\nsymmetry c1\nno_reorient\nno_com")
+    capture_geometry(mol.geometry(), atom, r)
     r["setup_wall_s"] = time.perf_counter() - start
     psi4.core.clean_timers()
     start = time.perf_counter()
@@ -656,6 +662,16 @@ def summarize(records, c, systems):
                         r.get("config", {}).get("audited_overlap") == audit for r in all_good)
                     row["audited_overlap"] = audit
                     row["comparison_eligible"] &= row["timed_rank_matches_audit"]
+                if c.get("geometry_angstrom_per_bohr") is not None:
+                    all_good = groups["psi4"] + groups["pyscf"]
+                    expected_policy = dict(input_unit="Bohr",
+                        angstrom_per_bohr=c["geometry_angstrom_per_bohr"],
+                        live_coordinates_verified=True)
+                    hashes = {r.get("geometry_bohr_sha256") for r in all_good}
+                    row["live_bohr_coordinates_equal"] = (
+                        len(hashes) == 1 and None not in hashes and all(
+                            r.get("geometry_policy") == expected_policy for r in all_good))
+                    row["comparison_eligible"] &= row["live_bohr_coordinates_equal"]
                 if c.get("df_mode") == "stored-df":
                     row["stored_df_verified"] = all(r.get("stored_df_verified") is True for r in groups["pyscf"])
                     row["comparison_eligible"] &= row["stored_df_verified"]

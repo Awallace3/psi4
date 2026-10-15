@@ -2,6 +2,7 @@
   "schema": 3,
   "headline_timing": "full_process_wall_s",
   "require_memory_observations": true,
+  "geometry_angstrom_per_bohr": 0.52917721067,
   "overlap_eigenvalue_cutoff": 1e-7,
   "systems": ["peptide", "protein83"],
   "functionals": {

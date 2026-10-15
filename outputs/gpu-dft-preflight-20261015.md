@@ -39,8 +39,9 @@ coordinate/total-weight multiset: **477,977 points**.
 
    The largest differences are at eigenvalues approximately7.54 and19.00.
    Minimum eigenvalues are approximately5.3981e-4 and7.0701e-6 respectively,
-   both above the prescribed1e-7 cutoff. The origin of the differences remains
-   unproven; no tolerance has been loosened merely to make the gate pass.
+   both above the prescribed1e-7 cutoff. At failure their origin was unproven;
+   no tolerance was loosened merely to make the gate pass. The subsequent
+   replay below isolated the cause.
 
 ## Preliminary diagnostic energy differences
 
@@ -56,6 +57,37 @@ shared cuEST mesh. They do not establish stored-DF equivalence or resolve the
 remaining overlap audit. Per-worker RSS and sampled process/device GPU memory
 were captured, but profile/export overhead makes these unsuitable as clean
 benchmark memory comparisons.
+
+## Causal CPU replay: geometry-unit conversion
+
+Installed PySCF uses0.52917721092 Angstrom/Bohr; Psi4 uses0.52917721067.
+The benchmark had passed the same Angstrom text to both, which did **not**
+produce exactly the same Bohr coordinates.
+
+A local CPU-only PySCF2.14 replay holds the basis, integral implementation and
+all other settings fixed, changing only the coordinate conversion:
+
+| Basis | Native CPU PySCF versus saved GPU4PySCF spectrum | Psi4-converted CPU PySCF versus saved Psi4 spectrum |
+|---|---:|---:|
+| cc-pVTZ |8.88e-15|1.15e-14|
+| aug-cc-pVTZ |1.42e-14|2.49e-14|
+
+Thus unit conversion explains the observed discrepancy for these peptide
+cases; the original `atol=1e-9, rtol=1e-10` gate passes without loosening.
+The helper `devtools/benchmarks/gpu_compare/diagnose_overlap_units.py` reproduces
+this result from the private archived spectra and the hash-checked input XYZ.
+No GPU allocation or SCF is needed for this replay.
+
+The corrected harness converts once to explicit17-digit Bohr coordinates for
+both engines, checks live molecule coordinates exactly, and records their
+normalized coordinate hash. This avoids per-engine conversion constants.
+The stored-list verifier fix remains in place; the revised local suite has
+108 passing tests. The already validated compiled Psi4 core can be reused:
+only benchmark-harness files change, and the wrapper checks all compiled Psi4
+inputs unchanged while preserving distinct compiled/harness commit identities.
+
+**Combined GPU acceptance remains pending.** CPU replay does not establish
+GPU timing, memory, stored-DF residency, or Protein83 performance.
 
 The failed immutable run and raw evidence are preserved. Additional paid
 recovery jobs require fresh approval; none has been submitted.
