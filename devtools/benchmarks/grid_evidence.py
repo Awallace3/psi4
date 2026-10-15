@@ -139,7 +139,10 @@ def worker(args):
     }
     if args.system != "water":
         opts.update(PUREAM=True, DF_BASIS_SCF="def2-universal-jkfit", DF_BASIS_MP2="aug-cc-pvdz-ri")
-    geo_file = Path(__file__).with_name("grid_geometries.json")
+    if getattr(args, "ints_tolerance", None) is not None:
+        opts["INTS_TOLERANCE"] = args.ints_tolerance
+    geo_file = Path(getattr(args, "geometry_file", None) or
+                    Path(__file__).with_name("grid_geometries.json"))
     geometry = WATER if args.system == "water" else json.loads(geo_file.read_text())[args.system]
     result = dict(system=args.system, arm=args.arm, repeat=args.repeat, options=opts,
                   memory=args.memory, threads=args.threads, geometry=geometry, ok=False,
@@ -156,7 +159,10 @@ def worker(args):
             k: psi4.core.get_option("SCF", k) for k in ("USE_CUEST", "CUEST_XC", "CUEST_SAD")}
         mol = psi4.geometry(geometry)
         result["nbf"] = psi4.core.BasisSet.build(mol, "BASIS", SYSTEMS[args.system]).nbf()
-        assert result["nbf"] == dict(water=48, peptide=250, nanotube=548, protein83=922)[args.system]
+        expected_nbf = getattr(args, "expected_nbf", None)
+        if expected_nbf is None:
+            expected_nbf = dict(water=48, peptide=250, nanotube=548, protein83=922)[args.system]
+        assert result["nbf"] == expected_nbf
         result["effective_grid_options"] = {k: psi4.core.get_option("SCF", k) for k in (
             "DFT_PRUNING_SCHEME", "DFT_GRID_NAME", "DFT_RADIAL_SCHEME",
             "DFT_RADIAL_POINTS", "DFT_SPHERICAL_POINTS", "DFT_GRID_SWITCH_FACTOR")}
