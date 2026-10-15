@@ -37,6 +37,7 @@
 #include <cassert>
 
 #include "psi4/libfunctional/LibXCfunctional.h"
+#include "psi4/libfunctional/xc_timing.h"
 #include "psi4/libfunctional/functional.h"
 #include "psi4/libfunctional/superfunctional.h"
 #include "psi4/libqt/qt.h"
@@ -58,6 +59,7 @@
 #include <cstdio>
 #include <string>
 #include <algorithm>
+#include <utility>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -66,6 +68,14 @@
 #ifdef USING_cuEST
 #include <array>
 #include <cuest.h>
+// These wrappers are no-ops unless explicitly profiling. Keep the API argument
+// lists visible at each integration point, and label by the API name alone.
+#define XC_DEVICE_CALL(operation)                                                                    \
+    xc_timing::call(Process::environment.options.get_bool("CUEST_XC_TIMING"), #operation,              \
+                    [&]() { return operation; }, true)
+#define XC_CHECK_CUEST(operation)                                                                    \
+    xc_timing::call(Process::environment.options.get_bool("CUEST_XC_TIMING"), #operation,              \
+                    [&]() { CHECK_CUEST(operation); }, true)
 #include <xc.h>
 #include <cublas_v2.h>
 #include "psi4/libfock/cuESTCommon.h"
@@ -175,12 +185,13 @@ class CuestXCDeviceBuffer {
     CuestXCDeviceBuffer(const CuestXCDeviceBuffer&) = delete;
     CuestXCDeviceBuffer& operator=(const CuestXCDeviceBuffer&) = delete;
     ~CuestXCDeviceBuffer() {
+        // Profiling synchronization may throw. Destructors must never profile.
         if (pointer_) cudaFree(pointer_);
     }
 
     void allocate(size_t count) {
         if (count == 0) return;
-        const auto status = cudaMalloc(reinterpret_cast<void**>(&pointer_), count * sizeof(double));
+        const auto status = XC_DEVICE_CALL(cudaMalloc(reinterpret_cast<void**>(&pointer_), count * sizeof(double)));
         if (status != cudaSuccess) {
             throw PSIEXCEPTION("CUDA LibXC allocation failed: " + std::string(cudaGetErrorString(status)));
         }
@@ -193,7 +204,7 @@ class CuestXCDeviceBuffer {
     double* ensure(size_t count) {
         if (count == 0) return nullptr;
         if (count > capacity_) {
-            if (pointer_) cudaFree(pointer_);
+            if (pointer_) XC_DEVICE_CALL(cudaFree(pointer_));
             pointer_ = nullptr;
             capacity_ = 0;
             allocate(count);
@@ -261,15 +272,15 @@ void evaluate_cuest_xc_component_device(const std::shared_ptr<Functional>& compo
     double* const f_out = has_exc ? f : nullptr;
 
     if (component->is_meta()) {
-        xc_mgga_exc_vxc(xc_functional, npoints, rho, gamma, nullptr, tau, f_out, f_rho, f_gamma, nullptr, f_tau);
+        xc_timing::call(libxc_component->microtiming(), libxc_component->microtiming() ? (component->name() + " / xc_mgga_exc_vxc").c_str() : "", [&]() { xc_mgga_exc_vxc(xc_functional, npoints, rho, gamma, nullptr, tau, f_out, f_rho, f_gamma, nullptr, f_tau); }, true);
     } else if (component->is_gga()) {
-        xc_gga_exc_vxc(xc_functional, npoints, rho, gamma, f_out, f_rho, f_gamma);
+        xc_timing::call(libxc_component->microtiming(), libxc_component->microtiming() ? (component->name() + " / xc_gga_exc_vxc").c_str() : "", [&]() { xc_gga_exc_vxc(xc_functional, npoints, rho, gamma, f_out, f_rho, f_gamma); }, true);
     } else {
-        xc_lda_exc_vxc(xc_functional, npoints, rho, f_out, f_rho);
+        xc_timing::call(libxc_component->microtiming(), libxc_component->microtiming() ? (component->name() + " / xc_lda_exc_vxc").c_str() : "", [&]() { xc_lda_exc_vxc(xc_functional, npoints, rho, f_out, f_rho); }, true);
     }
-    check_cuest_xc_cuda(cuest_xc_accumulate(npoints, component->alpha(), has_exc, nrho,
+    check_cuest_xc_cuda(XC_DEVICE_CALL(cuest_xc_accumulate(npoints, component->alpha(), has_exc, nrho,
                                              component->is_gga() ? ngamma : 0, component->is_meta() ? ntau : 0, f,
-                                             f_rho, f_gamma, f_tau, full_f, full_f_rho, full_f_gamma, full_f_tau),
+                                             f_rho, f_gamma, f_tau, full_f, full_f_rho, full_f_gamma, full_f_tau)),
                         "CUDA LibXC accumulation");
 }
 
@@ -287,16 +298,16 @@ void evaluate_cuest_xc_device(const std::shared_ptr<SuperFunctional>& functional
         full_f_gamma(workspace.full_f_gamma, gga ? npoints : 0),
         full_f_tau(workspace.full_f_tau, meta ? npoints : 0);
 
-    check_cuest_xc_cuda(cuest_xc_prepare_inputs(npoints, ncomponents, density, rho.get(), gamma.get(), tau.get()),
+    check_cuest_xc_cuda(XC_DEVICE_CALL(cuest_xc_prepare_inputs(npoints, ncomponents, density, rho.get(), gamma.get(), tau.get())),
                         "CUDA LibXC input preparation");
-    check_cuest_xc_cuda(cudaMemset(full_f.get(), 0, npoints * sizeof(double)), "CUDA LibXC energy initialization");
-    check_cuest_xc_cuda(cudaMemset(full_f_rho.get(), 0, npoints * sizeof(double)),
+    check_cuest_xc_cuda(XC_DEVICE_CALL(cudaMemset(full_f.get(), 0, npoints * sizeof(double))), "CUDA LibXC energy initialization");
+    check_cuest_xc_cuda(XC_DEVICE_CALL(cudaMemset(full_f_rho.get(), 0, npoints * sizeof(double))),
                         "CUDA LibXC density-potential initialization");
     if (gga)
-        check_cuest_xc_cuda(cudaMemset(full_f_gamma.get(), 0, npoints * sizeof(double)),
+        check_cuest_xc_cuda(XC_DEVICE_CALL(cudaMemset(full_f_gamma.get(), 0, npoints * sizeof(double))),
                             "CUDA LibXC gradient-potential initialization");
     if (meta)
-        check_cuest_xc_cuda(cudaMemset(full_f_tau.get(), 0, npoints * sizeof(double)),
+        check_cuest_xc_cuda(XC_DEVICE_CALL(cudaMemset(full_f_tau.get(), 0, npoints * sizeof(double))),
                             "CUDA LibXC tau-potential initialization");
 
     const auto evaluate_components = [&](const std::vector<std::shared_ptr<Functional>>& components, double* out_f,
@@ -316,14 +327,14 @@ void evaluate_cuest_xc_device(const std::shared_ptr<SuperFunctional>& functional
         if (!gga) throw PSIEXCEPTION("CUDA LibXC GRAC requires a GGA density layout.");
         CuestXCDeviceBufferRef grac_f(workspace.grac_f, npoints), grac_v_rho(workspace.grac_v_rho, npoints),
             unused_gamma(workspace.grac_gamma, npoints), unused_tau(workspace.grac_tau, meta ? npoints : 0);
-        check_cuest_xc_cuda(cudaMemset(grac_f.get(), 0, npoints * sizeof(double)),
+        check_cuest_xc_cuda(XC_DEVICE_CALL(cudaMemset(grac_f.get(), 0, npoints * sizeof(double))),
                             "CUDA LibXC GRAC energy initialization");
-        check_cuest_xc_cuda(cudaMemset(grac_v_rho.get(), 0, npoints * sizeof(double)),
+        check_cuest_xc_cuda(XC_DEVICE_CALL(cudaMemset(grac_v_rho.get(), 0, npoints * sizeof(double))),
                             "CUDA LibXC GRAC potential initialization");
-        check_cuest_xc_cuda(cudaMemset(unused_gamma.get(), 0, npoints * sizeof(double)),
+        check_cuest_xc_cuda(XC_DEVICE_CALL(cudaMemset(unused_gamma.get(), 0, npoints * sizeof(double))),
                             "CUDA LibXC GRAC gradient initialization");
         if (meta)
-            check_cuest_xc_cuda(cudaMemset(unused_tau.get(), 0, npoints * sizeof(double)),
+            check_cuest_xc_cuda(XC_DEVICE_CALL(cudaMemset(unused_tau.get(), 0, npoints * sizeof(double))),
                                 "CUDA LibXC GRAC tau initialization");
         if (functional->grac_x_functional())
             evaluate_components({functional->grac_x_functional()}, grac_f.get(), grac_v_rho.get(),
@@ -331,14 +342,14 @@ void evaluate_cuest_xc_device(const std::shared_ptr<SuperFunctional>& functional
         if (functional->grac_c_functional())
             evaluate_components({functional->grac_c_functional()}, grac_f.get(), grac_v_rho.get(),
                                 unused_gamma.get(), unused_tau.get());
-        check_cuest_xc_cuda(cuest_xc_apply_grac(npoints, functional->grac_alpha(), functional->grac_beta(),
+        check_cuest_xc_cuda(XC_DEVICE_CALL(cuest_xc_apply_grac(npoints, functional->grac_alpha(), functional->grac_beta(),
                                                 functional->grac_shift(), rho.get(), gamma.get(), grac_v_rho.get(),
-                                                full_f_rho.get(), full_f_gamma.get()),
+                                                full_f_rho.get(), full_f_gamma.get())),
                             "CUDA LibXC GRAC");
     }
 
-    check_cuest_xc_cuda(cuest_xc_pack_potential(npoints, ncomponents, density, weights, full_f_rho.get(),
-                                                full_f_gamma.get(), full_f_tau.get(), potential),
+    check_cuest_xc_cuda(XC_DEVICE_CALL(cuest_xc_pack_potential(npoints, ncomponents, density, weights, full_f_rho.get(),
+                                                full_f_gamma.get(), full_f_tau.get(), potential)),
                         "CUDA LibXC potential packing");
 
     // The Exc and <rho> quadratures are the only thing the host wanted the grid for,
@@ -348,11 +359,11 @@ void evaluate_cuest_xc_device(const std::shared_ptr<SuperFunctional>& functional
     const size_t nvalues = 2;
     double* scratch = workspace.reduce_scratch.ensure(cuest_xc_reduce_scratch(nvalues));
     double* out = workspace.reduce_out.ensure(nvalues);
-    check_cuest_xc_cuda(cuest_xc_reduce_rks(npoints, weights, full_f.get(), rho.get(), scratch, out),
+    check_cuest_xc_cuda(XC_DEVICE_CALL(cuest_xc_reduce_rks(npoints, weights, full_f.get(), rho.get(), scratch, out)),
                         "CUDA LibXC quadrature reduction");
 
     double host_out[nvalues];
-    check_cuest_xc_cuda(cudaMemcpy(host_out, out, nvalues * sizeof(double), cudaMemcpyDeviceToHost),
+    check_cuest_xc_cuda(XC_DEVICE_CALL(cudaMemcpy(host_out, out, nvalues * sizeof(double), cudaMemcpyDeviceToHost)),
                         "CUDA LibXC quadrature download");
     Exc = host_out[0];
     integrated_density = host_out[1];
@@ -378,17 +389,17 @@ void evaluate_cuest_xc_device_polarized(const std::shared_ptr<SuperFunctional>& 
         full_f_gamma(workspace.full_f_gamma, gga ? ngamma * npoints : 0),
         full_f_tau(workspace.full_f_tau, meta ? ntau * npoints : 0);
 
-    check_cuest_xc_cuda(cuest_xc_prepare_inputs_polarized(npoints, ncomponents, density_a, density_b, rho.get(),
-                                                          gamma.get(), tau.get()),
+    check_cuest_xc_cuda(XC_DEVICE_CALL(cuest_xc_prepare_inputs_polarized(npoints, ncomponents, density_a, density_b, rho.get(),
+                                                          gamma.get(), tau.get())),
                         "CUDA LibXC input preparation");
-    check_cuest_xc_cuda(cudaMemset(full_f.get(), 0, npoints * sizeof(double)), "CUDA LibXC energy initialization");
-    check_cuest_xc_cuda(cudaMemset(full_f_rho.get(), 0, nrho * npoints * sizeof(double)),
+    check_cuest_xc_cuda(XC_DEVICE_CALL(cudaMemset(full_f.get(), 0, npoints * sizeof(double))), "CUDA LibXC energy initialization");
+    check_cuest_xc_cuda(XC_DEVICE_CALL(cudaMemset(full_f_rho.get(), 0, nrho * npoints * sizeof(double))),
                         "CUDA LibXC density-potential initialization");
     if (gga)
-        check_cuest_xc_cuda(cudaMemset(full_f_gamma.get(), 0, ngamma * npoints * sizeof(double)),
+        check_cuest_xc_cuda(XC_DEVICE_CALL(cudaMemset(full_f_gamma.get(), 0, ngamma * npoints * sizeof(double))),
                             "CUDA LibXC gradient-potential initialization");
     if (meta)
-        check_cuest_xc_cuda(cudaMemset(full_f_tau.get(), 0, ntau * npoints * sizeof(double)),
+        check_cuest_xc_cuda(XC_DEVICE_CALL(cudaMemset(full_f_tau.get(), 0, ntau * npoints * sizeof(double))),
                             "CUDA LibXC tau-potential initialization");
 
     for (const auto& components : {functional->x_functionals(), functional->c_functionals()}) {
@@ -400,19 +411,19 @@ void evaluate_cuest_xc_device_polarized(const std::shared_ptr<SuperFunctional>& 
         }
     }
 
-    check_cuest_xc_cuda(cuest_xc_pack_potential_polarized(npoints, ncomponents, density_a, density_b, weights,
+    check_cuest_xc_cuda(XC_DEVICE_CALL(cuest_xc_pack_potential_polarized(npoints, ncomponents, density_a, density_b, weights,
                                                           full_f_rho.get(), full_f_gamma.get(), full_f_tau.get(),
-                                                          potential_a, potential_b),
+                                                          potential_a, potential_b)),
                         "CUDA LibXC potential packing");
 
     const size_t nvalues = 3;
     double* scratch = workspace.reduce_scratch.ensure(cuest_xc_reduce_scratch(nvalues));
     double* out = workspace.reduce_out.ensure(nvalues);
-    check_cuest_xc_cuda(cuest_xc_reduce_uks(npoints, weights, full_f.get(), rho.get(), scratch, out),
+    check_cuest_xc_cuda(XC_DEVICE_CALL(cuest_xc_reduce_uks(npoints, weights, full_f.get(), rho.get(), scratch, out)),
                         "CUDA LibXC quadrature reduction");
 
     double host_out[nvalues];
-    check_cuest_xc_cuda(cudaMemcpy(host_out, out, nvalues * sizeof(double), cudaMemcpyDeviceToHost),
+    check_cuest_xc_cuda(XC_DEVICE_CALL(cudaMemcpy(host_out, out, nvalues * sizeof(double), cudaMemcpyDeviceToHost)),
                         "CUDA LibXC quadrature download");
     Exc = host_out[0];
     integrated_density_a = host_out[1];
@@ -430,26 +441,26 @@ inline void evaluate_cuest_xc_component(
     const size_t npoints = end_point - start_point;
 
     if (component->is_meta()) {
-        xc_mgga_exc_vxc(libxc_component->xc_functional(), npoints, rho + rho_components * start_point,
+        xc_timing::call(libxc_component->microtiming(), libxc_component->microtiming() ? (component->name() + " / xc_mgga_exc_vxc").c_str() : "", [&]() { xc_mgga_exc_vxc(libxc_component->xc_functional(), npoints, rho + rho_components * start_point,
                         gamma + gamma_components * start_point, nullptr, tau + tau_components * start_point,
                         f + start_point, f_rho + rho_components * start_point,
-                        f_gamma + gamma_components * start_point, nullptr, f_tau + tau_components * start_point);
+                        f_gamma + gamma_components * start_point, nullptr, f_tau + tau_components * start_point); }, false, xc_timing::worker_rank());
         accumulate_cuest_xc_component(
             start_point, end_point, component->alpha(),
             std::array{CuestXCField{f, full_f, 1}, CuestXCField{f_rho, full_f_rho, rho_components},
                        CuestXCField{f_gamma, full_f_gamma, gamma_components},
                        CuestXCField{f_tau, full_f_tau, tau_components}});
     } else if (component->is_gga()) {
-        xc_gga_exc_vxc(libxc_component->xc_functional(), npoints, rho + rho_components * start_point,
+        xc_timing::call(libxc_component->microtiming(), libxc_component->microtiming() ? (component->name() + " / xc_gga_exc_vxc").c_str() : "", [&]() { xc_gga_exc_vxc(libxc_component->xc_functional(), npoints, rho + rho_components * start_point,
                        gamma + gamma_components * start_point, f + start_point,
-                       f_rho + rho_components * start_point, f_gamma + gamma_components * start_point);
+                       f_rho + rho_components * start_point, f_gamma + gamma_components * start_point); }, false, xc_timing::worker_rank());
         accumulate_cuest_xc_component(
             start_point, end_point, component->alpha(),
             std::array{CuestXCField{f, full_f, 1}, CuestXCField{f_rho, full_f_rho, rho_components},
                        CuestXCField{f_gamma, full_f_gamma, gamma_components}});
     } else {
-        xc_lda_exc_vxc(libxc_component->xc_functional(), npoints, rho + rho_components * start_point,
-                       f + start_point, f_rho + rho_components * start_point);
+        xc_timing::call(libxc_component->microtiming(), libxc_component->microtiming() ? (component->name() + " / xc_lda_exc_vxc").c_str() : "", [&]() { xc_lda_exc_vxc(libxc_component->xc_functional(), npoints, rho + rho_components * start_point,
+                       f + start_point, f_rho + rho_components * start_point); }, false, xc_timing::worker_rank());
         accumulate_cuest_xc_component(
             start_point, end_point, component->alpha(),
             std::array{CuestXCField{f, full_f, 1}, CuestXCField{f_rho, full_f_rho, rho_components}});
@@ -489,6 +500,7 @@ void evaluate_cuest_grac(const std::shared_ptr<SuperFunctional>& functional,
         }
     }
     const bool meta = functional->is_meta();
+    const bool microtiming = Process::environment.options.get_bool("CUEST_XC_TIMING");
 
 #pragma omp parallel num_threads(nthreads)
     {
@@ -496,6 +508,7 @@ void evaluate_cuest_grac(const std::shared_ptr<SuperFunctional>& functional,
 #ifdef _OPENMP
         rank = omp_get_thread_num();
 #endif
+        xc_timing::Stages microstages(microtiming, rank);
         auto& inputs = thread_inputs[rank];
         auto* rho = inputs.at("RHO_A")->pointer();
         auto* rho_x = inputs.at("RHO_AX")->pointer();
@@ -507,6 +520,7 @@ void evaluate_cuest_grac(const std::shared_ptr<SuperFunctional>& functional,
 
 #pragma omp for schedule(static)
         for (size_t start = 0; start < npoints; start += block_size) {
+            microstages.start("GRAC worker input packing");
             const int count = std::min<size_t>(block_size, npoints - start);
             for (int i = 0; i < count; ++i) {
                 const auto point = start + i;
@@ -521,7 +535,9 @@ void evaluate_cuest_grac(const std::shared_ptr<SuperFunctional>& functional,
                 gamma[i] = sigma;
                 if (meta) tau[i] = 2.0 * density_values[4][point];
             }
+            microstages.start("GRAC worker functional");
             const auto& values = workers[rank]->compute_functional(inputs, count);
+            microstages.start("GRAC worker potential packing");
             const auto* value = values.at("V")->pointer();
             const auto* v_rho = values.at("V_RHO_A")->pointer();
             const auto* v_gamma = values.at("V_GAMMA_AA")->pointer();
@@ -556,10 +572,13 @@ VBase::~VBase() {
     // finalize() is not (and per the empty RV/UV overrides below, need not be)
     // virtually dispatched here -- it releases the cuEST GPU resources
     // (d_Coccs_AO_, cuest_xcint_plan_/_ws_ptr_, VV10 equivalents) that
-    // otherwise leak permanently, since nothing else ever calls finalize()
-    // on a VBase/RV/UV object (it isn't even exposed to Python). Safe to
-    // call unconditionally: every branch inside is null-checked already.
-    VBase::finalize();
+    // otherwise leak permanently. Explicit finalize() checks and profiles API
+    // calls; destructors instead perform best-effort, unprofiled cleanup.
+    try {
+        finalize_impl(false);
+    } catch (...) {
+        // Never mask an active exception with a destructor cleanup failure.
+    }
 }
 void VBase::common_init() {
     print_ = options_.get_int("PRINT");
@@ -639,8 +658,8 @@ void VBase::set_Cocc(std::vector<SharedMatrix> Coccs) {
             d_Cocc_size_needed += Cocc->size();
         }
         if (d_Cocc_noccs_provided != d_Cocc_noccs_) {
-            cudaFree(d_Coccs_AO_);
-            cudaError_t err = cudaMalloc((void**)&d_Coccs_AO_, d_Cocc_size_needed * sizeof(double));
+            XC_DEVICE_CALL(cudaFree(d_Coccs_AO_));
+            cudaError_t err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Coccs_AO_, d_Cocc_size_needed * sizeof(double)));
             if (err != cudaSuccess) {
                 throw PSIEXCEPTION("cudaMalloc failed in VBase::set_Cocc");
             }
@@ -651,7 +670,7 @@ void VBase::set_Cocc(std::vector<SharedMatrix> Coccs) {
         for (SharedMatrix Cocc : Coccs) {
             noccs.push_back(Cocc->colspi()[0]);
             auto CoccT = Cocc->transpose();
-            cudaError_t err = cudaMemcpy(d_Coccs_AO_ + d_Cocc_offset, CoccT->get_pointer(0), Cocc->size() * sizeof(double), cudaMemcpyHostToDevice);
+            cudaError_t err = XC_DEVICE_CALL(cudaMemcpy(d_Coccs_AO_ + d_Cocc_offset, CoccT->get_pointer(0), Cocc->size() * sizeof(double), cudaMemcpyHostToDevice));
             if (err != cudaSuccess) {
                 throw PSIEXCEPTION("cudaMemcpy failed in VBase::set_Cocc");
             }
@@ -696,6 +715,35 @@ void VBase::set_D(std::vector<SharedMatrix> Dvec) {
         }
     }
 }
+void VBase::set_grid(const std::string& name) {
+    if (name != "Initial" && name != "Final") {
+        throw PSIEXCEPTION("DFT grid must be Initial or Final.");
+    }
+    const bool initial = name == "Initial";
+    if (initial) {
+        const int radial = options_.get_int("DFT_RADIAL_POINTS_INITIAL");
+        const int angular = options_.get_int("DFT_SPHERICAL_POINTS_INITIAL");
+        if (radial <= 0 || angular <= 0) {
+            throw PSIEXCEPTION("Set both DFT_RADIAL_POINTS_INITIAL and DFT_SPHERICAL_POINTS_INITIAL positive.");
+        }
+        // DFTGrid validates the angular rule against its private Lebedev table.
+        if (options_.get_str("DFT_GRID_NAME").empty() &&
+            (radial > options_.get_int("DFT_RADIAL_POINTS") ||
+             angular > options_.get_int("DFT_SPHERICAL_POINTS") ||
+             (radial == options_.get_int("DFT_RADIAL_POINTS") &&
+              angular == options_.get_int("DFT_SPHERICAL_POINTS")))) {
+            throw PSIEXCEPTION("The initial DFT grid must be smaller than the final grid.");
+        }
+    }
+    if (grid_ && initial_grid_ == initial) return;
+    // Destroy plans before their grids, and discard every grid-indexed worker/cache.
+    VBase::finalize();
+    point_workers_.clear();
+    functional_workers_.clear();
+    quad_values_.clear();
+    initial_grid_ = initial;
+    initialize();  // virtual: RV/UV must resize their point workers as well
+}
 void VBase::initialize() {
     // VBase is the only consumer of the GPU-resident cuEST grid (via DFTGrid::cuest_grid()), so it
     // is the only place that asks DFTGrid for one. Every other DFTGrid client integrates on the
@@ -706,9 +754,20 @@ void VBase::initialize() {
     // empty blocks() list.
     const bool use_cuest = use_cuest_xc();
     timer_on("V: Grid");
-    grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, options_, use_cuest);
+    if (initial_grid_) {
+        std::map<std::string, int> ints = {
+            {"DFT_RADIAL_POINTS", options_.get_int("DFT_RADIAL_POINTS_INITIAL")},
+            {"DFT_SPHERICAL_POINTS", options_.get_int("DFT_SPHERICAL_POINTS_INITIAL")}};
+        std::map<std::string, std::string> strings = {{"DFT_GRID_NAME", ""}};
+        grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, ints, strings, options_, use_cuest);
+    } else {
+        grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, options_, use_cuest);
+    }
     timer_off("V: Grid");
-    if (functional_->needs_vv10()) {
+    // DFT_VV10_POSTSCF temporarily disables evaluation during SCF. A grid
+    // transition must still recreate the infrastructure used in finalization.
+    const bool prepare_vv10 = functional_->needs_vv10() || functional_->vv10_b() > 0.0;
+    if (prepare_vv10) {
         timer_on("V: VV10 Grid");
         std::map<std::string, std::string> opt_map;
         opt_map["DFT_PRUNING_SCHEME"] = "FLAT";
@@ -728,7 +787,7 @@ void VBase::initialize() {
         cuest_common::ensure_cuest_initialized();
 
         cuestXCIntPlanParameters_t xcint_params;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCINTPLAN_PARAMETERS, reinterpret_cast<void**>(&xcint_params)));
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCINTPLAN_PARAMETERS, reinterpret_cast<void**>(&xcint_params)));
 
         cuestWorkspaceDescriptor_t persistentWorkspaceDescriptor {};
         cuestWorkspaceDescriptor_t temporaryWorkspaceDescriptor {};
@@ -737,7 +796,7 @@ void VBase::initialize() {
         // This involves using the advanced cuEST interface, wherein the rate-limiting collocation steps are done
         // on the GPU, and the functional evaluation is done on the CPU using LibXC engines exracted from the Psi4
         // functional objects.  Defined the plan's functional as HF here, just as an unused placeholder.
-        CHECK_CUEST(cuestXCIntPlanCreateWorkspaceQuery(
+        XC_CHECK_CUEST(cuestXCIntPlanCreateWorkspaceQuery(
             cuest_handle,
             primary_->cuest_basis(),
             grid_->cuest_grid(),
@@ -747,10 +806,10 @@ void VBase::initialize() {
             &temporaryWorkspaceDescriptor,
             nullptr));
 
-        cuest_xcint_ws_ptr_ = cuest_common::allocateWorkspace(&persistentWorkspaceDescriptor);
-        cuestWorkspace_t* temporary_workspace = cuest_common::allocateWorkspace(&temporaryWorkspaceDescriptor);
+        cuest_xcint_ws_ptr_ = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&persistentWorkspaceDescriptor));
+        cuestWorkspace_t* temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporaryWorkspaceDescriptor));
 
-        CHECK_CUEST(cuestXCIntPlanCreate(
+        XC_CHECK_CUEST(cuestXCIntPlanCreate(
             cuest_handle,
             primary_->cuest_basis(),
             grid_->cuest_grid(),
@@ -759,10 +818,10 @@ void VBase::initialize() {
             cuest_xcint_ws_ptr_,
             temporary_workspace,
             &cuest_xcint_plan_));
-        cuest_common::freeWorkspace(temporary_workspace);
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
 
-        if (functional_->needs_vv10()) {
-            CHECK_CUEST(cuestXCIntPlanCreateWorkspaceQuery(
+        if (prepare_vv10) {
+            XC_CHECK_CUEST(cuestXCIntPlanCreateWorkspaceQuery(
                 cuest_handle,
                 primary_->cuest_basis(),
                 vv10_grid_->cuest_grid(),
@@ -771,9 +830,9 @@ void VBase::initialize() {
                 &persistentWorkspaceDescriptor,
                 &temporaryWorkspaceDescriptor,
                 nullptr));
-            temporary_workspace = cuest_common::allocateWorkspace(&temporaryWorkspaceDescriptor);
-            cuest_vv10_xcint_ws_ptr_ = cuest_common::allocateWorkspace(&persistentWorkspaceDescriptor);
-            CHECK_CUEST(cuestXCIntPlanCreate(
+            temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporaryWorkspaceDescriptor));
+            cuest_vv10_xcint_ws_ptr_ = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&persistentWorkspaceDescriptor));
+            XC_CHECK_CUEST(cuestXCIntPlanCreate(
                 cuest_handle,
                 primary_->cuest_basis(),
                 vv10_grid_->cuest_grid(),
@@ -782,15 +841,32 @@ void VBase::initialize() {
                 cuest_vv10_xcint_ws_ptr_,
                 temporary_workspace,
                 &cuest_vv10_xcint_plan_));
-            cuest_common::freeWorkspace(temporary_workspace);
+            XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
         }
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCINTPLAN_PARAMETERS, xcint_params));
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCINTPLAN_PARAMETERS, xcint_params));
+        // A grid transition clears workers but preserves the configured GRAC
+        // functional. Reclone its independent host engines for non-CUDA LibXC.
+        if (functional_->needs_grac()) {
+            for (size_t i = 0; i < num_threads_; ++i) {
+                functional_workers_.push_back(functional_->build_worker());
+            }
+        }
         return;
     }
 #endif
     for (size_t i = 0; i < num_threads_; i++) {
         // Need a functional worker per thread
-        functional_workers_.push_back(functional_->build_worker());
+        auto worker = functional_->build_worker();
+        if (prepare_vv10 && !worker->needs_vv10()) {
+            // build_worker() omits VV10 parameters/scratch when the parent's
+            // evaluation flag is temporarily off. As in an unswitched SCF,
+            // workers must retain that scratch for post-SCF VV10 evaluation.
+            worker->set_lock(false);
+            worker->set_vv10_b(functional_->vv10_b());
+            worker->set_vv10_c(functional_->vv10_c());
+            worker->allocate();
+        }
+        functional_workers_.push_back(worker);
     }
 #ifdef USING_BrianQC
     if (brianEnable and brianEnableDFT)
@@ -1368,34 +1444,55 @@ void VBase::print_header() const {
 }
 std::shared_ptr<BlockOPoints> VBase::get_block(int block) { return grid_->blocks()[block]; }
 size_t VBase::nblocks() { return grid_->blocks().size(); }
-void VBase::finalize() {
+void VBase::finalize() { finalize_impl(true); }
+void VBase::finalize_impl(bool checked) {
     // The collocation cache is keyed by grid block index, so it must never
     // outlive the grid it was built from.
     clear_collocation_cache();
-    grid_.reset();
 #ifdef USING_cuEST
+    auto free_workspace = [checked](cuestWorkspace_t* workspace) {
+        if (checked) {
+            XC_DEVICE_CALL(cuest_common::freeWorkspace(workspace));
+        } else {
+            if (workspace->deviceBuffer) cudaFree(reinterpret_cast<void*>(workspace->deviceBuffer));
+            if (workspace->hostBuffer) std::free(reinterpret_cast<void*>(workspace->hostBuffer));
+            std::free(workspace);
+        }
+    };
     if (d_Coccs_AO_ != nullptr) {
-        cudaFree(d_Coccs_AO_);
-        d_Coccs_AO_ = nullptr;
+        auto* occupied = std::exchange(d_Coccs_AO_, nullptr);
+        if (checked) {
+            XC_DEVICE_CALL(cudaFree(occupied));
+        } else {
+            cudaFree(occupied);
+        }
         d_Cocc_noccs_.clear();
     }
     if (cuest_xcint_plan_ != nullptr) {
-        CHECK_CUEST(cuestXCIntPlanDestroy(cuest_xcint_plan_));
-        cuest_xcint_plan_ = nullptr;
+        auto plan = std::exchange(cuest_xcint_plan_, nullptr);
+        if (checked) {
+            XC_CHECK_CUEST(cuestXCIntPlanDestroy(plan));
+        } else {
+            cuestXCIntPlanDestroy(plan);
+        }
     }
     if (cuest_xcint_ws_ptr_ != nullptr) {
-        cuest_common::freeWorkspace(cuest_xcint_ws_ptr_);
-        cuest_xcint_ws_ptr_ = nullptr;
+        free_workspace(std::exchange(cuest_xcint_ws_ptr_, nullptr));
     }
     if (cuest_vv10_xcint_plan_ != nullptr) {
-        CHECK_CUEST(cuestXCIntPlanDestroy(cuest_vv10_xcint_plan_));
-        cuest_vv10_xcint_plan_ = nullptr;
+        auto plan = std::exchange(cuest_vv10_xcint_plan_, nullptr);
+        if (checked) {
+            XC_CHECK_CUEST(cuestXCIntPlanDestroy(plan));
+        } else {
+            cuestXCIntPlanDestroy(plan);
+        }
     }
     if (cuest_vv10_xcint_ws_ptr_ != nullptr) {
-        cuest_common::freeWorkspace(cuest_vv10_xcint_ws_ptr_);
-        cuest_vv10_xcint_ws_ptr_ = nullptr;
+        free_workspace(std::exchange(cuest_vv10_xcint_ws_ptr_, nullptr));
     }
 #endif
+    grid_.reset();
+    vv10_grid_.reset();
     // The grid is a block list, i.e. many small allocations, so the same arena retention that
     // hides a released collocation cache hides this too.
     release_freed_memory();
@@ -1985,13 +2082,16 @@ void RV::finalize() { VBase::finalize(); }
 void RV::print_header() const { VBase::print_header(); }
 void RV::compute_V(std::vector<SharedMatrix> ret) {
     // => Validate object <=
-    timer_on("RV: Form V");
+    xc_timing::CoarseScope form_timer("RV: Form V");
     
     if ((ret.size() != 1)) {
         throw PSIEXCEPTION("V: RKS should have only one V Matrix");
     }
 #ifdef USING_cuEST
     if (use_cuest_xc()) {
+        xc_timing::CoarseScope functional_timer;
+        xc_timing::Stages microstages(options_.get_bool("CUEST_XC_TIMING"));
+        microstages.start("RKS setup");
         cuest_common::ensure_cuest_initialized();
 
         if ((d_Cocc_noccs_.size() != 1)) {
@@ -2003,7 +2103,7 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         // -- i.e. just the first irrep block -- and back-transform AO -> SO at the end.
         const size_t nbf2 = (size_t)nbf_ * (size_t)nbf_;
         double *d_Vxc = nullptr;
-        cudaError_t err = cudaMalloc((void**)&d_Vxc, nbf2 * sizeof(double));
+        cudaError_t err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc, nbf2 * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in RV::compute_V");
         }
@@ -2015,7 +2115,7 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         };
 
         uint64_t npoints;
-        CHECK_CUEST(cuestQuery(
+        XC_CHECK_CUEST(cuestQuery(
             cuest_handle,
             CUEST_MOLECULARGRID,
             grid_->cuest_grid(),
@@ -2043,13 +2143,14 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         }
     
         // => Compute integration weights <= //
+        microstages.start("RKS integration weights");
         double *d_weights = nullptr;
-        if (cudaMalloc((void**)&d_weights, npoints * sizeof(double)) != cudaSuccess) {
+        if (XC_DEVICE_CALL(cudaMalloc((void**)&d_weights, npoints * sizeof(double))) != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in RV::compute_V");
         }
         cuestXCIntegrationWeightComputeParameters_t weight_compute_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, &weight_compute_parameters));
-        CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, &weight_compute_parameters));
+        XC_CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
@@ -2057,8 +2158,8 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
             &temporary_workspace_descriptor,
             d_weights
             ));
-        cuestWorkspace_t* temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCIntegrationWeightCompute(
+        cuestWorkspace_t* temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCIntegrationWeightCompute(
             cuest_handle,
             cuest_xcint_plan_,
             CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
@@ -2066,22 +2167,23 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
             temporary_workspace,
             d_weights
             ));
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, weight_compute_parameters));
-        cuest_common::freeWorkspace(temporary_workspace);
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, weight_compute_parameters));
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
 #ifndef USING_Libxc_CUDA
         // Only the host functional path reads the weights back; with CUDA LibXC they
         // stay on the device and the quadrature reduction consumes them there.
         SharedMatrix h_weights = std::make_shared<Matrix>("weights", 1, npoints);
         double *p_weights = h_weights->pointer()[0];
-        err = cudaMemcpy(h_weights->pointer()[0], d_weights, npoints * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(h_weights->pointer()[0], d_weights, npoints * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in RV::compute_V");
         }
 #endif
 
         // => Compute grid density (and derivatives) <= //
+        microstages.start("RKS grid density");
         cuestXCDensityComputeParameters_t density_compute_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCDENSITYCOMPUTE_PARAMETERS, &density_compute_parameters));
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCDENSITYCOMPUTE_PARAMETERS, &density_compute_parameters));
         cuestXCAdvancedComputeParametersApproximation_t ansatz_types[3] = {
             CUEST_XCADVANCED_PARAMETERS_APPROXIMATION_LDA,
             CUEST_XCADVANCED_PARAMETERS_APPROXIMATION_GGA,
@@ -2097,11 +2199,11 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         uint64_t ncomponents = ncomponents_by_ansatz[functional_->ansatz()];
 
         double *d_rho = nullptr;
-        err = cudaMalloc((void**)&d_rho, npoints * ncomponents * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_rho, npoints * ncomponents * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in RV::compute_V");
         }
-        CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -2112,8 +2214,8 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
             d_Coccs_AO_,
             d_rho
             ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCDensityCompute(
+        temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCDensityCompute(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -2124,33 +2226,39 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
             d_Coccs_AO_,
             d_rho
             ));
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCDENSITYCOMPUTE_PARAMETERS, density_compute_parameters));
-        cuest_common::freeWorkspace(temporary_workspace);
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCDENSITYCOMPUTE_PARAMETERS, density_compute_parameters));
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
         temporary_workspace = nullptr;
 
         double* d_Vxc_grid = nullptr;
         double Exc = 0.0;
         double integrated_density = 0.0;
 #ifdef USING_Libxc_CUDA
+        microstages.stop();
         // Grid-sized potential buffer out of the persistent workspace. The block shape
         // repeats every SCF iteration, so this allocates once for the whole run instead
         // of round-tripping cudaMalloc/cudaFree -- both of which synchronize -- per call.
         d_Vxc_grid = cuest_xc_workspace().potential_a.ensure(npoints * ncomponents);
-        timer_on("cuEST XC: CUDA LibXC Functional");
+        functional_timer.start("cuEST XC: CUDA LibXC Functional");
+        microstages.start("RKS device functional");
         evaluate_cuest_xc_device(functional_, npoints, ncomponents, d_rho, d_weights, d_Vxc_grid, Exc,
                                  integrated_density);
-        timer_off("cuEST XC: CUDA LibXC Functional");
+        microstages.stop();
+        functional_timer.stop();
 #else
         double* p_full_f = nullptr;
         double* rho_0 = nullptr;
-        timer_on("cuEST XC: Host Functional");
+        microstages.stop();
+        functional_timer.start("cuEST XC: Host Functional");
+        microstages.start("RKS density download and transpose");
         // Copy the density and its derivatives to host, then transpose it for easier access.
         SharedMatrix h_rho_matrix = std::make_shared<Matrix>("rho", npoints, ncomponents);
-        err = cudaMemcpy(h_rho_matrix->pointer()[0], d_rho, npoints * ncomponents * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(h_rho_matrix->pointer()[0], d_rho, npoints * ncomponents * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in RV::compute_V");
         }
         SharedMatrix h_rho_matrixT = h_rho_matrix->transpose();
+        microstages.start("RKS host packing and evaluation");
 
         SharedMatrix h_Vxc_grid = std::make_shared<Matrix>("Vxc_grid", npoints, ncomponents);
         double* p_Vxc_grid = h_Vxc_grid->pointer()[0];
@@ -2165,10 +2273,10 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
             rho_0 = h_rho_matrixT->pointer()[0];
             full_f = std::make_shared<Matrix>("GRAC energy density", 1, npoints);
             p_full_f = full_f->pointer()[0];
-            timer_on("cuEST XC: GRAC Host Functional");
+            xc_timing::CoarseScope grac_timer("cuEST XC: GRAC Host Functional");
             evaluate_cuest_grac(functional_, functional_workers_, h_rho_matrixT, npoints, ncomponents,
                                 p_weights, p_full_f, p_Vxc_grid);
-            timer_off("cuEST XC: GRAC Host Functional");
+            grac_timer.stop();
         } else switch (ansatz_type) {
             case CUEST_XCADVANCED_PARAMETERS_APPROXIMATION_LDA:
                 rho = std::make_shared<Matrix>("rho", 1, npoints);
@@ -2360,21 +2468,23 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
                 throw PSIEXCEPTION("RV::compute_V: Invalid ansatz type.");
         }
 
-        err = cudaMalloc((void**)&d_Vxc_grid, npoints * ncomponents * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc_grid, npoints * ncomponents * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in RV::compute_V");
         }
-        err = cudaMemcpy(d_Vxc_grid, p_Vxc_grid, npoints * ncomponents * sizeof(double), cudaMemcpyHostToDevice);
+        err = XC_DEVICE_CALL(cudaMemcpy(d_Vxc_grid, p_Vxc_grid, npoints * ncomponents * sizeof(double), cudaMemcpyHostToDevice));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in RV::compute_V");
         }
-        timer_off("cuEST XC: Host Functional");
+        microstages.stop();
+        functional_timer.stop();
 #endif
 
         // => Compute the potential matrix from its grid representation <= //
+        microstages.start("RKS AO potential integration");
         cuestXCPotentialComputeParameters_t potential_compute_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCPOTENTIALCOMPUTE_PARAMETERS, &potential_compute_parameters));
-        CHECK_CUEST(cuestXCPotentialComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCPOTENTIALCOMPUTE_PARAMETERS, &potential_compute_parameters));
+        XC_CHECK_CUEST(cuestXCPotentialComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -2384,8 +2494,8 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
             d_Vxc_grid,
             d_Vxc
             ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCPotentialCompute(
+        temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCPotentialCompute(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -2395,19 +2505,19 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
             d_Vxc_grid,
             d_Vxc
         ));
-        cuest_common::freeWorkspace(temporary_workspace);
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCPOTENTIALCOMPUTE_PARAMETERS, potential_compute_parameters));
-        cudaFree(d_rho);
-        cudaFree(d_weights);
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCPOTENTIALCOMPUTE_PARAMETERS, potential_compute_parameters));
+        XC_DEVICE_CALL(cudaFree(d_rho));
+        XC_DEVICE_CALL(cudaFree(d_weights));
 
 #ifndef USING_Libxc_CUDA
         // Under CUDA LibXC this buffer belongs to the persistent workspace.
-        cudaFree(d_Vxc_grid);
+        XC_DEVICE_CALL(cudaFree(d_Vxc_grid));
 #endif
         auto V_AO = std::make_shared<Matrix>("V AO Temp", nbf_, nbf_);
-        err = cudaMemcpy(V_AO->get_pointer(0), d_Vxc, nbf2 * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(V_AO->get_pointer(0), d_Vxc, nbf2 * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
-            cudaFree(d_Vxc);
+            XC_DEVICE_CALL(cudaFree(d_Vxc));
             throw PSIEXCEPTION("cudaMemcpy failed in RV::compute_V");
         }
 
@@ -2427,31 +2537,31 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         if (functional_->needs_vv10()) {
         
             cuestNonlocalXCPotentialRKSComputeParameters_t vv10_potential_compute_parameters;
-            CHECK_CUEST(cuestParametersCreate(CUEST_NONLOCALXCPOTENTIALRKSCOMPUTE_PARAMETERS, &vv10_potential_compute_parameters));
+            XC_CHECK_CUEST(cuestParametersCreate(CUEST_NONLOCALXCPOTENTIALRKSCOMPUTE_PARAMETERS, &vv10_potential_compute_parameters));
 
             double vv10_scale = 1.0;
             double vv10_C = functional_->vv10_c();
             double vv10_b = functional_->vv10_b();
-            cuestParametersConfigure(
+            XC_CHECK_CUEST(cuestParametersConfigure(
                 CUEST_NONLOCALXCPOTENTIALRKSCOMPUTE_PARAMETERS, 
                 vv10_potential_compute_parameters,
                 CUEST_NONLOCALXCPOTENTIALUKSCOMPUTE_PARAMETERS_VV10_SCALE,
                 &vv10_scale,
-                sizeof(double));
-            cuestParametersConfigure(
+                sizeof(double)));
+            XC_CHECK_CUEST(cuestParametersConfigure(
                 CUEST_NONLOCALXCPOTENTIALRKSCOMPUTE_PARAMETERS, 
                 vv10_potential_compute_parameters,
                 CUEST_NONLOCALXCPOTENTIALUKSCOMPUTE_PARAMETERS_VV10_C,
                 &vv10_C,
-                sizeof(double));
-            cuestParametersConfigure(
+                sizeof(double)));
+            XC_CHECK_CUEST(cuestParametersConfigure(
                 CUEST_NONLOCALXCPOTENTIALRKSCOMPUTE_PARAMETERS, 
                 vv10_potential_compute_parameters,
                 CUEST_NONLOCALXCPOTENTIALUKSCOMPUTE_PARAMETERS_VV10_B,
                 &vv10_b,
-                sizeof(double));
+                sizeof(double)));
             double Evv10 = 0.0;
-            CHECK_CUEST(cuestNonlocalXCPotentialRKSComputeWorkspaceQuery(
+            XC_CHECK_CUEST(cuestNonlocalXCPotentialRKSComputeWorkspaceQuery(
                 cuest_handle,
                 cuest_vv10_xcint_plan_,
                 vv10_potential_compute_parameters,
@@ -2462,8 +2572,8 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
                 &Evv10,
                 d_Vxc));
 
-            temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-            CHECK_CUEST(cuestNonlocalXCPotentialRKSCompute(
+            temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+            XC_CHECK_CUEST(cuestNonlocalXCPotentialRKSCompute(
                 cuest_handle,
                 cuest_vv10_xcint_plan_,
                 vv10_potential_compute_parameters,
@@ -2474,21 +2584,21 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
                 &Evv10,
                 d_Vxc
             ));
-            cuest_common::freeWorkspace(temporary_workspace);
-            CHECK_CUEST(cuestParametersDestroy(CUEST_NONLOCALXCPOTENTIALRKSCOMPUTE_PARAMETERS, vv10_potential_compute_parameters));
+            XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
+            XC_CHECK_CUEST(cuestParametersDestroy(CUEST_NONLOCALXCPOTENTIALRKSCOMPUTE_PARAMETERS, vv10_potential_compute_parameters));
 
             // Add the VV10 contribution to Vxc
             auto VV10 = std::make_shared<Matrix>("VV10 AO Temp", nbf_, nbf_);
-            err = cudaMemcpy(VV10->get_pointer(0), d_Vxc, nbf2 * sizeof(double), cudaMemcpyDeviceToHost);
+            err = XC_DEVICE_CALL(cudaMemcpy(VV10->get_pointer(0), d_Vxc, nbf2 * sizeof(double), cudaMemcpyDeviceToHost));
             if (err != cudaSuccess) {
-                cudaFree(d_Vxc);
+                XC_DEVICE_CALL(cudaFree(d_Vxc));
                 throw PSIEXCEPTION("cudaMemcpy failed in RV::compute_V");
             }
             V_AO->add(VV10);
             quad_values_["VV10"] = Evv10;
         }
 
-        cudaFree(d_Vxc);
+        XC_DEVICE_CALL(cudaFree(d_Vxc));
 
         // Fold the dense AO-basis potential back into ret[0]'s (possibly
         // symmetry-blocked) SO storage, exactly as the CPU path below does.
@@ -2498,7 +2608,8 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
             ret[0]->copy(V_AO);
         }
 
-        timer_off("RV: Form V");
+        microstages.stop();
+        form_timer.stop();
         return;
     }
 #endif
@@ -2665,7 +2776,7 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         outfile->Printf("    <\\vec r\\rho_b> : <%24.16E,%24.16E,%24.16E>\n\n", quad_values_["RHO_BX"],
                         quad_values_["RHO_BY"], quad_values_["RHO_BZ"]);
     }
-    timer_off("RV: Form V");
+    form_timer.stop();
 }
 
 std::vector<SharedMatrix> RV::compute_fock_derivatives() {
@@ -3228,7 +3339,7 @@ SharedMatrix RV::compute_gradient() {
         };
 
         uint64_t npoints;
-        CHECK_CUEST(cuestQuery(
+        XC_CHECK_CUEST(cuestQuery(
             cuest_handle,
             CUEST_MOLECULARGRID,
             grid_->cuest_grid(),
@@ -3238,12 +3349,12 @@ SharedMatrix RV::compute_gradient() {
             ));
 
         double *d_Vxc_grad_atom = nullptr;
-        cudaError_t err = cudaMalloc((void**)&d_Vxc_grad_atom, 3 * natom * sizeof(double));
+        cudaError_t err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc_grad_atom, 3 * natom * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in RV::compute_gradient");
         }
         double *d_Vxc_grad_grid = nullptr;
-        err = cudaMalloc((void**)&d_Vxc_grad_grid, 3 * npoints * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc_grad_grid, 3 * npoints * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in RV::compute_gradient");
         }
@@ -3268,12 +3379,12 @@ SharedMatrix RV::compute_gradient() {
     
         // => Compute integration weights <= //
         double *d_weights = nullptr;
-        if (cudaMalloc((void**)&d_weights, npoints * sizeof(double)) != cudaSuccess) {
+        if (XC_DEVICE_CALL(cudaMalloc((void**)&d_weights, npoints * sizeof(double))) != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in RV::compute_V");
         }
         cuestXCIntegrationWeightComputeParameters_t weight_compute_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, &weight_compute_parameters));
-        CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, &weight_compute_parameters));
+        XC_CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
@@ -3281,8 +3392,8 @@ SharedMatrix RV::compute_gradient() {
             &temporary_workspace_descriptor,
             d_weights
             ));
-        cuestWorkspace_t* temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCIntegrationWeightCompute(
+        cuestWorkspace_t* temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCIntegrationWeightCompute(
             cuest_handle,
             cuest_xcint_plan_,
             CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
@@ -3290,18 +3401,18 @@ SharedMatrix RV::compute_gradient() {
             temporary_workspace,
             d_weights
             ));
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, weight_compute_parameters));
-        cuest_common::freeWorkspace(temporary_workspace);
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, weight_compute_parameters));
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
         SharedMatrix h_weights = std::make_shared<Matrix>("weights", 1, npoints);
         double *p_weights = h_weights->pointer()[0];
-        err = cudaMemcpy(h_weights->pointer()[0], d_weights, npoints * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(h_weights->pointer()[0], d_weights, npoints * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in RV::compute_V");
         }
 
         // => Compute grid density (and derivatives) <= //
         cuestXCDensityComputeParameters_t density_compute_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCDENSITYCOMPUTE_PARAMETERS, &density_compute_parameters));
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCDENSITYCOMPUTE_PARAMETERS, &density_compute_parameters));
         cuestXCAdvancedComputeParametersApproximation_t ansatz_types[3] = {
             CUEST_XCADVANCED_PARAMETERS_APPROXIMATION_LDA,
             CUEST_XCADVANCED_PARAMETERS_APPROXIMATION_GGA,
@@ -3317,11 +3428,11 @@ SharedMatrix RV::compute_gradient() {
         uint64_t ncomponents = ncomponents_by_ansatz[functional_->ansatz()];
 
         double *d_rho = nullptr;
-        err = cudaMalloc((void**)&d_rho, npoints * ncomponents * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_rho, npoints * ncomponents * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in RV::compute_gradient");
         }
-        CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -3332,8 +3443,8 @@ SharedMatrix RV::compute_gradient() {
             d_Coccs_AO_,
             d_rho
             ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCDensityCompute(
+        temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCDensityCompute(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -3344,13 +3455,13 @@ SharedMatrix RV::compute_gradient() {
             d_Coccs_AO_,
             d_rho
             ));
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCDENSITYCOMPUTE_PARAMETERS, density_compute_parameters));
-        cuest_common::freeWorkspace(temporary_workspace);
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCDENSITYCOMPUTE_PARAMETERS, density_compute_parameters));
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
         temporary_workspace = nullptr;
 
         // Copy the density and its derivatives to host, then transpose it for easier access.
         SharedMatrix h_rho_matrix = std::make_shared<Matrix>("rho", npoints, ncomponents);
-        err = cudaMemcpy(h_rho_matrix->pointer()[0], d_rho, npoints * ncomponents * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(h_rho_matrix->pointer()[0], d_rho, npoints * ncomponents * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in RV::compute_V");
         }
@@ -3557,19 +3668,19 @@ SharedMatrix RV::compute_gradient() {
                 throw PSIEXCEPTION("RV::compute_V: Invalid ansatz type.");
         }
 
-        err = cudaMalloc((void**)&d_Vxc_grid, npoints * ncomponents * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc_grid, npoints * ncomponents * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in RV::compute_V");
         }
-        err = cudaMemcpy(d_Vxc_grid, p_Vxc_grid, npoints * ncomponents * sizeof(double), cudaMemcpyHostToDevice);
+        err = XC_DEVICE_CALL(cudaMemcpy(d_Vxc_grid, p_Vxc_grid, npoints * ncomponents * sizeof(double), cudaMemcpyHostToDevice));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in RV::compute_V");
         }
 
         // => Compute the potential matrix from its grid representation <= //
         cuestXCDerivativeComputeParameters_t derivative_compute_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCDERIVATIVECOMPUTE_PARAMETERS, &derivative_compute_parameters));
-        CHECK_CUEST(cuestXCDerivativeComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCDERIVATIVECOMPUTE_PARAMETERS, &derivative_compute_parameters));
+        XC_CHECK_CUEST(cuestXCDerivativeComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -3582,8 +3693,8 @@ SharedMatrix RV::compute_gradient() {
             d_Vxc_grad_atom,
             d_Vxc_grad_grid
             ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCDerivativeCompute(
+        temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCDerivativeCompute(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -3596,30 +3707,30 @@ SharedMatrix RV::compute_gradient() {
             d_Vxc_grad_atom,
             d_Vxc_grad_grid
             ));
-        cuest_common::freeWorkspace(temporary_workspace);
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCDERIVATIVECOMPUTE_PARAMETERS, derivative_compute_parameters));
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCDERIVATIVECOMPUTE_PARAMETERS, derivative_compute_parameters));
 
         for (int point = 0; point < npoints; point++) {
             p_full_f[point] *= rho_0[point];
         }
         double *d_exc = nullptr;
-        err = cudaMalloc((void**)&d_exc, npoints * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_exc, npoints * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in RV::compute_V");
         }
-        err = cudaMemcpy(d_exc, p_full_f, npoints * sizeof(double), cudaMemcpyHostToDevice);
+        err = XC_DEVICE_CALL(cudaMemcpy(d_exc, p_full_f, npoints * sizeof(double), cudaMemcpyHostToDevice));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in RV::compute_V");
         }
 
         // Copy the atom gradient to the result matrix - we still need to work out the chain rule terms involving the grid below
-        err = cudaMemcpy(grad->get_pointer(0), d_Vxc_grad_atom, 3 * natom * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(grad->get_pointer(0), d_Vxc_grad_atom, 3 * natom * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in RV::compute_V");
         }
         cuestXCGridDerivativeComputeParameters_t grid_derivative_compute_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCGRIDDERIVATIVECOMPUTE_PARAMETERS, &grid_derivative_compute_parameters));
-        CHECK_CUEST(cuestXCGridDerivativeComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCGRIDDERIVATIVECOMPUTE_PARAMETERS, &grid_derivative_compute_parameters));
+        XC_CHECK_CUEST(cuestXCGridDerivativeComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             grid_derivative_compute_parameters,
@@ -3628,8 +3739,8 @@ SharedMatrix RV::compute_gradient() {
             d_Vxc_grad_grid,
             d_Vxc_grad_atom
             ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCGridDerivativeCompute(
+        temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCGridDerivativeCompute(
             cuest_handle,
             cuest_xcint_plan_,
             grid_derivative_compute_parameters,
@@ -3638,12 +3749,12 @@ SharedMatrix RV::compute_gradient() {
             d_Vxc_grad_grid,
             d_Vxc_grad_atom
             ));
-        cuest_common::freeWorkspace(temporary_workspace);
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCGRIDDERIVATIVECOMPUTE_PARAMETERS, grid_derivative_compute_parameters));
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCGRIDDERIVATIVECOMPUTE_PARAMETERS, grid_derivative_compute_parameters));
 
         // Combine the atom gradient and the grid gradient
         SharedMatrix grad_atom_from_grid = grad->clone();
-        err = cudaMemcpy(grad_atom_from_grid->get_pointer(0), d_Vxc_grad_atom, 3 * natom * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(grad_atom_from_grid->get_pointer(0), d_Vxc_grad_atom, 3 * natom * sizeof(double), cudaMemcpyDeviceToHost));
         grad->add(grad_atom_from_grid);
         grad->scale(2.0);
 
@@ -3653,30 +3764,30 @@ SharedMatrix RV::compute_gradient() {
                 throw PSIEXCEPTION("RV::compute_gradient: analytic gradient for DFT_VV10_POSTSCF=True is not supported.");
             }
             cuestNonlocalXCDerivativeRKSComputeParameters_t vv10_derivative_compute_parameters;
-            CHECK_CUEST(cuestParametersCreate(CUEST_NONLOCALXCDERIVATIVERKSCOMPUTE_PARAMETERS, &vv10_derivative_compute_parameters));
+            XC_CHECK_CUEST(cuestParametersCreate(CUEST_NONLOCALXCDERIVATIVERKSCOMPUTE_PARAMETERS, &vv10_derivative_compute_parameters));
 
             double vv10_scale = 1.0;
             double vv10_C = functional_->vv10_c();
             double vv10_b = functional_->vv10_b();
-            cuestParametersConfigure(
+            XC_CHECK_CUEST(cuestParametersConfigure(
                 CUEST_NONLOCALXCDERIVATIVERKSCOMPUTE_PARAMETERS, 
                 vv10_derivative_compute_parameters,
                 CUEST_NONLOCALXCDERIVATIVERKSCOMPUTE_PARAMETERS_VV10_SCALE,
                 &vv10_scale,
-                sizeof(double));
-            cuestParametersConfigure(
+                sizeof(double)));
+            XC_CHECK_CUEST(cuestParametersConfigure(
                 CUEST_NONLOCALXCDERIVATIVERKSCOMPUTE_PARAMETERS, 
                 vv10_derivative_compute_parameters,
                 CUEST_NONLOCALXCDERIVATIVERKSCOMPUTE_PARAMETERS_VV10_C,
                 &vv10_C,
-                sizeof(double));
-            cuestParametersConfigure(
+                sizeof(double)));
+            XC_CHECK_CUEST(cuestParametersConfigure(
                 CUEST_NONLOCALXCDERIVATIVERKSCOMPUTE_PARAMETERS, 
                 vv10_derivative_compute_parameters,
                 CUEST_NONLOCALXCDERIVATIVERKSCOMPUTE_PARAMETERS_VV10_B,
                 &vv10_b,
-                sizeof(double));
-            CHECK_CUEST(cuestNonlocalXCDerivativeRKSComputeWorkspaceQuery(
+                sizeof(double)));
+            XC_CHECK_CUEST(cuestNonlocalXCDerivativeRKSComputeWorkspaceQuery(
                 cuest_handle,
                 cuest_vv10_xcint_plan_,
                 vv10_derivative_compute_parameters,
@@ -3686,8 +3797,8 @@ SharedMatrix RV::compute_gradient() {
                 d_Coccs_AO_,
                 d_Vxc_grad_atom));
 
-            temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-            CHECK_CUEST(cuestNonlocalXCDerivativeRKSCompute(
+            temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+            XC_CHECK_CUEST(cuestNonlocalXCDerivativeRKSCompute(
                 cuest_handle,
                 cuest_vv10_xcint_plan_,
                 vv10_derivative_compute_parameters,
@@ -3697,21 +3808,21 @@ SharedMatrix RV::compute_gradient() {
                 d_Coccs_AO_,
                 d_Vxc_grad_atom
             ));
-            cuest_common::freeWorkspace(temporary_workspace);
-            CHECK_CUEST(cuestParametersDestroy(CUEST_NONLOCALXCDERIVATIVERKSCOMPUTE_PARAMETERS, vv10_derivative_compute_parameters));
+            XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
+            XC_CHECK_CUEST(cuestParametersDestroy(CUEST_NONLOCALXCDERIVATIVERKSCOMPUTE_PARAMETERS, vv10_derivative_compute_parameters));
 
             // Add the VV10 contribution to Vxc
             SharedMatrix VV10grad = grad->clone();
-            err = cudaMemcpy(VV10grad->get_pointer(0), d_Vxc_grad_atom, 3 * natom * sizeof(double), cudaMemcpyDeviceToHost);
+            err = XC_DEVICE_CALL(cudaMemcpy(VV10grad->get_pointer(0), d_Vxc_grad_atom, 3 * natom * sizeof(double), cudaMemcpyDeviceToHost));
             grad->add(VV10grad);
         }
 
-        cudaFree(d_rho);
-        cudaFree(d_weights);
-        cudaFree(d_Vxc_grid);
-        cudaFree(d_exc);
-        cudaFree(d_Vxc_grad_atom);
-        cudaFree(d_Vxc_grad_grid);
+        XC_DEVICE_CALL(cudaFree(d_rho));
+        XC_DEVICE_CALL(cudaFree(d_weights));
+        XC_DEVICE_CALL(cudaFree(d_Vxc_grid));
+        XC_DEVICE_CALL(cudaFree(d_exc));
+        XC_DEVICE_CALL(cudaFree(d_Vxc_grad_atom));
+        XC_DEVICE_CALL(cudaFree(d_Vxc_grad_grid));
 
         return grad;
     }
@@ -4342,7 +4453,7 @@ void UV::finalize() { VBase::finalize(); }
 void UV::print_header() const { VBase::print_header(); }
 void UV::compute_V(std::vector<SharedMatrix> ret) {
     // => Validate object <=
-    timer_on("UV: Form V");
+    xc_timing::CoarseScope form_timer("UV: Form V");
     if ((D_AO_.size() != 2) || (ret.size() != 2)) {
         throw PSIEXCEPTION("V: UKS should have two D/V Matrices");
     }
@@ -4352,6 +4463,9 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
     }
 #ifdef USING_cuEST
     if (use_cuest_xc()) {
+        xc_timing::CoarseScope functional_timer;
+        xc_timing::Stages microstages(options_.get_bool("CUEST_XC_TIMING"));
+        microstages.start("UKS setup");
         cuest_common::ensure_cuest_initialized();
 
         if ((d_Cocc_noccs_.size() != 2)) {
@@ -4364,12 +4478,12 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
         // AO -> SO at the end.
         const size_t nbf2 = (size_t)nbf_ * (size_t)nbf_;
         double *d_Vxc_a = nullptr;
-        cudaError_t err = cudaMalloc((void**)&d_Vxc_a, nbf2 * sizeof(double));
+        cudaError_t err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc_a, nbf2 * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_V");
         }
         double *d_Vxc_b = nullptr;
-        err = cudaMalloc((void**)&d_Vxc_b, nbf2 * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc_b, nbf2 * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_V");
         }
@@ -4381,7 +4495,7 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
         };
 
         uint64_t npoints;
-        CHECK_CUEST(cuestQuery(
+        XC_CHECK_CUEST(cuestQuery(
             cuest_handle,
             CUEST_MOLECULARGRID,
             grid_->cuest_grid(),
@@ -4409,13 +4523,14 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
         }
     
         // => Compute integration weights <= //
+        microstages.start("UKS integration weights");
         double *d_weights = nullptr;
-        if (cudaMalloc((void**)&d_weights, npoints * sizeof(double)) != cudaSuccess) {
+        if (XC_DEVICE_CALL(cudaMalloc((void**)&d_weights, npoints * sizeof(double))) != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_V");
         }
         cuestXCIntegrationWeightComputeParameters_t weight_compute_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, &weight_compute_parameters));
-        CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, &weight_compute_parameters));
+        XC_CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
@@ -4423,8 +4538,8 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
             &temporary_workspace_descriptor,
             d_weights
             ));
-        cuestWorkspace_t* temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCIntegrationWeightCompute(
+        cuestWorkspace_t* temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCIntegrationWeightCompute(
             cuest_handle,
             cuest_xcint_plan_,
             CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
@@ -4432,22 +4547,23 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
             temporary_workspace,
             d_weights
             ));
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, weight_compute_parameters));
-        cuest_common::freeWorkspace(temporary_workspace);
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, weight_compute_parameters));
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
 #ifndef USING_Libxc_CUDA
         // Only the host functional path reads the weights back; with CUDA LibXC they
         // stay on the device and the quadrature reduction consumes them there.
         SharedMatrix h_weights = std::make_shared<Matrix>("weights", 1, npoints);
         double *p_weights = h_weights->pointer()[0];
-        err = cudaMemcpy(h_weights->pointer()[0], d_weights, npoints * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(h_weights->pointer()[0], d_weights, npoints * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_V");
         }
 #endif
 
         // => Compute grid density (and derivatives) <= //
+        microstages.start("UKS grid density");
         cuestXCDensityComputeParameters_t density_compute_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCDENSITYCOMPUTE_PARAMETERS, &density_compute_parameters));
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCDENSITYCOMPUTE_PARAMETERS, &density_compute_parameters));
         cuestXCAdvancedComputeParametersApproximation_t ansatz_types[3] = {
             CUEST_XCADVANCED_PARAMETERS_APPROXIMATION_LDA,
             CUEST_XCADVANCED_PARAMETERS_APPROXIMATION_GGA,
@@ -4464,11 +4580,11 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
 
         double *d_rho_a = nullptr;
         double *d_rho_b = nullptr;
-        err = cudaMalloc((void**)&d_rho_a, npoints * ncomponents * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_rho_a, npoints * ncomponents * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_V");
         }
-        err = cudaMalloc((void**)&d_rho_b, npoints * ncomponents * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_rho_b, npoints * ncomponents * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_V");
         }
@@ -4478,58 +4594,35 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
         // only the first irrep block for a symmetry-adapted Va_/Vb_.
         assert (nbf == nbf_);
 
-        CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
-            cuest_handle,
-            cuest_xcint_plan_,
-            ansatz_type,
-            density_compute_parameters,
-            &variable_buffersize_descriptor,
-            &temporary_workspace_descriptor,
-            d_Cocc_noccs_[0],
-            d_Coccs_AO_,
-            d_rho_a
-            ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCDensityCompute(
-            cuest_handle,
-            cuest_xcint_plan_,
-            ansatz_type,
-            density_compute_parameters,
-            &variable_buffersize_descriptor,
-            temporary_workspace,
-            d_Cocc_noccs_[0],
-            d_Coccs_AO_,
-            d_rho_a
-            ));
-        cuest_common::freeWorkspace(temporary_workspace);
-        temporary_workspace = nullptr;
-
-        CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
-            cuest_handle,
-            cuest_xcint_plan_,
-            ansatz_type,
-            density_compute_parameters,
-            &variable_buffersize_descriptor,
-            &temporary_workspace_descriptor,
-            d_Cocc_noccs_[1],
-            d_Coccs_AO_ + d_Cocc_noccs_[0] * nbf,
-            d_rho_b
-            ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCDensityCompute(
-            cuest_handle,
-            cuest_xcint_plan_,
-            ansatz_type,
-            density_compute_parameters,
-            &variable_buffersize_descriptor,
-            temporary_workspace,
-            d_Cocc_noccs_[1],
-            d_Coccs_AO_ + d_Cocc_noccs_[0] * nbf,
-            d_rho_b
-            ));
-        cuest_common::freeWorkspace(temporary_workspace);
-        temporary_workspace = nullptr;
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCDENSITYCOMPUTE_PARAMETERS, density_compute_parameters));
+        double* spin_densities[] = {d_rho_a, d_rho_b};
+        uint64_t occupied_offset = 0;
+        for (size_t spin = 0; spin < 2; ++spin) {
+            const uint64_t nocc = d_Cocc_noccs_[spin];
+            if (nocc == 0) {
+                // cuEST rejects a zero-column coefficient matrix. An empty
+                // spin channel has exactly zero density and all derivatives,
+                // including tau; do not ask the library to collocate it.
+                if (XC_DEVICE_CALL(cudaMemset(spin_densities[spin], 0,
+                                               npoints * ncomponents * sizeof(double))) != cudaSuccess) {
+                    throw PSIEXCEPTION("cudaMemset failed for empty spin density in UV::compute_V");
+                }
+            } else {
+                double* coefficients = d_Coccs_AO_ + occupied_offset;
+                XC_CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
+                    cuest_handle, cuest_xcint_plan_, ansatz_type, density_compute_parameters,
+                    &variable_buffersize_descriptor, &temporary_workspace_descriptor,
+                    nocc, coefficients, spin_densities[spin]));
+                temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+                XC_CHECK_CUEST(cuestXCDensityCompute(
+                    cuest_handle, cuest_xcint_plan_, ansatz_type, density_compute_parameters,
+                    &variable_buffersize_descriptor, temporary_workspace,
+                    nocc, coefficients, spin_densities[spin]));
+                XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
+                temporary_workspace = nullptr;
+            }
+            occupied_offset += nocc * nbf;
+        }
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCDENSITYCOMPUTE_PARAMETERS, density_compute_parameters));
 
         double* d_Vxc_grid_a = nullptr;
         double* d_Vxc_grid_b = nullptr;
@@ -4537,33 +4630,39 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
         double integrated_density_a = 0.0;
         double integrated_density_b = 0.0;
 #ifdef USING_Libxc_CUDA
+        microstages.stop();
         // Both grid-sized potential buffers come from the persistent workspace, so the
         // block shape is allocated once for the run rather than twice per evaluation.
         d_Vxc_grid_a = cuest_xc_workspace().potential_a.ensure(npoints * ncomponents);
         d_Vxc_grid_b = cuest_xc_workspace().potential_b.ensure(npoints * ncomponents);
-        timer_on("cuEST XC: CUDA LibXC Functional");
+        functional_timer.start("cuEST XC: CUDA LibXC Functional");
+        microstages.start("UKS device functional");
         evaluate_cuest_xc_device_polarized(functional_, npoints, ncomponents, d_rho_a, d_rho_b, d_weights,
                                            d_Vxc_grid_a, d_Vxc_grid_b, Exc, integrated_density_a,
                                            integrated_density_b);
-        timer_off("cuEST XC: CUDA LibXC Functional");
+        microstages.stop();
+        functional_timer.stop();
 #else
         double* p_full_f = nullptr;
         double* rho_0_a = nullptr;
         double* rho_0_b = nullptr;
-        timer_on("cuEST XC: Host Functional");
+        microstages.stop();
+        functional_timer.start("cuEST XC: Host Functional");
+        microstages.start("UKS density download and transpose");
         // Copy the density and its derivatives to host, then transpose it for easier access.
         SharedMatrix h_rho_a_matrix = std::make_shared<Matrix>("rho_a", npoints, ncomponents);
         SharedMatrix h_rho_b_matrix = std::make_shared<Matrix>("rho_b", npoints, ncomponents);
-        err = cudaMemcpy(h_rho_a_matrix->pointer()[0], d_rho_a, npoints * ncomponents * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(h_rho_a_matrix->pointer()[0], d_rho_a, npoints * ncomponents * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_V");
         }
-        err = cudaMemcpy(h_rho_b_matrix->pointer()[0], d_rho_b, npoints * ncomponents * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(h_rho_b_matrix->pointer()[0], d_rho_b, npoints * ncomponents * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_V");
         }
         SharedMatrix h_rho_a_matrixT = h_rho_a_matrix->transpose();
         SharedMatrix h_rho_b_matrixT = h_rho_b_matrix->transpose();
+        microstages.start("UKS host packing and evaluation");
 
         SharedMatrix h_Vxc_grid_a = std::make_shared<Matrix>("Vxc_grid_a", npoints, ncomponents);
         SharedMatrix h_Vxc_grid_b = std::make_shared<Matrix>("Vxc_grid_b", npoints, ncomponents);
@@ -4826,29 +4925,31 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
                 throw PSIEXCEPTION("UV::compute_V: Invalid ansatz type.");
         }
 
-        err = cudaMalloc((void**)&d_Vxc_grid_a, npoints * ncomponents * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc_grid_a, npoints * ncomponents * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_V");
         }
-        err = cudaMemcpy(d_Vxc_grid_a, p_Vxc_grid_a, npoints * ncomponents * sizeof(double), cudaMemcpyHostToDevice);
+        err = XC_DEVICE_CALL(cudaMemcpy(d_Vxc_grid_a, p_Vxc_grid_a, npoints * ncomponents * sizeof(double), cudaMemcpyHostToDevice));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_V");
         }
-        err = cudaMalloc((void**)&d_Vxc_grid_b, npoints * ncomponents * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc_grid_b, npoints * ncomponents * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_V");
         }
-        err = cudaMemcpy(d_Vxc_grid_b, p_Vxc_grid_b, npoints * ncomponents * sizeof(double), cudaMemcpyHostToDevice);
+        err = XC_DEVICE_CALL(cudaMemcpy(d_Vxc_grid_b, p_Vxc_grid_b, npoints * ncomponents * sizeof(double), cudaMemcpyHostToDevice));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_V");
         }
 
-        timer_off("cuEST XC: Host Functional");
+        microstages.stop();
+        functional_timer.stop();
 #endif
         // => Compute the potential matrix from its grid representation <= //
+        microstages.start("UKS AO potential integration");
         cuestXCPotentialComputeParameters_t potential_compute_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCPOTENTIALCOMPUTE_PARAMETERS, &potential_compute_parameters));
-        CHECK_CUEST(cuestXCPotentialComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCPOTENTIALCOMPUTE_PARAMETERS, &potential_compute_parameters));
+        XC_CHECK_CUEST(cuestXCPotentialComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -4858,8 +4959,8 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
             d_Vxc_grid_a,
             d_Vxc_a
             ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCPotentialCompute(
+        temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCPotentialCompute(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -4869,9 +4970,9 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
             d_Vxc_grid_a,
             d_Vxc_a
         ));
-        cuest_common::freeWorkspace(temporary_workspace);
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
 
-        CHECK_CUEST(cuestXCPotentialComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestXCPotentialComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -4881,8 +4982,8 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
             d_Vxc_grid_b,
             d_Vxc_b
             ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCPotentialCompute(
+        temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCPotentialCompute(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -4892,27 +4993,27 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
             d_Vxc_grid_b,
             d_Vxc_b
         ));
-        cuest_common::freeWorkspace(temporary_workspace);
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCPOTENTIALCOMPUTE_PARAMETERS, potential_compute_parameters));
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCPOTENTIALCOMPUTE_PARAMETERS, potential_compute_parameters));
 
-        cudaFree(d_rho_a);
-        cudaFree(d_rho_b);
-        cudaFree(d_weights);
+        XC_DEVICE_CALL(cudaFree(d_rho_a));
+        XC_DEVICE_CALL(cudaFree(d_rho_b));
+        XC_DEVICE_CALL(cudaFree(d_weights));
 #ifndef USING_Libxc_CUDA
         // Under CUDA LibXC these belong to the persistent workspace.
-        cudaFree(d_Vxc_grid_a);
-        cudaFree(d_Vxc_grid_b);
+        XC_DEVICE_CALL(cudaFree(d_Vxc_grid_a));
+        XC_DEVICE_CALL(cudaFree(d_Vxc_grid_b));
 #endif
         auto Va_AO = std::make_shared<Matrix>("Va AO Temp", nbf_, nbf_);
         auto Vb_AO = std::make_shared<Matrix>("Vb AO Temp", nbf_, nbf_);
-        err = cudaMemcpy(Va_AO->get_pointer(0), d_Vxc_a, nbf2 * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(Va_AO->get_pointer(0), d_Vxc_a, nbf2 * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
-            cudaFree(d_Vxc_a);
+            XC_DEVICE_CALL(cudaFree(d_Vxc_a));
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_V");
         }
-        err = cudaMemcpy(Vb_AO->get_pointer(0), d_Vxc_b, nbf2 * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(Vb_AO->get_pointer(0), d_Vxc_b, nbf2 * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
-            cudaFree(d_Vxc_b);
+            XC_DEVICE_CALL(cudaFree(d_Vxc_b));
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_V");
         }
 
@@ -4932,31 +5033,31 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
         if (functional_->needs_vv10()) {
         
             cuestNonlocalXCPotentialUKSComputeParameters_t vv10_potential_compute_parameters;
-            CHECK_CUEST(cuestParametersCreate(CUEST_NONLOCALXCPOTENTIALUKSCOMPUTE_PARAMETERS, &vv10_potential_compute_parameters));
+            XC_CHECK_CUEST(cuestParametersCreate(CUEST_NONLOCALXCPOTENTIALUKSCOMPUTE_PARAMETERS, &vv10_potential_compute_parameters));
 
             double vv10_scale = 1.0;
             double vv10_C = functional_->vv10_c();
             double vv10_b = functional_->vv10_b();
-            cuestParametersConfigure(
+            XC_CHECK_CUEST(cuestParametersConfigure(
                 CUEST_NONLOCALXCPOTENTIALUKSCOMPUTE_PARAMETERS, 
                 vv10_potential_compute_parameters,
                 CUEST_NONLOCALXCPOTENTIALUKSCOMPUTE_PARAMETERS_VV10_SCALE,
                 &vv10_scale,
-                sizeof(double));
-            cuestParametersConfigure(
+                sizeof(double)));
+            XC_CHECK_CUEST(cuestParametersConfigure(
                 CUEST_NONLOCALXCPOTENTIALUKSCOMPUTE_PARAMETERS, 
                 vv10_potential_compute_parameters,
                 CUEST_NONLOCALXCPOTENTIALUKSCOMPUTE_PARAMETERS_VV10_C,
                 &vv10_C,
-                sizeof(double));
-            cuestParametersConfigure(
+                sizeof(double)));
+            XC_CHECK_CUEST(cuestParametersConfigure(
                 CUEST_NONLOCALXCPOTENTIALUKSCOMPUTE_PARAMETERS, 
                 vv10_potential_compute_parameters,
                 CUEST_NONLOCALXCPOTENTIALUKSCOMPUTE_PARAMETERS_VV10_B,
                 &vv10_b,
-                sizeof(double));
+                sizeof(double)));
             double Evv10 = 0.0;
-            CHECK_CUEST(cuestNonlocalXCPotentialUKSComputeWorkspaceQuery(
+            XC_CHECK_CUEST(cuestNonlocalXCPotentialUKSComputeWorkspaceQuery(
                 cuest_handle,
                 cuest_vv10_xcint_plan_,
                 vv10_potential_compute_parameters,
@@ -4969,8 +5070,8 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
                 &Evv10,
                 d_Vxc_a));
 
-            temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-            CHECK_CUEST(cuestNonlocalXCPotentialUKSCompute(
+            temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+            XC_CHECK_CUEST(cuestNonlocalXCPotentialUKSCompute(
                 cuest_handle,
                 cuest_vv10_xcint_plan_,
                 vv10_potential_compute_parameters,
@@ -4983,12 +5084,12 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
                 &Evv10,
                 d_Vxc_a));
 
-            cuest_common::freeWorkspace(temporary_workspace);
-            CHECK_CUEST(cuestParametersDestroy(CUEST_NONLOCALXCPOTENTIALUKSCOMPUTE_PARAMETERS, vv10_potential_compute_parameters));
+            XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
+            XC_CHECK_CUEST(cuestParametersDestroy(CUEST_NONLOCALXCPOTENTIALUKSCOMPUTE_PARAMETERS, vv10_potential_compute_parameters));
 
             // Add the VV10 contribution to Vxc
             auto VV10 = std::make_shared<Matrix>("VV10 AO Temp", nbf_, nbf_);
-            err = cudaMemcpy(VV10->get_pointer(0), d_Vxc_a, nbf2 * sizeof(double), cudaMemcpyDeviceToHost);
+            err = XC_DEVICE_CALL(cudaMemcpy(VV10->get_pointer(0), d_Vxc_a, nbf2 * sizeof(double), cudaMemcpyDeviceToHost));
             if (err != cudaSuccess) {
                 throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_V");
             }
@@ -4997,8 +5098,8 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
             quad_values_["VV10"] = Evv10;
         }
 
-        cudaFree(d_Vxc_a);
-        cudaFree(d_Vxc_b);
+        XC_DEVICE_CALL(cudaFree(d_Vxc_a));
+        XC_DEVICE_CALL(cudaFree(d_Vxc_b));
 
         // Fold the dense AO-basis potentials back into ret[0]/ret[1]'s (possibly
         // symmetry-blocked) SO storage, exactly as the CPU path below does.
@@ -5010,7 +5111,8 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
             ret[1]->copy(Vb_AO);
         }
 
-        timer_off("UV: Form V");
+        microstages.stop();
+        form_timer.stop();
         return;
     }
 #endif
@@ -5326,7 +5428,7 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
         outfile->Printf("    <\\vec r\\rho_b>  : <%24.16E,%24.16E,%24.16E>\n\n", quad_values_["RHO_BX"],
                         quad_values_["RHO_BY"], quad_values_["RHO_BZ"]);
     }
-    timer_off("UV: Form V");
+    form_timer.stop();
 }
 std::vector<SharedMatrix> UV::compute_fock_derivatives() {
     throw_if_cuest_unsupported("UKS Fock derivatives (compute_fock_derivatives)");
@@ -6174,7 +6276,7 @@ SharedMatrix UV::compute_gradient() {
         };
 
         uint64_t npoints;
-        CHECK_CUEST(cuestQuery(
+        XC_CHECK_CUEST(cuestQuery(
             cuest_handle,
             CUEST_MOLECULARGRID,
             grid_->cuest_grid(),
@@ -6184,22 +6286,22 @@ SharedMatrix UV::compute_gradient() {
             ));
 
         double *d_Vxc_grad_atom_a = nullptr;
-        cudaError_t err = cudaMalloc((void**)&d_Vxc_grad_atom_a, 3 * natom * sizeof(double));
+        cudaError_t err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc_grad_atom_a, 3 * natom * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_gradient");
         }
         double *d_Vxc_grad_atom_b = nullptr;
-        err = cudaMalloc((void**)&d_Vxc_grad_atom_b, 3 * natom * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc_grad_atom_b, 3 * natom * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_gradient");
         }
         double *d_Vxc_grad_grid_a = nullptr;
-        err = cudaMalloc((void**)&d_Vxc_grad_grid_a, 3 * npoints * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc_grad_grid_a, 3 * npoints * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_gradient");
         }
         double *d_Vxc_grad_grid_b = nullptr;
-        err = cudaMalloc((void**)&d_Vxc_grad_grid_b, 3 * npoints * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc_grad_grid_b, 3 * npoints * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_gradient");
         }
@@ -6224,12 +6326,12 @@ SharedMatrix UV::compute_gradient() {
     
         // => Compute integration weights <= //
         double *d_weights = nullptr;
-        if (cudaMalloc((void**)&d_weights, npoints * sizeof(double)) != cudaSuccess) {
+        if (XC_DEVICE_CALL(cudaMalloc((void**)&d_weights, npoints * sizeof(double))) != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_gradient");
         }
         cuestXCIntegrationWeightComputeParameters_t weight_compute_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, &weight_compute_parameters));
-        CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, &weight_compute_parameters));
+        XC_CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
@@ -6237,8 +6339,8 @@ SharedMatrix UV::compute_gradient() {
             &temporary_workspace_descriptor,
             d_weights
             ));
-        cuestWorkspace_t* temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCIntegrationWeightCompute(
+        cuestWorkspace_t* temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCIntegrationWeightCompute(
             cuest_handle,
             cuest_xcint_plan_,
             CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
@@ -6246,18 +6348,18 @@ SharedMatrix UV::compute_gradient() {
             temporary_workspace,
             d_weights
             ));
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, weight_compute_parameters));
-        cuest_common::freeWorkspace(temporary_workspace);
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, weight_compute_parameters));
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
         SharedMatrix h_weights = std::make_shared<Matrix>("weights", 1, npoints);
         double *p_weights = h_weights->pointer()[0];
-        err = cudaMemcpy(h_weights->pointer()[0], d_weights, npoints * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(h_weights->pointer()[0], d_weights, npoints * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_gradient");
         }
 
         // => Compute grid density (and derivatives) <= //
         cuestXCDensityComputeParameters_t density_compute_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCDENSITYCOMPUTE_PARAMETERS, &density_compute_parameters));
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCDENSITYCOMPUTE_PARAMETERS, &density_compute_parameters));
         cuestXCAdvancedComputeParametersApproximation_t ansatz_types[3] = {
             CUEST_XCADVANCED_PARAMETERS_APPROXIMATION_LDA,
             CUEST_XCADVANCED_PARAMETERS_APPROXIMATION_GGA,
@@ -6274,16 +6376,16 @@ SharedMatrix UV::compute_gradient() {
 
         double *d_rho_a = nullptr;
         double *d_rho_b = nullptr;
-        err = cudaMalloc((void**)&d_rho_a, npoints * ncomponents * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_rho_a, npoints * ncomponents * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_gradient");
         }
-        err = cudaMalloc((void**)&d_rho_b, npoints * ncomponents * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_rho_b, npoints * ncomponents * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_gradient");
         }
         
-        CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -6294,8 +6396,8 @@ SharedMatrix UV::compute_gradient() {
             d_Coccs_AO_,
             d_rho_a
             ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCDensityCompute(
+        temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCDensityCompute(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -6306,11 +6408,11 @@ SharedMatrix UV::compute_gradient() {
             d_Coccs_AO_,
             d_rho_a
             ));
-        cuest_common::freeWorkspace(temporary_workspace);
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
         temporary_workspace = nullptr;
 
         int nbf = primary_->nbf();
-        CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -6321,8 +6423,8 @@ SharedMatrix UV::compute_gradient() {
             d_Coccs_AO_ + d_Cocc_noccs_[0] * nbf,
             d_rho_b
             ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCDensityCompute(
+        temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCDensityCompute(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -6333,18 +6435,18 @@ SharedMatrix UV::compute_gradient() {
             d_Coccs_AO_ + d_Cocc_noccs_[0] * nbf,
             d_rho_b
             ));
-        cuest_common::freeWorkspace(temporary_workspace);
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
         temporary_workspace = nullptr;
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCDENSITYCOMPUTE_PARAMETERS, density_compute_parameters));
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCDENSITYCOMPUTE_PARAMETERS, density_compute_parameters));
 
         // Copy the density and its derivatives to host, then transpose it for easier access.
         SharedMatrix h_rho_a_matrix = std::make_shared<Matrix>("rho_a", npoints, ncomponents);
         SharedMatrix h_rho_b_matrix = std::make_shared<Matrix>("rho_b", npoints, ncomponents);
-        err = cudaMemcpy(h_rho_a_matrix->pointer()[0], d_rho_a, npoints * ncomponents * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(h_rho_a_matrix->pointer()[0], d_rho_a, npoints * ncomponents * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_gradient");
         }
-        err = cudaMemcpy(h_rho_b_matrix->pointer()[0], d_rho_b, npoints * ncomponents * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(h_rho_b_matrix->pointer()[0], d_rho_b, npoints * ncomponents * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_gradient");
         }
@@ -6614,27 +6716,27 @@ SharedMatrix UV::compute_gradient() {
                 throw PSIEXCEPTION("UV::compute_gradient: Invalid ansatz type.");
         }
 
-        err = cudaMalloc((void**)&d_Vxc_grid_a, npoints * ncomponents * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc_grid_a, npoints * ncomponents * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_gradient");
         }
-        err = cudaMemcpy(d_Vxc_grid_a, p_Vxc_grid_a, npoints * ncomponents * sizeof(double), cudaMemcpyHostToDevice);
+        err = XC_DEVICE_CALL(cudaMemcpy(d_Vxc_grid_a, p_Vxc_grid_a, npoints * ncomponents * sizeof(double), cudaMemcpyHostToDevice));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_gradient");
         }
-        err = cudaMalloc((void**)&d_Vxc_grid_b, npoints * ncomponents * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_Vxc_grid_b, npoints * ncomponents * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_gradient");
         }
-        err = cudaMemcpy(d_Vxc_grid_b, p_Vxc_grid_b, npoints * ncomponents * sizeof(double), cudaMemcpyHostToDevice);
+        err = XC_DEVICE_CALL(cudaMemcpy(d_Vxc_grid_b, p_Vxc_grid_b, npoints * ncomponents * sizeof(double), cudaMemcpyHostToDevice));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_gradient");
         }
 
         // => Compute the potential matrix from its grid representation <= //
         cuestXCDerivativeComputeParameters_t derivative_compute_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCDERIVATIVECOMPUTE_PARAMETERS, &derivative_compute_parameters));
-        CHECK_CUEST(cuestXCDerivativeComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCDERIVATIVECOMPUTE_PARAMETERS, &derivative_compute_parameters));
+        XC_CHECK_CUEST(cuestXCDerivativeComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -6647,8 +6749,8 @@ SharedMatrix UV::compute_gradient() {
             d_Vxc_grad_atom_a,
             d_Vxc_grad_grid_a
             ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCDerivativeCompute(
+        temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCDerivativeCompute(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -6661,9 +6763,9 @@ SharedMatrix UV::compute_gradient() {
             d_Vxc_grad_atom_a,
             d_Vxc_grad_grid_a
         ));
-        cuest_common::freeWorkspace(temporary_workspace);
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
         
-        CHECK_CUEST(cuestXCDerivativeComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestXCDerivativeComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -6676,8 +6778,8 @@ SharedMatrix UV::compute_gradient() {
             d_Vxc_grad_atom_b,
             d_Vxc_grad_grid_b
             ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCDerivativeCompute(
+        temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCDerivativeCompute(
             cuest_handle,
             cuest_xcint_plan_,
             ansatz_type,
@@ -6690,28 +6792,28 @@ SharedMatrix UV::compute_gradient() {
             d_Vxc_grad_atom_b,
             d_Vxc_grad_grid_b
         ));
-        cuest_common::freeWorkspace(temporary_workspace);
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCDERIVATIVECOMPUTE_PARAMETERS, derivative_compute_parameters));
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCDERIVATIVECOMPUTE_PARAMETERS, derivative_compute_parameters));
 
         for (int point = 0; point < npoints; point++) {
             p_full_f[point] *= (rho_0_a[point] + rho_0_b[point]);
         }
         double *d_exc = nullptr;
-        err = cudaMalloc((void**)&d_exc, npoints * sizeof(double));
+        err = XC_DEVICE_CALL(cudaMalloc((void**)&d_exc, npoints * sizeof(double)));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMalloc failed in UV::compute_gradient");
         }
-        err = cudaMemcpy(d_exc, p_full_f, npoints * sizeof(double), cudaMemcpyHostToDevice);
+        err = XC_DEVICE_CALL(cudaMemcpy(d_exc, p_full_f, npoints * sizeof(double), cudaMemcpyHostToDevice));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_gradient");
         }
-        err = cudaMemcpy(grad->get_pointer(0), d_Vxc_grad_atom_a, 3 * natom * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(grad->get_pointer(0), d_Vxc_grad_atom_a, 3 * natom * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_gradient");
         }
 
         SharedMatrix grad_tmp = grad->clone();
-        err = cudaMemcpy(grad_tmp->get_pointer(0), d_Vxc_grad_atom_b, 3 * natom * sizeof(double), cudaMemcpyDeviceToHost);
+        err = XC_DEVICE_CALL(cudaMemcpy(grad_tmp->get_pointer(0), d_Vxc_grad_atom_b, 3 * natom * sizeof(double), cudaMemcpyDeviceToHost));
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_gradient");
         }
@@ -6730,8 +6832,8 @@ SharedMatrix UV::compute_gradient() {
             );
 
         cuestXCGridDerivativeComputeParameters_t grid_derivative_compute_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_XCGRIDDERIVATIVECOMPUTE_PARAMETERS, &grid_derivative_compute_parameters));
-        CHECK_CUEST(cuestXCGridDerivativeComputeWorkspaceQuery(
+        XC_CHECK_CUEST(cuestParametersCreate(CUEST_XCGRIDDERIVATIVECOMPUTE_PARAMETERS, &grid_derivative_compute_parameters));
+        XC_CHECK_CUEST(cuestXCGridDerivativeComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
             grid_derivative_compute_parameters,
@@ -6740,8 +6842,8 @@ SharedMatrix UV::compute_gradient() {
             d_Vxc_grad_grid_a,
             d_Vxc_grad_atom_a
             ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCGridDerivativeCompute(
+        temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+        XC_CHECK_CUEST(cuestXCGridDerivativeCompute(
             cuest_handle,
             cuest_xcint_plan_,
             grid_derivative_compute_parameters,
@@ -6750,10 +6852,10 @@ SharedMatrix UV::compute_gradient() {
             d_Vxc_grad_grid_a,
             d_Vxc_grad_atom_a
             ));
-        cuest_common::freeWorkspace(temporary_workspace);
-        CHECK_CUEST(cuestParametersDestroy(CUEST_XCGRIDDERIVATIVECOMPUTE_PARAMETERS, grid_derivative_compute_parameters));
+        XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
+        XC_CHECK_CUEST(cuestParametersDestroy(CUEST_XCGRIDDERIVATIVECOMPUTE_PARAMETERS, grid_derivative_compute_parameters));
 
-        cudaMemcpy(grad_tmp->get_pointer(0), d_Vxc_grad_atom_a, 3 * natom * sizeof(double), cudaMemcpyDeviceToHost);
+        XC_DEVICE_CALL(cudaMemcpy(grad_tmp->get_pointer(0), d_Vxc_grad_atom_a, 3 * natom * sizeof(double), cudaMemcpyDeviceToHost));
         grad->add(grad_tmp);
 
         if (functional_->needs_vv10()) {
@@ -6763,30 +6865,30 @@ SharedMatrix UV::compute_gradient() {
             }
         
             cuestNonlocalXCDerivativeUKSComputeParameters_t vv10_derivative_compute_parameters;
-            CHECK_CUEST(cuestParametersCreate(CUEST_NONLOCALXCDERIVATIVEUKSCOMPUTE_PARAMETERS, &vv10_derivative_compute_parameters));
+            XC_CHECK_CUEST(cuestParametersCreate(CUEST_NONLOCALXCDERIVATIVEUKSCOMPUTE_PARAMETERS, &vv10_derivative_compute_parameters));
 
             double vv10_scale = 1.0;
             double vv10_C = functional_->vv10_c();
             double vv10_b = functional_->vv10_b();
-            cuestParametersConfigure(
+            XC_CHECK_CUEST(cuestParametersConfigure(
                 CUEST_NONLOCALXCDERIVATIVEUKSCOMPUTE_PARAMETERS, 
                 vv10_derivative_compute_parameters,
                 CUEST_NONLOCALXCDERIVATIVEUKSCOMPUTE_PARAMETERS_VV10_SCALE,
                 &vv10_scale,
-                sizeof(double));
-            cuestParametersConfigure(
+                sizeof(double)));
+            XC_CHECK_CUEST(cuestParametersConfigure(
                 CUEST_NONLOCALXCDERIVATIVEUKSCOMPUTE_PARAMETERS, 
                 vv10_derivative_compute_parameters,
                 CUEST_NONLOCALXCDERIVATIVEUKSCOMPUTE_PARAMETERS_VV10_C,
                 &vv10_C,
-                sizeof(double));
-            cuestParametersConfigure(
+                sizeof(double)));
+            XC_CHECK_CUEST(cuestParametersConfigure(
                 CUEST_NONLOCALXCDERIVATIVEUKSCOMPUTE_PARAMETERS, 
                 vv10_derivative_compute_parameters,
                 CUEST_NONLOCALXCDERIVATIVEUKSCOMPUTE_PARAMETERS_VV10_B,
                 &vv10_b,
-                sizeof(double));
-            CHECK_CUEST(cuestNonlocalXCDerivativeUKSComputeWorkspaceQuery(
+                sizeof(double)));
+            XC_CHECK_CUEST(cuestNonlocalXCDerivativeUKSComputeWorkspaceQuery(
                 cuest_handle,
                 cuest_vv10_xcint_plan_,
                 vv10_derivative_compute_parameters,
@@ -6798,8 +6900,8 @@ SharedMatrix UV::compute_gradient() {
                 d_Coccs_AO_ + nbf_ * d_Cocc_noccs_[0],
                 d_Vxc_grad_atom_a));
 
-            temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-            CHECK_CUEST(cuestNonlocalXCDerivativeUKSCompute(
+            temporary_workspace = XC_DEVICE_CALL(cuest_common::allocateWorkspace(&temporary_workspace_descriptor));
+            XC_CHECK_CUEST(cuestNonlocalXCDerivativeUKSCompute(
                 cuest_handle,
                 cuest_vv10_xcint_plan_,
                 vv10_derivative_compute_parameters,
@@ -6811,27 +6913,27 @@ SharedMatrix UV::compute_gradient() {
                 d_Coccs_AO_ + nbf_ * d_Cocc_noccs_[0],
                 d_Vxc_grad_atom_a));
 
-            cuest_common::freeWorkspace(temporary_workspace);
-            CHECK_CUEST(cuestParametersDestroy(CUEST_NONLOCALXCDERIVATIVEUKSCOMPUTE_PARAMETERS, vv10_derivative_compute_parameters));
+            XC_DEVICE_CALL(cuest_common::freeWorkspace(temporary_workspace));
+            XC_CHECK_CUEST(cuestParametersDestroy(CUEST_NONLOCALXCDERIVATIVEUKSCOMPUTE_PARAMETERS, vv10_derivative_compute_parameters));
 
             // Add the VV10 contribution to the Vxc gradient
-            err = cudaMemcpy(grad_tmp->get_pointer(0), d_Vxc_grad_atom_a, 3 * natom * sizeof(double), cudaMemcpyDeviceToHost);
+            err = XC_DEVICE_CALL(cudaMemcpy(grad_tmp->get_pointer(0), d_Vxc_grad_atom_a, 3 * natom * sizeof(double), cudaMemcpyDeviceToHost));
             if (err != cudaSuccess) {
                 throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_gradient");
             }
             grad->add(grad_tmp);
         }
 
-        cudaFree(d_rho_a);
-        cudaFree(d_rho_b);
-        cudaFree(d_weights);
-        cudaFree(d_Vxc_grid_a);
-        cudaFree(d_Vxc_grid_b);
-        cudaFree(d_exc);
-        cudaFree(d_Vxc_grad_atom_a);
-        cudaFree(d_Vxc_grad_atom_b);
-        cudaFree(d_Vxc_grad_grid_a);
-        cudaFree(d_Vxc_grad_grid_b);
+        XC_DEVICE_CALL(cudaFree(d_rho_a));
+        XC_DEVICE_CALL(cudaFree(d_rho_b));
+        XC_DEVICE_CALL(cudaFree(d_weights));
+        XC_DEVICE_CALL(cudaFree(d_Vxc_grid_a));
+        XC_DEVICE_CALL(cudaFree(d_Vxc_grid_b));
+        XC_DEVICE_CALL(cudaFree(d_exc));
+        XC_DEVICE_CALL(cudaFree(d_Vxc_grad_atom_a));
+        XC_DEVICE_CALL(cudaFree(d_Vxc_grad_atom_b));
+        XC_DEVICE_CALL(cudaFree(d_Vxc_grad_grid_a));
+        XC_DEVICE_CALL(cudaFree(d_Vxc_grad_grid_b));
 
         return grad;
     }

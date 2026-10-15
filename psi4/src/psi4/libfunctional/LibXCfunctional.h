@@ -68,6 +68,7 @@ class LibXCFunctional : public Functional {
     bool exc_; // Can we compute functional at a point?
     bool vxc_; // Can we compute first derivative at a point?
     bool fxc_; // Can we compute second derivative at a point?
+    bool microtiming_ = false;
 
     // **ONLY** Used to pass information up the chain.
     // Exchange
@@ -126,6 +127,7 @@ class LibXCFunctional : public Functional {
     // False for potential-only functionals (e.g. LB94), whose LibXC entry has no
     // XC_FLAGS_HAVE_EXC. Asking those for an energy density aborts the process.
     bool has_exc() const { return exc_; }
+    bool microtiming() const { return microtiming_; }
 
     // Get libxc provenance stamp
     static std::string xclib_description();

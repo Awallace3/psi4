@@ -87,6 +87,8 @@ class PSI_API VBase {
     std::vector<std::shared_ptr<PointFunctions>> point_workers_;
     /// Integration grid, built by KSPotential
     std::shared_ptr<DFTGrid> grid_;
+    /// Only SCF potentials opt into the initial grid; response grids stay final.
+    bool initial_grid_ = false;
     /// VV10 Grid
     std::shared_ptr<DFTGrid> vv10_grid_;
 #ifdef USING_cuEST
@@ -130,6 +132,8 @@ class PSI_API VBase {
 
     /// Set things up
     void common_init();
+    /// Destructor cleanup is unprofiled and best-effort; explicit cleanup is checked.
+    void finalize_impl(bool checked);
 
     /// Whether the exchange-correlation quadrature runs on the GPU.
     ///
@@ -204,6 +208,9 @@ class PSI_API VBase {
 
     virtual void initialize();
     virtual void finalize();
+    /// Rebuild the grid, workers and GPU integral plans without changing the functional.
+    void set_grid(const std::string& name);
+    bool initial_grid() const { return initial_grid_; }
 
     virtual void print_header() const;
 };
