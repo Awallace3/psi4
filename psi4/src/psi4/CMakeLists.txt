@@ -87,6 +87,10 @@ if(TARGET cuEST::cuEST)
 
   # cuEST adds members to public Psi4 classes, so plugins must use the same ABI.
   target_compile_definitions(core INTERFACE USING_cuEST)
+  if(cuEST_HAS_DIRECT_JK)
+    target_compile_definitions(psi4_optional_deps INTERFACE USING_cuEST_DIRECT_JK)
+    target_compile_definitions(core INTERFACE USING_cuEST_DIRECT_JK)
+  endif()
 endif()
 
 foreach(dir_name

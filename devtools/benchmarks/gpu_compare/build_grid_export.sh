@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run on a compute node under explicit QoS, not on a login node.
-# Usage: /bin/bash build_grid_export.sh ABS_REPO COMMIT ABS_RUN [embers|inferno]
+# Usage: /bin/bash build_grid_export.sh ABS_REPO COMMIT ABS_RUN [embers|inferno] [ABS_CUEST_SDK]
 # inferno is permitted only for a specifically user-authorized submission.
 # The historical CUDA-LibXC stage is read-only and is never rebuilt here.
 set -euo pipefail
@@ -18,6 +18,12 @@ SLURM_JOB_QOS=$(squeue -h -j "${SLURM_JOB_ID:?}" -o '%q')
 [[ ! -e "$run/build" && ! -e "$run/build-manifest.json" ]]
 
 env_root=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt
+sdk=${5:-$env_root}
+[[ "$sdk" == /* && -r "$sdk/include/cuest.h" ]]
+sdk_lib="$sdk/lib/13"
+if [[ ! -r "$sdk_lib/libcuest.so" ]]; then sdk_lib="$sdk/lib"; fi
+test -r "$sdk_lib/libcuest.so"
+export CUEST_SELECTED_SDK="$sdk" CUEST_SELECTED_LIBRARY="$sdk_lib/libcuest.so"
 toolchains=/storage/project/r-cs207-0/awallace43/software/toolchains
 cuda="$toolchains/cuda13"
 xc=/storage/project/r-cs207-0/awallace43/software/libxc-7.1.2-cuda
@@ -27,7 +33,7 @@ unset GCC_ROOT CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH LIBRARY
 unset LD_PRELOAD
 export PATH="$env_root/bin:$cuda/bin:$PATH" PYTHONNOUSERSITE=1
 export CUDA_HOME="$cuda" CUDA_PATH="$cuda"
-export LD_LIBRARY_PATH="$xc/lib64:$cuda/lib64:$env_root/lib"
+export LD_LIBRARY_PATH="$sdk_lib:$xc/lib64:$cuda/lib64:$env_root/lib"
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 export TMPDIR="/storage/scratch1/3/awallace43/gpu-dft-grid-build/${SLURM_JOB_ID:?}"
 mkdir -p "$TMPDIR" "$run"
@@ -42,11 +48,12 @@ cmake -S "$repo" -B "$run/build" -G Ninja \
     -DCMAKE_C_COMPILER="$cc" -DCMAKE_CXX_COMPILER="$cxx" \
     -DCMAKE_CUDA_HOST_COMPILER="$cxx" -DCMAKE_CUDA_COMPILER="$cuda/bin/nvcc" \
     -DCUDAToolkit_ROOT="$cuda" -DCMAKE_CUDA_ARCHITECTURES=90 \
-    -DCMAKE_PREFIX_PATH="$env_root;$xc" \
+    -DCMAKE_PREFIX_PATH="$sdk;$env_root;$xc" \
     -DPython_EXECUTABLE="$env_root/bin/python" \
     -DLibint2_DIR="$env_root/lib/cmake/libint2" \
     -DLibxc_DIR="$xc/lib64/cmake/Libxc" \
-    -DcuEST_ROOT="$env_root" -DENABLE_cuEST=ON \
+    -DcuEST_ROOT="$sdk" -DcuEST_INCLUDE_DIR="$sdk/include" \
+    -DcuEST_LIBRARY="$sdk_lib/libcuest.so" -DENABLE_cuEST=ON \
     -DBLAS_LIBRARIES="$env_root/lib/libmkl_rt.so" \
     -DLAPACK_LIBRARIES="$env_root/lib/libmkl_rt.so" \
     -DCMAKE_INSTALL_PREFIX="$run/install" \
@@ -93,6 +100,16 @@ assert "not found" not in linkage, linkage
 xc_line = next(line for line in linkage.splitlines() if line.strip().startswith("libxc.so"))
 assert "/software/libxc-7.1.2-cuda/" in xc_line, linkage
 assert "libcudart.so.13" in linkage, linkage
+sdk = Path(os.environ["CUEST_SELECTED_SDK"]).resolve()
+library = Path(os.environ["CUEST_SELECTED_LIBRARY"]).resolve()
+cuest_line = next(line for line in linkage.splitlines() if line.strip().startswith("libcuest.so"))
+assert str(library.parent) in cuest_line, linkage
+cache = (run / "build/psi4-core-prefix/src/psi4-core-build/CMakeCache.txt")
+if not cache.exists():
+    matches = list((run / "build").rglob("CMakeCache.txt"))
+    direct_available = any("cuEST_HAS_DIRECT_JK:INTERNAL=1" in p.read_text() for p in matches)
+else:
+    direct_available = "cuEST_HAS_DIRECT_JK:INTERNAL=1" in cache.read_text()
 assert subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip() == commit
 assert not subprocess.check_output(
     ["git", "-C", repo, "status", "--porcelain", "--untracked-files=no"], text=True).strip()
@@ -100,6 +117,9 @@ manifest = dict(
     commit=commit, version=psi4.__version__, job_id=os.environ["SLURM_JOB_ID"],
     qos=os.environ["SLURM_JOB_QOS"], package=str(package), core_sha256=hashlib.sha256(core.read_bytes()).hexdigest(),
     linkage=linkage, dynamic_section=dynamic, gpu_test_run=False,
+    cuest_sdk=str(sdk), cuest_library=str(library),
+    cuest_library_sha256=hashlib.sha256(library.read_bytes()).hexdigest(),
+    cuest_direct_jk_available=direct_available,
     note="New instrumented comparison implementation; historical stage unchanged. CUDA grid export still requires allocated-GPU validation.",
 )
 with (run / "build-manifest.json").open("x") as stream:

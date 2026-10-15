@@ -2,6 +2,7 @@ list(APPEND sources
   CDJK.cc
   CompositeJK.cc
   cuESTJK.cc
+  cuESTDirectJK.cc
   COSK.cc
   DirectDFJ.cc
   DirectJK.cc

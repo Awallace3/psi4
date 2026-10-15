@@ -171,8 +171,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- Whether to enable NVIDIA cuEST GPU acceleration (requires CUDA and cuEST libraries) -*/
     options.add_bool("USE_CUEST", false);
     /*- Whether |globals__use_cuest| also routes the DFT exchange-correlation
-    quadrature through cuEST.  When false, cuEST still builds the density-fitted
-    J/K matrices -- the dominant cost -- while the XC grid, its CPU blocking, and
+    quadrature through cuEST.  When false, cuEST still builds the J/K matrices
+    (density-fitted for DF, four-center direct for DIRECT) while the XC grid, its CPU blocking, and
     the per-thread functional workers are built as usual.  When true, the grid and
     the potential integration run on the GPU, and the LibXC functional itself is
     evaluated on the device if Psi4 was built against a CUDA-enabled LibXC and on
@@ -186,6 +186,12 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     options.add_bool("CUEST_XC", true);
     /*- Whether to allow GPU calculations to use mixed precision emulation (requires CUDA and cuEST libraries) -*/
     options.add_bool("CUEST_MIXED_PRECISION", true);
+    /*- JIT kernel compilation for four-center cuEST direct J/K.
+    AUTO uses the linked SDK/toolkit default (normally enabled with CUDA 13,
+    disabled with CUDA 12). OFF is useful for deterministic startup debugging.
+    Requires |globals__use_cuest| and |globals__scf_type| = DIRECT and a cuEST
+    SDK exporting the direct integral interfaces. No effect on DF J/K. -*/
+    options.add_str("CUEST_DIRECT_JIT", "AUTO", "AUTO ON OFF");
     /*- Tune # of Ozaki Slices in emulated DF K computations (requires CUDA and cuEST libraries) -*/
     options.add_int("CUEST_DFK_SLICES", 5);
     /*- Tune # of Ozaki Moduli in emulated DF K computations (requires CUDA and cuEST libraries) -*/

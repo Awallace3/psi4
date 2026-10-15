@@ -12,6 +12,12 @@ import unittest
                      "Linux CMake/C compiler required for loader regression")
 class LibxcRpathTests(unittest.TestCase):
     def test_selected_libxc_precedes_host_library_with_same_soname(self):
+        self._check_selected_library()
+
+    def test_selected_cuest_precedes_old_sdk_with_same_soname(self):
+        self._check_selected_library(cuest=True)
+
+    def _check_selected_library(self, cuest=False):
         repo = Path(__file__).resolve().parents[3]
         source = (repo / "psi4/src/CMakeLists.txt").read_text()
         block = source.split("# <<<  RPATH  >>>", 1)[1].split("set_target_properties(core", 1)[0]
@@ -21,7 +27,7 @@ class LibxcRpathTests(unittest.TestCase):
             (root / "cuda.c").write_text("int xc_func_init_flags(void) { return 42; }\n")
             (root / "core.c").write_text(
                 "extern int xc_func_init_flags(void);\nint probe(void) { return xc_func_init_flags(); }\n")
-            (root / "CMakeLists.txt").write_text("""
+            cmake = """
 cmake_minimum_required(VERSION 3.20)
 project(libxc_loader_regression C)
 set(CMAKE_INSTALL_LIBDIR lib)
@@ -43,7 +49,13 @@ target_link_options(core PRIVATE "-Wl,--disable-new-dtags")
 set(_addons "${CMAKE_BINARY_DIR}/host/libxc.so" "${CMAKE_BINARY_DIR}/cuda/libxc.so")
 """ + block + """
 set_target_properties(core PROPERTIES INSTALL_RPATH "${psi4_RPATH}" BUILD_WITH_INSTALL_RPATH ON)
-""")
+"""
+            if cuest:
+                cmake = cmake.replace("set(Libxc_ENABLE_CUDA ON)", "set(Libxc_ENABLE_CUDA OFF)")
+                cmake = cmake.replace("Libxc::xc", "cuEST::cuEST")
+                cmake = cmake.replace("OUTPUT_NAME xc", "OUTPUT_NAME cuest")
+                cmake = cmake.replace("libxc.so", "libcuest.so")
+            (root / "CMakeLists.txt").write_text(cmake)
             env = dict(os.environ, CC=shutil.which("cc"), LD_LIBRARY_PATH="")
             env.pop("LD_PRELOAD", None)
             for command in (["cmake", "-S", str(root), "-B", str(root / "build"), "-DCMAKE_BUILD_TYPE=Release"],

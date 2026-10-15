@@ -173,6 +173,11 @@ endforeach()
 if(Libxc_ENABLE_CUDA)
     list(PREPEND psi4_RPATH "$<TARGET_FILE_DIR:Libxc::xc>")
 endif()
+# cuEST SDK releases also share a SONAME. Select the linked SDK, not an older
+# libcuest.so.0 in a conda directory (which may lack the direct-JK interfaces).
+if(TARGET cuEST::cuEST)
+    list(PREPEND psi4_RPATH "$<TARGET_FILE_DIR:cuEST::cuEST>")
+endif()
 list(REMOVE_DUPLICATES psi4_RPATH)
 message(STATUS "Psi4 rpath: ${psi4_RPATH}")
 

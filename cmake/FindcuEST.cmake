@@ -7,6 +7,7 @@
 #   cuEST_INCLUDE_DIR
 #   cuEST_LIBRARY            (shared, if found)
 #   cuEST_STATIC_LIBRARY     (static, if found)
+#   cuEST_HAS_DIRECT_JK      (headers AND library expose direct J/K interfaces)
 #
 # Imported targets:
 #   cuEST::cuEST         - shared library target if available, else static
@@ -101,5 +102,27 @@ if(cuEST_FOUND)
       )
     endif()
   endif()
-endif()
 
+  # Capability, not version: the 0.2.50 SDK already exports APIs whose header
+  # comments say "since v0.3.0". Keep older DF-only SDKs supported, and require
+  # linkable symbols as well as declarations. Never execute CUDA on configure.
+  include(CheckCXXSourceCompiles)
+  include(CMakePushCheckState)
+  cmake_push_check_state(RESET)
+  set(CMAKE_REQUIRED_LIBRARIES cuEST::cuEST)
+  unset(cuEST_HAS_DIRECT_JK CACHE)
+  check_cxx_source_compiles([=[
+    #include <cuest.h>
+    int main() {
+      auto volatile a = &cuestDirectIntPlanCreate;
+      auto volatile b = &cuestDirectIntPlanCreateWorkspaceQuery;
+      auto volatile c = &cuestDirectIntPlanDestroy;
+      auto volatile d = &cuestDirectCoulombCompute;
+      auto volatile e = &cuestDirectCoulombComputeWorkspaceQuery;
+      auto volatile f = &cuestDirectSymmetricExchangeCompute;
+      auto volatile g = &cuestDirectSymmetricExchangeComputeWorkspaceQuery;
+      return !(a && b && c && d && e && f && g);
+    }
+  ]=] cuEST_HAS_DIRECT_JK)
+  cmake_pop_check_state()
+endif()

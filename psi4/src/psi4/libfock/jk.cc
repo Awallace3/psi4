@@ -31,6 +31,7 @@
 
 #include "jk.h"
 #include "cuESTJK.h"
+#include "cuESTDirectJK.h"
 
 #include "psi4/lib3index/3index.h"
 #include "psi4/libpsio/psio.hpp"
@@ -189,6 +190,20 @@ std::shared_ptr<JK> JK::build_JK(std::shared_ptr<BasisSet> primary, std::shared_
         return jk;
 
     } else if (jk_type == "DIRECT") {
+        if (options.get_bool("USE_CUEST")) {
+#if defined(USING_cuEST) && defined(USING_cuEST_DIRECT_JK)
+            auto jk = std::make_shared<cuESTDirectJK>(primary, options);
+            if (options["INTS_TOLERANCE"].has_changed() || options.get_str("SCREENING") == "NONE")
+                jk->set_cutoff(cutoff);
+            if (options["PRINT"].has_changed()) jk->set_print(options.get_int("PRINT"));
+            if (options["DEBUG"].has_changed()) jk->set_debug(options.get_int("DEBUG"));
+            if (options["BENCH"].has_changed()) jk->set_bench(options.get_int("BENCH"));
+            return jk;
+#else
+            throw PSIEXCEPTION("cuEST direct JK is unavailable: rebuild with a cuEST SDK exporting "
+                               "the direct integral plan, Coulomb and symmetric exchange interfaces.");
+#endif
+        }
         auto jk = std::make_shared<DirectJK>(primary, options);
         if (options["INTS_TOLERANCE"].has_changed() || options.get_str("SCREENING") == "NONE") jk->set_cutoff(cutoff);
 
