@@ -516,12 +516,23 @@ std::vector<SharedMatrix> RHF::twoel_Hx_full(std::vector<SharedMatrix> x_vec, bo
 
     std::vector<SharedMatrix> Vx;
     if (functional_->needs_xc()) {
-        std::vector<SharedMatrix> Dx;
-        for (size_t i = 0; i < x_vec.size(); i++) {
-            Dx.push_back(cpscf::doublet(options_, Cl[i], Cr[i], false, true));
-            Vx.push_back(std::make_shared<Matrix>("Vx Temp", Dx[i]->rowspi(), Dx[i]->colspi(), Dx[i]->symmetry()));
+        auto rv = std::dynamic_pointer_cast<RV>(potential_);
+        if (rv && rv->uses_cuest_xc()) {
+            // Contract the J/K factors directly (Cr already carries the response sign);
+            // outputs take the shape and symmetry of Cl Cr^T without forming it.
+            for (size_t i = 0; i < x_vec.size(); i++) {
+                Vx.push_back(std::make_shared<Matrix>("Vx Temp", Cl[i]->rowspi(), Cr[i]->rowspi(),
+                                                      Cl[i]->symmetry() ^ Cr[i]->symmetry()));
+            }
+            rv->compute_Vx_full_factored(Cl, Cr, Vx, singlet);
+        } else {
+            std::vector<SharedMatrix> Dx;
+            for (size_t i = 0; i < x_vec.size(); i++) {
+                Dx.push_back(cpscf::doublet(options_, Cl[i], Cr[i], false, true));
+                Vx.push_back(std::make_shared<Matrix>("Vx Temp", Dx[i]->rowspi(), Dx[i]->colspi(), Dx[i]->symmetry()));
+            }
+            potential_->compute_Vx_full(Dx, Vx, singlet);
         }
-        potential_->compute_Vx_full(Dx, Vx, singlet);
     }
 
     std::vector<SharedMatrix> V_ext_pert;

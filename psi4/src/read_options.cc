@@ -188,10 +188,12 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     evaluated on the device if Psi4 was built against a CUDA-enabled LibXC and on
     the host otherwise.  Restricted GRAC asymptotic corrections
     (|scf__dft_grac_shift|), including the SAPT(DFT) monomer SCFs, are supported
-    with either setting.  GRAC analytic gradients, the XC response kernels used by
-    TDDFT and CPHF properties, Fock derivatives, analytic XC Hessians, and the SAP
-    guess have no cuEST implementation and raise rather than falling back, so set
-    this false to run them alongside cuEST J/K.  DFT with OpenOrbitalOptimizer
+    with either setting.  The LDA/GGA XC response kernel used by CPHF/CPKS and
+    TDDFT (RKS singlet and triplet, UKS) also runs on the cuEST grid when the
+    linked cuEST provides a nonsymmetric XC density.  GRAC analytic gradients,
+    meta-GGA and VV10 response kernels, Fock derivatives, analytic XC Hessians,
+    and the SAP guess have no cuEST implementation and raise rather than falling
+    back, so set this false to run them alongside cuEST J/K.  DFT with OpenOrbitalOptimizer
     also rejects cuEST XC; use the internal orbital optimizer or set this false.
     No effect unless
     |globals__use_cuest| is true. -*/
@@ -203,6 +205,11 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     for production speed comparisons. Host LibXC timers are per-thread timings,
     not additive elapsed wall times. Also profiles LibXC in CPU-only builds. -*/
     options.add_bool("CUEST_XC_TIMING", false);
+    /*- Diagnostic: evaluate the XC response kernel's functional derivatives with host
+    LibXC on the cuEST grid even when Psi4 was built against a CUDA-enabled LibXC.
+    Both routes contract on the same grid, so this isolates the derivative evaluation.
+    Has no effect in a build without CUDA LibXC, which always uses host LibXC. -*/
+    options.add_bool("CUEST_XC_RESPONSE_HOST_LIBXC", false);
     /*- Whether to allow GPU calculations to use mixed precision emulation (requires CUDA and cuEST libraries).
     False forces native FP64; true restores cuEST's default math mode, which permits
     emulation but may select native FP64 for a particular operation. -*/

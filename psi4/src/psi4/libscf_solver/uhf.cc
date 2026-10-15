@@ -636,7 +636,21 @@ std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool co
     const std::vector<SharedMatrix>& wK = jk_->wK();
 
     std::vector<SharedMatrix> Vx;
-    if (functional_->needs_xc()) {
+    if (functional_->needs_xc() && potential_->uses_cuest_xc()) {
+        // J/K holds all alpha factors, then all beta; the XC kernel wants [a0, b0, a1, b1, ...].
+        std::vector<SharedMatrix> left, right;
+        for (size_t i = 0; i < nvecs; i++) {
+            for (size_t spin_offset : {size_t(0), size_t(nvecs)}) {
+                const auto& L = Cl[spin_offset + i];
+                const auto& R = Cr[spin_offset + i];
+                left.push_back(L);
+                right.push_back(R);
+                Vx.push_back(std::make_shared<Matrix>(spin_offset ? "Vbx temp" : "Vax temp", L->rowspi(),
+                                                      R->rowspi(), L->symmetry() ^ R->symmetry()));
+            }
+        }
+        potential_->compute_Vx_factored(left, right, Vx);
+    } else if (functional_->needs_xc()) {
         std::vector<SharedMatrix> Dx;
         // Gotta reorder the wizardry
         for (size_t i = 0; i < nvecs; i++) {

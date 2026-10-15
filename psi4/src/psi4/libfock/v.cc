@@ -79,6 +79,7 @@
 #include <xc.h>
 #include <cublas_v2.h>
 #include "psi4/libfock/cuESTCommon.h"
+#include "psi4/libfock/cuest_xc_response.h"
 #ifdef USING_Libxc_CUDA
 #include "psi4/libfock/cuest_xc_gpu.h"
 #endif
@@ -667,7 +668,10 @@ void VBase::set_Cocc(std::vector<SharedMatrix> Coccs) {
         }
         uint64_t d_Cocc_offset = 0;
         std::vector<uint64_t> noccs;
+        cuest_Cocc_.clear();
+        cuest_Cocc_matches_D_ = -1;
         for (SharedMatrix Cocc : Coccs) {
+            cuest_Cocc_.push_back(Cocc->clone());
             noccs.push_back(Cocc->colspi()[0]);
             auto CoccT = Cocc->transpose();
             cudaError_t err = XC_DEVICE_CALL(cudaMemcpy(d_Coccs_AO_ + d_Cocc_offset, CoccT->get_pointer(0), Cocc->size() * sizeof(double), cudaMemcpyHostToDevice));
@@ -683,6 +687,9 @@ void VBase::set_D(std::vector<SharedMatrix> Dvec) {
     if (Dvec.size() > 2) {
         throw PSIEXCEPTION("VBase::set_D: Can only set up to two D vectors.");
     }
+#ifdef USING_cuEST
+    cuest_Cocc_matches_D_ = -1;
+#endif
 
     // Build AO2USO matrix, if needed
     if (!AO2USO_ && (Dvec[0]->nirrep() != 1)) {
@@ -1363,6 +1370,39 @@ void VBase::compute_V(std::vector<SharedMatrix> ret) {
 void VBase::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret) {
     throw PSIEXCEPTION("VBase: deriv not implemented for this Vx instance.");
 }
+namespace {
+std::vector<SharedMatrix> form_factored_densities(const std::vector<SharedMatrix>& left,
+                                                  const std::vector<SharedMatrix>& right) {
+    if (left.size() != right.size()) {
+        throw PSIEXCEPTION("Vx: left and right response factors must come in pairs.");
+    }
+    std::vector<SharedMatrix> Dx;
+    Dx.reserve(left.size());
+    for (size_t i = 0; i < left.size(); i++) Dx.push_back(linalg::doublet(left[i], right[i], false, true));
+    return Dx;
+}
+#ifdef USING_cuEST
+std::vector<VxDensity> factored_inputs(const std::vector<SharedMatrix>& left, const std::vector<SharedMatrix>& right) {
+    if (left.size() != right.size()) {
+        throw PSIEXCEPTION("Vx: left and right response factors must come in pairs.");
+    }
+    std::vector<VxDensity> inputs;
+    inputs.reserve(left.size());
+    for (size_t i = 0; i < left.size(); i++) inputs.push_back({left[i], right[i], nullptr});
+    return inputs;
+}
+std::vector<VxDensity> dense_inputs(const std::vector<SharedMatrix>& Dx) {
+    std::vector<VxDensity> inputs;
+    inputs.reserve(Dx.size());
+    for (const auto& D : Dx) inputs.push_back({nullptr, nullptr, D});
+    return inputs;
+}
+#endif
+}  // namespace
+void VBase::compute_Vx_factored(const std::vector<SharedMatrix>& left, const std::vector<SharedMatrix>& right,
+                                std::vector<SharedMatrix> ret) {
+    compute_Vx(form_factored_densities(left, right), ret);
+}
 std::vector<SharedMatrix> VBase::compute_fock_derivatives() {
     throw PSIEXCEPTION("VBase: compute_fock_derivatives not implemented for this Vx instance.");
 }
@@ -1450,6 +1490,10 @@ void VBase::finalize_impl(bool checked) {
     // outlive the grid it was built from.
     clear_collocation_cache();
 #ifdef USING_cuEST
+    // Response scratch first: it was sized for, and used with, the plan and grid below.
+    cuest_response_.reset();
+    cuest_Cocc_.clear();
+    cuest_Cocc_matches_D_ = -1;
     auto free_workspace = [checked](cuestWorkspace_t* workspace) {
         if (checked) {
             XC_DEVICE_CALL(cuest_common::freeWorkspace(workspace));
@@ -3020,9 +3064,24 @@ std::vector<SharedMatrix> RV::compute_fock_derivatives() {
     return Vx;
 }
 
+void RV::compute_Vx_full_factored(const std::vector<SharedMatrix>& left, const std::vector<SharedMatrix>& right,
+                                  std::vector<SharedMatrix> ret, bool singlet) {
+#ifdef USING_cuEST
+    if (use_cuest_xc()) {
+        compute_Vx_cuest(factored_inputs(left, right), ret, singlet ? VxSpin::RKSSinglet : VxSpin::RKSTriplet);
+        return;
+    }
+#endif
+    compute_Vx_full(form_factored_densities(left, right), ret, singlet);
+}
 void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret, bool singlet) {
+#ifdef USING_cuEST
+    if (use_cuest_xc()) {
+        compute_Vx_cuest(dense_inputs(Dx), ret, singlet ? VxSpin::RKSSinglet : VxSpin::RKSTriplet);
+        return;
+    }
+#endif
     throw_if_cuest_unsupported("The RKS XC response kernel (compute_Vx; used by TDDFT and CPHF response properties)");
-    timer_on("RV: Form Vx");
 
     // => Validate object / inputs <=
     if (D_AO_.size() != 1) {
@@ -3045,6 +3104,13 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
     if (ansatz >= 2) {
         throw PSIEXCEPTION("Vx: RKS does not support rotated V builds for MGGA's");
     }
+    // The triplet kernel's polarized clone cannot carry GRAC. Its constructor would throw
+    // inside the OpenMP loop below, which terminates the process instead of raising.
+    if (!singlet && functional_->needs_grac()) {
+        throw PSIEXCEPTION("GRAC is not implemented for UKS functionals (RKS triplet XC response).");
+    }
+    // Only after validation: a throw with the timer on would leave it running.
+    timer_on("RV: Form Vx");
 
     auto old_point_deriv = point_workers_[0]->deriv();
     auto old_func_deriv = functional_->deriv();
@@ -5740,9 +5806,24 @@ std::vector<SharedMatrix> UV::compute_fock_derivatives() {
     timer_off("UV: Form Fx");
     return Vx;
 }
+void UV::compute_Vx_factored(const std::vector<SharedMatrix>& left, const std::vector<SharedMatrix>& right,
+                             std::vector<SharedMatrix> ret) {
+#ifdef USING_cuEST
+    if (use_cuest_xc()) {
+        compute_Vx_cuest(factored_inputs(left, right), ret, VxSpin::UKS);
+        return;
+    }
+#endif
+    compute_Vx(form_factored_densities(left, right), ret);
+}
 void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret) {
+#ifdef USING_cuEST
+    if (use_cuest_xc()) {
+        compute_Vx_cuest(dense_inputs(Dx), ret, VxSpin::UKS);
+        return;
+    }
+#endif
     throw_if_cuest_unsupported("The UKS XC response kernel (compute_Vx; used by TDDFT and CPHF response properties)");
-    timer_on("UV: Form Vx");
 
     // => Validate object / inputs <=
     if (D_AO_.size() != 2) {
@@ -5768,6 +5849,8 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
     if (ansatz >= 2) {
         throw PSIEXCEPTION("Vx: UKS does not support rotated V builds for MGGA's");
     }
+    // Only after validation: a throw with the timer on would leave it running.
+    timer_on("UV: Form Vx");
 
     auto old_point_deriv = point_workers_[0]->deriv();
     auto old_func_deriv = functional_->deriv();
@@ -6235,14 +6318,16 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
         }
     }
 
-    // Set the result
+    // Set the result. Each output follows its own input's representation: indexing the
+    // inputs by pair (Dx[i]) here would read the wrong spin/pair in mixed AO/SO batches.
     for (size_t i = 0; i < (Dx.size() / 2); i++) {
-        if (Dx[i]->nirrep() != 1) {
-            ret[2 * i]->apply_symmetry(Vax_AO[i], AO2USO_);
-            ret[2 * i + 1]->apply_symmetry(Vbx_AO[i], AO2USO_);
-        } else {
-            ret[2 * i]->copy(Vax_AO[i]);
-            ret[2 * i + 1]->copy(Vbx_AO[i]);
+        for (size_t s = 0; s < 2; s++) {
+            const auto& V_AO = s == 0 ? Vax_AO[i] : Vbx_AO[i];
+            if (Dx[2 * i + s]->nirrep() != 1) {
+                ret[2 * i + s]->apply_symmetry(V_AO, AO2USO_);
+            } else {
+                ret[2 * i + s]->copy(V_AO);
+            }
         }
     }
 
