@@ -84,10 +84,13 @@ def compare_overlap_exports(left, right):
 
 def stored_tensor_info(dfobj, cp):
     tensors = getattr(dfobj, "_cderi", None)
-    if not isinstance(tensors, dict) or not tensors:
+    if not isinstance(tensors, (dict, list, tuple)) or not tensors:
         raise RuntimeError("Materialized DF tensor is missing")
     result = []
-    for key, tensor in tensors.items():
+    # Current GPU4PySCF returns a per-device list from multi_gpu.run;
+    # older implementations can expose an indexed mapping.
+    entries = tensors.items() if isinstance(tensors, dict) else enumerate(tensors)
+    for key, tensor in entries:
         if (not isinstance(tensor, cp.ndarray) or tensor.dtype != cp.float64 or
                 tensor.ndim != 2 or tensor.size == 0 or int(tensor.device.id) != 0):
             raise RuntimeError("Stored-DF control requires FP64 tensors on the selected GPU; no host spill")

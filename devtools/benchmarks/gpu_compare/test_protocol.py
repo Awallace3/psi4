@@ -95,6 +95,17 @@ class ProtocolTests(unittest.TestCase):
                 pass
         self.assertEqual((jk.get_j, jk.get_jk), original)
 
+    def test_stored_tensor_accepts_installed_multi_gpu_list_but_rejects_host_arrays(self):
+        # GPU4PySCF1.8.1: _cholesky_eri -> multi_gpu.run -> [func(...)]
+        cp = SimpleNamespace(ndarray=FakeGPU, float64=np.float64)
+        gpu = np.zeros((3, 4)).view(FakeGPU)
+        self.assertEqual(protocol.stored_tensor_info(SimpleNamespace(_cderi=[gpu]), cp),
+                         [dict(device=0, shape=[3, 4], bytes=96)])
+        with self.assertRaisesRegex(RuntimeError, "no host spill"):
+            protocol.stored_tensor_info(SimpleNamespace(_cderi=[np.zeros((3, 4))]), cp)
+        with self.assertRaisesRegex(RuntimeError, "missing"):
+            protocol.stored_tensor_info(SimpleNamespace(_cderi=[]), cp)
+
     def test_lazy_rsh_tensor_built_with_requested_omega_before_contraction(self):
         builds = []
         def contract(dfobj, dm, hermi=0, with_j=True, with_k=True, omega=None):
