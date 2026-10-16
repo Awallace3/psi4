@@ -142,6 +142,35 @@ const ElementData kElements[kMaxElementZ + 1] = {
 };
 // clang-format on
 
+/// MODULE radii's van der Waals radii in bohr (atoms.f90:191-211), transcribed
+/// with CamCASP's own element comments so the two can be diffed by eye.  These
+/// are genuine doubles in CamCASP -- note the explicit `d0` on every literal --
+/// unlike the AtomProp copy, which is float32.
+const double kVdwRadius[kMaxVdwRadiusZ + 1] = {
+    0.000,                                  //  dummy site
+    2.268, 2.646,                           //  H, He
+    3.440, kVdwRadiusDefault, kVdwRadiusDefault, 3.213,     //  Li, Be, B, C
+    2.929, 2.872, 2.778, 2.910,             //  N, O, F, Ne
+    4.290, 3.270, kVdwRadiusDefault, 3.968,               //  Na, Mg, Al, Si
+    3.402, 3.402, 3.307, 3.553,             //  P, S, Cl, Ar
+    5.197, kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault,   //  K, Ca, Sc, Ti
+    kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault,     //  V, Cr, Mn, Fe
+    kVdwRadiusDefault, 3.080, 2.646, 2.627,               //  Co, Ni, Cu, Zn
+    3.534, kVdwRadiusDefault, 3.496, 3.590,               //  Ga, Ge, As, Se
+    3.496, 3.817, kVdwRadiusDefault, kVdwRadiusDefault,         //  Br, Kr, Rb, Sr
+    kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault,     //  Y, Zr, Nb, Mo
+    kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault, 3.080,           //  Tc, Ru, Rh, Pd
+    3.250, 2.986, 3.647, 4.100,             //  Ag, Cd, In, Sn
+    kVdwRadiusDefault, 3.893, 3.742, 4.082,               //  Sb, Te, I, Xe
+    kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault,     //  Cs, Ba, La, Ce
+    kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault,     //  Pr, Nd, Pm, Sm
+    kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault,     //  Eu, Gd, Tb, Dy
+    kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault,     //  Ho, Er, Tm, Yb
+    kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault,     //  Lu, Hf, Ta, W
+    kVdwRadiusDefault, kVdwRadiusDefault, kVdwRadiusDefault, 3.250,           //  Re, Os, Ir, Pt
+    3.137, 2.929, 3.704, 3.817              //  Au, Hg, Tl, Pb
+};
+
 const ElementData& row(int Z) {
     if (Z < 0 || Z > kMaxElementZ)
         throw PSIEXCEPTION("libisapol: no element data for Z = " + std::to_string(Z) +
@@ -163,6 +192,11 @@ double slater_radius(int Z) {
 }
 
 double vdw_radius_bondi(int Z) { return row(Z).rvdw_bondi; }
+
+double vdw_radius(int Z) {
+    if (Z < 0 || Z > kMaxVdwRadiusZ) return kVdwRadiusDefault;
+    return kVdwRadius[Z];
+}
 
 double vdw_radius_grimme(int Z) { return row(Z).rvdw_grimme_ang / kCamcaspBohr; }
 

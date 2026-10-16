@@ -10,6 +10,9 @@ list(APPEND sources
   orbital_coulomb.cc
   isa_grid.cc
   tables.cc
+  pfit.cc
+  fit_points.cc
+  t_functions.cc
   )
 
 # Keep the heavy Libint2 engine implementation out of the Gaussian-kernel unity TU.

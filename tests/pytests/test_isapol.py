@@ -350,3 +350,276 @@ def test_casimir_polder_single_pole():
         # 1e-4 is the accuracy of a 10-point rule on this integrand, not a parity
         # tolerance; the grid itself is bit-identical to CamCASP (test above).
         assert np.isclose(6.0 * np.dot(cw, alpha_A * alpha_B), exact, rtol=1e-4, atol=0)
+
+
+# --- Fit points: the random cloud the point-response refinement samples on ----
+#
+# The generator and the cloud are both bit-exact and stay that way: the
+# refinement fits to the potential at these points, so a single extra or missing
+# deviate shifts every later point and every fitted coefficient.
+#
+# The full 256-deep reference stream of each seed is not committed.  What is kept
+# is the part that constrains the generator most per line: the head of each
+# stream, which pins the lag-table initialization, and far checkpoints, which pin
+# the lag indexing at draws a prefix comparison cannot reach.
+
+
+PRAND_HEAD = {  # first eight dprand() draws after sdprnd(seed)
+    0: [
+        0.7913183967560748, 0.3741928192300996, 0.44861432892185005, 0.7428031178186686,
+        0.6519068277859982, 0.8119357718628364, 0.09214209014210396, 0.8206511920147144,
+    ],
+    1: [
+        0.6249940256745002, 0.4739767236995389, 0.33774460100239345, 0.9689091568136964,
+        0.9894501642012402, 0.370424110430112, 0.8350173508391068, 0.6246675242825115,
+    ],
+    7: [
+        0.6270499875570739, 0.07276176427472626, 0.6755453525578009, 0.4372540904407638,
+        0.14793210299769322, 0.6505653461173164, 0.6730832975142309, 0.5388973351375128,
+    ],
+    9999: [
+        0.7168473754051381, 0.2223250760738269, 0.8897056205590392, 0.5964859634692803,
+        0.4657688706665557, 0.7045823942811531, 0.10825906528783459, 0.4158048498115648,
+    ],
+}
+
+#: (seed, n, value): the n-th draw of the same stream, n up to 1e5.
+PRAND_FAR = [
+    (0, 1000, 0.3558536943794186),
+    (1, 1000, 0.8229176297805547),
+    (7, 1000, 0.5286973905111498),
+    (9999, 1000, 0.7794555606863224),
+    (0, 10000, 0.34760313364902484),
+    (1, 10000, 0.3919020645028068),
+    (7, 10000, 0.2389805735660362),
+    (9999, 10000, 0.5977261887690788),
+    (0, 100000, 0.4218999418199747),
+    (1, 100000, 0.6455312107296698),
+    (7, 100000, 0.16019401789973986),
+    (9999, 100000, 0.20506340327750427),
+]
+
+
+@pytest.mark.parametrize("seed", sorted(PRAND_HEAD))
+def test_maclaren_stream_head_bit_identical(seed):
+    """The start of each reference stream, exactly, straight out of sdprnd."""
+    want = PRAND_HEAD[seed]
+    got = psi4.core.MaclarenRng(seed).take(len(want))
+    assert np.array_equal(got, want), (seed, got, want)
+
+
+@pytest.mark.parametrize("seed,n,want", PRAND_FAR)
+def test_maclaren_far_stream_bit_identical(seed, n, want):
+    """The n-th draw, n up to 1e5, so a lag-index bug cannot hide in a prefix."""
+    rng = psi4.core.MaclarenRng(seed)
+    assert rng.take(n)[-1] == want
+
+
+def test_maclaren_reseed_restarts_stream():
+    rng = psi4.core.MaclarenRng(1)
+    first = rng.take(50)
+    rng.take(500)
+    rng.seed(1)
+    assert np.array_equal(rng.take(50), first)
+    with pytest.raises(ValueError, match="nonnegative"):
+        rng.take(-1)
+    assert rng.take(0).size == 0
+    assert np.array_equal(rng.take(50), psi4.core.MaclarenRng(1).take(100)[50:])
+
+
+def test_maclaren_seed_folds_like_fortran():
+    """sdprnd takes mod(abs(iseed), 10000), so these three are the same stream."""
+    a = psi4.core.MaclarenRng(7).take(20)
+    for equivalent in (-7, 10007, 20007):
+        assert np.array_equal(psi4.core.MaclarenRng(equivalent).take(20), a)
+
+
+def test_maclaren_range():
+    """Uniform on (0, 1), never exactly 0 or 1: dprand adds `tiny` to guarantee it."""
+    x = psi4.core.MaclarenRng(1).take(200000)
+    assert x.min() > 0.0 and x.max() < 1.0
+    # 200k draws of a generator this old should still look flat.  The bound is
+    # five binomial standard deviations, so this is a smoke test for a broken
+    # range reduction, not a claim about the generator's statistical quality.
+    nbin = 20
+    counts, _ = np.histogram(x, bins=nbin, range=(0.0, 1.0))
+    expected = len(x) / nbin
+    sigma = np.sqrt(expected * (1.0 - 1.0 / nbin))
+    assert np.abs(counts - expected).max() < 5.0 * sigma
+
+
+@pytest.fixture(scope="module")
+def reffit():
+    return np.load(DATA / "camcasp_fit_points.npz")
+
+
+def _fit_molecule(geom):
+    mol = psi4.geometry(
+        "units bohr\nno_com\nno_reorient\nsymmetry c1\n"
+        + "\n".join(f"{int(Z)} {x} {y} {z}" for Z, x, y, z in geom)
+    )
+    mol.update_geometry()
+    return mol
+
+
+@pytest.mark.parametrize("name, npoints", [("h2o", 2000), ("hcl", 2000), ("ref500", 500)])
+def test_fit_points_bit_identical(reffit, name, npoints):
+    """``ref500`` is the cloud the H2O_props reference case's own refinement was fitted on.
+
+    `tests/H2O_props/psi4/H2O-avtz.clt` declares `Options Tests`, and the
+    `properties` run type's generated `SET Lattice` block therefore asks for
+    `Random 500` rather than the production `Random 2000`
+    (cluster_file_interface.F90::write_camcasp_1).
+
+    The stored cloud comes from `oracle/make_lattice_oracle.sh`'s `latticedump`,
+    i.e. from CamCASP's own `generate_lattice` and `random.f90`; it was also
+    checked against those routines linked directly out of a built CamCASP, and
+    all three routes agree bitwise.
+    """
+    mol = _fit_molecule(reffit[f"{name}_geom"])
+    options = psi4.core.FitPointsOptions()
+    options.npoints = npoints
+    options.seed = 1
+    points = psi4.core.FitPoints(mol, options)
+    assert points.npoints() == npoints
+
+    # The cube the candidates are drawn from has to match first: it is built from
+    # the van der Waals radii and the centre of geometry, and if it is off by an
+    # ulp every accept/reject decision downstream is suspect.
+    assert points.dmax() == reffit[f"{name}_dmax"]
+    assert np.array_equal(points.centre(), reffit[f"{name}_centre"])
+
+    got = np.column_stack([points.x(), points.y(), points.z()])
+    assert np.array_equal(got, reffit[f"{name}_points"])
+
+
+def test_fit_points_lie_in_the_shell(reffit):
+    """Every accepted point is outside 2 R_vdW of all atoms and inside 4 of one."""
+    geom = reffit["h2o_geom"]
+    mol = _fit_molecule(geom)
+    options = psi4.core.FitPointsOptions()
+    options.npoints = 500
+    points = psi4.core.FitPoints(mol, options)
+
+    xyz = np.column_stack([points.x(), points.y(), points.z()])
+    radii = np.array([psi4.core.isapol_vdw_radius(int(Z)) for Z, *_ in geom])
+    d = np.linalg.norm(xyz[:, None, :] - geom[None, :, 1:], axis=2)
+    assert (d >= 2.0 * radii).all()
+    assert (d < 4.0 * radii).any(axis=1).all()
+
+
+def test_fit_points_seed_changes_the_cloud(reffit):
+    mol = _fit_molecule(reffit["h2o_geom"])
+    clouds = []
+    for seed in (1, 2):
+        options = psi4.core.FitPointsOptions()
+        options.npoints = 100
+        options.seed = seed
+        p = psi4.core.FitPoints(mol, options)
+        clouds.append(np.column_stack([p.x(), p.y(), p.z()]))
+    assert not np.array_equal(*clouds)
+
+
+def test_fit_points_rejects_empty_shell(reffit):
+    mol = _fit_molecule(reffit["h2o_geom"])
+    options = psi4.core.FitPointsOptions()
+    options.lolim = 4.0
+    options.hilim = 2.0
+    with pytest.raises(RuntimeError, match="hilim must exceed lolim"):
+        psi4.core.FitPoints(mol, options)
+    options = psi4.core.FitPointsOptions()
+    options.npoints = 0
+    with pytest.raises(RuntimeError, match="npoints must be positive"):
+        psi4.core.FitPoints(mol, options)
+
+
+#: Child for the refusal cases: it must print its own refusal, so a parent-side
+#: timeout (an endless draw loop holds the GIL) can never pass as a refusal.
+_FIT_REFUSAL_CHILD = """
+import json, sys, time
+import psi4
+spec = json.loads(sys.argv[1])
+mol = psi4.geometry(spec["geometry"])
+mol.update_geometry()
+options = psi4.core.FitPointsOptions()
+for key, value in spec["options"].items():
+    setattr(options, key, value)
+start = time.perf_counter()
+try:
+    psi4.core.FitPoints(mol, options)
+except RuntimeError as error:
+    print("REFUSED", round(time.perf_counter() - start, 3), error)
+    sys.exit(0)
+print("ACCEPTED")
+sys.exit(3)
+"""
+
+
+@pytest.mark.parametrize("case, options, message", [
+    ("ghost_only", {}, "no atom has a positive van der Waals radius"),
+    ("water", {"lolim": -1.0, "hilim": -0.5}, "lolim must be nonnegative"),
+    ("water", {"hilim": math.inf}, "lolim and hilim must be finite"),
+    ("water", {"lolim": math.nan}, "lolim and hilim must be finite"),
+    ("water", {"lolim": 2.0, "hilim": 2.0 + 1e-15}, "after 1000000 candidate draws"),
+    ("water", {"npoints": 1000001}, "exceeds the 1000000 candidate draws"),
+])
+def test_fit_points_refuses_unsatisfiable_shells_and_terminates(reffit, tmp_path, case, options, message):
+    """Each of these drew forever before the bounds and the 1,000,000-draw cap."""
+    import json
+    import os
+    import subprocess
+    import sys
+    header = "units bohr\nno_com\nno_reorient\nsymmetry c1\n"
+    if case == "ghost_only":
+        geometry = header + "@He 0 0 0\n@He 0 0 3"
+    else:
+        geometry = header + "\n".join(f"{int(Z)} {x} {y} {z}" for Z, x, y, z in reffit["h2o_geom"])
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join([str(pathlib.Path(psi4.__file__).resolve().parents[1]),
+                                         env.get("PYTHONPATH", "")])
+    try:
+        done = subprocess.run([sys.executable, "-c", _FIT_REFUSAL_CHILD,
+                               json.dumps({"geometry": geometry, "options": options})],
+                              cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"FitPoints did not terminate for {case} {options}")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.stdout.startswith("REFUSED") and message in done.stdout, done.stdout
+
+
+def test_fit_points_ghosts_beside_real_atoms_stay_invisible(reffit):
+    """A ghost has no radius, so it neither excludes nor admits points (CamCASP)."""
+    geom = reffit["h2o_geom"]
+    real = _fit_molecule(geom)
+    ghosted = psi4.geometry("units bohr\nno_com\nno_reorient\nsymmetry c1\n"
+                            + "\n".join(f"{int(Z)} {x} {y} {z}" for Z, x, y, z in geom)
+                            + "\n@He 0.0 0.0 9.0")
+    ghosted.update_geometry()
+    options = psi4.core.FitPointsOptions()
+    options.npoints = 300
+    assert psi4.core.FitPoints.max_candidates == 1000000
+    assert psi4.core.FitPoints(real, options).ncandidates() < 1000000
+    b = psi4.core.FitPoints(ghosted, options)
+    xyz = np.column_stack([b.x(), b.y(), b.z()])
+    radii = np.array([psi4.core.isapol_vdw_radius(int(Z)) for Z, *_ in geom])
+    d = np.linalg.norm(xyz[:, None, :] - geom[None, :, 1:], axis=2)
+    assert b.npoints() == 300 and (d >= 2.0 * radii).all() and (d < 4.0 * radii).any(axis=1).all()
+
+
+def test_vdw_radius_tables_are_distinct():
+    """MODULE radii is double precision; AtomProp's copy is float32-rounded.
+
+    Both cite Bondi (1964) and agree to seven digits, but only one of them is
+    what the lattice generator uses.  If this ever starts passing as an equality,
+    someone has collapsed the two tables and broken fit-point parity.
+    """
+    for Z in (1, 6, 7, 8, 17):
+        double = psi4.core.isapol_vdw_radius(Z)
+        single = psi4.core.isapol_vdw_radius_bondi(Z)
+        assert double != single
+        assert abs(double - single) < 1e-6 * double
+
+    # Elements MODULE radii leaves out fall back on vdwdef rather than throwing.
+    assert psi4.core.isapol_vdw_radius(4) == 2.5
+    assert psi4.core.isapol_vdw_radius(92) == 2.5
+    assert psi4.core.isapol_vdw_radius(0) == 0.0

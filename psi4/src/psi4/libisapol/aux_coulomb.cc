@@ -9,6 +9,7 @@
 #include "psi4/libmints/integral.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/molecule.h"
+#include "psi4/libmints/potential.h"
 #include <libint2/cgshell_ordering.h>
 #include <algorithm>
 #include <cmath>
@@ -150,6 +151,59 @@ std::shared_ptr<Matrix> IsaAuxCoulomb::metric() const {
             aux_int_require(std::isfinite(value),"Nonfinite AUX Coulomb integral");
             result->set(offsets[a]+i,offsets[b]+j,value);
             result->set(offsets[b]+j,offsets[a]+i,value);
+        }
+    }
+    return result;
+}
+std::shared_ptr<Matrix> IsaAuxCoulomb::point_potentials(const Matrix& points, size_t max_bytes) const {
+    aux_int_require(points.nirrep()==1 && points.ncol()==3 && points.nrow()>0,
+                    "AUX point potentials require nonempty npoint x 3 coordinates");
+    const int npoint=points.nrow(), naux=basis_.nfunction();
+    aux_int_require(npoint<=512, "AUX point potential resource limit (maximum 512 points)");
+    aux_int_require(max_bytes>0 && static_cast<size_t>(naux)<=max_bytes/sizeof(double)/npoint,
+                    "AUX point potential matrix byte resource limit");
+    for (int p=0;p<npoint;++p) for (int axis=0;axis<3;++axis)
+        aux_int_require(std::isfinite(points.get(p,axis)), "Nonfinite AUX potential point");
+    const bool pure=basis_.representation_==IsaBasisRepresentation::Spherical;
+    // A true unit shell makes a two-function nuclear integral a one-function
+    // AUX potential. The nuclear operator includes a minus sign: use a negative
+    // unit source to obtain the declared positive Coulomb kernel. Libint2 one-body
+    // integrals ignore engine precision, so the native default adds no screening.
+    const auto aux=native_basis(basis_);
+    const auto zero=BasisSet::zero_ao_basis_set();
+    IntegralFactory factory(aux.basis,zero,aux.basis,zero);
+    auto integral=factory.ao_potential();
+    auto* potential=dynamic_cast<PotentialInt*>(integral.get());
+    aux_int_require(potential!=nullptr,"Native AUX point potential requires PotentialInt");
+    auto result=std::make_shared<Matrix>("Explicit AUX positive point potentials",naux,npoint);
+    for (int p=0;p<npoint;++p) {
+        potential->set_charge_field({{-1.,{points.get(p,0),points.get(p,1),points.get(p,2)}}});
+        int offset=0;
+        for (size_t s=0;s<basis_.shells_.size();++s) {
+            potential->compute_shell(aux.shells[s],0);
+            const auto* block=potential->buffers()[0];
+            const int l=basis_.shells_[s].l;
+            if (block) {
+                if (pure) {
+                    const auto transform=isa_dalton_transform(l);
+                    for (size_t i=0;i<transform.size();++i) {
+                        double value=0.;
+                        for (const auto& term:transform[i]) value+=term.second*block[term.first];
+                        aux_int_require(std::isfinite(value),"Nonfinite AUX point potential integral");
+                        result->set(offset+i,p,value);
+                    }
+                } else {
+                    const auto& powers=IsaExplicitBasis::cartesian_powers(l);
+                    for (size_t i=0;i<powers.size();++i) {
+                        const auto& power=powers[i];
+                        const double value=block[libint2::INT_CARTINDEX(l,power[0],power[1])]*
+                                           aux_factor(l,power);
+                        aux_int_require(std::isfinite(value),"Nonfinite AUX point potential integral");
+                        result->set(offset+i,p,value);
+                    }
+                }
+            }
+            offset+=IsaExplicitBasis::shell_size(l,basis_.representation_);
         }
     }
     return result;
