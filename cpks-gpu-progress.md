@@ -736,3 +736,26 @@ products into one J/K call.
   78/68): A 0.234 s, B 0.234 s, separate 0.468 s, batched 0.461 s (−1.5%), max diff 3.2e-12.
   cuEST J/K has no per-call overhead to share; batching A/B Hx is not worth ~200 lines.
   Not implemented. The J/K lever is per-vector cost or fewer CG iterations, not batching.
+
+## Protein157 aug-cc-pVDZ on the GPU: blocked at J/K memory (user, 2026-10-16 13:2x)
+
+User asked to complete the GPU side with plain aug-cc-pVDZ while a GPU session exists. Holder 14096296
+expired 13:22 before this; next holder 14104298 (embers H100|H200 8c 2 h) pending.
+Earlier attempts (suite `gpu-timing-protein157`, `-mem50`, holder 14087771) stopped in the first
+SCF's Integral Setup: "requested 83.748 GiB; device has 12.185 GiB free of 139.844 GiB", identical
+with psi4 memory 102 and 47 GiB, so ~128 GiB was already held deterministically by this process.
+Psi4's own budget printed JK allocation 85.3 GiB. Hypothesis (unmeasured): the cuEST XC integral
+plan's persistent workspace (built in V::initialize before J/K; the SDK exposes only collocation
+threshold / derivative level / threads, no memory cap). Diagnostic `devtools/cuest_xc_plan_memory_probe.py`
+(`7609398790`) measures device memory before/after V.initialize for heavy-aug vs aug; auto-launches on
+14104298 (`xcmem.sh`, session `h200-xcplan-memory-protein157`).
+
+## Electrostatic embedding (question, 2026-10-16)
+
+`ExternalPotential::computePotentialMatrix` (Libint PotentialInt over shell pairs, CPU OpenMP) is a
+one-time one-electron matrix per SCF/basis (hf.cc:694 per SCF; again for each monomer in
+`sapt_jk_terms_ein.py:692`). Local Threadripper 3960X, 8 threads, random charges in a 15 Å box margin:
+peptide aDZ (356) 1k 0.40 s / 10k 3.74 s; nanotube aDZ (742) 1k 1.81 s / 10k 17.96 s (linear in charges,
+~nbf²). cuEST already has `cuestPotentialCompute` for arbitrary point charges (psi4 uses it for nuclei,
+mintshelper.cc:4621) and `cuestPotentialDerivativeCompute` (charge gradients). Diffuse-Gaussian
+external densities use 3-index ERIs, not covered by that call.
