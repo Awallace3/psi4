@@ -210,6 +210,11 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     Both routes contract on the same grid, so this isolates the derivative evaluation.
     Has no effect in a build without CUDA LibXC, which always uses host LibXC. -*/
     options.add_bool("CUEST_XC_RESPONSE_HOST_LIBXC", false);
+    /*- Device variable-buffer budget (MB, 10^6 bytes) handed to cuEST for each XC response
+    density and potential call on the cuEST grid. cuEST sizes its temporary workspace from it,
+    and the response keeps that workspace until the potential is finalized, so this bounds the
+    response's extra GPU memory. -*/
+    options.add_int("CUEST_XC_RESPONSE_BUDGET_MB", 2000);
     /*- Whether to allow GPU calculations to use mixed precision emulation (requires CUDA and cuEST libraries).
     False forces native FP64; true restores cuEST's default math mode, which permits
     emulation but may select native FP64 for a particular operation. -*/

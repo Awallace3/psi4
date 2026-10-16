@@ -701,6 +701,31 @@ def test_vx_cuest_routes_and_host_grid(method, kind, tmp_path):
 @uusing("cuda_cc8")
 @pytest.mark.cuest
 @pytest.mark.parametrize("kind", _KINDS)
+def test_vx_cuest_response_budget(kind):
+    """CUEST_XC_RESPONSE_BUDGET_MB changes only cuEST's workspace, never the response."""
+    wfn, V, Cs, Cv = _kind_setup("pbe0", kind, "cuest")
+    rng = np.random.default_rng(23)
+    Dx = [o @ rng.normal(size=(o.shape[1], v.shape[1])) @ v.T * 0.1 for o, v in zip(Cs, Cv)]
+    reference = _apply(V, kind, Dx)
+    scale = max(np.abs(v).max() for v in reference)
+    for budget in (256, 16):
+        psi4.set_options({"cuest_xc_response_budget_mb": budget})
+        small = _potential(wfn, "cuest")  # fresh workspace, sized under the new budget
+        _set_reference(small, Cs)
+        err = max(np.abs(a - b).max() for a, b in zip(reference, _apply(small, kind, Dx)))
+        print(f"\n{kind} budget {budget} MB: max |dVx| vs 2000 MB = {err:.3e}")
+        assert err <= 1.e-11 * max(1.0, scale)
+    psi4.set_options({"cuest_xc_response_budget_mb": 0})
+    bad = _potential(wfn, "cuest")
+    _set_reference(bad, Cs)
+    with pytest.raises(Exception, match="CUEST_XC_RESPONSE_BUDGET_MB must be positive"):
+        _apply(bad, kind, Dx)
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+@pytest.mark.parametrize("kind", _KINDS)
 def test_vx_cuest_grid_survives_option_changes(kind):
     """A cuEST-grid V keeps its kernel after another V turns CUEST_XC off.
 

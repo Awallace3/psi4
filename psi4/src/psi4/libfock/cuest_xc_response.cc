@@ -731,6 +731,8 @@ void VBase::compute_Vx_cuest(const std::vector<VxDensity>& inputs, std::vector<S
     uint64_t npoints = 0;
     RESPONSE_CHECK_CUEST(cuestQuery(cuest_handle, CUEST_MOLECULARGRID, grid_->cuest_grid(),
                                     CUEST_MOLECULARGRID_NUM_POINT, &npoints, sizeof(uint64_t)));
+    const int budget_mb = options_.get_int("CUEST_XC_RESPONSE_BUDGET_MB");
+    if (budget_mb <= 0) throw PSIEXCEPTION("CUEST_XC_RESPONSE_BUDGET_MB must be positive.");
     if (!cuest_response_) cuest_response_ = std::make_unique<CuestXCResponseWorkspace>();
     auto& ws = *cuest_response_;
     GridContext g{cuest_xcint_plan_,
@@ -739,7 +741,7 @@ void VBase::compute_Vx_cuest(const std::vector<VxDensity>& inputs, std::vector<S
                   ncomponents,
                   nbf,
                   ws,
-                  cuestWorkspaceDescriptor_t{0, 2000000000},
+                  cuestWorkspaceDescriptor_t{0, static_cast<size_t>(budget_mb) * 1000000},
                   print_ > 2 || debug_ > 0};
     const size_t field = npoints * ncomponents;
 
