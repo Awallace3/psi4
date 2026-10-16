@@ -525,7 +525,20 @@ CPU (24c Gold 6226) so far: peptide SCF 14.67 s, Hx1/Hx8 1.080/4.251 s, solve 36
 SAPT total 68.6 s / CPKS 34.41 s; switched 25x110 SCF 17.17 s (slower), solve 36.37 s.
 **Peptide speedups: CPKS solve 18.1x, SAPT CPKS 19.3x, SAPT total 7.1x; host-LibXC
 derivatives route 11.8x.** Polarizability switched vs fixed: CPU ≤ 1e-6, GPU ≤ 1e-5 au
-(nanotube), i.e. relative ≤ 3e-8. Nanotube/protein83 CPU: jobs 14098244/14098245 running.
+(nanotube), i.e. relative ≤ 3e-8.
+
+CPU jobs all COMPLETED 0:0 (14098243 3:44, 14098244 13:33, 14098245 25:55). Matched
+speedups, H200 CUDA-LibXC vs 24-core CPU, aug-cc-pVDZ PBE0, fixed 75 x 302:
+
+| System (nbf) | SCF CPU / GPU s | Hx8 CPU / GPU s | **CPKS solve CPU / GPU s** | SAPT CPKS CPU / GPU s | SAPT total CPU / GPU s |
+|---|---|---|---|---|---|
+| peptide (356) | 14.67 / 2.42 (6.1x) | 4.25 / 0.258 (16.5x) | **36.14 / 2.00 (18.1x)** | 34.41 / 1.78 (19.3x) | 68.6 / 9.7 (7.1x) |
+| nanotube (742) | 77.3 / 4.58 (16.9x) | 31.40 / 1.116 (28.1x) | **236.4 / 8.06 (29.3x)** | 188.3 / 7.09 (26.6x) | 355.7 / 24.7 (14.4x) |
+| protein83 (1293) | 261.4 / 14.0 (18.6x) | 103.5 / 4.45 (23.3x) | **865.0 / 35.2 (24.6x)** | — / 30.9 | — / 79.0 |
+
+Protein83 SAPT CPU baseline was not run. CPU vs GPU energies differ by grid only (cuEST vs
+host grid): nanotube IND −3.78901 vs −3.78874 kcal/mol, TOTAL −1.17762 vs −1.17692; peptide
+IND −2.93960 vs −2.93962.
 
 ## Resume
 

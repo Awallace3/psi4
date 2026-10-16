@@ -1,0 +1,68 @@
+<!-- CPKS section for the saptdft-cuest breakdown page. Branch saptdft-cuest-cpks; every
+     number below is in cpks-gpu-progress.md with its Phoenix job ID and session directory. -->
+<section id="cpks">
+<h2 data-summary="cuEST-grid XC response makes SAPT(DFT) CPKS induction 18–29x faster than a 24-core CPU node, matching fixed-grid answers after XC grid switching." id="cpks-title">CPKS induction on the GPU</h2>
+
+<p>SAPT(DFT) CPKS induction now builds the XC response kernel (<code>compute_Vx</code>) on the
+cuEST grid for native LDA/GGA RKS singlet, RKS triplet and UKS, with the existing CPKS J/K
+factors reused. The kernel derivatives come from CUDA LibXC when the build has it, otherwise
+from host LibXC (<code>CUEST_XC_RESPONSE_HOST_LIBXC</code> forces the host route). mGGA, VV10,
+direct J/K and analytic Hessians are out of scope.</p>
+
+<div class="fig">
+<div class="fig-head"><span class="t">Matched speedup: H200 (CUDA LibXC) vs 24-core Xeon Gold 6226, aug-cc-pVDZ, PBE0, 75×302</span>
+<span class="tag measured">measured · single run</span></div>
+<div class="table-wrap"><table><thead><tr><th>System (nbf)</th><th>SCF CPU / GPU (s)</th>
+<th>CPKS Hx, 8 vectors (s)</th><th>CPKS solve CPU / GPU (s)</th><th>SAPT CPKS CPU / GPU (s)</th>
+<th>SAPT total CPU / GPU (s)</th></tr></thead><tbody>
+<tr><td>peptide (356)</td><td class="num">14.67 / 2.42 · 6.1×</td><td class="num">4.25 / 0.258 · 16.5×</td><td class="num"><strong>36.14 / 2.00 · 18.1×</strong></td><td class="num">34.41 / 1.78 · 19.3×</td><td class="num">68.6 / 9.7 · 7.1×</td></tr>
+<tr><td>nanotube (742)</td><td class="num">77.3 / 4.58 · 16.9×</td><td class="num">31.40 / 1.116 · 28.1×</td><td class="num"><strong>236.4 / 8.06 · 29.3×</strong></td><td class="num">188.3 / 7.09 · 26.6×</td><td class="num">355.7 / 24.7 · 14.4×</td></tr>
+<tr><td>protein83 (1293)</td><td class="num">261.4 / 14.0 · 18.6×</td><td class="num">103.5 / 4.45 · 23.3×</td><td class="num"><strong>865.0 / 35.2 · 24.6×</strong></td><td class="num">not run / 30.9</td><td class="num">not run / 79.0</td></tr>
+<tr><td>protein157, heavy-aug-cc-pVDZ (2171)</td><td class="num">— / 62.0</td><td class="num">— / 25.96</td><td class="num">— / 210.1</td><td class="num">— / 142.0</td><td class="num">— / 348.4</td></tr>
+</tbody></table></div>
+<p class="caption">CPKS solve = static dipole polarizability, converged to 1e-8 (max |Hx − b| ≤ 8.5e-9).
+SAPT = SAPT(DFT)-D4(I), GRAC 0.136, δHF on. Protein157 in aug-cc-pVDZ does not start on one H200:
+cuEST JK setup asks for 83.7 GiB with 12.2 GiB free, before any response call (an SCF limit).
+In protein157 the XC response is 53 of the 210 s solve; J/K dominates.</p></div>
+
+<div class="fig">
+<div class="fig-head"><span class="t">Routes, peptide aug-cc-pVDZ PBE0 (356 nbf)</span>
+<span class="tag measured">measured</span></div>
+<div class="table-wrap"><table><thead><tr><th>Route</th><th>Hx, 1 / 8 vectors (s)</th><th>CPKS solve (s)</th><th>vs CPU</th></tr></thead><tbody>
+<tr><td>Native CPU, 24 cores</td><td class="num">1.080 / 4.251</td><td class="num">36.14</td><td class="num">1×</td></tr>
+<tr><td>cuEST grid, host-LibXC derivatives</td><td class="num">0.107 / 0.335</td><td class="num">3.05</td><td class="num">11.8×</td></tr>
+<tr><td>cuEST grid, CUDA-LibXC derivatives</td><td class="num">0.051 / 0.258</td><td class="num">2.00</td><td class="num">18.1×</td></tr>
+</tbody></table></div>
+<p class="caption">Earlier, smaller systems on the same H200: benzene dimer aug-cc-pVDZ 25×, coronene
+aug-cc-pVDZ 31–34× (solve); A100 host-LibXC route 10–13× against the same CPU node.</p></div>
+
+<div class="fig">
+<div class="fig-head"><span class="t">CPKS after initial→final XC grid switching (final 75×302)</span>
+<span class="tag measured">measured · tests</span></div>
+<div class="table-wrap"><table><thead><tr><th>Check (water cc-pVDZ; svwn/pbe0, RKS/UKS)</th><th>Native CPU</th><th>cuEST grid, CUDA LibXC</th></tr></thead><tbody>
+<tr><td>Switched SCF's live V vs fresh 75×302 V, same orbitals</td><td class="num">≤ 1.7e-17</td><td class="num">≤ 6.9e-18</td></tr>
+<tr><td>Polarizability, switched vs fixed75 (25×110, 30×146, 20×110, 35×194)</td><td class="num">≤ 4.1e-10</td><td class="num">≤ 7.5e-10</td></tr>
+<tr><td>SAPT CPKS IND, switched − fixed75 (25×110 / 30×146), Eh</td><td class="num">1.1e-10 / 7.8e-11</td><td class="num">6.0e-11 / 2.5e-10</td></tr>
+<tr><td>Worst SAPT component (ELST/EXCH/TOTAL), Eh</td><td class="num">1.9e-9</td><td class="num">2.0e-9</td></tr>
+<tr><td>Response on the initial grid</td><td>computed on the coarse grid</td><td>refused (guard)</td></tr>
+</tbody></table></div>
+<p class="caption">48/48 grid-switch tests pass on the H200, including a live V that goes final → initial → final
+twice with its response caches populated. Switching 25×110 → 75×302 leaves CPKS cost unchanged
+(peptide 1.97 vs 2.00 s; nanotube 8.07 vs 8.06 s); polarizabilities agree to ≤ 3e-8 relative. On the
+CPU, the switched peptide SCF was slower (17.2 vs 14.7 s), in line with the tiny-grid pilot.</p></div>
+
+<details class="context"><summary>Correctness, memory and limits</summary>
+<p>H200, CUDA LibXC build (cuEST 0.2.50): 148 tests pass, 6 fail — 4 pre-existing cuEST wK
+long-range-corrected fixed-orbital cases (cam-b3lyp, lrc-wpbe) and 2 svwn empty-beta cases from an
+oracle since fixed; SDK normalization/signed-density contract 18/18 clean; CUDA vs host LibXC
+derivatives ≤ 1.7e-17.</p>
+<p>GPU memory: each live V holds a cached cuEST response workspace sized by
+<code>CUEST_XC_RESPONSE_BUDGET_MB</code> (default 2000 MB, ≈ 2 GB per V, ×2 for SAPT monomers),
+outside Psi4's GPU budget, freed by <code>V.finalize()</code>. Results are budget-independent
+(≤ 1e-16); 500 MB costs ≤ 1% time through coronene (660 nbf), 16 MB up to 2.2×.</p>
+<p>Provenance: branch <code>saptdft-cuest-cpks</code>; tests/probe at <code>aa44bb5080</code>, GPU binary
+<code>58d061979b</code> (core sha256 15363319…ed07d), CPU binary <code>c0f23b8d9d</code> host build.
+Phoenix H200 holder 14087771 (inferno); CPU jobs 14098243–5 (embers, cpu-small, 24 cores).
+Run dir <code>runs/saptdft-cuest-cpks/suite-aa44bb5080-20261016/</code>. Single runs, not
+statistics.</p></details>
+</section>
