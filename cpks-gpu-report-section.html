@@ -8,6 +8,9 @@ cuEST grid for native LDA/GGA RKS singlet, RKS triplet and UKS, with the existin
 factors reused. The kernel derivatives come from CUDA LibXC when the build has it, otherwise
 from host LibXC (<code>CUEST_XC_RESPONSE_HOST_LIBXC</code> forces the host route). mGGA, VV10,
 direct J/K and analytic Hessians are out of scope.</p>
+<div class="notice gold"><p><strong>Branch result, not merged.</strong> This work is on
+<code>saptdft-cuest-cpks</code>. Statements elsewhere on this page that CPKS has no cuEST
+implementation describe the parent <code>saptdft_cuest</code> branch, which those measurements used.</p></div>
 
 <div class="fig">
 <div class="fig-head"><span class="t">Matched speedup: H200 (CUDA LibXC) vs 24-core Xeon Gold 6226, aug-cc-pVDZ, PBE0, 75×302</span>
