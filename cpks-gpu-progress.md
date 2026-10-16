@@ -341,6 +341,36 @@ The H100/H200 holders 14087771 (inferno) / 14096296 (embers) still run the origi
 cuEST 0.2.2 CUDA build of `c0f23b8d9d` (`interactive/h100-chain.sh`) when one starts; the
 multi build can also be run there with `multi-…/chain.sh`.
 
+## H200 results: CUDA-LibXC route, multi-arch build `f2d8ec7a93` (2026-10-16)
+
+Holder 14087771 (inferno, gts-cs207, gpu-h200, 8 c) started 06:08 on atl1-1-02-014-2-0,
+NVIDIA H200 (cc 9.0, driver 615.71.09). `interactive/h100-both.sh` ran
+`multi-f2d8ec7a93-20261016/chain.sh` (core sha256 ec656ab1…d1d3; `ldd`: cuEST 0.2.50
+`lib/13`, LibXC `libxc-7.1.2-cuda-sm80-89-90-120`). Sessions in
+`runs/saptdft-cuest-cpks/multi-f2d8ec7a93-20261016/sessions/`.
+
+**Tests** (`h200-tests-1`: test_cuest_cphf + test_cuest_grac + test_dft_grid_switch):
+148 passed, 6 failed — the 4 known cuEST wK LRC fixed-orbital cases, and
+`test_vx_empty_beta_spin[svwn-host|svwn-cuest]` (V_beta off by 1.5e-5, 0.3 %).
+
+Diagnosis of the empty-beta failure (all on the same H200):
+- The host-LibXC build (LibXC 7.0.0, cuEST 0.2.2) passes the same test there → not hardware.
+- Bisection (`h200-bisect-1..5`): fails with every preceding test group → not test-order state.
+- Failing array is the beta block. At rho_b = 0 (zeta = 1) LibXC's VWN vrho_b is
+  ill-conditioned: FD of vrho_b along rho_a vs its own analytic v2rho2_ab differs by 1.1 %
+  (7.0.0, rho_a = 0.1) and 0.26–2.6 % (7.1.2, rho_a = 1e-3…1e-6); v2rho2_ab agrees between
+  the versions to 3e-5; alpha-block fxc vs FD agree to 1e-9 in both; host vs device LibXC
+  7.1.2 agree to ≤1e-14 (scripts `xczeta.py`, `xcab.py`, `xcdev.py` run with ctypes).
+  The svwn beta-block FD oracle passed under 7.0.0 by accident.
+- Fix (`afa5ae424b`, tolerance `8e0c645e4d`): alpha block keeps the FD check at 1e-7; beta
+  block is checked for finiteness and, on the cuEST grid, against the native host-grid
+  V_beta at 2e-6·max(1, scale). H200 results: CUDA build svwn 1.7e-7, pbe 2.7–2.8e-6
+  (scale 4.4); host build svwn 4e-11, pbe 1.6–1.9e-6. All 4 cases pass with both builds.
+
+**Contract** (`h200-probe-1`, CUDA LibXC device derivatives): 18/18 clean — identities
+≤ 3.3e-16, FD 7e-11–8.5e-10 on 4e-2–1.3e-1, host grid vs cuEST grid ≤ 1.5e-6, negative
+reference finite; **CUDA vs host LibXC response ≤ 1.73e-17** for all 6 functionals × 3 kinds.
+
 ## Resume
 
 1. `scripts/job_status.sh phoenix2 14085247 14085248 14085249 14085250`.
