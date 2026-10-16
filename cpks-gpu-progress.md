@@ -422,6 +422,83 @@ fields. It is bounded across a solve (≤ +72 MiB), released by `V.finalize()`, 
 V (SAPT(DFT) monomers: up to ~2x), and not counted in any Psi4 GPU budget. Open option:
 make the budget configurable / release the SDK workspace after each call, with a timing sweep.
 
+## Response workspace budget (`58d061979b`, H200 14087771, 2026-10-16)
+
+`CUEST_XC_RESPONSE_BUDGET_MB` (default 2000, MB = 1e6 bytes, must be > 0) sizes the cuEST
+temporary workspace the response passes as `cuestWorkspaceDescriptor_t{0, budget*1e6}`.
+Build job 14098104 (embers cpu-small, worktree `gits/psi4.saptdft-cuest-cpks-budget`, core
+sha256 15363319…ed07d, cuEST 0.2.50, CUDA LibXC multi). Run dir
+`runs/saptdft-cuest-cpks/budget-58d061979b-20261016/`.
+
+- `sessions/h200-budget-tests`: 10 passed (budget 256/16 MB vs 2000 MB: max |dVx| ≤ 1.4e-17
+  for singlet/triplet/UKS; budget 0 raises; empty-beta and option-survival tests pass).
+- `sessions/h200-coronene-budget` (same orbitals, coronene aDZ PBE, 8 vectors): 250 and 16 MB
+  vs 2000 MB max |dVx| 9.7e-17 / 8.0e-17 (scale 3.3e-2).
+- `sessions/h200-budget-sweep` (`budgetsweep.py`; **a fresh SCF per budget**, so its
+  `hx_vs_first_budget` column mixes in orbital gauge: 1e-12 water, 7e-7 benzene dimer, 7e-3
+  coronene from degenerate-orbital rotations — the same-orbital check above shows the budget
+  itself changes nothing):
+
+| System (nbf) | budget MB | added GPU MiB | Hx8 s | solve s |
+|---|---|---|---|---|
+| water+ UKS aTZ (92) | 2000 / 500 / 125 / 16 | 1962 / 532 / 174 / 70 | 0.077 / 0.078 / 0.078 / 0.086 | 0.33 / 0.33 / 0.33 / 0.37 |
+| benzene dimer aDZ PBE0 (384) | 2000 / 500 / 125 / 16 | 2014 / 710 / 226 / 122 | 0.288 / 0.285 / 0.312 / 0.503 | 1.47 / 1.45 / 1.59 / 2.49 |
+| coronene aDZ PBE (660) | 2000 / 500 / 250 / 125 / 16 | 2092 / 662 / 422 / 304 / 200 | 0.618 / 0.623 / 0.654 / 0.711 / 1.370 | 3.68 / 3.72 / 3.94 / 4.21 / 8.10 |
+
+Recommendation: 500 MB costs ≤ 1% time at these sizes and saves ~1.4 GB per live V; 250 MB
+costs ≤ 7%. The default stays 2000 until the timing-suite sizes (up to 1293 bf) are measured.
+
+## CPKS after initial-to-final XC grid switching (user request, 2026-10-16)
+
+Candidates from CPU job 14097678 (SCF/SAPT induction NONE only): final 75 x 302, initial
+25x110, 30x146, 20x110, 35x194, `DFT_GRID_SWITCH_FACTOR=10`. Tests added in
+`48e88bbc23`/`aa44bb5080` (`test_cuest_cphf.py`, `-k grid_switch`):
+
+- `test_vx_grid_switch_invalidates_response` (25x110, 30x146 × singlet/triplet/UKS × host/cuEST,
+  cuEST with CUDA- and host-LibXC derivatives): a V with populated response caches on the
+  final grid goes Initial → Final twice; back on the final grid it must equal a V that was
+  only ever final (≤ 1e-11·scale), dense and factored. On the initial grid the cuEST kernel
+  **refuses** (`cuest_xc_response.cc` guard: "must be built on the final DFT grid"); the
+  native host kernel computes on the coarse quadrature (2.4e-4 off fixed75 at 25x110). The
+  first version of the test (`48e88bbc23`) assumed both compute and failed 6 cuEST cases
+  on the H200 for that reason; fixed in `aa44bb5080` by asserting the per-route behavior.
+- `test_vx_grid_switched_scf_cpks` (all 4 initial grids × svwn/pbe0 × RKS/UKS × host/cuEST):
+  switched SCF ends on the final grid (host: same npoints as fixed75), ≥ 10 initial-grid
+  iterations; the switched SCF's live V equals a fresh final-grid V on the same orbitals
+  (≤ 1.7e-17); CPKS converges with |Hx − b| ≤ 1e-9; static polarizability vs fixed75 SCF.
+- `test_vx_grid_switched_saptdft_cpks_induction` (25x110, 30x146 × host/cuEST): SAPT(DFT)-D4(I)
+  CPKS, GRAC monomers, components vs fixed75 < 1e-7.
+
+Results. Local CPU build: 24 passed (cuEST skipped). H200 (holder 14087771, build `58d061979b`
++ tests `48e88bbc23`, `budget-58d061979b-20261016/sessions/h200-switch-tests`): 42 passed, 6
+failed (the refusal above). Rerun with `aa44bb5080`: `suite-aa44bb5080-20261016/sessions/
+h200-switch-tests` (see below).
+
+| Check | native CPU | cuEST grid, CUDA LibXC |
+|---|---|---|
+| live switched V vs fresh final V | ≤ 1.7e-17 | ≤ 6.9e-18 |
+| alpha switched vs fixed75 (4 grids × svwn/pbe0 × RKS/UKS = 16 per route) | ≤ 4.1e-10 | ≤ 7.5e-10 |
+| SAPT IND switched − fixed75 (25x110 / 30x146), Eh | 1.1e-10 / 7.8e-11 | 6.0e-11 / 2.5e-10 |
+| SAPT ELST/EXCH/TOTAL worst, Eh | 1.9e-9 | 2.0e-9 |
+
+## Timing-suite scale-up, aug-cc-pVDZ (user request, 2026-10-16)
+
+Suite `~/data/timing_test_suite/geometries/systems.py` (local copy, md5 73ec495b…; the
+Phoenix `~/data` copy lacks protein83 — uploaded to the run dir, shared geometries identical);
+`pla15_3pe2` excluded. Run dir `runs/saptdft-cuest-cpks/suite-aa44bb5080-20261016/`, probe and
+tests from worktree `gits/psi4.saptdft-cuest-cpks-suite` (`aa44bb5080`), GPU binary = budget
+build `58d061979b` (C++ identical; `run.sh` asserts no psi4/src or driver diff), CPU binary
+= `c0f23b8d9d` host build (CPU code unchanged since; same as the cpu24 baseline 14091690).
+PBE0, fixed 75 x 302 unless noted.
+
+- GPU: `gpu-chain.sh` on H200 holder 14087771 (ends 08:05): switch tests; timing
+  peptide+nanotube; SAPT peptide; timing peptide+nanotube switched 25x110; peptide with
+  host-LibXC derivatives; protein83; SAPT nanotube. Whatever does not finish needs a new GPU
+  allocation (embers holder 14096296 still pending).
+- CPU (embers, gts-cs207-chemx, cpu-small 24c, Xeon Gold 6226): 14098243 peptide (timing,
+  timing switched 25x110, SAPT), 14098244 nanotube (timing, SAPT), 14098245 protein83 (timing).
+  14098238–40 were cancelled seconds after start: an escaping bug left `PROBE_MEMORY` empty.
+
 ## Resume
 
 1. `scripts/job_status.sh phoenix2 14085247 14085248 14085249 14085250`.
