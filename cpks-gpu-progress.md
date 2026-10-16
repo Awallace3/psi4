@@ -845,3 +845,13 @@ Rainbow (17-operation) CPU/GPU pairs vs system size: peptide, nanotube, protein8
     36 passed, 0 failed** — includes both point-charge SCF tests (points; points+diffuse with the CPU warning)
     and `test_cuest_response_route_matches_cpu[tdscf|polarizability]`. Earlier step 0: test_extern.py all passed,
     test_cuest_sad.py passed. GPU repeats r2/r3 started 18:47 on the same holder.
+- **aDZ GPU blocker located: the cuEST DF integral plan** (`devtools/cuest_jk_memory_probe.py`, da91c2b430;
+  14104298 step, `extern-…/sessions/h200-jkmem-protein157/`). heavy-aug-cc-pVDZ (nbf 2171, naux 8462):
+  device used 691 MiB after JK.build → 85,273 MiB after JK.initialize (cuESTJK prints: AO pair list 0.011 GiB,
+  **DF int plan 82.581 GiB**, J/K scratch 7.434 GiB), unchanged by a compute, back to 697 MiB after delete.
+  aug-cc-pVDZ (nbf 2491, naux 9182) in a clean process state fails inside JK.initialize with the same
+  "requested 83.748 GiB; device has 12.560 GiB free of 139.844" as the SAPT runs (native abort, no Python
+  exception), i.e. ~127 GiB was allocated within initialize first. Scaling the haDZ plan by nbf²·naux gives
+  ~118 GiB, so the plan itself is the held memory and a second large request (83.7 GiB, plan-construction
+  workspace or the J/K buffers) cannot fit. The XC plan (<1 GiB) is not involved. Options: FP32/mixed-precision
+  integrals, direct J/K (deferred by scope), a larger device, or SDK-side plan chunking. Holder idle afterwards.
