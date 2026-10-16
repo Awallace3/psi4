@@ -778,3 +778,34 @@ Phoenix: worktree `gits/psi4.saptdft-cuest-cpks-extern` (b9032fdf25), run dir
 
 Report ownership (parent notice, 2026-10-16): `~/docs/saptdft/cuest` report and builders are owned by the
 parent's cleanup worker until coordinated; this branch does not edit them. Induction/extern results stay unpublished.
+
+## 6-31+g** coupled-CPKS size-scaling suite (parent relay of user request, 2026-10-16 14:xx)
+
+Rainbow (17-operation) CPU/GPU pairs vs system size: peptide, nanotube, protein83, protein157
+(pla15_3pe2 not run, shown unmeasured). Free embers only; parent owns the report.
+
+- Science (both arms, `SCIENCE` in `devtools/saptdft_cpks_suite_run.py`, `fc851a8346`): Protein157
+  6-31+g** options of 13868775 (def2-universal-jkfit, aug-cc-pvdz-ri, PUREAM true, d/e conv 8/9,
+  MAXITER 150, INTERNAL optimizer, δHF, einsums) with SAPT_DFT_INDUCTION_TYPE CPKS and fixed GRAC
+  0.136/0.136; SCF_SUBTYPE AUTO; FP64; grid 35x194 → 75x302, factor 1, minimum 2 final iterations.
+  Backends: cpu = native DF J/K + XC + SAD, 24 threads, psi4 200 GiB; gpu = cuEST DF J/K + XC + SAD, 8 threads, 100 GiB.
+- Actual sizes (spherical; local basis build): peptide 24 atoms nbf 250 (125/125), JK naux 1010, RI 1042;
+  nanotube 42, 548 (56/492), 2238, 2240; protein83 83, 922 (480/442), 3735, 3820;
+  protein157 157, 1786 (1344/442), 7265, 7384. systems.py sha256 72668390….
+- Runner checks: backend strings, libcuest loaded (gpu), per-SCF switch proofs, every CPKS solve timed
+  and its residual history parsed and converged, GRAC = 0.136. Local CPU water-dimer smoke ok (2 switched
+  SCFs 10/5; 2 CPKS solves 11/8 iterations); report partition (`tree_from_records`/`partition`) accepts the
+  tree for δHF/DFT stages; **no GRAC stages exist with fixed shifts** (the builder's `parse_run` asserts
+  iterative GRAC + induction NONE and indexes gracA/gracB: parent must treat them as absent).
+- Builds: cpu = host-LibXC build of the pin in `gits/psi4.saptdft-cuest-cpks-scal631`
+  (`build_cpks_host`, cuEST SDK 0.2.50) built by the preflight job; gpu = CUDA-LibXC build of
+  `b9032fdf25` (extern worktree): `git diff b9032fdf25 fc851a8346 -- psi4 CMakeLists.txt cmake` is empty
+  (run.sh refuses otherwise) and each meta records the staged driver-tree sha256.
+- Run root `runs/saptdft-cuest-cpks/scal631-fc851a8346-20261016/` (`run.sh`, `preflight-cpu.sbatch`,
+  `gpu-pilot.sh`, `JOBS.txt`, `sessions/<label>{/,.meta.txt,.log}`, `sessions/gpu-samples-<job>.csv`).
+- Preflight submitted: **14108848** (embers / gts-cs207-chemx, 24c, 230G, 6 h; `--test-only` routed
+  cpu-medium): host build → CPU water-dimer smoke gate → cpu-peptide-r1, cpu-nanotube-r1.
+  GPU: `gpu-pilot.sh` appended to the extern `chain.sh` on holder 14104298 (after the point-charge
+  tests/timing): GPU smoke gate → gpu-{peptide,nanotube,protein83}-r1 → gpu-protein157-r1 only on a ≥120 GiB device.
+- No completed exact-match timings exist (13868775 fixed 99x590/iterative GRAC/induction NONE; 14096296
+  induction NONE; aug/heavy-aug cohorts other basis).
