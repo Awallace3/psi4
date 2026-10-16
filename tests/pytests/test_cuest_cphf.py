@@ -755,7 +755,7 @@ def test_vx_cuest_grid_survives_option_changes(kind):
 def test_vx_cuest_reference_reuse(unrestricted, tmp_path):
     """The CUDA LibXC route reuses its reference density and kernel only while they are current.
 
-    Repeated calls reuse (and give identical results); a change of spin integration, reference,
+    Repeated calls reuse (and agree to ~1 ulp, as GPU reductions do); a change of spin integration, reference,
     occupied factors, or a host-LibXC call in between recomputes, and then matches a fresh V.
     """
     kind = "uks" if unrestricted else "singlet"
@@ -783,11 +783,12 @@ def test_vx_cuest_reference_reuse(unrestricted, tmp_path):
         if "CUDA LibXC" not in out.read_text():
             pytest.skip("no CUDA LibXC route in this build; reuse is CUDA-LibXC only")
         computed, reused = events()
-        _assert_close(first, _apply(V, kind, Dx), 0.0)
-        _assert_close(first, _apply(V, kind, Dx), 0.0)
-        assert events() == (computed, reused + 2)
+        # Repeats agree to the GPU reduction-order level (~1 ulp), not bitwise, with or without reuse.
         scale = max(np.abs(v).max() for v in first)
         tol = 1.e-13 * max(1.0, scale)
+        _assert_close(first, _apply(V, kind, Dx), tol)
+        _assert_close(first, _apply(V, kind, Dx), tol)
+        assert events() == (computed, reused + 2)
         changes = []
         if not unrestricted:
             # Singlet <-> triplet on one RV: the kernel differs, so each switch recomputes.
@@ -805,7 +806,7 @@ def test_vx_cuest_reference_reuse(unrestricted, tmp_path):
             after = events()
             assert after == (before[0] + 1, before[1]), f"{label}: V did not recompute"
             _assert_close(expected, got, tol)
-            _assert_close(got, _apply(V, k, Dx), 0.0)
+            _assert_close(got, _apply(V, k, Dx), tol)
             assert events() == (after[0], after[1] + 1), f"{label}: repeat did not reuse"
         # A host-LibXC call in between invalidates the device state.
         psi4.set_options({"cuest_xc_response_host_libxc": True})
