@@ -826,3 +826,18 @@ Rainbow (17-operation) CPU/GPU pairs vs system size: peptide, nanotube, protein8
   Initialize took 0.94 / 0.28 s, so if the cuEST grid plan is built lazily at the first compute the probe
   would miss it. The ~128 GiB held before the 83.7 GiB J/K request is therefore not the XC plan as built
   by initialize; next suspect is a first cuEST J/K allocation phase (or SAD/lazy XC). Unresolved.
+- **Holder 14104298** (embers, H200 atl1-1-03-019-2-0, started 22:16Z) — 2026-10-16 evening:
+  - extern build b9032fdf25 BUILD_OK 18:30. Point-charge matrix tests passed (1/4/500 charges); the two
+    SCF tests failed on the driver's Z-matrix refusal (test bug; fixed in `5f71b8ca43`→`d0b6d64c92`, Cartesian water).
+    `test_cuest_unsupported_route[tdscf|polarizability]` fail identically on the pre-extern build 36ebf36ad0:
+    they expected compute_Vx on the cuEST grid to raise, which this branch implements; replaced by
+    `test_cuest_response_route_matches_cpu` (be02857fe1). Full test_cuest.py + test_cuest_extern.py rerun queued (rerun2.sh).
+  - Point-charge timing (H200 vs 8 host threads, aug-cc-pVDZ; best of 2; max|ΔV| vs CPU):
+    peptide (356) 1k 0.319 → 0.0122 s (26×), 10k 3.14 → 0.0152 s (206×, 2.2e-9);
+    nanotube (742) 1k 1.51 → 0.0417 s (36×), 10k 14.6 → 0.0575 s (254×, 5.8e-9);
+    protein83 (1293) 1k 4.41 → 0.102 s (43×), 10k 43.2 → 0.122 s (354×, 6.5e-8 of max|V| 20.5).
+    First cuEST call per process +0.6 s (plan setup).
+  - scal631 GPU smoke failed only the GPU-SAD proof (SAD_PRINT unset); runner → `5f71b8ca43` (SAD_PRINT 1,
+    worktree scal631b; run.sh repointed; failed smoke kept). GPU pilot r1 all ok:
+    peptide 8.3 s (CPKS 0.8), nanotube 17.0 (3.2), protein83 41.3 (11.2), protein157 198.7 s (CPKS 67.5 = 27.0 δHF + 40.5 PBE0;
+    18/17 CG iterations; switched SCFs 21/10, 17/7), GPU peak 78,457 MiB (76.6 GiB). Repeats 2–3 queued on the same holder.
