@@ -718,3 +718,21 @@ products into one J/K call.
 - (4) scope probe `devtools/sapt_hx_batch_probe.py` (`a6929cccb4`, worktree
   `gits/psi4.saptdft-cuest-cpks-hxprobe`): J/K with induction factor shapes for A, B, A+B batched.
   Local CPU MemDFJK peptide cc-pVDZ: separate 0.197 s vs batched 0.165 s (16%), max diff 3.5e-18.
+- **H200 results (holder 14096296, build 36ebf36ad0, GPU-b8adb295…, 2026-10-16 12:58–13:06).**
+  Build: in-tree, BUILD_OK 12:58. `sessions/h200-reuse-tests` (36ebf36ad0 tests): 55 passed,
+  6 failed = 4 pre-existing cuEST wK LRC `test_cuest_cpscf_fixed_orbitals[cam-b3lyp|lrc-wpbe]` +
+  2 `test_vx_cuest_reference_reuse` that demanded bitwise-equal repeats (GPU reductions differ by
+  ~1 ulp between identical calls, e.g. −0.004771355804425583 vs …584) → test fixed in
+  `8d7ccfdf69` (repeats at 1e-13·scale; reuse still asserted through the print counts).
+  `sessions/h200-reuse-tests2` (8d7ccfdf69 tests, worktree `psi4.saptdft-cuest-cpks-reusetests`,
+  tests-only diff): 8 passed (reuse ×2, reference changes ×6 host/cuEST). `sessions/h200-reuse-switch`:
+  40 passed (test_dft_grid_switch.py).
+- Protein83 aDZ SAPT(DFT) CPKS, fresh process, vs suite run `gpu-sapt-protein83` (58d061979b):
+  total 78.96 → 76.08 s; CPKS solves 30.89 → 27.21 s; Vx 11.80 → 8.02 s; reference density
+  3.54 s/34 calls → 0.23 s/2 calls; derivatives 0.61 → 0.02 s; response density / AO integration
+  unchanged (3.5 / 4.1 s). Energies: ELST −1.3e-10, EXCH −8e-14, IND −6.5e-10, TOTAL −7.8e-10 Eh
+  (ELST is untouched by this change, so this is run-to-run noise at CPKS 1e-8).
+- (4) answered by `sessions/h200-hxbatch-protein83` (a6929cccb4 probe, cuESTJK, nbf 1293, nocc
+  78/68): A 0.234 s, B 0.234 s, separate 0.468 s, batched 0.461 s (−1.5%), max diff 3.2e-12.
+  cuEST J/K has no per-call overhead to share; batching A/B Hx is not worth ~200 lines.
+  Not implemented. The J/K lever is per-vector cost or fewer CG iterations, not batching.
