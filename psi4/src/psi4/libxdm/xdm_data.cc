@@ -211,6 +211,35 @@ const double frevol_b971[37] = {
   107.07435287066555,   103.20705595068554,   95.879065901986593,   88.146215884084469
 };
 
+// wB97M (VV10 off) and wB97X free-atom <r^3>: isolated UKS atoms, aug-cc-pVQZ, 200/974 grid, from
+// Psi4's own XDM integration (the same recipe reproduces frevol_b3lyp and frevol_pbe0 to 0.1-0.3%).
+// No atomic data for K-Zn (19-30); those zero entries fall back to frevol0.
+const double frevol_wb97m[37] = {
+    0.0,
+        9.306094000000,       4.260854000000,     104.421109644805,      61.605418149639,
+       50.337348058873,      36.708749679706,      27.527434179408,      23.128637904429,
+       18.986179687164,      15.667955521431,     122.111210794705,     105.064719464548,
+      127.565790249468,     106.832247592956,      88.246206911130,      77.274477056375,
+       66.547143404713,      57.348597059419,                 0.00,                 0.00,
+                  0.00,                 0.00,                 0.00,                 0.00,
+                  0.00,                 0.00,                 0.00,                 0.00,
+                  0.00,                 0.00,     123.786993316324,     119.454815897225,
+      109.744708299708,     104.852563892001,      97.065842823792,      89.049765912652
+};
+
+const double frevol_wb97x[37] = {
+    0.0,
+        8.376971000000,       4.141104000000,      94.565953811716,      60.549725772607,
+       47.304796240523,      35.022840541192,      26.527134004521,      22.463580885935,
+       18.544231623630,      15.361875366352,     122.804763752321,     104.929956753133,
+      116.134075533853,      99.772413961194,      83.625279524853,      74.682041142413,
+       64.892640172499,      56.197722324584,                 0.00,                 0.00,
+                  0.00,                 0.00,                 0.00,                 0.00,
+                  0.00,                 0.00,                 0.00,                 0.00,
+                  0.00,                 0.00,     118.451796000931,     114.932653274558,
+      105.970221535135,     102.453243159392,      95.472655686639,      87.882858636573
+};
+
 // Free volumes at 5 HF fractions (0, 0.25, 0.50, 0.75, 1.00) for Z=0..10
 // frevol1[hf_idx][z]
 const double frevol1[5][11] = {
@@ -263,6 +292,9 @@ double specific_volume_hf_fraction(const std::string& functional) {
     if (functional == "pbe0") return 0.25;
     if (functional == "bhahlyp" || functional == "bhandhlyp" || functional == "bhandh") return 0.50;
     if (functional == "lcwpbe" || functional == "lc-wpbe" || functional == "lrc-wpbe") return 0.0;
+    // short-range exact exchange of the range-separated hybrids
+    if (functional == "wb97m") return 0.15;
+    if (functional == "wb97x") return 0.157706;
     return -1.0;
 }
 
@@ -277,7 +309,7 @@ double fitted_hf_fraction(const std::string& functional) {
 
 bool is_range_separated(const std::string& functional) {
     return functional == "camb3lyp" || functional == "cam-b3lyp" || functional == "hse06" || functional == "lcwpbe" ||
-           functional == "lc-wpbe" || functional == "lrc-wpbe";
+           functional == "lc-wpbe" || functional == "lrc-wpbe" || functional == "wb97m" || functional == "wb97x";
 }
 
 }  // namespace
@@ -301,16 +333,20 @@ double get_free_volume(int Z, const std::string& functional, double hf_fraction)
     bool use_specific = has_specific && table_hf_fraction >= 0.0 &&
                         (hf_fraction < 0.0 || std::abs(hf_fraction - table_hf_fraction) < 1.0e-10);
     if (use_specific) {
-        // Use functional-specific table
-        if (functional == "blyp") return frevol_blyp[Z];
-        if (functional == "b3lyp") return frevol_b3lyp[Z];
-        if (functional == "bhahlyp" || functional == "bhandhlyp" || functional == "bhandh") return frevol_bhahlyp[Z];
-        if (functional == "camb3lyp" || functional == "cam-b3lyp") return frevol_camb3lyp[Z];
-        if (functional == "pbe") return frevol_pbe[Z];
-        if (functional == "pbe0") return frevol_pbe0[Z];
-        if (functional == "lcwpbe" || functional == "lc-wpbe" || functional == "lrc-wpbe") return frevol_lcwpbe[Z];
-        if (functional == "pw86pbe" || functional == "pw86") return frevol_pw86[Z];
-        if (functional == "b97-1" || functional == "b971") return frevol_b971[Z];
+        // Use functional-specific table; zero entries (no atomic data) fall through to frevol0
+        const double* table = nullptr;
+        if (functional == "blyp") table = frevol_blyp;
+        if (functional == "b3lyp") table = frevol_b3lyp;
+        if (functional == "bhahlyp" || functional == "bhandhlyp" || functional == "bhandh") table = frevol_bhahlyp;
+        if (functional == "camb3lyp" || functional == "cam-b3lyp") table = frevol_camb3lyp;
+        if (functional == "pbe") table = frevol_pbe;
+        if (functional == "pbe0") table = frevol_pbe0;
+        if (functional == "lcwpbe" || functional == "lc-wpbe" || functional == "lrc-wpbe") table = frevol_lcwpbe;
+        if (functional == "pw86pbe" || functional == "pw86") table = frevol_pw86;
+        if (functional == "b97-1" || functional == "b971") table = frevol_b971;
+        if (functional == "wb97m") table = frevol_wb97m;
+        if (functional == "wb97x") table = frevol_wb97x;
+        if (table != nullptr && table[Z] > 0.0) return table[Z];
     }
 
     // Determine the real HF fraction for interpolation

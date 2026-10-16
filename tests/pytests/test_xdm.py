@@ -6,6 +6,10 @@ from psi4 import compare_values
 
 pytestmark = [pytest.mark.psi, pytest.mark.api]
 
+# frevol_wb97m / frevol_wb97x H entries (bohr^3) in libxdm/xdm_data.cc
+WB97M_FREE_H = 9.306094
+WB97X_FREE_H = 8.376971
+
 
 @pytest.mark.xdm
 def test_water_xdm():
@@ -906,6 +910,34 @@ def test_xdm_kb49_aliases_and_lcwpbe_reference():
         assert superfunctional.x_omega() == reference.x_omega()
         assert functor.engine == "xdm"
         assert functor.xdm.functional_name() == "lc-wpbe"
+
+
+@pytest.mark.xdm
+@pytest.mark.parametrize("name, base, free_h_volume", [
+    ("wb97m-xdm(los-ii)", "wb97m-v", WB97M_FREE_H),
+    ("wb97x-xdm(los-ii)", "wb97x", WB97X_FREE_H),
+])
+def test_xdm_wb97_range_separated(name, base, free_h_volume):
+    """wB97M-XDM drops the VV10 of wB97M-V; both keep the base range separation and own free volumes."""
+    from psi4.driver.procrouting import proc
+
+    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.5, 2.0]})
+    reference, _ = proc.build_functional_and_disp(base, True)
+    superfunctional, functor = proc.build_functional_and_disp(name, True)
+    assert superfunctional.vv10_b() <= 0.0
+    assert superfunctional.x_alpha() == reference.x_alpha()
+    assert superfunctional.x_beta() == reference.x_beta()
+    assert superfunctional.x_omega() == reference.x_omega()
+    assert functor.xdm.functional_name() == name.split("-xdm")[0]
+
+    mol = psi4.geometry("0 1\nH 0 0 0\nCl 0 0 1.3\nunits angstrom")
+    psi4.set_options({"DFT_SPHERICAL_POINTS": 110, "DFT_RADIAL_POINTS": 50})
+    psi4.energy(name, molecule=mol)
+    assert psi4.variable("DISPERSION CORRECTION ENERGY") < 0.0
+    assert not psi4.core.has_variable("VV10 NONLOCAL ENERGY") or psi4.variable("VV10 NONLOCAL ENERGY") == 0.0
+    props = psi4.core.variable("XDM ATOMIC PROPERTIES").np
+    alpha_free_h = 0.6668 / 0.52917720859**3
+    assert props[0, 7] == pytest.approx(props[0, 3] * alpha_free_h / free_h_volume, rel=1.0e-10)
 
 
 @pytest.mark.xdm

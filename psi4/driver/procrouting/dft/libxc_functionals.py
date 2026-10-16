@@ -167,6 +167,9 @@ funcs.append({"name": "BHandHLYP-XDM(LOS-II)", "xc_functionals": {"HYB_GGA_XC_BH
 funcs.append({"name": "CAM-B3LYP-XDM(LOS-II)", "xc_functionals": {"HYB_GGA_XC_CAM_B3LYP"     : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "los-ii"}}})
 funcs.append({"name": "LC-wPBE-XDM(LOS-II)" , "x_functionals": {"GGA_X_HJS_PBE": {"omega": 0.4}}, "x_hf": {"alpha": 0.0, "beta": 1.0, "omega": 0.4}, "c_functionals": {"GGA_C_PBE": {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "los-ii"}}, "alias": ["LRC-WPBE-XDM(LOS-II)"]})
 funcs.append({"name": "B97-1-XDM(LOS-II)"   , "xc_functionals": {"HYB_GGA_XC_B97_1"          : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "los-ii"}}, "alias": ["B971-XDM(LOS-II)"]})
+# wB97M with its VV10 switched off (as in wB97M-D3BJ) and the original dispersion-free wB97X.
+funcs.append({"name": "wB97M-XDM(LOS-II)"   , "xc_functionals": {"HYB_MGGA_XC_WB97M_V"       : {}}, "dispersion": {"type": "xdm", "nlc": False, "params": {"xdm_model": "los-ii"}}})
+funcs.append({"name": "wB97X-XDM(LOS-II)"   , "xc_functionals": {"HYB_GGA_XC_WB97X"          : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "los-ii"}}})
 # yapf: enable
 
 functional_list = {}

@@ -64,6 +64,8 @@ extern const double frevol_pbe0[37];
 extern const double frevol_lcwpbe[37];
 extern const double frevol_pw86[37];
 extern const double frevol_b971[37];
+extern const double frevol_wb97m[37];
+extern const double frevol_wb97x[37];
 
 /// Free atomic volumes at 5 HF fractions (0%, 25%, 50%, 75%, 100%)
 /// for periods 1 and 2 (Z=0..10). frevol1[hf_idx][z], hf_idx 0..4.
@@ -72,7 +74,7 @@ extern const double frevol1[5][11];
 /// Get free-atom volume for element Z with a given functional.
 /// @param Z              atomic number
 /// @param functional     functional name (lowercase): "blyp", "b3lyp", "pbe", "pbe0",
-///                       "bhahlyp", "camb3lyp", "lcwpbe", "pw86pbe", "b971"
+///                       "bhahlyp", "camb3lyp", "lcwpbe", "pw86pbe", "b971", "wb97m", "wb97x"
 /// @param hf_fraction    fraction of HF exchange (used for general hybrids and interpolation)
 double get_free_volume(int Z, const std::string& functional, double hf_fraction = -1.0);
 

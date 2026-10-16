@@ -1416,6 +1416,7 @@ def _without_xdm_dispersion(name):
 def _reference_xdm_superfunctional(functional_name, restricted):
     normalized_name = functional_name.lower()
     candidates = [normalized_name]
+    xdm_definitions = []
     for definition in dft_builder.dict_functionals.values():
         dispersion = definition.get("dispersion")
         if not isinstance(dispersion, dict) or dispersion.get("type") != "xdm":
@@ -1426,12 +1427,19 @@ def _reference_xdm_superfunctional(functional_name, restricted):
         ]
         if normalized_name in base_aliases:
             candidates.extend(base_aliases)
+            xdm_definitions.append(definition)
 
+    npoints = core.get_option("SCF", "DFT_BLOCK_MAX_POINTS")
     for candidate in candidates:
         definition = dft_builder.functionals.get(candidate)
         if definition is not None and "dispersion" not in definition:
-            npoints = core.get_option("SCF", "DFT_BLOCK_MAX_POINTS")
             return dft_builder.build_superfunctional_from_dictionary(definition, npoints, 1, restricted)[0]
+    # No dispersion-free functional of that name (wB97M-XDM strips the VV10 of wB97M-V):
+    # the XDM definition itself carries the fitted exchange.
+    if xdm_definitions:
+        definition = {key: value for key, value in xdm_definitions[0].items() if key not in ("dispersion", "alias")}
+        definition["name"] = f"{definition['name']}-exchange-reference"  # custom names must not shadow registered ones
+        return dft_builder.build_superfunctional_from_dictionary(definition, npoints, 1, restricted)[0]
     return None
 
 

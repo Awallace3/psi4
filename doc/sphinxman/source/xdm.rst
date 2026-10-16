@@ -145,6 +145,12 @@ counterpoise fits; the counterpoise set is selected automatically for
 ``bsse_type='cp'`` and ``'vmfc'`` (see below). Any other combination
 requires |scf__xdm_dispersion_parameters|.
 
+``wB97M-XDM(LOS-II)`` is wB97M-V with its VV10 nonlocal correlation turned
+off (as in wB97M-D3BJ), and ``wB97X-XDM(LOS-II)`` is the dispersion-free
+wB97X. Both have their own free-atom volumes (H--Ar, Ga--Kr; other elements
+use the LSDA volumes) but no fitted damping parameters yet, so they require
+|scf__xdm_dispersion_parameters|.
+
 The dispersion correction is available after a calculation in the
 PSI variable :psivar:`DISPERSION CORRECTION ENERGY`.
 
