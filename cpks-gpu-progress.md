@@ -575,6 +575,21 @@ DFT_GRID_SWITCH_FACTOR=1 and **at least 2 final-grid iterations**.
   Smoke (water dimer) ok in 5.87 s: cuESTJK + GPU SAD, no CPU/DIRECT J/K, 6 switched SCFs all
   converged on the final grid with 9–11 initial / 5 final iterations, GRAC 0.13141/0.13152.
   `protein157-631gss-full2` started 11:24. The sampler CSV fills in 4 KB stdio blocks (~30 rows).
+- **Result (11:28:47, exit 0, ok, policy problems none).** energy() wall **256.9 s** vs CPU reference
+  13868775 10358.6 s (8 threads, fixed 99×590) = **40.3×**. nbf 1786 (A 1344, B 442), naux 7265.
+  Backend: cuESTJK + GPU SAD only (no MemDFJK/DiskDFJK/DirectJK). Options changed vs reference: only
+  USE_CUEST, CUEST_SAD, final grid 99×590 → 75×302, initial 35×194, factor 1.
+  Components (Eh) and minus reference: ELST −0.0076109256 (+5.95e-7), EXCH 0.0211400802 (−1.51e-6),
+  IND −0.0032076767 (−6.1e-9), DISP −0.0269733672 (0.0), TOTAL −0.0166518892 (−9.18e-7 =
+  −5.8e-4 kcal/mol). GRAC A 0.0453099 (−1.27e-6), B 0.0503957 (+4.0e-8). These differences mix the
+  final-grid change (99×590 → 75×302) with switching; no fixed-75×302 GPU control was run.
+  Per-SCF proofs, initial/final iterations: 6 switched PBE0 SCFs all converged on the final grid,
+  final ≥ 2: GRAC A neutral 18/6, GRAC A cation 80/10, GRAC B neutral 14/6, cation 23/7, dimer-basis
+  monomer A 22/10, B 17/7; 3 HF SCFs 18/16/13 iterations (no XC grid).
+  Top timers (s): GRAC Shift Monomer A 123.1 (the 80-iteration initial-grid cation SCF), Monomer A DFT
+  37.3, Dimer SCF 26.5, Monomer B DFT 20.6, Monomer A SCF 16.9, Monomer B SCF 10.3, GRAC B 6.7.
+  GPU sampler: 294 samples 11:23:53–11:28:46, peak memory.used 78,649 MiB of 143,771 MiB.
+  Raw: `sessions/protein157-631gss-full2/{result.json,psi4.out}`, `sessions/gpu-samples.csv`.
 
 ## CPKS section published (user, 2026-10-16 09:21)
 
