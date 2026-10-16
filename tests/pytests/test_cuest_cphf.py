@@ -897,11 +897,12 @@ def _switch_options(initial):
 @pytest.mark.parametrize("kind", _KINDS)
 @pytest.mark.parametrize("initial", _SWITCH_GRIDS[:2])
 def test_vx_grid_switch_invalidates_response(initial, kind, grid):
-    """A V that ran a response on the initial grid answers on the final grid after set_grid.
+    """A V whose response caches are populated keeps answering on the final grid across set_grid.
 
     The switch rebuilds the grid and plan; every reference/derivative cache sized for the old
-    grid must go with it. Compared against a V that was only ever on the final grid, both
-    with and without re-setting the reference after the switch.
+    grid must go with it. The cuEST kernel refuses a response on the initial grid outright;
+    the native host kernel computes one (on the coarse quadrature). Either way, back on the
+    final grid the V must agree with a V that was only ever on the final grid.
     """
     wfn, final, Cs, Cv = _kind_setup("pbe", kind, grid)
     rng = np.random.default_rng(37)
@@ -911,39 +912,42 @@ def test_vx_grid_switch_invalidates_response(initial, kind, grid):
     expected = _apply(final, kind, Dx)
     expected_factored = _apply_factored(final, kind, left, right)
     scale = max(np.abs(v).max() for v in expected)
+    atol = 1.e-11 * max(1.0, scale)
 
     _switch_options(initial)
     routes = (False, True) if grid == "cuest" else (False,)
     for host_libxc in routes:
         psi4.set_options({"cuest_xc_response_host_libxc": host_libxc})
         V = _potential(wfn, grid)
-        V.set_grid("Initial")
-        assert V.initial_grid()
-        if grid == "host":
-            assert V.grid().npoints() < final.grid().npoints()
         _set_reference(V, Cs)
-        coarse = _apply(V, kind, Dx)
-        _apply_factored(V, kind, left, right)
-        V.set_grid("Final")
-        assert not V.initial_grid() and V.uses_cuest_xc() == (grid == "cuest")
-        if grid == "host":
-            assert V.grid().npoints() == final.grid().npoints()
-        _set_reference(V, Cs)
-        switched = _apply(V, kind, Dx)
-        err = max(np.abs(a - b).max() for a, b in zip(expected, switched))
-        shift = max(np.abs(a - b).max() for a, b in zip(expected, coarse))
-        print(f"\n{initial} {kind} {grid} host_libxc={host_libxc}: final vs fixed75 {err:.3e}, "
-              f"initial-grid vs fixed75 {shift:.3e} (scale {scale:.3e})")
-        assert err <= 1.e-11 * max(1.0, scale)
-        assert shift > 1.e3 * err  # the initial grid really was a different quadrature
-        _assert_close(expected_factored, _apply_factored(V, kind, left, right), 1.e-11 * max(1.0, scale))
-        # Same answer after another round trip, so nothing from the first initial pass survives.
-        V.set_grid("Initial")
-        _set_reference(V, Cs)
-        _assert_close(coarse, _apply(V, kind, Dx), 1.e-11 * max(1.0, scale))
-        V.set_grid("Final")
-        _set_reference(V, Cs)
-        _assert_close(expected, _apply(V, kind, Dx), 1.e-11 * max(1.0, scale))
+        _assert_close(expected, _apply(V, kind, Dx), atol)  # caches now populated on the final grid
+        _assert_close(expected_factored, _apply_factored(V, kind, left, right), atol)
+        for _ in range(2):  # a second round trip: nothing from the first survives either
+            V.set_grid("Initial")
+            assert V.initial_grid()
+            if grid == "host":
+                assert V.grid().npoints() < final.grid().npoints()
+            _set_reference(V, Cs)
+            if grid == "cuest":
+                with pytest.raises(Exception, match="final DFT grid, not the initial SCF grid"):
+                    _apply(V, kind, Dx)
+                shift = None
+            else:
+                coarse = _apply(V, kind, Dx)
+                shift = max(np.abs(a - b).max() for a, b in zip(expected, coarse))
+            V.set_grid("Final")
+            assert not V.initial_grid() and V.uses_cuest_xc() == (grid == "cuest")
+            if grid == "host":
+                assert V.grid().npoints() == final.grid().npoints()
+            _set_reference(V, Cs)
+            switched = _apply(V, kind, Dx)
+            err = max(np.abs(a - b).max() for a, b in zip(expected, switched))
+            print(f"\n{initial} {kind} {grid} host_libxc={host_libxc}: back on final vs fixed75 {err:.3e}, "
+                  f"initial-grid vs fixed75 {shift if shift is None else f'{shift:.3e}'} (scale {scale:.3e})")
+            assert err <= atol
+            if shift is not None:
+                assert shift > 1.e3 * atol  # the initial grid really was a different quadrature
+            _assert_close(expected_factored, _apply_factored(V, kind, left, right), atol)
         V.finalize()
 
 
