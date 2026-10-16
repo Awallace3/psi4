@@ -69,21 +69,36 @@ isolated cuEST 0.2.50 CUDA 13 library plus CUDA-enabled LibXC.
 - Run: `/storage/project/r-cs207-0/awallace43/runs/cuest-direct/20261015-7896a4b-r1`.
 - Manifest: `build-stage/build-manifest.json` beneath that run.
 
-**Allocated-GPU numerical validation has NOT run.** Free H100 job **14081007**
-is submitted on `gts-cs207-chemx/gpu-h100/embers`, 1 H100, 4 cores, 32 GiB,
-30-minute limit. Five-minute monitoring is active. Both H200/H100 test-only
-routes estimated roughly two-week queues even on inferno, so the paid-job
-recommendation was withdrawn; no paid GPU job was submitted. Actual start time
-may change with backfill.
+**Allocated-GPU numerical validation passed on 2026-10-16.** Free H100 job
+**14081007**, `gts-cs207-chemx/gpu-h100/embers`, completed 0:0 in **2m06s**:
+**23 tests passed, zero failures, zero skips**. `validation.json` reports
+success and the JUnit file independently confirms all 23 cases. The actual
+device was an NVIDIA H100 80GB HBM3. The 30-minute allocation requested one GPU,
+four CPU cores and 32 GiB host RAM. No paid GPU job was submitted.
 
 The GPU harness source is pinned independently to
 `f4289f3debe49fe78f24cfd00d0c815b6413850a`; the compiled source/core remains the
-immutable build above. Test output will be `validation-h100-r1` beneath the
+immutable build above. Test output is `validation-h100-r1` beneath the
 same run, and logs are `logs/test-h100-14081007.{out,err}`. H100 timings must not
 be mixed into H200 performance comparisons.
 
-The adapter must not be treated as a validated direct GPU route until the
-numerical tests pass.
+The six ordinary DFT/cc-pVDZ energy tests (SVWN, PBE, M06-L, B3LYP, WB97X and LC-WPBE)
+passed the CPU DIRECT comparison threshold of 5e-9 Eh with host XC isolating
+JK. Cartesian/spherical, UKS, density-batch and weighted-exchange, J-only/K-only,
+zero-density, operator-reset and nonsymmetric-density checks also passed.
+The separate GPU-XC smoke explicitly required a CUDA LibXC timer. Five existing
+DF-JK regressions passed. This is small-system correctness validation, not a
+matched-grid CPU/GPU XC comparison or large-system direct performance test.
+
+GNU time reports **2:00.89** for the whole Python validation process and
+**1,336,976 KiB** maximum RSS (~1.275 GiB). The SLURM allocation duration and
+pytest-only duration (79.04s) are different clocks, not per-energy timings.
+No sampled GPU memory high-water series was recorded by this correctness
+runner; do not substitute the device's capacity for measured GPU usage.
+
+The finalized Cedar handoff's original pending-status snapshot remains intact.
+New artifacts and a separately checksummed addendum are under:
+`/projects/cos-lab-cs207/ds/awallace43/share/cuest-pyscf/updates/direct-h100-14081007`.
 
 The Phoenix validation runner records exact hashes, runtime
 linkage, GPU identity, per-test chemistry logs, JUnit and `validation.json`.

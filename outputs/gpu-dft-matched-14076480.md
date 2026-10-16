@@ -101,5 +101,8 @@ claiming exact GPU high-water marks.
 - Page generator: `devtools/benchmarks/gpu_compare/control_report.py`.
 
 The newly implemented cuEST 0.2.50 **four-center direct** adapter is separate:
-build 14080574 passed; free H100 correctness job 14081007 is queued.
+build 14080574 passed; free H100 correctness job 14081007 subsequently passed
+23 tests with no failures or skips on 2026-10-16 (see
+`outputs/cuest-direct-investigation.md`). This is small-system correctness
+validation, not a large-system performance panel.
 Neither that new core nor H100 timings are included in the H200 DF results.
