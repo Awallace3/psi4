@@ -645,6 +645,7 @@ std::shared_ptr<VBase> VBase::build_V(std::shared_ptr<BasisSet> primary, std::sh
 }
 void VBase::set_Cocc(std::vector<SharedMatrix> Coccs) {
 #ifdef USING_cuEST
+    ++cuest_reference_epoch_;
     if (uses_cuest_xc()) {
         cuest_common::ensure_cuest_initialized();
 
@@ -689,6 +690,7 @@ void VBase::set_D(std::vector<SharedMatrix> Dvec) {
     }
 #ifdef USING_cuEST
     cuest_Cocc_matches_D_ = -1;
+    ++cuest_reference_epoch_;
 #endif
 
     // Build AO2USO matrix, if needed
@@ -752,6 +754,9 @@ void VBase::set_grid(const std::string& name) {
     initialize();  // virtual: RV/UV must resize their point workers as well
 }
 void VBase::initialize() {
+#ifdef USING_cuEST
+    ++cuest_reference_epoch_;
+#endif
     // VBase is the only consumer of the GPU-resident cuEST grid (via DFTGrid::cuest_grid()), so it
     // is the only place that asks DFTGrid for one. Every other DFTGrid client integrates on the
     // host and gets a host grid, even when USE_CUEST is on.

@@ -66,6 +66,7 @@
 #include <cstring>
 #include <exception>
 #include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -664,6 +665,20 @@ void evaluate_device_kernel(const std::shared_ptr<SuperFunctional>& base, VxSpin
 }
 #endif
 
+/// What the derivative kernel depends on in the functional: its semilocal components.
+/// (GRAC is never applied at deriv = 2; exact exchange does not enter the XC kernel.)
+std::string kernel_fingerprint(const SuperFunctional& functional) {
+    std::ostringstream key;
+    key.precision(17);
+    key << static_cast<const void*>(&functional);
+    for (const auto& components : {functional.x_functionals(), functional.c_functionals()}) {
+        for (const auto& component : components) {
+            key << '|' << component->name() << ',' << component->alpha() << ',' << component->omega();
+        }
+    }
+    return key.str();
+}
+
 #endif  // PSI4_CUEST_NONSYMMETRIC_XC
 
 }  // namespace
@@ -752,70 +767,92 @@ void VBase::compute_Vx_cuest(const std::vector<VxDensity>& inputs, std::vector<S
 #endif
     const double cutoff = v2_rho_cutoff_;
 
-    // => Integration weights (applied exactly once, in the packed potential) <= //
-    stages.start("cuEST Vx: weights");
-    double* d_weights = ws.weights.ensure(npoints, "integration weights");
-    {
-        CuestParameters<cuestXCIntegrationWeightComputeParameters_t> parameters(
-            CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS);
-        cuestWorkspaceDescriptor_t temporary{};
-        RESPONSE_CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(
-            cuest_handle, g.plan, CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL, parameters.get(), &temporary,
-            d_weights));
-        RESPONSE_CHECK_CUEST(cuestXCIntegrationWeightCompute(cuest_handle, g.plan,
-                                                             CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
-                                                             parameters.get(), ws.sdk_workspace(temporary), d_weights));
-    }
-    std::vector<double> h_weights;
-    if (!device_functional) {
-        h_weights.resize(npoints);
-        download(d_weights, npoints, h_weights.data());
-    }
-
-    // => Reference density: verified occupied factors, else the dense D_AO_ <= //
-    stages.start("cuEST Vx: reference density");
     const size_t nspin = uks ? 2 : 1;
+    double* d_weights = ws.weights.ensure(npoints, "integration weights");
     // The host route keeps the reference on the host; the device copies are only scratch then.
     double* d_ref[2] = {ws.reference_a.ensure(field, "reference density"),
                         uks ? ws.reference_b.ensure(field, "reference density") : nullptr};
+    std::vector<double> h_weights;
     std::vector<double> h_ref[2];
-    const bool occupied = cuest_Cocc_reproduces_D();
-    uint64_t offset = 0;
-    for (size_t s = 0; s < nspin; ++s) {
-        if (occupied) {
-            occupied_density(g, d_Cocc_noccs_[s], d_Coccs_AO_ + offset, d_ref[s]);
-            offset += d_Cocc_noccs_[s] * nbf;
-            if (!device_functional) {
-                h_ref[s].resize(field);
-                download(d_ref[s], field, h_ref[s].data());
-            }
-        } else {
-            DensityTarget target;
-            if (device_functional) {
-                target.device = d_ref[s];
-            } else {
-                target.host = &h_ref[s];
-            }
-            dense_density(g, *D_AO_[s], target);
-        }
-    }
-    if (g.verbose) {
-        outfile->Printf("    cuEST Vx: %s, %zu points, reference from %s, %s LibXC\n",
-                        uks ? "UKS" : (spin == VxSpin::RKSSinglet ? "RKS singlet" : "RKS triplet"),
-                        static_cast<size_t>(npoints), occupied ? "occupied factors" : "dense D",
-                        device_functional ? "CUDA" : "host");
-    }
-
-    // => Reference first/second derivatives <= //
-    stages.start("cuEST Vx: derivatives");
     HostKernel host_kernel;
-    if (device_functional) {
-#ifdef USING_Libxc_CUDA
-        evaluate_device_kernel(polarized_base, spin, gga, g, d_ref[0], d_ref[1]);
-#endif
+
+    // => Reuse the reference state of the previous call, when nothing it depends on changed <= //
+    const std::string fingerprint = kernel_fingerprint(*functional_);
+    const bool reuse = device_functional && ws.reference_valid && ws.reference_epoch == cuest_reference_epoch_ &&
+                       ws.reference_spin == static_cast<int>(spin) && ws.reference_npoints == npoints &&
+                       ws.reference_functional == fingerprint;
+    if (reuse) {
+        if (g.verbose) {
+            outfile->Printf("    cuEST Vx: %s, %zu points, reference and kernel reused, CUDA LibXC\n",
+                            uks ? "UKS" : (spin == VxSpin::RKSSinglet ? "RKS singlet" : "RKS triplet"),
+                            static_cast<size_t>(npoints));
+        }
     } else {
-        evaluate_host_kernel(polarized_base, spin, gga, npoints, ncomponents, h_ref[0], uks ? h_ref[1] : h_ref[0],
-                             num_threads_, host_kernel);
+        // Invalid until the derivatives below complete, so a failure can never leave a partial state.
+        ws.reference_valid = false;
+
+        // => Integration weights (applied exactly once, in the packed potential) <= //
+        stages.start("cuEST Vx: weights");
+        {
+            CuestParameters<cuestXCIntegrationWeightComputeParameters_t> parameters(
+                CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS);
+            cuestWorkspaceDescriptor_t temporary{};
+            RESPONSE_CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(
+                cuest_handle, g.plan, CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL, parameters.get(), &temporary,
+                d_weights));
+            RESPONSE_CHECK_CUEST(cuestXCIntegrationWeightCompute(cuest_handle, g.plan,
+                                                                 CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
+                                                                 parameters.get(), ws.sdk_workspace(temporary), d_weights));
+        }
+        if (!device_functional) {
+            h_weights.resize(npoints);
+            download(d_weights, npoints, h_weights.data());
+        }
+
+        // => Reference density: verified occupied factors, else the dense D_AO_ <= //
+        stages.start("cuEST Vx: reference density");
+        const bool occupied = cuest_Cocc_reproduces_D();
+        uint64_t offset = 0;
+        for (size_t s = 0; s < nspin; ++s) {
+            if (occupied) {
+                occupied_density(g, d_Cocc_noccs_[s], d_Coccs_AO_ + offset, d_ref[s]);
+                offset += d_Cocc_noccs_[s] * nbf;
+                if (!device_functional) {
+                    h_ref[s].resize(field);
+                    download(d_ref[s], field, h_ref[s].data());
+                }
+            } else {
+                DensityTarget target;
+                if (device_functional) {
+                    target.device = d_ref[s];
+                } else {
+                    target.host = &h_ref[s];
+                }
+                dense_density(g, *D_AO_[s], target);
+            }
+        }
+        if (g.verbose) {
+            outfile->Printf("    cuEST Vx: %s, %zu points, reference from %s, %s LibXC\n",
+                            uks ? "UKS" : (spin == VxSpin::RKSSinglet ? "RKS singlet" : "RKS triplet"),
+                            static_cast<size_t>(npoints), occupied ? "occupied factors" : "dense D",
+                            device_functional ? "CUDA" : "host");
+        }
+
+        // => Reference first/second derivatives <= //
+        stages.start("cuEST Vx: derivatives");
+        if (device_functional) {
+#ifdef USING_Libxc_CUDA
+            evaluate_device_kernel(polarized_base, spin, gga, g, d_ref[0], d_ref[1]);
+#endif
+            ws.reference_epoch = cuest_reference_epoch_;
+            ws.reference_spin = static_cast<int>(spin);
+            ws.reference_npoints = npoints;
+            ws.reference_functional = fingerprint;
+            ws.reference_valid = true;
+        } else {
+            evaluate_host_kernel(polarized_base, spin, gga, npoints, ncomponents, h_ref[0], uks ? h_ref[1] : h_ref[0],
+                                 num_threads_, host_kernel);
+        }
     }
 
     // => One RHS (one alpha/beta pair) at a time <= //

@@ -123,6 +123,10 @@ class PSI_API VBase {
     int cuest_Cocc_matches_D_ = -1;
     /// Scratch of the cuEST-grid XC response kernel; released before the plan/grid.
     std::unique_ptr<CuestXCResponseWorkspace> cuest_response_;
+    /// Bumped by set_D, set_Cocc and initialize. The XC response reuses its reference density and
+    /// derivative kernel only while this is unchanged (grid changes also pass through finalize,
+    /// which destroys cuest_response_).
+    uint64_t cuest_reference_epoch_ = 0;
 #endif
     /// Quadrature values obtained during integration
     std::map<std::string, double> quad_values_;

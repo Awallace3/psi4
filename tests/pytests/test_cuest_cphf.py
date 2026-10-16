@@ -748,6 +748,78 @@ def test_vx_cuest_grid_survives_option_changes(kind):
     gpu.finalize()
 
 
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+@pytest.mark.parametrize("unrestricted", [False, True])
+def test_vx_cuest_reference_reuse(unrestricted, tmp_path):
+    """The CUDA LibXC route reuses its reference density and kernel only while they are current.
+
+    Repeated calls reuse (and give identical results); a change of spin integration, reference,
+    occupied factors, or a host-LibXC call in between recomputes, and then matches a fresh V.
+    """
+    kind = "uks" if unrestricted else "singlet"
+    wfn, host, Cs, Cv = _kind_setup("pbe0", kind, "host")
+    rng = np.random.default_rng(37)
+    Dx = [o @ rng.normal(size=(o.shape[1], v.shape[1])) @ v.T * 0.1 for o, v in zip(Cs, Cv)]
+    other = [c @ np.linalg.qr(rng.normal(size=(c.shape[1], c.shape[1])))[0] * 1.05 for c in Cs]
+    out = tmp_path / "reuse.out"
+    psi4.core.set_output_file(str(out), False)
+    try:
+        psi4.set_options({"print": 3})
+        V = _potential(wfn, "cuest")
+        fresh = _potential(wfn, "cuest")
+
+        def fresh_at(Cref, k=kind):
+            _set_reference(fresh, Cref)
+            return _apply(fresh, k, Dx)
+
+        def events():
+            text = out.read_text()
+            return text.count("reference from"), text.count("reference and kernel reused")
+
+        _set_reference(V, Cs)
+        first = _apply(V, kind, Dx)
+        if "CUDA LibXC" not in out.read_text():
+            pytest.skip("no CUDA LibXC route in this build; reuse is CUDA-LibXC only")
+        computed, reused = events()
+        _assert_close(first, _apply(V, kind, Dx), 0.0)
+        _assert_close(first, _apply(V, kind, Dx), 0.0)
+        assert events() == (computed, reused + 2)
+        scale = max(np.abs(v).max() for v in first)
+        tol = 1.e-13 * max(1.0, scale)
+        changes = []
+        if not unrestricted:
+            # Singlet <-> triplet on one RV: the kernel differs, so each switch recomputes.
+            changes.append(("triplet", None, lambda: fresh_at(Cs, "triplet"), "triplet"))
+            changes.append(("back to singlet", None, lambda: first, kind))
+        changes.append(("set_D/set_Cocc", lambda: _set_reference(V, other), lambda: fresh_at(other), kind))
+        changes.append(("set_Cocc only", lambda: V.set_Cocc([_M(c) for c in other]), lambda: fresh_at(other), kind))
+        changes.append(("restore", lambda: _set_reference(V, Cs), lambda: first, kind))
+        for label, change, expected, k in changes:
+            expected = expected()
+            if change:
+                change()
+            before = events()
+            got = _apply(V, k, Dx)
+            after = events()
+            assert after == (before[0] + 1, before[1]), f"{label}: V did not recompute"
+            _assert_close(expected, got, tol)
+            _assert_close(got, _apply(V, k, Dx), 0.0)
+            assert events() == (after[0], after[1] + 1), f"{label}: repeat did not reuse"
+        # A host-LibXC call in between invalidates the device state.
+        psi4.set_options({"cuest_xc_response_host_libxc": True})
+        _apply(V, kind, Dx)
+        psi4.set_options({"cuest_xc_response_host_libxc": False})
+        before = events()
+        _assert_close(first, _apply(V, kind, Dx), tol)
+        assert events() == (before[0] + 1, before[1]), "device route did not recompute after a host-LibXC call"
+        V.finalize()
+        fresh.finalize()
+    finally:
+        psi4.core.close_outfile()
+
+
 def _gpu_wavefunction(method, unrestricted, symmetry="c1"):
     psi4.set_num_threads(2)
     mol = psi4.geometry(f"""

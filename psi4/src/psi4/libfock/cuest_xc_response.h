@@ -30,6 +30,8 @@
 #define PSI4_LIBFOCK_CUEST_XC_RESPONSE_H
 
 #include <cstddef>
+#include <cstdint>
+#include <string>
 
 #ifdef USING_cuEST
 #include <cuest.h>
@@ -62,10 +64,13 @@ class CuestDeviceArray {
 
 /// Device and SDK scratch of the cuEST-grid XC response kernel, owned by one VBase.
 ///
-/// Only allocation capacity survives between calls. Every public compute_Vx call
-/// rebuilds the weights, reference density and derivative fields, so no numerical
-/// state can outlive a change of reference, functional or grid. VBase::finalize
-/// destroys this before the XC integral plan and grid it was used with.
+/// Allocation capacity survives between calls. On the CUDA LibXC route the weights,
+/// reference density and derivative fields also survive, and are reused while the key
+/// below matches: the V's reference epoch (bumped by set_D, set_Cocc and initialize),
+/// the spin integration, the point count and the functional's components. The host
+/// LibXC route keeps its fields in host memory only for one call, so it always
+/// recomputes. VBase::finalize destroys this before the XC integral plan and grid it
+/// was used with, so a grid change can never reuse it.
 struct CuestXCResponseWorkspace {
     CuestDeviceArray weights;
     CuestDeviceArray reference_a, reference_b;
@@ -85,6 +90,12 @@ struct CuestXCResponseWorkspace {
     void* sdk_host = nullptr;
     std::size_t sdk_host_capacity = 0;
     cuestWorkspace_t sdk_view{};
+    // Key of the reference state held in weights, reference_a/b and the derivative fields.
+    bool reference_valid = false;
+    std::uint64_t reference_epoch = 0;
+    int reference_spin = -1;
+    std::size_t reference_npoints = 0;
+    std::string reference_functional;
 
     CuestXCResponseWorkspace() = default;
     CuestXCResponseWorkspace(const CuestXCResponseWorkspace&) = delete;
