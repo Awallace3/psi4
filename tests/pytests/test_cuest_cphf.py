@@ -683,6 +683,32 @@ def test_vx_cuest_routes_and_host_grid(method, kind, tmp_path):
     assert err <= 1.e-4 * max(1.0, scale)
 
 
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+@pytest.mark.parametrize("kind", _KINDS)
+def test_vx_cuest_grid_survives_option_changes(kind):
+    """A cuEST-grid V keeps its kernel after another V turns CUEST_XC off.
+
+    Building a host-grid V sets CUEST_XC false globally. The cuEST-grid V must keep
+    using its own grid (Phoenix 14085249 segfaulted in the native kernel instead).
+    """
+    wfn, _, Cs, Cv = _kind_setup("blyp", kind, "host")
+    rng = np.random.default_rng(31)
+    Dx = [o @ rng.normal(size=(o.shape[1], v.shape[1])) @ v.T * 0.1 for o, v in zip(Cs, Cv)]
+    gpu = _potential(wfn, "cuest")
+    _set_reference(gpu, Cs)
+    first = _apply(gpu, kind, Dx)
+    host = _potential(wfn, "host")
+    assert not psi4.core.get_option("SCF", "CUEST_XC")
+    assert gpu.uses_cuest_xc() and not host.uses_cuest_xc()
+    _set_reference(gpu, Cs)
+    _assert_close(first, _apply(gpu, kind, Dx), 1.e-12)
+    _set_reference(host, Cs)
+    assert max(np.abs(a - b).max() for a, b in zip(first, _apply(host, kind, Dx))) < 1.e-4
+    gpu.finalize()
+
+
 def _gpu_wavefunction(method, unrestricted, symmetry="c1"):
     psi4.set_num_threads(2)
     mol = psi4.geometry(f"""

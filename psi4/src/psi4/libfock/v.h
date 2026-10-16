@@ -240,8 +240,16 @@ class PSI_API VBase {
     void set_print(int print) { print_ = print; }
     void set_debug(int debug) { debug_ = debug; }
 
-    /// Whether XC quadrature, including the response kernel, runs on the cuEST grid.
-    bool uses_cuest_xc() const { return use_cuest_xc(); }
+    /// Whether this potential's XC response kernel runs on the cuEST grid. True when it was
+    /// initialized on a cuEST grid, whatever USE_CUEST/CUEST_XC say now (another potential
+    /// may have changed them since), and also when they now request cuEST for a potential
+    /// initialized on the CPU grid, so that compute_Vx raises instead of mixing grids.
+    bool uses_cuest_xc() const {
+#ifdef USING_cuEST
+        if (cuest_xcint_plan_) return true;
+#endif
+        return use_cuest_xc();
+    }
 
     virtual void initialize();
     virtual void finalize();

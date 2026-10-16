@@ -645,7 +645,7 @@ std::shared_ptr<VBase> VBase::build_V(std::shared_ptr<BasisSet> primary, std::sh
 }
 void VBase::set_Cocc(std::vector<SharedMatrix> Coccs) {
 #ifdef USING_cuEST
-    if (use_cuest_xc()) {
+    if (uses_cuest_xc()) {
         cuest_common::ensure_cuest_initialized();
 
         std::vector<uint64_t> d_Cocc_noccs_provided;
@@ -3067,7 +3067,7 @@ std::vector<SharedMatrix> RV::compute_fock_derivatives() {
 void RV::compute_Vx_full_factored(const std::vector<SharedMatrix>& left, const std::vector<SharedMatrix>& right,
                                   std::vector<SharedMatrix> ret, bool singlet) {
 #ifdef USING_cuEST
-    if (use_cuest_xc()) {
+    if (uses_cuest_xc()) {
         compute_Vx_cuest(factored_inputs(left, right), ret, singlet ? VxSpin::RKSSinglet : VxSpin::RKSTriplet);
         return;
     }
@@ -3076,7 +3076,7 @@ void RV::compute_Vx_full_factored(const std::vector<SharedMatrix>& left, const s
 }
 void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret, bool singlet) {
 #ifdef USING_cuEST
-    if (use_cuest_xc()) {
+    if (uses_cuest_xc()) {
         compute_Vx_cuest(dense_inputs(Dx), ret, singlet ? VxSpin::RKSSinglet : VxSpin::RKSTriplet);
         return;
     }
@@ -5809,7 +5809,7 @@ std::vector<SharedMatrix> UV::compute_fock_derivatives() {
 void UV::compute_Vx_factored(const std::vector<SharedMatrix>& left, const std::vector<SharedMatrix>& right,
                              std::vector<SharedMatrix> ret) {
 #ifdef USING_cuEST
-    if (use_cuest_xc()) {
+    if (uses_cuest_xc()) {
         compute_Vx_cuest(factored_inputs(left, right), ret, VxSpin::UKS);
         return;
     }
@@ -5818,7 +5818,7 @@ void UV::compute_Vx_factored(const std::vector<SharedMatrix>& left, const std::v
 }
 void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret) {
 #ifdef USING_cuEST
-    if (use_cuest_xc()) {
+    if (uses_cuest_xc()) {
         compute_Vx_cuest(dense_inputs(Dx), ret, VxSpin::UKS);
         return;
     }
