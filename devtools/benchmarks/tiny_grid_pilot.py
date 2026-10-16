@@ -126,7 +126,7 @@ def campaign(args):
                 env = dict(os.environ, TMPDIR=scratch, SCRATCH=scratch, PSI_SCRATCH=scratch)
                 if args.variant == "cpu":
                     env["CUDA_VISIBLE_DEVICES"] = ""
-                command = [sys.executable, str(Path(__file__).resolve()), "worker",
+                command = [sys.executable, str(getattr(args, "worker_script", Path(__file__).resolve())), "worker",
                     "--system", system, "--arm", arm, "--output", str(directory),
                     "--expected-package", str(args.expected_package), "--variant", args.variant,
                     "--threads", str(args.threads), "--memory", args.memory]
@@ -164,7 +164,7 @@ def campaign(args):
     return 0 if len(rows)==expected else 75
 
 
-def main():
+def main(worker_script=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("mode", choices=("worker", "campaign"))
     p.add_argument("--output", type=Path, required=True)
@@ -186,6 +186,8 @@ def main():
     if args.threads < 1 or args.case_timeout <= 0 or args.budget <= 0:
         p.error("Threads and time budgets must be positive")
     args.output = args.output.resolve()
+    if worker_script is not None:
+        args.worker_script = Path(worker_script).resolve()
     install_configs()
     return worker(args) if args.mode == "worker" else campaign(args)
 

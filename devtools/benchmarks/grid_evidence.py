@@ -135,7 +135,7 @@ def worker(args):
         "DFT_RADIAL_POINTS": final[0], "DFT_SPHERICAL_POINTS": final[1],
         "DFT_RADIAL_POINTS_INITIAL": initial[0] if initial else 0,
         "DFT_SPHERICAL_POINTS_INITIAL": initial[1] if initial else 0,
-        "DFT_GRID_SWITCH_FACTOR": 10.0, "SAD_PRINT": 1, "BENCH": 0,
+        "DFT_GRID_SWITCH_FACTOR": getattr(args, "switch_factor", 10.0), "SAD_PRINT": 1, "BENCH": 0,
     }
     if args.system != "water":
         opts.update(PUREAM=True, DF_BASIS_SCF="def2-universal-jkfit", DF_BASIS_MP2="aug-cc-pvdz-ri")
