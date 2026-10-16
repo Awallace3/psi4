@@ -813,7 +813,11 @@ def test_mbis_molecular_properties(mbis_water, tmp_path):
     assert max(d['localization_residual'] for d in result.diagnostics) < 1e-6
     assert not list(tmp_path.iterdir())
     c6 = [c.value for pair in result.dispersion.pairs for c in pair.coefficients]
-    oo, oh, hh = 25.66199432, 3.79986053, .56625895
+    # Later nodes penalize the static node's selection (CamCASP's sweep): at the
+    # last node H1_10_11c_A's anchor (1.9e-6) is within the cutoff but stays
+    # penalized. The per-node cutoff rule this replaced left it free and gave
+    # 25.66199432, 3.79986053, .56625895.
+    oo, oh, hh = 25.66224939, 3.79969683, .56621263
     np.testing.assert_allclose(c6, [oo, oh, oh, oh, hh, hh, oh, hh, hh], rtol=2e-6)
     np.testing.assert_allclose(result.refinements[0].parameters,
         [7.30577867, 7.19150699, 7.71292004, 2.08822061, -.00364998, .65936187, .71967940],
