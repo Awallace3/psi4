@@ -50,11 +50,22 @@ if [[ "$variant" == cuda ]]; then
     libxc=$(realpath "${CPKS_CUDA_LIBXC:-$software/libxc-7.1.2-cuda}")
     cc="$software/toolchains/conda-gcc"
     cxx="$software/toolchains/conda-g++"
+    cuda_flags="-I$software/toolchains/cuda13/targets/x86_64-linux/include"
+    cuda_archs="$archs"
+    if [[ "$archs" == *";"* ]]; then
+        # The superbuild forwards CMAKE_CUDA_ARCHITECTURES to psi4-core without a
+        # LIST_SEPARATOR, so a list arrives as its first entry only. Spell the
+        # architectures out as -gencode flags (one argument) and switch the CMake list off.
+        for arch in ${archs//;/ }; do
+            cuda_flags+=" -gencode=arch=compute_$arch,code=sm_$arch"
+        done
+        cuda_archs=OFF
+    fi
     cuda_args=(
         "-DCMAKE_CUDA_COMPILER=$software/toolchains/cuda13/bin/nvcc"
         "-DCMAKE_CUDA_HOST_COMPILER=$cxx"
-        "-DCMAKE_CUDA_ARCHITECTURES=$archs"
-        "-DCMAKE_CUDA_FLAGS=-I$software/toolchains/cuda13/targets/x86_64-linux/include"
+        "-DCMAKE_CUDA_ARCHITECTURES=$cuda_archs"
+        "-DCMAKE_CUDA_FLAGS=$cuda_flags"
     )
     libxc_config="$libxc/lib64/cmake/Libxc"
     libxc_lib="$libxc/lib64"
@@ -121,6 +132,13 @@ fi
 if readelf --dyn-syms --wide "$build"/stage/lib/psi4/core*.so | grep ' UND cudaGetDeviceProperties_v2'; then
     echo 'CUDA header/runtime mismatch: core still requires the CUDA 12 device-properties ABI' >&2
     exit 1
+fi
+# Device code of the core must exist for every requested architecture.
+if [[ "$variant" == cuda ]]; then
+    cuobjdump -lelf "$build"/stage/lib/psi4/core*.so | grep -oE 'sm_[0-9]+' | sort -u > "$out/core_sass.txt"
+    for arch in ${archs//;/ }; do
+        grep -qx "sm_$arch" "$out/core_sass.txt"
+    done
 fi
 # Host self-check of the shared per-point algebra (no GPU).
 "$cxx" -std=c++17 -O2 -I "$root/psi4/src" "$root/devtools/cuest_xc_response_math_check.cc" \
