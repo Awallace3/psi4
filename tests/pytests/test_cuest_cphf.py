@@ -493,9 +493,11 @@ def test_vx_empty_beta_spin(method, grid):
         _assert_close(expected[:1], got[:1], atol=1.e-7)
         assert np.all(np.isfinite(got[1]))
         if native_beta is not None:
+            # H200, CUDA LibXC 7.1.2: svwn 1.7e-7 (scale 7e-3), pbe 1.7e-6 (scale 4.4).
+            scale = np.abs(native_beta).max()
             print(f"\n{method}: beta block, cuEST grid vs host grid: "
-                  f"{np.abs(native_beta - got[1]).max():.3e} (scale {np.abs(native_beta).max():.3e})")
-            _assert_close([native_beta], [got[1]], atol=1.e-4)
+                  f"{np.abs(native_beta - got[1]).max():.3e} (scale {scale:.3e})")
+            _assert_close([native_beta], [got[1]], atol=2.e-6 * max(1.0, scale))
     # A beta-only response density on an alpha-only reference.
     beta = np.outer(wfn.Ca_subset("AO", "OCC").np[:, 0], wfn.Ca_subset("AO", "VIR").np[:, 0])
     out = _apply(V, "uks", [np.zeros_like(beta), beta])
