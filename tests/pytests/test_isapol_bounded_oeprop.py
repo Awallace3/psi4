@@ -98,6 +98,62 @@ def test_byte_budget_follows_psi4_memory():
         psi4.set_memory(saved, quiet=True)
 
 
+def test_default_resources_stay_standard_and_legacy():
+    saved = core.get_memory()
+    try:
+        psi4.set_memory(3*1024**3, quiet=True)
+        r = api.default_resources()
+        assert r.capacity == 'standard'
+        assert repr(r) == 'BoundedResources(max_bytes=3221225472, max_work=6000000000000, max_io_bytes=68719476736)'
+    finally:
+        psi4.set_memory(saved, quiet=True)
+
+
+def test_explicit_large_resources_pass_through_unchanged(water, monkeypatch):
+    from psi4.driver.procrouting.isapol_bounded_response import BoundedResources
+    captured = {}
+    monkeypatch.setattr(api, 'bounded_properties', lambda wfn, recipe, **kwargs: captured.update(kwargs))
+    large = BoundedResources(int(core.get_memory()), 64_000_000_000_000, 64*1024**3, capacity='large')
+    core.clean_options()
+    assert api.settings('water', {'resources': large})['resources'] is large
+    psi4.oeprop(water, 'ATOMIC_REFINED_POLARIZABILITIES', atomic_backend='BOUNDED_DF', preset='water',
+                npoints=32, radial_points=20, spherical_points=50, resources=large, log=StageLog(0))
+    assert captured['resources'] is large
+
+
+
+def test_refinement_parameter_limit_defaults_to_64_and_passes_through(water, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(api, 'bounded_properties', lambda wfn, recipe, **kwargs: captured.update(kwargs))
+    core.clean_options()
+    for preset in ('water', 'benzene'):
+        assert api.settings(preset, {})['max_refinement_parameters'] == 64
+    for extra, expected in (({}, 64), ({'max_refinement_parameters': 72}, 72),
+                            ({'max_refinement_parameters': 1}, 1)):
+        captured.clear()
+        psi4.oeprop(water, 'ATOMIC_REFINED_POLARIZABILITIES', atomic_backend='BOUNDED_DF', preset='water',
+                    npoints=32, radial_points=20, spherical_points=50, log=StageLog(0), **extra)
+        assert type(captured['max_parameters']) is int and captured['max_parameters'] == expected
+    assert 'max_refinement_parameters' not in captured
+
+
+@pytest.mark.parametrize('value', [73, 0, -1, True, 72., '72', np.int64(72), None])
+def test_refinement_parameter_limit_is_refused_before_preparation(water, monkeypatch, value):
+    """A bad limit closes preset preparation FAILED before any grid, basis or backend call."""
+    called = []
+    monkeypatch.setattr(api, 'bounded_properties', lambda *a, **k: called.append('backend'))
+    monkeypatch.setattr(core, 'IsaGrid', lambda *a, **k: called.append('grid'))
+    monkeypatch.setattr(api, 'preset_sites', lambda *a, **k: called.append('sites'))
+    messages = []
+    with pytest.raises(ValueError, match=r'max_refinement_parameters must be an int in 1\.\.72'):
+        psi4.oeprop(water, 'ATOMIC_REFINED_POLARIZABILITIES', atomic_backend='BOUNDED_DF', preset='water',
+                    npoints=32, radial_points=20, spherical_points=50, max_refinement_parameters=value,
+                    log=StageLog(1, writer=messages.append))
+    assert not called
+    assert 'Stage FAILED: Bounded preset preparation' in ''.join(messages)
+    with pytest.raises(ValueError, match='No native'):
+        psi4.atomic_property_result(water)
+
 def test_auto_correction_follows_the_scf_functional(water):
     assert api.resolve_correction(water, 'AUTO', None) == ('NONE', None)
     assert api.resolve_correction(water, 'AUTO', .13) == ('FIXED_GRAC', .13)

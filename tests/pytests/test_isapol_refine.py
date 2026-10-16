@@ -965,6 +965,123 @@ def test_declared_variables_reject_malformed_names(declared, pattern):
                            declared_variables=declared)
 
 
+# ------------------------------------------------- static-node penalized set
+
+def _with_entry(anchors, site, row, col, value):
+    """Copies of ``anchors`` with one symmetric pair of ``anchors[site]`` replaced."""
+    out = [np.array(a, dtype=float, copy=True) for a in anchors]
+    out[site][row, col] = out[site][col, row] = value
+    return out
+
+
+def _penalized(model):
+    return tuple(n for n in model.parameter_labels if n not in model.unpenalized_variables)
+
+
+def test_penalized_variables_keep_a_static_penalty_below_the_node_cutoff():
+    """CamCASP selects penalized variables once, on the static node, and writes
+    a ``Penalties`` line for each of them at every later node with that node's
+    anchor and the unchanged weight formula (process_data.F90:2112-2134,
+    2269-2275).  ``penalized_variables`` carries that static selection: a
+    variable in it stays anchored and penalized at a later node even where its
+    node anchor has fallen below the cutoff.  Omitting the argument keeps the
+    legacy per-node cutoff test for direct callers."""
+    built = case('l2h1')
+    sites, omega = built['model'].sites, 1.5
+    row, col = 1, 2
+    label = f'O_{R.COMPONENT_NAMES[row]}_{R.COMPONENT_NAMES[col]}_A'
+    static = R.refinement_model(sites, _with_entry(built['anchors'], 0, row, col, 2.0e-4),
+                                cutoff=1.0e-4, weight_type=3, weight_coefficient=1.0e-3,
+                                provenance='static node')
+    assert label in _penalized(static) and static.unpenalized_variables == ()
+    later_anchors = _with_entry(built['anchors'], 0, row, col, 5.0e-5)
+    common = dict(frequency_au=omega, cutoff=1.0e-4, weight_type=3, weight_coefficient=1.0e-3,
+                  provenance='later node', declared_variables=static.parameter_labels)
+    later = R.refinement_model(sites, later_anchors, penalized_variables=_penalized(static), **common)
+    legacy = R.refinement_model(sites, later_anchors, **common)
+    k = later.parameter_labels.index(label)
+    assert later.parameter_labels == legacy.parameter_labels == static.parameter_labels
+    assert later.unpenalized_variables == ()
+    assert later.anchors[k] == 5.0e-5
+    assert later.strengths[k] == R.penalty_weight(weight_type=3, weight_coefficient=1.0e-3, alpha=5.0e-5,
+                                                  frequency=omega, rank1=R.component_rank(row),
+                                                  rank2=R.component_rank(col))
+    assert later.strengths[k] > 0.0
+    # Everything else is the per-node model the cutoff test builds anyway.
+    others = [i for i in range(later.parameter_count) if i != k]
+    assert [later.anchors[i] for i in others] == [legacy.anchors[i] for i in others]
+    assert [later.strengths[i] for i in others] == [legacy.strengths[i] for i in others]
+    assert (later.cutoff, later.weight_type, later.weight_coefficient) == (1.0e-4, 3, 1.0e-3)
+    # Legacy direct-helper default (penalized_variables=None): the node's own cutoff test.
+    assert legacy.unpenalized_variables == (label,)
+    assert (legacy.anchors[k], legacy.strengths[k]) == (0.0, 0.0)
+
+
+def test_penalized_variables_leave_a_failed_static_extra_free_at_every_node():
+    """A declared extra that failed the STATIC cutoff is a free parameter --
+    the ``.pdef`` variable with no ``Penalties`` line -- and stays free at a
+    later node even where that node's anchor exceeds the cutoff."""
+    built = case('rank4')
+    derived = built['model']
+    extra = next(f'O_{R.COMPONENT_NAMES[i]}_{R.COMPONENT_NAMES[j]}_A'
+                 for i in range(25) for j in range(i, 25)
+                 if f'O_{R.COMPONENT_NAMES[i]}_{R.COMPONENT_NAMES[j]}_A' not in derived.parameter_labels)
+    row, col = (R.COMPONENT_NAMES.index(q) for q in extra[2:-2].split('_'))
+    assert built['anchors'][0][row, col] == 0.0
+    declared = tuple(derived.parameter_labels) + (extra,)
+    static = R.refinement_model(derived.sites, built['anchors'], cutoff=1.0e-4, weight_type=3,
+                                weight_coefficient=1.0e-3, provenance='static node',
+                                declared_variables=declared)
+    assert static.unpenalized_variables == (extra,)
+    later_anchors = _with_entry(built['anchors'], 0, row, col, 3.0e-4)
+    common = dict(frequency_au=0.75, cutoff=1.0e-4, weight_type=3, weight_coefficient=1.0e-3,
+                  provenance='later node', declared_variables=declared)
+    later = R.refinement_model(derived.sites, later_anchors, penalized_variables=_penalized(static), **common)
+    k = later.parameter_labels.index(extra)
+    assert later.unpenalized_variables == (extra,)
+    assert (later.anchors[k], later.strengths[k]) == (0.0, 0.0)
+    assert _penalized(later) == _penalized(static)
+    # The legacy per-node test would have penalized it here; that is the direct-helper default.
+    legacy = R.refinement_model(derived.sites, later_anchors, **common)
+    assert legacy.unpenalized_variables == ()
+    assert legacy.anchors[k] == 3.0e-4
+
+
+def test_an_empty_penalized_set_penalizes_nothing():
+    """An explicit empty set is a declaration that no variable is penalized,
+    not a request to fall back to the cutoff."""
+    built = case('l2h1')
+    derived = built['model']
+    free = R.refinement_model(derived.sites, built['anchors'], cutoff=1.0e-4, weight_type=3,
+                              weight_coefficient=1.0e-3, provenance='nothing penalized',
+                              declared_variables=derived.parameter_labels, penalized_variables=())
+    assert free.parameter_labels == derived.parameter_labels
+    assert free.unpenalized_variables == derived.parameter_labels
+    assert set(free.anchors) == {0.0} and set(free.strengths) == {0.0}
+
+
+@pytest.mark.parametrize('declared,penalized,pattern', [
+    (None, ('O_10_10_A',), 'penalized_variables requires declared_variables'),
+    ('all', ('O_10_10_A', 'O_10_10_A'), 'must not repeat'),
+    ('all', ('O_99_99_A',), 'is not a declared variable'),
+    ('all', ('H2_10_10_A',), 'is not a declared variable'),
+    ('all', 'O_10_10_A', 'not a single label string'),
+    ('all', (1,), 'is not a declared variable'),
+    ('all', None, None),
+])
+def test_penalized_variables_must_be_a_subset_of_the_declared_list(declared, penalized, pattern):
+    built = case('l2h1')
+    derived = built['model']
+    kwargs = dict(cutoff=1.0e-4, provenance='penalized subset',
+                  declared_variables=derived.parameter_labels if declared == 'all' else declared)
+    if pattern is None:
+        model = R.refinement_model(derived.sites, built['anchors'], penalized_variables=penalized, **kwargs)
+        assert model.anchors == derived.anchors and model.strengths == derived.strengths
+        return
+    with pytest.raises(ValueError, match=pattern):
+        R.refinement_model(derived.sites, built['anchors'], penalized_variables=penalized, **kwargs)
+
+
 # ---------------------------------------------------------------- input guards
 
 def test_refine_requires_declared_provenance():

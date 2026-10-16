@@ -354,8 +354,12 @@ Point-response fitting (PFIT)
      of the type), upper-triangle components whose reference anchor exceeds
      ``cutoff``, and penalty strengths from ``weight_type`` and
      ``weight_coefficient``. ``declared_variables`` replays a supplied variable
-     list instead. ``refine`` solves one target densely (``core.isa_pfit_solve``,
-     at most 512 points) and returns per-site refined tensors; components
+     list instead. By default the node's own cutoff decides which declared
+     variables are penalized (the others are free); ``penalized_variables``
+     names that subset explicitly, so the bounded route passes the static
+     node's selection to every later node. ``refine`` solves one target
+     densely (``core.isa_pfit_solve``, at most 512 points) and returns
+     per-site refined tensors; components
      outside the model are exactly zero.
    * ``isapol_pfit_stream.refine_streamed(models, points, packed, ...)`` fits
      several targets (typically one per frequency) over one complete cloud.

@@ -206,13 +206,15 @@ class RefinementModel:
 
     ``declared_variables`` is empty when the variable list was derived from the
     cutoff, and is the caller's own ``.pdef`` variable list when one was
-    supplied.  ``unpenalized_variables`` names the declared variables the
-    cutoff screens out, which are free parameters carrying anchor 0 and
-    strength 0 -- CamCASP's own split, where ``.pdef`` sets the variable list
-    and the ``Penalties`` block ``process`` writes covers only the above-cutoff
-    subset.  A model with a nonempty ``declared_variables`` is a DIFFERENT
-    DECLARED MODEL from the cutoff-derived one, even where the two share every
-    penalized variable.
+    supplied.  ``unpenalized_variables`` names the declared variables that
+    carry no penalty -- those this node's cutoff screens out, or, when
+    ``refinement_model`` was given ``penalized_variables``, those outside that
+    set -- which are free parameters carrying anchor 0 and strength 0.  This is
+    CamCASP's own split, where ``.pdef`` sets the variable list and the
+    ``Penalties`` block ``process`` writes covers only the subset the static
+    node's cutoff selected.  A model with a nonempty ``declared_variables`` is
+    a DIFFERENT DECLARED MODEL from the cutoff-derived one, even where the two
+    share every penalized variable.
     """
     sites: tuple
     site_types: tuple
@@ -325,9 +327,27 @@ def _validated_declared_variables(declared, sites, ordered_types, first):
     return resolved
 
 
+def _validated_penalized_variables(penalized, declared):
+    """The caller's penalized subset of the declared list, as a set of labels."""
+    if penalized is None:
+        return None
+    if declared is None:
+        raise ValueError('penalized_variables requires declared_variables')
+    if isinstance(penalized, str):
+        raise ValueError('penalized_variables is a collection of labels, not a single label string')
+    penalized = tuple(penalized)
+    if len(set(penalized)) != len(penalized):
+        raise ValueError('penalized_variables must not repeat a variable')
+    names = set(declared.values())
+    for label in penalized:
+        if label not in names:
+            raise ValueError(f'penalized variable {label!r} is not a declared variable')
+    return set(penalized)
+
+
 def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
                      weight_type=3, weight_coefficient=1e-3, provenance='',
-                     declared_variables=None):
+                     declared_variables=None, penalized_variables=None):
     """Build the variable list CamCASP's ``.pdef`` plus ``Penalties`` block encodes.
 
     ``anchor_tensors[s]`` is site ``s``'s raw local polarizability at
@@ -344,11 +364,29 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
     ``.pdef`` does, instead of deriving it from the cutoff.  It must name every
     variable the cutoff would have produced -- a declared list that omits a
     penalized variable would misrepresent the ``Penalties`` block as covering
-    the fit -- and may name more; the extra ones are free parameters with
-    anchor 0.0 and strength 0.0, exactly the state a ``.pdef`` variable with no
-    ``Penalties`` line is in.  Supplying it is a different declared model, not
-    a relaxation of the cutoff: the cutoff still decides which variables are
-    anchored and penalized, and is recorded unchanged on the model.
+    the fit -- and may name more.  Supplying it is a different declared model,
+    not a relaxation of the cutoff, which is recorded unchanged on the model.
+
+    Which declared variables carry a penalty is decided in one of two ways:
+
+    * ``penalized_variables=None`` (the default, and the legacy direct-helper
+      behaviour): this node's own cutoff test.  A declared variable whose
+      anchor here is within the cutoff is a free parameter with anchor 0.0 and
+      strength 0.0.
+    * ``penalized_variables`` given (requires ``declared_variables``): exactly
+      the named subset of the declared list is penalized, each with this
+      node's anchor and ``penalty_weight`` even where that anchor is within
+      the cutoff; every other declared variable is free.  This is CamCASP's
+      frequency sweep, where the static node's cutoff scan selects the
+      penalized variables and ``process`` writes a ``Penalties`` line for each
+      of them at every later node (process_data.F90:2112-2134, 2269-2275).
+      An empty collection penalizes nothing.
+
+    Free parameters are the state of a ``.pdef`` variable with no
+    ``Penalties`` line, e.g. a user-declared extra the static cutoff did not
+    select.  The declared-list completeness check above always uses this
+    node's cutoff.  The helper knows nothing about other nodes: a caller that
+    wants the static selection must pass it, as ``isapol_bounded`` does.
     """
     sites = _validated_sites(sites)
     tensors = _validated_anchor_tensors(sites, anchor_tensors)
@@ -372,6 +410,7 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
             ordered_types.append(site.site_type)
     members = {t: tuple(i for i, s in enumerate(sites) if s.site_type == t) for t in ordered_types}
     declared = _validated_declared_variables(declared_variables, sites, ordered_types, first)
+    selected = _validated_penalized_variables(penalized_variables, declared)
 
     parameter_labels, parameter_entries, anchors, strengths = [], [], [], []
     nonsymmetric, copy_discrepancy = 0, 0.0
@@ -387,17 +426,19 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
             for col in range(row, site.component_count):
                 rank2 = component_rank(col)
                 alpha = float(tensor[row, col])
-                penalized = abs(alpha) > cutoff
+                above = abs(alpha) > cutoff
                 label = (f'{site.label}_{COMPONENT_NAMES[row]}'
                          f'_{COMPONENT_NAMES[col]}_A')
                 if declared is not None and (site_type, row, col) not in declared:
                     # A variable the cutoff keeps but the declared list omits
                     # would leave a penalized anchor out of the fit entirely.
-                    if penalized:
+                    if above:
                         missing.append(label)
                     continue
-                if declared is None and not penalized:
+                if declared is None and not above:
                     continue
+                # A supplied penalized set replaces this node's cutoff test.
+                penalized = above if selected is None else label in selected
                 parameter_labels.append(label)
                 parameter_entries.append(tuple((s, row, col) for s in members[site_type]))
                 anchors.append(alpha if penalized else 0.0)

@@ -8,6 +8,7 @@ refinement against an independent dense fit, distribution and response
 selection, and refusals. Toy admissions are not molecular acceptance.
 """
 import math
+import re
 
 import numpy as np
 import pytest
@@ -303,15 +304,15 @@ def test_parameter_cap_is_admitted_at_node_one_before_any_targets(small_water, t
     monkeypatch.setattr(backend.BoundedResponse, 'solve',
                         lambda self, omega: solves.append(omega) or solve(self, omega))
     monkeypatch.setattr(driver, 'fitted_point_targets', lambda *a, **k: targets.append(1) or fitted(*a, **k))
-    monkeypatch.setattr(driver, 'MAX_PARAMETERS', count)  # at the cap: admitted, full sweep
-    driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, log=StageLog(0))
+    # At the selected limit: admitted, full sweep.
+    driver.bounded_properties(wfn, recipe, **args, max_parameters=count, scratch_directory=tmp_path,
+                              log=StageLog(0))
     assert (len(solves), len(targets)) == (3, 3)
     solves.clear(), targets.clear()
-    monkeypatch.setattr(driver, 'MAX_PARAMETERS', count-1)
     messages = []
     with pytest.raises(ValueError, match=f'at most {count-1} parameters'):
-        driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, publish_qcvariables=True,
-                                  log=StageLog(1, writer=messages.append))
+        driver.bounded_properties(wfn, recipe, **args, max_parameters=count-1, scratch_directory=tmp_path,
+                                  publish_qcvariables=True, log=StageLog(1, writer=messages.append))
     text = ''.join(messages)
     assert (len(solves), len(targets)) == (1, 0)
     assert 'Stage FAILED: Refinement model admission' in text
@@ -319,6 +320,105 @@ def test_parameter_cap_is_admitted_at_node_one_before_any_targets(small_water, t
     assert 'Stage FAILED: Production LW localization' not in text and 'Point-response targets' not in text
     assert not _owned_names(wfn) and not list(tmp_path.iterdir())
 
+
+
+class _Reached(Exception):
+    """Raised by a patched later stage to show that an admission was passed."""
+
+
+class _CountedModel:
+    """A real node model reporting another parameter count, to drive admission past the toy's size."""
+
+    def __init__(self, model, count):
+        self._model, self._count = model, count
+
+    def __getattr__(self, name):
+        return getattr(self._model, name)
+
+    @property
+    def parameter_count(self):
+        return self._count
+
+
+def _forbid_response(monkeypatch):
+    built = []
+
+    def refuse(*args, **kwargs):
+        built.append(1)
+        raise _Reached('validation passed')
+
+    monkeypatch.setattr(driver, 'BoundedResponse', refuse)
+    return built
+
+
+@pytest.mark.parametrize('value', [73, 0, -1, True, 72., '72', np.int64(72), None])
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_max_parameters_must_be_an_exact_int_in_the_allowance(small_water, tmp_path, monkeypatch, value):
+    """Anything but an exact int in 1..72 is refused at input validation, before any response work."""
+    wfn, recipe, args = small_water
+    built = _forbid_response(monkeypatch)
+    messages = []
+    with pytest.raises(ValueError, match=r'max_parameters must be an int in 1\.\.72'):
+        driver.bounded_properties(wfn, recipe, **args, max_parameters=value, scratch_directory=tmp_path,
+                                  log=StageLog(1, writer=messages.append))
+    assert not built and not list(tmp_path.iterdir())
+    assert 'Stage FAILED: Bounded input validation' in ''.join(messages)
+    assert (driver.MAX_PARAMETERS, driver.MAX_PARAMETER_ALLOWANCE) == (64, 72)
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_declared_variable_list_admission_uses_the_selected_limit(small_water, tmp_path, monkeypatch):
+    """Default 64 keeps its message; the opt-in admits 72 declared names and refuses 73, all before work."""
+    wfn, recipe, args = small_water
+    built = _forbid_response(monkeypatch)
+    names = [f'v{i}' for i in range(73)]
+    for declared, limit, admitted in ((64, None, True), (65, None, False), (72, 72, True), (73, 72, False)):
+        extra = {} if limit is None else {'max_parameters': limit}
+        if admitted:
+            with pytest.raises(_Reached):
+                driver.bounded_properties(wfn, recipe, **args, **extra, declared_variables=names[:declared],
+                                          scratch_directory=tmp_path, log=StageLog(0))
+        else:
+            with pytest.raises(ValueError,
+                               match=rf'^bounded refinement requires 1\.\.{limit or 64} declared variables$'):
+                driver.bounded_properties(wfn, recipe, **args, **extra, declared_variables=names[:declared],
+                                          scratch_directory=tmp_path, log=StageLog(0))
+    assert len(built) == 2 and not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_cutoff_derived_model_admission_uses_the_selected_limit(small_water, tmp_path, monkeypatch):
+    """Node-1 admission: 65 refused by default (message and logged limit 64), 72 admitted and 73 refused
+    under the opt-in. Refusals stop before any target; the admitted model reaches the first target."""
+    wfn, recipe, args = small_water
+    build, solve = refine.refinement_model, backend.BoundedResponse.solve
+    solves, targets = [], []
+    count = [0]
+    monkeypatch.setattr(refine, 'refinement_model', lambda *a, **k: _CountedModel(build(*a, **k), count[0]))
+    monkeypatch.setattr(backend.BoundedResponse, 'solve',
+                        lambda self, omega: solves.append(omega) or solve(self, omega))
+
+    def first_target(*a, **k):
+        targets.append(1)
+        raise _Reached('model admitted')
+
+    monkeypatch.setattr(driver, 'fitted_point_targets', first_target)
+    for count[0], limit, error, match in ((65, None, ValueError, 'at most 64 parameters'),
+                                          (72, 72, _Reached, 'model admitted'),
+                                          (73, 72, ValueError, 'at most 72 parameters')):
+        solves.clear(), targets.clear()
+        messages = []
+        extra = {} if limit is None else {'max_parameters': limit}
+        with pytest.raises(error, match=match):
+            driver.bounded_properties(wfn, recipe, **args, **extra, scratch_directory=tmp_path,
+                                      log=StageLog(1, writer=messages.append))
+        text = ''.join(messages)
+        admission = text[text.index('Refinement model admission'):]
+        assert re.search(rf'\bparameters +{count[0]}\n', admission)
+        assert re.search(rf'\blimit +{limit or 64}\n', admission)
+        assert len(solves) == 1 and len(targets) == (error is _Reached)
+        assert ('Stage FAILED: Refinement model admission' in text) == (error is ValueError)
+        assert not list(tmp_path.iterdir())
 
 @pytest.mark.parametrize('small_water', ['water'], indirect=True)
 def test_exact_resource_boundaries(small_water, tmp_path, monkeypatch):
@@ -449,3 +549,69 @@ def test_reserved_publication_labels_refuse_before_any_report_but_the_model_keep
     assert wfn.has_variable('ATOMIC REFINED DISPERSION C6 O TOTALS')
     assert wfn.has_variable('ATOM H_TOTAL C6 REFINED DISPERSION COEFFICIENT')
     assert np.array_equal(_c6(kept), _c6(similar))
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_later_nodes_penalize_exactly_the_static_node_selection(small_water, tmp_path, monkeypatch):
+    """CamCASP selects the penalized variables on the static (first) node and
+    writes a Penalties line for each at every later node, with that node's
+    anchor and the unchanged weight formula (process_data.F90:2112-2134,
+    2269-2275). Both bounded entries -- cutoff-derived and declared -- must
+    carry that static selection to every node: a selected variable whose later
+    anchor falls below the cutoff stays penalized, and a declared extra that
+    failed the static cutoff stays free even where a later anchor exceeds it.
+
+    The real helper builds every model; the patch only replaces the selected
+    (and, in the declared run, the extra) anchor entry per node so that the toy
+    crosses the cutoff on purpose."""
+    wfn, recipe, args = small_water
+    omegas = list(args['quadrature'].frequencies)
+    selected, extra = 'A_10_11c_A', 'A_00_10_A'
+    build = refine.refinement_model
+    seen, raise_extra = [], [False]
+
+    def crossing(sites, anchors, **kwargs):
+        node = omegas.index(kwargs['frequency_au'])
+        anchors = [np.array(a, copy=True) for a in anchors]
+        anchors[0][1, 2] = anchors[0][2, 1] = 2e-4 if node == 0 else 5e-5
+        if node and raise_extra[0]:
+            anchors[0][0, 1] = anchors[0][1, 0] = 3e-4
+        model = build(sites, anchors, **kwargs)
+        seen.append((node, model))
+        return model
+
+    monkeypatch.setattr(refine, 'refinement_model', crossing)
+
+    def check(models, declared):
+        static = set(models[0].parameter_labels)-set(models[0].unpenalized_variables)
+        assert selected in static and extra not in static
+        for node, model in enumerate(models):
+            assert model.parameter_labels == models[0].parameter_labels
+            assert set(model.parameter_labels)-set(model.unpenalized_variables) == static
+            k = model.parameter_labels.index(selected)
+            alpha = 2e-4 if node == 0 else 5e-5
+            assert model.anchors[k] == alpha
+            assert model.strengths[k] == refine.penalty_weight(weight_type=args['weight_type'],
+                weight_coefficient=args['weight_coefficient'], alpha=alpha, frequency=omegas[node],
+                rank1=1, rank2=1)
+            assert model.strengths[k] > 0.0
+            if declared:
+                j = model.parameter_labels.index(extra)
+                assert extra in model.unpenalized_variables
+                assert (model.anchors[j], model.strengths[j]) == (0.0, 0.0)
+        return static
+
+    derived = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, log=StageLog(0))
+    models = [r.model for r in derived.refinements]
+    assert len(models) == len(omegas) >= 3
+    static = check(models, False)
+    seen.clear()
+    raise_extra[0] = True
+    declared = driver.bounded_properties(wfn, recipe, **args,
+                                         declared_variables=models[0].parameter_labels+(extra,),
+                                         scratch_directory=tmp_path, log=StageLog(0))
+    explicit = [r.model for r in declared.refinements]
+    assert extra in explicit[0].parameter_labels
+    assert check(explicit, True) == static
+    assert {node for node, _ in seen} == set(range(len(omegas)))
+    assert not list(tmp_path.iterdir())

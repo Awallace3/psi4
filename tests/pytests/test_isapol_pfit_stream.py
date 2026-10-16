@@ -216,6 +216,32 @@ def test_design_admission_replay_and_benzene_pair_count():
     assert full.planned_bytes < 200_000
 
 
+
+def test_design_admits_the_72_parameter_benzene_allowance_without_a_pass():
+    """Benzene metadata at the opt-in ceiling: 12 rank-2 sites (108 channels), two COPY types of 36
+    variables over the 96 rank-1..2 channels, 2000 points. The class work bound admits it; no pass runs."""
+    from psi4.driver.procrouting import isapol_bounded as B
+    from psi4.driver.procrouting import isapol_refine as R
+    from psi4.driver.procrouting.isapol_pfit_stream import PackedDesignRows
+    frame = tuple(map(tuple, np.eye(3)))
+    sites = tuple(R.RefinementSite(f"{t}{k+1}", t, (float(k), float(t == "H"), 0.), frame, 2)
+                  for t in "CH" for k in range(6))
+    anchor = np.ones((9, 9))
+    anchor[0, :] = anchor[:, 0] = 0.  # the driver never varies the 00 entry
+    model = R.refinement_model(sites, [anchor.copy() for _ in sites], cutoff=1.e-4,
+                               provenance="benzene allowance admission test")
+    assert (model.channel_count, model.parameter_count) == (108, B.MAX_PARAMETER_ALLOWANCE)
+    used = {model.channel_offsets[s]+c for entries in model.parameter_entries for s, r, c in entries}
+    used |= {model.channel_offsets[s]+r for entries in model.parameter_entries for s, r, c in entries}
+    assert len(used) == 96
+    npoint = B.MAX_FIT_POINTS
+    source = PackedDesignRows(model, np.zeros((npoint, 108)), block_rows=B.BLOCK_ROWS)
+    rows = npoint*(npoint+1)//2
+    expected = 2*((rows+PackedDesignRows.MAX_CHUNK*npoint)*2*96*72+rows*(4*72+8))
+    assert source.planned_work == expected == 60_047_184_000
+    assert source.planned_work <= PackedDesignRows.MAX_WORK == 64_000_000_000
+    assert source.passes_used == 0
+
 def test_design_chunked_products_replay_bit_for_bit():
     from psi4.driver.procrouting import isapol_refine as R
     from psi4.driver.procrouting.isapol_pfit_stream import PackedDesignRows
