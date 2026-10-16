@@ -373,8 +373,8 @@ Only small local/refined results and diagnostics are retained in the result.
 
 ``BoundedResources`` is an explicit cumulative opt-in ceiling on planned
 numerical storage (caller-sized; the oeprop presets use the Psi4 memory
-setting), arithmetic work (at most 6 trillion units) and checkpoint I/O (at
-most 64 GiB). Array lifetimes, retained output allowances and LW
+setting), arithmetic work (at most 6 trillion units in the default tier) and
+checkpoint I/O (at most 64 GiB). Array lifetimes, retained output allowances and LW
 workspace reservations are charged together; work and I/O are not reset per
 frequency or block. These are not process-RSS or elapsed-time guarantees:
 caller-owned wavefunction/basis metadata and implementation-specific
@@ -385,6 +385,38 @@ failures and unsolved fits all raise instead of returning an accepted result.
 Each budget is checked before the stage allocates; a budget one byte or one
 work unit short of a stage's plan is refused. The refined dispersion arrays
 themselves are small and are not charged.
+
+Larger molecules can exceed the default work ceiling. ``capacity="large"`` is
+an explicit opt-in tier with a finite 100-trillion-unit work ceiling; the
+checkpoint I/O ceiling stays 64 GiB, and omitting ``capacity`` keeps the
+default ``"standard"`` tier, its ceilings and its printed form unchanged. Under
+the large tier ``max_bytes`` may not exceed the Psi4 memory setting, so set the
+memory first and pass the matching budget explicitly; a larger value is refused
+during ``Bounded input validation``, before any state, ledger, scratch or
+native work. For example, at 24 GiB:
+
+.. code-block:: python
+
+   from psi4.driver.procrouting.isapol_bounded import BoundedResources
+
+   psi4.set_memory("24 GiB")
+   # ... converged SCF ...
+   psi4.oeprop(wfn, "ATOMIC_REFINED_DISPERSION", atomic_backend="BOUNDED_DF",
+               preset="benzene",
+               resources=BoundedResources(
+                   max_bytes=int(core.get_memory()),
+                   max_work=64_000_000_000_000,
+                   max_io_bytes=64 * 1024**3,
+                   capacity="large",
+               ))
+
+The tier changes only these admission ceilings, not the calculation or its
+accuracy. Its budgets remain accounting of planned buffers and nominal work,
+not RSS, thread or wall-time caps; bound those externally. Admission is still
+per stage: each stage refuses before its own work, but there is no
+whole-calculation preflight, so a work budget that admits the early stages but
+not the complete chain is refused only when a later stage is reached, after the
+earlier stages have run. Size ``max_work`` for the complete chain.
 
 The result records state/AUX/grid/lattice identities, correction and model
 declarations, per-node response/localization diagnostics, the resource ledger

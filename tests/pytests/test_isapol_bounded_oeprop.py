@@ -98,6 +98,29 @@ def test_byte_budget_follows_psi4_memory():
         psi4.set_memory(saved, quiet=True)
 
 
+def test_default_resources_stay_standard_and_legacy():
+    saved = core.get_memory()
+    try:
+        psi4.set_memory(3*1024**3, quiet=True)
+        r = api.default_resources()
+        assert r.capacity == 'standard'
+        assert repr(r) == 'BoundedResources(max_bytes=3221225472, max_work=6000000000000, max_io_bytes=68719476736)'
+    finally:
+        psi4.set_memory(saved, quiet=True)
+
+
+def test_explicit_large_resources_pass_through_unchanged(water, monkeypatch):
+    from psi4.driver.procrouting.isapol_bounded_response import BoundedResources
+    captured = {}
+    monkeypatch.setattr(api, 'bounded_properties', lambda wfn, recipe, **kwargs: captured.update(kwargs))
+    large = BoundedResources(int(core.get_memory()), 64_000_000_000_000, 64*1024**3, capacity='large')
+    core.clean_options()
+    assert api.settings('water', {'resources': large})['resources'] is large
+    psi4.oeprop(water, 'ATOMIC_REFINED_POLARIZABILITIES', atomic_backend='BOUNDED_DF', preset='water',
+                npoints=32, radial_points=20, spherical_points=50, resources=large, log=StageLog(0))
+    assert captured['resources'] is large
+
+
 def test_auto_correction_follows_the_scf_functional(water):
     assert api.resolve_correction(water, 'AUTO', None) == ('NONE', None)
     assert api.resolve_correction(water, 'AUTO', .13) == ('FIXED_GRAC', .13)
