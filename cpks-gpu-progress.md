@@ -820,3 +820,9 @@ Rainbow (17-operation) CPU/GPU pairs vs system size: peptide, nanotube, protein8
   SAPT(HF):ind 2014.7, Dimer SCF 1238.2, Monomer B DFT 846.1, Monomer A SCF 648.4, Monomer B SCF 285.4,
   Build JK 149.7, SAPT(HF):exch 148.6, JK 147.0, SAPT(DFT):exch 145.5, D4 2.0.
   No matched GPU partner (aDZ does not fit cuEST J/K on one H200; heavy-aDZ GPU cohort is another basis).
+- **XC-plan hypothesis refuted** (14104298, H200 atl1-1-03-019-2-0, 18:16; `sessions/h200-xcplan-memory-protein157/xcmem.json`
+  in the reuse run dir): device used before → after `V.initialize()` (PBE0, 75x302): heavy-aug-cc-pVDZ 0 → 995 MiB
+  (691 MiB of it is the CUDA context, still held after finalize), aug-cc-pVDZ 691 → 995 MiB (+304 MiB).
+  Initialize took 0.94 / 0.28 s, so if the cuEST grid plan is built lazily at the first compute the probe
+  would miss it. The ~128 GiB held before the 83.7 GiB J/K request is therefore not the XC plan as built
+  by initialize; next suspect is a first cuEST J/K allocation phase (or SAD/lazy XC). Unresolved.
