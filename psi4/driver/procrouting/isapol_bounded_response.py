@@ -28,25 +28,47 @@ from .isapol_native_propagator import KernelSmoothing
 from .isapol_native_response import native_restricted_state_from_wavefunction
 
 
-@dataclass(frozen=True)
+#: Closed capacity tiers: finite (max_work, max_io_bytes) ceilings. 'large' is
+#: an explicit opt-in whose ``max_bytes`` may not exceed the Psi4 memory setting.
+RESOURCE_CAPACITIES = {
+    'standard': (6_000_000_000_000, 64*1024**3),
+    'large': (100_000_000_000_000, 64*1024**3),
+}
+
+
+@dataclass(frozen=True, repr=False)
 class BoundedResources:
     """Explicit opt-in ceilings; no individual stage can reset this allowance.
 
     ``max_bytes`` is sized by the caller (the oeprop preset uses the Psi4
-    memory setting); work and checkpoint I/O keep fixed upper bounds.
+    memory setting); work and checkpoint I/O keep the fixed upper bounds of
+    ``capacity`` (RESOURCE_CAPACITIES). These are accounting budgets, not
+    process RSS or wall-time limits.
     """
     max_bytes: int
     max_work: int
     max_io_bytes: int
+    capacity: str = 'standard'
 
     def __post_init__(self):
+        if type(self.capacity) is not str or self.capacity not in RESOURCE_CAPACITIES:
+            raise ValueError(f'capacity must be one of {tuple(RESOURCE_CAPACITIES)}')
+        work, io = RESOURCE_CAPACITIES[self.capacity]
         for name, ceiling in (("max_bytes", None),
-                              ("max_work", 6_000_000_000_000),
-                              ("max_io_bytes", 64*1024**3)):
+                              ("max_work", work),
+                              ("max_io_bytes", io)):
             value = getattr(self, name)
             if type(value) is not int or value <= 0 or (ceiling is not None and value > ceiling):
                 bound = '' if ceiling is None else f' <= {ceiling}'
                 raise ValueError(f'{name} must be a positive integer{bound}')
+
+    def __repr__(self):
+        # The default tier keeps the legacy three-field text printed as "resource ceilings".
+        text = (f'BoundedResources(max_bytes={self.max_bytes!r}, max_work={self.max_work!r}, '
+                f'max_io_bytes={self.max_io_bytes!r}')
+        if self.capacity != 'standard':
+            text += f', capacity={self.capacity!r}'
+        return text+')'
 
 
 #: Canonical response selector spellings; the reference is the default.
@@ -492,6 +514,9 @@ class BoundedResponse:
             raise TypeError('log must be a StageLog')
         if not isinstance(resources, BoundedResources):
             raise TypeError('explicit BoundedResources required')
+        # Refused before any state, ledger, scratch or native work.
+        if resources.capacity == 'large' and resources.max_bytes > int(core.get_memory()):
+            raise ValueError('large capacity numeric budget exceeds the Psi4 memory setting')
         if not isinstance(auxiliary_recipe, BasisRecipe):
             raise ValueError('explicit AUX recipe required')
         if not isinstance(quadrature, Quadrature) or not isinstance(smoothing, KernelSmoothing):
