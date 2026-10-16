@@ -291,6 +291,38 @@ SAPT energies of cpu24 equal the 16-thread cpu arm (IND -0.318822 kcal/mol).
 The cuest arm runs SCF and response on the cuEST grid, so its energies differ from the
 host grid by grid error (benzene IND 4.5e-4, ELST 1.4e-3 kcal/mol); hostxc and cpu agree.
 
+## Multi-architecture CUDA-LibXC route with cuEST 0.2.50 (user, 2026-10-16)
+
+User: "find the cuest 0.2.50 and then build the more general cuda libxc route".
+
+- **cuEST 0.2.50 SDK**: `software/cuest-0.2.50-a06e8148` (`lib/13/libcuest.so.0.2.50`, sha256
+  65c9e559…963c), already linked by the cuest-direct build 14080574 (pin 7896a4b, embers).
+  SASS sm_80/90/100/120 (PTX sm_120): A100, H100/H200 and RTX Pro Blackwell; **not L40S
+  (sm_89)**. cuEST 0.2.2.2 (env) has sm_80/86/89/90/100/120.
+- XC API 0.2.2 → 0.2.50: `exchange_correlation/` headers identical apart from comments;
+  `cuestXCNonsymmetricDensityCompute` unchanged. 0.2.50 adds direct-integral, grid-K and
+  Hessian APIs only. Same soname `libcuest.so.0` as the env's 0.2.2 → the SDK `lib/13` must
+  precede `$env/lib` (builds use RUNPATH, so LD_LIBRARY_PATH decides); `cpks_gpu_build.sh`
+  now writes `runtime.env` and checks `ldd` resolves the SDK.
+- Existing CUDA LibXC `software/libxc-7.1.2-cuda` is sm_90 only (built 2026-09-11, 26 min).
+- Scripts (`d6e30f93f2`): `devtools/cuda_libxc_build.sh` (new prefix only, verifies SASS per
+  architecture), `cpks_gpu_build.sh` overrides `CPKS_CUDA_ARCHS`, `CPKS_CUDA_LIBXC`,
+  `CPKS_CUEST_SDK`, `CPKS_BUILD_DIR`; `cpks_gpu_validate.sh` sources `runtime.env` and
+  admits a GPU whose compute capability is in the build's list.
+- Pin `d6e30f93f2` (C++ identical to `c0f23b8d9d`), remote worktree
+  `gits/psi4.saptdft-cuest-cpks-multi` (detached), run dir
+  `runs/saptdft-cuest-cpks/multi-d6e30f93f2-20261016/`, architectures `80;89;90;120`:
+
+| Job | What | QoS / account | Dependency |
+|---|---|---|---|
+| 14096518 | CUDA LibXC → `software/libxc-7.1.2-cuda-sm80-89-90-120` (build dir `software/build/libxc-7.1.2-cuda-sm80-89-90-120`), cpu-small 24 c, 6 h | embers / gts-cs207-chemx | — |
+| 14096519 | Psi4 cuda variant, cuEST 0.2.50, `build_cpks_cuda_multi` → `build-cuda/`, 3 h | embers / gts-cs207-chemx | afterok:14096518 |
+| 14096526 | A100 (16 c, 3 h): `chain.sh` = tests then probe (`PROBE_ARMS=cuest,hostxc`) → `sessions/a100-{tests,probe}-1` | embers / gts-cs207-chemx | afterok:14096519 |
+
+The H100/H200 holders 14087771 (inferno) / 14096296 (embers) still run the original sm_90,
+cuEST 0.2.2 CUDA build of `c0f23b8d9d` (`interactive/h100-chain.sh`) when one starts; the
+multi build can also be run there with `multi-…/chain.sh`.
+
 ## Resume
 
 1. `scripts/job_status.sh phoenix2 14085247 14085248 14085249 14085250`.
