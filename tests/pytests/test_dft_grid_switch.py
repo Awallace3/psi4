@@ -284,3 +284,73 @@ def test_cuest_empty_spin_density_all_components(method):
     assert quadrature["RHO_A"] > 0.0
     assert quadrature["RHO_B"] == pytest.approx(0.0, abs=1.e-14)
     assert wfn.variable("SCF DFT FINAL GRID ITERATIONS") >= 1
+
+
+# => Minimum final-grid iterations (scf_iterate(..., xc_final_min_iterations=N)) <= #
+# A Python-only policy knob: no registered option yet, so the tests reach it the way the
+# Protein157 policy runs do, by wrapping HF.iterations.
+
+import functools
+
+
+@pytest.fixture
+def final_minimum():
+    from psi4.driver.procrouting.scf_proc import scf_iterator
+    original = psi4.core.HF.iterations
+    proofs = []
+
+    def install(minimum):
+        @functools.wraps(scf_iterator.scf_iterate)
+        def iterate(wfn, *args, **kwargs):
+            switched = bool(wfn.V_potential() and wfn.V_potential().initial_grid())
+            result = scf_iterator.scf_iterate(wfn, *args, xc_final_min_iterations=minimum, **kwargs)
+            if switched:
+                proofs.append((int(wfn.variable("SCF DFT INITIAL GRID ITERATIONS")),
+                               int(wfn.variable("SCF DFT FINAL GRID ITERATIONS"))))
+            return result
+        psi4.core.HF.iterations = iterate
+        return proofs
+
+    yield install
+    psi4.core.HF.iterations = original
+
+
+@pytest.mark.parametrize("reference,geometry", [("rks", WATER), ("uks", "0 2\nH 0 0 0\nsymmetry c1")])
+def test_full_threshold_minimum_two_matches_final_grid(reference, geometry, final_minimum):
+    mol = psi4.geometry(geometry)
+    options(reference=reference)
+    expected = psi4.energy("pbe", molecule=mol)
+    proofs = final_minimum(2)
+    options(reference=reference, dft_radial_points_initial=35, dft_spherical_points_initial=110,
+            dft_grid_switch_factor=1.0)
+    assert psi4.energy("pbe", molecule=mol) == pytest.approx(expected, abs=2.e-9)
+    assert proofs and all(initial > 0 and final >= 2 for initial, final in proofs)
+
+
+@pytest.mark.parametrize("minimum", [1, 2, 3])
+def test_minimum_final_iterations_exact_when_already_converged(minimum, final_minimum):
+    """One-orbital He converges at once on each grid: the minimum alone sets the final count."""
+    mol = psi4.geometry("He 0 0 0\nsymmetry c1")
+    proofs = final_minimum(minimum)
+    options(reference="rks", e_convergence=3, d_convergence=3, dft_radial_points_initial=35,
+            dft_spherical_points_initial=110, dft_grid_switch_factor=1.0)
+    psi4.energy("pbe", molecule=mol)
+    assert proofs[-1][1] == minimum
+
+
+def test_maxiter_cannot_bypass_final_minimum(final_minimum):
+    mol = psi4.geometry("He 0 0 0\nsymmetry c1")
+    final_minimum(100)
+    options(reference="rks", maxiter=8, fail_on_maxiter=False, e_convergence=3, d_convergence=3,
+            dft_radial_points_initial=35, dft_spherical_points_initial=110, dft_grid_switch_factor=1.0)
+    with pytest.raises(psi4.driver.p4util.exceptions.SCFConvergenceError):
+        psi4.energy("pbe", molecule=mol)
+
+
+@pytest.mark.parametrize("minimum", [0, -1, 1.5, True])
+def test_invalid_final_minimum_rejected(minimum, final_minimum):
+    mol = psi4.geometry("He 0 0 0\nsymmetry c1")
+    final_minimum(minimum)
+    options(reference="rks", dft_radial_points_initial=35, dft_spherical_points_initial=110)
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match="positive integer"):
+        psi4.energy("pbe", molecule=mol)

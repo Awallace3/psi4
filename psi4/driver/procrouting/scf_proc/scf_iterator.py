@@ -560,8 +560,12 @@ def scf_initialize(self):
 
 
 @p4util.timer("SCF: Iterations")
-def scf_iterate(self, e_conv=None, d_conv=None):
+def scf_iterate(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
+    """Iterate SCF, requiring the requested final-grid evaluations after a switch.
 
+    The optional Python argument permits controlled policy experiments without
+    changing the registered C++ options. Ordinary callers retain minimum one.
+    """
     _validate_ooo_cuest(self)
 
     is_dfjk = core.get_global_option('SCF_TYPE').endswith('DF')
@@ -584,6 +588,10 @@ def scf_iterate(self, e_conv=None, d_conv=None):
     xc_switching = xc_initial
     self._xc_grid_switching = xc_switching
     self._xc_grid_ready_for_finalize = not xc_initial
+    if xc_switching and (isinstance(xc_final_min_iterations, bool) or
+                         not isinstance(xc_final_min_iterations, (int, np.integer)) or
+                         xc_final_min_iterations < 1):
+        raise ValidationError("Minimum final XC-grid iterations must be a positive integer.")
     xc_switch_factor = core.get_option("SCF", "DFT_GRID_SWITCH_FACTOR")
     if xc_switching and (not np.isfinite(xc_switch_factor) or xc_switch_factor <= 0):
         raise ValidationError("DFT_GRID_SWITCH_FACTOR must be finite and positive.")
@@ -705,7 +713,8 @@ def scf_iterate(self, e_conv=None, d_conv=None):
         with p4util.timer("HF: Form G"):
             self.form_G()
         if not xc_initial:
-            self._xc_grid_ready_for_finalize = True
+            self._xc_grid_ready_for_finalize = (
+                not xc_switching or xc_final_iterations + 1 >= xc_final_min_iterations)
 
         # Check if special J/K construction algorithms were used
         incfock_performed = hasattr(self.jk(), "do_incfock_iter") and self.jk().do_incfock_iter()
@@ -937,7 +946,9 @@ def scf_iterate(self, e_conv=None, d_conv=None):
             continue
 
         # Call any postiteration callbacks
-        if not ((self.iteration_ == 0) and self.sad_) and _converged(Ediff, Dnorm, e_conv=e_conv, d_conv=d_conv):
+        if (not ((self.iteration_ == 0) and self.sad_) and
+                (not xc_switching or xc_final_iterations >= xc_final_min_iterations) and
+                _converged(Ediff, Dnorm, e_conv=e_conv, d_conv=d_conv)):
 
             if early_screening:
 
