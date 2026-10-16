@@ -809,3 +809,14 @@ Rainbow (17-operation) CPU/GPU pairs vs system size: peptide, nanotube, protein8
   tests/timing): GPU smoke gate → gpu-{peptide,nanotube,protein83}-r1 → gpu-protein157-r1 only on a ≥120 GiB device.
 - No completed exact-match timings exist (13868775 fixed 99x590/iterative GRAC/induction NONE; 14096296
   induction NONE; aug/heavy-aug cohorts other basis).
+- **14103914 COMPLETED** 2026-10-16 15:56:22 (sacct COMPLETED 0:0, 03:12:49, inferno / gts-cs207,
+  atl1-1-01-005-31-1, MaxRSS 362 GiB; manifest `protein157-adz-cpks-full2 exit=0`, `DONE rc=0`).
+  result.json sha256 9622b565…6d63, ok, policy problems none. **energy() wall 11468.5 s**;
+  **CPKS solves 5405.1 s** (δHF CPHF 1859.2 s + PBE0 CPKS 3545.9 s; 47% of the wall).
+  nbf 2491 (A 1874, B 617), aug-cc-pvdz-jkfit naux 9182. MemDFJK only (no DiskDFJK, no cuEST).
+  Switched PBE0 SCFs: A 18 initial / 8 final, B 13 / 7; 3 HF SCFs; all converged. GRAC 0.136/0.136.
+  Components (Eh): ELST −0.0065302244, EXCH 0.0175583851, IND −0.0030743380, DISP −0.0269733672,
+  TOTAL −0.0190195444. ru_maxrss 358.3 GiB. Top timers (s): SAPT(DFT):ind 3698.3, Monomer A DFT 2137.1,
+  SAPT(HF):ind 2014.7, Dimer SCF 1238.2, Monomer B DFT 846.1, Monomer A SCF 648.4, Monomer B SCF 285.4,
+  Build JK 149.7, SAPT(HF):exch 148.6, JK 147.0, SAPT(DFT):exch 145.5, D4 2.0.
+  No matched GPU partner (aDZ does not fit cuEST J/K on one H200; heavy-aDZ GPU cohort is another basis).
