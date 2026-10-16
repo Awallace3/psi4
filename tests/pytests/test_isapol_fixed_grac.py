@@ -52,6 +52,19 @@ def test_default_policy_rejects_actual_grac(water):
         correction.validate_correction(water)
 
 
+def test_correction_options_are_closed():
+    """Exercise the registered option validator rather than its C++ spelling."""
+    key = 'ATOMIC_SCF_ASYMPTOTIC_CORRECTION'
+    with options({key: 'NONE'}):
+        assert core.get_global_option(key) == 'NONE'
+        core.set_global_option(key, 'FIXED_GRAC')
+        assert core.get_global_option(key) == 'FIXED_GRAC'
+        with pytest.raises(RuntimeError):
+            core.set_global_option(key, 'DECLARED_MULTPOLE_AC')
+        with pytest.raises(RuntimeError):
+            core.set_global_option('ATOMIC_AC_JOIN', 'TANH')
+
+
 def test_correction_admission_does_not_mutate_scf(water, monkeypatch):
     before = _scf_state_signature(water)
     def forbidden(*args, **kwargs):
@@ -180,7 +193,8 @@ def test_fixed_grac_provenance_is_owned_and_ignores_ambient_options(water, monke
     with pytest.raises(FrozenInstanceError):
         owned.shift = .1
     assert _scf_state_signature(water) == before
-    # The policy declaration is independent of ambient SCF DFT settings. (The
-    # BOUNDED_DF oeprop options join this check with their stage.)
-    with options({('SCF', 'DFT_GRAC_SHIFT'): .2}):
+    # The policy declaration is independent of ambient SCF DFT settings.
+    with options({('SCF', 'DFT_GRAC_SHIFT'): .2,
+                  'ATOMIC_SCF_ASYMPTOTIC_CORRECTION': 'FIXED_GRAC',
+                  'ATOMIC_SCF_EXPECTED_GRAC_SHIFT': SHIFT}):
         assert correction.validate_correction(water, **DECLARATION) == owned

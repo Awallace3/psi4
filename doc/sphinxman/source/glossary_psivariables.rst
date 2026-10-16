@@ -235,6 +235,40 @@ PSI Variables by Alpha
 
    The total electronic energy [E_h] and correlation energy component [E_h]
    for the averaged quadratic coupled-cluster level of theory.
+
+.. psivar:: ATOMIC REFINED DISPERSION Cn A B
+   ATOMIC REFINED DISPERSION Cn TOTAL
+   ATOM A Cn REFINED DISPERSION COEFFICIENT
+
+   Isotropic dispersion coefficients [E_h a0^n] contracted from PFIT-refined
+   ISA-Pol site polarizabilities, for each ordered site pair A B, summed over
+   all ordered site pairs, and for each site with itself; n is an even order
+   from 6 to the requested maximum and A, B are the site labels. An order
+   missing a rank pair at the declared site ranks carries the suffix
+   ``INCOMPLETE`` instead. A refined C_n is a different model from an
+   unrefined (``ATOMIC DISPERSION``) one. See :ref:`sec:isapol`.
+
+.. psivar:: ATOMIC REFINED DISPERSION SITE PAIRS
+   ATOMIC REFINED DISPERSION MAX ORDER
+   ATOMIC REFINED DISPERSION QUADRATURE NODES
+   ATOMIC REFINED DISPERSION QUADRATURE FREQUENCIES
+   ATOMIC REFINED DISPERSION CP WEIGHTS
+   ATOMIC REFINED DISPERSION ANCHOR SHIFT MAXABS
+
+   Records of the latest refined-dispersion publication: the ordered site-pair
+   count, the largest order, the Casimir-Polder node count, the nodes
+   [E_h] and weights (1, nodes) including the Jacobian and 1/(2 pi), and the
+   largest PFIT shift from the anchors. Every ``ATOMIC REFINED DISPERSION`` and
+   ``ATOM A Cn REFINED DISPERSION COEFFICIENT`` name is written by an
+   ``ATOMIC_REFINED_DISPERSION`` :py:func:`~psi4.driver.oeprop` request, and
+   also by a direct ``isapol_bounded.bounded_properties`` or
+   ``isapol_refine.refined_isotropic_dispersion`` call that publishes to a
+   wavefunction. Publication is not transactional. The oeprop route removes
+   them when an ``ATOMIC_*`` request starts and when it raises an
+   ``Exception`` (not on an interrupt); a direct call that fails before
+   publication keeps the latest publication, and one failing during or after
+   it can leave a partial or its own set. See :ref:`sec:isapol`.
+
 .. psivar:: BRUECKNER CONVERGED
 
    Value 1 (0) when the Brueckner orbitals have (have not) converged.
