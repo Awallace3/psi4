@@ -8,9 +8,12 @@ parent branch, report or PR.
 ## Status (2026-10-15)
 
 - Implementation, tests and Phoenix payloads are committed and pushed.
-- Local CPU build/tests pass. **No GPU evidence yet**: Phoenix jobs are queued
-  (inferno since 2026-10-15). Correctness on the cuEST grid is **not claimed** until
-  the GPU jobs below pass.
+- **Host-LibXC route: GPU-verified on A100** (interactive job 14087772, dev build of
+  `c0f23b8d9d`): 116 tests pass, 4 fail (pre-existing cuEST wK DF gap, unrelated);
+  18/18 contract cases clean; 13–27x speedup of complete CPKS solves over all-CPU CPKS
+  at 16 threads for 384–660 bf (see "A100 interactive results").
+- **CUDA-LibXC route: no GPU evidence yet** (needs H100/H200; holder 14087771 pending).
+- Full-node (24-core) CPU baseline: job 14091690 pending.
 
 ## Commits
 
@@ -197,6 +200,57 @@ Holders (`runs/saptdft-cuest-cpks/interactive/hold*.sbatch`, `sleep` for 2 h; wo
 `srun --jobid=<id> --overlap`): 14087771 (H100|H200, 8 c — max 8:1), 14087772 (A100, 16 c).
 Dev worktree `gits/psi4.saptdft-cuest-cpks-dev` (detached, separate from the pinned one),
 dev build job 14087810 (cpu-small inferno) → `runs/saptdft-cuest-cpks/interactive/build-c0f23b8d9d/`.
+
+## A100 interactive results (job 14087772, 2026-10-15)
+
+Node atl1-1-01-002-12-0, NVIDIA A100 80GB PCIe, 16 CPU threads, account gts-cs207 /
+QoS inferno. Dev worktree `gits/psi4.saptdft-cuest-cpks-dev` at `c0f23b8d9d`, host-LibXC
+build `build_cpks_host`, core sha256 `5092d24c651ac05f272daa9897c233c6169e5222679b50ba850bc22fcfe13d4b`.
+Outputs: `runs/saptdft-cuest-cpks/interactive/sessions/{a100-tests-1,a100-probe-1}/`
+(`meta.txt`, `log.txt`, `probe/{contract,timing,sapt}.json`).
+
+**Tests** (`a100-tests-1`): 116 passed, 4 failed — only
+`test_cuest_cpscf_fixed_orbitals[cam-b3lyp|lrc-wpbe x RKS|UKS]`, the known cuEST wK DF
+fit gap (5e-6–1.2e-5; upstream tolerates it at 5e-4), not XC response.
+The SAPT CPKS induction test and `test_vx_cuest_grid_survives_option_changes` pass.
+
+**Contract** (`probe contract`, water, 6 functionals x singlet/triplet/UKS, every V on the
+cuEST grid): factored-vs-dense, transpose, sign, antisymmetric, L=R and
+occupied-vs-dense reference identities <= 3.3e-16; finite difference of the native-convention
+potential 7e-11–8.5e-10 on a 4e-2–1.3e-1 scale; host-grid vs cuEST-grid Vx 2.7e-7–1.5e-6
+(grid difference); a negative reference density gives finite output. The SDK nonsymmetric
+density normalization/sign contract holds on device for the host-LibXC route.
+
+**Timing** (`probe timing`, s; Hx8 = one `cphf_Hx` with 8 vectors; solve = 3 dipole RHS to
+1e-8; arms: cuest = cuEST J/K + cuEST-grid XC response, hostxc = cuEST J/K + native XC,
+cpu = DF J/K + native XC; all 16 threads on the same node):
+
+| System (nbf) | XC | Hx8 cuest / hostxc / cpu | solve cuest / hostxc / cpu | solve speedup vs cpu |
+|---|---|---|---|---|
+| benzene dimer cc-pVDZ (228) | PBE | 0.43 / 1.58 / 1.77 | 2.22 / 8.39 / 9.29 | 4.2x |
+| benzene dimer cc-pVDZ (228) | PBE0 | 0.43 / 1.60 / 2.40 | 2.38 / 8.74 / 12.27 | 5.2x |
+| benzene dimer aug-cc-pVDZ (384) | PBE | 0.65 / 7.68 / 8.19 | 3.33 / 40.09 / 44.45 | 13.3x |
+| benzene dimer aug-cc-pVDZ (384) | PBE0 | 0.71 / 7.74 / 10.70 | 3.57 / 39.70 / 52.76 | 14.8x |
+| coronene aug-cc-pVDZ (660) | PBE | 1.50 / 31.0 / 29.5 | 9.29 / 214.4 / 176.1 | 19.0x |
+| coronene aug-cc-pVDZ (660) | PBE0 | 1.94 / 37.6 / 55.1 | 11.58 / 201.1 / 309.2 | 26.7x |
+
+Water (24–92 bf, RKS and UKS cation): no speedup (GPU 0.15–0.71 s vs CPU 0.11–1.12 s);
+launch/transfer overhead dominates. Cold first factored call vs warm: water 19/12 ms,
+benzene cc-pVDZ 90/85 ms. Per-action cuEST stage split (coronene PBE, Hx8): response
+density 0.61 s, AO integration 0.58 s, reference density 0.07 s, derivatives 0.03 s,
+contraction 0.04 s — the per-vector SDK density/potential calls dominate. All solves
+converged (residuals 1e-9–8e-9) in every arm.
+
+**SAPT(DFT)-D4(I) CPKS** (`probe sapt`, PBE0, GRAC 0.136, `_sapt_cpscf_solve` wall time):
+
+| System | CPKS s cuest / hostxc / cpu | total s cuest / cpu | IND kcal/mol cuest / cpu |
+|---|---|---|---|
+| water dimer cc-pVDZ | 0.29 / 0.41 / 0.40 | 3.7 / 2.6 | -1.660964 / -1.660953 |
+| water dimer aug-cc-pVDZ | 0.49 / 0.81 / 0.84 | 2.3 / 3.5 | -1.810282 / -1.810262 |
+| benzene dimer aug-cc-pVDZ | 3.25 / 34.4 / 49.9 (15.3x) | 11.4 / 93.0 | -0.319269 / -0.318822 |
+
+The cuest arm runs SCF and response on the cuEST grid, so its energies differ from the
+host grid by grid error (benzene IND 4.5e-4, ELST 1.4e-3 kcal/mol); hostxc and cpu agree.
 
 ## Resume
 
