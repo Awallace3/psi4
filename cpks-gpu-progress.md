@@ -576,7 +576,8 @@ DFT_GRID_SWITCH_FACTOR=1 and **at least 2 final-grid iterations**.
   converged on the final grid with 9–11 initial / 5 final iterations, GRAC 0.13141/0.13152.
   `protein157-631gss-full2` started 11:24. The sampler CSV fills in 4 KB stdio blocks (~30 rows).
 - **Result (11:28:47, exit 0, ok, policy problems none).** energy() wall **256.9 s** vs CPU reference
-  13868775 10358.6 s (8 threads, fixed 99×590) = **40.3×**. nbf 1786 (A 1344, B 442), naux 7265.
+  13868775 10358.6 s (8 threads, fixed 99×590) = **40.3× whole-call ratio** (induction NONE: this is
+  not CPKS evidence; it also mixes grid, backend and host differences). nbf 1786 (A 1344, B 442), naux 7265.
   Backend: cuESTJK + GPU SAD only (no MemDFJK/DiskDFJK/DirectJK). Options changed vs reference: only
   USE_CUEST, CUEST_SAD, final grid 99×590 → 75×302, initial 35×194, factor 1.
   Components (Eh) and minus reference: ELST −0.0076109256 (+5.95e-7), EXCH 0.0211400802 (−1.51e-6),
@@ -655,6 +656,13 @@ coupled CPKS SAPT(DFT)-D4(I), CPU DF J/K + native XC + CPU SAD (no cuEST), PBE0,
   systems.py sha256 identical), then at 11:59:11 cancelled it while PENDING (never started) on the
   parent's instruction not to resubmit automatically. `-r2/` holds only job.sbatch, geometries and
   JOBS.txt. Awaiting a recovery decision.
+- **Inferno rerun, user-approved (≤ $2.12, one job): 14103914**, submitted 2026-10-16 12:37:37,
+  `--qos=inferno --account=gts-cs207` (selector re-run just before sbatch: gts-cs207 $141.66
+  available, worst case $2.12 = 24 cpu × weight 410 × 480 min, SPLIT gts-cs207=1), cpu-large,
+  localNVMe, 24 cpus, 740G, tmp 600G, 8 h. Run root `…-20261016-inferno-r3/`; job.sbatch differs
+  from 14099871's only in account, QoS and paths; same pins dce9e8ae71 / c0f23b8d9d, systems.py
+  sha256 72668390…; fresh process, full timing, no resume. `--test-only` route cpu-large (est.
+  start 21:45; its ID 14103913 is not a job). Effective prolog QoS to be read at start.
 
 ## Resume
 
