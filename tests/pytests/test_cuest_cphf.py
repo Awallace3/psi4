@@ -454,8 +454,12 @@ def test_vx_algebra(method, kind, grid):
 def test_vx_empty_beta_spin(method, grid):
     """UKS with no beta electrons: zero-rank occupied factors and responses.
 
-    Finite differences of V_beta are ill-conditioned where rho_beta = 0 for a GGA (the
-    error grows as the step shrinks), so the GGA beta block is only checked for finiteness.
+    V_beta is not finite-difference checkable at rho_beta = 0 (zeta = 1). For a GGA the
+    error grows as the step shrinks. For LDA (VWN) LibXC's own vrho_b is ill-conditioned
+    there: its finite difference along rho_a misses its analytic v2rho2_ab by 1% (LibXC
+    7.0.0, rho_a = 0.1) to 3% (7.1.2, rho_a = 1e-6), while v2rho2_ab itself agrees between
+    the versions to 3e-5. The beta block is therefore checked for finiteness and, on the
+    cuEST grid, against the native host-grid V_beta at quadrature level.
     """
     psi4.set_num_threads(2)
     mol = psi4.geometry("""
@@ -478,12 +482,20 @@ def test_vx_empty_beta_spin(method, grid):
     expected = [(p - m) / (2 * eps) for p, m in zip(plus, minus)]
     _set_reference(V, Cs)
     Dx = [u @ c.T + c @ u.T for c, u in zip(Cs, Us)]
-    nspin = 2 if method == "svwn" else 1
+    native_beta = None
+    if grid == "cuest":
+        host = _potential(wfn, "host")
+        _set_reference(host, Cs)
+        native_beta = _apply(host, "uks", Dx)[1]
     for got in (_apply(V, "uks", Dx),
                 _apply_factored(V, "uks", [np.hstack([u, c]) for c, u in zip(Cs, Us)],
                                 [np.hstack([c, u]) for c, u in zip(Cs, Us)])):
-        _assert_close(expected[:nspin], got[:nspin], atol=1.e-7)
+        _assert_close(expected[:1], got[:1], atol=1.e-7)
         assert np.all(np.isfinite(got[1]))
+        if native_beta is not None:
+            print(f"\n{method}: beta block, cuEST grid vs host grid: "
+                  f"{np.abs(native_beta - got[1]).max():.3e} (scale {np.abs(native_beta).max():.3e})")
+            _assert_close([native_beta], [got[1]], atol=1.e-4)
     # A beta-only response density on an alpha-only reference.
     beta = np.outer(wfn.Ca_subset("AO", "OCC").np[:, 0], wfn.Ca_subset("AO", "VIR").np[:, 0])
     out = _apply(V, "uks", [np.zeros_like(beta), beta])
