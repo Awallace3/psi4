@@ -809,7 +809,7 @@ def test_vx_cuest_saptdft_cpks_induction(tmp_path):
         timers = psi4.core.get_timer_dict()
         assert any("RV: Form Vx (cuEST)" in k for k in timers) == cuest_xc
         values[cuest_xc] = {k: psi4.variable(k) for k in (
-            "SAPT IND20,R ENERGY", "SAPT IND ENERGY", "SAPT ELST ENERGY", "SAPT TOTAL ENERGY")}
+            "SAPT IND ENERGY", "SAPT ELST ENERGY", "SAPT EXCH ENERGY", "SAPT TOTAL ENERGY")}
         psi4.core.close_outfile()
     for key in values[False]:
         print(f"\n{key}: host grid {values[False][key]:.10f} cuEST grid {values[True][key]:.10f}")

@@ -421,7 +421,7 @@ def sapt():
                          "cpks_solve_s": timed.elapsed,
                          "vx_timers": timer_totals(("RV: Form Vx", "cuEST Vx:")),
                          "values": {k: psi4.variable(k) for k in (
-                             "SAPT ELST ENERGY", "SAPT EXCH ENERGY", "SAPT IND20,R ENERGY",
+                             "SAPT ELST ENERGY", "SAPT EXCH ENERGY",
                              "SAPT IND ENERGY", "SAPT TOTAL ENERGY")}}
                 print(json.dumps(entry), flush=True)
                 results.append(entry)
