@@ -9,10 +9,16 @@ PYTHONPATH:
 contract  SDK normalization/signed-density contract on the cuEST grid, central
           differences of the grid's own compute_V, the CUDA-vs-host LibXC derivative
           routes, and the nonfinite-reference behavior. Writes contract.json.
-timing    Cold setup, repeated actions and complete CPKS solves, cuEST-grid XC vs
-          host-grid XC (both with cuEST J/K). Writes timing.json.
-sapt      SAPT(DFT)-D4(I) with CPKS induction, CUEST_XC true vs false. Writes sapt.json.
+timing    Cold setup, repeated actions and complete CPKS solves. Writes timing.json.
+sapt      SAPT(DFT)-D4(I) with CPKS induction. Writes sapt.json.
 quick     Restrict timing and sapt to the smallest system.
+
+timing and sapt run each arm in PROBE_ARMS (comma separated, default all):
+  cuest   cuEST J/K + XC response on the cuEST grid (this work)
+  hostxc  cuEST J/K + native XC response on the host grid
+  cpu     CPU DF J/K + native XC response: the all-CPU CPHF/CPKS baseline
+PROBE_SYSTEMS (comma separated names) restricts the systems. Threads follow
+OMP_NUM_THREADS (Psi4 itself would otherwise run single-threaded).
 
 Numbers only; tests/pytests/test_cuest_cphf.py holds the pass/fail gates.
 PROBE_CPU_SMOKE=1 runs the same logic with every potential on the host grid (no GPU),
@@ -26,7 +32,11 @@ import time
 from pathlib import Path
 
 import numpy as np
-import psi4
+
+# Exit on a crash instead of parking the process in Einsums' debugger-wait loop.
+sys.argv.append("--einsums:no-attach-debugger")
+import psi4  # noqa: E402
+sys.argv.pop()
 
 if os.environ.get("EXPECTED_PSI4_PACKAGE"):
     found = Path(psi4.__file__).resolve().parent
@@ -34,6 +44,11 @@ if os.environ.get("EXPECTED_PSI4_PACKAGE"):
 OUT = Path(sys.argv[1]).resolve()
 SECTIONS = set(sys.argv[2:]) - {"quick"} or {"contract", "timing", "sapt"}
 QUICK = "quick" in sys.argv[2:]
+ARMS = os.environ.get("PROBE_ARMS", "cuest,hostxc,cpu").split(",")
+SYSTEMS = set(filter(None, os.environ.get("PROBE_SYSTEMS", "").split(",")))
+ARM_OPTIONS = {"cuest": (True, True), "hostxc": (True, False), "cpu": (False, False)}
+THREADS = int(os.environ.get("OMP_NUM_THREADS", "1"))
+psi4.set_num_threads(THREADS)
 OUT.mkdir(parents=True, exist_ok=True)
 psi4.core.set_output_file(str(OUT / "probe.out"), False)
 psi4.set_memory("24 GB")
@@ -117,9 +132,11 @@ def base_options(**extra):
     psi4.set_options(options)
 
 
-def scf(geometry, method, unrestricted, gpu_xc, **extra):
+def scf(geometry, method, unrestricted, gpu_xc, arm=None, **extra):
     psi4.core.clean()
-    base_options(reference="uhf" if unrestricted else "rhf", use_cuest=GPU, cuest_xc=gpu_xc and GPU, **extra)
+    use_cuest, cuest_xc = ARM_OPTIONS[arm] if arm else (True, gpu_xc)
+    base_options(reference="uhf" if unrestricted else "rhf", use_cuest=use_cuest and GPU,
+                 cuest_xc=cuest_xc and GPU, **extra)
     mol = psi4.geometry(geometry)
     t0 = time.perf_counter()
     wfn = psi4.energy(method, molecule=mol, return_wfn=True)[1]
@@ -282,6 +299,29 @@ def contract():
 # => Timing <= #
 
 
+def coronene():
+    """Planar coronene C24H12 (C-C 1.42 A, C-H 1.08 A) from the graphene lattice."""
+    a = 1.42
+    centers = [np.zeros(2)] + [np.sqrt(3) * a * np.array([np.cos(t), np.sin(t)])
+                               for t in np.pi / 6 + np.arange(6) * np.pi / 3]
+    carbons = []
+    for c in centers:
+        for t in np.arange(6) * np.pi / 3:
+            p = c + a * np.array([np.cos(t), np.sin(t)])
+            if all(np.linalg.norm(p - q) > 0.1 for q in carbons):
+                carbons.append(p)
+    assert len(carbons) == 24, len(carbons)
+    lines = ["0 1"] + [f"C {x:.6f} {y:.6f} 0.0" for x, y in carbons]
+    for p in carbons:
+        neighbors = [q for q in carbons if 0.1 < np.linalg.norm(p - q) < 1.6]
+        if len(neighbors) == 2:
+            out = 2 * p - sum(neighbors)
+            h = p + 1.08 * out / np.linalg.norm(out)
+            lines.append(f"H {h[0]:.6f} {h[1]:.6f} 0.0")
+    assert len(lines) == 37, len(lines)
+    return "\n".join(lines + ["symmetry c1", "no_reorient", "no_com"]) + "\n"
+
+
 def rotations(wfn, unrestricted, count, seed=29):
     rng = np.random.default_rng(seed)
     ret = []
@@ -357,21 +397,25 @@ def timing():
     systems = [("water", WATER.format(charge=0, mult=1), "cc-pvdz"),
                ("water", WATER.format(charge=0, mult=1), "aug-cc-pvtz"),
                ("benzene_dimer", BENZENE_DIMER, "cc-pvdz"),
-               ("benzene_dimer", BENZENE_DIMER, "aug-cc-pvdz")]
+               ("benzene_dimer", BENZENE_DIMER, "aug-cc-pvdz"),
+               ("coronene", coronene(), "aug-cc-pvdz")]
     if QUICK:
         systems = systems[:1]
+    if SYSTEMS:
+        systems = [s for s in systems if s[0] in SYSTEMS]
     results = []
     for name, geometry, basis in systems:
         for method in ("pbe", "pbe0"):
             for unrestricted in (False,) if name != "water" else (False, True):
                 mol = WATER.format(charge=1, mult=2) if unrestricted else geometry
-                for gpu_xc in (True, False):
+                for arm in ARMS:
                     psi4.core.clean_timers()
-                    wfn, scf_s = scf(mol, method, unrestricted, gpu_xc, basis=basis, df_basis_scf=basis + "-jkfit")
+                    wfn, scf_s = scf(mol, method, unrestricted, None, arm=arm, basis=basis,
+                                     df_basis_scf=basis + "-jkfit")
                     entry = {"system": name, "basis": basis, "nbf": wfn.basisset().nbf(), "method": method,
-                             "reference": "UKS" if unrestricted else "RKS",
-                             "xc_grid": "cuest" if gpu_xc else "host", "scf_s": scf_s,
-                             **libxc_route_from_scf()}
+                             "reference": "UKS" if unrestricted else "RKS", "arm": arm, "threads": THREADS,
+                             "xc_on_cuest_grid": wfn.V_potential().uses_cuest_xc(), "scf_s": scf_s,
+                             "jk": wfn.jk().name(), **libxc_route_from_scf()}
                     entry["actions"] = [time_actions(wfn, unrestricted, n, 5) for n in (1, 8)]
                     entry["solve"] = time_solve(wfn, unrestricted)
                     print(json.dumps(entry), flush=True)
@@ -383,25 +427,37 @@ def timing():
 
 
 def sapt():
-    import psi4.driver.procrouting.sapt.sapt_jk_terms_ein as terms
+    import importlib
+    modules = [importlib.import_module("psi4.driver.procrouting.sapt." + name)
+               for name in ("sapt_jk_terms_ein", "sapt_jk_terms")]
 
     results = []
-    original = terms._sapt_cpscf_solve
+    originals = [m._sapt_cpscf_solve for m in modules]
 
-    def timed(*args, **kwargs):
-        t0 = time.perf_counter()
-        try:
-            return original(*args, **kwargs)
-        finally:
-            timed.elapsed += time.perf_counter() - t0
+    def wrap(original):
+        def timed(*args, **kwargs):
+            t0 = time.perf_counter()
+            try:
+                return original(*args, **kwargs)
+            finally:
+                timer.elapsed += time.perf_counter() - t0
+        return timed
 
-    terms._sapt_cpscf_solve = timed
+    class timer:
+        elapsed = 0.0
+
+    for m, original in zip(modules, originals):
+        m._sapt_cpscf_solve = wrap(original)
     try:
         systems = (("water_dimer", WATER_DIMER, "cc-pvdz"),
                    ("water_dimer", WATER_DIMER, "aug-cc-pvdz"),
                    ("benzene_dimer", BENZENE_DIMER, "aug-cc-pvdz"))
-        for name, geometry, basis in systems[:1] if QUICK else systems:
-            for cuest_xc in (False, True):
+        systems = systems[:1] if QUICK else systems
+        if SYSTEMS:
+            systems = [s for s in systems if s[0] in SYSTEMS]
+        for name, geometry, basis in systems:
+            for arm in ARMS:
+                use_cuest, cuest_xc = ARM_OPTIONS[arm]
                 psi4.core.clean()
                 psi4.core.clean_options()
                 psi4.core.clean_timers()
@@ -410,15 +466,16 @@ def sapt():
                     "basis": basis, "scf_type": "df", "SAPT_DFT_FUNCTIONAL": "pbe0",
                     "SAPT_DFT_GRAC_SHIFT_A": 0.136, "SAPT_DFT_GRAC_SHIFT_B": 0.136,
                     "SAPT_DFT_INDUCTION_TYPE": "CPKS", "SAPT_DFT_DO_DHF": True,
-                    "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL", "USE_CUEST": GPU, "CUEST_XC": cuest_xc and GPU,
+                    "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL", "USE_CUEST": use_cuest and GPU,
+                    "CUEST_XC": cuest_xc and GPU,
                     "CUEST_MIXED_PRECISION": False,
                 })
-                timed.elapsed = 0.0
+                timer.elapsed = 0.0
                 t0 = time.perf_counter()
                 psi4.energy("sapt(dft)-d4(i)")
                 total = time.perf_counter() - t0
-                entry = {"system": name, "basis": basis, "cuest_xc": cuest_xc, "total_s": total,
-                         "cpks_solve_s": timed.elapsed,
+                entry = {"system": name, "basis": basis, "arm": arm, "threads": THREADS, "total_s": total,
+                         "cpks_solve_s": timer.elapsed,
                          "vx_timers": timer_totals(("RV: Form Vx", "cuEST Vx:")),
                          "values": {k: psi4.variable(k) for k in (
                              "SAPT ELST ENERGY", "SAPT EXCH ENERGY",
@@ -427,7 +484,8 @@ def sapt():
                 results.append(entry)
                 (OUT / "sapt.json").write_text(json.dumps(results, indent=2) + "\n")
     finally:
-        terms._sapt_cpscf_solve = original
+        for m, original in zip(modules, originals):
+            m._sapt_cpscf_solve = original
 
 
 if __name__ == "__main__":
