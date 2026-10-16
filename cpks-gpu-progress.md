@@ -588,7 +588,7 @@ DFT_GRID_SWITCH_FACTOR=1 and **at least 2 final-grid iterations**.
   monomer A 22/10, B 17/7; 3 HF SCFs 18/16/13 iterations (no XC grid).
   Top timers (s): GRAC Shift Monomer A 123.1 (the 80-iteration initial-grid cation SCF), Monomer A DFT
   37.3, Dimer SCF 26.5, Monomer B DFT 20.6, Monomer A SCF 16.9, Monomer B SCF 10.3, GRAC B 6.7.
-  GPU sampler: 294 samples 11:23:53–11:28:46, peak memory.used 78,649 MiB of 143,771 MiB.
+  GPU sampler: 294 samples 11:23:53–11:28:46, peak memory.used 78,649 MiB (76.81 GiB) of 143,771 MiB (140.4 GiB).
   Raw: `sessions/protein157-631gss-full2/{result.json,psi4.out}`, `sessions/gpu-samples.csv`.
 
 ## CPKS section published (user, 2026-10-16 09:21)
@@ -638,6 +638,23 @@ coupled CPKS SAPT(DFT)-D4(I), CPU DF J/K + native XC + CPU SAD (no cuEST), PBE0,
   `scratch_left`). Standalone polarizability timing not included (kept the baseline safe).
 - Local checks: `--cpu-smoke`-style run of the runner on peptide cc-pVDZ (8 threads): ok, 2
   switched SCFs (12 initial / 7 final), GRAC 0.136/0.136, MemDFJK, CPKS 4.8 + 20.4 s.
+- **14099871 PREEMPTED** 2026-10-16 11:55:27 after 02:09:36 (prolog/epilog: "CANCELLED … DUE TO
+  PREEMPTION"; `.batch` CANCELLED 0:15; Requeue=1 but Restarts=0, not requeued). Not OOM or
+  convergence: MaxRSS 352.3 GiB of 740 G, MaxDiskWrite 2.81 GB. Peptide smoke ok (72.0 s).
+  Protein157: no result.json, no manifest exit line. `psi4.out` (279 KB) last written 11:03 and
+  ends in the first PBE0 SCF's "Integral Setup" (SAPT(DFT): DFT Monomer A, bulk shift 0.136),
+  after the whole δHF segment (dimer + monomer HF SCFs, HF elst/exch/coupled induction,
+  δHF induction −3.343 mEh). Timeline: start 09:47:24 → δHF done ≈ 11:03 (~76 min) → 52 min with
+  no output in the monomer-A DFT setup/SCF → preempted. So the 3–4.5 h estimate was optimistic.
+- Recovery state: nothing to resume. Scratch was `mktemp -d /tmp/p157cpu.XXXXXX` on the node's
+  job-private /tmp, which is purged at job end (see memory: embers preemption kills /tmp); the
+  run writes no orbitals/180 files to persistent storage, and SAPT(DFT) has no restart path.
+  Resuming from intermediates would also break the single fresh-process `energy()` wall that the
+  benchmark protocol requires; segment timers could be stitched, but that is not the protocol.
+- 11:58 I resubmitted identically as **14102905** (run root `…-20261016-r2/`, same pins,
+  systems.py sha256 identical), then at 11:59:11 cancelled it while PENDING (never started) on the
+  parent's instruction not to resubmit automatically. `-r2/` holds only job.sbatch, geometries and
+  JOBS.txt. Awaiting a recovery decision.
 
 ## Resume
 
