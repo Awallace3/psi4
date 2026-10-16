@@ -14,6 +14,17 @@
 - SLURM status: FAILED 1:0 after 1h45m, despite the usable partial panel.
   No paid retry has been submitted.
 
+The pinned upstream source explains the immediate condition: `_cholesky_eri`
+chooses an AO-pair budget from **20% of available driver GPU memory**, divided
+by `8 * naux_sorted`, excluding free blocks held by the CuPy pool. General
+contractions select whole angular-momentum-group batching, and the largest
+group must fit that budget. This assertion is a batching-capacity check, not
+evidence of mismatched grids or basis dimensions and not a reported CUDA OOM.
+Which part of the budget dominates still needs an instrumented GPU reproducer:
+unused allocator-pool reservations, live Coulomb/range-separated tensors, or
+the strict grouping/boundary constraint. No installed-package/shared-environment
+patch has been made.
+
 ## What changed the memory conclusion
 
 For Protein83/PBE/aug-cc-pVTZ, GPU4PySCF's sampled whole-device peak changes
