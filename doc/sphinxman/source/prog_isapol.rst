@@ -90,6 +90,139 @@ Distributed moments (Q)
      rank and auxiliary identity. ``anchor_legs(C)`` is the only supported
      contraction, ``C @ Q.T``.
 
+Experimental ISA-A partition
+   ``psi4.driver.procrouting.isapol_native_partition`` declares an ISA-A
+   (iterated stockholder, CamCASP ``ISA-A`` with Fit-3 exponential tails)
+   partition entirely through frozen recipes: ``SiteRecipe`` (primitive
+   co-centred AtomAux and s-only shape bases, zero-based shell map, explicit
+   tail cutoff in bohr), ``GridRecipe`` (the native ``IsaGrid`` with tabulated
+   Bragg--Slater radii, all sites on the full molecular grid), ``ControllerRecipe``
+   (every controller and fit setting, no defaults except ``tail_fit_policy``) and ``PartitionRecipe``
+   (track, molecular density-fit AUX, atomic initialization, Drho profile).
+   ``native_partition(wfn, recipe, caller_converged=True)`` adapts the MAIN
+   basis (``adapt_main``), fits the density with the charge-constrained
+   Drho-C fit (``IsaAuxCoulomb.fit_drho_c``, penalty 1000, no rescaling), and
+   runs the native controller. Nonconvergence returns an inspectable result
+   with no Q. The result holds read-only copies of the grid, weights and
+   density samples; native objects own copies of their inputs. This direct
+   factory trusts ``caller_converged`` and does not check the SCF convergence
+   seal; ``isa_moments`` and the bounded and oeprop routes require the seal.
+
+   The Drho-C system is very ill-conditioned (condition estimate about 6e15
+   for the water recipe), so a plain LU solution depends on the LAPACK path:
+   on identical water operands, 1 and 8 threads gave coefficients 1.1e-3 apart
+   (relative). ``fit_drho_c`` therefore takes ``max_refinement_iterations``
+   (default 0: plain DGESV, unchanged), and ``native_partition`` uses 10
+   (``DRHO_REFINEMENT_ITERATIONS``). Each iteration computes the residual
+   b - A x exactly with an integer long accumulator, rounds it once to
+   binary64, and solves for the correction on the existing LU factors. A, b,
+   the penalty, pivoting and DGESV are unchanged.
+
+   * Refinement stops when the last correction is at most 2u max|x|. That
+     bounds the last step only. It is not a forward-error guarantee; no general
+     theory covers this conditioning.
+   * It fails closed, with no fallback to the plain LU coefficients. Stagnation
+     (a step larger than half the previous one), the iteration cap, nonfinite or
+     overflowing values, and a calling thread that is not in round-to-nearest
+     with gradual underflow all refuse, and the ISA stage then fails. Another
+     recipe may therefore refuse where plain LU returned coefficients.
+   * ``IsaDrhoCResult`` reports ``refinement_iterations`` and
+     ``refinement_displacement`` (how far refinement moved the LU solution; not
+     an error estimate).
+   * The residual's integer arithmetic does not depend on threads, BLAS,
+     rounding mode or FMA. The correction solves do, and the FP-environment
+     check covers only the calling thread, not vendor LAPACK worker threads.
+   * ``isa_resource_plan`` charges the refinement explicitly: the solver's
+     buffers once (four d-vectors and the accumulator, one vector of margin),
+     and the work of every iteration up to the cap of 10, counted in
+     source-level scalar operations (256 per residual product term, 16384 per
+     row). These are operation counts, not a time bound.
+
+   ISA results changed with this refinement. Up to stage08 commit
+   ``ee95fd9717`` they matched the unpublished extraction candidate bitwise;
+   they now differ from it and from CamCASP's default (plain LU) Drho-C fit.
+   CamCASP's ``LU ITERATIONS`` option is similar in kind, but its residual
+   precision was not checked, so no parity with it is claimed.
+
+   Native classes (``libisapol/isa_fit``, ``isa_shape``, ``isa_sweep``,
+   ``isa_controller``), bound in ``psi4.core``:
+
+   * ``IsaFixedDensity``: an owned molecular-AUX density expansion.
+     ``IsaShapeMap``: an exact shape-shell to AtomAux-shell map.
+     ``IsaAFitProvider``/``IsaAFitSamples``/``isa_a_fit_step``: one frozen
+     ISA-A update, with an LU (DGESV) solve. ``isa_overlap_change`` is the
+     W/RHO overlap-angle diagnostic.
+   * ``IsaGaussianShape``/``IsaExponentialTail``: the effective s-Gaussian
+     shape and its Func-1/Fit-3 tail (log-slope matching plus exterior-charge
+     conservation, not amplitude continuity). The interior is never clipped
+     under an active tail; the no-tail branch uses ``max(w, 0)``.
+   * ``IsaASweep``: one synchronous sweep over all sites.
+     ``IsaAController``: ordinary A/W convergence, with no DIIS or symmetry,
+     and CamCASP's single postconvergence tail refit. Downstream stages sample
+     ``final_tails``; ``state.tails`` lags one shape update. An optional
+     immutable preparation cache is capped at 192 MiB, and the cacheless path
+     gives the same trajectory.
+   * Tail fit schedule (``ControllerRecipe.tail_fit_policy``, native
+     ``IsaAControllerOptions.tail_fit_policy``). The default, ``'always'``, is
+     the published behaviour: the in-loop tails are refitted every step.
+     ``'when_enabled'`` is opt-in. It fits a tail only when the tail fix is on
+     in the state *entering* the step. Otherwise it keeps the last stored
+     tails, which may still be undefined, and the ``tail_fits`` of such a step
+     report ``status='skipped_tail_fix_off'``. A tail is used only when it is
+     both applied and defined. The postconvergence refit is unchanged. This
+     reproduces CamCASP's Tail-Fix-gated schedule, but computes it entirely in
+     Psi4; CamCASP is neither called nor read. It has been compared with
+     CamCASP only for the water ISA iteration (49 steps, as CamCASP's run,
+     against 53 for ``'always'``). Grid convergence and downstream C8/C10
+     agreement are not established. The policy is recorded in the partition
+     provenance. Adding the field changes identity labels even for the
+     default: ``repr(ControllerRecipe)`` and so ``repr(PartitionRecipe)`` now
+     include ``tail_fit_policy='always'``, which changes the
+     ``recipe_sha256`` diagnostic of every ISA ``DistributedMoments`` result,
+     and the default ``native_partition`` provenance gains ``tail fit policy
+     always``. These are labels, not numerical results; the ``'always'``
+     branch is the previous computation. Do not compare a ``recipe_sha256``
+     or provenance string across versions as a numerical check.
+
+   ``isapol_distribution.isa_moments`` runs this iteration
+   (``build_multipoles=False``), samples the frozen final shapes on the
+   caller's integration grid and integrates the stockholder ratio against the
+   response AUX with ``IsaPartitionedMultipoles``. It admits
+   ``isa_resource_plan`` on the shared ledger before any native work. The plan
+   is conservative and not an RSS cap. It records ``status='experimental'``.
+   The bounded orchestrator calls it for ``distribution='isa'``.
+
+   The only tested recipe is the water regression recipe in
+   ``tests/pytests/isapol_water_recipe.py`` (PBE0/aug-cc-pVTZ, aug-cc-pVTZ-RI
+   Cartesian AUX, 100x200 partition grid). Its measured limits, on one host
+   (AMD Zen2, oneMKL), serial unless stated:
+
+   * The ISA iteration converges in 50 sweeps (largest change 9.0e-10), and
+     the partition grid integrates the fitted density to 8.3e-6 electrons. The
+     Drho-C condition number is a LAPACK estimate on the same metric bytes:
+     6.4e15 with ``MKL_CBWR`` unset, 5.9e15 under ``COMPATIBLE``.
+   * Refinement converges in 5 to 6 iterations and moves the plain LU
+     coefficients by 2.6e-4 to 2.0e-3 relative. On the frozen water operands
+     it agrees with a 100-digit solution to 3e-24 relative (2e-23 at 8
+     threads). In one process the refined coefficients agree within 7e-18
+     between 1 and 8 threads. Between ``MKL_CBWR`` modes they still differ by
+     2e-6: each mode's SCF gives operands that differ in the last bits, and
+     the conditioning amplifies that.
+   * The 100x200 grid is refused as a Q grid: its Q charge rows err by 2.0e-4
+     and LW refuses the postcondition. The 200x590 and 300x974 Q grids pass
+     (charge-row errors 1.3e-7 and 4.4e-9), and their site C6 differ by up to
+     2.5e-4 relative. Each has its own regression.
+   * The stored regression values predate refinement: they are 8-thread
+     plain-LU values. Refined H-H C6 lies about 1e-6 below them. That is 0.53
+     of the ``rtol=2e-6`` band with ``MKL_CBWR`` unset and 0.43 under
+     ``COMPATIBLE`` (both grids; at most 0.56 at 8 threads). C6 now moves 5e-8
+     between 1 and 8 threads.
+   * The static parameter at index 4 (``H1_10_11c_A``, a small off-diagonal H
+     polarizability that does not enter C6) sits 4e-8 to 4.1e-7 from its
+     stored value across these paths. The shift arises downstream of Q, so
+     refinement does not remove it. It has an empirical absolute band of 1e-6;
+     the other parameters keep ``rtol=2e-6``, ``atol=2e-7``.
+
 LW localization, multipole transforms and frequency grid
    These consume supplied tensors only. No response, partition or external
    CamCASP/ORIENT program is involved. LW is the Lillestolen--Wheatley

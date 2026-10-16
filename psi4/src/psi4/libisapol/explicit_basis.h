@@ -60,6 +60,9 @@ class IsaExplicitBasis {
                                             const std::vector<int>& sites) const;
    private:
     friend class IsaAuxCoulomb;
+    friend class IsaShapeMap;
+    friend class IsaAFitProvider;
+    friend class IsaGaussianShape;
     static const std::vector<std::array<int,3>>& cartesian_powers(int l);
     /// Stored functions per shell: (l+1)(l+2)/2 Cartesian, 2l+1 spherical.
     static int shell_size(int l, IsaBasisRepresentation representation);

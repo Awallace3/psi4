@@ -450,6 +450,214 @@ def test_cpp_overlap_scope_and_integrability():
         cpp_basis(huge).overlap()
 
 
+def test_cpp_fixed_density_screening_signs_and_ownership():
+    from psi4 import core
+    b = primitive(0)
+    b['centres'] = np.array([[0., 0., 0.], [1., 0., 0.]])
+    b['shells'] = np.array([[1, 0, 1, 1], [2, 0, 1, 1]])
+    p = np.array([[0., 0., 0.], [1., 2., 3.]])
+    mol = cpp_basis(b, core.IsaBasisRole.MolecularAux)
+    coefficients = [-2., 3.]
+    rho = core.IsaFixedDensity(mol, coefficients)
+    coefficients[0] = 100
+    full = mol.evaluate(p.tolist()).np.copy()
+    np.testing.assert_allclose(rho.evaluate(p.tolist(), [0, 1]), full @ [-2., 3.])
+    assert rho.evaluate(p.tolist(), [0])[0] < 0  # no positivity clipping
+    np.testing.assert_allclose(rho.evaluate(p.tolist(), [1]), 3*full[:, 1])
+    np.testing.assert_array_equal(rho.evaluate(p.tolist(), []), [0, 0])
+    with pytest.raises(ValueError, match='molecular AUX'):
+        core.IsaFixedDensity(cpp_basis(b), [-2., 3.])
+    for bad in ([0, 0], [-1], [2]):
+        with pytest.raises(ValueError, match='[Nn]eighbour'):
+            rho.evaluate(p.tolist(), bad)
+    for bad in ([1.], [1., np.nan]):
+        with pytest.raises(ValueError, match='coefficient'):
+            core.IsaFixedDensity(mol, bad)
+
+
+def mapped_test_bases():
+    """s shells deliberately follow non-s blocks; shape is an explicit permutation."""
+    from psi4 import core
+    def shell(l, alpha):
+        s = core.IsaGaussianShell()
+        s.l, s.exponents, s.coefficients = l, [alpha], [2.]
+        return s
+    shells = [shell(1, .7), shell(0, .4), shell(2, .7), shell(0, 1.3)]
+    atomic = core.IsaExplicitBasis(core.IsaBasisRole.AtomAux, core.IsaBasisRepresentation.Cartesian,
+                                   [[0, 0, 0]], shells)
+    shape = core.IsaExplicitBasis(core.IsaBasisRole.Shape, core.IsaBasisRepresentation.Spherical,
+                                  [[0, 0, 0]], [shells[3], shells[1]])
+    return atomic, shape, shells
+
+
+def test_cpp_shape_map_permutation_subset_and_ownership():
+    from psi4 import core
+    atomic, shape, shells = mapped_test_bases()
+    indices = [3, 1]
+    mapping = core.IsaShapeMap(atomic, shape, indices)
+    assert mapping.function_indices == [10, 3]  # not shell indices
+    indices[0] = 0
+    shells[3].coefficients = [99.]
+    assert mapping.project(list(range(11))) == [10., 3.]
+    returned = mapping.function_indices
+    returned[0] = 0
+    assert mapping.function_indices == [10, 3]
+    one = core.IsaExplicitBasis(core.IsaBasisRole.Shape, core.IsaBasisRepresentation.Spherical,
+                                [[0, 0, 0]], [shells[1]])
+    assert core.IsaShapeMap(atomic, one, [1]).project(list(range(11))) == [3.]
+    with pytest.raises(ValueError, match='dimension'):
+        mapping.project([1.])
+    values = list(range(11))
+    values[0] = np.nan  # validate even unselected non-s coefficients
+    with pytest.raises(ValueError, match='finite'):
+        mapping.project(values)
+
+
+@pytest.mark.parametrize('indices,match', [([3], 'dimension'), ([-1, 1], 'range'),
+    ([4, 1], 'range'), ([3, 3], 'Duplicate'), ([0, 1], 's shell'), ([1, 3], 'matching')])
+def test_cpp_shape_map_rejects_bad_indices(indices, match):
+    from psi4 import core
+    atomic, shape, _ = mapped_test_bases()
+    with pytest.raises(ValueError, match=match):
+        core.IsaShapeMap(atomic, shape, indices)
+
+
+def test_cpp_shape_map_rejects_role_and_descriptor_mismatch():
+    from psi4 import core
+    atomic, shape, shells = mapped_test_bases()
+    with pytest.raises(ValueError, match='roles'):
+        core.IsaShapeMap(shape, atomic, [3, 1])
+    for centre, coefficient in [([1, 0, 0], 2.), ([0, 0, 0], 2.00000000001)]:
+        shells[1].coefficients = [coefficient]
+        mismatch = core.IsaExplicitBasis(core.IsaBasisRole.Shape, core.IsaBasisRepresentation.Spherical,
+                                         [centre], [shells[1]])
+        with pytest.raises(ValueError, match='matching'):
+            core.IsaShapeMap(atomic, mismatch, [1])
+
+
+def fit_provider_case():
+    from psi4 import core
+    b = primitive(1)
+    # p followed by s checks noncontiguous metadata/normalization roles.
+    b['shells'] = np.array([[1, 1, 1, 1], [1, 0, 1, 1]])
+    b['centres'] = np.array([[1., -2., 3.]])
+    b['nfunction'] = 4
+    atomic = cpp_basis(b)
+    mol = cpp_basis(b, core.IsaBasisRole.MolecularAux)
+    density = core.IsaFixedDensity(mol, [.1, -.3, .2, 2.])
+    samples = core.IsaAFitSamples()
+    samples.points = (np.random.default_rng(711).normal(size=(23, 3))+b['centres'][0]).tolist()
+    samples.weights = [.05]*23
+    samples.shape = [-.2]+[.7]*22  # signed supplied shape is not re-evaluated/clipped
+    samples.shape_sum = [1., 0.]+[1.3]*21
+    samples.previous = [.2, -.1, .3, -.4]
+    samples.density_sites = [0]
+    return b, atomic, density, samples
+
+
+def test_cpp_one_gaussian_provider_fit_and_shape_projection():
+    """Analytic provider oracle retained from the historical checkpoint replay.
+
+    One unnormalized exp(-r^2), sampled at the origin: overlap=(pi/2)^1.5,
+    density=2, RHS=2 and raw shape coefficient=2/overlap. No capture adapter.
+    """
+    from psi4 import core
+    b = primitive(0, exponent=1.)
+    b['contractions'][:] = 1.
+    atomic = cpp_basis(b)
+    density = core.IsaFixedDensity(cpp_basis(b, core.IsaBasisRole.MolecularAux), [2.])
+    shape = cpp_basis(b, core.IsaBasisRole.Shape)
+    samples = core.IsaAFitSamples()
+    samples.points, samples.weights = [[0., 0., 0.]], [1.]
+    samples.shape, samples.shape_sum, samples.previous = [1.], [1.], [.5]
+    samples.density_sites = [0]
+    provider = core.IsaAFitProvider(atomic, density)
+    data = provider.assemble(samples)
+    overlap = (np.pi/2.)**1.5
+    np.testing.assert_allclose(data.overlap.np, [[overlap]], rtol=0, atol=2e-15)
+    np.testing.assert_array_equal(data.basis_values.np, [[1.]])
+    np.testing.assert_array_equal(data.density, [2.])
+    np.testing.assert_array_equal(data.radius_squared, [0.])
+    assert data.exponents == [1.] and data.angular_momenta == [0]
+    result = provider.fit(samples)
+    for field, expected in (("metric", overlap), ("rhs", 2.), ("coefficients", 2./overlap)):
+        np.testing.assert_allclose(getattr(result, field).np, [[expected]], rtol=0, atol=2e-15)
+    mapping = core.IsaShapeMap(atomic, shape, [0])
+    np.testing.assert_allclose(mapping.project(result.coefficients.np[:, 0]), [2./overlap], rtol=0, atol=2e-15)
+    assert result.population == 2.
+    assert result.relative_residual < 1e-15
+
+
+def test_cpp_fit_provider_assembly_and_direct_solve():
+    from psi4 import core
+    b, atomic, density, samples = fit_provider_case()
+    provider = core.IsaAFitProvider(atomic, density)
+    options = core.IsaAFitOptions()
+    options.w_eps, options.damping = .17, .1
+    options.positive_lambda, options.positive_max_alpha = .001, 1.
+    data = provider.assemble(samples, options)
+    expected_values = basis_tool.evaluate_basis(b, samples.points)
+    np.testing.assert_allclose(data.basis_values.np, expected_values, atol=1e-15)
+    np.testing.assert_allclose(data.density, expected_values @ [.1, -.3, .2, 2.], atol=1e-15)
+    np.testing.assert_allclose(data.overlap.np, basis_tool.atomic_overlap(b, .17), atol=3e-15)
+    np.testing.assert_allclose(data.radius_squared, np.sum((np.asarray(samples.points)-b['centres'][0])**2, axis=1))
+    assert data.angular_momenta == [1, 1, 1, 0]
+    assert data.exponents == [.7]*4
+    assert data.shape == samples.shape and data.shape_sum == samples.shape_sum
+    direct = provider.fit(samples, options)
+    frozen = core.isa_a_fit_step(data, options)
+    for field in ('metric', 'rhs', 'coefficients'):
+        np.testing.assert_array_equal(getattr(direct, field).np, getattr(frozen, field).np)
+    assert direct.excluded_points == 1
+    assert direct.relative_residual < 1e-14
+    np.testing.assert_allclose(direct.coefficients.np, np.linalg.solve(direct.metric.np, direct.rhs.np), atol=2e-15)
+    # Returned mutable data never aliases either samples or the provider.
+    data.basis_values.np[:] = 99
+    data.shape = [99]*23
+    np.testing.assert_allclose(provider.assemble(samples, options).basis_values.np, expected_values, atol=1e-15)
+    samples.density_sites = []
+    assert provider.assemble(samples, options).density == [0.]*23
+
+
+@pytest.mark.parametrize('field,value,match', [
+    ('points', [], 'nonempty'), ('weights', [], 'dimension'), ('previous', [1.], 'dimension'),
+    ('shape', [np.nan]*23, 'finite'), ('shape_sum', [np.inf]*23, 'finite'),
+    ('points', [[np.nan, 0, 0]]*23, 'finite'), ('points', [[1e308, 0, 0]]*23, 'squared'),
+    ('density_sites', [-1], 'range'), ('density_sites', [0, 0], 'Duplicate')])
+def test_cpp_fit_provider_rejects_samples(field, value, match):
+    from psi4 import core
+    _, atomic, density, samples = fit_provider_case()
+    setattr(samples, field, value)
+    with pytest.raises(ValueError, match=match):
+        core.IsaAFitProvider(atomic, density).assemble(samples)
+
+
+@pytest.mark.parametrize('field', ['w_eps', 'damping', 'positive_lambda', 'positive_max_alpha', 'density_cutoff'])
+def test_cpp_fit_provider_rejects_options(field):
+    from psi4 import core
+    _, atomic, density, samples = fit_provider_case()
+    o = core.IsaAFitOptions()
+    setattr(o, field, -1.)
+    with pytest.raises(ValueError, match='options'):
+        core.IsaAFitProvider(atomic, density).assemble(samples, o)
+
+
+def test_cpp_fit_provider_rejects_contracts():
+    from psi4 import core
+    b, _, density, _ = fit_provider_case()
+    with pytest.raises(ValueError, match='AtomAux'):
+        core.IsaAFitProvider(cpp_basis(b, core.IsaBasisRole.MolecularAux), density)
+    b['exponents'] = np.array([.7, .4])
+    b['contractions'] = np.ones((2, 2))
+    b['shells'] = np.array([[1, 1, 1, 2]])
+    with pytest.raises(ValueError, match='primitive'):
+        core.IsaAFitProvider(cpp_basis(b), density)
+    b['centres'] = np.array([[0., 0., 0.], [1., 0., 0.]])
+    b['shells'] = np.array([[1, 1, 1, 1], [2, 0, 2, 2]])
+    with pytest.raises(ValueError, match='co-centred'):
+        core.IsaAFitProvider(cpp_basis(b), density)
+
+
 def test_recipe_module_loads_no_other_isapol_driver_module():
     """In a fresh process the recipe module builds a basis on its own."""
     import subprocess

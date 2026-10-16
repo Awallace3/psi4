@@ -169,7 +169,7 @@ def test_explicit_options_and_keyword_precedence():
     core.clean_options()
 
 
-@pytest.mark.parametrize('keyword', ['npointz', 'partition_recipe', 'partition_grid'])
+@pytest.mark.parametrize('keyword', ['npointz', 'partition_grd'])
 def test_bad_keywords_and_preset_fail(keyword):
     with pytest.raises(TypeError, match=keyword):
         api.settings('water', {keyword: 32})
@@ -316,6 +316,78 @@ def test_live_oeprop_publishes_latest_result_and_clears_it_on_refusal(sealed_wat
     with pytest.raises(ValueError, match='No native'):
         psi4.atomic_property_result(wfn)
     assert not _owned(wfn) and wfn.variable('UNRELATED SENTINEL') == 5.
+
+
+def _isa_route(wfn, tmp_path, resources, messages):
+    from psi4.driver.procrouting.isapol_native import Quadrature
+    from isapol_water_recipe import native_water_recipe
+    recipe = native_water_recipe(wfn.molecule())
+    options = core.IsaGridOptions()
+    options.radial_points, options.spherical_points = 20, 50
+    native_grid = core.IsaGrid(wfn.molecule().clone(), options)
+    grid = np.column_stack((native_grid.x(), native_grid.y(), native_grid.z(), native_grid.w()))
+    return recipe, grid, dict(atomic_backend='BOUNDED_DF', preset='water', distribution='isa',
+        partition_recipe=recipe, partition_grid=grid, auxiliary_recipe=recipe.auxiliary, response_grid=grid,
+        npoints=32, rank_limit=1, hydrogen_rank_limit=1, localization_rank_limit=1, weight_type=4,
+        weight_coefficient=1e-5, max_order=8, quadrature=Quadrature.from_casimir(core.CasimirGrid(2, .5)),
+        resources=resources, scratch_directory=tmp_path, log=StageLog(1, writer=messages.append))
+
+
+@pytest.mark.parametrize('capacity', ['large', 'standard'])
+def test_large_capacity_memory_rule_refuses_at_input_validation(sealed_water, tmp_path, monkeypatch, capacity):
+    """Large: refused while validating inputs, before state, ledger, scratch or ISA. Standard: unchanged."""
+    from psi4.driver.procrouting import isapol_bounded_response as backend
+    from psi4.driver.procrouting import isapol_native_partition as isa
+    from psi4.driver.procrouting.isapol_bounded_response import BoundedResources
+    class StateReached(Exception):
+        pass
+    def state(*args, **kwargs):
+        raise StateReached
+    monkeypatch.setattr(backend, 'native_restricted_state_from_wavefunction', state)
+    monkeypatch.setattr(isa, 'native_partition', lambda *a, **k: pytest.fail('ISA ran'))
+    saved, messages = core.get_memory(), []
+    try:
+        psi4.set_memory(1024**3, quiet=True)
+        resources = BoundedResources(2*1024**3, 6_000_000_000_000, 64*1024**3, capacity)
+        _, _, route = _isa_route(sealed_water, tmp_path, resources, messages)
+        if capacity == 'large':
+            with pytest.raises(ValueError, match='large capacity numeric budget exceeds the Psi4 memory setting'):
+                psi4.oeprop(sealed_water, 'ATOMIC_REFINED_DISPERSION', **route)
+        else:
+            with pytest.raises(StateReached):  # explicit standard bytes keep no memory ceiling
+                psi4.oeprop(sealed_water, 'ATOMIC_REFINED_DISPERSION', **route)
+    finally:
+        psi4.set_memory(saved, quiet=True)
+    text = ''.join(messages)
+    assert 'Stage FAILED: Bounded input validation' in text
+    assert 'Native ISA partition' not in text and 'resource ceilings' not in text
+    assert not list(tmp_path.iterdir())
+    with pytest.raises(ValueError, match='No native'):
+        psi4.atomic_property_result(sealed_water)
+
+
+def test_large_capacity_scarce_work_refuses_at_isa_admission(sealed_water, tmp_path, monkeypatch):
+    """Per-stage admission: the large tier refuses ISA before native ISA work; it is no whole-chain preflight."""
+    from psi4.driver.procrouting import isapol_distribution as dist
+    from psi4.driver.procrouting import isapol_native_partition as isa
+    from psi4.driver.procrouting.isapol_bounded_response import BoundedResources
+    monkeypatch.setattr(isa, 'native_partition', lambda *a, **k: pytest.fail('ISA ran before its admission'))
+    saved, messages = core.get_memory(), []
+    try:
+        psi4.set_memory(4*1024**3, quiet=True)
+        recipe, grid, _ = _isa_route(sealed_water, tmp_path, None, [])
+        _, work = dist.isa_resource_plan(sealed_water, recipe, recipe.auxiliary, grid, 4)
+        resources = BoundedResources(int(core.get_memory()), work-1, 64*1024**3, capacity='large')
+        _, _, route = _isa_route(sealed_water, tmp_path, resources, messages)
+        with pytest.raises(ValueError, match='^ISA iteration and response-AUX Q: cumulative work resource limit$'):
+            psi4.oeprop(sealed_water, 'ATOMIC_REFINED_DISPERSION', **route)
+    finally:
+        psi4.set_memory(saved, quiet=True)
+    text = ''.join(messages)
+    assert "capacity='large'" in text  # the declared tier is printed with the ceilings
+    assert 'Stage FAILED: Native ISA partition and response-AUX moments' in text
+    assert 'Native plain-DF factors' not in text
+    assert not list(tmp_path.iterdir())
 
 
 def test_preset_preparation_failure_is_closed_failed(water):
