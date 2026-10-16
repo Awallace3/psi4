@@ -667,7 +667,7 @@ void evaluate_device_kernel(const std::shared_ptr<SuperFunctional>& base, VxSpin
 
 /// What the derivative kernel depends on in the functional: its semilocal components.
 /// (GRAC is never applied at deriv = 2; exact exchange does not enter the XC kernel.)
-std::string kernel_fingerprint(const SuperFunctional& functional) {
+std::string kernel_fingerprint(SuperFunctional& functional) {
     std::ostringstream key;
     key.precision(17);
     key << static_cast<const void*>(&functional);
