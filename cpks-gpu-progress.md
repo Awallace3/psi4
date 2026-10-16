@@ -759,3 +759,19 @@ peptide aDZ (356) 1k 0.40 s / 10k 3.74 s; nanotube aDZ (742) 1k 1.81 s / 10k 17.
 ~nbf²). cuEST already has `cuestPotentialCompute` for arbitrary point charges (psi4 uses it for nuclei,
 mintshelper.cc:4621) and `cuestPotentialDerivativeCompute` (charge gradients). Diffuse-Gaussian
 external densities use 3-index ERIs, not covered by that call.
+
+## cuEST external point charges (user request, 2026-10-16)
+
+`2ae4a9ad05`: with USE_CUEST, `ExternalPotential::computePotentialMatrix` builds the point-charge
+matrix via `MintsHelper::form_V_cuest_charges` (cuestPotentialCompute with -Q, same convention
+as the nuclei; `form_V_cuest` now calls it). Diffuse Gaussian charges still run on the CPU
+and print once per potential: "Warning: USE_CUEST computes external point charges on the GPU,
+but diffuse (Gaussian) external charges are only supported on the CPU presently". Gradients on
+charges/atoms (`computePotentialGradients`) remain CPU. Test `tests/pytests/test_cuest_extern.py`
+(matrix CPU-vs-cuEST for 1/4/500 charges at 1e-10*max|V|; HF SCF energies with points and
+points+diffuse at 1e-6 and the warning's presence). Timing `devtools/extern_potential_timing.py` (`b9032fdf25`).
+Local CPU build: test_extern.py + test_cuest_extern.py 142 passed, 5 skipped (cuEST-only).
+Phoenix: worktree `gits/psi4.saptdft-cuest-cpks-extern` (b9032fdf25), run dir
+`runs/saptdft-cuest-cpks/extern-b9032fdf25-20261016/` (build.sh, run.sh, chain.sh, JOBS.txt);
+`chain.sh` builds, waits for the xcmem probe, then runs extern tests, test_cuest.py + test_cuest_sad.py
+(nuclear-V refactor regression) and the timing on holder 14104298 (auto-launched when it starts).
