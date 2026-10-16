@@ -259,6 +259,10 @@ def setup_fisapt_object(
         for sdft_key, fisapt_key in localized_matrix_keys.items():
             matrix_cache[fisapt_key] = to_matrix(cache[sdft_key])
 
+        for key in ["Elst_AB", "Exch_AB", "IndAB_AB", "IndBA_AB", "Disp_AB"]:
+            if key in cache:
+                matrix_cache[key] = to_matrix(cache[key])
+
         # Update Uaocc matrices based on frozen core slicing
         if nfrozen_A > 0:
             matrix_cache["Uaocc0A"] = core.Matrix.from_array(
