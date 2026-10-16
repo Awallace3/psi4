@@ -332,6 +332,8 @@ Results (2026-10-16):
   every architecture. Worktree `gits/psi4.saptdft-cuest-cpks-multi2` (detached at
   `f2d8ec7a93`), run dir `runs/saptdft-cuest-cpks/multi-f2d8ec7a93-20261016/`, build job
   **14096965** (embers, gts-cs207-chemx, reusing the 14096518 LibXC).
+- 14096965 COMPLETED 5:53: BUILD_OK `f2d8ec7a93 cuda`, core sha256 ec656ab1…d1d3, core SASS
+  sm_80/89/90/120 (verified by the new check), math check passes.
 - `interactive/h100-both.sh`: on the first H100/H200 holder, the `f2d8ec7a93` multi build
   chain (waits for its BUILD_OK), then the original sm_90 / cuEST 0.2.2 chain.
 
