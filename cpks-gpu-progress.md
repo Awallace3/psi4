@@ -568,6 +568,13 @@ DFT_GRID_SWITCH_FACTOR=1 and **at least 2 final-grid iterations**.
   sampler (1000 ms; timestamp, GPU UUID, memory used/total, utilization) to `sessions/gpu-samples.csv`,
   stopped on exit; markers in `sessions/gpu-samples.meta.txt` (coordinator request). Policy unchanged.
   Status checks every 300 s.
+- 11:23:53 launched, once: 14096296 RUNNING on `atl1-1-02-012-2-0` (NVIDIA H200, driver 615.71.09,
+  GPU-b8adb295-ee2b-7955-a1a9-e5fc6272ab4d; Xeon Platinum 8562Y+, 8 threads), single step
+  14096296.0, auto-launcher exited after launching. Core sha256 15363319…ed07d (58d061979b),
+  iterator 0cb954e4…, reference 2e2a2921…, libcuest 65c9e559…, libxc b8ba0110….
+  Smoke (water dimer) ok in 5.87 s: cuESTJK + GPU SAD, no CPU/DIRECT J/K, 6 switched SCFs all
+  converged on the final grid with 9–11 initial / 5 final iterations, GRAC 0.13141/0.13152.
+  `protein157-631gss-full2` started 11:24. The sampler CSV fills in 4 KB stdio blocks (~30 rows).
 
 ## CPKS section published (user, 2026-10-16 09:21)
 
