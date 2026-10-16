@@ -50,6 +50,7 @@ SCIENCE = {
     "basis": "6-31+g**", "scf_type": "df", "SCF_SUBTYPE": "AUTO", "reference": "rhf",
     "DF_BASIS_SCF": "def2-universal-jkfit", "DF_BASIS_MP2": "aug-cc-pvdz-ri", "PUREAM": True,
     "D_CONVERGENCE": 8, "E_CONVERGENCE": 9, "MAXITER": 150, "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
+    "SAD_PRINT": 1,  # prints "SAD J/K backend: <JK>", the GPU-SAD proof
     "SAPT_DFT_FUNCTIONAL": "pbe0", "SAPT_DFT_DO_DHF": True, "SAPT_DFT_USE_EINSUMS": True,
     "SAPT_DFT_GRAC_SHIFT_A": 0.136, "SAPT_DFT_GRAC_SHIFT_B": 0.136,
     "SAPT_DFT_INDUCTION_TYPE": "CPKS", "CUEST_MIXED_PRECISION": False,

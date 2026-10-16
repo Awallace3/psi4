@@ -25,6 +25,8 @@ def _water():
         H 1 0.96
         H 1 0.96 2 104.5
         symmetry c1
+        no_com
+        no_reorient
     """)
     psi4.set_options({"basis": "aug-cc-pvdz", "df_basis_scf": "aug-cc-pvdz-jkfit", "scf_type": "df",
                       "e_convergence": 1.e-10, "d_convergence": 1.e-9,
