@@ -499,6 +499,34 @@ PBE0, fixed 75 x 302 unless noted.
   timing switched 25x110, SAPT), 14098244 nanotube (timing, SAPT), 14098245 protein83 (timing).
   14098238–40 were cancelled seconds after start: an escaping bug left `PROBE_MEMORY` empty.
 
+GPU results (H200 14087771, CUDA LibXC, all exit 0 unless noted):
+
+| System, basis (nbf) | SCF s | Hx1 / Hx8 s | CPKS solve s | SAPT total / CPKS s |
+|---|---|---|---|---|
+| peptide aDZ (356) | 2.42 | 0.051 / 0.258 | 2.00 | 9.7 / 1.78 |
+| peptide aDZ, host-LibXC derivatives | 2.60 | 0.107 / 0.335 | 3.05 | — |
+| peptide aDZ, switched 25x110 | 2.47 (15 initial it.) | 0.051 / 0.257 | 1.97 | — |
+| nanotube aDZ (742) | 4.58 | 0.196 / 1.116 | 8.06 | 24.7 / 7.09 |
+| nanotube aDZ, switched 25x110 | 4.52 (14 initial it.) | 0.193 / 1.109 | 8.07 | — |
+| protein83 aDZ (1293) | 14.0 | 0.677 / 4.453 | 35.2 | 79.0 / 30.9 |
+| protein157 aDZ (2491) | **OOM in SCF setup** | — | — | — |
+| protein157 heavy-aDZ (2171) | 62.0 | 3.60 / 25.96 | 210.1 | 348.4 / 142.0 |
+
+protein157 aug-cc-pVDZ (`gpu-timing-protein157`, 110 GB, and `-mem50`, 50 GB): "Failed to
+allocate device buffer: requested 83.748 GiB; device has 12.185 GiB free of 139.844 GiB"
+during cuEST JK setup, before any response call; the request does not follow PROBE_MEMORY.
+An SCF/JK device-memory limit, outside this task. heavy-aug-cc-pVDZ (user request) runs:
+`gpu-{timing,sapt}-protein157-haDZ`. Protein157 heavy-aDZ solve: 22 Vx calls 53.2 s of 210 s
+(AO integration 24.3, response density 20.9, reference density 6.9, derivatives 0.54 s) —
+J/K dominates the solve. SAPT values (Eh): ELST -0.0064245, EXCH 0.0175524, IND -0.0030426,
+TOTAL -0.0188881. No CPU baseline for protein157 (hours on 24 cores; not submitted).
+
+CPU (24c Gold 6226) so far: peptide SCF 14.67 s, Hx1/Hx8 1.080/4.251 s, solve 36.14 s,
+SAPT total 68.6 s / CPKS 34.41 s; switched 25x110 SCF 17.17 s (slower), solve 36.37 s.
+**Peptide speedups: CPKS solve 18.1x, SAPT CPKS 19.3x, SAPT total 7.1x; host-LibXC
+derivatives route 11.8x.** Polarizability switched vs fixed: CPU ≤ 1e-6, GPU ≤ 1e-5 au
+(nanotube), i.e. relative ≤ 3e-8. Nanotube/protein83 CPU: jobs 14098244/14098245 running.
+
 ## Resume
 
 1. `scripts/job_status.sh phoenix2 14085247 14085248 14085249 14085250`.
