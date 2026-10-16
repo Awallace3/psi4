@@ -319,6 +319,22 @@ User: "find the cuest 0.2.50 and then build the more general cuda libxc route".
 | 14096519 | Psi4 cuda variant, cuEST 0.2.50, `build_cpks_cuda_multi` → `build-cuda/`, 3 h | embers / gts-cs207-chemx | afterok:14096518 |
 | 14096526 | A100 (16 c, 3 h): `chain.sh` = tests then probe (`PROBE_ARMS=cuest,hostxc`) → `sessions/a100-{tests,probe}-1` | embers / gts-cs207-chemx | afterok:14096519 |
 
+Results (2026-10-16):
+- 14096518 COMPLETED 4:31 (build 252 s, 24 c): `libxc-7.1.2-cuda-sm80-89-90-120`, SASS
+  sm_80/89/90/120 verified, `libxc.so.15` sha256 b8ba0110…cc98.
+- 14096519 COMPLETED 5:50: BUILD_OK `d6e30f93f2 cuda`, core sha256 cfd8adb2…ba40, `ldd`
+  resolves cuEST 0.2.50 (`lib/13`) and the new LibXC; math check passes. **But core.so
+  holds sm_80 SASS only**: the superbuild forwards `CMAKE_CUDA_ARCHITECTURES` to
+  psi4-core without a LIST_SEPARATOR, so `80;89;90;120` arrived as `80` (inner CMakeCache).
+  Valid for A100 (14096526 left queued); would fail on H100/H200/L40S.
+- Fix `f2d8ec7a93`: for a list, `cpks_gpu_build.sh` passes `-gencode=arch=compute_N,code=sm_N`
+  in `CMAKE_CUDA_FLAGS` with `CMAKE_CUDA_ARCHITECTURES=OFF`, and checks `core.so` SASS for
+  every architecture. Worktree `gits/psi4.saptdft-cuest-cpks-multi2` (detached at
+  `f2d8ec7a93`), run dir `runs/saptdft-cuest-cpks/multi-f2d8ec7a93-20261016/`, build job
+  **14096965** (embers, gts-cs207-chemx, reusing the 14096518 LibXC).
+- `interactive/h100-both.sh`: on the first H100/H200 holder, the `f2d8ec7a93` multi build
+  chain (waits for its BUILD_OK), then the original sm_90 / cuEST 0.2.2 chain.
+
 The H100/H200 holders 14087771 (inferno) / 14096296 (embers) still run the original sm_90,
 cuEST 0.2.2 CUDA build of `c0f23b8d9d` (`interactive/h100-chain.sh`) when one starts; the
 multi build can also be run there with `multi-…/chain.sh`.
