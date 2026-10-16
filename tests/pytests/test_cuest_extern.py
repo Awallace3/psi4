@@ -20,10 +20,11 @@ _WARNING = "diffuse (Gaussian)"
 
 def _water():
     psi4.set_num_threads(2)
+    # Cartesian: the driver refuses external potentials on Z-matrix molecules
     mol = psi4.geometry("""
-        O
-        H 1 0.96
-        H 1 0.96 2 104.5
+        O  0.000000  0.000000  0.117790
+        H  0.000000  0.758940 -0.471161
+        H  0.000000 -0.758940 -0.471161
         symmetry c1
         no_com
         no_reorient
