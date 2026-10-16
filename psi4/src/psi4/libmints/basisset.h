@@ -409,6 +409,10 @@ class PSI_API BasisSet {
     void compute_phi(double *phi_ao, double x, double y, double z);
     // Remove normalization from an s-function and negate.
     void negative_gaussian_normalization_to_coefficients();
+    /// Treat the user-provided (original) coefficients as complete effective contractions:
+    /// normalized, ERD and Libint2 coefficients all take them unchanged, and no normalization
+    /// is embedded in the Libint2 shells. Construction-time normalization is discarded.
+    void use_original_coefficients_as_effective();
     
    private:
     /// Helper functions for frozen core to reduce LOC

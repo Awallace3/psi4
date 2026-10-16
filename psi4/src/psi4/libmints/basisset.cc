@@ -1276,6 +1276,11 @@ void BasisSet::negative_gaussian_normalization_to_coefficients() {
     // expansion
     uoriginal_coefficients_[i] *= -std::pow(uexponents_[i]/M_PI,1.5);
   }
+  use_original_coefficients_as_effective();
+}
+
+void BasisSet::use_original_coefficients_as_effective() {
+  // Copy in place: the GaussianShell objects point into these arrays.
   ucoefficients_ = uoriginal_coefficients_;
   uerd_coefficients_ = uoriginal_coefficients_;
 

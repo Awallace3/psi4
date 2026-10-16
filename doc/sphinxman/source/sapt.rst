@@ -599,6 +599,150 @@ This helper does not choose an XC kernel, perform frequency quadrature,
 construct constrained fitting legs, or produce atomic polarizabilities.
 The SAPT driver continues to use its gridless Slater/VWN kernel.
 
+Declared-basis FDDS path
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+A second constructor prepares one monomer in a declared auxiliary space with
+explicit resources. SAPT does not use it, and the constructor above is
+unchanged::
+
+    need = core.FDDS_Monomer.requirement(primary, aux, nocc, nvir, naux_declared,
+                                         is_hybrid, "OUT_OF_CORE", nthread)
+    mono = core.FDDS_Monomer(primary, aux, Cocc, Cvir, eps_occ, eps_vir, is_hybrid,
+                             memory_bytes=need["memory_bytes"], disk_bytes=need["disk_bytes"],
+                             scratch_dir=path, nthread=nthread, aux_transform=T)
+    result = mono.form_coefficient_response(omega, x_alpha, kernel)
+
+- ``aux_transform`` is an optional :math:`p_d \times p_r` matrix :math:`T`
+  that defines the declared functions from the raw auxiliary basis. It may be
+  rectangular. :math:`T` is applied to every auxiliary index before any metric
+  power, factorization, QR or response, so :math:`J_d = T J T^T`. This is not
+  the same as transforming a raw-basis response afterwards.
+- ``memory_bytes`` and ``disk_bytes`` cap this instance's accounted numerical
+  storage and its peak scratch. ``requirement`` returns the minimum of each,
+  with per-stage terms; ``integral:*`` terms are the integral-object storage
+  inside the ``metric`` and ``raw_dfhelper`` stages.
+- Accounted storage includes the Psi4-owned storage of the integral objects:
+  ERI screening values, pair lists, blocks and zero buffers, libint2 shell-pair
+  data, the integral factories' spherical-transform tables and their setup
+  scratch, the auxiliary overlap buffers, and the exponent, coefficient, index
+  and coordinate arrays of the internally built one-function dummy basis
+  sets. These are bounded from the basis
+  dimensions and primitive counts for every ``SCREENING`` choice. Vectors
+  grown element by element are charged at twice their final length (the
+  libstdc++, libc++ and MSVC growth factors are 2, 2 and 1.5) plus one old
+  buffer while growing.
+- Every matrix and block on this path is charged with its row-pointer array
+  (one pointer per row, rounded up to whole doubles), and both DFHelpers are
+  charged with their shell-offset arrays. The runtime block sizes of the
+  declared pass, the exchange intermediates, the per-frequency amplitude and
+  auxiliary matrices and the S2 response subtract the same costs.
+- The memory cap is not a process-memory cap. It does not count:
+
+  - BLAS/LAPACK internals and ``libint2::Engine`` scratch;
+  - allocator overhead and bookkeeping such as tensor names, stream records,
+    timers and the dummy basis sets' object headers and names;
+  - the per-thread engines and list headers of the auxiliary-overlap shell-pair
+    builder, which uses the process thread count (``set_num_threads``). Its
+    pair lists are charged independently of that count.
+
+  Total vendor memory and thread use are therefore not capped per instance.
+
+  In tested builds with ``MAX_AM_ERI = 5`` the engine scratch was about 20 MB.
+- ``nthread`` fixes, for the instance's lifetime, the OpenMP threads of the
+  metric and raw-DFHelper integral generation. It also sizes the declared
+  blocking's per-thread buffers and hence its blocks; those loops are otherwise
+  serial apart from BLAS. It is not a total-thread cap: the
+  per-frequency amplitude and auxiliary-matrix loops (including the
+  ``native_dyson_ratio`` path) run at the process OpenMP thread count, and
+  BLAS threading stays with the vendor library.
+- DFHelper blocking depends on the memory budget, so results can differ at
+  rounding level between budgets. In tested cases near the minimum budget the
+  sampled differences were up to about :math:`10^{-11}` relative, and no
+  admission or refusal changed; with generous budgets they were bitwise
+  identical. No accuracy bound is claimed for this.
+- Every ERI on this path is computed by Libint2, whatever ``INTEGRAL_PACKAGE``
+  says. The raw DFHelper is given the instance's own Coulomb metric instead of
+  forming its own. Integral screening still follows ``INTS_TOLERANCE`` and
+  ``SCREENING``.
+- Admission uses checked byte arithmetic. It runs after input validation and
+  before any copy, integral or file.
+- Global memory, options, threads and the PSIO scratch path are neither read
+  for these resource decisions nor modified. The auxiliary-overlap builder's
+  thread count above is the one exception.
+- Scratch files go in the caller's existing writable ``scratch_dir``. They
+  are removed when the instance is destroyed, and the directory itself is
+  kept.
+- ``subalgo`` is ``INCORE`` or ``OUT_OF_CORE``. It selects the DFHelper AO
+  integral strategy. ``SCF_SUBTYPE`` is ignored.
+- Orbitals, energies and :math:`T` are copied. Basis sets are borrowed and
+  must not be modified.
+- Calls on one instance must be sequential; concurrent calls are unsupported.
+- ``project_densities`` is a raw-basis operation and is refused on this path.
+
+Each call takes the kernel :math:`W` (:math:`J_d + f_{xc}` in the declared
+basis, used as given), the imaginary frequency and the exact-exchange
+fraction, which must be 0 for nonhybrid preparation. It returns a newly
+allocated symmetric coefficient response
+:math:`\chi_c = \mathrm{sym}[(I-A)^{-1}\chi_0]`. This is evaluated in the
+fused factored form, with the full :math:`J_d^{-1}` folded into the fitted
+three-index legs :math:`b = B_d J_d^{-1}`.
+
+The native operator truncations are kept: :math:`J^+` and :math:`J^{-1/2}`
+at eigenvalue ratio 1e-12, Householder QR with ``pinv(R, 1e-13)``, the
+nonhybrid amplitude mask and the approximate hybrid exchange. The coefficient
+legs, however, use the full inverse rather than SAPT's :math:`J^+`. The two
+coefficient conventions are therefore not equivalent, and the SAPT driver
+keeps :math:`J^+`.
+
+Each frequency is admitted only if two differently formed Dyson matrices
+both have :math:`\sigma_{\min}/\sigma_{\max} > 2\times10^{-13}`. Both are
+built from the same prepared streams:
+
+- :math:`J_d - XSW`, formed in the order of the legacy helper;
+- :math:`J_d - J_d A`, formed from the fused factors.
+
+The native check runs first. Otherwise the call raises and names the failed
+check; the other check may be reported as not evaluated. A nonfinite matrix
+gives a ``nan`` ratio, which also refuses. The instance remains usable after
+a refusal.
+
+For an invertible :math:`J_d` the two matrices are equal in exact arithmetic,
+so finite ratios differ only by formation rounding. The S2 check still refuses
+cases the native check passes, for example when a strongly scaled declared
+basis with a very large finite kernel makes only the fused product overflow.
+
+This refusal is an empirical policy for numerically singular Dyson nodes. It
+is not a bound on the forward error, accuracy or sign of an admitted
+response, and a small ``solve_residual`` is not one either:
+
+- A declared metric with a dropped eigenvalue near the 1e-12 cutoff can still
+  give resolved ratios and a stable response.
+- When the dropped eigenvalue approaches machine precision (see
+  ``metric_max_dropped`` and ``metric_lu_rcond``), the full :math:`J_d^{-1}`
+  legs carry an error up to about :math:`\kappa(J_d)\epsilon`. Both ratios
+  then sit at a rounding floor near :math:`10^{-13}`–:math:`10^{-12}`, not
+  at their exact values.
+- Tested near-duplicate declared functions of this kind passed both checks on
+  several MKL code paths. The admitted responses were about 10% to over 100%
+  in error, and some had positive eigenvalues, although the exact responses
+  were negative semidefinite and exact arithmetic would refuse every such node.
+
+The result is symmetrized, but negative semidefiniteness is not enforced
+(``model()["response_sign"]``). Callers that need accuracy or a sign must
+check the metric resolution and the response themselves.
+
+``model()`` records the metric truncation (count and ratios), the LU
+condition estimate, the QR rank, the cutoffs, the resources and the
+conventions. Its ``declared_pass_blocks`` entry counts the blocks and peak
+block rows that the declared pass actually dispatched per raw stream; these
+are loop diagnostics, not allocation or RSS measurements. The response
+dictionary reports both Dyson ratios, the solve residual and the
+masked-transition count. ``metric()``, ``metric_inv()`` and
+``aux_overlap()`` return live handles to the instance's own matrices, not
+copies. Nothing prevents writes, but every later response uses them, so do not
+modify them; copy first (the bounded response runner does).
+
 Basic Keywords for SAPT(DFT)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
