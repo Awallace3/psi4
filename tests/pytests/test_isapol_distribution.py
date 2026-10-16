@@ -246,6 +246,46 @@ def test_final_tails_on_a_different_response_aux(molecular_water, monkeypatch):
     np.testing.assert_allclose(translate @ q.values, global_q, atol=2e-10, rtol=2e-12)
 
 
+def test_isa_tail_fit_policy_water_trajectories(molecular_water):
+    """Default vs opt-in gated tail fitting on the 1e-6 tail-activation water recipe.
+
+    Tails at 1.5 x Bragg-Slater. The default refits every step (53 steps). The
+    opt-in 'when_enabled' policy fits only when the entering tail fix is on and
+    keeps the last tails otherwise (49 steps, as in CamCASP's run of this
+    recipe). Iteration counts and flag sequences come from the native Psi4
+    trajectories in the diagnostic evidence, not from CamCASP output.
+    """
+    _, wfn, recipe, _ = molecular_water
+    sites = tuple(replace(s, tail_cutoff=1.5*core.isapol_slater_radius(int(wfn.molecule().Z(i))))
+                  for i, s in enumerate(recipe.sites))
+    runs = {}
+    for policy in ('always', 'when_enabled'):
+        controller = replace(recipe.controller, tail_activation=1e-6, tail_fit_policy=policy)
+        r = isa.native_partition(wfn, replace(recipe, sites=sites, controller=controller),
+                                 caller_converged=True, build_multipoles=False)
+        assert r.converged and f'tail fit policy {policy}' in r.provenance
+        runs[policy] = r.trajectory
+    flags = {p: ''.join(str(int(h.next.apply_tails)) for h in t.history) for p, t in runs.items()}
+    assert flags['always'] == '00000000000000100000' + '1' * 33
+    assert flags['when_enabled'] == '00000000000000110000' + '1' * 29
+    always, gated = runs['always'].history, runs['when_enabled'].history
+    # First activation (step 16): the default consumes a tail fitted at step 15;
+    # the gated run has none defined yet, clips, and fits its first tail.
+    assert always[15].raw_sweep.clipped_shape_points[0] == 0
+    assert gated[15].raw_sweep.clipped_shape_points[0] > 0
+    assert [f.status for f in gated[14].tail_fits] == ['skipped_tail_fix_off'] * 3
+    assert not any(t.defined for t in gated[14].next.tails)
+    assert all(f.status == 'fitted' for f in gated[15].tail_fits)
+    np.testing.assert_allclose([always[15].next.max_delta, gated[15].next.max_delta],
+                               [1.104572e-4, 4.286127e-7], rtol=1e-3)
+    # Off steps 18-21 keep the step-17 tail; the final refit is separate in both.
+    for k in range(17, 21):
+        assert [f.status for f in gated[k].tail_fits] == ['skipped_tail_fix_off'] * 3
+        assert [t.amplitude for t in gated[k].next.tails] == [t.amplitude for t in gated[16].next.tails]
+    for t in runs.values():
+        assert all(f.status == 'fitted' for f in t.final_tail_fits)
+
+
 def test_coarse_q_grid_does_not_bypass_lw_gate(molecular_water, tmp_path):
     _, wfn, recipe, grid = molecular_water
     with pytest.raises(RuntimeError, match='postcondition exceeds residual tolerance'):

@@ -98,6 +98,62 @@ def test_byte_budget_follows_psi4_memory():
         psi4.set_memory(saved, quiet=True)
 
 
+def test_default_resources_stay_standard_and_legacy():
+    saved = core.get_memory()
+    try:
+        psi4.set_memory(3*1024**3, quiet=True)
+        r = api.default_resources()
+        assert r.capacity == 'standard'
+        assert repr(r) == 'BoundedResources(max_bytes=3221225472, max_work=6000000000000, max_io_bytes=68719476736)'
+    finally:
+        psi4.set_memory(saved, quiet=True)
+
+
+def test_explicit_large_resources_pass_through_unchanged(water, monkeypatch):
+    from psi4.driver.procrouting.isapol_bounded_response import BoundedResources
+    captured = {}
+    monkeypatch.setattr(api, 'bounded_properties', lambda wfn, recipe, **kwargs: captured.update(kwargs))
+    large = BoundedResources(int(core.get_memory()), 64_000_000_000_000, 64*1024**3, capacity='large')
+    core.clean_options()
+    assert api.settings('water', {'resources': large})['resources'] is large
+    psi4.oeprop(water, 'ATOMIC_REFINED_POLARIZABILITIES', atomic_backend='BOUNDED_DF', preset='water',
+                npoints=32, radial_points=20, spherical_points=50, resources=large, log=StageLog(0))
+    assert captured['resources'] is large
+
+
+
+def test_refinement_parameter_limit_defaults_to_64_and_passes_through(water, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(api, 'bounded_properties', lambda wfn, recipe, **kwargs: captured.update(kwargs))
+    core.clean_options()
+    for preset in ('water', 'benzene'):
+        assert api.settings(preset, {})['max_refinement_parameters'] == 64
+    for extra, expected in (({}, 64), ({'max_refinement_parameters': 72}, 72),
+                            ({'max_refinement_parameters': 1}, 1)):
+        captured.clear()
+        psi4.oeprop(water, 'ATOMIC_REFINED_POLARIZABILITIES', atomic_backend='BOUNDED_DF', preset='water',
+                    npoints=32, radial_points=20, spherical_points=50, log=StageLog(0), **extra)
+        assert type(captured['max_parameters']) is int and captured['max_parameters'] == expected
+    assert 'max_refinement_parameters' not in captured
+
+
+@pytest.mark.parametrize('value', [73, 0, -1, True, 72., '72', np.int64(72), None])
+def test_refinement_parameter_limit_is_refused_before_preparation(water, monkeypatch, value):
+    """A bad limit closes preset preparation FAILED before any grid, basis or backend call."""
+    called = []
+    monkeypatch.setattr(api, 'bounded_properties', lambda *a, **k: called.append('backend'))
+    monkeypatch.setattr(core, 'IsaGrid', lambda *a, **k: called.append('grid'))
+    monkeypatch.setattr(api, 'preset_sites', lambda *a, **k: called.append('sites'))
+    messages = []
+    with pytest.raises(ValueError, match=r'max_refinement_parameters must be an int in 1\.\.72'):
+        psi4.oeprop(water, 'ATOMIC_REFINED_POLARIZABILITIES', atomic_backend='BOUNDED_DF', preset='water',
+                    npoints=32, radial_points=20, spherical_points=50, max_refinement_parameters=value,
+                    log=StageLog(1, writer=messages.append))
+    assert not called
+    assert 'Stage FAILED: Bounded preset preparation' in ''.join(messages)
+    with pytest.raises(ValueError, match='No native'):
+        psi4.atomic_property_result(water)
+
 def test_auto_correction_follows_the_scf_functional(water):
     assert api.resolve_correction(water, 'AUTO', None) == ('NONE', None)
     assert api.resolve_correction(water, 'AUTO', .13) == ('FIXED_GRAC', .13)
@@ -260,6 +316,78 @@ def test_live_oeprop_publishes_latest_result_and_clears_it_on_refusal(sealed_wat
     with pytest.raises(ValueError, match='No native'):
         psi4.atomic_property_result(wfn)
     assert not _owned(wfn) and wfn.variable('UNRELATED SENTINEL') == 5.
+
+
+def _isa_route(wfn, tmp_path, resources, messages):
+    from psi4.driver.procrouting.isapol_native import Quadrature
+    from isapol_water_recipe import native_water_recipe
+    recipe = native_water_recipe(wfn.molecule())
+    options = core.IsaGridOptions()
+    options.radial_points, options.spherical_points = 20, 50
+    native_grid = core.IsaGrid(wfn.molecule().clone(), options)
+    grid = np.column_stack((native_grid.x(), native_grid.y(), native_grid.z(), native_grid.w()))
+    return recipe, grid, dict(atomic_backend='BOUNDED_DF', preset='water', distribution='isa',
+        partition_recipe=recipe, partition_grid=grid, auxiliary_recipe=recipe.auxiliary, response_grid=grid,
+        npoints=32, rank_limit=1, hydrogen_rank_limit=1, localization_rank_limit=1, weight_type=4,
+        weight_coefficient=1e-5, max_order=8, quadrature=Quadrature.from_casimir(core.CasimirGrid(2, .5)),
+        resources=resources, scratch_directory=tmp_path, log=StageLog(1, writer=messages.append))
+
+
+@pytest.mark.parametrize('capacity', ['large', 'standard'])
+def test_large_capacity_memory_rule_refuses_at_input_validation(sealed_water, tmp_path, monkeypatch, capacity):
+    """Large: refused while validating inputs, before state, ledger, scratch or ISA. Standard: unchanged."""
+    from psi4.driver.procrouting import isapol_bounded_response as backend
+    from psi4.driver.procrouting import isapol_native_partition as isa
+    from psi4.driver.procrouting.isapol_bounded_response import BoundedResources
+    class StateReached(Exception):
+        pass
+    def state(*args, **kwargs):
+        raise StateReached
+    monkeypatch.setattr(backend, 'native_restricted_state_from_wavefunction', state)
+    monkeypatch.setattr(isa, 'native_partition', lambda *a, **k: pytest.fail('ISA ran'))
+    saved, messages = core.get_memory(), []
+    try:
+        psi4.set_memory(1024**3, quiet=True)
+        resources = BoundedResources(2*1024**3, 6_000_000_000_000, 64*1024**3, capacity)
+        _, _, route = _isa_route(sealed_water, tmp_path, resources, messages)
+        if capacity == 'large':
+            with pytest.raises(ValueError, match='large capacity numeric budget exceeds the Psi4 memory setting'):
+                psi4.oeprop(sealed_water, 'ATOMIC_REFINED_DISPERSION', **route)
+        else:
+            with pytest.raises(StateReached):  # explicit standard bytes keep no memory ceiling
+                psi4.oeprop(sealed_water, 'ATOMIC_REFINED_DISPERSION', **route)
+    finally:
+        psi4.set_memory(saved, quiet=True)
+    text = ''.join(messages)
+    assert 'Stage FAILED: Bounded input validation' in text
+    assert 'Native ISA partition' not in text and 'resource ceilings' not in text
+    assert not list(tmp_path.iterdir())
+    with pytest.raises(ValueError, match='No native'):
+        psi4.atomic_property_result(sealed_water)
+
+
+def test_large_capacity_scarce_work_refuses_at_isa_admission(sealed_water, tmp_path, monkeypatch):
+    """Per-stage admission: the large tier refuses ISA before native ISA work; it is no whole-chain preflight."""
+    from psi4.driver.procrouting import isapol_distribution as dist
+    from psi4.driver.procrouting import isapol_native_partition as isa
+    from psi4.driver.procrouting.isapol_bounded_response import BoundedResources
+    monkeypatch.setattr(isa, 'native_partition', lambda *a, **k: pytest.fail('ISA ran before its admission'))
+    saved, messages = core.get_memory(), []
+    try:
+        psi4.set_memory(4*1024**3, quiet=True)
+        recipe, grid, _ = _isa_route(sealed_water, tmp_path, None, [])
+        _, work = dist.isa_resource_plan(sealed_water, recipe, recipe.auxiliary, grid, 4)
+        resources = BoundedResources(int(core.get_memory()), work-1, 64*1024**3, capacity='large')
+        _, _, route = _isa_route(sealed_water, tmp_path, resources, messages)
+        with pytest.raises(ValueError, match='^ISA iteration and response-AUX Q: cumulative work resource limit$'):
+            psi4.oeprop(sealed_water, 'ATOMIC_REFINED_DISPERSION', **route)
+    finally:
+        psi4.set_memory(saved, quiet=True)
+    text = ''.join(messages)
+    assert "capacity='large'" in text  # the declared tier is printed with the ceilings
+    assert 'Stage FAILED: Native ISA partition and response-AUX moments' in text
+    assert 'Native plain-DF factors' not in text
+    assert not list(tmp_path.iterdir())
 
 
 def test_preset_preparation_failure_is_closed_failed(water):
