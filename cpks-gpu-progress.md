@@ -13,7 +13,8 @@ parent branch, report or PR.
   18/18 contract cases clean; 13–27x speedup of complete CPKS solves over all-CPU CPKS
   at 16 threads for 384–660 bf (see "A100 interactive results").
 - **CUDA-LibXC route: no GPU evidence yet** (needs H100/H200; holder 14087771 pending).
-- Full-node (24-core) CPU baseline: job 14091690 pending.
+- Full-node (24-core Xeon Gold 6226) CPU baseline, job 14091690: GPU solves still 4.0x
+  (228 bf), 9.8–10.1x (384 bf), 12.9–13.1x (660 bf) faster; SAPT benzene CPKS 11.1x.
 
 ## Commits
 
@@ -248,6 +249,19 @@ converged (residuals 1e-9–8e-9) in every arm.
 | water dimer cc-pVDZ | 0.29 / 0.41 / 0.40 | 3.7 / 2.6 | -1.660964 / -1.660953 |
 | water dimer aug-cc-pVDZ | 0.49 / 0.81 / 0.84 | 2.3 / 3.5 | -1.810282 / -1.810262 |
 | benzene dimer aug-cc-pVDZ | 3.25 / 34.4 / 49.9 (15.3x) | 11.4 / 93.0 | -0.319269 / -0.318822 |
+
+**Full-node CPU baseline** (job 14091690, cpu-small, gts-cs207/inferno, node
+atl1-1-02-018-5-2, 24 x Xeon Gold 6226, same build/hash, `PROBE_ARMS=cpu`, 17:45 wall;
+output `interactive/sessions/cpu24-baseline-1/`):
+
+| System (nbf) | XC | cpu24 Hx8 / solve | A100 cuest solve | speedup |
+|---|---|---|---|---|
+| benzene dimer cc-pVDZ (228) | PBE / PBE0 | 1.39 / 8.78 ; 1.53 / 9.47 | 2.22 ; 2.38 | 4.0x ; 4.0x |
+| benzene dimer aug-cc-pVDZ (384) | PBE / PBE0 | 5.66 / 32.68 ; 6.45 / 36.07 | 3.33 ; 3.57 | 9.8x ; 10.1x |
+| coronene aug-cc-pVDZ (660) | PBE / PBE0 | 18.66 / 121.74 ; 23.41 / 149.28 | 9.29 ; 11.58 | 13.1x ; 12.9x |
+| SAPT benzene dimer aug-cc-pVDZ CPKS | PBE0 | 35.97 | 3.25 | 11.1x |
+
+SAPT energies of cpu24 equal the 16-thread cpu arm (IND -0.318822 kcal/mol).
 
 The cuest arm runs SCF and response on the cuEST grid, so its energies differ from the
 host grid by grid error (benzene IND 4.5e-4, ELST 1.4e-3 kcal/mol); hostxc and cpu agree.
