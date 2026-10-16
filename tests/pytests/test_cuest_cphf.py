@@ -272,7 +272,7 @@ _KINDS = ["singlet", "triplet", "uks"]
 def _reset_cuest_options():
     yield
     psi4.set_options({"use_cuest": False, "cuest_xc": False, "cuest_xc_response_host_libxc": False,
-                      "print": 1})
+                      "print": 1, "dft_radial_points_initial": 0, "dft_spherical_points_initial": 0})
 
 
 def _M(array):
@@ -879,3 +879,179 @@ def test_vx_cuest_saptdft_cpks_induction(tmp_path):
     for key in values[False]:
         print(f"\n{key}: host grid {values[False][key]:.10f} cuEST grid {values[True][key]:.10f}")
         assert psi4.compare_values(values[False][key], values[True][key], 6, f"cuEST XC CPKS: {key}")
+
+
+# => XC grid switching (DFT_RADIAL/SPHERICAL_POINTS_INITIAL -> 75 x 302) <= #
+
+# Candidate initial grids from the SCF/SAPT induction-NONE pilot (CPU job 14097678).
+_SWITCH_GRIDS = [(25, 110), (30, 146), (20, 110), (35, 194)]
+
+
+def _switch_options(initial):
+    radial, angular = initial if initial else (0, 0)
+    psi4.set_options({"dft_radial_points_initial": radial, "dft_spherical_points_initial": angular,
+                      "dft_grid_switch_factor": 10.0})
+
+
+@pytest.mark.parametrize("grid", _GRIDS)
+@pytest.mark.parametrize("kind", _KINDS)
+@pytest.mark.parametrize("initial", _SWITCH_GRIDS[:2])
+def test_vx_grid_switch_invalidates_response(initial, kind, grid):
+    """A V that ran a response on the initial grid answers on the final grid after set_grid.
+
+    The switch rebuilds the grid and plan; every reference/derivative cache sized for the old
+    grid must go with it. Compared against a V that was only ever on the final grid, both
+    with and without re-setting the reference after the switch.
+    """
+    wfn, final, Cs, Cv = _kind_setup("pbe", kind, grid)
+    rng = np.random.default_rng(37)
+    Dx = [o @ rng.normal(size=(o.shape[1], v.shape[1])) @ v.T * 0.1 for o, v in zip(Cs, Cv)]
+    left = [o for o in Cs]
+    right = [o @ rng.normal(size=(o.shape[1], o.shape[1])) * 0.1 for o in Cs]
+    expected = _apply(final, kind, Dx)
+    expected_factored = _apply_factored(final, kind, left, right)
+    scale = max(np.abs(v).max() for v in expected)
+
+    _switch_options(initial)
+    routes = (False, True) if grid == "cuest" else (False,)
+    for host_libxc in routes:
+        psi4.set_options({"cuest_xc_response_host_libxc": host_libxc})
+        V = _potential(wfn, grid)
+        V.set_grid("Initial")
+        assert V.initial_grid()
+        if grid == "host":
+            assert V.grid().npoints() < final.grid().npoints()
+        _set_reference(V, Cs)
+        coarse = _apply(V, kind, Dx)
+        _apply_factored(V, kind, left, right)
+        V.set_grid("Final")
+        assert not V.initial_grid() and V.uses_cuest_xc() == (grid == "cuest")
+        if grid == "host":
+            assert V.grid().npoints() == final.grid().npoints()
+        _set_reference(V, Cs)
+        switched = _apply(V, kind, Dx)
+        err = max(np.abs(a - b).max() for a, b in zip(expected, switched))
+        shift = max(np.abs(a - b).max() for a, b in zip(expected, coarse))
+        print(f"\n{initial} {kind} {grid} host_libxc={host_libxc}: final vs fixed75 {err:.3e}, "
+              f"initial-grid vs fixed75 {shift:.3e} (scale {scale:.3e})")
+        assert err <= 1.e-11 * max(1.0, scale)
+        assert shift > 1.e3 * err  # the initial grid really was a different quadrature
+        _assert_close(expected_factored, _apply_factored(V, kind, left, right), 1.e-11 * max(1.0, scale))
+        # Same answer after another round trip, so nothing from the first initial pass survives.
+        V.set_grid("Initial")
+        _set_reference(V, Cs)
+        _assert_close(coarse, _apply(V, kind, Dx), 1.e-11 * max(1.0, scale))
+        V.set_grid("Final")
+        _set_reference(V, Cs)
+        _assert_close(expected, _apply(V, kind, Dx), 1.e-11 * max(1.0, scale))
+        V.finalize()
+
+
+def _scf(method, unrestricted, grid, initial):
+    """Water (cation for UKS) SCF on the requested route, optionally grid switched."""
+    gpu = grid == "cuest"
+    psi4.core.clean()
+    _switch_options(initial)
+    psi4.set_num_threads(2)
+    mol = psi4.geometry(f"""
+        {1 if unrestricted else 0} {2 if unrestricted else 1}
+        O
+        H 1 0.96
+        H 1 0.96 2 104.5
+        symmetry c1
+    """)
+    psi4.set_options({
+        "basis": "cc-pvdz", "df_basis_scf": "cc-pvdz-jkfit",
+        "scf_type": "df", "reference": "uhf" if unrestricted else "rhf",
+        "save_jk": True, "e_convergence": 1.e-11, "d_convergence": 1.e-10,
+        "use_cuest": gpu, "cuest_xc": gpu, "cuest_mixed_precision": False,
+        "dft_radial_points": 75, "dft_spherical_points": 302,
+    })
+    wfn = psi4.energy(method, molecule=mol, return_wfn=True)[1]
+    V = wfn.V_potential()
+    assert not V.initial_grid() and V.uses_cuest_xc() == gpu
+    iterations = wfn.variable("SCF DFT INITIAL GRID ITERATIONS") if initial else 0
+    if initial:
+        assert iterations > 0
+    return wfn, iterations
+
+
+@pytest.mark.parametrize("grid", _GRIDS)
+@pytest.mark.parametrize("unrestricted", [False, True])
+@pytest.mark.parametrize("method", ["svwn", "pbe0"])
+@pytest.mark.parametrize("initial", _SWITCH_GRIDS)
+def test_vx_grid_switched_scf_cpks(initial, method, unrestricted, grid):
+    """CPKS on a grid-switched SCF: the live V is a final-grid V, and the response matches fixed 75 x 302.
+
+    Fixed orbitals: the switched SCF's own V against a fresh final-grid V on the same
+    orbitals (singlet/triplet/UKS kernels). Solved: Hx residuals and the static
+    polarizability against an unswitched SCF on the same route.
+    """
+    fixed, _ = _scf(method, unrestricted, grid, None)
+    fixed_points = fixed.V_potential().grid().npoints() if grid == "host" else None
+    alpha_fixed = _polarizability(fixed, unrestricted)
+    wfn, iterations = _scf(method, unrestricted, grid, initial)
+    live = wfn.V_potential()
+    if grid == "host":
+        assert live.grid().npoints() == fixed_points
+    Cs, Cv = _occupied(wfn, unrestricted), _virtual(wfn, unrestricted)
+    rng = np.random.default_rng(41)
+    Dx = [o @ rng.normal(size=(o.shape[1], v.shape[1])) @ v.T * 0.1 for o, v in zip(Cs, Cv)]
+    fresh = _potential(wfn, grid)
+    for kind in (("uks",) if unrestricted else ("singlet", "triplet")):
+        _set_reference(live, Cs)
+        _set_reference(fresh, Cs)
+        got, ref = _apply(live, kind, Dx), _apply(fresh, kind, Dx)
+        scale = max(np.abs(v).max() for v in ref)
+        err = max(np.abs(a - b).max() for a, b in zip(ref, got))
+        print(f"\n{initial} {method} {kind} {grid}: {iterations:.0f} initial iterations, "
+              f"live switched V vs fresh final V {err:.3e} (scale {scale:.3e})")
+        assert err <= 1.e-11 * max(1.0, scale)
+    fresh.finalize()
+    psi4.core.clean_timers()
+    alpha = _polarizability(wfn, unrestricted)  # asserts converged and |Hx - b| <= 1e-9
+    if grid == "cuest":
+        label = "UV: Form Vx (cuEST)" if unrestricted else "RV: Form Vx (cuEST)"
+        assert any(label in k for k in psi4.core.get_timer_dict())
+    err = np.abs(alpha - alpha_fixed).max()
+    print(f"  alpha switched {np.diag(alpha)} fixed75 {np.diag(alpha_fixed)} max diff {err:.3e}")
+    np.testing.assert_allclose(alpha, alpha.T, atol=1.e-7)
+    np.testing.assert_allclose(alpha, alpha_fixed, atol=1.e-6, rtol=0)
+
+
+@pytest.mark.saptdft
+@pytest.mark.dftd4
+@uusing("dftd4")
+@pytest.mark.parametrize("grid", _GRIDS)
+@pytest.mark.parametrize("initial", _SWITCH_GRIDS[:2])
+def test_vx_grid_switched_saptdft_cpks_induction(initial, grid, tmp_path):
+    """SAPT(DFT) CPKS induction: GRAC monomer SCFs switched to 75 x 302 vs fixed 75 x 302."""
+    gpu = grid == "cuest"
+    values = {}
+    for label, switch in (("fixed75", None), ("switched", initial)):
+        psi4.core.clean()
+        psi4.core.clean_options()
+        psi4.core.set_output_file(str(tmp_path / f"sapt-{label}.out"), False)
+        psi4.geometry(_SAPT_DIMER)
+        psi4.set_options({
+            "basis": "cc-pvdz", "scf_type": "df", "SAPT_DFT_FUNCTIONAL": "pbe0",
+            "SAPT_DFT_GRAC_SHIFT_A": 0.136, "SAPT_DFT_GRAC_SHIFT_B": 0.136,
+            "SAPT_DFT_INDUCTION_TYPE": "CPKS", "SAPT_DFT_DO_DHF": True,
+            "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL", "USE_CUEST": gpu, "CUEST_XC": gpu,
+            "CUEST_MIXED_PRECISION": False,
+            "dft_radial_points": 75, "dft_spherical_points": 302,
+        })
+        _switch_options(switch)
+        psi4.core.clean_timers()
+        psi4.energy("sapt(dft)-d4(i)")
+        timers = psi4.core.get_timer_dict()
+        assert any("RV: Form Vx (cuEST)" in k for k in timers) == gpu
+        assert any("SCF: Switch XC grid" in k for k in timers) == (switch is not None)
+        values[label] = {k: psi4.variable(k) for k in (
+            "SAPT IND ENERGY", "SAPT ELST ENERGY", "SAPT EXCH ENERGY", "SAPT TOTAL ENERGY")}
+        psi4.core.close_outfile()
+    for key in values["fixed75"]:
+        diff = values["switched"][key] - values["fixed75"][key]
+        print(f"\n{initial} {grid} {key}: fixed75 {values['fixed75'][key]:.12f} switched "
+              f"{values['switched'][key]:.12f} diff {diff:.2e}")
+        assert abs(diff) < 1.e-7, key

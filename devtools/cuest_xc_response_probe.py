@@ -20,6 +20,13 @@ timing and sapt run each arm in PROBE_ARMS (comma separated, default all):
 PROBE_SYSTEMS (comma separated names) restricts the systems. Threads follow
 OMP_NUM_THREADS (Psi4 itself would otherwise run single-threaded).
 
+Scale-up on the timing test suite (~/data/timing_test_suite): PROBE_SUITE is its
+geometries directory; its SYSTEMS named in PROBE_SYSTEMS then replace the built-in
+systems in timing and sapt. PROBE_BASIS overrides their basis (e.g. aug-cc-pvdz, with
+the matching -jkfit), PROBE_METHODS the timing functionals (default pbe,pbe0),
+PROBE_REPEATS the timed actions per point (default 5) and PROBE_MEMORY Psi4's memory
+(default 24 GB).
+
 Numbers only; tests/pytests/test_cuest_cphf.py holds the pass/fail gates.
 PROBE_CPU_SMOKE=1 runs the same logic with every potential on the host grid (no GPU),
 to check the script itself.
@@ -51,7 +58,21 @@ THREADS = int(os.environ.get("OMP_NUM_THREADS", "1"))
 psi4.set_num_threads(THREADS)
 OUT.mkdir(parents=True, exist_ok=True)
 psi4.core.set_output_file(str(OUT / "probe.out"), False)
-psi4.set_memory("24 GB")
+psi4.set_memory(os.environ.get("PROBE_MEMORY", "24 GB"))
+METHODS = os.environ.get("PROBE_METHODS", "pbe,pbe0").split(",")
+REPEATS = int(os.environ.get("PROBE_REPEATS", "5"))
+BASIS = os.environ.get("PROBE_BASIS")
+
+
+def suite_systems():
+    """(name, geometry, basis) for the timing-suite systems named in PROBE_SYSTEMS."""
+    if not os.environ.get("PROBE_SUITE"):
+        return None
+    sys.path.insert(0, os.environ["PROBE_SUITE"])
+    from systems import SYSTEMS as SUITE  # noqa: E402
+    names = [n for n in SUITE if n in SYSTEMS]
+    assert names and "pla15_3pe2" not in names, names
+    return [(n, SUITE[n], BASIS or "aug-cc-pvdz") for n in names]
 GPU = not os.environ.get("PROBE_CPU_SMOKE")
 
 
@@ -403,9 +424,10 @@ def timing():
         systems = systems[:1]
     if SYSTEMS:
         systems = [s for s in systems if s[0] in SYSTEMS]
+    systems = suite_systems() or systems
     results = []
     for name, geometry, basis in systems:
-        for method in ("pbe", "pbe0"):
+        for method in METHODS:
             for unrestricted in (False,) if name != "water" else (False, True):
                 mol = WATER.format(charge=1, mult=2) if unrestricted else geometry
                 for arm in ARMS:
@@ -416,7 +438,7 @@ def timing():
                              "reference": "UKS" if unrestricted else "RKS", "arm": arm, "threads": THREADS,
                              "xc_on_cuest_grid": wfn.V_potential().uses_cuest_xc(), "scf_s": scf_s,
                              "jk": wfn.jk().name(), **libxc_route_from_scf()}
-                    entry["actions"] = [time_actions(wfn, unrestricted, n, 5) for n in (1, 8)]
+                    entry["actions"] = [time_actions(wfn, unrestricted, n, REPEATS) for n in (1, 8)]
                     entry["solve"] = time_solve(wfn, unrestricted)
                     print(json.dumps(entry), flush=True)
                     results.append(entry)
@@ -455,6 +477,7 @@ def sapt():
         systems = systems[:1] if QUICK else systems
         if SYSTEMS:
             systems = [s for s in systems if s[0] in SYSTEMS]
+        systems = suite_systems() or systems
         for name, geometry, basis in systems:
             for arm in ARMS:
                 use_cuest, cuest_xc = ARM_OPTIONS[arm]
