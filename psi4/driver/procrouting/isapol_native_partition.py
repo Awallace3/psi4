@@ -14,6 +14,7 @@ from .isapol_basis import BasisRecipe, MainAdaptation, adapt_main, _text, _finit
 # native fit_drho_c default stays 0, plain LU). Nonconvergence refuses; there is
 # no fallback to the plain LU coefficients.
 DRHO_REFINEMENT_ITERATIONS = 10
+TAIL_FIT_POLICIES = ('always', 'when_enabled')
 
 
 @dataclass(frozen=True)
@@ -86,8 +87,13 @@ class ControllerRecipe:
     mixing_skip: int
     tail_iteration_limit: int
     fix_tails: bool
+    # 'always' (published behaviour) refits tails every step; 'when_enabled'
+    # fits only when the entering tail fix is on and keeps the last stored tails.
+    tail_fit_policy: str = 'always'
 
     def __post_init__(self):
+        if self.tail_fit_policy not in TAIL_FIT_POLICIES:
+            raise ValueError(f'tail_fit_policy must be one of {TAIL_FIT_POLICIES}')
         for name in ('positive_auto', 's_block_only', 'fix_tails'):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f'{name} must be bool')
@@ -107,7 +113,9 @@ class ControllerRecipe:
         fit_fields = ('w_eps', 'positive_lambda', 'positive_max_alpha', 'positive_auto',
                       'damping', 's_block_only', 'density_cutoff')
         for name in self.__dataclass_fields__:
-            setattr(f if name in fit_fields else o, name, getattr(self, name))
+            if name != 'tail_fit_policy':
+                setattr(f if name in fit_fields else o, name, getattr(self, name))
+        o.tail_fit_policy = getattr(core.IsaTailFitPolicy, self.tail_fit_policy)
         o.fit = f
         o.tail_cutoffs = [s.tail_cutoff for s in sites]
         o.tail_allowed = [s.tail_allowed for s in sites]
@@ -323,7 +331,8 @@ def native_partition(wfn, recipe, *, caller_converged, build_multipoles=True):
     provenance = (f'native restricted C1 wfn; caller declares SCF converged; {recipe.name}; '
                   f'recipe origin: {recipe.origin}; actual MAIN effective coef + validated shell collocation; '
                   f'Drho-C lambda1000 unrescaled; {recipe.drho_profile} comparisons not evaluated; '
-                  f'ordinary ISA-A; atomic initialization {recipe.atomic_initialization}; '
+                  f'ordinary ISA-A; tail fit policy {recipe.controller.tail_fit_policy}; '
+                  f'atomic initialization {recipe.atomic_initialization}; '
                   'full molecular IsaGrid/all sites unscreened (no screening parity); '
                   'postconvergence-refit final tails; global Cartesian axes/bohr/atomic units; '
                   'no reference orbitals or density')

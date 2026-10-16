@@ -97,7 +97,7 @@ Experimental ISA-A partition
    co-centred AtomAux and s-only shape bases, zero-based shell map, explicit
    tail cutoff in bohr), ``GridRecipe`` (the native ``IsaGrid`` with tabulated
    Bragg--Slater radii, all sites on the full molecular grid), ``ControllerRecipe``
-   (every controller and fit setting, no defaults) and ``PartitionRecipe``
+   (every controller and fit setting, no defaults except ``tail_fit_policy``) and ``PartitionRecipe``
    (track, molecular density-fit AUX, atomic initialization, Drho profile).
    ``native_partition(wfn, recipe, caller_converged=True)`` adapts the MAIN
    basis (``adapt_main``), fits the density with the charge-constrained
@@ -162,6 +162,20 @@ Experimental ISA-A partition
      ``final_tails``; ``state.tails`` lags one shape update. An optional
      immutable preparation cache is capped at 192 MiB, and the cacheless path
      gives the same trajectory.
+   * Tail fit schedule (``ControllerRecipe.tail_fit_policy``, native
+     ``IsaAControllerOptions.tail_fit_policy``). The default, ``'always'``, is
+     the published behaviour: the in-loop tails are refitted every step.
+     ``'when_enabled'`` is opt-in. It fits a tail only when the tail fix is on
+     in the state *entering* the step. Otherwise it keeps the last stored
+     tails, which may still be undefined, and the ``tail_fits`` of such a step
+     report ``status='skipped_tail_fix_off'``. A tail is used only when it is
+     both applied and defined. The postconvergence refit is unchanged. This
+     reproduces CamCASP's Tail-Fix-gated schedule, but computes it entirely in
+     Psi4; CamCASP is neither called nor read. It has been compared with
+     CamCASP only for the water ISA iteration (49 steps, as CamCASP's run,
+     against 53 for ``'always'``). Grid convergence and downstream C8/C10
+     agreement are not established. The policy is recorded in the partition
+     provenance.
 
    ``isapol_distribution.isa_moments`` runs this iteration
    (``build_multipoles=False``), samples the frozen final shapes on the

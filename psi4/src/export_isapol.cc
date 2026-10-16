@@ -741,6 +741,10 @@ void export_isapol(py::module& m) {
         .def("run", &IsaASweep::run, "old"_a, "grids"_a, "options"_a = IsaAFitOptions())
         .def("run_with_tails", &IsaASweep::run_with_tails, "old"_a, "grids"_a, "tails"_a,
              "apply_tail"_a, "options"_a = IsaAFitOptions());
+    py::enum_<IsaTailFitPolicy>(m, "IsaTailFitPolicy",
+                                "In-loop tail fit schedule: always refit, or only when the entering tail fix is on")
+        .value("always", IsaTailFitPolicy::Always)
+        .value("when_enabled", IsaTailFitPolicy::WhenEnabled);
     py::class_<IsaAControllerOptions>(m, "IsaAControllerOptions", "Ordinary A / W convergence, no DIIS or symmetry; explicit tail cutoffs")
         .def(py::init<>())
         .def_readwrite("fit", &IsaAControllerOptions::fit)
@@ -754,6 +758,7 @@ void export_isapol(py::module& m) {
         .def_readwrite("tail_iteration_limit", &IsaAControllerOptions::tail_iteration_limit)
         .def_readwrite("max_iterations", &IsaAControllerOptions::max_iterations)
         .def_readwrite("fix_tails", &IsaAControllerOptions::fix_tails)
+        .def_readwrite("tail_fit_policy", &IsaAControllerOptions::tail_fit_policy)
         .def_readwrite("tail_cutoffs", &IsaAControllerOptions::tail_cutoffs)
         .def_readwrite("tail_allowed", &IsaAControllerOptions::tail_allowed)
         .def_readwrite("convergence_included", &IsaAControllerOptions::convergence_included);

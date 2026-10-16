@@ -11,6 +11,10 @@ namespace psi { namespace isapol {
 /// num_tail_iterations, which the reference protocol never enables). The SINGLE
 /// postconvergence tail refit that CamCASP always performs IS implemented; see
 /// IsaAControllerResult::final_tails.
+/// In-loop tail fitting schedule. Always (default) refits every step. WhenEnabled
+/// fits only when the ENTERING state's apply_tails is set and otherwise keeps the
+/// last stored tails (CamCASP's Tail-Fix-gated schedule, computed natively).
+enum class IsaTailFitPolicy { Always, WhenEnabled };
 struct IsaAControllerOptions {
     IsaAFitOptions fit;
     // Performance only: zero forces the independent uncached path. Hard ceiling
@@ -24,6 +28,7 @@ struct IsaAControllerOptions {
     double mixing = 0.0;
     int mixing_skip = 20, tail_iteration_limit = 20, max_iterations = 120;
     bool fix_tails = true;
+    IsaTailFitPolicy tail_fit_policy = IsaTailFitPolicy::Always;
     std::vector<double> tail_cutoffs;  ///< Explicit bohr radii, not inferred Slater tables
     std::vector<bool> tail_allowed, convergence_included;  ///< Empty means all sites
 };
@@ -46,9 +51,10 @@ struct IsaAControllerStep {
     std::vector<IsaTailFitResult> tail_fits;
 };
 struct IsaAControllerResult {
-    /// Restart cursor. Its tails are the LAST IN-LOOP fit, which by the documented
-    /// source lag came from the second-to-last shape, so they are NOT the tails any
-    /// downstream stage should sample. Use final_tails for that.
+    /// Restart cursor. Its tails are the LAST IN-LOOP fit (under WhenEnabled, the
+    /// last stored one), which by the documented source lag came from an earlier
+    /// shape, so they are NOT the tails any downstream stage should sample. Use
+    /// final_tails for that.
     IsaAControllerState state;
     std::vector<IsaAControllerStep> history;
     std::string termination;

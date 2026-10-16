@@ -110,7 +110,8 @@ def test_declaration_and_geometry_fail_closed(helium):
 
 
 @pytest.mark.parametrize('change', [{'w_eps':np.nan}, {'convergence':0.}, {'max_iterations':0},
-                                   {'mixing':1.1}, {'fix_tails':1}, {'density_cutoff':-1.}])
+                                   {'mixing':1.1}, {'fix_tails':1}, {'density_cutoff':-1.},
+                                   {'tail_fit_policy':'camcasp'}, {'tail_fit_policy':None}])
 def test_declared_controller_rejects_invalid_values(change):
     with pytest.raises(ValueError):
         controls(**change)
@@ -240,3 +241,16 @@ def test_declared_cutoff_reaches_the_controller_per_site(helium):
     r = recipe(helium)
     sites = tuple(replace(s, tail_cutoff=2.125) for s in r.sites)
     assert controls().build(sites).tail_cutoffs == [2.125]
+
+
+def test_tail_fit_policy_reaches_the_controller_and_provenance(helium):
+    assert controls().tail_fit_policy == 'always'
+    r = recipe(helium)
+    assert controls().build(r.sites).tail_fit_policy == core.IsaTailFitPolicy.always
+    gated = replace(r, controller=controls(tail_fit_policy='when_enabled'))
+    assert gated.controller.build(r.sites).tail_fit_policy == core.IsaTailFitPolicy.when_enabled
+    result = native.native_partition(helium, gated, caller_converged=True, build_multipoles=False)
+    assert 'tail fit policy when_enabled' in result.provenance
+    assert result.trajectory.history[0].tail_fits[0].status == 'skipped_tail_fix_off'
+    assert 'tail fit policy always' in native.native_partition(
+        helium, r, caller_converged=True, build_multipoles=False).provenance
