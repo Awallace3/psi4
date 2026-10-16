@@ -36,6 +36,7 @@
 #include "psi4/libmints/multipolesymmetry.h"
 #include "psi4/libpsi4util/process.h"
 
+#include <tuple>
 #include <vector>
 
 #ifdef USING_cuEST
@@ -142,6 +143,9 @@ class PSI_API MintsHelper {
     void form_V_cuest(SharedMatrix hostV);
 
    public:
+    /// AO potential of point charges (Q, x, y, z [a0]) from the cuEST one-electron plan,
+    /// with PotentialInt's sign convention: -sum_c Q_c (mu| 1/|r - R_c| |nu)
+    void form_V_cuest_charges(SharedMatrix hostV, const std::vector<std::tuple<double, double, double, double>>& charges);
     cuestAOPairList_t cuest_pair_list() { return cuest_pair_list_; };
     cuestOEIntPlan_t cuest_oeint_plan() { return cuest_oeint_plan_; };
 #endif
