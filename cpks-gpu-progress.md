@@ -12,7 +12,13 @@ parent branch, report or PR.
   `c0f23b8d9d`): 116 tests pass, 4 fail (pre-existing cuEST wK DF gap, unrelated);
   18/18 contract cases clean; 13–27x speedup of complete CPKS solves over all-CPU CPKS
   at 16 threads for 384–660 bf (see "A100 interactive results").
-- **CUDA-LibXC route: no GPU evidence yet** (needs H100/H200; holder 14087771 pending).
+- **CUDA-LibXC route: no GPU evidence yet** (needs H100/H200). Holders: 14087771
+  (inferno, est. start 2026-10-17 00:10) and 14096296 (embers, gts-cs207-chemx, submitted
+  2026-10-16 04:13 at user request). `interactive/h100-chain.sh` (tests, then probe with
+  `PROBE_ARMS=cuest,hostxc`) is launched on whichever starts first; sessions
+  `h100-tests-1`, `h100-probe-1`.
+- 14085250 (CUDA batch job pinned to the buggy `c477c22060`) cancelled at user request
+  2026-10-16 04:13 before it started.
 - Full-node (24-core Xeon Gold 6226) CPU baseline, job 14091690: GPU solves still 4.0x
   (228 bf), 9.8–10.1x (384 bf), 12.9–13.1x (660 bf) faster; SAPT benzene CPKS 11.1x.
 
