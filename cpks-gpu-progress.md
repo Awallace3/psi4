@@ -540,6 +540,31 @@ Protein83 SAPT CPU baseline was not run. CPU vs GPU energies differ by grid only
 host grid): nanotube IND −3.78901 vs −3.78874 kcal/mol, TOTAL −1.17762 vs −1.17692; peptide
 IND −2.93960 vs −2.93962.
 
+## Protein157 6-31+g** GPU run, full-threshold / minimum-2 grid policy (user, 2026-10-16)
+
+Request: GPU counterpart of CPU job 13868775 (`docs/saptdft/cuest/phoenix-2026-10-04/protein157-inferno/
+results-13868775/protein157-6-31+g**-new-cpu-1/result.json`, sha256 2e2a2921…fc94c; geometry sha256
+a1e9c894…6b60; nbf 1786; 8 threads; 10358.56 s; fixed 99x590): SAPT(DFT)-D4(I) PBE0, induction NONE,
+iterative unseeded GRAC, δHF, cuEST DF-JK (no DIRECT), GPU SAD, FP64; grid 35x194 → 75x302,
+DFT_GRID_SWITCH_FACTOR=1 and **at least 2 final-grid iterations**.
+
+- Not run on 14087771: 9.5 min left at 07:56, guard unported, input not yet located (reported).
+- Guard: `scf_iterate(..., xc_final_min_iterations=N)` ported in `ff2ebc4c4f` (same diff as sibling
+  `saptdft-cuest-grid-policy-v1` f4e4c68970; my base iterator blob 0547c274 is identical). Local CPU:
+  `test_dft_grid_switch.py` 32 passed (10 new: RKS/UKS energy parity at factor 1/min 2; exact final count
+  1/2/3 for converged He; MAXITER cannot bypass; invalid minima rejected). Runner CPU dry run
+  (`--cpu-smoke`, water dimer): 6 switched SCFs, all converged, final 5 ≥ 2, final grid after.
+- Runner `devtools/protein157_grid_policy_run.py`: options = reference options + USE_CUEST/CUEST_XC/
+  CUEST_SAD true, mixed precision false, DFT 75x302 final, 35x194 initial, factor 1; the iterator is
+  overlaid from the run worktree (pinned GPU build `58d061979b` untouched); no memory sampler.
+  Checks: cuESTJK seen, no MemDFJK/DiskDFJK/DirectJK, GPU SAD seen, every switched SCF converged with
+  final ≥ 2 and ended on the final grid. Records options changed vs reference, nbf/naux, components,
+  GRAC shifts, energy() wall, timer records, per-SCF proofs, core/libcuest/libxc sha256.
+- Phoenix: worktree `gits/psi4.saptdft-cuest-cpks-p157` (ff2ebc4c4f), run dir
+  `runs/saptdft-cuest-cpks/p157-full2-ff2ebc4c4f-20261016/` (`run.sh`, `chain.sh`: GPU water-dimer
+  smoke gates `protein157-631gss-full2`). Launch on embers holder 14096296 (H100|H200, 8c, 128G, 2h)
+  via `srun --overlap` when it starts; auto-launcher armed. No new submissions.
+
 ## Resume
 
 1. `scripts/job_status.sh phoenix2 14085247 14085248 14085249 14085250`.
