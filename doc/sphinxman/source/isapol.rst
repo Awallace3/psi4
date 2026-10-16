@@ -213,7 +213,8 @@ keywords are listed below.
 
 Additional keyword arguments accept ``auxiliary_recipe``, ``response_grid``,
 ``quadrature``, ``lattice_options``, ``smoothing``, ``shell_cutoff``,
-``sites``, ``bonds``, ``declared_variables``, ``distribution``,
+``sites``, ``bonds``, ``declared_variables``, ``max_refinement_parameters``,
+``distribution``,
 ``distributed_moments``, ``response``, ``fdds``, ``resources``,
 ``max_order``, ``scratch_directory`` and ``log``.  Object
 arguments replace the corresponding generated object; scalar generation options
@@ -370,6 +371,33 @@ disk-staged operands are created in a fresh temporary directory, hash-checked
 when read and removed on success or failure. ``scratch_directory`` optionally
 selects the parent directory; it is never an existing checkpoint to resume.
 Only small local/refined results and diagnostics are retained in the result.
+
+The 64-variable limit is the default refinement admission policy. It is not a
+solver, model or resource limit. ``bounded_properties`` takes an explicit
+``max_parameters`` (the oeprop route passes ``max_refinement_parameters``),
+an exact integer from 1 to 72. 72 is two rank-2 site types of 36 variables
+each, as in benzene. The selected limit replaces 64 in both admission checks:
+for an explicit ``declared_variables`` list it is checked during ``Bounded input
+validation``, and for the cutoff-derived variable set it is checked at the
+first node, before any point targets. The admission log reports the limit in
+use. Any other value, including ``bool``, ``float``, strings and NumPy integers,
+is refused before any response work. Omitting it keeps 64, the same refusal
+messages and the same output.
+
+The allowance changes admission only. The cutoff, labels, anchors, penalties,
+fit and the reported coefficients are those the same declarations would give
+under any limit that admits them.
+
+It is finite and capped, not unlimited, because the complete-cloud design
+has its own fixed replay-work bound, and the planned cost grows with the
+variable count. That bound depends on the actual design dimensions: the
+number of fit points, and the field channels the variables actually use. It is
+not a fixed variable count. For example, 72 variables over 96 used channels
+at 2000 points plan about 6.0e10 of the 6.4e10 replay work.
+
+The allowance is independent of ``BoundedResources``. It neither raises nor
+relaxes any numeric, work or I/O ceiling. The ``capacity="large"`` tier, below,
+changes resource admission only.
 
 ``BoundedResources`` is an explicit cumulative opt-in ceiling on planned
 numerical storage (caller-sized; the oeprop presets use the Psi4 memory

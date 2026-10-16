@@ -16,7 +16,9 @@ Unchanged option defaults do not leak into the preset.
 import numpy as np
 from psi4 import core
 from . import isapol_logging as _lg
-from .isapol_bounded import bounded_properties, BoundedResources, _closes_failed_stage
+from .isapol_bounded import (
+    bounded_properties, BoundedResources, MAX_PARAMETERS, _closes_failed_stage, check_max_parameters,
+)
 from .isapol_native import Quadrature
 from .isapol_basis import BasisRecipe, ShellRecipe
 from .isapol_native_propagator import KernelSmoothing
@@ -69,6 +71,7 @@ def settings(preset, overrides):
         quadrature=None, response_grid=None, lattice_options=None, auxiliary_recipe=None,
         sites=None, bonds=None, distribution='df_centre_analytic', distributed_moments=None,
         declared_variables=None,  # process_data.F90:2040-2150 cutoff-derived pdef
+        max_refinement_parameters=MAX_PARAMETERS,  # explicit finite opt-in up to 72
         response='reference_h2h1', fdds=None,  # explicit native FDDS only on request
         scratch_directory=None,
         resources=None, log=None)  # None: numeric budget = psi4.set_memory
@@ -180,6 +183,8 @@ def run(wfn, tasks, *, preset, **kwargs):
         with _closes_failed_stage(log):
             log.stage('Bounded preset preparation', (('preset', preset), ('distribution', v['distribution']),
                                                      ('response', v['response'])))
+            # Refuse a bad limit before any grid, basis or lattice is built.
+            check_max_parameters(v['max_refinement_parameters'], 'max_refinement_parameters')
             mol = wfn.molecule()
             sites, bonds = preset_sites(mol, preset, v['rank_limit'], v['hydrogen_rank_limit'])
             if v['sites'] is not None:
@@ -225,7 +230,8 @@ def run(wfn, tasks, *, preset, **kwargs):
                 'distribution', 'distributed_moments', 'response', 'fdds')
         result = bounded_properties(wfn, recipe, caller_converged=True,
             sites=sites, bonds=bonds, quadrature=quadrature, response_grid=grid,
-            lattice_options=lattice, declared_variables=v['declared_variables'], log=log,
+            lattice_options=lattice, declared_variables=v['declared_variables'],
+            max_parameters=v['max_refinement_parameters'], log=log,
             publish_qcvariables='ATOMIC_REFINED_DISPERSION' in tasks, **{k:v[k] for k in keys})
         wfn._native_atomic_property_result = result
     except Exception:

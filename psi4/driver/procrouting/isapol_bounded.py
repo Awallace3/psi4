@@ -30,6 +30,10 @@ DISTRIBUTIONS = ('df_centre_analytic', 'supplied')
 #: Bounded lattice and refinement sizes (complete cloud, every point pair).
 MAX_FIT_POINTS = 2000
 MAX_PARAMETERS = 64
+#: Finite opt-in refinement allowance (``max_parameters``): two rank-2 site
+#: types x 36. A policy bound, not a solver or resource limit; the default
+#: stays MAX_PARAMETERS.
+MAX_PARAMETER_ALLOWANCE = 72
 #: Rows per PFIT design block.
 BLOCK_ROWS = 4096
 
@@ -91,13 +95,24 @@ def _pfit_plan(npoint, channels, count, nt):
     return plan, work
 
 
+def check_max_parameters(value, name='max_parameters'):
+    """Refuse anything but an exact Python int in 1..MAX_PARAMETER_ALLOWANCE.
+
+    bool, float, str and NumPy integers are refused, so a limit is never coerced.
+    """
+    if type(value) is not int or not 1 <= value <= MAX_PARAMETER_ALLOWANCE:
+        raise ValueError(f'{name} must be an int in 1..{MAX_PARAMETER_ALLOWANCE}')
+    return value
+
+
 def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution='df_centre_analytic',
                        sites, bonds, quadrature, response_grid, smoothing,
                        shell_cutoff, charge_penalty, anchor_metric_damping,
                        lattice_options, localization_rank_limit,
                        weight_type, weight_coefficient, cutoff, resources,
                        scf_correction, expected_grac_shift=None,
-                       declared_variables=None, max_order=10, scratch_directory=None, log=None,
+                       declared_variables=None, max_parameters=MAX_PARAMETERS, max_order=10,
+                       scratch_directory=None, log=None,
                        distributed_moments=None, response='reference_h2h1', fdds=None,
                        publish_qcvariables=False):
     """Run the complete native chain under one explicit resource contract.
@@ -120,8 +135,10 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
 
     A successful live SCF seal is required even for NONE; SCF is never run here.
     ``lattice_options`` is an explicit core.FitPointsOptions (at most 2000
-    points); all pairs and both PFIT passes are used, with at most 64 fit
-    variables. ``scratch_directory`` is the parent of a fresh private temporary
+    points); all pairs and both PFIT passes are used, with at most
+    ``max_parameters`` fit variables (default 64; an explicit opt-in may raise
+    it to at most 72, which changes admission only, never the model, labels or
+    fit). ``scratch_directory`` is the parent of a fresh private temporary
     directory, never overwritten or resumed. Caller-owned wavefunction/basis
     metadata and BLAS/Libint workspace are outside the numeric cap. ``log`` is
     an optional isapol_logging.StageLog for timings, diagnostics and the
@@ -137,6 +154,7 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
         log.stage('Bounded input validation')
         if not isinstance(resources, BoundedResources):
             raise TypeError('explicit BoundedResources required')
+        check_max_parameters(max_parameters)
         if distribution not in DISTRIBUTIONS:
             raise ValueError(f'distribution must be one of {DISTRIBUTIONS}; '
                              'no ISA or MBIS partition is available here')
@@ -172,8 +190,8 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
         for name, value in (('weight_coefficient', weight_coefficient), ('cutoff', cutoff)):
             _scalar(name, value)
         declared_variables = None if declared_variables is None else tuple(declared_variables)
-        if declared_variables is not None and not 1 <= len(declared_variables) <= MAX_PARAMETERS:
-            raise ValueError(f'bounded refinement requires 1..{MAX_PARAMETERS} declared variables')
+        if declared_variables is not None and not 1 <= len(declared_variables) <= max_parameters:
+            raise ValueError(f'bounded refinement requires 1..{max_parameters} declared variables')
         if any(s.rank_limit > localization_rank_limit for s in sites):
             raise ValueError('refinement rank exceeds localization rank')
         if (not isinstance(response_grid, np.ndarray) or response_grid.dtype != np.float64
@@ -299,9 +317,9 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                     # The variable set is fixed here for every node, so the
                     # parameter cap is admitted before any targets or later solves.
                     log.stage('Refinement model admission', (('parameters', model.parameter_count),
-                              ('limit', MAX_PARAMETERS), ('declared variables', len(model.declared_variables))))
-                    if model.parameter_count > MAX_PARAMETERS:
-                        raise ValueError(f'bounded refinement supports at most {MAX_PARAMETERS} parameters')
+                              ('limit', max_parameters), ('declared variables', len(model.declared_variables))))
+                    if model.parameter_count > max_parameters:
+                        raise ValueError(f'bounded refinement supports at most {max_parameters} parameters')
                 log.stage(f'Point-response targets: {tag}', (('points', npoint),))
                 ledger.admit('point-response targets', _target_bytes(p, npoint),
                              2*p*p*npoint+2*p*npoint*npoint)
