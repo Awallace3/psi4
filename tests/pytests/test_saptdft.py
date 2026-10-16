@@ -718,6 +718,13 @@ def test_saptdft_auto_grac(
             "SAPT_DFT_FUNCTIONAL": "pbe0",
             "SAPT_DFT_GRAC_COMPUTE": SAPT_DFT_GRAC_COMPUTE,
             "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
+            # The GRAC shift runs the neutral monomer and its cation back to
+            # back in the same scratch directory, so a GUESS=READ left in the
+            # options (or a stale <mol>.180.npy in PSI_SCRATCH) would seed the
+            # cation SCF with the neutral orbitals and can converge it to a
+            # different solution than the reference values below.  Pin SAD so
+            # every SCF here builds its own guess.
+            "GUESS": "SAD",
         }
     )
     if grac_basis is not None:
