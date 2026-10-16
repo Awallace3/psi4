@@ -564,6 +564,21 @@ DFT_GRID_SWITCH_FACTOR=1 and **at least 2 final-grid iterations**.
   `runs/saptdft-cuest-cpks/p157-full2-ff2ebc4c4f-20261016/` (`run.sh`, `chain.sh`: GPU water-dimer
   smoke gates `protein157-631gss-full2`). Launch on embers holder 14096296 (H100|H200, 8c, 128G, 2h)
   via `srun --overlap` when it starts; auto-launcher armed. No new submissions.
+- 09:2x: `chain.sh` (run dir, not tracked source) now also starts an independent `nvidia-smi`
+  sampler (1000 ms; timestamp, GPU UUID, memory used/total, utilization) to `sessions/gpu-samples.csv`,
+  stopped on exit; markers in `sessions/gpu-samples.meta.txt` (coordinator request). Policy unchanged.
+  Status checks every 300 s.
+
+## CPKS section published (user, 2026-10-16 09:21)
+
+Inserted into `~/docs/saptdft/cuest/breakdown-2026-10-04.html` as section 4 "CPKS on the GPU" through
+the page builder, so rebuilds keep it: new `cpks_section.py` + `cpks-section.html` (copy of
+`cpks-gpu-report-section.html`, `ac3b32926d`), one import/render/nav line in
+`build_breakdown_2026_10_04.py`, one SECTIONS entry in `docs_html_report.py`. Built with
+`main(update_original=False)` (the default would also rewrite `../cuest-bottlenecks.html`). A
+scratch rebuild without the change was byte-identical to the live page; with it, the only other
+differences are section numbers 4–15 → 5–16. Data JSON unchanged. Backups of the replaced files:
+scratchpad `docsbuild/live-backup/`.
 
 ## Resume
 
