@@ -775,3 +775,6 @@ Phoenix: worktree `gits/psi4.saptdft-cuest-cpks-extern` (b9032fdf25), run dir
 `runs/saptdft-cuest-cpks/extern-b9032fdf25-20261016/` (build.sh, run.sh, chain.sh, JOBS.txt);
 `chain.sh` builds, waits for the xcmem probe, then runs extern tests, test_cuest.py + test_cuest_sad.py
 (nuclear-V refactor regression) and the timing on holder 14104298 (auto-launched when it starts).
+
+Report ownership (parent notice, 2026-10-16): `~/docs/saptdft/cuest` report and builders are owned by the
+parent's cleanup worker until coordinated; this branch does not edit them. Induction/extern results stay unpublished.
