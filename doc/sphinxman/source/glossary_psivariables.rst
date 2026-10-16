@@ -1124,6 +1124,43 @@ PSI Variables by Alpha
    Per-atom expectation value of r^3 [a0^3], equivalent to the volume
    of the MBIS-partitioned density.
 
+.. psivar:: MBIS SHELL COUNTS
+   MBIS SHELL POPULATIONS
+   MBIS SHELL WIDTHS
+
+   Complete native MBIS proatom model, stored on the wavefunction in molecule
+   atom order. Counts have shape (nat, 1); populations and widths have shape
+   (nat, 7), with active shells first and unused entries zero. Active populations
+   are positive electron numbers (not signed charges); widths are positive
+   :math:`\sigma` in bohr, not inverse widths. For atom A,
+   :math:`\rho_A^0(r)=\sum_s N_{As}\exp(-r/\sigma_{As})/(8\pi\sigma_{As}^3)`.
+   The last active shell reproduces ``MBIS VALENCE WIDTHS`` and the negative
+   of ``MBIS VALENCE CHARGES``.
+
+   These owned arrays are removed before each native MBIS attempt and published
+   only after convergence and successful postprocessing. ECPs and ghost sites
+   are unsupported. The snapshot describes the density and geometry at the time
+   of that attempt; later changes to the wavefunction do not update it.
+
+.. psivar:: MBIS CONVERGED
+   MBIS ITERATIONS
+   MBIS DENSITY RESIDUAL
+   MBIS GRID ELECTRONS
+
+   Wavefunction-local diagnostics for the latest native MBIS attempt.
+   ``MBIS CONVERGED`` is reset to 0 at entry and set to 1 only after publishing
+   the complete shell snapshot. ``MBIS ITERATIONS`` counts attempted shell
+   updates (0 if none). The existing iteration bound is unchanged: at most
+   ``MBIS_MAXITER - 1`` updates.
+   ``MBIS DENSITY RESIDUAL`` is the maximum over atoms of
+   :math:`[\int(\rho_{A,\mathrm{new}}^0-\rho_{A,\mathrm{old}}^0)^2\,d^3r]^{1/2}`
+   on the MBIS grid, in atomic units; it is positive infinity until a finite
+   residual is available for the current update. ``MBIS GRID ELECTRONS`` is the
+   integrated molecular electron density, removed at entry and set when
+   evaluated (possibly nonfinite on failure). A residual below threshold alone
+   does not imply successful postprocessing: always check ``MBIS CONVERGED``.
+   Existing valence and multipole variables are not invalidated by this protocol.
+
 .. psivar:: MBIS VALENCE CHARGES
 
    Per-atom valence charges [e] computed from an MBIS partitioned density.

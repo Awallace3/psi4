@@ -202,6 +202,12 @@ that the density is partitioned on a molecular quadrature grid, the details of w
 controlled with the keywords |globals__mbis_radial_points|, |globals__mbis_spherical_points|, and 
 |globals__mbis_pruning_scheme|. (Associated Paper: [Verstraelen:2016]_)
 
+Each native MBIS attempt also stores its complete converged proatom model, every
+shell rather than the valence shell alone, together with convergence
+diagnostics (:psivar:`MBIS SHELL POPULATIONS`, :psivar:`MBIS CONVERGED`). The
+model is published only after a fully successful attempt; check
+:psivar:`MBIS CONVERGED` before using it.
+
 .. note::
    MBIS is not supported for basis sets that use effective core potentials (ECPs).
    Please use all-electron basis sets for MBIS calculations. See `this issue at denspart <https://github.com/theochem/denspart/issues/19>`_
