@@ -12,7 +12,10 @@ parent branch, report or PR.
   `c0f23b8d9d`): 116 tests pass, 4 fail (pre-existing cuEST wK DF gap, unrelated);
   18/18 contract cases clean; 13–27x speedup of complete CPKS solves over all-CPU CPKS
   at 16 threads for 384–660 bf (see "A100 interactive results").
-- **CUDA-LibXC route: no GPU evidence yet** (needs H100/H200). Holders: 14087771
+- **CUDA-LibXC route: GPU-verified on H200** (14087771, multi-arch build `f2d8ec7a93`, cuEST
+  0.2.50): contract 18/18, CUDA vs host LibXC ≤ 1.7e-17, 25–34x CPKS solve speedup over the
+  24-core CPU node for 384–660 bf, SAPT CPKS 26x. Empty-beta oracle fixed (`afa5ae424b`).
+  Earlier note: Holders: 14087771
   (inferno, est. start 2026-10-17 00:10) and 14096296 (embers, gts-cs207-chemx, submitted
   2026-10-16 04:13 at user request). `interactive/h100-chain.sh` (tests, then probe with
   `PROBE_ARMS=cuest,hostxc`) is launched on whichever starts first; sessions
@@ -370,6 +373,28 @@ Diagnosis of the empty-beta failure (all on the same H200):
 **Contract** (`h200-probe-1`, CUDA LibXC device derivatives): 18/18 clean — identities
 ≤ 3.3e-16, FD 7e-11–8.5e-10 on 4e-2–1.3e-1, host grid vs cuEST grid ≤ 1.5e-6, negative
 reference finite; **CUDA vs host LibXC response ≤ 1.73e-17** for all 6 functionals × 3 kinds.
+
+**Timing** (`h200-probe-1`, 8 threads, arms cuest (CUDA LibXC device derivatives,
+`cuda_libxc_scf_timer` true) and hostxc; speedup vs the 24-core CPU baseline 14091690):
+
+| System (nbf) | XC | Hx8 cuest / hostxc | solve cuest / hostxc | cpu24 solve | speedup vs cpu24 |
+|---|---|---|---|---|---|
+| benzene dimer cc-pVDZ (228) | PBE | 0.167 / 1.72 | 0.79 / 9.60 | 8.78 | 11.1x |
+| benzene dimer cc-pVDZ (228) | PBE0 | 0.174 / 1.72 | 0.89 / 9.83 | 9.47 | 10.6x |
+| benzene dimer aug-cc-pVDZ (384) | PBE | 0.264 / 7.63 | 1.28 / 39.99 | 32.68 | 25.5x |
+| benzene dimer aug-cc-pVDZ (384) | PBE0 | 0.286 / 7.66 | 1.43 / 40.82 | 36.07 | 25.2x |
+| coronene aug-cc-pVDZ (660) | PBE | 0.619 / 28.1 | 3.63 / 155.9 | 121.74 | 33.5x |
+| coronene aug-cc-pVDZ (660) | PBE0 | 0.772 / 25.1 | 4.88 / 161.2 | 149.28 | 30.6x |
+
+Water (24–92 bf): GPU 0.05–0.32 s vs hostxc 0.15–1.33 s (now faster than the host
+route at every size). Per-action stage split (coronene PBE, Hx8): response density 0.234 s,
+AO integration 0.267 s, reference density 0.029 s, derivatives 0.0008 s, contraction
+0.0004 s (vs 0.03/0.04 s on the A100 host-LibXC route).
+
+**SAPT(DFT)-D4(I) CPKS** (PBE0, GRAC 0.136): water dimer cc-pVDZ 0.17 s (hostxc 0.98),
+aug-cc-pVDZ 0.20 s (0.93); **benzene dimer aug-cc-pVDZ 1.36 s vs cpu24 35.97 s (26.4x)**,
+total 5.6 s vs 70.8 s. Energies equal the A100 cuest arm (IND -0.319269, TOTAL -2.218377
+kcal/mol); the cuEST-grid vs host-grid difference is grid error as before.
 
 ## Resume
 
