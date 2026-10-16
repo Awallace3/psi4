@@ -403,6 +403,25 @@ probe exit 0, contract clean, timings equal to the cuEST 0.2.50 build (coronene 
 3.64 vs 3.63 s, PBE0 4.62 vs 4.88 s; benzene aDZ 1.28/1.44 s; SAPT benzene CPKS 1.37 s).
 The H200-vs-A100 gain is therefore the device (H200 + CUDA LibXC derivatives), not cuEST 0.2.50.
 
+**GPU memory** (`h200-vxmem-1`, multi build, cuest arm; `cudaMemGetInfo` used MiB after SCF →
+after the first `cphf_Hx` (8 vectors) → after a dipole solve → after `V.finalize()`):
+
+| System (nbf) | XC | after SCF | after 1st Hx | added | solve growth | after finalize |
+|---|---|---|---|---|---|---|
+| water+ UKS aug-cc-pVTZ (92) | PBE | 1123 | 3085 | +1962 | 0 | 1115 |
+| water+ UKS aug-cc-pVTZ (92) | PBE0 | 1101 | 3051 | +1950 | -16 | 1065 |
+| benzene dimer aug-cc-pVDZ (384) | PBE | 1991 | 4029 | +2038 | 0 | 1943 |
+| benzene dimer aug-cc-pVDZ (384) | PBE0 | 1927 | 3943 | +2016 | +72 | 1929 |
+| coronene aug-cc-pVDZ (660) | PBE | 5099 | 7191 | +2092 | 0 | 5029 |
+| coronene aug-cc-pVDZ (660) | PBE0 | 5023 | 7079 | +2056 | +28 | 4945 |
+
+The ~2 GB is nearly size-independent (only ~130 MB scales from 92 to 660 bf) and matches the
+2e9-byte cuEST variable-buffer budget the response passes (`cuestWorkspaceDescriptor_t{0,
+2000000000}`): the cached SDK temporary workspace (`sdk_device`) dominates, not the grid
+fields. It is bounded across a solve (≤ +72 MiB), released by `V.finalize()`, held per live
+V (SAPT(DFT) monomers: up to ~2x), and not counted in any Psi4 GPU budget. Open option:
+make the budget configurable / release the SDK workspace after each call, with a timing sweep.
+
 ## Resume
 
 1. `scripts/job_status.sh phoenix2 14085247 14085248 14085249 14085250`.
