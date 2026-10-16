@@ -91,6 +91,8 @@ class MolecularGrid {
 
     /// Orientation matrix
     std::shared_ptr<Matrix> orientation_;
+    /// Orientation matrix derivative, see orientation_gradient()
+    std::shared_ptr<Matrix> orientation_gradient_;
     /// Radial grids, per atom
     std::vector<std::shared_ptr<RadialGrid>> radial_grids_;
     /// Spherical grids, per atom and radial point
@@ -153,6 +155,15 @@ class MolecularGrid {
 
     /// Orientation matrix
     std::shared_ptr<Matrix> orientation() const { return orientation_; }
+    /// Generator W = (dQ/dX) Q^T of the orientation matrix Q, one row-major 3x3 per nuclear coordinate
+    /// (3*natom x 9). A point of atom A moves by dr = W (r - R_A) dX when the grid frame turns.
+    /// nullptr when the frame is not a smooth function of the geometry (degenerate charge moments).
+    std::shared_ptr<Matrix> orientation_gradient() const { return orientation_gradient_; }
+    /// d ln P_A / dR (npoints x 3*natom) of the nuclear partition weight for points owned by atom A
+    /// that move rigidly with it; the grid weight derivative is dw/dR = w * grad.
+    /// If grad_point is given, it receives d ln P_A / dr (npoints x 3) at fixed nuclei.
+    void nuclear_weight_log_gradient(int A, size_t npoints, const double* x, const double* y, const double* z,
+                                     double** grad, double** grad_point = nullptr) const;
     /// Radial grids, per atom
     const std::vector<std::shared_ptr<RadialGrid>>& radial_grids() const { return radial_grids_; }
     /// Spherical grids, per atom and radial point

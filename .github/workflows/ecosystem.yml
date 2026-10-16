@@ -248,6 +248,13 @@ jobs:
         cat env_p4build.yaml
         echo "::endgroup::"
 
+    - name: Constrain released QCFractal dependencies
+      if: runner.os == 'macOS'
+      # QCFractal 0.70 does not support SQLAlchemy 2.1's virtual generated columns.
+      # Remove once the conda release includes MolSSI/QCFractal#1038.
+      # Linux installs QCFractal main below and should exercise the upstream fix.
+      run: echo "  - sqlalchemy<2.1" >> env_p4build.yaml
+
     - name: Setup Conda
       uses: conda-incubator/setup-miniconda@v4
       with:
