@@ -355,10 +355,15 @@ model keeps its labels. Only the oeprop route clears the names on failure.
 The numerical settings above are a declaration, not transferable defaults or a
 claim of agreement for an arbitrary molecule. In particular, different kernel
 smoothing settings define different calculations. If variables are declared
-explicitly, use the same complete variable inventory at every node; the cutoff
-still decides which of those variables carry anchor penalties. Refined and
-unrefined tensors remain distinct under ``refined_tensors`` and
-``local_tensors``.
+explicitly, use the same complete variable inventory at every node. As in
+CamCASP's frequency sweep, the cutoff test on the first (static) node decides
+which variables carry anchor penalties, and every later node penalizes exactly
+that selection with its own anchor and the same weight formula, even where a
+later anchor is within the cutoff. Declared variables the static cutoff did not
+select (e.g. extras a ``.pdef`` lists without a ``Penalties`` line) are free
+parameters at every node. This holds for both the cutoff-derived and the
+declared bounded route. Refined and unrefined tensors remain distinct under
+``refined_tensors`` and ``local_tensors``.
 
 The bounded route permits at most 2000 fit points, 64 sites and 64
 fit variables (the variable set is fixed at the first node and admitted

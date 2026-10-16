@@ -547,3 +547,69 @@ def test_reserved_publication_labels_refuse_before_any_report_but_the_model_keep
     assert wfn.has_variable('ATOMIC REFINED DISPERSION C6 O TOTALS')
     assert wfn.has_variable('ATOM H_TOTAL C6 REFINED DISPERSION COEFFICIENT')
     assert np.array_equal(_c6(kept), _c6(similar))
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_later_nodes_penalize_exactly_the_static_node_selection(small_water, tmp_path, monkeypatch):
+    """CamCASP selects the penalized variables on the static (first) node and
+    writes a Penalties line for each at every later node, with that node's
+    anchor and the unchanged weight formula (process_data.F90:2112-2134,
+    2269-2275). Both bounded entries -- cutoff-derived and declared -- must
+    carry that static selection to every node: a selected variable whose later
+    anchor falls below the cutoff stays penalized, and a declared extra that
+    failed the static cutoff stays free even where a later anchor exceeds it.
+
+    The real helper builds every model; the patch only replaces the selected
+    (and, in the declared run, the extra) anchor entry per node so that the toy
+    crosses the cutoff on purpose."""
+    wfn, recipe, args = small_water
+    omegas = list(args['quadrature'].frequencies)
+    selected, extra = 'A_10_11c_A', 'A_00_10_A'
+    build = refine.refinement_model
+    seen, raise_extra = [], [False]
+
+    def crossing(sites, anchors, **kwargs):
+        node = omegas.index(kwargs['frequency_au'])
+        anchors = [np.array(a, copy=True) for a in anchors]
+        anchors[0][1, 2] = anchors[0][2, 1] = 2e-4 if node == 0 else 5e-5
+        if node and raise_extra[0]:
+            anchors[0][0, 1] = anchors[0][1, 0] = 3e-4
+        model = build(sites, anchors, **kwargs)
+        seen.append((node, model))
+        return model
+
+    monkeypatch.setattr(refine, 'refinement_model', crossing)
+
+    def check(models, declared):
+        static = set(models[0].parameter_labels)-set(models[0].unpenalized_variables)
+        assert selected in static and extra not in static
+        for node, model in enumerate(models):
+            assert model.parameter_labels == models[0].parameter_labels
+            assert set(model.parameter_labels)-set(model.unpenalized_variables) == static
+            k = model.parameter_labels.index(selected)
+            alpha = 2e-4 if node == 0 else 5e-5
+            assert model.anchors[k] == alpha
+            assert model.strengths[k] == refine.penalty_weight(weight_type=args['weight_type'],
+                weight_coefficient=args['weight_coefficient'], alpha=alpha, frequency=omegas[node],
+                rank1=1, rank2=1)
+            assert model.strengths[k] > 0.0
+            if declared:
+                j = model.parameter_labels.index(extra)
+                assert extra in model.unpenalized_variables
+                assert (model.anchors[j], model.strengths[j]) == (0.0, 0.0)
+        return static
+
+    derived = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, log=StageLog(0))
+    models = [r.model for r in derived.refinements]
+    assert len(models) == len(omegas) >= 3
+    static = check(models, False)
+    seen.clear()
+    raise_extra[0] = True
+    declared = driver.bounded_properties(wfn, recipe, **args,
+                                         declared_variables=models[0].parameter_labels+(extra,),
+                                         scratch_directory=tmp_path, log=StageLog(0))
+    explicit = [r.model for r in declared.refinements]
+    assert extra in explicit[0].parameter_labels
+    assert check(explicit, True) == static
+    assert {node for node, _ in seen} == set(range(len(omegas)))
+    assert not list(tmp_path.iterdir())

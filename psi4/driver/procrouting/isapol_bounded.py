@@ -138,11 +138,15 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
     points); all pairs and both PFIT passes are used, with at most
     ``max_parameters`` fit variables (default 64; an explicit opt-in may raise
     it to at most 72, which changes admission only, never the model, labels or
-    fit). ``scratch_directory`` is the parent of a fresh private temporary
-    directory, never overwritten or resumed. Caller-owned wavefunction/basis
-    metadata and BLAS/Libint workspace are outside the numeric cap. ``log`` is
-    an optional isapol_logging.StageLog for timings, diagnostics and the
-    dispersion tables. ``publish_qcvariables`` publishes the refined-dispersion
+    fit). The variable list and its penalized subset are both fixed at the
+    first (static) node, as CamCASP's sweep fixes them: every later node
+    penalizes exactly the variables the static cutoff selected, with its own
+    anchor and the same weight formula, and leaves declared variables the
+    static cutoff did not select free. ``scratch_directory`` is the parent of
+    a fresh private temporary directory, never overwritten or resumed.
+    Caller-owned wavefunction/basis metadata and BLAS/Libint workspace are
+    outside the numeric cap. ``log`` is an optional isapol_logging.StageLog
+    for timings, diagnostics and the dispersion tables. ``publish_qcvariables`` publishes the refined-dispersion
     QCVariables on ``wfn`` after a successful contraction (the oeprop route);
     by default nothing is written to the wavefunction.
     """
@@ -257,6 +261,7 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                 solve_record, localization = 'native Psi4 original H2H1 solve', 'Production'
             else:
                 solve_record, localization = 'native Psi4 declared-AUX FDDS solve', 'Reported-input'
+            static_penalized = None
             for node, omega in enumerate(quadrature.frequencies, 1):
                 tag = f'node {node}/{nf}, omega={omega:.12g} au'
                 solved = solver.solve(omega)
@@ -284,9 +289,14 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                     a = np.zeros((site.component_count, site.component_count))
                     a[1:, 1:] = local.raw_local.array[0, i, :site.component_count-1, :site.component_count-1]
                     anchors.append(a)
+                # The first (static) node's cutoff selects the penalized variables;
+                # every later node penalizes exactly that selection, each with its
+                # own anchor (process_data.F90:2112-2134, 2269-2275). Declared
+                # extras the static cutoff did not select stay free at every node.
                 model = refine.refinement_model(sites, anchors, frequency_au=omega, cutoff=cutoff,
                     weight_type=weight_type, weight_coefficient=weight_coefficient,
-                    declared_variables=declared_variables, provenance=source['model'])
+                    declared_variables=declared_variables, penalized_variables=static_penalized,
+                    provenance=source['model'])
                 if declared_variables is None:
                     # localize.py runs process on the first (static) node while no
                     # .pdef exists; process writes it (process_data.F90:2046-2058)
@@ -304,6 +314,9 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                         raise RuntimeError('cutoff-derived variable list does not reproduce its own model')
                     del derived
                     log.items((('cutoff-derived variables from this node', len(declared_variables)),))
+                if static_penalized is None:
+                    unpenalized = set(model.unpenalized_variables)
+                    static_penalized = tuple(n for n in model.parameter_labels if n not in unpenalized)
                 local_tensors.append(local.raw_local)
                 diagnostics.append(dict(frequency=omega, response_residual=residual,
                     localization_residual=local.frequency_diagnostics[0].residuals.maximum,
