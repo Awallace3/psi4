@@ -25,7 +25,10 @@ geometries directory; its SYSTEMS named in PROBE_SYSTEMS then replace the built-
 systems in timing and sapt. PROBE_BASIS overrides their basis (e.g. aug-cc-pvdz, with
 the matching -jkfit), PROBE_METHODS the timing functionals (default pbe,pbe0),
 PROBE_REPEATS the timed actions per point (default 5) and PROBE_MEMORY Psi4's memory
-(default 24 GB).
+(default 24 GB). PROBE_INITIAL_GRID=RADIALxANGULAR (e.g. 25x110) switches every SCF in
+timing and sapt from that initial XC grid to the final 75 x 302. PROBE_HOST_LIBXC=1 sets
+CUEST_XC_RESPONSE_HOST_LIBXC (cuEST-grid response derivatives from host LibXC even in a
+CUDA-LibXC build).
 
 Numbers only; tests/pytests/test_cuest_cphf.py holds the pass/fail gates.
 PROBE_CPU_SMOKE=1 runs the same logic with every potential on the host grid (no GPU),
@@ -62,6 +65,11 @@ psi4.set_memory(os.environ.get("PROBE_MEMORY", "24 GB"))
 METHODS = os.environ.get("PROBE_METHODS", "pbe,pbe0").split(",")
 REPEATS = int(os.environ.get("PROBE_REPEATS", "5"))
 BASIS = os.environ.get("PROBE_BASIS")
+INITIAL_GRID = os.environ.get("PROBE_INITIAL_GRID", "")
+SWITCH_OPTIONS = dict(zip(("dft_radial_points_initial", "dft_spherical_points_initial"),
+                          map(int, INITIAL_GRID.split("x")))) if INITIAL_GRID else {}
+if os.environ.get("PROBE_HOST_LIBXC"):
+    SWITCH_OPTIONS["cuest_xc_response_host_libxc"] = True
 
 
 def suite_systems():
@@ -149,6 +157,7 @@ def base_options(**extra):
         "save_jk": True, "e_convergence": 1.e-10, "d_convergence": 1.e-9,
         "cuest_mixed_precision": False, "dft_radial_points": 75, "dft_spherical_points": 302,
     }
+    options.update(SWITCH_OPTIONS)
     options.update(extra)
     psi4.set_options(options)
 
@@ -437,7 +446,10 @@ def timing():
                     entry = {"system": name, "basis": basis, "nbf": wfn.basisset().nbf(), "method": method,
                              "reference": "UKS" if unrestricted else "RKS", "arm": arm, "threads": THREADS,
                              "xc_on_cuest_grid": wfn.V_potential().uses_cuest_xc(), "scf_s": scf_s,
-                             "jk": wfn.jk().name(), **libxc_route_from_scf()}
+                             "jk": wfn.jk().name(), "initial_grid": INITIAL_GRID or None,
+                             "response_host_libxc": bool(os.environ.get("PROBE_HOST_LIBXC")),
+                             "initial_grid_iterations": wfn.variable("SCF DFT INITIAL GRID ITERATIONS")
+                             if INITIAL_GRID else 0, **libxc_route_from_scf()}
                     entry["actions"] = [time_actions(wfn, unrestricted, n, REPEATS) for n in (1, 8)]
                     entry["solve"] = time_solve(wfn, unrestricted)
                     print(json.dumps(entry), flush=True)
@@ -492,12 +504,15 @@ def sapt():
                     "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL", "USE_CUEST": use_cuest and GPU,
                     "CUEST_XC": cuest_xc and GPU,
                     "CUEST_MIXED_PRECISION": False,
+                    "dft_radial_points": 75, "dft_spherical_points": 302, **SWITCH_OPTIONS,
                 })
                 timer.elapsed = 0.0
                 t0 = time.perf_counter()
                 psi4.energy("sapt(dft)-d4(i)")
                 total = time.perf_counter() - t0
                 entry = {"system": name, "basis": basis, "arm": arm, "threads": THREADS, "total_s": total,
+                         "initial_grid": INITIAL_GRID or None,
+                         "response_host_libxc": bool(os.environ.get("PROBE_HOST_LIBXC")),
                          "cpks_solve_s": timer.elapsed,
                          "vx_timers": timer_totals(("RV: Form Vx", "cuEST Vx:")),
                          "values": {k: psi4.variable(k) for k in (
