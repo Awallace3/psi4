@@ -841,3 +841,7 @@ Rainbow (17-operation) CPU/GPU pairs vs system size: peptide, nanotube, protein8
     worktree scal631b; run.sh repointed; failed smoke kept). GPU pilot r1 all ok:
     peptide 8.3 s (CPKS 0.8), nanotube 17.0 (3.2), protein83 41.3 (11.2), protein157 198.7 s (CPKS 67.5 = 27.0 δHF + 40.5 PBE0;
     18/17 CG iterations; switched SCFs 21/10, 17/7), GPU peak 78,457 MiB (76.6 GiB). Repeats 2–3 queued on the same holder.
+  - rerun2 (step 3, 18:46–18:47, b9032fdf25 build, tests at d0b6d64c92): **test_cuest.py + test_cuest_extern.py
+    36 passed, 0 failed** — includes both point-charge SCF tests (points; points+diffuse with the CPU warning)
+    and `test_cuest_response_route_matches_cpu[tdscf|polarizability]`. Earlier step 0: test_extern.py all passed,
+    test_cuest_sad.py passed. GPU repeats r2/r3 started 18:47 on the same holder.
