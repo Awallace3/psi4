@@ -3,7 +3,13 @@
 # Runs inside a (CPU) allocation; no GPU calls. Dependencies are read-only.
 # Arguments: worktree, environment, commit, output, variant (host|cuda).
 #   host: LibXC from the environment (host LibXC derivative route)
-#   cuda: CUDA LibXC 7.1.2 (device derivative route), sm_90
+#   cuda: CUDA LibXC 7.1.2 (device derivative route)
+# Optional environment overrides (defaults reproduce the original sm_90 / cuEST 0.2.2 builds):
+#   CPKS_CUDA_ARCHS  CUDA architectures (default 90; must be embedded in CPKS_CUDA_LIBXC)
+#   CPKS_CUDA_LIBXC  CUDA LibXC prefix (default software/libxc-7.1.2-cuda)
+#   CPKS_CUEST_SDK   standalone cuEST SDK (lib/13, include); default: the environment's libcuest
+#   CPKS_BUILD_DIR   build directory name in the worktree (default build_cpks_<variant>)
+# The output gets runtime.env (LD_LIBRARY_PATH and expected prefixes) for the run scripts.
 set -euo pipefail
 root=$(realpath "$1")
 env=$(realpath "$2")
@@ -25,35 +31,55 @@ unset GCC_ROOT CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH LIBRARY
 deps=/storage/project/r-cs207-0/awallace43/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage
 software=/storage/project/r-cs207-0/awallace43/software
 export CUDA_HOME="$software/toolchains/cuda13" CUDA_PATH="$software/toolchains/cuda13"
+archs="${CPKS_CUDA_ARCHS:-90}"
+cuest_sdk="${CPKS_CUEST_SDK:-}"
+cuest_lib_dir="$env/lib"
+cuest_args=("-DcuEST_ROOT=$env" "-DcuEST_INCLUDE_DIR=$env/include" "-DcuEST_LIBRARY=$env/lib/libcuest.so")
+if [[ -n "$cuest_sdk" ]]; then
+    cuest_sdk=$(realpath "$cuest_sdk")
+    cuest_lib_dir="$cuest_sdk/lib/13"
+    test -f "$cuest_lib_dir/libcuest.so"
+    cuest_args=("-DcuEST_ROOT=$cuest_sdk" "-DcuEST_INCLUDE_DIR=$cuest_sdk/include"
+                "-DcuEST_LIBRARY=$cuest_lib_dir/libcuest.so")
+fi
 libxc="$env"
 cc="$env/bin/x86_64-conda-linux-gnu-cc"
 cxx="$env/bin/x86_64-conda-linux-gnu-c++"
 cuda_args=()
 if [[ "$variant" == cuda ]]; then
-    libxc="$software/libxc-7.1.2-cuda"
+    libxc=$(realpath "${CPKS_CUDA_LIBXC:-$software/libxc-7.1.2-cuda}")
     cc="$software/toolchains/conda-gcc"
     cxx="$software/toolchains/conda-g++"
     cuda_args=(
         "-DCMAKE_CUDA_COMPILER=$software/toolchains/cuda13/bin/nvcc"
         "-DCMAKE_CUDA_HOST_COMPILER=$cxx"
-        "-DCMAKE_CUDA_ARCHITECTURES=90"
+        "-DCMAKE_CUDA_ARCHITECTURES=$archs"
         "-DCMAKE_CUDA_FLAGS=-I$software/toolchains/cuda13/targets/x86_64-linux/include"
     )
     libxc_config="$libxc/lib64/cmake/Libxc"
-    export LD_LIBRARY_PATH="$libxc/lib64:$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    libxc_lib="$libxc/lib64"
 else
     libxc_config="$libxc/lib/cmake/Libxc"
-    export LD_LIBRARY_PATH="$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    libxc_lib="$env/lib"
 fi
+# The SDK libcuest and the environment's share the soname libcuest.so.0: the SDK goes first.
+runtime_path="$cuest_lib_dir:$libxc_lib:$env/lib"
+export LD_LIBRARY_PATH="$runtime_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+{
+    printf 'export LD_LIBRARY_PATH=%q\n' "$runtime_path"
+    printf 'CPKS_EXPECTED_LIBXC=%q\nCPKS_EXPECTED_CUEST=%q\nCPKS_CUDA_ARCHS=%q\n' \
+        "$libxc" "$cuest_lib_dir" "$archs"
+} > "$out/runtime.env"
 {
     "$cc" --version
     "$cxx" --version
     test -x "$("$cc" -print-prog-name=cc1)"
     test -x "$("$cxx" -print-prog-name=cc1plus)"
-    printf 'cc=%s\ncxx=%s\nvariant=%s\nlibxc=%s\n' "$cc" "$cxx" "$variant" "$libxc"
+    printf 'cc=%s\ncxx=%s\nvariant=%s\nlibxc=%s\ncuest=%s\narchs=%s\n' "$cc" "$cxx" "$variant" "$libxc" \
+        "$cuest_lib_dir" "$archs"
 } > "$out/compiler.txt"
 printf '%s\n' "$pin" > "$out/commit.txt"
-build="$root/build_cpks_$variant"
+build="$root/${CPKS_BUILD_DIR:-build_cpks_$variant}"
 mkdir -p "$build"
 if [[ -e "$build/cpks-commit.txt" ]]; then
     test "$( < "$build/cpks-commit.txt")" = "$pin"
@@ -69,15 +95,14 @@ fi
     "-DCMAKE_C_FLAGS=-I$software/toolchains/cuda13/targets/x86_64-linux/include -DPSI4_CUDA13_HEADER_ENV=1" \
     "-DCMAKE_CXX_FLAGS=-I$software/toolchains/cuda13/targets/x86_64-linux/include -DPSI4_CUDA13_HEADER_ENV=1" \
     -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--enable-new-dtags \
-    "-DCMAKE_PREFIX_PATH=$libxc;$env;$deps" \
+    "-DCMAKE_PREFIX_PATH=$libxc;${cuest_sdk:+$cuest_sdk;}$env;$deps" \
     "-DPython_EXECUTABLE=$env/bin/python" \
     "-DLAPACK_LIBRARIES=$env/lib/libmkl_rt.so" "-DLAPACK_INCLUDE_DIRS=$env/include" \
     "-DLibxc_DIR=$libxc_config" "-DLibint2_DIR=$env/lib/cmake/libint2" \
     "-DEinsums_DIR=$deps/share/cmake/Einsums" \
     -DENABLE_Einsums=ON -DENABLE_OPENMP=ON -DENABLE_cuEST=ON \
     -DENABLE_dkh=OFF -DENABLE_XHOST=OFF \
-    "-DcuEST_ROOT=$env" "-DcuEST_INCLUDE_DIR=$env/include" \
-    "-DcuEST_LIBRARY=$env/lib/libcuest.so" \
+    "${cuest_args[@]}" \
     -DCMAKE_INSIST_FIND_PACKAGE_cuEST=ON -Dpsi4_CMAKE_UNITY_BUILD=ON \
     "${cuda_args[@]}" > "$out/configure.log" 2>&1
 inner="$build/psi4-core-prefix/src/psi4-core-build"
@@ -101,6 +126,10 @@ fi
 "$cxx" -std=c++17 -O2 -I "$root/psi4/src" "$root/devtools/cuest_xc_response_math_check.cc" \
     -o "$out/math_check"
 "$out/math_check" > "$out/math_check.log" 2>&1
+# The staged core must resolve the intended cuEST and LibXC under runtime.env.
+ldd "$build"/stage/lib/psi4/core*.so > "$out/ldd.txt"
+grep -q "libcuest.so.0 => $cuest_lib_dir/" "$out/ldd.txt"
+grep -qE "libxc.so.[0-9]+ => $libxc/" "$out/ldd.txt"
 sha256sum "$build"/stage/lib/psi4/core*.so > "$out/core.sha256"
 test "$(git -C "$root" rev-parse HEAD)" = "$pin"
 test -z "$(git -C "$root" status --porcelain --untracked-files=no)"

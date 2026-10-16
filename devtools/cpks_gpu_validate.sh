@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # GPU validation of one cpks_gpu_build.sh build: regression tests, then the probe.
-# GPUs: H100/H200 for the CUDA LibXC build, also A100 for the host-LibXC build.
+# GPUs: the CUDA LibXC build runs where its architectures (runtime.env) include the device's;
+# the host-LibXC build runs on A100/H100/H200. Library paths come from the build's runtime.env.
 # Arguments: worktree, environment, commit, build output (with BUILD_OK), output,
 #            variant (host|cuda), probe sections (e.g. "contract timing sapt").
 set -euo pipefail
@@ -17,7 +18,7 @@ test "$(git -C "$root" rev-parse HEAD)" = "$pin"
 test -z "$(git -C "$root" status --porcelain --untracked-files=no)"
 # The build link must have finished for this exact commit and variant.
 test "$( < "$built/BUILD_OK")" = "$pin $variant"
-build="$root/build_cpks_$variant"
+build="$root/${CPKS_BUILD_DIR:-build_cpks_$variant}"
 (cd "$built" && sha256sum -c core.sha256)
 mkdir -p "$out"
 export PATH="$env/bin:$PATH" PYTHONNOUSERSITE=1
@@ -33,17 +34,14 @@ module load gcc/12.3.0 cuda/12.6.1
 unset GCC_ROOT CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH LIBRARY_PATH
 software=/storage/project/r-cs207-0/awallace43/software
 export CUDA_HOME="$software/toolchains/cuda13" CUDA_PATH="$software/toolchains/cuda13"
-libxc="$env"
-if [[ "$variant" == cuda ]]; then
-    libxc="$software/libxc-7.1.2-cuda"
-    export LD_LIBRARY_PATH="$libxc/lib64:$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-else
-    export LD_LIBRARY_PATH="$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-fi
+# Sets LD_LIBRARY_PATH, CPKS_EXPECTED_LIBXC, CPKS_EXPECTED_CUEST and CPKS_CUDA_ARCHS.
+source "$built/runtime.env"
+libxc=$CPKS_EXPECTED_LIBXC
 nvidia-smi --query-gpu=name,uuid,driver_version,compute_cap --format=csv,noheader | tee "$out/gpu.txt"
-# CUDA LibXC is built for sm_90 only; the host-LibXC build has no device code of its own.
 if [[ "$variant" == cuda ]]; then
-    grep -Eq 'H100|H200' "$out/gpu.txt"
+    # The device's architecture must be compiled into this CUDA LibXC/Psi4 build.
+    cap=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d ' .')
+    [[ ";$CPKS_CUDA_ARCHS;" == *";$cap;"* ]]
 else
     grep -Eq 'A100|H100|H200' "$out/gpu.txt"
 fi
@@ -51,6 +49,7 @@ printf '%s\n' "$pin" > "$out/commit.txt"
 eval "$("$build/stage/bin/psi4" --psiapi)"
 export EXPECTED_PSI4_PACKAGE="$build/stage/lib/psi4"
 export CUEST_DEPENDENCY_ENV="$env" EXPECTED_LIBXC_PREFIX="$libxc" CPKS_VARIANT="$variant"
+export EXPECTED_CUEST_DIR="$CPKS_EXPECTED_CUEST"
 # Never run Python from the source root (it shadows the staged package).
 cd "$out"
 "$env/bin/python" -P - <<'PY' > import.json
@@ -70,12 +69,17 @@ for line in ldd.splitlines():
         libraries[words[0]] = str(Path(words[words.index("=>") + 1]).resolve())
 xc = [Path(v) for k, v in libraries.items() if k.startswith("libxc.")]
 assert xc and all(p.is_relative_to(Path(os.environ["EXPECTED_LIBXC_PREFIX"])) for p in xc), libraries
+cuest = [Path(v) for k, v in libraries.items() if k.startswith("libcuest.")]
+cuest_dir = Path(os.environ["EXPECTED_CUEST_DIR"]).resolve()
+assert cuest and all(p.is_relative_to(cuest_dir) for p in cuest), libraries
 packages = [json.loads(p.read_text()) for p in
             (Path(os.environ["CUEST_DEPENDENCY_ENV"]) / "conda-meta").glob("libcuest*.json")]
-assert any(p["name"] == "libcuest" and p["version"] == "0.2.2.2" for p in packages), packages
+if cuest_dir == (Path(os.environ["CUEST_DEPENDENCY_ENV"]) / "lib").resolve():
+    assert any(p["name"] == "libcuest" and p["version"] == "0.2.2.2" for p in packages), packages
 print(json.dumps(dict(package=str(package), core=str(core), version=psi4.__version__,
                      core_sha256=hashlib.sha256(core.read_bytes()).hexdigest(),
                      linked_libraries=libraries, variant=os.environ["CPKS_VARIANT"],
+                     cuest_library_sha256=hashlib.sha256(cuest[0].read_bytes()).hexdigest(),
                      cuest_packages=[{k: p[k] for k in ("name", "version", "build")} for p in packages]),
                 indent=2))
 PY
