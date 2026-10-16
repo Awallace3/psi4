@@ -580,6 +580,43 @@ scratch rebuild without the change was byte-identical to the live page; with it,
 differences are section numbers 4–15 → 5–16. Data JSON unchanged. Backups of the replaced files:
 scratchpad `docsbuild/live-backup/`.
 
+## Protein157 aug-cc-pVDZ all-CPU coupled-CPKS baseline (user via parent, 2026-10-16)
+
+Request (parent relay of the user's "CPU adz with same grid procedure"): full aug-cc-pVDZ,
+coupled CPKS SAPT(DFT)-D4(I), CPU DF J/K + native XC + CPU SAD (no cuEST), PBE0, FP64,
+35x194 → 75x302, DFT_GRID_SWITCH_FACTOR=1, minimum 2 final-grid iterations. Free embers only.
+
+- **Submitted: job 14099871**, 2026-10-16 09:45, embers / gts-cs207-chemx, cpu-large,
+  `--constraint=localNVMe`, 24 cpus (Gold 6226 class), `--mem=740G`, `--tmp=600G`, 8 h.
+  `sbatch --test-only` accepted it (est. start 2026-10-16 21:27, node atl1-1-01-005-23-1). No
+  other CPU Protein157 job existed (only GPU holder 14096296).
+- Run root `runs/saptdft-cuest-cpks/p157cpu-adz-dce9e8ae71-20261016/` (`job.sbatch`, `JOBS.txt`,
+  `sessions/manifest.txt`, `sessions/{smoke-peptide,protein157-adz-cpks-full2}/result.json` +
+  `psi4.out`, logs). Exit markers: `<label> exit=` and `DONE rc=` lines in the manifest.
+- Immutable pins: runner/iterator worktree `gits/psi4.saptdft-cuest-cpks-p157cpu` at `dce9e8ae71`
+  (job aborts if moved or dirty); binary = host build of `c0f23b8d9d`
+  (`gits/psi4.saptdft-cuest-cpks-dev/build_cpks_host`, core sha256 5092d24c…3d4b; CPU C++ identical
+  to the pin, driver differs only by the overlaid guard). The GPU p157 worktree/build untouched.
+- Workload: timing-suite geometry (`systems.py` md5 73ec495b…, same file as the suite runs),
+  aug-cc-pVDZ (nbf 2491, monomers recorded; aug-cc-pvdz-jkfit naux recorded, 9182 expected),
+  PBE0, `SAPT_DFT_GRAC_SHIFT_A/B` 0.136 (fixed, as in all timing-suite SAPT runs and the GPU
+  heavy-aDZ cohort), `SAPT_DFT_DO_DHF` true, `SAPT_DFT_INDUCTION_TYPE` CPKS, D4(I),
+  `SCF_SUBTYPE` AUTO (explicit, so DFHelper may fall back instead of failing INCORE), psi4 memory
+  620 GiB (DF AO store ~276 GiB in core), scratch on node-local NVMe /tmp.
+- Differences vs the completed GPU heavy-aDZ cohort (`gpu-sapt-protein157-haDZ`): basis
+  aug-cc-pVDZ (2491) vs heavy-aug-cc-pVDZ (2171) — user's latest choice; grid 35x194 → 75x302
+  factor 1/min 2 vs fixed 75x302; CPU vs cuEST backends; SCF_SUBTYPE AUTO (CPU-only). GRAC, δHF,
+  CPKS and functional match. So there is no matched GPU partner for this exact workload yet.
+- Records: options, grid policy, per-SCF initial/final proofs, nbf/naux, components, GRAC shifts,
+  energy() wall, separate CPKS solve times (each call), timer records, ru_maxrss, J/K route
+  (MemDFJK/DiskDFJK, no cuEST), node features/CPU model/memory/scratch, hashes in the manifest.
+- Gate: peptide aug-cc-pVDZ with identical settings first (~1–2 min); failure stops the job.
+- Estimate (from the 6-31+g** reference timers scaled to aDZ/24 cores, without iterative GRAC):
+  ~3–4.5 h; 8 h cap. Embers may preempt (job-private /tmp is then lost; the manifest records
+  `scratch_left`). Standalone polarizability timing not included (kept the baseline safe).
+- Local checks: `--cpu-smoke`-style run of the runner on peptide cc-pVDZ (8 threads): ok, 2
+  switched SCFs (12 initial / 7 final), GRAC 0.136/0.136, MemDFJK, CPKS 4.8 + 20.4 s.
+
 ## Resume
 
 1. `scripts/job_status.sh phoenix2 14085247 14085248 14085249 14085250`.
