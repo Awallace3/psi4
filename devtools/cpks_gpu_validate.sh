@@ -115,6 +115,9 @@ PY
 test "$(git -C "$root" rev-parse HEAD)" = "$pin"
 test -z "$(git -C "$root" status --porcelain --untracked-files=no)"
 rm -rf "$TMPDIR"
-# Truthful completion: every stage must have passed.
-test "$cphf_status" = 0 && test "$regressions_status" = 0 && test "$probe_status" = 0
+# Truthful completion: every stage must have passed. (An `a && b && c` list does not trip
+# set -e when a or b fails, which wrote VERIFIED for the failed 14085249; use an if.)
+if [[ "$cphf_status" != 0 || "$regressions_status" != 0 || "$probe_status" != 0 ]]; then
+    exit 1
+fi
 printf 'tests and probe passed for %s %s\n' "$pin" "$variant" > "$out/VERIFIED"

@@ -22,6 +22,25 @@ parent branch, report or PR.
 - Full-node (24-core Xeon Gold 6226) CPU baseline, job 14091690: GPU solves still 4.0x
   (228 bf), 9.8–10.1x (384 bf), 12.9–13.1x (660 bf) faster; SAPT benzene CPKS 11.1x.
 
+## Pins (explicit)
+
+| Pin | Role | Remote worktree | Status |
+|---|---|---|---|
+| `c477c22060` | **Original batch pin, buggy** (cuEST-grid dispatch crash) | `gits/psi4.saptdft-cuest-cpks` (frozen, clean, unchanged) | Evidence preserved in `runs/saptdft-cuest-cpks/c477c22060-20261015/` |
+| `c0f23b8d9d` | **Corrected pin** (dispatch fix `391dc95521` + probe fixes) — all GPU results below | `gits/psi4.saptdft-cuest-cpks-dev` (detached, clean) | Host build verified on A100; CUDA build awaiting H100/H200 |
+
+Original-run evidence, kept as is:
+- 14085247/14085248 builds COMPLETED (host core sha256 8c626d98…7258, cuda 039a68fa…0487).
+- 14085249 gpu-host: accounting COMPLETED, but `out/status.txt` = `cphf=1 regressions=0
+  probe=143` (5 test failures: 4 pre-existing cuEST wK + 1 SAPT variable name, fixed in
+  `a085b035eb`; probe segfault from the dispatch bug then Einsums debugger hang, PID killed).
+  **Its `out/VERIFIED` file is spurious**: `cpks_gpu_validate.sh` ended in an `a && b && c`
+  test list, which `set -e` does not abort on, so it wrote VERIFIED and exited 0. Fixed in
+  the validation script (if-guard); the evidence directory was left untouched.
+- 14085250 gpu-cuda (pinned to `c477c22060`) cancelled before start, 2026-10-16 04:13,
+  at user request (also approved via the coordinator questionnaire). No CUDA-route result
+  exists from the original pin.
+
 ## Commits
 
 | Commit | Content |
