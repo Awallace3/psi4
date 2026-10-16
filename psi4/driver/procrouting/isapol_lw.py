@@ -455,3 +455,28 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
     return LocalProperties(labels, ArraySnapshot.of(pos), ArraySnapshot.of(frame), tuple(map(float,freq)), graph,
                            provenance, ArraySnapshot.of(raw), ArraySnapshot.of(globals_), ArraySnapshot.of(locals_),
                            ArraySnapshot.of(scalars), ArraySnapshot.of(dipoles), tuple(fd), tuple(td), tuple(warnings), metadata)
+
+
+@dataclass(frozen=True)
+class Coefficient:
+    order: int
+    value: float
+    included_rank_pairs: tuple[tuple[int, int], ...]
+    missing_rank_pairs: tuple[tuple[int, int], ...]
+    unrestricted_complete: bool
+
+    def __post_init__(self):
+        object.__setattr__(self, 'included_rank_pairs', tuple(map(tuple, self.included_rank_pairs)))
+        object.__setattr__(self, 'missing_rank_pairs', tuple(map(tuple, self.missing_rank_pairs)))
+
+
+@dataclass(frozen=True)
+class DispersionPair:
+    site_a: int
+    site_b: int
+    label_a: str
+    label_b: str
+    coefficients: tuple[Coefficient, ...]
+
+    def __post_init__(self):
+        object.__setattr__(self, 'coefficients', tuple(self.coefficients))

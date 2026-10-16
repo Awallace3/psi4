@@ -38,6 +38,7 @@
 #include "psi4/libisapol/partitioned_response.h"
 #include "psi4/libisapol/multipole_transform.h"
 #include "psi4/libisapol/t_functions.h"
+#include "psi4/libisapol/isotropic_dispersion.h"
 #include "psi4/libisapol/lw_localization.h"
 #include "psi4/libisapol/aux_coulomb.h"
 #include "psi4/libmints/matrix.h"
@@ -481,6 +482,44 @@ void export_isapol(py::module& m) {
           "One pfit T row: unit-charge interaction functions for a site's multipole components in "
           "the site's LOCAL axes. frame maps local to global Cartesian (columns are the local axes), "
           "as in isa_multipole_rotation; damping is CamCASP's Damping keyword in bohr^-1");
+    py::class_<IsaIsotropicSite>(m, "IsaIsotropicSite")
+        .def(py::init<>())
+        .def_readwrite("label", &IsaIsotropicSite::label)
+        .def_readwrite("origin", &IsaIsotropicSite::origin)
+        .def_readwrite("ranks", &IsaIsotropicSite::ranks)
+        .def_readwrite("polarizabilities", &IsaIsotropicSite::polarizabilities);
+    py::class_<IsaIsotropicModel>(m, "IsaIsotropicModel", "Owned supplied scalar alpha_l=trace(alpha_ll)/(2*l+1); atomic units, no localization")
+        .def(py::init<const std::vector<double>&, const std::vector<IsaIsotropicSite>&, const std::string&>(),
+             "frequencies"_a, "sites"_a, "provenance"_a)
+        .def_property_readonly("frequencies", &IsaIsotropicModel::frequencies)
+        .def_property_readonly("sites", &IsaIsotropicModel::sites)
+        .def_property_readonly("provenance", &IsaIsotropicModel::provenance)
+        .def_property_readonly("units", [](const IsaIsotropicModel&) { return "atomic_units"; });
+    py::class_<IsaIsotropicCoefficient>(m, "IsaIsotropicCoefficient")
+        .def_readonly("order", &IsaIsotropicCoefficient::order)
+        .def_readonly("value", &IsaIsotropicCoefficient::value)
+        .def_readonly("complete", &IsaIsotropicCoefficient::complete)
+        .def_readonly("included_rank_pairs", &IsaIsotropicCoefficient::included_rank_pairs)
+        .def_readonly("missing_rank_pairs", &IsaIsotropicCoefficient::missing_rank_pairs);
+    py::class_<IsaIsotropicPair>(m, "IsaIsotropicPair")
+        .def_readonly("site_a", &IsaIsotropicPair::site_a)
+        .def_readonly("site_b", &IsaIsotropicPair::site_b)
+        .def_readonly("coefficients", &IsaIsotropicPair::coefficients);
+    py::class_<IsaIsotropicDispersionResult>(m, "IsaIsotropicDispersionResult")
+        .def_readonly("pairs", &IsaIsotropicDispersionResult::pairs)
+        .def_readonly("frequencies", &IsaIsotropicDispersionResult::frequencies)
+        .def_readonly("cp_weights", &IsaIsotropicDispersionResult::cp_weights)
+        .def_readonly("labels_a", &IsaIsotropicDispersionResult::labels_a)
+        .def_readonly("labels_b", &IsaIsotropicDispersionResult::labels_b)
+        .def_readonly("origins_a", &IsaIsotropicDispersionResult::origins_a)
+        .def_readonly("origins_b", &IsaIsotropicDispersionResult::origins_b)
+        .def_readonly("provenance_a", &IsaIsotropicDispersionResult::provenance_a)
+        .def_readonly("provenance_b", &IsaIsotropicDispersionResult::provenance_b)
+        .def_property_readonly("units", [](const IsaIsotropicDispersionResult&) { return "atomic_units"; })
+        .def_property_readonly("method", [](const IsaIsotropicDispersionResult&) { return "supplied_local_isotropic"; });
+    m.def("isa_isotropic_dispersion", &isa_isotropic_dispersion,
+          "model_a"_a, "model_b"_a, "cp_weights"_a, "max_order"_a=12,
+          "All A/B site pairs; cp_weights already contain 1/(2*pi); explicit rank completeness");
     py::class_<IsaMultipoleSamples>(m, "IsaMultipoleSamples")
         .def(py::init<>())
         .def_readwrite("points", &IsaMultipoleSamples::points)

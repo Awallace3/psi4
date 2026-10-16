@@ -382,6 +382,10 @@ def test_nested_record_constructor_snapshots():
     changed = replace(r, bonds=bonds, warnings=warnings)
     bonds[0][0] = 5; warnings[0] = 'changed'
     assert changed.bonds == ((0,1),) and changed.warnings == ('test',)
+    pairs = [[1,4]]
+    c = lw.Coefficient(12,0,[],pairs,False)
+    pairs[0][0] = 9
+    assert c.missing_rank_pairs == ((1,4),)
 
 
 def test_disconnected_inconsistent_flow_fails_no_fallback():
