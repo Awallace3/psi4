@@ -153,6 +153,51 @@ probe/{contract,timing,sapt}.json, status.txt}` and `VERIFIED` only if tests and
 probe all exit 0. Build links write `out/{configure,build}.log`, `abi-after-build`,
 `math_check.log`, `core.sha256`, `BUILD_OK`.
 
+## GPU run 1 (pin `c477c22060`, 2026-10-15) — results and fixes
+
+- Builds 14085247 (host LibXC, core SHA256 `8c626d98…7258`) and 14085248 (CUDA LibXC,
+  `039a68fa…0487`) COMPLETED 0:0 in ~6 min; nonsymmetric-SDK gate, ABI probe and
+  algebra self-check passed.
+- 14085249 (A100-SXM4-80GB, host LibXC, `gts-cs207`/inferno): `test_cuest_cphf.py`
+  **112 passed, 5 failed**. Every new cuEST-grid test passed on this route. Host vs
+  cuEST grid Vx: 1.6e-7–9.4e-7 (quadrature-level). Failures:
+  - `test_cuest_cpscf_fixed_orbitals[cam-b3lyp|lrc-wpbe, RKS|UKS]` (4): pre-existing
+    cuEST J/K vs CPU J/K test with CPU XC, wK gap 5e-6–1.2e-5 — the known cuEST wK
+    density-fit difference, unrelated to the XC response. Left unweakened.
+  - `test_vx_cuest_saptdft_cpks_induction`: the SAPT(DFT) runs completed, then the test
+    read `SAPT IND20,R ENERGY`, which SAPT(DFT) never sets. Fixed in `a085b035eb`
+    (`SAPT IND ENERGY`; same fix in the probe).
+- 14085249 probe: **segfault** in the contract section, then Einsums parked the process
+  in its debugger-wait loop (GPU idle ~1.3 h until I killed PID 640115 inside the
+  allocation; job then ended FAILED). Localized in-allocation with `srun --overlap`:
+  building a host-grid V sets `CUEST_XC=false` globally; the still-alive cuEST-grid V then
+  dispatched `compute_Vx` (and `set_Cocc`) from the live options, ran the native kernel
+  over a grid with no CPU blocks and crashed. **Real bug, fixed in `391dc95521`**:
+  dispatch follows how the V was initialized (`uses_cuest_xc()` is true when its cuEST
+  plan exists); options requesting cuEST for a host-grid V still raise. Regression test
+  `test_vx_cuest_grid_survives_option_changes`. (Pre-existing, unchanged: `compute_V`
+  and other XC entry points still read the live options.)
+- Probe now passes `--einsums:no-attach-debugger` so crashes exit (`c0f23b8d9d`).
+- 14085250 (CUDA LibXC, pending) is pinned to the buggy `c477c22060`; its probe would hit
+  the same crash. Needs cancelling (awaiting user approval) or it will be superseded.
+
+## Speedup requirement (user, 2026-10-15)
+
+Success includes demonstrating speedup over **CPU CPHF/CPKS**. Probe `c0f23b8d9d` times
+three arms per system: `cuest` (cuEST J/K + cuEST-grid XC), `hostxc` (cuEST J/K + native
+XC) and `cpu` (CPU DF J/K + native XC, the all-CPU baseline), for per-action `cphf_Hx`,
+complete dipole-polarizability solves and SAPT(DFT)-D4(I) CPKS induction; systems water,
+benzene dimer, coronene/aug-cc-pVDZ (660 bf). The CPU baseline must also be run on a full
+CPU node (24 threads), not only on the GPU allocation's 8 cores.
+
+## Interactive debugging (user, 2026-10-15)
+
+"Until you are confident in your code, get an interactive inferno node at 2hr time outs."
+Holders (`runs/saptdft-cuest-cpks/interactive/hold*.sbatch`, `sleep` for 2 h; work via
+`srun --jobid=<id> --overlap`): 14087771 (H100|H200, 8 c — max 8:1), 14087772 (A100, 16 c).
+Dev worktree `gits/psi4.saptdft-cuest-cpks-dev` (detached, separate from the pinned one),
+dev build job 14087810 (cpu-small inferno) → `runs/saptdft-cuest-cpks/interactive/build-c0f23b8d9d/`.
+
 ## Resume
 
 1. `scripts/job_status.sh phoenix2 14085247 14085248 14085249 14085250`.
