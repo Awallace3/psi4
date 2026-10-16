@@ -688,3 +688,33 @@ coupled CPKS SAPT(DFT)-D4(I), CPU DF J/K + native XC + CPU SAD (no cuEST), PBE0,
 - Functional parameter changes on a live V (e.g. omega) are not tested; independent
   V objects and reference/grid changes are.
 - Outside scope (unchanged): mGGA/VV10 response, direct J/K, analytic Hessians, FDDS.
+
+## Induction setup trims and Vx reference reuse (user, 2026-10-16 12:40)
+
+User accepted: (1) drop the duplicated potential builds in `induction()`, (2) vectorize the Eq. 20
+loops, (3) reuse the cuEST Vx reference across a solve; (4) scope batching A/B Hessian-vector
+products into one J/K call.
+
+- Measured motivation (H200, Protein157 heavy-aDZ SAPT, suite run): induction 156.0 s = J/K 105.7
+  + Vx 36.2 + cuBLAS 2.1 + ~11.5 s everything else (Python ein ops, potentials, CG). Within Vx,
+  "reference density" 11.2 s and "derivatives" 0.9 s over 35 calls, identical within a solve.
+- `a15dc59af3` + fix `36ebf36ad0`: (1)+(2) in `sapt_jk_terms_ein.py` (values used were already the
+  `build_*_pot` ones, so results are unchanged; Eq. 20 loop 0.33 s → 3.5 ms locally at Protein157
+  sizes). (3) CUDA-LibXC route keeps weights/reference/kernel on the device keyed on
+  `cuest_reference_epoch_` (set_D, set_Cocc, initialize), spin, npoints and the functional's
+  components; finalize destroys it. No added memory (buffers were retained capacity). Host-LibXC
+  route unchanged (would hold ~650 MB host per V at Protein157). New test
+  `test_vx_cuest_reference_reuse` (reuse counted from print-3 output; recompute after spin,
+  set_D, set_Cocc, host-LibXC call; matches fresh V ≤ 1e-13·scale; repeats bit-identical).
+- Local CPU (`build_cpks_cpu` + staged driver): test_saptdft.py/test_dft_grid_switch.py
+  induction subset 56 passed, 5 failed = 4 qcmanybody import (p4_ci qcmanybody too old) +
+  test_qcng_embedded_saptdft (qcengine schema "field required"); environment, not this change.
+- a15dc59af3 GPU build failed (`kernel_fingerprint(const SuperFunctional&)`: x_functionals() is
+  non-const) → `36ebf36ad0`. Phoenix: worktree `gits/psi4.saptdft-cuest-cpks-reuse` (36ebf36ad0),
+  in-tree build `build_cpks_cuda_multi` (repinned from the failed a15dc59af3 attempt), run dir
+  `runs/saptdft-cuest-cpks/reuse-a15dc59af3-20261016/` (`build.sh`, `run.sh`, `tests.sh`,
+  `probe.sh`, `JOBS.txt`), on holder 14096296 (H200). Next holder 14104298 queued (embers, H100|H200,
+  8c, 2 h) in case 14096296 expires first.
+- (4) scope probe `devtools/sapt_hx_batch_probe.py` (`a6929cccb4`, worktree
+  `gits/psi4.saptdft-cuest-cpks-hxprobe`): J/K with induction factor shapes for A, B, A+B batched.
+  Local CPU MemDFJK peptide cc-pVDZ: separate 0.197 s vs batched 0.165 s (16%), max diff 3.5e-18.
