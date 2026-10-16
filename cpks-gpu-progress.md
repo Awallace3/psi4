@@ -396,6 +396,13 @@ aug-cc-pVDZ 0.20 s (0.93); **benzene dimer aug-cc-pVDZ 1.36 s vs cpu24 35.97 s (
 total 5.6 s vs 70.8 s. Energies equal the A100 cuest arm (IND -0.319269, TOTAL -2.218377
 kcal/mol); the cuEST-grid vs host-grid difference is grid error as before.
 
+**Original CUDA build on the same H200** (`c0f23b8d9d`, sm_90, cuEST 0.2.2, LibXC
+`libxc-7.1.2-cuda`, `interactive/sessions/h100-{tests,probe}-1`): tests 148 passed / 6 failed
+— the same 4 wK LRC cases and the 2 svwn empty-beta cases (old oracle, as diagnosed above);
+probe exit 0, contract clean, timings equal to the cuEST 0.2.50 build (coronene PBE solve
+3.64 vs 3.63 s, PBE0 4.62 vs 4.88 s; benzene aDZ 1.28/1.44 s; SAPT benzene CPKS 1.37 s).
+The H200-vs-A100 gain is therefore the device (H200 + CUDA LibXC derivatives), not cuEST 0.2.50.
+
 ## Resume
 
 1. `scripts/job_status.sh phoenix2 14085247 14085248 14085249 14085250`.
