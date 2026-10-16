@@ -1,0 +1,85 @@
+<main>
+<button class="menu-btn" id="menuBtn" type="button" aria-controls="toc">☰ Contents</button>
+<h1>Matched-grid GPU DFT</h1>
+<p class="sub">Psi4 cuEST + CUDA LibXC · GPU4PySCF · <span id="jobLabel"></span> · REPORT_DATE</p>
+<p class="notice">Partial results: Protein83/ωB97X/aug-cc-pVTZ failed inside GPU4PySCF’s range-separated DF batching.
+The other four Protein83 functionals completed. The new cuEST <strong>four-center direct</strong> implementation is a separate experiment and is not included here.</p>
+<div class="filterbar">
+ <label>System<select id="systemSelect"><option value="protein83">Protein83</option><option value="peptide">Peptide preflight</option></select></label>
+ <label>Basis<select id="basisSelect"><option value="aug-cc-pvtz">aug-cc-pVTZ</option><option value="cc-pvtz">cc-pVTZ</option></select></label>
+ <label>DF strategy<select id="modeSelect"><option value="stored-df">Stored DF → stored DF</option><option value="native-strategy">Native strategy (not stored-DF parity)</option></select></label>
+</div>
+
+<h2 id="wall" data-summary="Compare full fresh-process walltime, including imports, only after both bases and both engines pass grid and overlap audits.">1 · Full-process timing</h2>
+<div class="fig">
+ <div class="fig-head"><span class="t" id="timeTitle"></span><span class="tag measured">measured</span><button class="expand">⤢ Expand</button></div>
+ <div class="legend"></div><div class="chartscroll"><svg id="timeChart" class="chart" viewBox="0 0 1020 420" role="img" aria-label="Full process walltime in seconds"></svg></div>
+ <p class="cap" id="timeCaption"></p>
+ <details class="data"><summary>Walltime data · seconds</summary><div class="tablewrap" id="timeTable"></div></details>
+</div>
+
+<h2 id="memory" data-summary="Report exact Linux worker peak RSS separately from sampled GPU memory; the latter is a lower bound, not an exact high-water mark.">2 · Host and GPU memory</h2>
+<div class="grid2">
+ <div class="fig">
+  <div class="fig-head"><span class="t">Worker peak RSS · GiB</span><span class="tag measured">measured</span><button class="expand">⤢ Expand</button></div>
+  <div class="legend"></div><div class="chartscroll"><svg id="rssChart" class="chart" viewBox="0 0 1020 420" role="img" aria-label="Peak resident memory in GiB"></svg></div>
+  <details class="data"><summary>Peak RSS data · GiB</summary><div class="tablewrap" id="rssTable"></div></details>
+ </div>
+ <div class="fig">
+  <div class="fig-head"><span class="t">Observed device peak · GiB</span><span class="tag measured">measured</span><button class="expand">⤢ Expand</button></div>
+  <div class="legend"></div><div class="chartscroll"><svg id="gpuChart" class="chart" viewBox="0 0 1020 420" role="img" aria-label="Sampled GPU device memory in GiB"></svg></div>
+  <details class="data"><summary>Sampled GPU data · GiB</summary><div class="tablewrap" id="gpuTable"></div></details>
+ </div>
+</div>
+<p id="memoryCaption"></p>
+
+<h2 id="grids" data-summary="Count the actual stored points in each engine and distinguish zero-weight padding from the identical nonzero quadrature.">3 · Basis and actual grids</h2>
+<div class="fig">
+ <div class="fig-head"><span class="t">NBF / retained MOs / actual quadrature</span><span class="tag measured">measured</span><button class="expand">⤢ Expand</button></div>
+ <div class="tablewrap" id="gridTable"></div>
+ <p class="cap">Counts alone do not prove a matched grid. Eligible rows passed actual coordinate/weight-multiset and overlap-spectrum/rank audits.
+PySCF can append zero-weight storage padding; the nonzero quadrature is what must agree.</p>
+</div>
+<p class="notice">This experiment uses the exported <strong>cuEST native mesh</strong>, not the smaller native default.
+Importing the smaller PySCF grid into cuEST is still outstanding; these results do not complete that requested control.</p>
+
+<h2 id="energy" data-summary="Show paired energy differences and withheld cases explicitly instead of treating failed ωB97X calculations as fast zero-time runs.">4 · Energies and failures</h2>
+<div class="fig">
+ <div class="fig-head"><span class="t">GPU4PySCF − Psi4 · Hartree</span><span class="tag measured">measured</span><button class="expand">⤢ Expand</button></div>
+ <div class="tablewrap" id="energyTable"></div>
+ <p class="cap">Peptide ωB97X/cc-pVTZ and ωB97X/aug-cc-pVTZ retain a 6–9 µEh discrepancy even with stored DF; matching the route is not proof of identical DF metric treatment.
+Completed Protein83 rows for the other four functionals agree much more closely; exact differences are shown above.</p>
+</div>
+<details><summary>Why Protein83/ωB97X/aug-cc-pVTZ was withheld</summary>
+ <pre>GPU4PySCF df/int3c2e_bdiv.py:199
+assert max(ao_pair_offsets[1:] - ao_pair_offsets[:-1]) &lt; ao_pair_batch_size</pre>
+ <p>The failure occurs while constructing the range-separated three-center DF integrals, in both native and stored-DF strategies and with native and shared grids.
+The paired cc-pVTZ timing arm is also withheld by the declared four-arm audit gate; it was not independently timed after the augmented arm failed.</p>
+</details>
+
+<h2 id="protocol" data-summary="Keep this old-SDK H200 DF comparison separate from the newly linked cuEST 0.2.50 four-center direct-JK build.">5 · Scope and provenance</h2>
+<div class="fig"><div class="fig-head"><span class="t">Measured panel versus pending work</span><span class="tag measured">measured</span><button class="expand">⤢ Expand</button></div>
+ <div class="tablewrap"><table><tr><th>Panel</th><th>State</th></tr>
+ <tr><td>Peptide · PBE/cc-pVTZ, PBE/aug-cc-pVTZ, ωB97X/cc-pVTZ, ωB97X/aug-cc-pVTZ</td><td id="peptideCoverage"></td></tr>
+ <tr><td>Protein83 · five functionals × cc-pVTZ/aug-cc-pVTZ × two DF strategies</td><td id="proteinCoverage"></td></tr>
+ <tr><td>cuEST 0.2.50 four-center direct-JK adapter</td><td>Separate implementation/validation; no direct-JK timings included here</td></tr>
+ <tr><td>Both engines on the smaller native mesh</td><td>Not implemented / not claimed</td></tr></table></div>
+</div>
+<p>The comparison job ended with status failed because the complete-panel gate rejected the two incomplete range-separated cases.
+The compiled core is from <code id="compiledCommit"></code>; harness source is <code id="harnessCommit"></code>. All runtime pins remained unchanged.</p>
+
+<h2 id="glossary" data-summary="Definitions and units used in the figures and audit tables.">Glossary</h2>
+<dl class="gloss">
+ <dt data-g="dft" data-match="DFT">DFT</dt><dd>Density-functional theory.</dd>
+ <dt data-g="df" data-match="DF">DF</dt><dd>Density fitting: approximating four-center electron-repulsion integrals with an auxiliary basis.</dd>
+ <dt data-g="jk" data-match="J/K|JK">J/K</dt><dd>Coulomb and exchange matrix construction.</dd>
+ <dt data-g="rss" data-match="RSS">RSS</dt><dd>Resident set size; the reported exact peak is Linux child ru_maxrss, not the sum of process-tree pages.</dd>
+ <dt data-g="nbf" data-match="NBF">NBF</dt><dd>Number of orbital basis functions; obtained from the running engine.</dd>
+ <dt data-g="mo" data-match="MOs">MOs</dt><dd>Retained molecular orbitals after the common overlap-eigenvalue cutoff.</dd>
+ <dt data-g="gib" data-match="GiB">GiB</dt><dd>2³⁰ bytes. RSS KiB are divided by 2²⁰; NVML MiB by 2¹⁰.</dd>
+ <dt data-g="eh" data-match="Eh|Hartree">Eh</dt><dd>Hartree, the atomic unit of energy; 1 µEh = 10⁻⁶ Eh.</dd>
+ <dt data-g="gpu" data-match="GPU">GPU</dt><dd>Graphics processing unit; this timing panel used one H200.</dd>
+ <dt data-g="h200" data-match="H200">H200</dt><dd>NVIDIA Hopper GPU used for the measured DF comparison; not interchangeable with H100 performance data.</dd>
+</dl>
+<footer>Generated from saptdft-cuest-pyscf@ANALYSIS_REVISION on REPORT_DATE.</footer>
+</main>

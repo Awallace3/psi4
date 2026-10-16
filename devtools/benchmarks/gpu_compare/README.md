@@ -532,3 +532,35 @@ python3 /home/awallace43/.pi/agent/skills/python-plot-tailscale/scripts/plot_gal
 When adding a new campaign, update the dashboard's status/count header too;
 the current header describes these four fixed archived campaign directories.
 Do not change tailscale serving/Funnel settings to publish updates.
+
+### Matched-grid recovery 14076480 (October 16)
+
+The corrected combined protocol has now run on H200. Peptide preflight passed
+for PBE/cc-pVTZ, PBE/aug-cc-pVTZ, WB97X/cc-pVTZ and WB97X/aug-cc-pVTZ in both
+native and stored-DF strategies. Protein83 completed 16 of 20 strategy/basis
+comparisons: SVWN, PBE, M06-L and B3LYP with both bases in both strategies.
+The WB97X/aug-cc-pVTZ GPU4PySCF arm failed in the range-separated three-center
+integral batching assertion in `df/int3c2e_bdiv.py:199`. The four-arm audit gate
+therefore correctly withheld timing repeats for WB97X in **both** bases;
+job14076480 exited1 rather than declaring the partial panel complete.
+
+`control_report.py` renders this protocol separately from the historical
+unmatched-grid dashboard, using **full_process_wall_s**, exact worker peak RSS,
+sampled GPU memory, actual NBF/MO/grid counts and explicit failed/missing arms.
+It publishes only derived share-safe data, embedded in the page:
+
+```bash
+python3 devtools/benchmarks/gpu_compare/control_report.py \
+  --control .pi/gpu_compare/bohr-14076480-evidence \
+  --template /home/awallace43/.pi/agent/skills/docs-html/template.html \
+  --revision "$(git rev-parse --short HEAD)" \
+  --output /home/awallace43/docs/saptdft/cuest/matched-df-2026-10-16.html
+```
+
+Stored-DF and native strategies are separate filters; the latter does not imply
+equal storage or integral algorithms. This is a shared **cuEST-source** mesh,
+not the smaller-native-default experiment. Native storage lengths can differ
+because of zero-weight padding; eligibility requires the actual nonzero
+coordinate/total-weight multiset and overlap spectrum/rank proofs.
+The separately compiled cuEST0.2.50 **four-center direct** adapter and its H100
+debug tests are not mixed into these H200 DF timings.
