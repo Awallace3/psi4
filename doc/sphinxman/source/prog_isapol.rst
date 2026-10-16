@@ -175,7 +175,14 @@ Experimental ISA-A partition
      CamCASP only for the water ISA iteration (49 steps, as CamCASP's run,
      against 53 for ``'always'``). Grid convergence and downstream C8/C10
      agreement are not established. The policy is recorded in the partition
-     provenance.
+     provenance. Adding the field changes identity labels even for the
+     default: ``repr(ControllerRecipe)`` and so ``repr(PartitionRecipe)`` now
+     include ``tail_fit_policy='always'``, which changes the
+     ``recipe_sha256`` diagnostic of every ISA ``DistributedMoments`` result,
+     and the default ``native_partition`` provenance gains ``tail fit policy
+     always``. These are labels, not numerical results; the ``'always'``
+     branch is the previous computation. Do not compare a ``recipe_sha256``
+     or provenance string across versions as a numerical check.
 
    ``isapol_distribution.isa_moments`` runs this iteration
    (``build_multipoles=False``), samples the frozen final shapes on the
