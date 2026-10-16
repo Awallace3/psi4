@@ -33,8 +33,69 @@ def test_byte_budget_has_no_fixed_ceiling():
     assert backend.BoundedResources(8*1024**3, 1, 1).max_bytes == 8*1024**3
 
 
-def test_ledger_never_resets_between_stages():
-    budget = backend._Ledger(backend.BoundedResources(100, 100, 100), reserved=20)
+def test_legacy_three_field_declaration_is_unchanged():
+    r = backend.BoundedResources(512*1024**2, 6_000_000_000_000, 64*1024**3)
+    assert r.capacity == 'standard' and r == backend.BoundedResources(512*1024**2, 6_000_000_000_000, 64*1024**3,
+                                                                      capacity='standard')
+    # Printed as "resource ceilings" in psi4.out; must stay byte-identical.
+    assert repr(r) == 'BoundedResources(max_bytes=536870912, max_work=6000000000000, max_io_bytes=68719476736)'
+    with pytest.raises(ValueError, match=r'^max_work must be a positive integer <= 6000000000000$'):
+        backend.BoundedResources(1, 6_000_000_000_001, 1)
+    assert backend.RESOURCE_CAPACITIES == {'standard': (6_000_000_000_000, 64*1024**3),
+                                           'large': (100_000_000_000_000, 64*1024**3)}
+
+
+def test_large_capacity_is_explicit_and_finite():
+    benzene = backend.BoundedResources(24*1024**3, 64_000_000_000_000, 64*1024**3, capacity='large')
+    assert repr(benzene) == ('BoundedResources(max_bytes=25769803776, max_work=64000000000000, '
+                             "max_io_bytes=68719476736, capacity='large')")
+    assert backend.BoundedResources(1, 100_000_000_000_000, 64*1024**3, 'large').max_work == 100_000_000_000_000
+    with pytest.raises(ValueError, match=r'^max_work must be a positive integer <= 100000000000000$'):
+        backend.BoundedResources(1, 100_000_000_000_001, 1, capacity='large')
+    with pytest.raises(TypeError):
+        backend.BoundedResources(1, 1, 1, capacity='large', max_flops=1)
+
+
+@pytest.mark.parametrize('capacity', [None, True, 1, 'LARGE', 'Large', '', 'unlimited', b'large', ('large',)])
+def test_capacity_is_a_closed_exact_string(capacity):
+    with pytest.raises(ValueError, match='capacity must be one of'):
+        backend.BoundedResources(1, 1, 1, capacity=capacity)
+
+
+class _Text(str):
+    pass
+
+
+def test_capacity_str_subclass_is_refused():
+    with pytest.raises(ValueError, match='capacity must be one of'):
+        backend.BoundedResources(1, 1, 1, capacity=_Text('large'))
+
+
+@pytest.mark.parametrize('capacity', ['standard', 'large'])
+@pytest.mark.parametrize('field', ['max_bytes', 'max_work', 'max_io_bytes'])
+@pytest.mark.parametrize('value', [True, False, 1., 64e12, float('inf'), float('nan'), np.int64(1), '1', 0, -1, None])
+def test_every_field_keeps_exact_positive_integer_validation(capacity, field, value):
+    args = dict(max_bytes=1, max_work=1, max_io_bytes=1, capacity=capacity)
+    args[field] = value
+    with pytest.raises(ValueError, match=f'^{field} must be a positive integer'):
+        backend.BoundedResources(**args)
+
+
+@pytest.mark.parametrize('capacity,work_ceiling', [('standard', 6_000_000_000_000), ('large', 100_000_000_000_000)])
+def test_tier_ceilings_are_inclusive_and_finite(capacity, work_ceiling):
+    io = 64*1024**3
+    at = backend.BoundedResources(2**200, work_ceiling, io, capacity)  # bytes: no class ceiling (memory rule below)
+    assert (at.max_work, at.max_io_bytes) == (work_ceiling, io)
+    for field, value in (('max_work', work_ceiling+1), ('max_io_bytes', io+1)):
+        args = dict(max_bytes=1, max_work=1, max_io_bytes=1, capacity=capacity)
+        args[field] = value
+        with pytest.raises(ValueError, match=f'^{field} must be a positive integer <= '):
+            backend.BoundedResources(**args)
+
+
+@pytest.mark.parametrize('capacity', ['standard', 'large'])
+def test_ledger_never_resets_between_stages(capacity):
+    budget = backend._Ledger(backend.BoundedResources(100, 100, 100, capacity), reserved=20)
     budget.admit('one', 80, 60)
     with pytest.raises(ValueError, match='cumulative work'):
         budget.admit('two', 80, 41)
@@ -45,6 +106,39 @@ def test_ledger_never_resets_between_stages():
     with pytest.raises(ValueError, match='I/O'):
         budget.charge_io(41)
     assert budget.work == 100 and budget.peak == 100 and budget.io == 60
+
+
+@pytest.mark.parametrize('capacity', ['standard', 'large'])
+def test_ledger_reservations_count_against_numeric_plans(capacity):
+    budget = backend._Ledger(backend.BoundedResources(1000, 10, 10, capacity), reserved=100)
+    budget.reserved += 400
+    budget.admit('held', 500)
+    with pytest.raises(ValueError, match='held more: shared numeric'):
+        budget.admit('held more', 501)
+    budget.reserved -= 400
+    budget.admit('released', 900)
+    assert budget.peak == 1000 and [s['numeric_bytes'] for s in budget.stages] == [1000, 1000]
+
+
+def test_large_capacity_byte_budget_may_not_exceed_psi4_memory(tmp_path):
+    """Refused in the constructor: no wavefunction, state, ledger stage or scratch is touched."""
+    from psi4.driver.procrouting.isapol_logging import StageLog
+    messages = []
+    memory = int(core.get_memory())
+    for capacity, max_bytes in (('large', memory+1), ('large', 2**80)):
+        with pytest.raises(ValueError, match='large capacity numeric budget exceeds the Psi4 memory setting'):
+            backend.BoundedResponse(None, None, (), caller_converged=True, quadrature=None, response_grid=None,
+                smoothing=None, shell_cutoff=0., charge_penalty=0., anchor_metric_damping=0.,
+                resources=backend.BoundedResources(max_bytes, 1, 1, capacity), scf_correction='NONE',
+                scratch_directory=tmp_path, log=StageLog(3, writer=messages.append))
+    assert not messages and _nothing_left(tmp_path)
+    # At the setting the rule passes and later declaration checks run; standard keeps no byte ceiling.
+    for resources in (backend.BoundedResources(memory, 1, 1, 'large'), backend.BoundedResources(2**80, 1, 1)):
+        with pytest.raises(ValueError, match='explicit AUX recipe'):
+            backend.BoundedResponse(None, None, (), caller_converged=True, quadrature=None, response_grid=None,
+                smoothing=None, shell_cutoff=0., charge_penalty=0., anchor_metric_damping=0.,
+                resources=resources, scf_correction='NONE', scratch_directory=tmp_path)
+    assert _nothing_left(tmp_path)
 
 
 def test_checkpoint_identity_and_duplicate_refusals(tmp_path):
@@ -490,15 +584,19 @@ def test_missing_scf_seal_is_not_manufactured(small_water, tmp_path, monkeypatch
     assert _nothing_left(tmp_path)
 
 
+@pytest.mark.parametrize('capacity', ['standard', 'large'])
 @pytest.mark.parametrize('response', [{}, _fdds()], ids=['reference', 'fdds'])
 @pytest.mark.parametrize('small_water', ['water'], indirect=True)
-def test_work_preflight_rejects_before_factor_construction(small_water, tmp_path, monkeypatch, response):
+def test_work_preflight_rejects_before_factor_construction(small_water, tmp_path, monkeypatch, response, capacity):
     wfn, recipe, args = small_water
     def forbidden(*args, **kwargs):
         pytest.fail('factor construction happened before work refusal')
     monkeypatch.setattr(backend, 'native_plain_df_operators', forbidden)
     monkeypatch.setattr(backend, 'native_plain_density', forbidden)
-    args = dict(args, resources=_resources(max_work=1))
+    # The large tier refuses at the same per-stage preflight; it adds no whole-chain check.
+    memory = int(core.get_memory())
+    args = dict(args, resources=(_resources(max_work=1) if capacity == 'standard'
+                                 else backend.BoundedResources(memory, 1, 64*1024**3, capacity)))
     with pytest.raises(ValueError, match='work resource limit'):
         with _runner(wfn, recipe, args, tmp_path, **response) as runner:
             runner.prepare()
