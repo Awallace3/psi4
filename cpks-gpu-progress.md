@@ -855,3 +855,12 @@ Rainbow (17-operation) CPU/GPU pairs vs system size: peptide, nanotube, protein8
   ~118 GiB, so the plan itself is the held memory and a second large request (83.7 GiB, plan-construction
   workspace or the J/K buffers) cannot fit. The XC plan (<1 GiB) is not involved. Options: FP32/mixed-precision
   integrals, direct J/K (deferred by scope), a larger device, or SDK-side plan chunking. Holder idle afterwards.
+- **CPU preflight 14108848 COMPLETED** (embers / gts-cs207-chemx / cpu-medium, atl1-1-01-004-19-1, Xeon Gold 6226,
+  20:15–20:27, MaxRSS 26.9 GiB): host build (fc851a8346, CUEST SDK 0.2.50) ok in 7 min; cpu-smoke ok;
+  runner/options/driver-tree hashes equal to the GPU runs (06f7b9d4… / e8954d0c… / 7b8dd571…).
+  cpu-peptide-r1 38.1 s (CPKS 16.8; 15/14 CG iterations like the GPU); CPU−GPU ELST 6.2e-7, EXCH −9.5e-7,
+  IND 2.6e-9, TOTAL −3.2e-7 Eh. cpu-nanotube-r1 182.4 s (CPKS 83.1 = 16.1 + 67.0; 17/14); CPU−GPU ELST −1.6e-6,
+  EXCH 1.7e-6, IND −3.6e-7, TOTAL −2.8e-7 Eh; RSS 9.1 GiB.
+- Prepared, not submitted (awaiting go-ahead): `campaign-cpu-small.sbatch` (peptide r2–3, nanotube r2–3,
+  protein83 r1–3; 3 h) and `campaign-cpu-p157-r{1,2,3}.sbatch` (one protein157 run each; 4 h); all embers,
+  cpu-medium, 24c, 230G; `--test-only` accepted all four (est. start 2026-10-17 05:04).
