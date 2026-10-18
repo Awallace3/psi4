@@ -126,7 +126,9 @@ def allocation(job_text, env):
     require(env.get("SLURM_CPUS_PER_TASK") == "8" and env.get("SLURM_JOB_ACCOUNT") == ROUTE["account"] and
             env.get("SLURM_JOB_QOS") == "embers" and env.get("SLURM_JOB_NUM_NODES") == "1", "allocation environment")
     start, end = int(env["SLURM_JOB_START_TIME"]), int(env["SLURM_JOB_END_TIME"])
-    require(0 < end-start <= 14400, "allocation wall cap")
+    # Controller TimeLimit above is authoritative; site EndTime can round up.
+    # An earlier environment end (e.g. preemption grace) remains binding.
+    require(0 < start < end, "allocation timestamps")
     return fields
 
 
@@ -158,7 +160,8 @@ class Engine:
         self.job = os.environ["SLURM_JOB_ID"]
         require(re.fullmatch(r"\d+", self.job), "real job id required")
         self.scratch = Path(m["scratch_parent"]) / self.job
-        self.end = int(os.environ["SLURM_JOB_END_TIME"])
+        self.end = min(int(os.environ["SLURM_JOB_END_TIME"]),
+                       int(os.environ["SLURM_JOB_START_TIME"]) + ROUTE["seconds"])
         self.gpu = None
         self.scheduler_gpu = self.env_gpu_selector()
         self.gpu_selector = None  # never a scheduler/global numerical-index guess
@@ -288,7 +291,11 @@ class Engine:
         write_json(self.raw / "environment.json", {key: self.env.get(key) for key in env_keys})
         info = self.query(["scontrol", "show", "job", "-o", self.job])
         (self.raw / "scheduler.txt").write_text(info)
-        allocation(info, self.env)
+        fields = allocation(info, self.env)
+        write_json(self.raw / "deadline.json",
+                   dict(environment_start=int(self.env["SLURM_JOB_START_TIME"]),
+                        environment_end=int(self.env["SLURM_JOB_END_TIME"]),
+                        controller_time_limit=fields["TimeLimit"], effective_end=self.end))
         self.identify_gpu()
         write_json(self.raw / "gpu.json", self.gpu)
         for name, argv in [("lscpu", ["lscpu"]), ("affinity", ["taskset", "-pc", str(os.getpid())]),

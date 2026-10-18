@@ -447,6 +447,101 @@ class HarnessTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 campaign.gpu_line(bad)
 
+    def wallcap_fixture(self):
+        # Actual 14160001 startup fields (full original raw bytes replayed
+        # separately). Controller TimeLimit is exactly four hours, but its
+        # StartTime/EndTime and the environment differ by 14401 seconds.
+        text = ("JobId=14160001 Account=gts-cs207-chemx QOS=embers Partition=gpu-h200 "
+                "NumCPUs=8 MinMemoryNode=128G NumNodes=1 NumTasks=1 TimeLimit=04:00:00 "
+                "StartTime=2026-10-18T15:07:28 EndTime=2026-10-18T19:07:29 "
+                "Features=H200 AllocTRES=cpu=8,mem=128G,node=1,gres/gpu=1,gres/gpu:h200=1")
+        env = dict(SLURM_JOB_ID="14160001", SLURM_JOB_GPUS="4", CUDA_VISIBLE_DEVICES="0",
+                   SLURM_CPUS_PER_TASK="8", SLURM_JOB_ACCOUNT="gts-cs207-chemx",
+                   SLURM_JOB_QOS="embers", SLURM_JOB_NUM_NODES="1",
+                   SLURM_JOB_START_TIME="1792350448", SLURM_JOB_END_TIME="1792364849")
+        return text, env
+
+    def test_wallcap_actual_14160001_rounding(self):
+        text, env = self.wallcap_fixture()
+        self.assertEqual(int(env["SLURM_JOB_END_TIME"])-int(env["SLURM_JOB_START_TIME"]), 14401)
+        fields = campaign.allocation(text, env)
+        self.assertEqual(fields["TimeLimit"], "04:00:00")
+        self.assertEqual(env["SLURM_JOB_END_TIME"], "1792364849")
+
+    def test_wallcap_exact_shortened_and_invalid_timestamps_resources(self):
+        text, env = self.wallcap_fixture()
+        start = int(env["SLURM_JOB_START_TIME"])
+        for duration in [14400, 14401, 3600, 1]:
+            with self.subTest(duration=duration):
+                campaign.allocation(text, dict(env, SLURM_JOB_END_TIME=str(start+duration)))
+        for begin, end in [("0", "14400"), ("-1", "14400"), (str(start), str(start)),
+                           (str(start), str(start-1)), (str(start), "0"), ("bad", str(start+14400)),
+                           (str(start), "bad"), ("", str(start+14400)),
+                           (str(start), "1792364849.0")]:
+            with self.subTest(begin=begin, end=end), self.assertRaises((RuntimeError, ValueError)):
+                campaign.allocation(text, dict(env, SLURM_JOB_START_TIME=begin, SLURM_JOB_END_TIME=end))
+        for old, new in [("04:00:00", "08:00:00"), ("04:00:00", "03:00:00"),
+                         ("QOS=embers", "QOS=inferno"), ("NumCPUs=8", "NumCPUs=12"),
+                         ("Features=H200", "Features=H100"), ("128G", "64G"),
+                         ("gpu-h200", "gpu-h100"), ("NumNodes=1", "NumNodes=2")]:
+            with self.subTest(old=old), self.assertRaises(RuntimeError):
+                campaign.allocation(text.replace(old, new), env)
+        for key in ["SLURM_CPUS_PER_TASK", "SLURM_JOB_ACCOUNT", "SLURM_JOB_QOS", "SLURM_JOB_NUM_NODES"]:
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                campaign.allocation(text, dict(env, **{key: "wrong"}))
+
+    def test_wallcap_engine_deadline_prolog_admission_and_timeout(self):
+        text, env = self.wallcap_fixture()
+        start = int(env["SLURM_JOB_START_TIME"])
+        class PinsReached(Exception):
+            pass
+        for duration in [14400, 14401, 3600]:
+            with self.subTest(duration=duration), tempfile.TemporaryDirectory(dir=self.root) as directory:
+                root = Path(directory)
+                current = dict(env, SLURM_JOB_END_TIME=str(start+duration))
+                m = manifest()
+                m.update(run_root=str(root), scratch_parent=str(root/"scratch"))
+                with patch.dict(os.environ, current):
+                    engine = campaign.Engine(m, root/"manifest.json")
+                    engine.query = Mock(return_value=text)
+                    engine.identify_gpu = Mock(side_effect=lambda: setattr(engine, "gpu_selector", "GPU-mocked"))
+                    engine.run_command = Mock()
+                    engine.pins = Mock(side_effect=PinsReached)
+                    with self.assertRaises(PinsReached):
+                        engine.prolog()  # actual allocation gate, NOT mocked
+                expected = start+min(duration, 14400)
+                self.assertEqual(engine.end, expected)
+                deadline = p.read_json(engine.raw/"deadline.json")
+                self.assertEqual(deadline["effective_end"], expected)
+                self.assertEqual(deadline["environment_end"], start+duration)
+                self.assertEqual(deadline["controller_time_limit"], "04:00:00")
+                self.assertEqual((engine.raw/"scheduler.txt").read_text(), text)
+                self.assertEqual(p.read_json(engine.raw/"environment.json")["SLURM_JOB_END_TIME"],
+                                 current["SLURM_JOB_END_TIME"])
+                # Real run_command consumes the effective end, including its
+                # existing 240s cleanup reserve. No subprocess is actually run.
+                proc = Mock()
+                proc.wait.return_value = 0
+                engine.pins = Mock()
+                with patch.object(campaign.time, "time", return_value=expected-300), \
+                     patch.object(campaign.subprocess, "Popen", return_value=proc):
+                    campaign.Engine.run_command(engine, ["fake"], "wallcap-timeout", timeout=600)
+                proc.wait.assert_called_once_with(timeout=60)
+                # A rounded extra second must not admit a new case at 899s.
+                # A shortened preemption end is equally binding.
+                engine.run_command.reset_mock()
+                with patch.object(campaign.time, "time", return_value=expected-899):
+                    with self.assertRaisesRegex(RuntimeError, "insufficient remaining wall"):
+                        engine.case(m["sequence"][0])
+                    engine.run_command.assert_not_called()
+                if duration == 3600:
+                    with patch.object(campaign.time, "time", return_value=start+1):
+                        with self.assertRaisesRegex(RuntimeError, "insufficient remaining wall"):
+                            engine.build("baseline", 2)
+                        with self.assertRaisesRegex(RuntimeError, "insufficient remaining wall"):
+                            engine.tests("baseline", "not-started", p.COMMON)
+                    engine.run_command.assert_not_called()
+
     def mapping_prolog(self, physical="6", visible="0", probe=None, nvml_uuid=None, duplicate=False):
         """Actual prolog up to its first pin gate; only external operations mocked.
 
@@ -461,6 +556,7 @@ class HarnessTests(unittest.TestCase):
         class PrologPinsReached(Exception):
             pass
         env = dict(SLURM_JOB_ID="12345", SLURM_JOB_GPUS=physical, CUDA_VISIBLE_DEVICES=visible,
+                   SLURM_JOB_START_TIME=str(int(time.time())),
                    SLURM_JOB_END_TIME=str(int(time.time())+14400))
         with patch.dict(os.environ, env):
             engine = campaign.Engine(manifest(), self.root/"manifest.json")
@@ -488,7 +584,7 @@ class HarnessTests(unittest.TestCase):
         engine.query = Mock(side_effect=query)
         engine.run_command = Mock(side_effect=run_command)
         engine.pins = Mock(side_effect=PrologPinsReached)
-        with patch.dict(os.environ, env), patch.object(campaign, "allocation"):
+        with patch.dict(os.environ, env), patch.object(campaign, "allocation", return_value={"TimeLimit": "04:00:00"}):
             with self.assertRaises(PrologPinsReached):
                 engine.prolog()
         return engine, proof, calls

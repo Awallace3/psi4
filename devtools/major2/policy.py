@@ -13,13 +13,13 @@ OBSERVED_CANDIDATE = "6171b5901dbb43de5f19223cd08b13e45f9af742"
 P = "/storage/project/r-cs207-0/awallace43"
 E = P + "/miniconda/envs/p4cuest_sapt"
 DEPS = P + "/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage"
-RUN = P + "/runs/saptdft-cuest-cpks/major2-merged-b1e4947268-20261018-einsums113-gpumap-toolchain"
+RUN = P + "/runs/saptdft-cuest-cpks/major2-merged-b1e4947268-20261018-einsums113-gpumap-toolchain-wallcap"
 H0 = P + "/runs/saptdft-cuest-cpks/scal631-fc851a8346-20261016"
 SOURCES = {
     "baseline": P + "/gits/psi4.saptdft-cuest-major2-baseline-20261017",
     "candidate": P + "/gits/psi4.saptdft-cuest-major2-gpu-20261017",
 }
-HARNESS = P + "/gits/psi4.saptdft-cuest-major2-campaign-20261018-einsums113-gpumap-toolchain"
+HARNESS = P + "/gits/psi4.saptdft-cuest-major2-campaign-20261018-einsums113-gpumap-toolchain-wallcap"
 SDK = P + "/software/cuest-0.2.50-a06e8148"
 XC = P + "/software/libxc-7.1.2-cuda-sm80-89-90-120"
 CUDA = P + "/software/toolchains/cuda13"
