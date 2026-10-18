@@ -20,6 +20,7 @@ sys.dont_write_bytecode = True
 from policy import *
 import science
 import artifacts
+import jkexception as j
 
 HERE = Path(__file__).resolve().parent
 PY = E + "/bin/python"
@@ -37,6 +38,7 @@ def literal_assignments(path, names):
 
 
 def prepare(args):
+    require(not args.artifact_pair, "new common-fixed cohort requires fresh builds, not old artifacts")
     local = dict(baseline=Path(args.baseline_local).resolve(), candidate=Path(args.candidate_local).resolve())
     harness = HERE.parents[1]
     hp = git(harness, "rev-parse", "HEAD")
@@ -45,57 +47,50 @@ def prepare(args):
     candidate_pin = args.approved_candidate_pin if args.command == "freeze" else git(local["candidate"], "rev-parse", "HEAD")
     full_pin(candidate_pin)
     arms = {}
-    for arm, pin in [("baseline", BASE), ("candidate", candidate_pin)]:
+    for arm, pin in [("baseline", j.BASE), ("candidate", candidate_pin)]:
         check_source(local[arm], pin)
         files = file_manifest(local[arm])
-        arms[arm] = dict(source=SOURCES[arm], pin=pin, tree=git(local[arm], "rev-parse", "HEAD^{tree}"),
-                         backend="gpu", build=SOURCES[arm] + "/build_major2_cuda_mapproof", files=files, files_digest=digest(files))
-    require(subprocess.run(["git", "-C", str(local["candidate"]), "merge-base", "--is-ancestor", BASE, candidate_pin]).returncode == 0,
-            "candidate not descended from merged baseline")
-    changed = set(git(local["candidate"], "diff", "--name-only", BASE, candidate_pin).splitlines())
-    require(changed == OWNED_DIFF, "candidate diff not the five reviewed paths; new review/harness policy required")
+        arms[arm] = dict(source=j.SOURCES[arm], pin=pin, tree=git(local[arm], "rev-parse", "HEAD^{tree}"),
+                         backend="gpu", build=j.SOURCES[arm] + "/" + j.BUILD, files=files, files_digest=digest(files))
+    shared_fix = j.proof(local)
+    require(candidate_pin == j.CANDIDATE, "reviewed common-fixed candidate pin")
     require(tree_manifest(local["baseline"] / "psi4/driver") == tree_manifest(local["candidate"] / "psi4/driver"), "scientific drivers differ")
     additions = git(harness, "diff", "--name-status", BASE, hp).splitlines()
     require(additions and all(x.startswith("A\tdevtools/major2/") for x in additions), "harness must only add its own helpers from BASE")
     hfiles = file_manifest(harness)
     # Freeze all shared toolchain/dependency small input files by path/hash before job.
     # Missing remote-only compiler files are rehashed and recorded inside the GPU allocation.
-    m = dict(schema=1, route=ROUTE, gates=GATES, run_root=RUN, scratch_parent="/storage/scratch1/3/awallace43/cpks-major2",
+    m = dict(schema=1, build_mode=j.MODE, shared_fix=shared_fix,
+             route=ROUTE, gates=GATES, run_root=j.RUN, scratch_parent="/storage/scratch1/3/awallace43/cpks-major2",
              suite=H0 + "/geometries", suite_sha256=SUITE_SHA, systems=SYSTEMS, sequence=sequence(), arms=arms,
-             harness=dict(path=HARNESS, pin=hp, files=hfiles, files_digest=digest(hfiles)),
+             harness=dict(path=j.HARNESS, pin=hp, files=hfiles, files_digest=digest(hfiles)),
              dependency_hashes=LIBS, runtime_hash_pins=RUNTIME_LIBS, inspection_tool=INSPECTION_TOOL,
              common_selectors=COMMON, fixed_selector=FIXED, fixed_k=FIXED_K,
              selectors_ast=selectors_ast(local["candidate"]),
              runtime_policy=dict(threads=8, memory="100 GiB", cache="enabled-shared-job-1GiB",
                                  prewarm=False, print_override=False, affinity_override=False),
              approval=dict(state="APPROVED" if args.command == "freeze" else "PENDING",
-                           review_id=args.review_id if args.command == "freeze" else "",
+                           review_id=args.review_id if args.command == "freeze" else j.REVIEW_ID,
                            candidate_pin=candidate_pin if args.command == "freeze" else None),
              observed_candidate_pin=candidate_pin,
              rhf_tolerance_note="Reviewed focused tests remain stricter: atol=2e-13 rtol=2e-13; response 1e-12/1e-10. No weakening.",
              build_budget_seconds=[3600, 3600], test_smoke_budget_seconds=1800,
              production_budget_seconds=3600, per_process_timeout_seconds=600)
-    if args.artifact_pair:
-        pair_data = read_json(args.artifact_pair)
-        m["artifact_pair"] = pair_data.get("pair", pair_data)
-        artifacts.validate_pair(m["artifact_pair"])
-        for arm in arms:
-            arms[arm]["build"] = m["artifact_pair"]["arms"][arm]["build"]
-        m["build_budget_seconds"] = [0, 0]  # Explicit reuse, NOT a fresh compile budget promise.
     validate_manifest(m, executable=args.command == "freeze")
     out = Path(args.output_dir).resolve()
     out.mkdir(exist_ok=False)
     write_json(out / "manifest.json", m)
     mh = sha(out / "manifest.json")
-    batch = batch_text(mh)
+    batch = batch_text(mh, fresh=True)
     (out / "campaign.sbatch").write_text(batch)
     write_json(out / "bundle-receipt.json", dict(manifest_sha256=mh, batch_sha256=sha(out / "campaign.sbatch"),
                harness_pin=hp, executable_approval=m["approval"]["state"], generated_only=True))
     print(f"{args.command.upper()} {out} manifest_sha256={mh}; NOT submitted")
 
 
-def batch_text(manifest_hash):
+def batch_text(manifest_hash, fresh=False):
     require(re.fullmatch("[0-9a-f]{64}", manifest_hash), "manifest digest")
+    run, harness = (j.RUN, j.HARNESS) if fresh else (RUN, HARNESS)
     return f"""#!/usr/bin/env bash
 # Generated data; tracked code moves only via Git after separate approval.
 #SBATCH --job-name=major2-gpu-ab
@@ -111,14 +106,14 @@ def batch_text(manifest_hash):
 #SBATCH --time=04:00:00
 #SBATCH --signal=TERM@300
 #SBATCH --no-requeue
-#SBATCH --chdir={RUN}
-#SBATCH --output={RUN}/logs/%x-%j.out
-#SBATCH --error={RUN}/logs/%x-%j.err
+#SBATCH --chdir={run}
+#SBATCH --output={run}/logs/%x-%j.out
+#SBATCH --error={run}/logs/%x-%j.err
 set -euo pipefail
 # logs/ must preexist, no source-root or spool-relative path resolution.
-exec bash {HARNESS}/devtools/major2/supervise.sh {RUN} \\
-  {PY} -B {HARNESS}/devtools/major2/campaign.py run \\
-  --manifest {RUN}/manifest.json --manifest-sha256 {manifest_hash}
+exec bash {harness}/devtools/major2/supervise.sh {run} \\
+  {PY} -B {harness}/devtools/major2/campaign.py run \\
+  --manifest {run}/manifest.json --manifest-sha256 {manifest_hash}
 """
 
 
@@ -287,6 +282,10 @@ class Engine:
         self.raw.mkdir()
         self.scratch.mkdir(parents=True, exist_ok=False)
         self.env = runtime_env(os.environ, self.scratch)
+        if self.m.get("build_mode") == j.MODE:
+            self.env["CPKS_BUILD_DIR"] = j.BUILD
+            require(j.proof({arm: item["source"] for arm, item in self.m["arms"].items()}) == self.m["shared_fix"],
+                    "same-allocation common fix/delta proof")
         self.env["CUDA_CACHE_PATH"] = str(self.scratch / "cuda-cache")
         Path(self.env["CUDA_CACHE_PATH"]).mkdir()
         env_keys = [
@@ -585,6 +584,12 @@ class Engine:
                 self.build("baseline", 1)
             require(self.drivers["baseline"] == self.drivers["candidate"], "merged drivers must match exactly")
             require(self.configurations["baseline"] == self.configurations["candidate"], "build policies differ")
+            if self.m.get("build_mode") == j.MODE:
+                items = self.m["arms"]
+                require(artifacts.normalized_configs(items["baseline"]) ==
+                        artifacts.normalized_configs(items["candidate"]), "full actual CMake configurations differ")
+                require(artifacts.normalized_compile_commands(items["baseline"]) ==
+                        artifacts.normalized_compile_commands(items["candidate"]), "full actual compiler commands differ")
             for arm in ("baseline", "candidate"):
                 self.tests(arm, arm+"-common", COMMON)
                 self.tests(arm, arm+"-hf-pbe0-fixed", [FIXED], FIXED_K)
@@ -651,7 +656,8 @@ def main():
         require(sha(args.manifest) == args.manifest_sha256, "frozen manifest SHA mismatch")
         m = read_json(args.manifest)
         validate_manifest(m)
-        require(Path(args.manifest) == Path(RUN)/"manifest.json", "manifest outside new cohort root")
+        require(m.get("build_mode") == j.MODE, "new entry point only runs fresh common-fixed cohort")
+        require(Path(args.manifest) == Path(j.RUN)/"manifest.json", "manifest outside new cohort root")
         Engine(m, args.manifest).execute()
 
 

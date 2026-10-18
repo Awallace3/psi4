@@ -343,6 +343,14 @@ def cmake_policy(outer, inner, stage):
 
 
 def validate_manifest(m, executable=True):
+    fresh = "build_mode" in m
+    if fresh:
+        import jkexception as j
+        j.validate(m)
+    expected_run = j.RUN if fresh else RUN
+    expected_harness = j.HARNESS if fresh else HARNESS
+    expected_sources = j.SOURCES if fresh else SOURCES
+    expected_base = j.BASE if fresh else BASE
     pair = m.get("artifact_pair")
     if pair is not None:
         from artifacts import validate_pair
@@ -352,16 +360,17 @@ def validate_manifest(m, executable=True):
                 m["per_process_timeout_seconds"] == 600, "artifact budget policy")
         require(m["approval"]["review_id"] == pair["review_id"], "artifact approval review")
     require(m["schema"] == 1 and m["route"] == ROUTE and m["gates"] == GATES, "campaign policy mismatch")
-    require(m["run_root"] == RUN and m["harness"]["path"] == HARNESS, "wrong/new root or harness path")
+    require(m["run_root"] == expected_run and m["harness"]["path"] == expected_harness, "wrong/new root or harness path")
     require(m["scratch_parent"] == "/storage/scratch1/3/awallace43/cpks-major2", "scratch policy")
     require(m["sequence"] == sequence() and len({v["label"] for v in m["sequence"]}) == 24, "cohort/arm/order")
     require(m["systems"] == SYSTEMS and m["suite_sha256"] == SUITE_SHA and m["suite"] == H0 + "/geometries", "geometry policy")
     require(set(m["arms"]) == {"baseline", "candidate"}, "exactly two GPU arms")
-    require(m["arms"]["baseline"]["pin"] == BASE, "baseline pin")
+    require(m["arms"]["baseline"]["pin"] == expected_base, "baseline pin")
     for arm, item in m["arms"].items():
         full_pin(item["pin"])
-        require(item["source"] == SOURCES[arm] and item["backend"] == "gpu", "wrong arm/source/backend")
-        expected_build = pair["arms"][arm]["build"] if pair else SOURCES[arm] + "/build_major2_cuda_mapproof"
+        require(item["source"] == expected_sources[arm] and item["backend"] == "gpu", "wrong arm/source/backend")
+        expected_build = (expected_sources[arm] + "/" + j.BUILD if fresh else
+                          pair["arms"][arm]["build"] if pair else SOURCES[arm] + "/build_major2_cuda_mapproof")
         require(item["build"] == expected_build, "wrong build stage")
         if pair:
             require(item["pin"] == pair["arms"][arm]["pin"], "artifact source pin")
