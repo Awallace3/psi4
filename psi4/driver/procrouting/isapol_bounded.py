@@ -39,6 +39,8 @@ class BoundedProperties:
     The ledger reports explicit numeric plans, not measured resident memory.
     Arrays retained here are small local tensors; AUX and full OV intermediates
     are private ephemeral disk checkpoints, removed when the call exits.
+    ``dispersion`` remains isotropic; ``recoupled_dispersion`` is an owned
+    local-axis angular result only when explicitly requested, otherwise None.
     """
     frequencies: tuple
     local_tensors: tuple
@@ -47,6 +49,7 @@ class BoundedProperties:
     diagnostics: tuple
     resources: dict
     provenance: dict
+    recoupled_dispersion: object = None
 
     @property
     def refined_tensors(self):
@@ -58,6 +61,18 @@ def _matrix(a):
     result = core.IsaPfitMatrix()
     result.rows, result.cols, result.values = a.shape[0], a.shape[1], a.ravel().tolist()
     return result
+
+
+def _refined_dispersions(results, quadrature, max_order, ledger, *, recoupled=False):
+    """Common final stage; ordinary requests never import/construct recoupling."""
+    isotropic = refine.refined_isotropic_dispersion(results, cp_weights=quadrature.cp_weights,
+        quadrature_provenance=quadrature.provenance, max_order=max_order)
+    angular = None
+    if recoupled:
+        from .isapol_native_recoupled import refined_recoupled_dispersion
+        angular = refined_recoupled_dispersion(results, cp_weights=quadrature.cp_weights,
+            quadrature_provenance=quadrature.provenance, max_order=max_order, ledger=ledger)
+    return isotropic, angular
 
 
 def _pack_targets(packed, column, coefficient, potentials, ledger):
@@ -152,7 +167,8 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution,
                        lattice_options, localization_rank_limit,
                        weight_type, weight_coefficient, cutoff, resources,
                        scf_correction, expected_grac_shift=None,
-                       declared_variables=None, max_order=10, scratch_directory=None, log=None):
+                       declared_variables=None, max_order=10, scratch_directory=None, log=None,
+                       recoupled_dispersion=False):
     """Run the complete native chain under one explicit resource contract.
 
     Scientific scope: canonical restricted C1 PBE0, NONE or FIXED_GRAC, plain
@@ -172,6 +188,9 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution,
     explicit numeric cap. Return values make no automatic CamCASP parity claim.
     ``log`` optionally supplies an isapol_logging.StageLog for stage timings,
     input dimensions and numerical diagnostics; no numerical policy is changed.
+    ``recoupled_dispersion=True`` additionally contracts this run's full
+    PFIT-refined local tensors through the native Cn(t,u,J) core under the
+    same ledger. No charge response/reciprocity repair or dimer energy is added.
     """
     from .isapol_logging import StageLog
     if log is None:
@@ -211,6 +230,12 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution,
         seen.add(tuple(sorted(edge)))
     if type(max_order) is not int or max_order not in refine.DISPERSION_ORDERS:
         raise ValueError('max_order must be 6, 8, 10 or 12')
+    if type(recoupled_dispersion) is not bool:
+        raise TypeError('recoupled_dispersion must be an explicit bool')
+    if recoupled_dispersion:
+        from .isapol_native_recoupled import recoupled_plan
+        # Reject unsupported ranks/core-size requests before response/LW/PFIT.
+        recoupled_plan(sites, len(quadrature.frequencies), max_order)
     if type(weight_type) is not int or weight_type not in refine.WEIGHT_TYPES:
         raise ValueError('invalid weight_type')
     for name, value in (('weight_coefficient', weight_coefficient), ('cutoff', cutoff)):
@@ -244,6 +269,9 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution,
     reserved = 2*grid.nbytes+state.planned_bytes+32*state.nbf**2
     ledger = _Ledger(resources, reserved)
     ledger.admit('state and grid', 0)
+    if recoupled_dispersion:
+        numeric, _ = recoupled_plan(sites, len(quadrature.frequencies), max_order)
+        ledger.admit('native recoupled preflight', numeric)
     main = adapt_main(wfn, caller_converged=True)
     coefficients = main.transform @ np.asarray(state.orbitals())
     energies = np.asarray(state.energies()).copy()
@@ -401,12 +429,12 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution,
             log.items(((f'node {node} solver status', str(result.status)),
                        (f'node {node} maximum parameter change from anchor', result.anchor_shift_maxabs)))
         log.stage('Casimir-Polder dispersion', (('maximum order', max_order), ('nodes', nf)))
-        dispersion = refine.refined_isotropic_dispersion(results, cp_weights=quadrature.cp_weights,
-            quadrature_provenance=quadrature.provenance, max_order=max_order)
+        dispersion, recoupled = _refined_dispersions(results, quadrature, max_order, ledger,
+                                                    recoupled=recoupled_dispersion)
         log.items((('site pairs', len(dispersion.pairs)), ('peak planned numeric bytes', ledger.peak),
                    ('charged work', ledger.work), ('checkpoint I/O bytes', ledger.io)))
         log.stage_end()
     return BoundedProperties(quadrature.frequencies, tuple(local_tensors), tuple(results), dispersion,
         tuple(diagnostics), dict(maximum_numeric_plan=ledger.peak, charged_work=ledger.work,
         charged_io_bytes=ledger.io, frequency_rhs=nf*(p+q), fit_rows=nf*len(points)*(len(points)+1),
-        stages=ledger.stages), dict(source, stability=stability))
+        stages=ledger.stages), dict(source, stability=stability), recoupled)

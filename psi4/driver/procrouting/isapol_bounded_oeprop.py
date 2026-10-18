@@ -24,7 +24,8 @@ from .isapol_logging import StageLog
 from .isapol_native_correction import correction_state
 
 
-TASKS = frozenset(('ATOMIC_REFINED_POLARIZABILITIES', 'ATOMIC_REFINED_DISPERSION'))
+RECOUPLED_TASK = 'ATOMIC_REFINED_RECOUPLED_DISPERSION'
+TASKS = frozenset(('ATOMIC_REFINED_POLARIZABILITIES', 'ATOMIC_REFINED_DISPERSION', RECOUPLED_TASK))
 OPTION_MAP = {
     'auxiliary_basis': 'ATOMIC_PROPERTY_AUXILIARY_BASIS',
     'radial_points': 'ATOMIC_RESPONSE_RADIAL_POINTS',
@@ -143,11 +144,12 @@ def atomic_property_result(wfn):
 def run(wfn, tasks, *, preset, **kwargs):
     """Run explicit BOUNDED_DF oeprop tasks and attach the owned result on success.
 
-    The two supported refined tasks execute the full common chain. Read its
-    BoundedProperties record with psi4.atomic_property_result(wfn).
+    All refined tasks share one common chain per request. Only RECOUPLED_TASK
+    adds the optional local-axis contraction. Read the owned BoundedProperties
+    record with psi4.atomic_property_result(wfn); .dispersion stays isotropic.
     """
     if not tasks or any(task not in TASKS for task in tasks) or len(set(tasks)) != len(tasks):
-        raise ValueError('BOUNDED_DF accepts only ATOMIC_REFINED_POLARIZABILITIES and ATOMIC_REFINED_DISPERSION')
+        raise ValueError('BOUNDED_DF accepts only '+', '.join(sorted(TASKS)))
     if not isinstance(wfn, core.Wavefunction):
         raise TypeError('BOUNDED_DF requires a live Psi4 Wavefunction')
     v = settings(preset, kwargs)
@@ -195,7 +197,9 @@ def run(wfn, tasks, *, preset, **kwargs):
     keys = ('smoothing', 'shell_cutoff', 'charge_penalty', 'anchor_metric_damping',
             'localization_rank_limit', 'weight_type', 'weight_coefficient', 'cutoff',
             'resources', 'scf_correction', 'expected_grac_shift', 'max_order', 'scratch_directory')
+    optional = {'recoupled_dispersion': True} if RECOUPLED_TASK in tasks else {}
     result = bounded_properties(wfn, recipe, caller_converged=True, distribution='df_centre_analytic',
         sites=sites, bonds=bonds, quadrature=quadrature, response_grid=grid,
-        lattice_options=lattice, declared_variables=v['declared_variables'], log=log, **{k:v[k] for k in keys})
+        lattice_options=lattice, declared_variables=v['declared_variables'], log=log,
+        **optional, **{k:v[k] for k in keys})
     wfn._native_atomic_property_result = result

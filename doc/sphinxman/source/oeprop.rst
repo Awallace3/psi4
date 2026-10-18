@@ -89,7 +89,14 @@ summarized in the table below.
    | Refined dispersion coefficients    | ATOMIC_REFINED_DISPERSION        | Needs ``atomic_backend='BOUNDED_DF'``. See :ref:`ISA-Pol <sec:isapol>`                      |
    +------------------------------------+----------------------------------+---------------------------------------------------------------------------------------------+
 
-There are two ways the computation of one-electron properties can be requested. 
+The explicit task ``ATOMIC_REFINED_RECOUPLED_DISPERSION`` additionally exposes
+native local-axis :math:`C_n(t,u,J)`, not oriented dimer energies. It requires
+``atomic_backend='BOUNDED_DF'`` and returns the owned optional
+``atomic_property_result(wfn).recoupled_dispersion``; ordinary ``.dispersion``
+remains isotropic. See :ref:`ISA-Pol <sec:isapol>` for tensor conventions,
+rank/completeness inventories and combined requests.
+
+There are two ways the computation of one-electron properties can be requested.
 Firstly, the properties can be evaluated from the last
 computed one-particle density, using the following syntax::
 

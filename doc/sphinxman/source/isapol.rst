@@ -67,8 +67,8 @@ stockholder (ISA-A) partition is performed or inferred.
 Requesting a computation
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-The two refined tasks are passed to :py:func:`~psi4.driver.oeprop` together
-with an explicit backend and a molecule preset.  Both run the same full chain;
+The refined tasks are passed to :py:func:`~psi4.driver.oeprop` together
+with an explicit backend and a molecule preset.  They share one full chain;
 any other ``ATOMIC_*`` request, or one without ``atomic_backend='BOUNDED_DF'``,
 is refused.
 
@@ -83,6 +83,11 @@ is refused.
    +-----------------------------------+--------------------------------------------------------------------------------+
    | ATOMIC_REFINED_DISPERSION         | The refined isotropic site-pair :math:`C_n` contracted from them.              |
    +-----------------------------------+--------------------------------------------------------------------------------+
+
+The additional opt-in task ``ATOMIC_REFINED_RECOUPLED_DISPERSION`` contracts
+the full PFIT-refined tensors into local-axis :math:`C_n(t,u,J)` (including
+odd orders), without dimer placement. Combined requests execute response,
+LW and PFIT only once. Ordinary requests do not construct a recoupled model.
 
 A minimal |PSIfour| input::
 
@@ -140,6 +145,55 @@ other property, and this route publishes no QCVariables.  The owned
     r.dispersion.pairs     # individually labelled refined site-pair C_n
     r.diagnostics          # per-node response/localization/PFIT diagnostics
     r.resources            # the cumulative resource ledger
+
+Local-axis recoupled dispersion (explicit opt-in)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    psi4.oeprop(wfn, 'ATOMIC_REFINED_POLARIZABILITIES',
+                'ATOMIC_REFINED_DISPERSION', 'ATOMIC_REFINED_RECOUPLED_DISPERSION',
+                atomic_backend='BOUNDED_DF', preset='water')
+    r = psi4.atomic_property_result(wfn)
+    d = r.recoupled_dispersion  # None unless explicitly requested
+    d.frequencies, d.cp_weights  # CP includes Jacobian and 1/(2*pi), once
+    d.pair_labels              # ordered labelled site pairs, self pairs included
+    d.model.source.sites       # owned labels, origins, frames, ranks, full tensors
+    d.model.sites              # complex recoupled rank-pair blocks and t labels
+    d.pairs[0].coefficients    # order, one-based t/u, J, value
+    d.pairs[0].coverage        # original core rank-quadruple inventories
+    d.declared_model_coverage  # additional per-pair/order declared-rank inventory
+
+``r.dispersion`` remains isotropic, unchanged even on combined requests.
+Both ``r.local_tensors`` and ``r.refined_tensors`` retain full tensors, not
+traces. Components are real Racah/no-Condon--Shortley
+``00,10,11c,11s,20,...`` (dipoles z,x,y); frames are proper local-to-global
+Cartesian columns, not rotations applied by the recoupling adapter. The core
+source tensors omit only the identically zero charge ``00`` row/column.
+Nonzero charge response, rank-zero-only sites and any failure of exact
+reciprocity are refused, not repaired. Signed symmetric tensors are allowed.
+Every frequency retains its own tensor, with zero static CP weight and positive
+dynamic weights. Origins are bohr, imaginary frequencies atomic units, tensor
+rank-(l,l') blocks have units :math:`a_0^{l+l'+1}`, and coefficients
+:math:`E_h a_0^n`. The adapter uses only this run's native PFIT results.
+
+``t`` and ``u`` are one-based real angular-component indices, labelled
+``00,10,11c,11s,...`` in the recoupled blocks; ``J`` is angular momentum.
+These are **not** oriented scalar coefficients or :math:`-C_n/R^n` energies.
+The scalar ``t=u=1,J=0`` C6/C8 equals the existing isotropic coefficient with
+no extra prefactor, but this identity is not anisotropic completeness.
+
+Completeness is reported separately for each ordered site pair and order:
+``coverage`` preserves ``included_rank_quadruples``,
+``missing_table_rank_quadruples``, ``missing_unrestricted_rank_quadruples``,
+``table_complete`` and ``unrestricted_complete`` from the core.
+``declared_model_coverage`` separately reports ``declared_model_complete`` and
+``missing_declared_rank_quadruples`` within the actual per-site rank limits.
+The core tables omit rank pairs (3,4), (4,3), (4,4); these are not zero physics.
+Rank-2 models are not unrestricted-complete for anisotropic C8/C10. No partial
+coefficient is relabelled full, and coefficient zeros do not certify coverage.
+The optional conversion/contraction is charged to the shared bounded ledger,
+in addition to the unchanged native core ceilings.
 
 Refined and unrefined tensors remain distinct under ``refined_tensors`` and
 ``local_tensors``.  The narrative written to the output file is controlled by
