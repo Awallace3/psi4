@@ -48,7 +48,7 @@ def prepare(args):
         check_source(local[arm], pin)
         files = file_manifest(local[arm])
         arms[arm] = dict(source=SOURCES[arm], pin=pin, tree=git(local[arm], "rev-parse", "HEAD^{tree}"),
-                         backend="gpu", build=SOURCES[arm] + "/build_major2_cuda_armenv", files=files, files_digest=digest(files))
+                         backend="gpu", build=SOURCES[arm] + "/build_major2_cuda_mapproof", files=files, files_digest=digest(files))
     require(subprocess.run(["git", "-C", str(local["candidate"]), "merge-base", "--is-ancestor", BASE, candidate_pin]).returncode == 0,
             "candidate not descended from merged baseline")
     changed = set(git(local["candidate"], "diff", "--name-only", BASE, candidate_pin).splitlines())
@@ -62,7 +62,7 @@ def prepare(args):
     m = dict(schema=1, route=ROUTE, gates=GATES, run_root=RUN, scratch_parent="/storage/scratch1/3/awallace43/cpks-major2",
              suite=H0 + "/geometries", suite_sha256=SUITE_SHA, systems=SYSTEMS, sequence=sequence(), arms=arms,
              harness=dict(path=HARNESS, pin=hp, files=hfiles, files_digest=digest(hfiles)),
-             dependency_hashes=LIBS, inspection_tool=INSPECTION_TOOL,
+             dependency_hashes=LIBS, runtime_hash_pins=RUNTIME_LIBS, inspection_tool=INSPECTION_TOOL,
              common_selectors=COMMON, fixed_selector=FIXED, fixed_k=FIXED_K,
              selectors_ast=selectors_ast(local["candidate"]),
              runtime_policy=dict(threads=8, memory="100 GiB", cache="enabled-shared-job-1GiB",
@@ -265,6 +265,7 @@ class Engine:
                 "GPU/UUID/driver changed")
         for p, h in LIBS.items():
             require(sha(p) == h, "shared dependency changed")
+        check_runtime_aliases()
         einsums_coherence()
         for arm in self.probes:
             stage = Path(self.m["arms"][arm]["build"]) / "stage"
@@ -490,9 +491,7 @@ class Engine:
         require(all(actual_maps.get(p) == h for p, h in d["libraries_sha256"].items()), "runner/library mapping hash disagreement")
         require(str(Path(self.probes[arm]["core"]).resolve()) in d["libraries_sha256"], "runner core mapping absent")
         check_runtime_maps(actual_maps)
-        for prefix in ("libcudart.so", "libmkl_rt.so", "libstdc++.so"):
-            found = [p for p in actual_maps if Path(p).name.startswith(prefix)]
-            require(found and all(Path(p).is_relative_to(E + "/lib") for p in found), "actual runtime " + prefix)
+        check_required_runtime_maps(actual_maps)
         other = self.m["arms"]["candidate" if arm == "baseline" else "baseline"]["build"]
         require(not any(p.startswith(other) for p in actual_maps), "other-arm runtime mapped")
         if not row["smoke"]:
@@ -528,8 +527,8 @@ class Engine:
         write_json(self.root/"STARTED.json", dict(job=self.job, manifest_sha256=self.manifest_hash))
         try:
             self.prolog()
-            self.build("baseline", 2)
-            self.build("candidate", 1)
+            self.build("candidate", 2)
+            self.build("baseline", 1)
             require(self.drivers["baseline"] == self.drivers["candidate"], "merged drivers must match exactly")
             require(self.configurations["baseline"] == self.configurations["candidate"], "build policies differ")
             for arm in ("baseline", "candidate"):

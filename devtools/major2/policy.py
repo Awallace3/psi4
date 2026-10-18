@@ -13,13 +13,13 @@ OBSERVED_CANDIDATE = "6171b5901dbb43de5f19223cd08b13e45f9af742"
 P = "/storage/project/r-cs207-0/awallace43"
 E = P + "/miniconda/envs/p4cuest_sapt"
 DEPS = P + "/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage"
-RUN = P + "/runs/saptdft-cuest-cpks/major2-merged-b1e4947268-20261018-einsums113-gpumap-toolchain-wallcap-armenv"
+RUN = P + "/runs/saptdft-cuest-cpks/major2-merged-b1e4947268-20261018-einsums113-gpumap-toolchain-wallcap-armenv-mapproof"
 H0 = P + "/runs/saptdft-cuest-cpks/scal631-fc851a8346-20261016"
 SOURCES = {
     "baseline": P + "/gits/psi4.saptdft-cuest-major2-baseline-20261017",
     "candidate": P + "/gits/psi4.saptdft-cuest-major2-gpu-20261017",
 }
-HARNESS = P + "/gits/psi4.saptdft-cuest-major2-campaign-20261018-einsums113-gpumap-toolchain-wallcap-armenv"
+HARNESS = P + "/gits/psi4.saptdft-cuest-major2-campaign-20261018-einsums113-gpumap-toolchain-wallcap-armenv-mapproof"
 SDK = P + "/software/cuest-0.2.50-a06e8148"
 XC = P + "/software/libxc-7.1.2-cuda-sm80-89-90-120"
 CUDA = P + "/software/toolchains/cuda13"
@@ -31,6 +31,20 @@ LIBS = {
     SDK + "/lib/13/libcuest.so.0": "65c9e559201ee589cb742b919cc1c5d80c45aa480b64aede17ac96aff9e4963c",
     XC + "/lib64/libxc.so.15": "b8ba011064d688748fca2676801602d6fd8a51712f13235ba2b4511d2976cc98",
     DEPS + "/lib/libEinsums.so.1": "cf1f411130bc902a3ca74280cf23b3e7f325843de8cf38ec4a95fcb6f917faf2",
+}
+# Frozen read-only from the actual shared files BEFORE performance inspection.
+# /proc/maps names physical targets, not necessarily their E/lib aliases.
+RUNTIME_LIBS = {
+    "libcudart.so": dict(
+        alias=E+"/lib/libcudart.so.13",
+        realpath=E+"/targets/x86_64-linux/lib/libcudart.so.13.3.29",
+        sha256="2470c77122b124cf202e364c627b13af78f42d1998db0f5f1468161b3735f256"),
+    "libmkl_rt.so": dict(
+        alias=E+"/lib/libmkl_rt.so", realpath=E+"/lib/libmkl_rt.so.2",
+        sha256="221e89c09644d546cdc6505fc1fdecdf6490a4c57f7da6ca3b48a1c96c4860bd"),
+    "libstdc++.so": dict(
+        alias=E+"/lib/libstdc++.so.6", realpath=E+"/lib/libstdc++.so.6.0.34",
+        sha256="38e5308c07cbb5f4858fda88461b336ddffc44caa227ee22bd2e0d8a09e51374"),
 }
 EINSUMS_INPUTS = {
     "share/cmake/Einsums/EinsumsConfig.cmake": "d444049359b1f2c70914898b1178cfb1e0eec61a543bda775b2ae6d530991f4d",
@@ -228,6 +242,28 @@ def check_runtime_maps(loaded):
             "multiple/wrong Einsums SONAME copies")
 
 
+def check_runtime_aliases():
+    proof = {}
+    for prefix, pin in RUNTIME_LIBS.items():
+        actual = Path(pin["alias"]).resolve(strict=True)
+        require(str(actual) == pin["realpath"], "runtime alias target changed: " + prefix)
+        require(sha(actual) == pin["sha256"], "runtime hash changed: " + prefix)
+        st = actual.stat()
+        proof[prefix] = dict(pin, device=st.st_dev, inode=st.st_ino, bytes=st.st_size)
+    return proof
+
+
+def check_required_runtime_maps(loaded):
+    proof = check_runtime_aliases()
+    for prefix, pin in RUNTIME_LIBS.items():
+        found = {str(Path(path).resolve(strict=True)) for path in loaded
+                 if Path(path).name.startswith(prefix)}
+        require(found == {pin["realpath"]}, "missing/multiple/wrong runtime mapping: " + prefix)
+        require(all(h == pin["sha256"] for path, h in loaded.items()
+                    if Path(path).name.startswith(prefix)), "mapped runtime hash: " + prefix)
+    return proof
+
+
 def runtime_env(parent, scratch):
     env = dict(parent)
     for key in ("GCC_ROOT", "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH",
@@ -240,7 +276,7 @@ def runtime_env(parent, scratch):
                OMP_NUM_THREADS="8", MKL_NUM_THREADS="8", OPENBLAS_NUM_THREADS="1",
                TMPDIR=str(scratch), SCRATCH=str(scratch), PSI_SCRATCH=str(scratch),
                CPKS_CUDA_ARCHS="80;89;90;120", CPKS_CUDA_LIBXC=XC,
-               CPKS_CUEST_SDK=SDK, CPKS_BUILD_DIR="build_major2_cuda_armenv",
+               CPKS_CUEST_SDK=SDK, CPKS_BUILD_DIR="build_major2_cuda_mapproof",
                CUDA_CACHE_DISABLE="0", CUDA_CACHE_MAXSIZE="1073741824")
     return env
 
@@ -294,7 +330,7 @@ def validate_manifest(m, executable=True):
     for arm, item in m["arms"].items():
         full_pin(item["pin"])
         require(item["source"] == SOURCES[arm] and item["backend"] == "gpu", "wrong arm/source/backend")
-        require(item["build"] == SOURCES[arm] + "/build_major2_cuda_armenv", "wrong build stage")
+        require(item["build"] == SOURCES[arm] + "/build_major2_cuda_mapproof", "wrong build stage")
         require(item["files"] and digest(item["files"]) == item["files_digest"], "source files manifest")
         require(item["files"]["devtools/saptdft_cpks_suite_run.py"]["sha256"] == RUNNER_SHA, "runner pin")
         require(item["files"]["devtools/cpks_gpu_build.sh"]["sha256"] == BUILD_SHA, "build helper pin")
@@ -302,6 +338,7 @@ def validate_manifest(m, executable=True):
     require(digest(m["harness"]["files"]) == m["harness"]["files_digest"], "harness manifest")
     require(m["common_selectors"] == COMMON and m["fixed_selector"] == FIXED and m["fixed_k"] == FIXED_K, "test selectors")
     require(m["dependency_hashes"] == LIBS, "dependency hashes")
+    require(m["runtime_hash_pins"] == RUNTIME_LIBS, "runtime hash pins")
     require(m["inspection_tool"] == INSPECTION_TOOL, "inspection tool pin")
     require(m["runtime_policy"] == dict(threads=8, memory="100 GiB", cache="enabled-shared-job-1GiB",
                                       prewarm=False, print_override=False, affinity_override=False), "runtime policy")

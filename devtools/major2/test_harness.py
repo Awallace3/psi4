@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import campaign
@@ -28,11 +29,11 @@ def manifest():
                 suite=p.H0+"/geometries", suite_sha256=p.SUITE_SHA, sequence=p.sequence(),
                 scratch_parent="/storage/scratch1/3/awallace43/cpks-major2",
                 arms={arm: dict(source=p.SOURCES[arm], pin=pin, backend="gpu",
-                                build=p.SOURCES[arm]+"/build_major2_cuda_armenv",
+                                build=p.SOURCES[arm]+"/build_major2_cuda_mapproof",
                                 files=files, files_digest=p.digest(files))
                       for arm, pin in [("baseline", p.BASE), ("candidate", p.OBSERVED_CANDIDATE)]},
                 harness=dict(path=p.HARNESS, pin="a"*40, files=files, files_digest=p.digest(files)),
-                dependency_hashes=p.LIBS, inspection_tool=p.INSPECTION_TOOL,
+                dependency_hashes=p.LIBS, runtime_hash_pins=p.RUNTIME_LIBS, inspection_tool=p.INSPECTION_TOOL,
                 common_selectors=p.COMMON, fixed_selector=p.FIXED, fixed_k=p.FIXED_K,
                 runtime_policy=dict(threads=8, memory="100 GiB", cache="enabled-shared-job-1GiB",
                                     prewarm=False, print_override=False, affinity_override=False),
@@ -160,7 +161,7 @@ class HarnessTests(unittest.TestCase):
             lambda x: x["arms"]["candidate"].update(pin="saptdft_cuest_major2_gpu"),
             lambda x: x["arms"]["candidate"].update(pin="6171b59"),
             lambda x: x["arms"]["candidate"].update(backend="cpu"),
-            lambda x: x["arms"]["candidate"].update(build=p.SOURCES["baseline"]+"/build_major2_cuda_armenv"),
+            lambda x: x["arms"]["candidate"].update(build=p.SOURCES["baseline"]+"/build_major2_cuda_mapproof"),
             lambda x: x["approval"].update(candidate_pin=p.BASE),
             lambda x: x["harness"].update(pin="HEAD"),
             lambda x: x.update(run_root=p.H0),
@@ -215,7 +216,7 @@ class HarnessTests(unittest.TestCase):
         self.assertNotIn("/old", env["LD_LIBRARY_PATH"])
         self.assertEqual(env["OMP_PROC_BIND"], "inherited")
         self.assertEqual(env["CPKS_CUDA_ARCHS"], "80;89;90;120")
-        self.assertEqual(env["CPKS_BUILD_DIR"], "build_major2_cuda_armenv")
+        self.assertEqual(env["CPKS_BUILD_DIR"], "build_major2_cuda_mapproof")
         for name in ["TMPDIR", "SCRATCH", "PSI_SCRATCH"]:
             self.assertEqual(env[name], str(self.root))
         argv = p.build_argv("/fake source ; not shell", p.BASE, "/fake output")
@@ -614,7 +615,7 @@ class HarnessTests(unittest.TestCase):
         engine.manifest_hash = "fake"
         with patch.object(campaign, "check_source"), patch.object(campaign, "sha", return_value="fake"), \
              patch.object(campaign, "SUITE_SHA", "fake"), patch.object(campaign, "LIBS", {}), \
-             patch.object(campaign, "einsums_coherence"):
+             patch.object(campaign, "einsums_coherence"), patch.object(campaign, "check_runtime_aliases"):
             campaign.Engine.pins(engine)
         with patch.object(campaign.subprocess, "Popen") as popen:
             engine.start_sampler()
@@ -867,6 +868,151 @@ class HarnessTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("wrong arm/package import", proc.stderr)
         self.assertFalse((self.root/"probe.json").exists())
+        observed = p.read_json(self.root/"probe-observed.json")
+        self.assertEqual(observed["validation"], "UNVALIDATED")
+        self.assertTrue(observed["maps"])
+
+    def runtime_fixture(self):
+        env = self.root/"env"
+        (env/"lib").mkdir(parents=True)
+        target = env/"targets/x86_64-linux/lib"
+        target.mkdir(parents=True)
+        pins = {}
+        for prefix, alias, real in [
+            ("libcudart.so", "libcudart.so.13", target/"libcudart.so.13.3.29"),
+            ("libmkl_rt.so", "libmkl_rt.so", env/"lib/libmkl_rt.so.2"),
+            ("libstdc++.so", "libstdc++.so.6", env/"lib/libstdc++.so.6.0.34"),
+        ]:
+            real.write_bytes(b"synthetic runtime, not ELF: "+alias.encode())
+            link = env/"lib"/alias
+            link.symlink_to(real)
+            pins[prefix] = dict(alias=str(link), realpath=str(real), sha256=p.sha(real))
+        return env, pins, {v["realpath"]: v["sha256"] for v in pins.values()}
+
+    def test_probe_accepts_captured_conda_lib_to_targets_mapping(self):
+        import probe
+        env, pins, loaded = self.runtime_fixture()
+        physical = pins["libcudart.so"]["realpath"]
+        # Exact captured 14160948 pattern: the OLD guard rejects the correct
+        # library because /proc/maps reports E/targets, not its E/lib alias.
+        self.assertFalse(Path(physical).is_relative_to(env/"lib"))
+        stage = self.root/"stage"
+        (stage/"lib/psi4").mkdir(parents=True)
+        core = stage/"lib/psi4/core.so"
+        core.write_bytes(b"fake core")
+        runtime = self.root/"runtime.env"
+        runtime.write_text("fake helper")
+        psi = SimpleNamespace(__file__=str(stage/"lib/psi4/__init__.py"),
+                              core=SimpleNamespace(__file__=str(core), release_freed_memory=lambda: None),
+                              __version__="FAKE", addons=lambda name: name == "cuest")
+        einsums = SimpleNamespace(__file__="fake-einsums", __version__="FAKE",
+                                 core=SimpleNamespace(__file__=str(core)))
+        output = self.root/"probe.json"
+        with patch.dict(sys.modules, psi4=psi, einsums=einsums), \
+             patch.object(p, "RUNTIME_LIBS", pins, create=True), \
+             patch.object(probe, "maps", return_value=loaded), \
+             patch.object(probe, "check_runtime_maps"), \
+             patch.dict(os.environ, MAJOR2_EXPECTED_STAGE=str(stage),
+                        MAJOR2_HELPER_RUNTIME_ENV=str(runtime), LD_LIBRARY_PATH=p.RUNTIME_PATH), \
+             patch.object(sys, "argv", ["probe.py", str(output)]):
+            probe.main()
+        self.assertEqual(p.read_json(output)["runtime_proof"]["libcudart.so"]["realpath"], physical)
+        self.assertEqual(p.read_json(self.root/"probe-observed.json")["validation"], "UNVALIDATED")
+        loaded[physical] = "0"*64
+        failed = self.root/"failed-probe.json"
+        with patch.dict(sys.modules, psi4=psi, einsums=einsums), \
+             patch.object(p, "RUNTIME_LIBS", pins), \
+             patch.object(probe, "maps", return_value=loaded), \
+             patch.object(probe, "check_runtime_maps"), \
+             patch.dict(os.environ, MAJOR2_EXPECTED_STAGE=str(stage),
+                        MAJOR2_HELPER_RUNTIME_ENV=str(runtime), LD_LIBRARY_PATH=p.RUNTIME_PATH), \
+             patch.object(sys, "argv", ["probe.py", str(failed)]), \
+             self.assertRaisesRegex(RuntimeError, "mapped runtime hash"):
+            probe.main()
+        self.assertFalse(failed.exists())
+        diagnostic = p.read_json(self.root/"failed-probe-observed.json")
+        self.assertEqual(diagnostic["validation"], "UNVALIDATED")
+        self.assertEqual(diagnostic["maps"][physical], "0"*64)
+
+    def test_probe_import_failure_preserves_unvalidated_maps(self):
+        package = self.root/"psi4"
+        package.mkdir()
+        (package/"__init__.py").write_text("raise ImportError('synthetic import failure')\n")
+        env = dict(os.environ, PYTHONPATH=str(self.root), MAJOR2_EXPECTED_STAGE=str(self.root))
+        output = self.root/"probe.json"
+        proc = subprocess.run([sys.executable, "-B", str(HERE/"probe.py"), str(output)],
+                              cwd=self.root, env=env, capture_output=True, text=True, timeout=15)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertFalse(output.exists())
+        observed = p.read_json(self.root/"probe-observed.json")
+        self.assertIn("synthetic import failure", observed["import_error"])
+        self.assertEqual(observed["validation"], "UNVALIDATED")
+        self.assertTrue(observed["maps"])
+
+    def test_runtime_exact_canonical_hash_and_coalesced_aliases(self):
+        _, pins, loaded = self.runtime_fixture()
+        with patch.object(p, "RUNTIME_LIBS", pins):
+            proof = p.check_required_runtime_maps(loaded)
+            self.assertEqual(proof["libcudart.so"]["realpath"], pins["libcudart.so"]["realpath"])
+            alias = pins["libcudart.so"]["alias"]
+            p.check_required_runtime_maps(dict(loaded, **{alias: pins["libcudart.so"]["sha256"]}))
+
+    def test_runtime_wrong_hash_version_unreviewed_alias_and_two_copies(self):
+        env, pins, loaded = self.runtime_fixture()
+        with patch.object(p, "RUNTIME_LIBS", pins):
+            for mutation in ("hash", "version", "outside", "two", "missing"):
+                bad = dict(loaded)
+                real = pins["libcudart.so"]["realpath"]
+                if mutation == "hash":
+                    bad[real] = "0"*64
+                elif mutation == "missing":
+                    del bad[real]
+                else:
+                    other = (env/"lib/libcudart.so.12.6" if mutation == "version" else
+                             self.root/"unreviewed/libcudart.so.13.3.29")
+                    other.parent.mkdir(exist_ok=True)
+                    other.write_bytes(Path(real).read_bytes())
+                    if mutation != "two":
+                        del bad[real]
+                    bad[str(other)] = pins["libcudart.so"]["sha256"]
+                with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
+                    p.check_required_runtime_maps(bad)
+            # Even identical bytes via a retargeted declared alias are forbidden.
+            alias = Path(pins["libcudart.so"]["alias"])
+            alias.unlink()
+            alias.symlink_to(other)
+            with self.assertRaisesRegex(RuntimeError, "alias target"):
+                p.check_runtime_aliases()
+
+    def test_runtime_shared_file_hash_change_rejected(self):
+        _, pins, _ = self.runtime_fixture()
+        with patch.object(p, "RUNTIME_LIBS", pins):
+            Path(pins["libmkl_rt.so"]["realpath"]).write_bytes(b"changed")
+            with self.assertRaisesRegex(RuntimeError, "runtime hash"):
+                p.check_runtime_aliases()
+
+    def test_candidate_build_first_keeps_correctness_and_cohort_order(self):
+        class BuildsCaptured(Exception):
+            pass
+        engine = self.fake_engine()
+        engine.raw.rmdir()
+        engine.m = manifest()
+        engine.job = "FAKE"
+        engine.records = []
+        engine.sampler = None
+        engine.manifest_path = self.root/"manifest.json"
+        engine.manifest_path.write_text("{}")
+        engine.prolog = Mock()
+        calls = []
+        def build(arm, remaining):
+            calls.append((arm, remaining))
+            if len(calls) == 2:
+                raise BuildsCaptured
+        engine.build = build
+        engine.inventory = Mock()
+        with patch.object(campaign.signal, "signal"), self.assertRaises(BuildsCaptured):
+            engine.execute()
+        self.assertEqual(calls, [("candidate", 2), ("baseline", 1)])
 
     def test_fake_raw_inventory_covers_builds_rechecked(self):
         engine = self.fake_engine()
