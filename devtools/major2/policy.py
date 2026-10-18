@@ -13,13 +13,13 @@ OBSERVED_CANDIDATE = "6171b5901dbb43de5f19223cd08b13e45f9af742"
 P = "/storage/project/r-cs207-0/awallace43"
 E = P + "/miniconda/envs/p4cuest_sapt"
 DEPS = P + "/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage"
-RUN = P + "/runs/saptdft-cuest-cpks/major2-merged-b1e4947268-20261018-einsums113-gpumap-toolchain-wallcap-armenv-mapproof"
+RUN = P + "/runs/saptdft-cuest-cpks/major2-verified-pair-20261018"
 H0 = P + "/runs/saptdft-cuest-cpks/scal631-fc851a8346-20261016"
 SOURCES = {
     "baseline": P + "/gits/psi4.saptdft-cuest-major2-baseline-20261017",
     "candidate": P + "/gits/psi4.saptdft-cuest-major2-gpu-20261017",
 }
-HARNESS = P + "/gits/psi4.saptdft-cuest-major2-campaign-20261018-einsums113-gpumap-toolchain-wallcap-armenv-mapproof"
+HARNESS = P + "/gits/psi4.saptdft-cuest-major2-verified-pair-20261018"
 SDK = P + "/software/cuest-0.2.50-a06e8148"
 XC = P + "/software/libxc-7.1.2-cuda-sm80-89-90-120"
 CUDA = P + "/software/toolchains/cuda13"
@@ -157,6 +157,29 @@ def file_manifest(root):
 
 def tree_manifest(root):
     return {str(p.relative_to(root)): sha(p) for p in sorted(Path(root).rglob("*.py")) if p.is_file()}
+
+
+# Exact pinned psi4/CMakeLists.txt rule; no generic test/source ignore list.
+DRIVER_INSTALL_RULE = """install(DIRECTORY driver
+DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4
+FILES_MATCHING PATTERN "*.py" PATTERN pytest EXCLUDE )"""
+
+
+def installed_drivers(source, files):
+    cmake = Path(source)/"psi4/CMakeLists.txt"
+    require(sha(cmake) == files["psi4/CMakeLists.txt"]["sha256"], "driver install CMake hash")
+    rules = re.findall(r"install\s*\(\s*DIRECTORY\s+driver\b[^)]*\)", cmake.read_text())
+    require(len(rules) == 1 and " ".join(rules[0].split()) == " ".join(DRIVER_INSTALL_RULE.split()),
+            "unreviewed driver install rule")
+    return {k.removeprefix("psi4/driver/"): v["sha256"] for k, v in files.items()
+            if k.startswith("psi4/driver/") and k.endswith(".py") and
+            "pytest" not in Path(k.removeprefix("psi4/driver/")).parts[:-1]}
+
+
+def check_installed_drivers(stage, source, files):
+    actual = tree_manifest(Path(stage)/"lib/psi4/driver")
+    require(actual == installed_drivers(source, files), "staged drivers not exact installed source")
+    return actual
 
 
 def sequence():
@@ -320,6 +343,14 @@ def cmake_policy(outer, inner, stage):
 
 
 def validate_manifest(m, executable=True):
+    pair = m.get("artifact_pair")
+    if pair is not None:
+        from artifacts import validate_pair
+        validate_pair(pair)
+        require(m["build_budget_seconds"] == [0, 0] and
+                m["test_smoke_budget_seconds"] == 1800 and m["production_budget_seconds"] == 3600 and
+                m["per_process_timeout_seconds"] == 600, "artifact budget policy")
+        require(m["approval"]["review_id"] == pair["review_id"], "artifact approval review")
     require(m["schema"] == 1 and m["route"] == ROUTE and m["gates"] == GATES, "campaign policy mismatch")
     require(m["run_root"] == RUN and m["harness"]["path"] == HARNESS, "wrong/new root or harness path")
     require(m["scratch_parent"] == "/storage/scratch1/3/awallace43/cpks-major2", "scratch policy")
@@ -330,7 +361,10 @@ def validate_manifest(m, executable=True):
     for arm, item in m["arms"].items():
         full_pin(item["pin"])
         require(item["source"] == SOURCES[arm] and item["backend"] == "gpu", "wrong arm/source/backend")
-        require(item["build"] == SOURCES[arm] + "/build_major2_cuda_mapproof", "wrong build stage")
+        expected_build = pair["arms"][arm]["build"] if pair else SOURCES[arm] + "/build_major2_cuda_mapproof"
+        require(item["build"] == expected_build, "wrong build stage")
+        if pair:
+            require(item["pin"] == pair["arms"][arm]["pin"], "artifact source pin")
         require(item["files"] and digest(item["files"]) == item["files_digest"], "source files manifest")
         require(item["files"]["devtools/saptdft_cpks_suite_run.py"]["sha256"] == RUNNER_SHA, "runner pin")
         require(item["files"]["devtools/cpks_gpu_build.sh"]["sha256"] == BUILD_SHA, "build helper pin")

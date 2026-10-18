@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import campaign
+import artifacts as a
 import policy as p
 import science as s
 
@@ -1013,6 +1014,196 @@ class HarnessTests(unittest.TestCase):
         with patch.object(campaign.signal, "signal"), self.assertRaises(BuildsCaptured):
             engine.execute()
         self.assertEqual(calls, [("candidate", 2), ("baseline", 1)])
+
+    def driver_fixture(self):
+        source = self.root/"source"
+        driver = source/"psi4/driver"
+        driver.mkdir(parents=True)
+        cmake = source/"psi4/CMakeLists.txt"
+        cmake.write_text(p.DRIVER_INSTALL_RULE)
+        names = ["procrouting/scf_proc/scf_iterator.py", "procrouting/sapt/sapt_proc.py"]
+        names += [f"driver{i}.py" for i in range(141)]
+        excluded = ["addons.py", "test_bfs.py", "test_from_string.py", "test_mints4.py",
+                    "test_mints5_molecule_symmetry.py", "test_mints9_basisset.py",
+                    "test_to_string.py", "utils.py"]
+        names += ["qcdb/pytest/"+name for name in excluded]
+        for name in names:
+            f = driver/name
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("# synthetic "+name+"\n")
+        files = {"psi4/CMakeLists.txt": dict(sha256=p.sha(cmake), mode="100644")}
+        files.update({"psi4/driver/"+name: dict(sha256=p.sha(driver/name), mode="100644") for name in names})
+        stage = self.root/"build/stage"
+        for name in names[:143]:
+            f = stage/"lib/psi4/driver"/name
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes((driver/name).read_bytes())
+        return source, files, stage
+
+    def test_install_rule_red_151_vs_143_green_exact_packaging(self):
+        source, files, stage = self.driver_fixture()
+        old = {k.removeprefix("psi4/driver/"): v["sha256"] for k, v in files.items()
+               if k.startswith("psi4/driver/")}
+        actual = p.tree_manifest(stage/"lib/psi4/driver")
+        self.assertEqual((len(old), len(actual)), (151, 143))
+        with self.assertRaisesRegex(RuntimeError, "old staged drivers"):
+            p.require(actual == old, "old staged drivers not exact merged source")
+        self.assertEqual(actual, p.installed_drivers(source, files))
+        self.assertEqual(actual, p.check_installed_drivers(stage, source, files))
+
+    def test_installed_drivers_reject_changed_missing_injected_and_rule_edits(self):
+        source, files, stage = self.driver_fixture()
+        target = stage/"lib/psi4/driver/procrouting/scf_proc/scf_iterator.py"
+        original = target.read_bytes()
+        for mutation in ["changed", "missing", "injected", "excluded-injected"]:
+            with self.subTest(mutation=mutation):
+                extra = stage/"lib/psi4/driver"/("qcdb/pytest/addons.py" if mutation == "excluded-injected" else "injected.py")
+                if mutation == "changed":
+                    target.write_text("changed\n")
+                elif mutation == "missing":
+                    target.unlink()
+                else:
+                    extra.parent.mkdir(parents=True, exist_ok=True)
+                    extra.write_text("# extra")
+                with self.assertRaises(RuntimeError):
+                    p.check_installed_drivers(stage, source, files)
+                target.write_bytes(original)
+                if extra.exists():
+                    extra.unlink()
+        cmake = source/"psi4/CMakeLists.txt"
+        cmake.write_text(p.DRIVER_INSTALL_RULE.replace("pytest", "qcdb"))
+        with self.assertRaisesRegex(RuntimeError, "CMake hash"):
+            p.installed_drivers(source, files)
+        files["psi4/CMakeLists.txt"]["sha256"] = p.sha(cmake)
+        with self.assertRaisesRegex(RuntimeError, "install rule"):
+            p.installed_drivers(source, files)
+
+    def test_artifact_allowlist_digest_mode_and_manifest_budget_fail_closed(self):
+        pair = dict(mode="verified-artifact-pair", review_id=a.REVIEW_ID,
+                    arms=copy.deepcopy(a.ALLOWLIST))
+        with patch.object(a, "PAIR_DIGEST", p.digest(pair)):
+            a.validate_pair(pair)
+            for mutate in [
+                lambda x: x.update(mode="resume"),
+                lambda x: x.update(review_id="unreviewed"),
+                lambda x: x["arms"]["baseline"].update(build="/arbitrary/existing"),
+                lambda x: x["arms"]["candidate"].update(pin=p.BASE),
+                lambda x: x["arms"]["baseline"].update(origin_job="new"),
+                lambda x: x.update(shared_inputs={"changed": "0"*64}),
+            ]:
+                bad = copy.deepcopy(pair)
+                mutate(bad)
+                with self.assertRaises(RuntimeError):
+                    a.validate_pair(bad)
+            m = manifest()
+            m.update(artifact_pair=pair, build_budget_seconds=[0, 0], test_smoke_budget_seconds=1800,
+                     production_budget_seconds=3600, per_process_timeout_seconds=600)
+            m["approval"]["review_id"] = a.REVIEW_ID
+            for arm in m["arms"]:
+                m["arms"][arm]["build"] = pair["arms"][arm]["build"]
+            p.validate_manifest(m)
+            m["build_budget_seconds"] = [3600, 3600]
+            with self.assertRaisesRegex(RuntimeError, "budget"):
+                p.validate_manifest(m)
+
+    def test_normalized_actual_configs_only_source_and_build_paths(self):
+        items = []
+        for name in ["baseline", "candidate"]:
+            source = self.root/name
+            build = source/"build"
+            inner = build/"psi4-core-prefix/src/psi4-core-build"
+            inner.mkdir(parents=True)
+            text = f"ROOT:PATH={source}\nBUILD:PATH={build}\nFLAGS:STRING=-O3\n"
+            for file in [build/"CMakeCache.txt", inner/"CMakeCache.txt"]:
+                file.write_text(text)
+            (inner/"compile_commands.json").write_text(json.dumps([
+                dict(directory=str(build),file=str(source/"fake.cc"),command="c++ -O3 "+str(source/"fake.cc"))]))
+            items.append(dict(source=str(source), build=str(build)))
+        self.assertEqual(a.normalized_configs(items[0]), a.normalized_configs(items[1]))
+        self.assertEqual(a.normalized_compile_commands(items[0]), a.normalized_compile_commands(items[1]))
+        (inner/"CMakeCache.txt").write_text(text.replace("-O3", "-O2"))
+        self.assertNotEqual(a.normalized_configs(items[0]), a.normalized_configs(items[1]))
+        file = inner/"compile_commands.json"
+        file.write_text(file.read_text().replace("-O3","-O2"))
+        self.assertNotEqual(a.normalized_compile_commands(items[0]), a.normalized_compile_commands(items[1]))
+
+    def test_artifact_metadata_stage_and_compiler_hash_failures(self):
+        source, files, stage = self.driver_fixture()
+        build = stage.parent
+        meta = self.root/"metadata"
+        meta.mkdir()
+        (meta/"BUILD_OK").write_text(p.BASE+" cuda\n")
+        cache = build/"CMakeCache.txt"
+        cache.write_text("FLAGS:STRING=-O3\n")
+        inner = build/"psi4-core-prefix/src/psi4-core-build"
+        inner.mkdir(parents=True)
+        (inner/"CMakeCache.txt").write_bytes(cache.read_bytes())
+        core = stage/"lib/psi4/core.cpython-313-x86_64-linux-gnu.so"
+        core.write_bytes(b"fake-ELF")
+        item = dict(source=str(source), build=str(build), metadata=str(meta), pin=p.BASE,
+                    source_files_digest=p.digest(files), core_sha256=p.sha(core),
+                    stage_files=a.hashed_tree(stage), build_files={"CMakeCache.txt": p.sha(cache)},
+                    metadata_files=a.hashed_tree(meta))
+        pair = dict(arms=dict(baseline=item))
+        with patch.object(a, "validate_pair"), patch.object(a, "check_source"), patch.object(a, "cmake_policy"):
+            a.verify_artifact(pair, "baseline", files)
+            for file, message in [(meta/"BUILD_OK", "metadata"), (cache, "compiler config"),
+                                  (core, "stage bytes")]:
+                original = file.read_bytes()
+                file.write_bytes(b"changed")
+                with self.assertRaisesRegex(RuntimeError, message):
+                    a.verify_artifact(pair, "baseline", files)
+                file.write_bytes(original)
+            (meta/"injected").write_text("extra")
+            with self.assertRaisesRegex(RuntimeError, "metadata"):
+                a.verify_artifact(pair, "baseline", files)
+
+    def test_artifact_execution_adopts_only_and_preserves_test_order(self):
+        class Adopted(Exception):
+            pass
+        engine = self.fake_engine()
+        engine.raw.rmdir()
+        engine.m = dict(manifest(), artifact_pair={"explicit": True})
+        engine.job, engine.records, engine.sampler = "FAKE", [], None
+        engine.manifest_path = self.root/"manifest.json"
+        engine.manifest_path.write_text("{}")
+        engine.prolog, engine.inventory, engine.build = Mock(), Mock(), Mock()
+        engine.drivers = dict(baseline={}, candidate={})
+        engine.configurations = dict(baseline={}, candidate={})
+        engine.adopt = Mock()
+        engine.tests = Mock(side_effect=Adopted)
+        with patch.object(campaign.signal, "signal"), self.assertRaises(Adopted):
+            engine.execute()
+        self.assertEqual(engine.adopt.call_args_list, [unittest.mock.call("candidate"), unittest.mock.call("baseline")])
+        engine.build.assert_not_called()
+        self.assertEqual(engine.tests.call_args.args, ("baseline", "baseline-common", p.COMMON))
+
+    def test_adopt_copies_only_validated_receipts_and_common_tail(self):
+        meta = self.root/"old-metadata"
+        meta.mkdir()
+        (meta/"BUILD_OK").write_text("FAKE cuda\n")
+        (meta/"runtime.env").write_text("FAKE_RUNTIME=1\n")
+        hashes = a.hashed_tree(meta)
+        item = dict(metadata=str(meta), build="/approved/build", origin_job="14160948",
+                    metadata_files=hashes)
+        engine = self.fake_engine()
+        engine.m = dict(artifact_pair={"arms":{"baseline":item}},arms={"baseline":{"files":{"fake":True}}})
+        engine.pins, engine.verify_build = Mock(), Mock()
+        engine.end = time.time()+14400
+        with patch.object(a,"verify_artifact") as verify:
+            engine.adopt("baseline")
+            verify.assert_called_once()
+        copied = self.root/"build-baseline"
+        for name,h in hashes.items():
+            self.assertEqual(p.sha(copied/name),h)
+        self.assertFalse(p.read_json(copied/"BUILD_ORIGIN.json")["compiled_in_this_job"])
+        self.assertEqual(a.hashed_tree(meta),hashes)
+        engine.verify_build.assert_called_once_with("baseline")
+        # Invalid proofs fail BEFORE making even the new metadata directory.
+        with patch.object(a,"verify_artifact",side_effect=RuntimeError("invalid proof")):
+            with self.assertRaisesRegex(RuntimeError,"invalid proof"):
+                engine.adopt("baseline")
+        self.assertEqual(a.hashed_tree(meta),hashes)
 
     def test_fake_raw_inventory_covers_builds_rechecked(self):
         engine = self.fake_engine()

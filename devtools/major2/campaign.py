@@ -19,6 +19,7 @@ import time
 sys.dont_write_bytecode = True
 from policy import *
 import science
+import artifacts
 
 HERE = Path(__file__).resolve().parent
 PY = E + "/bin/python"
@@ -74,6 +75,13 @@ def prepare(args):
              rhf_tolerance_note="Reviewed focused tests remain stricter: atol=2e-13 rtol=2e-13; response 1e-12/1e-10. No weakening.",
              build_budget_seconds=[3600, 3600], test_smoke_budget_seconds=1800,
              production_budget_seconds=3600, per_process_timeout_seconds=600)
+    if args.artifact_pair:
+        pair_data = read_json(args.artifact_pair)
+        m["artifact_pair"] = pair_data.get("pair", pair_data)
+        artifacts.validate_pair(m["artifact_pair"])
+        for arm in arms:
+            arms[arm]["build"] = m["artifact_pair"]["arms"][arm]["build"]
+        m["build_budget_seconds"] = [0, 0]  # Explicit reuse, NOT a fresh compile budget promise.
     validate_manifest(m, executable=args.command == "freeze")
     out = Path(args.output_dir).resolve()
     out.mkdir(exist_ok=False)
@@ -267,6 +275,8 @@ class Engine:
             require(sha(p) == h, "shared dependency changed")
         check_runtime_aliases()
         einsums_coherence()
+        if self.m.get("artifact_pair"):
+            artifacts.verify_shared(self.m["artifact_pair"])
         for arm in self.probes:
             stage = Path(self.m["arms"][arm]["build"]) / "stage"
             require(sha(self.probes[arm]["core"]) == self.probes[arm]["core_sha256"], "core changed")
@@ -306,8 +316,12 @@ class Engine:
             self.run_command(argv, name, timeout=30)
         self.pins()
         for arm, item in self.m["arms"].items():
-            require(not Path(item["build"]).exists() and not Path(item["build"]).is_symlink(), "new build root already exists: " + arm)
+            if not self.m.get("artifact_pair"):
+                require(not Path(item["build"]).exists() and not Path(item["build"]).is_symlink(), "new build root already exists: " + arm)
             require(not (self.root / ("build-" + arm)).exists(), "new build metadata root exists")
+        if self.m.get("artifact_pair"):
+            write_json(self.raw/"artifact-pair-verification.json",
+                       artifacts.verify_pair(self.m["artifact_pair"], self.m["arms"]))
         selectors = selectors_ast(self.m["arms"]["candidate"]["source"])
         require(selectors == self.m["selectors_ast"], "test selector source changed")
         write_json(self.raw / "selectors-ast.json", selectors)
@@ -344,6 +358,33 @@ class Engine:
         out.mkdir()
         self.run_command(["bash", HERE/"build.sh",
                           *build_argv(item["source"], item["pin"], out)], "build-" + arm, timeout=3600)
+        self.verify_build(arm)
+
+    def adopt(self, arm):
+        """Copy validated origin receipts ONLY; never write the approved prefix."""
+        admission(self.end-time.time(), 1800 + 3600)
+        self.pins()
+        pair = self.m["artifact_pair"]
+        artifacts.verify_artifact(pair, arm, self.m["arms"][arm]["files"])
+        out = self.root/("build-"+arm)
+        out.mkdir()
+        origin = pair["arms"][arm]
+        for name, expected in origin["metadata_files"].items():
+            src, dst = Path(origin["metadata"])/name, out/name
+            require(sha(src) == expected, "origin receipt changed before copy")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            with dst.open("xb") as stream:
+                stream.write(src.read_bytes())
+            require(sha(dst) == expected, "copied receipt mismatch")
+        write_json(out/"BUILD_ORIGIN.json", dict(origin_job=origin["origin_job"],
+            original_metadata=origin["metadata"], original_build=origin["build"],
+            copied_receipts=True, compiled_in_this_job=False, artifact_pair_digest=artifacts.PAIR_DIGEST))
+        self.verify_build(arm)
+
+    def verify_build(self, arm):
+        """Identical effective runtime/stage/config/ABI/probe tail for build or adoption."""
+        item = self.m["arms"][arm]
+        out = self.root/("build-"+arm)
         require((out / "BUILD_OK").read_text().strip() == item["pin"] + " cuda", "BUILD_OK pin")
         inner = Path(item["build"]) / "psi4-core-prefix/src/psi4-core-build"
         cache = (inner / "CMakeCache.txt").read_text()
@@ -367,17 +408,26 @@ class Engine:
                          arm + "-effective-ldd", timeout=30)
         for arch in ["sm_80", "sm_89", "sm_90", "sm_120"]:
             require(arch in (out / "core_sass.txt").read_text().split(), "missing embedded SASS")
+        if self.m.get("artifact_pair"):
+            self.run_command([INSPECTION_TOOL["path"], "-lelf", *stage.glob("lib/psi4/core*.so")],
+                             arm+"-sass", timeout=30)
+            require(sorted(set(re.findall(r"sm_[0-9]+", (self.raw/(arm+"-sass.log")).read_text()))) ==
+                    sorted((out/"core_sass.txt").read_text().split()), "actual artifact SASS identity")
         abi = read_json(out / "abi-after-build/result.json")
         require(abi["ok"] and abi["no_gpu_calls"], "CUDA13 ABI probe")
         require(abi["cudart_version"] == 13030, "CUDA13 header macro evidence absent")
         self.run_command(self.arm_command(arm, [PY, "-B", HERE / "probe.py", self.raw / (arm + "-probe.json")]),
                          arm + "-probe", timeout=60)
         self.probes[arm] = read_json(self.raw / (arm + "-probe.json"))
+        if self.m.get("artifact_pair"):
+            pair = self.m["artifact_pair"]
+            require(self.probes[arm]["core_sha256"] == pair["arms"][arm]["core_sha256"],
+                    "actual import artifact core pin")
+            require(self.probes[arm]["pyeinsums_core"] == pair["pyeinsums_core"]["path"] and
+                    self.probes[arm]["pyeinsums_core_sha256"] == pair["pyeinsums_core"]["sha256"],
+                    "actual import PyEinsums pin")
         self.executables[arm] = sha(stage/"bin/psi4")
-        self.drivers[arm] = tree_manifest(stage / "lib/psi4/driver")
-        expected = {k.removeprefix("psi4/driver/"): v["sha256"] for k, v in item["files"].items()
-                    if k.startswith("psi4/driver/") and k.endswith(".py")}
-        require(self.drivers[arm] == expected, "staged drivers not exact merged source")
+        self.drivers[arm] = check_installed_drivers(stage, item["source"], item["files"])
         write_json(self.raw / (arm + "-drivers.json"), self.drivers[arm])
         write_json(self.raw / (arm + "-stage.json"), {str(p.relative_to(stage)): sha(p) for p in sorted(stage.rglob("*"))
                    if p.is_file()})
@@ -527,8 +577,12 @@ class Engine:
         write_json(self.root/"STARTED.json", dict(job=self.job, manifest_sha256=self.manifest_hash))
         try:
             self.prolog()
-            self.build("candidate", 2)
-            self.build("baseline", 1)
+            if self.m.get("artifact_pair"):
+                self.adopt("candidate")
+                self.adopt("baseline")
+            else:
+                self.build("candidate", 2)
+                self.build("baseline", 1)
             require(self.drivers["baseline"] == self.drivers["candidate"], "merged drivers must match exactly")
             require(self.configurations["baseline"] == self.configurations["candidate"], "build policies differ")
             for arm in ("baseline", "candidate"):
@@ -583,6 +637,7 @@ def main():
         p.add_argument("--baseline-local", required=True)
         p.add_argument("--candidate-local", required=True)
         p.add_argument("--output-dir", required=True)
+        p.add_argument("--artifact-pair", help="Explicit immutable reviewed pair JSON; skips compilation only")
         if mode == "freeze":
             p.add_argument("--approved-candidate-pin", required=True)
             p.add_argument("--review-id", required=True)
