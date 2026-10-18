@@ -57,9 +57,27 @@ class PSI_API cuESTJK : public JK {
     uint64_t dfk_moduli_;
 
     bool initialized_;
+    // One live plan only. The key contains values, never pointer identity.
+    std::string plan_key_;
+    // cuEST receives Molecule geometry, not independent BasisSet::move_atom
+    // displacements. Reject the latter instead of silently retaining stale
+    // centers; build a new BasisSet/JK for that lifecycle.
+    std::string shell_centers_;
+    int primary_natom_;
+    int auxiliary_natom_;
+    std::string primary_symmetry_;
+    std::string auxiliary_symmetry_;
+    std::string molecular_frame_;
+    uint64_t plan_creations_ = 0;
+    bool cleanup_failed_ = false;
+    bool cutoff_overridden_ = false;
 
+    // Object-owned basis descriptors, rebuilt from current shell data. Do not
+    // borrow BasisSet::cuest_basis(), whose descriptor is cached for its lifetime.
     cuestAOBasis_t cuest_primary_basis_;
     cuestAOBasis_t cuest_auxiliary_basis_;
+    cuestWorkspace_t* cuest_primary_basis_ws_ = nullptr;
+    cuestWorkspace_t* cuest_auxiliary_basis_ws_ = nullptr;
     cuestAOPairList_t cuest_pair_list_;
     cuestDFIntPlan_t cuest_df_plan_;
 
@@ -90,12 +108,11 @@ class PSI_API cuESTJK : public JK {
     void compute_JK() override;
     void postiterations() override;
 
-    cuestAOBasis_t build_cuest_basis(std::shared_ptr<BasisSet> basis,
-                                     std::vector<cuestAOShell_t>& shells_out,
-                                     cuestWorkspace_t& persistent_ws);
-    void allocate_workspace(cuestWorkspaceDescriptor_t& desc, cuestWorkspace_t& ws);
-    void free_workspace(cuestWorkspace_t& ws);
-    void destroy_cuest_objects();
+    void build_cuest_basis(const std::shared_ptr<BasisSet>& basis, cuestAOBasis_t& result,
+                          cuestWorkspace_t*& workspace);
+    bool destroy_cuest_objects() noexcept;
+    std::string current_plan_key() const;
+    void build_cuest_plan(const std::string& key);
     /// Restore this computation's requested mode on the shared cuEST handle.
     void configure_math_mode();
     /// Tear down and re-create the DF integral plan; a no-op before initialize().
@@ -103,9 +120,11 @@ class PSI_API cuESTJK : public JK {
 
    public:
     cuESTJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary, Options& options);
-    ~cuESTJK() override;
+    ~cuESTJK() noexcept override;
 
     void set_condition(double condition) { condition_ = condition; }
+    // An explicit setter takes precedence over the live INTS_TOLERANCE option.
+    void set_cutoff(double cutoff) override;
     void set_do_wK(bool do_wK) override {
         do_wK_ = do_wK;
         do_K_ = do_K_ || do_wK;  // cuEST returns full- and long-range exchange together in K.
