@@ -28,7 +28,7 @@ def manifest():
                 suite=p.H0+"/geometries", suite_sha256=p.SUITE_SHA, sequence=p.sequence(),
                 scratch_parent="/storage/scratch1/3/awallace43/cpks-major2",
                 arms={arm: dict(source=p.SOURCES[arm], pin=pin, backend="gpu",
-                                build=p.SOURCES[arm]+"/build_major2_cuda",
+                                build=p.SOURCES[arm]+"/build_major2_cuda_armenv",
                                 files=files, files_digest=p.digest(files))
                       for arm, pin in [("baseline", p.BASE), ("candidate", p.OBSERVED_CANDIDATE)]},
                 harness=dict(path=p.HARNESS, pin="a"*40, files=files, files_digest=p.digest(files)),
@@ -160,7 +160,7 @@ class HarnessTests(unittest.TestCase):
             lambda x: x["arms"]["candidate"].update(pin="saptdft_cuest_major2_gpu"),
             lambda x: x["arms"]["candidate"].update(pin="6171b59"),
             lambda x: x["arms"]["candidate"].update(backend="cpu"),
-            lambda x: x["arms"]["candidate"].update(build=p.SOURCES["baseline"]+"/build_major2_cuda"),
+            lambda x: x["arms"]["candidate"].update(build=p.SOURCES["baseline"]+"/build_major2_cuda_armenv"),
             lambda x: x["approval"].update(candidate_pin=p.BASE),
             lambda x: x["harness"].update(pin="HEAD"),
             lambda x: x.update(run_root=p.H0),
@@ -215,7 +215,7 @@ class HarnessTests(unittest.TestCase):
         self.assertNotIn("/old", env["LD_LIBRARY_PATH"])
         self.assertEqual(env["OMP_PROC_BIND"], "inherited")
         self.assertEqual(env["CPKS_CUDA_ARCHS"], "80;89;90;120")
-        self.assertEqual(env["CPKS_BUILD_DIR"], "build_major2_cuda")
+        self.assertEqual(env["CPKS_BUILD_DIR"], "build_major2_cuda_armenv")
         for name in ["TMPDIR", "SCRATCH", "PSI_SCRATCH"]:
             self.assertEqual(env[name], str(self.root))
         argv = p.build_argv("/fake source ; not shell", p.BASE, "/fake output")
@@ -331,7 +331,8 @@ class HarnessTests(unittest.TestCase):
         stage = self.root / "stage"
         (stage / "bin").mkdir(parents=True)
         psi = stage / "bin/psi4"
-        psi.write_text("#!/bin/bash\nprintf 'export LD_LIBRARY_PATH=/wrong-psiapi\\n'\n")
+        psi.write_text("#!/bin/bash\nprintf 'export PYTHONPATH=\"%s/lib:$PYTHONPATH\"\\n"
+                       "export LD_LIBRARY_PATH=/wrong-psiapi\\n' \"$(dirname \"$(dirname \"$0\")\")\"\n")
         psi.chmod(0o755)
         runtime = self.root / "runtime.env"
         original = "export LD_LIBRARY_PATH=/old-helper\n"
@@ -350,15 +351,24 @@ class HarnessTests(unittest.TestCase):
             argv = engine.arm_command(name, ["fake"])
             self.assertEqual(argv[2:4], [item["build"] + "/stage",
                                         str(self.root / ("build-" + name) / "runtime.env")])
-            result = subprocess.run(["bash", str(arm), str(stage), str(runtime), sys.executable,
-                                     "-c", "import os,json; print(json.dumps(dict(os.environ)))"],
-                                    capture_output=True, text=True, check=True)
-            env = json.loads(result.stdout)
-            expected = p.RUNTIME_PATH.replace(p.P, str(self.root))
-            self.assertEqual(env["LD_LIBRARY_PATH"], expected)
-            self.assertEqual(p.runtime_env({}, self.root)["LD_LIBRARY_PATH"], p.RUNTIME_PATH)
-            self.assertEqual(env["MAJOR2_HELPER_RUNTIME_ENV"], str(runtime))
-            self.assertEqual(runtime.read_text(), original)
+            for inherited in [None, "", "/untrusted/source/psi4"]:
+                child_env = dict(os.environ)
+                child_env.pop("PYTHONPATH", None)
+                if inherited is not None:
+                    child_env["PYTHONPATH"] = inherited
+                child_env["PYTHONHOME"] = "/untrusted/python"
+                result = subprocess.run(["bash", str(arm), str(stage), str(runtime), sys.executable,
+                                         "-c", "import os,json; print(json.dumps(dict(os.environ)))"],
+                                        env=child_env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                env = json.loads(result.stdout)
+                expected = p.RUNTIME_PATH.replace(p.P, str(self.root))
+                self.assertEqual(env["LD_LIBRARY_PATH"], expected)
+                self.assertEqual(env["PYTHONPATH"], str(stage / "lib") + ":")
+                self.assertNotIn("PYTHONHOME", env)
+                self.assertEqual(p.runtime_env({}, self.root)["LD_LIBRARY_PATH"], p.RUNTIME_PATH)
+                self.assertEqual(env["MAJOR2_HELPER_RUNTIME_ENV"], str(runtime))
+                self.assertEqual(runtime.read_text(), original)
 
     def test_build_wrapper_module_inspector_without_cuda13_cuobjdump(self):
         # Execute the actual wrapper body with only site roots/module setup

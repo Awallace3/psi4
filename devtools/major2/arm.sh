@@ -19,6 +19,7 @@ export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
 export OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=1
 # Never eval stdout of another arm's executable. --psiapi is checked by the probe.
 test -x "$stage/bin/psi4"
+export PYTHONPATH=""
 eval "$("$stage/bin/psi4" --psiapi)"
 export LD_LIBRARY_PATH="$effective_path"
 export MAJOR2_HELPER_RUNTIME_ENV="$runtime_file"

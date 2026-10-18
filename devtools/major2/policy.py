@@ -13,13 +13,13 @@ OBSERVED_CANDIDATE = "6171b5901dbb43de5f19223cd08b13e45f9af742"
 P = "/storage/project/r-cs207-0/awallace43"
 E = P + "/miniconda/envs/p4cuest_sapt"
 DEPS = P + "/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage"
-RUN = P + "/runs/saptdft-cuest-cpks/major2-merged-b1e4947268-20261018-einsums113-gpumap-toolchain-wallcap"
+RUN = P + "/runs/saptdft-cuest-cpks/major2-merged-b1e4947268-20261018-einsums113-gpumap-toolchain-wallcap-armenv"
 H0 = P + "/runs/saptdft-cuest-cpks/scal631-fc851a8346-20261016"
 SOURCES = {
     "baseline": P + "/gits/psi4.saptdft-cuest-major2-baseline-20261017",
     "candidate": P + "/gits/psi4.saptdft-cuest-major2-gpu-20261017",
 }
-HARNESS = P + "/gits/psi4.saptdft-cuest-major2-campaign-20261018-einsums113-gpumap-toolchain-wallcap"
+HARNESS = P + "/gits/psi4.saptdft-cuest-major2-campaign-20261018-einsums113-gpumap-toolchain-wallcap-armenv"
 SDK = P + "/software/cuest-0.2.50-a06e8148"
 XC = P + "/software/libxc-7.1.2-cuda-sm80-89-90-120"
 CUDA = P + "/software/toolchains/cuda13"
@@ -240,7 +240,7 @@ def runtime_env(parent, scratch):
                OMP_NUM_THREADS="8", MKL_NUM_THREADS="8", OPENBLAS_NUM_THREADS="1",
                TMPDIR=str(scratch), SCRATCH=str(scratch), PSI_SCRATCH=str(scratch),
                CPKS_CUDA_ARCHS="80;89;90;120", CPKS_CUDA_LIBXC=XC,
-               CPKS_CUEST_SDK=SDK, CPKS_BUILD_DIR="build_major2_cuda",
+               CPKS_CUEST_SDK=SDK, CPKS_BUILD_DIR="build_major2_cuda_armenv",
                CUDA_CACHE_DISABLE="0", CUDA_CACHE_MAXSIZE="1073741824")
     return env
 
@@ -294,7 +294,7 @@ def validate_manifest(m, executable=True):
     for arm, item in m["arms"].items():
         full_pin(item["pin"])
         require(item["source"] == SOURCES[arm] and item["backend"] == "gpu", "wrong arm/source/backend")
-        require(item["build"] == SOURCES[arm] + "/build_major2_cuda", "wrong build stage")
+        require(item["build"] == SOURCES[arm] + "/build_major2_cuda_armenv", "wrong build stage")
         require(item["files"] and digest(item["files"]) == item["files_digest"], "source files manifest")
         require(item["files"]["devtools/saptdft_cpks_suite_run.py"]["sha256"] == RUNNER_SHA, "runner pin")
         require(item["files"]["devtools/cpks_gpu_build.sh"]["sha256"] == BUILD_SHA, "build helper pin")

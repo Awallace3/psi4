@@ -48,7 +48,7 @@ def prepare(args):
         check_source(local[arm], pin)
         files = file_manifest(local[arm])
         arms[arm] = dict(source=SOURCES[arm], pin=pin, tree=git(local[arm], "rev-parse", "HEAD^{tree}"),
-                         backend="gpu", build=SOURCES[arm] + "/build_major2_cuda", files=files, files_digest=digest(files))
+                         backend="gpu", build=SOURCES[arm] + "/build_major2_cuda_armenv", files=files, files_digest=digest(files))
     require(subprocess.run(["git", "-C", str(local["candidate"]), "merge-base", "--is-ancestor", BASE, candidate_pin]).returncode == 0,
             "candidate not descended from merged baseline")
     changed = set(git(local["candidate"], "diff", "--name-only", BASE, candidate_pin).splitlines())
