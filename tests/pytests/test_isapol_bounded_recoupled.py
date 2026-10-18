@@ -235,6 +235,66 @@ def test_shared_ledger_refuses_before_model_allocations(kind, monkeypatch):
         calculate(r, ledger=ledger)
 
 
+def test_real_driver_optional_budget_refuses_before_factors(monkeypatch, tmp_path):
+    """Same finite budget reaches factors ordinarily, but not with recoupling.
+
+    Mock only the wavefunction/state/basis boundary: run the real driver input
+    checks, optional planner and shared ledger. The factor sentinel stops the
+    admitted old path before any integrals/response/LW/PFIT can execute.
+    """
+    from types import SimpleNamespace
+    from psi4.driver.procrouting.isapol_native_partition import BasisRecipe, ShellRecipe
+
+    sites = analytic()[0].model.sites
+    origins = np.asarray([s.origin_bohr for s in sites])
+    quadrature = Quadrature((0., .7, 2.), (0., .4, .2), CP_PROVENANCE)
+    grid = np.array([[0., 0., 0., 1.]], dtype=np.float64)
+    state = SimpleNamespace(nbf=2, nocc=1, nvir=1, planned_bytes=64,
+                            orbitals=lambda: np.eye(2),
+                            energies=lambda: np.array([-1., 1.]))
+    wfn = SimpleNamespace(molecule=lambda: SimpleNamespace(geometry=lambda: origins))
+    main = SimpleNamespace(transform=np.eye(2), basis=object())
+    recipe = BasisRecipe('analytic AUX', 'mocked driver-budget boundary', 'Cartesian',
+                         tuple(map(tuple, origins)), (ShellRecipe(0, 0, (1.,), (1.,)),))
+    lattice = core.FitPointsOptions()
+    lattice.npoints = 32
+    numeric, _ = adapter.recoupled_plan(sites, len(quadrature.frequencies), 10)
+    reserved = 2*grid.nbytes+state.planned_bytes+32*state.nbf**2
+    resources = BoundedResources(numeric+reserved-1, 6_000_000_000_000, 64*1024**3)
+    monkeypatch.setattr(bounded, 'validate_correction', lambda *a, **kw: 'mocked NONE')
+    monkeypatch.setattr(bounded, 'require_scf_seal', lambda *a: None)
+    monkeypatch.setattr(bounded, 'native_restricted_state_from_wavefunction', lambda *a, **kw: state)
+    monkeypatch.setattr(bounded, 'adapt_main', lambda *a, **kw: main)
+    monkeypatch.setattr(bounded, '_context', lambda *a: 'mocked-state-no-SCF')
+    monkeypatch.setattr(BasisRecipe, 'build', lambda *a: SimpleNamespace(nfunction=1))
+    calls = []
+
+    class FactorBoundary(RuntimeError):
+        pass
+
+    def factors(*args, **kwargs):
+        calls.append(kwargs)
+        raise FactorBoundary('admitted to factor construction; no factors computed')
+
+    monkeypatch.setattr(bounded, 'native_plain_df_operators', factors)
+    kwargs = dict(caller_converged=True, distribution='df_centre_analytic',
+        sites=sites, bonds=[(0, 1)], quadrature=quadrature, response_grid=grid,
+        smoothing=api.settings('water', {})['smoothing'], shell_cutoff=1e-8,
+        charge_penalty=1000., anchor_metric_damping=.0005, lattice_options=lattice,
+        localization_rank_limit=2, weight_type=3, weight_coefficient=1e-3, cutoff=1e-4,
+        resources=resources, scf_correction='NONE', max_order=10,
+        scratch_directory=tmp_path, log=StageLog(0))
+    with pytest.raises(FactorBoundary, match='admitted to factor construction'):
+        bounded.bounded_properties(wfn, recipe, **kwargs)
+    assert len(calls) == 1
+    assert calls[0]['max_bytes'] == resources.max_bytes-reserved
+    calls.clear()
+    with pytest.raises(ValueError, match='native recoupled preflight: shared numeric byte resource limit'):
+        bounded.bounded_properties(wfn, recipe, **kwargs, recoupled_dispersion=True)
+    assert calls == []
+    assert not list(tmp_path.iterdir())
+
+
 def test_legacy_seven_positional_fields_and_no_optional_work():
     r = bounded.BoundedProperties((), (), (), 'isotropic', (), {}, {})
     assert r.dispersion == 'isotropic' and r.recoupled_dispersion is None
