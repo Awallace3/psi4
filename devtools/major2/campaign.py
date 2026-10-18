@@ -62,7 +62,8 @@ def prepare(args):
     m = dict(schema=1, route=ROUTE, gates=GATES, run_root=RUN, scratch_parent="/storage/scratch1/3/awallace43/cpks-major2",
              suite=H0 + "/geometries", suite_sha256=SUITE_SHA, systems=SYSTEMS, sequence=sequence(), arms=arms,
              harness=dict(path=HARNESS, pin=hp, files=hfiles, files_digest=digest(hfiles)),
-             dependency_hashes=LIBS, common_selectors=COMMON, fixed_selector=FIXED, fixed_k=FIXED_K,
+             dependency_hashes=LIBS, inspection_tool=INSPECTION_TOOL,
+             common_selectors=COMMON, fixed_selector=FIXED, fixed_k=FIXED_K,
              selectors_ast=selectors_ast(local["candidate"]),
              runtime_policy=dict(threads=8, memory="100 GiB", cache="enabled-shared-job-1GiB",
                                  prewarm=False, print_override=False, affinity_override=False),
@@ -305,6 +306,7 @@ class Engine:
         # Record read-only toolchain/config/library inputs. Their runtime hashes must
         # remain identical through the allocation, including after both builds.
         paths = [
+            INSPECTION_TOOL["path"],
             P + "/software/toolchains/conda-gcc", P + "/software/toolchains/conda-g++",
             CUDA + "/bin/nvcc", E + "/bin/python", E + "/bin/cmake", E + "/bin/ninja",
             XC + "/lib64/cmake/Libxc/LibxcConfig.cmake",
@@ -314,6 +316,8 @@ class Engine:
         require(libint_configs, "Libint2 config directory missing")
         paths += list(map(str, libint_configs))
         self.inputs = {p: sha(p) for p in paths}
+        require(self.inputs[INSPECTION_TOOL["path"]] == INSPECTION_TOOL["sha256"], "inspection tool changed")
+        write_json(self.raw / "inspection-tool.json", INSPECTION_TOOL)
         self.inputs.update({DEPS + "/" + p: sha(Path(DEPS) / p) for p in EINSUMS_INPUTS})
         write_json(self.raw / "einsums-coherence.json", einsums_coherence())
         write_json(self.raw / "toolchain-inputs.json", self.inputs)

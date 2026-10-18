@@ -13,16 +13,20 @@ OBSERVED_CANDIDATE = "6171b5901dbb43de5f19223cd08b13e45f9af742"
 P = "/storage/project/r-cs207-0/awallace43"
 E = P + "/miniconda/envs/p4cuest_sapt"
 DEPS = P + "/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage"
-RUN = P + "/runs/saptdft-cuest-cpks/major2-merged-b1e4947268-20261018-einsums113-gpumap"
+RUN = P + "/runs/saptdft-cuest-cpks/major2-merged-b1e4947268-20261018-einsums113-gpumap-toolchain"
 H0 = P + "/runs/saptdft-cuest-cpks/scal631-fc851a8346-20261016"
 SOURCES = {
     "baseline": P + "/gits/psi4.saptdft-cuest-major2-baseline-20261017",
     "candidate": P + "/gits/psi4.saptdft-cuest-major2-gpu-20261017",
 }
-HARNESS = P + "/gits/psi4.saptdft-cuest-major2-campaign-20261018-einsums113-gpumap"
+HARNESS = P + "/gits/psi4.saptdft-cuest-major2-campaign-20261018-einsums113-gpumap-toolchain"
 SDK = P + "/software/cuest-0.2.50-a06e8148"
 XC = P + "/software/libxc-7.1.2-cuda-sm80-89-90-120"
 CUDA = P + "/software/toolchains/cuda13"
+INSPECTION_TOOL = dict(
+    path="/usr/local/pace-apps/spack/packages/linux-rhel9-x86_64_v3/gcc-12.3.0/cuda-12.6.1-fgbhrk26npivybjj65zswagcf4zv6p2n/bin/cuobjdump",
+    sha256="1a53d40230259b7904d068305c9c3b368746423e973df34fba55c5e2f1d35996",
+    version="V12.6.68", role="ELF/SASS inspection only; NOT compiler/headers/runtime")
 LIBS = {
     SDK + "/lib/13/libcuest.so.0": "65c9e559201ee589cb742b919cc1c5d80c45aa480b64aede17ac96aff9e4963c",
     XC + "/lib64/libxc.so.15": "b8ba011064d688748fca2676801602d6fd8a51712f13235ba2b4511d2976cc98",
@@ -298,6 +302,7 @@ def validate_manifest(m, executable=True):
     require(digest(m["harness"]["files"]) == m["harness"]["files_digest"], "harness manifest")
     require(m["common_selectors"] == COMMON and m["fixed_selector"] == FIXED and m["fixed_k"] == FIXED_K, "test selectors")
     require(m["dependency_hashes"] == LIBS, "dependency hashes")
+    require(m["inspection_tool"] == INSPECTION_TOOL, "inspection tool pin")
     require(m["runtime_policy"] == dict(threads=8, memory="100 GiB", cache="enabled-shared-job-1GiB",
                                       prewarm=False, print_override=False, affinity_override=False), "runtime policy")
     if executable:

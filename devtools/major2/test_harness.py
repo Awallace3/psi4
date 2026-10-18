@@ -32,7 +32,8 @@ def manifest():
                                 files=files, files_digest=p.digest(files))
                       for arm, pin in [("baseline", p.BASE), ("candidate", p.OBSERVED_CANDIDATE)]},
                 harness=dict(path=p.HARNESS, pin="a"*40, files=files, files_digest=p.digest(files)),
-                dependency_hashes=p.LIBS, common_selectors=p.COMMON, fixed_selector=p.FIXED, fixed_k=p.FIXED_K,
+                dependency_hashes=p.LIBS, inspection_tool=p.INSPECTION_TOOL,
+                common_selectors=p.COMMON, fixed_selector=p.FIXED, fixed_k=p.FIXED_K,
                 runtime_policy=dict(threads=8, memory="100 GiB", cache="enabled-shared-job-1GiB",
                                     prewarm=False, print_override=False, affinity_override=False),
                 approval=dict(state="APPROVED", review_id="FAKE-UNIT-TEST", candidate_pin=p.OBSERVED_CANDIDATE))
@@ -164,6 +165,7 @@ class HarnessTests(unittest.TestCase):
             lambda x: x["harness"].update(pin="HEAD"),
             lambda x: x.update(run_root=p.H0),
             lambda x: x.update(suite_sha256="0"*64),
+            lambda x: x["inspection_tool"].update(sha256="0"*64),
             lambda x: x["gates"].update(component_abs_eh=1e-5),
         ]
         for mutate in mutations:
@@ -357,6 +359,55 @@ class HarnessTests(unittest.TestCase):
             self.assertEqual(p.runtime_env({}, self.root)["LD_LIBRARY_PATH"], p.RUNTIME_PATH)
             self.assertEqual(env["MAJOR2_HELPER_RUNTIME_ENV"], str(runtime))
             self.assertEqual(runtime.read_text(), original)
+
+    def test_build_wrapper_module_inspector_without_cuda13_cuobjdump(self):
+        # Execute the actual wrapper body with only site roots/module setup
+        # replaced by fake fixtures. CUDA13 remains the compiler, not inspector.
+        module_bin = self.root / "module-cuda12/bin"
+        module_bin.mkdir(parents=True)
+        inspector = module_bin / "cuobjdump"
+        inspector.write_text("#!/bin/bash\nprintf 'Cuda compilation tools, release 12.6, V12.6.68\\n'\n")
+        inspector.chmod(0o755)
+        for directory in ["software/toolchains/cuda13/bin", "miniconda/envs/p4cuest_sapt/bin"]:
+            (self.root / directory).mkdir(parents=True)
+        nvcc = self.root / "software/toolchains/cuda13/bin/nvcc"
+        nvcc.write_text("#!/bin/bash\nexit 0\n")
+        nvcc.chmod(0o755)
+        original = (HERE / "build.sh").read_text()
+        tool = "/usr/local/pace-apps/spack/packages/linux-rhel9-x86_64_v3/gcc-12.3.0/cuda-12.6.1-fgbhrk26npivybjj65zswagcf4zv6p2n/bin/cuobjdump"
+        digest = "1a53d40230259b7904d068305c9c3b368746423e973df34fba55c5e2f1d35996"
+        self.assertEqual(p.INSPECTION_TOOL["path"], tool)
+        self.assertEqual(p.INSPECTION_TOOL["sha256"], digest)
+        self.assertIn(tool, original)
+        self.assertIn(digest, original)
+        wrapper = self.root / "build.sh"
+        wrapper.write_text(original.replace("source /etc/profile.d/z00_lmod_pace.sh", "true").replace(
+            "module load gcc/12.3.0 cuda/12.6.1", 'export PATH="' + str(module_bin) + ':$PATH"').replace(
+            "P=/storage/project/r-cs207-0/awallace43", "P=" + str(self.root)).replace(
+            tool, str(inspector)).replace(digest, p.sha(inspector)))
+        env = dict(os.environ, GCC_ROOT="/bad", CPATH="/bad", C_INCLUDE_PATH="/bad",
+                   CPLUS_INCLUDE_PATH="/bad", OBJC_INCLUDE_PATH="/bad", LIBRARY_PATH="/bad")
+        child = ("import os,json,shutil; print(json.dumps(dict("
+                 "nvcc=shutil.which('nvcc'), inspector=shutil.which('cuobjdump'), "
+                 "cleared=all(k not in os.environ for k in "
+                 "['GCC_ROOT','CPATH','C_INCLUDE_PATH','CPLUS_INCLUDE_PATH','OBJC_INCLUDE_PATH','LIBRARY_PATH']))))")
+        result = subprocess.run(["bash", str(wrapper), sys.executable, "-c", child],
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), dict(nvcc=str(nvcc), inspector=str(inspector), cleared=True))
+        self.assertIn(p.sha(inspector), result.stderr)
+        self.assertIn("V12.6.68", result.stderr)
+        self.assertFalse((nvcc.parent / "cuobjdump").exists())
+        # Same path but changed bytes, or an unverified higher-PATH tool: reject.
+        inspector.write_text(inspector.read_text() + "# changed\n")
+        bad = subprocess.run(["bash", str(wrapper), "/usr/bin/true"], env=env, capture_output=True)
+        self.assertNotEqual(bad.returncode, 0)
+        inspector.write_text(inspector.read_text().replace("# changed\n", ""))
+        shadow = nvcc.parent / "cuobjdump"
+        shadow.write_text("#!/bin/bash\nexit 0\n")
+        shadow.chmod(0o755)
+        bad = subprocess.run(["bash", str(wrapper), "/usr/bin/true"], env=env, capture_output=True)
+        self.assertNotEqual(bad.returncode, 0)
 
     def test_fake_cmake_cache_policy_and_cuda12_rejection(self):
         expected = {
