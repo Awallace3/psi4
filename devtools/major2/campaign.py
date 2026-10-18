@@ -288,7 +288,7 @@ class Engine:
         item = self.m["arms"][arm]
         out = self.root / ("build-" + arm)
         out.mkdir()
-        self.run_command([PY, "-B", HERE/"no_network.py", "bash", HERE/"build.sh",
+        self.run_command(["bash", HERE/"build.sh",
                           *build_argv(item["source"], item["pin"], out)], "build-" + arm, timeout=3600)
         require((out / "BUILD_OK").read_text().strip() == item["pin"] + " cuda", "BUILD_OK pin")
         inner = Path(item["build"]) / "psi4-core-prefix/src/psi4-core-build"

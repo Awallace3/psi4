@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import Mock
 
 import campaign
 import policy as p
@@ -220,6 +221,29 @@ class HarnessTests(unittest.TestCase):
                                 "/fake source ; not shell", p.E, p.BASE, "/fake output", "cuda"])
         self.assertEqual(env["OMP_NUM_THREADS"], "8")
         self.assertEqual(env["MKL_NUM_THREADS"], "8")
+
+    def test_both_build_arms_use_same_wrapper_without_seccomp(self):
+        class BuildInvocationCaptured(Exception):
+            pass
+
+        engine = campaign.Engine.__new__(campaign.Engine)
+        engine.m = manifest()
+        engine.root = self.root
+        engine.end = time.time() + 14400
+        engine.pins = Mock()
+        engine.run_command = Mock(side_effect=BuildInvocationCaptured)
+        for arm, remaining in [("baseline", 2), ("candidate", 1)]:
+            with self.subTest(arm=arm):
+                with self.assertRaises(BuildInvocationCaptured):
+                    engine.build(arm, remaining)
+                item = engine.m["arms"][arm]
+                engine.run_command.assert_called_with(
+                    ["bash", campaign.HERE / "build.sh",
+                     "bash", item["source"] + "/devtools/cpks_gpu_build.sh",
+                     item["source"], p.E, item["pin"],
+                     str(self.root / ("build-" + arm)), "cuda"],
+                    "build-" + arm, timeout=3600)
+        self.assertEqual(engine.pins.call_count, 2)
 
     def test_fake_cmake_cache_policy_and_cuda12_rejection(self):
         expected = {
