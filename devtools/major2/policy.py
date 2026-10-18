@@ -12,21 +12,32 @@ BASE = "b1e49472686c4e5843688a27d85b808375b90852"
 OBSERVED_CANDIDATE = "6171b5901dbb43de5f19223cd08b13e45f9af742"
 P = "/storage/project/r-cs207-0/awallace43"
 E = P + "/miniconda/envs/p4cuest_sapt"
-RUN = P + "/runs/saptdft-cuest-cpks/major2-merged-b1e4947268-20261018"
+DEPS = P + "/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage"
+RUN = P + "/runs/saptdft-cuest-cpks/major2-merged-b1e4947268-20261018-einsums113"
 H0 = P + "/runs/saptdft-cuest-cpks/scal631-fc851a8346-20261016"
 SOURCES = {
     "baseline": P + "/gits/psi4.saptdft-cuest-major2-baseline-20261017",
     "candidate": P + "/gits/psi4.saptdft-cuest-major2-gpu-20261017",
 }
-HARNESS = P + "/gits/psi4.saptdft-cuest-major2-campaign-20261017"
+HARNESS = P + "/gits/psi4.saptdft-cuest-major2-campaign-20261018-einsums113"
 SDK = P + "/software/cuest-0.2.50-a06e8148"
 XC = P + "/software/libxc-7.1.2-cuda-sm80-89-90-120"
 CUDA = P + "/software/toolchains/cuda13"
 LIBS = {
     SDK + "/lib/13/libcuest.so.0": "65c9e559201ee589cb742b919cc1c5d80c45aa480b64aede17ac96aff9e4963c",
     XC + "/lib64/libxc.so.15": "b8ba011064d688748fca2676801602d6fd8a51712f13235ba2b4511d2976cc98",
-    E + "/lib/libEinsums.so.1": "988fa21b663e474cfbc5f90f931da4c6d75233e336ad5ec04245da723a48e6b9",
+    DEPS + "/lib/libEinsums.so.1": "cf1f411130bc902a3ca74280cf23b3e7f325843de8cf38ec4a95fcb6f917faf2",
 }
+EINSUMS_INPUTS = {
+    "share/cmake/Einsums/EinsumsConfig.cmake": "d444049359b1f2c70914898b1178cfb1e0eec61a543bda775b2ae6d530991f4d",
+    "share/cmake/Einsums/EinsumsConfigVersion.cmake": "54346a6d32bfe31f2fff43f0d17f4e9ee2218e704a3328973c2779e4875dff86",
+    "share/cmake/Einsums/EinsumsTargets.cmake": "c3105b37555a03750875582200da34653619e9d5b1e3a99de048e478c91dd6d8",
+    "share/cmake/Einsums/EinsumsTargets-release.cmake": "35e9f27642efa2265389c52625be265b7fcbb4de598f1f576b49c91cacbba7a5",
+    "share/cmake/Einsums/einsums_internal_targets.cmake": "9f9932853f6aea503cc51d71567438ee145df45b4a660365f256ea0290d943ee",
+    "share/cmake/Einsums/EinsumsCacheVariables.cmake": "68b9f1f176aa8497f27f0b29dc8f608a8a10a25de485df5bb0acf236fc6b4a13",
+    "include/Einsums/Config/Version.hpp": "69fc93bcf4b6baf954d1ac850a675357f47bcf2c6282bb8565466649cb99c7c4",
+}
+RUNTIME_PATH = SDK + "/lib/13:" + XC + "/lib64:" + DEPS + "/lib:" + E + "/lib"
 SUITE_SHA = "72668390d24f134316c8e779931a2f65efcd9289ecea8f1cf20a72733262e3bb"
 RUNNER_SHA = "06f7b9d47ed5723eb52f54c9142a40d9311cfe0a85313d38a449a1d6baf20a16"
 BUILD_SHA = "e2f2991967c7a70c63f929ee1ac63eba3da4f13dcd40285851da9dcde33991ff"
@@ -179,6 +190,40 @@ def build_argv(source, pin, out):
             str(source), E, full_pin(pin), str(out), "cuda"]
 
 
+def einsums_coherence(prefix=DEPS):
+    """Read-only config/header/imported-library agreement; never configure/install."""
+    root = Path(prefix).resolve()
+    config = root / "share/cmake/Einsums"
+    version = (config / "EinsumsConfigVersion.cmake").read_text()
+    header = (root / "include/Einsums/Config/Version.hpp").read_text()
+    target = (config / "EinsumsTargets-release.cmake").read_text()
+    includes = (config / "einsums_internal_targets.cmake").read_text()
+    require('set(PACKAGE_VERSION "1.1.3")' in version, "Einsums config version mismatch")
+    for name, value in [("MAJOR", 1), ("MINOR", 1), ("PATCH", 3)]:
+        require(re.search(rf"^#define EINSUMS_VERSION_{name}\s+{value}\s*$", header, re.M),
+                "Einsums headers/runtime version mismatch")
+    require('IMPORTED_LOCATION_RELEASE "${_IMPORT_PREFIX}/lib/libEinsums.so.1.1.3"' in target and
+            'IMPORTED_SONAME_RELEASE "libEinsums.so.1"' in target and
+            'INTERFACE_INCLUDE_DIRECTORIES "${_IMPORT_PREFIX}/include"' in includes,
+            "Einsums imported target/prefix mismatch")
+    library = (root / "lib/libEinsums.so.1").resolve(strict=True)
+    require(library == root / "lib/libEinsums.so.1.1.3", "Einsums resolved runtime prefix/version mismatch")
+    require(sha(library) == LIBS[DEPS + "/lib/libEinsums.so.1"], "Einsums dependency hash changed")
+    inputs = {name: sha(root / name) for name in EINSUMS_INPUTS}
+    require(inputs == EINSUMS_INPUTS, "Einsums config/header dependency hash changed")
+    return dict(prefix=str(root), version="1.1.3", library=str(library),
+                library_sha256=sha(library), inputs=inputs)
+
+
+def check_runtime_maps(loaded):
+    for p, h in LIBS.items():
+        actual = str(Path(p).resolve())
+        require(actual in loaded and loaded[actual] == h, "wrong/missing SDK/LibXC/Einsums mapping " + p)
+    copies = [p for p in loaded if Path(p).name.startswith("libEinsums.so")]
+    require(copies == [str(Path(DEPS + "/lib/libEinsums.so.1").resolve())],
+            "multiple/wrong Einsums SONAME copies")
+
+
 def runtime_env(parent, scratch):
     env = dict(parent)
     for key in ("GCC_ROOT", "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH",
@@ -187,7 +232,7 @@ def runtime_env(parent, scratch):
     env.update(PATH=E + "/bin:" + CUDA + "/bin:" + env.get("PATH", "/usr/bin:/bin"),
                CUDA_HOME=CUDA, CUDA_PATH=CUDA, PYTHONNOUSERSITE="1",
                PYTHONDONTWRITEBYTECODE="1", GIT_OPTIONAL_LOCKS="0",
-               LD_LIBRARY_PATH=SDK + "/lib/13:" + XC + "/lib64:" + E + "/lib",
+               LD_LIBRARY_PATH=RUNTIME_PATH,
                OMP_NUM_THREADS="8", MKL_NUM_THREADS="8", OPENBLAS_NUM_THREADS="1",
                TMPDIR=str(scratch), SCRATCH=str(scratch), PSI_SCRATCH=str(scratch),
                CPKS_CUDA_ARCHS="80;89;90;120", CPKS_CUDA_LIBXC=XC,
@@ -211,7 +256,7 @@ def cmake_policy(outer, inner, stage):
         "CMAKE_CUDA_COMPILER": CUDA+"/bin/nvcc", "CMAKE_CUDA_ARCHITECTURES": "OFF",
         "CUDAToolkit_ROOT": CUDA, "Python_EXECUTABLE": E+"/bin/python",
         "Libxc_DIR": XC+"/lib64/cmake/Libxc", "Libint2_DIR": E+"/lib/cmake/libint2",
-        "Einsums_DIR": P+"/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage/share/cmake/Einsums",
+        "Einsums_DIR": DEPS+"/share/cmake/Einsums",
         "ENABLE_Einsums": "ON", "ENABLE_cuEST": "ON", "ENABLE_OPENMP": "ON",
         "ENABLE_dkh": "OFF", "ENABLE_XHOST": "OFF", "psi4_CMAKE_UNITY_BUILD": "ON",
         "LAPACK_LIBRARIES": E+"/lib/libmkl_rt.so",

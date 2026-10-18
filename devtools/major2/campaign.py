@@ -223,6 +223,7 @@ class Engine:
                 "GPU/UUID/driver changed")
         for p, h in LIBS.items():
             require(sha(p) == h, "shared dependency changed")
+        einsums_coherence()
         for arm in self.probes:
             stage = Path(self.m["arms"][arm]["build"]) / "stage"
             require(sha(self.probes[arm]["core"]) == self.probes[arm]["core_sha256"], "core changed")
@@ -275,11 +276,14 @@ class Engine:
         require(libint_configs, "Libint2 config directory missing")
         paths += list(map(str, libint_configs))
         self.inputs = {p: sha(p) for p in paths}
+        self.inputs.update({DEPS + "/" + p: sha(Path(DEPS) / p) for p in EINSUMS_INPUTS})
+        write_json(self.raw / "einsums-coherence.json", einsums_coherence())
         write_json(self.raw / "toolchain-inputs.json", self.inputs)
 
     def arm_command(self, arm, argv):
         stage = Path(self.m["arms"][arm]["build"]) / "stage"
-        return ["bash", str(HERE / "arm.sh"), str(stage), *map(str, argv)]
+        runtime = self.root / ("build-" + arm) / "runtime.env"
+        return ["bash", str(HERE / "arm.sh"), str(stage), str(runtime), *map(str, argv)]
 
     def build(self, arm, remaining_builds):
         needed = remaining_builds*3600 + 1800 + 3600
@@ -299,6 +303,18 @@ class Engine:
         for token in ["PSI4_CUEST_HAS_NONSYMMETRIC_XC:INTERNAL=1", "CMAKE_BUILD_TYPE:STRING=Release",
                       "CMAKE_INSTALL_PREFIX:PATH=" + str(stage)]:
             require(token in cache, "inner CMake gate: " + token)
+        require("Einsums_DIR:" in cache and DEPS + "/share/cmake/Einsums" in cache,
+                "inner Einsums configuration prefix")
+        require(DEPS + "/lib/libEinsums.so.1.1.3" in (inner / "build.ninja").read_text(),
+                "new core must link the matching Einsums imported library")
+        write_json(self.raw / (arm + "-runtime-selection.json"),
+                   dict(helper_runtime_env=(out / "runtime.env").read_text(),
+                        helper_runtime_sha256=sha(out / "runtime.env"),
+                        helper_ldd=(out / "ldd.txt").read_text(),
+                        effective_ld_library_path=RUNTIME_PATH,
+                        note="Helper ldd precedes arm override; actual tested maps are in probes."))
+        self.run_command(self.arm_command(arm, ["ldd", *stage.glob("lib/psi4/core*.so")]),
+                         arm + "-effective-ldd", timeout=30)
         for arch in ["sm_80", "sm_89", "sm_90", "sm_120"]:
             require(arch in (out / "core_sass.txt").read_text().split(), "missing embedded SASS")
         abi = read_json(out / "abi-after-build/result.json")
@@ -424,8 +440,7 @@ class Engine:
         require(before_probe["core_sha256"] == self.probes[arm]["core_sha256"], "process imported other core")
         require(all(actual_maps.get(p) == h for p, h in d["libraries_sha256"].items()), "runner/library mapping hash disagreement")
         require(str(Path(self.probes[arm]["core"]).resolve()) in d["libraries_sha256"], "runner core mapping absent")
-        for p, h in LIBS.items():
-            require(actual_maps.get(str(Path(p).resolve())) == h, "actual mapped dependency " + p)
+        check_runtime_maps(actual_maps)
         for prefix in ("libcudart.so", "libmkl_rt.so", "libstdc++.so"):
             found = [p for p in actual_maps if Path(p).name.startswith(prefix)]
             require(found and all(Path(p).is_relative_to(E + "/lib") for p in found), "actual runtime " + prefix)

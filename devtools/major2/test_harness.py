@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import campaign
 import policy as p
@@ -244,6 +244,119 @@ class HarnessTests(unittest.TestCase):
                      str(self.root / ("build-" + arm)), "cuda"],
                     "build-" + arm, timeout=3600)
         self.assertEqual(engine.pins.call_count, 2)
+
+    def einsums_fixture(self):
+        root = self.root / "deps"
+        config = root / "share/cmake/Einsums"
+        config.mkdir(parents=True)
+        header = root / "include/Einsums/Config/Version.hpp"
+        header.parent.mkdir(parents=True)
+        header.write_text("#define EINSUMS_VERSION_MAJOR 1\n#define EINSUMS_VERSION_MINOR 1\n"
+                          "#define EINSUMS_VERSION_PATCH 3\n")
+        (config / "EinsumsConfigVersion.cmake").write_text('set(PACKAGE_VERSION "1.1.3")')
+        (config / "EinsumsTargets-release.cmake").write_text(
+            'IMPORTED_LOCATION_RELEASE "${_IMPORT_PREFIX}/lib/libEinsums.so.1.1.3"\n'
+            'IMPORTED_SONAME_RELEASE "libEinsums.so.1"')
+        (config / "einsums_internal_targets.cmake").write_text(
+            'INTERFACE_INCLUDE_DIRECTORIES "${_IMPORT_PREFIX}/include"')
+        for name in p.EINSUMS_INPUTS:
+            if not (root / name).exists():
+                (root / name).write_text("fake config")
+        (root / "lib").mkdir()
+        library = root / "lib/libEinsums.so.1.1.3"
+        library.write_bytes(b"fake library, not an ELF")
+        (root / "lib/libEinsums.so.1").symlink_to(library.name)
+        return root, {n: p.sha(root / n) for n in p.EINSUMS_INPUTS}, p.sha(library)
+
+    def test_einsums_resolved_same_prefix(self):
+        root, inputs, libhash = self.einsums_fixture()
+        with patch.object(p, "EINSUMS_INPUTS", inputs), patch.dict(
+                p.LIBS, {p.DEPS + "/lib/libEinsums.so.1": libhash}):
+            proof = p.einsums_coherence(root)
+            self.assertEqual(proof["library"], str(root / "lib/libEinsums.so.1.1.3"))
+            self.assertEqual(proof["prefix"], str(root))
+            # Same bytes elsewhere are not the approved resolved prefix.
+            (root / "lib/libEinsums.so.1").unlink()
+            other = self.root / "libEinsums.so.1.1.3"
+            other.write_bytes(b"fake library, not an ELF")
+            (root / "lib/libEinsums.so.1").symlink_to(other)
+            with self.assertRaisesRegex(RuntimeError, "resolved runtime prefix"):
+                p.einsums_coherence(root)
+
+    def test_einsums_rejects_headers_runtime_mismatch(self):
+        root, inputs, libhash = self.einsums_fixture()
+        (root / "include/Einsums/Config/Version.hpp").write_text(
+            "#define EINSUMS_VERSION_MAJOR 1\n#define EINSUMS_VERSION_MINOR 1\n#define EINSUMS_VERSION_PATCH 2\n")
+        with patch.object(p, "EINSUMS_INPUTS", inputs), patch.dict(
+                p.LIBS, {p.DEPS + "/lib/libEinsums.so.1": libhash}):
+            with self.assertRaisesRegex(RuntimeError, "headers/runtime version"):
+                p.einsums_coherence(root)
+
+    def test_einsums_rejects_dependency_hash_changes_and_missing(self):
+        root, inputs, libhash = self.einsums_fixture()
+        library = root / "lib/libEinsums.so.1.1.3"
+        with patch.object(p, "EINSUMS_INPUTS", inputs), patch.dict(
+                p.LIBS, {p.DEPS + "/lib/libEinsums.so.1": libhash}):
+            original = library.read_bytes()
+            library.write_bytes(b"changed")
+            with self.assertRaisesRegex(RuntimeError, "dependency hash changed"):
+                p.einsums_coherence(root)
+            library.write_bytes(original)
+            (root / "share/cmake/Einsums/EinsumsConfig.cmake").write_text("changed config")
+            with self.assertRaisesRegex(RuntimeError, "config/header dependency hash"):
+                p.einsums_coherence(root)
+            library.unlink()
+            with self.assertRaises(FileNotFoundError):
+                p.einsums_coherence(root)
+        m = copy.deepcopy(manifest())
+        m["dependency_hashes"][p.DEPS + "/lib/libEinsums.so.1"] = "0" * 64
+        with self.assertRaisesRegex(RuntimeError, "dependency hashes"):
+            p.validate_manifest(m)
+
+    def test_einsums_runtime_maps_reject_extra_soname_copy(self):
+        root, _, libhash = self.einsums_fixture()
+        lib = str(root / "lib/libEinsums.so.1")
+        with patch.object(p, "DEPS", str(root)), patch.object(p, "LIBS", {lib: libhash}):
+            loaded = {str(Path(lib).resolve()): libhash}
+            p.check_runtime_maps(loaded)
+            loaded[str(self.root / "old/libEinsums.so.1.1.2")] = libhash
+            with self.assertRaisesRegex(RuntimeError, "multiple/wrong"):
+                p.check_runtime_maps(loaded)
+
+    def test_arm_runtime_override_after_helper_source_and_psiapi(self):
+        # Execute the real arm body, replacing only site module initialization
+        # and the project root with a local fake tree; no GPU/scientific import.
+        stage = self.root / "stage"
+        (stage / "bin").mkdir(parents=True)
+        psi = stage / "bin/psi4"
+        psi.write_text("#!/bin/bash\nprintf 'export LD_LIBRARY_PATH=/wrong-psiapi\\n'\n")
+        psi.chmod(0o755)
+        runtime = self.root / "runtime.env"
+        original = "export LD_LIBRARY_PATH=/old-helper\n"
+        runtime.write_text(original)
+        arm = self.root / "arm.sh"
+        text = (HERE / "arm.sh").read_text().replace(
+            "source /etc/profile.d/z00_lmod_pace.sh", "true").replace(
+            "module load gcc/12.3.0 cuda/12.6.1", "true").replace(
+            "P=/storage/project/r-cs207-0/awallace43", "P=" + str(self.root))
+        arm.write_text(text)
+        for name in ["baseline", "candidate"]:
+            item = manifest()["arms"][name]
+            engine = campaign.Engine.__new__(campaign.Engine)
+            engine.m = manifest()
+            engine.root = self.root
+            argv = engine.arm_command(name, ["fake"])
+            self.assertEqual(argv[2:4], [item["build"] + "/stage",
+                                        str(self.root / ("build-" + name) / "runtime.env")])
+            result = subprocess.run(["bash", str(arm), str(stage), str(runtime), sys.executable,
+                                     "-c", "import os,json; print(json.dumps(dict(os.environ)))"],
+                                    capture_output=True, text=True, check=True)
+            env = json.loads(result.stdout)
+            expected = p.RUNTIME_PATH.replace(p.P, str(self.root))
+            self.assertEqual(env["LD_LIBRARY_PATH"], expected)
+            self.assertEqual(p.runtime_env({}, self.root)["LD_LIBRARY_PATH"], p.RUNTIME_PATH)
+            self.assertEqual(env["MAJOR2_HELPER_RUNTIME_ENV"], str(runtime))
+            self.assertEqual(runtime.read_text(), original)
 
     def test_fake_cmake_cache_policy_and_cuda12_rejection(self):
         expected = {
