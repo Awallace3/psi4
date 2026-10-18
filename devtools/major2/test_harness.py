@@ -390,10 +390,120 @@ class HarnessTests(unittest.TestCase):
                          ("Features=H200", "Features=H100"), ("128G", "64G"), ("gpu-h200", "gpu-h100")]:
             with self.assertRaises(RuntimeError):
                 campaign.allocation(text.replace(old, new), env)
-        campaign.gpu_line("NVIDIA H200, GPU-abcdef, 143771, fake-driver")
-        for bad in ["NVIDIA H100, GPU-abcdef, 143771, fake-driver", "NVIDIA H200, GPU-abcdef, 143771, fake-driver\n"*2]:
+        row = "NVIDIA H200, GPU-cef53330-5214-b247-8ee2-ea62cc683988, 143771, fake-driver, 0"
+        campaign.gpu_line(row)
+        for bad in [row.replace("H200", "H100"), (row+"\n")*2, row.replace("143771", "nan")]:
             with self.assertRaises(RuntimeError):
                 campaign.gpu_line(bad)
+
+    def mapping_prolog(self, physical="6", visible="0", probe=None, nvml_uuid=None, duplicate=False):
+        """Actual prolog up to its first pin gate; only external operations mocked.
+
+        Captured failure: physical 6, visible 0, NVML --id=6 exit 6 NOT_FOUND.
+        NVML namespace index 0 deliberately need not equal scheduler index 6.
+        """
+        uuid = "GPU-cef53330-5214-b247-8ee2-ea62cc683988"
+        proof = dict(count=1, logical_device=0, name="NVIDIA H200", uuid=uuid,
+                     memory_bytes=143771 * 1048576, header_version=13030, runtime_version=13030)
+        if probe:
+            proof.update(probe)
+        class PrologPinsReached(Exception):
+            pass
+        env = dict(SLURM_JOB_ID="12345", SLURM_JOB_GPUS=physical, CUDA_VISIBLE_DEVICES=visible,
+                   SLURM_JOB_END_TIME=str(int(time.time())+14400))
+        with patch.dict(os.environ, env):
+            engine = campaign.Engine(manifest(), self.root/"manifest.json")
+        engine.root = self.root
+        engine.raw = self.root/"raw"
+        engine.scratch = self.root/"scratch"
+        calls = []
+        def query(argv):
+            calls.append(argv)
+            if argv[0] == "scontrol":
+                return "synthetic scheduler (allocation guard mocked separately)"
+            if "--id=6" in argv:
+                raise subprocess.CalledProcessError(6, argv, "GPU not found")
+            self.assertIn("--id="+uuid, argv)
+            fields = next(x for x in argv if x.startswith("--query-gpu="))
+            row = f"NVIDIA H200, {nvml_uuid or uuid}, 143771, fake-driver"
+            if "index" in fields:
+                row += ", 0"
+            return (row+"\n") * (2 if duplicate else 1)
+        def run_command(argv, name, **kwargs):
+            calls.append(list(map(str, argv)))
+            if name == "gpu-identity-run":
+                (engine.raw/(name+".log")).write_text(json.dumps(proof)+"\n")
+            return 0
+        engine.query = Mock(side_effect=query)
+        engine.run_command = Mock(side_effect=run_command)
+        engine.pins = Mock(side_effect=PrologPinsReached)
+        with patch.dict(os.environ, env), patch.object(campaign, "allocation"):
+            with self.assertRaises(PrologPinsReached):
+                engine.prolog()
+        return engine, proof, calls
+
+    def test_gpu_mapping_captured_physical6_visible0_prolog_pins_sampler(self):
+        engine, proof, calls = self.mapping_prolog()
+        self.assertEqual(engine.gpu_selector, proof["uuid"])
+        self.assertEqual(engine.gpu["nvml_index"], 0)
+        self.assertEqual(p.read_json(engine.raw/"environment.json")["SLURM_JOB_GPUS"], "6")
+        self.assertEqual(p.read_json(engine.raw/"gpu-identity.json")["uuid"], proof["uuid"])
+        compile_call = next(c for c in calls if any("gpu_identity.cc" in str(x) for x in c))
+        self.assertEqual(compile_call[:3], ["bash", str(HERE/"build.sh"), p.P+"/software/toolchains/conda-g++"])
+        self.assertIn("-I"+p.CUDA+"/targets/x86_64-linux/include", compile_call)
+        self.assertIn(p.E+"/lib/libcudart.so", compile_call)
+        self.assertIn("-H", compile_call)
+        # Exercise real pins(), not the prolog mock, and real sampler launch.
+        engine.manifest_hash = "fake"
+        with patch.object(campaign, "check_source"), patch.object(campaign, "sha", return_value="fake"), \
+             patch.object(campaign, "SUITE_SHA", "fake"), patch.object(campaign, "LIBS", {}), \
+             patch.object(campaign, "einsums_coherence"):
+            campaign.Engine.pins(engine)
+        with patch.object(campaign.subprocess, "Popen") as popen:
+            engine.start_sampler()
+            self.assertEqual(popen.call_args.args[0][-1], proof["uuid"])
+        gpu_queries = [c for c in calls if c[0] == "nvidia-smi" and any(x.startswith("--query-gpu=") for x in c)]
+        self.assertGreaterEqual(len(gpu_queries), 2)
+        self.assertTrue(all("--id="+proof["uuid"] in c for c in gpu_queries))
+        engine.query = Mock(return_value="NVIDIA H200, GPU-00000000-0000-0000-0000-000000000000, 143771, fake-driver, 0")
+        with patch.object(campaign, "check_source"), patch.object(campaign, "sha", return_value="fake"), \
+             patch.object(campaign, "SUITE_SHA", "fake"):
+            with self.assertRaisesRegex(RuntimeError, "GPU/UUID/driver changed"):
+                campaign.Engine.pins(engine)
+
+    def test_gpu_mapping_normal_and_uuid_visibility(self):
+        for physical, visible in [("0", "0"), ("GPU-cef53330-5214-b247-8ee2-ea62cc683988",
+                                              "GPU-cef53330-5214-b247-8ee2-ea62cc683988")]:
+            with self.subTest(physical=physical), tempfile.TemporaryDirectory(dir=self.root) as directory:
+                original = self.root
+                self.root = Path(directory)
+                try:
+                    engine, proof, _ = self.mapping_prolog(physical, visible)
+                    self.assertEqual(engine.gpu_selector, proof["uuid"])
+                finally:
+                    self.root = original
+
+    def test_gpu_mapping_multi_ambiguous_mismatch_fail_closed(self):
+        bad = [
+            dict(visible="0,1"), dict(visible=""), dict(probe=dict(count=2)),
+            dict(probe=dict(count=0)), dict(probe=dict(logical_device=1)),
+            dict(probe=dict(uuid="GPU-not-a-uuid")), dict(probe=dict(name="NVIDIA H100")),
+            dict(probe=dict(memory_bytes=1000)), dict(probe=dict(header_version=12060)),
+            dict(probe=dict(runtime_version=12060)), dict(duplicate=True),
+            dict(nvml_uuid="GPU-00000000-0000-0000-0000-000000000000"),
+            dict(visible="GPU-00000000-0000-0000-0000-000000000000"),
+            dict(physical="GPU-00000000-0000-0000-0000-000000000000"),
+            dict(physical="6,7"),
+        ]
+        for kwargs in bad:
+            with self.subTest(kwargs=kwargs), tempfile.TemporaryDirectory(dir=self.root) as directory:
+                original = self.root
+                self.root = Path(directory)
+                try:
+                    with self.assertRaises(RuntimeError):
+                        self.mapping_prolog(**kwargs)
+                finally:
+                    self.root = original
 
     def test_time_admission(self):
         p.admission(14400, 12600)
@@ -704,8 +814,10 @@ class HarnessTests(unittest.TestCase):
             "import os,sys,signal\n"
             "if '--help-query-gpu' in sys.argv: print('\"power.draw\"');raise SystemExit()\n"
             "if any(x.startswith('--query-compute-apps=') for x in sys.argv):\n"
+            " assert '--id=GPU-fake' in sys.argv\n"
             " print('GPU-fake, 123, fake-chemistry, 20',flush=True);os.kill(os.getppid(),signal.SIGTERM)\n"
             "else:\n"
+            " assert '--id=GPU-fake' in sys.argv\n"
             " fields=next(x.split('=',1)[1].split(',') for x in sys.argv if x.startswith('--query-gpu='))\n"
             " if os.getenv('FAKE_OPTIONAL_ERROR') and 'power.draw' in fields and len(fields)>1:\n"
             "  print('optional field unsupported',file=sys.stderr);raise SystemExit(1)\n"

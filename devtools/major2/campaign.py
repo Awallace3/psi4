@@ -133,8 +133,11 @@ def gpu_line(text):
     rows = [x.strip() for x in text.splitlines() if x.strip()]
     require(len(rows) == 1, "exactly one visible GPU required")
     fields = [x.strip() for x in rows[0].split(",")]
-    require(len(fields) == 4 and "H200" in fields[0] and fields[1].startswith("GPU-") and float(fields[2]) >= 130000, "H200/UUID/VRAM")
-    return dict(name=fields[0], uuid=fields[1], memory_mib=float(fields[2]), driver=fields[3])
+    require(len(fields) == 5 and "H200" in fields[0] and
+            re.fullmatch(r"GPU-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", fields[1]) and
+            130000 <= float(fields[2]) < 200000 and fields[4].isdigit(), "H200/UUID/VRAM/index")
+    return dict(name=fields[0], uuid=fields[1], memory_mib=float(fields[2]), driver=fields[3],
+                nvml_index=int(fields[4]))
 
 
 class Engine:
@@ -156,7 +159,8 @@ class Engine:
         self.scratch = Path(m["scratch_parent"]) / self.job
         self.end = int(os.environ["SLURM_JOB_END_TIME"])
         self.gpu = None
-        self.gpu_selector = self.env_gpu_selector()
+        self.scheduler_gpu = self.env_gpu_selector()
+        self.gpu_selector = None  # never a scheduler/global numerical-index guess
 
     @staticmethod
     def env_gpu_selector():
@@ -212,6 +216,40 @@ class Engine:
     def query(self, argv):
         return subprocess.check_output(argv, env=self.env, text=True, timeout=30)
 
+    def identify_gpu(self):
+        visible = self.env.get("CUDA_VISIBLE_DEVICES", "")
+        require(re.fullmatch(r"(?:\d+|GPU-[0-9a-fA-F-]+)", visible), "one CUDA-visible device")
+        helper = self.scratch / "gpu-identity"
+        # The very same module initialization and include/compiler isolation as
+        # the builds, but only one tiny host translation unit, no dependency build.
+        self.run_command(["bash", HERE/"build.sh", P+"/software/toolchains/conda-g++",
+                          "-std=c++17", "-O0", "-H", "-I"+CUDA+"/targets/x86_64-linux/include",
+                          HERE/"gpu_identity.cc", E+"/lib/libcudart.so",
+                          "-Wl,-rpath,"+E+"/lib", "-o", helper],
+                         "gpu-identity-compile", timeout=60)
+        # A separate executable process cannot prewarm any production energy/J/K/XC.
+        self.run_command([helper], "gpu-identity-run", timeout=30)
+        proof = read_json(self.raw/"gpu-identity-run.log")
+        require(proof["count"] == 1 and proof["logical_device"] == 0, "one logical CUDA device required")
+        require(proof["header_version"] == proof["runtime_version"] == 13030,
+                "identity CUDA13 header/runtime version mismatch")
+        require("H200" in proof["name"] and 130000*1048576 <= proof["memory_bytes"] < 200000*1048576,
+                "identity H200/VRAM")
+        uuid = proof["uuid"]
+        require(isinstance(uuid, str) and
+                re.fullmatch(r"GPU-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", uuid),
+                "invalid CUDA GPU UUID")
+        for provenance in [visible, self.scheduler_gpu]:
+            if provenance.startswith("GPU-"):
+                require(provenance.lower() == uuid.lower(), "visible/scheduler UUID mismatch")
+        write_json(self.raw/"gpu-identity.json", proof)
+        self.gpu_selector = uuid
+        selected = gpu_line(self.query(["nvidia-smi", "--id="+uuid,
+                            "--query-gpu=name,uuid,memory.total,driver_version,index",
+                            "--format=csv,noheader,nounits"]))
+        require(selected["uuid"] == uuid, "CUDA/NVML UUID mismatch")
+        self.gpu = selected
+
     def pins(self):
         for item in self.m["arms"].values():
             check_source(item["source"], item["pin"], item["files"])
@@ -219,7 +257,7 @@ class Engine:
         require(sha(self.manifest_path) == self.manifest_hash, "manifest changed")
         require(sha(Path(self.m["suite"]) / "systems.py") == SUITE_SHA, "geometry module changed")
         require(gpu_line(self.query(["nvidia-smi", "--id="+self.gpu_selector,
-                                    "--query-gpu=name,uuid,memory.total,driver_version", "--format=csv,noheader,nounits"])) == self.gpu,
+                                    "--query-gpu=name,uuid,memory.total,driver_version,index", "--format=csv,noheader,nounits"])) == self.gpu,
                 "GPU/UUID/driver changed")
         for p, h in LIBS.items():
             require(sha(p) == h, "shared dependency changed")
@@ -250,12 +288,12 @@ class Engine:
         info = self.query(["scontrol", "show", "job", "-o", self.job])
         (self.raw / "scheduler.txt").write_text(info)
         allocation(info, self.env)
-        self.gpu = gpu_line(self.query(["nvidia-smi", "--id="+self.gpu_selector,
-                                        "--query-gpu=name,uuid,memory.total,driver_version", "--format=csv,noheader,nounits"]))
-        require(len(self.env.get("CUDA_VISIBLE_DEVICES", "").split(",")) == 1 and self.env.get("CUDA_VISIBLE_DEVICES"), "one CUDA-visible device")
+        self.identify_gpu()
         write_json(self.raw / "gpu.json", self.gpu)
         for name, argv in [("lscpu", ["lscpu"]), ("affinity", ["taskset", "-pc", str(os.getpid())]),
-                           ("gpu-full", ["nvidia-smi", "-q"]), ("gpu-tenants", ["nvidia-smi", "--query-compute-apps=gpu_uuid,pid,process_name,used_memory", "--format=csv"])]:
+                           ("gpu-full", ["nvidia-smi", "--id="+self.gpu_selector, "-q"]),
+                           ("gpu-tenants", ["nvidia-smi", "--id="+self.gpu_selector,
+                            "--query-compute-apps=gpu_uuid,pid,process_name,used_memory", "--format=csv"])]:
             self.run_command(argv, name, timeout=30)
         self.pins()
         for arm, item in self.m["arms"].items():

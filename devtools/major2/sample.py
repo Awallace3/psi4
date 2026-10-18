@@ -49,7 +49,7 @@ if __name__ == "__main__":
             values = [x.strip() for x in result.stdout.strip().split(",")]
             if not values or values[0] != uuid:
                 raise RuntimeError("telemetry UUID changed")
-            apps = subprocess.run(["nvidia-smi", "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
+            apps = subprocess.run(["nvidia-smi", "--id="+uuid, "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
                                    "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10)
             if apps.returncode:
                 raise RuntimeError("compute-apps observation failed: " + apps.stderr)
