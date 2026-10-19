@@ -1,0 +1,22 @@
+{
+  "provenance": "Exact selected native lines from completed speed job14179309 raw/speed-{baseline,candidate}-1/plan.out; NOT whole-energy observations. Full log SHA256 below.",
+  "baseline_log_sha256": "e617c7f641c9bb7ecedd3edebacff22ec6da2c9b608b52a6f59ce0f2c8810186",
+  "candidate_log_sha256": "db455e1b7aebe5008753917d1a1b216b5ebbd0fcf4f8441d1288605964bc9663",
+  "baseline_lines": [
+    "    Device memory, DF int plan:     42.946 [GiB]",
+    "    Device memory, DF int plan:     42.946 [GiB]",
+    "    Device memory, DF int plan:     42.946 [GiB]",
+    "    Device memory, DF int plan:     42.946 [GiB]",
+    "    Device memory, DF int plan:     42.946 [GiB]",
+    "    Device memory, DF int plan:     42.946 [GiB]"
+  ],
+  "candidate_lines": [
+    "    cuESTJK plan created #1",
+    "    Device memory, DF int plan:     42.946 [GiB]",
+    "    cuESTJK plan reused #1",
+    "    cuESTJK plan reused #1",
+    "    cuESTJK plan reused #1",
+    "    cuESTJK plan reused #1",
+    "    cuESTJK plan reused #1"
+  ]
+}
