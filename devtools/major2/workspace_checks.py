@@ -153,8 +153,9 @@ runpy.run_path('fixed_jk_runner.py',run_name='__main__')
 
     def test_shell_gate_precedes_inherited_psiapi(self):
         text = (HERE/"child-arm.sh").read_text()
-        self.assertLess(text.index("--child-shell-check"),text.index('exec bash "$H/arm.sh"'))
-        self.assertNotIn("unset", "\n".join(text.splitlines()[2:]))
+        self.assertLess(text.index("--child-shell-check"),text.index('eval "$("$stage/bin/psi4" --psiapi)"'))
+        self.assertEqual(text.count("\ncheck_control\n"),3)
+        self.assertNotIn("unset CUBLAS",text)
         self.assertNotIn("export CUBLAS",text)
         tree = ast.parse((HERE/"workspace_control.py").read_text())
         imports = [n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)]
