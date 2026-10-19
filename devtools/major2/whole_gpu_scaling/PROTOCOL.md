@@ -97,7 +97,36 @@ Preserve all17 actual old roots (13 FAILED,4 COMPLETED including14179309),
 separately inherited unsubmitted stages, scientific builds, finalizers and
 their receipts. New run is pristine, readonly generated bundle only. Code
 moves only by Git. `custody.audit` rechecks preservation, accounting, queue
-headroom and no own active H200 holder and issues only `sbatch --test-only`.
+headroom and campaign-specific duplicate admission and issues only
+`sbatch --test-only`.
+
+### Campaign admission is not allocation exclusivity
+
+Only this custody module binds `admission.queue`; the inherited
+`native_plan/handoff.py` global protocol is unchanged. A fresh, user-filtered,
+expanded-task `squeue` snapshot includes owner/name/command/workdir/route/state.
+Both effective login name and numeric UID must agree with every row. Explicit
+header-only output is valid empty evidence; missing/truncated/malformed output,
+unknown metadata, foreign owners, command failure, stderr, timeout, duplicates
+and exhausted embers headroom are fatal. Queries have 35s/2MiB/4096-row bounds.
+There is no cluster-wide dump, controller fan-out, wait or scheduler write.
+
+Duplicate identity is the unique `major2-whole-gpu-scaling` stem in JobName,
+Command or WorkDir (including dated/versioned/prior-partial source/run
+namespaces), or the owned `/devtools/major2/whole_gpu_scaling` helper path.
+This deliberately catches direct helper commands from differently named
+checkouts too. Generic `major2`, partition, GPU type, account or QoS alone do
+not identify this campaign. Every queued state is checked, not just RUNNING.
+
+Unrelated pending/running H200 jobs are permitted, including XDM14179965/66
+in `/runs/xdm-gpu/20261019`. Their inferno route is neither ours nor permission
+to charge inferno; they are never controlled, attached to or used as holders.
+The receipt preserves their metadata as `unrelated`, with fresh per-user
+embers counts and explicitly `allocation_exclusivity_proven=false`.
+SLURM must grant our separate six-hour embers allocation. Only the unchanged
+in-allocation route/environment, compiled CUDA logical0→physical UUID,
+before-child empty-holder, and actual own-PID exclusive-UUID checks establish
+device custody. Queue admission NEVER establishes GPU exclusivity.
 
 `parent-finalize.sh` MUST remain UNEXECUTED during preparation. A parent review
 sets the exact manifest SHA approval. Permanent local and remote attempt

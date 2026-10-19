@@ -23,7 +23,7 @@ cd "$H/native_plan"
 cd "$H/planreuse_speed"
 "$PY" -B -m unittest -v test_speed
 cd "$here"
-"$PY" -B -m unittest -v test_whole
+"$PY" -B -m unittest -v test_whole test_admission
 "$PY" -B - <<'PY'
 import ast
 from pathlib import Path

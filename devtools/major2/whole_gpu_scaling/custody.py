@@ -11,7 +11,8 @@ sys.modules.setdefault("common", s.n)
 legacy = s.inherited("native_plan", "handoff")
 FAILED = legacy.FAILED
 COMPLETED = legacy.COMPLETED+["14178506", "14179309"]
-preserve, queue, accept_id = legacy.preserve, legacy.queue, legacy.accept_id
+preserve, accept_id = legacy.preserve, legacy.accept_id
+from admission import queue
 
 
 def accounting():
