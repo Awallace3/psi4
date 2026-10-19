@@ -1759,7 +1759,7 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
         throw PSIEXCEPTION("Vx: RKS input and output sizes should be the same.");
     }
 
-    if (functional_->needs_vv10()) {
+    if (functional_->needs_vv10() && !vx_neglect_vv10_) {
         throw PSIEXCEPTION("Vx: RKS cannot compute VV10 Vx contribution.");
     }
 
@@ -3399,7 +3399,7 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
         throw PSIEXCEPTION("Vx: UKS input should occur in alpha and beta pairs.");
     }
 
-    if (functional_->needs_vv10()) {
+    if (functional_->needs_vv10() && !vx_neglect_vv10_) {
         throw PSIEXCEPTION("V: UKS cannot compute VV10 Vx contribution.");
     }
 
@@ -3409,9 +3409,6 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
 
     // What local XC ansatz are we in?
     auto ansatz = functional_->ansatz();
-    if (ansatz >= 2) {
-        throw PSIEXCEPTION("Vx: UKS does not support rotated V builds for MGGA's");
-    }
 
     auto old_point_deriv = point_workers_[0]->deriv();
     auto old_func_deriv = functional_->deriv();
@@ -3443,6 +3440,7 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
     std::vector<std::shared_ptr<Vector>> R_rho_ak, R_rho_ak_x, R_rho_ak_y, R_rho_ak_z, R_gamma_ak;
     std::vector<std::shared_ptr<Vector>> R_rho_bk, R_rho_bk_x, R_rho_bk_y, R_rho_bk_z, R_gamma_bk;
     std::vector<std::shared_ptr<Vector>> R_gamma_abk;
+    std::vector<std::shared_ptr<Vector>> R_tau_ak, R_tau_bk;
     for (size_t i = 0; i < num_threads_; i++) {
         R_Vax_local.push_back(std::make_shared<Matrix>("Vax Temp", max_functions, max_functions));
         R_Vbx_local.push_back(std::make_shared<Matrix>("Vbx Temp", max_functions, max_functions));
@@ -3464,6 +3462,11 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
             R_gamma_bk.push_back(std::make_shared<Vector>("Gamma K Temp", max_points));
 
             R_gamma_abk.push_back(std::make_shared<Vector>("Gamma K Temp", max_points));
+        }
+
+        if (ansatz >= 2) {
+            R_tau_ak.push_back(std::make_shared<Vector>("Tau aK Temp", max_points));
+            R_tau_bk.push_back(std::make_shared<Vector>("Tau bK Temp", max_points));
         }
 
         functional_workers_[i]->set_deriv(2);
@@ -3568,7 +3571,11 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
         }
 
         // Meta
-        // Forget that!
+        double *tau_ak = nullptr, *tau_bk = nullptr;
+        if (ansatz >= 2) {
+            tau_ak = R_tau_ak[rank]->pointer();
+            tau_bk = R_tau_bk[rank]->pointer();
+        }
 
         // ==> Compute Vx contribution for each x <==
         for (size_t dindex = 0; dindex < (Dx_vec.size() / 2); dindex++) {
@@ -3635,6 +3642,28 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
                     gamma_abk[P] += rho_ak_z[P] * rho_bz[P] + rho_bk_z[P] * rho_az[P];
                 }
             }
+
+            // τk = 1/2 einsum("mnσ, xpm, xpn -> pσ", Dk, ∇φ, ∇φ), the τ definition of the point workers.
+            // Ta, Tb are free again: ρk and ∇ρk are already extracted.
+            if (ansatz >= 2) {
+                std::fill(tau_ak, tau_ak + npoints, 0.0);
+                std::fill(tau_bk, tau_bk + npoints, 0.0);
+                double** phi_w[3] = {phi_x, phi_y, phi_z};
+                for (int i = 0; i < 3; i++) {
+                    C_DGEMM('N', 'N', npoints, nlocal, nlocal, 1.0, phi_w[i][0], coll_funcs, Dax_localp[0],
+                            max_functions, 0.0, Tap[0], max_functions);
+                    C_DGEMM('N', 'T', npoints, nlocal, nlocal, 1.0, phi_w[i][0], coll_funcs, Dax_localp[0],
+                            max_functions, 1.0, Tap[0], max_functions);
+                    C_DGEMM('N', 'N', npoints, nlocal, nlocal, 1.0, phi_w[i][0], coll_funcs, Dbx_localp[0],
+                            max_functions, 0.0, Tbp[0], max_functions);
+                    C_DGEMM('N', 'T', npoints, nlocal, nlocal, 1.0, phi_w[i][0], coll_funcs, Dbx_localp[0],
+                            max_functions, 1.0, Tbp[0], max_functions);
+                    for (int P = 0; P < npoints; P++) {
+                        tau_ak[P] += 0.25 * C_DDOT(nlocal, phi_w[i][P], 1, Tap[P], 1);
+                        tau_bk[P] += 0.25 * C_DDOT(nlocal, phi_w[i][P], 1, Tbp[P], 1);
+                    }
+                }
+            }
             parallel_timer_off("Derivative Properties", rank);
 
             parallel_timer_on("V_XCd", rank);
@@ -3657,6 +3686,21 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
                     tmp_val = v2_rho2_bb[P] * rho_bk[P];
                     tmp_val += v2_rho2_ab[P] * rho_ak[P];
                     tmp_val *= 0.5 * w[P];
+                    C_DAXPY(nlocal, tmp_val, phi[P], 1, Tbp[P], 1);
+                }
+            }
+
+            // ===> Meta-GGA: ∂^2 f / ∂ρ∂τ in the LSDA rows <=== //
+            if (ansatz >= 2) {
+                auto v2_rho_a_tau_a = vals["V_RHO_A_TAU_A"]->pointer();
+                auto v2_rho_a_tau_b = vals["V_RHO_A_TAU_B"]->pointer();
+                auto v2_rho_b_tau_a = vals["V_RHO_B_TAU_A"]->pointer();
+                auto v2_rho_b_tau_b = vals["V_RHO_B_TAU_B"]->pointer();
+                for (int P = 0; P < npoints; P++) {
+                    if (rho_a[P] + rho_b[P] <= v2_rho_cutoff_) continue;
+                    tmp_val = 0.5 * w[P] * (v2_rho_a_tau_a[P] * tau_ak[P] + v2_rho_a_tau_b[P] * tau_bk[P]);
+                    C_DAXPY(nlocal, tmp_val, phi[P], 1, Tap[P], 1);
+                    tmp_val = 0.5 * w[P] * (v2_rho_b_tau_a[P] * tau_ak[P] + v2_rho_b_tau_b[P] * tau_bk[P]);
                     C_DAXPY(nlocal, tmp_val, phi[P], 1, Tbp[P], 1);
                 }
             }
@@ -3687,6 +3731,19 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
                 auto v2_rho_b_gamma_bb = vals["V_RHO_B_GAMMA_BB"]->pointer();
 
                 double tmp_val = 0.0, v2_val_aa = 0.0, v2_val_ab = 0.0, v2_val_bb = 0.0;
+
+                // Meta-GGA: ∂^2 f / ∂γ∂τ, contracted with τk into the same intermediates as ∂^2 f / ∂γ∂ρ
+                double *v2_gamma_aa_tau_a = nullptr, *v2_gamma_aa_tau_b = nullptr;
+                double *v2_gamma_ab_tau_a = nullptr, *v2_gamma_ab_tau_b = nullptr;
+                double *v2_gamma_bb_tau_a = nullptr, *v2_gamma_bb_tau_b = nullptr;
+                if (ansatz >= 2) {
+                    v2_gamma_aa_tau_a = vals["V_GAMMA_AA_TAU_A"]->pointer();
+                    v2_gamma_aa_tau_b = vals["V_GAMMA_AA_TAU_B"]->pointer();
+                    v2_gamma_ab_tau_a = vals["V_GAMMA_AB_TAU_A"]->pointer();
+                    v2_gamma_ab_tau_b = vals["V_GAMMA_AB_TAU_B"]->pointer();
+                    v2_gamma_bb_tau_a = vals["V_GAMMA_BB_TAU_A"]->pointer();
+                    v2_gamma_bb_tau_b = vals["V_GAMMA_BB_TAU_B"]->pointer();
+                }
 
                 // There are lots of GGA terms.
                 for (int P = 0; P < npoints; P++) {
@@ -3737,6 +3794,11 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
                     // Define Γk[τχ=ββ] terms in 3 intermediate
                     v2_val_aa += v2_gamma_aa_gamma_bb[P] * gamma_bbk[P];
                     v2_val_ab += v2_gamma_ab_gamma_bb[P] * gamma_bbk[P];
+
+                    if (ansatz >= 2) {
+                        v2_val_aa += v2_gamma_aa_tau_a[P] * tau_ak[P] + v2_gamma_aa_tau_b[P] * tau_bk[P];
+                        v2_val_ab += v2_gamma_ab_tau_a[P] * tau_ak[P] + v2_gamma_ab_tau_b[P] * tau_bk[P];
+                    }
 
                     // Compute W terms, first 1 and then 2a and 3 at once
        
@@ -3800,6 +3862,11 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
                     v2_val_bb += v2_gamma_aa_gamma_bb[P] * gamma_aak[P];
                     v2_val_ab += v2_gamma_aa_gamma_ab[P] * gamma_aak[P];
 
+                    if (ansatz >= 2) {
+                        v2_val_bb += v2_gamma_bb_tau_a[P] * tau_ak[P] + v2_gamma_bb_tau_b[P] * tau_bk[P];
+                        v2_val_ab += v2_gamma_ab_tau_a[P] * tau_ak[P] + v2_gamma_ab_tau_b[P] * tau_bk[P];
+                    }
+
                     // Compute W terms, first 1 and then 2a and 3 at once
        
                     //                                         ∂
@@ -3849,6 +3916,60 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
                 for (int n = 0; n <= m; n++) {
                     Vax_localp[m][n] = Vax_localp[n][m] = Vax_localp[m][n] + Vax_localp[n][m];
                     Vbx_localp[m][n] = Vbx_localp[n][m] = Vbx_localp[m][n] + Vbx_localp[n][m];
+                }
+            }
+
+            // ===> Meta-GGA τ rows, already symmetric: same coefficient as the V_TAU term of compute_V <=== //
+            // Vσ += einsum("xpm, p, p, xpn -> mn", ∇φ, w, δV_TAUσ, ∇φ), δV_TAUσ = 1/2 ∂^2 f / ∂τσ∂(ρ, γ, τ) · (ρk, Γk, τk)
+            if (ansatz >= 2) {
+                auto v2_rho_a_tau_a = vals["V_RHO_A_TAU_A"]->pointer();
+                auto v2_rho_a_tau_b = vals["V_RHO_A_TAU_B"]->pointer();
+                auto v2_rho_b_tau_a = vals["V_RHO_B_TAU_A"]->pointer();
+                auto v2_rho_b_tau_b = vals["V_RHO_B_TAU_B"]->pointer();
+                auto v2_tau_a_tau_a = vals["V_TAU_A_TAU_A"]->pointer();
+                auto v2_tau_a_tau_b = vals["V_TAU_A_TAU_B"]->pointer();
+                auto v2_tau_b_tau_b = vals["V_TAU_B_TAU_B"]->pointer();
+                double *v2_gamma_aa_tau_a = nullptr, *v2_gamma_aa_tau_b = nullptr;
+                double *v2_gamma_ab_tau_a = nullptr, *v2_gamma_ab_tau_b = nullptr;
+                double *v2_gamma_bb_tau_a = nullptr, *v2_gamma_bb_tau_b = nullptr;
+                if (ansatz >= 1) {
+                    v2_gamma_aa_tau_a = vals["V_GAMMA_AA_TAU_A"]->pointer();
+                    v2_gamma_aa_tau_b = vals["V_GAMMA_AA_TAU_B"]->pointer();
+                    v2_gamma_ab_tau_a = vals["V_GAMMA_AB_TAU_A"]->pointer();
+                    v2_gamma_ab_tau_b = vals["V_GAMMA_AB_TAU_B"]->pointer();
+                    v2_gamma_bb_tau_a = vals["V_GAMMA_BB_TAU_A"]->pointer();
+                    v2_gamma_bb_tau_b = vals["V_GAMMA_BB_TAU_B"]->pointer();
+                }
+                double** phi_w[3] = {phi_x, phi_y, phi_z};
+                double* dv_tau[2] = {rho_ak, rho_bk};  // overwritten below: ρk is no longer needed
+                for (int P = 0; P < npoints; P++) {
+                    double ra = rho_ak[P], rb = rho_bk[P];
+                    double dva = 0.0, dvb = 0.0;
+                    if (rho_a[P] + rho_b[P] > v2_rho_cutoff_) {
+                        dva = v2_rho_a_tau_a[P] * ra + v2_rho_b_tau_a[P] * rb;
+                        dva += v2_gamma_aa_tau_a[P] * gamma_aak[P] + v2_gamma_ab_tau_a[P] * gamma_abk[P] +
+                               v2_gamma_bb_tau_a[P] * gamma_bbk[P];
+                        dva += v2_tau_a_tau_a[P] * tau_ak[P] + v2_tau_a_tau_b[P] * tau_bk[P];
+                        dvb = v2_rho_a_tau_b[P] * ra + v2_rho_b_tau_b[P] * rb;
+                        dvb += v2_gamma_aa_tau_b[P] * gamma_aak[P] + v2_gamma_ab_tau_b[P] * gamma_abk[P] +
+                               v2_gamma_bb_tau_b[P] * gamma_bbk[P];
+                        dvb += v2_tau_a_tau_b[P] * tau_ak[P] + v2_tau_b_tau_b[P] * tau_bk[P];
+                    }
+                    // V_TAU is 1/2 the LibXC τ derivative (see LibXCFunctional), the second derivatives are not
+                    dv_tau[0][P] = 0.5 * w[P] * dva;
+                    dv_tau[1][P] = 0.5 * w[P] * dvb;
+                }
+                double** V_out[2] = {Vax_localp, Vbx_localp};
+                double** T_out[2] = {Tap, Tbp};
+                for (int s = 0; s < 2; s++) {
+                    for (int i = 0; i < 3; i++) {
+                        for (int P = 0; P < npoints; P++) {
+                            std::fill(T_out[s][P], T_out[s][P] + nlocal, 0.0);
+                            C_DAXPY(nlocal, dv_tau[s][P], phi_w[i][P], 1, T_out[s][P], 1);
+                        }
+                        C_DGEMM('T', 'N', nlocal, nlocal, npoints, 1.0, phi_w[i][0], coll_funcs, T_out[s][0],
+                                max_functions, 1.0, V_out[s][0], max_functions);
+                    }
                 }
             }
 

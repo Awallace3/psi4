@@ -876,7 +876,7 @@ int RHF::soscf_update(double soscf_conv, int soscf_min_iter, int soscf_max_iter,
         return 0;
     }
 
-    std::vector<SharedMatrix> ret_x = cphf_solve({Gradient}, soscf_conv, soscf_max_iter, soscf_print ? 2 : 0);
+    std::vector<SharedMatrix> ret_x = soscf_cphf_solve({Gradient}, soscf_conv, soscf_max_iter, soscf_print ? 2 : 0);
 
     // => Rotate orbitals <= //
     rotate_orbitals(Ca_, ret_x[0]);

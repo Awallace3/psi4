@@ -98,6 +98,11 @@ class PSI_API VBase {
     // GRAC data
     bool grac_initialized_;
 
+    /// Leave the VV10 kernel out of compute_Vx instead of refusing a VV10 functional. Only for callers
+    /// that can use an approximate orbital Hessian, e.g., SOSCF, where it changes the step and not the
+    /// stationary point.
+    bool vx_neglect_vv10_ = false;
+
     // VV10 dispersion, return vv10_nlc energy
     void prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
                             std::vector<std::map<std::string, SharedVector>>& vv10_cache,
@@ -138,6 +143,10 @@ class PSI_API VBase {
 
     // Set the site of the grac shift
     void set_grac_shift(double value);
+
+    /// See vx_neglect_vv10_
+    void set_vx_neglect_vv10(bool neglect) { vx_neglect_vv10_ = neglect; }
+    bool vx_neglect_vv10() const { return vx_neglect_vv10_; }
 
     /// Throws by default
     virtual void compute_V(std::vector<SharedMatrix> ret);

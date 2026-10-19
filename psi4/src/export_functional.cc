@@ -277,6 +277,8 @@ void export_functional(py::module &m) {
         .def("Dao", &VBase::set_D, "Returns internal AO density.")
         .def("compute_V", &VBase::compute_V, "doctsring")
         .def("compute_Vx", &VBase::compute_Vx, "doctsring")
+        .def("set_vx_neglect_vv10", &VBase::set_vx_neglect_vv10,
+             "Leave the VV10 kernel out of compute_Vx instead of refusing a VV10 functional.")
         .def("compute_gradient", &VBase::compute_gradient, "Compute the DFT nuclear gradient contribution.")
         .def("compute_hessain", &VBase::compute_hessian, "Compute the DFT nuclear Hessian contribution.")
 
