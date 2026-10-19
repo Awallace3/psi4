@@ -441,6 +441,62 @@ was completed.
 Recipe-only correction pin `5245210a100b73c3c5b275d889ad2de3c51ec736`
 was sent to parent with a fresh one-job CPU build approval request. No new
 approval or allocation is assumed.
+
+## Corrected CPU build authorization and preflight
+
+Coordinator explicitly relayed fresh approval for **EXACTLY ONE** corrected
+CPU-only build at `5245210a100b73c3c5b275d889ad2de3c51ec736`, 8 CPUs / 48G /
+2h / free embers / gts-cs207-chemx. This is one authorization, not permission
+for an extra submission if already acted upon. At receipt, this agent had
+submitted only failed job14182584; **no corrected job had been submitted**.
+
+Require fresh passing exact-route test-only, live headroom, explicit
+--no-requeue and new detached source/env/build/run roots. Preserve all
+14182584/1e25b5e89a evidence, including actual CMake4.4.4 / GNU14.3 build20
+versus CPU-oracle build18 drift. No automatic retry, inferno or GPU submission.
+
+Started corrected-branch publication b4eae7c65 and fresh headroom/duplicate
+guard be1c8d608. Intended new source
+`P/gits/psi4.saptdft-cuest-disp0-build-5245210a10`; receipt must not already
+exist at `logs/submission-5245210a10.receipt` before any actual submission.
+No corrected accepted job ID yet.
+
+Corrected preflight be1c8d608: PASS, live embers **26/50** slots used.
+Corrected source path/receipt were absent before staging, no active
+`disp0-e2-build` job was reported, and the original failed receipt is present.
+Branch publication b4eae7c65: PASS. Exact corrected test-only b2fe53fb3 pending.
+
+Corrected exact-route test-only b2fe53fb3: PASS, **cpu-small**, 8 processors.
+Detached source verified at the exact approved 5245210a full SHA and committed
+--no-requeue verified. Forecast number 14193846 is test-only, **not an actual
+allocation**. One corrected submission is now in flight as bb8c805ec, with
+fresh receipt guard and a second active-build duplicate check immediately
+before sbatch. Explicit --no-requeue also passed on the actual command line.
+
+### Accepted corrected CPU build receipt
+
+* **Job 14193865**, accepted by bb8c805ec (exit 0), submit timestamp
+  2026-10-19 19:18:04 Phoenix local time.
+* Exactly approved source pin:
+  `5245210a100b73c3c5b275d889ad2de3c51ec736`,
+  detached at `P/gits/psi4.saptdft-cuest-disp0-build-5245210a10`.
+* Effective `scontrol`: **gts-cs207-chemx / cpu-small / embers**, 8 CPUs,
+  48G, 02:00:00, **Requeue=0**, Restarts=0 and **no GPU TRES**.
+  Initial PENDING (Priority); no start-time estimate claimed.
+* New job-owned root:
+  `P/runs/saptdft-cuest-disp0/build-5245210a100b73c3c5b275d889ad2de3c51ec736-14193865`.
+  Source/env/build/install/cache roots are distinct from failed job14182584.
+* Persistent scratch:
+  `/storage/scratch1/3/awallace43/saptdft-cuest-disp0/14193865`.
+* Logs `P/runs/saptdft-cuest-disp0/logs/disp0-e2-build-14193865.{out,err}`;
+  terminal artifact `logs/14193865.status`;
+  accepted receipt `logs/submission-5245210a10.receipt`.
+* Parent receipt delivered. Exactly one corrected actual submission.
+  Official state-change monitor b130435b3 started; no automatic retry.
+  Failed14182584/1e25 roots and evidence remain untouched.
+
+Acceptance is not build success or CUDA correctness. No H200/GPU numerical
+job or broader F-SAPT work is authorized/started by this receipt.
 * Read-only Phoenix access preflight: PASS, exit 0 (bfefc7153).
   No remote branch worktree/build has yet been created and no job submitted.
 * Read-only Phoenix dependency discovery: PASS, exit 0 (b99607f10).
