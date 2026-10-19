@@ -131,7 +131,7 @@ def verify_process(raw, row, factor_sha, uuid):
     p.check_runtime_maps(value["runtime_maps"])
     p.check_required_runtime_maps(value["runtime_maps"])
     p.require(p.sha(root/"plan.out") == value["trace_sha256"] and
-              f.traces((root/"plan.out").read_text(), row["arm"]) == f.expected_trace(row["arm"], "D"),
+              f.traces((root/"plan.out").read_bytes().decode("utf-8"), row["arm"]) == f.expected_trace(row["arm"], "D"),
               "complete backend trace")
     p.require([v["state"] for v in value["records"]] == list(f.STATES), "four output states")
     factor = p.read_json(raw/"factor/FACTOR.json")

@@ -45,6 +45,16 @@ class TestWarning(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "backend fallback or SDK error"):
                 namespace["traces"](CAPTURE.read_text(), arm)
 
+    def test_trace_callers_preserve_newline_bytes(self):
+        tree = ast.parse((HERE/"fixed_jk_runner.py").read_text())
+        jk = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "jk_process")
+        trace = next(n for n in jk.body if isinstance(n, ast.FunctionDef) and n.name == "trace")
+        returned = next(n.value for n in trace.body if isinstance(n, ast.Return))
+        self.assertEqual(ast.unparse(returned), "trace_path.read_bytes().decode('utf-8')")
+        campaign = (HERE/"fixed_jk_campaign.py").read_text()
+        self.assertIn('(root/"plan.out").read_bytes().decode("utf-8")', campaign)
+        self.assertNotIn('(root/"plan.out").read_text()', campaign)
+
     def test_native_like_suffix_counts_all_states_and_six_processes(self):
         total = 0
         for row in f.sequence():

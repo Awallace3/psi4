@@ -88,7 +88,7 @@ def jk_process(m, row, root, factor_root, before, uuid):
     def trace():
         psi4.core.flush_outfile()
         p.require(trace_path.stat().st_size < 2*1024**2, "bounded trace log")
-        return trace_path.read_text()
+        return trace_path.read_bytes().decode("utf-8")
     def snapshot(state, before_trace, after_trace, calls):
         p.require(o.array_info(coeff.np) == receipt["C"]["array"], "native coefficient mutation")
         p.require(o.array_info(np.array(mol.geometry().np, order="C", copy=True)) == o.array_info(geometry_array),
