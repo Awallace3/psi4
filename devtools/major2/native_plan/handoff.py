@@ -164,6 +164,8 @@ def freeze(collection, directory):
     helpers={x.split("\t")[1]:n.sha(root/x.split("\t")[1]) for x in changes}
     n.require("devtools/major2/native_plan/supervise.sh" in helpers,
               "owned supervisor must be tracked despite global *.sh ignore")
+    n.require("devtools/major2/native_plan/parent-finalize.sh" in helpers,
+              "parent finalizer must be tracked")
     m=dict(collection,policy=n.POLICY,source=n.SOURCE,run=n.RUN,parent=PARENT,pin=pin,
            helpers=helpers)
     n.source_check(m,root)
@@ -199,7 +201,7 @@ def stage(pin):
     for name,value in payload.items(): n.durable(root/name,value)
     receipt=n.load(root/"bundle-receipt.json")
     verify(pin,receipt["manifest_sha256"],receipt["batch_sha256"])
-    print(json.dumps(dict(staged=True,no_submission=True,**receipt),sort_keys=True))
+    print(json.dumps(dict(receipt,staged=True),sort_keys=True))
 
 
 def audit(pin,mh,bh,pristine=True):
@@ -248,6 +250,36 @@ def parent_submit(pin,mh,bh):
     print(json.dumps(dict(job=job,no_retry=True)))
 
 
+def parent_local(bundle,phx):
+    """Only the reviewed local finalizer calls this. Both attempt locks are permanent."""
+    bundle=Path(bundle)
+    receipt=n.load(bundle/"bundle-receipt.json")
+    pin,mh,bh=(receipt[k] for k in ("pin","manifest_sha256","batch_sha256"))
+    n.require(os.environ.get("MAJOR2_NATIVE_PARENT_REVIEW")==mh,"explicit parent local review")
+    m=n.manifest(bundle/"manifest.json",mh)
+    n.require(n.sha(bundle/"campaign.sbatch")==bh and
+              (bundle/"campaign.sbatch").read_text()==batch_text(mh),"local exact bundle")
+    n.source_check(m,n.HERE.parents[2])
+    n.require(m["pin"]==pin and re.fullmatch("[a-f0-9]{64}",bh),"local pin")
+    permanent_lock(bundle.parent/"parent-finalizer.attempt")
+    command=(f"MAJOR2_NATIVE_PARENT_REVIEW={mh} "
+             f"{n.E}/bin/python -B {n.SOURCE}/devtools/major2/native_plan/handoff.py "
+             f"parent-submit {pin} {mh} {bh}")
+    env=dict(os.environ,PHX_TIMEOUT="180")
+    try:
+        result=subprocess.run([phx,command],env=env,capture_output=True,text=True,timeout=190)
+    except BaseException:
+        n.durable(bundle.parent/"local-submit-ambiguous.json",dict(ambiguous=True,retry=False))
+        raise
+    n.durable(bundle.parent/"local-submit-response.json",dict(returncode=result.returncode,
+              stdout=result.stdout,stderr=result.stderr))
+    n.require(result.returncode==0,"remote acceptance unknown/rejected: STOP; do not retry")
+    value=json.loads(result.stdout)
+    job=accept_id(value["job"])
+    n.durable(bundle.parent/"job-id.txt",job+"\n")
+    print(json.dumps(dict(job=job,no_retry=True)))
+
+
 def main():
     n.check_env(os.environ)
     mode,*args=sys.argv[1:]
@@ -256,6 +288,7 @@ def main():
     elif mode=="stage": stage(*args)
     elif mode=="audit": print(json.dumps(audit(*args),sort_keys=True))
     elif mode=="parent-submit": parent_submit(*args)
+    elif mode=="parent-local": parent_local(*args)
     else: raise RuntimeError("unknown handoff mode")
 
 

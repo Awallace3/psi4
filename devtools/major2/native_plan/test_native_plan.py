@@ -1,6 +1,7 @@
 """Focused host/fake tests only. Compiles input.h, never native.cc or GPU libraries."""
 import copy
 import json
+import io
 import os
 from pathlib import Path
 import signal
@@ -258,6 +259,44 @@ class Tests(unittest.TestCase):
         with patch.dict(os.environ,{},clear=True),self.assertRaises(RuntimeError):
             handoff.parent_submit("p","h","b")
 
+    def test_local_attempt_is_permanent_on_transport_ambiguity(self):
+        bundle=self.root/"bundle";bundle.mkdir()
+        mh="a"*64;bh="b"*64;pin="c"*40
+        receipt=dict(pin=pin,manifest_sha256=mh,batch_sha256=bh)
+        n.durable(bundle/"bundle-receipt.json",receipt)
+        n.durable(bundle/"campaign.sbatch",handoff.batch_text(mh))
+        m=dict(pin=pin)
+        with patch.dict(os.environ,{"MAJOR2_NATIVE_PARENT_REVIEW":mh}),\
+             patch.object(n,"manifest",return_value=m),patch.object(n,"sha",return_value=bh),\
+             patch.object(n,"source_check"),patch.object(subprocess,"run",side_effect=subprocess.TimeoutExpired("phx",1)) as cmd:
+            with self.assertRaises(subprocess.TimeoutExpired): handoff.parent_local(bundle,"/fake/phx")
+            self.assertEqual(cmd.call_count,1)
+            self.assertTrue((self.root/"parent-finalizer.attempt").is_dir())
+            with self.assertRaises(FileExistsError): handoff.parent_local(bundle,"/fake/phx")
+            self.assertEqual(cmd.call_count,1)
+
+    def test_stage_generated_data_only(self):
+        target=self.root/"new-run"
+        payload={"manifest.json":"{}\n","campaign.sbatch":"#!/bin/bash\n",
+                 "bundle-receipt.json":json.dumps(dict(pin="p",manifest_sha256="m",
+                                                       batch_sha256="b",no_submission=True))}
+        with patch.object(n,"RUN",str(target)),patch.object(sys,"stdin",io.StringIO(json.dumps(payload))),\
+             patch.object(sys,"stdout",io.StringIO()) as out,patch.object(handoff,"verify") as verify:
+            handoff.stage("p")
+            verify.assert_called_once_with("p","m","b")
+            self.assertTrue(json.loads(out.getvalue())["no_submission"])
+            self.assertEqual(set(p.name for p in target.iterdir()),set(payload)|{"logs"})
+            self.assertFalse((target/"campaign.sbatch").stat().st_mode&0o222)
+
+    def test_audit_is_test_only_no_real_submission(self):
+        result=subprocess.CompletedProcess([],0,"Partition=gpu-h200,gpu-v100","")
+        with patch.object(handoff,"verify"),patch.object(handoff,"queue",return_value=[]),\
+             patch.object(handoff,"accounting",return_value=[]),\
+             patch.object(subprocess,"run",return_value=result) as cmd:
+            v=handoff.audit("p","m","b")
+            self.assertTrue(v["no_submission"])
+            self.assertEqual(cmd.call_args.args[0],["sbatch","--test-only",n.RUN+"/campaign.sbatch"])
+
     def supervise(self,code):
         return subprocess.run(["bash",str(n.HERE/"supervise.sh"),str(self.root),sys.executable,"-c",code],
                               capture_output=True,text=True,timeout=10)
@@ -303,6 +342,31 @@ class Tests(unittest.TestCase):
     def test_allocation_gate_before_import(self):
         with patch.dict(os.environ,{},clear=True),self.assertRaises(RuntimeError):
             n.allocation_only()
+
+    def test_actual_runner_override_gate_before_native_import(self):
+        env=dict(os.environ,SLURM_JOB_ID="999",CUBLAS_WORKSPACE_CONFIG=":4096:8")
+        r=subprocess.run([sys.executable,"-B",str(n.HERE/"run.py"),"missing","wrong"],
+                         env=env,capture_output=True,text=True,timeout=5)
+        self.assertNotEqual(r.returncode,0)
+        self.assertIn("inherited numerical override",r.stderr)
+        self.assertNotIn("No such file",r.stderr)
+
+    def test_manifest_bytes_gate(self):
+        p=self.root/"m.json";n.durable(p,{})
+        with self.assertRaises(RuntimeError): n.manifest(p,"0"*64)
+
+    def test_manifest_policy_gate(self):
+        p=self.root/"m.json"
+        n.durable(p,dict(policy=dict(n.POLICY,outputs=17),source=n.SOURCE,run=n.RUN,
+                        base_pin=n.BASE_PIN,base_stage=n.STAGE,pin="1"*40))
+        with self.assertRaises(RuntimeError): n.manifest(p,n.sha(p))
+
+    def test_wrong_native_lifecycle_receipt_fatal(self):
+        r=object.__new__(run.Runner);r.raw=self.root;r.m={}
+        p=self.root/"p1";p.mkdir()
+        n.durable(p/"native-complete.json",dict(outputs=5))
+        with patch.dict(os.environ,{"SLURM_JOB_ID":"999"}),self.assertRaises(RuntimeError):
+            r.verify_native(p,123,"GPU-fake")
 
 
 if __name__=="__main__": unittest.main()

@@ -44,7 +44,7 @@ static void env_check() {
     for (char** p=environ; *p; ++p) {
         std::string key(*p); key=key.substr(0,key.find('='));
         bool bad=false;
-        for (const auto* pre : {"CUBLAS_","CUBLASLT_","CUDNN_","CUSOLVER_","CUEST_",
+        for (const auto* pre : {"CUBLAS","CUDNN","CUSOLVER","CUSPARSE","CUEST",
                                "NVIDIA_TF32","TORCH_ALLOW_TF32","CUDA_MATH_","NVIDIA_TF32_OVERRIDE"})
             if (key.rfind(pre,0)==0) bad=true;
         for (const auto* exact : {"CUDA_LAUNCH_BLOCKING","CUDA_DEVICE_MAX_CONNECTIONS",
@@ -248,6 +248,7 @@ int main(int argc, char** argv) {
         // Verify input device density remained unchanged (not a C-reconstruction).
         // All scientific output is raw FP64, not any opaque workspace.
         std::ifstream maps("/proc/self/maps");
+        need(bool(maps),"runtime mapping read");
         std::string maptext((std::istreambuf_iterator<char>(maps)),{});
         text(std::string(argv[3])+"/maps.txt",maptext);
         CU(cuestDestroy(h)); boundary(); SO(cusolverDnDestroy(solver)); BL(cublasDestroy(blas));

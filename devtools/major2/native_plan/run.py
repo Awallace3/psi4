@@ -71,6 +71,7 @@ class Runner:
             finally:
                 self.active=None
         n.durable(self.raw/(name+".exit.json"),dict(exit=code,interrupted=False,pid=p.pid))
+        (self.raw/(name+".log")).chmod(0o444)
         n.require(code==0 and not self.signalled,"command failed: "+name)
         n.require((self.raw/(name+".log")).stat().st_size<8*1024**2,"bounded diagnostic log")
         return p.pid
@@ -151,6 +152,7 @@ class Runner:
                   "exact readonly original density")
         exe=self.scratch/"native-plan"
         self.command(link_command(exe),"compile-owned-native",120)
+        exe.chmod(0o555)
         self.command(["readelf","-d",exe],"native-elf-dynamic",30)
         dynamic=(self.raw/"native-elf-dynamic.log").read_text()
         n.require(all(s not in dynamic.lower() for s in ("libpsi4","libpython","einsums")) and
@@ -169,6 +171,7 @@ class Runner:
             pids.append(pid); self.verify_native(directory,pid,uuid)
         n.require(len(set(pids))==3,"three fresh native processes")
         # At most 153 matrix pairs, no historical output read, no timings.
+        n.require(self.end-time.time()>=1500,"analysis admission plus teardown reserve")
         import compare
         def deadline(*_): raise RuntimeError("analysis budget")
         signal.signal(signal.SIGALRM,deadline); signal.alarm(1200)

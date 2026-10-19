@@ -60,6 +60,7 @@ def main():
         D_is_not_C_reconstructed=True,computed_from_C=False,scf=0,energy=0,jk=0,
         core_sha256=n.CORE_SHA,pid=os.getpid(),job=os.environ["SLURM_JOB_ID"]))
     psi4.core.close_outfile()
+    (out/"basis.out").chmod(0o444)
 
 
 if __name__ == "__main__":
