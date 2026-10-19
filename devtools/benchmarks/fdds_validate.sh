@@ -19,7 +19,18 @@ if [[ -z "${TMPDIR:-}" || ! -d "$TMPDIR" ]]; then
 fi
 TMPDIR=$(mktemp -d "$TMPDIR/cuest-fdds-$SLURM_JOB_ID.XXXXXX")
 export TMPDIR SCRATCH="$TMPDIR" PSI_SCRATCH="$TMPDIR"
-build="$root/build_fdds_validation"
+build_root="${CUEST_FDDS_READONLY_BUILD_ROOT:-$root}"
+build="$build_root/build_fdds_validation"
+if [[ -n "${CUEST_FDDS_READONLY_BUILD_ROOT:-}" ]]; then
+    : "${CUEST_FDDS_BINARY_PIN:?pin the existing read-only scientific binary}"
+    : "${CUEST_FDDS_EXPECTED_CORE_SHA256:?pin the existing core hash}"
+    test "$(git -C "$build_root" rev-parse HEAD)" = "$CUEST_FDDS_BINARY_PIN"
+    test -z "$(git -C "$build_root" status --porcelain --untracked-files=no)"
+    # Only test-driver/docs/harness differences are allowed when reusing a core.
+    git -C "$root" diff --exit-code "$CUEST_FDDS_BINARY_PIN" "$pin" -- \
+        psi4 cmake CMakeLists.txt external
+    printf '%s\n' "$CUEST_FDDS_BINARY_PIN" > "$out/binary-commit.txt"
+fi
 mkdir -p "$out"
 nvidia-smi --query-gpu=name,uuid,driver_version --format=csv,noheader | tee "$out/gpu.txt"
 grep -q H200 "$out/gpu.txt"
@@ -56,6 +67,7 @@ command -v nvcc
 } > "$out/compiler.txt" 2>&1
 # Existing installed Einsums dependency only; this directory is read-only.
 deps=/storage/project/r-cs207-0/awallace43/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage
+if [[ -z "${CUEST_FDDS_READONLY_BUILD_ROOT:-}" ]]; then
 "$env/bin/cmake" -S "$root" -B "$build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER="$env/bin/x86_64-conda-linux-gnu-cc" \
@@ -70,6 +82,7 @@ deps=/storage/project/r-cs207-0/awallace43/gits/psi4.saptdft-cuest-lifecycle-202
     -DcuEST_LIBRARY="$env/lib/libcuest.so" -DCMAKE_INSIST_FIND_PACKAGE_cuEST=ON \
     -Dpsi4_CMAKE_UNITY_BUILD=ON > "$out/configure.log" 2>&1
 "$env/bin/cmake" --build "$build" -j "${SLURM_CPUS_PER_TASK:-4}" > "$out/build.log" 2>&1
+fi
 eval "$("$build/stage/bin/psi4" --psiapi)"
 export EXPECTED_PSI4_PACKAGE="$build/stage/lib/psi4"
 export CUEST_DEPENDENCY_ENV="$env"
@@ -83,6 +96,10 @@ assert p == Path(os.environ["EXPECTED_PSI4_PACKAGE"]).resolve(), p
 assert hasattr(psi4.core, "cuest_chain_gemm")
 assert hasattr(psi4.core.FDDS_Dispersion, "gpu_contraction_blocks")
 core = Path(psi4.core.__file__)
+core_hash = hashlib.sha256(core.read_bytes()).hexdigest()
+expected_hash = os.environ.get("CUEST_FDDS_EXPECTED_CORE_SHA256")
+if expected_hash:
+    assert core_hash == expected_hash, (core_hash, expected_hash)
 ldd = subprocess.check_output(["ldd", str(core)], text=True)
 assert "not found" not in ldd, ldd
 libraries = {}
@@ -96,8 +113,12 @@ for file in (Path(os.environ["CUEST_DEPENDENCY_ENV"]) / "conda-meta").glob("libc
     packages.append({k: data[k] for k in ("name", "version", "build")})
 assert any(p["name"] == "libcuest" and p["version"] == "0.2.2.2" for p in packages), packages
 print(json.dumps(dict(package=str(p), core=str(core), version=psi4.__version__,
-                     core_sha256=hashlib.sha256(core.read_bytes()).hexdigest(),
-                     linked_libraries=libraries, cuest_packages=packages), indent=2))
+                     core_sha256=core_hash,
+                     linked_libraries=libraries,
+                     linked_library_sha256={name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+                                            for name, path in libraries.items()},
+                     binary_pin=os.environ.get("CUEST_FDDS_BINARY_PIN"),
+                     cuest_packages=packages), indent=2))
 PY
 test_selection=()
 if [[ "${CUEST_FDDS_FOCUSED:-0}" == 1 ]]; then
@@ -153,3 +174,7 @@ print(json.dumps(counts, indent=2))
 PY
 test "$(git -C "$root" rev-parse HEAD)" = "$pin"
 test -z "$(git -C "$root" status --porcelain --untracked-files=no)"
+if [[ -n "${CUEST_FDDS_READONLY_BUILD_ROOT:-}" ]]; then
+    test "$(git -C "$build_root" rev-parse HEAD)" = "$CUEST_FDDS_BINARY_PIN"
+    test -z "$(git -C "$build_root" status --porcelain --untracked-files=no)"
+fi
