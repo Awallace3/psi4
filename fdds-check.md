@@ -26,7 +26,14 @@
   **e124e5cfba24a3a046aee4e5f055d1cdfc92dbfa** verifies the binary's exact
   source pin and core hash, records linked library hashes, and never rebuilds
   or overwrites it. New run02, H200/4 CPUs/16 GiB/15 minutes/free embers.
-  Staging/preflight in progress; no new replay submission recorded yet.
+  Staging/dry-run passed; **14184910** accepted on explicit free embers/H200,
+  4 CPUs/16 GiB/15 minutes. Live headroom30/50, duplicate/pin/clean-tree checks
+  passed, effective QoS confirmed embers, initial state PENDING.
+  Run `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261019-integrated-focused-02`;
+  watcher **b07d6597e**, 300 s, 48-hour watcher deadline.
+  Neither old job nor stage was cancelled or modified. Required nine actual
+  passes/no skips plus normal GDB inferior exit, VERIFIED.json/COMPLETED and
+  pinned import/core/library provenance; no full suite or speedup claim.
 - Atomic `fdds-gpu-diagnosis-complete.json` reports diagnosis/CPU-fix completion
   with outcome **blocked**, not a full GPU pass. Remaining gates: corrected
   SAPT GPU test, full57-case FDDS suite, capacity-driven reduction/fallback and
