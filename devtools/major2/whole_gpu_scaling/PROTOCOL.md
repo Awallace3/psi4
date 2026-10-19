@@ -114,7 +114,21 @@ Both effective login name and numeric UID must agree with every row. Explicit
 header-only output is valid empty evidence; missing/truncated/malformed output,
 unknown metadata, foreign owners, command failure, stderr, timeout, duplicates
 and exhausted embers headroom are fatal. Queries have 35s/2MiB/4096-row bounds.
-There is no cluster-wide dump, controller fan-out, wait or scheduler write.
+There is no cluster-wide dump, unbounded controller fan-out, wait or scheduler write.
+
+Literal `Command=(null)` is not an available command and is never invented.
+Only otherwise valid own, nonduplicate PENDING/RUNNING rows on a known single
+CPU partition can request targeted `scontrol show job -o JOBID` evidence.
+The whole snapshot, duplicates, headroom and maximum eight candidates are
+validated before querying. Each controller read has a 5-second/64KiB cap
+(at most 40 seconds additional), exact job/owner/name/WD/partition/state/
+account/QoS/Command agreement, CPU/memory/node ReqTRES and running AllocTRES.
+Only bounded CPU TRES are recognized; GPU/unknown GRES/TresPer requests fail.
+Missing fields are recorded honestly; BatchFlag=1 is valid and is NOT called
+interactive. The raw bytes/hash and selected controller fields accompany
+`command_available=false`, `unrelatedCPUproven-no-GPU`. Without proof, parsing
+still rejects null commands. Query failure/disappearance/ambiguity stops for
+a new audited snapshot; no retry/wait or claim of device custody is permitted.
 
 Duplicate identity is the unique `major2-whole-gpu-scaling` stem in JobName,
 Command or WorkDir (including dated/versioned/prior-partial source/run
