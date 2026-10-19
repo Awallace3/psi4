@@ -44,9 +44,7 @@ def main():
         coefficients="GaussianShell.coef, verbatim normalized values",order="global shell/AO order"))
     saved=n.load(out/"basis.json")
     n.require(wire.encode(saved["xyz"],saved["bases"])==payload,"JSON/binary exact float64 roundtrip")
-    for name,digest in n.FACTOR_FILES.items():
-        p=Path(n.FACTOR)/name
-        n.require(n.sha(p)==digest and not p.stat().st_mode & 0o222,"frozen original factor")
+    n.check_factor(n.FACTOR,n.FACTOR_FILES)
     d=np.load(Path(n.FACTOR)/"D.npy",allow_pickle=False)
     n.require(d.shape==(1786,1786) and d.dtype==np.dtype("<f8") and
               d.flags.c_contiguous and np.isfinite(d).all(),"frozen density shape/dtype")

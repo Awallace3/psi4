@@ -1,6 +1,7 @@
 // Standalone diagnostic, public C API only. No Psi4/Python link or import.
 // Abort on any failure, with no retry/fallback; process exit reclaims incomplete resources.
 #include "input.h"
+#include "uuid.h"
 #include <cuest.h>
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -222,13 +223,9 @@ int main(int argc, char** argv) {
         CA(cudaGetDeviceCount(&count)); CA(cudaGetDevice(&device));
         need(count==1 && device==0,"one logical GPU required");
         cudaDeviceProp props{}; CA(cudaGetDeviceProperties(&props,0));
-        cudaUUID_t u{}; CA(cudaDeviceGetUuid(&u,0)); CA(cudaRuntimeGetVersion(&rv));
-        std::ostringstream uuid; uuid << "GPU-" << std::hex << std::setfill('0');
-        for (int k=0;k<16;++k) {
-            if (k==4 || k==6 || k==8 || k==10) uuid << "-";
-            uuid << std::setw(2) << static_cast<unsigned>(static_cast<unsigned char>(u.bytes[k]));
-        }
-        need(uuid.str()==argv[4] && std::string(props.name).find("H200")!=std::string::npos,"GPU identity");
+        CA(cudaRuntimeGetVersion(&rv));
+        const std::string uuid=format_uuid(props.uuid.bytes);
+        need(uuid==argv[4] && std::string(props.name).find("H200")!=std::string::npos,"GPU identity");
         need(CUDART_VERSION==13030 && rv==13030 && CUEST_VERSION==250,"header/runtime ABI");
         cudaStream_t stream{}; cublasHandle_t blas{}; cusolverDnHandle_t solver{};
         CA(cudaStreamCreate(&stream)); BL(cublasCreate(&blas)); SO(cusolverDnCreate(&solver));
@@ -244,7 +241,7 @@ int main(int argc, char** argv) {
         CU(cuestGetMajorVersion(h,&major)); CU(cuestGetMinorVersion(h,&minor)); CU(cuestGetPatchVersion(h,&patch));
         need(major==0 && minor==2 && patch==50,"SDK runtime version");
         CU(cuestSetMathMode(h,CUEST_NATIVE_FP64_MATH_MODE)); boundary();
-        Replay b(in,argv[3],h,d,uuid.str()); schedule(b); b.close(d);
+        Replay b(in,argv[3],h,d,uuid); schedule(b); b.close(d);
         // Verify input device density remained unchanged (not a C-reconstruction).
         // All scientific output is raw FP64, not any opaque workspace.
         std::ifstream maps("/proc/self/maps");
@@ -255,7 +252,7 @@ int main(int argc, char** argv) {
         CA(cudaStreamDestroy(stream)); boundary();
         text(std::string(argv[3])+"/native-complete.json",
              "{\"outputs\":6,\"plans\":3,\"handles\":1,\"upstream_builds\":2,\"sdk\":\"0.2.50\","
-             "\"cudart\":13030,\"pid\":"+std::to_string(getpid())+",\"uuid\":\""+uuid.str()+"\",\"job\":\""+job+"\"}\n");
+             "\"cudart\":13030,\"pid\":"+std::to_string(getpid())+",\"uuid\":\""+uuid+"\",\"job\":\""+job+"\"}\n");
         return 0;
     } catch(const std::exception& e) { std::cerr << e.what() << "\n"; return 1; }
 }

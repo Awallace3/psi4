@@ -10,7 +10,7 @@ HERE = Path(__file__).resolve().parent
 P = "/storage/project/r-cs207-0/awallace43"
 E = P+"/miniconda/envs/p4cuest_sapt"
 SOURCE = P+"/gits/psi4.major2-native-plan-20261019"
-RUN = P+"/runs/saptdft-cuest-cpks/major2-native-plan-20261019"
+RUN = P+"/runs/saptdft-cuest-cpks/major2-native-plan-20261019-v2"
 OLD = P+"/runs/saptdft-cuest-cpks/major2-workspace-20261019"
 BASE = P+"/gits/psi4.saptdft-cuest-major2-jkexception-baseline-20261018"
 BASE_PIN = "c56708fc6f6e8fcf2801868f0d3cb49bdb1bb0a2"
@@ -54,6 +54,18 @@ def sha(path):
         for block in iter(lambda: f.read(1024**2), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def check_factor(root, files):
+    """Validate original factor bytes and permissions without mutating inputs."""
+    for name, digest in files.items():
+        p = Path(root)/name
+        # The historical receipt is 0600. Hash-pin every file, but only the
+        # frozen arrays have a readonly contract. Preservation checks retain
+        # the receipt's original stat/mode; never chmod historical inputs.
+        require(sha(p) == digest and
+                (name == "FACTOR.json" or not p.stat().st_mode & 0o222),
+                "frozen original factor: "+name)
 
 
 def check_env(env):

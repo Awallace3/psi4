@@ -11,6 +11,8 @@ PARENT = "beaaa33f5a23d7a1906e14ad3dc1fbf983fba4ce"
 FAILED = ["14158602","14159755","14160001","14160573","14160948","14161975",
           "14164895","14165998","14169328","14170562","14173808","14174849"]
 COMPLETED = ["14175243","14176359"]
+ORIGINAL_STAGE = n.P+"/runs/saptdft-cuest-cpks/major2-native-plan-20261019"
+ORIGINAL_PIN = "42583c6d5e6f1b527fd3be538b4290011737daed"
 
 
 def stat(path):
@@ -31,6 +33,14 @@ def snapshot(root):
     return {str(p.relative_to(root)):stat(p) for p in files}
 
 
+def unsubmitted_stage(root):
+    root=Path(root)
+    n.require(set(p.name for p in root.iterdir())==
+              {"manifest.json","campaign.sbatch","bundle-receipt.json","logs"} and
+              not list((root/"logs").iterdir()),"immutable unsubmitted staging layout")
+    return snapshot(root)
+
+
 def preserve(value):
     for root,expected in value["roots"].items():
         n.require(snapshot(root)==expected,"immutable old jobroot: "+root)
@@ -39,6 +49,9 @@ def preserve(value):
             n.require(stat(Path(root)/name)==expected,"immutable scientific build sentinel")
     for path,digest in value["small_hashes"].items():
         n.require(small(path)==digest,"immutable metadata/staging")
+    # This is unsubmitted staging, never a fifteenth historical jobroot.
+    for root,expected in value.get("unsubmitted_staging",{}).items():
+        n.require(unsubmitted_stage(root)==expected,"immutable original native staging")
 
 
 def accounting():
@@ -95,7 +108,17 @@ def collect():
     n.require(len(receipts)==6 and all(n.load(p)["observed"]=={"CUBLAS_WORKSPACE_CONFIG":":4096:8"}
                                       for p in receipts),"completed control ENV proofs")
     for p in receipts: hashes[str(p)]=small(p)
-    pres=dict(roots=roots,builds=old["preservation"]["build_sentinel_stats"],small_hashes=hashes)
+    staged=unsubmitted_stage(ORIGINAL_STAGE)
+    original=n.load(Path(ORIGINAL_STAGE)/"manifest.json")
+    receipt=n.load(Path(ORIGINAL_STAGE)/"bundle-receipt.json")
+    n.require(original["pin"]==receipt["pin"]==ORIGINAL_PIN and
+              original["run"]==ORIGINAL_STAGE and receipt["no_submission"] is True and
+              receipt["manifest_sha256"]==small(Path(ORIGINAL_STAGE)/"manifest.json") and
+              receipt["batch_sha256"]==small(Path(ORIGINAL_STAGE)/"campaign.sbatch"),
+              "original unsubmitted native bundle identity")
+    for rel in staged: hashes[str(Path(ORIGINAL_STAGE)/rel)]=small(Path(ORIGINAL_STAGE)/rel)
+    pres=dict(roots=roots,builds=old["preservation"]["build_sentinel_stats"],small_hashes=hashes,
+              unsubmitted_staging={ORIGINAL_STAGE:staged})
     preserve(pres)
     # Only tiny compiler wrapper read and version/frontend query on login; no compilation/import.
     wrapper=Path(n.CXX).read_text()
