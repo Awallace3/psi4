@@ -62,6 +62,16 @@ namespace psi {
 
 namespace {
 
+// Initial construction only: building a second basis can symmetrize the shared
+// molecule again, moving a coordinate by one representable double while the
+// first basis owns its original snapshot. This also admits an indistinguishable
+// one-ULP preconstruction edit, not a general geometry tolerance. Later shell
+// and non-C1 frame dependency keys remain exact.
+bool initial_shell_coordinate_matches(double actual, double expected) {
+    return std::isfinite(actual) && std::isfinite(expected) &&
+           (actual == expected || std::nextafter(actual, expected) == expected);
+}
+
 // Plan construction must unwind on allocation/SDK failure. The older shared
 // workspace helper exits on OOM and cannot provide that recovery contract.
 bool release_plan_workspace(cuestWorkspace_t* ws) noexcept {
@@ -244,7 +254,8 @@ cuESTJK::cuESTJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> au
         const auto xyz = basis->molecule()->geometry();
         for (int s = 0; s < basis->nshell(); ++s)
             for (int k = 0; k < 3; ++k)
-                if (basis->shell(s).coord(k) != xyz.get(basis->shell_to_center(s), k))
+                if (!initial_shell_coordinate_matches(basis->shell(s).coord(k),
+                                                      xyz.get(basis->shell_to_center(s), k)))
                     throw PSIEXCEPTION("cuESTJK requires basis shell centers consistent with molecule geometry.");
     }
     shell_centers_ = shell_centers_key(primary_, auxiliary_);
