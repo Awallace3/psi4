@@ -1244,8 +1244,17 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("SAPT_FDDS_DISP_LEG_LAMBDA", 0.3);
         /*- Minimum rho cutoff for the in the LDA response for FDDS !expert -*/
         options.add_double("SAPT_FDDS_V2_RHO_CUTOFF", 1.e-6);
-        /*- Which MP2 Exch-Disp module to use? !expert -*/
-        options.add_str("SAPT_DFT_MP2_DISP_ALG", "SAPT", "FISAPT SAPT");
+        /*- Which MP2 dispersion/exchange-dispersion module to use? EINSUMS
+        selects the blocked Python Einsums2 SAPT0 implementation for HF,
+        without F-SAPT or S-infinity exchange-dispersion. !expert -*/
+        options.add_str("SAPT_DFT_MP2_DISP_ALG", "SAPT", "FISAPT SAPT EINSUMS");
+        /*- Use eligible CUDA Einsums2 graph contractions with EINSUMS MP2
+        dispersion. Packing, elementwise operations and reductions remain on
+        CPU; small blocks can remain CPU under the library cost model. !expert -*/
+        options.add_bool("SAPT_DFT_EINSUMS_GPU", false);
+        /*- Virtual-orbital compute block edge for EINSUMS MP2 dispersion.
+        Reduced if needed to bound scratch memory. !expert -*/
+        options.add_int("SAPT_DFT_EINSUMS_DISP_BLOCK", 24);
         /*- FSAPT localization through SAPT(DFT)? Set SAPTDFT for PyEinsums
          f-terms or use an FISAPT object (C++ side) for f-terms.
         -*/

@@ -1,0 +1,43 @@
+# Dedicated environment proposal; not a modification of p4cuest_sapt/p4_einv2.
+# Einsums native+Python are built together from Git d17bb76e, not conda 1.x.
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.13.13
+  - gcc_linux-64=14.3.0
+  - gxx_linux-64=14.3.0
+  - gfortran_linux-64=14.3.0
+  - cmake>=3.25.2
+  - ninja=1.13.2
+  - apiary=1.0.0
+  - pybind11=3.0.2
+  - fmt=12.1.0
+  - mimalloc=3.3.2
+  - spdlog=1.17.0
+  - hdf5=1.14.6=nompi_*
+  - zlib
+  - mkl=2025.3.1
+  - mkl-devel=2025.3.1
+  - libblas=*=*mkl
+  - liblapack=*=*mkl
+  - blas-devel
+  - eigen
+  - libboost-headers
+  - libint=2.13.1
+  - libxc-c=7.0.0=cpu_*
+  - gau2grid
+  - numpy=2.4.3
+  - scipy
+  - optking
+  - qcelemental
+  - qcengine
+  - networkx
+  - pint
+  - pydantic
+  - msgpack-python
+  - setuptools
+  - py-cpuinfo
+  - psutil
+  - pytest
+  - pip

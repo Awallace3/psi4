@@ -3,7 +3,7 @@
 set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 env="${DISP0_ENV:-$HOME/miniconda3/envs/p4_einv2}"
-build="$root/build_disp0_cpu"
+build="${DISP0_BUILD_DIR:-$root/build_disp0_cpu}"
 export PATH="$env/bin:$PATH"
 export LD_LIBRARY_PATH="$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONNOUSERSITE=1

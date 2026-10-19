@@ -1,0 +1,6 @@
+# Job-local configuration; never edits the user's shared conda settings.
+channels:
+  - conda-forge
+channel_priority: strict
+create_default_packages: []
+auto_activate_base: false

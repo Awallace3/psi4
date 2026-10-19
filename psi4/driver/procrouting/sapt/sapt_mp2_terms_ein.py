@@ -299,6 +299,25 @@ def df_mp2_fisapt_dispersion(wfn, primary, auxiliary, cache, nfrozen_A, nfrozen_
     return ret
 
 
+def df_mp2_einsums_dispersion(dimer_wfn, cache, nfrozen_A=0, nfrozen_B=0, do_print=True):
+    """Blocked canonical HF dispersion; no FDDS or empirical replacement."""
+    import json
+    from .sapt_jk_terms_ein import dispersion0
+
+    result = dispersion0(
+        cache, dimer_wfn, nfrozen_A, nfrozen_B, do_print=do_print,
+        block_size=core.get_option("SAPT", "SAPT_DFT_EINSUMS_DISP_BLOCK"),
+        gpu=core.get_option("SAPT", "SAPT_DFT_EINSUMS_GPU"))
+    execution = result.pop("Disp0 execution", None)
+    if do_print:
+        for label in ("Disp20,u", "Exch-Disp20,u"):
+            core.print_out(print_sapt_var(label, result[label], short=True) + "\n")
+    if execution is not None:
+        core.print_out("    Disp0 execution (plans are not device proof):\n"
+                       + json.dumps(execution, sort_keys=True) + "\n")
+    return result
+
+
 def df_mp2_sapt_dispersion(dimer_wfn, wfn_A, wfn_B, primary_basis, aux_basis, cache, do_print=True):
 
     if do_print:

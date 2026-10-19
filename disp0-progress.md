@@ -88,7 +88,21 @@ No tolerance relaxation to hide failures.
   same localized ethane-water/cc-pVDZ wavefunction for PAIR vs BLOCKED edges
   1/5/500. Both signed Disp20 and Exch-Disp20, combined Disp_AB and partition
   sums agree at rtol=1e-11/atol=1e-12 Eh. No tolerance changes.
-* GPU dispersion: not implemented or validated.
+* Phase 1 implementation checkpoint (not yet numerically validated):
+  opt-in `SAPT_DFT_MP2_DISP_ALG=EINSUMS`, with HF-only validation and
+  `SAPT_DFT_EINSUMS_GPU=false` default. Existing SAPT/FISAPT defaults and
+  non-HF paths remain selected as before. Canonical mode shares fdisp0's
+  equations with active occupied slices, without localization caches.
+* Kernel-local `sapt_dispersion_gpu.BlockContractions` uses three packed
+  rank-2 einsum descriptors in default graph replay, cached per edge shape.
+  No global executor changes and no new native algorithms. It reports
+  placement as **planned**, never device proof, and accounts for packing,
+  replay including transfers, other host work and total elapsed time.
+* GPU implementation has not executed on CUDA. No GPU correctness claim.
+  Fragment-GPU and S-infinity dispersion are explicitly rejected in this
+  initial scalar checkpoint rather than silently taking a CPU route.
+  Fragment dispersion/sum-rule coverage is still required before claiming
+  the full Phase 1 gate; no broader F-SAPT terms have been implemented.
 * Phase 2: gated, not started.
 
 Parent scope agreement: Phase 1 is explicitly **GPU contractions with CPU
@@ -210,6 +224,112 @@ F-SAPT GPU API gaps and propose a Python-level approach before expanding.
   source root reproduced source `psi4/` shadowing the staged native package.
   The successful stage API probe and sealed-world probe use a non-source
   working directory. No scientific mismatch is attributed to this harness issue.
+* Canonical checkpoint incremental dedicated build: PASS (bf9409911).
+  Source is currently the uncommitted Phase 1 checkpoint above; no claim of
+  a finalized source pin until its tests pass and it is committed.
+* `bash devtools/disp0_test_reference.sh
+  "$PWD/tests/pytests/test_saptdft_disp0.py"
+  "$PWD/tests/pytests/test_saptdft.py::test_einsum_terms"
+  "$PWD/tests/pytests/test_fisapt.py::test_fsapt_fdisp_blocked_matches_pair"`:
+  b55c1dc04: **PASS, 15 passed in 18.50s**, 3 JUnit-schema warnings.
+  Results: `build_disp0_cpu/reference-check-IvAuRbOB/results.xml`.
+  XML parsing confirmed all 36 signed discrepancy records were retained.
+  Runner now selects legacy JUnit schema to avoid record_property warnings.
+  This run used the uncommitted checkpoint over `69e8299046`; it is not
+  represented as a finalized source pin. Physical cases: water-Ne at two
+  distinct geometries/cc-pVDZ spherical/unfrozen, ethane-water/6-31G*
+  Cartesian/frozen. Each signed component is compared to native FISAPT for
+  edges 1/5/500, eager and independent default CPU graph execution. Every
+  discrepancy is retained in JUnit properties. Additional tests poison and
+  mutate graph inputs across cache hits, pack strided views, verify pool
+  reset fails with live replay borrows and succeeds after release.
+  Maximum absolute discrepancies (Eh), Disp20 / Exch-Disp20:
+  water-Ne geometry 1: 3.66e-19 / 4.40e-20;
+  geometry 2: 1.42e-19 / 1.06e-20;
+  ethane-water: 7.81e-18 / 9.13e-18.
+  Both the non-HF regression and imported physical blocked-reference tests
+  passed in this run. No GPU numerical/device-shadow test has run.
+
+## Dedicated CUDA2 build proposal (not submitted)
+
+Use exact upstream Git pin `d17bb76e` (present in local origin/main remote
+tracking and pinned fork refs), a new environment without the conda Einsums1
+package, separate build/install directories, and a fresh dedicated Psi4 stage.
+The Python-only dispersion route needs no native cuEST algorithm or older
+Einsums stage. SCF/DFHelper and non-dispersion work remain CPU in this first
+implementation; do not describe it as a whole-run GPU implementation.
+
+A CPU-only embers build job can configure CUDA arch 90 explicitly, compile
+the CUDA-enabled E2 library/Python together, rebuild this branch's Psi4, and
+run CPU/API probes without borrowing a GPU. Candidate request: 8 CPUs, 48G,
+2h, gts-cs207-chemx, explicit embers; exact-resource test-only and parent
+coordination still required. Then request the separately coordinated
+one-H200/4CPU/32G/30min numerical gate only after build/import/ABI proof.
+The known CUDA13.3/GCC14.3 prefix is a toolchain candidate, not a passing E2
+configuration. No job or shared environment has been changed.
+
+Parent approval received for **ONE CPU-only dependency/build job**, after
+canonical CPU regressions are green and the source is committed/pinned:
+8 CPUs / 48G / 2h / embers / gts-cs207-chemx, cpu-small subject to actual
+test-only routing. This is not a benchmark rerun. Use isolated immutable
+source/build/install/environment roots, explicit sm90/CUDA/GNU pins and
+persistent job-owned scratch; TERM-safe honest outputs, no automatic retry,
+inferno or shared mutation. Validate test-only/headroom, record the actual
+QoS/account/job ID and send the parent a receipt. GPU-enabled import failure
+on a CPU node must not be masked. CPU/API/header/ELF/import checks establish
+preparation only. H200 GPU numerical gate still requires separate readiness.
+
+Prepared `devtools/disp0/{environment.yml,condarc,cpu_build.sbatch,
+cpu_build_payload.sh,cuda_header_abi.cc,runtime_provenance.py}`.
+Syntax/AST/YAML/diff checks PASS; environment solve/build not yet attempted.
+The recipe uses job-owned package/cache/env/build/install roots, no conda
+Einsums1 or release Psi4 package, explicit native CUDA13 header/runtime check
+(13030) and GCC14.3 frontends, E2 shared/Python build together, strict import
+pairing and CPU-only tests. No native E2 unit-test suite is built in this
+bounded recipe; used Python operations and physical signed comparisons are
+the focused checks. TERM handling propagates failure and cannot write a
+CPU preparation success marker after a signal. No retry or GPU submission.
+
+## Read-only review follow-up before source pin
+
+Review d0a5ab9b8243c1321ec536956c8a16bca found no signed-equation or
+frozen-energy slicing defect, but identified three P2 gaps in the green
+checkpoint. Retained here rather than treating the earlier tests as exhaustive:
+
+1. Non-aligned DF/compute edges could retain nine shapes, exceeding a four-shape
+   charge. DF extents now align to compute extents; a pure planner test includes
+   the exact 93/47/24 reproducer. Both host work and graph packs charge all four
+   possible main/final-edge shapes.
+2. Final Far/Fbs construction matrices remained live with packed factors.
+   Construction now uses bounded staging slabs, deletes its temporaries before
+   packing, charges all eight stage arrays and includes the rank-one rows in
+   packed-factor memory costs.
+3. Direct exported `sapt_dft()` bypassed unsupported-mode validation. Both
+   entrypoints now share validation using effective do_dft/do_disp/backend
+   arguments, with direct-entrypoint fail-fast tests.
+
+Expanded tests add main/edge/main reuse in one graph cache, forced non-aligned
+DF caps, asymmetric frozen counts, zero-active/virtual spaces and A/B-reversed
+geometry. Prior 15-test CPU pass remains valid for its checkpoint; revised
+source must pass again before commit/pin and the single approved CPU job.
+Incremental revised stage build launched as ba1079bc6. No submission yet.
+
+Revised stage build ba1079bc6: PASS. Expanded CPU gate b1f7d8f24:
+**26 passed in 21.17s, no warnings or skips**. Same focused command as above.
+Results `build_disp0_cpu/reference-check-8JYWWupu/results.xml` retain 64 signed
+comparison records across four physical cases, eager/default replay,
+forced non-aligned DF cap and asymmetric freezing. Max |delta|:
+Disp20 7.81e-18 Eh; Exch-Disp20 1.01e-17 Eh. A/B reversed native references
+differ by 1.18e-17 / -8.05e-18 Eh. Also passed zero-active/virtual, one-cache
+main/edge/main replay, lifetime/reset, dispatch guards, unchanged non-HF and
+imported fragment reference tests. A separate deterministic planner property
+check passed 1000 extent/cap cases with <=4 cached shapes.
+
+Follow-up read-only review d8ebbed82e78c854667d91df47c1cc14c retrieved:
+no source blockers in the four scoped files; all three prior findings appear
+resolved. Advisory review is not a build/test or GPU correctness substitute.
+No CUDA/device-shadow numerical evidence exists yet. CPU build submission
+still waits for finalized committed source plus exact-route/headroom checks.
 * Read-only Phoenix access preflight: PASS, exit 0 (bfefc7153).
   No remote branch worktree/build has yet been created and no job submitted.
 * Read-only Phoenix dependency discovery: PASS, exit 0 (b99607f10).

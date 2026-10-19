@@ -71,6 +71,31 @@ except ImportError:
 __all__ = ["run_sapt_dft", "sapt_dft", "run_sf_sapt"]
 
 
+def _validate_einsums_dispersion(do_dft, do_disp, fsapt_type, use_einsums):
+    """Guard both public entrypoints using their effective computational mode."""
+    python_disp = core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "EINSUMS"
+    gpu_disp = core.get_option("SAPT", "SAPT_DFT_EINSUMS_GPU")
+    if not (python_disp or gpu_disp):
+        return
+    if not python_disp or not use_einsums:
+        raise ValidationError("Einsums dispersion requires SAPT_DFT_MP2_DISP_ALG=EINSUMS "
+                              "and SAPT_DFT_USE_EINSUMS=true with Einsums2 available.")
+    if (do_dft or not do_disp or core.get_option("SAPT", "SAPT_DFT_D4_IE")
+            or core.get_option("SAPT", "SAPT_DFT_D3_IE")):
+        raise ValidationError("EINSUMS dispersion requires SAPT_DFT_FUNCTIONAL=HF "
+                              "and ordinary SAPT_DFT_DO_DISP=true (not D3/D4/FDDS).")
+    if fsapt_type != "NONE":
+        raise ValidationError("EINSUMS scalar dispersion does not yet support F-SAPT. "
+                              "Keep the existing CPU fragment route explicitly selected.")
+    if core.get_option("SAPT", "DO_DISP_EXCH_SINF"):
+        raise ValidationError("EINSUMS dispersion does not support DO_DISP_EXCH_SINF.")
+    if core.get_option("SAPT", "SAPT_DFT_EINSUMS_DISP_BLOCK") < 1:
+        raise ValidationError("SAPT_DFT_EINSUMS_DISP_BLOCK must be positive.")
+    if gpu_disp:
+        from .sapt_dispersion_gpu import gpu_runtime
+        gpu_runtime()  # never silently accept CPU/mock for an explicit request
+
+
 def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     """Run SAPT(DFT) while restoring all driver-managed options and timers."""
     optstash = p4util.OptionsState(
@@ -307,6 +332,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     sapt_dft_D3_IE = core.get_option("SAPT", "SAPT_DFT_D3_IE")
     do_dft = sapt_dft_functional != "HF"
+    _validate_einsums_dispersion(do_dft, do_disp, fsapt_type, use_einsums)
     if shift_only and grac_compute == "NONE":
         raise ValidationError("SAPT_DFT_GRAC_SHIFT_ONLY=true contradicts SAPT_DFT_GRAC_COMPUTE=NONE.")
     if shift_only and not do_dft:
@@ -1373,6 +1399,9 @@ def sapt_dft(
 
     induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
     fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper()
+    _validate_einsums_dispersion(
+        do_dft, do_disp, fsapt_type,
+        einsums_available and core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS"))
     if induction_type == "CPHF" and do_dft and "Ind20,r" not in data:
         raise ValidationError(
             "SAPT_DFT_INDUCTION_TYPE=CPHF reuses the SAPT0 induction terms computed by the "
@@ -1709,7 +1738,10 @@ def sapt_dft(
 
         if not do_fsapt:
             core.timer_on("MP2 disp")
-            if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
+            if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "EINSUMS":
+                mp2_disp = sapt_mp2.df_mp2_einsums_dispersion(
+                    dimer_wfn, cache, nfrozen_A, nfrozen_B, do_print=True)
+            elif core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
                 mp2_disp = sapt_mp2.df_mp2_fisapt_dispersion(
                     wfn_A,
                     primary_basis,

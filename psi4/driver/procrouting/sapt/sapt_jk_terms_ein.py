@@ -168,6 +168,23 @@ def _fdisp_carve(pool, dims, name: str):
     return _ein_zeros(*dims, name=name)
 
 
+def _dispersion_block_extents(nr, ns, max_r, max_s, blk_r, blk_s):
+    """Align DF boundaries so only main/final-edge shapes can be cached.
+
+    A non-aligned DF edge creates an additional short compute edge at every
+    DF boundary, distinct from the final system edge. Aligning both axes
+    limits their Cartesian product to four shapes, as charged by the planner.
+    """
+    blk_r, blk_s = min(blk_r, max_r), min(blk_s, max_s)
+    if min(nr, ns, max_r, max_s, blk_r, blk_s) < 1:
+        raise ValueError("Dispersion block extents must be positive")
+    if max_r < nr:
+        max_r = max(blk_r, max_r // blk_r * blk_r)
+    if max_s < ns:
+        max_s = max(blk_s, max_s // blk_s * blk_s)
+    return max_r, max_s, blk_r, blk_s
+
+
 def _ein_clone(x, name: str = "clone", scale: float = 1.0):
     """A fresh einsums tensor holding ``scale * x``, whatever ``x`` is."""
     out = ein.array(_arr(x), name=name)
@@ -2485,6 +2502,26 @@ def find(
     return cache
 
 
+def dispersion0(cache, dimer_wfn, nfrozen_A=0, nfrozen_B=0, *, block_size=None, gpu=False,
+                do_print=True, _graph_device=None, _df_block_size=None):
+    """Canonical SAPT0 dispersion using the blocked Python Einsums equations.
+
+    No localization or fragment cache is required. The caller's cache is not
+    mutated. Both signed components are returned, in Hartree. ``gpu=True``
+    offloads eligible block contractions only; elementwise work/reductions
+    remain on the host. The native SAPT/FISAPT algorithms remain CPU oracles.
+    """
+    work = dict(cache)
+    fdisp0(work, {}, dimer_wfn, None, None, None, do_print,
+           _canonical=True, _nfrozen=(nfrozen_A, nfrozen_B),
+           _block_size=block_size, _gpu=gpu, _graph_device=_graph_device,
+           _df_block_size=_df_block_size)
+    result = {key: work[key] for key in ("Disp20,u", "Exch-Disp20,u")}
+    if "Disp0 execution" in work:
+        result["Disp0 execution"] = work["Disp0 execution"]
+    return result
+
+
 def fdisp0(
     cache: dict,
     scalars: dict,
@@ -2493,6 +2530,13 @@ def fdisp0(
     wfn_B: core.Wavefunction,
     jk: core.JK,
     do_print: bool = True,
+    *,
+    _canonical=False,
+    _nfrozen=(0, 0),
+    _block_size=None,
+    _gpu=False,
+    _graph_device=None,
+    _df_block_size=None,
 ) -> dict:
     r"""Compute the F-SAPT0 dispersion partitioning.
 
@@ -2524,8 +2568,23 @@ def fdisp0(
     dict
         Updated cache with ``Disp_AB`` matrix and ``Disp20,u``/``Exch-Disp20,u`` scalar energies.
     """
+    started = time.perf_counter()
+    block_edge = FDISP_BLOCK if _block_size is None else int(_block_size)
+    if block_edge < 1:
+        raise ValueError("Dispersion compute block edge must be positive")
+    if _df_block_size is not None and _df_block_size < 1:
+        raise ValueError("Dispersion DF test block cap must be positive")
+    if _gpu and not _canonical:
+        raise NotImplementedError("GPU fragment dispersion is not yet supported; use the explicit CPU fragment route")
+    use_graph = _gpu or _graph_device is not None
+    if use_graph:
+        from .sapt_dispersion_gpu import BlockContractions
+        contractions = BlockContractions(device="cuda" if _gpu else _graph_device)
+    else:
+        contractions = None
     if do_print:
-        core.print_out("  ==> F-SAPT0 Dispersion <==\n\n")
+        core.print_out("  ==> Python SAPT0 Dispersion <==\n\n" if _canonical
+                       else "  ==> F-SAPT0 Dispersion <==\n\n")
 
     core.timer_on("F-SAPT Disp Setup")
     # ind_scale = core.get_option("FISAPT", "FISAPT_FSAPT_IND_SCALE")
@@ -2535,11 +2594,17 @@ def fdisp0(
     dimer_basis = dimer_wfn.basisset()
     nA = mol.natom()
     nB = mol.natom()
-    nfa = cache["Lfocc0A"].shape[1]
-    nfb = cache["Lfocc0B"].shape[1]
+    nfa, nfb = _nfrozen if _canonical else (cache["Lfocc0A"].shape[1], cache["Lfocc0B"].shape[1])
+    if _canonical:
+        if not (0 <= nfa <= cache["Cocc_A"].shape[1] and 0 <= nfb <= cache["Cocc_B"].shape[1]):
+            raise ValueError("Invalid frozen occupied dimensions for dispersion")
+        Cocc_A = core.Matrix.from_array(cache["Cocc_A"].np[:, nfa:])
+        Cocc_B = core.Matrix.from_array(cache["Cocc_B"].np[:, nfb:])
+    else:
+        Cocc_A, Cocc_B = cache["Caocc0A"], cache["Caocc0B"]
     # Use active occupied dimensions (excluding frozen core) to match C++ FISAPT fdisp
-    na = cache["Caocc0A"].shape[1]
-    nb = cache["Caocc0B"].shape[1]
+    na = Cocc_A.shape[1]
+    nb = Cocc_B.shape[1]
     nr = cache["Cvir_A"].shape[1]
     ns = cache["Cvir_B"].shape[1]
     nn = cache["Cocc_A"].shape[0]  # number of AO basis functions
@@ -2560,18 +2625,15 @@ def fdisp0(
     #     snfb = nfb
     #     snb = nb
 
-    if link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
+    if not _canonical and link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
         na1 = na + 1
         nb1 = nb + 1
 
-    Locc_A = cache["Locc_A"].clone()
-    Locc_A.name = "LoccA"
-    Locc_B = cache["Locc_B"].clone()
-    Locc_B.name = "LoccB"
-
-    # Use active occupied orbitals (excluding frozen core) to match C++ FISAPT fdisp
-    Cocc_A = cache["Caocc0A"]
-    Cocc_B = cache["Caocc0B"]
+    if min(na, nb, nr, ns) == 0:
+        cache["Disp_AB"] = core.Matrix("Disp_AB", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
+        cache["Disp20,u"] = cache["Exch-Disp20,u"] = 0.0
+        core.timer_off("F-SAPT Disp Setup")
+        return cache
     Cvir_A = cache["Cvir_A"]
     Cvir_B = cache["Cvir_B"]
 
@@ -2830,6 +2892,13 @@ def fdisp0(
     overhead += 12 * nn * nn  # D, V, J, K, P, C matrices for A and B
 
     total_memory = core.get_memory() // 8  # Convert bytes to doubles
+    # Explicitly charge all eight host staging matrices. With a small budget,
+    # shrink staging before consuming all remaining memory with packed DF
+    # factors. One virtual orbital is the irreducible staging floor.
+    stage_target = max(1, min(STAGE_DOUBLES, (total_memory - overhead) // 32))
+    stage_r_cap = max(1, min(nr, stage_target // (nQ * max(na, nb))))
+    stage_s_cap = max(1, min(ns, stage_target // (nQ * max(na, nb))))
+    overhead += 2 * nQ * (na + nb) * (stage_r_cap + stage_s_cap)
 
     # The (r,s) pairs of a compute block are contracted as one matrix
     # V[(r,a),(s,b)] (see the main loop below), which needs seven work arrays
@@ -2838,18 +2907,31 @@ def fdisp0(
     # are only part of the block's cost, so FDISP_BLOCK caps the compute block
     # at the whole-kernel optimum, independently of how much of the DF tensors
     # memory lets us hold at once.
-    blk_r = min(FDISP_BLOCK, nr)
-    blk_s = min(FDISP_BLOCK, ns)
-    overhead += 7 * blk_r * blk_s * na * nb
+    blk_r = min(block_edge, nr)
+    blk_s = min(block_edge, ns)
+    # Charge all four possible edge shapes and the graph input packs, not just
+    # the main block. Shrink compute blocks before reducing DF staging.
+    def compute_overhead(br, bs):
+        work_arrays = 8 if use_graph else 7
+        charge = 4 * work_arrays * br * bs * na * nb
+        if use_graph:
+            nk = 2 * nQ + 2
+            charge += 4 * ((nk + nQ) * (br * na + bs * nb) + nk * (bs * na + br * nb))
+        return charge
+
+    while (blk_r > 1 or blk_s > 1) and 4 * compute_overhead(blk_r, blk_s) > total_memory - overhead:
+        blk_r, blk_s = max(1, blk_r // 2), max(1, blk_s // 2)
+    overhead += compute_overhead(blk_r, blk_s)
     # The slab _localize_columns stages each packed buffer through, sized to
     # fit in the two work arrays (W, IW) that localizing the factors made
     # unnecessary, so the total stays within what nine arrays used to take.
     # The exception is the one-orbital floor: when a block's two arrays hold
     # less than one orbital's columns (2*blk_r*blk_s*na*nb < nk*max(na, nb)),
     # the slab is one orbital, nk*max(na, nb) doubles.
-    lo_slab = max(1, min(FDISP_BLOCK, max(nr, ns),
+    lo_slab = max(1, min(block_edge, max(nr, ns),
                          2 * blk_r * blk_s * na * nb // ((2 * nQ + 2) * max(na, nb))))
-    overhead += (2 * nQ + 2) * lo_slab * max(na, nb)
+    if not _canonical:
+        overhead += (2 * nQ + 2) * lo_slab * max(na, nb)
 
     # Available memory for dispersion calculation
     rem = total_memory - overhead
@@ -2862,23 +2944,26 @@ def fdisp0(
         raise Exception("Too little static memory for fdisp0")
 
     # Calculate cost per r or s virtual orbital
-    # Each r contributes two Q-major columns each to AFar (na wide) and BCbr
-    # (nb wide), i.e. 2*nQ*(na+nb) doubles; the same holds for each s.  The DF
+    # Each r contributes 2*nQ+2 Q/rank-one rows to AFar (na wide) and BCbr
+    # (nb wide), i.e. (2*nQ+2)*(na+nb) doubles; likewise for each s. The DF
     # tensors are read into small staging matrices (STAGE_DOUBLES below) and
     # copied straight into those columns, so there is no second full-size copy
     # to pay for -- hence the factor of 2, for the r side and the s side.
-    cost_r = 2 * na * nQ + 2 * nb * nQ
+    cost_r = (2 * nQ + 2) * (na + nb)
     max_r_l = rem // (2 * cost_r)
     max_s_l = max_r_l
     max_r = min(max_r_l, nr)
     max_s = min(max_s_l, ns)
+    if _df_block_size is not None:
+        max_r, max_s = min(max_r, _df_block_size), min(max_s, _df_block_size)
 
     if max_r < 1 or max_s < 1:
         raise Exception("Too little dynamic memory for fdisp0")
 
     # The compute block never exceeds the DF block that feeds it.
-    blk_r = min(blk_r, max_r)
-    blk_s = min(blk_s, max_s)
+    max_r, max_s, blk_r, blk_s = _dispersion_block_extents(
+        nr, ns, max_r, max_s, blk_r, blk_s)
+    STAGE_R, STAGE_S = min(stage_r_cap, max_r), min(stage_s_cap, max_s)
 
     nrblocks = (nr + max_r - 1) // max_r  # Ceiling division
     nsblocks = (ns + max_s - 1) // max_s
@@ -2900,8 +2985,8 @@ def fdisp0(
     dfh.add_disk_tensor("Far", (nr, na, nQ))
 
     # Loop over r blocks to compute Far = Dar + Ear
-    for rstart in range(0, nr, max_r):
-        nrblock = min(max_r, nr - rstart)
+    for rstart in range(0, nr, STAGE_R):
+        nrblock = min(STAGE_R, nr - rstart)
 
         # Allocate matrices to hold the tensor slices
         Dar = core.Matrix("Dar block", nrblock * na, nQ)
@@ -2916,13 +3001,14 @@ def fdisp0(
 
         # Write Far back to disk (Dar now contains Dar + Ear)
         dfh.write_disk_tensor("Far", Dar, (rstart, rstart + nrblock))
+    del Dar, Ear
 
     # Add disk tensor for Fbs
     dfh.add_disk_tensor("Fbs", (ns, nb, nQ))
 
     # Loop over s blocks to compute Fbs = Dbs + Ebs
-    for sstart in range(0, ns, max_s):
-        nsblock = min(max_s, ns - sstart)
+    for sstart in range(0, ns, STAGE_S):
+        nsblock = min(STAGE_S, ns - sstart)
 
         # Allocate matrices to hold the tensor slices
         Dbs = core.Matrix("Dbs block", nsblock * nb, nQ)
@@ -2937,13 +3023,14 @@ def fdisp0(
 
         # Write Fbs back to disk (Dbs now contains Dbs + Ebs)
         dfh.write_disk_tensor("Fbs", Dbs, (sstart, sstart + nsblock))
+    del Dbs, Ebs
 
     E_disp20_comp = _ein_zeros(na, nb, name="E_disp20")
     E_exch_disp20_comp = _ein_zeros(na, nb, name="E_exch_disp20")
 
     # => MO to LO Transformation
-    UA = _ein(cache["Uaocc0A"], name="Uaocc0A")
-    UB = _ein(cache["Uaocc0B"], name="Uaocc0B")
+    UA = None if _canonical else _ein(cache["Uaocc0A"], name="Uaocc0A")
+    UB = None if _canonical else _ein(cache["Uaocc0B"], name="Uaocc0B")
 
     # In the dispersion formula: indices a,b are occupied and r,s are virtual.
     ean = _arr(eps_occ_A)  # occupied energies of A (index a)
@@ -3011,7 +3098,7 @@ def fdisp0(
             # numpy's lazily faulted np.zeros did for the v1 port.  A zeroed
             # tensor is first touched by this thread alone, and the block's
             # GEMMs then all read from one socket's memory.
-            pool = _fdisp_pool(8 * (6 * M * N + Ms * Nr))
+            pool = _fdisp_pool(8 * ((7 if use_graph else 6) * M * N + Ms * Nr))
             b = dict(
                 V=_fdisp_carve(pool, [M, N], "Vrs"),
                 T=_fdisp_carve(pool, [M, N], "Trs"),
@@ -3021,6 +3108,9 @@ def fdisp0(
                 D=_fdisp_carve(pool, [M, N], "Drs"),
                 W2=_fdisp_carve(pool, [Ms, Nr], "W2sr"),
             )
+            if use_graph:
+                b["X2"] = _fdisp_carve(pool, [M, N], "X2rs")
+                b["X2v"] = b["X2"].reshape_view([na, nrb, nb, nsb])
             b["Dv"] = b["D"].reshape_view([na, nrb, nb, nsb])
             b["T2v"] = b["T2"].reshape_view([na, nrb, nb, nsb])
             b["V2v"] = b["V2"].reshape_view([na, nrb, nb, nsb])
@@ -3070,7 +3160,7 @@ def fdisp0(
     # cost.  This is the reassociation ComputeGraph's
     # ContractionPlanning reports for the captured block, which it cannot
     # apply itself because the chain runs through rank-4 views.
-    lo_tmp = _ein_zeros(nk, lo_slab * max(na, nb), name="LO slab")
+    lo_tmp = None if _canonical else _ein_zeros(nk, lo_slab * max(na, nb), name="LO slab")
 
     def _localize_columns(buf, n_o, nblk, U):
         """buf[:, (o,x)] <- sum_o' buf[:, (o',x)] U[o',o] for x < nblk, in place.
@@ -3079,6 +3169,8 @@ def fdisp0(
         column-major buffer is contiguous, so each slab is one memcpy out and
         one batched GEMM back.
         """
+        if _canonical:
+            return
         tmpn = np.asarray(lo_tmp)
         bufn = np.asarray(buf)
         for x0 in range(0, nblk, lo_slab):
@@ -3101,9 +3193,6 @@ def fdisp0(
     # that is dead the moment the pack finishes.  Reading STAGE_R virtuals at
     # a time bounds it at a few tens of MB instead, at no measurable cost:
     # fill_tensor's per-call overhead is negligible against a slab this size.
-    STAGE_R = max(1, min(max_r, STAGE_DOUBLES // (nQ * max(na, nb))))
-    STAGE_S = max(1, min(max_s, STAGE_DOUBLES // (nQ * max(na, nb))))
-
     Aar = core.Matrix("Aar stage", STAGE_R * na, nQ)
     Far = core.Matrix("Far stage", STAGE_R * na, nQ)
     Bbr = core.Matrix("Bbr stage", STAGE_R * nb, nQ)
@@ -3185,10 +3274,20 @@ def fdisp0(
 
                     # V2[(r,a),(s,b)] = sum_Q Aar[(r,a),Q] Abs[(s,b),Q], from the
                     # localized factors, so in the LO basis; V is its MO image.
-                    ein.linalg.gemm(1.0, AFar[0:nQ, ra0:ra1],
-                                    FAbs[nQ:2 * nQ, sb0:sb1], 0.0, V2,
-                                    trans_a=True)
-                    _from_lo(b, "V2", "I", "V", nrb, nsb)
+                    if contractions is not None:
+                        # Three independent DF products in one replay. The
+                        # GPU helper packs owning column-major inputs and uses
+                        # rank-2 einsum descriptors, never linalg.gemm.
+                        contractions.products(
+                            AFar[:, ra0:ra1], FAbs[:, sb0:sb1],
+                            BCas[:, sa0:sa1], BCbr[:, rb0:rb1],
+                            nQ, V2, b["X2"], W2)
+                    else:
+                        ein.linalg.gemm(1.0, AFar[0:nQ, ra0:ra1],
+                                        FAbs[nQ:2 * nQ, sb0:sb1], 0.0, V2,
+                                        trans_a=True)
+                    if not _canonical:
+                        _from_lo(b, "V2", "I", "V", nrb, nsb)
 
                     # Amplitudes T = V / (ea + eb - er - es).  outer_sum is
                     # einsums' own MP2-denominator primitive and builds the
@@ -3197,10 +3296,12 @@ def fdisp0(
                     # first and runs single-threaded, which cost twice as much.
                     ein.linalg.outer_sum(b["Dv"], [ea_v, er_t[rr], eb_v, es_t[ss]],
                                          [1.0, -1.0, 1.0, -1.0])
-                    ein.linalg.direct_division(1.0, V, D, 0.0, T)
+                    ein.linalg.direct_division(1.0, V2 if _canonical else V,
+                                               D, 0.0, T2 if _canonical else T)
 
                     # Transform to localized orbital basis and accumulate
-                    _to_lo(b, "T", "I", "T2", nrb, nsb)
+                    if not _canonical:
+                        _to_lo(b, "T", "I", "T2", nrb, nsb)
                     ein.einsum("ab <- arbs ; arbs", E_disp20_comp,
                                b["T2v"], b["V2v"], c_pf=1.0, ab_pf=4.0)
 
@@ -3209,18 +3310,21 @@ def fdisp0(
                     # (r,a) x (s,b) half: Aar.Fbs + Far.Abs + Qar.SAbs + SBar.Qbs,
                     # from the localized factors, so it lands in V2 already in
                     # the LO basis (see _localize_columns).
-                    ein.linalg.gemm(1.0, AFar[:, ra0:ra1], FAbs[:, sb0:sb1],
-                                    0.0, V2, trans_a=True)
+                    if contractions is None:
+                        ein.linalg.gemm(1.0, AFar[:, ra0:ra1], FAbs[:, sb0:sb1],
+                                        0.0, V2, trans_a=True)
                     ein.einsum("ab <- arbs ; arbs", E_exch_disp20_comp,
-                               b["T2v"], b["V2v"], c_pf=1.0, ab_pf=-2.0)
+                               b["T2v"], b["X2v"] if use_graph else b["V2v"],
+                               c_pf=1.0, ab_pf=-2.0)
 
                     # (s,a) x (r,b) half: Bas.Bbr + Cas.Cbr + Sas.Qbr + Qas.Sbr.
                     # The localization is linear and the energy contraction
                     # elementwise, so this half stays in its own layout and is
                     # reduced against T2 through a transposed index map rather
                     # than permuted into the (r,a) x (s,b) one.
-                    ein.linalg.gemm(1.0, BCas[:, sa0:sa1], BCbr[:, rb0:rb1],
-                                    0.0, W2, trans_a=True)
+                    if contractions is None:
+                        ein.linalg.gemm(1.0, BCas[:, sa0:sa1], BCbr[:, rb0:rb1],
+                                        0.0, W2, trans_a=True)
                     ein.einsum("ab <- arbs ; asbr", E_exch_disp20_comp,
                                b["T2v"], b["W2v"], c_pf=1.0, ab_pf=-2.0)
 
@@ -3243,6 +3347,14 @@ def fdisp0(
     ExchDisp20 = np.sum(E_exch_disp20.np)
     cache["Exch-Disp20,u"] = ExchDisp20
     cache["Disp20,u"] = Disp20
+    if contractions is not None:
+        cache["Disp0 execution"] = contractions.report(time.perf_counter() - started)
+        cache["Disp0 execution"].update({
+            "df_block_extents": [max_r, max_s], "compute_block_extents": [blk_r, blk_s],
+            "cached_work_shapes": len(_bufs),
+            "staging_extents": [STAGE_R, STAGE_S],
+            "planned_overhead_doubles": overhead,
+        })
     # if do_print:
     #     core.print_out(f"    Disp20              = {Disp20 * 1000:.8f} [mEh]\n")
     #     core.print_out(f"    Exch-Disp20         = {ExchDisp20 * 1000:.8f} [mEh]\n")
