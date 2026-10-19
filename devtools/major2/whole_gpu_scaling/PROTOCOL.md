@@ -95,7 +95,12 @@ headers/compiler/ELF/runtime remain authoritative. No new dependency/build.
 
 Preserve all17 actual old roots (13 FAILED,4 COMPLETED including14179309),
 separately inherited unsubmitted stages, scientific builds, finalizers and
-their receipts. New run is pristine, readonly generated bundle only. Code
+their receipts. The rejected `major2-whole-gpu-scaling-20261019` root remains
+unchanged unsubmitted staging, separately snapshotted and small-metadata
+hashed alongside the two inherited unsubmitted stages. It is NOT a jobroot.
+The fresh run is `major2-whole-gpu-scaling-20261019-v2`; neither namespace
+has an actual attempt/job ID during preparation.
+New run is pristine, readonly generated bundle only. Code
 moves only by Git. `custody.audit` rechecks preservation, accounting, queue
 headroom and campaign-specific duplicate admission and issues only
 `sbatch --test-only`.
@@ -136,7 +141,41 @@ partials, requires the exact 24-call completion schema plus report, and writes
 exclusive fsynced immutable exit/terminal markers. A zero process exit without
 endpoint completion cannot create a success marker.
 
+### Interpreter exit and completed native artifacts
+
+The scientific runner, clock and minimal proof adapters are unchanged.
+`execute.py` retains early environment/import, actual PID and allocated UUID
+exclusivity, PRINT3/one-call endpoint return, CUDA status and runtime/maps
+proof **before interpreter exit**. It writes `ENDPOINT-PRE-EXIT.json`,
+explicitly labeled pre-exit endpoint evidence, not completed native artifact
+verification. There are no pre-exit native file hashes or child COMPLETE.
+Ordinary Psi4 atexit owns native timer/profile finalization: an early
+`timer.dat` may exist but is incomplete; the profile may not yet exist.
+No explicit core.finalize, atexit removal, double finalize or observer is added.
+
+Only after `run_command` has waited for exit zero, the parent `complete_case`
+requires the actual PID/unsignalled exit receipt and matching endpoint
+PID/UUID/job/manifest evidence. It checks directory/file paths (no symlinks),
+required completed files, ordinary single-link files and output/record caps.
+It seals `result.json`, `psi4.out`, `timer.dat`, `profile.txt` readonly,
+fsyncs, SHA256-hashes their final post-exit bytes, checks stable identity/bytes
+and fsyncs the output directory. The parent's exclusive readonly COMPLETE
+receipt binds the actual child exit, exact endpoint evidence+SHA and all four
+post-exit hashes. Only then does unchanged individual science validation run.
+Nonzero/signal/timeout/missing output cannot complete; partials remain.
+
+`test_exit_lifecycle.py` launches genuine fresh Python subprocesses through
+the production child wrapper and parent wait/custody path, replacing only the
+scientific endpoint/device dependencies with stdlib fixtures. Actual atexit
+appends an early timer and creates the profile for the first time. Tests prove
+final byte hashes and fsync ordering, no child completion, readonly outputs,
+nonzero after endpoint (even with atexit files), actual signal, missing file,
+wrong PID, caps and file/directory symlinks. These are real temporary files,
+not a mocked filesystem; they provide no native scientific/GPU evidence.
+
 Run `bash devtools/major2/whole_gpu_scaling/run-tests.sh` locally with its
 prepared absolute cwd/env. All295 inherited host checks run unchanged before
-the new synthetic/fixture/custody tests. Do not publish HTML or infer new GPU
+the whole/admission/lifecycle host checks. The prior362 tests remain unchanged;
+no old fixture expectations or timing/source/numerical criteria are weakened.
+Do not publish HTML or infer new GPU
 performance from these preparation checks.

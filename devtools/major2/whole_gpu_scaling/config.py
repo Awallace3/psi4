@@ -24,7 +24,8 @@ require, sha, durable, load = n.require, n.sha, n.durable, n.load
 P, E = n.P, n.E
 PARENT = "8af4a8bf034c16c0c01821b8442673db0f54514f"
 SOURCE = P+"/gits/psi4.major2-whole-gpu-scaling-20261019"
-RUN = P+"/runs/saptdft-cuest-cpks/major2-whole-gpu-scaling-20261019"
+REJECTED_RUN = P+"/runs/saptdft-cuest-cpks/major2-whole-gpu-scaling-20261019"
+RUN = P+"/runs/saptdft-cuest-cpks/major2-whole-gpu-scaling-20261019-v2"
 SPEED_RUN = P+"/runs/saptdft-cuest-cpks/major2-planreuse-speed-20261019"
 SCRATCH = "/storage/scratch1/3/awallace43/cpks-major2-whole-gpu-scaling"
 SEQUENCE = [dict(v, label=v["label"].replace("major2-", "whole-")) for v in p.sequence()]

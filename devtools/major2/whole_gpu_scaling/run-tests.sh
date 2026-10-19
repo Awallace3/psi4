@@ -4,7 +4,7 @@ set -euo pipefail
 here=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
 H=$(dirname "$here")
 A=/home/awallace43/gits/psi4__worktrees/saptdft-cuest/.pi/major2-gpu-optimization-20261017
-export MAJOR2_TEST_TMP="$A/whole-gpu-scaling/test-tmp"
+export MAJOR2_TEST_TMP="$A/whole-gpu-scaling/exit-repair/test-tmp"
 export MAJOR2_PAIR_JSON="$A/fitting-test-repair/artifact-pair.json"
 export MAJOR2_REPEATABILITY_COLLECTION="$A/p157-repeatability/collection.json"
 export MAJOR2_FIXED_MANIFEST="$A/workspace-control/bundle/manifest.json"
@@ -23,7 +23,7 @@ cd "$H/native_plan"
 cd "$H/planreuse_speed"
 "$PY" -B -m unittest -v test_speed
 cd "$here"
-"$PY" -B -m unittest -v test_whole test_admission
+"$PY" -B -m unittest -v test_whole test_admission test_exit_lifecycle
 "$PY" -B - <<'PY'
 import ast
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""One fresh child: early ENV, original import probe, one owned runner, post proof."""
+"""One fresh child: early ENV, original probe, one runner, pre-exit endpoint evidence."""
 import os
 from pathlib import Path
 import runpy
@@ -70,24 +70,14 @@ def execute(path, mh, label, uuid):
     data = s.load(output/"result.json")
     s.require(data["ok"] is True and data["trace_print_options"] ==
               {"global":3,"scf":3,"sapt":3}, "whole endpoint/PRINT options")
-    # Ordinary output files must be synchronous and durable before COMPLETE.
-    files = {}
-    for name in ("result.json","psi4.out","timer.dat","profile.txt"):
-        file = output/name
-        s.require(file.is_file() and not file.is_symlink() and
-                  file.stat().st_size <= s.POLICY["output_cap_bytes"], "missing/capped output")
-        fd = os.open(file, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        files[name] = s.sha(file)
-    s.n.fsync_dir(output)
+    # Native timers/profile are finalized by ordinary interpreter atexit.
+    # This proves endpoint return only, NOT completed native output custody.
     s.durable(Path(s.RUN)/"raw"/(label+".maps.json"), mapped)
-    s.durable(Path(s.RUN)/"raw"/(label+".COMPLETE.json"), dict(
+    s.durable(Path(s.RUN)/"raw"/(label+".ENDPOINT-PRE-EXIT.json"), dict(
+        evidence_kind="pre-exit endpoint evidence; native artifacts not yet verified",
         label=label, pid=os.getpid(), uuid=uuid, job=os.environ["SLURM_JOB_ID"],
         early=receipt, pre_gpu=pre_gpu, post_gpu=post_gpu,
-        maps_after_CDLL=cuda.maps, final_maps=mapped, output_hashes=files,
+        maps_after_CDLL=cuda.maps, final_maps=mapped,
         actual_gpu_execution=True, energy_calls=1, synchronization_outside_primary=True))
 
 

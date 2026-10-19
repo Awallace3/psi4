@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -175,23 +176,106 @@ class Engine(rc.Engine):
         argv = self.arm_command(arm, [s.E+"/bin/python","-B",s.HERE/"execute.py",
             self.manifest_path,self.manifest_hash,label,self.gpu_selector])
         pid = self.run_command(argv,label,env=env,cwd=scratch,timeout=s.CAPS[row["system"]])
+        self.complete_case(row,pid)
         return self.verify_case(row,pid)
+
+    def complete_case(self, row, pid):
+        """Parent-only custody after wait(): capture final atexit bytes before science."""
+        label = row["label"]
+        complete = self.raw/(label+".COMPLETE.json")
+        if complete.exists():
+            raise FileExistsError(complete)
+        child_exit = s.load(self.raw/(label+".exit.json"))
+        s.require(child_exit["pid"] == pid and child_exit["exit"] == 0 and
+                  child_exit["interrupted"] is False and not self.signalled,
+                  "successful actual child exit required")
+        endpoint_path = self.raw/(label+".ENDPOINT-PRE-EXIT.json")
+        s.require(endpoint_path.is_file() and not endpoint_path.is_symlink() and
+                  not endpoint_path.stat().st_mode & 0o222, "readonly endpoint evidence")
+        endpoint = s.load(endpoint_path)
+        s.require(endpoint["evidence_kind"] ==
+                  "pre-exit endpoint evidence; native artifacts not yet verified" and
+                  "output_hashes" not in endpoint and
+                  endpoint["label"] == label and endpoint["pid"] == pid and
+                  endpoint["job"] == self.job and endpoint["uuid"] == self.gpu_selector and
+                  endpoint["early"]["pid"] == pid and
+                  endpoint["early"]["manifest_sha256"] == self.manifest_hash and
+                  endpoint["actual_gpu_execution"] is True and endpoint["energy_calls"] == 1 and
+                  endpoint["pre_gpu"] == endpoint["post_gpu"] ==
+                      dict(pid=pid,uuid=self.gpu_selector), "pre-exit endpoint identity")
+        out = self.raw/"sessions"/label
+        s.require(all(v.is_dir() and not v.is_symlink()
+                      for v in (self.raw,self.raw/"sessions",out)) and
+                  out.resolve().parent == (self.raw/"sessions").resolve(), "output path custody")
+        # Validate all entries before sealing any; required files may only appear at exit.
+        required = {"result.json","psi4.out","timer.dat","profile.txt"}
+        entries = list(out.iterdir())
+        s.require(required <= {v.name for v in entries}, "missing completed output")
+        for file in entries:
+            info = file.lstat()
+            s.require(stat.S_ISREG(info.st_mode) and
+                      info.st_size <= s.POLICY["output_cap_bytes"], "output cap/type/path")
+        s.require((out/"result.json").stat().st_size <= s.POLICY["record_cap_bytes"], "record cap")
+        files = {}
+        for name in sorted(required):
+            file = out/name
+            fd = os.open(file, os.O_RDONLY|os.O_NOFOLLOW)
+            try:
+                info = os.fstat(fd)
+                s.require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and
+                          info.st_size <= s.POLICY["output_cap_bytes"] and
+                          (name != "result.json" or info.st_size <= s.POLICY["record_cap_bytes"]),
+                          "ordinary exclusive output file")
+                os.fchmod(fd, 0o444)  # Parent seals completed bytes, never before native exit.
+                os.fsync(fd)
+                with os.fdopen(os.dup(fd), "rb") as stream:
+                    digest = hashlib.sha256()
+                    for block in iter(lambda:stream.read(1024*1024), b""):
+                        digest.update(block)
+                    files[name] = digest.hexdigest()
+                final = os.fstat(fd)
+                actual = file.lstat()
+                s.require(not final.st_mode & 0o222 and
+                          (info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns) ==
+                          (final.st_dev,final.st_ino,final.st_size,final.st_mtime_ns) and
+                          (actual.st_dev,actual.st_ino,actual.st_mode,actual.st_size,actual.st_mtime_ns) ==
+                          (final.st_dev,final.st_ino,final.st_mode,final.st_size,final.st_mtime_ns),
+                          "stable readonly completed output")
+            finally:
+                os.close(fd)
+        s.n.fsync_dir(out)
+        s.durable(complete, dict(endpoint, evidence_kind="parent post-exit completed output custody",
+            endpoint_evidence=endpoint, endpoint_sha256=s.sha(endpoint_path),
+            child_exit=child_exit, output_hashes=files))
 
     def verify_case(self, row, pid):
         arm,label = row["arm"],row["label"]
         out = self.raw/"sessions"/label
         receipt = s.load(self.raw/(label+".COMPLETE.json"))
+        endpoint_path = self.raw/(label+".ENDPOINT-PRE-EXIT.json")
+        s.require(receipt["evidence_kind"] == "parent post-exit completed output custody" and
+                  receipt["endpoint_sha256"] == s.sha(endpoint_path) and
+                  receipt["endpoint_evidence"] == s.load(endpoint_path) and
+                  all(receipt[key] == value for key,value in receipt["endpoint_evidence"].items()
+                      if key != "evidence_kind") and
+                  receipt["child_exit"] == s.load(self.raw/(label+".exit.json")) and
+                  receipt["child_exit"]["exit"] == 0 and
+                  receipt["child_exit"]["pid"] == pid and
+                  receipt["child_exit"]["interrupted"] is False, "parent post-exit custody")
         s.require(receipt["label"] == label and receipt["pid"] == pid and
                   receipt["job"] == self.job and receipt["uuid"] == self.gpu_selector and
                   receipt["actual_gpu_execution"] is True and receipt["energy_calls"] == 1 and
                   receipt["pre_gpu"] == receipt["post_gpu"] == dict(pid=pid,uuid=self.gpu_selector),
                   "actual process/UUID/one-call proof")
         for name,digest in receipt["output_hashes"].items():
-            s.require(s.sha(out/name) == digest, "synchronous output hash")
+            file = out/name
+            s.require(not file.is_symlink() and not file.stat().st_mode & 0o222 and
+                      s.sha(file) == digest, "readonly post-exit output hash")
         s.require(set(receipt["output_hashes"]) == {"result.json","psi4.out","timer.dat","profile.txt"},
                   "complete artifacts")
         for file in out.iterdir():
-            s.require(file.is_file() and file.stat().st_size <= s.POLICY["output_cap_bytes"], "output cap/type")
+            s.require(file.is_file() and not file.is_symlink() and
+                      file.stat().st_size <= s.POLICY["output_cap_bytes"], "output cap/type")
         s.require((out/"result.json").stat().st_size <= s.POLICY["record_cap_bytes"], "record cap")
         d = s.load(out/"result.json")
         runner = c.literal_assignments(s.HERE/"runner.py",["SCIENCE","WATER_DIMER"])

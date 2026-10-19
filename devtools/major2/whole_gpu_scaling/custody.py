@@ -47,6 +47,20 @@ def collect():
         pres["small_hashes"][str(root/name)] = legacy.small(root/name)
     s.require(len(pres["roots"]) == 17 and len(FAILED) == 13 and len(COMPLETED) == 4,
               "17 actual roots = 13 FAILED + 4 COMPLETED")
+    # Rejected whole v1 is unsubmitted staging, not an eighteenth actual jobroot.
+    rejected = Path(s.REJECTED_RUN)
+    staged = legacy.unsubmitted_stage(rejected)
+    previous = s.load(rejected/"manifest.json")
+    receipt = s.load(rejected/"bundle-receipt.json")
+    s.require(previous["pin"] == receipt["pin"] ==
+              "82d95144bfb5e7a00b0fdd9a2841b43e02836c19" and
+              previous["run_root"] == s.REJECTED_RUN and receipt["no_submission"] is True and
+              receipt["manifest_sha256"] == legacy.small(rejected/"manifest.json") and
+              receipt["batch_sha256"] == legacy.small(rejected/"campaign.sbatch"),
+              "rejected unsubmitted whole bundle identity")
+    pres["unsubmitted_staging"][s.REJECTED_RUN] = staged
+    for rel in staged:
+        pres["small_hashes"][str(rejected/rel)] = legacy.small(rejected/rel)
     preserve(pres)
     import repeatability as r
     r.validate_pair(m["diagnostic_pair"])
