@@ -1,6 +1,8 @@
 """Host/fake-only diagnostic tests. NOT GPU correctness or numerical repeatability evidence."""
 import ast
+import contextlib
 import copy
+import io
 import json
 import os
 from pathlib import Path
@@ -175,6 +177,24 @@ class PolicyTests(unittest.TestCase):
              patch.object(h, "audit") as audit, self.assertRaisesRegex(RuntimeError, "parent review"):
             h.main()
         audit.assert_not_called()
+
+    def test_staging_real_generated_receipt_ack_no_duplicate_keyword(self):
+        receipt = dict(harness_pin="pin", manifest_sha256="m", batch_sha256="b", no_submission=True)
+        payload = {"manifest.json": json.dumps({"harness": {"pin": "pin"}}),
+                   "campaign.sbatch": "# fake", "bundle-receipt.json": json.dumps(receipt)}
+        with tempfile.TemporaryDirectory(dir=os.environ["MAJOR2_TEST_TMP"]) as td:
+            base = Path(td)
+            cache = base/"cache"
+            cache.mkdir()
+            p.write_json(cache/"preflight.json", dict(no_submission=True))
+            with patch.object(r, "RUN", str(base/"fresh")), patch.object(h, "CACHE", cache), \
+                 patch.object(h.sys, "stdin", io.StringIO(json.dumps(payload))), \
+                 patch.object(r, "validate"), patch.object(h, "verify_bundle") as verifier, \
+                 contextlib.redirect_stdout(io.StringIO()) as stdout:
+                h.stage("pin")
+            self.assertTrue(json.loads(stdout.getvalue())["staged"])
+            verifier.assert_called_once_with("pin", "m", "b", full_sources=True)
+            self.assertEqual(p.read_json(base/"fresh/bundle-receipt.json"), receipt)
 
     def test_wrapper_does_not_write_installed_scientific_state(self):
         tree = ast.parse((ROOT/"devtools/major2/observe.py").read_text())

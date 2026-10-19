@@ -13,7 +13,7 @@ import policy as p
 import repeatability as r
 import repeatability_campaign as c
 
-CACHE = Path.home()/".cache/psi4-major2/p157-repeatability-20261019"
+CACHE = Path.home()/".cache/psi4-major2/p157-repeatability-20261019-v2"
 FAILED_JOBS = n.FAILED_JOBS+["14170562"]
 
 
@@ -91,7 +91,7 @@ def stage(pin):
     o.atomic(root/"logs/preflight.json", p.read_json(CACHE/"preflight.json"))
     receipt = json.loads(payload["bundle-receipt.json"])
     verify_bundle(pin, receipt["manifest_sha256"], receipt["batch_sha256"], full_sources=True)
-    print(json.dumps(dict(staged=True, no_submission=True, **receipt)))
+    print(json.dumps({**receipt, "staged": True, "no_submission": True}))
 
 
 def audit(pin, mh, bh):

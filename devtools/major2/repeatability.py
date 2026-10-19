@@ -10,7 +10,7 @@ import science
 
 MODE = "p157-numerical-repeatability-only"
 REVIEW_ID = "parent-blinded-p157-repeatability-review-required"
-RUN = p.P+"/runs/saptdft-cuest-cpks/major2-p157-repeatability-20261019"
+RUN = p.P+"/runs/saptdft-cuest-cpks/major2-p157-repeatability-20261019-v2"
 HARNESS = p.P+"/gits/psi4.saptdft-cuest-major2-p157-repeatability-20261019"
 PARENT_PIN = "7046ed48cb7284cb1eaa71ec23bbac699dd68085"
 PAIR_DIGEST = "c9d4ec615a37a6a50d493fcfa6c01cf567bea9b616f298ef1fd49fcea0e87a33"
