@@ -1,5 +1,38 @@
 # FDDS cuEST implementation handoff
 
+## Diagnosis complete; corrected SAPT GPU confirmation still pending
+
+- Final CPU gate with corrected test driver
+  **3b21adb662f47fc4b89f1cbb89a44592f7a1d10f** and integrated scientific
+  binary9d4b1cd4aa: **165 passed, zero failures/errors/skips, 179.023 s**
+  (46 FDDS, 67 CPSCF, 6 SAD, 6 lifecycle, 8 basis-parser, 32 grid-switch).
+  Evidence `build_fdds_cpu/integrated-9d4b1cd4aa/{native-output-fixed.xml,native-output-fixed.log,native-output-fixed-provenance.json}`.
+  The unchanged CPU core SHA256 is explicitly rechecked in provenance.
+- Integrated focused job **14181925** ran and failed on its own, no
+  cancellation: free embers/H200, **6m46s**, exit1. Own integrated GPU build
+  succeeded. **8 contribution/budget tests passed**, zero errors/failures/
+  skips, **3.850 s**; all four equal/unequal nonhybrid/hybrid comparisons
+  printed zero CPU/GPU matrix error and passed actual block/timer routing
+  assertions. The final SAPT case then SIGSEGV'd in Printf with the old
+  helper; no SAPT XML/VERIFIED/COMPLETED, so not a focused-suite pass.
+  Preserved evidence `build_fdds_cpu/gpu-14181925/`.
+- GPU binary pin9d4b1cd4aa, original focused harnessa6233fffac; staged core
+  SHA256 `68e34452afa80002d4bb7fb1b56297e19389617fcb3ee3b926abc0b5fcead0b7`,
+  version1.12a1.dev802, cuEST0.2.2 (conda0.2.2.2), CUDA runtime13.3.29,
+  cuBLAS13.6.0.2. These are correctness fixtures, no speedup claim.
+- Corrected replay uses existing integrated GPU stage **read-only**; scientific
+  C++/installed Python/build configuration diff9d4b1cd4aa..3b21adb662 is empty.
+  Test driver remains frozen3b21adb662; replay harness
+  **e124e5cfba24a3a046aee4e5f055d1cdfc92dbfa** verifies the binary's exact
+  source pin and core hash, records linked library hashes, and never rebuilds
+  or overwrites it. New run02, H200/4 CPUs/16 GiB/15 minutes/free embers.
+  Staging/preflight in progress; no new replay submission recorded yet.
+- Atomic `fdds-gpu-diagnosis-complete.json` reports diagnosis/CPU-fix completion
+  with outcome **blocked**, not a full GPU pass. Remaining gates: corrected
+  SAPT GPU test, full57-case FDDS suite, capacity-driven reduction/fallback and
+  post-enqueue fault-injection runtime coverage. All prior evidence/pins remain
+  immutable; no coordinator dirty work copied and no merge back.
+
 ## Native crash diagnosed: test helper closed the global output stream
 
 - Recovered diagnostic **14006185** completed Oct16 on free embers in
