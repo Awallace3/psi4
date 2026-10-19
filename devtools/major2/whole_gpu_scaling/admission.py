@@ -62,14 +62,18 @@ def duplicate_fields(name, command, workdir):
     """Name/source/request identity, including dated/versioned/partial attempts.
 
     The unique campaign stem in any identity field catches prior run/source
-    namespaces and JobName variants. The owned helper directory also catches
+    namespaces and JobName variants. The current source namespace is also an
+    identity when a repair checkout has a different basename; match its exact
+    path or a child/dated-partial suffix, not similarly prefixed unrelated paths.
+    The owned helper directory also catches
     direct helper commands from differently named checkouts. Generic 'major2',
     partition, GPU type, account and QoS are NOT duplicate identities.
     """
     return [key for key, value in (("JobName", name), ("Command", command),
                                   ("WorkDir", workdir))
             if CAMPAIGN in value.lower() or
-            "/devtools/major2/whole_gpu_scaling" in value.lower()]
+            "/devtools/major2/whole_gpu_scaling" in value.lower() or
+            re.search(re.escape(s.SOURCE.lower()) + r"(?:$|[/\s-])", value.lower())]
 
 
 def cpu_tres(value, required):

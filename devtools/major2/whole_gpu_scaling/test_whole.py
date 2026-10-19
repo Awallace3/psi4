@@ -316,19 +316,22 @@ class WholeTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 s.n.check_env({key:"forbidden"})
 
-    def test_17_root_accounting_exact_no_unsubmitted_confusion(self):
-        self.assertEqual(len(custody.FAILED),13)
+    def test_18_root_accounting_exact_no_unsubmitted_confusion(self):
+        self.assertEqual(len(custody.FAILED),14)
         self.assertEqual(len(custody.COMPLETED),4)
-        self.assertEqual(len(set(custody.FAILED+custody.COMPLETED)),17)
+        self.assertEqual(len(set(custody.FAILED+custody.COMPLETED)),18)
+        self.assertIn("14182594",custody.FAILED)
+        self.assertNotIn("14182594",custody.COMPLETED)
         self.assertIn("14179309",custody.COMPLETED)
         output = "\n".join("|".join((j+suf,state,code)) for jobs,state,code in (
             (custody.FAILED,"FAILED","1:0"),(custody.COMPLETED,"COMPLETED","0:0"))
             for j in jobs for suf in ("",".batch"))
         with patch.object(s.n,"output",return_value=output):
-            self.assertEqual(len(custody.accounting()),34)
-        with patch.object(s.n,"output",return_value=output.replace("14179309.batch","missing.batch")):
-            with self.assertRaises(RuntimeError):
-                custody.accounting()
+            self.assertEqual(len(custody.accounting()),36)
+        for job in ("14179309","14182594"):
+            with patch.object(s.n,"output",return_value=output.replace(job+".batch","missing.batch")):
+                with self.assertRaises(RuntimeError):
+                    custody.accounting()
 
     def test_exact_batch_six_hours_and_parent_only_entry(self):
         text = custody.batch_text("a"*64)

@@ -87,6 +87,17 @@ class AdmissionTests(unittest.TestCase):
                                workdir=s.P+"/runs/major2-other")])
         self.assertEqual(value["observations"][0]["classification"], "unrelated")
 
+    def test_repair_source_namespace_boundaries(self):
+        for key in ("command", "workdir"):
+            for suffix in ("", "/job.sbatch", "-partial/job.sbatch"):
+                with self.subTest(key=key, suffix=suffix):
+                    with self.assertRaisesRegex(RuntimeError, "campaign duplicate"):
+                        self.call([dict(XDM, **{key: s.SOURCE+suffix})])
+            for suffix in ("ology/job.sbatch", "_unrelated/job.sbatch"):
+                with self.subTest(unrelated_suffix=suffix):
+                    value = self.call([dict(XDM, **{key: s.SOURCE+suffix})])
+                    self.assertEqual(value["observations"][0]["classification"], "unrelated")
+
     def test_headroom_counts_every_expanded_embers_task(self):
         jobs = [dict(XDM, job_id="123_"+str(i), qos="embers") for i in range(49)]
         value = self.call(jobs)

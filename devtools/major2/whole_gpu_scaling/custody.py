@@ -9,10 +9,87 @@ import config as s
 
 sys.modules.setdefault("common", s.n)
 legacy = s.inherited("native_plan", "handoff")
-FAILED = legacy.FAILED
+FAILED = legacy.FAILED+["14182594"]
 COMPLETED = legacy.COMPLETED+["14178506", "14179309"]
-preserve, accept_id = legacy.preserve, legacy.accept_id
+accept_id = legacy.accept_id
 from admission import queue
+
+
+# Independent saved first-case retrieval pins, not newly accepted science.
+FAILED_ARTIFACT_HASHES = {
+    "WHOLE-FAILED.json": "2dec06ae8c05830b6164d5141a3611a86c01a1c1da5d48156ab9fe853339cf6d",
+    "FAILED": "0630b6557bb49b2952604d10aa49db0d7439afd726b940439f884d95e4126c2c",
+    "batch-exit.json": "6fd4e5dff04355eccecfab0c3cf771a49c83977942fd64716c9181db4a31632c",
+    "STARTED.json": "ce1cf84c29b0dfd967467446243a0e4dd20c1f49abac87467e9fc8ac42b34e62",
+    "raw/scheduler.txt": "fac1597ed2fac549e510b73ab2a09b8d51ef825eefbb234c7394eeba4d6f83aa",
+    "raw/pair-VERIFIED.json": "4b7aba2bda33b526638a426bd74df6693f510f18341fcfa4b873e2f6f2d2bf23",
+    "raw/gpu-identity.json": "40e8f9c57f6d76300e28e57123c38fc209c54a0da3e3c3305cbd05f44ebc4e61",
+    "raw/whole-baseline-peptide-r1.COMPLETE.json": "9246b162107cf0a7ff9685d6de367064b027a03c621336abe4f1fe934a5be97e",
+    "raw/whole-baseline-peptide-r1.ENDPOINT-PRE-EXIT.json": "d6338aa3bdcb71094736c14948acee3172d324469465499e593208f3f90fd894",
+    "raw/whole-baseline-peptide-r1.exit.json": "8bca810dc60387de807cce5c01160c88ac57d54d1e848d73b85c086806833cb1",
+    "raw/whole-baseline-peptide-r1.log": "7a460b1f1165d926a09f16114153950682f6bc5b8155624df557cc08c71679b3",
+    "logs/major2-whole-gpu-scaling-14182594.out": "f549e0f426d9815f4302e52fc11bc5e4313013914340a95230d5d2b55a20fe2f",
+    "logs/major2-whole-gpu-scaling-14182594.err": "6c4a0d12e5a1a9c2373368b666321e301e4b2464ce6ca9551a044a71a6ce3001",
+    "raw/sessions/whole-baseline-peptide-r1/result.json": "674aabc204343050f53e8db14498d1ac784f2868e25c416d38cc89a6e351736e",
+    "raw/sessions/whole-baseline-peptide-r1/psi4.out": "f5a09c362b09a0c0878afc31eb0bf5e807d4fbd1777e41ebdbb99b7df268e6c9",
+    "raw/sessions/whole-baseline-peptide-r1/timer.dat": "1d2364d21ea4c8282fcf46099092e3037b482abafb21c3551a7a738cf3f17313",
+    "raw/sessions/whole-baseline-peptide-r1/profile.txt": "1111c0e9c572c4e15868e792f4cf877b68cb5c627f0e69dba803908d30c5b8d3",
+}
+
+
+def preserve(value):
+    legacy.preserve(value)
+    s.require(s.p.git(s.FAILED_SOURCE, "rev-parse", "HEAD") == s.FAILED_PIN and
+              not s.p.git(s.FAILED_SOURCE, "status", "--porcelain"),
+              "immutable failed whole source pin/clean tree")
+
+
+def preserve_failed_whole(pres):
+    """Add the actual FAILED allocation, including its completed first child."""
+    root = Path(s.FAILED_RUN)
+    stats = legacy.snapshot(root)
+    s.require(sum(v[0] for v in stats.values()) <= 16*1024**2,
+              "bounded failed whole metadata/output tree")
+    hashes = {rel:legacy.small(root/rel) for rel in stats}
+    s.require(all(hashes.get(rel) == digest for rel,digest in FAILED_ARTIFACT_HASHES.items()),
+              "failed whole saved first-case artifact pins")
+    mh = "a9318198cc73a82588ba46523f7dbecc06362d1838719be4b25461b913a4d7f5"
+    bh = "3a9dec1242dc3f61fb9e0cccdd738ed364b9939a1bd60c06ac7da58f4ce1b46f"
+    old = s.load(root/"manifest.json")
+    s.require(old["pin"] == s.FAILED_PIN and old["source"] == s.FAILED_SOURCE and
+              old["run_root"] == s.FAILED_RUN and hashes["manifest.json"] == mh and
+              hashes["campaign.sbatch"] == bh and
+              s.load(root/"bundle-receipt.json") == dict(pin=s.FAILED_PIN,
+                  manifest_sha256=mh, batch_sha256=bh, no_submission=True),
+              "failed whole original bundle/source identity")
+    s.require(s.load(root/"STARTED.json") == dict(job="14182594", pin=s.FAILED_PIN,
+                  manifest_sha256=mh) and
+              s.load(root/"batch-exit.json") == dict(exit=1, signalled=0) and
+              s.load(root/"WHOLE-FAILED.json") == dict(
+                  error="missing backend/options print: Spherical Harmonics?: true",
+                  error_type="RuntimeError", individually_valid_records=0, signalled=False) and
+              (root/"FAILED").is_file() and not (root/"COMPLETED").exists() and
+              not (root/"WHOLE-COMPLETE.json").exists() and
+              (root/"logs/job-id.txt").read_text() == "14182594\n" and
+              (root/"logs/parent-attempt").is_dir() and
+              s.load(root/"logs/sbatch-response.json") ==
+                  dict(returncode=0, stdout="14182594\n", stderr=""),
+              "actual failed whole receipts/lock retained; not successful")
+    label = "whole-baseline-peptide-r1"
+    complete = s.load(root/("raw/"+label+".COMPLETE.json"))
+    s.require(complete["job"] == "14182594" and complete["label"] == label and
+              complete["child_exit"] == s.load(root/("raw/"+label+".exit.json")) and
+              complete["child_exit"]["exit"] == 0 and
+              complete["child_exit"]["interrupted"] is False and
+              complete["evidence_kind"] == "parent post-exit completed output custody" and
+              complete["output_hashes"] == {name:hashes["raw/sessions/"+label+"/"+name]
+                  for name in ("result.json","psi4.out","timer.dat","profile.txt")},
+              "first child completed custody only, parent failed")
+    pres["roots"][s.FAILED_RUN] = stats
+    pres["small_hashes"].update({str(root/rel):digest for rel,digest in hashes.items()})
+    s.require(len(pres["roots"]) == 18 and len(pres["unsubmitted_staging"]) == 3,
+              "18 actual roots and three unsubmitted stages")
+    preserve(pres)
 
 
 def accounting():
@@ -45,9 +122,9 @@ def collect():
     for name in ("manifest.json","campaign.sbatch","STARTED.json","SPEED-COMPLETE.json",
                  "COMPLETED","batch-exit.json","logs/job-id.txt"):
         pres["small_hashes"][str(root/name)] = legacy.small(root/name)
-    s.require(len(pres["roots"]) == 17 and len(FAILED) == 13 and len(COMPLETED) == 4,
-              "17 actual roots = 13 FAILED + 4 COMPLETED")
-    # Rejected whole v1 is unsubmitted staging, not an eighteenth actual jobroot.
+    s.require(len(pres["roots"]) == 17 and len(FAILED) == 14 and len(COMPLETED) == 4,
+              "17 inherited actual roots before adding failed14182594")
+    # Rejected whole v1 is unsubmitted staging, not an actual jobroot.
     rejected = Path(s.REJECTED_RUN)
     staged = legacy.unsubmitted_stage(rejected)
     previous = s.load(rejected/"manifest.json")
@@ -62,6 +139,7 @@ def collect():
     for rel in staged:
         pres["small_hashes"][str(rejected/rel)] = legacy.small(rejected/rel)
     preserve(pres)
+    preserve_failed_whole(pres)
     import repeatability as r
     r.validate_pair(m["diagnostic_pair"])
     return dict(preservation=pres, historical_accounting=accounting(), queue=queue(),
@@ -104,7 +182,7 @@ def freeze(collection, directory):
     s.require(changes and all(v.startswith("A\tdevtools/major2/whole_gpu_scaling/")
                              for v in changes), "only owned additions")
     helpers = {v.split("\t")[1]:s.sha(s.ROOT/v.split("\t")[1]) for v in changes}
-    for name in ("runner.py", "execute.py", "controller.py", "supervise.sh", "parent-finalize.sh", "run-tests.sh"):
+    for name in ("runner.py", "execute.py", "controller.py", "validation.py", "supervise.sh", "parent-finalize.sh", "run-tests.sh"):
         s.require("devtools/major2/whole_gpu_scaling/"+name in helpers, "required owned helper")
     files = p.file_manifest(s.ROOT)
     m = dict(collection, source=s.SOURCE, run_root=s.RUN, parent=s.PARENT, pin=pin,
@@ -168,8 +246,8 @@ def audit(pin, mh, bh):
                             text=True, capture_output=True, timeout=35)
     s.require(result.returncode == 0 and "gpu-h200" in result.stdout+result.stderr,
               "exact H200 test-only route")
-    return dict(pin=pin, manifest_sha256=mh, batch_sha256=bh, old_roots=17,
-        failed_roots=13, completed_roots=4, queue=rows, accounting=acct,
+    return dict(pin=pin, manifest_sha256=mh, batch_sha256=bh, old_roots=18,
+        failed_roots=14, completed_roots=4, queue=rows, accounting=acct,
         no_submission=True, test_only_stdout=result.stdout, test_only_stderr=result.stderr)
 
 

@@ -23,11 +23,14 @@ import policy as p
 require, sha, durable, load = n.require, n.sha, n.durable, n.load
 P, E = n.P, n.E
 PARENT = "8af4a8bf034c16c0c01821b8442673db0f54514f"
-SOURCE = P+"/gits/psi4.major2-whole-gpu-scaling-20261019"
+SOURCE = P+"/gits/psi4.major2-whole-gpu-print3-repair-20261019"
 REJECTED_RUN = P+"/runs/saptdft-cuest-cpks/major2-whole-gpu-scaling-20261019"
-RUN = P+"/runs/saptdft-cuest-cpks/major2-whole-gpu-scaling-20261019-v2"
+FAILED_RUN = REJECTED_RUN+"-v2"
+FAILED_SOURCE = P+"/gits/psi4.major2-whole-gpu-scaling-20261019"
+FAILED_PIN = "6ae8a733279f6b830775fc0ceb7061a7ec3a6f9a"
+RUN = P+"/runs/saptdft-cuest-cpks/major2-whole-gpu-scaling-20261019-v3"
 SPEED_RUN = P+"/runs/saptdft-cuest-cpks/major2-planreuse-speed-20261019"
-SCRATCH = "/storage/scratch1/3/awallace43/cpks-major2-whole-gpu-scaling"
+SCRATCH = "/storage/scratch1/3/awallace43/cpks-major2-whole-gpu-print3-repair-20261019-v3"
 SEQUENCE = [dict(v, label=v["label"].replace("major2-", "whole-")) for v in p.sequence()]
 CAPS = dict(peptide=180, nanotube=300, protein83=600, protein157=1500)
 ROUTE = dict(p.ROUTE, seconds=21600)
@@ -104,7 +107,7 @@ def manifest(path, digest):
             m["native_libraries"].get(n.SDK+"/lib/13/libcuest.so.0.2.50") == n.SDK_SHA and
             m["native_libraries"].get(p.RUNTIME_LIBS["libcudart.so"]["realpath"]) ==
                 p.RUNTIME_LIBS["libcudart.so"]["sha256"], "compiler/native pins")
-    require(len(m["preservation"]["roots"]) == 17, "seventeen actual old roots")
+    require(len(m["preservation"]["roots"]) == 18, "eighteen actual old roots")
     from provenance import verify_runner
     require(m["runner_provenance"] == verify_runner(ROOT), "frozen exact runner delta")
     return m

@@ -93,13 +93,17 @@ are deferred to the allocation and reuse exact inherited implementations.
 CUDA_ROOT12.6 is an allowed site locator; CUDA_HOME/PATH13 and pinned
 headers/compiler/ELF/runtime remain authoritative. No new dependency/build.
 
-Preserve all17 actual old roots (13 FAILED,4 COMPLETED including14179309),
+Preserve all18 actual old roots (14 FAILED,4 COMPLETED including14179309),
 separately inherited unsubmitted stages, scientific builds, finalizers and
 their receipts. The rejected `major2-whole-gpu-scaling-20261019` root remains
 unchanged unsubmitted staging, separately snapshotted and small-metadata
 hashed alongside the two inherited unsubmitted stages. It is NOT a jobroot.
-The fresh run is `major2-whole-gpu-scaling-20261019-v2`; neither namespace
-has an actual attempt/job ID during preparation.
+Failed14182594 at `major2-whole-gpu-scaling-20261019-v2` remains FAILED1:0,
+including its exit-zero first-child COMPLETE custody and all saved output hashes.
+Its original source stays pinned at6ae8; no old finalizer or lock is reused.
+The fresh replacement run is `major2-whole-gpu-scaling-20261019-v3`, from
+`psi4.major2-whole-gpu-print3-repair-20261019` with a dedicated scratch parent.
+Only this new namespace has no actual attempt/job ID during preparation.
 New run is pristine, readonly generated bundle only. Code
 moves only by Git. `custody.audit` rechecks preservation, accounting, queue
 headroom and campaign-specific duplicate admission and issues only
