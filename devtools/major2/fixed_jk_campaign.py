@@ -116,17 +116,24 @@ def storage(raw):
     return used
 
 
-def verify_process(raw, row, factor_sha, uuid):
-    root = raw/row["label"]
-    value = p.read_json(root/"COMPLETE.json")
+def verify_environment(raw, row, value, uuid, manifest_sha, job):
     env_file = raw/(row["label"]+".effective-env.json")
     env_receipt = p.read_json(env_file)
-    w.verify_receipt(env_receipt, row, value["pid"], os.environ["SLURM_JOB_ID"], uuid,
-                     p.sha(Path(f.RUN)/"manifest.json"))
+    w.verify_receipt(env_receipt, row, value["pid"], job, uuid, manifest_sha)
     p.require(not env_file.stat().st_mode & 0o222 and
               value["numerical_environment"] == w.CONTROL and
               value["effective_env_receipt"] == env_receipt and
               value["effective_env_sha256"] == p.sha(env_file), "raw effective ENV receipt")
+    p.require(all(v["numerical_environment"] == env_receipt["observed"] for v in value["records"]),
+              "per-output ENV proof")
+    return env_receipt
+
+
+def verify_process(raw, row, factor_sha, uuid):
+    root = raw/row["label"]
+    value = p.read_json(root/"COMPLETE.json")
+    verify_environment(raw, row, value, uuid, p.sha(Path(f.RUN)/"manifest.json"),
+                       os.environ["SLURM_JOB_ID"])
     p.require(value["label"] == row["label"] and value["arm"] == row["arm"] and
               value["settings"] == f.SETTINGS and value["factor_receipt_sha256"] == factor_sha,
               "process exact fixed input/mode")
@@ -294,8 +301,9 @@ class Engine(rc.Engine):
         f.verify_reused_factor(self.raw/"factor")
         result["reused_factor_origin"] = p.read_json(self.raw/"factor/REUSED_FACTOR_ORIGIN.json")
         result["numerical_control"] = w.POLICY
+        by_label = {v["label"]:v for v in values}
         for output in result["outputs"]:
-            output["numerical_environment"] = w.CONTROL
+            output["numerical_environment"] = by_label[output["label"]]["numerical_environment"]
         result["effective_environments"] = [
             dict(label=v["label"], arm=v["arm"], pid=v["pid"],
                  receipt=v["effective_env_receipt"], sha256=v["effective_env_sha256"]) for v in values]

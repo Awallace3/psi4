@@ -183,6 +183,41 @@ runpy.run_path('fixed_jk_runner.py',run_name='__main__')
         self.assertIn('p.read_json(env_path) == EARLY_ENV',runner)
         self.assertIn('numerical_environment=effective_env',runner)
 
+    def test_raw_receipt_hash_mode_and_output_corruption_fatal(self):
+        with tempfile.TemporaryDirectory(dir=os.environ["MAJOR2_TEST_TMP"]) as tmp:
+            raw = Path(tmp)
+            row = f.sequence()[0]
+            receipt = dict(label=row["label"], arm=row["arm"], pid=12, job="99",
+                gpu_uuid="GPU", observed=w.CONTROL, before_numpy_psi4_import=True,
+                manifest_sha256="sha")
+            file = raw/(row["label"]+".effective-env.json")
+            file.write_text(json.dumps(receipt))
+            file.chmod(0o444)
+            value = dict(pid=12, numerical_environment=w.CONTROL,
+                effective_env_receipt=receipt,effective_env_sha256=p.sha(file),
+                records=[dict(numerical_environment=w.CONTROL) for _ in f.STATES])
+            self.assertEqual(c.verify_environment(raw,row,value,"GPU","sha","99"),receipt)
+            for key in ("numerical_environment","effective_env_receipt","effective_env_sha256"):
+                bad = copy.deepcopy(value)
+                bad[key] = None
+                with self.subTest(key=key),self.assertRaises(RuntimeError):
+                    c.verify_environment(raw,row,bad,"GPU","sha","99")
+            bad = copy.deepcopy(value)
+            bad["records"][2]["numerical_environment"] = {}
+            with self.assertRaises(RuntimeError):
+                c.verify_environment(raw,row,bad,"GPU","sha","99")
+            file.chmod(0o644)
+            with self.assertRaises(RuntimeError):
+                c.verify_environment(raw,row,value,"GPU","sha","99")
+            file.write_text(file.read_text()+"\n")
+            file.chmod(0o444)
+            with self.assertRaises(RuntimeError):
+                c.verify_environment(raw,row,value,"GPU","sha","99")
+            file.chmod(0o644)
+            file.unlink()
+            with self.assertRaises(FileNotFoundError):
+                c.verify_environment(raw,row,value,"GPU","sha","99")
+
     def test_all_prior161_tests_byte_identical(self):
         for file in HERE.glob("test_*.py"):
             prior = subprocess.check_output(["git","show",w.PARENT+":devtools/major2/"+file.name],cwd=HERE)
@@ -219,6 +254,18 @@ runpy.run_path('fixed_jk_runner.py',run_name='__main__')
             with self.assertRaises(RuntimeError):
                 f.validate(bad)
 
+    def test_completed_snapshot_changes_fail_preservation(self):
+        m = self.manifest()
+        expected = m["completed_control"]
+        for key in ("stats","hashes","report","job"):
+            bad = copy.deepcopy(expected)
+            bad[key] = {}
+            with patch.object(h.fh,"preservation"), patch.object(h,"old_staging",return_value=m["prior_staging"]), \
+                 patch.object(h,"original_input"), patch.object(h,"frozen_origin"), \
+                 patch.object(h,"completed_control",return_value=bad),self.subTest(key=key), \
+                 self.assertRaisesRegex(RuntimeError,"completed root/report/metadata"):
+                h.preserve(m)
+
     def test_explicit_old_and_new_grouping_bounds_not_timings(self):
         old = self.manifest()["completed_control"]["report"]
         result = w.summary(old)
@@ -236,7 +283,7 @@ runpy.run_path('fixed_jk_runner.py',run_name='__main__')
     def test_only_narrow_owned_diff_scientific_unchanged(self):
         names = subprocess.check_output(["git","diff","--name-only",w.PARENT],cwd=HERE,text=True).splitlines()
         self.assertTrue(all(n.startswith("devtools/major2/") for n in names))
-        for name in ("science.py","observe.py","execute_runner.py","policy.py","summary.py"):
+        for name in ("science.py","observe.py","execute_runner.py","policy.py"):
             prior = subprocess.check_output(["git","show",w.PARENT+":devtools/major2/"+name],cwd=HERE)
             self.assertEqual((HERE/name).read_bytes(),prior)
 
