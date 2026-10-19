@@ -636,7 +636,21 @@ std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool co
     const std::vector<SharedMatrix>& wK = jk_->wK();
 
     std::vector<SharedMatrix> Vx;
-    if (functional_->needs_xc()) {
+    if (functional_->needs_xc() && potential_->uses_cuest_xc()) {
+        // J/K holds all alpha factors, then all beta; the XC kernel wants [a0, b0, a1, b1, ...].
+        std::vector<SharedMatrix> left, right;
+        for (size_t i = 0; i < nvecs; i++) {
+            for (size_t spin_offset : {size_t(0), size_t(nvecs)}) {
+                const auto& L = Cl[spin_offset + i];
+                const auto& R = Cr[spin_offset + i];
+                left.push_back(L);
+                right.push_back(R);
+                Vx.push_back(std::make_shared<Matrix>(spin_offset ? "Vbx temp" : "Vax temp", L->rowspi(),
+                                                      R->rowspi(), L->symmetry() ^ R->symmetry()));
+            }
+        }
+        potential_->compute_Vx_factored(left, right, Vx);
+    } else if (functional_->needs_xc()) {
         std::vector<SharedMatrix> Dx;
         // Gotta reorder the wizardry
         for (size_t i = 0; i < nvecs; i++) {
@@ -1262,6 +1276,10 @@ void UHF::compute_nos() {
 std::shared_ptr<UHF> UHF::c1_deep_copy(std::shared_ptr<BasisSet> basis) {
     auto wfn = Wavefunction::c1_deep_copy(basis);
     auto hf_wfn = std::make_shared<UHF>(wfn, functional_, wfn->options(), wfn->psio());
+    // Do not restart coarse-grid SCF merely by copying a converged wavefunction.
+    if (potential_ && hf_wfn->potential_ && !potential_->initial_grid()) {
+        hf_wfn->potential_->set_grid("Final");
+    }
 
     // now just have to copy the matrices that UHF initializes
     // include only those that are not temporary (some deleted in finalize())
@@ -1284,7 +1302,12 @@ std::shared_ptr<UHF> UHF::c1_deep_copy(std::shared_ptr<BasisSet> basis) {
 void UHF::setup_potential() {
     if (functional_->needs_xc()) {
         potential_ = std::make_shared<UV>(functional_, basisset_, options_);
-        potential_->initialize();
+        if (options_.get_int("DFT_RADIAL_POINTS_INITIAL") != 0 ||
+            options_.get_int("DFT_SPHERICAL_POINTS_INITIAL") != 0) {
+            potential_->set_grid("Initial");
+        } else {
+            potential_->initialize();
+        }
     } else {
         potential_ = nullptr;
     }

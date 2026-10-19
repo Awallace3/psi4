@@ -15,6 +15,7 @@
  */
 
 #include "cuest_xc_gpu.h"
+#include "cuest_xc_response_math.h"
 
 #include <cmath>
 
@@ -142,6 +143,66 @@ __global__ void pack_potential_polarized_kernel(std::size_t npoints, std::size_t
         out_a[4] = weight * v_tau[2 * point + 0];
         out_b[4] = weight * v_tau[2 * point + 1];
     }
+}
+
+// => XC response (second-derivative) kernels <= //
+
+__global__ void response_axpy_kernel(std::size_t n, double alpha, const double* x, double* y) {
+    const std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) y[i] += alpha * x[i];
+}
+
+__global__ void response_count_nonfinite_kernel(std::size_t n, const double* values, unsigned long long* count) {
+    const std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n && !isfinite(values[i])) atomicAdd(count, 1ULL);
+}
+
+__global__ void response_project_triplet_kernel(std::size_t npoints, bool gga, const double* v2rho2,
+                                                const double* v2rhosigma, const double* v2sigma2,
+                                                const double* vsigma, double* A, double* B, double* C, double* S) {
+    const std::size_t point = blockIdx.x * blockDim.x + threadIdx.x;
+    if (point >= npoints) return;
+    const auto k = cuest_xc_response::project_triplet(v2rho2 + 3 * point, gga ? v2rhosigma + 6 * point : nullptr,
+                                                      gga ? v2sigma2 + 6 * point : nullptr,
+                                                      gga ? vsigma + 3 * point : nullptr, gga);
+    A[point] = k.A;
+    if (gga) {
+        B[point] = k.B;
+        C[point] = k.C;
+        S[point] = k.S;
+    }
+}
+
+__global__ void response_pack_rks_kernel(std::size_t npoints, bool gga, double cutoff, const double* weights,
+                                         const double* reference, const double* A, const double* B, const double* C,
+                                         const double* S, const double* response, double* potential) {
+    const std::size_t point = blockIdx.x * blockDim.x + threadIdx.x;
+    if (point >= npoints) return;
+    const std::size_t ncomponents = gga ? 4 : 1;
+    cuest_xc_response::RKSKernel k{A[point], 0.0, 0.0, 0.0};
+    if (gga) {
+        k.B = B[point];
+        k.C = C[point];
+        k.S = S[point];
+    }
+    cuest_xc_response::pack_rks(gga, weights[point], cutoff, reference + ncomponents * point, k,
+                                response + ncomponents * point, potential + ncomponents * point);
+}
+
+__global__ void response_pack_uks_kernel(std::size_t npoints, bool gga, double cutoff, const double* weights,
+                                         const double* reference_a, const double* reference_b,
+                                         const double* v2rho2, const double* v2rhosigma, const double* v2sigma2,
+                                         const double* vsigma, const double* response_a, const double* response_b,
+                                         double* potential_a, double* potential_b) {
+    const std::size_t point = blockIdx.x * blockDim.x + threadIdx.x;
+    if (point >= npoints) return;
+    const std::size_t ncomponents = gga ? 4 : 1;
+    const std::size_t offset = ncomponents * point;
+    cuest_xc_response::pack_uks(gga, weights[point], cutoff, reference_a + offset, reference_b + offset,
+                                v2rho2 + 3 * point, gga ? v2rhosigma + 6 * point : nullptr,
+                                gga ? v2sigma2 + 6 * point : nullptr, gga ? vsigma + 3 * point : nullptr,
+                                response_a + offset, response_b + offset, potential_a + offset,
+                                potential_b + offset);
 }
 
 inline int blocks(std::size_t npoints) { return static_cast<int>((npoints + block_size - 1) / block_size); }
@@ -275,6 +336,48 @@ cudaError_t cuest_xc_reduce_uks(std::size_t npoints, const double* weights, cons
     const auto status = cudaGetLastError();
     if (status != cudaSuccess) return status;
     reduce_finish_kernel<3><<<1, reduce_block_size>>>(scratch, out);
+    return cudaGetLastError();
+}
+
+cudaError_t cuest_xc_response_axpy(std::size_t n, double alpha, const double* x, double* y) {
+    if (n == 0) return cudaSuccess;
+    response_axpy_kernel<<<blocks(n), block_size>>>(n, alpha, x, y);
+    return cudaGetLastError();
+}
+
+cudaError_t cuest_xc_response_count_nonfinite(std::size_t n, const double* values, unsigned long long* count) {
+    if (n == 0) return cudaSuccess;
+    response_count_nonfinite_kernel<<<blocks(n), block_size>>>(n, values, count);
+    return cudaGetLastError();
+}
+
+cudaError_t cuest_xc_response_project_triplet(std::size_t npoints, bool gga, const double* v2rho2,
+                                              const double* v2rhosigma, const double* v2sigma2, const double* vsigma,
+                                              double* A, double* B, double* C, double* S) {
+    if (npoints == 0) return cudaSuccess;
+    response_project_triplet_kernel<<<blocks(npoints), block_size>>>(npoints, gga, v2rho2, v2rhosigma, v2sigma2,
+                                                                     vsigma, A, B, C, S);
+    return cudaGetLastError();
+}
+
+cudaError_t cuest_xc_response_pack_rks(std::size_t npoints, bool gga, double cutoff, const double* weights,
+                                       const double* reference, const double* A, const double* B, const double* C,
+                                       const double* S, const double* response, double* potential) {
+    if (npoints == 0) return cudaSuccess;
+    response_pack_rks_kernel<<<blocks(npoints), block_size>>>(npoints, gga, cutoff, weights, reference, A, B, C, S,
+                                                              response, potential);
+    return cudaGetLastError();
+}
+
+cudaError_t cuest_xc_response_pack_uks(std::size_t npoints, bool gga, double cutoff, const double* weights,
+                                       const double* reference_a, const double* reference_b, const double* v2rho2,
+                                       const double* v2rhosigma, const double* v2sigma2, const double* vsigma,
+                                       const double* response_a, const double* response_b, double* potential_a,
+                                       double* potential_b) {
+    if (npoints == 0) return cudaSuccess;
+    response_pack_uks_kernel<<<blocks(npoints), block_size>>>(npoints, gga, cutoff, weights, reference_a,
+                                                              reference_b, v2rho2, v2rhosigma, v2sigma2, vsigma,
+                                                              response_a, response_b, potential_a, potential_b);
     return cudaGetLastError();
 }
 

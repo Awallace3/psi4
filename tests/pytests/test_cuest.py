@@ -1,3 +1,4 @@
+import re
 import subprocess
 import sys
 
@@ -720,9 +721,8 @@ else:
 @uusing("cuest")
 @uusing("cuda_cc8")
 @pytest.mark.parametrize("route,expected", [
-    # TDDFT and CPHF response properties both go through RV::compute_Vx.
-    pytest.param('tdscf', 'XC response kernel', id='tdscf'),
-    pytest.param('polarizability', 'XC response kernel', id='polarizability'),
+    # TDDFT and CPHF response properties (RV::compute_Vx) run on the cuEST grid now:
+    # test_cuest_response_route_matches_cpu checks their numbers.
     pytest.param('sap_guess', 'SAP guess', id='sap_guess'),
     # GRAC SCF energies are supported; analytic gradients are not.
     pytest.param('grac_gradient', 'cuEST analytic gradients with GRAC', id='grac_gradient'),
@@ -759,3 +759,53 @@ def test_cuest_unsupported_route(route, expected, tmp_path):
         f"cuEST '{route}' raised, but not from the expected guard "
         f"(wanted {expected!r}).\nstdout:\n{proc.stdout}"
     )
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.parametrize("route", ["tdscf", "polarizability"])
+def test_cuest_response_route_matches_cpu(route):
+    """TDDFT and CPHF polarizabilities through the cuEST-grid compute_Vx agree with the CPU grid.
+
+    These were unsupported routes (a guard raised); a silent XC-free kernel would move the
+    excitation energies and polarizabilities far beyond the grid-to-grid tolerance used here.
+    """
+    results = {}
+    for gpu in (False, True):
+        psi4.core.clean()
+        psi4.core.clean_options()
+        psi4.core.clean_variables()
+        psi4.set_options({
+            "scf_type": "df", "df_basis_scf": "def2-universal-JKFIT", "basis": "def2-svp",
+            "puream": True, "reference": "rhf", "dft_nuclear_scheme": "stratmann",
+            "e_convergence": 10, "d_convergence": 10, "save_jk": True,
+            "use_cuest": gpu, "cuest_xc": gpu, "cuest_mixed_precision": False,
+        })
+        mol = psi4.geometry("""
+            0 1
+            O
+            H 1 0.9584
+            H 1 0.9584 2 104.45
+            symmetry c1
+        """)
+        try:
+            if route == "tdscf":
+                _, wfn = psi4.energy("b3lyp", molecule=mol, return_wfn=True)
+                psi4.set_options({"tdscf_states": [4], "tdscf_r_convergence": 1.e-6})
+                wfn = psi4.tdscf(wfn)
+                values = [v for k, v in sorted(wfn.variables().items())
+                          if re.fullmatch(r"TD-.* ROOT 0 -> ROOT \d+ EXCITATION ENERGY", k)]
+            else:
+                psi4.properties("b3lyp", properties=["DIPOLE_POLARIZABILITIES"], molecule=mol)
+                values = [v for k, v in sorted(psi4.core.variables().items()) if "POLARIZABILITY" in k]
+        finally:
+            psi4.set_options({"use_cuest": False, "cuest_xc": False})
+        results[gpu] = np.array(values, dtype=float)
+    cpu, gpu = results[False], results[True]
+    assert cpu.size >= 4 and cpu.shape == gpu.shape
+    # Host grid vs cuEST grid differ only by quadrature details: excitation energies to
+    # ~1e-6 Eh, polarizabilities to ~1e-5 relative; the tolerances leave a decade of room.
+    if route == "tdscf":
+        np.testing.assert_allclose(gpu, cpu, atol=1.e-5, rtol=0)
+    else:
+        np.testing.assert_allclose(gpu, cpu, rtol=1.e-4, atol=1.e-4)

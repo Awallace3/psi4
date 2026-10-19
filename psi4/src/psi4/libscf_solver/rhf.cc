@@ -516,12 +516,23 @@ std::vector<SharedMatrix> RHF::twoel_Hx_full(std::vector<SharedMatrix> x_vec, bo
 
     std::vector<SharedMatrix> Vx;
     if (functional_->needs_xc()) {
-        std::vector<SharedMatrix> Dx;
-        for (size_t i = 0; i < x_vec.size(); i++) {
-            Dx.push_back(cpscf::doublet(options_, Cl[i], Cr[i], false, true));
-            Vx.push_back(std::make_shared<Matrix>("Vx Temp", Dx[i]->rowspi(), Dx[i]->colspi(), Dx[i]->symmetry()));
+        auto rv = std::dynamic_pointer_cast<RV>(potential_);
+        if (rv && rv->uses_cuest_xc()) {
+            // Contract the J/K factors directly (Cr already carries the response sign);
+            // outputs take the shape and symmetry of Cl Cr^T without forming it.
+            for (size_t i = 0; i < x_vec.size(); i++) {
+                Vx.push_back(std::make_shared<Matrix>("Vx Temp", Cl[i]->rowspi(), Cr[i]->rowspi(),
+                                                      Cl[i]->symmetry() ^ Cr[i]->symmetry()));
+            }
+            rv->compute_Vx_full_factored(Cl, Cr, Vx, singlet);
+        } else {
+            std::vector<SharedMatrix> Dx;
+            for (size_t i = 0; i < x_vec.size(); i++) {
+                Dx.push_back(cpscf::doublet(options_, Cl[i], Cr[i], false, true));
+                Vx.push_back(std::make_shared<Matrix>("Vx Temp", Dx[i]->rowspi(), Dx[i]->colspi(), Dx[i]->symmetry()));
+            }
+            potential_->compute_Vx_full(Dx, Vx, singlet);
         }
-        potential_->compute_Vx_full(Dx, Vx, singlet);
     }
 
     std::vector<SharedMatrix> V_ext_pert;
@@ -1048,6 +1059,11 @@ bool RHF::stability_analysis() {
 std::shared_ptr<RHF> RHF::c1_deep_copy(std::shared_ptr<BasisSet> basis) {
     auto wfn = Wavefunction::c1_deep_copy(basis);
     auto hf_wfn = std::make_shared<RHF>(wfn, functional_, wfn->options(), wfn->psio());
+    // Construction may select the initial SCF grid. A copy is not a new SCF:
+    // preserve the source phase for subsequent potential/response evaluation.
+    if (potential_ && hf_wfn->potential_ && !potential_->initial_grid()) {
+        hf_wfn->potential_->set_grid("Final");
+    }
     // now just have to copy the matrices that RHF initializes
     // include only those that are not temporary (some deleted in finalize())
     if (Ca_) {
@@ -1077,7 +1093,12 @@ std::shared_ptr<RHF> RHF::c1_deep_copy(std::shared_ptr<BasisSet> basis) {
 void RHF::setup_potential() {
     if (functional_->needs_xc()) {
         potential_ = std::make_shared<RV>(functional_, basisset_, options_);
-        potential_->initialize();
+        if (options_.get_int("DFT_RADIAL_POINTS_INITIAL") != 0 ||
+            options_.get_int("DFT_SPHERICAL_POINTS_INITIAL") != 0) {
+            potential_->set_grid("Initial");
+        } else {
+            potential_->initialize();
+        }
     } else {
         potential_ = nullptr;
     }

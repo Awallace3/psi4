@@ -59,6 +59,9 @@
 #include "psi4/libmints/factory.h"
 #include "psi4/libdiis/diismanager.h"
 #include "psi4/libfock/jk.h"
+#ifdef USING_cuEST
+#include "psi4/libfock/cuESTJK.h"
+#endif
 #include "psi4/lib3index/dfhelper.h"
 #include "psi4/libpsi4util/PsiOutStream.h"
 #include "psi4/libpsi4util/process.h"
@@ -261,11 +264,93 @@ void SADGuess::common_init() {
     if (options_["SOCC"].size() > 0 || options_["DOCC"].size() > 0)
         PSIEXCEPTION("SAD guess not implemented for user-specified SOCCs and/or DOCCs yet");
 }
+
+void SADGuess::initialize_jk(std::shared_ptr<BasisSet> bas, std::shared_ptr<BasisSet> fit) {
+    // Atomic guesses need their own fit and *bare* HF exchange, even when the
+    // molecular calculation is a hybrid or range-separated DFT calculation.
+    // Share this route between the internal and OpenOrbitalOptimizer solvers.
+    // Release the previous atom's plan before allocating the next one.
+    jk.reset();
+    bool use_gpu = false;
+    if (SAD_use_fitting(options_)) {
+#ifdef USING_cuEST
+        // Like molecular cuEST J/K, the default uses cuEST pair screening.
+        // Preserve explicitly requested CPU screening/metric contracts: the
+        // wrapper does not implement CSAM/DENSITY/NONE or a configurable DF
+        // metric cutoff, and a zero cuEST pair threshold is not validated.
+        const bool requested = options_.get_bool("USE_CUEST") && options_.get_bool("CUEST_SAD");
+        use_gpu = requested && fit && fit->has_puream() &&
+                  options_.get_double("INTS_TOLERANCE") > 0.0 &&
+                  (!options_["SCREENING"].has_changed() || options_.get_str("SCREENING") == "SCHWARZ") &&
+                  !options_["DF_FITTING_CONDITION"].has_changed();
+        if (requested && !use_gpu && print_) {
+            outfile->Printf("  SAD cuEST ineligible: retaining CPU J/K for the requested fitting/screening contract.\n");
+        }
+        if (use_gpu) {
+            jk = std::make_unique<cuESTJK>(bas, fit, options_);
+            jk->set_omega_alpha(1.0);
+            jk->set_omega_beta(0.0);
+            jk->set_omega(0.0);
+        } else
+#endif
+        {
+            auto dfjk = std::make_unique<MemDFJK>(bas, fit, options_);
+            if (options_["DF_INTS_NUM_THREADS"].has_changed())
+                dfjk->set_df_ints_num_threads(options_.get_int("DF_INTS_NUM_THREADS"));
+            dfjk->dfh()->set_print_lvl(0);
+            jk = std::move(dfjk);
+        }
+    } else {
+        auto directjk = std::make_unique<DirectJK>(bas, options_);
+        if (options_["DF_INTS_NUM_THREADS"].has_changed())
+            directjk->set_df_ints_num_threads(options_.get_int("DF_INTS_NUM_THREADS"));
+        jk = std::move(directjk);
+    }
+
+    jk->set_print(print_ > 1 ? 1 : 0);
+    jk->set_bench(options_.get_int("BENCH"));
+    if (print_) outfile->Printf("  SAD J/K backend: %s\n", jk->name().c_str());
+    jk->set_memory(static_cast<size_t>(0.5 * (Process::environment.get_memory() / 8L)));
+    if (use_gpu) {
+        // No libint Schwarz engine is involved, and no global option needs
+        // changing. Errors here remain GPU errors, not silent CPU retries.
+        jk->initialize();
+        if (print_ > 1) jk->print_header();
+        return;
+    }
+
+    // The CPU JK's libint2 engine constructs Schwarz bounds externally and
+    // needs zero precision during initialization. Restore this on failure too.
+    auto& env_options = Process::environment.options;
+    std::string tolerance_key = "INTS_TOLERANCE";
+    const auto tolerance = env_options.get_local(tolerance_key).to_double();
+    const bool changed = env_options.get_local(tolerance_key).has_changed();
+    auto restore_tolerance = [&]() {
+        env_options.set_double("SCF", "INTS_TOLERANCE", tolerance);
+        if (!changed) env_options.get_local(tolerance_key).dechanged();
+    };
+    env_options.set_double("SCF", "INTS_TOLERANCE", 0.0);
+    try {
+        jk->initialize();
+    } catch (...) {
+        restore_tolerance();
+        throw;
+    }
+    restore_tolerance();
+    if (print_ > 1) jk->print_header();
+}
+
 void SADGuess::compute_guess() {
     timer_on("SAD Guess");
     start_skip_timers();
-    form_D();
-    form_C();
+    try {
+        form_D();
+        form_C();
+    } catch (...) {
+        stop_skip_timers();
+        timer_off("SAD Guess");
+        throw;
+    }
     stop_skip_timers();
     timer_off("SAD Guess");
 }
@@ -702,34 +787,7 @@ void SADGuess::get_uhf_atomic_density(std::shared_ptr<BasisSet> bas, std::shared
     diis_manager.set_error_vector_size(gradient_a.get(), gradient_b.get());
     diis_manager.set_vector_size(Fa.get(), Fb.get());
 
-    // Setup JK
-    // Need a very special auxiliary basis here
-    if (SAD_use_fitting(options_)) {
-        auto dfjk = std::make_unique<MemDFJK>(bas, fit, options_);
-
-        if (options_["DF_INTS_NUM_THREADS"].has_changed())
-            dfjk->set_df_ints_num_threads(options_.get_int("DF_INTS_NUM_THREADS"));
-        dfjk->dfh()->set_print_lvl(0);
-        jk = std::move(dfjk);
-    } else {
-        DirectJK* directjk(new DirectJK(bas, options_));
-        if (options_["DF_INTS_NUM_THREADS"].has_changed())
-            directjk->set_df_ints_num_threads(options_.get_int("DF_INTS_NUM_THREADS"));
-        jk = std::unique_ptr<JK>(directjk);
-    }
-
-    // JK object primary libint2::Engine used to construct Schwarz externally, so need to zero precision for SAD scope
-    std::string ints_tolerance_key = "INTS_TOLERANCE";
-    auto ints_tolerance_value = Process::environment.options.get_double(ints_tolerance_key);
-    auto ints_tolerance_changed = Process::environment.options.use_local(ints_tolerance_key).has_changed();
-    Process::environment.options.set_double("SCF", ints_tolerance_key, 0.0);
-
-    jk->set_memory((size_t)(0.5 * (Process::environment.get_memory() / 8L)));
-    jk->initialize();
-    if (print_ > 1) jk->print_header();
-
-    Process::environment.options.set_double("SCF", ints_tolerance_key, ints_tolerance_value);
-    if (!ints_tolerance_changed) Process::environment.options.use_local(ints_tolerance_key).dechanged();
+    initialize_jk(bas, fit);
 
     // These are static so lets just grab them now
     std::vector<SharedMatrix>& jkC = jk->C_left();
@@ -967,33 +1025,7 @@ void SADGuess::get_uhf_atomic_density_ooo(std::shared_ptr<BasisSet> bas, std::sh
     diis_manager.set_error_vector_size(gradient_a.get(), gradient_b.get());
     diis_manager.set_vector_size(Fa.get(), Fb.get());
 
-    // Need a very special auxiliary basis here
-    if (SAD_use_fitting(options_)) {
-        auto dfjk = std::make_unique<MemDFJK>(bas, fit, options_);
-
-        if (options_["DF_INTS_NUM_THREADS"].has_changed())
-            dfjk->set_df_ints_num_threads(options_.get_int("DF_INTS_NUM_THREADS"));
-        dfjk->dfh()->set_print_lvl(0);
-        jk = std::move(dfjk);
-    } else {
-        DirectJK* directjk(new DirectJK(bas, options_));
-        if (options_["DF_INTS_NUM_THREADS"].has_changed())
-            directjk->set_df_ints_num_threads(options_.get_int("DF_INTS_NUM_THREADS"));
-        jk = std::unique_ptr<JK>(directjk);
-    }
-
-    // JK object primary libint2::Engine used to construct Schwarz externally, so need to zero precision for SAD scope
-    std::string ints_tolerance_key = "INTS_TOLERANCE";
-    auto ints_tolerance_value = Process::environment.options.get_double(ints_tolerance_key);
-    auto ints_tolerance_changed = Process::environment.options.use_local(ints_tolerance_key).has_changed();
-    Process::environment.options.set_double("SCF", ints_tolerance_key, 0.0);
-
-    jk->set_memory((size_t)(0.5 * (Process::environment.get_memory() / 8L)));
-    jk->initialize();
-    if (print_ > 1) jk->print_header();
-
-    Process::environment.options.set_double("SCF", ints_tolerance_key, ints_tolerance_value);
-    if (!ints_tolerance_changed) Process::environment.options.use_local(ints_tolerance_key).dechanged();
+    initialize_jk(bas, fit);
 
     // These are static so lets just grab them now
     std::vector<SharedMatrix>& jkC = jk->C_left();

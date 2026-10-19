@@ -71,6 +71,8 @@ class PSI_API ExternalPotential {
     /// diffuse Gaussian charges as a vector of the number of bases applied,
     /// each containing a number of diffuses for each basis x 3 SharedMatrix
     std::vector<SharedMatrix> gradients_on_gaussians_;
+    /// Whether the USE_CUEST diffuse-charges-on-CPU warning was printed
+    bool warned_diffuse_cuest_ = false;
 
    public:
     /// Constructur, does nothing
