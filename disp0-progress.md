@@ -422,6 +422,25 @@ preflight link probe, CMake=4.3.2 for baseline comparability, and
 `#SBATCH --no-requeue`. These changes affect only this local branch, **not**
 failed immutable source/env/build/install roots. No new job submitted.
 Any corrected dependency build requires fresh parent approval.
+
+Additional failed-run provenance bafb39732 (read-only): header/link probe
+reported `CUDART_VERSION=13030`, runtime version 13030, status 0; nvcc
+13.3.73. Configure selected explicit CUDA13 compiler/toolkit, sm90 and
+Python build ON. These are **CPU header/link preparation checks only**,
+not CUDA device/runtime or numerical correctness.
+
+Environment lock exists. Actual packages included Apiary 1.0.0,
+pybind11 3.0.2, mimalloc 3.3.2, CMake **4.4.4**, GCC/G++ implementations
+14.3.0 **build 20**; the local CPU oracle uses GCC/G++14.3.0 build18.
+The version-only GCC pin did not freeze package build numbers; this drift is
+retained rather than claiming identical toolchains. `Catch2_DIR` pointed to
+CMake's `pkgRedirects`, confirming source fallback, not the installed imported
+target used by the CPU oracle. No E2 native/Python install or fresh Psi4 stage
+was completed.
+
+Recipe-only correction pin `5245210a100b73c3c5b275d889ad2de3c51ec736`
+was sent to parent with a fresh one-job CPU build approval request. No new
+approval or allocation is assumed.
 * Read-only Phoenix access preflight: PASS, exit 0 (bfefc7153).
   No remote branch worktree/build has yet been created and no job submitted.
 * Read-only Phoenix dependency discovery: PASS, exit 0 (b99607f10).
