@@ -30,6 +30,8 @@
 Miscellaneous tools for driver and users.
 """
 
+# Needed by SCF decorators during the fcidump -> procrouting import cycle.
+from .timing import timer
 from .exceptions import *
 from .fchk import *
 from .fcidump import *

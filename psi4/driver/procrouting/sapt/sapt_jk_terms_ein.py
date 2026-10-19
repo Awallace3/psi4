@@ -2720,6 +2720,49 @@ def fdisp0(
     return cache
 
 
+# Present only in a cuEST-enabled build; see psi4/src/cuest_gemm.cc.
+_HAVE_CUEST_GEMM = hasattr(core, "cuest_chain_gemm")
+
+
+def _chain_gemm_work(tensors: list[core.Matrix], transposes: list[str]) -> int:
+    """Return the largest ``m * k * n`` among the links of a gemm chain.
+
+    Follows the same shape rules as :func:`chain_gemm_einsums` itself: only the
+    first left operand may be transposed, and the row count of the running
+    product never changes after the first link.
+    """
+    rows, cols = tensors[0].shape
+    if transposes[0] == "T":
+        rows, cols = cols, rows
+    largest = 0
+    for i in range(len(tensors) - 1):
+        b_cols = tensors[i + 1].shape[0 if transposes[i + 1] == "T" else 1]
+        largest = max(largest, rows * cols * b_cols)
+        cols = b_cols
+    return largest
+
+
+def _use_cuest_gemm(
+    tensors: list[core.Matrix], transposes: list[str], prefactors_C: list[float] | None
+) -> bool:
+    """Whether a gemm chain is worth sending to cuBLAS.
+
+    Operand uploads and requested-product downloads can outweigh small GEMMs.
+    The heuristic requires the largest link's ``m * k * n`` to be at least
+    ``CUEST_GEMM_MIN_DIM ** 3``; it is not a timing estimate for the whole chain.
+    The GPU interface supports only beta=0. Nonzero ``prefactors_C`` retain the
+    CPU path, although its freshly zeroed outputs also have nothing to accumulate.
+    """
+    if not _HAVE_CUEST_GEMM or len(tensors) < 2:
+        return False
+    if not core.get_global_option("USE_CUEST"):
+        return False
+    if prefactors_C is not None and any(prefactors_C):
+        return False
+    min_dim = core.get_global_option("CUEST_GEMM_MIN_DIM")
+    return _chain_gemm_work(tensors, transposes) >= min_dim**3
+
+
 def chain_gemm_einsums(
     tensors: list[core.Matrix],
     transposes: list[str] = None,
@@ -2728,25 +2771,28 @@ def chain_gemm_einsums(
     return_tensors: list[bool] = None,
 ) -> core.Matrix | list[core.Matrix]:
     """
-    Computes a chain of einsum matrix multiplications
+    Multiply input matrices left to right using einsums or the cuBLAS fast path.
 
     Parameters
     ----------
     tensors : list[core.Matrix]
         List of tensors to be contracted.
     transposes : list[str], optional
-        List of transpose operations for each tensor, where "N" means no transpose and "T" means transpose.
+        One operation per input tensor: "N" or "T". Computed intermediates are
+        never transposed again.
     prefactors_C : list[float], optional
-        List of prefactors for the resulting tensors in the chain.
+        One GEMM beta per multiplication link. Each output starts at zero, so
+        these do not accumulate an earlier product. Nonzero values select CPU einsums.
     prefactors_AB : list[float], optional
-        List of prefactors for the tensors being multiplied in the chain.
+        One GEMM alpha per multiplication link (length ``len(tensors) - 1``).
+        Each alpha scales that link's product, including all preceding products.
     return_tensors : list[bool], optional
         List indicating which intermediate tensors should be returned. If None,
         only the final tensor is returned. Note that these are only
         intermediate tensors and final tensor; hence, the length of this list
         should be one less than the number of tensors.
     """
-    # initialization "computed_tensors" with the first tensor of the chain
+    # The initial left operand is an input; subsequent ones are computed products.
     computed_tensors = [tensors[0]]
     N = len(tensors)
     if transposes is None:
@@ -2755,6 +2801,19 @@ def chain_gemm_einsums(
         prefactors_C = [0.0] * (N - 1)
     if prefactors_AB is None:
         prefactors_AB = [1.0] * (N - 1)
+
+    if _use_cuest_gemm(tensors, transposes, prefactors_C):
+        # Upload each input operand and download only requested products.
+        # Running intermediates stay on the device. The eligibility check has
+        # already restricted this call to beta=0, as required by the GPU API.
+        if return_tensors is None:
+            return_flags = [False] * (N - 2) + [True]
+        else:
+            return_flags = [bool(r) for r in return_tensors][: N - 1]
+            return_flags += [False] * (N - 1 - len(return_flags))
+        products = core.cuest_chain_gemm(tensors, transposes, prefactors_AB, return_flags)
+        return products[0] if return_tensors is None else products
+
     try:
         for i in range(len(tensors) - 1):
             A = computed_tensors[-1]
@@ -3071,43 +3130,7 @@ def induction(
     cache["J_P_A"] = J_P_A
     cache["J_P_B"] = J_P_B
 
-    # Eq. 17: exchange-induction potential for A due to B
-    EX_A = K_B.clone()
-    EX_A.scale(-1.0)
-    ein.core.axpy(-2.0, J_O.np, EX_A.np)
-    ein.core.axpy(1.0, K_O.np, EX_A.np)
-    ein.core.axpy(2.0, J_P_B.np, EX_A.np)
-
-    # Apply all the axpy operations to EX_A
-    S_DB, S_DB_VA, S_DB_VA_DB_S = chain_gemm_einsums(
-        [S, D_B, V_A, D_B, S], return_tensors=[True, True, False, True]
-    )
-    S_DB_JA, S_DB_JA_DB_S = chain_gemm_einsums(
-        [S_DB, J_A, D_B, S], return_tensors=[True, False, True]
-    )
-    S_DB_S_DA, S_DB_S_DA_VB = chain_gemm_einsums(
-        [S_DB, S, D_A, V_B],
-        return_tensors=[False, True, True],
-    )
-    ein.core.axpy(-1.0, S_DB_VA.np, EX_A.np)
-    ein.core.axpy(-2.0, S_DB_JA.np, EX_A.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([S_DB, K_A]).np, EX_A.np)
-    ein.core.axpy(1.0, S_DB_S_DA_VB.np, EX_A.np)
-    ein.core.axpy(2.0, chain_gemm_einsums([S_DB_S_DA, J_B]).np, EX_A.np)
-    ein.core.axpy(1.0, S_DB_VA_DB_S.np, EX_A.np)
-    ein.core.axpy(2.0, S_DB_JA_DB_S.np, EX_A.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([S_DB, K_O], ["N", "T"]).np, EX_A.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([V_B, D_B, S]).np, EX_A.np)
-    ein.core.axpy(-2.0, chain_gemm_einsums([J_B, D_B, S]).np, EX_A.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([K_B, D_B, S]).np, EX_A.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([V_B, D_A, S, D_B, S]).np, EX_A.np)
-    ein.core.axpy(2.0, chain_gemm_einsums([J_B, D_A, S, D_B, S]).np, EX_A.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([K_O, D_B, S]).np, EX_A.np)
-
-    EX_A_MO_1 = chain_gemm_einsums(
-        [cache["Cocc_A"], EX_A, cache["Cvir_A"]],
-        ["T", "N", "N"],
-    )
+    # Eq. 17: exchange-induction potentials for A due to B and B due to A
     mapA = {
         "S": S,
         "J_O": J_O,
@@ -3128,69 +3151,7 @@ def induction(
         "J_P_B": J_P_B,
     }
     EX_A_MO = build_exch_ind_pot_AB(mapA)
-    assert np.allclose(EX_A_MO, EX_A_MO_1), "EX_A_MO and EX_A_MO_1 do not match!"
-
-    # Eq. 17: exchange-induction potential for B due to A
-    EX_B = K_A.clone()
-    EX_B.scale(-1.0)
-    ein.core.axpy(-2.0, J_O.np, EX_B.np)
-    ein.core.axpy(1.0, K_O.np, EX_B.np.T)
-    ein.core.axpy(2.0, J_P_A.np, EX_B.np)
-    cache["J_P_A"] = J_P_A
-    cache["J_P_B"] = J_P_B
-
-    S_DA, S_DA_VB, S_DA_VB_DA_S = chain_gemm_einsums(
-        [S, D_A, V_B, D_A, S], return_tensors=[True, True, False, True]
-    )
-    S_DA_JB, S_DA_JB_DA_S = chain_gemm_einsums(
-        [S_DA, J_B, D_A, S], return_tensors=[True, False, True]
-    )
-    S_DA_S_DB, S_DA_S_DB_VA = chain_gemm_einsums(
-        [S_DA, S, D_B, V_A],
-        return_tensors=[False, True, True],
-    )
-
-    # Apply all the axpy operations to EX_B
-    ein.core.axpy(-1.0, S_DA_VB.np, EX_B.np)
-    ein.core.axpy(-2.0, S_DA_JB.np, EX_B.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([S_DA, K_B]).np, EX_B.np)
-    ein.core.axpy(1.0, S_DA_S_DB_VA.np, EX_B.np)
-    ein.core.axpy(2.0, chain_gemm_einsums([S_DA_S_DB, J_A]).np, EX_B.np)
-    ein.core.axpy(1.0, S_DA_VB_DA_S.np, EX_B.np)
-    ein.core.axpy(2.0, S_DA_JB_DA_S.np, EX_B.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([S_DA, K_O]).np, EX_B.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([V_A, D_A, S]).np, EX_B.np)
-    ein.core.axpy(-2.0, chain_gemm_einsums([J_A, D_A, S]).np, EX_B.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([K_A, D_A, S]).np, EX_B.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([V_A, D_B, S, D_A, S]).np, EX_B.np)
-    ein.core.axpy(2.0, chain_gemm_einsums([J_A, D_B, S, D_A, S]).np, EX_B.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([K_O, D_A, S], ["T", "N", "N"]).np, EX_B.np)
-
-    EX_B_MO_1 = chain_gemm_einsums(
-        [cache["Cocc_B"], EX_B, cache["Cvir_B"]],
-        ["T", "N", "N"],
-    )
     EX_B_MO = build_exch_ind_pot_BA(mapA)
-    assert np.allclose(EX_B_MO, EX_B_MO_1), "EX_B_MO and EX_B_MO_1 do not match!"
-
-    # Eq. 8: omega^A = V^A + 2*J^A
-    w_A = V_A.clone()
-    w_A.name = "w_A"
-    ein.core.axpy(2.0, J_A.np, w_A.np)
-
-    # Eq. 8: omega^B = V^B + 2*J^B
-    w_B = V_B.clone()
-    w_B.name = "w_B"
-    ein.core.axpy(2.0, J_B.np, w_B.np)
-
-    w_B_MOA_1 = chain_gemm_einsums(
-        [cache["Cocc_A"], w_B, cache["Cvir_A"]],
-        ["T", "N", "N"],
-    )
-    w_A_MOB_1 = chain_gemm_einsums(
-        [cache["Cocc_B"], w_A, cache["Cvir_B"]],
-        ["T", "N", "N"],
-    )
 
     # Eq. 16: induction potential omega_B in MO basis of A
     w_B_MOA = build_ind_pot(
@@ -3212,8 +3173,6 @@ def induction(
         }
     )
     w_A_MOB.name = "w_A_MOB"
-    assert np.allclose(w_B_MOA, w_B_MOA_1), "w_B_MOA and w_B_MOA_1 do not match!"
-    assert np.allclose(w_A_MOB, w_A_MOB_1), "w_A_MOB and w_A_MOB_1 do not match!"
 
     # Do uncoupled induction calculations
     core.print_out("   => Uncoupled Induction <= \n\n")
@@ -3228,14 +3187,8 @@ def induction(
     eps_vir_B = cache["eps_vir_B"]
 
     # Eq. 20
-    for r in range(unc_x_B_MOA.shape[0]):
-        for a in range(unc_x_B_MOA.shape[1]):
-            unc_x_B_MOA.np[r, a] /= eps_occ_A.np[r] - eps_vir_A.np[a]
-
-    # Eq. 20
-    for r in range(unc_x_A_MOB.shape[0]):
-        for a in range(unc_x_A_MOB.shape[1]):
-            unc_x_A_MOB.np[r, a] /= eps_occ_B.np[r] - eps_vir_B.np[a]
+    unc_x_B_MOA.np[:] /= eps_occ_A.np[:, None] - eps_vir_A.np[None, :]
+    unc_x_A_MOB.np[:] /= eps_occ_B.np[:, None] - eps_vir_B.np[None, :]
 
     # Eq. 14: E^(2)_ind(A<-B) = 2 * x^A . omega_tilde^B
     unc_ind_ab = 2.0 * ein.core.dot(unc_x_B_MOA.np, w_B_MOA.np)

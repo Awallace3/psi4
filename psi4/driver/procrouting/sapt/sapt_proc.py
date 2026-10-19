@@ -1211,17 +1211,26 @@ def compute_GRAC_shift(
                 core.print_out(
                     f"\n\n  ==> GRAC {label} Electron Removed Molecule: charge={mol_cation.molecular_charge()} mult={mol_cation.multiplicity()} <==\n\n"
                 )
+                cation_kwargs = dict(scf_kwargs)
+                if core.get_option("SAPT", "SAPT_DFT_GRAC_SEED_CATION"):
+                    # Seed from the given monomer (which may already be charged),
+                    # with the same geometry/basis but one electron removed.
+                    # Occupations are reset for the target electron count by
+                    # _seed_scf_orbitals. This is opt-in because the starting
+                    # orbitals can bias which cation SCF solution is reached.
+                    cation_kwargs["guess_wfn"] = wfn_given
                 wfn_cation = run_scf(
                     dft_functional.lower(),
                     molecule=mol_cation,
                     jk=jk_obj,
-                    **scf_kwargs,
+                    **cation_kwargs,
                 )
             except ConvergenceError:
                 # A failed attempt's wavefunctions are still bound in this
                 # function's scope, so without dropping them here they stay
-                # resident -- grid data, collocation cache and all -- while the
-                # next convergence tier allocates its own from the full budget.
+                # resident while the next tier allocates its own from the full
+                # budget. SCF failure already clears the collocation cache;
+                # dropping the wavefunctions releases their remaining grid/matrices.
                 wfn_given = None
                 wfn_cation = None
                 if len(grac_options) == 1:
@@ -1487,8 +1496,22 @@ def sapt_dft(
     sapt_jk.set_do_K(True)
 
     if wfn_A.functional().is_x_lrc():
+        if core.get_global_option("USE_CUEST"):
+            raise ValidationError(
+                "SAPT(DFT) with a range-separated SAPT_DFT_FUNCTIONAL is not supported under "
+                "USE_CUEST: cuEST returns the full- and long-range exchange summed into a single "
+                "K, so the separate K and wK the SAPT exchange formulas need are not available. "
+                "Use a global hybrid (e.g. PBE0) for SAPT_DFT_FUNCTIONAL, or set USE_CUEST false."
+            )
         sapt_jk.set_do_wK(True)
         sapt_jk.set_omega(wfn_A.functional().x_omega())
+    else:
+        # SAPT needs bare K, not the hybrid-weighted K used by the monomer SCF.
+        # cuEST folds x_alpha into its DF plan (0.25 for PBE0), so these setters
+        # must rebuild an inherited cuEST plan with weights (1, 0). CPU builders
+        # already return bare K for global hybrids.
+        sapt_jk.set_omega_alpha(1.0)
+        sapt_jk.set_omega_beta(0.0)
 
     use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
 

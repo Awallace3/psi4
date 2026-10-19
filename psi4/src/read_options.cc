@@ -168,6 +168,69 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- Whether to enable using the BrianQC GPU module -*/
     options.add_bool("BRIANQC_ENABLE", false);
 #endif
+    /*- Whether to enable NVIDIA cuEST GPU acceleration (requires CUDA and cuEST libraries) -*/
+    options.add_bool("USE_CUEST", false);
+    /*- Whether |globals__use_cuest| also uses cuEST for the density-fitted
+    atomic J/K builds in SAD, SADNO, and Huckel guesses. Requires a spherical
+    SAD fitting basis and positive integral tolerance. Non-DF
+    |scf__sad_scf_type| choices retain the CPU direct builder. Explicit CPU
+    screening modes other than SCHWARZ, a custom DF fitting condition, and
+    Cartesian fitting functions retain CPU atomic J/K. Set false to compare
+    CPU atomic guesses with GPU molecular
+    SCF; tiny atoms may be faster on CPU because of GPU setup/transfer costs.
+    No effect unless |globals__use_cuest| is true. -*/
+    options.add_bool("CUEST_SAD", true);
+    /*- Whether |globals__use_cuest| also routes the DFT exchange-correlation
+    quadrature through cuEST.  When false, cuEST still builds the density-fitted
+    J/K matrices -- the dominant cost -- while the XC grid, its CPU blocking, and
+    the per-thread functional workers are built as usual.  When true, the grid and
+    the potential integration run on the GPU, and the LibXC functional itself is
+    evaluated on the device if Psi4 was built against a CUDA-enabled LibXC and on
+    the host otherwise.  Restricted GRAC asymptotic corrections
+    (|scf__dft_grac_shift|), including the SAPT(DFT) monomer SCFs, are supported
+    with either setting.  The LDA/GGA XC response kernel used by CPHF/CPKS and
+    TDDFT (RKS singlet and triplet, UKS) also runs on the cuEST grid when the
+    linked cuEST provides a nonsymmetric XC density.  GRAC analytic gradients,
+    meta-GGA and VV10 response kernels, Fock derivatives, analytic XC Hessians,
+    and the SAP guess have no cuEST implementation and raise rather than falling
+    back, so set this false to run them alongside cuEST J/K.  DFT with OpenOrbitalOptimizer
+    also rejects cuEST XC; use the internal orbital optimizer or set this false.
+    No effect unless
+    |globals__use_cuest| is true. -*/
+    options.add_bool("CUEST_XC", true);
+    /*- Enable detailed XC profiling: individual cuEST API calls, workspace
+    allocation, transfers, CUDA XC kernels, and per-component LibXC evaluation.
+    Device regions synchronize at each boundary to measure completed work, not
+    launch latency. This diagnostic mode perturbs execution and must be disabled
+    for production speed comparisons. Host LibXC timers are per-thread timings,
+    not additive elapsed wall times. Also profiles LibXC in CPU-only builds. -*/
+    options.add_bool("CUEST_XC_TIMING", false);
+    /*- Diagnostic: evaluate the XC response kernel's functional derivatives with host
+    LibXC on the cuEST grid even when Psi4 was built against a CUDA-enabled LibXC.
+    Both routes contract on the same grid, so this isolates the derivative evaluation.
+    Has no effect in a build without CUDA LibXC, which always uses host LibXC. -*/
+    options.add_bool("CUEST_XC_RESPONSE_HOST_LIBXC", false);
+    /*- Device variable-buffer budget (MB, 10^6 bytes) handed to cuEST for each XC response
+    density and potential call on the cuEST grid. cuEST sizes its temporary workspace from it,
+    and the response keeps that workspace until the potential is finalized, so this bounds the
+    response's extra GPU memory. -*/
+    options.add_int("CUEST_XC_RESPONSE_BUDGET_MB", 2000);
+    /*- Whether to allow GPU calculations to use mixed precision emulation (requires CUDA and cuEST libraries).
+    False forces native FP64; true restores cuEST's default math mode, which permits
+    emulation but may select native FP64 for a particular operation. -*/
+    options.add_bool("CUEST_MIXED_PRECISION", true);
+    /*- Tune # of Ozaki Slices in emulated DF K computations (requires CUDA and cuEST libraries) -*/
+    options.add_int("CUEST_DFK_SLICES", 5);
+    /*- Tune # of Ozaki Moduli in emulated DF K computations (requires CUDA and cuEST libraries) -*/
+    options.add_int("CUEST_DFK_MODULI", 8);
+    /*- Work threshold for the SAPT einsums matrix-chain cuBLAS fast path.
+    A chain is eligible when its largest link has $m k n$ at least this value
+    cubed, where the link multiplies an $m \times k$ matrix by a $k \times n$ matrix.
+    This is a transfer-overhead heuristic, not a bound on every matrix dimension.
+    Set to 0 to send every otherwise eligible chain to the GPU for CPU/GPU
+    comparisons. Chains requesting nonzero GEMM beta remain on CPU. No effect unless
+    |globals__use_cuest| is true. -*/
+    options.add_int("CUEST_GEMM_MIN_DIM", 256);
 
     // Note that case-insensitive options are only functional as
     //   globals, not as module-level, and should be defined sparingly
@@ -191,7 +254,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- What algorithm to use for the SCF computation. See Table :ref:`SCF
     Convergence & Algorithm <table:conv_scf>` for default algorithm for
     different calculation types. -*/
-    options.add_str("SCF_TYPE", "PK", "DIRECT DF MEM_DF DISK_DF PK OUT_OF_CORE CD GTFOCK DFDIRJ DFDIRJ+COSX DFDIRJ+LINK DFDIRJ+SNLINK");
+    options.add_str("SCF_TYPE", "PK", "DIRECT DF MEM_DF DISK_DF PK OUT_OF_CORE CD GTFOCK DFDIRJ DFDIRJ+COSX DFDIRJ+LINK DFDIRJ+SNLINK CUEST");
 #ifdef USING_OpenOrbitalOptimizer
     /*- Orbital optimizer package to use for SCF. If compiled with OpenOrbitalOptimizer support, change this to use it or the internal code. -*/
     options.add_str("ORBITAL_OPTIMIZER_PACKAGE", "INTERNAL", "INTERNAL OOO OPENORBITALOPTIMIZER");
@@ -328,6 +391,14 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
                     "ROBUST TREUTLER NONE FLAT P_GAUSSIAN D_GAUSSIAN P_SLATER D_SLATER LOG_GAUSSIAN LOG_SLATER NONE");
     /*- Maximum Radial Moment to Calculate -*/
     options.add_int("MAX_RADIAL_MOMENT", 4);
+    /*- Accelerate the MBIS stockholder iteration with Anderson mixing on the shell populations
+        and widths. Switching this off converges to the same fixed point, just more slowly. -*/
+    options.add_bool("MBIS_ANDERSON", true);
+    /*- Pro-atom density below which an atom is dropped from a grid block in the MBIS stockholder
+        sweep. The cost of the sweep is O(natom * npoints) unscreened, and npoints itself grows with
+        natom, so this is what keeps MBIS from being quadratic in system size. Set to 0 to disable
+        screening entirely. !expert -*/
+    options.add_double("MBIS_SCREENING_THRESHOLD", 1.0e-14);
 
     /*- PCM boolean for pcmsolver module -*/
     options.add_bool("PCM", false);
@@ -335,6 +406,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     options.add_bool("PE", false);
     /*- DDX boolean for ddx module -*/
     options.add_bool("DDX", false);
+    /*- cuEST PCM boolean for cuEST PCM module -*/
+    options.add_bool("CUEST_PCM", false);
 
     if (name == "PCM" || options.read_globals()) {
         /*- MODULEDESCRIPTION Performs polarizable continuum model (PCM) computations. -*/
@@ -345,6 +418,20 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_str_i("PCMSOLVER_PARSED_FNAME", "");
         /*- PCM-CCSD algorithm type. -*/
         options.add_str("PCM_CC_TYPE", "PTE", "PTE");
+        /*- cuEST PCM dielectric constant (e.g. 1.0 for vacuum, ~78 for water) -*/
+        options.add_double("CUEST_PCM_DIELECTRIC", 0.0);
+        /*- cuEST PCM grid for heavy atoms. (A :ref:`Lebedev Points <table:lebedevorder>` number) -*/
+        options.add_int("CUEST_PCM_HEAVY_ATOM_SPHERICAL_POINTS", 194);
+        /*- cuEST PCM grid for hydrogen atoms. (A :ref:`Lebedev Points <table:lebedevorder>` number) -*/
+        options.add_int("CUEST_PCM_HYDROGEN_ATOM_SPHERICAL_POINTS", 110);
+        /*- scale factor applied to Bondi radii to define effective atomic radius in cuEST PCM calculations -*/
+        options.add_double("CUEST_PCM_BONDI_RADII_SCALE", 1.2);
+        /*- cuEST PCM x prefactor (0.0 gives CPCM, 0.5 gives COSMO-like behavior)-*/
+        options.add_double("CUEST_PCM_X_PREFACTOR", 0.0);
+        /*- cuEST PCM cutoff; iSWIG switching functions below this value will result in the point being discarded -*/
+        options.add_double("CUEST_PCM_CUTOFF", 1e-8);
+        /*- cuEST PCM convergence criterion (maximum value of the residual in the PCG iterations) -*/
+        options.add_double("CUEST_PCM_CONVERGENCE", 1e-10);
     }
 
     if (name == "DDX" || options.read_globals()) {
@@ -1192,6 +1279,13 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     not counted twice. Rows shared between A and B are never trimmed, since
     the dimer field must stay the sum of the monomer fields. -*/
     options.add_bool("SAPT_DFT_GRAC_USE_EXT_POT", false);
+    /*- Seed the GRAC electron-removed SCF with the converged given monomer's
+    orbitals instead of a fresh SAD guess. The given monomer may already be
+    charged; the target has one fewer electron in the same geometry and basis.
+    Seeding can reduce the iteration count but can also bias which cation SCF
+    solution is reached, so it is off by default. Fresh guesses in the
+    |sapt__sapt_dft_grac_compute| convergence tiers can explore other solutions. -*/
+    options.add_bool("SAPT_DFT_GRAC_SEED_CATION", false);
         /*- To ensure that the GRAC shift is computed with a sufficiently large
           basis set, the user can specify a larger basis set for the GRAC
           calculation, which can be different from the basis set used for the
@@ -1709,9 +1803,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("INCFOCK", false);
         /*- Frequency with which to compute the full Fock matrix if using |scf__incfock| . 
         N means rebuild every N SCF iterations to avoid accumulating error from the incremental procedure. -*/
-        options.add_int("INCFOCK_FULL_FOCK_EVERY", 5);
-        /*- The density threshold at which to stop building the Fock matrix incrementally -*/
-        options.add_double("INCFOCK_CONVERGENCE", 1.0e-5);
+        options.add_int("INCFOCK_FULL_FOCK_EVERY", 15);
+        /*- Use a variable integral tolerance while building the Fock matrix incrementally? -*/
+        options.add_bool("INCFOCK_VAR_INTS_TOL", false);
 
         /*- The screening tolerance used for ERI/Density sparsity in the LinK algorithm -*/
         options.add_double("LINK_INTS_TOLERANCE", 1.0e-12);
@@ -1935,6 +2029,20 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_int("DFT_SPHERICAL_POINTS", 302);
         /*- Number of radial points. -*/
         options.add_int("DFT_RADIAL_POINTS", 75);
+        /*- Initial SCF radial grid size. Set both this and
+        |scf__dft_spherical_points_initial| to positive values to enable XC grid
+        switching. Zero disables switching. Normal DFT settings define the final
+        grid; response and property grids are unchanged. -*/
+        options.add_int("DFT_RADIAL_POINTS_INITIAL", 0);
+        /*- Initial SCF angular grid size (a supported Lebedev number).
+        Used with |scf__dft_radial_points_initial|. The initial grid inherits the
+        radial and pruning schemes, but not a named final grid. -*/
+        options.add_int("DFT_SPHERICAL_POINTS_INITIAL", 0);
+        /*- Switch to the final XC grid when both energy change and orbital
+        residual fall below this multiple of their SCF convergence tolerances.
+        Must be positive. Final-grid SCF convergence is always required, including
+        at least one additional iteration after switching. -*/
+        options.add_double("DFT_GRID_SWITCH_FACTOR", 10.0);
         /*- Spherical Scheme. -*/
         options.add_str("DFT_SPHERICAL_SCHEME", "LEBEDEV", "LEBEDEV");
         /*- Radial Scheme. -*/

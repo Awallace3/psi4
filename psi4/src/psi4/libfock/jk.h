@@ -476,12 +476,15 @@ class PSI_API JK {
     */
     virtual void set_wcombine(bool wcombine);
     bool get_wcombine() { return wcombine_; }
+    /// True if K contains the preweighted alpha/r + beta*erf(omega*r)/r
+    /// operator, with no separate wK result. Not the MemDFJK wcombine layout.
+    virtual bool returns_combined_exchange() const { return false; }
 
     /**
     * Set the omega value for wK
     * @param omega range-separation parameter
     */
-    void set_omega(double omega) { omega_ = omega; }
+    virtual void set_omega(double omega) { omega_ = omega; }
     double get_omega() { return omega_; }
 
     /**
@@ -760,6 +763,12 @@ class PSI_API DirectJK : public JK {
 
     /// Pseudo-density matrix to be used this iteration
     std::vector<SharedMatrix> D_ref_;
+
+    /// \Delta J & \Delta K matricies to accumulate eri contributions into this iteration (to avoid roundoff error)
+    std::vector<SharedMatrix> J_delta_;
+    std::vector<SharedMatrix> K_delta_;
+    std::vector<SharedMatrix> wK_delta_;
+
 
     // Is the JK currently on the first SCF iteration of this SCF cycle?
     bool initial_iteration_ = true;
@@ -1363,4 +1372,3 @@ class PSI_API CompositeJK : public JK {
 }
 
 #endif
-

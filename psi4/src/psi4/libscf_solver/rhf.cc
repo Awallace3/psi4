@@ -63,6 +63,8 @@
 #endif
 
 #include "rhf.h"
+#include "cpscf_gemm.h"
+#include "cpscf_exchange.h"
 
 #ifdef USING_BrianQC
 
@@ -173,7 +175,6 @@ void RHF::form_V() {
     // std::vector<SharedMatrix> & C = potential_->C();
     // C.clear();
     // C.push_back(Ca_subset("SO", "OCC"));
-
     // // Run the potential object
     // potential_->compute();
 
@@ -181,6 +182,7 @@ void RHF::form_V() {
     // const std::vector<SharedMatrix> & V = potential_->V();
     // Va_ = V[0];
     potential_->set_D({Da_});
+    potential_->set_Cocc({Ca_subset("AO", "OCC")});
     potential_->compute_V({Va_});
     Vb_ = Va_;
 }
@@ -191,7 +193,6 @@ void RHF::form_G() {
     } else {
         G_->zero();
     }
-
     /// Push the C matrix on
     std::vector<SharedMatrix>& C = jk_->C_left();
     C.clear();
@@ -205,7 +206,12 @@ void RHF::form_G() {
     const std::vector<SharedMatrix>& K = jk_->K();
     const std::vector<SharedMatrix>& wK = jk_->wK();
     J_ = J[0];
-    if (functional_->is_x_hybrid()) {
+#ifdef USING_cuEST
+    const bool use_cuest = options_.get_bool("USE_CUEST");
+#else
+    const bool use_cuest = false;
+#endif
+    if (functional_->is_x_hybrid() || (use_cuest && functional_->is_x_lrc())) {
         K_ = K[0];
     }
     if (functional_->is_x_lrc()) {
@@ -225,13 +231,22 @@ void RHF::form_G() {
     }
 #endif
 
-    if (functional_->is_x_hybrid() && !(functional_->is_x_lrc() && jk_->get_wcombine())) {
+#ifdef USING_cuEST
+    // cuEST constructs K & wK at the same time, so we must set them to 1.0 here as well
+    if (use_cuest) {
+        alpha = 1.0;
+        beta = 1.0;
+    }
+#endif
+
+    if ((functional_->is_x_hybrid() || (use_cuest && functional_->is_x_lrc())) &&
+        !(functional_->is_x_lrc() && jk_->get_wcombine())) {
         G_->axpy(-alpha, K_);
     } else {
         K_->zero();
     }
 
-    if (functional_->is_x_lrc()) {
+    if (functional_->is_x_lrc() && !use_cuest) { // if using cuEST, wK is encapsulated in K
         if (jk_->get_wcombine()) {
             G_->axpy(-1.0, wK_);
         } else {
@@ -324,6 +339,12 @@ double RHF::compute_E() {
     double alpha = functional_->x_alpha();
     double beta = functional_->x_beta();
 
+#ifdef USING_cuEST
+    const bool use_cuest = options_.get_bool("USE_CUEST");
+#else
+    const bool use_cuest = false;
+#endif
+
 #ifdef USING_BrianQC
     if (brianEnable and brianEnableDFT) {
         // BrianQC multiplies with the exact exchange factors inside the Fock building, so we must not do it here
@@ -332,10 +353,18 @@ double RHF::compute_E() {
     }
 #endif
 
-    if (functional_->is_x_hybrid()) {
+#ifdef USING_cuEST
+    // cuEST constructs K & wK at the same time, so we must set them to 1.0 here as well
+    if (use_cuest) {
+        alpha = 1.0;
+        beta = 1.0;
+    }
+#endif
+
+    if (functional_->is_x_hybrid() || (use_cuest && functional_->is_x_lrc())) {
         exchange_E -= alpha * Da_->vector_dot(K_);
     }
-    if (functional_->is_x_lrc()) {
+    if (functional_->is_x_lrc() && !use_cuest) {
         if (jk_->get_do_wK() && jk_->get_wcombine()) {
             exchange_E -= Da_->vector_dot(wK_);
         } else {
@@ -413,13 +442,7 @@ std::vector<SharedMatrix> RHF::onel_Hx(std::vector<SharedMatrix> x_vec) {
             Cv = Cvir_so;
         }
 
-        auto tmp1 = linalg::triplet(Co, F, Co, true, false, false);
-        auto result = linalg::doublet(tmp1, x_vec[i], false, false);
-
-        auto tmp2 = linalg::triplet(x_vec[i], Cv, F, false, true, false);
-        result->gemm(false, false, -1.0, tmp2, Cv, 1.0);
-
-        ret.push_back(result);
+        ret.push_back(cpscf::onel(options_, Co, Cv, F, x_vec[i]));
     }
 
     return ret;
@@ -479,7 +502,7 @@ std::vector<SharedMatrix> RHF::twoel_Hx_full(std::vector<SharedMatrix> x_vec, bo
         }
 
         Cl.push_back(Co);
-        SharedMatrix R = linalg::doublet(Cv, x_vec[i], false, true);
+        SharedMatrix R = cpscf::doublet(options_, Cv, x_vec[i], false, true);
         R->scale(-1.0);
         Cr.push_back(R);
     }
@@ -493,19 +516,30 @@ std::vector<SharedMatrix> RHF::twoel_Hx_full(std::vector<SharedMatrix> x_vec, bo
 
     std::vector<SharedMatrix> Vx;
     if (functional_->needs_xc()) {
-        std::vector<SharedMatrix> Dx;
-        for (size_t i = 0; i < x_vec.size(); i++) {
-            Dx.push_back(linalg::doublet(Cl[i], Cr[i], false, true));
-            Vx.push_back(std::make_shared<Matrix>("Vx Temp", Dx[i]->rowspi(), Dx[i]->colspi(), Dx[i]->symmetry()));
+        auto rv = std::dynamic_pointer_cast<RV>(potential_);
+        if (rv && rv->uses_cuest_xc()) {
+            // Contract the J/K factors directly (Cr already carries the response sign);
+            // outputs take the shape and symmetry of Cl Cr^T without forming it.
+            for (size_t i = 0; i < x_vec.size(); i++) {
+                Vx.push_back(std::make_shared<Matrix>("Vx Temp", Cl[i]->rowspi(), Cr[i]->rowspi(),
+                                                      Cl[i]->symmetry() ^ Cr[i]->symmetry()));
+            }
+            rv->compute_Vx_full_factored(Cl, Cr, Vx, singlet);
+        } else {
+            std::vector<SharedMatrix> Dx;
+            for (size_t i = 0; i < x_vec.size(); i++) {
+                Dx.push_back(cpscf::doublet(options_, Cl[i], Cr[i], false, true));
+                Vx.push_back(std::make_shared<Matrix>("Vx Temp", Dx[i]->rowspi(), Dx[i]->colspi(), Dx[i]->symmetry()));
+            }
+            potential_->compute_Vx_full(Dx, Vx, singlet);
         }
-        potential_->compute_Vx_full(Dx, Vx, singlet);
     }
 
     std::vector<SharedMatrix> V_ext_pert;
     for (const auto& pert : external_cpscf_perturbations_) {
         if (print_ > 1) outfile->Printf("Adding external CPSCF contribution %s.\n", pert.first.c_str());
         for (size_t i = 0; i < x_vec.size(); i++) {
-            auto Dx = linalg::doublet(Cl[i], Cr[i], false, true);
+            auto Dx = cpscf::doublet(options_, Cl[i], Cr[i], false, true);
             V_ext_pert.push_back(pert.second(Dx));
         }
     }
@@ -525,7 +559,17 @@ std::vector<SharedMatrix> RHF::twoel_Hx_full(std::vector<SharedMatrix> x_vec, bo
     }
 #endif
 
+    // The backend, not the current global option, determines K's layout.
+    const bool combined_exchange = jk_->returns_combined_exchange();
+    const bool use_k = functional_->is_x_hybrid() ||
+                       (combined_exchange && functional_->is_x_lrc());
+    const bool use_wk = functional_->is_x_lrc() && !combined_exchange;
+    if (combined_exchange) {
+        alpha = cpscf::exchange_scale(*jk_, *functional_);
+    }
+
     std::vector<SharedMatrix> ret;
+    std::vector<size_t> ret_input;
     if (!singlet) {
         for (size_t i = 0; i < x_vec.size(); i++) {
             J[i]->zero();
@@ -535,11 +579,11 @@ std::vector<SharedMatrix> RHF::twoel_Hx_full(std::vector<SharedMatrix> x_vec, bo
         // Cocc_ni (4 * J[D]_nm - K[D]_nm - K[D]_mn) C_vir_ma
         for (size_t i = 0; i < x_vec.size(); i++) {
             J[i]->scale(4.0);
-            if (functional_->is_x_hybrid()) {
+            if (use_k) {
                 J[i]->axpy(-alpha, K[i]);
                 J[i]->axpy(-alpha, K[i]->transpose());
             }
-            if (functional_->is_x_lrc()) {
+            if (use_wk) {
                 J[i]->axpy(-beta, wK[i]);
                 J[i]->axpy(-beta, wK[i]->transpose());
             }
@@ -550,6 +594,7 @@ std::vector<SharedMatrix> RHF::twoel_Hx_full(std::vector<SharedMatrix> x_vec, bo
                 J[i]->axpy(4.0, V_ext_pert[i]);
             }
             ret.push_back(J[i]);
+            ret_input.push_back(i);
         }
     } else {
         if (jk_->get_wcombine()) {
@@ -566,18 +611,21 @@ std::vector<SharedMatrix> RHF::twoel_Hx_full(std::vector<SharedMatrix> x_vec, bo
                 J[i]->add(V_ext_pert[i]);
             }
             ret.push_back(J[i]);
+            ret_input.push_back(i);
             // may have K^HF
-            if (functional_->is_x_hybrid()) {
+            if (use_k) {
                 K[i]->scale(alpha);
                 // may have K^HF + wK
-                if (functional_->is_x_lrc()) {
+                if (use_wk) {
                     K[i]->axpy(beta, wK[i]);
                 }
                 ret.push_back(K[i]);
+                ret_input.push_back(i);
                 // could also have just wK
-            } else if (functional_->is_x_lrc()) {
+            } else if (use_wk) {
                 wK[i]->scale(beta);
                 ret.push_back(wK[i]);
+                ret_input.push_back(i);
             }  // also may have not k-like piece
         }
     }
@@ -587,10 +635,10 @@ std::vector<SharedMatrix> RHF::twoel_Hx_full(std::vector<SharedMatrix> x_vec, bo
         /* pass */
     } else if (return_basis == "MO") {
         for (size_t i = 0; i < ret.size(); i++) {
-            if (c1_input_[i]) {
-                ret[i] = linalg::triplet(Cocc_ao, ret[i], Cvir_ao, true, false, false);
+            if (c1_input_[ret_input[i]]) {
+                ret[i] = cpscf::triplet(options_, Cocc_ao, ret[i], Cvir_ao, true, false, false);
             } else {
-                ret[i] = linalg::triplet(Cocc_so, ret[i], Cvir_so, true, false, false);
+                ret[i] = cpscf::triplet(options_, Cocc_so, ret[i], Cvir_so, true, false, false);
             }
         }
     } else {
@@ -1011,6 +1059,11 @@ bool RHF::stability_analysis() {
 std::shared_ptr<RHF> RHF::c1_deep_copy(std::shared_ptr<BasisSet> basis) {
     auto wfn = Wavefunction::c1_deep_copy(basis);
     auto hf_wfn = std::make_shared<RHF>(wfn, functional_, wfn->options(), wfn->psio());
+    // Construction may select the initial SCF grid. A copy is not a new SCF:
+    // preserve the source phase for subsequent potential/response evaluation.
+    if (potential_ && hf_wfn->potential_ && !potential_->initial_grid()) {
+        hf_wfn->potential_->set_grid("Final");
+    }
     // now just have to copy the matrices that RHF initializes
     // include only those that are not temporary (some deleted in finalize())
     if (Ca_) {
@@ -1040,7 +1093,12 @@ std::shared_ptr<RHF> RHF::c1_deep_copy(std::shared_ptr<BasisSet> basis) {
 void RHF::setup_potential() {
     if (functional_->needs_xc()) {
         potential_ = std::make_shared<RV>(functional_, basisset_, options_);
-        potential_->initialize();
+        if (options_.get_int("DFT_RADIAL_POINTS_INITIAL") != 0 ||
+            options_.get_int("DFT_SPHERICAL_POINTS_INITIAL") != 0) {
+            potential_->set_grid("Initial");
+        } else {
+            potential_->initialize();
+        }
     } else {
         potential_ = nullptr;
     }
@@ -1105,6 +1163,14 @@ void RHF::openorbital_scf() {
       // BrianQC multiplies with the exact exchange factors inside the Fock building, so we must not do it here
       alpha = 1.0;
       beta = 1.0;
+    }
+#endif
+
+#ifdef USING_cuEST
+    // cuEST constructs K & wK at the same time, so we must set them to 1.0 here as well
+    if (options_.get_bool("USE_CUEST")) {
+        alpha = 1.0;
+        beta = 1.0;
     }
 #endif
 
