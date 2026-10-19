@@ -105,6 +105,15 @@ def test_cuest_changed_dependencies_rebuild(tmp_path, change):
     try:
         jk.initialize()
         reference = _compute(jk, primary.nbf())
+        def change_fitting_condition():
+            before = psi4.core.get_option("SCF", "DF_FITTING_CONDITION")
+            after = before * 10.0
+            assert np.isfinite(before) and before > 0
+            assert np.isfinite(after) and after > 0 and after != before
+            psi4.set_options({"df_fitting_condition": after})
+            assert psi4.core.get_option("SCF", "DF_FITTING_CONDITION") == after
+            assert psi4.core.get_option("SCF", "DF_FITTING_CONDITION") != before
+
         actions = {
             "alpha": lambda: jk.set_omega_alpha(0.25),
             "beta": lambda: jk.set_omega_beta(0.2),
@@ -114,7 +123,7 @@ def test_cuest_changed_dependencies_rebuild(tmp_path, change):
             "moduli": lambda: psi4.set_options({"cuest_dfk_moduli": 7}),
             "cutoff": lambda: jk.set_cutoff(1.e-11),
             "threshold_option": lambda: psi4.set_options({"ints_tolerance": 1.e-11}),
-            "fitting_condition": lambda: psi4.set_options({"df_fitting_condition": 1.e-10}),
+            "fitting_condition": change_fitting_condition,
         }
         actions[change]()
         # Operator and cutoff setters must still rebuild immediately.
@@ -144,6 +153,25 @@ def test_cuest_changed_dependencies_rebuild(tmp_path, change):
                 _equal(got, _compute(fresh, p2.nbf()), atol=1.e-7)
             finally:
                 fresh.finalize()
+    finally:
+        jk.finalize()
+
+
+def test_cuest_same_fitting_condition_reuses_plan(tmp_path):
+    mol, trace = _setup(tmp_path)
+    jk, primary, _ = _builder(mol)
+    try:
+        jk.initialize()
+        assert _creations(trace) == 1
+        reference = _compute(jk, primary.nbf())
+        before = psi4.core.get_option("SCF", "DF_FITTING_CONDITION")
+        assert np.isfinite(before) and before > 0
+        psi4.set_options({"df_fitting_condition": before})
+        assert psi4.core.get_option("SCF", "DF_FITTING_CONDITION") == before
+        jk.initialize()
+        assert _creations(trace) == 1
+        _equal(reference, _compute(jk, primary.nbf()))
+        assert _creations(trace) == 1
     finally:
         jk.finalize()
 
