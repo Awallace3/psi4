@@ -3,6 +3,7 @@ list(APPEND sources
   CompositeJK.cc
   cuESTJK.cc
   cuESTDirectJK.cc
+  cuest_xc_response.cc
   COSK.cc
   DirectDFJ.cc
   DirectJK.cc

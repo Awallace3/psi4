@@ -32,6 +32,7 @@
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/integral.h"
 #include "psi4/libmints/potential.h"
+#include "psi4/libmints/mintshelper.h"
 #include "psi4/libciomr/libciomr.h"
 #include "psi4/libqt/qt.h"
 #include "psi4/physconst.h"
@@ -116,7 +117,23 @@ SharedMatrix ExternalPotential::computePotentialMatrix(std::shared_ptr<BasisSet>
     nthreads = Process::environment.get_n_threads();
 #endif
 
+    bool use_cuest = false;
+#ifdef USING_cuEST
+    use_cuest = Process::environment.options.get_bool("USE_CUEST");
+#endif
+    if (use_cuest && gaussians_.size() && !warned_diffuse_cuest_) {
+        outfile->Printf("\n  Warning: USE_CUEST computes external point charges on the GPU, but diffuse (Gaussian)\n"
+                        "           external charges are only supported on the CPU presently; they run there.\n\n");
+        warned_diffuse_cuest_ = true;
+    }
+
     // Monopoles
+#ifdef USING_cuEST
+    if (charges_.size() && use_cuest) {
+        MintsHelper mints(basis, Process::environment.options, 0);
+        mints.form_V_cuest_charges(V, charges_);
+    } else
+#endif
     if (charges_.size()) {
         // Make a vector of charge-coordinate pairs for the point charges.
         std::vector<std::pair<double, std::array<double, 3>>> Qxyz;

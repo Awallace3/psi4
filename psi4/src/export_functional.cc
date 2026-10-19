@@ -261,6 +261,8 @@ void export_functional(py::module &m) {
                     })
         .def("initialize", &VBase::initialize, "doctsring")
         .def("finalize", &VBase::finalize, "doctsring")
+        .def("set_grid", &VBase::set_grid, "Rebuild the XC potential on the Initial or Final grid.")
+        .def("initial_grid", &VBase::initial_grid, "Whether this potential uses the initial SCF grid.")
         .def("basis", &VBase::basis, "Returns the internal basis set.")
         .def("functional", &VBase::functional, "Returns the interal superfunctional.")
         .def("properties", &VBase::properties, "Returns the properties computer.")
@@ -280,6 +282,27 @@ void export_functional(py::module &m) {
         .def("Dao", &VBase::set_D, "Returns internal AO density.")
         .def("compute_V", &VBase::compute_V, "doctsring")
         .def("compute_Vx", &VBase::compute_Vx, "doctsring")
+        .def("set_Cocc", &VBase::set_Cocc, "Sets the occupied orbitals used by the cuEST XC grid.")
+        .def("uses_cuest_xc", &VBase::uses_cuest_xc, "Whether XC quadrature and response run on the cuEST grid.")
+        .def("compute_Vx_factored", &VBase::compute_Vx_factored, "left"_a, "right"_a, "ret"_a,
+             "compute_Vx for response densities left[i] @ right[i].T.")
+        .def(
+            "compute_Vx_full",
+            [](VBase& self, std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret, bool singlet) {
+                auto* rv = dynamic_cast<RV*>(&self);
+                if (!rv) throw PSIEXCEPTION("compute_Vx_full requires an RV (RKS) potential.");
+                rv->compute_Vx_full(Dx, ret, singlet);
+            },
+            "Dx"_a, "ret"_a, "singlet"_a, "RKS response kernel; singlet=False gives the triplet kernel.")
+        .def(
+            "compute_Vx_full_factored",
+            [](VBase& self, std::vector<SharedMatrix> left, std::vector<SharedMatrix> right,
+               std::vector<SharedMatrix> ret, bool singlet) {
+                auto* rv = dynamic_cast<RV*>(&self);
+                if (!rv) throw PSIEXCEPTION("compute_Vx_full_factored requires an RV (RKS) potential.");
+                rv->compute_Vx_full_factored(left, right, ret, singlet);
+            },
+            "left"_a, "right"_a, "ret"_a, "singlet"_a, "compute_Vx_full for response densities left[i] @ right[i].T.")
         .def("compute_gradient", &VBase::compute_gradient, "Compute the DFT nuclear gradient contribution.")
         .def("compute_hessain", &VBase::compute_hessian, "Compute the DFT nuclear Hessian contribution.")
 

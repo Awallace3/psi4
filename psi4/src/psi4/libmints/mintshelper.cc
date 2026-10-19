@@ -4581,12 +4581,25 @@ void MintsHelper::form_T_cuest(SharedMatrix hostT) {
 }
 
 void MintsHelper::form_V_cuest(SharedMatrix hostV) {
-
     auto mol = basisset_->molecule();
-    size_t natom = mol->natom();
-    std::vector<double> Zs(natom);
-    for (size_t i=0; i<natom; i++) {
-        Zs[i] = -1.0 * mol->Z(i);
+    std::vector<std::tuple<double, double, double, double>> nuclei;
+    for (int i = 0; i < mol->natom(); i++) {
+        nuclei.emplace_back(mol->Z(i), mol->x(i), mol->y(i), mol->z(i));
+    }
+    form_V_cuest_charges(hostV, nuclei);
+}
+
+void MintsHelper::form_V_cuest_charges(SharedMatrix hostV,
+                                       const std::vector<std::tuple<double, double, double, double>>& charges) {
+    if (cuest_oeint_plan_ == nullptr) throw PSIEXCEPTION("MintsHelper::form_V_cuest_charges: USE_CUEST is off");
+    size_t natom = charges.size();
+    std::vector<double> Zs(natom), xyz(3 * natom);
+    for (size_t i = 0; i < natom; i++) {
+        const auto& [Q, x, y, z] = charges[i];
+        Zs[i] = -1.0 * Q;
+        xyz[3 * i] = x;
+        xyz[3 * i + 1] = y;
+        xyz[3 * i + 2] = z;
     }
 
     double* d_xyz_matrix = NULL;
@@ -4594,7 +4607,7 @@ void MintsHelper::form_V_cuest(SharedMatrix hostV) {
     cudaMalloc((void**) &d_xyz_matrix, natom * 3 * sizeof(double));
     cudaMalloc((void**) &d_q_matrix, natom * sizeof(double));
 
-    cudaMemcpy(d_xyz_matrix, mol->geometry().pointer()[0], natom * 3 * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_xyz_matrix, xyz.data(), natom * 3 * sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy(d_q_matrix,   Zs.data(), natom * sizeof(double), cudaMemcpyHostToDevice);
 
     double* d_potential_matrix = NULL;

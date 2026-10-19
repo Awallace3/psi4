@@ -91,6 +91,30 @@ if(TARGET cuEST::cuEST)
     target_compile_definitions(psi4_optional_deps INTERFACE USING_cuEST_DIRECT_JK)
     target_compile_definitions(core INTERFACE USING_cuEST_DIRECT_JK)
   endif()
+
+  # The XC response kernel needs the nonsymmetric XC density (cuEST 0.2.2). Require the
+  # declaration, the parameter type and a resolvable symbol, so an older SDK keeps the
+  # explicit unsupported diagnostic instead of failing to link or silently changing grids.
+  # The define changes no class layout.
+  include(CheckCXXSourceCompiles)
+  set(CMAKE_REQUIRED_LIBRARIES cuEST::cuEST)
+  check_cxx_source_compiles("
+#include <cuest.h>
+int main() {
+    cuestXCNonsymmetricDensityComputeParameters_t parameters{};
+    (void)parameters;
+    const auto type = CUEST_XCNONSYMMETRICDENSITYCOMPUTE_PARAMETERS;
+    auto compute = &cuestXCNonsymmetricDensityCompute;
+    auto query = &cuestXCNonsymmetricDensityComputeWorkspaceQuery;
+    return (compute && query && type) ? 0 : 1;
+}" PSI4_CUEST_HAS_NONSYMMETRIC_XC)
+  unset(CMAKE_REQUIRED_LIBRARIES)
+  if(PSI4_CUEST_HAS_NONSYMMETRIC_XC)
+    target_compile_definitions(psi4_optional_deps INTERFACE PSI4_CUEST_NONSYMMETRIC_XC)
+    message(STATUS "cuEST nonsymmetric XC density found: GPU XC response kernel enabled")
+  else()
+    message(STATUS "cuEST nonsymmetric XC density not found: GPU XC response kernel disabled")
+  endif()
 endif()
 
 foreach(dir_name

@@ -54,6 +54,33 @@ cudaError_t cuest_xc_reduce_rks(std::size_t npoints, const double* weights, cons
 cudaError_t cuest_xc_reduce_uks(std::size_t npoints, const double* weights, const double* full_f, const double* rho,
                                 double* scratch, double* out);
 
+// => XC response kernel helpers (see cuest_xc_response_math.h for the algebra) <= //
+
+// y += alpha x on the device.
+cudaError_t cuest_xc_response_axpy(std::size_t n, double alpha, const double* x, double* y);
+
+// Adds the number of non-finite entries of values to *count (a device counter).
+cudaError_t cuest_xc_response_count_nonfinite(std::size_t n, const double* values, unsigned long long* count);
+
+// Polarized LibXC derivatives at a closed-shell reference -> spin-adapted triplet (A, B, C, S).
+// B, C, S and the GGA inputs are unused (and may be null) when gga is false.
+cudaError_t cuest_xc_response_project_triplet(std::size_t npoints, bool gga, const double* v2rho2,
+                                              const double* v2rhosigma, const double* v2sigma2, const double* vsigma,
+                                              double* A, double* B, double* C, double* S);
+
+// RKS singlet/triplet: reference is cuEST's one-spin density, response the signed response
+// density, potential the weighted cuEST grid potential.
+cudaError_t cuest_xc_response_pack_rks(std::size_t npoints, bool gga, double cutoff, const double* weights,
+                                       const double* reference, const double* A, const double* B, const double* C,
+                                       const double* S, const double* response, double* potential);
+
+// UKS alpha/beta pair, polarized LibXC derivative layouts.
+cudaError_t cuest_xc_response_pack_uks(std::size_t npoints, bool gga, double cutoff, const double* weights,
+                                       const double* reference_a, const double* reference_b, const double* v2rho2,
+                                       const double* v2rhosigma, const double* v2sigma2, const double* vsigma,
+                                       const double* response_a, const double* response_b, double* potential_a,
+                                       double* potential_b);
+
 }  // namespace psi
 
 #endif

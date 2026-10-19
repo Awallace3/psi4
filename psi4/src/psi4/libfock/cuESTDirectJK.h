@@ -32,6 +32,7 @@ class PSI_API cuESTDirectJK : public JK {
     cuESTDirectJK(std::shared_ptr<BasisSet> primary, Options& options);
     ~cuESTDirectJK() override;
     void print_header() const override;
+    bool returns_combined_exchange() const override { return true; }
     void set_do_wK(bool value) override {
         do_wK_ = value;
         do_K_ = do_K_ || value;
