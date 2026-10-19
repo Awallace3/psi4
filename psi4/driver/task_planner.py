@@ -35,23 +35,68 @@ __all__ = [
 import copy
 import logging
 import os
-from typing import Dict, Tuple, Union
+from typing import Any, Dict, Tuple, Union
 
 from qcelemental.models.v2 import DriverEnum
 
 from psi4 import core
 
 from . import p4util
+from .p4util.exceptions import ValidationError
 from .constants import pp
 from .driver_findif import FiniteDifferenceComputer
 from .driver_nbody import ManyBodyComputer
 from .driver_cbs import CompositeComputer, composite_procedures, cbs_text_parser
 from .driver_util import negotiate_convergence_criterion, negotiate_derivative_type
+from .p4util.exceptions import ValidationError
+from .procrouting.xdm_params import has_xdm_suffix, is_xdm_dispersion
 from .task_base import AtomicComputer
 
 logger = logging.getLogger(__name__)
 
 TaskComputers = Union[AtomicComputer, CompositeComputer, FiniteDifferenceComputer, ManyBodyComputer]
+
+
+def _functional_uses_xdm(value: Any) -> bool:
+    if isinstance(value, str):
+        return has_xdm_suffix(value)
+    if isinstance(value, dict):
+        return is_xdm_dispersion(value.get("dispersion"))
+    return False
+
+
+def _container_uses_xdm(value: Any) -> bool:
+    if isinstance(value, str):
+        return _functional_uses_xdm(value)
+    if isinstance(value, dict):
+        return any(_container_uses_xdm(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_container_uses_xdm(item) for item in value)
+    return False
+
+
+def _callable_dispersion(functional):
+    from .procrouting.dft import build_superfunctional
+
+    reference = core.get_option("SCF", "REFERENCE").upper()
+    _, dispersion = build_superfunctional(functional, reference in ("RHF", "RKS"))
+    return dispersion
+
+
+# Documented string spellings of the dertype kwarg
+_DERTYPE_LEVELS = {"none": None, "energy": 0, "gradient": 1, "first": 1, "hessian": 2, "second": 2}
+
+
+def _negotiate_derivative_type(driver, method, user_dertype, uses_xdm):
+    if uses_xdm and driver == "gradient":
+        if isinstance(user_dertype, str):
+            if user_dertype.lower() not in _DERTYPE_LEVELS:
+                raise ValidationError(f"dertype ({user_dertype}) should be one of {list(_DERTYPE_LEVELS)} or an int.")
+            user_dertype = _DERTYPE_LEVELS[user_dertype.lower()]
+        if user_dertype not in (None, 0):
+            raise NotImplementedError("Analytic XDM gradients are not implemented; use dertype=0.")
+        user_dertype = 0
+    return negotiate_derivative_type(driver, method, user_dertype, verbose=1)
 
 
 def expand_cbs_methods(method: str, basis: str, driver: DriverEnum, **kwargs) -> Tuple[str, str, Dict]:
@@ -153,6 +198,51 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
     current_manybody_kwargs = {kw: kwargs.pop(kw) for kw in pertinent_manybody_kwargs if kw in kwargs}
     # explicit: "levels"
 
+    dft_functional = kwargs.get("dft_functional")
+    needs_dispersion_metadata = driver != "energy" or current_manybody_kwargs.get("bsse_type") is not None
+    if callable(dft_functional) and needs_dispersion_metadata:
+        dft_uses_xdm = is_xdm_dispersion(_callable_dispersion(dft_functional))
+    else:
+        dft_uses_xdm = _functional_uses_xdm(dft_functional)
+    cbs_kwargs_uses_xdm = any(
+        _container_uses_xdm(value) for key, value in kwargs.items() if key.endswith("_wfn") or key == "cbs_metadata"
+    )
+    task_uses_xdm = dft_uses_xdm or cbs_kwargs_uses_xdm or _container_uses_xdm((method, cbsmeta))
+    uses_xdm = task_uses_xdm or _container_uses_xdm(kwargs.get("levels", {}))
+    xdm_counterpoise = False
+    if current_manybody_kwargs.get("bsse_type") is not None:
+        bsse_type = current_manybody_kwargs["bsse_type"]
+        bsse_types = [bsse_type] if isinstance(bsse_type, str) else bsse_type
+        xdm_counterpoise = uses_xdm and any(item.lower() in {"cp", "vmfc"} for item in bsse_types)
+        # Counterpoise XDM energies superpose ghost-centre moments across subsystem
+        # tasks after they run (procrouting/xdm_counterpoise.py). That correction
+        # has no derivative, so gradients would silently miss it.
+        if xdm_counterpoise and driver != "energy":
+            raise NotImplementedError(f"Counterpoise-based XDM {driver}s are not implemented; use bsse_type='nocp'.")
+        if uses_xdm:
+            # Counterpoise and no-CP XDM energies take differently fitted damping
+            # parameters, but share the full-cluster tasks.
+            if (xdm_counterpoise and any(item.lower() == "nocp" for item in bsse_types)
+                    and not core.has_option_changed("SCF", "XDM_DISPERSION_PARAMETERS")):
+                raise ValidationError(
+                    "XDM uses different damping parameters for counterpoise and no-CP energies; run "
+                    "bsse_type='nocp' separately from 'cp'/'vmfc', or set XDM_DISPERSION_PARAMETERS.")
+            keywords.pop("SCF__XDM_COUNTERPOISE", None)
+            keywords["XDM_COUNTERPOISE"] = xdm_counterpoise
+        # A no-CP subsystem is computed without its partners, so its standard-orientation DFT grid is rotated
+        # differently from the full cluster's and the quadrature error no longer cancels in the interaction
+        # energy (~1e-3 Eh for hexamine molecules 25 A apart). Subsystems keep the parent frame, so grids on
+        # the input axes are identical atom by atom.
+        if (any(item.lower() == "nocp" for item in bsse_types)
+                and not core.has_option_changed("SCF", "DFT_GRID_ORIENTATION")):
+            keywords.pop("SCF__DFT_GRID_ORIENTATION", None)
+            keywords["DFT_GRID_ORIENTATION"] = "INPUT"
+
+    # XDM has no analytic derivatives: gradients are finite differences of the
+    # full XDM energy (see proc_table, where XDM registers for energy only).
+    if uses_xdm and driver in ("hessian", "properties"):
+        raise NotImplementedError(f"XDM {driver} is not implemented.")
+
     # Build a packet
     packet = {"molecule": molecule, "driver": driver, "method": method, "basis": basis, "keywords": keywords}
 
@@ -170,21 +260,38 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
             mtdin = mtdkey if mtd == "(auto)" else mtd
             method, basis, cbsmeta = expand_cbs_methods(mtdin, basis, driver, cbsmeta=cbsmeta, **kwargs)  # NEW mtd->mtdkey
             packet.update({'method': method, 'basis': basis})
+            # cbsmeta carries over between levels; only a "cbs" level actually uses it
+            level_uses_xdm = dft_uses_xdm or _container_uses_xdm((method, cbsmeta if method == "cbs" else None))
+            if xdm_counterpoise and level_uses_xdm and method == "cbs":
+                # Composite results do not carry the per-atom XDM moments the
+                # counterpoise superposition needs.
+                raise NotImplementedError("Counterpoise-based XDM energies through composite (CBS) methods are "
+                                          "not implemented.")
 
             # Tell the task builder which level to add a task list for
             # * see https://github.com/psi4/psi4/pull/1351#issuecomment-549948276 for discussion of where build_tasks logic should live
             if method == "cbs":
                 # This CompositeComputer is discarded after being used for dermode.
                 simplekwargs = copy.deepcopy(kwargs)
+                if level_uses_xdm and driver == "gradient":
+                    simplekwargs["component_findif_kwargs"] = current_findif_kwargs
                 simplecbsmeta = copy.deepcopy(cbsmeta)
                 simplecbsmeta['verbose'] = 0
                 dummyplan = CompositeComputer(**packet, **simplecbsmeta, molecule=original_molecule, **simplekwargs)
 
                 methods = [sr.method for sr in dummyplan.task_list]
                 # TODO: pass more info, so fn can use for managed_methods -- ref, qc_module, fc/ae, conv/df
-                dermode = negotiate_derivative_type(driver, methods, dertype, verbose=1)
+                dermode = _negotiate_derivative_type(driver, methods, dertype, level_uses_xdm)
 
-                if dermode[0] == dermode[1]:  # analytic
+                if level_uses_xdm and driver == "gradient":
+                    logger.info("PLANNING MB(CBS(XDM COMPONENTS)):  {mc_level_idx=} {packet=} {cbsmeta=} kw={kwargs}")
+                    plan.build_tasks(CompositeComputer,
+                                     **packet,
+                                     mc_level_idx=mc_level_idx,
+                                     component_findif_kwargs=current_findif_kwargs,
+                                     **cbsmeta,
+                                     **kwargs)
+                elif dermode[0] == dermode[1]:  # analytic
                     logger.info("PLANNING MB(CBS):  {mc_level_idx=} {packet=} {cbsmeta=} {dertype=} kw={kwargs}")
                     plan.build_tasks(CompositeComputer, **packet, mc_level_idx=mc_level_idx, **cbsmeta, **kwargs)  # TODO dertype expected in kwargs?
 
@@ -204,7 +311,7 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
                                      # TODO dertype expected in kwargs?
 
             else:
-                dermode = negotiate_derivative_type(driver, method, dertype, verbose=1)
+                dermode = _negotiate_derivative_type(driver, method, dertype, level_uses_xdm)
                 if dermode[0] == dermode[1]:  # analytic
                     logger.info(f"PLANNING MB:  {mc_level_idx=} {packet=} {kwargs=}")
                     plan.build_tasks(AtomicComputer, **packet, mc_level_idx=mc_level_idx, **kwargs)
@@ -228,14 +335,21 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
         kwargs.update(cbsmeta)
         # This CompositeComputer is discarded after being used for dermode. Could have used directly for analytic except for excess printing with FD
         simplekwargs = copy.deepcopy(kwargs)
+        if task_uses_xdm and driver == "gradient":
+            simplekwargs["component_findif_kwargs"] = current_findif_kwargs
         simplekwargs['verbose'] = 0
         dummyplan = CompositeComputer(**packet, **simplekwargs)
 
         methods = [sr.method for sr in dummyplan.task_list]
         # TODO: pass more info, so fn can use for managed_methods -- ref, qc_module, fc/ae, conv/df
-        dermode = negotiate_derivative_type(driver, methods, kwargs.pop('dertype', None), verbose=1)
+        dermode = _negotiate_derivative_type(driver, methods, kwargs.pop('dertype', None), task_uses_xdm)
 
-        if dermode[0] == dermode[1]:  # analytic
+        if task_uses_xdm and driver == "gradient":
+            logger.info(f'PLANNING CBS(XDM COMPONENTS):  packet={packet} kw={kwargs}')
+            return CompositeComputer(**packet,
+                                     component_findif_kwargs=current_findif_kwargs,
+                                     **kwargs)
+        elif dermode[0] == dermode[1]:  # analytic
             logger.info('PLANNING CBS:  packet={packet} kw={kwargs}')
             plan = CompositeComputer(**packet, **kwargs)
             return plan
@@ -252,7 +366,7 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
 
     # Done with Wrappers -- know we want E, G, or H -- but may still be FD or AtomicComputer
     else:
-        dermode = negotiate_derivative_type(driver, method, kwargs.pop('dertype', None), verbose=1)
+        dermode = _negotiate_derivative_type(driver, method, kwargs.pop('dertype', None), task_uses_xdm)
         convcrit = negotiate_convergence_criterion(dermode, method, return_optstash=False)
 
         if dermode[0] == dermode[1]:  # analytic

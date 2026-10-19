@@ -81,12 +81,14 @@ dict = {
 """
 import collections
 import copy
+from collections.abc import Mapping
 
 from qcengine.programs.empirical_dispersion_resources import dashcoeff, get_dispersion_aliases, new_d4_api
 
 from psi4 import core
 
 from ...p4util.exceptions import ValidationError
+from ..xdm_params import available_xdm_functionals, normalize_xdm_model
 from . import dh_functionals, gga_functionals, hyb_functionals, lda_functionals, libxc_functionals, mgga_functionals
 
 dict_functionals = {}
@@ -125,6 +127,9 @@ for functional_name in dict_functionals:
     # if the parent functional is already dispersion corrected:
     if "dispersion" in dict_functionals[functional_name]:
         disp = dict_functionals[functional_name]['dispersion']
+        # XDM dispersion is handled natively (not via qcengine dashcoeff), skip dashcoeff logic
+        if disp['type'] == 'xdm':
+            continue
         for formal in functional_aliases:
             # "bless" the original functional dft/*_functionals dispersion definition including aliases
             dashcoeff_supplement[disp['type']]['definitions'][formal] = disp
@@ -167,6 +172,29 @@ for functional_name in dict_functionals:
                     for alias in functional_aliases:
                         alias += "-" + nominal_dispersion_level.lower()
                         functionals[alias] = func
+
+
+# Auto-generate -xdm variants for base functionals with fitted damping parameters.
+_xdm_base_functionals = {}
+_xdm_parameterized_functionals = set(available_xdm_functionals())
+for fname, fdict in dict_functionals.items():
+    aliases = set(get_functional_aliases(fdict))
+    if "dispersion" not in fdict and aliases & _xdm_parameterized_functionals:
+        _xdm_base_functionals[fname] = fdict
+
+for functional_name, base_dict in _xdm_base_functionals.items():
+    functional_aliases = get_functional_aliases(base_dict)
+    parameterized_aliases = sorted(set(functional_aliases) & _xdm_parameterized_functionals)
+    canonical_alias = (base_dict["name"].lower()
+                       if base_dict["name"].lower() in parameterized_aliases else parameterized_aliases[0])
+    func = copy.deepcopy(base_dict)
+    func["name"] = canonical_alias + "-XDM"
+    func["dispersion"] = {"type": "xdm", "params": {"xdm_model": "kb49"}}
+    for alias in functional_aliases:
+        for suffix in ("-xdm", "-xdm(kb49)"):
+            xdm_alias = alias + suffix
+            if xdm_alias not in functionals:
+                functionals[xdm_alias] = func
 
 
 def check_consistency(func_dictionary):
@@ -235,14 +263,25 @@ def check_consistency(func_dictionary):
     if "dispersion" in func_dictionary:
         disp = func_dictionary["dispersion"]
         # 3b) check dispersion type present and known
-        if "type" not in disp or disp["type"] not in _dispersion_aliases:
+        if "type" not in disp or (disp["type"] not in _dispersion_aliases and disp["type"] != "xdm"):
             raise ValidationError(
                 f"SCF: Dispersion type ({disp['type']}) should be among ({_dispersion_aliases.keys()})")
+        # XDM dispersion is handled natively, not through qcengine dashcoeff
+        if disp["type"] == "xdm":
+            params = disp.get("params", {})
+            if not isinstance(params, Mapping):
+                raise ValidationError(f"SCF: XDM dispersion params for {name} must be a mapping.")
+            unknown_params = sorted((key for key in params if key != "xdm_model"), key=str)
+            if unknown_params:
+                raise ValidationError(f"SCF: Unsupported XDM dispersion params for {name}: {unknown_params}. "
+                                      "Supported params are ['xdm_model'].")
+            normalize_xdm_model(params.get("xdm_model", "kb49"))
     # 3c) check dispersion params complete
-        allowed_params = sorted(dashcoeff[_dispersion_aliases[disp["type"]]]["default"].keys())
-        if "params" not in disp or sorted(disp["params"].keys()) != allowed_params:
-            raise ValidationError(
-                f"SCF: Dispersion params for {name} ({list(disp['params'].keys())}) must include all ({allowed_params})")
+        else:
+            allowed_params = sorted(dashcoeff[_dispersion_aliases[disp["type"]]]["default"].keys())
+            if "params" not in disp or sorted(disp["params"].keys()) != allowed_params:
+                raise ValidationError(
+                    f"SCF: Dispersion params for {name} ({list(disp['params'].keys())}) must include all ({allowed_params})")
     # 3d) check formatting for dispersion citation
         if "citation" in disp:
             cit = disp["citation"]
