@@ -1191,6 +1191,10 @@ def _grac_cation_ground_state(dft_functional, mol_cation, jk_obj, wfn_given, scf
     the SAD state, its n/pi cation states being nearly degenerate.
     """
     nelec_cation = wfn_given.nalpha() + wfn_given.nbeta() - 1
+    # Second-order steps on every cation SCF, whatever the tier: when the hole mixes two near-degenerate
+    # neutral orbitals (amide n/pi, ethane e_g, carboxylate O lone pairs) DIIS either stalls or "converges"
+    # 0.2-2 mEh above the ground state, under every tier. The neutral, and so the HOMO, is left alone.
+    core.set_local_option("SCF", "SOSCF", True)
     best = None
     read_file = core.Wavefunction.build(mol_cation, core.get_global_option("BASIS")).get_scratch_filename(180)
     for guess in ("READ", "SAD"):
@@ -1273,11 +1277,13 @@ def compute_GRAC_shift(
         ["SCF", "LEVEL_SHIFT"],
         ["SCF", "LEVEL_SHIFT_CUTOFF"],
         ["SCF", "SCF_INITIAL_ACCELERATOR"],
+        ["SCF", "SOSCF"],
         ["SCF", "ORBITAL_OPTIMIZER_PACKAGE"],
         ["SCF", "GUESS"],
         ["BASIS"],
     )
     neutral_guess = core.get_option("SCF", "GUESS")
+    neutral_soscf = core.get_option("SCF", "SOSCF")
 
     monomer_label = label
     label = f"Monomer {label}"
@@ -1343,8 +1349,10 @@ def compute_GRAC_shift(
                     dft_functional, mol_cation, jk_obj, wfn_given, scf_kwargs
                 )
                 core.set_local_option("SCF", "GUESS", neutral_guess)
+                core.set_local_option("SCF", "SOSCF", neutral_soscf)
             except ConvergenceError:
                 core.set_local_option("SCF", "GUESS", neutral_guess)
+                core.set_local_option("SCF", "SOSCF", neutral_soscf)
                 # A failed attempt's wavefunctions are still bound in this
                 # function's scope, so without dropping them here they stay
                 # resident -- grid data, collocation cache and all -- while the
