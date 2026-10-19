@@ -1,5 +1,29 @@
 # FDDS cuEST implementation handoff
 
+## Same allocation extended to gated full-suite validation
+
+- User explicitly requested using the allocation for the full FDDS suite once
+  focused checks pass, and authorized brief hold/release of **14184910** to
+  update only its unstarted replay harness. That update succeeded; job ID,
+  scientific binary9d4b1cd4aa, test driver3b21adb662, 15-minute limit and free
+  embers/H200 route are unchanged. No new submission/cancellation.
+- Replay harness advanced from e124e5cfba to
+  **ce2ab6b38d157b3fb805708bf3da74a19e80c208** while held; clean tree and
+  no scientific/test/build-code changes were verified before release.
+  The previous harness commit remains available in git. Transition and
+  before/after scheduler snapshots are recorded in run02.
+- Execution plan: **9 focused passes first**, then **all57 FDDS tests** in
+  the same allocation under bounded GDB (300 s, 15 s kill grace).
+  Full success requires exact57 executed/no skips/failures/errors and normal
+  GDB inferior exit. `FOCUSED_VERIFIED.json` is kept separately; only a verified
+  full run writes final `VERIFIED.json` and allows `COMPLETED`.
+  There are **66 total test executions including repeats**, not 66 unique tests.
+  Six synthetic gate checks accepted normal completion and rejected partial
+  counts, skipped/failed tests, native faults and abnormal exits; not GPU data.
+- Effective post-release state PENDING, QOS embers. Existing watcher
+  **b07d6597e** continues on the same job. No numerical/full-suite or speedup
+  conclusion before terminal accounting/provenance/artifact audit.
+
 ## Diagnosis complete; corrected SAPT GPU confirmation still pending
 
 - Final CPU gate with corrected test driver
