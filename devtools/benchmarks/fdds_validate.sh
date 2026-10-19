@@ -99,16 +99,55 @@ print(json.dumps(dict(package=str(p), core=str(core), version=psi4.__version__,
                      core_sha256=hashlib.sha256(core.read_bytes()).hexdigest(),
                      linked_libraries=libraries, cuest_packages=packages), indent=2))
 PY
+test_selection=()
+if [[ "${CUEST_FDDS_FOCUSED:-0}" == 1 ]]; then
+    test_selection=(-k 'test_fdds_contribution_fixture_budget or test_fdds_gpu_contributions')
+    # Preserve both focused outcomes even if the contribution process fails.
+    set +e
+fi
 "$env/bin/python" -m pytest "$root/tests/pytests/test_cuest_fdds.py" -q -s \
-    --junitxml="$out/fdds.xml" > "$out/fdds.log" 2>&1
+    "${test_selection[@]}" --junitxml="$out/fdds.xml" > "$out/fdds.log" 2>&1
+contribution_status=$?
+if [[ "${CUEST_FDDS_FOCUSED:-0}" == 1 ]]; then
+    # Native faults must stop at GDB, not wait indefinitely for an attachment.
+    # A successful GDB process alone is not a successful pytest run.
+    export PYTHONFAULTHANDLER=1
+    ulimit -c 0
+    timeout --signal=TERM --kill-after=15s 240s /usr/bin/gdb --batch \
+        -ex 'set pagination off' -ex 'set confirm off' -ex 'set breakpoint pending on' \
+        -ex 'handle SIGSEGV stop print nopass' \
+        -ex 'break einsums::util::attach_debugger()' \
+        -ex run -ex 'thread apply all bt 12' -ex quit \
+        --args "$env/bin/python" -X faulthandler -m pytest \
+        "$root/tests/pytests/test_cuest_fdds.py::test_saptdft_fdds_native_xc_gpu" \
+        -vv -x -s --basetemp="$out/sapt-tmp" --junitxml="$out/sapt.xml" \
+        > "$out/sapt-gdb.log" 2>&1
+    gdb_status=$?
+    set -e
+    export CUEST_FDDS_CONTRIBUTION_STATUS="$contribution_status" CUEST_FDDS_GDB_STATUS="$gdb_status"
+fi
 "$env/bin/python" - <<'PY'
 from pathlib import Path
 from xml.etree import ElementTree
-import json
+import json, os, re
 suite = ElementTree.parse("fdds.xml").find("testsuite")
 counts = dict(suite.attrib)
-assert int(suite.get("tests")) == 56, counts
+focused = os.environ.get("CUEST_FDDS_FOCUSED", "0") == "1"
+if focused:
+    assert int(os.environ["CUEST_FDDS_CONTRIBUTION_STATUS"]) == 0, "contribution subprocess failed"
+    assert int(os.environ["CUEST_FDDS_GDB_STATUS"]) == 0, "GDB subprocess failed or timed out"
+assert int(suite.get("tests")) == (8 if focused else 56), counts
 assert all(int(suite.get(k, "0")) == 0 for k in ("errors", "failures", "skipped")), counts
+if focused:
+    log = Path("sapt-gdb.log").read_text()
+    assert not re.search(r"received signal|hit Breakpoint|^Breakpoint \d+,", log, re.MULTILINE), "native fault/debugger breakpoint"
+    assert "exited normally" in log, "GDB did not observe a normal inferior exit"
+    sapt = ElementTree.parse("sapt.xml").find("testsuite")
+    sapt_counts = dict(sapt.attrib)
+    assert int(sapt.get("tests")) == 1, sapt_counts
+    assert all(int(sapt.get(k, "0")) == 0 for k in ("errors", "failures", "skipped")), sapt_counts
+    counts = {"mode": "focused_only_not_full_suite", "contribution_tests": counts,
+              "sapt_gpu_test": sapt_counts, "executed_tests": 9}
 Path("VERIFIED.json").write_text(json.dumps(counts, indent=2) + "\n")
 print(json.dumps(counts, indent=2))
 PY
