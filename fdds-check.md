@@ -1,5 +1,37 @@
 # FDDS cuEST implementation handoff
 
+## User-authorized upstream integration and new CPU gate
+
+- User authorized pulling committed `saptdft_cuest` work into this FDDS
+  branch. Merge **9d4b1cd4aab718dec1f7b831a53dd54d68f2a609** integrates
+  upstream **ca21ef8645a73263281480454b730085506adca5**, including committed
+  SAD/lifecycle and LDA/GGA cuEST-grid XC response work. No dirty coordinator
+  edits were copied, and no merge back into the coordinator branch occurred.
+  FDDS scientific C++ and fixture corrections remain intact. One option-doc
+  conflict was resolved retaining both routing descriptions.
+- Own CPU-only Release stage rebuilt successfully, cuEST/Einsums OFF.
+  **164 passed, zero failures/errors/skips, 209.808 s**:
+  45 FDDS, 67 native CPSCF, 6 SAD, 6 lifecycle, 8 basis-parser, 32 grid-switch.
+  Evidence `build_fdds_cpu/integrated-9d4b1cd4aa/{build.log,native.xml,native.log,provenance.json}`.
+  Actual outside-root staged import asserted, version `1.12a1.dev802`,
+  core SHA256 `5b2825a1dd99a8f7e40c5a24ec2b14df2c1f7436b8d1197ea7de11c500a48358`.
+  No CUDA/cuEST linkage in this CPU gate.
+- Focused GPU harness **a6233fffac7ce1311f8f3a0164adea55708f6c1f**
+  prepares an entirely new source/build/run at scientific pin9d4b1cd4aa.
+  Only 8 contribution/budget tests plus the final SAPT GPU test under bounded
+  GDB (**9 targeted tests**, not the full 56-case suite). Separate processes
+  preserve the crash stack even if contributions fail. Gate checks both
+  subprocess statuses, exact JUnit counts/no skips, and normal GDB inferior
+  exit; SIGSEGV/attachment-breakpoint output cannot become a false pass.
+  Five synthetic artifact-gate checks passed (normal exit accepted; native
+  signal, attachment breakpoint, skip and timeout rejected); these are
+  harness checks only, not GPU correctness evidence.
+- Staging/dry-run is in progress for explicit free embers/H200, 8 CPUs/
+  64 GiB/one-hour build+focused-validation limit. No full GPU rerun.
+  Frozen previous stages, failed13992504 evidence, and diagnostic14006185
+  scientific/driver pins remain immutable. Native crash is not yet established
+  fixed by upstream integration; targeted GPU evidence is still required.
+
 ## Confirmed fixture correction (CPU evidence; GPU diagnosis pending)
 
 - Local direct replay of the original unequal/nonhybrid test stopped in
