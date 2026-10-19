@@ -9,7 +9,7 @@ import policy as p
 MODE = "verified-commonfix-artifact-pair"
 REVIEW_ID = "parent-fitcase-commonfix-review-required"
 ORIGIN = j.RUN
-PAIR_DIGEST = "PENDING_CAPTURE"
+PAIR_DIGEST = "180f8d96d764994b6ca5719056372aaf06bb7be34f17f6c54fe68949f98b3cf9"
 CORE = {
     "baseline": "67c1e9021cc2fcaaf3b4ad3f98f6750ee39049c1aafe8cdfbe75b46c8335f224",
     "candidate": "11f4c3e83dc92f5482b499911156185bce45f07dd9a83abb4a4335f04545c696",

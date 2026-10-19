@@ -344,15 +344,20 @@ def cmake_policy(outer, inner, stage):
 
 def validate_manifest(m, executable=True):
     fresh = "build_mode" in m
+    commonfix = m.get("build_mode") == "verified-commonfix-artifact-pair"
     if fresh:
         import jkexception as j
-        j.validate(m)
-    expected_run = j.RUN if fresh else RUN
-    expected_harness = j.HARNESS if fresh else HARNESS
+        if commonfix:
+            import fitcase as f
+            f.validate(m)
+        else:
+            j.validate(m)
+    expected_run = f.RUN if commonfix else j.RUN if fresh else RUN
+    expected_harness = f.HARNESS if commonfix else j.HARNESS if fresh else HARNESS
     expected_sources = j.SOURCES if fresh else SOURCES
     expected_base = j.BASE if fresh else BASE
     pair = m.get("artifact_pair")
-    if pair is not None:
+    if pair is not None and not commonfix:
         from artifacts import validate_pair
         validate_pair(pair)
         require(m["build_budget_seconds"] == [0, 0] and

@@ -21,9 +21,14 @@ from policy import *
 import science
 import artifacts
 import jkexception as j
+import fitcase as f
+import commonfix
 
 HERE = Path(__file__).resolve().parent
 PY = E + "/bin/python"
+
+def artifact_api(m):
+    return commonfix if m.get("build_mode") == f.MODE else artifacts
 
 
 def literal_assignments(path, names):
@@ -39,6 +44,8 @@ def literal_assignments(path, names):
 
 def prepare(args):
     require(not args.artifact_pair, "new common-fixed cohort requires fresh builds, not old artifacts")
+    reuse = bool(args.commonfix_pair)
+    cohort = f if reuse else j
     local = dict(baseline=Path(args.baseline_local).resolve(), candidate=Path(args.candidate_local).resolve())
     harness = HERE.parents[1]
     hp = git(harness, "rev-parse", "HEAD")
@@ -60,37 +67,46 @@ def prepare(args):
     hfiles = file_manifest(harness)
     # Freeze all shared toolchain/dependency small input files by path/hash before job.
     # Missing remote-only compiler files are rehashed and recorded inside the GPU allocation.
-    m = dict(schema=1, build_mode=j.MODE, shared_fix=shared_fix,
-             route=ROUTE, gates=GATES, run_root=j.RUN, scratch_parent="/storage/scratch1/3/awallace43/cpks-major2",
+    m = dict(schema=1, build_mode=cohort.MODE, shared_fix=shared_fix,
+             route=ROUTE, gates=GATES, run_root=cohort.RUN, scratch_parent="/storage/scratch1/3/awallace43/cpks-major2",
              suite=H0 + "/geometries", suite_sha256=SUITE_SHA, systems=SYSTEMS, sequence=sequence(), arms=arms,
-             harness=dict(path=j.HARNESS, pin=hp, files=hfiles, files_digest=digest(hfiles)),
+             harness=dict(path=cohort.HARNESS, pin=hp, files=hfiles, files_digest=digest(hfiles)),
              dependency_hashes=LIBS, runtime_hash_pins=RUNTIME_LIBS, inspection_tool=INSPECTION_TOOL,
              common_selectors=COMMON, fixed_selector=FIXED, fixed_k=FIXED_K,
              selectors_ast=selectors_ast(local["candidate"]),
              runtime_policy=dict(threads=8, memory="100 GiB", cache="enabled-shared-job-1GiB",
                                  prewarm=False, print_override=False, affinity_override=False),
              approval=dict(state="APPROVED" if args.command == "freeze" else "PENDING",
-                           review_id=args.review_id if args.command == "freeze" else j.REVIEW_ID,
+                           review_id=args.review_id if args.command == "freeze" else cohort.REVIEW_ID,
                            candidate_pin=candidate_pin if args.command == "freeze" else None),
              observed_candidate_pin=candidate_pin,
              rhf_tolerance_note="Reviewed focused tests remain stricter: atol=2e-13 rtol=2e-13; response 1e-12/1e-10. No weakening.",
              build_budget_seconds=[3600, 3600], test_smoke_budget_seconds=1800,
              production_budget_seconds=3600, per_process_timeout_seconds=600)
+    if reuse:
+        require(args.test_source_local, "corrected test-source checkout required")
+        root = Path(args.test_source_local).resolve()
+        files = file_manifest(root)
+        m.update(artifact_pair=read_json(args.commonfix_pair), build_budget_seconds=[0, 0],
+                 test_counts=f.COUNTS,
+                 test_source=dict(source=f.TEST_SOURCE, pin=f.TEST_PIN, files=files, files_digest=digest(files),
+                                  tree=git(root, "rev-parse", "HEAD^{tree}"), proof=f.test_proof(root)),
+                 selectors_ast=selectors_ast(root))
     validate_manifest(m, executable=args.command == "freeze")
     out = Path(args.output_dir).resolve()
     out.mkdir(exist_ok=False)
     write_json(out / "manifest.json", m)
     mh = sha(out / "manifest.json")
-    batch = batch_text(mh, fresh=True)
+    batch = batch_text(mh, fresh=True, commonfix=reuse)
     (out / "campaign.sbatch").write_text(batch)
     write_json(out / "bundle-receipt.json", dict(manifest_sha256=mh, batch_sha256=sha(out / "campaign.sbatch"),
                harness_pin=hp, executable_approval=m["approval"]["state"], generated_only=True))
     print(f"{args.command.upper()} {out} manifest_sha256={mh}; NOT submitted")
 
 
-def batch_text(manifest_hash, fresh=False):
+def batch_text(manifest_hash, fresh=False, commonfix=False):
     require(re.fullmatch("[0-9a-f]{64}", manifest_hash), "manifest digest")
-    run, harness = (j.RUN, j.HARNESS) if fresh else (RUN, HARNESS)
+    run, harness = (f.RUN, f.HARNESS) if commonfix else (j.RUN, j.HARNESS) if fresh else (RUN, HARNESS)
     return f"""#!/usr/bin/env bash
 # Generated data; tracked code moves only via Git after separate approval.
 #SBATCH --job-name=major2-gpu-ab
@@ -261,6 +277,9 @@ class Engine:
         for item in self.m["arms"].values():
             check_source(item["source"], item["pin"], item["files"])
         check_source(self.m["harness"]["path"], self.m["harness"]["pin"], self.m["harness"]["files"])
+        if self.m.get("build_mode") == f.MODE:
+            test = self.m["test_source"]
+            check_source(test["source"], test["pin"], test["files"])
         require(sha(self.manifest_path) == self.manifest_hash, "manifest changed")
         require(sha(Path(self.m["suite"]) / "systems.py") == SUITE_SHA, "geometry module changed")
         require(gpu_line(self.query(["nvidia-smi", "--id="+self.gpu_selector,
@@ -271,7 +290,7 @@ class Engine:
         check_runtime_aliases()
         einsums_coherence()
         if self.m.get("artifact_pair"):
-            artifacts.verify_shared(self.m["artifact_pair"])
+            artifact_api(self.m).verify_shared(self.m["artifact_pair"])
         for arm in self.probes:
             stage = Path(self.m["arms"][arm]["build"]) / "stage"
             require(sha(self.probes[arm]["core"]) == self.probes[arm]["core_sha256"], "core changed")
@@ -282,10 +301,14 @@ class Engine:
         self.raw.mkdir()
         self.scratch.mkdir(parents=True, exist_ok=False)
         self.env = runtime_env(os.environ, self.scratch)
-        if self.m.get("build_mode") == j.MODE:
+        if self.m.get("build_mode") in (j.MODE, f.MODE):
             self.env["CPKS_BUILD_DIR"] = j.BUILD
             require(j.proof({arm: item["source"] for arm, item in self.m["arms"].items()}) == self.m["shared_fix"],
                     "same-allocation common fix/delta proof")
+        if self.m.get("build_mode") == f.MODE:
+            require(f.test_proof(self.m["test_source"]["source"]) == self.m["test_source"]["proof"],
+                    "same-allocation corrected test-source proof")
+            write_json(self.raw/"test-source-provenance.json", self.m["test_source"])
         self.env["CUDA_CACHE_PATH"] = str(self.scratch / "cuda-cache")
         Path(self.env["CUDA_CACHE_PATH"]).mkdir()
         env_keys = [
@@ -320,8 +343,8 @@ class Engine:
             require(not (self.root / ("build-" + arm)).exists(), "new build metadata root exists")
         if self.m.get("artifact_pair"):
             write_json(self.raw/"artifact-pair-verification.json",
-                       artifacts.verify_pair(self.m["artifact_pair"], self.m["arms"]))
-        selectors = selectors_ast(self.m["arms"]["candidate"]["source"])
+                       artifact_api(self.m).verify_pair(self.m["artifact_pair"], self.m["arms"]))
+        selectors = selectors_ast(self.m.get("test_source", self.m["arms"]["candidate"])["source"])
         require(selectors == self.m["selectors_ast"], "test selector source changed")
         write_json(self.raw / "selectors-ast.json", selectors)
         # Record read-only toolchain/config/library inputs. Their runtime hashes must
@@ -364,7 +387,8 @@ class Engine:
         admission(self.end-time.time(), 1800 + 3600)
         self.pins()
         pair = self.m["artifact_pair"]
-        artifacts.verify_artifact(pair, arm, self.m["arms"][arm]["files"])
+        api = artifact_api(self.m)
+        api.verify_artifact(pair, arm, self.m["arms"][arm]["files"])
         out = self.root/("build-"+arm)
         out.mkdir()
         origin = pair["arms"][arm]
@@ -375,9 +399,13 @@ class Engine:
             with dst.open("xb") as stream:
                 stream.write(src.read_bytes())
             require(sha(dst) == expected, "copied receipt mismatch")
-        write_json(out/"BUILD_ORIGIN.json", dict(origin_job=origin["origin_job"],
+        receipt = dict(origin_job=origin["origin_job"],
             original_metadata=origin["metadata"], original_build=origin["build"],
-            copied_receipts=True, compiled_in_this_job=False, artifact_pair_digest=artifacts.PAIR_DIGEST))
+            copied_receipts=True, compiled_in_this_job=False, artifact_pair_digest=api.PAIR_DIGEST)
+        if self.m.get("build_mode") == f.MODE:
+            receipt.update(compiled_source_pin=origin["pin"], compiled_core_sha256=origin["core_sha256"],
+                           correctness_test_source_pin=f.TEST_PIN)
+        write_json(out/"BUILD_ORIGIN.json", receipt)
         self.verify_build(arm)
 
     def verify_build(self, arm):
@@ -437,7 +465,10 @@ class Engine:
         for src, name in [(Path(item["build"])/"CMakeCache.txt", "CMakeCache.outer.txt"),
                           (inner/"CMakeCache.txt", "CMakeCache.inner.txt"),
                           (inner/"compile_commands.json", "compile_commands.json")]:
-            shutil.copy2(src, out/name)
+            if (out/name).exists():
+                require(sha(src) == sha(out/name), "copied compiler receipt differs")
+            else:
+                shutil.copy2(src, out/name)
         self.pins()
         require(self.inputs == {p: sha(p) for p in self.inputs}, "toolchain/config changed during build")
 
@@ -452,14 +483,16 @@ class Engine:
         # Plugin-only harness path, never a source package or old driver overlay.
         # arm.sh clears PYTHONPATH; pytest's --pyargs is not used.
         env["MAJOR2_PYTEST_EVIDENCE"] = str(directory / "execution.json")
-        expected_count = 1 if red else (4 if expression == FIXED_K else (48 if selectors == COMMON else 16))
+        plan_count = 17 if self.m.get("build_mode") == f.MODE else 16
+        expected_count = 1 if red else (4 if expression == FIXED_K else (48 if selectors == COMMON else plan_count))
         env["MAJOR2_EXPECTED_COUNT"] = str(expected_count)
         env["MAJOR2_PROCESS_PROBE"] = str(directory / "process-probe.json")
+        test_root = Path(self.m.get("test_source", self.m["arms"]["candidate"])["source"])
         argv = [PY, "-B", HERE / "run_pytest.py", HERE, "--", "-c",
-                Path(self.m["arms"]["candidate"]["source"]) / "pytest.ini",
+                test_root / "pytest.ini",
                 "-q", "-ra", "-x", "--maxfail=1", "--tb=short", "-p", "no:cacheprovider",
                 "--basetemp=" + str(temp / "pytest"), "--junitxml=" + str(directory / "junit.xml"),
-                *[str(Path(self.m["arms"]["candidate"]["source"]) / "tests/pytests" / s) for s in selectors]]
+                *[str(test_root / "tests/pytests" / s) for s in selectors]]
         if expression:
             argv += ["-k", expression]
         rc = self.run_command(self.arm_command(arm, argv), label, env=env, cwd=temp, timeout=600, accept_failure=red)
@@ -643,6 +676,8 @@ def main():
         p.add_argument("--candidate-local", required=True)
         p.add_argument("--output-dir", required=True)
         p.add_argument("--artifact-pair", help="Explicit immutable reviewed pair JSON; skips compilation only")
+        p.add_argument("--commonfix-pair", help="Exact verified commonfix pair from 14165998 only")
+        p.add_argument("--test-source-local", help="One-file corrected child of the frozen candidate")
         if mode == "freeze":
             p.add_argument("--approved-candidate-pin", required=True)
             p.add_argument("--review-id", required=True)
@@ -656,8 +691,9 @@ def main():
         require(sha(args.manifest) == args.manifest_sha256, "frozen manifest SHA mismatch")
         m = read_json(args.manifest)
         validate_manifest(m)
-        require(m.get("build_mode") == j.MODE, "new entry point only runs fresh common-fixed cohort")
-        require(Path(args.manifest) == Path(j.RUN)/"manifest.json", "manifest outside new cohort root")
+        require(m.get("build_mode") in (j.MODE, f.MODE), "new entry point only runs fresh common-fixed or exact commonfix cohort")
+        run = f.RUN if m.get("build_mode") == f.MODE else j.RUN
+        require(Path(args.manifest) == Path(run)/"manifest.json", "manifest outside new cohort root")
         Engine(m, args.manifest).execute()
 
 

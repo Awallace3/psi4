@@ -193,23 +193,31 @@ def audit(pin, manifest_sha, batch_sha):
                          no_submission=True), indent=2))
 
 
-def submit(pin, manifest_sha, batch_sha):
+def submit(pin, manifest_sha, batch_sha, *, cohort=j, verifier=None, cache=None, failed_jobs=None):
     """Called ONLY by reviewed parent-finalize. A failed lock is never reusable."""
-    root = Path(j.RUN)
+    root = Path(cohort.RUN)
     lock = root/"logs/submission.lock"
     lock.mkdir()
-    m, pre = verify_bundle(pin, manifest_sha, batch_sha)
+    directory = os.open(lock.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    m, pre = (verifier or verify_bundle)(pin, manifest_sha, batch_sha)
+    cache = CACHE if cache is None else cache
+    failed_jobs = FAILED_JOBS if failed_jobs is None else failed_jobs
     gates = p.read_json(root/"logs/pre-submit-gates.json")
     p.require(gates["harness_pin"] == pin and gates["manifest_sha256"] == manifest_sha and
-              gates["batch_sha256"] == batch_sha and gates["preflight_sha256"] == p.sha(CACHE/"preflight.json") and
+              gates["batch_sha256"] == batch_sha and gates["preflight_sha256"] == p.sha(cache/"preflight.json") and
               gates["pristine_staging"] and gates["old_run_unchanged"] and gates["old_build_sentinels_unchanged"],
               "parent audit gates")
     p.require("gpu-h200" in gates["test_only_stdout"]+gates["test_only_stderr"], "test-only missing")
     durable(lock/"controller-before.json", queue())
     argv = ["sbatch", "--parsable", str(root/"campaign.sbatch")]
     durable(lock/"attempt.json", dict(utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            argv=argv, no_retry=True, replacement_for="14164895", preserved_failed_jobs=FAILED_JOBS,
-            compiled_in_new_job=True, build_mode=j.MODE, manifest_sha256=manifest_sha))
+            argv=argv, no_retry=True, replacement_for="14165998" if cohort is not j else "14164895",
+            preserved_failed_jobs=failed_jobs, compiled_in_new_job=cohort.MODE == j.MODE,
+            build_mode=cohort.MODE, manifest_sha256=manifest_sha))
     try:
         result = subprocess.run(argv, cwd=root, text=True, capture_output=True, timeout=35)
     except BaseException as exc:
