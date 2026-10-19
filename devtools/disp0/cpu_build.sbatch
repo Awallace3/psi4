@@ -9,6 +9,7 @@
 #SBATCH --mem=48G
 #SBATCH --time=02:00:00
 #SBATCH --signal=TERM@90
+#SBATCH --no-requeue
 #SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/logs/%x-%j.out
 #SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/logs/%x-%j.err
 

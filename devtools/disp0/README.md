@@ -8,6 +8,11 @@
 * `environment.yml` is a fresh-prefix proposal matching essential local CPU
   dependency versions. It intentionally excludes conda Einsums1 and release
   Psi4. Solve/install success and the full explicit lock must be recorded.
+  Catch2 3.16.0 is required even with E2 tests OFF: d17bb76e unconditionally
+  probes its string-view symbol with `check_cxx_source_compiles`. The installed
+  IMPORTED target works; the FetchContent source alias does not cross into
+  that try_compile project. The recipe preflights this exact link and pins
+  CMake 4.3.2 to the CPU baseline.
 * Use a fresh branch-specific native Psi4 build. Native `ENABLE_Einsums=OFF`
   is intentional, as in the CPU oracle: this route uses Python RuntimeTensors,
   not Psi4 C++ Einsums objects. Python `_core` must still link the one matching
@@ -21,6 +26,11 @@ Candidate CPU-only build allocation: 8 CPUs, 48G host, 2h, explicit embers,
 gts-cs207-chemx. No GPU needed when arch 90 is explicitly configured.
 Check the exact route with `sbatch --test-only`, send provenance/readiness to
 the parent and obtain coordination before submission.
+Job 14182584 already consumed the original one-job approval and failed at
+Catch2 configuration. No retry is authorized by this recipe. Any corrected
+build requires fresh approval, fresh source/environment/build roots and a
+new immutable pin. Preserve the failed roots. Future jobs explicitly request
+`--no-requeue`.
 
 Candidate Einsums configuration (requires actual isolated paths):
 

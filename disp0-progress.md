@@ -383,6 +383,45 @@ No GPU submission and no automatic retry.
 This is CPU build/API/ABI preparation only. It does not establish actual CUDA
 device, GPU shadow or cuBLAS numerical correctness. H200 gate and Phase 2 remain
 unapproved/unpassed and no GPU job has been submitted.
+
+### CPU build terminal failure (no retry)
+
+Official state-change monitor b68b89e8d reports job **14182584 FAILED**,
+job/.batch/.0 all exit **1:0**, elapsed **00:06:31** (step 00:06:26).
+It waited pending until the 2026-10-19 23:04:45Z snapshot showed RUNNING;
+23:09:48Z snapshot showed FAILED/ALL-TERMINAL. These are observation times,
+not exact scheduler start/end timestamps. No requeue or job modification was
+made by this agent, and no second build or GPU job has been submitted.
+
+Bounded stdout/stderr/status inspection launched as bceb45947; exact cause
+pending artifacts. The single build authorization is consumed; preserve
+failed immutable source/environment/run roots and coordinate any next build
+separately. CPU/API/ABI preparation has **not passed** merely because its
+submission succeeded. GPU numerical/device-shadow gate and Phase 2 remain
+blocked.
+
+Bounded artifact inspection bceb45947: confirmed FAILED_OR_SIGNALLED with
+`exit_code=1`, `term_received=0`; epilog confirms actual cpu-small / embers /
+gts-cs207-chemx. Exact failure occurs in Einsums d17bb76e configure:
+`cmake/Einsums_SetupCatch.cmake:37` calls `check_cxx_source_compiles`; its
+try_compile cannot resolve `Catch2::Catch2`. This setup is unconditional even
+when native tests are OFF. The fresh env omitted installed Catch2, selecting
+the FetchContent source-backed alias. Local CPU baseline has installed
+Catch2 3.16.0 and imported targets. The solve also selected CMake 4.4 rather
+than local 4.3.2; this is recorded drift, not the sole assumed cause.
+
+Local diagnostic:
+`devtools/disp0/catch_config_probe` with GNU14.3/CMake4.3.2 reproduced the
+same missing-target error for a source alias (exit 1) and linked the actual
+installed Catch2 string-view symbol with imported target (exit 0).
+This red/green result establishes the build-system issue independently of
+CUDA. No scientific contraction or native dispersion algorithm was changed.
+
+Prepared recipe-only correction: Catch2=3.16.0, explicit Catch2_DIR and
+preflight link probe, CMake=4.3.2 for baseline comparability, and
+`#SBATCH --no-requeue`. These changes affect only this local branch, **not**
+failed immutable source/env/build/install roots. No new job submitted.
+Any corrected dependency build requires fresh parent approval.
 * Read-only Phoenix access preflight: PASS, exit 0 (bfefc7153).
   No remote branch worktree/build has yet been created and no job submitted.
 * Read-only Phoenix dependency discovery: PASS, exit 0 (b99607f10).

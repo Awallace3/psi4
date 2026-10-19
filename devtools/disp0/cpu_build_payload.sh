@@ -46,6 +46,9 @@ printf '%s\n' "$nvcc_version" | tee "$run/nvcc-version.txt"
     -Wl,-rpath,"$CUDA_HOME/lib" -lcudart -o "$run/cuda_header_abi"
 "$run/cuda_header_abi" | tee "$run/cuda-header-runtime.txt"
 readelf -Ws "$run/cuda_header_abi" > "$run/cuda-header-symbols.txt"
+cmake -S "$source_root/devtools/disp0/catch_config_probe" -B "$run/catch-config-probe" -G Ninja \
+    -DCMAKE_CXX_COMPILER="$cxx" -DCMAKE_PREFIX_PATH="$env" \
+    -DCatch2_DIR="$env/lib/cmake/Catch2"
 ein_source="$run/einsums-source"
 git clone --no-checkout https://github.com/jturney/Einsums.git "$ein_source"
 git -C "$ein_source" checkout --detach "$ein_pin"
@@ -62,6 +65,7 @@ cmake -S "$ein_source" -B "$run/einsums-build" -G Ninja \
     -DEINSUMS_WITH_MALLOC=system -DEINSUMS_BUILD_PYTHON=ON \
     -DEINSUMS_PYBIND_NUM_TU=8 -DEINSUMS_INSTALL_PYMODDIR=naive \
     -DPython_EXECUTABLE="$env/bin/python" -DPython_ROOT_DIR="$env" \
+    -DCatch2_DIR="$env/lib/cmake/Catch2" \
     -DLAPACK_LIBRARIES="$env/lib/libmkl_rt.so" \
     -DEINSUMS_WITH_PROFILER=ON -DEINSUMS_WITH_TESTS=OFF \
     -DEINSUMS_WITH_EXAMPLES=OFF -DEINSUMS_WITH_DOCUMENTATION=OFF
