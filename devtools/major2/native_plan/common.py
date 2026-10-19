@@ -10,7 +10,7 @@ HERE = Path(__file__).resolve().parent
 P = "/storage/project/r-cs207-0/awallace43"
 E = P+"/miniconda/envs/p4cuest_sapt"
 SOURCE = P+"/gits/psi4.major2-native-plan-20261019"
-RUN = P+"/runs/saptdft-cuest-cpks/major2-native-plan-20261019-v2"
+RUN = P+"/runs/saptdft-cuest-cpks/major2-native-plan-20261019-v3"
 OLD = P+"/runs/saptdft-cuest-cpks/major2-workspace-20261019"
 BASE = P+"/gits/psi4.saptdft-cuest-major2-jkexception-baseline-20261018"
 BASE_PIN = "c56708fc6f6e8fcf2801868f0d3cb49bdb1bb0a2"
@@ -69,7 +69,9 @@ def check_factor(root, files):
 
 
 def check_env(env):
-    allowed_cuda = {"CUDA_VISIBLE_DEVICES","CUDA_HOME","CUDA_PATH","CUDA_CACHE_PATH",
+    # ROOT/HOME/PATH locate toolchains, not numerical modes. Keep inherited
+    # values as evidence; explicit compiler/header/runtime checks remain binding.
+    allowed_cuda = {"CUDA_VISIBLE_DEVICES","CUDA_ROOT","CUDA_HOME","CUDA_PATH","CUDA_CACHE_PATH",
                     "CUDA_CACHE_DISABLE","CUDA_CACHE_MAXSIZE"}
     found = {k:v for k,v in env.items() if
         k.startswith(("CUBLAS","CUDNN","CUSOLVER","CUSPARSE","CUEST","NVIDIA_TF32",

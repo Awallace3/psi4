@@ -9,10 +9,12 @@ import common as n
 
 PARENT = "beaaa33f5a23d7a1906e14ad3dc1fbf983fba4ce"
 FAILED = ["14158602","14159755","14160001","14160573","14160948","14161975",
-          "14164895","14165998","14169328","14170562","14173808","14174849"]
+          "14164895","14165998","14169328","14170562","14173808","14174849","14178058"]
 COMPLETED = ["14175243","14176359"]
 ORIGINAL_STAGE = n.P+"/runs/saptdft-cuest-cpks/major2-native-plan-20261019"
 ORIGINAL_PIN = "42583c6d5e6f1b527fd3be538b4290011737daed"
+FAILED_NATIVE_STAGE = ORIGINAL_STAGE+"-v2"
+FAILED_NATIVE_PIN = "0950376a4acc4a484e5557aa9996e92ef6e48db3"
 
 
 def stat(path):
@@ -49,7 +51,7 @@ def preserve(value):
             n.require(stat(Path(root)/name)==expected,"immutable scientific build sentinel")
     for path,digest in value["small_hashes"].items():
         n.require(small(path)==digest,"immutable metadata/staging")
-    # This is unsubmitted staging, never a fifteenth historical jobroot.
+    # Original v1 alone is unsubmitted staging; failed v2 is a real jobroot.
     for root,expected in value.get("unsubmitted_staging",{}).items():
         n.require(unsubmitted_stage(root)==expected,"immutable original native staging")
 
@@ -108,6 +110,29 @@ def collect():
     n.require(len(receipts)==6 and all(n.load(p)["observed"]=={"CUBLAS_WORKSPACE_CONFIG":":4096:8"}
                                       for p in receipts),"completed control ENV proofs")
     for p in receipts: hashes[str(p)]=small(p)
+    # v2 is terminal FAILED, not reusable/unsubmitted staging. Preserve every
+    # file stat, plus bounded metadata/log bytes; never read historical arrays.
+    failed=Path(FAILED_NATIVE_STAGE)
+    failed_stats=snapshot(failed)
+    failed_manifest=n.load(failed/"manifest.json")
+    failed_receipt=n.load(failed/"bundle-receipt.json")
+    n.require(failed_manifest["pin"]==failed_receipt["pin"]==FAILED_NATIVE_PIN and
+              failed_manifest["run"]==FAILED_NATIVE_STAGE and
+              failed_receipt["manifest_sha256"]==small(failed/"manifest.json") and
+              failed_receipt["batch_sha256"]==small(failed/"campaign.sbatch"),
+              "failed v2 bundle identity")
+    n.require(n.load(failed/"STARTED.json")==dict(job="14178058",pin=FAILED_NATIVE_PIN) and
+              n.load(failed/"batch-exit.json")==dict(exit=1,signalled=0) and
+              (failed/"FAILED").is_file() and
+              (failed/"logs/job-id.txt").read_text()=="14178058\n" and
+              (failed/"logs/parent-attempt").is_dir() and
+              not (failed/"ENDPOINT-COMPLETE.json").exists() and
+              not list((failed/"raw/input").iterdir()) and
+              not any(k.startswith(("raw/compile-owned-native","raw/native-p","raw/p1/"))
+                      for k in failed_stats),"terminal pre-import v2 failure")
+    roots[FAILED_NATIVE_STAGE]=failed_stats
+    n.require(len(roots)==15,"15 actual old jobroots including failed v2")
+    for rel in failed_stats: hashes[str(failed/rel)]=small(failed/rel)
     staged=unsubmitted_stage(ORIGINAL_STAGE)
     original=n.load(Path(ORIGINAL_STAGE)/"manifest.json")
     receipt=n.load(Path(ORIGINAL_STAGE)/"bundle-receipt.json")
@@ -233,7 +258,7 @@ def audit(pin,mh,bh,pristine=True):
     r=subprocess.run(["sbatch","--test-only",n.RUN+"/campaign.sbatch"],text=True,
                      capture_output=True,timeout=35)
     n.require(r.returncode==0 and "gpu-h200" in r.stdout+r.stderr,"H200 test-only failed")
-    return dict(pin=pin,manifest_sha256=mh,batch_sha256=bh,old_roots=14,failed_roots=12,
+    return dict(pin=pin,manifest_sha256=mh,batch_sha256=bh,old_roots=15,failed_roots=13,
                 completed_roots=2,queue=rows,accounting=acct,no_submission=True,
                 test_only_stdout=r.stdout,test_only_stderr=r.stderr)
 

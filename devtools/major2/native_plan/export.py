@@ -11,6 +11,11 @@ def main():
     out = Path(sys.argv[3])
     n.durable(out/"export-effective-env.json",dict(numerical_overrides=n.check_env(os.environ),
                                                 pid=os.getpid(),before_native_import=True))
+    n.durable(out/"export-toolchain-locators.json",
+              dict(locators={k:os.environ[k] for k in
+                   ("CUDA_ROOT","CUDA_HOME","CUDA_PATH","PATH") if k in os.environ},
+                   before_scientific_imports=True,
+                   authoritative_identity="pinned compiler/header/runtime and ELF/mapped-library checks"))
     sys.path.insert(0,str(n.HERE.parent))
     import probe
     # Reuse exact reviewed core-first/PyEinsums runtime validation.

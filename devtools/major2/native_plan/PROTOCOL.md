@@ -77,6 +77,20 @@ math/stream/handle/workspace-control variations. Reject inherited numerical
 controls before imports and in every native process, never silently unset them.
 Cache/scratch path and thread settings follow the original UNSET runtime.
 
+`CUDA_ROOT`, `CUDA_HOME`, and `CUDA_PATH` are TOOLCHAIN LOCATORS, allowed by
+both Python and native ENV guards. The site gcc12.3/cuda12.6.1 module injects
+`CUDA_ROOT`; do not delete or reinterpret it as a numerical control. The
+exporter records raw locators separately before scientific imports. A site
+12.6 locator is not proof of the actual selected CUDA13.3 compiler headers or
+runtime: existing explicit toolchain paths, compiler/frontend pins, header
+hashes, CUDA ABI13030, ELF and mapped-library identity checks are authoritative.
+Inherited CUBLAS_WORKSPACE_CONFIG, TF32 controls, unknown CUDA_* controls and
+all other rejected numerical controls remain fatal; never unset them.
+Before another allocation, `module_env_check.sh` reproduces only the original
+site module/cleared include/compiler variables and explicit CUDA13 locators on
+login, then calls production stdlib `check_env`. No SDK, numpy, Psi4, --psiapi,
+native compilation, or device operation is permitted in that login proof.
+
 Actual H200 UUID comes from CUDA logical-device mapping, not scheduler numeric
 index assumptions. Match CUDA/NVML UUID; reject wrong hardware. Require empty
 GPU before each process and exactly the native PID on that UUID at each
@@ -113,9 +127,12 @@ permits the fsynced completion marker.
 
 Stage tracked helpers only by committed Git push/fetch/worktree. Generated
 bundle data may cross stdin. Verify exact commit, clean tracked state, every
-owned helper SHA, pristine run, all 14 old roots (12 failed, 2 completed),
+owned helper SHA, pristine v3 run, all 15 old roots (13 failed, 2 completed),
 scientific build stat sentinels, old staging, queue/headroom and exact-resource
 sbatch --test-only. No broad matrix rehash on login.
+Original v1 remains separate unsubmitted staging. Failed v2 (job14178058) is
+the fifteenth actual jobroot, not pristine staging; its consumed finalizer and
+job-ID receipts are permanent. Never reuse or replay either previous bundle.
 
 Finalizer is parent-only, with permanent exclusive local and remote attempt
 directories. After any attempted sbatch, ambiguity is terminal: no retry.

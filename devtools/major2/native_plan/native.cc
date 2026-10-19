@@ -52,7 +52,8 @@ static void env_check() {
                                   "CUDA_DEVICE_MAX_COPY_CONNECTIONS","NVIDIA_TF32_OVERRIDE",
                                   "OMP_PROC_BIND","OMP_PLACES","MKL_CBWR","MKL_DEBUG_CPU_TYPE"})
             if (key==exact) bad=true;
-        if (key.rfind("CUDA_",0)==0 && key!="CUDA_VISIBLE_DEVICES" && key!="CUDA_HOME" &&
+        // CUDA_ROOT is a locator, like CUDA_HOME/PATH, not a numerical override.
+        if (key.rfind("CUDA_",0)==0 && key!="CUDA_VISIBLE_DEVICES" && key!="CUDA_ROOT" && key!="CUDA_HOME" &&
             key!="CUDA_PATH" && key!="CUDA_CACHE_PATH" && key!="CUDA_CACHE_DISABLE" &&
             key!="CUDA_CACHE_MAXSIZE") bad=true;
         need(!bad, "inherited numerical override: stop");
