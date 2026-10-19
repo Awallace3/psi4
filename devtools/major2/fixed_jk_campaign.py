@@ -42,7 +42,9 @@ def source_review(roots):
             "exchange_E -= alpha * Da_->vector_dot(K_)",
             'energies_["Two-Electron"] = coulomb_E + exchange_E'],
         "psi4/src/psi4/libfock/jk.cc": ["void JK::initialize() { preiterations(); }",
-            "void JK::finalize() { postiterations(); }", "C_right_ = C_left_", "C_right_.clear()"],
+            "void JK::finalize() { postiterations(); }", "C_right_ = C_left_", "C_right_.clear()",
+            *[line+"\\n" for line in f.SIMPLE_DF_WARNING.splitlines()],
+            'options.get_bool("USE_CUEST")', "std::make_shared<cuESTJK>"],
         "psi4/src/export_mints.cc": ['"partial_cholesky_factorize", &Matrix::partial_cholesky_factorize'],
         "psi4/src/export_fock.cc": ['.def("C_left_add"', '.def("set_do_wK"', '.def("set_omega"'],
     }
@@ -75,14 +77,20 @@ def freeze(args):
     pin = p.git(harness, "rev-parse", "HEAD")
     p.check_source(harness, pin)
     additions = p.git(harness, "diff", "--name-status", f.PARENT_PIN, pin).splitlines()
-    p.require(additions and all(line.startswith("A\tdevtools/major2/") for line in additions), "add-only from107-check parent")
+    owned = {"devtools/major2/"+name for name in (
+        "fixed_jk.py", "fixed_jk_runner.py", "fixed_jk_campaign.py", "fixed_jk_handoff.py", "FIXED_JK.md")}
+    p.require(additions and all(
+        line.startswith("A\tdevtools/major2/") or
+        (line.startswith("M\t") and line.split("\t")[1] in owned)
+        for line in additions), "narrow owned warning/factor repair only")
     files = p.file_manifest(harness)
     m = dict(schema=1, mode=f.MODE, approval=f.REVIEW_ID, diagnostic_pair=payload["pair"],
         run_root=f.RUN, route=p.ROUTE, gates=p.GATES, suite=p.H0+"/geometries", suite_sha256=p.SUITE_SHA,
-        scratch_parent="/storage/scratch1/3/awallace43/cpks-major2-fixed-jk", arms=arms,
+        scratch_parent="/storage/scratch1/3/awallace43/cpks-major2-fixed-jk-v2", arms=arms,
         harness=dict(path=f.HARNESS, pin=pin, files=files, files_digest=p.digest(files)),
         sequence=f.sequence(), matrix_cap_bytes=f.CAP, settings=f.SETTINGS, findings_bounds=f.BOUNDS,
         input_path=f.INPUT, input_sha256=f.INPUT_SHA, input_Da=f.DA, factor_tolerance=f.TOL,
+        frozen_factor=f.FROZEN_FACTOR,
         build_budget_seconds=[0,0], per_process_timeout_seconds=1800, factor_budget_seconds=600,
         analysis_budget_seconds=1200, teardown_reserve_seconds=300, accepted_speedup_data=False,
         identity_helper=f.IDENTITY, preservation=payload["preservation"], prior_staging=payload["prior_staging"],
@@ -114,6 +122,10 @@ def verify_process(raw, row, factor_sha, uuid):
               "process exact fixed input/mode")
     p.require(value["calls"] == dict(initialize=3, compute=4, finalize=2, C_left_add=1, C_right_add=0),
               "exact four-compute dispatch")
+    f.verify_reused_factor(raw/"factor")
+    p.require(value["actual_backend"] == "cuESTJK" and
+              value["reused_factor_origin_sha256"] == p.sha(raw/"factor/REUSED_FACTOR_ORIGIN.json"),
+              "live backend and frozen origin")
     p.require(value["gpu_uuid"] == uuid and value["core_sha256"] == r.ALLOWLIST[row["arm"]]["core_sha256"],
               "process GPU/core identity")
     p.check_runtime_maps(value["runtime_maps"])
@@ -125,7 +137,8 @@ def verify_process(raw, row, factor_sha, uuid):
     factor = p.read_json(raw/"factor/FACTOR.json")
     p.require(value["factor_C"] == factor["C"], "same factor bytes all processes")
     for v in value["records"]:
-        p.require(v["C_left_add"] == factor["C"]["array"] and v["rank"] == f.RANK and
+        p.require(v["actual_backend"] == "cuESTJK" and
+                  v["C_left_add"] == factor["C"]["array"] and v["rank"] == f.RANK and
                   v["after"] == f.expected_trace(row["arm"], v["state"]) and
                   v["gpu"] == dict(pid=value["pid"], gpu_uuid=uuid), "actual input/count/PID")
         file = root/(v["state"]+".npz")
@@ -227,14 +240,16 @@ class Engine(rc.Engine):
         p.require(source_review({arm:item["source"] for arm,item in self.m["arms"].items()}) ==
                   self.m["source_review"], "same-allocation source semantics")
         p.admission(self.end-time.time(), 6*1800+600+1200+300)
-        self.fixed_child("baseline", "factor", "factor-prepare", budget=600)
+        self.fixed_child("baseline", "reuse-factor", "factor-reuse", budget=600)
         factor_sha = p.sha(self.raw/"factor/FACTOR.json")
         factor = p.read_json(self.raw/"factor/FACTOR.json")
-        f.load_factor(self.raw/"factor", factor)
+        f.verify_reused_factor(self.raw/"factor")
+        f.load_frozen_factor(self.raw/"factor")
         values = []
         for index, row in enumerate(f.sequence()):
             p.admission(self.end-time.time(), (6-index)*1800+1200+300)
             self.pins()
+            f.verify_reused_factor(self.raw/"factor")
             self.fixed_child(row["arm"], "jk", row["label"], (row["label"],self.gpu_selector))
             values.append(verify_process(self.raw,row,factor_sha,self.gpu_selector))
             o.atomic(self.raw/(row["label"]+".VERIFIED.json"), dict(label=row["label"], pid=values[-1]["pid"],
@@ -253,6 +268,9 @@ class Engine(rc.Engine):
             signal.signal(signal.SIGALRM, prior)
         p.require(p.sha(self.raw/"factor/FACTOR.json") == factor_sha and p.sha(f.INPUT) == f.INPUT_SHA,
                   "immutable inputs after all six processes")
+        f.verify_reused_factor(self.raw/"factor")
+        result["reused_factor_origin"] = p.read_json(self.raw/"factor/REUSED_FACTOR_ORIGIN.json")
+        f.no_timing(result)
         o.atomic(self.root/"ENDPOINT-DIAGNOSTIC.json", result)
 
 

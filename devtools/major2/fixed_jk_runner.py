@@ -1,4 +1,4 @@
-"""Allocation-only one-time factor OR one fresh JK process. Never SCF/energy."""
+"""Allocation-only frozen-factor reuse OR one fresh JK process. Never SCF/energy."""
 import json
 import os
 from pathlib import Path
@@ -27,26 +27,6 @@ def imported(arm, before):
     p.require(value["core_sha256"] == r.ALLOWLIST[arm]["core_sha256"], "imported exact arm")
     import psi4
     return psi4, value
-
-
-def factor(root, before):
-    psi4, observed = imported("baseline", before)
-    psi4.set_num_threads(8)
-    psi4.set_memory("100 GiB")
-    da = f.load_Da(f.INPUT)
-    root.mkdir(exist_ok=False)
-    cmat, dmat, reconstruction = f.factor_once(psi4.core, da)
-    value = dict(rank=cmat.shape[1], tolerance=f.TOL, input_path=f.INPUT,
-        input_sha256=f.INPUT_SHA, Da=f.DA, C=f.save_array(root/"C.npy", cmat),
-        D=f.save_array(root/"D.npy", dmat), reconstruction=reconstruction,
-        baseline_core=observed["core"], baseline_core_sha256=observed["core_sha256"],
-        baseline_version=observed["psi4_version"], baseline_pin=r.ALLOWLIST["baseline"]["pin"],
-        baseline_origin_job="14165998", compiled_in_this_job=False, pid=os.getpid(),
-        source="SADGuess::form_C -> Matrix::partial_cholesky_factorize",
-        input_unchanged=(o.array_info(da) == f.DA and p.sha(f.INPUT) == f.INPUT_SHA))
-    p.require(value["input_unchanged"], "factor input mutation")
-    o.atomic(root/"FACTOR.json", value)
-    f.load_factor(root, value)
 
 
 def gpu_pid(uuid):
@@ -81,9 +61,9 @@ def jk_process(m, row, root, factor_root, before, uuid):
               primary.has_puream() and auxiliary.has_puream() and mol.schoenflies_symbol() == "c1",
               "exact spherical basis dimensions/frame")
     geometry_array = np.array(mol.geometry().np, order="C", copy=True)
-    receipt = p.read_json(factor_root/"FACTOR.json")
+    f.verify_reused_factor(factor_root)
+    receipt, (coefficients, density) = f.load_frozen_factor(factor_root)
     receipt_sha = p.sha(factor_root/"FACTOR.json")
-    coefficients, density = f.load_factor(factor_root, receipt)
     coeff = psi4.core.Matrix.from_array(coefficients)
     p.require(o.array_info(coeff.np) == receipt["C"]["array"], "actual C_left_add coefficient bytes/column count")
     store = f.Store(root)
@@ -117,7 +97,7 @@ def jk_process(m, row, root, factor_root, before, uuid):
         arrays = {k:np.array(getattr(jk,k)()[0].np, order="C", copy=True) for k in ("J","K")}
         meta = store.save(state, arrays)  # read-only copies only; no state writeback
         symmetry = {k:float(np.max(np.abs(v-v.T))) for k,v in arrays.items()}
-        value = dict(state=state, before=before_trace, after=after_trace, calls=calls,
+        value = dict(state=state, actual_backend=jk.name(), before=before_trace, after=after_trace, calls=calls,
             C_left_add=o.array_info(coeff.np), rank=coeff.np.shape[1],
             gpu=gpu_pid(uuid), scalar_eh=f.scalar(density, arrays["J"], arrays["K"]),
             symmetry_maxabs=symmetry,
@@ -125,11 +105,13 @@ def jk_process(m, row, root, factor_root, before, uuid):
         o.atomic(root/(state+".json"), value)
         return value
     def input_guard():
+        f.verify_reused_factor(factor_root)
         p.require(o.array_info(coeff.np) == receipt["C"]["array"], "exact native coefficient bytes before/after dispatch")
     records, calls = f.dispatch(jk, coeff, row["arm"], trace, snapshot,input_guard)
     p.require(calls == dict(initialize=3, compute=4, finalize=2, C_left_add=1, C_right_add=0), "exact dispatch count")
     p.require(f.traces(trace(), row["arm"]) == f.expected_trace(row["arm"], "D"), "post-cleanup trace")
-    f.load_factor(factor_root, receipt)
+    f.verify_reused_factor(factor_root)
+    f.load_frozen_factor(factor_root)
     p.require(p.sha(factor_root/"FACTOR.json") == receipt_sha and
               o.array_info(coeff.np) == receipt["C"]["array"], "factor/receipt mutation")
     mapped = probe.maps()
@@ -137,6 +119,7 @@ def jk_process(m, row, root, factor_root, before, uuid):
     proof = p.check_required_runtime_maps(mapped)
     o.atomic(root/"COMPLETE.json", dict(label=row["label"], arm=row["arm"], pid=os.getpid(),
         job=os.environ["SLURM_JOB_ID"], gpu_uuid=uuid, settings=f.SETTINGS, effective_options=options,
+        actual_backend=jk.name(), reused_factor_origin_sha256=p.sha(factor_root/"REUSED_FACTOR_ORIGIN.json"),
         molecule_geometry=o.array_info(geometry_array), input_geometry_sha256=p.SYSTEMS["protein157"][6],
         factor_receipt_sha256=receipt_sha, factor_C=receipt["C"], calls=calls, records=records,
         stored_bytes=store.used, trace_sha256=p.sha(trace_path), trace=f.traces(trace(), row["arm"]),
@@ -153,8 +136,8 @@ def main():
     m = p.read_json(manifest)
     f.validate(m)
     raw = Path(f.RUN)/"raw"
-    if mode == "factor":
-        factor(raw/"factor", raw/"factor-import.json")
+    if mode == "reuse-factor":
+        f.reuse_factor(raw/"factor")
     elif mode == "jk":
         label, uuid = args
         matches = [row for row in f.sequence() if row["label"] == label]

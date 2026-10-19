@@ -11,11 +11,12 @@ import observe as o
 import policy as p
 import repeatability as r
 
-PARENT_PIN = "c1bccd2215a2bf02a6a91fa1723f8d1729f2cd2e"
-RUN = p.P + "/runs/saptdft-cuest-cpks/major2-fixed-jk-20261019"
-HARNESS = p.P + "/gits/psi4.major2-fixed-jk-20261019"
-MODE = "p157-fixed-identical-factor-jk-endpoint"
-REVIEW_ID = "parent-fixed-identical-jk-review-required"
+PARENT_PIN = "f52cc6e9f704f89f2a45303106d2b3807b7777e1"
+FIXED_V1 = p.P + "/runs/saptdft-cuest-cpks/major2-fixed-jk-20261019"
+RUN = FIXED_V1 + "-v2"
+HARNESS = p.P + "/gits/psi4.major2-fixed-jk-20261019-v2"
+MODE = "p157-fixed-reused-factor-jk-endpoint-v2"
+REVIEW_ID = "parent-fixed-jk-warning-reuse-v2-review-required"
 COMPILED_IN_NEW_JOB = False
 REPLACEMENT_FOR = "none-exploratory-endpoint-only"
 SUBMISSION_BUILD_ORIGINS = r.SUBMISSION_BUILD_ORIGINS
@@ -27,6 +28,22 @@ DA = dict(shape=[1786, 1786], dtype="<f8", c_contiguous=True, bytes=25518368,
           sha256="4a17f42cba7778bad576751b2cad0a066111c9231dd4641c347fb79c75b6a410")
 RANK = 465
 TOL = 1e-7
+FROZEN_FACTOR = dict(
+    root=FIXED_V1+"/raw/factor", original_job="14174849",
+    files={
+        "FACTOR.json": "b6777acd5ec6098c0a81bcf08af74591b8c17edb511c4bd04c5aee9be3c9121e",
+        "C.npy": "76b2aa312d8b6de1568224a793f33c634630b8d7f418fbd4a2b10522220a92a0",
+        "D.npy": "76cef9607770669ffd08b5f5599b385bb2f1e42ed57254261c5209dfb3025f92"},
+    C_array_sha256="44919f2f4747f5cb07c53867ab89c93abe8ea1700f13ecc314684d6ac45d48af",
+    D_array_sha256="ba006a181c7ddfb151eef54bd98dcc01bd500f7c50da9c4a02ac7b0f5cf2a1a3",
+    rank=RANK, tolerance=TOL, input_sha256=INPUT_SHA, Da=DA,
+    baseline_core_sha256=r.ALLOWLIST["baseline"]["core_sha256"],
+    new_factor_calls=0)
+# Exact jk.cc:120–122 message only. No whitespace normalization or global removal.
+SIMPLE_DF_WARNING = (
+    "  Warning: JK type 'DF' found in simple constructor, defaulting to DiskDFJK.\n"
+    "           Please use the build_JK(primary, auxiliary, options, do_wK, memory)\n"
+    "           constructor as DiskDFJK has non-optimal performance for many workloads.\n")
 CAP = 2 * 1024**3
 PROCESS_CAP = 300 * 1024**2
 STATES = ("A", "B", "C", "D")
@@ -53,10 +70,11 @@ def validate(m):
         gates=p.GATES, suite=p.H0+"/geometries", suite_sha256=p.SUITE_SHA,
         sequence=sequence(), matrix_cap_bytes=CAP, settings=SETTINGS,
         findings_bounds=BOUNDS, input_path=INPUT, input_sha256=INPUT_SHA, input_Da=DA,
-        factor_tolerance=TOL, per_process_timeout_seconds=1800, factor_budget_seconds=600,
+        factor_tolerance=TOL, frozen_factor=FROZEN_FACTOR,
+        per_process_timeout_seconds=1800, factor_budget_seconds=600,
         analysis_budget_seconds=1200, teardown_reserve_seconds=300,
         build_budget_seconds=[0, 0], accepted_speedup_data=False,
-        identity_helper=IDENTITY, scratch_parent="/storage/scratch1/3/awallace43/cpks-major2-fixed-jk")
+        identity_helper=IDENTITY, scratch_parent="/storage/scratch1/3/awallace43/cpks-major2-fixed-jk-v2")
     for key, value in expected.items():
         p.require(m.get(key) == value, "fixed policy mismatch: "+key)
     p.require(m["harness"]["path"] == HARNESS, "fixed harness path")
@@ -67,8 +85,8 @@ def validate(m):
         p.require(all(item[k] == r.ALLOWLIST[arm][k] for k in ("source", "build", "pin")), "scientific arm")
         p.require(p.digest(item["files"]) == m["diagnostic_pair"]["arms"][arm]["source_files_digest"],
                   "scientific source digest")
-    p.require(len(m["preservation"]["failed_root_stats"]) == 11, "eleven failed roots")
-    p.require(set(m["prior_staging"]) == {"v1", "v2"}, "retain both old staging roots")
+    p.require(len(m["preservation"]["failed_root_stats"]) == 12, "twelve failed roots")
+    p.require(set(m["prior_staging"]) == {"v1", "v2", "fixed-v1"}, "retain all old staging roots")
     p.require(48 * 1786**2 * 8 + 6*4*1024**2 < CAP, "validated worst-case payload reserve")
 
 
@@ -148,11 +166,75 @@ def load_factor(root, receipt):
     return result
 
 
+def frozen_factor_files(root):
+    """Bind the actual original receipt/NPY bytes, not a newly equivalent factor."""
+    root = Path(root)
+    for name, expected in FROZEN_FACTOR["files"].items():
+        file = root/name
+        readonly = name != "FACTOR.json" or str(root) != FROZEN_FACTOR["root"]
+        p.require(file.is_file() and not file.is_symlink() and
+                  (not readonly or not (file.stat().st_mode & 0o222)) and p.sha(file) == expected,
+                  "frozen factor readonly file: "+name)
+
+
+def load_frozen_factor(root):
+    frozen_factor_files(root)
+    receipt = p.read_json(Path(root)/"FACTOR.json")
+    values = load_factor(root, receipt)
+    p.require(receipt["C"]["array"]["sha256"] == FROZEN_FACTOR["C_array_sha256"] and
+              receipt["D"]["array"]["sha256"] == FROZEN_FACTOR["D_array_sha256"],
+              "frozen factor array identity")
+    return receipt, values
+
+
+def reuse_factor(root):
+    """Allocation-only byte copy; original FACTOR receipt remains byte-identical."""
+    allocated()
+    source, root = Path(FROZEN_FACTOR["root"]), Path(root)
+    receipt, _ = load_frozen_factor(source)
+    p.require(p.sha(INPUT) == INPUT_SHA, "original input archive unchanged")
+    root.mkdir(exist_ok=False)
+    for name in FROZEN_FACTOR["files"]:
+        with (source/name).open("rb") as src, (root/name).open("xb") as dst:
+            while chunk := src.read(1024**2):
+                dst.write(chunk)
+            dst.flush()
+            os.fsync(dst.fileno())
+        (root/name).chmod(0o444)
+    frozen_factor_files(source)
+    load_frozen_factor(root)
+    origin = dict(frozen_factor=FROZEN_FACTOR, destination=str(root),
+        reused_in_job=os.environ["SLURM_JOB_ID"], new_factor_calls=0,
+        original_receipt_preserved_byte_identical=True)
+    o.atomic(root/"REUSED_FACTOR_ORIGIN.json", origin)
+    (root/"REUSED_FACTOR_ORIGIN.json").chmod(0o444)
+    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    return receipt
+
+
+def verify_reused_factor(root):
+    frozen_factor_files(FROZEN_FACTOR["root"])
+    frozen_factor_files(root)
+    origin = p.read_json(Path(root)/"REUSED_FACTOR_ORIGIN.json")
+    p.require(origin == dict(frozen_factor=FROZEN_FACTOR, destination=str(root),
+        reused_in_job=os.environ["SLURM_JOB_ID"], new_factor_calls=0,
+        original_receipt_preserved_byte_identical=True), "reused factor origin")
+
+
 def traces(text, arm):
+    # Ignore LF-only leading blank lines, and at most one exact initial warning.
+    # All other text (including any second/moved/modified warning) is scanned.
+    scan = text.lstrip("\n")
+    if scan.startswith(SIMPLE_DF_WARNING):
+        scan = scan[len(SIMPLE_DF_WARNING):]
     created = re.findall(r"cuESTJK plan created #(\d+)", text)
     reused = re.findall(r"cuESTJK plan reused #(\d+)", text)
     banners = text.count("Device memory, DF int plan:")
-    p.require(not any(x in text for x in ("DirectJK", "DiskDFJK", "MemDFJK", "status code", "CUDA error")),
+    p.require(not any(x in scan for x in ("DirectJK", "DiskDFJK", "MemDFJK", "status code", "CUDA error")),
               "backend fallback or SDK error")
     if arm == "candidate":
         p.require(banners == len(created), "candidate creation trace/banner agreement")
@@ -174,6 +256,7 @@ def dispatch(jk, coefficients, arm, trace, snapshot, input_guard=lambda:None):
     calls = dict(initialize=0, compute=0, finalize=0, C_left_add=0, C_right_add=0)
     records = []
     def checkpoint(state, phase):
+        p.require(jk.name() == "cuESTJK", "live cuEST backend mandatory")
         actual = traces(trace(), arm)
         if phase == "after":
             p.require(actual == expected_trace(arm, state), "exact plan creation/reuse count")
@@ -194,6 +277,7 @@ def dispatch(jk, coefficients, arm, trace, snapshot, input_guard=lambda:None):
             if state != "B":
                 jk.initialize()
                 calls["initialize"] += 1
+            p.require(jk.name() == "cuESTJK", "live cuEST backend before compute")
             p.require(traces(trace(), arm) == expected_trace(arm, state), "initialize trace count")
             input_guard()
             jk.compute()

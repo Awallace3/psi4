@@ -1,0 +1,6 @@
+
+  Warning: JK type 'DF' found in simple constructor, defaulting to DiskDFJK.
+           Please use the build_JK(primary, auxiliary, options, do_wK, memory)
+           constructor as DiskDFJK has non-optimal performance for many workloads.
+
+  cuEST initializing on GPU device 0 of 1 visible (NVIDIA H200), compute capability 9.0

@@ -1,4 +1,4 @@
-# Frozen identical-factor Protein157 endpoint protocol
+# Frozen reused-factor Protein157 endpoint protocol v2
 
 This is not an accepted performance experiment, molecular energy, full SCF,
 guess, response calculation, or substitute for the failed primary comparison.
@@ -7,8 +7,10 @@ or scientific API is modified.
 
 ## Source review and identity
 
-Parent harness c1bccd2215a2bf02a6a91fa1723f8d1729f2cd2e has107 checks.
-New files are add-only. Compiled BASE c56708fc6f6e8fcf2801868f0d3cb49bdb1bb0a2
+Parent harness f52cc6e9f704f89f2a45303106d2b3807b7777e1 has148 checks.
+All prior test functions remain byte-identical. Only the owned fixed-JK
+helpers/protocol and new regression tests/data change.
+Compiled BASE c56708fc6f6e8fcf2801868f0d3cb49bdb1bb0a2
 and CAND21a7b4d9c922f293d6220cafd8143d70f7d85e18 are reused, never rebuilt;
 origins14165998/14170562 both have compiled_in_this_job=false.
 Exact pair digest c9d4ec615a37a6a50d493fcfa6c01cf567bea9b616f298ef1fd49fcea0e87a33.
@@ -20,20 +22,32 @@ Original B1 job14173808 stage0 NPZ is never overwritten. Archive SHA
 dbe9d5ccbab8ebdb8299c6a8ba6463997ba3aca24fb828f124edf1c0f7b0c32e,
 Da1786×1786 little-endian FP64 SHA
 4a17f42cba7778bad576751b2cad0a066111c9231dd4641c347fb79c75b6a410.
-Original COMPLETE.json bytes are frozen too. Old11 failed run roots and
-both prior staging bundles (including unsubmitted v1) remain unchanged.
+Original COMPLETE.json bytes are frozen too. All12 failed roots (including
+job14174849), both earlier staging bundles and failed fixed-v1 stay unchanged.
+New run/harness/cache/bundle namespace is major2-fixed-jk-20261019-v2.
 
 `sad.cc:377–380` constructs Ca by
 `Da_->partial_cholesky_factorize(options_.get_double("SAD_CHOL_TOLERANCE"))`.
 `read_options.cc:1971` defaults that threshold to1e-7. `sad.cc:1341ff`
 copies these factors and temporarily sets the occupied dimensions to their
-rank. RHF::form_G passes Ca_subset(SO,OCC), not Da, to JK. Rank465 is expected.
-The baseline core performs that operation exactly once in a separate process
-inside the GPU allocation, with no energy or cuEST/JK object. Any other rank
-stops for review. C.npy and D.npy=C@C.T are exclusively written once, read-only,
-with file/array checksums and atomic receipt. Reconstruction maxabs, norm,
-relative norm, trace error and both traces are reported honestly, not assumed zero.
-Every JK process reads the exact saved C bytes; no independent refactoring.
+rank. RHF::form_G passes Ca_subset(SO,OCC), not Da, to JK.
+Job14174849 ALREADY generated rank465 with that exact native BASE core.
+v2 MUST NOT factor again: the executable protocol has only reuse-factor/jk
+modes. The original factor_once helper remains solely for prior local tests.
+The allocation verifies and exclusively copies the exact original readonly
+C.npy/D.npy and byte-identical FACTOR.json into NEW raw/factor, rechecks the
+source and destination, and writes a distinct REUSED_FACTOR_ORIGIN.json
+(original job14174849, new_factor_calls=0). The old receipt is never relabeled.
+
+Pinned FACTOR.json b6777acd5ec6098c0a81bcf08af74591b8c17edb511c4bd04c5aee9be3c9121e;
+C.npy 76b2aa312d8b6de1568224a793f33c634630b8d7f418fbd4a2b10522220a92a0;
+D.npy 76cef9607770669ffd08b5f5599b385bb2f1e42ed57254261c5209dfb3025f92.
+Complete array hashes/shape/dtype/rank/tolerance/original Da/NPZ/BASE core
+are frozen in FROZEN_FACTOR and the manifest; all file hashes and origin are
+checked throughout every child, before/after copying and at parent boundaries.
+Original receipt reconstruction maxabs2.220446049250313e-16 and relative
+Frobenius1.7586966334785784e-16 are retained as original measurements.
+Every JK process reads those exact already-generated C bytes; no refactoring.
 
 `rhf.cc:323ff`: coulomb_E=2*Da.vector_dot(J), exchange_E=-alpha*Da.vector_dot(K).
 Bare HF alpha1,beta0,omega0 gives 2Tr(DJ)-Tr(DK) for common D=C@C.T.
@@ -69,6 +83,19 @@ BASE lacks new counters: use its native "Device memory, DF int plan:" banner
 which follows successful creation, just as the unchanged focused regression.
 CAND counters must agree with those banners. No optional extra object is used.
 Actual PID/physical GPU UUID is checked at each snapshot; all6 PIDs must differ.
+The factory and dispatch initial jk.name()=="cuESTJK" checks stay mandatory,
+with additional live name guards before/after each state and before compute.
+Each state and COMPLETE records actual_backend, independently verified.
+
+The exact three-line simple-DF constructor warning at jk.cc:120–122 is
+allowed ONCE at the beginning of a trace, ignoring LF-only leading blank
+lines. It precedes USE_CUEST selection and is not fallback evidence.
+No global DiskDFJK whitelist: altered, duplicate or moved warnings, actual
+fallback/SDK text and wrong live backends stay fatal. Raw plan.out bytes
+are never changed. Captured 329-byte job14174849-plan.out is SHA256
+d7cd3bba1ae1977f788df11b53077c76eae30d10fa4961dae52560c8e8488777.
+The pinned old parser must reject; v2 parses zero initial creations, then
+native-like suffixes prove exact A/B/C/D counts (not actual GPU proof).
 
 ## Persistence and numerical findings
 
@@ -94,7 +121,7 @@ fields. Native logs are retained but never summarized for performance.
 ## One-shot preparation and handoff
 
 Only one4h gts-cs207-chemx/embers/gpu-h200 H200×1/8CPU/128G/no-requeue
-allocation is eligible. Reserve6×1800 child budgets+600 factor+1200 analysis
+allocation is eligible. Reserve6×1800 child budgets+600 verified copy+1200 analysis
 +300 teardown after prolog; stop if admission fails. No external warmups.
 No real factor, JK, cuEST or energy is run on a login node.
 Fake/host tests establish protocol behavior only, not GPU endpoint correctness.
