@@ -1964,6 +1964,8 @@ def scf_helper(name, post_scf=True, **kwargs):
         bannername = name
         if isinstance(name, dict):
             bannername = name.get("name", "custom functional")
+        elif callable(name):
+            bannername = getattr(name, "__name__", "custom functional")
 
     p4util.libint2_print_out()
 
