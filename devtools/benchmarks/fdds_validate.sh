@@ -172,6 +172,40 @@ if focused:
 Path("VERIFIED.json").write_text(json.dumps(counts, indent=2) + "\n")
 print(json.dumps(counts, indent=2))
 PY
+# A read-only replay is cheap enough to use the same allocation for the full
+# FDDS suite once both focused processes are proven good. This default can be
+# disabled explicitly by a future diagnostics-only harness.
+if [[ "${CUEST_FDDS_FOCUSED:-0}" == 1 &&
+      -n "${CUEST_FDDS_READONLY_BUILD_ROOT:-}" &&
+      "${CUEST_FDDS_FULL_AFTER_FOCUSED:-1}" == 1 ]]; then
+    mv "$out/VERIFIED.json" "$out/FOCUSED_VERIFIED.json"
+    timeout --signal=TERM --kill-after=15s 300s /usr/bin/gdb --batch \
+        -ex 'set pagination off' -ex 'set confirm off' -ex 'set print thread-events off' \
+        -ex 'set breakpoint pending on' -ex 'handle SIGSEGV stop print nopass' \
+        -ex 'break einsums::util::attach_debugger()' \
+        -ex run -ex 'thread apply all bt 12' -ex quit \
+        --args "$env/bin/python" -X faulthandler -m pytest \
+        "$root/tests/pytests/test_cuest_fdds.py" -vv -s \
+        --basetemp="$out/full-tmp" --junitxml="$out/full-fdds.xml" \
+        > "$out/full-fdds-gdb.log" 2>&1
+    "$env/bin/python" - <<'PY'
+from pathlib import Path
+from xml.etree import ElementTree
+import json, re
+log = Path("full-fdds-gdb.log").read_text()
+assert not re.search(r"received signal|hit Breakpoint|^Breakpoint \d+,", log, re.MULTILINE), "full suite native fault"
+assert "exited normally" in log, "full suite inferior did not exit normally"
+suite = ElementTree.parse("full-fdds.xml").find("testsuite")
+counts = dict(suite.attrib)
+assert int(suite.get("tests")) == 57, counts
+assert all(int(suite.get(k, "0")) == 0 for k in ("errors", "failures", "skipped")), counts
+focused = json.loads(Path("FOCUSED_VERIFIED.json").read_text())
+result = {"mode": "focused_then_full", "focused": focused, "full": counts,
+          "executed_tests_including_repeats": 66, "unique_full_suite_tests": 57}
+Path("VERIFIED.json").write_text(json.dumps(result, indent=2) + "\n")
+print(json.dumps(result, indent=2))
+PY
+fi
 test "$(git -C "$root" rev-parse HEAD)" = "$pin"
 test -z "$(git -C "$root" status --porcelain --untracked-files=no)"
 if [[ -n "${CUEST_FDDS_READONLY_BUILD_ROOT:-}" ]]; then
