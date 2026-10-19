@@ -10,13 +10,14 @@ import numpy as np
 import observe as o
 import policy as p
 import repeatability as r
+import workspace_control as w
 
 PARENT_PIN = "f52cc6e9f704f89f2a45303106d2b3807b7777e1"
 FIXED_V1 = p.P + "/runs/saptdft-cuest-cpks/major2-fixed-jk-20261019"
-RUN = FIXED_V1 + "-v2"
-HARNESS = p.P + "/gits/psi4.major2-fixed-jk-20261019-v2"
-MODE = "p157-fixed-reused-factor-jk-endpoint-v2"
-REVIEW_ID = "parent-fixed-jk-warning-reuse-v2-review-required"
+RUN = w.RUN
+HARNESS = p.P + "/gits/psi4.major2-workspace-20261019"
+MODE = "p157-fixed-factor-workspace-control"
+REVIEW_ID = "parent-workspace-control-4096-8-review-required"
 COMPILED_IN_NEW_JOB = False
 REPLACEMENT_FOR = "none-exploratory-endpoint-only"
 SUBMISSION_BUILD_ORIGINS = r.SUBMISSION_BUILD_ORIGINS
@@ -74,7 +75,8 @@ def validate(m):
         per_process_timeout_seconds=1800, factor_budget_seconds=600,
         analysis_budget_seconds=1200, teardown_reserve_seconds=300,
         build_budget_seconds=[0, 0], accepted_speedup_data=False,
-        identity_helper=IDENTITY, scratch_parent="/storage/scratch1/3/awallace43/cpks-major2-fixed-jk-v2")
+        identity_helper=IDENTITY, numerical_control=w.POLICY,
+        scratch_parent="/storage/scratch1/3/awallace43/cpks-major2-workspace")
     for key, value in expected.items():
         p.require(m.get(key) == value, "fixed policy mismatch: "+key)
     p.require(m["harness"]["path"] == HARNESS, "fixed harness path")
@@ -87,6 +89,10 @@ def validate(m):
                   "scientific source digest")
     p.require(len(m["preservation"]["failed_root_stats"]) == 12, "twelve failed roots")
     p.require(set(m["prior_staging"]) == {"v1", "v2", "fixed-v1"}, "retain all old staging roots")
+    p.require(m["completed_control"]["root"] == w.OLD_RUN and
+              m["completed_control"]["job"] == "14175243" and
+              m["completed_control"]["numerical_control"] == {}, "separate completed UNSET cohort")
+    w.summary(m["completed_control"]["report"])
     p.require(48 * 1786**2 * 8 + 6*4*1024**2 < CAP, "validated worst-case payload reserve")
 
 

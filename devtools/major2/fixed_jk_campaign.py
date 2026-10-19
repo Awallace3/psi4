@@ -18,6 +18,7 @@ import observe as o
 import policy as p
 import repeatability as r
 import repeatability_campaign as rc
+import workspace_control as w
 
 HERE = Path(__file__).resolve().parent
 
@@ -76,7 +77,7 @@ def freeze(args):
     harness = HERE.parents[1]
     pin = p.git(harness, "rev-parse", "HEAD")
     p.check_source(harness, pin)
-    additions = p.git(harness, "diff", "--name-status", f.PARENT_PIN, pin).splitlines()
+    additions = p.git(harness, "diff", "--name-status", w.PARENT, pin).splitlines()
     owned = {"devtools/major2/"+name for name in (
         "fixed_jk.py", "fixed_jk_runner.py", "fixed_jk_campaign.py", "fixed_jk_handoff.py", "FIXED_JK.md")}
     p.require(additions and all(
@@ -86,14 +87,15 @@ def freeze(args):
     files = p.file_manifest(harness)
     m = dict(schema=1, mode=f.MODE, approval=f.REVIEW_ID, diagnostic_pair=payload["pair"],
         run_root=f.RUN, route=p.ROUTE, gates=p.GATES, suite=p.H0+"/geometries", suite_sha256=p.SUITE_SHA,
-        scratch_parent="/storage/scratch1/3/awallace43/cpks-major2-fixed-jk-v2", arms=arms,
+        scratch_parent="/storage/scratch1/3/awallace43/cpks-major2-workspace", arms=arms,
         harness=dict(path=f.HARNESS, pin=pin, files=files, files_digest=p.digest(files)),
         sequence=f.sequence(), matrix_cap_bytes=f.CAP, settings=f.SETTINGS, findings_bounds=f.BOUNDS,
         input_path=f.INPUT, input_sha256=f.INPUT_SHA, input_Da=f.DA, factor_tolerance=f.TOL,
         frozen_factor=f.FROZEN_FACTOR,
         build_budget_seconds=[0,0], per_process_timeout_seconds=1800, factor_budget_seconds=600,
         analysis_budget_seconds=1200, teardown_reserve_seconds=300, accepted_speedup_data=False,
-        identity_helper=f.IDENTITY, preservation=payload["preservation"], prior_staging=payload["prior_staging"],
+        identity_helper=f.IDENTITY, numerical_control=w.POLICY, completed_control=payload["completed_control"],
+        preservation=payload["preservation"], prior_staging=payload["prior_staging"],
         input_complete_sha256=payload["input_complete_sha256"], source_review=source_review(local))
     f.validate(m)
     out = Path(args.output_dir)
@@ -117,6 +119,14 @@ def storage(raw):
 def verify_process(raw, row, factor_sha, uuid):
     root = raw/row["label"]
     value = p.read_json(root/"COMPLETE.json")
+    env_file = raw/(row["label"]+".effective-env.json")
+    env_receipt = p.read_json(env_file)
+    w.verify_receipt(env_receipt, row, value["pid"], os.environ["SLURM_JOB_ID"], uuid,
+                     p.sha(Path(f.RUN)/"manifest.json"))
+    p.require(not env_file.stat().st_mode & 0o222 and
+              value["numerical_environment"] == w.CONTROL and
+              value["effective_env_receipt"] == env_receipt and
+              value["effective_env_sha256"] == p.sha(env_file), "raw effective ENV receipt")
     p.require(value["label"] == row["label"] and value["arm"] == row["arm"] and
               value["settings"] == f.SETTINGS and value["factor_receipt_sha256"] == factor_sha,
               "process exact fixed input/mode")
@@ -137,6 +147,7 @@ def verify_process(raw, row, factor_sha, uuid):
     factor = p.read_json(raw/"factor/FACTOR.json")
     p.require(value["factor_C"] == factor["C"], "same factor bytes all processes")
     for v in value["records"]:
+        p.require(v["numerical_environment"] == w.CONTROL, "per-output ENV proof")
         p.require(v["actual_backend"] == "cuESTJK" and
                   v["C_left_add"] == factor["C"]["array"] and v["rank"] == f.RANK and
                   v["after"] == f.expected_trace(row["arm"], v["state"]) and
@@ -228,13 +239,25 @@ class Engine(rc.Engine):
         return rc
 
     def fixed_child(self, arm, mode, name, extra=(), budget=1800):
+        w.check_env(self.env)  # Never mutate controller or remove inherited overrides.
         argv = self.arm_command(arm, [c.PY, "-B", HERE/"fixed_jk_runner.py", mode,
             self.manifest_path, self.manifest_hash, *extra])
-        self.run_command(argv, name, timeout=budget)
+        env = None
+        if mode == "jk":
+            p.require(name in {row["label"] for row in f.sequence()}, "only actual JK children")
+            p.require(argv[0] == "bash" and Path(argv[1]).name == "arm.sh", "reviewed child arm")
+            argv[1] = str(HERE/"child-arm.sh")
+            env = w.child_env(self.env)
+        else:
+            p.require(mode == "reuse-factor", "no factor generation")
+        self.run_command(argv, name, timeout=budget, env=env)
+        w.check_env(self.env)
 
     def execute_fixed(self):
         f.allocated()
+        w.check_env(os.environ)
         self.prolog()  # exact reviewed allocation, pair/ABI/config/SASS/import/143-driver checks; no builds
+        w.check_env(self.env)
         import fixed_jk_handoff
         fixed_jk_handoff.preserve(self.m)
         p.require(source_review({arm:item["source"] for arm,item in self.m["arms"].items()}) ==
@@ -270,6 +293,20 @@ class Engine(rc.Engine):
                   "immutable inputs after all six processes")
         f.verify_reused_factor(self.raw/"factor")
         result["reused_factor_origin"] = p.read_json(self.raw/"factor/REUSED_FACTOR_ORIGIN.json")
+        result["numerical_control"] = w.POLICY
+        for output in result["outputs"]:
+            output["numerical_environment"] = w.CONTROL
+        result["effective_environments"] = [
+            dict(label=v["label"], arm=v["arm"], pid=v["pid"],
+                 receipt=v["effective_env_receipt"], sha256=v["effective_env_sha256"]) for v in values]
+        result["within_cohort_summary"] = w.summary(result)
+        old = self.m["completed_control"]
+        p.require(p.sha(Path(old["root"])/"ENDPOINT-DIAGNOSTIC.json") ==
+                  old["hashes"]["ENDPOINT-DIAGNOSTIC.json"], "old numerical report unchanged")
+        result["old_unset_comparison"] = dict(job=old["job"],
+            report_sha256=old["hashes"]["ENDPOINT-DIAGNOSTIC.json"],
+            summary=w.summary(old["report"]),
+            interpretation="Compare bounds and variation only; one control, no unique-cause or SAPT claim")
         f.no_timing(result)
         o.atomic(self.root/"ENDPOINT-DIAGNOSTIC.json", result)
 

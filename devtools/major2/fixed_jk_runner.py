@@ -6,6 +6,9 @@ import signal
 import subprocess
 import sys
 
+import workspace_control as w
+EARLY_ENV = w.preimport(sys.argv) if __name__ == "__main__" else None
+
 import numpy as np
 
 import campaign as c
@@ -40,6 +43,8 @@ def gpu_pid(uuid):
 
 
 def jk_process(m, row, root, factor_root, before, uuid):
+    effective_env = w.check_env(os.environ, True)
+    p.require(EARLY_ENV is not None, "mandatory before-import receipt")
     psi4, observed = imported(row["arm"], before)
     psi4.core.clean_options()
     psi4.set_num_threads(8)
@@ -97,7 +102,9 @@ def jk_process(m, row, root, factor_root, before, uuid):
         arrays = {k:np.array(getattr(jk,k)()[0].np, order="C", copy=True) for k in ("J","K")}
         meta = store.save(state, arrays)  # read-only copies only; no state writeback
         symmetry = {k:float(np.max(np.abs(v-v.T))) for k,v in arrays.items()}
+        p.require(w.check_env(os.environ, True) == effective_env, "ENV mutation during dispatch")
         value = dict(state=state, actual_backend=jk.name(), before=before_trace, after=after_trace, calls=calls,
+            numerical_environment=effective_env,
             C_left_add=o.array_info(coeff.np), rank=coeff.np.shape[1],
             gpu=gpu_pid(uuid), scalar_eh=f.scalar(density, arrays["J"], arrays["K"]),
             symmetry_maxabs=symmetry,
@@ -117,7 +124,12 @@ def jk_process(m, row, root, factor_root, before, uuid):
     mapped = probe.maps()
     p.check_runtime_maps(mapped)
     proof = p.check_required_runtime_maps(mapped)
+    w.check_env(os.environ, True)
+    env_path = root.parent/(row["label"]+".effective-env.json")
+    p.require(p.read_json(env_path) == EARLY_ENV, "raw effective ENV receipt unchanged")
     o.atomic(root/"COMPLETE.json", dict(label=row["label"], arm=row["arm"], pid=os.getpid(),
+        numerical_environment=effective_env, effective_env_receipt=EARLY_ENV,
+        effective_env_sha256=p.sha(env_path),
         job=os.environ["SLURM_JOB_ID"], gpu_uuid=uuid, settings=f.SETTINGS, effective_options=options,
         actual_backend=jk.name(), reused_factor_origin_sha256=p.sha(factor_root/"REUSED_FACTOR_ORIGIN.json"),
         molecule_geometry=o.array_info(geometry_array), input_geometry_sha256=p.SYSTEMS["protein157"][6],

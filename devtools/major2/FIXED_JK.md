@@ -97,6 +97,39 @@ d7cd3bba1ae1977f788df11b53077c76eae30d10fa4961dae52560c8e8488777.
 The pinned old parser must reject; v2 parses zero initial creations, then
 native-like suffixes prove exact A/B/C/D counts (not actual GPU proof).
 
+## Documented workspace-control cohort (preparation only)
+
+The new namespace is `major2-workspace-20261019`, parent harness
+`b9abe3e38fd194524185648d9e15807a8d66d4c9`. Exactly six real JK children
+receive `CUBLAS_WORKSPACE_CONFIG=:4096:8` in a fresh Popen environment copy.
+MAIN/controller, CUDA identity, import/probe-only and factor-copy environments
+remain unset. Unexpected inherited overrides cause STOP, never silent removal.
+`child-arm.sh` verifies the whitelist before the unchanged `arm.sh` executes
+any native `--psiapi`; the runner writes/fsyncs a readonly raw ENV receipt
+before importing numpy, policy, probe or Psi4. Every output/COMPLETE and the
+final report carry observed ENV provenance; missing/wrong/extra overrides,
+receipt edits or identity mismatch are fatal.
+
+Source: https://docs.nvidia.com/cuda/cublas/index.html#results-reproducibility
+(current docs13.4; installed CUDA13.3/GCC14/cuEST0.2.50 unchanged).
+NVIDIA documents this debug ENV as a workaround for cuBLAS concurrent-stream
+reproducibility (~24MiB extra workspace). It is not a guarantee for cuEST,
+custom kernels or cuSOLVER; no mode/precision/cutoff/stream/handle change.
+
+Completed UNSET job14175243 is preserved separately, requiring
+`COMPLETED 0:0` job and batch accounting, never added to FAILED_JOBS.
+Its full file-set/stat proof and small JSON/trace hashes are frozen; old
+readonly arrays are not rehashed on login. Full new allocated source/stage,
+ABI/SASS/runtime/config/143-driver and factor/input checks remain unchanged.
+New analysis retains all24 outputs/all276 comparisons and reports three
+explicit anchored pairs per arm for A/B (sameplan), A/C (unchanged initialize),
+A/D (finalize/newplan) and fresh A/A. It compares those numerical summaries
+and unchanged finding bounds to the preserved old report, without old-new
+matrix crossproducts, timing fields, SAPT acceptance or causal guarantees.
+
+Host/fake tests use `workspace_checks` in addition to the unchanged prior161.
+No GPU result exists until parent review and the one-shot free-embers run.
+
 ## Persistence and numerical findings
 
 All24 outputs (48 J/K arrays) are saved as compressed NPZ, with file and array

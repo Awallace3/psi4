@@ -13,9 +13,11 @@ import observe as o
 import policy as p
 import repeatability as r
 import repeatability_handoff as rh
+import workspace_control as w
 
-CACHE = Path.home()/".cache/psi4-major2/fixed-jk-20261019-v2"
+CACHE = Path.home()/".cache/psi4-major2/workspace-20261019"
 FAILED_JOBS = rh.FAILED_JOBS+["14173808", "14174849"]
+COMPLETED_JOB = "14175243"
 
 
 def original_input(m=None):
@@ -27,7 +29,9 @@ def original_input(m=None):
               stage["sad"] and stage["nalpha"] == stage["nbeta"] == f.RANK and
               stage["stage"] == "delta HF Dimer" and stage["file"] == file.name and
               stage["file_sha256"] == f.INPUT_SHA and stage["arrays"]["Da"] == f.DA, "original SAD receipt")
-    p.require(p.sha(file) == f.INPUT_SHA, "original frozen NPZ")
+    # The inherited failed-root stat proof includes this original archive.
+    # Full archive/factor hashes remain mandatory on the allocated host.
+    p.require(file.is_file(), "original frozen NPZ exists")
     if m is not None:
         p.require(p.sha(complete) == m["input_complete_sha256"], "original COMPLETE unchanged")
     return p.sha(complete)
@@ -49,7 +53,13 @@ def old_staging():
 
 
 def frozen_origin():
-    receipt, _ = f.load_frozen_factor(f.FROZEN_FACTOR["root"])
+    factor = Path(f.FROZEN_FACTOR["root"])
+    p.require(p.sha(factor/"FACTOR.json") == f.FROZEN_FACTOR["files"]["FACTOR.json"],
+              "frozen factor receipt bytes")
+    receipt = p.read_json(factor/"FACTOR.json")
+    for name in ("C.npy", "D.npy"):
+        p.require((factor/name).is_file() and not (factor/name).stat().st_mode & 0o222,
+                  "frozen factor readonly stat proof")
     root = Path(f.FIXED_V1)
     outputs = list((root/"raw").glob("fixed-*/*.npz"))
     complete = list((root/"raw").glob("fixed-*/COMPLETE.json"))
@@ -66,12 +76,57 @@ def frozen_origin():
                 jk_outputs=[], completed_jk_processes=[], native_factor_exit=0, first_base_exit=1)
 
 
+def completed_control():
+    """Bounded stats + small metadata hashes ONLY; never old array rehash/JK."""
+    root = Path(w.OLD_RUN)
+    files = sorted(x for x in root.rglob("*") if x.is_file())
+    p.require(len(files) < 1000 and all(not x.is_symlink() for x in files), "bounded completed root")
+    stats = {str(x.relative_to(root)):fh.stat(x) for x in files}
+    metadata = [x for x in files if x.suffix == ".json" or x.name in
+                ("campaign.sbatch", "plan.out", "job-id.txt")]
+    p.require(all(x.stat().st_size < 16*1024**2 for x in metadata) and
+              sum(x.stat().st_size for x in metadata) < 32*1024**2, "small completed metadata")
+    hashes = {str(x.relative_to(root)):p.sha(x) for x in metadata}
+    m = p.read_json(root/"manifest.json")
+    p.require(m["harness"]["pin"] == w.PARENT and
+              "numerical_control" not in m and m["frozen_factor"] == f.FROZEN_FACTOR,
+              "original completed UNSET manifest")
+    p.require(p.read_json(root/"STARTED.json")["job"] == COMPLETED_JOB and
+              p.read_json(root/"ENDPOINT-COMPLETE.json") ==
+              dict(outputs=24, computes=24, accepted_speedup_data=False), "completed endpoint identity")
+    failures = [x for x in files if "FAILED" in x.name or "AMBIGUOUS" in x.name]
+    p.require(not failures, "old completed failure markers")
+    report = p.read_json(root/"ENDPOINT-DIAGNOSTIC.json")
+    w.summary(report)
+    pids = set()
+    for row in f.sequence():
+        name = row["label"]
+        p.require(p.read_json(root/"raw"/(name+".exit.json")) ==
+                  dict(exit=0, interrupted=False), "old complete process exit")
+        value = p.read_json(root/"raw"/name/"COMPLETE.json")
+        pids.add(value["pid"])
+        p.require(value["job"] == COMPLETED_JOB and value["label"] == name and
+                  value["arm"] == row["arm"] and value["actual_backend"] == "cuESTJK" and
+                  value["factor_receipt_sha256"] == f.FROZEN_FACTOR["files"]["FACTOR.json"] and
+                  value["trace"] == f.expected_trace(row["arm"], "D"), "old completed provenance")
+        p.require([v["state"] for v in value["records"]] == list(f.STATES), "old four states")
+        for v in value["records"]:
+            array = root/"raw"/name/v["file"]
+            p.require(array.stat().st_size == v["file_bytes"] and not array.stat().st_mode & 0o222,
+                      "old readonly output stats, no rehash")
+    p.require(len(pids) == 6 and len(list((root/"raw").glob("fixed-*/*.npz"))) == 24,
+              "old six processes/24 readonly outputs")
+    return dict(root=str(root), job=COMPLETED_JOB, numerical_control={},
+                stats=stats, hashes=hashes, report=report)
+
+
 def preserve(m):
     p.require(len(m["preservation"]["failed_root_stats"]) == 12, "twelve failed roots")
     fh.preservation(m["preservation"])
     p.require(old_staging() == m["prior_staging"], "both previous staging manifests/batches unchanged")
     original_input(m)
     frozen_origin()
+    p.require(completed_control() == m["completed_control"], "completed root/report/metadata unchanged")
 
 
 def collect():
@@ -90,16 +145,20 @@ def collect():
     result = dict(pair=old["diagnostic_pair"], pair_digest=r.PAIR_DIGEST,
         preservation=dict(failed_root_stats=stats,build_sentinel_stats=old["preservation"]["build_sentinel_stats"]),
         prior_staging=old_staging(), input_complete_sha256=original_input(), no_submission=True,
-        original_primary_gate_unchanged=True, frozen_origin=frozen_origin())
+        original_primary_gate_unchanged=True, frozen_origin=frozen_origin(),
+        completed_control=completed_control())
     print(json.dumps(result,sort_keys=True,indent=2))
 
 
 def accounting():
-    rows = [line.split("|") for line in h.output("sacct","-n","-P","-j",",".join(FAILED_JOBS),
+    p.require(COMPLETED_JOB not in FAILED_JOBS, "never classify completed cohort as failed")
+    rows = [line.split("|") for line in h.output("sacct","-n","-P","-j",",".join(FAILED_JOBS+[COMPLETED_JOB]),
             "--format=JobIDRaw,State,ExitCode").splitlines()]
     for job in FAILED_JOBS:
         for ident in (job,job+".batch"):
             p.require(any(v[:3] == [ident,"FAILED","1:0"] for v in rows), "old failed accounting: "+ident)
+    for ident in (COMPLETED_JOB, COMPLETED_JOB+".batch"):
+        p.require(any(v[:3] == [ident,"COMPLETED","0:0"] for v in rows), "old completed accounting: "+ident)
     return rows
 
 
@@ -183,6 +242,7 @@ def audit(pin,mh,bh):
 
 
 def main():
+    w.check_env(os.environ)
     p.require(os.environ["USER"] == "awallace43", "owner")
     mode, pin, *hashes = sys.argv[1:]
     p.require(p.git(f.HARNESS,"rev-parse","HEAD") == pin, "handoff harness pin")
