@@ -1,5 +1,32 @@
 # FDDS cuEST implementation handoff
 
+## Native crash diagnosed: test helper closed the global output stream
+
+- Recovered diagnostic **14006185** completed Oct16 on free embers in
+  **27 s**. Contribution process exited1, exact fail-fast traceback confirms
+  the unequal/nonhybrid CPU-reference memory exception; JUnit **1 failed**,
+  2.956 s. Separate GDB process exited0 **after catching SIGSEGV** in
+  `psi::PsiOutStream::Printf`; no SAPT JUnit exists, so this is not a pass.
+  The archived stage core SHA256 exactly matches the failed13992504 build.
+  Evidence `build_fdds_cpu/diagnostic-14006185/{accounting.txt,remote-evidence.tar.gz,logs/,results-14006185/}`.
+- Minimal CPU-only reproduction on the integrated binary: open a native
+  outfile, close it, call public `psi4.set_num_threads(1)`. GDB catches the
+  same SIGSEGV/Printf frame. Keeping the stream open exits normally.
+  No SCF, J/K, FDDS or GPU call is required. This confirms an invalid
+  test-helper output lifetime, not a demonstrated backend scientific bug.
+  Evidence `build_fdds_cpu/integrated-9d4b1cd4aa/{reproduce_closed_output.py,minimal-open-gdb.log,minimal-closed-gdb.log}`.
+- `_run_saptdft_fdds` now opens output before any setup messages and restores
+  the caller's previous native stream in `finally`. New repeated-control
+  regression went red (**1 failed**, 3.54 s) against the old helper; fixed
+  native SAPT + sequential-control subset **2 passed**, zero failures/errors/
+  skips, **7.233 s**. Evidence `output-{red,green}.{log,xml}` in that directory.
+  Full prospective FDDS suite is now **57**, focused GPU suite still **9**.
+- User explicitly authorized replacing **14181925 only if still queued**,
+  after the CPU gate passes; if running it must remain untouched. No
+  cancellation has yet been issued. Prospective corrected focused payload
+  uses a new v2 checkout/run02; original v1 scientific/harness pins and
+  failed/diagnostic evidence remain frozen.
+
 ## User-authorized upstream integration and new CPU gate
 
 - User authorized pulling committed `saptdft_cuest` work into this FDDS

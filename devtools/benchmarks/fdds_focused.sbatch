@@ -8,14 +8,14 @@
 #SBATCH --mem=64G
 #SBATCH --time=01:00:00
 #SBATCH --signal=TERM@120
-#SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261017-integrated-focused-01/logs/%x-%j.out
-#SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261017-integrated-focused-01/logs/%x-%j.err
+#SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261019-integrated-focused-02/logs/%x-%j.out
+#SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261019-integrated-focused-02/logs/%x-%j.err
 set -euo pipefail
 : "${CUEST_FDDS_PIN:?set immutable integrated scientific pin}"
 : "${CUEST_FDDS_PAYLOAD_ROOT:?set separately pinned validation harness}"
-root=/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-integrated-20261017-v1
+root=/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-integrated-20261019-v2
 env=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt
-out=/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261017-integrated-focused-01/results-$SLURM_JOB_ID
+out=/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261019-integrated-focused-02/results-$SLURM_JOB_ID
 export CUEST_FDDS_FOCUSED=1
 mkdir -p "$out"
 git -C "$CUEST_FDDS_PAYLOAD_ROOT" rev-parse HEAD > "$out/harness-commit.txt"

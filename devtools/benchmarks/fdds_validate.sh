@@ -136,7 +136,7 @@ focused = os.environ.get("CUEST_FDDS_FOCUSED", "0") == "1"
 if focused:
     assert int(os.environ["CUEST_FDDS_CONTRIBUTION_STATUS"]) == 0, "contribution subprocess failed"
     assert int(os.environ["CUEST_FDDS_GDB_STATUS"]) == 0, "GDB subprocess failed or timed out"
-assert int(suite.get("tests")) == (8 if focused else 56), counts
+assert int(suite.get("tests")) == (8 if focused else 57), counts
 assert all(int(suite.get(k, "0")) == 0 for k in ("errors", "failures", "skipped")), counts
 if focused:
     log = Path("sapt-gdb.log").read_text()

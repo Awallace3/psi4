@@ -378,12 +378,15 @@ def test_fdds_integrated_gpu_energy(fdds_factory, hybrid, occupied):
 
 
 def _run_saptdft_fdds(enabled, threshold, path):
-    psi4.core.clean()
-    psi4.core.clean_options()
-    psi4.set_num_threads(1)
-    psi4.set_memory("500 MiB")
+    previous_output = psi4.core.outfile_name()
+    # set_num_threads/set_memory print through the global native output stream.
+    # Open it before setup, including when a previous caller closed its file.
     psi4.core.set_output_file(str(path), False)
     try:
+        psi4.core.clean()
+        psi4.core.clean_options()
+        psi4.set_num_threads(1)
+        psi4.set_memory("500 MiB")
         psi4.geometry("""
             0 1
             He 0 0 0
@@ -412,6 +415,7 @@ def _run_saptdft_fdds(enabled, threshold, path):
         return result
     finally:
         psi4.core.close_outfile()
+        psi4.core.set_output_file(previous_output, True)
 
 
 @pytest.mark.saptdft
@@ -420,6 +424,26 @@ def test_saptdft_fdds_native_xc_cpu(tmp_path):
     _run_saptdft_fdds(False, 0, path)
     assert _timer_calls() == 0
     assert "Disp20" in path.read_text()
+
+
+@pytest.mark.saptdft
+def test_saptdft_fdds_sequential_cpu_output(tmp_path):
+    """Repeated backend controls must restore a usable caller output stream."""
+    previous = psi4.core.outfile_name()
+    results = []
+    try:
+        for index in range(2):
+            path = tmp_path / f"sapt-sequential-{index}.out"
+            results.append(_run_saptdft_fdds(False, 0, path))
+            assert psi4.core.outfile_name() == previous
+            # This native print catches a closed stream, even on CPU-only builds.
+            psi4.set_num_threads(1)
+            assert "Disp20" in path.read_text()
+        for key in results[0]:
+            assert abs(results[0][key] - results[1][key]) < 1.e-12
+    finally:
+        # A failed regression assertion must not leave pytest's native stream closed.
+        psi4.core.set_output_file(previous, True)
 
 
 @uusing("cuest")
