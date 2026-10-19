@@ -26,8 +26,15 @@
   Five synthetic artifact-gate checks passed (normal exit accepted; native
   signal, attachment breakpoint, skip and timeout rejected); these are
   harness checks only, not GPU correctness evidence.
-- Staging/dry-run is in progress for explicit free embers/H200, 8 CPUs/
-  64 GiB/one-hour build+focused-validation limit. No full GPU rerun.
+- Staging and dry-run passed; exactly one new job **14181925** was accepted
+  on explicit free `embers`/H200, 8 CPUs/64 GiB/one-hour build+focused-validation
+  limit. Live headroom 32/50, unique job-name/comment/run checks passed;
+  effective submission QoS confirmed embers, state PENDING.
+  Source `/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-integrated-20261017-v1`,
+  separate harness checkout with `-harness` suffix. Run directory
+  `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261017-integrated-focused-01`.
+  Watcher **b945ab472**, standard 300 s interval, 48-hour watcher deadline.
+  No full GPU rerun.
   Frozen previous stages, failed13992504 evidence, and diagnostic14006185
   scientific/driver pins remain immutable. Native crash is not yet established
   fixed by upstream integration; targeted GPU evidence is still required.
