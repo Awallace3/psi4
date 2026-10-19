@@ -1270,3 +1270,58 @@ symmetry c1
     assert compare_values(ie_superposed, xdm_ie, 8, "dft-xdm(sapt) XDM IE vs standalone CP superposition")
     assert abs(ie_bare - xdm_ie) > 1.0e-5, "the ghost superposition correction was not applied"
     assert xdm_ie < 0.0 and sapt_disp < 0.0
+
+
+@pytest.mark.xdm
+@pytest.mark.skipif(psi4.addons("cuest"), reason="a cuEST build accepts XDM_GPU")
+def test_xdm_gpu_requires_cuest_build():
+    mol = psi4.geometry("0 1\nO 0 0 0.117\nH 0 0.757 -0.467\nH 0 -0.757 -0.467\nsymmetry c1")
+    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.6, 1.4], "XDM_GPU": True})
+    with pytest.raises(RuntimeError, match="XDM_GPU requires a Psi4 built with cuEST"):
+        psi4.energy("b3lyp-xdm", molecule=mol)
+
+
+_xdm_gpu_cases = {
+    # closed shell, pure d functions
+    "rks": ("0 1\nO 0 0 0.117\nH 0 0.757 -0.467\nH 0 -0.757 -0.467\nO 0 0 3.117\nH 0 0.757 2.533\nH 0 -0.757 2.533",
+            "aug-cc-pvdz"),
+    # counterpoise monomer: ghosts in the promolecule and the basis
+    "ghost": ("0 1\nO 0 0 0.117\nH 0 0.757 -0.467\nH 0 -0.757 -0.467\n"
+              "Gh(O) 0 0 3.117\nGh(H) 0 0.757 2.533\nGh(H) 0 -0.757 2.533", "aug-cc-pvdz"),
+    # open shell
+    "uks": ("0 2\nO 0 0 0\nH 0 0 0.97", "aug-cc-pvdz"),
+    # Cartesian d functions
+    "cartesian": ("0 1\nO 0 0 0.117\nH 0 0.757 -0.467\nH 0 -0.757 -0.467", "6-31g*"),
+}
+
+
+@pytest.mark.xdm
+@pytest.mark.parametrize("case", list(_xdm_gpu_cases))
+def test_xdm_gpu_matches_host(case):
+    """The XDM_GPU moments agree with the host path on the same converged density."""
+    if not psi4.addons("cuest"):
+        pytest.skip("XDM_GPU needs a cuEST build")
+    geom, basis = _xdm_gpu_cases[case]
+    mol = psi4.geometry(geom + "\nsymmetry c1\nno_com\nno_reorient")
+    psi4.set_options({
+        "basis": basis,
+        "reference": "uks" if case == "uks" else "rks",
+        "dft_radial_points": 75,
+        "dft_spherical_points": 302,
+        "XDM_DISPERSION_PARAMETERS": [0.6, 1.4],
+        "XDM_GPU": False,
+    })
+    _, wfn = psi4.energy("b3lyp-xdm", molecule=mol, return_wfn=True)
+
+    results = {}
+    for gpu in (False, True):
+        psi4.set_options({"XDM_GPU": gpu})
+        energy = wfn._disp_functor.compute_energy(wfn.molecule(), wfn)
+        results[gpu] = (energy, psi4.core.array_variable("XDM ATOMIC PROPERTIES").np.copy())
+
+    (e_host, p_host), (e_gpu, p_gpu) = results[False], results[True]
+    assert abs(e_gpu - e_host) < 1.0e-9
+    # charge, volume, <M1^2>, <M2^2>, <M3^2>, polarizability
+    for col in (2, 3, 4, 5, 6, 7):
+        np.testing.assert_allclose(p_gpu[:, col], p_host[:, col], rtol=1.0e-8, atol=0.0)
+    np.testing.assert_array_equal(p_gpu[:, :2], p_host[:, :2])

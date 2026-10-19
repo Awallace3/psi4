@@ -2095,6 +2095,16 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         counterpoise subsystem jobs run outside that driver. Ignored when
         |scf__xdm_dispersion_parameters| is set. -*/
         options.add_bool("XDM_COUNTERPOISE", false);
+        /*- Evaluate the XDM moment integrals on the GPU: basis functions and their
+        derivatives, the spin densities and Laplacians, the Becke--Roussel hole, the
+        Hirshfeld partition and the moments. The grid is built on the host exactly as
+        for the host path, so the two agree to rounding. Requires a Psi4 built with
+        cuEST; raises otherwise. Independent of |globals__use_cuest|. -*/
+        options.add_bool("XDM_GPU", false);
+        /*- Device workspace [MiB] for |scf__xdm_gpu|: the basis-function values and
+        density products of one batch of grid blocks. Larger batches run faster;
+        raised automatically to the minimum that holds one grid block. !expert -*/
+        options.add_int("XDM_GPU_MEMORY", 256);
         /*- Parameters defining the -NL/-V dispersion correction. First b, then C -*/
         options.add("NL_DISPERSION_PARAMETERS", new ArrayType());
         /*- Number of spherical points (A :ref:`Lebedev Points <table:lebedevorder>` number) for VV10 NL integration.
