@@ -162,6 +162,30 @@ runpy.run_path('fixed_jk_runner.py',run_name='__main__')
         self.assertEqual(imports, ["pathlib"])
         self.assertNotIn("numpy", [a.name for n in ast.walk(tree) if isinstance(n,ast.Import) for a in n.names])
 
+    def test_child_setup_exact_same_commands_as_original_arm(self):
+        def commands(path):
+            return [line for line in path.read_text().splitlines() if line.strip() and
+                    not line.lstrip().startswith("#")]
+        old = commands(HERE/"arm.sh")
+        new, function = [], False
+        for line in commands(HERE/"child-arm.sh"):
+            if line.startswith("check_control()"):
+                function = True
+            elif function:
+                if line == "}":
+                    function = False
+            elif line == "check_control" or line.startswith("H="):
+                continue
+            else:
+                new.append(line)
+        # These two literal assignments are made earlier only so the stdlib gate
+        # uses the exact selected interpreter before any module/native launch.
+        assignments = [line for line in new if line.startswith(("P=","E="))]
+        new = [line for line in new if not line.startswith(("P=","E="))]
+        index = new.index("unset PYTHONPATH PYTHONHOME")+1
+        new[index:index] = assignments
+        self.assertEqual(new, old)
+
     def test_receipt_identity_and_each_corruption(self):
         row = f.sequence()[0]
         value = dict(label=row["label"],arm=row["arm"],pid=12,job="99",gpu_uuid="GPU",

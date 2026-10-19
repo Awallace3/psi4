@@ -104,8 +104,9 @@ The new namespace is `major2-workspace-20261019`, parent harness
 receive `CUBLAS_WORKSPACE_CONFIG=:4096:8` in a fresh Popen environment copy.
 MAIN/controller, CUDA identity, import/probe-only and factor-copy environments
 remain unset. Unexpected inherited overrides cause STOP, never silent removal.
-`child-arm.sh` verifies the whitelist before the unchanged `arm.sh` executes
-any native `--psiapi`; the runner writes/fsyncs a readonly raw ENV receipt
+`child-arm.sh` repeats the original arm setup commands with whitelist checks
+before native `--psiapi` and exec (original `arm.sh` remains unchanged for
+all other processes); the runner writes/fsyncs a readonly raw ENV receipt
 before importing numpy, policy, probe or Psi4. Every output/COMPLETE and the
 final report carry observed ENV provenance; missing/wrong/extra overrides,
 receipt edits or identity mismatch are fatal.
