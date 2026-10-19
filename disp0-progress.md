@@ -330,6 +330,59 @@ no source blockers in the four scoped files; all three prior findings appear
 resolved. Advisory review is not a build/test or GPU correctness substitute.
 No CUDA/device-shadow numerical evidence exists yet. CPU build submission
 still waits for finalized committed source plus exact-route/headroom checks.
+
+Finalized implementation/build-recipe source pin:
+`1e25b5e89a0ec29e17e20c791d9f3d23f7ef3e86`, committed and pushed on
+`saptdft_cuest_disp0` (be962a2cf, exit 0). No merge into a parent branch.
+This pin represents the initial canonical scalar hybrid checkpoint, not a
+passed GPU gate or F-SAPT GPU coverage. The implementation task is complete
+only in that explicitly limited sense.
+
+One-shot headroom/path check ba6538b83 and new detached-source/test-only
+preparation b76687edd started. Planned immutable remote source:
+`P/gits/psi4.saptdft-cuest-disp0-build-1e25b5e89a`; source moved by Git only,
+without updating sibling checkouts or queued pins. No accepted job ID yet.
+Live preflight ba6538b83: PASS, embers **29/50** slots used, main repository
+resolves to `P/gits/psi4`, conda 24.11.3 available, new own source path free,
+explicit CUDA13 nvcc present. Exact-route test-only still pending.
+
+Exact-resource test-only b76687edd: PASS, route **cpu-small**, 8 processors,
+2h/48G/embers/gts-cs207-chemx script. The test-only forecast number 14182567
+is **not an accepted job receipt**. Immutable detached remote source verified
+at `1e25b5e89a0ec29e17e20c791d9f3d23f7ef3e86`; only this new worktree created.
+The one approved actual submission is now in flight as b15fcd7f7.
+No GPU submission and no automatic retry.
+
+### Accepted CPU build receipt
+
+* **Job 14182584**, accepted by b15fcd7f7 (exit 0), submitted
+  2026-10-19 12:35:23 Phoenix local time.
+* Actual `scontrol`: account **gts-cs207-chemx**, partition **cpu-small**,
+  QoS **embers**, 8 CPUs / 48G / 02:00:00, **no GPU TRES**.
+  Initial state PENDING (Priority); no start-time estimate claimed.
+* Immutable source:
+  `P/gits/psi4.saptdft-cuest-disp0-build-1e25b5e89a`,
+  exact commit `1e25b5e89a0ec29e17e20c791d9f3d23f7ef3e86`.
+* Run root:
+  `P/runs/saptdft-cuest-disp0/build-1e25b5e89a0ec29e17e20c791d9f3d23f7ef3e86-14182584`.
+  Environment, package/cache, E2 source/build/install and Psi4 build all
+  live under that new job-owned root.
+* Persistent scratch:
+  `/storage/scratch1/3/awallace43/saptdft-cuest-disp0/14182584`.
+* Logs:
+  `P/runs/saptdft-cuest-disp0/logs/disp0-e2-build-14182584.{out,err}`;
+  terminal status file `logs/14182584.status`;
+  accepted receipt `logs/submission-1e25b5e89a.receipt`.
+* Parent receipt sent successfully with workmux. Exactly one actual
+  submission; test-only forecast 14182567 is not a second allocation.
+* Scheduler caveat: effective Requeue=1 default was observed. Payload never
+  resubmits and refuses reuse of a partial build root. Asked parent permission
+  to set Requeue=0 on this job only; **no job modification made yet**.
+  Future recipes should explicitly use --no-requeue. Queued source is frozen.
+
+This is CPU build/API/ABI preparation only. It does not establish actual CUDA
+device, GPU shadow or cuBLAS numerical correctness. H200 gate and Phase 2 remain
+unapproved/unpassed and no GPU job has been submitted.
 * Read-only Phoenix access preflight: PASS, exit 0 (bfefc7153).
   No remote branch worktree/build has yet been created and no job submitted.
 * Read-only Phoenix dependency discovery: PASS, exit 0 (b99607f10).
