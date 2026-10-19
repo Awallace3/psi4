@@ -23,6 +23,7 @@ import artifacts
 import jkexception as j
 import fitcase as f
 import commonfix
+import nonc1 as n
 
 HERE = Path(__file__).resolve().parent
 PY = E + "/bin/python"
@@ -44,8 +45,10 @@ def literal_assignments(path, names):
 
 def prepare(args):
     require(not args.artifact_pair, "new common-fixed cohort requires fresh builds, not old artifacts")
+    hybrid = bool(getattr(args, "nonc1_baseline", None))
+    require(not (hybrid and args.commonfix_pair), "hybrid cannot adopt candidate")
     reuse = bool(args.commonfix_pair)
-    cohort = f if reuse else j
+    cohort = n if hybrid else f if reuse else j
     local = dict(baseline=Path(args.baseline_local).resolve(), candidate=Path(args.candidate_local).resolve())
     harness = HERE.parents[1]
     hp = git(harness, "rev-parse", "HEAD")
@@ -57,10 +60,11 @@ def prepare(args):
     for arm, pin in [("baseline", j.BASE), ("candidate", candidate_pin)]:
         check_source(local[arm], pin)
         files = file_manifest(local[arm])
-        arms[arm] = dict(source=j.SOURCES[arm], pin=pin, tree=git(local[arm], "rev-parse", "HEAD^{tree}"),
-                         backend="gpu", build=j.SOURCES[arm] + "/" + j.BUILD, files=files, files_digest=digest(files))
-    shared_fix = j.proof(local)
-    require(candidate_pin == j.CANDIDATE, "reviewed common-fixed candidate pin")
+        arms[arm] = dict(source=cohort.SOURCES[arm], pin=pin, tree=git(local[arm], "rev-parse", "HEAD^{tree}"),
+                         backend="gpu", build=n.BUILDS[arm] if hybrid else j.SOURCES[arm] + "/" + j.BUILD,
+                         files=files, files_digest=digest(files))
+    shared_fix = n.proof(local) if hybrid else j.proof(local)
+    require(candidate_pin == cohort.CANDIDATE, "reviewed scientific candidate pin")
     require(tree_manifest(local["baseline"] / "psi4/driver") == tree_manifest(local["candidate"] / "psi4/driver"), "scientific drivers differ")
     additions = git(harness, "diff", "--name-status", BASE, hp).splitlines()
     require(additions and all(x.startswith("A\tdevtools/major2/") for x in additions), "harness must only add its own helpers from BASE")
@@ -92,21 +96,31 @@ def prepare(args):
                  test_source=dict(source=f.TEST_SOURCE, pin=f.TEST_PIN, files=files, files_digest=digest(files),
                                   tree=git(root, "rev-parse", "HEAD^{tree}"), proof=f.test_proof(root)),
                  selectors_ast=selectors_ast(root))
+    if hybrid:
+        require(args.test_source_local, "new test child required")
+        root = Path(args.test_source_local).resolve()
+        files = file_manifest(root)
+        m.pop("shared_fix")
+        m.update(baseline_origin=read_json(args.nonc1_baseline), build_budget_seconds=[0, 3600],
+                 constructor_proof=shared_fix, test_counts=n.COUNTS,
+                 test_source=dict(source=n.TEST_SOURCE, pin=n.TEST_PIN, tree=n.TEST_TREE,
+                                  files=files, files_digest=digest(files), proof=n.test_proof(root)),
+                 selectors_ast=selectors_ast(root))
     validate_manifest(m, executable=args.command == "freeze")
     out = Path(args.output_dir).resolve()
     out.mkdir(exist_ok=False)
     write_json(out / "manifest.json", m)
     mh = sha(out / "manifest.json")
-    batch = batch_text(mh, fresh=True, commonfix=reuse)
+    batch = batch_text(mh, fresh=True, commonfix=reuse, hybrid=hybrid)
     (out / "campaign.sbatch").write_text(batch)
     write_json(out / "bundle-receipt.json", dict(manifest_sha256=mh, batch_sha256=sha(out / "campaign.sbatch"),
                harness_pin=hp, executable_approval=m["approval"]["state"], generated_only=True))
     print(f"{args.command.upper()} {out} manifest_sha256={mh}; NOT submitted")
 
 
-def batch_text(manifest_hash, fresh=False, commonfix=False):
+def batch_text(manifest_hash, fresh=False, commonfix=False, hybrid=False):
     require(re.fullmatch("[0-9a-f]{64}", manifest_hash), "manifest digest")
-    run, harness = (f.RUN, f.HARNESS) if commonfix else (j.RUN, j.HARNESS) if fresh else (RUN, HARNESS)
+    run, harness = (n.RUN, n.HARNESS) if hybrid else (f.RUN, f.HARNESS) if commonfix else (j.RUN, j.HARNESS) if fresh else (RUN, HARNESS)
     return f"""#!/usr/bin/env bash
 # Generated data; tracked code moves only via Git after separate approval.
 #SBATCH --job-name=major2-gpu-ab
@@ -277,7 +291,7 @@ class Engine:
         for item in self.m["arms"].values():
             check_source(item["source"], item["pin"], item["files"])
         check_source(self.m["harness"]["path"], self.m["harness"]["pin"], self.m["harness"]["files"])
-        if self.m.get("build_mode") == f.MODE:
+        if self.m.get("build_mode") in (f.MODE, n.MODE):
             test = self.m["test_source"]
             check_source(test["source"], test["pin"], test["files"])
         require(sha(self.manifest_path) == self.manifest_hash, "manifest changed")
@@ -291,6 +305,8 @@ class Engine:
         einsums_coherence()
         if self.m.get("artifact_pair"):
             artifact_api(self.m).verify_shared(self.m["artifact_pair"])
+        if self.m.get("build_mode") == n.MODE:
+            n.verify_shared(self.m["baseline_origin"])
         for arm in self.probes:
             stage = Path(self.m["arms"][arm]["build"]) / "stage"
             require(sha(self.probes[arm]["core"]) == self.probes[arm]["core_sha256"], "core changed")
@@ -301,6 +317,13 @@ class Engine:
         self.raw.mkdir()
         self.scratch.mkdir(parents=True, exist_ok=False)
         self.env = runtime_env(os.environ, self.scratch)
+        if self.m.get("build_mode") == n.MODE:
+            self.env["CPKS_BUILD_DIR"] = n.BUILD
+            require(n.proof({arm: item["source"] for arm, item in self.m["arms"].items()}) ==
+                    self.m["constructor_proof"], "same-allocation scientific/constructor proof")
+            require(n.test_proof(self.m["test_source"]["source"]) == self.m["test_source"]["proof"],
+                    "same-allocation new test proof")
+            write_json(self.raw/"test-source-provenance.json", self.m["test_source"])
         if self.m.get("build_mode") in (j.MODE, f.MODE):
             self.env["CPKS_BUILD_DIR"] = j.BUILD
             require(j.proof({arm: item["source"] for arm, item in self.m["arms"].items()}) == self.m["shared_fix"],
@@ -338,12 +361,15 @@ class Engine:
             self.run_command(argv, name, timeout=30)
         self.pins()
         for arm, item in self.m["arms"].items():
-            if not self.m.get("artifact_pair"):
+            if not self.m.get("artifact_pair") and not (self.m.get("build_mode") == n.MODE and arm == "baseline"):
                 require(not Path(item["build"]).exists() and not Path(item["build"]).is_symlink(), "new build root already exists: " + arm)
             require(not (self.root / ("build-" + arm)).exists(), "new build metadata root exists")
         if self.m.get("artifact_pair"):
             write_json(self.raw/"artifact-pair-verification.json",
                        artifact_api(self.m).verify_pair(self.m["artifact_pair"], self.m["arms"]))
+        if self.m.get("build_mode") == n.MODE:
+            n.verify_baseline(self.m["baseline_origin"], self.m["arms"]["baseline"]["files"])
+            write_json(self.raw/"baseline-origin-verification.json", dict(digest=n.ORIGIN_DIGEST, verified=True))
         selectors = selectors_ast(self.m.get("test_source", self.m["arms"]["candidate"])["source"])
         require(selectors == self.m["selectors_ast"], "test selector source changed")
         write_json(self.raw / "selectors-ast.json", selectors)
@@ -372,6 +398,8 @@ class Engine:
         return ["bash", str(HERE / "arm.sh"), str(stage), str(runtime), *map(str, argv)]
 
     def build(self, arm, remaining_builds):
+        if self.m.get("build_mode") == n.MODE:
+            require(arm == "candidate" and remaining_builds == 1, "hybrid fresh candidate ONLY")
         needed = remaining_builds*3600 + 1800 + 3600
         admission(self.end-time.time(), needed)
         self.pins()
@@ -386,9 +414,15 @@ class Engine:
         """Copy validated origin receipts ONLY; never write the approved prefix."""
         admission(self.end-time.time(), 1800 + 3600)
         self.pins()
-        pair = self.m["artifact_pair"]
-        api = artifact_api(self.m)
-        api.verify_artifact(pair, arm, self.m["arms"][arm]["files"])
+        hybrid = self.m.get("build_mode") == n.MODE
+        if hybrid:
+            require(arm == "baseline", "hybrid cannot import old CAND")
+            pair = self.m["baseline_origin"]
+            n.verify_baseline(pair, self.m["arms"][arm]["files"])
+        else:
+            pair = self.m["artifact_pair"]
+            api = artifact_api(self.m)
+            api.verify_artifact(pair, arm, self.m["arms"][arm]["files"])
         out = self.root/("build-"+arm)
         out.mkdir()
         origin = pair["arms"][arm]
@@ -401,7 +435,12 @@ class Engine:
             require(sha(dst) == expected, "copied receipt mismatch")
         receipt = dict(origin_job=origin["origin_job"],
             original_metadata=origin["metadata"], original_build=origin["build"],
-            copied_receipts=True, compiled_in_this_job=False, artifact_pair_digest=api.PAIR_DIGEST)
+            copied_receipts=True, compiled_in_this_job=False)
+        if hybrid:
+            receipt.update(baseline_origin_digest=n.ORIGIN_DIGEST, compiled_source_pin=origin["pin"],
+                           compiled_core_sha256=origin["core_sha256"], correctness_test_source_pin=n.TEST_PIN)
+        else:
+            receipt["artifact_pair_digest"] = api.PAIR_DIGEST
         if self.m.get("build_mode") == f.MODE:
             receipt.update(compiled_source_pin=origin["pin"], compiled_core_sha256=origin["core_sha256"],
                            correctness_test_source_pin=f.TEST_PIN)
@@ -435,7 +474,7 @@ class Engine:
                          arm + "-effective-ldd", timeout=30)
         for arch in ["sm_80", "sm_89", "sm_90", "sm_120"]:
             require(arch in (out / "core_sass.txt").read_text().split(), "missing embedded SASS")
-        if self.m.get("artifact_pair"):
+        if self.m.get("artifact_pair") or self.m.get("build_mode") == n.MODE:
             self.run_command([INSPECTION_TOOL["path"], "-lelf", *stage.glob("lib/psi4/core*.so")],
                              arm+"-sass", timeout=30)
             require(sorted(set(re.findall(r"sm_[0-9]+", (self.raw/(arm+"-sass.log")).read_text()))) ==
@@ -446,6 +485,17 @@ class Engine:
         self.run_command(self.arm_command(arm, [PY, "-B", HERE / "probe.py", self.raw / (arm + "-probe.json")]),
                          arm + "-probe", timeout=60)
         self.probes[arm] = read_json(self.raw / (arm + "-probe.json"))
+        if self.m.get("build_mode") == n.MODE:
+            origin = self.m["baseline_origin"]
+            probe = self.probes[arm]
+            if arm == "baseline":
+                require(probe["core_sha256"] == origin["arms"]["baseline"]["core_sha256"], "BASE imported core")
+            else:
+                write_json(out/"BUILD_ORIGIN.json", dict(origin_job=self.job, copied_receipts=False,
+                           compiled_in_this_job=True, compiled_source_pin=item["pin"],
+                           compiled_core_sha256=probe["core_sha256"], correctness_test_source_pin=n.TEST_PIN))
+            require(probe["pyeinsums_core"] == origin["pyeinsums_core"]["path"] and
+                    probe["pyeinsums_core_sha256"] == origin["pyeinsums_core"]["sha256"], "hybrid PyEinsums pin")
         if self.m.get("artifact_pair"):
             pair = self.m["artifact_pair"]
             require(self.probes[arm]["core_sha256"] == pair["arms"][arm]["core_sha256"],
@@ -483,7 +533,7 @@ class Engine:
         # Plugin-only harness path, never a source package or old driver overlay.
         # arm.sh clears PYTHONPATH; pytest's --pyargs is not used.
         env["MAJOR2_PYTEST_EVIDENCE"] = str(directory / "execution.json")
-        plan_count = 17 if self.m.get("build_mode") == f.MODE else 16
+        plan_count = n.COUNTS["candidate_plan"] if self.m.get("build_mode") == n.MODE else 17 if self.m.get("build_mode") == f.MODE else 16
         expected_count = 1 if red else (4 if expression == FIXED_K else (48 if selectors == COMMON else plan_count))
         env["MAJOR2_EXPECTED_COUNT"] = str(expected_count)
         env["MAJOR2_PROCESS_PROBE"] = str(directory / "process-probe.json")
@@ -609,7 +659,10 @@ class Engine:
         write_json(self.root/"STARTED.json", dict(job=self.job, manifest_sha256=self.manifest_hash))
         try:
             self.prolog()
-            if self.m.get("artifact_pair"):
+            if self.m.get("build_mode") == n.MODE:
+                self.build("candidate", 1)
+                self.adopt("baseline")
+            elif self.m.get("artifact_pair"):
                 self.adopt("candidate")
                 self.adopt("baseline")
             else:
@@ -617,7 +670,7 @@ class Engine:
                 self.build("baseline", 1)
             require(self.drivers["baseline"] == self.drivers["candidate"], "merged drivers must match exactly")
             require(self.configurations["baseline"] == self.configurations["candidate"], "build policies differ")
-            if self.m.get("build_mode") == j.MODE:
+            if self.m.get("build_mode") in (j.MODE, n.MODE):
                 items = self.m["arms"]
                 require(artifacts.normalized_configs(items["baseline"]) ==
                         artifacts.normalized_configs(items["candidate"]), "full actual CMake configurations differ")
@@ -677,6 +730,7 @@ def main():
         p.add_argument("--output-dir", required=True)
         p.add_argument("--artifact-pair", help="Explicit immutable reviewed pair JSON; skips compilation only")
         p.add_argument("--commonfix-pair", help="Exact verified commonfix pair from 14165998 only")
+        p.add_argument("--nonc1-baseline", help="Exact BASE14165998 origin; candidate MUST compile fresh")
         p.add_argument("--test-source-local", help="One-file corrected child of the frozen candidate")
         if mode == "freeze":
             p.add_argument("--approved-candidate-pin", required=True)
@@ -691,8 +745,8 @@ def main():
         require(sha(args.manifest) == args.manifest_sha256, "frozen manifest SHA mismatch")
         m = read_json(args.manifest)
         validate_manifest(m)
-        require(m.get("build_mode") in (j.MODE, f.MODE), "new entry point only runs fresh common-fixed or exact commonfix cohort")
-        run = f.RUN if m.get("build_mode") == f.MODE else j.RUN
+        require(m.get("build_mode") in (j.MODE, f.MODE, n.MODE), "new entry point only runs fresh common-fixed, exact commonfix or reviewed hybrid cohort")
+        run = n.RUN if m.get("build_mode") == n.MODE else f.RUN if m.get("build_mode") == f.MODE else j.RUN
         require(Path(args.manifest) == Path(run)/"manifest.json", "manifest outside new cohort root")
         Engine(m, args.manifest).execute()
 

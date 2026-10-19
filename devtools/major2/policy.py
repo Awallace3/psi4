@@ -345,16 +345,22 @@ def cmake_policy(outer, inner, stage):
 def validate_manifest(m, executable=True):
     fresh = "build_mode" in m
     commonfix = m.get("build_mode") == "verified-commonfix-artifact-pair"
+    hybrid = m.get("build_mode") == "baseline14165998-fresh-nonc1"
+    if hybrid:
+        import nonc1 as n
+        n.validate(m)
     if fresh:
         import jkexception as j
-        if commonfix:
+        if hybrid:
+            pass  # separate exact allowlist; legacy pair APIs remain unchanged
+        elif commonfix:
             import fitcase as f
             f.validate(m)
         else:
             j.validate(m)
-    expected_run = f.RUN if commonfix else j.RUN if fresh else RUN
-    expected_harness = f.HARNESS if commonfix else j.HARNESS if fresh else HARNESS
-    expected_sources = j.SOURCES if fresh else SOURCES
+    expected_run = n.RUN if hybrid else f.RUN if commonfix else j.RUN if fresh else RUN
+    expected_harness = n.HARNESS if hybrid else f.HARNESS if commonfix else j.HARNESS if fresh else HARNESS
+    expected_sources = n.SOURCES if hybrid else j.SOURCES if fresh else SOURCES
     expected_base = j.BASE if fresh else BASE
     pair = m.get("artifact_pair")
     if pair is not None and not commonfix:
@@ -374,7 +380,7 @@ def validate_manifest(m, executable=True):
     for arm, item in m["arms"].items():
         full_pin(item["pin"])
         require(item["source"] == expected_sources[arm] and item["backend"] == "gpu", "wrong arm/source/backend")
-        expected_build = (expected_sources[arm] + "/" + j.BUILD if fresh else
+        expected_build = (n.BUILDS[arm] if hybrid else expected_sources[arm] + "/" + j.BUILD if fresh else
                           pair["arms"][arm]["build"] if pair else SOURCES[arm] + "/build_major2_cuda_mapproof")
         require(item["build"] == expected_build, "wrong build stage")
         if pair:

@@ -215,8 +215,9 @@ def submit(pin, manifest_sha, batch_sha, *, cohort=j, verifier=None, cache=None,
     durable(lock/"controller-before.json", queue())
     argv = ["sbatch", "--parsable", str(root/"campaign.sbatch")]
     durable(lock/"attempt.json", dict(utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            argv=argv, no_retry=True, replacement_for="14165998" if cohort is not j else "14164895",
-            preserved_failed_jobs=failed_jobs, compiled_in_new_job=cohort.MODE == j.MODE,
+            argv=argv, no_retry=True, replacement_for=getattr(cohort, "REPLACEMENT_FOR", "14165998" if cohort is not j else "14164895"),
+            preserved_failed_jobs=failed_jobs, compiled_in_new_job=getattr(cohort, "COMPILED_IN_NEW_JOB", cohort.MODE == j.MODE),
+            build_origins=getattr(cohort, "SUBMISSION_BUILD_ORIGINS", None),
             build_mode=cohort.MODE, manifest_sha256=manifest_sha))
     try:
         result = subprocess.run(argv, cwd=root, text=True, capture_output=True, timeout=35)
