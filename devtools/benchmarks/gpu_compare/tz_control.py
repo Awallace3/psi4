@@ -17,6 +17,15 @@ from compare import (HERE, ENGINES, atomic_json, digest, engine_env,
                      expected_nbf, observed_worker, summarize, xyz)
 from grids import compare_exports
 from protocol import compare_overlap_exports
+from direct import is_direct, jk_mode
+
+
+def strategy_modes(config, requested=None):
+    if is_direct(config):
+        if requested:
+            raise ValueError("--df-modes cannot be combined with conventional-direct")
+        return [None]
+    return requested or ["native-strategy", "stored-df"]
 
 
 def matching_audit(source, candidate):
@@ -71,7 +80,8 @@ def attempt(a, base, config_path, engine, system, functional, label, profile, re
         cmd += ["--profile", "--export-grid"]
     config = json.loads(config_path.read_text())
     expected = dict(engine=engine, system=system, functional=functional, repeat=repeat, profile=profile,
-                    df_mode=config.get("df_mode", "native-strategy"),
+                    jk_mode=jk_mode(config),
+                    df_mode=None if is_direct(config) else config.get("df_mode", "native-strategy"),
                     config_sha256=a._config_pins[config_path],
                     geometry_sha256=a._geometry_pins[system])
     if digest(config_path) != expected["config_sha256"]:
@@ -107,6 +117,10 @@ def control(a):
         if path.is_file():
             shutil.copy2(path, a.output / "harness" / path.name)
     config = json.loads(a.config.read_text())
+    config["jk_mode"] = getattr(a, "jk_mode", None) or config.get("jk_mode", "density-fitted")
+    if is_direct(config):
+        config.pop("df_mode", None)
+    modes = strategy_modes(config, a.df_modes)
     a._config_pins = {}
     a._geometry_pins = {}
     config.update(grid_mode="native-default", threads=a.threads, repeats=a.repeats)
@@ -152,7 +166,7 @@ def control(a):
         (a.output / f"{engine}-pip-freeze.txt").write_text(lock)
     atomic_json(a.output / "manifest.json", dict(
         config=config, systems=a.systems, gpu=gpu, job_id=os.environ["SLURM_JOB_ID"],
-        df_modes=a.df_modes,
+        jk_mode=jk_mode(config), df_modes=[] if is_direct(config) else modes,
         command=sys.argv, linkage=linkage, pins={str(path): sha for path, sha in pins.items()},
         geometry_sha256={path.name: digest(path) for path in (a.output / "inputs/geometries").glob("*.xyz")},
         grid_protocol="shared actual cuEST native-default mesh, not necessarily smaller native default",
@@ -161,8 +175,8 @@ def control(a):
         timing_note="Headline is fresh worker launch-to-reap, including interpreter startup, imports, grid and DF construction, SCF, validation and teardown. Internal clocks are diagnostics only." ))
     results = []
     for system in a.systems:
-        for functional, df_mode in itertools.product(config["functionals"], a.df_modes):
-            case = a.output / system / functional / df_mode
+        for functional, df_mode in itertools.product(config["functionals"], modes):
+            case = a.output / system / functional / (df_mode or "conventional-direct")
             source_base = case / "native-source"
             source_base.mkdir(parents=True)
             native = dict(config, basis="cc-pvtz", df_mode=df_mode,
@@ -172,7 +186,7 @@ def control(a):
             a._config_pins[native_path] = digest(native_path)
             source_record, source_output = attempt(a, source_base, native_path, "psi4", system,
                                                    functional, "source", True, 0, gpu)
-            item = dict(system=system, functional=functional, df_mode=df_mode,
+            item = dict(system=system, functional=functional, df_mode=df_mode, jk_mode=jk_mode(config),
                         headline_timing="full_process_wall_s", complete=False, basis_runs={})
             try:
                 source_info = validate_source_record(source_record)
@@ -310,8 +324,9 @@ def main():
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--preflight", action="store_true")
+    parser.add_argument("--jk-mode", choices=("density-fitted", "conventional-direct"))
     parser.add_argument("--df-modes", choices=("native-strategy", "stored-df"),
-                        nargs="+", default=["native-strategy", "stored-df"])
+                        nargs="+")
     args = parser.parse_args()
     for key, value in vars(args).items():
         if isinstance(value, Path):

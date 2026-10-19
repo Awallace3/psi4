@@ -83,6 +83,58 @@ DF regressions; rejects skips/failures and retains each chemistry output plus
 JUnit and `validation.json`. GNU time reports whole-suite peak RSS. This is a
 correctness/debug suite, **not** a matched-grid performance benchmark.
 
+## Matched cuEST / GPU4PySCF four-center comparison
+
+The comparison branch merges **committed** `saptdft_cuest@ca21ef8645` at
+`2e542f9803`, retaining both direct JK and live-grid exports. The direct adapter
+advertises the parent's `returns_combined_exchange()` contract. No unpublished
+changes from the other worktree are included. The old validated core is not a
+validation of this merged implementation; build and test it separately.
+
+`compare_job.sh` runs a fresh merged direct validation suite and the two GPU
+grid-export tests before a peptide PBE/WB97X preflight in cc-pVTZ and
+aug-cc-pVTZ:
+
+```bash
+bash ABS_REPO/devtools/benchmarks/cuest_direct/compare_job.sh \
+  ABS_REPO HARNESS_COMMIT ABS_BUILD ABS_NEW_RUN ABS_DATA BUILD_JOB \
+  H100 preflight embers
+```
+
+The optional `protein83` panel first repeats the preflight, then all five
+functionals with three timed repeats per engine and basis. It needs a
+separately sized/authorized submission; a preflight does not automatically
+launch it. Default is free `embers`. An inferno submission still needs fresh
+approval for that job.
+
+This uses `jk_mode=conventional-direct`, **not** either historical `df_mode`:
+
+- Psi4: `SCF_TYPE=DIRECT`, `USE_CUEST=True`, `DF_SCF_GUESS=False`,
+  core guess, strict FP64, JIT OFF, no auxiliary basis. Each worker verifies
+  the actual `cuESTDirectJK` object, direct compute timer and header, and absence
+  of a DF-JK header.
+- GPU4PySCF: undecorated `gpu4pyscf.dft.rks.RKS`, **no `.density_fit()`**,
+  1-electron/core guess, no stored ERIs or DF object. The pinned implementation
+  uses `scf.j_engine.get_j` and `scf.jk.get_k`; consumed GPU densities/matrices,
+  successful `MD_build_j`/`RYS_build_k` calls and nonzero-omega K for RSH are
+  audited. CPU four-center fallback and GPU DF build/contraction entries raise.
+  No changes are made to the installed package.
+- Auxiliary dimensions are null/not applicable. Both engines must provide
+  direct-route proofs before a speed ratio is eligible; DF and direct
+  records cannot mix.
+
+The controller reuses the shared exported cuEST native mesh, exact nonzero
+point/weight proofs, explicit common Bohr geometry, canonical-overlap
+cutoff/spectrum/rank audit, full fresh-process walltime including imports,
+worker peak RSS and sampled GPU/process memory. Grid exports/profiling run
+separately from timed repeats. **This still does not implement the
+smaller-PySCF-native-grid-in-cuEST control.**
+
+CPU atomic/one-electron setup, screening implementations and SCF convergence
+norms can differ. This is conventional four-center direct/direct, not a claim
+that both programs execute identical kernels or convergence histories.
+Successful small-system correctness does not imply protein-scale feasibility.
+
 ## Required NVIDIA dependency notice
 
 NVIDIA MAKES NO REPRESENTATION ABOUT THE SUITABILITY OF THESE LICENSED

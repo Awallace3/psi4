@@ -95,6 +95,26 @@ class CompareTests(unittest.TestCase):
         row = self.row([self.record("psi4"), self.record("pyscf", stored_df_verified=False)])
         self.assertFalse(row["comparison_eligible"])
 
+    def test_conventional_direct_needs_proof_not_auxiliary_dimensions(self):
+        self.c["jk_mode"] = "conventional-direct"
+        records = [self.record(e, jk_mode="conventional-direct", naux=None,
+                               direct_verified=True) for e in m.ENGINES]
+        row = self.row(records)
+        self.assertTrue(row["comparison_eligible"])
+        self.assertIsNone(row["naux_equal"])
+        records[1]["direct_verified"] = False
+        self.assertFalse(self.row(records)["comparison_eligible"])
+        records[1]["direct_verified"] = True
+        records[0]["naux"] = 600
+        self.assertFalse(self.row(records)["comparison_eligible"])
+
+    def test_df_and_four_center_direct_repeats_cannot_mix(self):
+        self.c["jk_mode"] = "conventional-direct"
+        records = [self.record(e, jk_mode="conventional-direct", naux=None,
+                               direct_verified=True) for e in m.ENGINES]
+        records[1]["jk_mode"] = "density-fitted"
+        self.assertFalse(self.row(records)["complete"])
+
     def test_common_input_file_does_not_mask_live_coordinate_mismatch(self):
         self.c["geometry_angstrom_per_bohr"] = .52917721067
         policy = dict(input_unit="Bohr", angstrom_per_bohr=.52917721067,

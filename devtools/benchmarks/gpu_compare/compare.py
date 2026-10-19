@@ -23,6 +23,7 @@ from memory import MemoryMonitor, stop_supervisor
 from grids import apply_pyscf_grid_settings, export_grid, grid_fingerprint, install_pyscf_shared_grid
 from protocol import (overlap_cutoff, configure_pyscf_overlap, capture_overlap, pyscf_df_policy,
                       molecular_geometry, capture_geometry)
+from direct import is_direct, jk_mode, make_rks, pyscf_direct_policy
 
 HERE = Path(__file__).resolve().parent
 ENGINES = ("psi4", "pyscf")
@@ -73,14 +74,18 @@ def xyz(path, system):
 def psi_options(c):
     opts = dict(
         basis=c["basis"], puream=True, reference="rhf", scf_type="df",
-        df_basis_scf=c["auxbasis"], use_cuest=True, cuest_xc=True,
+        use_cuest=True, cuest_xc=True,
         cuest_mixed_precision=c["cuest_mixed_precision"], guess="sad",
         e_convergence=c["energy_convergence"],
         d_convergence=c["orbital_gradient_convergence"],
         maxiter=c["max_iterations"], fail_on_maxiter=True,
         ints_tolerance=c["integral_tolerance"],
-        df_fitting_condition=c["df_fitting_condition"],
     )
+    if is_direct(c):
+        opts.update(scf_type="direct", df_scf_guess=False, save_jk=True,
+                    guess="core", screening="schwarz", cuest_direct_jit="off")
+    else:
+        opts.update(df_basis_scf=c["auxbasis"], df_fitting_condition=c["df_fitting_condition"])
     mode = c.get("grid_mode", "nominal")
     cutoff = overlap_cutoff(c)
     if cutoff is not None:
@@ -303,6 +308,26 @@ class Timings:
         setattr(cls, name, measured)
 
 
+@contextlib.contextmanager
+def pyscf_timing_policy(policy, mf, timers, profile, direct):
+    """Validate original dispatch first; restore diagnostic wrappers on every exit."""
+    from unittest.mock import patch
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(policy)
+        if profile:
+            methods = [(mf, "get_jk", "jk"), (mf, "get_j", "j_inclusive"),
+                       (mf, "get_k", "k_inclusive"), (mf._numint, "nr_rks", "xc"),
+                       (mf, "eig", "diagonalization"), (mf.grids, "build", "grid_setup")]
+            for obj, name, label in methods:
+                stack.enter_context(patch.object(obj, name, getattr(obj, name)))
+                timers.wrap(obj, name, label)
+            if not direct:
+                cls = type(mf.with_df)
+                stack.enter_context(patch.object(cls, "build", cls.build))
+                timers.wrap_class(cls, "build", "df_setup")
+        yield
+
+
 def run_pyscf(a, c, atom, r):
     import_start = time.perf_counter()
     import warnings
@@ -346,8 +371,8 @@ def run_pyscf(a, c, atom, r):
                 output=str(Path.cwd() / "pyscf.out"),
                 max_memory=c["memory_gib"] * 1024)
     capture_geometry(mol.atom_coords(unit="Bohr"), atom, r)
-    mf = rks.RKS(mol, xc=c["functionals"][a.functional]["pyscf"]).density_fit(
-        auxbasis=c["auxbasis"], only_dfj=False)
+    direct = is_direct(c)
+    mf = make_rks(rks, mol, c["functionals"][a.functional]["pyscf"], c)
     assert mf.__class__.__module__.startswith("gpu4pyscf.")
     if c.get("grid_mode") == "shared-cuest":
         grid_start = time.perf_counter()
@@ -361,12 +386,16 @@ def run_pyscf(a, c, atom, r):
     mf.conv_tol_grad = c["orbital_gradient_convergence"]
     mf.max_cycle = c["max_iterations"]
     mf.direct_scf_tol = c["integral_tolerance"]
-    mf.init_guess = "atom"
+    if direct:
+        mf.direct_scf = True
+    mf.init_guess = "1e" if direct else "atom"
     mf.diis_space = 8
-    from gpu4pyscf.df import df
-    df.LINEAR_DEP_THR = c["df_fitting_condition"]
+    if not direct:
+        from gpu4pyscf.df import df
+        df.LINEAR_DEP_THR = c["df_fitting_condition"]
     configure_pyscf_overlap(c, r)
-    r["df_metric_note"] = "PySCF uses Cholesky then absolute eigenvalue cutoff; Psi4/cuEST fitting is not algebraically identical"
+    if not direct:
+        r["df_metric_note"] = "PySCF uses Cholesky then absolute eigenvalue cutoff; Psi4/cuEST fitting is not algebraically identical"
     # Psi4 SVWN and B3LYP use VWN-RPA. Name the exact LibXC components,
     # rather than confuse those with the distinct VWN5 variants.
     omega, alpha, hyb = mf._numint.rsh_and_hybrid_coeff(mf.xc, spin=0)
@@ -388,14 +417,6 @@ def run_pyscf(a, c, atom, r):
                             elapsed_s=time.perf_counter() - scf_start))
     mf.callback = callback
     timers = Timings(sync)
-    if a.profile:
-        timers.wrap(mf, "get_jk", "jk")
-        timers.wrap(mf, "get_j", "j_inclusive")
-        timers.wrap(mf, "get_k", "k_inclusive")
-        timers.wrap(mf._numint, "nr_rks", "xc")
-        timers.wrap_class(type(mf.with_df), "build", "df_setup")
-        timers.wrap(mf, "eig", "diagonalization")
-        timers.wrap(mf.grids, "build", "grid_setup")
     audit_grid = getattr(a, "export_grid", False)
     original_nr_rks = mf._numint.nr_rks
     if audit_grid:
@@ -411,7 +432,8 @@ def run_pyscf(a, c, atom, r):
         mf._numint.nr_rks = audited_nr_rks
     sync()
     try:
-        with pyscf_df_policy(mf, c, r, sync):
+        policy = pyscf_direct_policy(mf, r) if direct else pyscf_df_policy(mf, c, r, sync)
+        with pyscf_timing_policy(policy, mf, timers, a.profile, direct):
             sync()
             scf_start = time.perf_counter()
             energy = mf.kernel()
@@ -431,7 +453,7 @@ def run_pyscf(a, c, atom, r):
              calculation_wall_s=calculation_elapsed,
              energy_hartree=float(energy), converged=bool(mf.converged),
              scf_iterations=len(history), iteration_history=history,
-             nbf=int(mol.nao_nr()), naux=int(mf.with_df.auxmol.nao_nr()),
+             nbf=int(mol.nao_nr()), naux=None if direct else int(mf.with_df.auxmol.nao_nr()),
              grid_points=int(mf.grids.weights.size),
              grid_nonzero_weight_points=int(cp.count_nonzero(mf.grids.weights).item()),
              diagnostic_timers=dict(timers.data),
@@ -448,8 +470,9 @@ def run_pyscf(a, c, atom, r):
         prune=str(mf.grids.prune), small_rho_cutoff=float(mf.small_rho_cutoff))
     if c.get("grid_mode") == "shared-cuest":
         r["effective_grid"]["note"] = "Imported final cuEST mesh; listed native generation options were not applied"
-    r["effective_df"] = dict(linear_dep_threshold=float(df.LINEAR_DEP_THR),
-                            direct_scf_tol=float(mf.direct_scf_tol))
+    r["effective_df"] = None if direct else dict(linear_dep_threshold=float(df.LINEAR_DEP_THR),
+                                                direct_scf_tol=float(mf.direct_scf_tol))
+    r["integral_tolerance"] = float(mf.direct_scf_tol)
     if a.profile:
         assert timers.data["xc"]["calls"] > 0
         assert any(timers.data[k]["calls"] > 0 for k in ("jk", "j_inclusive")), \
@@ -470,6 +493,7 @@ def run_psi4(a, c, atom, r):
     psi4.core.set_output_file(str(Path.cwd() / "psi4.out"), False)
     psi4.set_memory(f'{c["memory_gib"]} GiB')
     psi4.set_num_threads(c["threads"])
+    direct = is_direct(c)
     opts = psi_options(c)
     # Historical CUDA-LibXC build has CPU SAD and predates CUEST_SAD.
     try:
@@ -502,7 +526,7 @@ def run_psi4(a, c, atom, r):
              energy_hartree=float(energy), scf_wall_s=elapsed, converged=True,
              calculation_wall_s=calculation_elapsed,
              nbf=wfn.basisset().nbf(),
-             naux=wfn.get_basisset("DF_BASIS_SCF").nbf(),
+             naux=None if direct else wfn.get_basisset("DF_BASIS_SCF").nbf(),
              scf_iterations=int(wfn.variable("SCF ITERATIONS")),
              timer_records=psi4.core.get_timer_records(),
              functional_metadata=dict(name=f.name(), meta=bool(f.is_meta()),
@@ -513,11 +537,20 @@ def run_psi4(a, c, atom, r):
                     if f.is_x_lrc() else float(f.x_alpha())))
     diagnostic_overlap = a.profile and overlap_cutoff(c) is not None
     capture_overlap(wfn.S() if diagnostic_overlap else None, wfn.nmo(), r, diagnostic_overlap)
-    r["df_strategy"] = "cuest-persistent-plan"
+    r["df_strategy"] = None if direct else "cuest-persistent-plan"
     psi4.core.close_outfile()
     text = Path("psi4.out").read_text()
-    assert "cuESTJK: GPU-Accelerated" in text, "cuEST JK not observed"
     names = ["/".join(t["timer_path"]) for t in r["timer_records"].values()]
+    if direct:
+        r["jk_backend"] = wfn.jk().name()
+        r["direct_verified"] = (r["jk_backend"] == "cuESTDirectJK" and
+            "cuESTDirectJK: GPU-Accelerated Four-Center Direct" in text and
+            any("cuEST Direct J/K" in name for name in names) and
+            "cuESTJK: GPU-Accelerated" not in text and
+            psi4.core.get_option("SCF", "DF_SCF_GUESS") is False)
+        assert r["direct_verified"], "cuEST four-center direct JK not verified"
+    else:
+        assert "cuESTJK: GPU-Accelerated" in text, "cuEST JK not observed"
     assert any("CUDA LibXC Functional" in n for n in names), \
         "CUDA LibXC timer missing: host-functional build is not this benchmark's GPU arm"
     r["xc_route"] = "cuda-libxc"
@@ -535,7 +568,8 @@ def worker(a):
     os.chdir(a.output)
     r = dict(ok=False, engine=a.engine, system=a.system, functional=a.functional,
              rung=c["functionals"][a.functional]["rung"], profile=a.profile,
-             df_mode=c.get("df_mode", "native-strategy"),
+             jk_mode=jk_mode(c),
+             df_mode=None if is_direct(c) else c.get("df_mode", "native-strategy"),
              repeat=a.repeat, config_sha256=digest(a.config),
              geometry_sha256=digest(a.xyz), config=c, job_id=os.getenv("SLURM_JOB_ID"),
              hostname=os.uname().nodename, python=sys.executable)
@@ -571,13 +605,16 @@ def summarize(records, c, systems):
         for functional in c["functionals"]:
             row = dict(system=system, functional=functional,
                        rung=c["functionals"][functional]["rung"])
-            revised = "headline_timing" in c or "df_mode" in c or overlap_cutoff(c) is not None
+            revised = ("headline_timing" in c or "df_mode" in c or "jk_mode" in c or
+                       overlap_cutoff(c) is not None)
             if revised:
-                row.update(headline_timing=headline, df_mode=c.get("df_mode", "native-strategy"))
+                row.update(headline_timing=headline, jk_mode=jk_mode(c),
+                           df_mode=None if is_direct(c) else c.get("df_mode", "native-strategy"))
             groups = {}
             for engine in ENGINES:
                 group = [r for r in records if r["system"] == system
                          and r["functional"] == functional and r["engine"] == engine
+                         and r.get("jk_mode", "density-fitted") == jk_mode(c)
                          and not r["profile"]]
                 good = [r for r in group if r.get("ok") and r.get("process_returncode") == 0
                         and isinstance(r.get(headline), (int, float)) and
@@ -634,7 +671,9 @@ def summarize(records, c, systems):
                     "energy_review_threshold_eh"]
                 row["nbf_equal"] = {r["nbf"] for r in groups["psi4"] + groups["pyscf"]} == {
                     expected_nbf(c, system)}
-                row["naux_equal"] = len({r["naux"] for r in groups["psi4"] + groups["pyscf"]}) == 1
+                all_good = groups["psi4"] + groups["pyscf"]
+                row["naux_equal"] = (None if is_direct(c) else
+                                    len({r["naux"] for r in all_good}) == 1)
                 row["functional_parameters_equal"] = all(math.isclose(
                     groups["psi4"][0]["functional_metadata"][key],
                     groups["pyscf"][0]["functional_metadata"][key],
@@ -642,9 +681,14 @@ def summarize(records, c, systems):
                     ("omega", "short_range_exchange", "long_range_exchange"))
                 row["functional_components_equal"] = all(r["functional_metadata"]["components"] ==
                     c["functionals"][functional]["components"] for r in groups["psi4"] + groups["pyscf"])
-                row["comparison_eligible"] = (row["nbf_equal"] and row["naux_equal"]
+                auxiliary_ok = (all(r["naux"] is None for r in all_good) if is_direct(c)
+                                else row["naux_equal"])
+                row["comparison_eligible"] = (row["nbf_equal"] and auxiliary_ok
                                               and row["functional_parameters_equal"]
                                               and row["functional_components_equal"])
+                if is_direct(c):
+                    row["direct_verified"] = all(r.get("direct_verified") is True for r in all_good)
+                    row["comparison_eligible"] &= row["direct_verified"]
                 if overlap_cutoff(c) is not None:
                     all_good = groups["psi4"] + groups["pyscf"]
                     row["retained_dimensions_equal"] = (
