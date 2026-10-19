@@ -162,6 +162,8 @@ def freeze(collection, directory):
     n.require(changes and all(x.startswith("A\tdevtools/major2/native_plan/") for x in changes),
               "only owned additions allowed")
     helpers={x.split("\t")[1]:n.sha(root/x.split("\t")[1]) for x in changes}
+    n.require("devtools/major2/native_plan/supervise.sh" in helpers,
+              "owned supervisor must be tracked despite global *.sh ignore")
     m=dict(collection,policy=n.POLICY,source=n.SOURCE,run=n.RUN,parent=PARENT,pin=pin,
            helpers=helpers)
     n.source_check(m,root)
