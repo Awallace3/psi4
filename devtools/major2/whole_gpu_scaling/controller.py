@@ -15,7 +15,7 @@ import campaign as c
 import policy as p
 import repeatability as r
 import repeatability_campaign as rc
-import science
+import validation
 from trace import parse, timer_regions
 
 
@@ -299,7 +299,7 @@ class Engine(rc.Engine):
         expected.update(zip(["natom","nbf","naux_jkfit","naux_ri","nbf_monomer_a","nbf_monomer_b"],sizes[:6]))
         s.require(expected["geometry_sha256"] == sizes[6], "geometry identity")
         text = (out/"psi4.out").read_text()
-        verdict = science.validate_record(d,text,(out/"timer.dat").read_text(),
+        verdict = validation.validate_record(d,text,(out/"timer.dat").read_text(),
             (out/"profile.txt").read_text(),expected,options,geom,candidate=arm == "candidate")
         # Do not retain inherited UNAVAILABLE-PRINT note for this new explicit PRINT3 cohort.
         verdict = dict(verdict,plan_counts="partial observed native events; see trace coverage")
