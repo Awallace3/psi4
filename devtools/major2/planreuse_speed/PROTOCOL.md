@@ -30,6 +30,10 @@ Its existing compiled CUDA logical-device UUID helper selects the physical
 NVML UUID; never equate CUDA logical0 to NVML index0.
 Each process additionally verifies checked cudart version/count/current device,
 maps after CDLL, maps after work, and exclusive own PID at every output.
+The completed-native manifest's exact compiler/frontend,59 SDK headers and nine
+native CUDA library identities are also retained. They are rehashed only inside
+the allocation, before/after work; every mapped cuBLAS/Lt, cuSOLVER/cuSPARSE,
+nvJitLink/nvrtc/cuEST/cudart/libstdc++ family must match those original pins.
 
 `native_plan.common.check_env` is reused unchanged, before scientific imports.
 Site CUDA_ROOT12.6 and pinned CUDA_HOME/PATH13 are locator evidence, not numerical

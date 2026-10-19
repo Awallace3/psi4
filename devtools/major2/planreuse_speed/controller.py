@@ -45,7 +45,10 @@ def verify_process(raw, value, row, pid, uuid, m):
     import fixed_jk as f
     import observe as o
     import numpy as np
+    from runtime import native_maps
     records_check(value, row, pid, uuid, os.environ["SLURM_JOB_ID"])
+    native_maps(value["maps_after_CDLL"], m["native_libraries"])
+    native_maps(value["final_runtime_maps"], m["native_libraries"])
     s.require(value["settings"] == m["settings"], "actual settings")
     root = raw/row["label"]
     early = s.load(raw/(row["label"]+".effective-env.json"))
@@ -101,6 +104,15 @@ class Engine(rc.Engine):
         s.n.check_env(os.environ)
         super().pins()
         s.source_check(self.m)
+        compiler = self.m["compiler"]
+        s.require(str(Path(compiler["actual"]).resolve(strict=True)) == compiler["actual_resolved"],
+                  "compiler target alias changed")
+        extra = dict(self.m["sdk_headers"], **self.m["native_libraries"])
+        extra.update({compiler["actual"]:compiler["actual_sha256"],
+                      compiler["frontend"]:compiler["frontend_sha256"],
+                      compiler["wrapper"]:compiler["wrapper_sha256"]})
+        for path, digest in extra.items():
+            s.require(s.sha(path) == digest, "full compiler/native runtime identity: "+path)
 
     def run_command(self, argv, name, env=None, cwd=None, timeout=600, **kwargs):
         """Reviewed process-group/TERM pattern; exact PID and startup elapsed retained."""

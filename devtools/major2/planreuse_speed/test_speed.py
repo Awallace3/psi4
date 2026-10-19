@@ -419,7 +419,7 @@ class RuntimeTests(TemporaryTests):
         def cdll(path):
             order.append(("CDLL", path))
             return lib
-        def maps():
+        def maps(*_):
             order.append(("maps", None))
             return {}
         with patch.dict(runtime.p.RUNTIME_LIBS, {"libcudart.so":pins}), \
@@ -442,6 +442,26 @@ class RuntimeTests(TemporaryTests):
         cuda, _, _ = self.fake_cuda(sync_rc=99)
         with self.assertRaisesRegex(RuntimeError, "Synchronize"):
             cuda.synchronize()
+
+    def test_all_native_cuda_library_families_are_pinned(self):
+        names = ("libcuest.so.0.2.50", "libcudart.so.13.3.29", "libstdc++.so.6.0.34",
+                 "libcublas.so.13.6.0.2", "libcusolver.so.12.2.6.9", "libcublasLt.so.13.6.0.2",
+                 "libcusparse.so.12.8.2.51", "libnvJitLink.so.13.3.33", "libnvrtc.so.13.3.33")
+        pins = {}
+        for name in names:
+            file = self.root/name
+            file.touch()
+            pins[str(file)] = "fake-host-hash"
+        self.assertEqual(runtime.native_maps(pins, pins), pins)
+        for name in names:
+            wrong = dict(pins)
+            wrong[str(self.root/name)] = "changed"
+            with self.assertRaisesRegex(RuntimeError, "native"):
+                runtime.native_maps(wrong, pins)
+        wrong = dict(pins)
+        del wrong[str(self.root/"libcublas.so.13.6.0.2")]
+        with self.assertRaisesRegex(RuntimeError, "required"):
+            runtime.native_maps(wrong, pins)
 
     def test_wrong_runtime_or_logical_mapping_is_fatal(self):
         for args in (dict(version=12060), dict(count=2), dict(device=1)):

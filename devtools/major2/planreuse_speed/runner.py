@@ -84,7 +84,7 @@ def execute(m, row, uuid, receipt, started):
     # below is independently reconstructed by the real wrapper's compute_D.
     del diagnostic_D_only
     coeff = psi4.core.Matrix.from_array(coefficients)
-    cuda = Cuda()
+    cuda = Cuda(m["native_libraries"])
     store = Store(root)
     analysis = Analysis(store)
     trace_path = root/"plan.out"
@@ -116,6 +116,9 @@ def execute(m, row, uuid, receipt, started):
 
     def guard():
         s.n.check_env(os.environ)
+        s.require(all(os.getenv(k) == v for k, v in receipt["effective_runtime"].items()) and
+                  all(os.getenv(k) == v for k, v in receipt["locators"].items()),
+                  "effective runtime/locator ENV mutation")
         s.require(jk.name() == "cuESTJK" and o.array_info(coeff.np) == factor["C"]["array"],
                   "live backend/exact frozen C bytes")
         s.require(o.array_info(np.array(mol.geometry().np, order="C", copy=True)) == frame,
@@ -142,7 +145,7 @@ def execute(m, row, uuid, receipt, started):
     guard()
     s.require(trace() == expected_trace(row["arm"], 6), "post-finalize counts")
     f.frozen_factor_files(f.FROZEN_FACTOR["root"])  # no chmod of historical receipt
-    mapped = validate_maps()
+    mapped = validate_maps(m["native_libraries"])
     s.n.check_env(os.environ)
     s.require(s.load(Path(s.RUN)/"raw"/(row["label"]+".effective-env.json")) == receipt,
               "early ENV custody")

@@ -88,6 +88,13 @@ def manifest(path, digest):
                 p.digest(item["files"]) == m["diagnostic_pair"]["arms"][arm]["source_files_digest"],
                 "exact scientific source")
     require(p.digest(m["harness"]["files"]) == m["harness"]["files_digest"], "harness file digest")
+    require(m["compiler"]["actual"] == n.CXX_REAL and
+            m["compiler"]["actual_sha256"] == n.CXX_REAL_SHA and
+            m["compiler"]["frontend"] == n.CC1PLUS and
+            m["compiler"]["frontend_sha256"] == n.CC1PLUS_SHA and
+            m["native_libraries"].get(n.SDK+"/lib/13/libcuest.so.0.2.50") == n.SDK_SHA and
+            m["native_libraries"].get(p.RUNTIME_LIBS["libcudart.so"]["realpath"]) ==
+                p.RUNTIME_LIBS["libcudart.so"]["sha256"], "compiler/SDK/CUDA native identities")
     require(len(m["preservation"]["roots"]) == 16, "preserve sixteen actual old roots")
     return m
 

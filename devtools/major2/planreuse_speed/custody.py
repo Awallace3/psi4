@@ -45,6 +45,20 @@ def collect():
     for name in ("manifest.json", "campaign.sbatch", "STARTED.json", "ENDPOINT-COMPLETE.json",
                  "COMPLETED", "batch-exit.json", "logs/job-id.txt"):
         pres["small_hashes"][str(native_root/name)] = legacy.small(native_root/name)
+    # A metadata-only preliminary bundle may be archived, never overwritten.
+    # This fixed owned archive is NOT a jobroot and can never count as a result.
+    archive = Path(s.RUN+"-preparation-v1")
+    if archive.exists():
+        staged = legacy.unsubmitted_stage(archive)
+        receipt = s.load(archive/"bundle-receipt.json")
+        s.require(receipt["pin"] == "875e22bfb2d15ca03ed159da6d9b58843fb49dae" and
+                  receipt["no_submission"] is True and
+                  receipt["manifest_sha256"] == legacy.small(archive/"manifest.json") and
+                  receipt["batch_sha256"] == legacy.small(archive/"campaign.sbatch"),
+                  "exact unsubmitted preliminary speed preparation archive")
+        pres["unsubmitted_staging"][str(archive)] = staged
+        for rel in staged:
+            pres["small_hashes"][str(archive/rel)] = legacy.small(archive/rel)
     s.require(len(pres["roots"]) == 16, "sixteen old roots: thirteen failed, three completed")
     preserve(pres)
     old = s.load(Path(s.n.OLD)/"manifest.json")  # policy metadata ONLY, no results/timers
@@ -54,6 +68,8 @@ def collect():
         diagnostic_pair=old["diagnostic_pair"], arms=old["arms"],
         suite=old["suite"], suite_sha256=old["suite_sha256"],
         identity_helper=old["identity_helper"], numerical_overrides={},
+        compiler=native["compiler"], native_libraries=native["native_libraries"],
+        sdk_headers=native["headers"],
         metadata_only=True, no_submission=True)
 
 
