@@ -178,6 +178,9 @@ def replay(psi4, args, metadata):
         exchange_calls = sum(int(value["n_calls"]) for key, value in psi4.core.get_timer_dict().items()
                              if "cuEST FDDS: hybrid exchange" in key)
         result["gpu_exchange_timer_calls"] = exchange_calls
+        metric_calls = sum(int(value["n_calls"]) for key, value in psi4.core.get_timer_dict().items()
+                           if "cuEST FDDS: metric fold" in key)
+        result["gpu_metric_timer_calls"] = metric_calls
         if args.arm == "gpu" and calls == 0:
             raise RuntimeError("Forced GPU benchmark did not execute FDDS GPU contractions")
         if args.arm == "cpu" and calls:
@@ -186,6 +189,10 @@ def replay(psi4, args, metadata):
             raise RuntimeError("CPU baseline unexpectedly executed GPU exchange preprocessing")
         if args.arm == "gpu" and args.require_gpu_exchange and exchange_calls != 4:
             raise RuntimeError("Optimized benchmark requires actual GPU X/Y work on both monomers")
+        if args.arm == "cpu" and metric_calls:
+            raise RuntimeError("CPU baseline unexpectedly executed GPU DF metric folds")
+        if args.arm == "gpu" and args.require_gpu_metric and metric_calls == 0:
+            raise RuntimeError("Metric candidate did not execute GPU DF metric folds")
         assert all(np.isfinite(v) for v in energies.values())
         result["ok"] = True
     finally:
@@ -208,6 +215,7 @@ def main():
     p.add_argument("--prepare", action="store_true")
     p.add_argument("--arm", choices=("cpu", "gpu"), default="cpu")
     p.add_argument("--require-gpu-exchange", action="store_true")
+    p.add_argument("--require-gpu-metric", action="store_true")
     p.add_argument("--threads", type=int, default=16)
     p.add_argument("--memory", default="96 GiB")
     p.add_argument("--binary-pin", required=True)
