@@ -523,3 +523,12 @@ old frozen source/build/run directories or other agents' jobs.
   **b554527c9** is rearmed with a300-second handoff delay then300-second
   checks; official allocation watcher remains unchanged. No duplicate
   acquisition, overlapping timings or job modification occurred.
+- Owner independently verified diagnostic01 cleanup, then storage probe
+  `fdds-local-storage-probe` exited1: **PermissionError creating the proposed
+  `/scratch/14214205/awallace43-fdds-perf-v1` directory**. No write/read probe
+  ran and no `STORAGE_VERIFIED.json` was produced. Its cleanup is independently
+  verified, with empty GPU process tables/no quarantine. This is a path
+  permission failure, not evidence of a node-local disk I/O fault. A separate
+  bounded, serialized read-only path discovery is checking writable
+  scheduler-private scratch before any replacement probe; prior artifacts
+  are untouched.
