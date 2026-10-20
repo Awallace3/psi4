@@ -63,9 +63,14 @@ def main():
     p.add_argument("--phx", type=Path, required=True)
     p.add_argument("--lifetime-log", type=Path, required=True)
     p.add_argument("--interval", type=int, default=300)
+    p.add_argument("--initial-delay", type=int, choices=(0, 300), default=0,
+                   help="Allow a bounded handoff before the first artifact check.")
     args = p.parse_args()
     assert args.interval >= 300
-    deadline = time.monotonic()
+    deadline = time.monotonic() + args.initial_delay
+    if args.initial_delay:
+        print("HANDOFF_FIRST_CHECK_IN_300_SECONDS", flush=True)
+        time.sleep(args.initial_delay)
     while True:
         if args.lifetime_log.exists() and official_terminal(args.lifetime_log.read_text()):
             print("OFFICIAL_ALLOCATION_TERMINAL_REQUIRE_ARTIFACT_AUDIT", flush=True)
