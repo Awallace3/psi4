@@ -32,8 +32,14 @@ if [[ -n "${CUEST_FDDS_READONLY_BUILD_ROOT:-}" ]]; then
     printf '%s\n' "$CUEST_FDDS_BINARY_PIN" > "$out/binary-commit.txt"
 fi
 mkdir -p "$out"
-nvidia-smi --query-gpu=name,uuid,driver_version --format=csv,noheader | tee "$out/gpu.txt"
-grep -q H200 "$out/gpu.txt"
+# A CPU allocation may compile/link the CUDA backend ahead of GPU scheduling.
+# It must never write VERIFIED.json or a GPU-validation completion artifact.
+compile_only="${CUEST_FDDS_COMPILE_ONLY:-0}"
+[[ "$compile_only" == 0 || "$compile_only" == 1 ]]
+if [[ "$compile_only" == 0 ]]; then
+    nvidia-smi --query-gpu=name,uuid,driver_version --format=csv,noheader | tee "$out/gpu.txt"
+    grep -q H200 "$out/gpu.txt"
+fi
 git -C "$root" rev-parse HEAD > "$out/commit.txt"
 source /etc/profile.d/z00_lmod_pace.sh
 module load gcc/12.3.0 cuda/12.6.1
@@ -75,7 +81,12 @@ payload=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
 "$env/bin/x86_64-conda-linux-gnu-c++" \
     -I"$cuda_include" "$payload/fdds_cuda_probe.cc" \
     -L"$env/lib" -Wl,-rpath,"$env/lib" -lcudart -o "$out/cuda-probe"
-"$out/cuda-probe" > "$out/cuda-probe.txt" 2>&1
+if [[ "$compile_only" == 1 ]]; then
+    "$env/bin/x86_64-conda-linux-gnu-c++" -I"$cuda_include" -dM -E \
+        "$payload/fdds_cuda_probe.cc" | grep '^#define CUDART_VERSION ' > "$out/cuda-probe.txt"
+else
+    "$out/cuda-probe" > "$out/cuda-probe.txt" 2>&1
+fi
 ldd "$out/cuda-probe" >> "$out/cuda-probe.txt"
 # Existing installed Einsums dependency only; this directory is read-only.
 deps=/storage/project/r-cs207-0/awallace43/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage
@@ -133,6 +144,10 @@ print(json.dumps(dict(package=str(p), core=str(core), version=psi4.__version__,
                      binary_pin=os.environ.get("CUEST_FDDS_BINARY_PIN"),
                      cuest_packages=packages), indent=2))
 PY
+if [[ "$compile_only" == 1 ]]; then
+    printf 'CUDA-enabled compile/link/import only; zero GPU tests executed.\n' > "$out/BUILD_ONLY.txt"
+    exit 0
+fi
 test_selection=()
 if [[ "${CUEST_FDDS_FOCUSED:-0}" == 1 ]]; then
     test_selection=(-k 'test_fdds_contribution_fixture_budget or test_fdds_gpu_contributions or test_fdds_native_exchange_preprocessing or test_fdds_gpu_exchange_preprocessing')
