@@ -1672,6 +1672,43 @@ continues; no immediate READY window requested.
 
 This later progress-only record does not replace executable pin89b6160126.
 
+Parent granted CONDITIONAL resources for exactly one CPU-only build at89b616:
+1node/1task/8CPU/48G/2h/noGPU/freeembers/gts-cs207-chemx/no-requeue,
+fresh roots/no retry. **NOT SUBMISSION GO**. Explicit parent INPUT-READINESS
+CLEARANCE after real completeSDKmanifest+SHA/exactdependencylock+SHA is
+mandatory before subsequent fresh source/route/headroom/quota/duplicate
+checks. GPU requests remain held for FDDS-owner assigned shared02 window.
+
+Separately cleared <=120s aggregate one-thread bounded read-only SDK/lock
+inspection b611c8f6e completed in**0.401507902s**,1GiB address-space ceiling,
+streaming hashes, no remote writes/materialization/compile/install/device/
+numerical call. Result **INCOMPLETE_SDK_NO_BUILD**, not an input pass:
+`P/software/toolchains/cuda13/include/cusparse.h` and `nvJitLink.h` missing.
+Their unversioned development links are also absent. Versioned genuine
+candidates are cusparse12.8.2.51(SONAME12) and nvJitLink13.3.33(SONAME13);
+nvcc is13.3.73. Other inspected required bin/NVVM/CRT inputs exist. Full
+SDK inventory was not attempted because mandatory inputs were missing;
+partial identities are not a complete SDK manifest.
+
+Exact immutable dependency lock:
+`P/runs/saptdft-cuest-disp0/build-587e172a33afaadb00eb7f574a5089533f7fc755-14196330/environment-explicit.txt`,
+11018bytes/@EXPLICIT,
+SHA256 **3f9a508fd601306f548a9088f5cd304367a5fde3988e8bbd4fe00d9e6efb0205**.
+Includes GNU14.3 implementationbuild20/wrappers28, CMake4.3.2,
+Clang22.1.4/LLVM22.1.8. Raw numerical flags were empty; raw PMIX CPATH/
+LIBRARY_PATH and LD_LIBRARY_PATH with empty entries were retained in the
+task output, not adopted as effective build inputs. Future effective flags
+remain unexecuted/unverified; unknown numerical drift is not approved.
+Evidence: `.pi/tasks/01a154d8-a459-768d-83bd-c57c6a5dc42c-4065461/b611c8f6e.output`.
+Parent received exact failure/lock digest; no input clearance or CPU job.
+
+Read-only matching installed-package/cache metadata lookup bab0e76b0 is the
+bounded continuation (85s maximum plus prior0.4s,1thread/512MiB), solely to
+identify available matched development inputs for a separate private-input
+preparation proposal. No download/extraction/install/materialization or
+shared mutation is authorized/performed. Conditional build approval remains
+unconsumed; all prior failed roots and fixed-tuple rejection remain intact.
+
 Final timing safeguard test task b6403af75: **68passed in6.48s**, no
 warnings/skips, JUnit
 `build_disp0_cpu/reference-check-ctS1hjRJ/results.xml`. Includes staged/
@@ -1687,3 +1724,66 @@ with actual `op_kind=Einsum`, `device=CPU` annotations. This confirms the
 CPU-edge parser schema beyond synthetic fixtures. Artifact:
 `build_disp0_cpu/profile-api-y9bZgU0K/profile.json`.
 Tiny matrix API work only; no GPU/physical SAPT/performance claim.
+
+### Matched private developer input attempt (preparation)
+
+Parent subsequently cleared ONE private INPUT provision, not another planning
+roundtrip or CPU submission: new absent0700 prefix,120s aggregate/1thread/
+1GiB RAM,128MiB download/512MiB written maximum, no retry/solve/compile/device/
+shared mutation. Runtime cache lookup bab0e76b0 took0.2563s and found only
+runtime packages, no developer headers.
+
+Public conda-forge release metadata supplies exact matching developer inputs:
+
+* `libcusparse-dev-12.8.2.51-hecca717_0.conda`,54443bytes,
+  SHA256`c472d4f6687017a42b1a392ba4064dbe07ee499d77a61558c04bfd7e6b81b163`.
+* `libnvjitlink-dev-13.3.33-hecca717_0.conda`,28126bytes,
+  SHA256`4d0c356194dc359142147236efb56099c0f3d745e6239e51627fa8a97cfaf229`.
+
+Metadata URLs are `https://api.anaconda.org/release/conda-forge/NAME/VERSION`;
+exact download URLs use
+`https://conda.anaconda.org/conda-forge/linux-64/ARCHIVE`.
+Combined archive bytes82569, no latest/full toolkit/runtime replacement.
+New tracked `provision_sdk_inputs.py` is a separately pinned INPUT tool,
+not a change to conditionally approved CPU executable89b616. It validates
+whole package SHA/index/header/link identities before materializing headers,
+copies the complete include tree privately, retains read-only bin/NVVM/lib64
+inputs and supplies genuine devlinks under private `lib/`. Complete89 SDK
+inspection and read-only ELF/ldd closure follow within the same deadline.
+The old explicit lock is a permitted read-only input, not a loader path.
+No provision/build/GPU result is implied by this preparatory record.
+
+Initial input guards b635d8517:12passed1.36s, JUnit
+`build_disp0_cpu/reference-check-H0WpGeuz/results.xml` (fixture archives,
+no download/compile). Read-only locator check b7eb0c16d took0.80054s:
+2129 include files/22211755bytes; base Python zstandard0.19.0 available.
+The existing nvcc shell wrapper delegates to
+`P/miniconda/envs/p4cuest_sapt/bin/nvcc`, injecting original PATH/LIBRARIES
+for verbose identification. Review d275c9028 confirms overlay compatibility
+with89 inspection/preparation but **does not prove compiler discovery uses
+the copied include root**; unchanged89 correctly rejects original imported
+include directories outside that root. No wrapper edit/fabricated metadata/
+compiler invocation is permitted. The provisioning receipt additionally binds
+the real vendor nvcc/profile identities and retains discovery_ready=false.
+This limitation must go to parent input-readiness review, not become an
+implicit successful build admission.
+
+Review db7f140b07ff249173fb4a6f623ce7395 requested `python -B` and protected
+destination rejection; both are incorporated, plus a mocked successful
+provision and nesting-negative tests. Its suggestion to replace input
+`lib64` with a symlink-filled private directory is NOT adopted:89 canonicalizes
+`library_root` to that directory and then rejects canonical imported targets
+outside it. Instead original canonical `lib64` stays identity-bound, input
+`lib/` developer links are separately hash/SONAME-bound in the receipt, and89
+supplies its own private aliases. This matches the independent overlay review.
+Package bytes/hashes are exact; no fallback/solve/compile/device work exists.
+
+Final input safety guards bfa2f3b6d:16passed1.39s, no warnings/skips,
+JUnit`build_disp0_cpu/reference-check-J2QIEGgw/results.xml`.
+Compatibility guards bb5b5e236:108passed6.14s,
+JUnit`build_disp0_cpu/reference-check-hL3IRFbM/results.xml`.
+AST/whitespace PASS; approved89 runtime_contract/payload and scientific
+sources unchanged. Input helper SHA256
+`f47c959fa2bc0f50b3f4ba629cb51602c2ce548f681bb0d2bc89dcff0b036a00`.
+Next execute the already-cleared single bounded attempt from its pushed
+immutable tool pin; this is not an additional CPU approval request.
