@@ -49,7 +49,13 @@ export DISP0_GATE_RUN="$P/runs/saptdft-cuest-disp0/gpu-gate-$DISP0_GATE_PIN-$SLU
 jobinfo="$(scontrol show job "$SLURM_JOB_ID" -o)"
 printf '%s\n' "$jobinfo"
 [[ "$jobinfo" == *" Account=gts-cs207 "* && "$jobinfo" == *" QOS=inferno "* ]]
-srun bash "${DISP0_GATE_SOURCE:?}/devtools/disp0/gpu_gate_payload.sh" &
+if [[ -n "${DISP0_RECOVERED_ADMISSION:-}" ]]; then
+    : "${DISP0_RECOVERED_ADMISSION_SHA256:?}"
+    payload="${DISP0_GATE_SOURCE:?}/devtools/disp0/recovered_gpu_gate_payload.sh"
+else
+    payload="${DISP0_GATE_SOURCE:?}/devtools/disp0/gpu_gate_payload.sh"
+fi
+srun bash "$payload" &
 child=$!
 set +e
 wait "$child"; status=$?

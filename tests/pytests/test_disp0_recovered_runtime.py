@@ -219,3 +219,45 @@ def test_original_job_and_batch_accounting_retain_failed_exit(corrupt):
             module.verify_accounting(text)
     else:
         assert module.verify_accounting(text)["job_and_batch_remain_failed"] is True
+
+
+@pytest.mark.parametrize("corrupt", [None, "hash", "document", "proof"])
+def test_gate_revalidates_explicit_recovery_admission(recovery, corrupt):
+    module, prefix, science, anchor, *_ = recovery
+    document = validate(recovery)
+    path = prefix / "recovery-proofs/gate-admission.json"
+    if corrupt == "document":
+        document["prefix"] = "/different-prefix"
+    path.write_text(json.dumps(document))
+    expected = module.digest(path)
+    if corrupt == "hash":
+        expected = "0" * 64
+    elif corrupt == "proof":
+        api = prefix / "recovery-proofs/api-probe.json"
+        contents = json.loads(api.read_text())
+        contents["checks"] = []
+        api.write_text(json.dumps(contents))
+    if corrupt:
+        with pytest.raises(RuntimeError):
+            module.gate_preparation(prefix, path, expected, science, anchor, "a" * 40)
+    else:
+        metadata, admitted = module.gate_preparation(
+            prefix, path, expected, science, anchor, "a" * 40)
+        assert metadata["status"] == "PASS"
+        assert admitted["actual_gpu_correctness_verified"] is False
+
+
+def test_diagnostic_recipe_bounds_scope_without_prefix_writes():
+    root = Path(__file__).resolve().parents[2]
+    script = (root / "devtools/disp0/prepare_recovered_gpu_gate.sh").read_text()
+    assert "timeout --signal=TERM --kill-after=5s 110s" in script
+    assert "ulimit -v 4194304" in script and "ulimit -f 65536" in script
+    assert "OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1" in script
+    assert "DISP0_RECOVERY_DIAGNOSTIC_COMPILE_CLEARANCE:?" in script
+    assert 'admission="${DISP0_RECOVERED_ADMISSION:?' in script
+    assert '--out "$admission"' not in script and "recovered_runtime.py" not in script
+    assert "disp0_cublas_forwarding_identity" in script
+    assert "disp0_cuda_identity" not in script
+    assert 'sha256sum "$source_root/devtools/disp0/cublas_trace.cc"' in script
+    assert '"${command[@]}"' in script and '"$source_root/devtools/disp0/cublas_trace.cc"' in script
+    assert "cmake --build" not in script and "pip install" not in script and "sbatch" not in script

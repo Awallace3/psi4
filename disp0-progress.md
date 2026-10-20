@@ -111,8 +111,11 @@ No tolerance relaxation to hide failures.
   builds but omitted E2 Python installation; post-install import failed).
   Same-job build-tree import/ELF metadata now PASS with one E2d17/GNU14 world;
   this is not an installed-runtime/numerical pass. Artifact-only installation
-  into a fresh absent prefix is cleared, pending recipe review/pin and
-  byte/quota preflight. Preserve all failed roots/statuses.
+  into a fresh prefix passed whole-artifact byte/ELF audit in59.5s, but the
+  **installed-prefix mapping proof FAILED**: E2 native resolved to the old
+  build tree. Tiny new-prefix API probe did not run. Read-only ELF diagnosis
+  pending; no loader bypass, binary patch, overlay or automatic retry.
+  Preserve all failed roots/statuses and failed proof artifacts.
 * No GPU job has been submitted. Available conditional approvals: one
   H200/4CPU/32G/30min signed/device gate, then one H200/8CPU/512G/up-to6h
   timing job, bothinferno/gts-cs207. Quoted combined ceiling$9.19 requires
@@ -1401,6 +1404,78 @@ SHA72668390d24f134316c8e779931a2f65efcd9289ecea8f1cf20a72733262e3bb.
 Read-only byte/geometry identity verification b1958e914 launched. This
 resolves which source to inspect, not yet a verified timing admission.
 Parent snapshot is read-only, not copied/edited or used as an HF energy baseline.
+
+Read-only home-copy schema inspection b93143610 confirms an older three-key
+SYSTEMS dictionary (peptide/nanotube/protein157, no protein83) and different
+NBF metadata. It is excluded from campaign admission. Only the supplied
+immutable72668390… snapshot will be considered; verification b1958e914
+pending. No home-copy or parent-snapshot edits.
+
+Supplied snapshot verification b1958e914 **INPUT_BYTES_VERIFIED**:
+module72668390d24f134316c8e779931a2f65efcd9289ecea8f1cf20a72733262e3bb;
+all four exact geometry-string hashes match the predeclared local inventory
+(peptide14b4041b…, nanotube5010ea28…, protein83c4bc7429…,
+protein157a1e9c894…). This is input-byte identity only, not matched energies,
+runtime readiness, GPU correctness or timing. Parent snapshot unchanged.
+
+Artifact installation b76327e4b **ARTIFACT_BYTES_VERIFIED**, exactly
+190,505,547bytes,59.515536654s (within110s watchdog/<2min clearance).
+Recipe14e135d23c9e9de3a68ca5ead0eed43413cc86c8; fresh prefix
+`P/gits/psi4.saptdft-cuest-disp0-artifact-14e135d23c-resume1/runtime-587e172a33-14e135d23c-sxist_u6/image`.
+Complete per-origin/destination/hash/mode/link/ELF manifest:
+`<prefix>/deployment-manifest.json`. No compilation, old-root/status changes,
+allocation or retries. New-prefix matching --psiapi/import/maps and tiny
+one-thread API/layout/pool probe b9ec91c8f running; no physical/GPU claim.
+
+Separate admission committedb4ffd6595044c3fc6a0a97176acbf3edb0927152,
+pushb095c9076 pending. Explicit recovered gate integration drafted without
+changing original successful-build admission/payload. It revalidates the
+hash-bound recovered admission and records FAILED compilation origin, not a
+successful CPU preparation. Gate retains actual recovered-stage native/
+eager/defaultCPU signed oracles before GPU acceptance. Local focused
+admission/evidence/batch suite **65passed in3.03s**, XML
+`build_disp0_cpu/reference-check-cOQvE8NM/results.xml`.
+Integration reviewdd650be73a5e54b3c13c9d995604bb79e pending.
+Parent checkpoint sent with artifact prefix/result and request for separate
+ONE bounded<2min compilation of the existing generic forwarding diagnostic
+(no scientific/E2/Psi4 compilation or device operation). No CPU allocation
+requested; artifact-only clearance is not treated as compile permission.
+
+Separate diagnostic compile clearance received: ONE new isolated prep root,
+one CPU thread, aggregate<120s, modest memory/byte limits, no retries/fallback,
+read-only GNU14.3/CUDA13 inputs, no deployed-prefix/shared-env mutation or
+E2/Psi4/scientific compilation, no CUDA/device/numerical execution. Script
+updated for110s timeout(+5s forced termination),4GiB virtual-address ceiling
+(large read-only NVIDIA ELF mappings),64MiB output-file bound, explicit
+compiler/header/helper/command/output/library hashes, ELF and resolve-only
+result, compiler resource usage. Admission creation remains a **separate**
+operation; diagnostic prep now only reads its hash-bound record and never
+writes the deployed prefix. No diagnostic compilation has executed yet.
+
+**Installed-prefix proof FAILED** b9ec91c8f. Relocated `--psiapi` correctly
+selected the new Psi4stage, but `sealed.mapped_einsums_libraries()` reported
+`P/runs/saptdft-cuest-disp0/build-587e172a33afaadb00eb7f574a5089533f7fc755-14196330/einsums-build/lib/libEinsums-abi1.so.1`,
+not the new prefix. Assertion in runtime_provenance.py:39 correctly stopped
+the proof. Metadata output remains partial/empty; tiny API tests **not run**.
+Do not treat the artifact byte/ELF copy pass as a relocatable runtime pass.
+Stopped diagnostic compile and GPU preparation; no compile/GPU submission.
+Read-only recorded/current ELF diagnosisb13607b43 launched and parent notified.
+No RPATH patch, old-core overlay, prefix/failed-root repair, retry or version/
+mapping-check bypass. Local pinned E2 sealed implementation uses actual
+`dl_iterate_phdr` enumeration, not a compile-time path label; ELF evidence
+is needed to identify the loader binding cause. Task9 records this blocker.
+
+Recovered-gate integration reviewdd650be73a5e54b3c13c9d995604bb79e:
+**no blockers** in scoped recovered admission/branch/payload. Confirms original
+failed-build rejection and recorded failed origin, plus actual recovered
+native/eager/defaultCPU references before GPU acceptance. Read-only review,
+no tests rerun or runtime proof. New one-shot diagnostic timeout/resource/
+read-only-scope guards are covered by local static fixture; focused suite
+now **66passed in3.03s**, no skips/warnings, XML
+`build_disp0_cpu/reference-check-4KQoZysn/results.xml`; all three shell files
+individually pass `bash -n`. These are harness results only. Runtime remains
+blocked by failed installed-prefix mapping proof. No diagnostic compile or
+GPU submission has run; the one-shot compile authorization is unconsumed.
 
 Final timing safeguard test task b6403af75: **68passed in6.48s**, no
 warnings/skips, JUnit

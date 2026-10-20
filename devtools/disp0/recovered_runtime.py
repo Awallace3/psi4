@@ -260,6 +260,21 @@ def validate(prefix, science, harness, pin):
     }
 
 
+def gate_preparation(prefix, admission, expected_sha256, science, harness, pin):
+    """Revalidate the explicit recovery admission; never interpret old exit1 as0."""
+    prefix = Path(prefix).resolve(strict=True)
+    admission = Path(admission).resolve(strict=True)
+    require(admission.parent == prefix / "recovery-proofs", "Foreign recovery admission")
+    require(digest(admission) == expected_sha256, "Recovery admission hash changed")
+    document = json.loads(admission.read_text())
+    require(document == validate(prefix, science, harness, pin), "Recovery admission is stale or foreign")
+    require(document["status"] == "RECOVERED_RUNTIME_PREPARATION_ONLY"
+            and document["actual_gpu_correctness_verified"] is False, "Recovery mislabeled GPU physics")
+    metadata = document["new_prefix_proofs"]["runtime-provenance.json"]
+    require(digest(metadata["path"]) == metadata["sha256"], "Recovered metadata changed")
+    return json.loads(Path(metadata["path"]).read_text()), document
+
+
 def main():
     parser = argparse.ArgumentParser()
     for flag in ("prefix", "science-source", "admission-source", "admission-pin", "out"):

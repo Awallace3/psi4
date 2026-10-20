@@ -81,3 +81,23 @@ def test_batch_signal_cannot_write_success(tmp_path, batch_kind):
     text = status.read_text()
     assert "exit_code=143\n" in text and "term_received=1\n" in text
     assert "EXIT_ZERO" not in text
+
+
+@pytest.mark.parametrize("recovered,checksum", [(False, False), (True, False), (True, True)])
+def test_gpu_batch_uses_separate_explicit_recovery_payload(tmp_path, recovered, checksum):
+    control = "printf 'JobId=123456 Account=gts-cs207 QOS=inferno JobState=RUNNING\\n'"
+    script, env, status = fixture_script(
+        tmp_path, control, "printf 'PAYLOAD=%s\\n' \"$2\"", batch_kind="gpu")
+    if recovered:
+        env["DISP0_RECOVERED_ADMISSION"] = str(tmp_path / "unused-admission.json")
+    if checksum:
+        env["DISP0_RECOVERED_ADMISSION_SHA256"] = "d" * 64
+    result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=5)
+    if recovered and not checksum:
+        assert result.returncode != 0
+        assert "FAILED_OR_SIGNALLED" in status.read_text()
+        assert "PAYLOAD=" not in result.stdout
+    else:
+        assert result.returncode == 0, result.stderr
+        name = "recovered_gpu_gate_payload.sh" if recovered else "gpu_gate_payload.sh"
+        assert f"PAYLOAD={env['DISP0_GATE_SOURCE']}/devtools/disp0/{name}" in result.stdout

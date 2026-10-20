@@ -334,7 +334,23 @@ def main():
 
     try:
         build = Path(os.environ["DISP0_BUILD_ROOT"]).resolve()
-        prep = json.loads((build / "runtime-provenance.json").read_text())
+        recovered = None
+        if os.environ.get("DISP0_RECOVERED_ADMISSION"):
+            from recovered_runtime import gate_preparation
+            prep, recovered = gate_preparation(
+                build, os.environ["DISP0_RECOVERED_ADMISSION"],
+                os.environ["DISP0_RECOVERED_ADMISSION_SHA256"],
+                os.environ["DISP0_SCIENCE_SOURCE"], os.environ["DISP0_GATE_SOURCE"],
+                os.environ["DISP0_GATE_PIN"])
+            report["recovered_runtime_admission"] = {
+                "path": os.environ["DISP0_RECOVERED_ADMISSION"],
+                "sha256": os.environ["DISP0_RECOVERED_ADMISSION_SHA256"],
+                "deployment_manifest": recovered["deployment_manifest"],
+                "new_prefix_proofs": recovered["new_prefix_proofs"],
+                "origin_compilation_status": "FAILED1:0; original status unchanged",
+            }
+        else:
+            prep = json.loads((build / "runtime-provenance.json").read_text())
         assert prep["status"] == "PASS"
         assert Path(psi4.__file__).resolve().is_relative_to(build / "psi4-build/stage")
         assert Path(ein.__file__).resolve().is_relative_to(build / "einsums-stage")
@@ -353,8 +369,15 @@ def main():
             Path(sealed.world()["library_path"]).resolve()}
         science_source = Path(os.environ["DISP0_SCIENCE_SOURCE"]).resolve()
         science_pin = verify_science_pin(science_source, os.environ["DISP0_BUILD_PIN"])
-        report["science_build"] = {"pin": science_pin, "source": str(science_source),
-                                   "cpu_preparation_job": os.environ["DISP0_BUILD_JOB_ID"]}
+        report["science_build"] = {"pin": science_pin, "source": str(science_source)}
+        if recovered is not None:
+            assert recovered["compile_pin"] == science_pin
+            assert recovered["origin_compilation_job"] == os.environ["DISP0_BUILD_JOB_ID"]
+            report["science_build"].update(
+                origin_compilation_job=recovered["origin_compilation_job"],
+                origin_compilation_status="FAILED1:0; recovered artifacts only")
+        else:
+            report["science_build"]["cpu_preparation_job"] = os.environ["DISP0_BUILD_JOB_ID"]
         report["imported_scientific_modules"] = {}
         for module in (terms, mp2, gpu, importlib.import_module("psi4.driver.procrouting.sapt.sapt_proc")):
             path = Path(module.__file__).resolve()
