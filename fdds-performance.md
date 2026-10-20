@@ -364,3 +364,20 @@ old frozen source/build/run directories or other agents' jobs.
   automatically on grant/failure, no polling or duplicate request.
   Parent sequenced one separate bounded disp0 CPU-INPUT metadata/preflight
   SSH turn after this snapshot; not a GPU window/allocation probe.
+- User ETA snapshot **2026-10-20T15:07:34Z**: still PENDING/Priority;
+  scheduler `StartTime=Unknown`, `squeue --start=N/A`, no node. No start-time
+  guarantee was inferred from the old dry-run.
+- **Actual grant later arrived:** acquisitionb022d3628 completed0 and the
+  controller wrote allocated manifest after its exclusive identity step.
+  Node-ready prolog **Oct20 15:49:49 Eastern**, node
+  `atl1-1-03-019-14-0.pace.gatech.edu`, **NVIDIA H200**,
+  UUID **GPU-5fdf3697-20d4-8564-a920-317ecda4e1a9**,
+  driver615.71.09,143771MiB. CUDA-visible ordinal0 maps to step GPU7;
+  identity uses the full16-byte CUDA UUID, not a guessed NVML index.
+- Initial actual FDDS gate **b57a73af9** launched through shared controller:
+  **1200-second** whole-step bound, pre/post GPU-process cleanup required,
+ 21 focused then69 full executions if all checks pass. Frozen source/testfd2,
+  binarycore92e5..., validation payloadc289..., shared controller9a026...
+  Other agents HOLD until terminal/cleanup proof; PySCF's1200s outer/
+ 1050s inner preflight follows, no overlapping timings. Lifetime watcher
+  **bda4c38b4**. Allocation grant is **not** a correctness or speedup pass.

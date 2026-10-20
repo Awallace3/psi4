@@ -53,6 +53,12 @@ then re-establish actual manifest/state/cleanup proof before any launch.
 and the pinned manifest says pending. State is known again, but all GPU
 steps remain HOLD until grant/full UUID/cleanup/GO. Wait the existing client;
 no repeated queries or duplicate requests.
+**Actual grant:** acquisitionb022d3628 completed0, H200 job14214205 on
+`atl1-1-03-019-14-0.pace.gatech.edu`, UUID
+`GPU-5fdf3697-20d4-8564-a920-317ecda4e1a9`, driver615.71.09.
+Manifest now allocated; initial FDDS21+69 gate **b57a73af9** is running
+under the common exclusive lock (1200-second bound), before PySCF's assigned
+window or timing. Lifetime watcherbda4c38b4. No GPU pass/speedup claim yet.
 
 ## Current result: isolated GPU validation PASSED
 
