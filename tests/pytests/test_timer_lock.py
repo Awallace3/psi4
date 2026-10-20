@@ -1,8 +1,11 @@
+import os
 import subprocess
 import sys
 import textwrap
 
 import pytest
+
+import psi4
 
 pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick]
 
@@ -35,6 +38,10 @@ def test_timer_error_releases_lock():
         psi4.core.timer_off("timer-lock-test: after")
         print("released")
     """)
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=120)
+    # The child must import the psi4 under test, not whichever one its own sys.path finds first.
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in (os.path.dirname(os.path.dirname(psi4.__file__)), env.get("PYTHONPATH")) if p)
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=120, env=env)
     assert result.returncode == 0, result.stderr[-2000:]
     assert "released" in result.stdout
