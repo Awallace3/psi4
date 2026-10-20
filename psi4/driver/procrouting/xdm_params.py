@@ -176,8 +176,6 @@ _XDM_LOS_II_PARAMS_ANGSTROM: Dict[str, Tuple[float, float]] = {
     "b3lyp/aug-cc-pvdz": (0.362043, 2.452093),
     # b3lyp/aug-cc-pvtz MAE: 0.136507 kcal/mol on LoS-II
     "b3lyp/aug-cc-pvtz": (0.344500, 2.304241),
-    # pbe0/aug-cc-pvdz MAE: 0.208978 kcal/mol on LoS-II
-    "pbe0/aug-cc-pvdz": (0.068267, 3.963874),
 }
 
 _XDM_LOS_II_CP_PARAMS_ANGSTROM: Dict[str, Tuple[float, float]] = {
