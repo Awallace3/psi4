@@ -1863,3 +1863,46 @@ Tests include real LOCAL0.25 codec frames and version-rejection/injected
 unit metadata, NOT actual remote0.19 proof; only the new approved job can
 supply that startup proof. Freeze/push this tracked input-only recipe before
 fresh exact-route/source/quota/headroom/no-duplicate submission checks.
+
+Frozen input-only source`e396e97215158830bad3fbee265a20ebeeb2bbd7`;
+push verification bd12e76a1 pending at this record. Quota/capacity snapshot
+b94f79888 PASS: embers21/50 slots, no disp0-sdk-input duplicates; project
+6272.5/8192GB quota and37281129942 filesystem free inodes, scratch
+3556.8/15360GB quota and208713/1000000 individual inodes. More than enough
+for <=512MiB newly written input scope; no protein/run/build sizing inference.
+Fresh exact source staging/test-only and final live duplicate/headroom check
+still precede ONE approved submission. No GPU job/window requested.
+
+Push bd12e76a1 verified exact remotee396e97215158830bad3fbee265a20ebeeb2bbd7.
+Git-only source staging b5440ad3d PASS in NEW0700root
+`P/gits/psi4.disp0-input-cpu-e396e97215-01/source`, detached/clean.
+Helper SHA256`58068fe77cdf55148f0370f8ae255bd25c4c416662f7b5e975c64d3d59cfdd64`;
+batch`0d46aef917ea16410e0638e125fe580d46572504956e9dfc167d207c5396fc30`;
+payload`652d9142604b820ce72dbba3609ab35a456a5eba0cc4437a91d3011af43165ae`.
+Exact test-only PASS cpu-small/1CPU; simulated14215760 is NOT an accepted job.
+Single approved submission task b4eb8ff87 now launched, with final live
+headroom/duplicate checks, byte/inode checks, cleared ambientSBATCH overrides,
+fresh exact-route test-only and irreversible own-root submission-attempt
+guard before one sbatch--parsable/--no-requeue call. Accepted receipt pending;
+no automatic retry even on ambiguous scheduler/network failure.
+
+**ACCEPTED input-only job14215786**, receipt b4eb8ff87, submitted
+2026-10-20 08:28:57 Phoenix local(Eastern). Effective scontrol:
+`gts-cs207-chemx /cpu-small /embers`,1node/1task/1CPU/2G/00:10:00,
+Requeue0/no GPU; initially PENDING(Priority), no node/start assigned.
+Final headroom21/50 andduplicates0; byte/inode/quota checks PASS.
+Final test-only simulated14215785 is NOT a second real job.
+The ONE fresh input-only CPU approval is consumed. No retry, no builds/
+device work; conditional8CPUCPU89 approval remains unconsumed and NOT GO.
+
+Source remains exact frozene396e97215158830bad3fbee265a20ebeeb2bbd7 in
+`P/gits/psi4.disp0-input-cpu-e396e97215-01/source`.
+Logs`P/runs/saptdft-cuest-disp0/logs/disp0-sdk-input-14215786.{out,err}`;
+status`logs/14215786.input-status`; future run
+`P/runs/saptdft-cuest-disp0/input-prep-e396e97215158830bad3fbee265a20ebeeb2bbd7-14215786`.
+Official watcher bdebd125d uses300s state-change reporting, no manual polls.
+Parent received accepted receipt/resource/source proof. Current test-only
+forecast is next-day2026-10-21~10:41, not a guaranteed start; dated08:00
+America/New_York objective is unmet, no speedup ETA promised. No GPU held/
+requested or parent roots/allocations changed. Input manifest, actual remote
+decoder proof, closure and parent INPUT-READINESS remain PENDING.
