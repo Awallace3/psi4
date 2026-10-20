@@ -8,7 +8,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=04:00:00
+#SBATCH --time=08:00:00
 #SBATCH --signal=TERM@60
 
 set -euo pipefail
@@ -61,11 +61,14 @@ on_term() {
     if [[ -n "$child" ]]; then kill -TERM "$child" || true; fi
 }
 trap on_term TERM INT
-for system in peptide nanotube protein83; do
-    # ABBA controls: each arm is a new process, same physical cache/host/threads.
-    for control in cpu-0 gpu-0 gpu-1 cpu-1; do
+for pass in 0 1; do
+    # Save one complete CPU/GPU pair for every system before costly repeats.
+    # For each system the overall order remains CPU/GPU/GPU/CPU (ABBA).
+    if [[ "$pass" == 0 ]]; then controls=(cpu-0 gpu-0); else controls=(gpu-1 cpu-1); fi
+    for system in peptide nanotube protein83; do
+      for control in "${controls[@]}"; do
         arm=${control%-*}
-        timeout --signal=TERM --kill-after=30s 4500s \
+        timeout --signal=TERM --kill-after=30s 10800s \
             "$env/bin/python" "$FDDS_PAYLOAD_ROOT/devtools/benchmarks/fdds_benchmark.py" \
             --system "$system" --cache "$cache_root/$system" \
             --output "$out/$system-$control" --arm "$arm" \
@@ -80,28 +83,17 @@ for system in peptide nanotube protein83; do
         child=
         if ((terminated)); then exit 143; fi
         if ((rc)); then exit "$rc"; fi
+      done
+      if [[ "$pass" == 0 ]]; then
+          "$env/bin/python" "$FDDS_PAYLOAD_ROOT/devtools/benchmarks/fdds_compare.py" \
+              --root "$out" --first-pair --system "$system"
+      fi
     done
+    if [[ "$pass" == 0 ]]; then
+        "$env/bin/python" "$FDDS_PAYLOAD_ROOT/devtools/benchmarks/fdds_compare.py" \
+            --root "$out" --first-pair
+    fi
 done
-"$env/bin/python" - <<'PY'
-import json
-from pathlib import Path
-from statistics import median
-summary = {}
-for system in ("peptide", "nanotube", "protein83"):
-    rows = [json.loads(Path(f"{system}-{arm}-{i}", "result.json").read_text())
-            for arm in ("cpu", "gpu") for i in range(2)]
-    assert all(r["ok"] for r in rows)
-    for key in ("cache_sha256", "metadata_sha256", "options", "binary_pin",
-                "core_sha256", "threads", "memory", "hostname"):
-        assert all(r[key] == rows[0][key] for r in rows), key
-    errors = {k: max(abs(r["energies_Eh"][k] - rows[0]["energies_Eh"][k]) for r in rows)
-              for k in rows[0]["energies_Eh"]}
-    assert max(errors.values()) <= 1.e-5, errors
-    assert all((r["gpu_timer_calls"] > 0) == (r["arm"] == "gpu") for r in rows)
-    times = {arm: [r["fdds_seconds"] for r in rows if r["arm"] == arm] for arm in ("cpu", "gpu")}
-    summary[system] = {"seconds": times, "cpu_over_gpu": median(times["cpu"]) / median(times["gpu"]),
-                       "max_errors_Eh": errors}
-Path("VERIFIED.json").write_text(json.dumps(summary, indent=2) + "\n")
-PY
+"$env/bin/python" "$FDDS_PAYLOAD_ROOT/devtools/benchmarks/fdds_compare.py" --root "$out"
 test "$terminated" = 0
 printf '%s\n' "$FDDS_PAYLOAD_PIN" > COMPLETED

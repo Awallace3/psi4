@@ -8,7 +8,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=04:00:00
+#SBATCH --time=08:00:00
 #SBATCH --signal=TERM@60
 
 # Own immutable source/build + distinct immutable harness, shared deps read-only.

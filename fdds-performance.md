@@ -122,8 +122,8 @@ old frozen source/build/run directories or other agents' jobs.
   SHA256`8ee2d4357a56a7a1d73334a939ce88ff75999138b4f2e745d360a962717ff601`;
   no-cuEST release build in the dedicated `fdds-opt-cpu-20261020-v1` worktree.
   GPU optimization validation must build its own separate stage.
-- Optimization harness uses the verified H200 limit of8 CPU threads/one GPU,
- 128 GiB allocation/96 GiB Psi4 memory/four hours. It builds the frozen
+- Optimization recovery harness uses the verified H200 limit of8 CPU threads/one GPU,
+ 128 GiB allocation/96 GiB Psi4 memory/eight hours. It builds the frozen
   scientific source, requires21 focused plus69 full executed passes, then
   replays matched CPU/GPU/GPU/CPU controls on all three physical caches.
   The separate baseline CPU job is not a dependency of this allocation.
@@ -216,3 +216,20 @@ old frozen source/build/run directories or other agents' jobs.
   validation contract. GPU mode is explicitly forced out of compile-only
   mode and still requires21+69 actual passes before matched benchmarks.
   CPU compilation alone never establishes GPU numerical correctness.
+- Corrected environment/compiler/link probe passed: conda **nvcc13.3.73**,
+  GCC14.3 absolute cc1/cc1plus, `CUDART_VERSION=13030`, conda
+  `libcudart.so.13`. This probe did not execute a GPU call. Evidence
+  `build_fdds_cpu/performance-gpu-14199355/corrected-toolkit-preflight.log`.
+- Partial protein83 output (not a finalized timing result) shows922 AO/
+ 3820 auxiliary,78/68 occupied and844/854 virtual; local16-thread replay
+  remains in object preparation. Recovery increases per-process timing bound
+  to three hours and requests eight hours for the paired/repeated campaign,
+  without changing physical settings or matched96 GiB host budgets.
+- Recovery runs one CPU/GPU pair for **all systems before repeats**, retaining
+  each system's overall ABBA order. Atomic per-system first-pair audits and
+  the all-system FIRST_PAIR_VERIFIED.json distinguish one-repeat measurements
+  from final two-repeat VERIFIED/COMPLETED. If a later process times out,
+  completed earlier pairs survive but the overall campaign is not called
+  complete. Auditor requires source/core/cache/options/host/job identity,
+  finite times/two energies, actual frequency/X/Y GPU routes and1e-5 Eh.
+  Its9 report-only unit tests passed; these are not scientific/GPU timings.
