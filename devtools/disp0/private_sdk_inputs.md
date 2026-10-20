@@ -55,7 +55,7 @@ to parent for explicit **INPUT-READINESS CLEARANCE**. Conditional CPU resources
 remain unconsumed until that clearance and subsequent exact source/route/
 headroom/storage/quota/no-duplicate guards. No independent GPU request.
 
-## Fresh input-only CPU approval — not yet submitted
+## Consumed input-only CPU approval — FAILED14215786
 
 Exactly ONE CPU-only input-prep job:1node/1task/1CPU/2G/00:10:00,
 free embers/gts-cs207-chemx, cpu-small subject exact-route test-only,
@@ -71,8 +71,7 @@ decoder window128MiB and process address cap1GiB. Retain the existing
 preserving any failure. This is separate from and does not consume/expand
 the conditional8CPU/48G/2h CPU89 build approval.
 
-Parent now freshly approved exactly this ONE input-only job after real-frame
-tests pass and corrected helper is committed/pushed/frozen.
+Parent approved exactly this ONE input-only job, now consumed.
 `input_prep.sbatch`/`input_prep_payload.sh` enforce route/resources,
 TERM-safe status, fresh roots and no-requeue. At start the helper requires
 actual zstandard0.19.0 and verifies an8MiB-window streaming frame: the old
@@ -80,7 +79,78 @@ actual zstandard0.19.0 and verifies an8MiB-window streaming frame: the old
 This happens BEFORE any real package download/extraction, without version
 override/unbounded decoder/fallback. The receipt binds that actual proof.
 Local version-metadata injection tests are explicitly not remote proof.
-Fresh pinned source/route/storage/quota/headroom/no-duplicate checks remain
-mandatory before single submission. No request has yet been submitted.
-Return complete SDK/lock proof for parent INPUT-READINESS; this approval
-does not clear CPU89 or GPU work.
+Actual remote0.19 proof PASSED inside14215786; the job then failed at the
+overly strict immediate-link/SONAME comparison. Both SDK manifest and receipt
+are absent. Preserve the job/root/status as failed. No corrected provisioning
+attempt/job/GPU step is approved. CPU89 remains unconsumed/NOT GO.
+
+## LOCAL archive-layout regression and component bindings
+
+Both exact public archives are validated in memory, without filesystem
+extraction or runtime use:
+
+```bash
+/home/awallace43/miniconda3/envs/p4_einv2/bin/python -B \
+  devtools/disp0/audit_sdk_archives.py
+```
+
+Exact official topology (each also has `targets/.../lib/UNVERSIONED` pointing
+directly to the same full versioned filename):
+
+```text
+lib/libcusparse.so
+  -> ../targets/x86_64-linux/lib/libcusparse.so.12.8.2.51
+lib/libnvJitLink.so
+  -> ../targets/x86_64-linux/lib/libnvJitLink.so.13.3.33
+```
+
+These terminal binaries are external to the developer archives. A raw link
+target is not an ELF SONAME. The virtual resolver follows at most16 links,
+normalizes only within an archive namespace, and rejects cycles, escapes,
+broken chains, unexpected regular intermediates or an archive shadowing the
+external terminal. It never dereferences archive links on the host.
+
+Parent supplied approved component-file bindings from the frozen completed
+14185006 manifest, SHA
+`3030cecda5562f1716a8df262f4f05386427ed4aab70cbda7d65000dc25a1ad1`.
+Canonical source root is
+`P/miniconda/envs/p4cuest_sapt/targets/x86_64-linux/lib`.
+File SHA/required ELF SONAME:
+
+* `libcusparse.so.12.8.2.51`:
+  `cadbe1c78feae59b7448dde354bc3c1a60c3da32e0f5902780842f14d475d405`,
+  `libcusparse.so.12`.
+* `libnvJitLink.so.13.3.33`:
+  `f84abd240b428825c3ef16632deb1026b208252fe19cef225a9f4ad06a39d1aa`,
+  `libnvJitLink.so.13`.
+
+The local audit binds virtual terminals to those approved expectations; it
+does NOT reverify remote bytes. Before any future use, the helper separately
+requires an actual regular terminal at the exact approved canonical root,
+matching file SHA and ELF SONAME. No host path is chosen from archive link
+text. Component provenance is not full SDK/E2/runtime/device readiness.
+
+## Narrow next-step proposal — NOT authorized
+
+Only after final local guards, BOTH real-archive regression and narrow review
+are green and committed/pushed: request fresh approval for exactly ONE
+INPUT-ONLY CPU job with the SAME1node/1task/1CPU/2G/10min,
+freeembers/gts-cs207-chemx/cpu-small subject fresh exact-route test-only,
+no GPU/no-requeue/no retry. Maximum1/6CPU-hour and1/3GiB-hour; $0 embers.
+Retain110s payload/5s kill/1GiB process/128MiB decoder bounds, same two
+82569byte archives and<=512MiB new data. Fresh Git source/run/input/scratch
+roots; preserve both failed input attempts and all failed builds.
+
+At start require actual0.19 frame proof, exact lock, actual approved component
+file SHA/ELF identities and correct SDK-selected canonical terminals. Then
+validate BOTH real archive layouts, copy the private include tree, create
+only genuine developer links and produce complete SDK identity/closure/
+provision receipts. Recheck approved component identities against the final
+SDK inventory. No dependency solve/install, scientific/native compilation,
+binary patch, SCF/SAPT/device work or shared root mutation.
+
+Fresh source/test-only/headroom/quota/inode/no-duplicate guards precede any
+new submission. This proposal is not a retry authorization or CPU89/GPU GO.
+Even complete input metadata will retain the unresolved nvcc/copied-header
+discovery caveat; parent INPUT-READINESS clearance remains mandatory before
+the conditionally approved CPU89 build. No new allocation has been requested.

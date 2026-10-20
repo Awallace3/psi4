@@ -45,10 +45,19 @@ def archive(item, corruption=None):
                     entry.size = len(value)
                     stream.addfile(entry, io.BytesIO(value))
                 if label == "pkg":
-                    entry = tarfile.TarInfo(f"targets/x86_64-linux/lib/lib{item['family']}.so")
-                    entry.type = tarfile.SYMTYPE
-                    entry.linkname = item["soname"] if corruption != "soname" else "libfake.so.12"
-                    stream.addfile(entry)
+                    for directory in ("lib", "targets/x86_64-linux/lib"):
+                        entry = tarfile.TarInfo(f"{directory}/lib{item['family']}.so")
+                        entry.type = tarfile.SYMTYPE
+                        target = (("../targets/x86_64-linux/lib/" if directory == "lib" else "")
+                                  + item["runtime_file"])
+                        if corruption == "soname":
+                            target = item["soname"]
+                        elif corruption == "link-escape":
+                            target = "/outside/" + item["runtime_file"]
+                        elif corruption == "wrong-link-dir":
+                            target = "../../../outside/" + item["runtime_file"]
+                        entry.linkname = target
+                        stream.addfile(entry)
             zipstream.writestr(f"{label}-fixture.tar.zst", data.getvalue())
     value = output.getvalue()
     item = {**item, "size": len(value), "sha256": hashlib.sha256(value).hexdigest()}
@@ -63,7 +72,8 @@ def test_pinned_package_index_header_and_genuine_link(item):
     assert receipt["index"]["version"] == item["version"]
 
 
-@pytest.mark.parametrize("corrupt", ["index", "traversal", "absolute", "soname", "size", "sha"])
+@pytest.mark.parametrize("corrupt", ["index", "traversal", "absolute", "soname", "size", "sha",
+                                   "link-escape", "wrong-link-dir"])
 def test_bad_archive_fails_before_header_writes(corrupt):
     data, item = archive(module.PACKAGES[0], corrupt)
     if corrupt == "size":
@@ -138,10 +148,19 @@ def test_complete_private_provision_preserves_sources_and_binds_separate_devlink
         payloads[module.package_url(item)] = data
         (source / "lib64" / item["runtime_file"]).write_bytes(item["soname"].encode())
     monkeypatch.setattr(module, "PACKAGES", packages)
+    monkeypatch.setattr(module, "COMPONENT_BINDINGS", {
+        item["family"]: {"source_root": str(source / "lib64"),
+                         "runtime_file": item["runtime_file"], "soname": item["soname"],
+                         "sha256": module.contract.digest(source / "lib64" / item["runtime_file"])}
+        for item in packages})
     monkeypatch.setattr(module.contract, "elf", lambda p: {
         "soname": Path(p).resolve().read_text(), "needed": []})
     monkeypatch.setattr(module.contract, "inspect_sdk", lambda p: {
-        "library_root": str((p / "lib64").resolve()), "libraries": {},
+        "library_root": str((p / "lib64").resolve()),
+        "libraries": {item["family"]: {
+            "path": str((p / "lib64" / item["runtime_file"]).resolve()),
+            "sha256": module.contract.digest(p / "lib64" / item["runtime_file"]),
+            "soname": item["soname"]} for item in packages},
         "allowed_files": {str(q.resolve()): module.contract.digest(q)
                           for q in (p / "lib64").iterdir()}})
     monkeypatch.setattr(module, "closure", lambda *args: {"fixture": "no actual ldd"})
@@ -223,3 +242,78 @@ def test_input_job_has_exact_bounded_resource_and_no_requeue_contract():
     assert "--kill-after=5s 110s" in payload
     assert ' -B ' in payload
     assert "cmake" not in payload and "nvcc " not in payload
+
+
+def virtual_nodes(item):
+    name = f"lib{item['family']}.so"
+    return {f"lib/{name}": {"type": "2", "link": f"../targets/x86_64-linux/lib/{name}"},
+            f"targets/x86_64-linux/lib/{name}": {"type": "2", "link": item["runtime_file"]}}
+
+
+@pytest.mark.parametrize("item", module.PACKAGES)
+def test_virtual_multihop_resolves_only_to_explicit_external_filename(item):
+    graph = module.resolve_developer_links(virtual_nodes(item), item)
+    start = f"lib/lib{item['family']}.so"
+    assert len(graph[start]["chain"]) == 3
+    assert graph[start]["external_terminal"].endswith("/" + item["runtime_file"])
+
+
+@pytest.mark.parametrize("corrupt", ["cycle", "escape", "absolute", "broken", "runtime-shadow",
+                                    "too-deep", "non-link", "ancestor-link", "ancestor-file"])
+def test_virtual_chains_reject_cycles_escape_broken_or_unbound_terminals(corrupt):
+    item = module.PACKAGES[0]
+    nodes = virtual_nodes(item)
+    start = "lib/libcusparse.so"
+    second = "targets/x86_64-linux/lib/libcusparse.so"
+    if corrupt == "cycle":
+        nodes[second]["link"] = "../../../lib/libcusparse.so"
+    elif corrupt == "escape":
+        nodes[start]["link"] = "../../outside/" + item["runtime_file"]
+    elif corrupt == "absolute":
+        nodes[start]["link"] = "/host/" + item["runtime_file"]
+    elif corrupt == "broken":
+        nodes[second]["link"] = "not-present.so"
+    elif corrupt == "runtime-shadow":
+        nodes["targets/x86_64-linux/lib/" + item["runtime_file"]] = {"type": "0", "link": ""}
+    elif corrupt == "non-link":
+        nodes[second]["type"] = "0"
+    elif corrupt.startswith("ancestor-"):
+        nodes["targets/x86_64-linux/lib"] = {
+            "type": "2" if corrupt == "ancestor-link" else "0", "link": "/outside"}
+    else:
+        nodes[start]["link"] = "step0"
+        for n in range(20):
+            nodes[f"lib/step{n}"] = {"type": "2", "link": f"step{n+1}"}
+    with pytest.raises(RuntimeError):
+        module.resolve_developer_links(nodes, item)
+
+
+def test_explicit_directory_ancestors_are_allowed():
+    item = module.PACKAGES[0]
+    nodes = virtual_nodes(item)
+    for directory in ("lib", "targets", "targets/x86_64-linux", "targets/x86_64-linux/lib"):
+        nodes[directory] = {"type": "5", "link": ""}
+    assert len(module.resolve_developer_links(nodes, item)) == 2
+
+
+@pytest.mark.parametrize("corrupt", [None, "hash", "soname", "filename", "symlink"])
+def test_explicit_external_runtime_binding_checks_actual_bytes_and_elf(tmp_path, monkeypatch, corrupt):
+    item = module.PACKAGES[0]
+    path = tmp_path / item["runtime_file"]
+    path.write_bytes(b"fixture runtime bytes, no native load")
+    binding = {"runtime_file": item["runtime_file"], "soname": item["soname"],
+               "source_root": str(tmp_path), "sha256": module.contract.digest(path)}
+    monkeypatch.setattr(module.contract, "elf", lambda p: {
+        "soname": item["soname"] if corrupt != "soname" else "libcusparse.so.11"})
+    if corrupt == "hash":
+        binding["sha256"] = "0" * 64
+    elif corrupt == "filename":
+        binding["runtime_file"] = "libcusparse.so.12"
+    elif corrupt == "symlink":
+        path.unlink()
+        path.symlink_to("/unapproved/host/file")
+    if corrupt:
+        with pytest.raises(RuntimeError):
+            module.verify_runtime_binding(item, binding)
+    else:
+        assert module.verify_runtime_binding(item, binding)["actual_sha256_and_soname_verified"] is True

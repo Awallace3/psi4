@@ -1906,3 +1906,119 @@ forecast is next-day2026-10-21~10:41, not a guaranteed start; dated08:00
 America/New_York objective is unmet, no speedup ETA promised. No GPU held/
 requested or parent roots/allocations changed. Input manifest, actual remote
 decoder proof, closure and parent INPUT-READINESS remain PENDING.
+
+Watcher bdebd125d terminal report: input-only14215786 **FAILED1:0**
+after00:00:03; `.batch`FAILED1:0/3s and `.0`FAILED1:0/2s. Parent notified.
+No retry or new allocation. Bounded read-only log/artifact diagnosis
+b6a4ed947 launched; precise blocker/manifest status pending inspection.
+Conditional CPU89 remains unconsumed/NOT GO, no GPU readiness/step.
+
+Read-only diagnosis b6a4ed947: actual0.19 decoder controls **PASS**
+inside14215786 (8MiB frame,131072 rejected,134217728 decoded8192bytes).
+Failure is specifically the developer-link immediate-target check; it does
+NOT establish invalid packages. `term_received=0`; manifests/receipt ABSENT.
+Nodeatl1-1-02-002-27-2; actual prolog/epilog confirm approved1CPU/2G/
+cpu-small/embers/chemx. All failed roots/status/evidence preserved.
+
+Parent cleared READ-ONLY LOCAL validation of BOTH exact public archives,
+not another allocation/provision/retry. Both official hashes/sizes/indexes
+were validated entirely in memory. Exact topology:
+`lib/libcusparse.so -> ../targets/x86_64-linux/lib/libcusparse.so.12.8.2.51`,
+and targetlib/libcusparse.so points directly to that same versioned filename;
+nvJitLink analogously targets`libnvJitLink.so.13.3.33`. Full filenames differ
+from their genuine ELF SONAME aliases. No header file was extracted.
+
+Actual header SHAs from both approved archives:
+cusparse.h`76c4ca9c08a101291c987776a42c03fa436202ac9fe970a02280452c8d1ee222`,
+cusparse_v2.h`8e41f603d85873e4c4174bee43f4aeadb84f3441e460650846ec4a5e1140aa7c`,
+nvJitLink.h`d1f43e48b34cb8bdc2ac32c192e60b1fec882c09c5dae691cb876aae4eafb48e`.
+New LOCAL audit entrypoint`audit_sdk_archives.py` enforces both archives
+and those header identities, emits virtual link graphs and approved external
+binding expectations; never follows archive links as host paths.
+
+Parent provided independently verified COMPONENT-FILE bindings from14185006
+manifest`P/runs/saptdft-cuest-cpks/major2-whole-gpu-scaling-20261019-v3/manifest.json`,
+SHA`3030cecda5562f1716a8df262f4f05386427ed4aab70cbda7d65000dc25a1ad1`.
+At canonicalvendor targetlib: cusparse12.8.2.51 SHA
+`cadbe1c78feae59b7448dde354bc3c1a60c3da32e0f5902780842f14d475d405`,
+SONAME`libcusparse.so.12`; nvJitLink13.3.33 SHA
+`f84abd240b428825c3ef16632deb1026b208252fe19cef225a9f4ad06a39d1aa`,
+SONAME`libnvJitLink.so.13`. Those are component expectations only, NOT
+SDK/E2/device readiness. Actual remote files were NOT rehashed locally.
+Before any future use, the corrected helper separately requires actual regular
+files at that exact approved canonical root, SHA and ELF SONAME match.
+
+Virtual resolver allows<=16 links, versioned-filename and legitimate
+multi-hop aliases; cycle/escape/broken/regular-intermediate/shadow/too-deep
+negatives plus actual wronghash/wrongSONAME/filename/symlink binding tests
+are running locally (ba505a815). First BOTH real-archive regression exit0;
+durable tracked audit b4f162ba8 and narrow read-only review dea89bcb pending.
+No new allocation/provisioning/step authorized or executed. Return reviewed
+immutable pin, BOTH real-archive proof and narrow proposal before any new
+resource discussion; CPU89 remains conditional/NOT GO.
+
+Virtual-chain/component-binding guard task ba505a815: **35passed1.45s**,
+no warnings/skips, JUnit
+`build_disp0_cpu/reference-check-pgmJLAWQ/results.xml`.
+Actual SHA checks use local fixture bytes; ELF is explicitly mocked in unit
+tests. They do not reverify remote component files. AST/whitespace PASS;
+approved89 runtime_contract/payload and all scientificpsi4/ sources unchanged.
+
+Review dea89bcb found an explicit symlink/non-directory ancestor could shadow
+the virtual terminal namespace even though no host path was followed.
+Corrected resolver now rejects non-directory ancestors of EVERY traversed
+path/terminal; added ancestor-link/ancestor-file negatives and explicit-directory
+positive. Also added post-inventory runtime SHA/path/SONAME equality to the
+approved preflight bindings so changed external bytes cannot enter a manifest.
+Real-archive evidence remains separate from synthetic/unit coverage:
+new durable BOTH actual archive audit b065224c4 runs the corrected helper;
+guard suite b4fdb7478 and narrow follow-up d81d3e45 pending. No attempt/job
+was retried and no new resource approval is inferred.
+
+Corrected BOTH real-archive audit b065224c4 **PASS exit0**:
+two original exact-SHA archives/82569bytes, real local zstd decoder, expected
+header inventory/SHAs, both virtual devlink graphs and approved component
+expectations. No filesystem extraction, remote component read, provisioning
+or allocation. Helper SHA256
+`c8c1b65fc9764212b524fdcc2479d171b9ec4cd3a4950be7d7b3390392b99d20`;
+durable stdout SHA256
+`7cb5bfe63e9ae3fa1e7688d0fdcfff7f0bc43e0bcf1e0f847b68681c768af71b`.
+Command: local`p4_einv2/bin/python -B devtools/disp0/audit_sdk_archives.py`.
+Evidence`.pi/tasks/01a154d8-a459-768d-83bd-c57c6a5dc42c-4065461/b065224c4.output`.
+This real-archive proof is explicitly separate from unit fixtures; it does
+not replace actual remote file/ELF revalidation, completeSDKmanifest,
+parent INPUT-READINESS, CPU89 build or GPU numerical gate.
+
+Final namespace guard suite b4fdb7478: **38passed1.49s**, no warnings/skips,
+JUnit`build_disp0_cpu/reference-check-FR4phSpz/results.xml`. BOTH real
+archive proof helper SHA matches current source byte-for-byte. AST/whitespace
+and unchanged89 scientific/runtime/payload checks PASS. Follow-up review
+d81d3e45 ended`child_turn_limit` with NO committed answer; not a pass and not
+a numerical/code-test failure. Its failed diagnostic artifacts are preserved.
+One narrowly scoped read-only final review d5d1f4cc is pending. No new HPC
+attempt, allocation, provisioning or remote source/build/root mutation is authorized.
+
+Final scoped review d5d1f4cc22b1b1c1c0789059e65e6aa1b completed: **no concrete
+blocker**, prior ancestor-shadow and real-proof-separation findings addressed.
+It read the three code/test files; supplied test/audit evidence was not
+independently rerun by reviewer. This is source review, not runtime clearance.
+
+Local milestone ready to freeze/push:38guardsPASS, BOTH original pinned
+archive real-decoder auditsPASS, exact parent-approved component-file
+expectations bound virtually, actual external regular-file/SHA/ELF checks
+required separately before future use, post-inventory identity equality.
+Changed scope: input helper, new local archive audit entrypoint, archive/
+binding unit tests, private-input documentation and this progress record.
+No scientificpsi4/ source, E2d17 source, approved89 runtime/payload, old
+failed root or coordinator data/source/build/environment changed.
+
+Narrow proposed next step (NOT APPROVED/SUBMITTED): exactlyONE INPUT-ONLY
+1node/1task/1CPU/2G/10min freeembers/gts-cs207-chemx job, cpu-small subject
+fresh exact-route; noGPU/no-requeue/no retry,110s/1GiB payload/128MiBdecoder,
+same82569B TWOarchives/<=512MiBwritten. Fresh source/run/input/scratch and
+source/headroom/quota/duplicates checks; actual0.19 proof + real approved
+component-file SHA/ELF before use, complete privateSDKmanifest/closure/lock
+proof only. No solve/native/scientific compilation/device/SCF/SAPT.
+Request explicit fresh input-only approval after returning immutable pin
+and this proof. CPU89 remains conditional/unconsumed/NO INPUT-READINESS;
+compiler/copied-include discovery still unproven. No independent GPU request.

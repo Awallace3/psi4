@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path, PurePosixPath
+import posixpath
 import resource
 import re
 import signal
@@ -27,6 +28,19 @@ PACKAGES = (
      "runtime_file": "libnvJitLink.so.13.3.33", "header": "nvJitLink.h"},
 )
 LOCK_SHA = "3f9a508fd601306f548a9088f5cd304367a5fde3988e8bbd4fe00d9e6efb0205"
+COMPONENT_BINDING_MANIFEST = {
+    "path": "/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-cpks/"
+            "major2-whole-gpu-scaling-20261019-v3/manifest.json",
+    "sha256": "3030cecda5562f1716a8df262f4f05386427ed4aab70cbda7d65000dc25a1ad1",
+    "scope": "PARENT_APPROVED_COMPONENT_FILES_ONLY_NOT_E2_OR_SDK_ADMISSION"}
+COMPONENT_BINDINGS = {
+    "cusparse": {"runtime_file": "libcusparse.so.12.8.2.51", "soname": "libcusparse.so.12",
+                 "sha256": "cadbe1c78feae59b7448dde354bc3c1a60c3da32e0f5902780842f14d475d405"},
+    "nvJitLink": {"runtime_file": "libnvJitLink.so.13.3.33", "soname": "libnvJitLink.so.13",
+                  "sha256": "f84abd240b428825c3ef16632deb1026b208252fe19cef225a9f4ad06a39d1aa"}}
+for _binding in COMPONENT_BINDINGS.values():
+    _binding["source_root"] = (
+        "/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt/targets/x86_64-linux/lib")
 MAX_WRITE = 512 * 1024**2
 MAX_DOWNLOAD = 128 * 1024**2
 MAX_MEMBER = 32 * 1024**2
@@ -105,11 +119,66 @@ def safe_member(name):
     return path
 
 
+def resolve_developer_links(nodes, item):
+    """Pure virtual archive namespace; NEVER follow a host filesystem link."""
+    terminal = str(PurePosixPath("targets/x86_64-linux/lib") / item["runtime_file"])
+    contract.require(terminal not in nodes, "Developer archive shadows external runtime")
+    starts = {f"lib/lib{item['family']}.so",
+              f"targets/x86_64-linux/lib/lib{item['family']}.so"}
+    contract.require(starts <= nodes.keys(), "Missing approved developer locators")
+    result = {}
+    for start in sorted(starts):
+        current, chain, seen = start, [], set()
+        for _ in range(17):  # <=16 symbolic links, plus the external terminal
+            for ancestor in PurePosixPath(current).parents:
+                name = str(ancestor)
+                if name in nodes:
+                    contract.require(nodes[name]["type"] == "5",
+                                     "Non-directory ancestor shadows virtual runtime namespace")
+            contract.require(current not in seen, "Cyclic developer-link chain")
+            seen.add(current)
+            chain.append(current)
+            if current == terminal:
+                result[start] = {"chain": chain, "external_terminal": terminal}
+                break
+            contract.require(current in nodes, "Broken developer-link chain")
+            node = nodes[current]
+            contract.require(node["type"] == "2", "Non-link developer intermediate")
+            target = node["link"]
+            contract.require(not PurePosixPath(target).is_absolute() and "\\" not in target,
+                             "Absolute/foreign developer target")
+            current = str(safe_member(posixpath.normpath(str(PurePosixPath(current).parent / target))))
+        else:
+            raise RuntimeError("Developer-link chain exceeds16 links")
+    return result
+
+
+def verify_runtime_binding(item, binding):
+    """Read ONLY an explicitly approved terminal, not an archive-provided host path."""
+    contract.require(binding.get("runtime_file") == item["runtime_file"]
+                     and binding.get("soname") == item["soname"], "Wrong approved runtime identity")
+    contract.require(re.fullmatch(r"[0-9a-f]{64}", binding.get("sha256", "")),
+                     "Missing approved terminal-file SHA256")
+    root = Path(binding["source_root"])
+    contract.require(root.is_absolute() and root.resolve(strict=True) == root,
+                     "Approved runtime root must be canonical")
+    contract.clean_location(root)
+    path = root / item["runtime_file"]
+    contract.require(not path.is_symlink() and path.is_file(), "Terminal is not a regular runtime file")
+    contract.require(path.resolve(strict=True).parent == root, "External runtime escaped approved root")
+    contract.require(contract.digest(path) == binding["sha256"], "Wrong actual terminal runtime hash")
+    info = contract.elf(path)
+    contract.require(info["soname"] == item["soname"], "Wrong actual terminal ELF SONAME")
+    return {**binding, "source_path": str(path),
+            "archive_terminal": f"targets/x86_64-linux/lib/{item['runtime_file']}",
+            "actual_sha256_and_soname_verified": True}
+
+
 def read_package(data, item, decompressor):
     """Validate entire archive identity before streaming selected data, never extractall."""
     contract.require(len(data) == item["size"], "Package size mismatch")
     contract.require(hashlib.sha256(data).hexdigest() == item["sha256"], "Package SHA mismatch")
-    headers, links, index = {}, {}, None
+    headers, index, payload_nodes = {}, None, {}
     entries = []
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         names = archive.namelist()
@@ -137,6 +206,9 @@ def read_package(data, item, decompressor):
                         entries.append({"path": str(path), "size": member.size,
                                         "type": member.type.decode("ascii"),
                                         "link": member.linkname})
+                        if name.startswith("pkg-"):
+                            payload_nodes[str(path)] = {"type": member.type.decode("ascii"),
+                                                       "link": member.linkname}
                         parts = path.parts
                         include = ("targets", "x86_64-linux", "include")
                         if parts[:3] == include and len(parts) > 3:
@@ -147,16 +219,16 @@ def read_package(data, item, decompressor):
                         if member.name == "info/index.json":
                             contract.require(member.isfile(), "Invalid package index")
                             index = json.loads(limited_read(stream.extractfile(member), MAX_MEMBER))
-                        if path.name == f"lib{item['family']}.so":
-                            contract.require(member.issym() and
-                                             PurePosixPath(member.linkname).name == item["soname"],
-                                             "Developer link is not the genuine SONAME")
-                            links[str(path)] = member.linkname
     contract.require(index is not None and all(index.get(k) == item[k]
                      for k in ("name", "version", "build")), "Package index identity mismatch")
     contract.require(index.get("subdir") == "linux-64", "Wrong package architecture")
-    contract.require(item["header"] in headers and links, "Missing header/developer link")
+    contract.require(item["header"] in headers, "Missing package header")
+    links = resolve_developer_links(payload_nodes, item)
     return headers, {"package": item, "url": package_url(item), "index": index, "entries": entries,
+                     "developer_link_graph": links,
+                     "external_expected_binding": COMPONENT_BINDINGS[item["family"]],
+                     "binding_manifest_provenance": COMPONENT_BINDING_MANIFEST,
+                     "scope": "ARCHIVE_LAYOUT_ONLY; actual external bytes/ELF verified separately",
                      "headers": {p: hashlib.sha256(v).hexdigest() for p, v in headers.items()}}
 
 
@@ -214,9 +286,12 @@ def provision(source, destination, lock, decompressor, vendor_environment=None, 
     contract.require("@EXPLICIT" in lock.read_text(), "Not an explicit dependency lock")
     contract.require(sum(p["size"] for p in PACKAGES) <= MAX_DOWNLOAD, "Download budget")
     # Exact selected runtime files must preexist. No runtime package is downloaded.
+    runtime_proofs = {}
     for item in PACKAGES:
         runtime = (source / "lib64" / item["runtime_file"]).resolve(strict=True)
-        contract.require(contract.elf(runtime)["soname"] == item["soname"], "Runtime SONAME mismatch")
+        proof = verify_runtime_binding(item, COMPONENT_BINDINGS[item["family"]])
+        contract.require(str(runtime) == proof["source_path"], "SDK selected a different external runtime")
+        runtime_proofs[item["family"]] = proof
     destination.mkdir(mode=0o700)
     writer, records, all_headers = Writer(), [], {}
     for item in PACKAGES:
@@ -247,6 +322,12 @@ def provision(source, destination, lock, decompressor, vendor_environment=None, 
         developer_links[str(link)] = {**contract.identity(link),
                                      "soname": contract.elf(link)["soname"]}
     manifest = contract.inspect_sdk(sdk)
+    for family, proof in runtime_proofs.items():
+        observed = manifest["libraries"][family]
+        contract.require(observed["path"] == proof["source_path"]
+                         and observed["sha256"] == proof["sha256"]
+                         and observed["soname"] == proof["soname"],
+                         "External runtime identity changed during input preparation")
     dependencies = closure(manifest, vendor_environment)
     # Existing nvcc locator delegates to this vendor compiler. Bind it rather
     # than presenting a wrapper hash as the underlying compiler identity.
@@ -267,6 +348,8 @@ def provision(source, destination, lock, decompressor, vendor_environment=None, 
             "address_space_bytes": 1024**3, "download_bytes": MAX_DOWNLOAD, "write_bytes": MAX_WRITE},
         "decoder_window_bound_bytes": MAX_WINDOW_BYTES,
         "actual_decoder_proof": decoder_proof,
+        "actual_runtime_bindings": runtime_proofs,
+        "component_binding_manifest_provenance": COMPONENT_BINDING_MANIFEST,
         "developer_links": developer_links,  # input lib/, separate from lib64 SDK inventory
         "compiler_chain": compiler_chain,
         "compiler_discovery_ready": False,
