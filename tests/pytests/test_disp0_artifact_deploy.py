@@ -28,6 +28,15 @@ def acquire(deploy, destination):
         os.close(fd)
 
 
+def private_namespace(deploy, parent, label):
+    parent.chmod(0o700)
+    fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        return deploy.PrivateNamespace(parent, label, parent_fd=fd)
+    finally:
+        os.close(fd)
+
+
 def fixture_source(tmp_path):
     source = tmp_path / "source"
     files = {
@@ -287,7 +296,7 @@ m.run_bounded_worker(blocked_output, timeout_seconds=0.2)
 
 def test_private_namespace_is_new_unpublished_and_not_a_public_destination(tmp_path):
     deploy = module()
-    namespace = deploy.PrivateNamespace(tmp_path, "runtime-fixture")
+    namespace = private_namespace(deploy, tmp_path, "runtime-fixture")
     assert namespace.path.parent == tmp_path
     assert namespace.path.name.startswith("runtime-fixture-")
     assert namespace.path.stat().st_mode & 0o777 == 0o700
@@ -298,7 +307,7 @@ def test_private_namespace_is_new_unpublished_and_not_a_public_destination(tmp_p
 
 def test_regular_parent_replacement_at_root_acquisition_does_not_adopt_foreign(tmp_path, monkeypatch):
     deploy = module()
-    namespace = deploy.PrivateNamespace(tmp_path, "runtime-fixture")
+    namespace = private_namespace(deploy, tmp_path, "runtime-fixture")
     destination = namespace.path / "image"
     foreign = tmp_path / "foreign"
     (foreign / "image").mkdir(parents=True, mode=0o700)
@@ -326,7 +335,7 @@ def test_regular_parent_replacement_at_root_acquisition_does_not_adopt_foreign(t
 def test_regular_parent_replacement_at_nested_acquisition_does_not_redirect(tmp_path, monkeypatch):
     deploy = module()
     source, original = fixture_source(tmp_path)
-    namespace = deploy.PrivateNamespace(tmp_path, "runtime-fixture")
+    namespace = private_namespace(deploy, tmp_path, "runtime-fixture")
     destination = namespace.path / "image"
     ownership = deploy.create_prefix(destination, private_parent_fd=namespace.fd)
     records = deploy.inventory(source, destination, time.monotonic() + 10)
@@ -374,6 +383,7 @@ def test_full_private_deployment_orchestration_with_fake_elf_artifacts(tmp_path)
     repo = tmp_path / "recipe-repo"
     script = repo / "devtools/disp0/artifact_deploy.py"
     script.parent.mkdir(parents=True)
+    repo.chmod(0o700)
     original = Path(__file__).resolve().parents[2] / "devtools/disp0/artifact_deploy.py"
     script.write_bytes(original.read_bytes())
 
@@ -404,7 +414,7 @@ m.run_bounded_worker(m.main,timeout_seconds=10)
     assert result.returncode == 0, result.stderr
     summary = json.loads(result.stdout)
     destination = Path(summary["destination"])
-    assert destination.name == "image" and destination.parent.parent == parent
+    assert destination.name == "image" and destination.parent.parent == repo
     manifest = json.loads((destination / "deployment-manifest.json").read_text())
     assert manifest["status"] == "ARTIFACT_BYTES_VERIFIED"
     assert manifest["selected_binary_sha256"] == expected

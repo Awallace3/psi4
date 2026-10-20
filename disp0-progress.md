@@ -1183,6 +1183,19 @@ cannot redirect writes. CLI uses a label, not an exact destination path.
 The copy is still whole-artifact, unchanged bytes, no build/RPATH patch.
 Private-parent permission preflight b42749f74 pending.
 
+Permission preflight b42749f74 completed: existing runs parent is
+**775/UID3170273**, so trust guard correctly blocks it. No chmod or copy.
+Updated placement uses a NEW recipe Git checkout created withumask077/
+private0700, verified/retained by FD (Git pin/blob checks through
+`/proc/<worker>/fd`). Its own unpublished namespace/image is the fresh
+runtime prefix, on the same project filesystem/quota. This changes only
+new-owned placement, not any existing shared/failed directory permissions.
+Full local integration revalidated: **21passed in2.26s**,
+`build_disp0_cpu/reference-check-uce6U0WA/results.xml`.
+Private Git-anchor review df3cf338f4418293b1c4fcd3b2c302c80 pending.
+Earlier f7be8f2d80 is superseded for this parent-selection change; require
+an updated immutable pin before any deployment.
+
 Private acquisition tests (regular parent replacement at root+nested gaps)
 passed20/20; added a full supervised fake-ELF integration test exercising
 tracked recipe verification, private prefix selection, copy/ABI manifest,

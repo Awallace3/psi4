@@ -136,22 +136,23 @@ class OwnedPrefix:
 class PrivateNamespace:
     """Trusted, unpublished 0700 namespace; its nonce is not a public target."""
 
-    def __init__(self, parent, label):
-        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    def __init__(self, parent, label, *, parent_fd):
+        self.parent_fd = os.dup(parent_fd)
         try:
-            info = os.fstat(parent_fd)
-            assert info.st_uid == os.geteuid() and info.st_mode & 0o022 == 0, "Untrusted namespace parent"
+            info = os.fstat(self.parent_fd)
+            assert info.st_uid == os.geteuid() and info.st_mode & 0o777 == 0o700, "Untrusted namespace parent"
             # Bootstrap through the trusted parent FD, not a mutable public
             # destination name. No artifact paths are disclosed until complete.
-            created = tempfile.mkdtemp(prefix=label + "-", dir=f"/proc/self/fd/{parent_fd}")
+            created = tempfile.mkdtemp(prefix=label + "-", dir=f"/proc/self/fd/{self.parent_fd}")
             name = Path(created).name
             self.path = parent / name
             self.fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-                              dir_fd=parent_fd)
+                              dir_fd=self.parent_fd)
             info = os.fstat(self.fd)
             assert info.st_uid == os.geteuid() and info.st_mode & 0o777 == 0o700
         finally:
-            os.close(parent_fd)
+            os.close(self.parent_fd)
+            self.parent_fd = None
 
     def __del__(self):
         if hasattr(self, "fd"):
@@ -332,18 +333,23 @@ def main():
         character.isalnum() or character == "-" for character in args.label)
     # Layout-only placeholder for preflight; no caller-supplied/public runtime
     # directory is acquired. The real prefix is generated privately afterward.
-    destination = PARENT / (args.label + "-unpublished") / "image"
     repository = Path(__file__).resolve().parents[2]
+    repository_fd = os.open(repository, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    info = os.fstat(repository_fd)
+    assert info.st_uid == os.geteuid() and info.st_mode & 0o777 == 0o700, \
+        "Recipe checkout must be a NEW private0700 trusted anchor"
+    repository_anchor = Path(f"/proc/{os.getpid()}/fd/{repository_fd}")
     pin = args.recipe_pin
-    verify_recipe(repository, Path(__file__), pin)
+    verify_recipe(repository_anchor, repository_anchor / "devtools/disp0/artifact_deploy.py", pin)
+    destination = repository / (args.label + "-unpublished") / "image"
     records = inventory(SOURCE, destination, deadline)
     for relative, expected in EXPECTED.items():
         assert records[relative]["sha256"] == expected, f"Unexpected approved binary: {relative}"
     total = sum(entry.get("bytes", 0) for entry in records.values())
     required = total * 2 + 1024**3
-    assert shutil.disk_usage(PARENT).free >= required, "Destination free-space preflight failed"
+    assert shutil.disk_usage(repository_anchor).free >= required, "Destination free-space preflight failed"
     assert args.quota_headroom_bytes >= required, "Destination quota preflight failed"
-    namespace = PrivateNamespace(PARENT, args.label)
+    namespace = PrivateNamespace(repository, args.label, parent_fd=repository_fd)
     destination = namespace.path / "image"
     for relative, entry in records.items():
         entry["destination"] = str(destination / relative)
@@ -353,6 +359,7 @@ def main():
               "files_and_links": records, "selected_binary_sha256": EXPECTED, "artifact_bytes": total,
               "required_headroom_bytes": required, "quota_headroom_bytes": args.quota_headroom_bytes,
               "quota_receipt": args.quota_receipt, "abi": {},
+              "private_recipe_anchor": str(repository),
               "scope": "artifact installation only; no import/API/numerical/device claim"}
     ownership = None
     try:
