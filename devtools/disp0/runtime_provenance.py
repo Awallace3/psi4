@@ -7,6 +7,9 @@ from pathlib import Path
 import platform
 import subprocess
 
+if not __debug__:
+    raise RuntimeError("Dispersion validation requires assertions; optimized Python is forbidden")
+
 import psi4
 from psi4 import core
 import einsums as ein

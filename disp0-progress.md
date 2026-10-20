@@ -106,12 +106,20 @@ No tolerance relaxation to hide failures.
   Fragment dispersion/sum-rule coverage is still required before claiming
   the full Phase 1 gate; no broader F-SAPT terms have been implemented.
 * Phase 2: gated, not started.
-* GPU test is now user-authorized but build-blocked. CPU job14182584 failed
-  Catch2 configuration; corrected job14193865 passed that point and linked
-  the native E2 library, but Python codegen failed on Apiary/Clang missing
-  `stddef.h`. No installed coherent E2 Python/Psi4 stage is ready and **no GPU
-  job has been submitted**. Failed roots are preserved; no further CPU retry
-  is implicitly authorized.
+* GPU work is conditionally authorized but runtime-blocked. Failed CPU jobs:
+  14182584(Catch2),14193865(Apiary resource headers),14196330(completed both
+  builds but omitted E2 Python installation; post-install import failed).
+  Same-job build-tree import/ELF metadata now PASS with one E2d17/GNU14 world;
+  this is not an installed-runtime/numerical pass. Artifact-only installation
+  into a fresh absent prefix is cleared, pending recipe review/pin and
+  byte/quota preflight. Preserve all failed roots/statuses.
+* No GPU job has been submitted. Available conditional approvals: one
+  H200/4CPU/32G/30min signed/device gate, then one H200/8CPU/512G/up-to6h
+  timing job, bothinferno/gts-cs207. Quoted combined ceiling$9.19 requires
+  fresh capacity/rate/route checks. No additional CPU allocation or retry.
+  Fixed-suite HF policy-controlled timings are distinct from parent PBE0-D4;
+  actual timed dispatch remains unverified, diagnostics stay separate.
+  Target2026-10-20 08:00 America/New_York is not guaranteed.
 
 Parent scope agreement: Phase 1 is explicitly **GPU contractions with CPU
 elementwise/reductions**, not fully GPU-resident dispersion. Use default
@@ -868,3 +876,356 @@ GPU guard accepts onlygts-cs207/inferno; CPU guard remains
 gts-cs207-chemx/embers; wrong-account, wrong-QoS, early-parameter/controller
 failure and TERM cases tested with fake scheduler. This is CPU-only harness
 validation, not CUDA execution or GPU numerical correctness.
+
+Complete billing inspection b2ffbd4c3: gpu-h200 has
+`TRESBillingWeights=gres/GPU=52381` only (no CPU/memory weights),
+MaxMemPerNode=UNLIMITED, PriorityFlags empty. Selector estimates therefore
+bound the requested resources at$0.71 for1H200/30min and$8.48 for1H200/6h,
+combined$9.19. Capacity/route must be refreshed before actual submissions.
+Exact conditional proposal reported to user and parent and saved in
+`devtools/disp0/benchmark_plan.md`: gate1H200/4CPU/32G/30min plus one
+timing1H200/8CPU/512G/up-to6h, bothgts-cs207/inferno/no-requeue.
+Timing uses one node for both arms, 24 timed fresh-process HF calls,
+four routine systems × two arms ×3repeats, initial Psi4 budget128GiB;
+resource margin considers independent protein157 bounds, other arrays,
+DF/disk behavior and page cache. Sufficient scratch/quota and actual
+memory behavior still require checks. No additional CPU allocation, no
+parent PBE0-D4 duplicate and no GPU job submitted. Six hours is a ceiling,
+not a validated runtime estimate or deadline guarantee.
+
+Parent confirms the exact512G proposal lies within the two conditional
+approvals. Clarified benchmark plan: CPU arm disables **GPUPlacement** for
+the same E2 graph; GPU arm retains natural placement. Label8-CPU versus
+hybridGPU, never historical24-CPU/PBE0 speedup or fully resident GPU.
+Actual free RAM and persistent scratch/user+group quota must be sufficient
+before protein launch; read-only quota inspection b18030c4e pending.
+
+Preparing standalone `benchmark_run.py` and `benchmark_evidence.py`; not
+ready/submitted and no scientific stage overlay. The per-process proof
+design captures actual same-graph objects, asserts all CPU targets for the
+CPU arm, then replays/logs them **after measured work**, with a separate
+naturally eligible native positive control to avoid accepting a silent
+logger as no GPU. Native cuBLAS logging is explicitly OFF during measured
+work, no interposer/profiler there. Gate preflight must validate the logger
+and both CPU/GPU controls before the six-hour timing job can be considered
+ready. Native API/header/symbol inspection bb41a5dba pending; no claim this
+diagnostic works on CUDA yet. CPU synthetic control/tamper tests b9c0fe764
+pending. This does not relax the numerical gate or imply timing readiness.
+
+## Additional CPU build14196330 failed; GPU approvals remain conditional
+
+Official watcher b7e91b661 terminal observation2026-10-20T00:55:46Z:
+**14196330 FAILED**, job/.batch/.0 exit **1:0**, elapsed **00:40:04**
+(step39:57). No fourth CPU build/retry is authorized; no job or failed root
+was altered. Parent notified immediately. Exact read-only log/status/install
+artifact diagnosis b1f43b496 pending; do not infer the blocker from the
+earlier517/520 snapshot. Neither GPU approval is consumed. Matching stage,
+signed/device correctness and timings remain unpassed; no build/repair
+inside a GPU job and no guaranteed08:00 outcome.
+
+Native API inspection bb41a5dba confirms the installed CUDA13 header
+declares `cublasLoggerConfigure(int,int,int,const char*)` and the selected
+libcublas.so.13 exports it (also logger callback getters/setters). This
+validates the proposed ctypes signature/symbol only; actual logging,
+positive-control CUDA execution and untimed per-process proof have not run.
+It does not resolve the failed build or authorize GPU allocation.
+
+Persistent scratch inspection b18030c4e: filesystem has
+1,264,549,264,683,008 free bytes; user usage4,838,809,280KiB versus
+16,106,127,360KiB soft/hard limit, about **10.494TiB** quota headroom and
+792,049 available inodes. Reported primary-group byte/inode limits are0
+(no finite limits in that report). This snapshot is sufficient for the
+proposed600GiB conservative protein scratch margin, but must be refreshed
+in the actual allocation before protein launches; it is not proof of actual
+future RAM availability or a waiver of project/filesystem restrictions.
+No scratch data modified. Preparing fail-closed per-point RAM/free-space/
+quota checks, with raw quota evidence retained. Runtime/build blocker remains.
+
+Initial timing-control task b9c0fe764 completed **41passed in2.46s**,
+JUnit `build_disp0_cpu/reference-check-ot373Eol/results.xml`. These are
+synthetic proof/tamper/logger-toggle tests plus CPU route/QCVariable tests,
+not CUDA proof or measured timings. Subsequent quota parsing and one small
+Water-Ne full HF/CPHF+deltaHF native-vs-CPU-graph physical regression were
+added; final frozen rerun b3da2a5a0 and read-only timing-worker review
+da12090c4390f1dbfb7ee6d81962647de pending. The single-point timing worker
+is preparatory; no multi-point campaign launcher is ready/submitted.
+
+Exact failed14196330 artifact inspection b1f43b496: **E2 and Psi4 builds
+completed; Psi4 install completed** (`[9/9] Completed psi4-core`).
+The post-build `runtime_provenance.py` failed at `import einsums` with
+**ModuleNotFoundError**. Expected `einsums-stage/lib/einsums` is absent;
+staged Psi4 executable exists; runtime-provenance.json exists but is empty,
+API JSON absent. No import/API/physical probe passed. This is not yet an
+observed CUDA runtime or numerical failure. Status remains exit1/term0/
+FAILED_OR_SIGNALLED, epilog cpu-small/embers/gts-cs207-chemx.
+Read-only install-manifest/cache/actual module-path audit b237a48ef pending.
+Do not rebuild or rewrite failed stage/environment/status. If matching
+installed modules exist elsewhere, propose fresh CPU-only validation/proof
+root (no rebuild) with explicit approval rather than silently relabeling
+this failed job or repairing anything inside a GPU allocation.
+
+Expanded timing controls b3da2a5a0: **46passed/1failed in5.12s**,
+JUnit `build_disp0_cpu/reference-check-Nbr2YCLV/results.xml`.
+The new full HF/CPHF test failed at QCVariable lookup before comparing
+components: invented `SAPT DISP20 ENERGY` name is not published on this
+route. Corrected both test and preparatory worker to the actual existing
+`Disp20,u` / `Exch-Disp20,u` signed names already validated by prior CPU
+gate tests. No numerical discrepancy inferred from that lookup error;
+no tolerance changes. Rerun b0c706d55 pending. Keep this failure evidence.
+
+Install audit b237a48ef: **no E2 Python package at any installed path**.
+Manifest lists native libEinsums ABI1 libraries only; cache has
+EINSUMS_INSTALL_PYMODDIR=naive. Complete built package, `_core.cpython-313`
+and native libEinsums pair exist together under the same job's
+`einsums-build/lib`. This is a genuine missing Python install, not an
+alternate installed directory. No overlay/rebuild/failed-root edits made.
+Bounded read-only same-build metadata/import/ELF/hash probe bf8b36bda launched,
+using build-tree E2 plus installed same-job Psi4, bytecode writes disabled.
+It performs no calculation and is not installed-runtime/API/GPU evidence.
+
+Prospective recovery, not authorized/submitted: declaratively install the
+complete same-build E2 Python/native artifacts and whole Psi4 stage into a
+fresh runtime prefix (no selective scientific Python overlay), verify byte
+identity/source lineage/library maps and run CPU API/physical probes in a
+fresh proof root. No native recompilation should be needed if the metadata
+audit passes. This would require a narrow fresh CPU-only approval; the
+current no-extra-CPU allocation constraint is respected. Do not turn a GPU
+gate into installation/repair or relabel failed14196330. Parent informed.
+
+Timing review da12090c4390f1dbfb7ee6d81962647de found five blockers:
+optimized-Python assert bypass (including native side-effect calls);
+wrong/root cgroup limits; incorrect scratch group/project quota coverage;
+retaining adapters excluded normal cleanup from measured wholewall;
+and an incomplete scientific module manifest could pass.
+Addressed provisionally: reject optimized Python before science imports,
+native ctypes calls outside assert; resolve process membership/mounts and
+tightest visible ancestor cgroup limits, fail closed if unprovable; inherited
+setgid and project quota checks; require exactly four scientific module
+names/hashes. Added targeted negative/synthetic tests.
+
+Crucially, removed strong graph references from timed work. Per-process
+dispatch proof now reconstructs an identical whole HF call **after** timing,
+with logging/reference retention limited to that untimed pass. Signed/global
+components and compute/DF/staging/placement policy must match the measured
+call. Maximum campaign count is now explicitly **24timed +24untimed full
+calls**, plus small native positive controls, in the same single6h allocation
+and unchanged charge ceiling. No cleanup cost is intentionally moved outside
+the measured call, and no extra allocation is implied. Parent notified of
+the increased work and deadline risk; plan updated. Final CPU control run
+bda04c116 and follow-up review dbf45f11ac926f5817187e64078bd26ec pending.
+No GPU execution/coverage/readiness/timing claim.
+
+Parent methodology clarification accepted: reconstructed untimed execution
+**does not independently prove actual timed-call dispatch**. Worker/plan now
+label measured results **policy-controlled8-CPU versus hybrid timing**,
+`actual_timed_gpu_dispatch_verified=false`; diagnostic evidence is separately
+named. Keep24timed calls in24fresh processes, at most24additional untimed
+reconstructions plus small controls; diagnostic walls never enter medians.
+48-call admission stays inside the same one6h/$8.48 ceiling and deadline,
+with partial counts/failures retained, not manufactured3repeat ratios.
+No new CPU approval exists.
+
+Also removed pre-clock CUDA identity/synthetic warmup/forced GPU synchronization:
+fresh whole-call first-use work remains within production timing where
+applicable; CPU timed route does not explicitly call CUDA synchronization.
+GPU end synchronization is included in both its wholecall and dispersion
+boundaries. Native logger remains default-OFF in the fresh measured process
+(reject logger environment flags); native metadata/logger diagnostics begin
+only after the measured interval. These are preparatory methodology changes,
+not executed native timing results.
+
+Corrected full-HF protocol/control rerun b0c706d55: **47passed in7.58s**,
+JUnit `build_disp0_cpu/reference-check-LMqLhDCA/results.xml`, no warnings/
+skips. This precedes the later review-control additions; bda04c116 remains
+the final pending run. The small Water-Ne fullHF/CPHF+deltaHF CPU graph
+versus nativeSAPT comparison retains all seven component deltas:
+ELST/EXCH/IND0; signedDisp20 -2.882622526095835e-17Eh;
+signedExch-Disp20 +1.2894350812459136e-9Eh; combinedDisp/TOTAL
++1.2894350524247705e-9Eh. These pass the predeclared1e-8 physical tolerance
+without loosening; they are not the near1e-17 agreement of the earlier
+nativeFISAPT-specific oracle comparisons. No GPU result inferred. Parent
+received the discrepancy and scope explicitly.
+
+Same-build metadata bf8b36bda PASS (read-only, no calculation): Psi4
+1.12a1.dev622 from completed installed stage; E2 Python/native both from
+`einsums-build/lib`, exactd17bb76e/GNU14 and one mapped native world.
+Approved source binary hashes:
+Psi4core `b3cfe2f2261533df9a9018731d9fe2bffea41cfe70f53f14195caaee7de8697d`;
+E2Python `_core` `8f23c69b79613f9b94eee95d4735e8f88f67be7c98867290f7546ca56bdc6833`;
+native `9e31b5ff8cf28e796b04ee74853c4923f06acf03f1af24dfddd75b79de583cb7`.
+CUDA maps resolve toolkit links to p4cuest_sapt's CUDA13 libraries
+(libcublas13.6.0.2 and libcudart13.3.29), not that environment's old
+Einsums1 stage. Actual CUDA ABI/device/numerics still untested. Bounded
+tiny1thread API/layout probe b20c10275 pending.
+
+Coordinator grants ARTIFACT-ONLY deployment **without any new allocation**:
+reviewed immutable recipe, whole same-job E2 built Python+matching native
+and completed whole Psi4 stage into a new absent isolated prefix; no
+configure/compile/rebuild/old-core overlay/RPATH patch/shared mutations.
+Preserve failed roots and statuses. Bound operation below2min with byte/
+quota preflight, origin→destination file/hash/ABI/dependency manifest and
+the exact three identities above. Then metadata/tinyAPI only, not GPU
+readiness. Proposed stdlib installer `artifact_deploy.py` has90s I/O alarm/
+deadline, absent-prefix guards, full inventory/destination hashes, symlink
+escape rejection and paired readelf audit. Tiny fake-artifact tests
+b86b0824f and review d900114d4a94fb4a63bdc9150deedb751 pending before
+commit/push/deployment. Artifact count/byte audit bad7ba6d6 and destination
+project quota b2669198f pending. No deployment or GPU allocation yet.
+
+Review-control run bda04c116 completed **60passed in6.70s**, no warnings/
+skips, JUnit `build_disp0_cpu/reference-check-kP0JNkN5/results.xml`.
+Includes optimized-Python fail-fast, each omitted scientific-module manifest,
+process cgroupv1/v2/namespace and tightest ancestor checks, inherited group,
+quota parsing, prior route/evidence controls and small fullHF/CPHF physical
+regression. These are local CPU tests; native logger, deployed-prefix imports,
+actual GPU numerics and measured timings remain unvalidated. Follow-up review
+and later methodology labels/untimed-work admission remain separately tracked.
+
+Second timing review dbf45f11ac926f5817187e64078bd26ec found further
+resource/provenance/preservation gaps. Provisionally fixed: reject unprovable
+root-membership/partial bind mounts rather than guessing namespaces; allow
+the real cgroupv2 hierarchy root to lack memory.max after a finite visible
+descendant bound, but reject missing ordinary controls. Scratch project/group
+ownership now comes from a private **new zero-byte inode** in job-owned scratch,
+with inheritance flag checked and probe removed outside timed work; query
+its actual user/group/project quota rather than assuming the parent ID.
+Completed measured wall/components/timers are atomically checkpointed as
+**MEASURED_PROOF_PENDING** before expensive diagnostics (not accepted PASS).
+Scientific source guard now checks both worktree-vs-HEAD and index-vs-HEAD,
+including staged-then-restored cases. Targeted fixtures added; final CPU
+validation b6403af75 pending. No installed-runtime or GPU readiness inferred.
+
+Same-build tiny1thread API probe b20c10275 PASS: FP64 GEMM/denominator/
+division/reduction at edges1x1/3x4/2x1, default-graph strided-view changed-input
+replay and pool/view keepalive/reset. Fixedrtol1e-11/atol1e-12. Psi4 is the
+completed same-job installed1.12a1.dev622; E2 is same-job built2.0.0 package.
+No SCF/SAPT/benchmark/device work, failed roots unchanged. This narrows the
+blocker to clean Python/runtime installation and deployed-prefix validation,
+not missing E2 API functionality. Parent informed. Repeat metadata and this
+tiny probe on the fresh artifact prefix after deployment; no GPU readiness
+claim yet.
+
+Artifact byte audit bad7ba6d6 completed read-only: whole Psi4 stage4803
+files/129,175,976bytes; complete built E2 package31files/24,001,971bytes;
+native E2 real library37,327,600bytes plus two relative ABI/name aliases.
+About190.5MB actual file data before metadata; the installer computes its
+exact full inventory and requires2×bytes+1GiB free/quota margin.
+This is a bounded artifact-I/O candidate, not a compilation. Project quota,
+recipe review/tests and immutable pin remain prerequisites to the cleared
+deployment; no copy has begun.
+
+Destination preflight b2669198f PASS: project export8TiB total,
+2,102,660,169,728 available bytes. Human-reviewed pace-quota research-group
+row reports6233.8/8192GiB used/limit (no finite project file-count limit);
+use conservative1900GiB quota headroom versus the installer's approximately
+1.36GiB minimum. pace-quota explicitly warns not to script its display, so
+do not automate parsing it. Deployment additionally checks live destination
+free bytes itself. Quota output is retained in taskb2669198f; this does not
+authorize spending or imply timing readiness. Account available at this
+snapshot is$28.72; refresh the dedicated selector before any GPU submission.
+No copy/deployment begun; recipe unit/review results still pending.
+
+Artifact recipe unit task b86b0824f: **6passed in3.06s**, no warnings/skips,
+JUnit `build_disp0_cpu/reference-check-lkoyv8qX/results.xml`. Fake artifacts
+only: complete-tree copies/hash identity, absent-prefix/no overlay,
+external symlink rejection, source tamper detection with partial preservation,
+deadline and optimized-Python rejection. No deployment/native build/device
+work. Await recipe review before immutable commit/push and actual cleared
+artifact installation.
+
+Tiny local CPU profiler API probe b3de6fda5 launched to check actual
+E2 default-graph annotation schema (not only synthetic parser fixtures).
+No GPU, physical SAPT or performance measurement; own local artifact directory.
+
+Artifact review d900114d4a94fb4a63bdc9150deedb751 found four safety blockers:
+relocated symlinks validated too late, pre-existing prefix manifest overwrite
+on failed exclusive mkdir, untracked recipe could claim an unrelated pin,
+and unbounded timeout finalization. Fixed provisionally: reject symlinked
+directory roots/ancestors and validate the full relocated link graph before
+writes; exclusive prefix creation returns device/inode ownership and only
+that prefix can receive an exclusive-created manifest; executing installer
+must match its tracked pinned Git blob;90s body plus separately hard-bounded
+10s finalization (absolute cap110s, exit124 if finalization stalls).
+Regular files retain explicit observed destination hashes/modes as well as
+origin identities; no binary/RPATH patch. Added targeted race/link/blob/
+deadline fixtures. Retest bca7cba61 and follow-up review
+d2d20df2919fa617238812c312ef58fa4 pending before commit/deployment.
+No copy, allocation or failed-root/status mutation has occurred.
+
+Hardened artifact retest bca7cba61: **14passed in2.61s**, no warnings/
+skips, JUnit `build_disp0_cpu/reference-check-kCD153yc/results.xml`.
+All four review-specific negative paths are covered. Final frozen rerun
+b354041f4 additionally checks the current recipe with explicit destination
+hash/mode recording; follow-up review still pending. No deployment begun.
+
+Follow-up artifact review d2d20df2919fa617238812c312ef58fa4 identified two
+remaining blockers: pathname replacement between ownership check and writes,
+and disarmed timeout before stdout/process exit. Reworked writes to retained
+owned directory descriptors: exclusive/no-follow file opens, descriptor-based
+copy/chmod/symlink/manifest operations, private new directories and no adoption
+of unexpected existing directories. Added replacement-at-write fixtures that
+verify foreign source/manifests remain unchanged.
+
+Added a separate parent watchdog through worker output/termination: readiness
+barrier before work, pidfd/private process group, waitid(WNOWAIT) to prevent PID
+reuse, hard110s kill of only owned worker/readelf descendants. Worker still has
+90s body and10s finalization caps; blocked-output fixture added. Retest
+b4f02ed0c and final bounded review d020ac4f93e3a496abe2c63a0d1db6c95 pending.
+No artifact deployment, compilation, allocation or failed-root mutation.
+
+Static admission audit (not measured throughput/runtime): for full dimer-basis,
+unfrozen spaces, the three product GEMMs require
+`(10*Nri+8)*na*nb*nr*ns` real FP64 FLOP. Routine cases are0.221/3.549/
+146.069/2995.439TFLOP respectively. Protein157 alone therefore has about
+2.995PFLOP/call of product work; six CPU calls would consume about5h even
+at a **hypothetical**, unmeasured1TFLOP/s, excluding SCF/CPHF/packing/I/O/
+other cases/GPU calls. Do not assume the48-full-call plan fits6h.
+
+Proposed to parent, **not yet adopted**: since full untimed reconstruction
+does not establish timed dispatch, replace24 extra full-energy diagnostics
+with24 small representative-block same-kernel synthetic post-timing probes
+and native positive controls. Preserve24 fresh timed whole calls, matched
+science, signed comparisons, policy-controlled/unverified-timed-dispatch
+labels and the same single6h allocation/charge ceiling. Await protocol
+clearance; otherwise preserve the explicit48 maximum and partial admission.
+
+Protocol clearance subsequently granted: current plan is24 timed fullHF
+calls in24fresh processes, plus24 bounded fresh SAME-kernel synthetic
+post-timing probes and24 explicitly separate native positive controls.
+The48-full-call proposal above is **superseded history**. No full untimed
+HF reconstruction remains; no timed adapters/graphs/arrays/DF scratch
+retained/reused, natural GPU policy unforced, diagnostic walls excluded
+from medians. Probe caps are virtual edges4, occupied widths8, RI64
+(≤32wide matrices), plus the separate fixed naturally eligible control.
+Policy-controlled8-CPU/hybrid labels and unverified-timed-dispatch caveat
+remain. One6h job/charge ceiling unchanged; no extra allocation or retry.
+Harness/schema/tests are being updated and are not timing-ready.
+
+Artifact descriptor/watchdog run b4f02ed0c initially **16passed/1failed**
+in2.98s, JUnit `build_disp0_cpu/reference-check-xHB1P9v5/results.xml`.
+Failure was a capability guard: this conda Python has no pidfd bindings.
+Removed the unnecessary pidfd dependency: the independent supervisor uses
+private child session/group and `waitid(WNOWAIT)`, retaining the child PID
+until supervisor exit so it cannot target a recycled unrelated PID.
+No unbounded fallback. Frozen retest via context-mode subprocess:
+**17passed in2.10s**, no warnings/skips,
+`build_disp0_cpu/reference-check-yGjzEGBp/results.xml`.
+Includes actual copy/manifest replacement-window and blocked-stdout
+fixtures. Final read-only review d020ac4f93e3a496abe2c63a0d1db6c95 pending;
+no deployment before review and immutable recipe pin.
+
+Final timing safeguard test task b6403af75: **68passed in6.48s**, no
+warnings/skips, JUnit
+`build_disp0_cpu/reference-check-ctS1hjRJ/results.xml`. Includes staged/
+unstaged/restored-index source pin rejection, realistic cgroupv2 root
+without memory.max, namespace/bind fail-closed checks, actual scratch-probe
+ownership/project inheritance and cleanup, prior guards and small fullHF/
+CPHF signed/global regression. No actual timed process, native CUDA logger,
+installed recovered runtime or GPU numerical gate has run.
+
+Real local CPU profiler microprobe b3de6fda5 PASS: observed
+`physical/cpu-api/edge-1` → `ComputeGraph::execute(sapt0-dispersion-products)`
+with actual `op_kind=Einsum`, `device=CPU` annotations. This confirms the
+CPU-edge parser schema beyond synthetic fixtures. Artifact:
+`build_disp0_cpu/profile-api-y9bZgU0K/profile.json`.
+Tiny matrix API work only; no GPU/physical SAPT/performance claim.
