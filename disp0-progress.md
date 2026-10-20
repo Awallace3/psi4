@@ -1647,6 +1647,31 @@ allocation. CPU proposal remains one8CPU/48G/2h/freeembers/gts-cs207-chemx/
 noGPU/no-requeue job only after fresh explicit approval and pinned input/
 route/headroom checks; no approval requested before returning the final pin.
 
+Final static confirmationd7c65a69eeeb89bf3228306f4bf3f0337 retrieved:
+**specific final finding resolved**, no remaining counterexample within the
+forwarding scope; fixtures inspected,172-test result not independently rerun.
+Executable recipe pin is **89b6160126d876b2ad649e6cf2a22f01f4b300f7**,
+origin push confirmedbee4dadc4 (6f5536→89b616). Working tree was clean,
+Python AST/four shell syntax/whitespace checks pass; scientific587 equality
+underpsi4/ and exact unchanged E2d17 tracked source were verified.
+Exact changed-source scope from5da211 to89b616 is18 paths: devtools/disp0
+configuration/packaging/audits/proofs/fixtures/docs, three existing devtools
+build/API/reference helpers, two pytest files and this progress document.
+No scientific source or shared/parent roots changed.
+
+Offline task10 completed. Fresh CPU approval REQUESTED through parent,
+not granted or submitted: ONE8CPU/48G/02:00:00/noGPU/no-requeue job,
+cpu-small subject exact-route, freeembers/gts-cs207-chemx,16CPU-hours max/$0.
+Complete real SDK input manifest and dependency-lock SHA remain UNPASSED
+prerequisites; their preparation is not implied by local fake guard tests.
+Source/push/inputs/test-only/headroom/quota/no-duplicate checks must precede
+any submission. Task11 tracks approval/input receipts. Runtime/GPU physics
+remain unpassed. No SDK operation, native build, diagnostic compile or new
+CPU/GPU allocation ran. SharedFDDS-controller-only/no512GiB/noidlehold policy
+continues; no immediate READY window requested.
+
+This later progress-only record does not replace executable pin89b6160126.
+
 Final timing safeguard test task b6403af75: **68passed in6.48s**, no
 warnings/skips, JUnit
 `build_disp0_cpu/reference-check-ctS1hjRJ/results.xml`. Includes staged/
