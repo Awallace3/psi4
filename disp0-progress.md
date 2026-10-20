@@ -88,7 +88,9 @@ No tolerance relaxation to hide failures.
   same localized ethane-water/cc-pVDZ wavefunction for PAIR vs BLOCKED edges
   1/5/500. Both signed Disp20 and Exch-Disp20, combined Disp_AB and partition
   sums agree at rtol=1e-11/atol=1e-12 Eh. No tolerance changes.
-* Phase 1 implementation checkpoint (not yet numerically validated):
+* Initial scalar Phase 1 implementation checkpoint `1e25b5e89a` is
+  **CPU-validated: 26 passed**, 64 signed physical comparisons retained.
+  CUDA numerical/device-shadow correctness remains unvalidated.
   opt-in `SAPT_DFT_MP2_DISP_ALG=EINSUMS`, with HF-only validation and
   `SAPT_DFT_EINSUMS_GPU=false` default. Existing SAPT/FISAPT defaults and
   non-HF paths remain selected as before. Canonical mode shares fdisp0's
@@ -104,6 +106,12 @@ No tolerance relaxation to hide failures.
   Fragment dispersion/sum-rule coverage is still required before claiming
   the full Phase 1 gate; no broader F-SAPT terms have been implemented.
 * Phase 2: gated, not started.
+* GPU test is now user-authorized but build-blocked. CPU job14182584 failed
+  Catch2 configuration; corrected job14193865 passed that point and linked
+  the native E2 library, but Python codegen failed on Apiary/Clang missing
+  `stddef.h`. No installed coherent E2 Python/Psi4 stage is ready and **no GPU
+  job has been submitted**. Failed roots are preserved; no further CPU retry
+  is implicitly authorized.
 
 Parent scope agreement: Phase 1 is explicitly **GPU contractions with CPU
 elementwise/reductions**, not fully GPU-resident dispersion. Use default
@@ -114,9 +122,9 @@ freshness against signed components. Account for host work and transfers in
 end-to-end timings. After the real GPU numerical gate, inventory remaining
 F-SAPT GPU API gaps and propose a Python-level approach before expanding.
 
-## Dispatch and GPU capability review
+## Launch-base dispatch and GPU capability review
 
-* Existing `energy("sapt(dft)")` + `SAPT_DFT_FUNCTIONAL=HF` correctly skips
+* At launch pin1592851675, `energy("sapt(dft)")` + `SAPT_DFT_FUNCTIONAL=HF` correctly skips
   FDDS and DFT exchange-dispersion scaling. Plain scalar dispersion still
   calls native `FISAPT.disp` or `core.sapt`, even from
   `sapt_mp2_terms_ein.py`. Only the SAPTDFT F-SAPT branch calls Python
@@ -497,6 +505,54 @@ before sbatch. Explicit --no-requeue also passed on the actual command line.
 
 Acceptance is not build success or CUDA correctness. No H200/GPU numerical
 job or broader F-SAPT work is authorized/started by this receipt.
+
+## GPU-test authorization
+
+User subsequently explicitly authorized the GPU test. Apply the previously
+agreed bounded shape: one H200 / 4 CPUs / 32G / 30min, free embers /
+gts-cs207-chemx. This does not waive corrected-build readiness, exact-route
+test-only/headroom, matching native/Python import/ABI checks, actual device
+identity or signed numerical/trace evidence. Do not finish an unready build
+inside this allocation, borrow a holder, use inferno or start broader F-SAPT.
+First inspect corrected job14193865 and its strict preparation artifacts.
+
+Readiness inspection b56d9f49b: corrected build14193865 is **RUNNING** on
+atl1-1-02-005-24-2, elapsed 00:05:35 at snapshot; job/.batch/.0 still running.
+No terminal status, runtime-provenance.json, api-probe.json or staged Psi4
+executable existed yet. The GPU gate is authorized but **not build-ready**;
+do not allocate a GPU merely to wait or finish this build. Official watcher
+b130435b3 remains responsible for terminal notification.
+
+While the corrected build runs, prepared standalone GPU gate files
+`devtools/disp0/{gpu_gate.py,cublas_trace.cc,prepare_gpu_gate.sh,
+gpu_gate_payload.sh,gpu_gate.sbatch}` and parser-only fixtures
+`tests/pytests/test_disp0_gate_evidence.py`. Scientific `psi4/` files remain
+byte-for-byte unchanged from build pin5245210a; the harness must import only
+that prepared stage, never a source overlay.
+
+Gate plan: native FISAPT plus eager/default CPU replay vs CUDA requests at
+edges1/5/24/500, forced DFcap7, asymmetric freezing, changed/reversed/repeated
+geometries, spherical/Cartesian bases and a nontrivial benzene dimer to obtain
+naturally eligible blocks without changing the cost model. Explicit larger
+production block for that case remains subject to the existing memory planner.
+Real GPU replay tests strided input packs, main/edge/main reuse and live pool
+reset rejection/release. Native CPU fragment partition sum is an oracle, not
+GPU fragment coverage; unsupported fragment/S-inf requests must still reject.
+Unchanged non-HF regression is repeated with the real CUDA runtime present.
+
+Evidence plan: exact prepared binary hashes/single-world import, header-ABI
+identity function compiled against CUDA13, logical CUDA UUID matched to NVML
+UUID and this process/exclusive context (no physical-index-zero assumption),
+default graph's observed `gpu_dispatch` annotations AND forwarded native
+`cublasDgemm_v2` API/status records within physical/production phases.
+The diagnostic interposer implements no mathematics and forwards arguments
+unchanged. It must be compiled/ELF-checked **before** the GPU allocation.
+Packing, transfers, CPU work and diagnostic/oracle time are labelled; no
+speedup/full-GPU/F-SAPT coverage claim.
+
+Gate scripts pass AST/shell/diff checks. Parser-only CPU fixture tests launched
+as b45d86fc5; review d61de3e3d264a3ad3977373062ef1950d pending. The tracer has
+not yet been compiled and the gate has not run on CUDA. No GPU submitted.
 * Read-only Phoenix access preflight: PASS, exit 0 (bfefc7153).
   No remote branch worktree/build has yet been created and no job submitted.
 * Read-only Phoenix dependency discovery: PASS, exit 0 (b99607f10).
@@ -506,3 +562,131 @@ job or broader F-SAPT work is authorized/started by this receipt.
   This does not exclude custom locations; do not treat the parent's old
   1.x measurement stage as a compatible ready build. Dedicated source,
   environment and native/Python install preparation are still needed.
+
+### Corrected CPU build failed; authorized GPU gate remains blocked
+
+Official watcher b130435b3 reports corrected job **14193865 FAILED**, job,
+.batch and .0 all exit **1:0**, elapsed **00:17:51** (step00:17:42).
+The terminal observation was 2026-10-19T23:38:47Z. No retry or job mutation
+was made. Both immutable failed roots remain preserved.
+
+Bounded stdout/stderr/status inspection launched as b6ef30efe for the exact
+new blocker. The user's GPU-test authorization is retained, but is not a
+waiver of coherent E2/Psi4 build/import/API readiness. **No GPU submitted**;
+do not repair/finish a full dependency build inside the 30-minute H200 gate.
+No third CPU allocation is authorized by either consumed one-job approval.
+
+Parser-only CPU fixture task b45d86fc5: **11 passed in 1.33s**, no warnings
+or skips. Results:
+`build_disp0_cpu/reference-check-lOGVr7MK/results.xml`.
+It verifies acceptance/rejection logic for native API records and observed
+profile annotations, including rejection of placement-only/CPU-fallback,
+wrong-PID, failed-status and nonphysical fixtures. These are deliberately
+synthetic parser fixtures, **not CUDA execution or GPU numerical evidence**.
+
+GPU harness review d61de3e3d264a3ad3977373062ef1950d found seven proof/control
+gaps; addressing before any allocation: explicit native cuBLAS loader/link
+preflight, attesting currently imported/mapped binaries and scientific modules
+instead of only prepared filenames, actual cuBLAS on each repeated synthetic
+main replay, dropping independent pool-output references before ownership
+checks, observed CPU edge execution (not placement alone), published driver
+signed/sum QCVariables, and EXIT status handling before fallible preflight.
+
+Native forwarding now explicitly links cuBLAS and exposes a resolve-only
+identity probe, still no numerical algorithm. Larger bounded synthetic main
+matrices exercise naturally eligible CUDA replays without forcing the cost
+model; small edges remain separate. Physical CPU-edge proof is scoped to
+actual `ComputeGraph::execute(sapt0-dispersion-products)` profile events.
+Additional negative parser fixtures and fake-scheduler parameter/controller/
+QoS/signal tests launched as b2210c4b4; CPU QCVariable wiring is also checked.
+These tests do not substitute for native compilation, loader preflight or GPU
+numerics. Underlying E2/Psi4 build readiness is still blocked by job14193865.
+
+Corrected-build artifact inspection b6ef30efe confirms the new exact blocker:
+Apiary/Clang cannot find `stddef.h` while parsing Options.hpp through GNU14.3
+`<complex>/<cmath>` and the conda sysroot's stdlib.h. `generate_rc` then fails
+"no option descriptors found". The native E2 shared library linked at build
+step378/520, but installed Python `_core`, Psi4 stage, runtime proof and API
+proof are all absent. Status records `exit_code=1`, `term_received=0`,
+FAILED_OR_SIGNALLED; epilog confirms cpu-small/embers/gts-cs207-chemx.
+This is not a device runtime failure that a GPU allocation can solve.
+
+Source audit: Apiary's CMake helper only locates its Clang builtin resource
+directory through a Clang native compiler or `CONDA_PREFIX/bin/clang++`.
+Native compiler must remain GNU14.3. CPU oracle has clangxx/Clang22.1.4 and
+`lib/clang/22/include/stddef.h`; original build recipe did not explicitly
+install clangxx or bind CONDA_PREFIX to its new env. Read-only failed-cache/
+package inspection b32b6a119 is pending before confirming this environment
+discovery hypothesis.
+
+Prepared a stricter isolated Apiary standard-library/annotated-AST preflight.
+Initial negative resource probes unexpectedly exited0 and retained the
+annotated declaration; direct diagnostics revealed **Apiary exits0 and emits
+partial AST even after a fatal missing-stddef error**. These failed diagnostic
+assumptions are retained. The strengthened preflight rejects fatal parser
+stderr as well as exit failures/missing AST, removes prior output and excludes
+ambient host include rescue. It now gives local RED (missing resource,
+exit1 with fatal stddef) / GREEN (matched Clang resources, native GNU14.3,
+nonempty AST, exit0).
+
+Prospective recipe adds clangxx22.1.4 for AST resources only, job-local
+CONDA_PREFIX binding, this fail-fast preflight and fatal-parser diagnostics
+checking on the full build log. Native GNU/CUDA pins and scientific source
+are unchanged. No failed root has been modified and no third CPU allocation
+or GPU allocation has been submitted.
+
+Strengthened CPU gate-control task b2210c4b4 completed: **22 passed in
+2.11s**, no warnings/skips. Command:
+`bash devtools/disp0_test_reference.sh "$PWD/tests/pytests/test_disp0_gate_evidence.py" "$PWD/tests/pytests/test_disp0_gate_batch.py"`.
+JUnit:
+`build_disp0_cpu/reference-check-iqa4RZ30/results.xml`.
+This covers synthetic trace/profile acceptance and rejection, actual CPU
+driver QCVariable names/component sum wiring, and fake-scheduler early
+failure/QoS/controller/TERM handling. It is separate from the 26-pass physical
+CPU checkpoint and provides **no CUDA execution or GPU numerical proof**.
+Follow-up read-only review da307e05df0e1659daaa9052fa847294b is pending.
+
+Read-only failed-environment inspection b32b6a119 confirms the Apiary resource
+discovery failure, rather than merely suggesting it:
+`APIARY_RESOURCE_DIR` is empty; the dedicated env has no `bin/clang++` and no
+Clang builtin `stddef.h`; `APIARY_EXTRA_ISYSTEM` incorrectly names the base
+`P/miniconda/include`, not this job's environment. Native C++ is correctly
+the job-owned GNU14.3 compiler. Failed job14193865 has Apiary1.0.0,
+Catch2 3.16.0, **CMake4.3.2** and libllvm22 22.1.8. This distinguishes its
+corrected CMake pin from failed job14182584's actual CMake4.4.4. The only
+partial native result found is
+`einsums-build/lib/libEinsums-abi1.so.2.0.0`; it is not an installed coherent
+native/Python runtime and will not be overlaid with an old Python extension.
+All inspection was read-only. Proposed Clang resources/CONDA_PREFIX/preflight
+fix still needs review and a new committed pin before requesting any fresh
+CPU build approval.
+
+Follow-up review da307e05df0e1659daaa9052fa847294b retrieved: no further
+concrete GPU harness blockers; one P2 in the CPU launcher: required parameter,
+controller and QoS checks preceded its EXIT trap. Moved trap installation
+ahead of those checks, added unset-safe status fields and status-write failure
+handling. The fake-scheduler early-failure/TERM suite now exercises both
+CPU and GPU launchers. Final CPU control rerun bfd547bbb and fresh Apiary
+red/green preflight b1743f6f0 are pending. Static bash/diff checks pass;
+`psi4/` source remains byte-identical to5245210a. Native CUDA tracer compilation,
+loader preflight and actual GPU numerical execution remain untested.
+
+Final CPU gate-control rerun bfd547bbb: **26 passed in2.10s**, no warnings or
+skips, including all eight CPU/GPU fake-scheduler early-error and signal cases.
+Command is the same two-file invocation above; JUnit:
+`build_disp0_cpu/reference-check-9hsDyCjK/results.xml`.
+These 26 control tests are **distinct from** the earlier 26 physical
+dispersion/API tests and64 signed comparisons; do not combine the counts into
+a GPU pass claim.
+
+Final fresh Apiary preflight b1743f6f0: **PASS**. Deliberately missing
+resource headers give RED exit1 with the expected fatal missing-stddef
+diagnostic; matched Clang22.1.4 resources with native GNU14.3 give GREEN
+exit0 and the required nonempty annotated AST. Artifacts:
+`build_disp0_cpu/apiary-final-review/{red,green,red.log,green.log}`.
+No failed remote root/environment was touched. Review findings are addressed
+and the build fix plus gate controls are ready to commit/pin. This is local
+parser preparation only, not proof that a fresh Phoenix solve/build or CUDA
+runtime will pass. Another CPU build requires fresh explicit approval;
+the already authorized GPU test stays blocked until matching preparation
+passes. No automatic retry and no broader F-SAPT transition.

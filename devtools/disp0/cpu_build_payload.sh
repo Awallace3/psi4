@@ -27,6 +27,7 @@ env="$run/environment"
 "$P/miniconda/bin/conda" env create --prefix "$env" --file "$source_root/devtools/disp0/environment.yml"
 "$P/miniconda/bin/conda" list --prefix "$env" --explicit > "$run/environment-explicit.txt"
 export PATH="$env/bin:$CUDA_HOME/bin:$PATH"
+export CONDA_PREFIX="$env"  # Apiary's helper locates Clang resources through this prefix
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$CUDA_HOME/lib:$env/lib"
 export OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1
 cc="$env/bin/x86_64-conda-linux-gnu-cc"
@@ -49,6 +50,8 @@ readelf -Ws "$run/cuda_header_abi" > "$run/cuda-header-symbols.txt"
 cmake -S "$source_root/devtools/disp0/catch_config_probe" -B "$run/catch-config-probe" -G Ninja \
     -DCMAKE_CXX_COMPILER="$cxx" -DCMAKE_PREFIX_PATH="$env" \
     -DCatch2_DIR="$env/lib/cmake/Catch2"
+cmake -S "$source_root/devtools/disp0/apiary_config_probe" -B "$run/apiary-config-probe" -G Ninja \
+    -DCMAKE_CXX_COMPILER="$cxx" -DCMAKE_PREFIX_PATH="$env"
 ein_source="$run/einsums-source"
 git clone --no-checkout https://github.com/jturney/Einsums.git "$ein_source"
 git -C "$ein_source" checkout --detach "$ein_pin"
@@ -69,7 +72,11 @@ cmake -S "$ein_source" -B "$run/einsums-build" -G Ninja \
     -DLAPACK_LIBRARIES="$env/lib/libmkl_rt.so" \
     -DEINSUMS_WITH_PROFILER=ON -DEINSUMS_WITH_TESTS=OFF \
     -DEINSUMS_WITH_EXAMPLES=OFF -DEINSUMS_WITH_DOCUMENTATION=OFF
-cmake --build "$run/einsums-build" --parallel 4
+cmake --build "$run/einsums-build" --parallel 4 2>&1 | tee "$run/einsums-build.log"
+if grep -m 20 -E 'fatal error:|Error while processing' "$run/einsums-build.log"; then
+    printf 'Rejecting parser errors even if Apiary returned exit0.\n' >&2
+    exit 1
+fi
 cmake --install "$run/einsums-build"
 export DISP0_ENV="$env" DISP0_BUILD_DIR="$run/psi4-build" DISP0_BUILD_THREADS=8
 cd "$source_root"

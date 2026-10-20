@@ -11,6 +11,8 @@ dependencies:
   - cmake=4.3.2
   - ninja=1.13.2
   - apiary=1.0.0
+  # AST/codegen resource headers only; native C/C++ compilers stay GNU14.3.
+  - clangxx=22.1.4
   - pybind11=3.0.2
   - fmt=12.1.0
   - mimalloc=3.3.2

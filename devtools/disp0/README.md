@@ -1,6 +1,9 @@
 # Dedicated Einsums2 CUDA build preparation
 
-**Not submitted or GPU-validated.** Parent readiness review is mandatory.
+**Build preparation blocked; not GPU-validated.** CPU builds14182584 and
+14193865 failed; their roots are preserved. The user authorized the bounded
+GPU test, but a coherent matching stage must pass preparation before it runs.
+No further CPU build is authorized by this recipe.
 
 * Einsums Git pin: `d17bb76e4ed3a07fbbc470e6813a5c134dfe0e62`.
 * Build native shared library and Python `_core` in the same configure/install.
@@ -13,6 +16,12 @@
   IMPORTED target works; the FetchContent source alias does not cross into
   that try_compile project. The recipe preflights this exact link and pins
   CMake 4.3.2 to the CPU baseline.
+  Apiary1.0 also requires discoverable matching Clang builtin headers even
+  when the native compiler is GNU. Install clangxx22.1.4 for AST resources,
+  bind `CONDA_PREFIX` to the dedicated environment and run
+  `apiary_config_probe` before building E2. Apiary can return0 and emit partial
+  AST after fatal parser errors: reject diagnostics as well as missing output.
+  The negative resource probe must fail; the matched-resource probe must pass.
 * Use a fresh branch-specific native Psi4 build. Native `ENABLE_Einsums=OFF`
   is intentional, as in the CPU oracle: this route uses Python RuntimeTensors,
   not Psi4 C++ Einsums objects. Python `_core` must still link the one matching
@@ -27,7 +36,9 @@ gts-cs207-chemx. No GPU needed when arch 90 is explicitly configured.
 Check the exact route with `sbatch --test-only`, send provenance/readiness to
 the parent and obtain coordination before submission.
 Job 14182584 already consumed the original one-job approval and failed at
-Catch2 configuration. No retry is authorized by this recipe. Any corrected
+Catch2 configuration. Separately approved corrected job14193865 consumed its
+one-job approval and failed at Apiary resource discovery. No retry is
+authorized by this recipe. Any corrected
 build requires fresh approval, fresh source/environment/build roots and a
 new immutable pin. Preserve the failed roots. Future jobs explicitly request
 `--no-requeue`.
@@ -49,7 +60,7 @@ EINSUMS_WITH_MALLOC=system
 EINSUMS_BUILD_PYTHON=ON
 EINSUMS_PYBIND_NUM_TU=8
 EINSUMS_WITH_PROFILER=ON
-EINSUMS_WITH_TESTS=ON
+EINSUMS_WITH_TESTS=OFF
 EINSUMS_WITH_EXAMPLES=OFF
 EINSUMS_WITH_DOCUMENTATION=OFF
 ```
