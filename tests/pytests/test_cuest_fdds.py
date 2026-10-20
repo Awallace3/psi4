@@ -15,8 +15,10 @@ pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick]
 def fdds_factory():
     psi4.set_num_threads(1)
     psi4.set_memory("500 MiB")
+    previous_subtype = psi4.core.get_global_option("SCF_SUBTYPE")
     psi4.set_options({"use_cuest": False, "cuest_xc": False,
-                      "cuest_mixed_precision": False, "cuest_gemm_min_dim": 0})
+                      "cuest_mixed_precision": False, "cuest_gemm_min_dim": 0,
+                      "scf_subtype": "auto"})
     mol = psi4.geometry("""
         He 0 0 0
         He 0 0 4
@@ -53,7 +55,8 @@ def fdds_factory():
 
     yield make
     psi4.core.set_memory_bytes(500 * 1024**2)
-    psi4.set_options({"use_cuest": False, "cuest_gemm_min_dim": 256})
+    psi4.set_options({"use_cuest": False, "cuest_gemm_min_dim": 256,
+                      "scf_subtype": previous_subtype})
 
 
 def _values(obj, hybrid, monomer, omega):
@@ -156,12 +159,31 @@ def _reference_exchange_tensors(obj, monomer, dimensions):
     }
 
 
+def _assert_exchange_partial_blocks(obj, dimensions, memory_bytes):
+    """Check that the small budget exercises partial tails in both X and Y."""
+    if memory_bytes is None:
+        return
+    q = obj.metric().np.shape[0]
+    available = int(.8 * (memory_bytes // 8))
+    x_tail, y_tail = [], []
+    for o, v in dimensions.values():
+        x_outer = min(o, (available - v * v) // (6 * v * q))
+        kov = v // o + 1
+        y_block = (available - o * v) // ((kov**2 + 4 * kov + 1) * o * q)
+        y_inner = min(v, y_block * max(1, kov - 1))
+        assert x_outer > 0 and y_inner > 0
+        x_tail.append(x_outer < o and o % x_outer != 0)
+        y_tail.append(y_inner < v and v % y_inner != 0)
+    assert any(x_tail) and any(y_tail)
+
+
 @pytest.mark.parametrize("occupied", [(3, 3), (2, 3), (6, 6)], ids=["equal", "unequal", "dense-occ"])
-@pytest.mark.parametrize("memory_bytes", [None, 16384], ids=["whole", "blocked"])
+@pytest.mark.parametrize("memory_bytes", [None, 12800], ids=["whole", "blocked"])
 def test_fdds_native_exchange_preprocessing(fdds_factory, occupied, memory_bytes):
     if memory_bytes is not None:
         psi4.core.set_memory_bytes(memory_bytes)
     obj = fdds_factory(True, occupied=occupied)
+    _assert_exchange_partial_blocks(obj, fdds_factory.dimensions, memory_bytes)
     for monomer in ("A", "B"):
         dims = fdds_factory.dimensions[monomer]
         refs = _reference_exchange_tensors(obj, monomer, dims)
@@ -173,11 +195,12 @@ def test_fdds_native_exchange_preprocessing(fdds_factory, occupied, memory_bytes
 @uusing("cuda_cc8")
 @pytest.mark.cuest
 @pytest.mark.parametrize("occupied", [(3, 3), (2, 3), (6, 6)], ids=["equal", "unequal", "dense-occ"])
-@pytest.mark.parametrize("memory_bytes", [None, 16384], ids=["whole", "blocked"])
+@pytest.mark.parametrize("memory_bytes", [None, 12800], ids=["whole", "blocked"])
 def test_fdds_gpu_exchange_preprocessing(fdds_factory, occupied, memory_bytes):
     if memory_bytes is not None:
         psi4.core.set_memory_bytes(memory_bytes)
     obj = fdds_factory(True, occupied=occupied)
+    _assert_exchange_partial_blocks(obj, fdds_factory.dimensions, memory_bytes)
     refs = {m: _reference_exchange_tensors(obj, m, fdds_factory.dimensions[m])
             for m in ("A", "B")}
     del obj

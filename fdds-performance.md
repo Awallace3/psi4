@@ -122,3 +122,19 @@ old frozen source/build/run directories or other agents' jobs.
   pass before configuration. The read-only path inspection found conda headers
   under `targets/x86_64-linux/include`, not `include`; its bounded-output
   pipeline ended141 (SIGPIPE), so it is path evidence, not a GPU execution pass.
+- Static review `d06a70caa6ac7f823fa86e561e093f8d3` found no proven
+  correctness defect in8dc's mappings, capacity arithmetic, host budgets or
+  lifetime/error handling. GPU numerical/fault/capacity runtime evidence is
+  still required; review is not a test pass.
+- First expanded native run: **168 passed/3 failed, zero errors/skips,
+  242.05 s**. All failures are new low-memory exchange fixtures rejecting
+  forced in-core DFHelper initialization before X/Y. Evidence preserved under
+  `/fastscratch/awallace43/fdds-performance-20261020/native-8dc714e4d3/`.
+  The fixture now explicitly selects/restores SCF_SUBTYPE=AUTO to permit the
+  budgeted out-of-core integral path. Targeted recovery at16 KiB passed all
+  six native exchange cases in4.44 s, zero failures/errors/skips.
+- Strengthened the final blocked fixture to12,800 bytes, with explicit
+  dimension-derived assertions that both X occupied blocks and Y virtual
+  blocks contain partial tails. Independent references/tolerances are
+  unchanged. A fresh targeted plus complete171-test native gate is required
+  for this final test-driver pin; the scientific C++ remains reviewed8dc.
