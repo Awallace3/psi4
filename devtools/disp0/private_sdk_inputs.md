@@ -55,7 +55,7 @@ to parent for explicit **INPUT-READINESS CLEARANCE**. Conditional CPU resources
 remain unconsumed until that clearance and subsequent exact source/route/
 headroom/storage/quota/no-duplicate guards. No independent GPU request.
 
-## Bounded alternative input-preparation proposal — NOT approved/submitted
+## Fresh input-only CPU approval — not yet submitted
 
 Exactly ONE CPU-only input-prep job:1node/1task/1CPU/2G/00:10:00,
 free embers/gts-cs207-chemx, cpu-small subject exact-route test-only,
@@ -69,6 +69,18 @@ Archive download82569bytes, newly written input data<=512MiB; corrected
 decoder window128MiB and process address cap1GiB. Retain the existing
 110s payload/5s kill bound (job10min includes bootstrap/evidence capture),
 preserving any failure. This is separate from and does not consume/expand
-the conditional8CPU/48G/2h CPU89 build approval. It requires fresh explicit
-authorization, source pin and exact-route/storage/headroom/no-duplicate
-checks. No new resource request has been submitted.
+the conditional8CPU/48G/2h CPU89 build approval.
+
+Parent now freshly approved exactly this ONE input-only job after real-frame
+tests pass and corrected helper is committed/pushed/frozen.
+`input_prep.sbatch`/`input_prep_payload.sh` enforce route/resources,
+TERM-safe status, fresh roots and no-requeue. At start the helper requires
+actual zstandard0.19.0 and verifies an8MiB-window streaming frame: the old
+131072 bound must reject; explicit128MiB bound must decode8192bytes.
+This happens BEFORE any real package download/extraction, without version
+override/unbounded decoder/fallback. The receipt binds that actual proof.
+Local version-metadata injection tests are explicitly not remote proof.
+Fresh pinned source/route/storage/quota/headroom/no-duplicate checks remain
+mandatory before single submission. No request has yet been submitted.
+Return complete SDK/lock proof for parent INPUT-READINESS; this approval
+does not clear CPU89 or GPU work.

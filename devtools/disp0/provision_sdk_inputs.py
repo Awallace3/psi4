@@ -40,6 +40,30 @@ def decoder():
     return zstandard.ZstdDecompressor(max_window_size=MAX_WINDOW_BYTES)
 
 
+def verify_remote_decoder():
+    """Tiny actual non-scientific compression proof BEFORE downloading/extracting."""
+    import zstandard
+    contract.require(zstandard.__version__ == "0.19.0", "Expected frozen remote zstandard0.19.0")
+    parameters = zstandard.ZstdCompressionParameters.from_level(1, window_log=23)
+    compressor = zstandard.ZstdCompressor(compression_params=parameters).compressobj()
+    frame = compressor.compress(b"x" * 8192) + compressor.flush()
+    window = zstandard.get_frame_parameters(frame).window_size
+    contract.require(window == 8 * 1024**2, "Unexpected streaming-frame window")
+    rejected = False
+    try:
+        with zstandard.ZstdDecompressor(max_window_size=128 * 1024).stream_reader(frame) as stream:
+            stream.read()
+    except zstandard.ZstdError:
+        rejected = True
+    contract.require(rejected, "Remote decoder did not enforce the small-window negative control")
+    with decoder().stream_reader(frame) as stream:
+        contract.require(stream.read() == b"x" * 8192, "Bounded decoder positive control failed")
+    return {"version": zstandard.__version__, "frame_window_bytes": window,
+            "negative_bound_argument": 128 * 1024, "negative_rejected": rejected,
+            "positive_bound_bytes": MAX_WINDOW_BYTES, "positive_payload_bytes": 8192,
+            "scope": "ACTUAL_INPUT_DECODER_ONLY_NOT_SCIENTIFIC_OR_DEVICE"}
+
+
 def package_url(item):
     return ("https://conda.anaconda.org/conda-forge/linux-64/"
             f"{item['name']}-{item['version']}-{item['build']}.conda")
@@ -170,7 +194,7 @@ def closure(sdk, vendor_environment):
     return result
 
 
-def provision(source, destination, lock, decompressor, vendor_environment=None):
+def provision(source, destination, lock, decompressor, vendor_environment=None, decoder_proof=None):
     start = time.monotonic()
     contract.require(destination.is_absolute() and source.is_absolute(), "Absolute paths required")
     contract.require(not destination.exists() and not destination.is_symlink(), "Fresh absent prefix required")
@@ -242,6 +266,7 @@ def provision(source, destination, lock, decompressor, vendor_environment=None):
             "wall_seconds": 110, "outer_kill_grace_seconds": 5, "threads": 1,
             "address_space_bytes": 1024**3, "download_bytes": MAX_DOWNLOAD, "write_bytes": MAX_WRITE},
         "decoder_window_bound_bytes": MAX_WINDOW_BYTES,
+        "actual_decoder_proof": decoder_proof,
         "developer_links": developer_links,  # input lib/, separate from lib64 SDK inventory
         "compiler_chain": compiler_chain,
         "compiler_discovery_ready": False,
@@ -274,9 +299,10 @@ def main():
     # External timeout --kill-after=5s 110s is additionally mandatory.
     signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError("110s input deadline")))
     signal.alarm(110)
-    result = provision(args.source, args.destination, args.lock,
-                       decoder(),
-                       args.vendor_environment.resolve(strict=True))
+    proof = verify_remote_decoder()
+    print(json.dumps({"decoder_proof_before_real_extraction": proof}), flush=True)
+    result = provision(args.source, args.destination, args.lock, decoder(),
+                       args.vendor_environment.resolve(strict=True), proof)
     print(json.dumps(result, sort_keys=True))
 
 

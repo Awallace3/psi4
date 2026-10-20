@@ -1843,3 +1843,23 @@ JUnit`build_disp0_cpu/reference-check-nZhWZLxV/results.xml`.
 This does not rerun remote0.19 or real developer archives. No corrected
 provisioning/CPU preparation job was executed. Preserve the consumed failed
 attempt as an explicit operational milestone; await fresh authorization.
+
+Parent subsequently granted fresh approval for EXACTLY ONE INPUT-ONLY CPU
+job:1node/1task/1CPU/2G/10min/freeembers/chemx/cpu-small subject exact-route,
+no-requeue/no retry,110s payload/1GiB process, same TWO pinned82569B archives,
+<=512MiBnewwritten. Does NOT consume or clear conditional CPU89. New tracked
+`input_prep.sbatch`/`input_prep_payload.sh` preserve failed roots and require
+frozen source, correct actual route/resources/approval, fresh run+scratch,
+TERM-safe status. Before downloading/extracting anything, actual remote
+zstandard0.19 must pass an8MiB-window frame negative131072/positive128MiB
+control. No unbounded decoder/version fallback. Current preparation is local
+and preflight only; no input-only job submitted yet. Complete SDKmanifest/
+closure/lock evidence still must go to explicit parent INPUT-READINESS.
+
+Input-only harness bf3591950: shell syntax PASS, **19passed1.41s**,
+no warnings/skips, JUnit
+`build_disp0_cpu/reference-check-7KjSzbmf/results.xml`.
+Tests include real LOCAL0.25 codec frames and version-rejection/injected
+unit metadata, NOT actual remote0.19 proof; only the new approved job can
+supply that startup proof. Freeze/push this tracked input-only recipe before
+fresh exact-route/source/quota/headroom/no-duplicate submission checks.

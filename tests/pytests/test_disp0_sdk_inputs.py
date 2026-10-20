@@ -195,3 +195,31 @@ def test_real_streaming_zstd_frame_window_units():
             stream.read()
     with module.decoder().stream_reader(frame) as stream:
         assert stream.read() == b"x" * 8192
+
+
+def test_startup_proof_version_is_fail_closed_then_exercises_actual_codec(monkeypatch):
+    import zstandard
+    monkeypatch.setattr(zstandard, "__version__", "not-the-frozen-remote-version")
+    with pytest.raises(RuntimeError, match="Expected frozen remote"):
+        module.verify_remote_decoder()
+    # Only this unit test simulates version metadata; actual CLI accepts no
+    # version override. Codec is real; this is NOT a remote0.19 pass.
+    monkeypatch.setattr(zstandard, "__version__", "0.19.0")
+    proof = module.verify_remote_decoder()
+    assert proof["negative_rejected"] is True
+    assert proof["positive_bound_bytes"] == 128 * 1024**2
+
+
+def test_input_job_has_exact_bounded_resource_and_no_requeue_contract():
+    batch = (TOOLS / "input_prep.sbatch").read_text()
+    for option in ["--account=gts-cs207-chemx", "--partition=cpu-small", "--qos=embers",
+                   "--nodes=1", "--ntasks=1", "--cpus-per-task=1", "--mem=2G",
+                   "--time=00:10:00", "--no-requeue"]:
+        assert "#SBATCH " + option in batch
+    assert "#SBATCH --gres" not in batch
+    assert 'trap on_term TERM INT' in batch
+    assert 'term_received == 0' in batch
+    payload = (TOOLS / "input_prep_payload.sh").read_text()
+    assert "--kill-after=5s 110s" in payload
+    assert ' -B ' in payload
+    assert "cmake" not in payload and "nvcc " not in payload
