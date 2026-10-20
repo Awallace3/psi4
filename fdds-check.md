@@ -5,6 +5,11 @@
 The validated result below applies to scientific9d4/test-driver3b21, **not**
 the new hybrid X/Y optimization candidate. See `fdds-performance.md` for
 profiling, the new isolated CPU/GPU gates and measured speedup status.
+Reviewed X/Y candidate scientific8dc714/test-driverfd2c09 now passes the
+expanded native gate: **171 passed, no failures/errors/skips,240.780 s**.
+Its GPU correctness/performance gate is not yet executed; queue dry-runs
+currently predict late H200/H100/A100 starts. The historical GPU pass below
+does not establish the new candidate's correctness or speed.
 
 ## Current result: isolated GPU validation PASSED
 

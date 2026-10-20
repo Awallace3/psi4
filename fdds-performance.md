@@ -138,3 +138,16 @@ old frozen source/build/run directories or other agents' jobs.
   blocks contain partial tails. Independent references/tolerances are
   unchanged. A fresh targeted plus complete171-test native gate is required
   for this final test-driver pin; the scientific C++ remains reviewed8dc.
+- Final native gate at test-driver **fd2c09cd0cfbfce61a311508ba6c53039025179a**
+  passed **171 tests, zero failures/errors/skips,240.780 s**;52 FDDS,
+  67 CPSCF,6 SAD,6 lifecycle,8 basis-parser,32 grid-switch. Separate targeted
+  six X/Y whole/blocked cases passed2.440 s. Maximum printed FDDS contribution
+  error7.105427357601002e-15. Evidence and audited counts:
+  `build_fdds_cpu/performance-cpu-fd2c09cd0c/`.
+- Scheduler dry-runs found no near-term H200/H100/A100 slot, even with shorter
+  wall/memory requests (estimates October28/November1). No optimization GPU
+  job has been submitted yet. RTX6000's earlier October20 morning estimate
+  is not a capability pass; its older Cascade Lake/RTX6000 node class may
+  be below the required compute8 capability. No unsupported GPU or skipped
+  suite will be called a correctness pass. Alternate account/QoS dry-runs
+  are read-only checks, not authorization to silently change the charge route.
