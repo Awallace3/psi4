@@ -208,6 +208,19 @@ def runtime_libraries():
     return sorted(paths)
 
 
+def cuda_uuid_from_pci(bus):
+    """Resolve a CUDA-selected PCI bus, never an NVML device ordinal."""
+    if isinstance(bus, bytes):
+        bus = bus.decode("ascii")
+    assert re.fullmatch(r"[0-9a-fA-F]{4,8}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]", bus), \
+        ("Invalid CUDA PCI bus", bus)
+    uuid = subprocess.check_output(["nvidia-smi", "-i", bus, "--query-gpu=uuid",
+                                    "--format=csv,noheader"], text=True).strip()
+    assert re.fullmatch(r"GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", uuid), \
+        ("Invalid or ambiguous GPU UUID for CUDA PCI bus", bus, uuid)
+    return bus, uuid
+
+
 def cuda_identity(runtime=None):
     """Use the process's already loaded CUDA runtime, not NVML's index order."""
     if runtime is not None:
@@ -216,7 +229,14 @@ def cuda_identity(runtime=None):
         count, device = runtime.getDeviceCount(), runtime.getDevice()
         assert count == 1 and device == 0, "Exactly one visible CUDA GPU is required"
         raw = bytes(runtime.getDeviceProperties(device)["uuid"])
-        assert len(raw) == 16, ("Invalid CUDA device UUID", raw)
+        if len(raw) != 16:
+            # Some CuPy versions expose cudaUUID_t's char[16] as a C string,
+            # truncating at its first NUL. Missing bytes cannot be reconstructed.
+            bus, uuid = cuda_uuid_from_pci(runtime.deviceGetPCIBusId(device))
+            return dict(uuid=uuid, pci_bus_id=bus, logical_device=device,
+                        visible_count=count, runtime="cupy.cuda.runtime",
+                        uuid_source="cuda-pci-bus/nvidia-smi",
+                        cuda_runtime=runtime.runtimeGetVersion())
         value = raw.hex()
         return dict(uuid="GPU-" + "-".join((value[:8], value[8:12], value[12:16],
                     value[16:20], value[20:])), logical_device=device,
@@ -235,10 +255,7 @@ def cuda_identity(runtime=None):
     # selected CUDA ordinal to PCI bus first, then query NVML by that bus.
     pci = ctypes.create_string_buffer(64)
     assert rt.cudaDeviceGetPCIBusId(pci, len(pci), device) == 0
-    bus = pci.value.decode()
-    uuid = subprocess.check_output(["nvidia-smi", "-i", bus, "--query-gpu=uuid",
-                                    "--format=csv,noheader"], text=True).strip()
-    assert uuid.startswith("GPU-") and "\n" not in uuid
+    bus, uuid = cuda_uuid_from_pci(pci.value)
     return dict(uuid=uuid, pci_bus_id=bus, logical_device=device.value,
                 visible_count=count.value, runtime=paths[0], cuda_runtime=version.value)
 

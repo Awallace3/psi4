@@ -189,6 +189,46 @@ class CompareTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 m.validate_cuda_route(dict(record, runtime_libraries=["/cuda/libcudart.so.11"]))
 
+    def test_cupy_uuid_embedded_nul_uses_visible_device_pci_not_nvml_index(self):
+        # CuPy's device-properties char-array conversion truncates at NUL.
+        # This is the actual H100 UUID from failed job14197755.
+        uuid = "GPU-43b49b76-6aa3-0000-d560-748ac1c97c5d"
+        raw = bytes.fromhex(uuid[4:].replace("-", ""))
+        self.assertEqual(len(raw.split(b"\0", 1)[0]), 6)
+        for bus in ("0000:17:00.0", b"0000:17:00.0"):
+            runtime = SimpleNamespace(
+                getDeviceCount=lambda: 1, getDevice=lambda: 0,
+                getDeviceProperties=lambda device: {"uuid": raw.split(b"\0", 1)[0]},
+                deviceGetPCIBusId=lambda device: bus, runtimeGetVersion=lambda: 12060)
+            with patch.object(m.subprocess, "check_output", return_value=uuid + "\n") as query:
+                identity = m.cuda_identity(runtime)
+            self.assertEqual(identity["uuid"], uuid)
+            self.assertEqual(identity["pci_bus_id"], "0000:17:00.0")
+            self.assertEqual(identity["logical_device"], 0)
+            self.assertEqual(identity["cuda_runtime"], 12060)
+            query.assert_called_once_with(
+                ["nvidia-smi", "-i", "0000:17:00.0", "--query-gpu=uuid",
+                 "--format=csv,noheader"], text=True)
+
+    def test_cupy_complete_uuid_needs_no_nvml_query(self):
+        raw = bytes.fromhex("11111111222233334444555555555555")
+        runtime = SimpleNamespace(getDeviceCount=lambda: 1, getDevice=lambda: 0,
+            getDeviceProperties=lambda device: {"uuid": raw}, runtimeGetVersion=lambda: 12060)
+        with patch.object(m.subprocess, "check_output") as query:
+            self.assertEqual(m.cuda_identity(runtime)["uuid"],
+                             "GPU-11111111-2222-3333-4444-555555555555")
+        query.assert_not_called()
+
+    def test_cupy_uuid_fallback_rejects_malformed_or_multiple_matches(self):
+        runtime = SimpleNamespace(getDeviceCount=lambda: 1, getDevice=lambda: 0,
+            getDeviceProperties=lambda device: {"uuid": b""},
+            deviceGetPCIBusId=lambda device: "0000:17:00.0", runtimeGetVersion=lambda: 12060)
+        for output in ("", "GPU-wrong", "GPU-11111111-2222-3333-4444-555555555555\n"
+                       "GPU-11111111-2222-3333-4444-555555555555\n"):
+            with patch.object(m.subprocess, "check_output", return_value=output):
+                with self.assertRaises(AssertionError):
+                    m.cuda_identity(runtime)
+
     def test_observer_entry_interrupt_reaps_spawned_supervisor(self):
         procs = []
         popen = subprocess.Popen
