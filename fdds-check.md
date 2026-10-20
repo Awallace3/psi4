@@ -5,6 +5,9 @@
 The validated result below applies to scientific9d4/test-driver3b21, **not**
 the new hybrid X/Y optimization candidate. See `fdds-performance.md` for
 profiling, the new isolated CPU/GPU gates and measured speedup status.
+CPU baseline job14198087 completed and audited all three systems on24 CPUs:
+**20.446/240.153/1592.476 s FDDS** for peptide24/nanotube42/protein83.
+This is old scientific9d4 on a CPU node, not a matched GPU speedup comparison.
 Reviewed X/Y candidate scientific8dc714/test-driverfd2c09 now passes the
 expanded native gate: **171 passed, no failures/errors/skips,240.780 s**.
 Its GPU correctness/performance gate is not yet executed; queue dry-runs

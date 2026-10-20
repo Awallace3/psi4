@@ -86,6 +86,26 @@ old frozen source/build/run directories or other agents' jobs.
   Compact result `build_fdds_cpu/performance-baselines/nanotube.json`;
   original `/fastscratch/awallace43/fdds-performance-20261020/nanotube-cpu/`.
 
+### Completed cluster CPU baseline
+
+- Job **14198087** and batch completed0:0 in **35m40s**, all three physical
+  cases actually finished. Audited VERIFIED/COMPLETED, source/core/import,
+  fresh CPU controls with0 GPU calls, finite energies, exact metadata/orbital
+  cache checksums and24-thread/96 GiB settings.
+- Same CPU node `atl1-1-02-007-27-1.pace.gatech.edu`, scientific9d4,
+  core68e344..., harness1a5a95168f. **FDDS-only** (SCF excluded):
+  **peptide20.445979 s; nanotube240.152734 s; protein83 1592.475991 s**.
+  Their22 pseudoinverses total3.754966/19.806817/87.188779 s, respectively.
+- Protein83 object1099.025057 s, **X189.203824/Y489.876410 s**,
+  QR27.420139 s, kernel86.499547 s, integration403.772981 s.
+  Coupled/uncoupled **-.007013974490528032 / -.011403077901569983 Eh**.
+  Thus the chosen X/Y seam accounts for679.080234 s of this actual baseline.
+- Evidence `build_fdds_cpu/performance-cpu-14198087/` includes compact JSONs,
+  full VERIFIED/provenance/completion, and audited counts. These use separate
+  SCF caches from the local profiles; do **not** compare across nodes/caches/
+  sources to claim a GPU speedup. The recovery still runs its own matched
+  CPU/GPU controls on the same new scientific stage/allocation/cache.
+
 ## Candidate: persistent hybrid X/Y block contraction (not yet validated)
 
 - `CuestFDDSExchange` uploads the outer integral block once and each inner
