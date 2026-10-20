@@ -618,3 +618,20 @@ old frozen source/build/run directories or other agents' jobs.
   routing. Backend tests explicitly exercise changing3/1/3/0 blocks.
   Git-only source/controller staging completed with exact pristine pins;
   accepted baseline stage and ongoing repeat campaign stay untouched.
+- **All baseline repeats completed and independent auditbbfa07c21 passed**:
+ 12 accepted samples, two per arm/system, same localXFS/source/core/cache/
+  libraries/options/thread/memory/job identity; expected routes and mandatory
+  cleanup pass, no active steps/quarantine. ProteinCPU1=1667.379830149s;
+  final median ratio **2.583019x**. Peptide/nanotube repeat ratios remain
+  **1.172611x/1.833807x**. All CPU/GPU cross-pair coupled differences are
+  ≤3.456794130e-10/8.787432640e-8/9.467751930e-10Eh. The original comparison
+  JSON uses the first CPU reference; the slightly larger nanotube number here
+  is the maximum across both CPU references, not a changed tolerance.
+  All12 local result/psi4-output/provenance/verified files are preserved in
+  `build_fdds_cpu/performance-gpu-14214205/var-local-v2/`.
+- With that checkpoint complete and scheduler snapshotRUNNING5:03:26 left,
+  **bb600889a** launched the separately staged metric-candidate workflow:
+  fresh owner budget/cleanup/pristine-source gates, then existing helper's
+ 9000s exclusive build+validation+comparison step. It refuses<9180s remaining
+  before starting. No new allocation or old-stage overwrite, and no candidate
+  GPU correctness/speedup conclusion before terminal artifact audit.

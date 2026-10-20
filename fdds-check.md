@@ -7,10 +7,17 @@ GPU tests pass (90 executions including focused repeats), zero skips/errors/
 failures. Actual shared H20014214205,8threads/96GiB, same source/core/cache/
 options/libraries for each fresh-process CPU/GPU control; SCF is excluded.
 
-**Protein83 local-XFS first pair audited:** CPU1669.110843s,
-GPU644.636978s, **2.589226x**. Coupled/uncoupled errors
-6.17631338434288e-10/2.3320586781117036e-11Eh;20 frequency and4 hybrid GPU
-routes versus zero CPU routes. Cleanup verified; peakRSS≈61.04GiB.
+**Local-XFS baseline repeats complete:** two runs per arm/system, all12
+samples independently audited and preserved, cleanup verified.
+Peptide CPU16.144716/16.167149s vsGPU13.763155/13.792320s: **1.172611x**.
+Nanotube CPU222.794186/222.049114s vsGPU121.374003/121.205100s:
+**1.833807x**. Protein83 CPU1669.110843/1667.379830s vsGPU644.636978/
+647.064827s: **2.583019x**. Ratios use per-arm medians.
+Maximum coupled errors across all CPU/GPU sample pairs:
+3.456794130e-10/8.787432640e-8/9.467751930e-10Eh, respectively;
+uncoupled errors7.365963742e-12/2.150354825e-10/2.332058678e-11Eh.
+Actual20 frequency and4 hybrid GPU routes versus zero CPU routes.
+Protein peakRSS≈61.04GiB.
 Preserved locally at
 `build_fdds_cpu/performance-gpu-14214205/var-local-v2/`.
 This full case succeeds on verified private localXFS after the preserved
@@ -19,10 +26,9 @@ network-scratch CPU failure; the underlying networkEIO cause remains unknown.
 Earlier network-scratch first pairs: peptide1.190898x and nanotube2.034857x
 (errors≤6.83e-11/9.62e-8Eh). These are separate backend measurements, not
 mixed with the local-XFS protein row into a final benchmark aggregate.
-Fresh local-XFS peptide/nanotube pairs and CPU/GPU/GPU/CPU repeats for all
-three systems are running sequentially asbde4a1953 if each preceding audit/
-cleanup/time gate passes. Ratios remain preliminary until repeats complete.
-Five-minute monitorb09c47ede and the official allocation watcher remain active.
+Those network-backend ratios remain preliminary one-pair measurements;
+the local-XFS figures above now have two-per-arm repeat evidence.
+Five-minute monitoring and the official allocation watcher remain active.
 No merge, new allocation, overlapping timing, settings relaxation or shared
 environment mutation.
 
@@ -35,7 +41,9 @@ failures/errors/skips,175.704s, core
 `c08b6341ce7b29099225fc83fde6dec336c6bc3e38caba0ca5840b7c6722d23f`.
 Local XML/provenance: `build_fdds_cpu/metric-fold-ada1a1d212/native/`.
 Actual candidate GPU compilation,81-test numerical/route gate and timing
-are still pending; old fd2/core92e5 baseline remains frozen.
+are pending in gated workflowbb600889a (9000s exclusive bound); it requires
+a fresh≥9180s remaining-time check and preceding cleanup. The prior audited
+snapshot wasRUNNING5:03:26 remaining. Old fd2/core92e5 baseline stays frozen.
 
 The new seam is FDDS-only metric-fold FP64 multiplication with one resident
 prepared metric per transform and reusable device blocks. Generic DFHelper

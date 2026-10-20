@@ -11,7 +11,7 @@ import time
 
 
 REMOTE = r"""
-import fcntl,json,pathlib
+import fcntl,json,pathlib,time
 r=pathlib.Path('/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-shared/20261020-interactive-02')
 m=json.loads((r/'allocation.json').read_text())
 out=dict(manifest_status=m['status'],job_id=m.get('job_id'),quarantined=(r/'QUARANTINED').exists())
@@ -26,15 +26,26 @@ for p in sorted((r/'steps').glob('*')):
  out['steps'].append(dict(name=p.name,terminal=(p/'TERMINAL').exists(),
   cleanup=(p/'GPU_CLEANUP_VERIFIED').exists(),
   exit_code=(p/'exit-code.txt').read_text().strip() if (p/'exit-code.txt').exists() else None))
-base=pathlib.Path('/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261020-interactive-01/matched-14214205')
 out['results']={}
-for system in ['peptide','nanotube','protein83']:
- for arm in ['cpu','gpu']:
-  for i in [0,1]:
-   p=base/f'{system}-{arm}-{i}'/'result.json'
-   if p.exists():
-    d=json.loads(p.read_text())
-    out['results'][f'{system}-{arm}-{i}']=dict(ok=d.get('ok'),seconds=d.get('fdds_seconds'))
+campaign=pathlib.Path('/storage/project/r-cs207-0/awallace43/runs/psi4-fdds')
+for base in (campaign/'20261020-interactive-01').glob('matched-14214205*'):
+ for p in base.glob('*/result.json'):
+  d=json.loads(p.read_text())
+  out['results'][base.name+'/'+p.parent.name]=dict(ok=d.get('ok'),seconds=d.get('fdds_seconds'))
+candidate=campaign/'20261020-metric-fold-01'
+if candidate.exists():
+ out['candidate']={}
+ for name in ['validation/configure.log','validation/build.log','validation/fdds.log',
+              'validation/full-fdds-gdb.log','validation-driver.log']:
+  p=candidate/name
+  if p.exists():
+   # Status only: an artifact/log is NOT a correctness pass.
+   out['candidate'][name]=dict(bytes=p.stat().st_size,age_seconds=int(time.time()-p.stat().st_mtime))
+ v=candidate/'validation/VERIFIED.json'
+ if v.exists():out['candidate']['validation_report']=json.loads(v.read_text())
+ for p in (candidate/'pairs').glob('*/result.json'):
+  d=json.loads(p.read_text())
+  out['results']['metric-candidate/'+p.parent.name]=dict(ok=d.get('ok'),seconds=d.get('fdds_seconds'))
 print(json.dumps(out,sort_keys=True))
 """
 
