@@ -10,11 +10,14 @@ expanded native gate: **171 passed, no failures/errors/skips,240.780 s**.
 Its GPU correctness/performance gate is not yet executed; queue dry-runs
 currently predict late H200/H100/A100 starts. The historical GPU pass below
 does not establish the new candidate's correctness or speed.
-Optimization job **14199355** is queued on explicit inferno/H200/8CPU/128GiB/
-4h, accountgts-cs207; watcherb486ad2e3. Scientific/test pinfd2c09cd0c,
-harnessf26b3b6d1b, new isolatedv2 source/build. Full69-test GPU gate precedes
-paired benchmarks on peptide24/nanotube42/protein83. Scheduler estimates are
-late; no candidate GPU correctness or performance result exists yet.
+Optimization job **14199355** started promptly on inferno/H200 but failed
+startup after6 s, **zero tests/benchmarks executed**. Site CUDA12 nvcc kept
+PATH precedence after activation, triggering the strict pinned-toolkit guard.
+Explicit post-activation env/bin rebinding fixes the reproduced guard failure;
+fresh preflight/recovery is in progress. Scientific/test pinfd2c09cd0c and
+frozen harnessf26b3b6d1b/sourcev2 remain unchanged. CPU compile-only14199512
+also failed the same guard before compilation. No candidate GPU correctness
+or speedup result exists; see terminal markers and `fdds-performance.md`.
 
 ## Current result: isolated GPU validation PASSED
 

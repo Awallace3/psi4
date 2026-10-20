@@ -56,11 +56,22 @@ unset GCC_ROOT
 # Site CUDA12 CPATH otherwise wins over the selected conda CUDA13 imported
 # targets. This is job-local header/linker isolation, never an env upgrade.
 unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH LIBRARY_PATH
+export PATH="$env/bin:$PATH"
+hash -r
 export LD_LIBRARY_PATH="$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export CUDA_HOME="$env" CUDA_PATH="$env"
-test "$(realpath "$(command -v nvcc)")" = "$(realpath "$env/bin/nvcc")"
+selected_nvcc=$(realpath "$(command -v nvcc)")
+expected_nvcc=$(realpath "$env/bin/nvcc")
+printf 'Selected nvcc=%s; required nvcc=%s\n' "$selected_nvcc" "$expected_nvcc"
+if [[ "$selected_nvcc" != "$expected_nvcc" ]]; then
+    printf 'FDDS preflight: selected nvcc is outside the pinned environment.\n' >&2
+    exit 1
+fi
 cuda_include="$env/targets/x86_64-linux/include"
-test -f "$cuda_include/cuda_runtime_api.h"
+if [[ ! -f "$cuda_include/cuda_runtime_api.h" ]]; then
+    printf 'FDDS preflight: CUDA headers absent at %s\n' "$cuda_include" >&2
+    exit 1
+fi
 payload=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
 {
     for pair in "cc:cc1" "c++:cc1plus"; do

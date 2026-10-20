@@ -187,3 +187,25 @@ old frozen source/build/run directories or other agents' jobs.
 - Automatic watcher **b486ad2e3**,300-second state-change checks,14-day bound.
   Latest dry-run predicts October29; actual accepted job initially has
   StartTime=Unknown. No morning completion guarantee or speedup claim.
+
+### Startup failure and harness recovery
+
+- Actual job14199355 started within minutes, **not** the late dry-run date:
+  H200/driver615.71.09, inferno, nodeatl1-1-03-019-2-0. It failed6 s after
+  startup, before compiler probes/configuration/tests. **Zero test executions
+  and benchmark processes**, no VERIFIED/COMPLETED artifacts.
+- Separate own CPU compile-only job **14199512**, gts-cs207/cpu-small/inferno,
+ 8 CPUs/48 GiB/one hour ($.07 worst case), also failed7 s before compilation.
+  Sourcefd2c09, harnessa178609; queued H200 checkout/build untouched.
+- Exact read-only module+activation reproduction confirms the cause:
+  site `/storage/pace-apps/.../cuda/12.6.1.../bin/nvcc` stays ahead of conda
+  after activation. The strict equality guard correctly stopped the job but
+  had no diagnostic message. `PATH="$env/bin:$PATH"; hash -r` after activation
+  selects the pinned conda nvcc. Compiler/root/include isolation is unchanged.
+  Guard now prints selected/required paths and missing-header diagnostics.
+  This is harness recovery, not an FDDS equation/kernel change.
+- Both frozen failed runs and local evidence are preserved at
+  `build_fdds_cpu/performance-gpu-14199355/` and
+  `build_fdds_cpu/performance-compile-14199512/`.
+  Terminal markers honestly report0 tests. Corrected compile/link preflight
+  is running before any new submission; no driver/package changes.
