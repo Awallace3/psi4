@@ -41,6 +41,7 @@
 #include "psi4/lib3index/dfhelper.h"
 #include "psi4/libpsi4util/memory_ledger.h"
 
+#include <algorithm>
 #include <iomanip>
 #include <limits>
 #ifdef USING_cuEST
@@ -148,6 +149,33 @@ struct GpuContractionTimer {
         if (active) timer_on("cuEST FDDS: contractions");
     }
     ~GpuContractionTimer() { if (active) timer_off("cuEST FDDS: contractions"); }
+};
+
+std::unique_ptr<CuestFDDSExchange> gpu_exchange(size_t q, size_t v, size_t k,
+                                              size_t& outer, size_t& inner) {
+    auto& options = Process::environment.options;
+    if (!options.get_bool("USE_CUEST") || !q || !v || !k || !outer || !inner) return nullptr;
+    const int threshold = options.get_int("CUEST_GEMM_MIN_DIM");
+    if (threshold < 0) throw PSIEXCEPTION("CUEST_GEMM_MIN_DIM must be nonnegative.");
+    const long double cutoff = static_cast<long double>(threshold) * threshold * threshold;
+    if (static_cast<long double>(q) * v * k * outer * inner < cutoff) return nullptr;
+    const auto capacity = CuestFDDSExchange::capacity(q, v, k, outer, inner);
+    if (!capacity.first || !capacity.second ||
+        static_cast<long double>(q) * v * k * capacity.first * capacity.second < cutoff) {
+        outfile->Printf("  cuEST FDDS: device capacity/threshold requires native hybrid exchange.\n");
+        return nullptr;
+    }
+    outer = capacity.first;
+    inner = capacity.second;
+    return std::unique_ptr<CuestFDDSExchange>(new CuestFDDSExchange(q, v, k, outer, inner));
+}
+
+struct GpuExchangeTimer {
+    bool active;
+    explicit GpuExchangeTimer(bool active) : active(active) {
+        if (active) timer_on("cuEST FDDS: hybrid exchange");
+    }
+    ~GpuExchangeTimer() { if (active) timer_off("cuEST FDDS: hybrid exchange"); }
 };
 #endif
 
@@ -930,27 +958,32 @@ void FDDS_Dispersion::form_X(std::string monomer) {
 #endif
 
     size_t doubles = available_doubles();
-    const size_t fixed = (size_t)nthread * nvir * nvir;
-    const size_t per_occ = 6 * nvir * naux;
-    long long int rem = doubles - (long long int)fixed;
-    if (rem < 0)
+    const size_t fixed = checked_product(nthread, checked_product(nvir, nvir));
+    const size_t per_occ = checked_product(6, checked_product(nvir, naux));
+    if (doubles < fixed)
         throw PSIEXCEPTION(
             too_little_memory("FDDS_Dispersion::form_X()", "nthread * nvir^2 of fixed storage", fixed, doubles, true));
-
+    const size_t rem = doubles - fixed;
     size_t maxo = rem / per_occ;
-    maxo = (maxo > nocc ? nocc : maxo);
+    maxo = std::min({maxo, nocc, static_cast<size_t>(std::numeric_limits<int>::max()) / nvir});
     if (maxo < 1)
         throw PSIEXCEPTION(too_little_memory("FDDS_Dispersion::form_X()",
                                              "the fixed storage plus one occupied block, "
                                              "nthread * nvir^2 + 6 * nvir * naux",
-                                             fixed + per_occ, doubles, true));
+                                             checked_sum(fixed, per_occ), doubles, true));
+
+    size_t maxi = maxo;
+#ifdef USING_cuEST
+    auto gpu = gpu_layout_supported_ ? gpu_exchange(naux, nvir, nvir, maxo, maxi) : nullptr;
+    GpuExchangeTimer gpu_timer(static_cast<bool>(gpu));
+#endif
 
     // => Tensor Slices <= //
 
     auto arR = std::make_shared<Matrix>("arR", maxo * nvir, naux); // ([a]r'|R)
-    auto aprR = std::make_shared<Matrix>("aprR", maxo * nvir, naux); // ([a']r|R)
-    auto arQ = std::make_shared<Matrix>("arQ", maxo * nvir, naux); // ([a']r'|Q)
-    auto QarQ = std::make_shared<Matrix>("QarQ", maxo * nvir, naux); // ([a']r'|Q|Q)
+    auto aprR = std::make_shared<Matrix>("aprR", maxi * nvir, naux); // ([a']r|R)
+    auto arQ = std::make_shared<Matrix>("arQ", maxi * nvir, naux); // ([a']r'|Q)
+    auto QarQ = std::make_shared<Matrix>("QarQ", maxi * nvir, naux); // ([a']r'|Q|Q)
     auto Vrr = std::make_shared<Matrix>("Vrr", nvir, nvir); // ([a']r|[a]r') single layer
 
     // => Target <= //
@@ -980,9 +1013,12 @@ void FDDS_Dispersion::form_X(std::string monomer) {
         dfh_->fill_tensor(arR_name, arR, {astart, astart + nablock});
         XarQ->zero();
         QXarQ->zero();
+#ifdef USING_cuEST
+        if (gpu) gpu->begin(arRp[0], nablock);
+#endif
 
-        for (size_t apstart = 0; apstart < nocc; apstart += maxo) {
-            size_t napblock = (apstart + maxo >= nocc ? nocc - apstart : maxo);        
+        for (size_t apstart = 0; apstart < nocc; apstart += maxi) {
+            size_t napblock = (apstart + maxi >= nocc ? nocc - apstart : maxi);
 
             aprR->zero();   
             arQ->zero();
@@ -992,6 +1028,12 @@ void FDDS_Dispersion::form_X(std::string monomer) {
             dfh_->fill_tensor(arQ_name, arQ, {apstart, apstart + napblock});
             dfh_->fill_tensor(QarQ_name, QarQ, {apstart, apstart + napblock});
 
+#ifdef USING_cuEST
+            if (gpu) {
+                gpu->accumulate(aprRp[0], arQp[0], QarQp[0], napblock);
+                continue;
+            }
+#endif
             size_t naap = nablock * napblock;
 
             for (size_t aap = 0; aap < naap; aap++) {
@@ -1008,6 +1050,9 @@ void FDDS_Dispersion::form_X(std::string monomer) {
             }
         }
 
+#ifdef USING_cuEST
+        if (gpu) gpu->finish(XarQp[0], QXarQp[0]);
+#endif
         dfh_->write_disk_tensor(XarQ_name, XarQ, {astart, astart + nablock});
         dfh_->write_disk_tensor(QXarQ_name, QXarQ, {astart, astart + nablock});
     }
@@ -1058,24 +1103,35 @@ void FDDS_Dispersion::form_Y(std::string monomer) {
 #endif
 
     size_t doubles = available_doubles();
-    const size_t fixed = (size_t)nthread * nocc * nvir;
-    long long int rem = doubles - (long long int)fixed;
-    if (rem < 0)
+    const size_t fixed = checked_product(nthread, checked_product(nocc, nvir));
+    if (doubles < fixed)
         throw PSIEXCEPTION(
             too_little_memory("FDDS_Dispersion::form_Y()", "nthread * nocc * nvir of fixed storage", fixed, doubles,
                               true));
 
-    size_t kov = nvir / nocc + 1; // Ratio of v/o, take ceiling for worst case
-    const size_t per_occ = (kov * kov + 4 * kov + 1) * nocc * naux;
+    const size_t rem = doubles - fixed;
+    size_t kov = checked_sum(nvir / nocc, 1); // Ratio of v/o, take ceiling for worst case
+    const size_t per_occ = checked_product(
+        checked_sum(checked_sum(checked_product(kov, kov), checked_product(4, kov)), 1),
+        checked_product(nocc, naux));
     size_t maxo = rem / per_occ;
-    size_t maxv = maxo * (kov - 1); 
-    maxo = (maxo > nocc ? nocc : maxo);
-    maxv = (maxv > nvir ? nvir : maxv);
+    // A virtual space smaller than the occupied space still needs an inner
+    // block. For kov=1, inner<=outer and v<o, so the original six-o budget
+    // bounds all buffers: bo*(o+2v)+bi*(v+2o) <= 6*bo*o.
+    size_t maxv = checked_product(maxo, std::max<size_t>(1, kov - 1));
+    const size_t row_limit = static_cast<size_t>(std::numeric_limits<int>::max()) / std::max(nocc, nvir);
+    maxo = std::min({maxo, nocc, row_limit});
+    maxv = std::min({maxv, nvir, row_limit});
     if (maxo < 1)
         throw PSIEXCEPTION(too_little_memory("FDDS_Dispersion::form_Y()",
                                              "the fixed storage plus one occupied block, "
                                              "nthread * nocc * nvir + (kov^2 + 4 * kov + 1) * nocc * naux",
-                                             fixed + per_occ, doubles, true));
+                                             checked_sum(fixed, per_occ), doubles, true));
+
+#ifdef USING_cuEST
+    auto gpu = gpu_layout_supported_ ? gpu_exchange(naux, nvir, nocc, maxo, maxv) : nullptr;
+    GpuExchangeTimer gpu_timer(static_cast<bool>(gpu));
+#endif
 
     // => Tensor Slices <= //
 
@@ -1112,6 +1168,9 @@ void FDDS_Dispersion::form_Y(std::string monomer) {
         dfh_->fill_tensor(aaR_name, aaR, {astart, astart + nablock});
         YarQ->zero();
         QYarQ->zero();
+#ifdef USING_cuEST
+        if (gpu) gpu->begin(aaRp[0], nablock);
+#endif
 
         for (size_t rstart = 0; rstart < nvir; rstart += maxv) {
             size_t nrblock = (rstart + maxv >= nvir ? nvir - rstart : maxv);        
@@ -1124,6 +1183,12 @@ void FDDS_Dispersion::form_Y(std::string monomer) {
             dfh_->fill_tensor(raQ_name, raQ, {rstart, rstart + nrblock});
             dfh_->fill_tensor(QraQ_name, QraQ, {rstart, rstart + nrblock});
 
+#ifdef USING_cuEST
+            if (gpu) {
+                gpu->accumulate(rrRp[0], raQp[0], QraQp[0], nrblock);
+                continue;
+            }
+#endif
             size_t nar = nablock * nrblock;
 
             for (size_t ar = 0; ar < nar; ar++) {
@@ -1139,6 +1204,9 @@ void FDDS_Dispersion::form_Y(std::string monomer) {
             }
         }
 
+#ifdef USING_cuEST
+        if (gpu) gpu->finish(YarQp[0], QYarQp[0]);
+#endif
         dfh_->write_disk_tensor(YarQ_name, YarQ, {astart, astart + nablock});
         dfh_->write_disk_tensor(QYarQ_name, QYarQ, {astart, astart + nablock});
     }

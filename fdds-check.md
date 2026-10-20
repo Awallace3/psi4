@@ -1,5 +1,11 @@
 # FDDS cuEST implementation handoff
 
+## Performance iteration in progress
+
+The validated result below applies to scientific9d4/test-driver3b21, **not**
+the new hybrid X/Y optimization candidate. See `fdds-performance.md` for
+profiling, the new isolated CPU/GPU gates and measured speedup status.
+
 ## Current result: isolated GPU validation PASSED
 
 - **Implemented and validated; no merge back.** Real FP64 occupied-block FDDS

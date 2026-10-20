@@ -177,6 +177,147 @@ size_t fdds_product(size_t a, size_t b) {
         throw PSIEXCEPTION("cuEST FDDS: size overflow");
     return a * b;
 }
+size_t fdds_sum(size_t a, size_t b) {
+    if (a > std::numeric_limits<size_t>::max() - b)
+        throw PSIEXCEPTION("cuEST FDDS: size overflow");
+    return a + b;
+}
+size_t exchange_storage(size_t q, size_t v, size_t k, size_t outer, size_t inner) {
+    const size_t left = fdds_product(outer, fdds_sum(k, fdds_product(2, v)));
+    const size_t right = fdds_product(inner, fdds_sum(v, fdds_product(2, k)));
+    return fdds_sum(fdds_product(q, fdds_sum(left, right)), fdds_product(v, k));
+}
+struct FDDSEnqueueGuard {
+    cudaStream_t stream;
+    bool complete = false;
+    ~FDDSEnqueueGuard() {
+        if (!complete) cudaStreamSynchronize(stream);
+    }
+};
+}
+
+std::pair<size_t, size_t> CuestFDDSExchange::capacity(size_t q, size_t v, size_t k,
+                                                    size_t outer, size_t inner) {
+    if (!q || !v || !k || !outer || !inner ||
+        std::max({q, v, k}) > static_cast<size_t>(std::numeric_limits<int>::max()))
+        return {0, 0};
+    cuest_common::ensure_cuest_initialized();
+    size_t free = 0, total = 0;
+    check_cuda(cudaMemGetInfo(&free, &total), "FDDS exchange memory preflight");
+    const size_t budget = (free / sizeof(double) / 5) * 4;
+    while (exchange_storage(q, v, k, outer, inner) > budget) {
+        if (outer == 1 && inner == 1) return {0, 0};
+        const size_t left = fdds_product(outer, fdds_sum(k, fdds_product(2, v)));
+        const size_t right = fdds_product(inner, fdds_sum(v, fdds_product(2, k)));
+        if (outer > 1 && (inner == 1 || left >= right)) outer = outer / 2 + outer % 2;
+        else inner = inner / 2 + inner % 2;
+    }
+    return {outer, inner};
+}
+
+struct CuestFDDSExchange::Impl {
+    size_t q, v, k, max_outer, max_inner, outer_count = 0;
+    cudaStream_t stream = nullptr;
+    DeviceBuffer outer, integrals, raw, orthogonal, out_raw, out_orthogonal, scratch;
+    Impl(size_t q_, size_t v_, size_t k_, size_t bo, size_t bi)
+        : q(q_), v(v_), k(k_), max_outer(bo), max_inner(bi) {
+        if (!q || !v || !k || !bo || !bi ||
+            std::max({q, v, k}) > static_cast<size_t>(std::numeric_limits<int>::max()))
+            throw PSIEXCEPTION("cuEST FDDS exchange: nonempty BLAS-int dimensions required");
+        // Validate all sums/products before initialization or allocation.
+        fdds_product(exchange_storage(q, v, k, bo, bi), sizeof(double));
+        cuest_common::ensure_cuest_initialized();
+        cublasPointerMode_t mode;
+        check_cublas(cublasGetPointerMode(cublas_handle, &mode), "FDDS exchange pointer mode");
+        if (mode != CUBLAS_POINTER_MODE_HOST)
+            throw PSIEXCEPTION("cuEST FDDS exchange: shared cuBLAS handle requires HOST pointer mode");
+        check_cublas(cublasGetStream(cublas_handle, &stream), "FDDS exchange stream");
+        outer = DeviceBuffer(fdds_product(fdds_product(bo, k), q), "FDDS exchange outer");
+        integrals = DeviceBuffer(fdds_product(fdds_product(bi, v), q), "FDDS exchange inner");
+        raw = DeviceBuffer(fdds_product(fdds_product(bi, k), q), "FDDS exchange raw");
+        orthogonal = DeviceBuffer(fdds_product(fdds_product(bi, k), q), "FDDS exchange orthogonal");
+        out_raw = DeviceBuffer(fdds_product(fdds_product(bo, v), q), "FDDS exchange output");
+        out_orthogonal = DeviceBuffer(fdds_product(fdds_product(bo, v), q), "FDDS exchange Q output");
+        scratch = DeviceBuffer(fdds_product(v, k), "FDDS exchange pair");
+    }
+    ~Impl() {
+        // Drain queued transfers even while unwinding; never let caller-owned
+        // host scratch die while an asynchronous upload still references it.
+        cudaStreamSynchronize(stream);
+    }
+    void upload(double* target, const double* source, size_t count) {
+        if (!source) throw PSIEXCEPTION("cuEST FDDS exchange: null input");
+        check_cuda(cudaMemcpyAsync(target, source, fdds_product(count, sizeof(double)),
+                                   cudaMemcpyHostToDevice, stream), "FDDS exchange upload");
+    }
+};
+
+CuestFDDSExchange::CuestFDDSExchange(size_t q, size_t v, size_t k, size_t outer, size_t inner)
+    : impl_(new Impl(q, v, k, outer, inner)) {}
+CuestFDDSExchange::~CuestFDDSExchange() = default;
+
+void CuestFDDSExchange::begin(const double* integrals, size_t count) {
+    auto& d = *impl_;
+    FDDSEnqueueGuard guard{d.stream};
+    if (!count || count > d.max_outer || d.outer_count)
+        throw PSIEXCEPTION("cuEST FDDS exchange: invalid outer block");
+    d.outer_count = count;
+    d.upload(d.outer.get(), integrals, fdds_product(fdds_product(count, d.k), d.q));
+    const size_t bytes = fdds_product(fdds_product(fdds_product(count, d.v), d.q), sizeof(double));
+    check_cuda(cudaMemsetAsync(d.out_raw.get(), 0, bytes, d.stream), "FDDS exchange output zero");
+    check_cuda(cudaMemsetAsync(d.out_orthogonal.get(), 0, bytes, d.stream), "FDDS exchange Q output zero");
+    check_cuda(cudaStreamSynchronize(d.stream), "FDDS exchange outer upload completion");
+    guard.complete = true;
+}
+
+void CuestFDDSExchange::accumulate(const double* integrals, const double* raw,
+                                  const double* orthogonal, size_t count) {
+    auto& d = *impl_;
+    FDDSEnqueueGuard guard{d.stream};
+    if (!d.outer_count || !count || count > d.max_inner)
+        throw PSIEXCEPTION("cuEST FDDS exchange: invalid inner block");
+    d.upload(d.integrals.get(), integrals, fdds_product(fdds_product(count, d.v), d.q));
+    const size_t right = fdds_product(fdds_product(count, d.k), d.q);
+    d.upload(d.raw.get(), raw, right);
+    d.upload(d.orthogonal.get(), orthogonal, right);
+    const double one = 1.0, zero = 0.0;
+    for (size_t a = 0; a < d.outer_count; ++a) {
+        const double* outer = d.outer.get() + a * d.k * d.q;
+        double* output = d.out_raw.get() + a * d.v * d.q;
+        double* qoutput = d.out_orthogonal.get() + a * d.v * d.q;
+        for (size_t b = 0; b < count; ++b) {
+            // Row-major V(v,k) = inner(v,q) outer(k,q)^T.
+            // Column-major V^T(k,v) = outer_col^T(k,q) inner_col(q,v).
+            check_cublas(cublasDgemm(cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                                     d.k, d.v, d.q, &one, outer, d.q,
+                                     d.integrals.get() + b * d.v * d.q, d.q,
+                                     &zero, d.scratch.get(), d.k), "FDDS exchange pair GEMM");
+            // Output_col(q,v) += right_col(q,k) V_col(k,v).
+            check_cublas(cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                                     d.q, d.v, d.k, &one, d.raw.get() + b * d.k * d.q, d.q,
+                                     d.scratch.get(), d.k, &one, output, d.q), "FDDS exchange raw GEMM");
+            check_cublas(cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                                     d.q, d.v, d.k, &one, d.orthogonal.get() + b * d.k * d.q, d.q,
+                                     d.scratch.get(), d.k, &one, qoutput, d.q), "FDDS exchange Q GEMM");
+        }
+    }
+    check_cuda(cudaStreamSynchronize(d.stream), "FDDS exchange inner completion");
+    guard.complete = true;
+}
+
+void CuestFDDSExchange::finish(double* raw, double* orthogonal) {
+    auto& d = *impl_;
+    FDDSEnqueueGuard guard{d.stream};
+    if (!d.outer_count || !raw || !orthogonal)
+        throw PSIEXCEPTION("cuEST FDDS exchange: invalid output block");
+    const size_t bytes = fdds_product(fdds_product(fdds_product(d.outer_count, d.v), d.q), sizeof(double));
+    check_cuda(cudaMemcpyAsync(raw, d.out_raw.get(), bytes, cudaMemcpyDeviceToHost, d.stream),
+               "FDDS exchange raw download");
+    check_cuda(cudaMemcpyAsync(orthogonal, d.out_orthogonal.get(), bytes, cudaMemcpyDeviceToHost, d.stream),
+               "FDDS exchange Q download");
+    check_cuda(cudaStreamSynchronize(d.stream), "FDDS exchange outer completion");
+    d.outer_count = 0;
+    guard.complete = true;
 }
 
 size_t CuestFDDSContractions::capacity(size_t naux, size_t requested_rows, bool hybrid) {

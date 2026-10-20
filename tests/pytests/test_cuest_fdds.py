@@ -128,6 +128,73 @@ def _reference_contractions(obj, hybrid, monomer, dimensions, cache, omega):
     return refs
 
 
+def _exchange_tensors(obj, monomer, dimensions):
+    o, v = dimensions
+    q = obj.metric().np.shape[0]
+    suffix = "arQ" if monomer == "A" else "bsQ"
+    return {prefix: obj.get_tensor_pqQ(prefix + suffix, (o, v, q)).np.copy()
+            for prefix in ("X", "QX", "Y", "QY")}
+
+
+def _reference_exchange_tensors(obj, monomer, dimensions):
+    """Independent contractions of the actual transformed integral tensors."""
+    o, v = dimensions
+    q = obj.metric().np.shape[0]
+    names = (("arR", "arQ", "QarQ", "aaR", "rrR", "raQ", "QraQ")
+             if monomer == "A" else
+             ("bsR", "bsQ", "QbsQ", "bbR", "ssR", "sbQ", "QsbQ"))
+    shapes = ((o, v, q), (o, v, q), (o, v, q), (o, o, q),
+              (v, v, q), (v, o, q), (v, o, q))
+    b, raw, orth, aa, rr, ra, qra = (
+        obj.get_tensor_pqQ(name, shape).np.copy() for name, shape in zip(names, shapes))
+    # Preserve the implemented index order, including nonsymmetric X/QX.
+    return {
+        "X": np.einsum("prk,ask,psq->arq", b, b, raw),
+        "QX": np.einsum("prk,ask,psq->arq", b, b, orth),
+        "Y": np.einsum("srk,apk,spq->arq", rr, aa, ra),
+        "QY": np.einsum("srk,apk,spq->arq", rr, aa, qra),
+    }
+
+
+@pytest.mark.parametrize("occupied", [(3, 3), (2, 3), (6, 6)], ids=["equal", "unequal", "dense-occ"])
+@pytest.mark.parametrize("memory_bytes", [None, 16384], ids=["whole", "blocked"])
+def test_fdds_native_exchange_preprocessing(fdds_factory, occupied, memory_bytes):
+    if memory_bytes is not None:
+        psi4.core.set_memory_bytes(memory_bytes)
+    obj = fdds_factory(True, occupied=occupied)
+    for monomer in ("A", "B"):
+        dims = fdds_factory.dimensions[monomer]
+        refs = _reference_exchange_tensors(obj, monomer, dims)
+        for key, got in _exchange_tensors(obj, monomer, dims).items():
+            np.testing.assert_allclose(got, refs[key], rtol=0, atol=2.e-11)
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+@pytest.mark.parametrize("occupied", [(3, 3), (2, 3), (6, 6)], ids=["equal", "unequal", "dense-occ"])
+@pytest.mark.parametrize("memory_bytes", [None, 16384], ids=["whole", "blocked"])
+def test_fdds_gpu_exchange_preprocessing(fdds_factory, occupied, memory_bytes):
+    if memory_bytes is not None:
+        psi4.core.set_memory_bytes(memory_bytes)
+    obj = fdds_factory(True, occupied=occupied)
+    refs = {m: _reference_exchange_tensors(obj, m, fdds_factory.dimensions[m])
+            for m in ("A", "B")}
+    del obj
+    for enabled, threshold in ((False, 0), (True, 10**9), (True, 0)):
+        psi4.set_options({"use_cuest": enabled, "cuest_gemm_min_dim": threshold})
+        psi4.core.clean_timers()
+        obj = fdds_factory(True, occupied=occupied)
+        calls = sum(v["n_calls"] for k, v in psi4.core.get_timer_dict().items()
+                    if "cuEST FDDS: hybrid exchange" in k)
+        assert calls == (4 if enabled and threshold == 0 else 0)
+        for monomer in ("A", "B"):
+            for key, got in _exchange_tensors(obj, monomer, fdds_factory.dimensions[monomer]).items():
+                np.testing.assert_allclose(got, refs[monomer][key], rtol=0, atol=2.e-11)
+        del obj
+    psi4.set_options({"use_cuest": False})
+
+
 @pytest.mark.parametrize("hybrid", [False, True])
 @pytest.mark.parametrize("occupied", [(3, 3), (2, 3)], ids=["equal", "unequal"])
 def test_fdds_native_contractions(fdds_factory, hybrid, occupied):

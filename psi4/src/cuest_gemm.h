@@ -4,6 +4,7 @@
 #include <string>
 #include <cstddef>
 #include <memory>
+#include <utility>
 #include <vector>
 #include "psi4/libmints/typedefs.h"
 
@@ -33,6 +34,30 @@ class CuestFDDSContractions {
                 const double* QY, const double* YL, size_t rows);
     /// Order: amp, K1LD, K2LD, K2L, K21L (hybrid); amp (uncoupled).
     void finish(const std::vector<SharedMatrix>& outputs);
+   private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+/// Hybrid FDDS exchange preprocessing, with two outputs resident across all
+/// inner blocks. Each pair forms V = inner(v,Q) outer(k,Q)^T, then accumulates
+/// V raw(k,Q) and V orthogonal(k,Q). k=v for X; k=nocc for Y.
+class CuestFDDSExchange {
+   public:
+    /// Reduce, never enlarge, caller-budgeted outer/inner block sizes to fit
+    /// 80% of free device memory. {0,0} means native execution before enqueue.
+    static std::pair<size_t, size_t> capacity(size_t q, size_t v, size_t k,
+                                            size_t outer, size_t inner);
+    CuestFDDSExchange(size_t q, size_t v, size_t k, size_t outer, size_t inner);
+    ~CuestFDDSExchange();
+    CuestFDDSExchange(const CuestFDDSExchange&) = delete;
+    CuestFDDSExchange& operator=(const CuestFDDSExchange&) = delete;
+    void begin(const double* outer_integrals, size_t count);
+    /// Drains the stream before returning so caller-owned DFHelper scratch
+    /// can safely be refilled for the next inner block.
+    void accumulate(const double* inner_integrals, const double* raw,
+                    const double* orthogonal, size_t count);
+    void finish(double* raw_output, double* orthogonal_output);
    private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

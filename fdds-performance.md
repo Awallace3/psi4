@@ -54,3 +54,49 @@ old frozen source/build/run directories or other agents' jobs.
   X/Y pairwise DGEMMs, QR,22 dense pseudoinverses, and density/ALDA setup.
   Choose the next seam from measured profiles; preserve exact equations and
   1e-13 singular-value cutoff rather than replacing pseudoinverse with a solve.
+
+## Submitted baseline and first measured bottleneck
+
+- **14198087** accepted on **gts-cs207 / cpu-small / inferno**,24 CPUs/160 GiB/
+  four hours. Effective QoS confirmed by scontrol. Worst-case credit$.79;
+  monthly-account available balance$29.51 before submission. Payload pinned
+  **1a5a95168f7cb4305c4a86a04d795d0274d859a9**, scientific binary9d4/hash68e344...
+  Local staging/smoke, geometry checksum, dry-run and duplicate checks passed.
+  Watcher **bd6b34709**. No job cancellation/modification.
+  Remote run `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261020-performance-01`.
+  Scheduler dry-run predicted an overnight delay; local profiles run in
+  parallel, not substituted into any cross-node speedup ratio.
+- Local physical peptide profile:250 AO/1042 auxiliary,20 occupied/230 virtual
+  per monomer,8 threads/16 GiB, **38.216089 s FDDS**. Object16.948329 s,
+  QR.641465 s, **X1.947119 s/Y6.633875 s**, ALDA3.620404 s,
+  integration17.203429 s;22 pseudoinverses5.755491 s (inside integration).
+  Coupled/uncoupled FDDS **-.006194210929276167 / -.009442035537422072 Eh**.
+  Cache and profile at `build_fdds_cpu/perf-peptide-{cache,cpu}/`;
+  native source9d4/core5b2825..., not an optimized GPU measurement.
+- Protein83 native profile is running locally (16 threads/64 GiB) to remove
+  queue latency from diagnosis; its final measurement is not yet available.
+
+## Candidate: persistent hybrid X/Y block contraction (not yet validated)
+
+- `CuestFDDSExchange` uploads the outer integral block once and each inner
+  integral/raw/orthogonal block once. Three exact FP64 cuBLAS products per
+  occupied-pair/occupied-virtual pair; two output tensors remain resident
+  across all inner blocks. Only completed outer outputs are downloaded.
+  Existing DFHelper reads/writes, tensor order and equations are preserved.
+- Shared cuEST stream/handle, actual HOST pointer-mode check, checked device
+  capacity (80% free), shrinking caller-budgeted blocks only. Stream drains
+  before host scratch can be reused and on every enqueued-error unwind;
+  runtime failures propagate without native retry. Native/no-cuEST/small/
+  unsupported-shape/capacity paths remain available; no new user option.
+- Device doubles: `q*[bo*(k+2v)+bi*(v+2k)] + v*k`, with k=v for X,
+  k=nocc for Y. Host memory budgets unchanged. Row limits and size arithmetic
+  are checked. Y's former zero virtual block when nvir<nocc is corrected
+  within the original six-o memory bound; dense-occupied regression added.
+- New real-interface tensor tests compare X/QX/Y/QY against independent
+  contractions of transformed integral tensors: equal/unequal/dense-occupied,
+  whole/blocked host budgets, disabled/huge-threshold/forced GPU controls.
+  Prospective full FDDS suite **69** (52 native/control,17 GPU cases);
+  focused gate20+real SAPT1, then full69 under bounded GDB in one allocation.
+  Collection count verified; runtime validation pending.
+- Read-only safety review of the new backend is running. No new GPU numerical
+  pass or performance speedup is claimed at this point.
