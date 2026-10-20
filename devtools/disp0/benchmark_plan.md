@@ -30,6 +30,11 @@ untouched. This is distinct HF-E2 work, not a copy of the PBE0-D4 cohort.
 
 Read-only suite: `~/data/timing_test_suite/geometries/systems.py`, SHA256
 `72668390d24f134316c8e779931a2f65efcd9289ecea8f1cf20a72733262e3bb`.
+Phoenix execution must use the supplied immutable snapshot
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-cpks/scal631-fc851a8346-20261016/geometries/systems.py`
+with that exact SHA (read-only). The current Phoenix home copy has a
+different module hash and is not admitted. Verify snapshot bytes and all four
+geometry-string hashes before launching; never modify the parent snapshot.
 Routine systems only: peptide, nanotube, protein83, protein157. No PLA15.
 Spherical `6-31+G**`, def2-universal-jkfit / aug-cc-pVDZ-RI; NBF
 250/548/922/1786 respectively. Retain geometry hashes and actual basis counts.

@@ -1284,6 +1284,124 @@ protein157 matched-work acceptance remain separate; do not use them as an
 HF baseline or modify parent artifacts. Our readiness/correctness/capacity
 gates remain unchanged.
 
+Unpublished-namespace review d21d5f2ee456d6ce788d0aa72af84814d retrieved:
+**no concrete functional or namespace-safety blockers** under the stated
+threat model. Confirms private-before-publication acquisition and retained
+directory descriptors prevent public-path replacement from redirecting
+writes; root/nested regular-directory replacement fixtures are covered.
+Read-only review, not a test rerun or runtime deployment proof. The final
+private Git-anchor review and exact recipe push receipt remain prerequisites
+before the first artifact copy.
+
+Coordinator protocol clearance received for a **separate immutable recovered-
+runtime admission**. It must bind original FAILED14196330/exit/provenance,
+exact compilepin587e172a33afaadb00eb7f574a5089533f7fc755, fixed b3/8f/9e
+whole-artifact identities, fresh complete deployment manifest/prefix and
+new metadata/maps/tinyAPI proofs, plus scientific-source equality. Existing
+failed-build admission must continue to reject failed status; no generic
+bypass or old-root/status mutation. No new CPU allocation is authorized.
+The local26/64 signed baseline is historical support only. Independent
+native/eager/defaultCPU signed physical references must execute with the
+actual recovered stage inside the authorized30min GPU gate before accepting
+GPU physics or timing. Report admission pin/manifest/prefix/proofs and fresh
+exact-route/gts-cs207 capacity/cost readiness before the single no-requeue
+GPU submission. Artifact14e still requires final narrow review/push and
+installed-prefix proofs before this transition.
+
+Final narrow anchor review df3cf338f4418293b1c4fcd3b2c302c80 exhausted its
+five-turn limit without a committed answer; this is **not review clearance**.
+Replacement scoped review d45a0182cbb14280ba8e790ab826cfaae launched with
+adequate answer budget; artifact installation remains unattempted.
+Fresh read-only storage/quota task b435a7ee8 and original failed-status/
+receipt/accounting evidence task bff3c2587 are running; no allocation.
+
+Separate admission implementation drafted in `devtools/disp0/recovered_runtime.py`
+without touching the original failed-build admission. Local fixture suite:
+**18passed in1.66s**, JUnit
+`build_disp0_cpu/reference-check-CMsZKLM7/results.xml`.
+Checks complete file inventory/hashes/modes/links, exact approved tuple,
+failed-origin identity, original toolchain/cache/header-link provenance,
+fresh prefix proofs and scientific equality; explicitly reports preparation
+only and historical CPU support, never GPU physics. Read-only review
+d12d077bd68ee10ab815ffc4ca3ad76ac pending. Real recovered-prefix proofs and
+actual original-provenance schema still need validation before use.
+
+Exact14e135d23c push receipt bda5ab64e confirmed origin updatef7be→14e.
+Staging a NEW umask077 private independent detached Git checkout through
+bda0dc11b; no artifact copy until final review/quota clearance.
+Timing-input discovery bb185c4cc found
+`/storage/home/hcoda1/3/awallace43/data/timing_test_suite/geometries/systems.py`,
+module SHAd949b063a052fce2c0f43c2bf7f50bccd68644b6917f6de2c9c40a28833df154,
+which **differs** from local planned module72668390…. Do not silently
+substitute it or assume matched geometries. Read-only AST literal comparison
+of the four exact geometry-string hashes launched as b13b22dcb; no import,
+SCF, source edits, or timing admission.
+
+Fresh artifact storage preflight b435a7ee8 completed successfully. Live
+project filesystem free2,073,195,184,128bytes; human-reviewed pace-quota
+project6261.2/8192.0GiB, inode limit0(unlimited). No scripted parsing of
+its unstable display. Conservative quota admission **1800GiB** comfortably
+exceeds selected artifact bytes≈190.5MB and required2×bytes+1GiB≈1.36GiB.
+Evidence: `.pi/tasks/01a154d8-a459-768d-83bd-c57c6a5dc42c-4065461/b435a7ee8.output`.
+Snapshot gts-cs207available$29.35 is not the mandatory fresh pre-submission
+capacity selector and does not authorize submission. No artifact copy yet.
+
+Final narrow private Git-anchor review d45a0182cbb14280ba8e790ab826cfaae:
+**no blockers** in main/verify_recipe/PrivateNamespace/private-anchor fixture.
+Exact-pin, `/proc/<workerPID>/fd/<repoFD>`, namespace creation and CLI are
+functionally consistent. Read-only review, no test rerun. Recipe14e push and
+fresh byte/quota evidence are complete; awaiting the private Git staging
+receipt before the first single bounded artifact installation.
+
+Original-failure evidence bff3c2587 confirms unchanged14196330 status
+exit_code1/term_received0, correct exact run/compilepin, submission receipt
+accepted_job_id14196330/Requeue0, cpu-small/embers/gts-cs207-chemx/8CPU48G2h.
+Live accounting job and.batch both **FAILED1:0,40m04s**; .0FAILED1:0
+39m57s. Extern0:0 is not success. Receipt/status schema matches separate
+admission expectations. No relabel, old-root changes or new allocation.
+
+Separate-admission review d12d077bd68ee10ab815ffc4ca3ad76ac identified two
+binding gaps: unlisted destination files and unchecked non-ELF origin bytes/
+links. Fixed both: exact enumeration of deployed whole Psi4stage and E2lib,
+plus every source/destination kind/mode/hash/size/link rechecked. Added extra
+module/library and changed-origin Python/link fixtures. Also binds live
+read-only sacct original job+.batch FAILED1:0 and original account/QoS/
+CPU/memory. Retest: **27passed in1.81s**, no skips/warnings,
+`build_disp0_cpu/reference-check-0eUQAqw4/results.xml`.
+Scoped follow-up d4970cca274b40cc7d84c36316a1e1de2 pending; no runtime/
+numerical admission or GPU submission yet. Original preparation script
+remains unchanged and rejects the failed status.
+
+Scoped recovery follow-up d4970cca274b40cc7d84c36316a1e1de2 retrieved:
+**no blockers**. Confirms exact deployed-tree inventory, complete original/
+destination kinds/modes/size/hash/link audits, and original job+.batch
+FAILED1:0/account/QoS/CPU/memory binding. Tests inspected, not executed.
+This clears the separate admission implementation for immutable pinning;
+actual new-prefix proofs remain required and no GPU correctness is implied.
+
+Remote input query b13b22dcb failed with `KeyError: protein83` in the initial
+literal SYSTEMS dictionary. This is an input-schema/provenance failure,
+not an energy/tolerance result. No geometry has been substituted or admitted.
+Read-only AST structure discovery b93143610 launched; parent requested to
+provide the immutable suite path/hash used for its finished cohort if known.
+No parent input/source/data changes.
+
+Private Git staging bda0dc11b completed: new checkout
+`P/gits/psi4.saptdft-cuest-disp0-artifact-14e135d23c-resume1`,
+mode0700/UID3170273, exact detached14e135d23c9e9de3a68ca5ead0eed43413cc86c8,
+clean tracked tree. Remote receipt time2026-10-20T05:51:29-04:00.
+All installation prerequisites now met. Exactly one artifact-only installer
+launched as b76327e4b with110s watchdog, fresh unpublished prefix, conservative
+1800GiB quota receipt, no compilation/allocation/retry. Actual outcome pending.
+The dated08:00 deadline is not promised; no timing work has begun.
+
+User supplied exact immutable input snapshot
+`P/runs/saptdft-cuest-cpks/scal631-fc851a8346-20261016/geometries/systems.py`,
+SHA72668390d24f134316c8e779931a2f65efcd9289ecea8f1cf20a72733262e3bb.
+Read-only byte/geometry identity verification b1958e914 launched. This
+resolves which source to inspect, not yet a verified timing admission.
+Parent snapshot is read-only, not copied/edited or used as an HF energy baseline.
+
 Final timing safeguard test task b6403af75: **68passed in6.48s**, no
 warnings/skips, JUnit
 `build_disp0_cpu/reference-check-ctS1hjRJ/results.xml`. Includes staged/
