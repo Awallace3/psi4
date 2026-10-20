@@ -545,3 +545,13 @@ old frozen source/build/run directories or other agents' jobs.
   `matched-14214205-var-local-v2`. No validated replacement-disk claim yet.
   Frozen scientific core, settings and caches remain identical; no new
   allocation, environment mutation, permission change or old-path adoption.
+- Actual replacement-disk gate **PASSED at21:13Z** under
+  `fdds-var-local-storage-probe`: localXFS,30,445,152,858,112 free bytes,
+ 536,870,912-byte fsync/readback SHA256
+  `c047731a3c134f3d34286d608e9c173027d50f43ab9d2064f3c360939977e908`,
+  cleanup verified. The same task then launched
+  `fdds-protein83-node-local-first`,10800s bound with23,795 seconds of
+  allocation time remaining. Full protein recovery/energy/timing still
+  require terminal audit. The five-minute observer's21:12:29Z free-lease
+  alert corresponded to the brief Git-staging gap, not a stuck worker.
+  Observer **b09c47ede** is rearmed; no duplicate allocation or timing overlap.
