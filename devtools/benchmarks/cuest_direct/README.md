@@ -142,6 +142,37 @@ norms can differ. This is conventional four-center direct/direct, not a claim
 that both programs execute identical kernels or convergence histories.
 Successful small-system correctness does not imply protein-scale feasibility.
 
+### Opt-in PySCF stall diagnostic (not a benchmark)
+
+`gpu_compare/diagnose_pyscf.py` invokes the existing profiled PySCF worker with
+the supplied immutable config and geometry, without changing the scientific
+settings. It is a separate entry point; normal campaigns are unaffected.
+It requires a committed, pristine harness and a new output directory.
+
+The parent bounds one child process group (180 s by default, at most 300 s),
+requests a final Python stack on timeout, then TERM/KILL/reaps it with at most
+five seconds cleanup grace. Group cleanup includes surviving descendants even
+if the leader exited; post-KILL reaping never blocks indefinitely. Absence of
+the entire group plus leader reaping is required for cleanup verification;
+otherwise exit 125 explicitly requires owner containment, not an assumed
+release. A second TERM is ignored only during bounded cleanup.
+TERM/INT during child creation are deferred, then delivered inside the
+cleanup-protected region; they are not silently discarded.
+The child emits all-thread Python stacks every 30 s by default and
+flushes paired phase markers around initial guess, core/overlap, eigensolver,
+J/K, effective potential, grid build and XC calls. Phase wrappers are installed
+only **after** the normal direct-dispatch policy has validated original methods.
+Input/source hashes and diagnostic-only terminal metadata are retained; the
+diagnostic's own bytes must be tracked and identical to its claimed HEAD.
+all worker records have `profile=True`, not eligible for headline timings.
+
+Use only inside a separately authorized owner-helper window with pinned
+environments and verified allocation cleanup. This is diagnostic preparation,
+not a GPU test pass, SCF fix, route certification or permission to launch.
+Python stacks identify Python call boundaries, not native CUDA kernel stacks.
+No automatic retry, grid export, production panel or environment provisioning
+is performed. Full RKS/grid/route gates remain necessary for later benchmarks.
+
 ## Required NVIDIA dependency notice
 
 NVIDIA MAKES NO REPRESENTATION ABOUT THE SUITABILITY OF THESE LICENSED
