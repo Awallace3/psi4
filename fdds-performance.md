@@ -209,3 +209,10 @@ old frozen source/build/run directories or other agents' jobs.
   `build_fdds_cpu/performance-compile-14199512/`.
   Terminal markers honestly report0 tests. Corrected compile/link preflight
   is running before any new submission; no driver/package changes.
+- Recovery will first compile/link/import the same fd2 scientific candidate
+  with CUDA enabled on a fresh isolated CPU checkout/build. A later H200 job
+  may reuse that own pinned stage read-only: binary pin, core SHA256 and
+  production-source equivalence are enforced by the existing read-only
+  validation contract. GPU mode is explicitly forced out of compile-only
+  mode and still requires21+69 actual passes before matched benchmarks.
+  CPU compilation alone never establishes GPU numerical correctness.

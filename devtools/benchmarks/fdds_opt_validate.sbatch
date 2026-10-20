@@ -37,7 +37,7 @@ on_term() {
     if [[ -n "$child" ]]; then kill -TERM "$child" || true; fi
 }
 trap on_term TERM INT
-export CUEST_FDDS_FOCUSED=1 CUEST_FDDS_FULL_AFTER_FOCUSED=1
+export CUEST_FDDS_FOCUSED=1 CUEST_FDDS_FULL_AFTER_FOCUSED=1 CUEST_FDDS_COMPILE_ONLY=0
 bash "$FDDS_PAYLOAD_ROOT/devtools/benchmarks/fdds_validate.sh" \
     "$FDDS_SOURCE_ROOT" "$env" "$FDDS_SOURCE_PIN" "$out" &
 child=$!
@@ -50,9 +50,12 @@ test -s "$out/VERIFIED.json"
 printf '%s\n' "$FDDS_SOURCE_PIN" > "$out/COMPLETED"
 
 # The full scientific gate is complete before any speed claim or large replay.
-# Run matched fresh CPU/GPU controls using this very same newly built stage.
-export FDDS_STAGE_ROOT="$FDDS_SOURCE_ROOT" FDDS_BINARY_PIN="$FDDS_SOURCE_PIN"
-FDDS_CORE_SHA256=$(sha256sum "$FDDS_SOURCE_ROOT"/build_fdds_validation/stage/lib/psi4/core*.so)
+# Run matched fresh CPU/GPU controls using this very same verified stage.
+# An own, pinned CUDA-enabled CPU build may be reused read-only so allocation
+# time goes to actual GPU validation/benchmarks rather than recompilation.
+export FDDS_STAGE_ROOT="${CUEST_FDDS_READONLY_BUILD_ROOT:-$FDDS_SOURCE_ROOT}"
+export FDDS_BINARY_PIN="${CUEST_FDDS_BINARY_PIN:-$FDDS_SOURCE_PIN}"
+FDDS_CORE_SHA256=$(sha256sum "$FDDS_STAGE_ROOT"/build_fdds_validation/stage/lib/psi4/core*.so)
 export FDDS_CORE_SHA256="${FDDS_CORE_SHA256%% *}" FDDS_GPU_EXCHANGE_REQUIRED=1
 unset FDDS_CPU_JOB_ID
 bash "$FDDS_PAYLOAD_ROOT/devtools/benchmarks/fdds_gpu_profile.sbatch" &
