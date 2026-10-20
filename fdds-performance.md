@@ -406,3 +406,31 @@ old frozen source/build/run directories or other agents' jobs.
   **1.1102230246251565e-16 /0 Eh**; real native-XC SAPT dispersion/total
   maximum errors **1.2705494208814505e-20 /1.1218961974295049e-14 Eh**.
   These deterministic small correctness cases are not speedup benchmarks.
+
+## First measured matched speedup (preliminary one pair)
+
+- **Peptide24:** CPU **17.749983983s**, GPU **14.904701657s** FDDS,
+  **1.1908983x CPU/GPU**. One fresh-process pair, not a repeated-median
+  conclusion. Includes object/integral/DF/QR/X/Y/ALDA and all ten frequency
+  points; excludes SCF and subsequent MP2 exchange-dispersion.
+- Same node/job14214205,8 threads/96GiB, scientific8dc/test+binaryfd2,
+  core92e5..., benchmark code/caches/options byte-identical. Actual GPU
+  frequency20 calls and X/Y4 calls; native control0. Owner auditb45c45721
+  checked exact source/core/cache/options/host/job/thread/memory identity,
+  finite positive times/energies, compare artifact and empty GPU cleanup.
+- Coupled/uncoupled energies CPU
+  **-.006194210331871708 /-.009442035524910403Eh**; GPU
+  **-.006194210400149608 /-.009442035532276367Eh**.
+  Absolute errors **6.827789982705168e-11 /7.365963741734483e-12Eh**.
+- X/Y walls CPU.872267/2.043124s; GPU1.014910/.812250s.
+  Time integration CPU7.215671s/GPU5.970677s. No setup/transfer cost was
+  subtracted from the timed FDDS call to inflate speedup.
+  Remaining native work limits the whole-FDDS improvement.
+- Exclusive first-pair nanotube42 is launched next; protein83 and ABBA
+  repeat pairs follow if time permits. Final per-system claims must retain
+  repeated times and failures, not replace these with separate24-CPU baselines.
+  Runtime payload remains c289; split case controller
+  **11f8195790fa49f640123c56d006025b6457147d** only changes sequencing,
+  not science. Stepfdds-peptide-first normal exit0/cleanup, no other timing
+  or GPU tasks overlapped. PySCF has stopped after its separate controller
+  bool/int proof-gate issue; no retry overlaps FDDS.

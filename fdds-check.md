@@ -16,8 +16,10 @@ and real SAPT1 passed11.425s (**90 actual executions**, not90 unique).
 Both GDB inferiors exited normally; import/core92e5/library provenance,
 VERIFIED.json and empty pre/post GPU process tables were audited. New X/Y
 whole/blocked/equal/unequal/dense-occupied routes actually ran.
-**Matched physical timings/speedup remain pending**; this is correctness,
-not performance evidence.
+**First matched physical timing (preliminary, one pair):** peptide24 CPU
+17.749984s/GPU14.904702s, **1.190898x**, same source/cache/allocation8threads/
+96GiB, actual20 frequency/4 X/Y GPU calls, energy error≤6.83e-11Eh.
+Nanotube42/protein83 and repeats remain pending; no cross-node baseline ratio.
 Preserved artifacts `build_fdds_cpu/performance-gpu-14214205/`:
 printed integrated coupled/uncoupled FDDS errors≤1.1102230246251565e-16/0Eh;
 real native-XC SAPT dispersion error≤1.2705494208814505e-20Eh.
