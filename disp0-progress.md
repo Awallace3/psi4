@@ -1502,6 +1502,36 @@ confirmed byb8df6762d (originb4ffd→d7c1517d06). This pin does not admit the
 failed relocated runtime. Neither H200 authorization nor the separate
 one-shot diagnostic compilation authorization has been consumed.
 
+Read-only dynamic-loader tracebf472f992 confirms **mixed CUDA dependency
+selection** under the intended LD_LIBRARY_PATH: cuSPARSE.so12 and
+nvJitLink.so12 resolve to siteCUDA12.6, while cuBLAS13/cuBLASLt13/CUDART13/
+cuSOLVER12 and an additional nvJitLink13 resolve through explicitcuda13.
+No missing-library error does not imply ABI coherence. This is loader-trace
+evidence only, not device execution. Parent notified. The failed prefix
+cannot satisfy the current admission contract; no preload/RPATH/dependency
+patch, mapping-check relaxation, retry or extra allocation.
+One final read-only original CMake cache/explicit-toolkit identity audit
+b2b62ea4e is running to specify a minimal corrected recipe proposal.
+
+Final read-only auditb2b62ea4e confirms compiler/root explicitly point to
+CUDA13 and sm90, yet original cache CUDA_cusparse_LIBRARY and
+CUDA_nvJitLink_LIBRARY point to siteCUDA12.6 (54 site12.6 cached selections
+in the inspected CUDA/configuration subset). Explicitcuda13 unversioned
+`libcusparse.so` and `libnvJitLink.so` do not exist; cuBLAS/CUDART development
+links resolve to genuine13.6.0.2/13.3.29 libraries. This is an incomplete
+development-toolkit/component-selection contract, not merely a misleading
+CUDA_ROOT locator. No configure/build/package/shared-prefix mutation occurred.
+
+Bounded correction handoff: `devtools/disp0/runtime_correction_plan.md`.
+It proposes a complete NEW private CUDA13 development prefix, configure-time
+imported-target closure rejection, complete E2 Python/native install rules
+and deliberate installed RPATH/RUNPATH, fresh coherent build/stage and a
+new explicitly reviewed artifact tuple. No SONAME aliases, binary patch,
+preload workaround, old-object repair or E1 downgrade. Candidate CPU shape
+8CPU/48G/up-to2h/freeembers is planning only; no corrected executable recipe/
+immutable build pin or new CPU approval exists. Existing diagnostic/GPU
+authorizations remain unconsumed. No credible08:00 speedup promise.
+
 Final timing safeguard test task b6403af75: **68passed in6.48s**, no
 warnings/skips, JUnit
 `build_disp0_cpu/reference-check-ctS1hjRJ/results.xml`. Includes staged/

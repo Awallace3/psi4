@@ -8,8 +8,10 @@ both libraries but did not install E2 Python. Its whole-artifact recovery
 passed byte/ELF checks (190,505,547bytes in59.5s), yet the new-prefix mapping
 proof failed: E2 `_core` has **DT_RPATH** pointing first to the original
 `14196330/einsums-build/lib`, overriding the requested new native prefix.
-Both E2 binaries also retain site CUDA12.6 paths before explicit CUDA13;
-actual dependency closure requires separate read-only diagnosis. No tiny
+Both E2 binaries also retain site CUDA12.6 paths before explicit CUDA13.
+The loader trace confirms CUDA12.6 cuSPARSE/nvJitLink alongside CUDA13;
+the original cache selected those components after finding their unversioned
+development links missing from the explicit CUDA13 prefix. No tiny
 API pass, diagnostic compile, CUDA execution, GPU correctness or speedup
 has been established for the deployed prefix.
 
@@ -21,6 +23,8 @@ Do not patch RPATH, overlay packages, weaken map checks, retry builds, or
 consume GPU allocations to repair this. A revised coherent installation/
 loader contract needs explicit review/clearance; no additional CPU allocation
 is authorized. See `../../disp0-progress.md` for exact evidence and approvals.
+`runtime_correction_plan.md` records the minimal proposed revised contract;
+it is planning only, not an executable recipe or new allocation clearance.
 
 ## Historical configuration and validation plan
 
