@@ -2,6 +2,8 @@ import psi4
 import pytest
 import numpy as np
 import re
+
+from addons import uusing
 from psi4 import compare_values
 
 pytestmark = [pytest.mark.psi, pytest.mark.api]
@@ -881,14 +883,19 @@ def test_xdm_rejects_empirical_double_dispersion():
     from psi4.driver.procrouting import dft, proc
     from psi4.driver.procrouting.dft import dft_builder
 
-    assert dft_builder.functionals["b3lyp-d3bj"]["dispersion"]["type"] == "d3bj"
+    from qcengine.programs.empirical_dispersion_resources import get_dispersion_aliases
+
+    # qcengine resolves the "d3bj" alias to its canonical level ("d3bj2b" in newer releases).
+    d3bj = get_dispersion_aliases().get("d3bj", "d3bj")
+    assert dft_builder.functionals["b3lyp-d3bj"]["dispersion"]["type"] == d3bj
     assert "b3lyp-d3bj-xdm" not in dft_builder.functionals
 
-    with pytest.raises(ValidationError, match="XDM cannot be combined with the 'd3bj' dispersion"):
+    message = f"XDM cannot be combined with the '{d3bj}' dispersion"
+    with pytest.raises(ValidationError, match=message):
         dft.build_superfunctional("b3lyp-d3bj-xdm", True)
 
     psi4.set_options({"basis": "aug-cc-pvdz", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
-    with pytest.raises(ValidationError, match="XDM cannot be combined with the 'd3bj' dispersion"):
+    with pytest.raises(ValidationError, match=message):
         proc.build_functional_and_disp("b3lyp-d3bj-xdm", True)
 
 
@@ -1024,6 +1031,7 @@ def test_xdm_rejects_range_separation_override():
 
 
 @pytest.mark.xdm
+@uusing("ecpint")
 def test_xdm_rejects_ecp_density():
     mol = psi4.geometry("0 2\nBr 0 0 0\nunits angstrom")
     psi4.set_options({
