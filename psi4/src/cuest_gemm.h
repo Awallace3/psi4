@@ -10,6 +10,25 @@
 
 namespace psi {
 #ifdef USING_cuEST
+/// Exact row-major DF metric folds. One metric upload per transform, reusable
+/// input/output storage; no host allocations or cached caller input pointers.
+class CuestDFMetric {
+   public:
+    enum class Layout { pqQ, Qpq, pQq, Qpq_to_pqQ };
+    static size_t capacity(size_t q, size_t requested_elements);
+    CuestDFMetric(size_t q, size_t elements, const double* metric, int min_dim);
+    ~CuestDFMetric();
+    CuestDFMetric(const CuestDFMetric&) = delete;
+    CuestDFMetric& operator=(const CuestDFMetric&) = delete;
+    size_t elements() const;
+    bool eligible(size_t p, size_t r) const;
+    /// Upload fresh input, multiply, download and drain before returning.
+    void fold(Layout layout, const double* input, double* output, size_t p, size_t r);
+   private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 /// Left-associated FP64 cuBLAS chain on the shared cuEST stream.
 /// Only requested intermediate products are downloaded to host matrices.
 std::vector<SharedMatrix> cuest_chain_gemm(const std::vector<SharedMatrix>& tensors,

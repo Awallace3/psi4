@@ -45,6 +45,7 @@ namespace psi {
 class BasisSet;
 class Matrix;
 class TwoBodyAOInt;
+class CuestDFMetric;
 
 // COMMON VARIABLE NAMES
 // lr_symmetric: Are the two C matrices in our J/K-esque contraction equal?
@@ -80,6 +81,12 @@ class PSI_API DFHelper {
     ///
     void set_memory(size_t doubles) { memory_ = doubles; }
     size_t get_memory() { return memory_; }
+    /// Internal FDDS opt-in only. Generic DFHelper callers remain native.
+    /// Uses the caller's existing work threshold and host blocking budget.
+    void set_metric_gpu(bool enabled, int min_dim) {
+        metric_gpu_ = enabled;
+        metric_gpu_min_dim_ = min_dim;
+    }
 
     ///
     /// Indicates whether to use the in-core or out-of-core
@@ -368,6 +375,8 @@ class PSI_API DFHelper {
     // Use in-core subalgorithm?
     bool AO_core_ = true;
     bool MO_core_ = false;
+    bool metric_gpu_ = false;
+    int metric_gpu_min_dim_ = 256;
     bool release_core_AO_before_metric_ = false;
     bool release_pre_metric_tensors_ = false;
     size_t nthreads_ = 1;
@@ -500,8 +509,10 @@ class PSI_API DFHelper {
     double* metric_inverse_prep_core();
 
     // => metric operations <=
-    void contract_metric_Qpq(std::string file, double* metp, double* Mp, double* Fp, const size_t tots);
-    void contract_metric(std::string file, double* metp, double* Mp, double* Fp, const size_t tots);
+    void contract_metric_Qpq(std::string file, double* metp, double* Mp, double* Fp, const size_t tots,
+                             CuestDFMetric* gpu = nullptr);
+    void contract_metric(std::string file, double* metp, double* Mp, double* Fp, const size_t tots,
+                         CuestDFMetric* gpu = nullptr);
     void contract_metric_core(std::string file);
     void contract_metric_AO(double* Mp);
     void contract_metric_AO_core(double* Qpq, double* metp);

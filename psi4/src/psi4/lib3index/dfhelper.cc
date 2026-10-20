@@ -46,6 +46,10 @@
 #endif
 
 #include <memory>
+#include <limits>
+#ifdef USING_cuEST
+#include "cuest_gemm.h"
+#endif
 #include "psi4/psi4-dec.h"
 #include "psi4/liboptions/liboptions.h"
 #include "psi4/libfock/jk.h"
@@ -67,6 +71,14 @@
 namespace psi {
 
 namespace {
+
+#ifdef USING_cuEST
+size_t metric_fold_product(size_t a, size_t b) {
+    if (b && a > std::numeric_limits<size_t>::max() / b)
+        throw PSIEXCEPTION("DFHelper GPU metric size overflow");
+    return a * b;
+}
+#endif
 
 // Report a stdio transfer that moved fewer doubles than it was asked to.
 // Anything short of the exact count leaves the tensor on disk truncated, so it
@@ -1603,7 +1615,8 @@ void DFHelper::metric_contraction_blocking(std::vector<std::pair<size_t, size_t>
     }
 }
 
-void DFHelper::contract_metric_Qpq(std::string file, double* metp, double* Mp, double* Fp, const size_t total_mem) {
+void DFHelper::contract_metric_Qpq(std::string file, double* metp, double* Mp, double* Fp, const size_t total_mem,
+                                  CuestDFMetric* gpu) {
     std::string getf = std::get<0>(files_[file]);
     std::string putf = std::get<1>(files_[file]);
 
@@ -1613,7 +1626,15 @@ void DFHelper::contract_metric_Qpq(std::string file, double* metp, double* Mp, d
 
     std::string op = "wb";
     std::vector<std::pair<size_t, size_t>> steps;
-    metric_contraction_blocking(steps, l, Q * r, total_mem, 2, naux_ * naux_);
+    size_t block_memory = total_mem;
+#ifdef USING_cuEST
+    if (gpu && Q && r) {
+        const size_t p = std::min(l, gpu->elements() / Q / r);
+        if (!gpu->eligible(p, r)) gpu = nullptr;
+        else block_memory = std::min(total_mem, gpu->elements());
+    } else gpu = nullptr;
+#endif
+    metric_contraction_blocking(steps, l, Q * r, block_memory, 2, naux_ * naux_);
 
     for (size_t i = 0; i < steps.size(); i++) {
         size_t begin = std::get<0>(steps[i]);
@@ -1622,7 +1643,12 @@ void DFHelper::contract_metric_Qpq(std::string file, double* metp, double* Mp, d
 
         get_tensor_(getf, Mp, 0, Q - 1, begin * r, (end + 1) * r - 1);
         timer_on("DFH: Total Workflow");
-        C_DGEMM('T', 'N', bs * r, Q, Q, 1.0, Mp, bs * r, metp, Q, 0.0, Fp, Q);
+#ifdef USING_cuEST
+        if (gpu && gpu->eligible(bs, r))
+            gpu->fold(CuestDFMetric::Layout::Qpq_to_pqQ, Mp, Fp, bs, r);
+        else
+#endif
+            C_DGEMM('T', 'N', bs * r, Q, Q, 1.0, Mp, bs * r, metp, Q, 0.0, Fp, Q);
         timer_off("DFH: Total Workflow");
         put_tensor(putf, Fp, begin, end, 0, r * Q - 1, op);
     }
@@ -1638,7 +1664,8 @@ void DFHelper::contract_metric_Qpq(std::string file, double* metp, double* Mp, d
     if (release_pre_metric_tensors_) file_streams_.erase(getf);
 }
 
-void DFHelper::contract_metric(std::string file, double* metp, double* Mp, double* Fp, const size_t total_mem) {
+void DFHelper::contract_metric(std::string file, double* metp, double* Mp, double* Fp, const size_t total_mem,
+                              CuestDFMetric* gpu) {
     std::string getf = std::get<0>(files_[file]);
     std::string putf = std::get<1>(files_[file]);
     size_t a0 = std::get<0>(sizes_[getf]);
@@ -1647,12 +1674,22 @@ void DFHelper::contract_metric(std::string file, double* metp, double* Mp, doubl
 
     std::string op = "wb";
     std::vector<std::pair<size_t, size_t>> steps;
+    size_t block_memory = total_mem;
+#ifdef USING_cuEST
+    if (gpu) {
+        const size_t quantum = std::get<2>(transf_[file]) == 2 ? a1 : a2;
+        const size_t p = quantum && naux_ ? std::min(std::get<2>(transf_[file]) ? a0 : a1,
+                                                    gpu->elements() / naux_ / quantum) : 0;
+        if (!gpu->eligible(p, quantum)) gpu = nullptr;
+        else block_memory = std::min(total_mem, gpu->elements());
+    }
+#endif
 
     // contract in steps
     if (std::get<2>(transf_[file])) {
         // determine blocking
         // both pqQ and pQq formats block through p, which is index 0
-        metric_contraction_blocking(steps, a0, a1 * a2, total_mem, 2, naux_ * naux_);
+        metric_contraction_blocking(steps, a0, a1 * a2, block_memory, 2, naux_ * naux_);
 
         // grab val, the inner contractions are different depending on the form
         size_t val = std::get<2>(transf_[file]);
@@ -1664,6 +1701,13 @@ void DFHelper::contract_metric(std::string file, double* metp, double* Mp, doubl
             get_tensor_(getf, Mp, begin, end, 0, a1 * a2 - 1);
             timer_on("DFH: Total Workflow");
 
+#ifdef USING_cuEST
+            const size_t r = val == 2 ? a1 : a2;
+            if (gpu && gpu->eligible(bs, r)) {
+                gpu->fold(val == 2 ? CuestDFMetric::Layout::pqQ : CuestDFMetric::Layout::pQq,
+                          Mp, Fp, bs, r);
+            } else
+#endif
             if (val == 2) {
                 C_DGEMM('N', 'N', bs * a1, a2, a2, 1.0, Mp, a2, metp, a2, 0.0, Fp, a2);
             } else {
@@ -1679,7 +1723,7 @@ void DFHelper::contract_metric(std::string file, double* metp, double* Mp, doubl
     } else {
         // determine blocking
         // the Qpq format blocks through p, which is index 1
-        metric_contraction_blocking(steps, a1, a0 * a2, total_mem, 2, naux_ * naux_);
+        metric_contraction_blocking(steps, a1, a0 * a2, block_memory, 2, naux_ * naux_);
 
         for (size_t i = 0; i < steps.size(); i++) {
             size_t begin = std::get<0>(steps[i]);
@@ -1688,7 +1732,12 @@ void DFHelper::contract_metric(std::string file, double* metp, double* Mp, doubl
 
             get_tensor_(getf, Mp, 0, a0 - 1, begin * a2, (end + 1) * a2 - 1);
             timer_on("DFH: Total Workflow");
-            C_DGEMM('N', 'N', a0, bs * a2, a0, 1.0, metp, a0, Mp, bs * a2, 0.0, Fp, bs * a2);
+#ifdef USING_cuEST
+            if (gpu && gpu->eligible(bs, a2))
+                gpu->fold(CuestDFMetric::Layout::Qpq, Mp, Fp, bs, a2);
+            else
+#endif
+                C_DGEMM('N', 'N', a0, bs * a2, a0, 1.0, metp, a0, Mp, bs * a2, 0.0, Fp, bs * a2);
             timer_off("DFH: Total Workflow");
             put_tensor(putf, Fp, 0, a0 - 1, begin * a2, (end + 1) * a2 - 1, op);
         }
@@ -2153,6 +2202,47 @@ void DFHelper::transform() {
         } else
             metp = metric_prep_core(mpower_);
 
+#ifdef USING_cuEST
+        // Explicit FDDS opt-in, never generic USE_CUEST routing. Each transform
+        // gets its own uploaded metric: FDDS changes its power between calls.
+        auto make_metric_gpu = [&](size_t host_elements) -> std::unique_ptr<CuestDFMetric> {
+            if (!metric_gpu_ || !naux_ || !host_elements ||
+                naux_ > static_cast<size_t>(std::numeric_limits<int>::max())) return nullptr;
+            if (metric_gpu_min_dim_ < 0) throw PSIEXCEPTION("CUEST_GEMM_MIN_DIM must be nonnegative.");
+            size_t requested = 0;
+            for (const auto& name : order_) {
+                const auto& dims = sizes_[std::get<0>(files_[name])];
+                requested = std::max(requested, metric_fold_product(std::get<0>(dims),
+                    metric_fold_product(std::get<1>(dims), std::get<2>(dims))));
+            }
+            requested = std::min(host_elements, requested);
+            const long double cutoff = static_cast<long double>(metric_gpu_min_dim_) *
+                                       metric_gpu_min_dim_ * metric_gpu_min_dim_;
+            if (static_cast<long double>(naux_) * naux_ * (requested / naux_) < cutoff) {
+                outfile->Printf("  cuEST FDDS: metric fold below work threshold; native execution.\n");
+                return nullptr;
+            }
+            const size_t elements = CuestDFMetric::capacity(naux_, requested);
+            bool fits = false;
+            for (const auto& name : order_) {
+                const auto& dims = sizes_[std::get<0>(files_[name])];
+                const size_t a0 = std::get<0>(dims), a1 = std::get<1>(dims), a2 = std::get<2>(dims);
+                const size_t r = direct_iaQ_ ? a2 : (std::get<2>(transf_[name]) == 2 ? a1 : a2);
+                const size_t p = r ? std::min(direct_iaQ_ || std::get<2>(transf_[name]) == 0 ? a1 : a0,
+                                             elements / naux_ / r) : 0;
+                if (p && r <= static_cast<size_t>(std::numeric_limits<int>::max()) &&
+                    p <= static_cast<size_t>(std::numeric_limits<int>::max()) / r &&
+                    static_cast<long double>(naux_) * naux_ * p * r >= cutoff) fits = true;
+            }
+            if (!fits) {
+                outfile->Printf("  cuEST FDDS: metric block capacity/layout requires native execution.\n");
+                return nullptr;
+            }
+            return std::unique_ptr<CuestDFMetric>(
+                new CuestDFMetric(naux_, elements, metp, metric_gpu_min_dim_));
+        };
+#endif
+
         if (direct_iaQ_) {
             if (MO_core_) {
                 std::unique_ptr<double[]> N(new double[naux_ * wfinal]);
@@ -2180,8 +2270,13 @@ void DFHelper::transform() {
                 std::unique_ptr<double[]> F(new double[total_mem]);
                 double* Mp = M.get();
                 double* Fp = F.get();
+                CuestDFMetric* metric_gpu = nullptr;
+#ifdef USING_cuEST
+                auto device_metric = make_metric_gpu(total_mem);
+                metric_gpu = device_metric.get();
+#endif
                 for (std::vector<std::string>::iterator itr = order_.begin(); itr != order_.end(); itr++)
-                    contract_metric_Qpq(*itr, metp, Mp, Fp, total_mem);
+                    contract_metric_Qpq(*itr, metp, Mp, Fp, total_mem, metric_gpu);
             }
 
         } else if (direct_) {
@@ -2196,9 +2291,14 @@ void DFHelper::transform() {
                 std::unique_ptr<double[]> F(new double[total_mem]);
                 double* Mp = M.get();
                 double* Fp = F.get();
+                CuestDFMetric* metric_gpu = nullptr;
+#ifdef USING_cuEST
+                auto device_metric = make_metric_gpu(total_mem);
+                metric_gpu = device_metric.get();
+#endif
 
                 for (std::vector<std::string>::iterator itr = order_.begin(); itr != order_.end(); itr++)
-                    contract_metric(*itr, metp, Mp, Fp, total_mem);
+                    contract_metric(*itr, metp, Mp, Fp, total_mem, metric_gpu);
 
             } else {
                 std::unique_ptr<double[]> N(new double[naux_ * wfinal]);

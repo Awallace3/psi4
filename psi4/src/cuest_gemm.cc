@@ -68,6 +68,7 @@
 
 #include "psi4/libmints/matrix.h"
 #include "psi4/libpsi4util/exception.h"
+#include "psi4/libqt/qt.h"
 #include "psi4/libfock/cuESTCommon.h"
 #include "cuest_gemm.h"
 
@@ -194,6 +195,107 @@ struct FDDSEnqueueGuard {
         if (!complete) cudaStreamSynchronize(stream);
     }
 };
+struct MetricTimer {
+    const char* name;
+    explicit MetricTimer(const char* name_) : name(name_) { timer_on(name); }
+    ~MetricTimer() { timer_off(name); }
+};
+}
+
+size_t CuestDFMetric::capacity(size_t q, size_t requested) {
+    if (!q || !requested || q > static_cast<size_t>(std::numeric_limits<int>::max())) return 0;
+    const size_t fixed = fdds_product(q, q);
+    fdds_product(fdds_sum(fixed, fdds_product(2, requested)), sizeof(double));
+    cuest_common::ensure_cuest_initialized();
+    size_t free = 0, total = 0;
+    check_cuda(cudaMemGetInfo(&free, &total), "DF metric capacity");
+    const size_t budget = (free / sizeof(double) / 5) * 4;
+    return fixed < budget ? std::min(requested, (budget - fixed) / 2) : 0;
+}
+
+struct CuestDFMetric::Impl {
+    size_t q, count;
+    int min_dim;
+    cudaStream_t stream = nullptr;
+    DeviceBuffer metric, input, output;
+    Impl(size_t q_, size_t count_, const double* metp, int threshold)
+        : q(q_), count(count_), min_dim(threshold) {
+        if (!q || !count || !metp || min_dim < 0 ||
+            q > static_cast<size_t>(std::numeric_limits<int>::max()))
+            throw PSIEXCEPTION("cuEST DF metric: invalid dimensions, threshold or metric");
+        fdds_product(fdds_sum(fdds_product(q, q), fdds_product(2, count)), sizeof(double));
+        cuest_common::ensure_cuest_initialized();
+        cublasPointerMode_t mode;
+        check_cublas(cublasGetPointerMode(cublas_handle, &mode), "DF metric pointer mode");
+        if (mode != CUBLAS_POINTER_MODE_HOST)
+            throw PSIEXCEPTION("cuEST DF metric: shared cuBLAS handle requires HOST pointer mode");
+        check_cublas(cublasGetStream(cublas_handle, &stream), "DF metric stream");
+        MetricTimer timer("cuEST FDDS: metric setup");
+        metric = DeviceBuffer(fdds_product(q, q), "DF metric");
+        input = DeviceBuffer(count, "DF metric input");
+        output = DeviceBuffer(count, "DF metric output");
+        // A failed constructor does not run ~Impl: drain before its members or
+        // the caller's borrowed metric can unwind.
+        FDDSEnqueueGuard guard{stream};
+        check_cuda(cudaMemcpyAsync(metric.get(), metp, fdds_product(fdds_product(q, q), sizeof(double)),
+                                   cudaMemcpyHostToDevice, stream), "DF metric upload");
+        check_cuda(cudaStreamSynchronize(stream), "DF metric upload completion");
+        guard.complete = true;
+    }
+    ~Impl() { cudaStreamSynchronize(stream); }
+};
+
+CuestDFMetric::CuestDFMetric(size_t q, size_t count, const double* metric, int threshold)
+    : impl_(new Impl(q, count, metric, threshold)) {}
+CuestDFMetric::~CuestDFMetric() = default;
+size_t CuestDFMetric::elements() const { return impl_->count; }
+bool CuestDFMetric::eligible(size_t p, size_t r) const {
+    const auto& d = *impl_;
+    if (!p || !r || r > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+        p > static_cast<size_t>(std::numeric_limits<int>::max()) / r) return false;
+    const size_t rows = p * r;
+    return rows <= d.count / d.q &&
+        static_cast<long double>(d.q) * d.q * rows >=
+            static_cast<long double>(d.min_dim) * d.min_dim * d.min_dim;
+}
+
+void CuestDFMetric::fold(Layout layout, const double* input, double* output, size_t p, size_t r) {
+    auto& d = *impl_;
+    if (!input || !output || !eligible(p, r))
+        throw PSIEXCEPTION("cuEST DF metric: invalid or ineligible block");
+    if (layout != Layout::pqQ && layout != Layout::Qpq && layout != Layout::pQq &&
+        layout != Layout::Qpq_to_pqQ)
+        throw PSIEXCEPTION("cuEST DF metric: unsupported layout");
+    const size_t rows = p * r, bytes = fdds_product(fdds_product(rows, d.q), sizeof(double));
+    FDDSEnqueueGuard guard{d.stream};
+    MetricTimer timer("cuEST FDDS: metric fold");  // includes all transfers and completion
+    check_cuda(cudaMemcpyAsync(d.input.get(), input, bytes, cudaMemcpyHostToDevice, d.stream),
+               "DF metric block upload");
+    const double one = 1.0, zero = 0.0;
+    // Row-major products use reversed operands in column-major cuBLAS.
+    if (layout == Layout::pqQ || layout == Layout::Qpq_to_pqQ) {
+        check_cublas(cublasDgemm(cublas_handle, CUBLAS_OP_N,
+                         layout == Layout::pqQ ? CUBLAS_OP_N : CUBLAS_OP_T,
+                         d.q, rows, d.q, &one, d.metric.get(), d.q,
+                         d.input.get(), layout == Layout::pqQ ? d.q : rows,
+                         &zero, d.output.get(), d.q), "DF metric right GEMM");
+    } else if (layout == Layout::Qpq) {
+        check_cublas(cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                         rows, d.q, d.q, &one, d.input.get(), rows,
+                         d.metric.get(), d.q, &zero, d.output.get(), rows), "DF metric left GEMM");
+    } else {
+        // Never enter the native OpenMP loop with a shared cuBLAS handle.
+        for (size_t i = 0; i < p; ++i) {
+            check_cublas(cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                             r, d.q, d.q, &one, d.input.get() + i * d.q * r, r,
+                             d.metric.get(), d.q, &zero, d.output.get() + i * d.q * r, r),
+                         "DF metric slice GEMM");
+        }
+    }
+    check_cuda(cudaMemcpyAsync(output, d.output.get(), bytes, cudaMemcpyDeviceToHost, d.stream),
+               "DF metric block download");
+    check_cuda(cudaStreamSynchronize(d.stream), "DF metric block completion");
+    guard.complete = true;
 }
 
 std::pair<size_t, size_t> CuestFDDSExchange::capacity(size_t q, size_t v, size_t k,
@@ -598,6 +700,51 @@ void export_cuest_gemm(py::module& m) {
           "return_tensors"_a,
           "Multiply a chain of matrices on the GPU with cuBLAS, keeping intermediates device-resident. "
           "Only the links flagged in return_tensors are copied back to the host.");
+    // Narrow internal regression seam: the same resident metric serves
+    // differently sized, changing input blocks. Not a new routing option.
+    m.def("_cuest_df_metric_fold", [](const psi::SharedMatrix& metric,
+                                      const std::vector<psi::SharedMatrix>& inputs,
+                                      const std::string& layout, size_t r) {
+        using Engine = psi::CuestDFMetric;
+        Engine::Layout kind;
+        if (layout == "pqQ") kind = Engine::Layout::pqQ;
+        else if (layout == "Qpq") kind = Engine::Layout::Qpq;
+        else if (layout == "pQq") kind = Engine::Layout::pQq;
+        else if (layout == "Qpq_to_pqQ") kind = Engine::Layout::Qpq_to_pqQ;
+        else throw PSIEXCEPTION("cuEST DF metric: unsupported layout");
+        if (!metric || metric->nirrep() != 1 || metric->symmetry() != 0 ||
+            metric->rowdim() != metric->coldim() || !r)
+            throw PSIEXCEPTION("cuEST DF metric: square one-irrep metric and positive r required");
+        const size_t q = metric->rowdim();
+        std::vector<size_t> ps;
+        std::vector<psi::SharedMatrix> result;
+        size_t requested = 0;
+        for (const auto& input : inputs) {
+            if (!input || input->nirrep() != 1 || input->symmetry() != 0)
+                throw PSIEXCEPTION("cuEST DF metric: one-irrep input required");
+            const size_t rows = input->rowdim(), cols = input->coldim();
+            size_t p = 0;
+            if (kind == Engine::Layout::pqQ && cols == q && rows % r == 0) p = rows / r;
+            else if ((kind == Engine::Layout::Qpq || kind == Engine::Layout::Qpq_to_pqQ) &&
+                     rows == q && cols % r == 0) p = cols / r;
+            else if (kind == Engine::Layout::pQq && cols == r && q && rows % q == 0) p = rows / q;
+            else throw PSIEXCEPTION("cuEST DF metric: incompatible input shape");
+            const size_t count = psi::fdds_product(rows, cols);
+            requested = std::max(requested, count);
+            ps.push_back(p);
+            result.push_back(std::make_shared<psi::Matrix>("DF metric regression",
+                kind == Engine::Layout::Qpq_to_pqQ ? cols : rows,
+                kind == Engine::Layout::Qpq_to_pqQ ? rows : cols));
+        }
+        if (!requested) return result;  // no CUDA initialization for empty inputs
+        if (Engine::capacity(q, requested) < requested)
+            throw PSIEXCEPTION("cuEST DF metric: regression blocks exceed device capacity");
+        Engine engine(q, requested, metric->get_pointer(0), 0);
+        for (size_t i = 0; i < inputs.size(); ++i)
+            if (ps[i]) engine.fold(kind, inputs[i]->get_pointer(0), result[i]->get_pointer(0), ps[i], r);
+        return result;
+    }, "metric"_a, "inputs"_a, "layout"_a, "r"_a,
+       "Internal FP64 DF metric block regression seam; explicit GPU execution, no CPU retry.");
 }
 
 #endif  // USING_cuEST

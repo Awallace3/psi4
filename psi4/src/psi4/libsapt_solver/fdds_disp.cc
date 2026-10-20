@@ -306,6 +306,10 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
     // Build DFHelper
     dfh_ = std::make_shared<DFHelper>(primary_, auxiliary_);
     dfh_->set_memory(doubles);
+#ifdef USING_cuEST
+    dfh_->set_metric_gpu(gpu_layout_supported_ && Process::environment.options.get_bool("USE_CUEST"),
+                         Process::environment.options.get_int("CUEST_GEMM_MIN_DIM"));
+#endif
     if (is_hybrid_) {
         dfh_->set_method("DIRECT");
     } else {

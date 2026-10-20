@@ -257,6 +257,45 @@ def test_fdds_gpu_metric_fold(fdds_factory, hybrid, occupied, memory_bytes):
     psi4.set_options({"use_cuest": False})
 
 
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+@pytest.mark.parametrize("layout", ["pqQ", "Qpq", "pQq", "Qpq_to_pqQ"])
+def test_fdds_gpu_metric_layout(layout):
+    """Nonsymmetric metric, unequal dimensions, tail and repeated-input freshness."""
+    rng = np.random.default_rng(401)
+    q, r = 5, 3
+    metric = rng.normal(size=(q, q))  # physical symmetric metrics hide transpose mistakes
+    inputs, expected = [], []
+    for p in (3, 1, 3, 0):
+        shape = ((p * r, q) if layout == "pqQ" else
+                 (p * q, r) if layout == "pQq" else (q, p * r))
+        a = rng.normal(size=shape)
+        inputs.append(psi4.core.Matrix.from_array(a))
+        if layout == "pqQ":
+            expected.append(a @ metric)
+        elif layout == "Qpq":
+            expected.append(metric @ a)
+        elif layout == "pQq":
+            expected.append(np.einsum("ij,pjk->pik", metric, a.reshape(p, q, r)).reshape(shape))
+        else:
+            expected.append(a.T @ metric)
+    met = psi4.core.Matrix.from_array(metric)
+    saved = [a.np.copy() for a in inputs]
+    got = psi4.core._cuest_df_metric_fold(met, inputs, layout, r)
+    for out, ref, a, before in zip(got, expected, inputs, saved):
+        np.testing.assert_allclose(out.np, ref, rtol=0, atol=2.e-13)
+        np.testing.assert_array_equal(a.np, before)
+    # Invalid requests fail before upload; a following valid call still works.
+    with pytest.raises(RuntimeError, match="unsupported layout"):
+        psi4.core._cuest_df_metric_fold(met, inputs, "invalid", r)
+    with pytest.raises(RuntimeError, match="positive r"):
+        psi4.core._cuest_df_metric_fold(met, inputs, layout, 0)
+    repeated = psi4.core._cuest_df_metric_fold(met, inputs, layout, r)
+    for out, ref in zip(repeated, expected):
+        np.testing.assert_allclose(out.np, ref, rtol=0, atol=2.e-13)
+
+
 @pytest.mark.parametrize("hybrid", [False, True])
 @pytest.mark.parametrize("occupied", [(3, 3), (2, 3)], ids=["equal", "unequal"])
 def test_fdds_native_contractions(fdds_factory, hybrid, occupied):
