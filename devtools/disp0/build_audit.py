@@ -88,6 +88,27 @@ def audit_tokens(tokens, directory, allowed):
     require(not any(token in joined for token in BAD), "Foreign historical/site12 command")
     require(not any(Path(token).name in ("ccache", "sccache") for token in tokens),
             "Unapproved compiler-cache launcher")
+    # GNU driver forwarding is one linker stream, not compiler filenames.
+    # In particular: --version-script -Xlinker FILE must not consume the
+    # intervening forwarding marker as the script name.
+    plain, forwarded = [], []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "-Xlinker":
+            require(index + 1 < len(tokens), "Truncated -Xlinker forwarding")
+            index += 1
+            forwarded.append(tokens[index])
+        elif token.startswith("-Xlinker="):
+            forwarded.append(token.split("=", 1)[1])
+        elif token.startswith("-Wl,"):
+            forwarded.extend(token.split(",")[1:])
+        else:
+            plain.append(token)
+        index += 1
+    if forwarded:
+        audit_linker_parts(forwarded, directory, allowed)
+    tokens = plain
     path_options = ("-I", "-L", "-isystem", "-iquote", "-idirafter", "-include", "-imacros",
                     "--sysroot", "-B", "-ccbin", "--compiler-bindir", "--include-path", "--library-path",
                     "-T", "--script", "--version-script", "--dynamic-list", "--retain-symbols-file",
@@ -105,9 +126,7 @@ def audit_tokens(tokens, directory, allowed):
                 safe_path(token[len(option) + 1:], directory, allowed)
             elif not option.startswith("--") and token.startswith(option) and len(token) > len(option):
                 safe_path(token[len(option):], directory, allowed)
-        if token.startswith("-Wl,"):
-            audit_linker_parts(token.split(",")[1:], directory, allowed)
-        elif token.startswith("--") and "=" in token and "/" in token.split("=", 1)[1]:
+        if token.startswith("--") and "=" in token and "/" in token.split("=", 1)[1]:
             audit_linker_parts([token], directory, allowed)
         if token.startswith("/"):
             safe_path(token, directory, allowed)

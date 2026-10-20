@@ -507,7 +507,7 @@ def test_revised_batch_is_only_a_fixed_cpu_proposal():
 
 @pytest.mark.parametrize("corrupt", [None, "compiler", "include", "link", "env-flags", "response",
                                     "version-script", "linker-script", "relative-script", "packed-script",
-                                    "xlinker-script"])
+                                    "xlinker-script", "xlinker-pairs", "xlinker-truncated"])
 def test_effective_compile_and_link_guard(sdk, tmp_path, corrupt):
     contract, source_sdk, manifest = sdk
     module = load("build_audit")
@@ -537,6 +537,10 @@ def test_effective_compile_and_link_guard(sdk, tmp_path, corrupt):
         command += " -Wl,-T/foreign/layout.ld"
     elif corrupt == "xlinker-script":
         command += " -Xlinker --version-script=/foreign/exports.map"
+    elif corrupt == "xlinker-pairs":
+        command += " -Xlinker --version-script -Xlinker ../../foreign/exports.map"
+    elif corrupt == "xlinker-truncated":
+        command += " -Xlinker"
     entries = [{"directory": str(run), "file": str(source / "fixture.cc"), "command": command}]
     if corrupt:
         with pytest.raises(RuntimeError):
@@ -548,6 +552,12 @@ def test_effective_compile_and_link_guard(sdk, tmp_path, corrupt):
             run, run, source, sdk_data, scratch) == 1
         assert module.audit_link_commands(
             f"{compiler} -shared -Wl,--version-script={run}/exports.map,-T,{run}/layout.ld",
+            run, run, source, sdk_data, scratch) == 1
+        assert module.audit_link_commands(
+            f"{compiler} -shared -Xlinker --version-script -Xlinker {run}/exports.map",
+            run, run, source, sdk_data, scratch) == 1
+        assert module.audit_link_commands(
+            f"{compiler} -shared -Wl,--version-script -Xlinker {run}/exports.map",
             run, run, source, sdk_data, scratch) == 1
 
 

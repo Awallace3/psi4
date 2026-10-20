@@ -1631,6 +1631,22 @@ suite **170passed in7.52s**, no warnings/skips,
 No real SDK, native build, diagnostic compilation, resource job or GPU
 execution occurred. Original failures and old fixed tuple remain rejected.
 
+Final targeted reviewdd3490bef162184f2a13a686f1b412629 confirmed the CUDA
+header findings and reported one forwarding counterexample:
+`-Xlinker --version-script -Xlinker ../../foreign/exports.map`.
+Fixed by normalizing all -Xlinker/-Wl forwarding into one ordered linker
+argument stream before path auditing; the marker can no longer be consumed
+as a filename. Added the exact negative, truncated-forwarding negative,
+own-root positive and mixed-forwarding positive. Final local suite:
+**172passed in8.35s**, no warnings/skips,
+`build_disp0_cpu/reference-check-FhEYT3uB/results.xml`.
+Recipe commit6f5536c989 is superseded for execution by the corrective
+normalization commit; do not submit the earlier pin. All prior evidence is
+preserved. No new SDK operation, rebuild, diagnostic compilation or resource
+allocation. CPU proposal remains one8CPU/48G/2h/freeembers/gts-cs207-chemx/
+noGPU/no-requeue job only after fresh explicit approval and pinned input/
+route/headroom checks; no approval requested before returning the final pin.
+
 Final timing safeguard test task b6403af75: **68passed in6.48s**, no
 warnings/skips, JUnit
 `build_disp0_cpu/reference-check-ctS1hjRJ/results.xml`. Includes staged/
