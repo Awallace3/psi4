@@ -39,6 +39,12 @@ confirming PENDING, with no test executions; no other jobs changed. New shared
 allocation is being prepared (FDDS sole owner, serial locked/exclusive steps,
 same1H200/8CPU128GiB8h inferno ceiling). PySCF has an early bounded ready
 preflight; parent/disp0 are not ready and will not hold it idle.
+Actual replacement request **14214205** appears in the corrected salloc log
+as queued/waiting, controller9a026ca149, run
+`.../runs/psi4-cuest-shared/20261020-interactive-02`. No grant/full UUID/
+allocated manifest yet. Disp0 reported separate SSH access timeouts; this
+does not prove this request failed or was released. One bounded owner-side
+state query is pending; absent proof, remain UNKNOWN/paused with no duplicate.
 
 ## Current result: isolated GPU validation PASSED
 

@@ -333,3 +333,18 @@ old frozen source/build/run directories or other agents' jobs.
   ERR line diagnostic. **Eight controller mock tests passed in.479s**.
   This attempt consumed no allocation and ran no GPU tests. Preserve its
   old8e9 controller checkout; retry uses a new controller pin/worktree/run.
+- Corrected controller **9a026ca149324b9476dd1e9ee7cca93e9d942701**
+  is frozen at `psi4.cuest-shared-interactive-20261020-v2`.
+  Acquisition task **b022d3628** logged **salloc request14214205**, queued/
+  waiting, under requested gts-cs207-chemx/inferno1H2008CPU128GiB8h.
+  Monthly account balance/reservations were insufficient; selector explicitly
+  chose chemx. $11.31 maximum; dry-run/duplicate checks passed.
+  Run `.../runs/psi4-cuest-shared/20261020-interactive-02`.
+  This receipt is not a grant: no allocated manifest or full UUID proof yet.
+- Disp0 reported separate bounded SSH timeouts on both configured aliases.
+  This does not prove a whole-cluster outage or failure/release of14214205.
+  A concrete-hang inspection found the acquisition client alive with its
+  queued receipt; one bounded owner state query **bb1721fec** is pending.
+  If unavailable, classify current state UNKNOWN and pause all participants;
+  no duplicate acquisitions, blind release assumptions, shared-mux resets or
+  further retries. Grant task still provides automatic completion handling.
