@@ -1173,6 +1173,24 @@ reuse, hard110s kill of only owned worker/readelf descendants. Worker still has
 b4f02ed0c and final bounded review d020ac4f93e3a496abe2c63a0d1db6c95 pending.
 No artifact deployment, compilation, allocation or failed-root mutation.
 
+Root acquisition review d020ac4f93e3a496abe2c63a0d1db6c95 still found a
+regular-directory acquisition gap before anchoring. Production recipe now
+creates an unpredictable private0700 **unpublished namespace** under an
+owner/non-group-writable parent; image and nested acquisition happen below
+that trusted anchor. There is no caller/public destination to adopt.
+Only the completed actual prefix is disclosed; old/public-name replacement
+cannot redirect writes. CLI uses a label, not an exact destination path.
+The copy is still whole-artifact, unchanged bytes, no build/RPATH patch.
+Private-parent permission preflight b42749f74 pending.
+
+Private acquisition tests (regular parent replacement at root+nested gaps)
+passed20/20; added a full supervised fake-ELF integration test exercising
+tracked recipe verification, private prefix selection, copy/ABI manifest,
+output and process termination. Final local run **21passed in2.23s**,
+`build_disp0_cpu/reference-check-4boxeCra/results.xml`, no warnings/skips.
+Read-only review d21d5f2ee456d6ce788d0aa72af84814d pending before actual
+deployment/new immutable pin acceptance. No copy or allocation yet.
+
 Static admission audit (not measured throughput/runtime): for full dimer-basis,
 unfrozen spaces, the three product GEMMs require
 `(10*Nri+8)*na*nb*nr*ns` real FP64 FLOP. Routine cases are0.221/3.549/
@@ -1213,6 +1231,37 @@ No unbounded fallback. Frozen retest via context-mode subprocess:
 Includes actual copy/manifest replacement-window and blocked-stdout
 fixtures. Final read-only review d020ac4f93e3a496abe2c63a0d1db6c95 pending;
 no deployment before review and immutable recipe pin.
+
+Artifact-only recipe and tests committed as
+`aae3064d84683214636c6892d2937d0b15b98930`; Git push b7f16becc in progress.
+Commit does not authorize deployment before the pending review; scientific
+source remains unchanged from completed build587e172a33.
+
+Updated bounded synthetic protocol/control suite: **70passed in4.75s**,
+JUnit `build_disp0_cpu/reference-check-lvMN6sk6/results.xml`. Includes caps,
+nonmutation and AST check for exactly one full energy call/no adapter
+retention. No GPU/device logger or measured timing run. Protocol review
+dc2b71ba92c83f5f5c009a983555d68b0 pending; no campaign launcher submitted.
+
+Final acquisition review d020ac4f93e3a496abe2c63a0d1db6c95 found remaining
+regular-directory replacement gaps before FD anchoring. **Do not deploy
+the earlier aae3064d84 recipe.** Reworked acquisition into an unpredictable
+private0700 nonce namespace below a verified trusted parent, not a
+caller/public destination. Image/nested acquisitions are below the private
+anchor before its path is disclosed. The actual fresh prefix is reported
+only after complete verification; no predictable public target is adopted.
+Added regular-parent replacement fixtures at root/nested acquisition gaps.
+Local retest: **20passed in2.09s**, no warnings/skips,
+`build_disp0_cpu/reference-check-9IPy4Izc/results.xml`.
+Private namespace review d21d5f2ee456d6ce788d0aa72af84814d and read-only
+parent permission preflight b42749f74 pending before a new immutable pin.
+No artifact copy, compilation, allocation or failed-root changes.
+
+Parent overlap update acknowledged:14185006 completed0:0, allocation
+released, no holder to borrow. Its24PBE0-D4 records/results and unresolved
+protein157 matched-work acceptance remain separate; do not use them as an
+HF baseline or modify parent artifacts. Our readiness/correctness/capacity
+gates remain unchanged.
 
 Final timing safeguard test task b6403af75: **68passed in6.48s**, no
 warnings/skips, JUnit

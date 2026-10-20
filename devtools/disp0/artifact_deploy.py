@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import traceback
+import tempfile
 
 if not __debug__:
     raise RuntimeError("Artifact validation requires assertions; optimized Python is forbidden")
@@ -105,14 +106,10 @@ def validate_relocated_links(records, destination):
 class OwnedPrefix:
     """All writes use retained directory descriptors, never mutable paths."""
 
-    def __init__(self, destination, identity):
+    def __init__(self, destination, fd):
         self.destination = destination
-        self.identity = identity
-        fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
         info = os.fstat(fd)
-        if (info.st_dev, info.st_ino) != identity:
-            os.close(fd)
-            raise RuntimeError("New prefix was replaced before it could be anchored")
+        self.identity = info.st_dev, info.st_ino
         self.directories = {Path("."): fd}
 
     def directory(self, relative):
@@ -136,10 +133,41 @@ class OwnedPrefix:
         self.close()
 
 
-def create_prefix(destination):
-    destination.mkdir(mode=0o700)
-    info = destination.lstat()
-    return OwnedPrefix(destination, (info.st_dev, info.st_ino))
+class PrivateNamespace:
+    """Trusted, unpublished 0700 namespace; its nonce is not a public target."""
+
+    def __init__(self, parent, label):
+        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            info = os.fstat(parent_fd)
+            assert info.st_uid == os.geteuid() and info.st_mode & 0o022 == 0, "Untrusted namespace parent"
+            # Bootstrap through the trusted parent FD, not a mutable public
+            # destination name. No artifact paths are disclosed until complete.
+            created = tempfile.mkdtemp(prefix=label + "-", dir=f"/proc/self/fd/{parent_fd}")
+            name = Path(created).name
+            self.path = parent / name
+            self.fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                              dir_fd=parent_fd)
+            info = os.fstat(self.fd)
+            assert info.st_uid == os.geteuid() and info.st_mode & 0o777 == 0o700
+        finally:
+            os.close(parent_fd)
+
+    def __del__(self):
+        if hasattr(self, "fd"):
+            os.close(self.fd)
+
+
+def create_prefix(destination, *, private_parent_fd):
+    info = os.fstat(private_parent_fd)
+    assert info.st_uid == os.geteuid() and info.st_mode & 0o777 == 0o700, \
+        "Artifact acquisition requires an already trusted private namespace"
+    parent_info = destination.parent.lstat()
+    assert (parent_info.st_dev, parent_info.st_ino) == (info.st_dev, info.st_ino)
+    os.mkdir(destination.name, mode=0o700, dir_fd=private_parent_fd)
+    fd = os.open(destination.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                 dir_fd=private_parent_fd)
+    return OwnedPrefix(destination, fd)
 
 
 def verify_owned_prefix(destination, ownership):
@@ -148,10 +176,8 @@ def verify_owned_prefix(destination, ownership):
     assert (info.st_dev, info.st_ino) == ownership.identity, "Deployment prefix ownership changed"
 
 
-def install(records, destination, deadline, ownership=None):
+def install(records, destination, deadline, ownership):
     """Copy whole reviewed trees unchanged; never write a source artifact."""
-    if ownership is None:
-        ownership = create_prefix(destination)  # existing/partial prefixes are never reused
     verify_owned_prefix(destination, ownership)
     for relative, entry in sorted(records.items(), key=lambda item: (item[0].count("/"), item[0])):
         if time.monotonic() >= deadline:
@@ -288,7 +314,7 @@ def run_bounded_worker(work, timeout_seconds=110):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--destination", type=Path, required=True)
+    parser.add_argument("--label", required=True, help="new private runtime namespace label; path reported only after completion")
     parser.add_argument("--recipe-pin", required=True)
     parser.add_argument("--quota-headroom-bytes", type=int, required=True)
     parser.add_argument("--quota-receipt", required=True, help="fresh durable quota evidence reference")
@@ -302,9 +328,11 @@ def main():
     signal.signal(signal.SIGALRM, abort)
     signal.signal(signal.SIGTERM, abort)
     signal.setitimer(signal.ITIMER_REAL, 90)
-    destination = args.destination.absolute()
-    assert destination.parent == PARENT and destination.name.startswith("runtime-587e172a33-")
-    assert not destination.exists() and not destination.is_symlink()
+    assert args.label.startswith("runtime-587e172a33-") and all(
+        character.isalnum() or character == "-" for character in args.label)
+    # Layout-only placeholder for preflight; no caller-supplied/public runtime
+    # directory is acquired. The real prefix is generated privately afterward.
+    destination = PARENT / (args.label + "-unpublished") / "image"
     repository = Path(__file__).resolve().parents[2]
     pin = args.recipe_pin
     verify_recipe(repository, Path(__file__), pin)
@@ -315,6 +343,11 @@ def main():
     required = total * 2 + 1024**3
     assert shutil.disk_usage(PARENT).free >= required, "Destination free-space preflight failed"
     assert args.quota_headroom_bytes >= required, "Destination quota preflight failed"
+    namespace = PrivateNamespace(PARENT, args.label)
+    destination = namespace.path / "image"
+    for relative, entry in records.items():
+        entry["destination"] = str(destination / relative)
+    validate_relocated_links(records, destination)
     report = {"status": "INSTALLING", "recipe_pin": pin, "source_run": str(SOURCE),
               "destination": str(destination), "source_job_status": "FAILED; never relabelled",
               "files_and_links": records, "selected_binary_sha256": EXPECTED, "artifact_bytes": total,
@@ -323,7 +356,7 @@ def main():
               "scope": "artifact installation only; no import/API/numerical/device claim"}
     ownership = None
     try:
-        ownership = create_prefix(destination)
+        ownership = create_prefix(destination, private_parent_fd=namespace.fd)
         install(records, destination, deadline, ownership=ownership)
         for relative in EXPECTED:
             pair = {}
