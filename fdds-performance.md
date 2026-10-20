@@ -73,8 +73,14 @@ old frozen source/build/run directories or other agents' jobs.
   Coupled/uncoupled FDDS **-.006194210929276167 / -.009442035537422072 Eh**.
   Cache and profile at `build_fdds_cpu/perf-peptide-{cache,cpu}/`;
   native source9d4/core5b2825..., not an optimized GPU measurement.
-- Protein83 native profile is running locally (16 threads/64 GiB) to remove
-  queue latency from diagnosis; its final measurement is not yet available.
+- A local protein83 native profile (16 threads/64 GiB) removed queue latency
+  from diagnosis. Its final atomic result was later recovered:
+  **3591.575812 s FDDS**,22 pseudoinverses192.668927 s,
+  coupled/uncoupled **-.007013972054413143 / -.011403077774448968 Eh**,
+  old scientific9d4/core5b2825..., no GPU work. Background terminal metadata
+  failed with ENOSPC after the result was written; that transport/status
+  failure is not a failed scientific calculation. Local artifact
+  `build_fdds_cpu/performance-baselines/protein83.json`.
 - Local physical nanotube profile completed:42 atoms,548 AO/2240 auxiliary,
   occupied8/78 and virtual533/463 (SCF removes linear dependencies),
  8 threads/32 GiB, **807.463674 s FDDS**. Object427.663180 s,
@@ -240,9 +246,9 @@ old frozen source/build/run directories or other agents' jobs.
   GCC14.3 absolute cc1/cc1plus, `CUDART_VERSION=13030`, conda
   `libcudart.so.13`. This probe did not execute a GPU call. Evidence
   `build_fdds_cpu/performance-gpu-14199355/corrected-toolkit-preflight.log`.
-- Partial protein83 output (not a finalized timing result) shows922 AO/
- 3820 auxiliary,78/68 occupied and844/854 virtual; local16-thread replay
-  remains in object preparation. Recovery increases per-process timing bound
+- The earlier partial protein83 snapshot (not a finalized timing result)
+  showed922 AO/3820 auxiliary,78/68 occupied and844/854 virtual while the
+  local16-thread replay was in object preparation. Recovery increases per-process timing bound
   to three hours and requests eight hours for the paired/repeated campaign,
   without changing physical settings or matched96 GiB host budgets.
 - Recovery runs one CPU/GPU pair for **all systems before repeats**, retaining
@@ -262,3 +268,16 @@ old frozen source/build/run directories or other agents' jobs.
   Automatic watcher **bb6a86037**; compilation/import outcome pending.
   GPU recovery harness **c289c502d55627eabf99acdc127a28334416704d** is
   staged separately; no second GPU job is submitted before the build audit.
+- Corrected build14200049 completed0:0 in **14m57s**. Its provenance audit
+  launch was interrupted by local ENOSPC (no launch receipt persisted).
+  On resume `/home` has26 GiB available; no files were deleted by this agent.
+  Audit was relaunched read-only as **b12bed014** before a GPU retry.
+- Read-only audit **b12bed014** passed: clean fd2c09 source, Release,
+  cuEST/Einsums/OpenMP enabled, XHOST disabled, correct staged import and
+  core SHA256 **92e5bff6641dbb2f4790938e9886fc8038d6d03527eb26c6934ddeecabac5a7f**.
+  BUILD_ONLY_COMPLETED identifies fd2c09; no GPU VERIFIED marker exists.
+  Resolved cuEST0.2.2, cudart13.3.29 and cuBLAS/cuBLASLt13.6.0.2 match the
+  recorded dependency provenance. **Zero GPU tests executed by this CPU build.**
+  Evidence `build_fdds_cpu/performance-compile-14200049/remote-evidence/`.
+  Submission of one read-only-stage H200 recovery is in progress under
+  **b03a4f22f**; acceptance/job ID remains unconfirmed until its receipt.
