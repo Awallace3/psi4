@@ -41,10 +41,16 @@ def fixture_script(tmp_path, scontrol, srun="exit 99", *, batch_kind):
     return script, env, logs / f"123456.{suffix}"
 
 
-@pytest.mark.parametrize("failure,expected", [("missing-pin", 1), ("controller", 7), ("wrong-qos", 1)])
+@pytest.mark.parametrize("failure,expected", [
+    ("missing-pin", 1), ("controller", 7), ("wrong-qos", 1), ("wrong-account", 1)])
 def test_batch_early_failure_leaves_failed_status(tmp_path, failure, expected, batch_kind):
+    account, qos = ("gts-cs207", "inferno") if batch_kind == "gpu" else ("gts-cs207-chemx", "embers")
+    if failure == "wrong-qos":
+        qos = "embers" if batch_kind == "gpu" else "inferno"
+    if failure == "wrong-account":
+        account = "gts-cs207-chemx" if batch_kind == "gpu" else "gts-cs207"
     control = ("exit 7" if failure == "controller" else
-               "printf 'JobId=123456 Account=gts-cs207-chemx QOS=inferno JobState=RUNNING\\n'")
+               f"printf 'JobId=123456 Account={account} QOS={qos} JobState=RUNNING\\n'")
     script, env, status = fixture_script(tmp_path, control, batch_kind=batch_kind)
     if failure == "missing-pin":
         del env["DISP0_GATE_PIN" if batch_kind == "gpu" else "DISP0_PIN"]
@@ -56,7 +62,8 @@ def test_batch_early_failure_leaves_failed_status(tmp_path, failure, expected, b
 
 
 def test_batch_signal_cannot_write_success(tmp_path, batch_kind):
-    control = "printf 'JobId=123456 Account=gts-cs207-chemx QOS=embers JobState=RUNNING\\n'"
+    account, qos = ("gts-cs207", "inferno") if batch_kind == "gpu" else ("gts-cs207-chemx", "embers")
+    control = f"printf 'JobId=123456 Account={account} QOS={qos} JobState=RUNNING\\n'"
     script, env, status = fixture_script(tmp_path, control, "printf 'CHILD_READY\\n'\nexec sleep 30",
                                         batch_kind=batch_kind)
     process = subprocess.Popen(["bash", "-c", script], env=env,

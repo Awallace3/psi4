@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=disp0-e2-gate
-#SBATCH --account=gts-cs207-chemx
+#SBATCH --account=gts-cs207
 #SBATCH --partition=gpu-h200
-#SBATCH --qos=embers
+#SBATCH --qos=inferno
 #SBATCH --gres=gpu:h200:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -48,7 +48,7 @@ trap on_exit EXIT
 export DISP0_GATE_RUN="$P/runs/saptdft-cuest-disp0/gpu-gate-$DISP0_GATE_PIN-$SLURM_JOB_ID"
 jobinfo="$(scontrol show job "$SLURM_JOB_ID" -o)"
 printf '%s\n' "$jobinfo"
-[[ "$jobinfo" == *" Account=gts-cs207-chemx "* && "$jobinfo" == *" QOS=embers "* ]]
+[[ "$jobinfo" == *" Account=gts-cs207 "* && "$jobinfo" == *" QOS=inferno "* ]]
 srun bash "${DISP0_GATE_SOURCE:?}/devtools/disp0/gpu_gate_payload.sh" &
 child=$!
 set +e

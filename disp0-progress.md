@@ -748,3 +748,123 @@ Acceptance is not successful preparation. At terminal state, require actual
 clang/libclang/LLVM/resource paths and versions, full explicit environment,
 header/ELF/import/API/physical checks and a coherent matching stage before
 the separately authorized GPU gate. No GPU submission or F-SAPT expansion.
+
+## User-authorized paid route and benchmark protocol
+
+User explicitly requests inferno on **gts-cs207**, results by morning8am
+(interpreted as Phoenix/US Eastern unless corrected), then specifies the
+benchmarking under `~/docs/saptdft/cuest` with inputs from
+`~/data/timing_test_suite/`. Do not silently fall back to chemx, promise a
+speedup or bypass correctness. Inspect existing14196330 before moving its
+route; do not create a duplicate. Original monitor remains active.
+Read-only state bd6312b8b and corrected CPU account pricing b2a779317 pending.
+An initial pricing-only invocation b97f173d9 used invalid `--gpus0`; it
+submits nothing and is replaced by proper `--cpus8`.
+
+Read-only protocol inspection: suite routine systems are peptide, nanotube,
+protein83 and protein157; pla15_3pe2 is explicitly excluded without named
+opt-in. Use fixed geometries/NBF checks, three independent fresh-process
+repeats per arm, median whole-energy wall and actual selected-run phase
+vectors, retained min/max rather than invented confidence intervals, fresh
+timer directories and flat-section-only parsing. The published coupled
+scaling cohort is PBE0 SAPT(DFT)-D4(I)/`6-31+G**`, spherical, not this branch's
+HF canonical Disp20/Exch-Disp20 science. Reuse its inputs/protocol, not its
+energies/timings as a matched HF baseline. Host threads, memory and library
+differences must remain explicit. Its large protein memory budgets exceed
+the bounded32G correctness gate; do not squeeze the full suite into it.
+Parent notified of paid-route/benchmark request and overlap coordination.
+No source/data/docs in the reference suite or coordinator trees modified.
+
+Fresh state bd6312b8b:14196330 is already RUNNING on
+atl1-1-02-005-26-2, cpu-small/embers, elapsed30:27, start
+2026-10-19T20:15:10 Eastern; job/.batch/.0 still running. Do not cancel,
+restart or change this running job's QoS/account: paid scheduling cannot
+accelerate it and its safety guard expects embers. Parent confirms this
+decision. Read-only running build-phase/resource inspection bae1ef0f0 pending.
+Explicit deadline assumption: **2026-10-20 08:00 America/New_York**.
+No guarantee of completed dependencies, signed GPU correctness or speedup
+by then.
+
+Parent14185006 remains pending(Priority), oneH200/8CPU/128G/6h and24 full
+PBE0-D4(I) calls; no holder is available. Do not touch/duplicate that
+allocation or its roots/data/docs. For our distinct HF-E2 work, fresh paid
+account capacity, exact job count/resource/time charge bound and independent
+protein memory sizing must be reported **before expanded allocations**.
+Matching geometry/basis/fresh-process3repeats/wholewall/phase protocol does
+not make different scientific methods a valid speedup pair. Conditional
+one-GPU correctness approval does not imply unlimited benchmark spending.
+
+Read-only running snapshot bae1ef0f0: native E2 build advanced to **517/520**
+(Python binding shards); no installed E2 Python/Psi4 stage, runtime-provenance
+or API JSON yet. Apiary's resource/include cache now selects this job's
+environment, not base miniconda. clangxx/clang/clang-22/libclang-cpp22.1 are
+22.1.4; actual libllvm22 is22.1.8 (retain patch-version drift versus local
+oracle, not an exact dependency match). Apiary's ELF dependency resolves
+`libLLVM.so.22.1` inside the job environment. Native compiler remains the
+job-owned GNU toolchain; E2 config CUDA=ON, arch90.
+Clang reports22.1.4 and dedicated `lib/clang/22/include/stddef.h` exists,
+SHA256 `b3e62a046ddf28d09eedebe6eb9461cb7060e47cad2c69964b222c4eea10347e`.
+Resource discovery is fixed; this does not yet prove completed Python
+binding generation/install/import, scientific readiness or CUDA execution.
+Parent received the phase/provenance checkpoint.
+
+Correct CPU account selector b2a779317: gts-cs207 available$29.51, hypothetical
+8CPU/cpu-small/2h charge bound$0.13; the running CPU job stays free embers.
+H200 pricing b1fead507 and basis-only routine-suite sizing b30d30efd pending;
+no expanded allocation submitted.
+
+Basis-only suite inventory b30d30efd PASS, **no SCF/timing performed**.
+Read-only systems.py SHA256
+`72668390d24f134316c8e779931a2f65efcd9289ecea8f1cf20a72733262e3bb`.
+Using spherical6-31+G**, def2-universal-jkfit and aug-cc-pVDZ-RI:
+
+| System | NBF | JKaux | RIaux | Dense DFJK upper GiB | Transformed-factor disk upper GiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| peptide | 250 | 1010 | 1042 | 0.482 | 0.429 |
+| nanotube | 548 | 2238 | 2240 | 5.063 | 4.267 |
+| protein83 | 922 | 3735 | 3820 | 23.811 | 21.164 |
+| protein157 | 1786 | 7265 | 7384 | 173.242 | 155.782 |
+
+Dense bound is8*(Naux*NBF^2+Naux^2+8*NBF^2), no screening assumption.
+Disk bound is8*Nri*(4*na*nr+4*nb*ns+2*na*ns+2*nb*nr), using unfrozen
+occupied spaces and dimer-centered virtuals, not measured disk/RSS/VRAM.
+Other live arrays, integral/setup work, page cache and temporary disk copies
+are additional. Spherical NBF differs intentionally from the suite's original
+Cartesian RHF counts; verified against the number of heavy-atom d shells.
+Do not assert that protein157 fits the32G gate or the parent's128G budget
+for this different HF/E2 workload.
+
+H200 selector b1fead507: current gts-cs207 available$29.51;
+one30min GPU charge estimate$0.71; one6h GPU charge estimate$8.48.
+These are GPU-weight estimates only; full CPU/memory billing bound
+inspection b2ffbd4c3 pending. No paid allocation submitted.
+Timing-design review dced54a2ddace409bff289adaddfde83d: gate must pass before
+timing; do not use oracle-inclusive gate walls or replay-with-transfers as
+kernel-only timing. Instrumentation-free fresh-process suite wholecall timing
+must be distinct from diagnostic profiling, and wholecall versus dispersion
+regions reported separately. GPU launcher now explicitly requests/validates
+gts-cs207/inferno; CPU launcher remains unchanged chemx/embers. Updated
+negative route/account/control tests b1851c000 pending.
+
+User explicitly approves **one candidate H200 timing allocation up to6h**,
+inferno charged specificallygts-cs207, conditional on coherent installed
+E2/Psi4 readiness and the actual signed GPU correctness gate passing.
+This is one approval, not an additional duplicate six-hour job; it does
+not authorize CPU reruns, retry loops, parent14185006 changes or blanket
+paid work. The separately approved bounded30min correctness allocation
+remains available. Neither GPU approval has been consumed.
+Before either submission, report exact CPU/memory/GRES/time/jobcount and
+conservative charge using fresh gts-cs207 capacity, then stop if that account
+cannot cover the work. No silent account fallback. Fresh roots/no-requeue,
+no GPU builds/repairs, preserve failed and parent evidence. Timings require
+uninstrumented fresh-process3repeats, matched HF science and wholewall/phase
+cuts; no08:00 guarantee while prerequisites remain incomplete.
+
+Paid GPU route/control regression b1851c000: **28 passed in2.18s**, no
+warnings/skips, JUnit
+`build_disp0_cpu/reference-check-cikiPNBp/results.xml`.
+Command: same two-file gate-evidence/batch test invocation recorded above.
+GPU guard accepts onlygts-cs207/inferno; CPU guard remains
+gts-cs207-chemx/embers; wrong-account, wrong-QoS, early-parameter/controller
+failure and TERM cases tested with fake scheduler. This is CPU-only harness
+validation, not CUDA execution or GPU numerical correctness.
