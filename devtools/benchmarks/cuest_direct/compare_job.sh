@@ -83,8 +83,9 @@ config.update(jk_mode="conventional-direct",
     compiled_inputs_unchanged=True), indent=2))
 PY
 compiled=$("$gpu_env/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$build/build-manifest.json")
-run_child /bin/bash "$repo/devtools/benchmarks/cuest_direct/run_validation.sh" \
-    "$repo" "$commit" "$build" "$run/direct-validation" "$expected_qos" "$compiled" "$gpu"
+run_child /usr/bin/timeout --signal=TERM --kill-after=30s 600 \
+    /bin/bash "$repo/devtools/benchmarks/cuest_direct/run_validation.sh" \
+    "$repo" "$commit" "$build" "$run/direct-validation" "$expected_qos" "$compiled" "$gpu" rks
 run_child /usr/bin/env PYTHONPATH="$package/..:$repo/tests/pytests" \
     LD_LIBRARY_PATH="$psi_env/lib:$xc:$cuda13" \
     "$psi_env/bin/python" -m pytest --noconftest "$repo/tests/pytests/test_cuest_grid_export.py" \

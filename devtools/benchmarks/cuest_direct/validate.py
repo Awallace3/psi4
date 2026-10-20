@@ -8,6 +8,34 @@ import subprocess
 import xml.etree.ElementTree as ET
 
 
+RKS_CASES = tuple(
+    [f"test_cuest_direct_dft_energy[{functional}]"
+     for functional in ("svwn", "pbe", "m06-l", "b3lyp", "wb97x", "lc-wpbe")]
+    + [f"test_cuest_direct_cartesian_and_symmetry[{puream}]" for puream in ("True", "False")]
+    + ["test_cuest_direct_with_gpu_xc"])
+
+
+def test_targets(repo, suite):
+    direct = repo / "tests/pytests/test_cuest_direct_jk.py"
+    if suite == "rks":
+        return [f"{direct}::{name}" for name in RKS_CASES]
+    if suite == "full":
+        return [str(direct), str(repo / "tests/pytests/test_cuest_jk.py")]
+    raise ValueError(f"Unknown validation suite: {suite}")
+
+
+def validation_success(result, cases, suite):
+    if result != 0 or any(any(c.find(tag) is not None for tag in
+                              ("failure", "error", "skipped")) for c in cases):
+        return False
+    if suite == "rks":
+        names = [c.attrib["name"] for c in cases]
+        return len(names) == len(RKS_CASES) and set(names) == set(RKS_CASES)
+    if suite == "full":
+        return len(cases) >= 18
+    raise ValueError(f"Unknown validation suite: {suite}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", type=Path, required=True)
@@ -17,6 +45,8 @@ def main():
                         help="Hopper device expected for this correctness allocation")
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--suite", choices=["full", "rks"], default="full",
+                        help="RKS excludes UKS and unrelated DF regression tests")
     args = parser.parse_args()
     manifest = json.loads((args.build / "build-manifest.json").read_text())
     compiled_commit = args.compiled_commit or args.commit
@@ -68,23 +98,22 @@ def main():
         "--noconftest", "-v", "-ra", "--tb=short",
         "--basetemp", str(out / "pytest-temp"),
         "--junitxml", str(out / "junit.xml"),
-        str(args.repo / "tests/pytests/test_cuest_direct_jk.py"),
-        str(args.repo / "tests/pytests/test_cuest_jk.py"),
+        *test_targets(args.repo, args.suite),
     ], plugins=[Evidence()])
     root = ET.parse(out / "junit.xml").getroot()
     cases = root.findall(".//testcase")
     failures = [c.attrib["name"] for c in cases if c.find("failure") is not None or c.find("error") is not None]
     skips = [c.attrib["name"] for c in cases if c.find("skipped") is not None]
-    success = result == 0 and len(cases) >= 18 and not failures and not skips
+    success = validation_success(result, cases, args.suite)
     report = dict(
-        success=success, pytest_exit=int(result), tests=len(cases), failures=failures, skips=skips,
+        success=success, suite=args.suite, pytest_exit=int(result), tests=len(cases), failures=failures, skips=skips,
         harness_commit=args.commit, compiled_commit=compiled_commit,
         build_job=manifest["job_id"], job=os.environ["SLURM_JOB_ID"],
         qos=os.environ["SLURM_JOB_QOS"], gpu=gpu, expected_gpu=args.expected_gpu,
         core_sha256=manifest["core_sha256"],
         cuest_library_sha256=manifest["cuest_library_sha256"], linkage=linkage,
         protocol="CPU DIRECT vs cuEST four-center DIRECT; CPU XC isolates JK numerics. "
-                 "Separate CUDA-XC smoke and existing DF-JK regressions. Native CPU/device grids "
+                 "Separate CUDA-XC smoke; DF-JK and UKS tests only in full suite. Native CPU/device grids "
                  "are NOT claimed identical by the GPU-XC smoke.",
     )
     (out / "validation.json").write_text(json.dumps(report, indent=2) + "\n")

@@ -91,9 +91,16 @@ advertises the parent's `returns_combined_exchange()` contract. No unpublished
 changes from the other worktree are included. The old validated core is not a
 validation of this merged implementation; build and test it separately.
 
-`compare_job.sh` runs a fresh merged direct validation suite and the two GPU
+`compare_job.sh` runs a fresh **RKS-only** direct validation suite and the two GPU
 grid-export tests before a peptide PBE/WB97X preflight in cc-pVTZ and
 aug-cc-pVTZ:
+
+The RKS gate selects exactly nine cases: six closed-shell functional energies,
+two Cartesian/symmetry checks and one CUDA-XC smoke. UKS and unrelated DF
+regressions are not prerequisites for this closed-shell comparison. The gate
+has a ten-minute timeout and rejects missing cases, failures and skips.
+`run_validation.sh` still defaults to its broader historical `full` suite;
+pass its eighth argument `rks` for this focused gate. Reports record the suite.
 
 ```bash
 bash ABS_REPO/devtools/benchmarks/cuest_direct/compare_job.sh \

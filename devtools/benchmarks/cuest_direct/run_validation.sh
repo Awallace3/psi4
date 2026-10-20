@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: /bin/bash run_validation.sh ABS_REPO COMMIT ABS_BUILD ABS_OUTPUT [QOS] [COMPILED_COMMIT] [H200|H100]
+# Usage: /bin/bash run_validation.sh ABS_REPO COMMIT ABS_BUILD ABS_OUTPUT [QOS] [COMPILED_COMMIT] [H200|H100] [full|rks]
 # Defaults to embers. Any inferno submission requires explicit per-job approval.
 # Build artifacts gate execution; a newer validation-only harness may use a pinned older core.
 set -euo pipefail
@@ -11,8 +11,10 @@ out=${4:?unique GPU validation output}
 expected_qos=${5:-embers}
 compiled_commit=${6:-$commit}
 expected_gpu=${7:-H200}
+suite=${8:-full}
 [[ "$expected_qos" == embers || "$expected_qos" == inferno ]]
 [[ "$expected_gpu" == H200 || "$expected_gpu" == H100 ]]
+[[ "$suite" == full || "$suite" == rks ]]
 [[ "$repo" == /* && "$build" == /* && "$out" == /* ]]
 [[ -r "$build/build-manifest.json" && ! -e "$out" ]]
 export SLURM_JOB_QOS
@@ -42,7 +44,7 @@ on_term() {
 trap on_term TERM
 setsid /usr/bin/time -v "$env_root/bin/python" "$repo/devtools/benchmarks/cuest_direct/validate.py" \
     --repo "$repo" --commit "$commit" --compiled-commit "$compiled_commit" \
-    --expected-gpu "$expected_gpu" --build "$build" --out "$out" &
+    --expected-gpu "$expected_gpu" --suite "$suite" --build "$build" --out "$out" &
 child=$!
 set +e
 wait "$child"
