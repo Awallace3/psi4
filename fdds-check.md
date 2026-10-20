@@ -19,7 +19,10 @@ whole/blocked/equal/unequal/dense-occupied routes actually ran.
 **First matched physical timing (preliminary, one pair):** peptide24 CPU
 17.749984s/GPU14.904702s, **1.190898x**, same source/cache/allocation8threads/
 96GiB, actual20 frequency/4 X/Y GPU calls, energy error≤6.83e-11Eh.
-Nanotube42/protein83 and repeats remain pending; no cross-node baseline ratio.
+**Nanotube42 first pair:** CPU285.588827s/GPU140.348366s, **2.034857x**,
+same matched controls; coupled-energy error9.61322e-8Eh<1e-5.
+Both ratios are preliminary one-pair measurements; protein83 and ABBA
+repeats remain pending. No cross-node baseline ratio.
 Preserved artifacts `build_fdds_cpu/performance-gpu-14214205/`:
 printed integrated coupled/uncoupled FDDS errors≤1.1102230246251565e-16/0Eh;
 real native-XC SAPT dispersion error≤1.2705494208814505e-20Eh.

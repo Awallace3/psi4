@@ -434,3 +434,25 @@ old frozen source/build/run directories or other agents' jobs.
   not science. Stepfdds-peptide-first normal exit0/cleanup, no other timing
   or GPU tasks overlapped. PySCF has stopped after its separate controller
   bool/int proof-gate issue; no retry overlaps FDDS.
+
+### Nanotube42 first matched pair
+
+- **CPU285.588827255s / GPU140.348365516s**, **2.0348568x** FDDS-only
+  speedup, still one pair pending ABBA repeats. Independent owner audit
+  checked exact source/core/cache/settings/node/job/thread/memory identity,
+  native0 vs GPU20 frequency+4 X/Y calls and empty pre/post cleanup.
+- Coupled/uncoupled energies CPU
+  **-.023879257323667667 /-.04431040617760495Eh**, GPU
+  **-.023879161191477864 /-.044310405962569466Eh**.
+  Absolute errors **9.613218980228377e-8 /2.1503548247592263e-10Eh**,
+  below the unchanged1e-5Eh energy target. Do not substitute the tiny-case
+  errors for these larger physical-system errors.
+- X/Y CPU38.557653/47.763580s, GPU3.700884/8.664430s;
+  object CPU189.304971s/GPU72.201309s, time integration
+  CPU74.588665s/GPU47.166869s, native ALDA19.233757/18.422205s.
+  Remaining DF/QR/kernel/pseudoinverse work still limits total speedup.
+- All controls on shared14214205,8 threads/96GiB, same validated frozen
+  fd2/core92e5 stage and cache. No overlapping GPU or CPU timing step.
+  After owner-verified nanotube cleanup, one explicit bounded PySCF
+  controller-fixed diagnostic window03 was assigned; FDDS protein83
+  first pair waits for its terminal and cleanup, not a new queue trip.
