@@ -469,3 +469,13 @@ old frozen source/build/run directories or other agents' jobs.
   CPU timing step overlaps. Need actual terminal/energy/cleanup audit before
   quoting protein speed or starting ABBA repeats. RKS diagnostics remain
   offline/unlaunched pending another explicit short window.
+- Subsequent user-requested progress snapshot **bf25d9b90 failed**:
+  Phoenix110-second timeout (outer task125s), no fresh state/results output.
+  Existing local proteinclient log proves actual step launch with
+  **7:21:52 allocation time remaining**,10800s bound, but does not prove
+  current progress/completion. Classify current protein/allocation progress
+  **UNKNOWN**, not GPU failure or release. All new timing/participant steps
+  HOLD; no further manual remote probes/retries/new requests/job changes.
+  Existing bounded protein client and lifetime watcher stay untouched for
+  automatic notification. Earlier audited peptide/nanotube pairs remain
+  valid preliminary evidence; do not manufacture protein/repeat results.
