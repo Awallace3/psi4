@@ -30,6 +30,11 @@ Latest user-requested snapshotbf25d9b90 timed out (Phoenix110s, task125s):
 current protein progress UNKNOWN. Prior client log proves launch with7:21:52
 allocation remaining/10800s bound. Leave existing client/watch untouched;
 all new steps HOLD until actual completion/state/results/cleanup proof.
+Actual protein terminal then arrived: **CPU control failed** with reported
+DFHelper network-scratch writeEIO/errno5; GPU never started, both results
+absent. Cleanup independently verified empty/no quarantine. Preserve failed
+attempt; preparing verified allocation-local scratch and a fresh matched
+root (same science/core/memory/tolerances) before any recovery measurement.
 Preserved artifacts `build_fdds_cpu/performance-gpu-14214205/`:
 printed integrated coupled/uncoupled FDDS errors≤1.1102230246251565e-16/0Eh;
 real native-XC SAPT dispersion error≤1.2705494208814505e-20Eh.

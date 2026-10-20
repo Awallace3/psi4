@@ -490,3 +490,24 @@ old frozen source/build/run directories or other agents' jobs.
   SSH errors remain UNKNOWN and are retried only on the authorized timer.
   Seven observer controller-only tests passed; no scientific source/stage/
   environment changes. Participants stay HOLD until explicit owner windows.
+- Protein first pair **failed in the CPU control**, not GPU comparison:
+  DFHelper reported a tensor stream write error **EIO/errno5** on
+  `/storage/scratch1/3/awallace43/fdds-interactive/14214205/...`.
+  Reported free capacity was ample; underlying filesystem/stream cause is
+  not proven. Both result JSONs absent; GPU arm never launched. Owner
+  independently verified terminal1, cleanup marker, empty pre/post GPU
+  process tables and no quarantine. Failed output/scratch stay preserved.
+  No accepted protein timing, energy difference or speedup exists.
+- Preparing a fresh controller-only recovery: private allocation-local
+  scratch, verified local filesystem/free capacity and512MiB write/fsync/
+  SHA256 readback before use. Three local storage-probe unit tests passed,
+  but actual storage probe/full-case recovery are still pending. Every new
+  CPU/GPU control must use the same backend; a new matched-root tag avoids
+  overwriting the failed network attempt or mixing backend measurements.
+  Scientific stage, physical settings, memory budgets, quadrature and
+  numerical tolerances are unchanged. Probe success alone is not proof
+  the original full-case error is avoided.
+- While the recovery harness is prepared, one explicit short PySCF
+  stack/checkpoint diagnostic window was assigned (360s outer,180s child,
+  source6f652942b9, existing independent env). No FDDS compute/timing step
+  overlaps; diagnostic success is not a matched scientific comparison.
