@@ -2022,3 +2022,48 @@ proof only. No solve/native/scientific compilation/device/SCF/SAPT.
 Request explicit fresh input-only approval after returning immutable pin
 and this proof. CPU89 remains conditional/unconsumed/NO INPUT-READINESS;
 compiler/copied-include discovery still unproven. No independent GPU request.
+
+Parent granted fresh EXACTLY ONE INPUT-ONLY CPU job pinned
+`3bb0c7d1d2ce21412d883ff9041c96900ef16277`:1node/1task/1CPU/2G/10min,
+freeembers/chemx/cpu-small subject fresh route/headroom/quota/duplicates,
+no-requeue/noGPU/no retry, NEW roots;110s/1GiB payload,128MiB decoder,
+same82569B two archives/<=512MiBwritten. Actual remote decoder and both
+canonical regular-file SHA/ELF checks BEFORE use; post-inventory equality,
+package/header/devlink and original component-manifest provenance retained.
+Only complete SDKmanifest/closure/exactlock, no solve/build/SCF/device.
+
+Approval is currently unconsumed: fresh capacity/quota b1400e06d and exact
+Git source staging/test-only b7a9b27f7 running independently. Planned NEW
+0700root`P/gits/psi4.disp0-input-cpu-3bb0c7d1d2-01/source`. No submission
+yet. Preserve failed14215786 and all earlier roots/manifestsABSENT. This
+does not clear or consume CPU89; explicit parent INPUT-READINESS after
+actual manifest remains mandatory. No GPU/shared allocation step requested.
+
+Source/test-only preflight b7a9b27f7 FAILED transport timeout124 after75s
+onphoenix, with NO remote command output. No real sbatch submission exists
+in that preflight script (Git prep/test-only only); approved job remains
+unsubmitted/approvalunconsumed. Do not infer root absence from silence or
+blindly repeat mutations. Bounded READ-ONLY diagnosis b5b03a6cc uses configured
+alternatephoenix2 to inspect planned root and live matching jobs; pending.
+Original quota snapshot task b1400e06d terminal result still pending.
+Parent notified; timeout evidence preserved, no provisioning/device claim.
+
+Capacity task b1400e06d also timed out100s/no remote output, with a producer
+warning that processgroup920568 might remain after termination. Targeted
+localps inspection found ZERO processes in that exact group; no signals or
+shared SSH mux changes were made. Fresh headroom/quota proof UNAVAILABLE,
+not passed. Parent notified. Alternate read-only diagnosis remains pending;
+no actual job submission/provisioning or approval consumption.
+
+Alternatephoenix2 READ-ONLY diagnosis b5b03a6cc also FAILED timeout124:
+phx40s/no output, background task50s. Both configured aliases unresponsive.
+STOPPED remote attempts after the bounded configured fallback, no retry loop/
+timeout stretching/shared SSH mux reset/cluster job modification. Planned
+source-root presence remains UNKNOWN; do not infer absence or reuse a
+possibly partial root. Fresh source/route/headroom/quota/no-duplicate proof
+remains UNPASSED. Parent notified. Exactly-one approved3bb input-only job
+is UNCONSUMED/UNSUBMITTED: no real sbatch command was issued, no provisioning/
+device/shared step. Current local recipe/38guards/BOTH real-archive proof
+remain unchanged; preserve failed14215786 and all timeout evidence.
+Resume only after remote access recovers and fresh bounded state/preflight
+proofs pass, still pinned3bb regardless of later progress-only commits.
