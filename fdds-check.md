@@ -18,6 +18,11 @@ fresh preflight/recovery is in progress. Scientific/test pinfd2c09cd0c and
 frozen harnessf26b3b6d1b/sourcev2 remain unchanged. CPU compile-only14199512
 also failed the same guard before compilation. No candidate GPU correctness
 or speedup result exists; see terminal markers and `fdds-performance.md`.
+Corrected CUDA-enabled build job **14200049** submitted on explicit
+inferno/cpu-small/8CPU/48GiB/1h ($.07 maximum), sourcefd2c09/harnessebdb1950be,
+watcherbb6a86037, fresh own compile-v2 checkout. After build/import audit,
+the H200 recovery can reuse this stage read-only. GPU recovery harnessc289c502
+is staged with early per-system pair checkpoints; no retry GPU job yet.
 
 ## Current result: isolated GPU validation PASSED
 

@@ -233,3 +233,12 @@ old frozen source/build/run directories or other agents' jobs.
   complete. Auditor requires source/core/cache/options/host/job identity,
   finite times/two energies, actual frequency/X/Y GPU routes and1e-5 Eh.
   Its9 report-only unit tests passed; these are not scientific/GPU timings.
+- Corrected CUDA build **14200049** accepted: **gts-cs207/cpu-small/inferno**,
+ 8 CPUs/48 GiB/one hour,$.07 worst case,$29.39 monthly available before submit.
+  Scientificfd2c09, harnessebdb1950be; source
+  `psi4.fdds-opt-cuda-compile-20261020-v2`, run
+  `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261020-cuda-compile-02`.
+  Clean pins, no duplicate compile job, dry-run and effective QoS verified.
+  Automatic watcher **bb6a86037**; compilation/import outcome pending.
+  GPU recovery harness **c289c502d55627eabf99acdc127a28334416704d** is
+  staged separately; no second GPU job is submitted before the build audit.
