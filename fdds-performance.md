@@ -555,3 +555,20 @@ old frozen source/build/run directories or other agents' jobs.
   require terminal audit. The five-minute observer's21:12:29Z free-lease
   alert corresponded to the brief Git-staging gap, not a stuck worker.
   Observer **b09c47ede** is rearmed; no duplicate allocation or timing overlap.
+- Full protein first pair completed cleanly and is independently audited:
+  **CPU1669.110843061s / GPU644.636978013s =2.589226x**. Coupled energies
+  CPU-.007013976141424744/GPU-.007013976759056083Eh (error6.176313384e-10Eh);
+  uncoupled CPU-.011403077681122588/GPU-.011403077704443175Eh
+  (error2.332058678e-11Eh). Both pass the unchanged1e-5Eh gate.
+  Full source/core/cache/options/library/import/thread/memory/job identity
+  checks pass, CPU route0/GPU20frequency+4hybrid calls; cleanup verified.
+  PeakRSS61.037/61.032GiB. General pseudoinverses remain CPU-bound:
+ 84.325/83.998s; hybrid X323.933→15.681s/Y496.921→35.895s, FDDS object
+ 1085.586→315.709s, native XC kernel112.142→103.930s.
+  This is a preliminary one-pair **full FDDS** speedup, not total SAPT/SCF.
+  Preserved results/outputs/provenance/first-pair marker at
+  `build_fdds_cpu/performance-gpu-14214205/var-local-v2/`.
+- Task **bde4a1953** audited that pair before starting fresh local-disk
+  peptide/nanotube first pairs, then GPU1/CPU1 repeats for all three systems.
+  Each step is exclusive, bounded, refuses insufficient allocation time,
+  and requires preceding cleanup. No cross-backend/cross-node ratio.

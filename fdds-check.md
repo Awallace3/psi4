@@ -1,5 +1,31 @@
 # FDDS cuEST implementation handoff
 
+## Latest audited performance status — supersedes historical progress below
+
+Scientific8dc714/test-driverfd2c09/core92e5:171 native tests pass and69 unique
+GPU tests pass (90 executions including focused repeats), zero skips/errors/
+failures. Actual shared H20014214205,8threads/96GiB, same source/core/cache/
+options/libraries for each fresh-process CPU/GPU control; SCF is excluded.
+
+**Protein83 local-XFS first pair audited:** CPU1669.110843s,
+GPU644.636978s, **2.589226x**. Coupled/uncoupled errors
+6.17631338434288e-10/2.3320586781117036e-11Eh;20 frequency and4 hybrid GPU
+routes versus zero CPU routes. Cleanup verified; peakRSS≈61.04GiB.
+Preserved locally at
+`build_fdds_cpu/performance-gpu-14214205/var-local-v2/`.
+This full case succeeds on verified private localXFS after the preserved
+network-scratch CPU failure; the underlying networkEIO cause remains unknown.
+
+Earlier network-scratch first pairs: peptide1.190898x and nanotube2.034857x
+(errors≤6.83e-11/9.62e-8Eh). These are separate backend measurements, not
+mixed with the local-XFS protein row into a final benchmark aggregate.
+Fresh local-XFS peptide/nanotube pairs and CPU/GPU/GPU/CPU repeats for all
+three systems are running sequentially asbde4a1953 if each preceding audit/
+cleanup/time gate passes. Ratios remain preliminary until repeats complete.
+Five-minute monitorb09c47ede and the official allocation watcher remain active.
+No merge, new allocation, overlapping timing, settings relaxation or shared
+environment mutation.
+
 ## Performance iteration in progress
 
 The validated result below applies to scientific9d4/test-driver3b21, **not**
