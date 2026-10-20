@@ -354,3 +354,13 @@ old frozen source/build/run directories or other agents' jobs.
   remote retries, new acquisitions, shared-mux resets or job changes.
   Acquisition clientb022d3628 remains untouched for automatic notification.
   No GPU test or timing step has been launched in this shared request.
+- After a reported successful login-only probe, the user authorized ONE
+  bounded owner reconciliation. **b4cf26e3a succeeded13:27:16Z**, October20:
+  queue/accounting/scontrol agree14214205 **PENDING/Priority**, effective
+  **gts-cs207-chemx/inferno**, H2001/8CPU/128GiB/eight hours, zero elapsed,
+  no node. Controller9a026ca's manifest exists and says pending. Current
+  state is known again, not granted; no full UUID or GPU cleanup proof/GO.
+  All GPU steps remain HOLD; sole acquisitionclientb022d3628 will notify
+  automatically on grant/failure, no polling or duplicate request.
+  Parent sequenced one separate bounded disp0 CPU-INPUT metadata/preflight
+  SSH turn after this snapshot; not a GPU window/allocation probe.

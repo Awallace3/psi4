@@ -48,6 +48,11 @@ state query **bb1721fec timed out after110s (exit124)**. Current allocation
 state is **UNKNOWN; all GPU steps paused**, no duplicate or further SSH retry.
 Existing acquisition client is untouched; wait for its automatic notification,
 then re-establish actual manifest/state/cleanup proof before any launch.
+**Recovery snapshot13:27:16Z:** bounded owner reconciliationb4cf26e3a passed;
+14214205 is **PENDING/Priority**, gts-cs207-chemx/inferno, zero elapsed/no node,
+and the pinned manifest says pending. State is known again, but all GPU
+steps remain HOLD until grant/full UUID/cleanup/GO. Wait the existing client;
+no repeated queries or duplicate requests.
 
 ## Current result: isolated GPU validation PASSED
 
