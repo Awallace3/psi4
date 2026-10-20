@@ -479,3 +479,14 @@ old frozen source/build/run directories or other agents' jobs.
   Existing bounded protein client and lifetime watcher stay untouched for
   automatic notification. Earlier audited peptide/nanotube pairs remain
   valid preliminary evidence; do not manufacture protein/repeat results.
+- User then explicitly requested **five-minute checks while allocated**.
+  Observer **bd4ae4b75** runs read-only lease/step/atomic-result checks
+  every300s (bounded SSH); the existing official watcherbda4c38b4 remains
+  the Slurm terminal authority. No second Slurm polling loop or GPU/resource
+  step is introduced. Observer completion wakes the owner on a free/unknown/
+  quarantined lease or a held lease with no unfinished step; this requires
+  actual-state/cleanup reconciliation, not automatic launching/cancellation.
+  A held lease performing the matched CPU baseline is legitimate work.
+  SSH errors remain UNKNOWN and are retried only on the authorized timer.
+  Seven observer controller-only tests passed; no scientific source/stage/
+  environment changes. Participants stay HOLD until explicit owner windows.
