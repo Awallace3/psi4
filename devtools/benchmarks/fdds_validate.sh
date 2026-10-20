@@ -47,8 +47,15 @@ source "$(dirname "$(dirname "$env")")/etc/profile.d/conda.sh"
 conda activate "$env"
 set -u
 unset GCC_ROOT
+# Site CUDA12 CPATH otherwise wins over the selected conda CUDA13 imported
+# targets. This is job-local header/linker isolation, never an env upgrade.
+unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH LIBRARY_PATH
 export LD_LIBRARY_PATH="$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-command -v nvcc
+export CUDA_HOME="$env" CUDA_PATH="$env"
+test "$(realpath "$(command -v nvcc)")" = "$(realpath "$env/bin/nvcc")"
+cuda_include="$env/targets/x86_64-linux/include"
+test -f "$cuda_include/cuda_runtime_api.h"
+payload=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
 {
     for pair in "cc:cc1" "c++:cc1plus"; do
         compiler="$env/bin/x86_64-conda-linux-gnu-${pair%:*}"
@@ -65,6 +72,11 @@ command -v nvcc
     "$out/compiler-c-probe"
     "$out/compiler-cxx-probe"
 } > "$out/compiler.txt" 2>&1
+"$env/bin/x86_64-conda-linux-gnu-c++" \
+    -I"$cuda_include" "$payload/fdds_cuda_probe.cc" \
+    -L"$env/lib" -Wl,-rpath,"$env/lib" -lcudart -o "$out/cuda-probe"
+"$out/cuda-probe" > "$out/cuda-probe.txt" 2>&1
+ldd "$out/cuda-probe" >> "$out/cuda-probe.txt"
 # Existing installed Einsums dependency only; this directory is read-only.
 deps=/storage/project/r-cs207-0/awallace43/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage
 if [[ -z "${CUEST_FDDS_READONLY_BUILD_ROOT:-}" ]]; then
@@ -80,6 +92,7 @@ if [[ -z "${CUEST_FDDS_READONLY_BUILD_ROOT:-}" ]]; then
     -DENABLE_dkh=OFF -DENABLE_XHOST=OFF \
     -DcuEST_ROOT="$env" -DcuEST_INCLUDE_DIR="$env/include" \
     -DcuEST_LIBRARY="$env/lib/libcuest.so" -DCMAKE_INSIST_FIND_PACKAGE_cuEST=ON \
+    -DCUDAToolkit_ROOT="$env" -DCUDAToolkit_NVCC_EXECUTABLE="$env/bin/nvcc" \
     -Dpsi4_CMAKE_UNITY_BUILD=ON > "$out/configure.log" 2>&1
 "$env/bin/cmake" --build "$build" -j "${SLURM_CPUS_PER_TASK:-4}" > "$out/build.log" 2>&1
 fi

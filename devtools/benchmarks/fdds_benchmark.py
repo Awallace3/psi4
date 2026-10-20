@@ -6,8 +6,10 @@ No random tensors, reduced quadrature, changed kernels, or D4 substitution.
 CPU/GPU comparisons must use the same cache SHA256 and scientific options.
 """
 import argparse
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -61,7 +63,8 @@ def libraries():
     for line in Path("/proc/self/maps").read_text().splitlines():
         path = line.split()[-1]
         if Path(path).name.startswith(("core.", "libcuest", "libcublas", "libcusolver",
-                                      "libcudart", "libxc", "libmkl")) and Path(path).is_file():
+                                      "libcudart", "libxc", "libmkl", "libint2", "libeinsums",
+                                      "libopenblas", "libscipy_openblas")) and Path(path).is_file():
             paths.add(path)
     return {p: digest(p) for p in sorted(paths)}
 
@@ -143,6 +146,11 @@ def replay(psi4, args, metadata):
         "psi4_package": psi4.__file__, "core_sha256": digest(psi4.core.__file__),
         "job_id": os.environ.get("SLURM_JOB_ID"), "hostname": os.uname().nodename,
     }
+    config = io.StringIO()
+    with contextlib.redirect_stdout(config):
+        np.show_config()
+    result["numpy_version"] = np.__version__
+    result["numpy_configuration"] = config.getvalue()
     pinv_calls = []
     original = np.linalg.pinv
 
@@ -167,10 +175,17 @@ def replay(psi4, args, metadata):
                     if "cuEST FDDS: contractions" in key)
         # Timer format is validated explicitly below; a missing GPU route is an error.
         result["gpu_timer_calls"] = calls
+        exchange_calls = sum(int(value["n_calls"]) for key, value in psi4.core.get_timer_dict().items()
+                             if "cuEST FDDS: hybrid exchange" in key)
+        result["gpu_exchange_timer_calls"] = exchange_calls
         if args.arm == "gpu" and calls == 0:
             raise RuntimeError("Forced GPU benchmark did not execute FDDS GPU contractions")
         if args.arm == "cpu" and calls:
             raise RuntimeError("CPU baseline unexpectedly executed FDDS GPU contractions")
+        if args.arm == "cpu" and exchange_calls:
+            raise RuntimeError("CPU baseline unexpectedly executed GPU exchange preprocessing")
+        if args.arm == "gpu" and args.require_gpu_exchange and exchange_calls != 4:
+            raise RuntimeError("Optimized benchmark requires actual GPU X/Y work on both monomers")
         assert all(np.isfinite(v) for v in energies.values())
         result["ok"] = True
     finally:
@@ -192,6 +207,7 @@ def main():
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--prepare", action="store_true")
     p.add_argument("--arm", choices=("cpu", "gpu"), default="cpu")
+    p.add_argument("--require-gpu-exchange", action="store_true")
     p.add_argument("--threads", type=int, default=16)
     p.add_argument("--memory", default="96 GiB")
     p.add_argument("--binary-pin", required=True)

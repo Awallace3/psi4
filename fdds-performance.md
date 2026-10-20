@@ -100,3 +100,25 @@ old frozen source/build/run directories or other agents' jobs.
   Collection count verified; runtime validation pending.
 - Read-only safety review of the new backend is running. No new GPU numerical
   pass or performance speedup is claimed at this point.
+- Red regression confirmed against the old9d4 CPU core: the dense-occupied
+  whole-block case failed in1.800 s with DFHelper's axis0 bounds error
+  (`rrR`, index18446744073709551615). This confirms the zero-sized virtual
+  block problem rather than a timeout hypothesis. Failure XML is preserved at
+  `build_fdds_cpu/perf-exchange-tests/dense-red.xml`.
+- Independent equal/unequal X/Y reference checks passed against the old core:
+  two executed tests, no failures/errors/skips,1.806 s. The new candidate's
+  expanded171-test native gate remains separate from this reference check.
+- Candidate CPU core was built at8dc714e4d30c272cc09bcbec5a348d3317518082,
+  SHA256`8ee2d4357a56a7a1d73334a939ce88ff75999138b4f2e745d360a962717ff601`;
+  no-cuEST release build in the dedicated `fdds-opt-cpu-20261020-v1` worktree.
+  GPU optimization validation must build its own separate stage.
+- Optimization harness uses the verified H200 limit of8 CPU threads/one GPU,
+ 128 GiB allocation/96 GiB Psi4 memory/four hours. It builds the frozen
+  scientific source, requires21 focused plus69 full executed passes, then
+  replays matched CPU/GPU/GPU/CPU controls on all three physical caches.
+  The separate baseline CPU job is not a dependency of this allocation.
+- CUDA build preflight explicitly pins the conda nvcc/toolkit and clears site
+  include-path overrides. A compiled runtime/header/device-property probe must
+  pass before configuration. The read-only path inspection found conda headers
+  under `targets/x86_64-linux/include`, not `include`; its bounded-output
+  pipeline ended141 (SIGPIPE), so it is path evidence, not a GPU execution pass.

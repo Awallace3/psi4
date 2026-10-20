@@ -12,9 +12,16 @@
 #SBATCH --signal=TERM@60
 
 set -euo pipefail
-: "${FDDS_PAYLOAD_ROOT:?}" "${FDDS_PAYLOAD_PIN:?}" "${FDDS_RUN_ROOT:?}" "${FDDS_CPU_JOB_ID:?}"
+: "${FDDS_PAYLOAD_ROOT:?}" "${FDDS_PAYLOAD_PIN:?}" "${FDDS_RUN_ROOT:?}"
 : "${FDDS_STAGE_ROOT:?}" "${FDDS_BINARY_PIN:?}" "${FDDS_CORE_SHA256:?}"
-test -s "$FDDS_RUN_ROOT/cpu-$FDDS_CPU_JOB_ID/COMPLETED"
+if [[ -n "${FDDS_CPU_JOB_ID:-}" ]]; then
+    test -s "$FDDS_RUN_ROOT/cpu-$FDDS_CPU_JOB_ID/COMPLETED"
+fi
+cache_root="${FDDS_CACHE_ROOT:-$FDDS_RUN_ROOT/caches}"
+for system in peptide nanotube protein83; do
+    test -s "$cache_root/$system/metadata.json"
+    test -s "$cache_root/$system/orbitals.npz"
+done
 test "$(git -C "$FDDS_PAYLOAD_ROOT" rev-parse HEAD)" = "$FDDS_PAYLOAD_PIN"
 test -z "$(git -C "$FDDS_PAYLOAD_ROOT" status --porcelain --untracked-files=no)"
 test "$(git -C "$FDDS_STAGE_ROOT" rev-parse HEAD)" = "$FDDS_BINARY_PIN"
@@ -42,6 +49,11 @@ cd "$out"
     scontrol show job "$SLURM_JOB_ID"
     nvidia-smi --query-gpu=name,uuid,driver_version --format=csv,noheader
 } > provenance.txt
+grep -q 'NVIDIA H200' provenance.txt
+extras=()
+if [[ "${FDDS_GPU_EXCHANGE_REQUIRED:-0}" == 1 ]]; then
+    extras=(--require-gpu-exchange)
+fi
 child=
 terminated=0
 on_term() {
@@ -53,13 +65,14 @@ for system in peptide nanotube protein83; do
     # ABBA controls: each arm is a new process, same physical cache/host/threads.
     for control in cpu-0 gpu-0 gpu-1 cpu-1; do
         arm=${control%-*}
-        timeout --signal=TERM --kill-after=30s 3000s \
+        timeout --signal=TERM --kill-after=30s 4500s \
             "$env/bin/python" "$FDDS_PAYLOAD_ROOT/devtools/benchmarks/fdds_benchmark.py" \
-            --system "$system" --cache "$FDDS_RUN_ROOT/caches/$system" \
+            --system "$system" --cache "$cache_root/$system" \
             --output "$out/$system-$control" --arm "$arm" \
             --threads "$SLURM_CPUS_PER_TASK" --memory "96 GiB" \
             --binary-pin "$FDDS_BINARY_PIN" --expected-core-sha256 "$FDDS_CORE_SHA256" \
             --expected-package "$FDDS_STAGE_ROOT/build_fdds_validation/stage/lib/psi4" \
+            "${extras[@]}" \
             > "$out/$system-$control.log" 2>&1 &
         child=$!
         rc=0
