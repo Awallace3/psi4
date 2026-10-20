@@ -74,7 +74,13 @@ else
     libxc_lib="$env/lib"
 fi
 # The SDK libcuest and the environment's share the soname libcuest.so.0: the SDK goes first.
-runtime_path="$cuest_lib_dir:$libxc_lib:$env/lib"
+# Without an SDK the cuEST directory is $env/lib, whose CPU libxc.so would shadow the CUDA
+# LibXC (same soname), so LibXC goes ahead of it.
+if [[ "$cuest_lib_dir" -ef "$env/lib" ]]; then
+    runtime_path="$libxc_lib:$env/lib"
+else
+    runtime_path="$cuest_lib_dir:$libxc_lib:$env/lib"
+fi
 export LD_LIBRARY_PATH="$runtime_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 {
     printf 'export LD_LIBRARY_PATH=%q\n' "$runtime_path"
