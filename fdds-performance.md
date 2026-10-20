@@ -75,6 +75,16 @@ old frozen source/build/run directories or other agents' jobs.
   native source9d4/core5b2825..., not an optimized GPU measurement.
 - Protein83 native profile is running locally (16 threads/64 GiB) to remove
   queue latency from diagnosis; its final measurement is not yet available.
+- Local physical nanotube profile completed:42 atoms,548 AO/2240 auxiliary,
+  occupied8/78 and virtual533/463 (SCF removes linear dependencies),
+ 8 threads/32 GiB, **807.463674 s FDDS**. Object427.663180 s,
+  X108.110879 s, Y179.639530 s, QR8.744222 s, kernel37.240188 s,
+  integration340.248031 s,22 pseudoinverses67.997986 s (inside integration).
+  Coupled/uncoupled FDDS **-.02387909012126487 / -.04431040718821849 Eh**,
+  zero GPU calls. This profiles old scientific9d4/core5b2825..., not the new
+  candidate; no cross-node or cross-source speedup is inferred.
+  Compact result `build_fdds_cpu/performance-baselines/nanotube.json`;
+  original `/fastscratch/awallace43/fdds-performance-20261020/nanotube-cpu/`.
 
 ## Candidate: persistent hybrid X/Y block contraction (not yet validated)
 
@@ -151,3 +161,29 @@ old frozen source/build/run directories or other agents' jobs.
   be below the required compute8 capability. No unsupported GPU or skipped
   suite will be called a correctness pass. Alternate account/QoS dry-runs
   are read-only checks, not authorization to silently change the charge route.
+
+## Optimization GPU submission (not a pass)
+
+- **14199355**, **gts-cs207 / gpu-h200 / inferno**, one H200,8 CPUs,
+ 128 GiB/four hours; effective route and PENDING/Priority state verified from
+  its own scontrol record. $5.65 worst case; monthly balance$28.72 before
+  submission. No duplicate optimization job; existing jobs were not changed.
+- Scientific/test pin **fd2c09cd0cfbfce61a311508ba6c53039025179a** (production
+  code identical to reviewed8dc714), own source/build
+  `/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-opt-validation-20261020-v2`.
+  Frozen harness **f26b3b6d1bd997b9c0e135053e99187dda55ee99**, own
+  `psi4.fdds-opt-harness-20261020-v1` checkout. Both clean pins checked;
+  old8dc v1 checkout and all historic validation builds/runs remain immutable.
+- Run `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261020-optimization-01`;
+  inputs in `caches/{peptide,nanotube,protein83}` checksum-verified after
+  transfer. Startup's CUDA header/runtime probe, compiler probes and import/
+  library hashes must pass. Scientific build uses shared dependencies
+  read-only; no installed package changes.
+- Require21 focused plus69 full passes (90 executions/69 unique, no skips)
+  before any timed replay. Then fresh-process CPU/GPU/GPU/CPU controls for
+  each system,8 threads/96 GiB/same frozen stage/options/cache/allocation.
+  GPU frequency work and four X/Y timer calls required; CPU route counts zero.
+  Both coupled and uncoupled energies must agree within1e-5 Eh.
+- Automatic watcher **b486ad2e3**,300-second state-change checks,14-day bound.
+  Latest dry-run predicts October29; actual accepted job initially has
+  StartTime=Unknown. No morning completion guarantee or speedup claim.

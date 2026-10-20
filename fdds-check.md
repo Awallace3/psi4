@@ -10,6 +10,11 @@ expanded native gate: **171 passed, no failures/errors/skips,240.780 s**.
 Its GPU correctness/performance gate is not yet executed; queue dry-runs
 currently predict late H200/H100/A100 starts. The historical GPU pass below
 does not establish the new candidate's correctness or speed.
+Optimization job **14199355** is queued on explicit inferno/H200/8CPU/128GiB/
+4h, accountgts-cs207; watcherb486ad2e3. Scientific/test pinfd2c09cd0c,
+harnessf26b3b6d1b, new isolatedv2 source/build. Full69-test GPU gate precedes
+paired benchmarks on peptide24/nanotube42/protein83. Scheduler estimates are
+late; no candidate GPU correctness or performance result exists yet.
 
 ## Current result: isolated GPU validation PASSED
 
