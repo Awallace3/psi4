@@ -18,6 +18,9 @@ VERIFIED.json and empty pre/post GPU process tables were audited. New X/Y
 whole/blocked/equal/unequal/dense-occupied routes actually ran.
 **Matched physical timings/speedup remain pending**; this is correctness,
 not performance evidence.
+Preserved artifacts `build_fdds_cpu/performance-gpu-14214205/`:
+printed integrated coupled/uncoupled FDDS errors≤1.1102230246251565e-16/0Eh;
+real native-XC SAPT dispersion error≤1.2705494208814505e-20Eh.
 Optimization job **14199355** started promptly on inferno/H200 but failed
 startup after6 s, **zero tests/benchmarks executed**. Site CUDA12 nvcc kept
 PATH precedence after activation, triggering the strict pinned-toolkit guard.

@@ -399,3 +399,10 @@ old frozen source/build/run directories or other agents' jobs.
   new output/label, same scientific source/build/env, no FDDS overlap.
   FDDS next uses per-system first/repeat matched cases, preserving the
   same frozen c289 benchmark code, fd2/core92e5 stage and physical caches.
+- Gate evidence copied locally to
+  `build_fdds_cpu/performance-gpu-14214205/{validation,step,audit.json}`.
+  Local re-audit reproduces all JUnit counts and empty cleanup tables.
+  Printed integrated coupled/uncoupled FDDS maximum errors
+  **1.1102230246251565e-16 /0 Eh**; real native-XC SAPT dispersion/total
+  maximum errors **1.2705494208814505e-20 /1.1218961974295049e-14 Eh**.
+  These deterministic small correctness cases are not speedup benchmarks.
