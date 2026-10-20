@@ -1477,6 +1477,31 @@ individually pass `bash -n`. These are harness results only. Runtime remains
 blocked by failed installed-prefix mapping proof. No diagnostic compile or
 GPU submission has run; the one-shot compile authorization is unconsumed.
 
+Read-only ELF diagnosisb13607b43 confirms actual **DT_RPATH**, not RUNPATH:
+E2Python `_core` lists original14196330/einsums-build/lib first, overriding
+new LD_LIBRARY_PATH and explaining the failed mapping proof. Both E2Python
+and native include siteCUDA12.6/lib64 before explicitcuda13; native also has
+an empty `::` path entry. Recorded origin/destination ELF is identical, so
+this is retained build linkage, not a corrupted artifact copy. Actual
+CUDA-component resolution is being inspected read-only as bf472f992; no
+preload workaround, loader/version-check bypass or binary/path patch.
+Parent notified that the fixed tuple is not relocatable under the cleared
+contract. No extra CPU allocation, compilation or GPU submission authorized/
+executed to resolve this failure.
+
+Read-only exactd17 source audit (local E2HEAD also exactd17) found no Python
+install() rules in `cmake/Einsums_FinalizePybind.cmake` and no packaging
+pyproject/setup entrypoint. The historical EINSUMS_INSTALL_PYMODDIR=naive
+argument did not provide a Python install target. README now explicitly
+marks that configuration as historical/unready rather than recommending
+another identical failed build. Any new install/loader contract or coherent
+rebuild must first be reviewed and separately cleared; no repair executed.
+
+Preparatory gate checkpointd7c1517d06cccce232582d75ab0bcdc76d514371 push
+confirmed byb8df6762d (originb4ffd→d7c1517d06). This pin does not admit the
+failed relocated runtime. Neither H200 authorization nor the separate
+one-shot diagnostic compilation authorization has been consumed.
+
 Final timing safeguard test task b6403af75: **68passed in6.48s**, no
 warnings/skips, JUnit
 `build_disp0_cpu/reference-check-ctS1hjRJ/results.xml`. Includes staged/

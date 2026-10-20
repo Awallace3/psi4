@@ -1,9 +1,28 @@
 # Dedicated Einsums2 CUDA build preparation
 
-**Build preparation blocked; not GPU-validated.** CPU builds14182584 and
-14193865 failed; their roots are preserved. The user authorized the bounded
-GPU test, but a coherent matching stage must pass preparation before it runs.
-No further CPU build is authorized by this recipe.
+## Current blocker — do not reuse the historical build recipe
+
+**Installed runtime blocked; not GPU-validated.** CPU builds14182584,
+14193865 and14196330 failed; preserve their status/roots. The third compiled
+both libraries but did not install E2 Python. Its whole-artifact recovery
+passed byte/ELF checks (190,505,547bytes in59.5s), yet the new-prefix mapping
+proof failed: E2 `_core` has **DT_RPATH** pointing first to the original
+`14196330/einsums-build/lib`, overriding the requested new native prefix.
+Both E2 binaries also retain site CUDA12.6 paths before explicit CUDA13;
+actual dependency closure requires separate read-only diagnosis. No tiny
+API pass, diagnostic compile, CUDA execution, GPU correctness or speedup
+has been established for the deployed prefix.
+
+At exact E2d17, `cmake/Einsums_FinalizePybind.cmake` builds the Python
+package but contains no Python `install()` rules. Passing the historical
+`EINSUMS_INSTALL_PYMODDIR=naive` did not install that package. The build
+commands below are **historical evidence, not a corrected ready recipe**.
+Do not patch RPATH, overlay packages, weaken map checks, retry builds, or
+consume GPU allocations to repair this. A revised coherent installation/
+loader contract needs explicit review/clearance; no additional CPU allocation
+is authorized. See `../../disp0-progress.md` for exact evidence and approvals.
+
+## Historical configuration and validation plan
 
 * Einsums Git pin: `d17bb76e4ed3a07fbbc470e6813a5c134dfe0e62`.
 * Build native shared library and Python `_core` in the same configure/install.
