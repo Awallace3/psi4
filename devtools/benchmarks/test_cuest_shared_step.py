@@ -89,6 +89,18 @@ class SharedStepTests(unittest.TestCase):
         self.assertFalse((self.root / "steps/unit-step/COMMAND_EXITED_ZERO").exists())
         self.assertNotEqual(self.run_step().returncode, 0)
 
+    def test_allocation_root_guard_accepts_only_campaign_children(self):
+        controller = self.script.with_name("cuest_interactive_allocate.sh").read_text()
+        guard = next(line for line in controller.splitlines()
+                     if '"$run"' in line and "/psi4-cuest-shared/*" in line)
+        for path, expected in [
+            ("/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-shared/new-run", 0),
+            ("/storage/project/r-cs207-0/awallace43/runs/another-campaign/new-run", 1),
+        ]:
+            p = subprocess.run(["bash", "-c", 'run=$1; ' + guard, "test", path],
+                               capture_output=True, timeout=5)
+            self.assertEqual(p.returncode, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

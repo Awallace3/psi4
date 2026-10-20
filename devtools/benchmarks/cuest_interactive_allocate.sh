@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # The owning agent invokes once after approval, duplicate/account/dry-run checks.
 # salloc --no-shell preserves the granted allocation for serialized srun steps.
-set -euo pipefail
+set -Eeuo pipefail
+trap 'rc=$?; printf "Shared allocation controller failed at line%s (exit%s)\n" "$LINENO" "$rc" >&2; exit "$rc"' ERR
 : "${CUEST_SHARED_RUN_ROOT:?}" "${CUEST_SHARED_ACCOUNT:?}"
 : "${CUEST_SHARED_HARNESS_PIN:?}"
 root=$(git -C "$(dirname "$(realpath "$0")")" rev-parse --show-toplevel)
 test "$(git -C "$root" rev-parse HEAD)" = "$CUEST_SHARED_HARNESS_PIN"
 test -z "$(git -C "$root" status --porcelain --untracked-files=no)"
 run=$CUEST_SHARED_RUN_ROOT
-test "$run" = /storage/project/r-cs207-0/awallace43/runs/psi4-cuest-shared/*
+[[ "$run" == /storage/project/r-cs207-0/awallace43/runs/psi4-cuest-shared/* ]]
 mkdir "$run" # A fresh run, never overwrite even an ungranted request.
 export PYTHONDONTWRITEBYTECODE=1
 python3 - "$run" "$CUEST_SHARED_HARNESS_PIN" <<'PY'

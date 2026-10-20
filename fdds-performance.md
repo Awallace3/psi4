@@ -325,3 +325,11 @@ old frozen source/build/run directories or other agents' jobs.
   Seven controller-only mock tests passed in.458s; these test locking/guards/
   exit-code/evidence behavior, **not** GPU numerical correctness.
   Replacement is not submitted until current account/cost/dry-run checks.
+- First controller acquisition **bb154fdd3** stopped after the accepted
+  scheduler dry-run, before creating its run directory or invoking salloc.
+  Root-path guard used `test` literal equality instead of Bash pattern
+  matching; positive-path rejection reproduced offline (exit1).
+  Corrected guard now has accepted/rejected-path regression coverage and an
+  ERR line diagnostic. **Eight controller mock tests passed in.479s**.
+  This attempt consumed no allocation and ran no GPU tests. Preserve its
+  old8e9 controller checkout; retry uses a new controller pin/worktree/run.
