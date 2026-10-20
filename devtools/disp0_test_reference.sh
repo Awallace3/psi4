@@ -35,6 +35,11 @@ PY
 if [[ $# == 0 ]]; then
     set -- "$root/tests/pytests/test_fisapt.py" -k test_fsapt_fdisp_blocked_matches_pair
 fi
-"$env/bin/python" -m pytest "$@" -v \
+proof_args=()
+if [[ "${DISP0_PHYSICAL_PROCESS_PROOF:-0}" == 1 ]]; then
+    export PYTHONPATH="$root/devtools/disp0:$PYTHONPATH"
+    proof_args=(-p revised_physical_proof)
+fi
+"$env/bin/python" -m pytest "${proof_args[@]}" "$@" -v \
     -o junit_family=legacy \
     --basetemp="$run/pytest" --junitxml="$run/results.xml"

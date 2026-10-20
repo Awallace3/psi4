@@ -25,6 +25,11 @@ loader contract needs explicit review/clearance; no additional CPU allocation
 is authorized. See `../../disp0-progress.md` for exact evidence and approvals.
 `runtime_correction_plan.md` records the minimal proposed revised contract;
 it is planning only, not an executable recipe or new allocation clearance.
+The offline executable proposal is now in `revised_build_contract.md`,
+`revised_cpu_build.sbatch` and `revised_cpu_payload.sh`, with local guard
+tests. It has not prepared a real SDK or rebuilt a stage, and is not CPU/GPU
+allocation authority. Historical gate/timing submissions are held while the
+FDDS owner coordinates the single shared allocation.
 
 ## Historical configuration and validation plan
 

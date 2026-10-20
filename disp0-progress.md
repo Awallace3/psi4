@@ -1532,6 +1532,105 @@ preload workaround, old-object repair or E1 downgrade. Candidate CPU shape
 immutable build pin or new CPU approval exists. Existing diagnostic/GPU
 authorizations remain unconsumed. No credible08:00 speedup promise.
 
+Parent explicitly cleared OFFLINE executable preparation; no additional
+planning approval is being awaited. Task10 active; runtime/task5 remains
+blocked by task9. New tracked recipe draft comprises private CUDA SDK
+identity/materialization/ELF/closure guards, deferred CMake configuration/
+complete-package install hook, actual runtime probe, same-process API/
+physical pytest proof, successful-new-build admission and one proposed CPU
+SBATCH/payload. Only devtools/tests change; exact local E2HEADd17 and its
+tracked source are unchanged, and `git diff587 -- psi4/` is empty.
+The original failed-runtime admission/old tuple stay rejected.
+
+Offline positive/negative fixtures cover missing/ambiguous/mixed CUDA
+components/headers, private aliases without source mutation, actual closure,
+bad loader paths, deferred install/configuration targets, whole-package/
+binary/source/process/physical proof binding, failed/signaled allocations,
+explicit CPU approval and resource-route guards. CMake fixtures use
+LANGUAGES NONE and deliberately nonexecutable build commands; no compiler,
+CUDA, SDK preparation, installation, full dependency/scientific rebuild,
+diagnostic compilation or resource job has run. Combined current guard
+suite: **127passed in5.69s**, no skips/warnings,
+`build_disp0_cpu/reference-check-hs7vu57I/results.xml`.
+An additional required cuBLASLt public-header presence check was then added
+and will be included in the final retest.
+
+Read-only upstream E2 packaging-seam investigationd1e572c41ab501a0befcdca7387a6ce33
+and revised-contract reviewdbbb8422a7b400be2d62c1d288be6b490 pending.
+`devtools/disp0/revised_build_contract.md` documents exact executable inputs/
+guards and ONE proposed8CPU/48G/2h/freeembers/gts-cs207-chemx job. This is
+not a CPU approval request yet: final review, immutable source pin and exact
+guard evidence must be returned first. Complete real SDK/dependency input
+identities remain required; fake/offline guard passes are not installed-
+runtime readiness or GPU correctness.
+
+Upstream packaging investigationd1e572c41ab501a0befcdca7387a6ce33 retrieved:
+external root-deferred configuration/install hook is viable without an E2
+source patch. Confirms native targetEinsums inlibs, Python targetPyEinsums
+inroot, existing native install and absent Python install. Additional
+constraints incorporated: require shared native/prefixlib layout, reject
+skipped install-RPATH policy, explicitly build PyEinsumsStubs before install,
+and require `_core.pyi`/py.typed. Build and installed paths remain distinct;
+actual RUNPATH and indirect CUDA loader closure are checked rather than
+assumed transitive. No upstream configure/build/install was executed.
+
+Updated offline guard run: **136passed in6.77s**, no warnings/skips,
+`build_disp0_cpu/reference-check-RcGadfuA/results.xml`. All three revised/
+optional-proof shell files pass syntax checks individually. Coverage now
+also includes native shared/stub-target/install-layout/RPATH requirements,
+actual compiler/architecture/library cache binding, immutable input receipts
+and actual API/physical process identities/components. No SDK inspection,
+dependency install or native compilation was executed. A final mixed-
+CUDA12/13 inventory rejection fixture was added afterward for next retest.
+Main contract reviewdbbb8422a7b400be2d62c1d288be6b490 remains pending;
+no final recipe pin or CPU approval request yet.
+
+Reviewdbbb8422a7b400be2d62c1d288be6b490 found three concrete blockers:
+missing transitive SDK inputs, incomplete actual mapped-library/Psi4 closure
+checks, and missing effective compile/include/link audit. Fixed in the
+offline draft: full include/bin/NVVM tree identities with required CRT header/
+cudafe++ and cycle checks; actual all-native process maps plus Psi4 loader
+closure; new build_audit.py captures compile databases and Ninja commands/
+actual dependencies/response-file expansions, validates compiler/path/header/
+link evidence before acceptance. NVCC flags already sanitized; launcher/
+ambient-path cleanup and verbose source-build logs are explicit.
+
+First expanded rerun retained **3failed/158passed**, XML
+`build_disp0_cpu/reference-check-QaOWQ3G5/results.xml`: generic historical-
+build path policy incorrectly rejected the intended NEW Psi4 installed
+stage. Fixed with an exact explicit installed-stage exception only; historical
+job/site12/build-tree mappings remain forbidden. No tolerance change or
+runtime retry. Corrected expanded offline suite **161passed in7.75s**,
+`build_disp0_cpu/reference-check-mBaCee31/results.xml`. Includes real Ninja
+response METADATA expansion with a nonexistent compiler; no object/shared
+library or actual build executes. Follow-up review
+d9b943acc60714330d8a980540948b57d pending.
+
+Shared GPU policy relayed to parent and FDDS owner through workmux; no active
+off-registry CPHF/CPKS agent was found by parent, no arbitrary pane input.
+FDDS is sole owner; disp0 has no immediate READY GPU need/allocation and must
+not hold it idle. No duplicate/direct-srun request; current shared128GiB
+cannot support512GiB proteins. Owner's first8e9/interactive-01 acquisition
+failed before salloc; discard it for launch, preserve evidence. Corrected
+controller9a026ca149/interactive-02 is only a future endpoint, **NOT READY**;
+await actual manifestallocated/job/fullUUID/ownerGO+serialized window. Only
+the owner controller may hold commonflock through exclusive step/cleanup.
+Runtime correction remains OFFLINE with no new CPU approval, actual SDK
+inspection/install, full rebuild, diagnostic compile or allocation executed.
+
+Follow-up reviewd9b943acc60714330d8a980540948b57d found two remaining input
+audit gaps: transitive CUDA headers under otherwise allowed roots, and
+embedded linker script/version-map forms. Both addressed: critical
+driver/vector/builtin/nv-target headers required; complete SDK root-name/
+namespace identity classification catches foreign copies while standard
+host headers remain legitimate. Linker argument parsing now validates
+version scripts, -T scripts, packed/equal/relative and -Xlinker forms.
+Negative fixtures reproduce every reported counterexample. Updated offline
+suite **170passed in7.52s**, no warnings/skips,
+`build_disp0_cpu/reference-check-IhfgnghE/results.xml`.
+No real SDK, native build, diagnostic compilation, resource job or GPU
+execution occurred. Original failures and old fixed tuple remain rejected.
+
 Final timing safeguard test task b6403af75: **68passed in6.48s**, no
 warnings/skips, JUnit
 `build_disp0_cpu/reference-check-ctS1hjRJ/results.xml`. Includes staged/

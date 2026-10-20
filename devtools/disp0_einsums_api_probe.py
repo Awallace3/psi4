@@ -7,6 +7,7 @@ rtol=1e-11/atol=1e-12 declared before results are inspected.
 
 import gc
 import json
+import os
 
 import psi4
 import einsums as ein
@@ -102,6 +103,10 @@ def main():
     pool.reset()
     checks.append("pool-view-keepalive-reset")
 
+    observation = {}
+    if os.environ.get("DISP0_API_RUNTIME_PROOF") == "1":
+        from revised_physical_proof import observed
+        observation["runtime_observation"] = observed()
     print(json.dumps({
         "status": "PASS",
         "scope": "CPU/API semantics only; not GPU execution or physical SAPT",
@@ -109,6 +114,7 @@ def main():
         "einsums": ein.__file__, "einsums_version": ein.__version__,
         "tolerances": {"rtol": RTOL, "atol": ATOL},
         "checks": checks,
+        **observation,
     }, indent=2))
 
 

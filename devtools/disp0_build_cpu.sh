@@ -12,6 +12,7 @@ cmake -S "$root" -B "$build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$build/install" \
     -DCMAKE_PREFIX_PATH="$env" \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_C_COMPILER_LAUNCHER= -DCMAKE_CXX_COMPILER_LAUNCHER= \
     -DCMAKE_C_COMPILER="$env/bin/x86_64-conda-linux-gnu-cc" \
     -DCMAKE_CXX_COMPILER="$env/bin/x86_64-conda-linux-gnu-c++" \
     -DCMAKE_Fortran_COMPILER="$env/bin/x86_64-conda-linux-gnu-gfortran" \
@@ -23,4 +24,6 @@ cmake -S "$root" -B "$build" -G Ninja \
     -DENABLE_PCMSolver=OFF \
     -DENABLE_dkh=OFF -DENABLE_gdma=OFF -DENABLE_libefp=OFF \
     -DENABLE_ambit=OFF -DENABLE_ecpint=OFF
-cmake --build "$build" --parallel "${DISP0_BUILD_THREADS:-6}"
+verbose_args=()
+if [[ "${DISP0_VERBOSE_BUILD:-0}" == 1 ]]; then verbose_args=(--verbose); fi
+cmake --build "$build" --parallel "${DISP0_BUILD_THREADS:-6}" "${verbose_args[@]}"
