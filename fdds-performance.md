@@ -588,3 +588,23 @@ old frozen source/build/run directories or other agents' jobs.
   dimensions, low-budget blocking and disabled/threshold controls. Existing
   pseudoinverse semantics and now-fast X/Y remain unchanged. No allocation
   build or new compute overlaps the ongoing repeat timing.
+- Metric-fold candidate **ada1a1d2128d6d6f3f5b89952b08f6ffd4ca5917**
+  is frozen for safety reviewd4630ce764. Its CPU-only build completed
+  (b8e4af628); native171-test gatebded351d9 is running locally, not on the
+  timing allocation. No candidate GPU correctness/speed claim yet.
+  Candidate retains the existing powered metric per transform, uploads it
+  once, reuses bounded FP64 device input/output buffers and drains every
+  completed fold before DFHelper reuses/writes host scratch. All four
+  row-major mappings have regression seams; metric powers are never cached
+  by pointer/address. GenericDFHelper stays native unless FDDS explicitly
+  opts in. Host buffers/block budgets and threshold/pinv/science are unchanged.
+- Frozen controller **60ee73db408c58be208367abef7bc9a894f6d860**
+  has five passing offline audit tests. Proposed exclusive comparison
+  includes candidate build,32focused+1SAPT+81full GPU tests (114executions,
+  zero skips required), then each system's oldGPU0/candidateGPU0/
+  candidateCPU0/candidateGPU1/oldGPU1. Every sample is required; core changes
+  are intentional but dependency/cache/settings/thread/storage identity and
+ 1e-5Eh numerical gates remain mandatory. Actual metric endpoints must run.
+  Budget proposal:9000s bounded step, only after current repeat terminal,
+  independently audited cleanup and≥9180s fresh allocation time remaining.
+  Git-only stagingb48d3acc1 does not launch allocation-side build/compute.
