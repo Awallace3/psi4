@@ -2126,3 +2126,56 @@ Exactly-one approved3bb inputCPU job remains UNCONSUMED/UNSUBMITTED;
 source proof nowPASS, remaining fresh exact-route(stderr retained)/quota/
 headroom/duplicate gates still needed before the existing CPU approval can
 execute. CPU89 build and all GPU readiness remain NO GO.
+
+Parent/owner assigned SEPARATE one final CPU preflight+conditional-submit
+turn. Used ONE bounded configured SSH session exec77157, no parallel probe.
+Fresh09:42:19Eastern source/sha/path/pristine proofPASS at3bb/-02;
+own duplicates0, embers19/50; byte/inode df gatesPASS, quota raw
+project6273.7/8192GB andscratch3660.7/15360GB/208990of1Minodes.
+Exact pinned batch test-only routePASScpu-small, bothstdout+stderr retained.
+Simulated14217020 is NOT a real accepted job.
+
+Permanent own attempt directory:
+`P/gits/psi4.disp0-input-cpu-3bb0c7d1d2-02/final-cpu-attempt`.
+Raw preflight/source/route/quota/df/duplicate evidence stored there. Session
+was interactive so quota/route could be reviewed before actual submission.
+Its hard100s turn clock expired before submission-phase acknowledgement.
+This is a turn-wall-budget failure, NOT evidence of a new cluster outage.
+The subsequent tool write of the actual-submit/durable-receipt phase returned
+exit124 immediately, with no echoed phase/raw sbatch response/durable ID/
+controller output observed. Input delivery/actual sbatch invocation is
+UNKNOWN; do NOT infer accepted or unsubmitted. Intended phase permanently
+marks invocation, retains raw response, fsyncs receipt+jobID BEFORE any
+controller query, but its execution is not observed/proved.
+
+Reported TURNFAILED/TIMEOUT toowner+parent and STOPPED/NEVERREPLAY. Existing
+exactly-one CPU approval RESERVED pending proof, not reusable automatically.
+No actual accepted job ID known; CPU89/GPUnoGO unchanged.
+Owner separately assigned ONE READ-ONLY receipt-reconciliation turn; task
+ba881acc1 inspects existing marker/raw receipt files and ONLY own
+disp0-sdk-input queue/accounting (no sourcewrites/sbatch/test-only/SDK/GPU).
+Empty/failed/delayed accounting is not proof of absence. Result pending;
+no other query or submit loop authorized.
+
+DISP0_CPU_RECEIPT_RECONCILE_01=ba881acc1 **TURNCOMPLETE exit0**,
+2026-10-20T13:46:40Z, one noninteractive bounded READ-ONLY SSH command.
+Attempt directory exists; source-pin.txt exactly3bb (41bytes, SHA
+63fbad7d5c603f9169136ccf86c8da2442285e63dc4abee657cef8f3043ccad4).
+ABSENT: SUBMISSION_INVOKED, preflight-review.txt, submission-response.json,
+job-id.txt, sbatch.stdout/stderr, controller.stdout/stderr.
+Retained test-only.stdout empty andtest-only.stderr125bytes/SHA
+7db2ddd73d0f6c2885a1bbe517ad2fa6cd9f8e1fe51cd8bbd0c85d22378c4720;
+simulated14217020 remains NOT an accepted ID.
+
+OwnCPU squeue(name=disp0-sdk-input) exit0,empty stdout/empty stderr.
+OwnCPU sacct(name filter/since09:40/WorkDir included) exit0,empty stdout/
+empty stderr. Complete query arguments/exits/raw stdout+stderr preserved
+`.pi/tasks/01a154d8-a459-768d-83bd-c57c6a5dc42c-4065461/ba881acc1.output`.
+No accepted job ID/effective job route proved. Missing records/empty or
+possibly delayed accounting are NOT conclusive absence proof: submission
+delivery/execution remains UNCONFIRMED/UNKNOWN; exact-one CPU approval
+RESERVED pending conclusive reconciliation, NEVERREPLAY. Reported exact
+evidence and TURNCOMPLETE toowner+parent and STOPPED. No sourcewrites/
+quota-refresh/sbatch/test-only/provision/build/GPU or ownerallocation query/
+signals/jobchanges in this reconciliation. Original records untouched.
+CPU89/GPUnoGO unchanged.
