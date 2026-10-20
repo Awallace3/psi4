@@ -301,3 +301,27 @@ old frozen source/build/run directories or other agents' jobs.
   timings. Then same-allocation8-thread96GiB CPU/GPU controls using identical
   physical caches; first pairs precede repeat pairs for all systems.
   **No new GPU numerical result or measured speedup yet.**
+
+### User-approved shared interactive replacement
+
+- The user explicitly selected replacing **only queued14210379** with one
+  bounded interactive allocation, then asked cuEST agents to share it.
+  A PENDING-state check preceded its authorized cancellation; old source,
+  stage, submission and run evidence stay unchanged. No tests ran in that
+  cancelled allocation. No other job was modified or cancelled.
+- FDDS is sole allocation owner. Parent and PySCF/disp0 agents reported no
+  usable interactive allocation and are holding duplicate requests. PySCF
+  fixed its offline UUID-controller bug and requests an early bounded RKS
+  preflight window. Disp0 is not ready and must not delay/hold the GPU idle.
+  This allocation cannot satisfy disp0's hypothetical512GiB protein request.
+- Replacement retains the approved ceiling **one H200/8CPU/128GiB/eight
+  hours/inferno**. It uses `salloc --no-shell` plus serialized exclusive srun
+  steps; final benchmarks have whole-allocation exclusivity. Common manifest
+  publishes job/node/full UUID/account/resources and a shared flock path.
+  Every process is bounded and cleanup must be proved before lock release;
+  missing GPU cleanup quarantines the allocation, not silent reuse.
+- Each agent keeps isolated pinned source/build/env/results. No shared
+  environment or frozen stage mutation. FDDS reuses core92e5... read-only.
+  Seven controller-only mock tests passed in.458s; these test locking/guards/
+  exit-code/evidence behavior, **not** GPU numerical correctness.
+  Replacement is not submitted until current account/cost/dry-run checks.

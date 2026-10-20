@@ -20,7 +20,15 @@ class SharedStepTests(unittest.TestCase):
         self.bin.mkdir()
         for name, text in {
             "squeue": 'printf "%s\\n" "${TEST_STATE:-RUNNING}"',
-            "srun": 'printf "%s\\n" "$@"\nexit "${TEST_STEP_RC:-0}"',
+            "srun": (
+                'printf "%s\\n" "$@"\n'
+                'for arg in "$@"; do\n'
+                ' if [[ "$arg" == */steps/unit-step && "${TEST_NO_CLEANUP:-0}" == 0 ]]; then\n'
+                '  touch "$arg/GPU_CLEANUP_VERIFIED"\n'
+                ' fi\n'
+                'done\n'
+                'exit "${TEST_STEP_RC:-0}"'
+            ),
         }.items():
             p = self.bin / name
             p.write_text("#!/bin/bash\n" + text + "\n")
@@ -74,6 +82,12 @@ class SharedStepTests(unittest.TestCase):
     def test_excessive_time_rejected(self):
         self.assertNotEqual(self.run_step(seconds="10801").returncode, 0)
         self.assertFalse((self.root / "steps").exists())
+
+    def test_missing_cleanup_quarantines_allocation(self):
+        self.assertEqual(self.run_step(TEST_NO_CLEANUP="1").returncode, 96)
+        self.assertTrue((self.root / "QUARANTINED").exists())
+        self.assertFalse((self.root / "steps/unit-step/COMMAND_EXITED_ZERO").exists())
+        self.assertNotEqual(self.run_step().returncode, 0)
 
 
 if __name__ == "__main__":

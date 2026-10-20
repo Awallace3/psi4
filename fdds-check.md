@@ -33,6 +33,12 @@ QoS verified. Watcher **bcde45e0e**. It requires21 focused plus69 full
 executions before matched timings; no GPU result for this candidate yet.
 Source/testfd2c09, harnessc289c502, read-only core92e5bff6641d...
 Run `.../runs/psi4-fdds/20261020-optimization-02`.
+**Superseding instruction:** user explicitly approved replacing queued14210379
+with one bounded shared interactive allocation. It was cancelled only after
+confirming PENDING, with no test executions; no other jobs changed. New shared
+allocation is being prepared (FDDS sole owner, serial locked/exclusive steps,
+same1H200/8CPU128GiB8h inferno ceiling). PySCF has an early bounded ready
+preflight; parent/disp0 are not ready and will not hold it idle.
 
 ## Current result: isolated GPU validation PASSED
 

@@ -11,6 +11,11 @@ manifest. Its common `gpu-step.lock` covers the entire bounded `srun` command;
 steps request all GPU/CPU/memory resources exclusively. Do not bypass that
 lock with raw `srun`, SSH-to-node launches, background GPU consumers or another
 process in the step. Concurrent GPU work invalidates benchmark isolation.
+The payload records GPU processes before and after the command against the
+allocation's actual full CUDA UUID. Missing cleanup proof quarantines the
+allocation and blocks all further steps until the owner investigates; it never
+kills unknown processes to clear the gate. No other participant should remove
+QUARANTINED. A zero exit code without cleanup proof is not accepted.
 
 The owner assigns windows through workmux before each step. Initial order:
 FDDS short correctness/diagnostic gate; RKS bounded failure diagnosis; FDDS
