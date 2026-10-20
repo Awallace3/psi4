@@ -23,6 +23,9 @@ whole/blocked/equal/unequal/dense-occupied routes actually ran.
 same matched controls; coupled-energy error9.61322e-8Eh<1e-5.
 Both ratios are preliminary one-pair measurements; protein83 and ABBA
 repeats remain pending. No cross-node baseline ratio.
+Protein83 first CPU/GPU pair is running exclusively asbd4b572c6 after owner
+verification of the preceding participant's timeout/cleanup; no overlapping
+GPU or CPU timing. Further participant diagnostics are offline/on HOLD.
 Preserved artifacts `build_fdds_cpu/performance-gpu-14214205/`:
 printed integrated coupled/uncoupled FDDS errors≤1.1102230246251565e-16/0Eh;
 real native-XC SAPT dispersion error≤1.2705494208814505e-20Eh.

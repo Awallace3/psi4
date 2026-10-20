@@ -456,3 +456,16 @@ old frozen source/build/run directories or other agents' jobs.
   After owner-verified nanotube cleanup, one explicit bounded PySCF
   controller-fixed diagnostic window03 was assigned; FDDS protein83
   first pair waits for its terminal and cleanup, not a new queue trip.
+- Window03 then ended124 (whole payload1050s):9 RKS and2 grid exporter
+  tests passed; native Psi4 direct-route gate passed, but its first PySCF
+  diagnostic worker produced no final result before timeout. No PySCF
+  comparison/speedup result was accepted. Owner independently read terminal,
+  cleanup marker, empty pre/post GPU tables and no quarantine before
+  launching FDDS again. Last PySCF message alone does not locate the stall.
+- **Protein83 first matched pair now running**, task **bd4b572c6**,
+  step `fdds-protein83-first`, same immutable science/core/cache/options,
+ 8 threads/96GiB, fresh-process CPU0/GPU0 under one exclusive shared lock.
+  Its bound is min10800s/remaining allocation minus180s; no other GPU or
+  CPU timing step overlaps. Need actual terminal/energy/cleanup audit before
+  quoting protein speed or starting ABBA repeats. RKS diagnostics remain
+  offline/unlaunched pending another explicit short window.
