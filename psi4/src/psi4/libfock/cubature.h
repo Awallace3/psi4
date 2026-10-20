@@ -236,9 +236,24 @@ class DFTGrid : public MolecularGrid {
                               std::map<std::string, double> float_opts_map, bool use_cuest = false);
     /// The Options object
     Options& options_;
+#if USING_cuEST
+    /// Blocking settings resolved by the build, kept for host_blocks_from_cuest().
+    std::shared_ptr<BasisExtents> cuest_extents_;
+    int cuest_max_points_ = 0;
+    int cuest_min_points_ = 0;
+    double cuest_max_radius_ = 0.0;
+#endif
 
    public:
     std::shared_ptr<BasisSet> primary() const { return primary_; }
+#if USING_cuEST
+    /// Give a cuEST grid host blocks on cuEST's own points: copy its points and total
+    /// (Becke-partitioned) weights to the host, drop weights below DFT_WEIGHTS_TOLERANCE and,
+    /// with DFT_REMOVE_DISTANT_POINTS, points beyond the basis extents, then block with OCTREE
+    /// (ATOMIC needs the host atomic grids, which a cuEST grid never builds). Afterwards
+    /// blocks(), npoints(), etc. describe the same points cuest_grid() integrates over.
+    void host_blocks_from_cuest();
+#endif
 
     /// The `use_cuest` flag requests a GPU-resident cuEST grid *instead of* the host grid: when
     /// it is set, the CPU-side blocks/points are never built, so `blocks()`, `npoints()`, etc. are

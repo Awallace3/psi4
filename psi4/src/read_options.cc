@@ -2105,6 +2105,13 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         density products of one batch of grid blocks. Larger batches run faster;
         raised automatically to the minimum that holds one grid block. !expert -*/
         options.add_int("XDM_GPU_MEMORY", 256);
+        /*- Grid for the XDM moment integrals. ``PSI4`` builds the host DFT grid from the
+        |scf__dft_radial_points| family of options. ``CUEST`` takes the points and Becke-partitioned
+        weights of the cuEST grid built from the same options (the grid a cuEST SCF integrates on),
+        which skips the host grid build; it needs a Psi4 built with cuEST. ``AUTO`` is ``CUEST`` when
+        |scf__xdm_gpu| and |globals__use_cuest| are on and |scf__dft_grid_orientation| has not been
+        set (a no-CP many-body run sets it), and ``PSI4`` otherwise. -*/
+        options.add_str("XDM_GRID", "AUTO", "AUTO PSI4 CUEST");
         /*- Parameters defining the -NL/-V dispersion correction. First b, then C -*/
         options.add("NL_DISPERSION_PARAMETERS", new ArrayType());
         /*- Number of spherical points (A :ref:`Lebedev Points <table:lebedevorder>` number) for VV10 NL integration.

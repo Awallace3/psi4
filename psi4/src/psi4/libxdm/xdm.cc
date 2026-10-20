@@ -216,16 +216,33 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     SharedMatrix Da = wfn->Da_subset("AO");
     SharedMatrix Db = restricted ? Da : wfn->Db_subset("AO");
 
-    // --- Build DFT grid with ATOMIC blockscheme ---
+    // --- Grid: the host DFT grid, or cuEST's points blocked on the host ---
+    std::string grid_kind = options.get_str("XDM_GRID");
+    if (grid_kind == "AUTO") {
+        grid_kind = use_gpu && options.get_bool("USE_CUEST") && !options["DFT_GRID_ORIENTATION"].has_changed()
+                        ? "CUEST"
+                        : "PSI4";
+    }
+#ifndef USING_cuEST
+    if (grid_kind == "CUEST") {
+        throw PSIEXCEPTION("XDM_GRID CUEST requires a Psi4 built with cuEST (ENABLE_cuEST).");
+    }
+#endif
     std::map<std::string, int> int_opts;
     std::map<std::string, std::string> str_opts;
-    str_opts["DFT_BLOCK_SCHEME"] = "ATOMIC";
+    // ATOMIC blocking needs the host atomic grids, which a cuEST grid never builds.
+    str_opts["DFT_BLOCK_SCHEME"] = grid_kind == "CUEST" ? "OCTREE" : "ATOMIC";
 
     std::shared_ptr<DFTGrid> grid;
     {
         ScopedTimer t("XDM: grid");
-        grid = std::make_shared<DFTGrid>(mol, primary, int_opts, str_opts, options);
+        grid = std::make_shared<DFTGrid>(mol, primary, int_opts, str_opts, options, grid_kind == "CUEST");
+#ifdef USING_cuEST
+        if (grid_kind == "CUEST") grid->host_blocks_from_cuest();
+#endif
     }
+    outfile->Printf("\n  XDM grid: %s, %d points in %zu blocks.\n", grid_kind == "CUEST" ? "cuEST" : "psi4",
+                    grid->npoints(), grid->blocks().size());
 
     int max_points = grid->max_points();
     int max_functions = grid->max_functions();

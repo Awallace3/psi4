@@ -1333,3 +1333,74 @@ def test_xdm_gpu_matches_host(case):
     for col in (2, 3, 4, 5, 6, 7):
         np.testing.assert_allclose(p_gpu[:, col], p_host[:, col], rtol=1.0e-8, atol=0.0)
     np.testing.assert_array_equal(p_gpu[:, :2], p_host[:, :2])
+
+
+@pytest.mark.xdm
+@pytest.mark.skipif(psi4.addons("cuest"), reason="a cuEST build accepts XDM_GRID CUEST")
+def test_xdm_cuest_grid_requires_cuest_build():
+    mol = psi4.geometry("0 1\nO 0 0 0.117\nH 0 0.757 -0.467\nH 0 -0.757 -0.467\nsymmetry c1")
+    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.6, 1.4], "XDM_GRID": "CUEST"})
+    with pytest.raises(RuntimeError, match="XDM_GRID CUEST requires a Psi4 built with cuEST"):
+        psi4.energy("b3lyp-xdm", molecule=mol)
+
+
+def _xdm_on_grid(wfn, gpu, grid):
+    psi4.set_options({"XDM_GPU": gpu, "XDM_GRID": grid})
+    energy = wfn._disp_functor.compute_energy(wfn.molecule(), wfn)
+    return energy, psi4.core.array_variable("XDM ATOMIC PROPERTIES").np.copy()
+
+
+@pytest.mark.xdm
+@pytest.mark.parametrize("case", list(_xdm_gpu_cases))
+def test_xdm_gpu_matches_host_on_cuest_grid(case):
+    """On cuEST's points the device and host XDM paths still agree to rounding."""
+    if not psi4.addons("cuest"):
+        pytest.skip("XDM_GRID CUEST needs a cuEST build")
+    geom, basis = _xdm_gpu_cases[case]
+    mol = psi4.geometry(geom + "\nsymmetry c1\nno_com\nno_reorient")
+    psi4.set_options({
+        "basis": basis,
+        "reference": "uks" if case == "uks" else "rks",
+        "dft_radial_points": 75,
+        "dft_spherical_points": 302,
+        "XDM_DISPERSION_PARAMETERS": [0.6, 1.4],
+        "XDM_GPU": False,
+    })
+    _, wfn = psi4.energy("b3lyp-xdm", molecule=mol, return_wfn=True)
+
+    e_host, p_host = _xdm_on_grid(wfn, False, "CUEST")
+    e_gpu, p_gpu = _xdm_on_grid(wfn, True, "CUEST")
+    assert abs(e_gpu - e_host) < 1.0e-9
+    for col in (2, 3, 4, 5, 6, 7):
+        np.testing.assert_allclose(p_gpu[:, col], p_host[:, col], rtol=1.0e-8, atol=0.0)
+    np.testing.assert_array_equal(p_gpu[:, :2], p_host[:, :2])
+
+    # A different quadrature of the same density: close to the psi4 grid, not equal to it.
+    e_psi4, p_psi4 = _xdm_on_grid(wfn, False, "PSI4")
+    assert 0.0 < abs(e_host - e_psi4) < 1.0e-2 * abs(e_psi4)
+    np.testing.assert_allclose(p_host[:, 3], p_psi4[:, 3], rtol=1.0e-2)
+
+
+@pytest.mark.xdm
+def test_xdm_grid_auto_follows_grid_orientation():
+    """AUTO takes the cuEST grid under USE_CUEST + XDM_GPU unless the grid frame was requested."""
+    if not psi4.addons("cuest"):
+        pytest.skip("XDM_GRID CUEST needs a cuEST build")
+    geom, basis = _xdm_gpu_cases["rks"]
+    mol = psi4.geometry(geom + "\nsymmetry c1\nno_com\nno_reorient")
+    psi4.set_options({
+        "basis": basis,
+        "dft_radial_points": 75,
+        "dft_spherical_points": 302,
+        "XDM_DISPERSION_PARAMETERS": [0.6, 1.4],
+        "XDM_GPU": True,
+        "USE_CUEST": True,
+        "CUEST_MIXED_PRECISION": False,
+    })
+    _, wfn = psi4.energy("b3lyp-xdm", molecule=mol, return_wfn=True)
+    e_cuest, _ = _xdm_on_grid(wfn, True, "CUEST")
+    e_psi4, _ = _xdm_on_grid(wfn, True, "PSI4")
+    assert _xdm_on_grid(wfn, True, "AUTO")[0] == e_cuest
+    assert _xdm_on_grid(wfn, False, "AUTO")[0] == _xdm_on_grid(wfn, False, "PSI4")[0]
+    psi4.set_options({"DFT_GRID_ORIENTATION": "STANDARD"})
+    assert _xdm_on_grid(wfn, True, "AUTO")[0] == e_psi4
