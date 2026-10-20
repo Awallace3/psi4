@@ -38,7 +38,9 @@ def write_read_probe(root, nbytes):
 def main():
     job = int(os.environ["SLURM_JOB_ID"])
     assert job == 14214205
-    root = Path(f"/scratch/{job}/awallace43-fdds-perf-v1")
+    # /scratch/<job> is root-owned on this H200. Avoid the known fragile
+    # per-job /tmp bind mount; probe a fresh private persistent-local path.
+    root = Path(f"/var/tmp/awallace43-fdds-{job}-v2")
     # Create only this fresh, job-owned namespace; no adoption or cleanup of
     # existing scratch, including the failed network-scratch attempt.
     os.umask(0o077)

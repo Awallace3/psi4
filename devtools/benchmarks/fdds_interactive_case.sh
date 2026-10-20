@@ -36,7 +36,7 @@ export PYTHONPATH="$stage/build_fdds_validation/stage/lib"
 export PSIDATADIR="$stage/build_fdds_validation/stage/share/psi4"
 export TMPDIR="${FDDS_BENCH_SCRATCH:-/storage/scratch1/3/$USER/fdds-interactive/$SLURM_JOB_ID}"
 if [[ -n "${FDDS_BENCH_SCRATCH:-}" ]]; then
-    [[ "$TMPDIR" == "/scratch/$SLURM_JOB_ID/awallace43-fdds-perf-v1" ]]
+    [[ "$TMPDIR" == "/var/tmp/awallace43-fdds-$SLURM_JOB_ID-v2" ]]
     test -s "$TMPDIR/STORAGE_VERIFIED.json"
 fi
 mkdir -p "$TMPDIR" "$out"
