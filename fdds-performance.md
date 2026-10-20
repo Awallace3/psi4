@@ -279,5 +279,25 @@ old frozen source/build/run directories or other agents' jobs.
   Resolved cuEST0.2.2, cudart13.3.29 and cuBLAS/cuBLASLt13.6.0.2 match the
   recorded dependency provenance. **Zero GPU tests executed by this CPU build.**
   Evidence `build_fdds_cpu/performance-compile-14200049/remote-evidence/`.
-  Submission of one read-only-stage H200 recovery is in progress under
-  **b03a4f22f**; acceptance/job ID remains unconfirmed until its receipt.
+  One read-only-stage H200 recovery was submitted under **b03a4f22f**.
+
+### Verified-stage H200 recovery submission
+
+- **14210379**, accepted **gts-cs207/gpu-h200/inferno**, one H200/8 CPUs/
+  128GiB/eight hours. Effective QoS/account/resources verified in its own
+  scontrol record; initial state PENDING/Priority, StartTime unknown.
+  Fresh dry-run, live headroom/duplicate checks and stage/core/input checks
+  passed. Monthly available$29.38; worst-case charge$11.31. No other jobs
+  cancelled or modified. Dry-run estimate October31 is not an actual start.
+- Source/test-driver **fd2c09cd0cfbfce61a311508ba6c53039025179a**,
+  scientific8dc714, frozen harness
+  **c289c502d55627eabf99acdc127a28334416704d**. Reuses audited compile-v2 stage
+  **read-only**, expected core92e5bff6641dbb2f4790938e9886fc8038d6d03527eb26c6934ddeecabac5a7f.
+  Bytecode and pytest cache writes disabled; shared environment unchanged.
+- Run `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261020-optimization-02`.
+  Automatic watcher **bcde45e0e**,300-second state-change checks,14-day bound.
+  Require21 focused plus69 full passes (90 executions,69 unique,zero skips),
+  actual X/Y/frequency GPU routes and pinned import/library provenance before
+  timings. Then same-allocation8-thread96GiB CPU/GPU controls using identical
+  physical caches; first pairs precede repeat pairs for all systems.
+  **No new GPU numerical result or measured speedup yet.**

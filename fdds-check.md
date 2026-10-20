@@ -27,8 +27,12 @@ watcherbb6a86037, fresh own compile-v2 checkout. Read-only auditb12bed014
 verified the pinned import/core92e5bff6641d..., actual CUDA/cuEST libraries
 and BUILD_ONLY completion. This establishes compilation/import, **not** GPU
 numerical validation. Recovery harnessc289c502 uses that stage read-only
-with early per-system pair checkpoints. One H200 submission is in progress
-underb03a4f22f; actual acceptance/job ID awaits its receipt.
+with early per-system pair checkpoints. **14210379** accepted on
+**gts-cs207/gpu-h200/inferno**, one H200/8CPU/128GiB/eight hours, effective
+QoS verified. Watcher **bcde45e0e**. It requires21 focused plus69 full
+executions before matched timings; no GPU result for this candidate yet.
+Source/testfd2c09, harnessc289c502, read-only core92e5bff6641d...
+Run `.../runs/psi4-fdds/20261020-optimization-02`.
 
 ## Current result: isolated GPU validation PASSED
 
