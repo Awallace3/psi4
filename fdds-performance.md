@@ -40,7 +40,16 @@ old frozen source/build/run directories or other agents' jobs.
   75-minute bound and30-second kill grace. No GPU requested.
 - Small physical-water cache smoke test exposed a Python Matrix accessor
   mismatch before timing; fixed to use NumPy shape. Original failure/cache
-  preserved, replay retest pending. No production scientific changes yet.
+  preserved. Corrected real hybrid replay passed:56 AO/236 auxiliary,
+  occupied5/5, virtual51/51, **.689684 s FDDS**,22 pseudoinverses
+  **.231785 s**, zero GPU calls. Coupled/uncoupled energies
+  **-.0023791261270024056 / -.0031182443982617552 Eh**.
+  This is harness validation, not a representative speedup measurement.
+  No production scientific changes yet.
+- Prospective matched GPU profiling job uses fresh-process **CPU/GPU/GPU/CPU**
+  controls,8 threads/96 GiB on one H200 allocation; cached SCFs unchanged.
+  Its completion gate checks exact cache/source/core/options/host/thread/memory
+  identity, actual routing and1e-5 Eh errors. It is not submitted yet.
 - Source-based candidate bottlenecks (not yet benchmark conclusions): hybrid
   X/Y pairwise DGEMMs, QR,22 dense pseudoinverses, and density/ALDA setup.
   Choose the next seam from measured profiles; preserve exact equations and
