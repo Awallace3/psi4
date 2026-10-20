@@ -497,6 +497,19 @@ def run_pyscf(a, c, atom, r):
     mol.stdout.close()
 
 
+def psi4_direct_evidence(backend, text, timer_paths, df_scf_guess):
+    """Keep independent route predicates visible in failed worker records."""
+    return dict(
+        backend=backend == "cuESTDirectJK",
+        direct_header="cuESTDirectJK: GPU-Accelerated Four-Center Direct" in text,
+        direct_timer=any("cuEST Direct J/K" in name for name in timer_paths),
+        no_df_header="cuESTJK: GPU-Accelerated" not in text,
+        # core.get_option exports boolean options as native Python integers.
+        # Reject missing/unknown values rather than treating arbitrary falsy
+        # objects (None, "", etc.) as proof that DF guess was disabled.
+        df_guess_disabled=type(df_scf_guess) in (bool, int) and df_scf_guess == 0)
+
+
 def run_psi4(a, c, atom, r):
     import_start = time.perf_counter()
     import psi4
@@ -560,11 +573,10 @@ def run_psi4(a, c, atom, r):
     names = ["/".join(t["timer_path"]) for t in r["timer_records"].values()]
     if direct:
         r["jk_backend"] = wfn.jk().name()
-        r["direct_verified"] = (r["jk_backend"] == "cuESTDirectJK" and
-            "cuESTDirectJK: GPU-Accelerated Four-Center Direct" in text and
-            any("cuEST Direct J/K" in name for name in names) and
-            "cuESTJK: GPU-Accelerated" not in text and
-            psi4.core.get_option("SCF", "DF_SCF_GUESS") is False)
+        r["df_scf_guess_effective"] = psi4.core.get_option("SCF", "DF_SCF_GUESS")
+        r["direct_evidence"] = psi4_direct_evidence(
+            r["jk_backend"], text, names, r["df_scf_guess_effective"])
+        r["direct_verified"] = all(r["direct_evidence"].values())
         assert r["direct_verified"], "cuEST four-center direct JK not verified"
     else:
         assert "cuESTJK: GPU-Accelerated" in text, "cuEST JK not observed"

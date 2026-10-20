@@ -229,6 +229,25 @@ class CompareTests(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     m.cuda_identity(runtime)
 
+    def test_psi4_direct_guess_disabled_accepts_native_integer_boolean(self):
+        # core.cc py_psi_get_option exports boolean via py::cast(to_integer()).
+        for value in (False, 0):
+            evidence = m.psi4_direct_evidence(
+                "cuESTDirectJK", "cuESTDirectJK: GPU-Accelerated Four-Center Direct",
+                ["SCF/HF/JK/cuEST Direct J/K"], value)
+            self.assertTrue(all(evidence.values()), (value, evidence))
+
+    def test_psi4_direct_proof_rejects_enabled_unknown_and_missing_routes(self):
+        backend = "cuESTDirectJK"
+        header = "cuESTDirectJK: GPU-Accelerated Four-Center Direct"
+        timers = ["SCF/HF/JK/cuEST Direct J/K"]
+        for value in (True, 1, None, "", "FALSE", "0", 0.0, [], {}):
+            self.assertFalse(all(m.psi4_direct_evidence(backend, header, timers, value).values()))
+        for args in (("DirectJK", header, timers), (backend, "", timers),
+                     (backend, header, []),
+                     (backend, header + " cuESTJK: GPU-Accelerated", timers)):
+            self.assertFalse(all(m.psi4_direct_evidence(*args, 0).values()))
+
     def test_observer_entry_interrupt_reaps_spawned_supervisor(self):
         procs = []
         popen = subprocess.Popen
