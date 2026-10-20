@@ -511,3 +511,15 @@ old frozen source/build/run directories or other agents' jobs.
   stack/checkpoint diagnostic window was assigned (360s outer,180s child,
   source6f652942b9, existing independent env). No FDDS compute/timing step
   overlaps; diagnostic success is not a matched scientific comparison.
+- Failed protein artifacts are now copied locally under
+  `build_fdds_cpu/performance-gpu-14214205/failed-protein-network-scratch/`
+  (preservation taskba2286344, exit0). Later atomic CPU result became visible:
+  `ok=false`,945.698048 seconds of **failed partial work**, not an accepted
+  timing; GPU result remains absent. Exact core/cache/library provenance and
+  raw DFHelper error/cleanup records are retained.
+- Observerbd4ae4b75 alerted at21:02:53Z on a free lease after this failure.
+  Owner assigned the already-prepared short diagnostic, which launched once
+  asb6e7a9abd; new FDDS steps await its terminal and cleanup. Observer
+  **b554527c9** is rearmed with a300-second handoff delay then300-second
+  checks; official allocation watcher remains unchanged. No duplicate
+  acquisition, overlapping timings or job modification occurred.
