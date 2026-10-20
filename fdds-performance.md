@@ -608,3 +608,13 @@ old frozen source/build/run directories or other agents' jobs.
   Budget proposal:9000s bounded step, only after current repeat terminal,
   independently audited cleanup and≥9180s fresh allocation time remaining.
   Git-only stagingb48d3acc1 does not launch allocation-side build/compute.
+- Candidate native gate **PASS**:171 tests, zero failures/errors/skips,
+ 175.704s; own CPU-only core
+  `c08b6341ce7b29099225fc83fde6dec336c6bc3e38caba0ca5840b7c6722d23f`.
+  XML/provenance copied to`build_fdds_cpu/metric-fold-ada1a1d212/native/`.
+  Static reviewd463 found no confirmed new defect, but did not execute GPU
+  code. Fault-injection/capacity-exhaustion branches remain untested; the
+  small-budget real-FDDS label does not establish production partial-tail
+  routing. Backend tests explicitly exercise changing3/1/3/0 blocks.
+  Git-only source/controller staging completed with exact pristine pins;
+  accepted baseline stage and ongoing repeat campaign stay untouched.

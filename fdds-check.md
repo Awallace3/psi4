@@ -26,6 +26,25 @@ Five-minute monitorb09c47ede and the official allocation watcher remain active.
 No merge, new allocation, overlapping timing, settings relaxation or shared
 environment mutation.
 
+## Next metric-fold candidate — not yet GPU accepted
+
+Frozen scientific/testpin`ada1a1d2128d6d6f3f5b89952b08f6ffd4ca5917`,
+controller`60ee73db408c58be208367abef7bc9a894f6d860`. Static review found
+no confirmed new defect. CPU-only build and **171 tests passed**, zero
+failures/errors/skips,175.704s, core
+`c08b6341ce7b29099225fc83fde6dec336c6bc3e38caba0ca5840b7c6722d23f`.
+Local XML/provenance: `build_fdds_cpu/metric-fold-ada1a1d212/native/`.
+Actual candidate GPU compilation,81-test numerical/route gate and timing
+are still pending; old fd2/core92e5 baseline remains frozen.
+
+The new seam is FDDS-only metric-fold FP64 multiplication with one resident
+prepared metric per transform and reusable device blocks. Generic DFHelper
+defaults, host budgets, powered metrics, threshold/rank/pinv policies and
+X/Y algorithms are unchanged. Twelve added GPU regressions cover real
+FDDS endpoints/controls and four nonsymmetric/changing-block layouts.
+Runtime fault injection, forced capacity exhaustion and proof of actual
+production partial-tail routing remain gaps; static checks are not tests.
+
 ## Performance iteration in progress
 
 The validated result below applies to scientific9d4/test-driver3b21, **not**
