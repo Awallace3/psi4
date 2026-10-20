@@ -180,3 +180,18 @@ def test_protected_destination_rejected_before_write(tmp_path, nested):
     with pytest.raises(RuntimeError):
         module.provision(source, destination, lock, UncompressedFixture(), vendor)
     assert not destination.exists()
+
+
+def test_real_streaming_zstd_frame_window_units():
+    import zstandard
+    parameters = zstandard.ZstdCompressionParameters.from_level(1, window_log=23)
+    compressor = zstandard.ZstdCompressor(compression_params=parameters).compressobj()
+    frame = compressor.compress(b"x" * 8192) + compressor.flush()
+    assert zstandard.get_frame_parameters(frame).window_size == 8 * 1024**2
+    # Reproduce the consumed remote attempt's guard bug with a real frame;
+    # the earlier uncompressed archive injection could not detect it.
+    with pytest.raises(zstandard.ZstdError, match="memory"):
+        with zstandard.ZstdDecompressor(max_window_size=128 * 1024).stream_reader(frame) as stream:
+            stream.read()
+    with module.decoder().stream_reader(frame) as stream:
+        assert stream.read() == b"x" * 8192

@@ -4,6 +4,12 @@ This is the already-cleared ONE input preparation attempt, not CPU submission
 or GPU readiness. It does not replace approved CPU recipe
 `89b6160126d876b2ad649e6cf2a22f01f4b300f7`.
 
+**That clearance is now consumed:** tool8b34329bee failed before header
+materialization at its zstd window guard. Preserve `...inputs-8b34329bee-01`.
+The corrected window constant and real compressed-frame regression are
+LOCAL preparation only. Do not run the command below again without fresh
+explicit authorization and another absent prefix.
+
 The separate input-tool commit must be immutable/pushed and staged by Git in a
 fresh private source root. Run from that exact source checkout. The destination
 must be absent beneath an owned, non-group/world-writable parent.
@@ -48,3 +54,21 @@ Return both manifest hashes, prefix/receipt, closure and exact lock digest
 to parent for explicit **INPUT-READINESS CLEARANCE**. Conditional CPU resources
 remain unconsumed until that clearance and subsequent exact source/route/
 headroom/storage/quota/no-duplicate guards. No independent GPU request.
+
+## Bounded alternative input-preparation proposal — NOT approved/submitted
+
+Exactly ONE CPU-only input-prep job:1node/1task/1CPU/2G/00:10:00,
+free embers/gts-cs207-chemx, cpu-small subject exact-route test-only,
+explicit no-requeue/no retry. Worst case1/6CPU-hour,1/3GiB-hour,zero
+embers charge. New source/input/run/scratch roots; no reuse or modification
+of failed sources/prefixes. Scope only the two exact developer archives,
+private input tree, complete SDK metadata hashes/ELF/closure and explicit-lock
+proof. No solve/E2/Psi4/scientific build/SCF/SAPT/device work.
+
+Archive download82569bytes, newly written input data<=512MiB; corrected
+decoder window128MiB and process address cap1GiB. Retain the existing
+110s payload/5s kill bound (job10min includes bootstrap/evidence capture),
+preserving any failure. This is separate from and does not consume/expand
+the conditional8CPU/48G/2h CPU89 build approval. It requires fresh explicit
+authorization, source pin and exact-route/storage/headroom/no-duplicate
+checks. No new resource request has been submitted.

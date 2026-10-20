@@ -1787,3 +1787,59 @@ sources unchanged. Input helper SHA256
 `f47c959fa2bc0f50b3f4ba629cb51602c2ce548f681bb0d2bc89dcff0b036a00`.
 Next execute the already-cleared single bounded attempt from its pushed
 immutable tool pin; this is not an additional CPU approval request.
+
+Tool pin`8b34329bee12f30fd5365bdb4666142f811ccaa4` pushed and verified by
+`git ls-remote` (b04392027). ONE authorized input attempt b1e4d02d6 launched:
+fresh0700 root`P/gits/psi4.disp0-sdk-inputs-8b34329bee-01`, Git-only shared
+read-only object origin plus exact pinned fetch/sparse checkout; destination
+`root/private-inputs`. The entire staging+provision command has outer110s
+timeout/5s kill,1GiB address ceiling and one CPU affinity; no retry. Python-B
+prevents import cache writes outside the new prefix. This launch record
+does not assert successful provisioning/input readiness/build submission.
+
+**Attempt b1e4d02d6 FAILED**, exit1 after3s aggregate. New root/source and
+partial private-inputs prefix preserved; no retry. Staged exact tool pin8b34329bee
+before execution, affinity CPU0/1GiB address bound/outer110s+5s guard.
+First public cusparse developer archive54443bytes passed exact size/SHA
+checks, then zstandard0.19.0 rejected its compressed frame with
+`Frame requires too much memory for decoding` at configured
+`ZstdDecompressor(max_window_size=128*1024)`. Decoder-window limit/units and
+frame requirement need local diagnosis; this does NOT demonstrate1GiB actual
+memory exhaustion. Unit fixtures used uncompressed stream injection and
+therefore did not test this real decoder behavior.
+
+Failure preceded all header copying/extraction, developer-link creation,
+SDK inventory/closure or manifest/receipt writes. Second archive was not
+requested. Git staging and fresh directories are the only persisted writes;
+downloaded first archive was validated in memory before the failing decoder.
+No complete SDK manifest exists, no INPUT-READINESS clearance, no CPU/GPU job
+or scientific/diagnostic compilation. Parent received exact failure immediately.
+The one input-provision attempt is consumed; any corrected remote operation
+or bounded input-prep CPU work needs separate explicit authorization.
+Conditional CPU89 approval remains unconsumed/NOT submission GO.
+Evidence `.pi/tasks/01a154d8-a459-768d-83bd-c57c6a5dc42c-4065461/b1e4d02d6.output`.
+
+LOCAL-only diagnosis (zstandard0.25.0, distinct from remote0.19.0):
+an actual streaming frame with8MiB advertised window reproduces the same
+error with raw max_window_size131072;134217728 succeeds on8192payload bytes.
+The prior constant was a128KiB bound, not128MiB. Corrected local helper
+names128MiB explicitly and adds a real streaming-frame regression; no remote
+retry or fresh archive download was made. Old pinned code/source remains
+unchanged. Compressed frame tests are preparation evidence, not validation
+of actual remote package contents or a complete input pass.
+
+Sent parent bounded alternative proposal (NOT approved/submitted): ONE
+input-only1node/1task/1CPU/2G/10min freeembers/chemx job, cpu-small subject
+exact-route, no-requeue/no retry,1/6CPUh/1/3GiB-hour/$0 maximum. Only the same
+two exact archives/private input manifests/ELF closure/lock proof; no solve/
+E2/Psi4/scientific build/SCF/SAPT/device. Keep1GiB address/512MiBnewwrite/
+110s payload guards, fresh roots, source/storage/headroom/duplicate checks.
+This is separate from conditional unconsumed CPU89 resources; no submission
+GO exists for either. Shared FDDS GPU hold and no512GiB proteins unchanged.
+
+Local corrected input guard suite bd5bff370: **17passed1.39s**, no
+warnings/skips, including real compressed streaming-frame window regression.
+JUnit`build_disp0_cpu/reference-check-nZhWZLxV/results.xml`.
+This does not rerun remote0.19 or real developer archives. No corrected
+provisioning/CPU preparation job was executed. Preserve the consumed failed
+attempt as an explicit operational milestone; await fresh authorization.

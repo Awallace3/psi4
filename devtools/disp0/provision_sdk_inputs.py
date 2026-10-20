@@ -30,6 +30,14 @@ LOCK_SHA = "3f9a508fd601306f548a9088f5cd304367a5fde3988e8bbd4fe00d9e6efb0205"
 MAX_WRITE = 512 * 1024**2
 MAX_DOWNLOAD = 128 * 1024**2
 MAX_MEMBER = 32 * 1024**2
+MAX_WINDOW_BYTES = 128 * 1024**2
+
+
+def decoder():
+    import zstandard
+    # This binding passes the raw integer to ZSTD_DCtx_setMaxWindowSize:
+    # bytes, not KiB. A real streaming-frame regression covers this boundary.
+    return zstandard.ZstdDecompressor(max_window_size=MAX_WINDOW_BYTES)
 
 
 def package_url(item):
@@ -233,6 +241,7 @@ def provision(source, destination, lock, decompressor, vendor_environment=None):
         "vendor_environment": str(vendor_environment), "limits": {
             "wall_seconds": 110, "outer_kill_grace_seconds": 5, "threads": 1,
             "address_space_bytes": 1024**3, "download_bytes": MAX_DOWNLOAD, "write_bytes": MAX_WRITE},
+        "decoder_window_bound_bytes": MAX_WINDOW_BYTES,
         "developer_links": developer_links,  # input lib/, separate from lib64 SDK inventory
         "compiler_chain": compiler_chain,
         "compiler_discovery_ready": False,
@@ -265,9 +274,8 @@ def main():
     # External timeout --kill-after=5s 110s is additionally mandatory.
     signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError("110s input deadline")))
     signal.alarm(110)
-    import zstandard
     result = provision(args.source, args.destination, args.lock,
-                       zstandard.ZstdDecompressor(max_window_size=128 * 1024),
+                       decoder(),
                        args.vendor_environment.resolve(strict=True))
     print(json.dumps(result, sort_keys=True))
 
