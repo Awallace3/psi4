@@ -532,3 +532,16 @@ old frozen source/build/run directories or other agents' jobs.
   bounded, serialized read-only path discovery is checking writable
   scheduler-private scratch before any replacement probe; prior artifacts
   are untouched.
+- Read-only path discovery/cleanup passed: `/scratch` is localXFS, but both
+  `/scratch` and root-owned0700 `/scratch/14214205` are unwritable; no writable
+  `/localscratch` or `/local_scratch` exists. Scheduler `TMPDIR=/tmp` uses the
+  known fragile per-job mount, so it is not selected.
+- Controller-only recovery pin
+  **b1a6f24f43c9846feb0608ff4969a1f39870345f** proposes a fresh0700
+  `/var/tmp/awallace43-fdds-14214205-v2`, subject to the same local-filesystem,
+ 160GiB free-capacity and512MiB fsync/SHA readback gate. Task **b16ccf677**
+  Git-stages a new v3 checkout; only after probe/cleanup and remaining-time
+  checks pass does it launch the fresh exclusive proteinCPU/GPU pair in
+  `matched-14214205-var-local-v2`. No validated replacement-disk claim yet.
+  Frozen scientific core, settings and caches remain identical; no new
+  allocation, environment mutation, permission change or old-path adoption.
