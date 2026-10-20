@@ -2179,3 +2179,26 @@ evidence and TURNCOMPLETE toowner+parent and STOPPED. No sourcewrites/
 quota-refresh/sbatch/test-only/provision/build/GPU or ownerallocation query/
 signals/jobchanges in this reconciliation. Original records untouched.
 CPU89/GPUnoGO unchanged.
+
+Parent authorized LOCAL original script/session/tool chronology analysis ONLY;
+all remote actions remainSTOPPED, UNKNOWN/approvalRESERVED cannot be relaxed.
+No original command executed/replayed. Evidence report:
+`devtools/disp0/local_submission_chronology.md`.
+
+Original session JSONL lines4185–4198 show exec-call journal13:41:56.699Z;
+second write request13:43:47.321Z,110.622s later/10.622s after nominal100s
+deadline. Second native function-call create_time13:43:47.146772Z is metadata,
+not a transport ACK. Tool result13:43:47.323Z reports exit124 in0.000128128s,
+only timeout text/no phase2 echo/receipt. Requested2618UTF8bytes SHA
+33ed577ce46b2034979c2533a77fde79427fbef92572336a8a956e2f48dee4bf;
+no byte-write counter/PTY/SSH delivery ACK appears in inspected result
+details. Earlier assistant message timestamp is NOT delivery evidence.
+
+Original phase2 requires review file(line1), invocation-directory(line2)
+before actual sbatch(line4); response/jobID fsync precedes controller(line26).
+However marker/review writes lack explicit pre-RPC fsync. Missing markers
+therefore are supporting evidence, not a certified durable negative proof.
+Chronology is consistent with a late call to an exited session, but does not
+independently certify zero delivered bytes. No predeadline phase2 dispatch
+is recorded. UNKNOWN/RESERVED/NEVERREPLAY retained; no remote queries,
+additional turns, resource approval or submission inferred.
