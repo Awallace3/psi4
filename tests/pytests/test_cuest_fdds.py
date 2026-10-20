@@ -218,6 +218,45 @@ def test_fdds_gpu_exchange_preprocessing(fdds_factory, occupied, memory_bytes):
     psi4.set_options({"use_cuest": False})
 
 
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+@pytest.mark.parametrize("hybrid", [False, True])
+@pytest.mark.parametrize("occupied", [(3, 3), (2, 3)], ids=["equal", "unequal"])
+@pytest.mark.parametrize("memory_bytes", [None, 12800], ids=["whole", "blocked"])
+def test_fdds_gpu_metric_fold(fdds_factory, hybrid, occupied, memory_bytes):
+    """Compare actual FDDS pqQ and Qpq metric folds, including opt-out controls."""
+    if memory_bytes is not None:
+        psi4.core.set_memory_bytes(memory_bytes)
+    obj = fdds_factory(hybrid, occupied=occupied)
+    q = obj.metric().np.shape[0]
+    shapes = {}
+    for monomer, (o, v) in fdds_factory.dimensions.items():
+        a, r = ("a", "r") if monomer == "A" else ("b", "s")
+        shapes[a + r + "Q"] = (o, v, q)
+        if hybrid:
+            shapes[r + a + "Q"] = (v, o, q)
+            shapes["Q" + a + r + "Q"] = (o, v, q)
+            shapes[a + a + "R"] = (o, o, q)
+            shapes[a + r + "R"] = (o, v, q)
+            shapes[r + r + "R"] = (v, v, q)
+    refs = {name: obj.get_tensor_pqQ(name, shape).np.copy()
+            for name, shape in shapes.items()}
+    del obj
+    for enabled, threshold in ((False, 0), (True, 10**9), (True, 0)):
+        psi4.set_options({"use_cuest": enabled, "cuest_gemm_min_dim": threshold})
+        psi4.core.clean_timers()
+        obj = fdds_factory(hybrid, occupied=occupied)
+        calls = sum(v["n_calls"] for k, v in psi4.core.get_timer_dict().items()
+                    if "cuEST FDDS: metric fold" in k)
+        assert (calls > 0) == (enabled and threshold == 0)
+        for name, shape in shapes.items():
+            got = obj.get_tensor_pqQ(name, shape).np
+            np.testing.assert_allclose(got, refs[name], rtol=0, atol=2.e-12)
+        del obj
+    psi4.set_options({"use_cuest": False})
+
+
 @pytest.mark.parametrize("hybrid", [False, True])
 @pytest.mark.parametrize("occupied", [(3, 3), (2, 3)], ids=["equal", "unequal"])
 def test_fdds_native_contractions(fdds_factory, hybrid, occupied):

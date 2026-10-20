@@ -161,7 +161,7 @@ if [[ "$compile_only" == 1 ]]; then
 fi
 test_selection=()
 if [[ "${CUEST_FDDS_FOCUSED:-0}" == 1 ]]; then
-    test_selection=(-k 'test_fdds_contribution_fixture_budget or test_fdds_gpu_contributions or test_fdds_native_exchange_preprocessing or test_fdds_gpu_exchange_preprocessing')
+    test_selection=(-k 'test_fdds_contribution_fixture_budget or test_fdds_gpu_contributions or test_fdds_native_exchange_preprocessing or test_fdds_gpu_exchange_preprocessing or test_fdds_gpu_metric_fold')
     # Preserve both focused outcomes even if the contribution process fails.
     set +e
 fi
@@ -196,7 +196,7 @@ focused = os.environ.get("CUEST_FDDS_FOCUSED", "0") == "1"
 if focused:
     assert int(os.environ["CUEST_FDDS_CONTRIBUTION_STATUS"]) == 0, "contribution subprocess failed"
     assert int(os.environ["CUEST_FDDS_GDB_STATUS"]) == 0, "GDB subprocess failed or timed out"
-assert int(suite.get("tests")) == (20 if focused else 69), counts
+assert int(suite.get("tests")) == (28 if focused else 77), counts
 assert all(int(suite.get(k, "0")) == 0 for k in ("errors", "failures", "skipped")), counts
 if focused:
     log = Path("sapt-gdb.log").read_text()
@@ -207,7 +207,7 @@ if focused:
     assert int(sapt.get("tests")) == 1, sapt_counts
     assert all(int(sapt.get(k, "0")) == 0 for k in ("errors", "failures", "skipped")), sapt_counts
     counts = {"mode": "focused_only_not_full_suite", "contribution_tests": counts,
-              "sapt_gpu_test": sapt_counts, "executed_tests": 21}
+              "sapt_gpu_test": sapt_counts, "executed_tests": 29}
 Path("VERIFIED.json").write_text(json.dumps(counts, indent=2) + "\n")
 print(json.dumps(counts, indent=2))
 PY
@@ -234,11 +234,11 @@ assert not re.search(r"received signal|hit Breakpoint|^Breakpoint \d+,", log, re
 assert "exited normally" in log, "full suite inferior did not exit normally"
 suite = ElementTree.parse("full-fdds.xml").find("testsuite")
 counts = dict(suite.attrib)
-assert int(suite.get("tests")) == 69, counts
+assert int(suite.get("tests")) == 77, counts
 assert all(int(suite.get(k, "0")) == 0 for k in ("errors", "failures", "skipped")), counts
 focused = json.loads(Path("FOCUSED_VERIFIED.json").read_text())
 result = {"mode": "focused_then_full", "focused": focused, "full": counts,
-          "executed_tests_including_repeats": 90, "unique_full_suite_tests": 69}
+          "executed_tests_including_repeats": 106, "unique_full_suite_tests": 77}
 Path("VERIFIED.json").write_text(json.dumps(result, indent=2) + "\n")
 print(json.dumps(result, indent=2))
 PY

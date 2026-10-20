@@ -572,3 +572,19 @@ old frozen source/build/run directories or other agents' jobs.
   peptide/nanotube first pairs, then GPU1/CPU1 repeats for all three systems.
   Each step is exclusive, bounded, refuses insufficient allocation time,
   and requires preceding cleanup. No cross-backend/cross-node ratio.
+- Owner repeat snapshotb23e2cf41: allocationRUNNING5:22:14 remaining,
+  `fdds-protein83-var-local-repeat` active, no quarantine. Accepted localXFS
+  peptideCPU16.144716/16.167149s vsGPU13.763155/13.792320s, median ratio
+  **1.172611x**; coupled/uncoupled maximum errors3.456795e-10/7.365964e-12Eh.
+  NanotubeCPU222.794186/222.049114s vsGPU121.374003/121.205100s,
+  **1.833807x**, errors7.691220e-8/2.150355e-10Eh. Both have two accepted
+  repeats per arm with verified markers. ProteinGPU1 completed647.064827s;
+  CPU1 still active, so no final two-per-arm protein aggregate yet.
+- User/parent instructed continued optimization: next candidate is a narrow,
+  FDDS-opt-in persistent GPU metric fold. The measured DFH nested dense
+  metric-contraction timer is84.141s **inside**133.411s metric workflow,
+  itself inside207.206s DF transform/315.709s object; do not sum nested times.
+  New regression preparation covers actualpqQ/Qpq endpoints, unequal
+  dimensions, low-budget blocking and disabled/threshold controls. Existing
+  pseudoinverse semantics and now-fast X/Y remain unchanged. No allocation
+  build or new compute overlaps the ongoing repeat timing.
