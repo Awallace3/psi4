@@ -2067,3 +2067,62 @@ device/shared step. Current local recipe/38guards/BOTH real-archive proof
 remain unchanged; preserve failed14215786 and all timeout evidence.
 Resume only after remote access recovers and fresh bounded state/preflight
 proofs pass, still pinned3bb regardless of later progress-only commits.
+
+Owner later reported shared14214205 stateUNKNOWN after its bounded status
+check timed out; past queued receipt is not grant/failure/release evidence.
+All GPU windows HOLD; no probing/cancellation/duplicate/mux reset on its
+behalf. Our input pause remained unchanged.
+
+User then reported connectivity-only defaultphoenix read-only login PASS
+2.28s at2026-10-20 09:26:02Eastern. This proves neither job/SDK/GPU state nor
+source-root presence. FDDS owner reconciling its actual allocation separately.
+To avoid simultaneous probes, requested one bounded INPUT-only fresh
+source/root/quota/headroom/route/duplicate preflight window after owner
+reconciliation. No remote command/submission run from this report alone.
+3bb input-job approval remains unconsumed/unsubmitted; GPU HOLD/CPU89noGO.
+
+Owner granted a single READ-ONLY CPU metadata turn after its healthy snapshot.
+Taskbe3b362fd captured2026-10-20 09:29:55Eastern onlogin-phoenix-gnr-3:
+own planned3bb-01root EXISTS0700/uid3170273 but is NOT a complete Git checkout;
+exact-pin/pristine source gateFAILED. No matching own input job, embers21/50;
+project6273.3/8192GB andscratch3734.1/15360GB/209068of1Minodes. Current-login-node
+own-root process references NONE, not a global quiescence claim. Resource-only
+test-only completion marker exists but routing stderr was not retained, so
+exact pinned-script route proof is NOT claimed.
+
+An intervening HOLD superseded the earlier NOW signal; stopped only our local
+read-only task, no Slurm job/controller/session changes. The captured output
+already contains READONLY_CPU_INPUT_TURN_COMPLETE_NO_SUBMISSION; did not
+duplicate probes on the renewed NOW signal. Preserved source partialroot,
+no writes/provisioning/realsbatch or approval consumption. Snapshot stdout
+SHA`90613b4132d0b218d79c36927e121d2e558f7216b180ca8a5e3be93cd4b07ac7`.
+Owner and parent received STOPPED/source-gate failure.
+
+Owner acknowledges turn complete; need for separately authorized bounded
+Git-only staging into NEW root relayed to parent. Prior metadata NOW is NOT
+write/submit approval. Remain offline/no re-probes pending that authorization.
+Shared14214205 last verified PENDING/manifestpending, no GPU window held for
+disp0. Exact-one3bb inputCPU approval unchanged/unconsumed; CPU89/GPUnoGO.
+
+Parent separately authorized ONE Git-only staging into NEWabsent-02 root,
+<=110s configuredSSH/Git, no retry/SDK/build/sbatch/test-only/GPU query;
+owner assigned CPU_GIT_STAGE=DISP0_GIT_ONLY_02 NOW as the SAME one turn.
+Executed exactlyONCE, taskb30423840 **exit0/elapsed1s**,
+2026-10-20 09:35:50Eastern onlogin-phoenix-gnr-3.
+NEW private0700 uid3170273 source:
+`P/gits/psi4.disp0-input-cpu-3bb0c7d1d2-02/source`.
+ExactHEAD`3bb0c7d1d2ce21412d883ff9041c96900ef16277`, pristine worktree/index,
+helperSHAc8c1b65fc9764212b524fdcc2479d171b9ec4cd3a4950be7d7b3390392b99d20,
+batch0d46aef917ea16410e0638e125fe580d46572504956e9dfc167d207c5396fc30,
+payload652d9142604b820ce72dbba3609ab35a456a5eba0cc4437a91d3011af43165ae.
+Gitstdout/stderr retained in
+`.pi/tasks/01a154d8-a459-768d-83bd-c57c6a5dc42c-4065461/b30423840.output`.
+Oldpartial-01 untouched/notadopted/reset/copied. No SDK/env/provision/
+install/build/sbatch/test-only/GPUquery/lockborrow or duplicate turn.
+
+Reported TURNCOMPLETE toowner+parent; owner acknowledged turn CLOSED.
+STOPPED, no additional probe/submission/GPU window authorized by that ack.
+Exactly-one approved3bb inputCPU job remains UNCONSUMED/UNSUBMITTED;
+source proof nowPASS, remaining fresh exact-route(stderr retained)/quota/
+headroom/duplicate gates still needed before the existing CPU approval can
+execute. CPU89 build and all GPU readiness remain NO GO.
