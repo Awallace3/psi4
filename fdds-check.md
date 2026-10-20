@@ -44,7 +44,10 @@ as queued/waiting, controller9a026ca149, run
 `.../runs/psi4-cuest-shared/20261020-interactive-02`. No grant/full UUID/
 allocated manifest yet. Disp0 reported separate SSH access timeouts; this
 does not prove this request failed or was released. One bounded owner-side
-state query is pending; absent proof, remain UNKNOWN/paused with no duplicate.
+state query **bb1721fec timed out after110s (exit124)**. Current allocation
+state is **UNKNOWN; all GPU steps paused**, no duplicate or further SSH retry.
+Existing acquisition client is untouched; wait for its automatic notification,
+then re-establish actual manifest/state/cleanup proof before any launch.
 
 ## Current result: isolated GPU validation PASSED
 

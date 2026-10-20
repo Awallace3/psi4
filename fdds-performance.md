@@ -348,3 +348,9 @@ old frozen source/build/run directories or other agents' jobs.
   If unavailable, classify current state UNKNOWN and pause all participants;
   no duplicate acquisitions, blind release assumptions, shared-mux resets or
   further retries. Grant task still provides automatic completion handling.
+- Owner check **bb1721fec failed exit124**, `phx: timed out after110s on
+  phoenix`. Current14214205 allocation state is **UNKNOWN**, not released,
+  failed or granted by inference. All agents notified PAUSED/HOLD. No further
+  remote retries, new acquisitions, shared-mux resets or job changes.
+  Acquisition clientb022d3628 remains untouched for automatic notification.
+  No GPU test or timing step has been launched in this shared request.
