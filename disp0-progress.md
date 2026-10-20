@@ -690,3 +690,61 @@ parser preparation only, not proof that a fresh Phoenix solve/build or CUDA
 runtime will pass. Another CPU build requires fresh explicit approval;
 the already authorized GPU test stays blocked until matching preparation
 passes. No automatic retry and no broader F-SAPT transition.
+
+## Approved single additional CPU preparation build
+
+User explicitly approved exactly one additional CPU-only build at
+`587e172a33afaadb00eb7f574a5089533f7fc755`, 8 CPUs/48G/2h,
+free embers/gts-cs207-chemx, cpu-small subject fresh exact-route test-only and
+live headroom, explicit no-requeue, fresh isolated source/environment/build/
+run/persistent scratch. Failed14182584/14193865 remain untouched.
+Push b70e9aa83 completed successfully to origin/saptdft_cuest_disp0.
+Source staging b333efc2f uses a new independent filtered Git clone and exact
+detached clean identity; it does not advance a shared checkout or queued pin.
+Live headroom inspection b03e6706f launched. Approval has not yet been
+consumed by an actual submission. This is CPU preparation only; GPU
+authorization remains conditional on matching stage/runtime readiness.
+
+Source staging b333efc2f completed: new independent
+`P/gits/psi4.saptdft-cuest-disp0-build-587e172a33`, exact587e172a33 full pin,
+detached and clean; no shared checkout advanced. Headroom b03e6706f:
+27/50 embers slots. Fresh exact-route/no-duplicate inspection ba11331a6
+is pending; no actual submission yet. Clang/Apiary resource and linked LLVM/
+libclang provenance must be retained from the newly solved job environment,
+not inferred from the local red/green probe.
+
+Exact-route preflight ba11331a6 passed at2026-10-20T00:14:37Z: source
+identity/cleanliness verified, 27/50 embers slots and zero active dispersion
+build duplicates. `sbatch --test-only` pseudo-ID14196325 selected
+**cpu-small**, 8 processors; its predicted start is not an accepted job
+or scheduling guarantee. Invocation explicitly requests account
+gts-cs207-chemx, QoSembers, 8CPU/48G/2h and no-requeue, identical to the
+actual single-attempt submission launched as b7a547b83.
+Actual accepted ID/effective route are pending that receipt. The receipt
+is created exclusively before sbatch; an ambiguous failure must be inspected,
+not automatically resubmitted.
+
+### Accepted additional CPU build receipt
+
+* Exactly one actual submission accepted: **14196330** (b7a547b83, exit0).
+* Source pin: **587e172a33afaadb00eb7f574a5089533f7fc755**, detached clean
+  independent clone `P/gits/psi4.saptdft-cuest-disp0-build-587e172a33`.
+* Effective controller route: **gts-cs207-chemx / cpu-small / embers**,
+  8CPUs/48G/02:00:00, **Requeue=0**, Restarts=0, no GPU TRES.
+  Initially PENDING(Priority); no actual start-time guarantee.
+* Fresh job-owned environment/source/build/install/cache run root:
+  `P/runs/saptdft-cuest-disp0/build-587e172a33afaadb00eb7f574a5089533f7fc755-14196330`.
+  Persistent scratch:
+  `/storage/scratch1/3/awallace43/saptdft-cuest-disp0/14196330`.
+* Logs: `P/runs/saptdft-cuest-disp0/logs/disp0-e2-build-587e-14196330.{out,err}`.
+  Terminal artifact `logs/14196330.status`; submission receipt
+  `logs/submission-587e172a33.receipt`; preflight receipt
+  `logs/preflight-587e172a33.txt`.
+* Official state-change monitor b7e91b661 is running. This approval is
+  consumed; no retry or fourth CPU submission is authorized.
+  Failed14182584/14193865 environments and evidence remain unchanged.
+
+Acceptance is not successful preparation. At terminal state, require actual
+clang/libclang/LLVM/resource paths and versions, full explicit environment,
+header/ELF/import/API/physical checks and a coherent matching stage before
+the separately authorized GPU gate. No GPU submission or F-SAPT expansion.
