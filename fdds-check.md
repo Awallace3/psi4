@@ -1,5 +1,96 @@
 # FDDS cuEST implementation handoff
 
+## Current result: isolated GPU validation PASSED
+
+- **Implemented and validated; no merge back.** Real FP64 occupied-block FDDS
+  contractions use persistent device sums on the shared cuEST stream, with
+  existing opt-in/threshold routing, native fallbacks, checked memory budgets,
+  cleanup and runtime-error propagation. Equations and QCVariables unchanged.
+- **Job14184910**, explicit free **embers**, H200/4 CPUs/16 GiB/15 minutes:
+  job/batch/payload **COMPLETED 0:0**, elapsed **54 s** (payload51 s).
+  **Full FDDS suite57 passed, zero failures/errors/skips, 18.596 s**:
+  46 native/control cases plus **11 GPU cases**, all actually executed.
+  Preceding focused checks:8 passed4.140 s plus real SAPT GPU test1 passed
+  11.254 s. Thus66 executions including repeats, **57 unique tests**, not66.
+  Both GDB inferiors exited normally without signal/breakpoint hits.
+  Exact JUnit counts, `FOCUSED_VERIFIED.json`, `VERIFIED.json`, `COMPLETED`,
+  actual timers/block assertions and pinned staged import were audited.
+- Scientific binary/source:
+  **`9d4b1cd4aab718dec1f7b831a53dd54d68f2a609`**.
+  Test driver (budget/output-helper regressions):
+  **`3b21adb662f47fc4b89f1cbb89a44592f7a1d10f`**.
+  Replay harness:
+  **`ce2ab6b38d157b3fb805708bf3da74a19e80c208`**.
+  All three remote tracked trees verified clean and pinned after completion.
+  No production-source/build/installed-Python difference between binary and
+  driver pins; the integrated GPU stage was reused **read-only**, not rebuilt.
+- GPU stage:
+  `/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-integrated-20261017-v1/build_fdds_validation/stage/lib/psi4`.
+  Psi4 **1.12a1.dev802**, core SHA256
+  `68e34452afa80002d4bb7fb1b56297e19389617fcb3ee3b926abc0b5fcead0b7`.
+  Release GPU build from job14181925; successful compiler frontend probes
+  after job-local GCC_ROOT isolation. Shared dependency environment unchanged.
+  Actual runtime **cuEST0.2.2** (conda libcuest/libcuest-dev0.2.2.2),
+  **CUDA13.3.29/cuBLAS13.6.0.2**, H200 driver615.71.09.
+  `import.json` records exact resolved library paths and SHA256 hashes;
+  the site nvcc12.6.1 is **not** the resolved runtime version.
+- Largest full-suite contribution/reference absolute error:
+  **7.105427357601002e-15**; all four integrated nonhybrid/hybrid,
+  equal/unequal CPU/forced-GPU dispersion differences printed **0 Eh**.
+  Real SVWN/cc-pVDZ He-dimer with native supported XC response:
+  CPU dispersion **-1.090781960579051e-6 Eh**,
+  forced-GPU **-1.0907819605790383e-6 Eh**, difference
+  **1.2705494208814505e-20 Eh**.
+  CPU total **-3.5131036459929232e-6 Eh**, forced-GPU total
+  **-3.5131036441000883e-6 Eh**, difference **1.892834881076031e-15 Eh**.
+  Across disabled/threshold/forced controls all six SAPT QCVariable errors
+  are at most **6.6574573662142395e-15 Eh**.
+  Forced real SAPT passed the20-call FDDS timer assertion after actual cuEST
+  J/K builds, which also exercised the shared handle HOST-mode check.
+- FDDS-only elapsed seconds, same source/H200 allocation, excludes SCF:
+
+  | Fixture | Disabled CPU | Huge-threshold control | Forced GPU | GPU contraction timer |
+  |---|---:|---:|---:|---:|
+  | Equal nonhybrid | .011230 | .010759 | .012674 | .000834985 |
+  | Equal hybrid | .016645 | .016663 | .021933 | .002517654 |
+  | Unequal nonhybrid | .010739 | .010768 | .012748 | .000845762 |
+  | Unequal hybrid | .016821 | .016780 | .021904 | .002529294 |
+
+  Tiny transfer-dominated correctness fixtures, under GDB; **no representative
+  throughput or speedup claim**. GPU timer includes transfers/preparation.
+- Latest CPU-only gate **165 passed, zero failures/errors/skips,179.023 s**,
+  including46 FDDS and67 CPSCF. Own Release/Ninja stage, cuEST/Einsums OFF,
+  scientific9d4/test-driver3b21, outside-source import checked. CPU core SHA256
+  `5b2825a1dd99a8f7e40c5a24ec2b14df2c1f7436b8d1197ea7de11c500a48358`.
+  Evidence `build_fdds_cpu/integrated-9d4b1cd4aa/native-output-fixed{.xml,.log,-provenance.json}`.
+- Local GPU evidence and reproducible audit:
+  **`build_fdds_cpu/gpu-14184910/{audit.py,audit.json,accounting.txt,remote-evidence.tar.gz,results-14184910/}`**.
+  Run `python3 build_fdds_cpu/gpu-14184910/audit.py` to recheck counts,
+  provenance, native exits, timers and errors; audit records artifact hashes.
+  Remote run
+  `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261019-integrated-focused-02`.
+  Watcher b07d6597e completed; no new allocation needed.
+- Remaining limitations: device-capacity-driven reduction/rejection/fallback
+  and post-enqueue CUDA/cuBLAS fault injection have **not** been runtime-tested.
+  Unsupported layouts/symmetry, empty/small/native routes and host-budget
+  exceptions/recovery are covered; runtime errors are not silently retried.
+  Remaining CPU work: integrals/DF preparation, ALDA kernel, hybrid QR/X/Y,
+  coupled susceptibility products/solves, quadrature and exchange-dispersion.
+  This FDDS work adds **no MGGA/VV10/GPU-XC response kernels**. End-to-end
+  tests deliberately use `CUEST_XC=false`; upstream LDA/GGA response support
+  was integrated separately, not established by this FDDS GPU suite.
+- Earlier failed jobs/stages/evidence and coordinator worktrees/jobs remain
+  immutable. Fixture-budget and test-output-lifetime causes are confirmed and
+  fixed, not attributed to FDDS equations or JK lifecycle. Old13991729 was
+  not cancelled or modified; its current scheduler state was not re-queried
+  in this terminal audit. No local GPU success, environment mutation, paid
+  retry, auto-merge or throughput claim.
+
+## Historical record (superseded status snapshots below)
+
+The remaining sections preserve earlier evidence and decisions. Their
+“pending”/“blocked” labels describe those earlier pins, not current14184910.
+
 ## Same allocation extended to gated full-suite validation
 
 - User explicitly requested using the allocation for the full FDDS suite once
