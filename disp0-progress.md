@@ -1243,6 +1243,14 @@ nonmutation and AST check for exactly one full energy call/no adapter
 retention. No GPU/device logger or measured timing run. Protocol review
 dc2b71ba92c83f5f5c009a983555d68b0 pending; no campaign launcher submitted.
 
+Protocol review dc2b71ba92c83f5f5c009a983555d68b0 retrieved: **no concrete
+blockers/new regressions**. Confirms one timed energy call, production cleanup
+inside timing, fresh bounded post-timing probes, separated positive controls,
+proof-pending checkpoints and diagnostic-versus-timed dispatch distinction.
+Review does not establish installed runtime, native logger functionality or
+GPU numerical correctness. Committing this as preparatory protocol/harness,
+not a ready/submitted campaign or measured speedup.
+
 Final acquisition review d020ac4f93e3a496abe2c63a0d1db6c95 found remaining
 regular-directory replacement gaps before FD anchoring. **Do not deploy
 the earlier aae3064d84 recipe.** Reworked acquisition into an unpredictable

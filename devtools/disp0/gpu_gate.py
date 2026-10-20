@@ -20,6 +20,9 @@ import time
 import traceback
 from unittest.mock import patch
 
+if not __debug__:
+    raise RuntimeError("Dispersion validation requires assertions; optimized Python is forbidden")
+
 import psi4
 from psi4 import core
 import einsums as ein
@@ -195,6 +198,14 @@ def mapped_paths():
     return paths
 
 
+def verify_science_pin(source, expected):
+    pin = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    assert pin == expected
+    subprocess.run(["git", "-C", str(source), "diff", "HEAD", "--exit-code"], check=True)
+    subprocess.run(["git", "-C", str(source), "diff", "--cached", "--exit-code"], check=True)
+    return pin
+
+
 def nvml_identity(identity, require_pid=False):
     hardware = subprocess.check_output(
         ["nvidia-smi", "--query-gpu=uuid,name", "--format=csv,noheader"], text=True)
@@ -278,6 +289,22 @@ def replay_probe(report):
     checks["reset_after_release"] = True
 
 
+def native_logger_preflight(out):
+    """Validate the timing harness's untimed per-process native proof first."""
+    from benchmark_evidence import NativeLogger, synthetic_policy_probe
+
+    logger = NativeLogger()
+    results = {}
+    for arm in ("cpu", "gpu"):
+        os.environ["DISP0_TRACE_PHASE"] = f"synthetic/native-logger-preflight/{arm}"
+        path = out / f"native-logger-{arm}"
+        path.mkdir()
+        results[arm] = synthetic_policy_probe(
+            logger, arm, path, ein, gpu,
+            {"compute_block_extents": [24, 24], "occupied_A": 15, "occupied_B": 15, "naux": 1024})
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, required=True)
@@ -325,11 +352,9 @@ def main():
         assert {Path(p).resolve() for p in sealed.mapped_einsums_libraries()} == {
             Path(sealed.world()["library_path"]).resolve()}
         science_source = Path(os.environ["DISP0_SCIENCE_SOURCE"]).resolve()
-        science_pin = subprocess.check_output(["git", "-C", str(science_source), "rev-parse", "HEAD"], text=True).strip()
-        assert science_pin == os.environ["DISP0_BUILD_PIN"]
+        science_pin = verify_science_pin(science_source, os.environ["DISP0_BUILD_PIN"])
         report["science_build"] = {"pin": science_pin, "source": str(science_source),
                                    "cpu_preparation_job": os.environ["DISP0_BUILD_JOB_ID"]}
-        subprocess.run(["git", "-C", str(science_source), "diff", "--exit-code"], check=True)
         report["imported_scientific_modules"] = {}
         for module in (terms, mp2, gpu, importlib.import_module("psi4.driver.procrouting.sapt.sapt_proc")):
             path = Path(module.__file__).resolve()
@@ -353,6 +378,7 @@ def main():
         report["device_free_bytes_before"] = ein.gpu.available_device_memory()
         checkpoint()
         replay_probe(report)
+        report["native_logger_preflight"] = native_logger_preflight(out)
         checkpoint()
         core.set_num_threads(4)
         # Still well below the 32G host request; permits a naturally profitable

@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +15,28 @@ path = Path(__file__).resolve().parents[2] / "devtools/disp0/gpu_gate.py"
 spec = importlib.util.spec_from_file_location("disp0_gpu_gate_validation", path)
 gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
+
+
+@pytest.mark.parametrize("state", ["unstaged", "staged", "staged-restored"])
+def test_source_pin_rejects_both_worktree_and_index_changes(tmp_path, state):
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(tmp_path), *args],
+                                       text=True, stderr=subprocess.STDOUT).strip()
+    git("init")
+    path = tmp_path / "science.py"
+    path.write_text("approved\n")
+    git("add", "science.py")
+    git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+        "commit", "-m", "fixture")
+    pin = git("rev-parse", "HEAD")
+    assert gate.verify_science_pin(tmp_path, pin) == pin
+    path.write_text("changed\n")
+    if state != "unstaged":
+        git("add", "science.py")
+    if state == "staged-restored":
+        path.write_text("approved\n")
+    with pytest.raises(subprocess.CalledProcessError):
+        gate.verify_science_pin(tmp_path, pin)
 
 
 def record(**updates):
