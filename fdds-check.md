@@ -8,11 +8,16 @@ profiling, the new isolated CPU/GPU gates and measured speedup status.
 CPU baseline job14198087 completed and audited all three systems on24 CPUs:
 **20.446/240.153/1592.476 s FDDS** for peptide24/nanotube42/protein83.
 This is old scientific9d4 on a CPU node, not a matched GPU speedup comparison.
-Reviewed X/Y candidate scientific8dc714/test-driverfd2c09 now passes the
+Reviewed X/Y candidate scientific8dc714/test-driverfd2c09 passes the
 expanded native gate: **171 passed, no failures/errors/skips,240.780 s**.
-Its GPU correctness/performance gate is not yet executed; queue dry-runs
-currently predict late H200/H100/A100 starts. The historical GPU pass below
-does not establish the new candidate's correctness or speed.
+**New GPU gate now audited on shared H20014214205:**69 unique tests passed,
+zero failures/errors/skips, full22.790s; preceding focused20 passed7.937s
+and real SAPT1 passed11.425s (**90 actual executions**, not90 unique).
+Both GDB inferiors exited normally; import/core92e5/library provenance,
+VERIFIED.json and empty pre/post GPU process tables were audited. New X/Y
+whole/blocked/equal/unequal/dense-occupied routes actually ran.
+**Matched physical timings/speedup remain pending**; this is correctness,
+not performance evidence.
 Optimization job **14199355** started promptly on inferno/H200 but failed
 startup after6 s, **zero tests/benchmarks executed**. Site CUDA12 nvcc kept
 PATH precedence after activation, triggering the strict pinned-toolkit guard.
@@ -60,7 +65,7 @@ Manifest now allocated; initial FDDS21+69 gate **b57a73af9** is running
 under the common exclusive lock (1200-second bound), before PySCF's assigned
 window or timing. Lifetime watcherbda4c38b4. No GPU pass/speedup claim yet.
 
-## Current result: isolated GPU validation PASSED
+## Historical pre-optimization result: isolated GPU validation PASSED
 
 - **Implemented and validated; no merge back.** Real FP64 occupied-block FDDS
   contractions use persistent device sums on the shared cuEST stream, with

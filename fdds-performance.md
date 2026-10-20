@@ -112,7 +112,7 @@ old frozen source/build/run directories or other agents' jobs.
   sources to claim a GPU speedup. The recovery still runs its own matched
   CPU/GPU controls on the same new scientific stage/allocation/cache.
 
-## Candidate: persistent hybrid X/Y block contraction (not yet validated)
+## Candidate: persistent hybrid X/Y block contraction (GPU correctness passed; timing pending)
 
 - `CuestFDDSExchange` uploads the outer integral block once and each inner
   integral/raw/orthogonal block once. Three exact FP64 cuBLAS products per
@@ -381,3 +381,21 @@ old frozen source/build/run directories or other agents' jobs.
   Other agents HOLD until terminal/cleanup proof; PySCF's1200s outer/
  1050s inner preflight follows, no overlapping timings. Lifetime watcher
   **bda4c38b4**. Allocation grant is **not** a correctness or speedup pass.
+- **Actual optimized GPU correctness audit PASS:** taskb7aaccc68 verified
+  **20 focused7.937s +1 real SAPT11.425s +69 full22.790s**,
+ 90 executed/69 unique, zero failures/errors/skips; both GDB inferiors
+  exited normally, no fault/breakpoint. Expected staged import/core92e5,
+  binaryfd2, actual cuEST0.2.2/CUDA13.3.29/cuBLAS13.6.0.2 library hashes,
+  GPU routing assertions, independent X/Y references and pre/post empty GPU
+  process tables checked. Largest printed native-reference contribution
+  error7.105427357601002e-15; printed forcedGPU-vs-native frequency
+  contribution errors0.0. X/Y reference tests use unchanged FP64 tolerances.
+  This is **not** a physical-system timing or speedup result.
+- PySCF's first assigned step failed2 after9 RKS tests passed13.56s:
+  exporter collection imported its source tree instead of staged core.
+  Owner independently audited terminal/exit2, mandatory cleanup marker,
+  empty pre/post NVML files and no quarantine. One new explicit bounded
+  preflight window was assigned using isolated output cwd and immutable
+  new output/label, same scientific source/build/env, no FDDS overlap.
+  FDDS next uses per-system first/repeat matched cases, preserving the
+  same frozen c289 benchmark code, fd2/core92e5 stage and physical caches.
