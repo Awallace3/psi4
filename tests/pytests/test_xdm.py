@@ -57,11 +57,10 @@ units angstrom
 
 @pytest.mark.xdm
 def test_h2o_ghosts():
-    """Ghost atoms are rejected; a plain monomer sizes the pairwise outputs by its atoms.
+    """Ghost atoms enter the Hirshfeld promolecule but not the pair sum.
 
-    How ghost centers should enter the Hirshfeld promolecule and the pair sum
-    is unresolved, so XDM refuses Gh() atoms both at planning time and in the
-    C++ module (for routes that bypass the task planner).
+    The pairwise outputs of a counterpoise monomer are sized by its real atoms;
+    see test_xdm_counterpoise_ghost_superposition for the CP interaction energy.
     """
 
     m = psi4.geometry("""
@@ -229,7 +228,11 @@ units angstrom
     assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz", model="los-ii") == (0.362043, 2.452093)
     assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz", model="los-ii", counterpoise=True) == (0.3880, 2.1781)
     assert get_xdm_bj_params("pbe0", "aug-cc-pvdz", model="LOS-II", counterpoise=True) == (0.1592, 3.3865)
+    # psi4-1.12 KB49 refits
+    assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz") == (0.5294, 2.0268)
+    assert get_xdm_bj_params("pbe0", "cc-pvtz", model="kb49") == (0.0000, 4.1133)
     assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz", counterpoise=True) == (0.5915, 1.5540)
+    assert get_xdm_bj_params("cam-b3lyp", "aug-cc-pvtz", counterpoise=True) == (0.2880, 2.9175)
     with pytest.raises(KeyError):
         get_xdm_bj_params("b3lyp", "6-31+g*", counterpoise=True)
 
