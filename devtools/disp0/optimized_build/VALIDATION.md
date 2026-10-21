@@ -1,5 +1,22 @@
 # Preparation evidence, 2026-10-21
 
+## Source version-history prerequisite (actual installation blocker)
+
+The real14254131 installation has `undefined+770ecf9`; the upstream Psi4
+import guard rejects it. No import bypass/metadata patch is acceptable.
+New builds must use a fresh exact-pin checkout with complete history and the
+real annotated `v1.11` tag, object75fa0e14aa16a868a00eced50eaaa2f8658aa806,
+peeled commitf16f4ea2ff2351cc2ab877d9b3887fcf81c2a670. Do not stage a
+`--depth=1` checkout and discover this after compilation. Fetch via Git only;
+do not manufacture tags, change the pinned HEAD, adopt or mutate failed roots.
+
+The new `source_version_guard.py` runs upstream version generation into NEW
+preparation evidence before SDK/dependency work, requires non-shallow history,
+the pinned ancestral annotated tag, clean source and matching generated
+version/hash. It never patches installed metadata. Local guards: **58PASS,
+3.346s**, payload Bash syntax PASS. Full new coherent build/install and actual
+runtime proofs remain necessary; these guards do not repair the old candidate.
+
 These are local fixtures/metadata/configure-only tests, not a build or scientific
 validation. No actual job ID is recorded here.
 

@@ -39,6 +39,10 @@ unset OMP_PROC_BIND OMP_PLACES DISP0_API_RUNTIME_PROOF
 export PATH="$P/miniconda/bin:/usr/bin:/bin" LD_LIBRARY_PATH="$P/miniconda/lib"
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 cd "$source_root"
+# Real source history/tags are build inputs. Fail before costly dependency work
+# rather than install an undefined-version Psi4 that refuses its own import.
+"$P/miniconda/bin/python" -B devtools/disp0/optimized_build/source_version_guard.py \
+    --source "$source_root" --out "$run/psi4-source-version"
 # Independent NEW input preparation within THIS build job; old input attempt
 # remains UNKNOWN/RESERVED and is neither read as admission nor replayed.
 timeout --signal=TERM --kill-after=5s 110s "$P/miniconda/bin/python" -B \
