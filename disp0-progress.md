@@ -30,6 +30,24 @@ work is NOT implemented or validated. Preserve basis/metric/spin/exchange
 conventions and independent signed component references. Greater-than10x
 end-to-end speedup is an optimization goal, not a measured or promised result.
 
+Local follow-up plan: `devtools/disp0/dfmo_device_plan.md` maps all ten
+coefficient-pair factors, Far/Fbs combinations, packed rank-one corrections,
+defaultDFHelper metric−1/2 and threshold settings, memory/gauge/layout and
+validation requirements. The owner-reported0.2.50
+`cuestDFMOIntegralsCompute` endpoint is promising; direct archive/header
+identity inspection here is still pending the local path/hash handoff.
+
+Read-only exact064 E2 auditdd2a4fd55fec87804bfc193d4393aefb1 finds **no
+supported Python external CUDA-buffer import/ownership seam**.
+`RuntimeGPUTensor` is native-only; DeviceShadowMap owns its allocations;
+default replay starts with empty device validity and ends in D2H flushing.
+No existing zero-copy producer contract was found. Direct inspection confirms
+those storage/executor findings. Generic Python-visible device storage,
+ownership, stream/freshness and safe-fallback plumbing would be needed;
+no C++ dispersion algorithm, unsafe host-tensor pointer alias, global executor
+change or implicit zero-copy claim is proposed. Parent/owner notified LOCAL
+ONLY; not READY and no GPU window requested.
+
 The optimized064 native/Python Einsums and whole Psi4 installation finished
 inside CPU allocation14254131. Original build step0 remains FAILED in its
 post-build audit; completion of compilation is not runtime readiness.
