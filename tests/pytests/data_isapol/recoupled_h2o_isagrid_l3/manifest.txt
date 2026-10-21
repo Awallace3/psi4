@@ -1,0 +1,20 @@
+{
+  "track": "work/H2O-isagrid",
+  "source_sha256": {
+    "H2O_ref_wt4_L3_casimir.data": "1d230aebab7a59c809028e28f98e2ecff47b806d771a125f1d223144adc2ea8b",
+    "H2O_ref_wt4_L3_C12.pot": "04feceb378fc2e6865224c45e7cba00bdcef294246a8f2289e5c2d792c408393"
+  },
+  "fixture_sha256": "750187e3ef331de120bc551d27ddda90c63e3e292535cdce9cd74d586b2a79bf",
+  "uncompressed_bytes": 468302,
+  "compressed_bytes": 103044,
+  "limits": {
+    "rows": 6285,
+    "nonzero_values": 10457,
+    "zero_placeholders": 30791,
+    "extra_high_J_rows": 411,
+    "rtol": 1e-06,
+    "placeholder_atol": 1e-06
+  },
+  "license": "LICENSE",
+  "not_validated": "J9,10 numeric parity; native SCF/PFIT/GRAC protocol"
+}
