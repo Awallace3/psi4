@@ -59,6 +59,22 @@ namespace sapt {
 
 namespace {
 
+// Coarse attribution only: outside OpenMP regions, no changed contraction
+// order, allocation policy, integral settings or host/device routing.
+struct DensityPhaseTimer {
+    const char* label;
+    explicit DensityPhaseTimer(const char* label) : label(label) { timer_on(label); }
+    void stop() {
+        if (label) {
+            timer_off(label);
+            label = nullptr;
+        }
+    }
+    ~DensityPhaseTimer() { stop(); }
+    DensityPhaseTimer(const DensityPhaseTimer&) = delete;
+    DensityPhaseTimer& operator=(const DensityPhaseTimer&) = delete;
+};
+
 /*! \brief Size of a buffer, in whichever of MiB or GiB reads at human scale. */
 std::string memory_size(double bytes) {
     const double mib = 1024.0 * 1024.0;
@@ -468,6 +484,7 @@ std::vector<SharedMatrix> FDDS_Dispersion::project_densities(std::vector<SharedM
     }
 
 // Do the contraction
+    DensityPhaseTimer ao_phase("FDDS density: AO integrals and collapse");
 #pragma omp parallel for schedule(dynamic) num_threads(nthread)
     for (size_t Rshell = 0; Rshell < auxiliary_->nshell(); Rshell++) {
         size_t thread = 0;
@@ -512,6 +529,7 @@ std::vector<SharedMatrix> FDDS_Dispersion::project_densities(std::vector<SharedM
         }
 
     }  // End Rshell
+    ao_phase.stop();
 
     // Clear a few temps
     collapse_temp.clear();
@@ -521,10 +539,12 @@ std::vector<SharedMatrix> FDDS_Dispersion::project_densities(std::vector<SharedM
 
     // ==> Contract (S|R)^-1 R -> S <== //
     std::vector<SharedVector> aux_dens_inv;
+    DensityPhaseTimer metric_phase("FDDS density: inverse metric");
     for (size_t i = 0; i < densities.size(); i++) {
         aux_dens_inv.push_back(std::make_shared<Vector>(naux));
         aux_dens_inv[i]->gemv(false, 1.0, *metric_inv_, *aux_dens[i], 0.0);
     }
+    metric_phase.stop();
 
     // ==> Contract (PQS) S -> PQ <== //
     std::vector<std::shared_ptr<ThreeCenterOverlapInt>> aux_ints(nthread);
@@ -555,6 +575,7 @@ std::vector<SharedMatrix> FDDS_Dispersion::project_densities(std::vector<SharedM
         collapse_temp.push_back(std::make_shared<Matrix>(max_func * max_func, naux));
     }
 
+    DensityPhaseTimer overlap_phase("FDDS density: auxiliary overlap and collapse");
 #pragma omp parallel for schedule(dynamic) num_threads(nthread)
     for (size_t PQi = 0; PQi < aux_pairs.size(); PQi++) {
         size_t thread = 0;
@@ -605,6 +626,7 @@ std::vector<SharedMatrix> FDDS_Dispersion::project_densities(std::vector<SharedM
             }
         }
     }
+    overlap_phase.stop();
 
     return ret;
 }
