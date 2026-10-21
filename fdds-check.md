@@ -32,7 +32,49 @@ Five-minute monitoring and the official allocation watcher remain active.
 No merge, new allocation, overlapping timing, settings relaxation or shared
 environment mutation.
 
-## Next metric-fold candidate — not yet GPU accepted
+## Metric-fold candidate — GPU and matched timing audit passed
+
+Scientific/test pin `ada1a1d2128d6d6f3f5b89952b08f6ffd4ca5917`,
+harness `60ee73db408c58be208367abef7bc9a894f6d860`, CUDA core
+`6f8294594134277ac55ae1a3b87d9003367a451b4f8a506a16e1a2b8a823de68`.
+Shared H20014214205: **81 unique GPU tests /114 executions passed**,
+zero failures/errors/skips (32 focused6.155s,1 SAPT10.977s,81 full21.143s).
+Both GDB inferiors exited normally. Exact import/library provenance and
+empty pre/post GPU process tables were independently audited; terminal0,
+cleanup verified at2026-10-21T00:21:28Z.
+
+All15 fresh-process matched samples were retained: baseline GPU0,
+candidate GPU0, candidate CPU0, candidate GPU1, baseline GPU1 per system.
+Same physical cache, runner, science,8threads/96GiB, allocation/node and
+verified private local-XFS backend; only baseline/candidate source/core differ.
+
+| System | Candidate CPU s (one run) | Candidate GPU s (two runs) | CPU/GPU median | Prior GPU/new GPU median |
+|---|---:|---:|---:|---:|
+| Peptide24 |16.252794|13.632431 /13.665514|1.190770x|1.010803x|
+| Nanotube42 |221.751859|113.101500 /112.476784|1.966075x|1.072547x|
+| Protein83 |1665.228173|579.193648 /577.174427|2.880101x|1.117253x|
+
+Maximum candidate coupled/uncoupled deviations from its same-allocation
+native CPU control: peptide3.288835107e-10/2.387883294e-12Eh,
+nanotube4.948029657e-8/1.248341437e-9Eh,
+protein1.036713920e-9/3.861587612e-11Eh. All meet unchanged1e-5Eh.
+Candidate GPU executed12 metric folds,20 frequency calls and4 hybrid calls;
+native controls executed zero GPU calls. These remain **FDDS-only**, not
+SCF, subsequent exchange-dispersion or whole-SAPT speedups.
+
+Protein first matched GPU sample: object316.216→247.041s;
+DF transform207.215→138.573s, including metric phase133.653→63.991s
+and its nested multiplication84.129→14.208s. Do not sum nested timers.
+Remaining measured phases: frequency220.488s (includes95.663s FDDS
+contractions and83.912s native general-SVD pseudoinverses), XC106.866s.
+No attribution yet for the frequency remainder or a next-candidate speedup.
+Preserved complete logs/results:
+`build_fdds_cpu/metric-fold-ada1a1d212/gpu-14214205/{run,step}/`.
+Remote root: `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261020-metric-fold-01`.
+Owner's post-terminal snapshot: RUNNING3:27:39 remaining; a fresh budget
+gate is still required before another allocation-side step.
+
+### Historical candidate preparation
 
 Frozen scientific/testpin`ada1a1d2128d6d6f3f5b89952b08f6ffd4ca5917`,
 controller`60ee73db408c58be208367abef7bc9a894f6d860`. Static review found
@@ -41,7 +83,7 @@ failures/errors/skips,175.704s, core
 `c08b6341ce7b29099225fc83fde6dec336c6bc3e38caba0ca5840b7c6722d23f`.
 Local XML/provenance: `build_fdds_cpu/metric-fold-ada1a1d212/native/`.
 Actual candidate GPU compilation,81-test numerical/route gate and timing
-are pending in gated workflowbb600889a (9000s exclusive bound); it requires
+were run in gated workflowbb600889a (9000s exclusive bound); it required
 a fresh≥9180s remaining-time check and preceding cleanup. The prior audited
 snapshot wasRUNNING5:03:26 remaining. Old fd2/core92e5 baseline stays frozen.
 

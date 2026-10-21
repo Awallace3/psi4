@@ -3,6 +3,52 @@
 User authorized inferno for this campaign. No changes to shared environments,
 old frozen source/build/run directories or other agents' jobs.
 
+## Latest accepted iteration: persistent metric fold
+
+Scientific/test `ada1a1d2128d6d6f3f5b89952b08f6ffd4ca5917`,
+controller `60ee73db408c58be208367abef7bc9a894f6d860`,
+core `6f8294594134277ac55ae1a3b87d9003367a451b4f8a506a16e1a2b8a823de68`.
+Own fresh build/source/output; prior fd2/core92e5 stage and all old evidence
+remain unchanged. Native171 tests and actual GPU81 unique/114 executions
+passed, zero failures/errors/skips. GPU times: focused32 in6.155s,
+SAPT1 in10.977s, full81 in21.143s; GDB normal exits.
+Actual runtime remains libcuest0.2.2 (conda package0.2.2.2),
+CUDA13.3.29/cuBLAS13.6.0.2. This is not a cuEST upgrade.
+
+Same H20014214205/8threads/96GiB/cache/science/private localXFS, fresh
+processes and serialized whole-allocation steps:
+
+| System | Old GPU0 /1 s | New GPU0 /1 s | New native CPU s | Old/new GPU median | CPU/new GPU median |
+|---|---:|---:|---:|---:|---:|
+| Peptide24 |13.782329 /13.810512|13.632431 /13.665514|16.252794|1.010803x|1.190770x|
+| Nanotube42 |120.902965 /121.040442|113.101500 /112.476784|221.751859|1.072547x|1.966075x|
+| Protein83 |646.443477 /645.512030|579.193648 /577.174427|1665.228173|1.117253x|2.880101x|
+
+All15 planned samples succeeded and were retained; two GPU runs per
+build/system but one candidate-native run per system in this round.
+Candidate-vs-native max coupled errors3.288835107e-10/4.948029657e-8/
+1.036713920e-9Eh; max uncoupled2.387883294e-12/1.248341437e-9/
+3.861587612e-11Eh. No tolerance/settings changes. Candidate GPU12 metric,
+20 frequency and4 hybrid calls; native0. Prior GPU metric0.
+These are FDDS-only speedups, excluding SCF and exchange-dispersion.
+
+Protein first control's object316.216→247.041s, DF transform207.215→
+138.573s, metric phase133.653→63.991s, **nested** metric multiplication
+84.129→14.208s. New peakRSS61.318GiB versus prior61.024GiB.
+Do not sum these nested timings. Remaining measured frequency220.488s
+includes95.663s contraction timer and83.912s native22-pseudoinverse timer;
+native XC106.866s is separate. Unattributed remainder is not proof of
+another particular bottleneck. Next seam investigation is read-only.
+
+Workflowbb600889a/helper `fdds-metric-candidate-ada1-v1` exit0;
+independent auditbfd6d162e confirms test XML, pinned imports/libraries,
+all systems/controls and empty pre/post process tables, cleanup verified,
+no quarantine. Preserved under
+`build_fdds_cpu/metric-fold-ada1a1d212/gpu-14214205/{run,step}/`;
+root `fdds-metric-validation-14214205.json` summarizes the accepted tuple.
+Owner post-terminal snapshotRUNNING3:27:39 remaining; no new resource
+authority is inferred. Parent independently accepted the metric audit.
+
 ## Benchmark contract
 
 - At most89 atoms. Available timing-suite keys below this cap are **peptide

@@ -1,0 +1,44 @@
+{
+  "status": "gpu_correctness_and_matched_timings_audited",
+  "job_id": 14214205,
+  "source_pin": "ada1a1d2128d6d6f3f5b89952b08f6ffd4ca5917",
+  "harness_pin": "60ee73db408c58be208367abef7bc9a894f6d860",
+  "core_sha256": "6f8294594134277ac55ae1a3b87d9003367a451b4f8a506a16e1a2b8a823de68",
+  "baseline_binary_pin": "fd2c09cd0cfbfce61a311508ba6c53039025179a",
+  "baseline_core_sha256": "92e5bff6641dbb2f4790938e9886fc8038d6d03527eb26c6934ddeecabac5a7f",
+  "gpu_uuid": "GPU-5fdf3697-20d4-8564-a920-317ecda4e1a9",
+  "unique_tests": 81,
+  "test_counts": {"tests": 114, "failures": 0, "errors": 0, "skipped": 0},
+  "samples": 15,
+  "threads": 8,
+  "psi4_memory": "96 GiB",
+  "storage": "verified_private_local_XFS",
+  "timing_scope": "FDDS only; excludes SCF, subsequent exchange-dispersion and whole SAPT",
+  "cleanup_verified": true,
+  "evidence_directory": "build_fdds_cpu/metric-fold-ada1a1d212/gpu-14214205",
+  "cpu_samples_per_system": 1,
+  "candidate_gpu_samples_per_system": 2,
+  "baseline_gpu_samples_per_system": 2,
+  "cpu_over_candidate_gpu_median": {
+    "peptide": 1.190770494896514,
+    "nanotube": 1.9660745212411652,
+    "protein83": 2.880100563806235
+  },
+  "baseline_gpu_over_candidate_gpu_median": {
+    "peptide": 1.010802881123647,
+    "nanotube": 1.0725474237109338,
+    "protein83": 1.1172528319489707
+  },
+  "max_candidate_coupled_error_Eh": {
+    "peptide": 3.2888351070292643e-10,
+    "nanotube": 4.9480296571841054e-8,
+    "protein83": 1.0367139204395248e-9
+  },
+  "limitations": [
+    "One candidate native CPU timing per system in this round; earlier baseline has two per arm",
+    "No forced device-capacity or post-enqueue fault injection",
+    "Synthetic layout tails tested; production partial-tail routing not independently proven",
+    "Allocation is not whole-node exclusive; other GPUs may have co-tenants",
+    "No scientific settings, pseudoinverse threshold or comparison tolerance relaxed"
+  ]
+}
