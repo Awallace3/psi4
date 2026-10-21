@@ -11,6 +11,11 @@ import unittest
 import numpy as np
 
 
+# Ordinary native pytest may already have initialized Psi4 before collection.
+# The supplied-array module must add none; the standalone portable runner also
+# independently requires that NO quantum modules exist in its fresh process.
+INITIAL_QUANTUM_MODULES = {name for name in sys.modules
+                           if name.split(".")[0] in ("psi4", "adcc", "pylibxc")}
 SOURCE = Path(__file__).resolve().parents[2] / "psi4/driver/procrouting/isapol_density_reference.py"
 spec = importlib.util.spec_from_file_location("_isapol_density_reference_source", SOURCE)
 reference = importlib.util.module_from_spec(spec)
@@ -195,7 +200,9 @@ class FiniteDensityReferenceTests(unittest.TestCase):
         # The diagnostic port must leave this production module untouched.
         self.assertEqual(hashlib.sha256(SOURCE.with_name("isapol_native_factors.py").read_bytes()).hexdigest(),
                          "7d0187360751024d6774307d486beec7ab77c5d2c45f7bffa3fcf30b5f3bbc43")
-        self.assertFalse(any(name.split(".")[0] in ("psi4", "adcc", "pylibxc") for name in sys.modules))
+        self.assertEqual({name for name in sys.modules
+                          if name.split(".")[0] in ("psi4", "adcc", "pylibxc")},
+                         INITIAL_QUANTUM_MODULES)
 
 
 class NativeWaterReferenceTests(unittest.TestCase):
