@@ -2,6 +2,34 @@
 
 ## Latest checkpoint — 2026-10-21 12:27 Eastern
 
+**Lease terminal update:** watcherb53cf45bd observed CPU14254131
+**PREEMPTED0:0, elapsed02:00:05**, at2026-10-21T16:50:57Z.
+This is allocation/accounting status, NOT a successful build/readiness marker.
+Step0 FAILED1:0 after43:16; validation1 FAILED1:0 after52s;
+validation2 FAILED1:0 after65s; read-only diagnostic3 COMPLETED0:0 after23s;
+validation4 FAILED1:0 after81s (its effective audit and standalone E2 import
+passed, but joint-stage identity did not). No active Disp0 CPU holder remains.
+No retry, replacement allocation, GPU request or installation repair was
+submitted. All original and later evidence stays preserved.
+
+Existing FDDS14250361 reuse inquiry answered **LOCAL ONLY** via workmux to
+owner `saptdft-cuest-disp` and parent: **BLOCKED/not READY; do not hold GPU
+idle for Disp0**. No allocation probe/borrow/step requested. Owner must verify
+its own live lease and assign any future serialized window.
+
+Current integral seam in `sapt_jk_terms_ein.fdisp0`: host DFHelper
+`DIRECT_iaQ`, ten orbital-space transformations (`Aar,Abs,Bas,Bbr,Cas,Cbr,
+Dar,Dbs,Ear,Ebs`), host staging/packing, then three packed FP64 default-graph
+DF products in `sapt_dispersion_gpu.BlockContractions`. Denominators and
+reductions remain host operations. The special E2 branch is not an integral
+engine and does not replace DFHelper. A future GPU-focused producer would
+require an audited existing cuEST three-center/auxiliary-metric endpoint,
+Python/E2 blocked orbital transforms and an explicit device-factor lifetime/
+layout contract before feeding those contractions. That producer/residency
+work is NOT implemented or validated. Preserve basis/metric/spin/exchange
+conventions and independent signed component references. Greater-than10x
+end-to-end speedup is an optimization goal, not a measured or promised result.
+
 The optimized064 native/Python Einsums and whole Psi4 installation finished
 inside CPU allocation14254131. Original build step0 remains FAILED in its
 post-build audit; completion of compilation is not runtime readiness.
