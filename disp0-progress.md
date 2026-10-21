@@ -48,6 +48,102 @@ no C++ dispersion algorithm, unsafe host-tensor pointer alias, global executor
 change or implicit zero-copy claim is proposed. Parent/owner notified LOCAL
 ONLY; not READY and no GPU window requested.
 
+## User-authorized alternative CuPy prototype — LOCAL implementation in progress
+
+User explicitly authorized trying CuPy-owned device buffers and CuPy Python
+dispersion instead of E2-only for a new experimental backend. This does not
+change default/E2 dispatch or authorize installing into shared environments,
+new resources or a GPU-holder window.
+
+New local building blocks `sapt_dispersion_cupy.py` and `sapt_cuest_dfmo.py`
+implement blocked FP64 packing/V-X-W/negative denominators/occupied-pair
+reductions and the existing caller-owned cuEST DFMO Python API. Ten coefficient
+pair factors are produced in r/s slab batches; only coefficient slabs upload,
+not host DF factors. Explicit native synchronization precedes workspace/owner
+release. Host-returned producer factors are rejected rather than relabeled
+GPU. Native plan/basis construction remains a caller-factory prerequisite,
+and exact layout/metric/native-package/runtime provenance remains unverified.
+
+CPU-only NumPy/ctypes fake-transport regression command:
+`python3 -B -m unittest discover -s devtools/disp0 -p test_cupy_backend.py -v`:
+**6PASS,0.063s**. Independent scalar signed-component and occupied-pair oracle,
+blocks1/3/500, changed inputs, crossed W indices, C/F output-layout fixtures,
+strided coefficient uploads, budget/device/native-error and missing-dependency/
+host-fallback rejection exercised. These are NOT actual CuPy/CUDA/native cuEST
+or physical SAPT tests. Source review and canonical setup integration pending.
+
+Optional dependencies documented in `devtools/disp0/cupy_backend.md`:
+CuPy (`cupy-core` from conda-forge or the `cupy-cuda13x` wheel, not both),
+compatible `cuest.bindings` and CUDA Python dependencies. No solve/install or
+new lock has occurred. Stable CuPy docs list CUDA13.2, not our13.3 combination,
+so compatibility is a runtime gate, not assumed from the13x package name.
+
+Canonical integration now adds explicit `dispersion0_cupy(...,provider_factory=...)`
+and a private optional callback after unchanged orbital/correction setup,
+before DFHelper construction. It shares the original occupied-pair placement
+and signed-sum helper with the default path. HF/ordinary dispersion,
+fragment/S-inf, E2-GPU conflict and C1 guards precede GPU/factory access.
+Zero active spaces bypass the factory; normal default dispatch remains selected
+unless this new programmatic entrypoint is explicitly called. No automatic
+driver option or audited native plan constructor is supplied yet.
+
+Expanded CPU-only suite: **10PASS,0.498s**, plus **58 existing optimized-build
+guards PASS,1.849s**; Python AST syntax/diff whitespace checks PASS.
+An initial independent Qbr boundary fixture failed (max231.525 in
+synthetic matrix units) due to two incorrectly transcribed *fixture*
+terms; corrected those two terms to the existing source expression, without
+changing setup equations or tolerances. Noncommuting densities and nonsymmetric
+K_O then pass at1e-12, with asymmetric freezing, caller-cache invariance and
+DFHelper failure sentinel. Source reviewsd7669487 andd020e303 remain pending.
+
+Reviewd7669487 confirms static V/X/W/sign/permutation consistency and identifies
+three prototype issues, now fixed locally: cleanup no longer masks original
+native/body errors (secondary failures become notes, failed adapters invalidate);
+memory admission explicitly estimates live buffers and requires aggregate
+native persistent allocation bytes, reports reserve separately and considers
+cached pool reuse; timing renamed `blocked_execution_seconds`, excluding
+upstream orbital setup and native-plan creation/cleanup. **13CPU/mock tests
+PASS,0.518s**, including combined native/sync/destroy errors and realistic
+used/reserved/native-memory fixtures. Follow-updf94c249 and callback review
+d020e303 pending. No actual native/GPU tests, installation or allocation.
+
+Callback reviewd020e303 found inherited execution metadata surviving a
+zero-dimensional call. Fixed `dispersion0` to remove only the copied execution
+report before dispatch, preserving the caller's original cache. Occupied-empty
+and virtual-empty tests preload a stale GPU report and now return zero signed
+energies without factory execution or stale provenance. Added original-default
+DFHelper sentinel and direct fragment/callback conflict checks. The default
+sentinel initially hit a missing `_mat` function in the CPU test namespace
+(harness NameError, not native/scientific execution); added that fixture stub.
+**14CPU/mock tests PASS,0.610s**. No tolerances changed; full native/physical
+regressions remain unrun with the new source and cannot be replaced by fixtures.
+
+Final scoped reviewdf94c249 identified an enclosing-`except` corner case:
+`sys.exception()` could select an unrelated caller exception and swallow a
+cleanup failure. Added a regression that went RED (cleanup not raised/caller
+exception modified), then replaced ambient exception inspection with a local
+primary-error variable populated only by this compute call. Both synchronization
+and parameter-destruction cases now raise correctly; original native errors
+still retain secondary cleanup notes. No native operation was executed.
+
+Final local commands:
+* `python3 -B -m unittest discover -s devtools/disp0 -p 'test_cupy*.py'`:
+  **15PASS,0.581s**.
+* Optimized-build guard discovery: **58PASS,3.105s**.
+* Existing p4_einv2 Python, `-B -m pytest --noconftest -q
+  tests/pytests/test_disp0_runtime_contract.py`: **96PASS,3.93s**.
+* Python AST syntax on all three changed scientific modules and
+  `git diff --check`: PASS.
+
+This is a reviewed **experimental implementation checkpoint**, not a ready
+CuPy/cuEST runtime. Native AO/RI basis/plan factory, exact dependency/artifact
+lock and loaded-library admission, cuEST output strides/metric/gauge physical
+proof, corrected complete Psi4 installation and the signed actualGPU gate
+remain separate blockers (task27/22/4). No source pushed to cluster, no
+dependency solve/install, no GPU/resource query/window and no performance
+claim. Existing E2/CPU behavior still requires a matching-stage physical
+regression after the installation blocker is fixed.
+
 The optimized064 native/Python Einsums and whole Psi4 installation finished
 inside CPU allocation14254131. Original build step0 remains FAILED in its
 post-build audit; completion of compilation is not runtime readiness.

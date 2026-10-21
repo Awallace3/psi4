@@ -2502,8 +2502,24 @@ def find(
     return cache
 
 
+def _store_dispersion0_components(cache, disp, exch, nA, nB, nfa, nfb, na1, nb1):
+    """Common original matrix placement/sum rules for canonical and fragment paths."""
+    na, nb = disp.shape
+    E_disp20 = core.Matrix("E_disp20", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
+    E_exch_disp20 = core.Matrix("E_exch_disp20", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
+    ablock = slice(nfa + nA, nfa + nA + na)
+    bblock = slice(nfb + nB, nfb + nB + nb)
+    E_disp20.np[ablock, bblock] = disp
+    E_exch_disp20.np[ablock, bblock] = exch
+    Disp_AB = core.Matrix("Disp_AB", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
+    Disp_AB.np[:, :] = E_disp20.np + E_exch_disp20.np
+    cache["Disp_AB"] = Disp_AB
+    cache["Disp20,u"] = np.sum(E_disp20.np)
+    cache["Exch-Disp20,u"] = np.sum(E_exch_disp20.np)
+
+
 def dispersion0(cache, dimer_wfn, nfrozen_A=0, nfrozen_B=0, *, block_size=None, gpu=False,
-                do_print=True, _graph_device=None, _df_block_size=None):
+                do_print=True, _graph_device=None, _df_block_size=None, _kernel_callback=None):
     """Canonical SAPT0 dispersion using the blocked Python Einsums equations.
 
     No localization or fragment cache is required. The caller's cache is not
@@ -2512,14 +2528,55 @@ def dispersion0(cache, dimer_wfn, nfrozen_A=0, nfrozen_B=0, *, block_size=None, 
     remain on the host. The native SAPT/FISAPT algorithms remain CPU oracles.
     """
     work = dict(cache)
+    # A zero-dimensional call never executes a producer/graph. Do not inherit
+    # an earlier call's device/timing provenance through the shallow cache copy.
+    work.pop("Disp0 execution", None)
     fdisp0(work, {}, dimer_wfn, None, None, None, do_print,
            _canonical=True, _nfrozen=(nfrozen_A, nfrozen_B),
            _block_size=block_size, _gpu=gpu, _graph_device=_graph_device,
-           _df_block_size=_df_block_size)
+           _df_block_size=_df_block_size, _kernel_callback=_kernel_callback)
     result = {key: work[key] for key in ("Disp20,u", "Exch-Disp20,u")}
     if "Disp0 execution" in work:
         result["Disp0 execution"] = work["Disp0 execution"]
     return result
+
+
+def dispersion0_cupy(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen_B=0,
+                     block_size=24, do_print=True):
+    """Experimental explicit Python entrypoint; not an automatic driver option.
+
+    provider_factory(primary_basis, auxiliary_basis) must be a context manager
+    yielding the audited cuEST DFMO adapter. Existing E2 canonical setup remains;
+    host DFHelper construction/transformation/packing is completely bypassed.
+    """
+    if (str(core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")).upper() != "HF"
+            or not core.get_option("SAPT", "SAPT_DFT_DO_DISP")
+            or core.get_option("SAPT", "SAPT_DFT_D3_IE")
+            or core.get_option("SAPT", "SAPT_DFT_D4_IE")):
+        raise ValueError("Experimental CuPy dispersion requires ordinary HF SAPT0, not DFT/D3/D4")
+    if (str(core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")).upper() != "NONE"
+            or core.get_option("SAPT", "DO_DISP_EXCH_SINF")):
+        raise NotImplementedError("CuPy fragment/F-SAPT and S-inf dispersion are unsupported")
+    if core.get_option("SAPT", "SAPT_DFT_EINSUMS_GPU"):
+        raise ValueError("Explicit CuPy and E2 GPU dispersion selections conflict")
+    if not callable(provider_factory):
+        raise TypeError("An explicit audited cuEST plan/provider factory is required")
+    if isinstance(block_size, bool) or not isinstance(block_size, int) or block_size < 1:
+        raise ValueError("CuPy compute block must be a positive integer")
+    if dimer_wfn.nirrep() != 1:
+        raise NotImplementedError("Experimental CuPy dispersion currently requires C1 symmetry")
+
+    def kernel(**inputs):
+        from .sapt_dispersion_cupy import blocked_dispersion
+        primary, auxiliary = inputs.pop("primary_basis"), inputs.pop("auxiliary_basis")
+        with provider_factory(primary, auxiliary) as provider:
+            provider.validate_basis(primary, auxiliary)
+            result = blocked_dispersion(provider, **inputs)
+        return (result["Disp20 occupied pairs"], result["Exch-Disp20 occupied pairs"],
+                result["Disp0 execution"])
+
+    return dispersion0(cache, dimer_wfn, nfrozen_A, nfrozen_B, block_size=block_size,
+                       do_print=do_print, _kernel_callback=kernel)
 
 
 def fdisp0(
@@ -2537,6 +2594,7 @@ def fdisp0(
     _gpu=False,
     _graph_device=None,
     _df_block_size=None,
+    _kernel_callback=None,
 ) -> dict:
     r"""Compute the F-SAPT0 dispersion partitioning.
 
@@ -2576,6 +2634,9 @@ def fdisp0(
         raise ValueError("Dispersion DF test block cap must be positive")
     if _gpu and not _canonical:
         raise NotImplementedError("GPU fragment dispersion is not yet supported; use the explicit CPU fragment route")
+    if _kernel_callback is not None and (
+            not _canonical or _gpu or _graph_device is not None or _df_block_size is not None):
+        raise ValueError("Canonical kernel callback conflicts with fragment/E2-GPU/DF-block selections")
     use_graph = _gpu or _graph_device is not None
     if use_graph:
         from .sapt_dispersion_gpu import BlockContractions
@@ -2796,6 +2857,37 @@ def fdisp0(
                    beta=0.0, name="SBar")
         chain_into(SAbs, [e_CoB, e_S, e_DA, e_S, e_CvB], "TNNNN",
                    beta=0.0, name="SAbs")
+
+    # An explicitly selected experimental producer/kernel shares the canonical
+    # setup and final placement, but never constructs or stages host DFHelper.
+    if _kernel_callback is not None:
+        spaces = dict(a=np.asarray(e_CoA), r=np.asarray(e_CvA),
+                      b=np.asarray(e_CoB), s=np.asarray(e_CvB),
+                      r1=np.asarray(Cr1), s1=np.asarray(Cs1), a2=np.asarray(Ca2),
+                      b2=np.asarray(Cb2), r3=np.asarray(Cr3), s3=np.asarray(Cs3),
+                      a4=np.asarray(Ca4), b4=np.asarray(Cb4))
+        corrections = {name: np.asarray(value) for name, value in (
+            ("Qar", Qar), ("SBar", SBar), ("Qbs", Qbs), ("SAbs", SAbs),
+            ("Qas", Qas), ("Sas", Sas), ("Qbr", Qbr), ("Sbr", Sbr))}
+        energies = dict(a=eps_occ_A.np, b=eps_occ_B.np,
+                        r=eps_vir_A.np, s=eps_vir_B.np)
+        core.timer_off("F-SAPT Disp Setup")
+        core.timer_on("F-SAPT Disp Compute")
+        try:
+            disp, exch, execution = _kernel_callback(
+                primary_basis=dimer_basis, auxiliary_basis=aux_basis,
+                spaces=spaces, corrections=corrections, energies=energies,
+                block_size=block_edge)
+            for component in (disp, exch):
+                if (not isinstance(component, np.ndarray) or component.dtype != np.float64
+                        or component.shape != (na, nb) or not np.isfinite(component).all()):
+                    raise ValueError("Canonical kernel must return finite host FP64 occupied-pair components")
+            _store_dispersion0_components(cache, disp, exch, nA, nB, nfa, nfb, na1, nb1)
+            cache["Disp0 execution"] = dict(execution)
+            cache["Disp0 execution"]["python_dispersion_call_seconds"] = time.perf_counter() - started
+        finally:
+            core.timer_off("F-SAPT Disp Compute")
+        return cache
 
     # => Integrals from DFHelper <= #
 
@@ -3330,23 +3422,8 @@ def fdisp0(
 
     core.timer_off("F-SAPT Disp Compute")
     # => Accumulate thread results <= //
-    E_disp20 = core.Matrix("E_disp20", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
-    E_exch_disp20 = core.Matrix("E_exch_disp20", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
-
-    ablock = slice(nfa + nA, nfa + nA + na)
-    bblock = slice(nfb + nB, nfb + nB + nb)
-    E_disp20.np[ablock, bblock] = np.asarray(E_disp20_comp)
-    E_exch_disp20.np[ablock, bblock] = np.asarray(E_exch_disp20_comp)
-
-    # Store energy matrices and scalars
-    Disp_AB = core.Matrix("Disp_AB", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
-    Disp_AB.np[:, :] = E_disp20.np + E_exch_disp20.np
-    cache["Disp_AB"] = Disp_AB
-
-    Disp20 = np.sum(E_disp20.np)
-    ExchDisp20 = np.sum(E_exch_disp20.np)
-    cache["Exch-Disp20,u"] = ExchDisp20
-    cache["Disp20,u"] = Disp20
+    _store_dispersion0_components(cache, np.asarray(E_disp20_comp), np.asarray(E_exch_disp20_comp),
+                                  nA, nB, nfa, nfb, na1, nb1)
     if contractions is not None:
         cache["Disp0 execution"] = contractions.report(time.perf_counter() - started)
         cache["Disp0 execution"].update({
