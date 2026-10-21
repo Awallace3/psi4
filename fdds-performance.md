@@ -3,7 +3,49 @@
 User authorized inferno for this campaign. No changes to shared environments,
 old frozen source/build/run directories or other agents' jobs.
 
-## Latest accepted iteration: persistent metric fold
+## Latest accepted iteration: exact response products
+
+Scientific/test `dcc8ac971310530688920efd0b2ba587a6e5cfd7`,
+harness `b776f35d59a6d517b9bd92b649b5ebffbea5a55c`,
+core `c4579a401c5c7fb81d009694c569124636f9d7205668e3a6da20597bb649293f`.
+Native176 passes/177.642s; GPU93 unique/138 executions passed, zero
+failures/errors/skips (focused44/5.747s, SAPT1/11.065s, full93/21.288s).
+Both GDB inferiors exited normally. Independent auditb9e468376 verified
+pins/imports/libraries, all15 matched controls and empty GPU cleanup.
+
+Same H20014214205, eight threads/96GiB, physical caches/science/private
+local-XFS backend, fresh serialized processes; prior GPU is frozen
+ada1/core6f829, not the earlier X/Y-only build.
+
+| System | Prior GPU0 /1 s | New GPU0 /1 s | New native CPU s | Prior/new GPU median | CPU/new GPU median |
+|---|---:|---:|---:|---:|---:|
+| Peptide24 |13.636540 /13.640018|13.438290 /13.409532|16.181435|1.015969x|1.205419x|
+| Nanotube42 |113.652568 /113.174692|109.921805 /109.361113|222.444475|1.034405x|2.028835x|
+| Protein83 |575.213327 /575.385371|560.758781 /560.797561|1664.982366|1.025895x|2.969057x|
+
+All15 samples succeeded and remain retained; one native CPU and two GPU
+runs/build/system, not a confidence interval or whole-SAPT speedup.
+Candidate/native max coupled deviations5.956963985e-10/7.718928004e-8/
+1.050541662e-9Eh; uncoupled2.103676608e-12/7.791047668e-11/
+1.956602588e-11Eh. Actual GPU60 response chains/12 metric/20 frequency/
+4 hybrid calls, versus native0. All22 original general pseudoinverses
+remain; cutoff1e-13 and all scientific settings/energy gates unchanged.
+
+Protein first control: integration219.320→202.685s; new response
+endpoint4.033s/60 chains. Object246.263→245.456s, native XC104.836→
+107.783s, native pinv83.649→84.173s. Remaining inclusive contraction
+region95.403s is not pure BLAS; do not sum nested timers. PeakRSS61.32GiB.
+Observed whole-FDDS improvement is smaller than a microkernel ratio,
+as expected from the measured29.021s original eight-chain profile.
+
+Helper `fdds-response-candidate-dcc8-v1` exit0, cleanup verified
+2026-10-21T02:37:50Z. Preserved artifacts:
+`build_fdds_cpu/response-products-dcc8ac9713/gpu-14214205/`.
+Runtime cuEST0.2.2/conda0.2.2.2, CUDA13.3.29/cuBLAS13.6.0.2,
+not an SDK upgrade. Owner snapshot02:38:54Z RUNNING1:10:47 remaining;
+no further step/new allocation is implied.
+
+## Previous accepted iteration: persistent metric fold
 
 Scientific/test `ada1a1d2128d6d6f3f5b89952b08f6ffd4ca5917`,
 controller `60ee73db408c58be208367abef7bc9a894f6d860`,

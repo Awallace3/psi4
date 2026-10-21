@@ -1,0 +1,31 @@
+{
+  "status": "gpu_validation_and_matched_timings_audited",
+  "job_id": 14214205,
+  "source_pin": "dcc8ac971310530688920efd0b2ba587a6e5cfd7",
+  "harness_pin": "b776f35d59a6d517b9bd92b649b5ebffbea5a55c",
+  "core_sha256": "c4579a401c5c7fb81d009694c569124636f9d7205668e3a6da20597bb649293f",
+  "base_pin": "ada1a1d2128d6d6f3f5b89952b08f6ffd4ca5917",
+  "base_core_sha256": "6f8294594134277ac55ae1a3b87d9003367a451b4f8a506a16e1a2b8a823de68",
+  "native_tests": {"tests": 176, "failures": 0, "errors": 0, "skipped": 0, "seconds": 177.642},
+  "gpu_tests": {
+    "unique_tests": 93, "executions": 138, "failures": 0, "errors": 0, "skipped": 0,
+    "focused_seconds": 5.747, "sapt_seconds": 11.065, "full_seconds": 21.288,
+    "gdb_inferiors": "both_exited_normally"
+  },
+  "controls": {"planned": 15, "accepted": 15, "failed": 0, "dropped": 0},
+  "scope": "FDDS only; excludes SCF, subsequent exchange-dispersion and whole-SAPT timing",
+  "threads": 8,
+  "psi4_memory_gib": 96,
+  "gpu_uuid": "GPU-5fdf3697-20d4-8564-a920-317ecda4e1a9",
+  "storage": "verified private node-local XFS",
+  "cleanup": {"verified": true, "timestamp_utc": "2026-10-21T02:37:50Z", "before_gpu_processes": 0, "after_gpu_processes": 0, "quarantined": false},
+  "evidence_directory": "build_fdds_cpu/response-products-dcc8ac9713/gpu-14214205",
+  "audit_task": "b9e468376",
+  "benchmark_ratios": {
+    "peptide": {"native_cpu_over_candidate_gpu_median": 1.2054188250849298, "prior_gpu_over_candidate_gpu_median": 1.015969119277095},
+    "nanotube": {"native_cpu_over_candidate_gpu_median": 2.0288354080477466, "prior_gpu_over_candidate_gpu_median": 1.0344045982785048},
+    "protein83": {"native_cpu_over_candidate_gpu_median": 2.9690570207733935, "prior_gpu_over_candidate_gpu_median": 1.025894691859822}
+  },
+  "energy_gate_Eh": 0.00001,
+  "remaining_gaps": ["No forced capacity exhaustion/overflow runtime test", "No post-enqueue CUDA fault injection", "No statistical confidence interval from two GPU repeats and one CPU control"]
+}

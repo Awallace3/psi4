@@ -1,6 +1,52 @@
 # FDDS cuEST implementation handoff
 
-## Next response-product candidate — not yet GPU validated
+## Response-product iteration — independent GPU/timing audit passed
+
+Scientific/test `dcc8ac971310530688920efd0b2ba587a6e5cfd7`,
+harness `b776f35d59a6d517b9bd92b649b5ebffbea5a55c`, CUDA core
+`c4579a401c5c7fb81d009694c569124636f9d7205668e3a6da20597bb649293f`.
+Native176 passes/177.642s. Actual H20014214205 GPU **93 unique tests/
+138 executions passed**, zero errors/failures/skips: focused44/5.747s,
+SAPT1/11.065s, full93/21.288s. Both GDB inferiors exited normally.
+Independent auditb9e468376 checked exact pins/imports/runtime libraries,
+all15 planned samples, actual GPU routes,22 unchanged pseudoinverse calls,
+finite energies and mandatory empty pre/post GPU process tables.
+Helper exit0; cleanup verified2026-10-21T02:37:50Z, no quarantine.
+
+| System | Native CPU s (one run) | Candidate GPU s (two runs) | CPU/GPU median | Prior metric GPU/new GPU median |
+|---|---:|---:|---:|---:|
+| Peptide24 |16.181435|13.438290 /13.409532|1.205419x|1.015969x|
+| Nanotube42 |222.444475|109.921805 /109.361113|2.028835x|1.034405x|
+| Protein83 |1664.982366|560.758781 /560.797561|2.969057x|1.025895x|
+
+Same physical caches/science, eight threads/96GiB, fresh processes,
+same allocation/node and verified private local-XFS backend. All five
+controls/system retained, including two prior metric GPU controls.
+Maximum candidate coupled/uncoupled errors versus native:
+peptide5.956963985e-10/2.103676608e-12Eh,
+nanotube7.718928004e-8/7.791047668e-11Eh,
+protein1.050541662e-9/1.956602588e-11Eh, below unchanged1e-5Eh.
+GPU60 response chains/12 metric/20 frequency/4 hybrid calls; native zero.
+These are FDDS-only, excluding SCF and subsequent exchange-dispersion,
+not whole-SAPT speedups.
+
+Protein first matched GPU control: integration219.320→202.685s,
+new response endpoint4.033s/60 calls, object246.263→245.456s.
+Remaining inclusive frequency-contraction region95.403s, native22-pinv
+84.173s and XC107.783s; do not sum nested timers or call the inclusive
+region pure BLAS. Candidate peakRSS≈61.32GiB.
+Actual runtime remains cuEST0.2.2 (conda0.2.2.2), CUDA13.3.29/
+cuBLAS13.6.0.2. No solver, cutoff, quadrature or fitting-policy changes.
+
+Evidence root:
+`build_fdds_cpu/response-products-dcc8ac9713/gpu-14214205/{run,step,compile,compile-step}/`.
+Remote run `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261020-response-products-01`.
+Owner snapshot2026-10-21T02:38:54Z: RUNNING1:10:47 remaining; the
+exclusive step has finished. No new allocation authority is inferred.
+Next preparation/ALDA investigation is read-only; further compute requires
+fresh cleanup/budget gates within the existing grant.
+
+### Historical preparation and scope
 
 Frozen scientific/test source `dcc8ac971310530688920efd0b2ba587a6e5cfd7`.
 Separate fresh native source/build at
@@ -32,14 +78,14 @@ enqueue; GPU runtime errors propagate after stream draining.
 Hybrid `Rtinv` transpose views deliberately remain native, so only6 sites/
 60 chains across ten quadrature points execute on GPU, targeting≈21.78s of the measured
 29.02s, not the inclusive95.66s contraction timer. Even eliminating this
-target entirely would provide only≈1.04x additional whole-FDDS speedup;
-no measured candidate speedup exists yet.
+target entirely would provide only≈1.04x additional whole-FDDS speedup.
+The accepted measured result is reported above.
 
 Added5 native and7 GPU layout/freshness/alias/preflight cases; integrated
 tests additionally check unchanged pseudoinverse inputs/counts/rcond and
-actual60-chain routing. Planned full GPU gate93 unique/138 executions,
-zero skips; native expanded gate176. Separate harness will require all15
-matched baseGPU/candidateGPU/nativeCPU controls and no dropped samples.
+actual60-chain routing. Full GPU gate93 unique/138 executions and native176
+now pass. The separate harness retained all15 matched
+baseGPU/candidateGPU/nativeCPU controls, with no dropped samples.
 Matched timings require prior cleanup, native/GPU gates, static review and
 a fresh remaining-budget check; no new allocation. An isolated compile-only
 step may run while the separate workstation builds its native compatibility
@@ -50,7 +96,8 @@ correctness/safety defect in dcc8. Owners/stream ordering/three-buffer reuse/
 exception draining and counts were checked statically. Capacity exhaustion,
 overflow and post-enqueue faults remain un-injected. NumPy's pinv output
 layout is not an API guarantee: the pinned local probe confirmed C output/
-F transpose, but the actual GPU60-chain gate must establish this at runtime.
+F transpose; actual GPU60-chain gates and physical replays now establish
+this for the pinned NumPy/runtime.
 The full-SAPT test checks frequency routing; integrated FDDS and physical
 benchmarks separately require the new response endpoint.
 
