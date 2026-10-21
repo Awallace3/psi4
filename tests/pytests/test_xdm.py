@@ -1169,7 +1169,7 @@ def test_xdm_counterpoise_ghost_superposition():
     """Counterpoise XDM keeps ghosts in the Hirshfeld promolecule and superposes partner moments.
 
     Long-range regression for the CP ghost treatment (see xdm.rst, "Ghost Atoms"). Uses the
-    large-a1 KB49 noCP parameters for B3LYP/aug-cc-pVDZ, where the superposition artefact is
+    large-a1 (0.7259, 1.3140 A) of the retired KB49 noCP B3LYP/aug-cc-pVDZ fit, where the superposition artefact is
     largest. At R(O-O) = 8 A, measured (kJ/mol): noCP -0.0125, intermolecular pair sum -0.0122,
     superposed CP -0.0095; dropping ghosts from the promolecule gave -0.0219, and ghosts in the
     promolecule without superposition gave -0.0001 (and changes sign by 9 A).

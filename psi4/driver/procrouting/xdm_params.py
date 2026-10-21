@@ -58,114 +58,179 @@ def strip_xdm_suffix(name: str) -> str:
 
 
 _XDM_BJ_PARAMS_ANGSTROM: Dict[str, Tuple[float, float]] = {
+    # Fitted to no-CP DFT IE (DFT_GRID_ORIENTATION=INPUT) against the KB49 reference;
+    # least squares on per-dimer relative errors (RMSP), 49 dimers each. Pople-basis
+    # entries are from a prior fit and carry no KB49 statistics.
+
     # ---- B3LYP ----
-    # noCP (KB49 RMSP fit)
-    "b3lyp/aug-cc-pvtz": (0.5049, 1.8215),  # MAPD: 6.94%, MAE: 0.225 kcal/mol
-    "b3lyp/aug-cc-pvdz": (0.7259, 1.3140),  # MAPD: 8.15%, MAE: 0.273 kcal/mol
-    "b3lyp/cc-pvtz": (0.5397, 1.8048),  # MAPD: 15.64%, MAE: 0.516 kcal/mol
-    "b3lyp/cc-pvdz": (0.3934, 2.4519),  # MAPD: 38.69%, MAE: 1.293 kcal/mol
-    # noCP Pople (prior fitting)
+    # b3lyp/aug-cc-pvtz RMSP: 8.18%, MAE: 0.248 kcal/mol on KB49
+    "b3lyp/aug-cc-pvtz": (0.6339, 1.5205),
+    # b3lyp/aug-cc-pvdz RMSP: 11.96%, MAE: 0.313 kcal/mol on KB49
+    "b3lyp/aug-cc-pvdz": (0.5294, 2.0268),
+    # b3lyp/cc-pvtz RMSP: 24.00%, MAE: 0.497 kcal/mol on KB49
+    "b3lyp/cc-pvtz": (0.0000, 3.6107),
+    # b3lyp/cc-pvdz RMSP: 60.47%, MAE: 1.292 kcal/mol on KB49
+    "b3lyp/cc-pvdz": (0.0000, 3.8589),
+    # Pople bases (prior fit)
     "b3lyp/6-31+g*": (0.249120, 2.690583),
     "b3lyp/6-31+g**": (0.226145, 2.762253),
     "b3lyp/6-311+g(2d,2p)": (0.564665, 1.708375),
 
     # ---- B3P86 ----
-    "b3p86/aug-cc-pvtz": (1.0391, 0.2422),  # MAPD: 13.65%, MAE: 0.486 kcal/mol
-    "b3p86/aug-cc-pvdz": (1.1622, 0.0000),  # MAPD: 12.62%, MAE: 0.468 kcal/mol
-    "b3p86/cc-pvtz": (0.6134, 1.6075),  # MAPD: 14.21%, MAE: 0.533 kcal/mol
-    "b3p86/cc-pvdz": (0.5413, 1.9809),  # MAPD: 31.17%, MAE: 1.120 kcal/mol
+    # b3p86/aug-cc-pvtz RMSP: 17.37%, MAE: 0.439 kcal/mol on KB49
+    "b3p86/aug-cc-pvtz": (1.0076, 0.4279),
+    # b3p86/aug-cc-pvdz RMSP: 15.79%, MAE: 0.410 kcal/mol on KB49
+    "b3p86/aug-cc-pvdz": (1.2013, 0.0000),
+    # b3p86/cc-pvtz RMSP: 20.93%, MAE: 0.510 kcal/mol on KB49
+    "b3p86/cc-pvtz": (0.3856, 2.4239),
+    # b3p86/cc-pvdz RMSP: 46.78%, MAE: 1.030 kcal/mol on KB49
+    "b3p86/cc-pvdz": (0.0000, 3.8310),
 
     # ---- B3PW91 ----
-    "b3pw91/aug-cc-pvtz": (0.2745, 2.2471),  # MAPD: 15.58%, MAE: 0.471 kcal/mol
-    "b3pw91/aug-cc-pvdz": (1.0810, 0.0000),  # MAPD: 14.28%, MAE: 0.487 kcal/mol
-    "b3pw91/cc-pvtz": (0.5767, 1.4443),  # MAPD: 13.20%, MAE: 0.459 kcal/mol
-    "b3pw91/cc-pvdz": (0.5415, 1.7270),  # MAPD: 28.85%, MAE: 0.986 kcal/mol
+    # b3pw91/aug-cc-pvtz RMSP: 19.16%, MAE: 0.424 kcal/mol on KB49
+    "b3pw91/aug-cc-pvtz": (0.5852, 1.4540),
+    # b3pw91/aug-cc-pvdz RMSP: 16.25%, MAE: 0.386 kcal/mol on KB49
+    "b3pw91/aug-cc-pvdz": (1.1043, 0.0323),
+    # b3pw91/cc-pvtz RMSP: 18.55%, MAE: 0.412 kcal/mol on KB49
+    "b3pw91/cc-pvtz": (0.2926, 2.4368),
+    # b3pw91/cc-pvdz RMSP: 43.02%, MAE: 0.850 kcal/mol on KB49
+    "b3pw91/cc-pvdz": (0.0000, 3.5779),
 
     # ---- B86BPBE ----
-    "b86bpbe/aug-cc-pvtz": (0.9003, 0.8168),  # MAPD: 10.85%, MAE: 0.355 kcal/mol
-    "b86bpbe/aug-cc-pvdz": (0.9428, 0.8603),  # MAPD: 13.60%, MAE: 0.412 kcal/mol
-    "b86bpbe/cc-pvtz": (0.5183, 2.0817),  # MAPD: 20.02%, MAE: 0.626 kcal/mol
-    "b86bpbe/cc-pvdz": (0.2617, 3.0913),  # MAPD: 41.18%, MAE: 1.368 kcal/mol
+    # b86bpbe/aug-cc-pvtz RMSP: 14.74%, MAE: 0.386 kcal/mol on KB49
+    "b86bpbe/aug-cc-pvtz": (0.7452, 1.3878),
+    # b86bpbe/aug-cc-pvdz RMSP: 18.22%, MAE: 0.461 kcal/mol on KB49
+    "b86bpbe/aug-cc-pvdz": (0.6669, 1.8586),
+    # b86bpbe/cc-pvtz RMSP: 29.81%, MAE: 0.647 kcal/mol on KB49
+    "b86bpbe/cc-pvtz": (0.0000, 3.8535),
+    # b86bpbe/cc-pvdz RMSP: 64.82%, MAE: 1.400 kcal/mol on KB49
+    "b86bpbe/cc-pvdz": (0.0000, 4.1417),
 
     # ---- B97-1 ----
-    "b97-1/aug-cc-pvtz": (0.4762, 2.5787),  # MAPD: 11.46%, MAE: 0.383 kcal/mol
-    "b97-1/aug-cc-pvdz": (0.2667, 3.5271),  # MAPD: 16.19%, MAE: 0.459 kcal/mol
-    "b97-1/cc-pvtz": (0.3583, 3.0287),  # MAPD: 19.86%, MAE: 0.620 kcal/mol
-    "b97-1/cc-pvdz": (0.0000, 4.3169),  # MAPD: 37.59%, MAE: 1.248 kcal/mol
+    # b97-1/aug-cc-pvtz RMSP: 17.08%, MAE: 0.432 kcal/mol on KB49
+    "b97-1/aug-cc-pvtz": (0.2134, 3.5101),
+    # b97-1/aug-cc-pvdz RMSP: 22.90%, MAE: 0.504 kcal/mol on KB49
+    "b97-1/aug-cc-pvdz": (0.0000, 4.5536),
+    # b97-1/cc-pvtz RMSP: 31.70%, MAE: 0.670 kcal/mol on KB49
+    "b97-1/cc-pvtz": (0.0000, 4.3236),
+    # b97-1/cc-pvdz RMSP: 61.85%, MAE: 1.332 kcal/mol on KB49
+    "b97-1/cc-pvdz": (0.0000, 4.6313),
 
     # ---- BHandHLYP ----
-    "bhandhlyp/aug-cc-pvtz": (0.2823, 2.7786),  # MAPD: 6.85%, MAE: 0.276 kcal/mol
-    "bhandhlyp/aug-cc-pvdz": (0.2731, 3.0268),  # MAPD: 8.88%, MAE: 0.343 kcal/mol
-    "bhandhlyp/cc-pvtz": (0.5132, 2.1560),  # MAPD: 16.31%, MAE: 0.585 kcal/mol
-    "bhandhlyp/cc-pvdz": (0.2962, 3.0123),  # MAPD: 34.10%, MAE: 1.205 kcal/mol
+    # bhandhlyp/aug-cc-pvtz RMSP: 8.65%, MAE: 0.309 kcal/mol on KB49
+    "bhandhlyp/aug-cc-pvtz": (0.3924, 2.5277),
+    # bhandhlyp/aug-cc-pvdz RMSP: 13.31%, MAE: 0.371 kcal/mol on KB49
+    "bhandhlyp/aug-cc-pvdz": (0.1382, 3.5494),
+    # bhandhlyp/cc-pvtz RMSP: 23.38%, MAE: 0.571 kcal/mol on KB49
+    "bhandhlyp/cc-pvtz": (0.0000, 3.8599),
+    # bhandhlyp/cc-pvdz RMSP: 55.40%, MAE: 1.236 kcal/mol on KB49
+    "bhandhlyp/cc-pvdz": (0.0000, 4.0987),
 
     # ---- BLYP ----
-    "blyp/aug-cc-pvtz": (0.5769, 1.3424),  # MAPD: 10.56%, MAE: 0.303 kcal/mol
-    "blyp/aug-cc-pvdz": (0.8980, 0.5261),  # MAPD: 10.24%, MAE: 0.312 kcal/mol
-    "blyp/cc-pvtz": (0.5381, 1.5455),  # MAPD: 19.77%, MAE: 0.563 kcal/mol
-    "blyp/cc-pvdz": (0.4409, 2.0840),  # MAPD: 45.42%, MAE: 1.443 kcal/mol
+    # blyp/aug-cc-pvtz RMSP: 11.83%, MAE: 0.243 kcal/mol on KB49
+    "blyp/aug-cc-pvtz": (0.6130, 1.3105),
+    # blyp/aug-cc-pvdz RMSP: 12.18%, MAE: 0.284 kcal/mol on KB49
+    "blyp/aug-cc-pvdz": (0.6772, 1.2885),
+    # blyp/cc-pvtz RMSP: 28.08%, MAE: 0.511 kcal/mol on KB49
+    "blyp/cc-pvtz": (0.0000, 3.3546),
+    # blyp/cc-pvdz RMSP: 68.68%, MAE: 1.386 kcal/mol on KB49
+    "blyp/cc-pvdz": (0.0000, 3.6424),
 
     # ---- BP86 ----
-    "bp86/aug-cc-pvtz": (1.0461, 0.0196),  # MAPD: 19.30%, MAE: 0.634 kcal/mol
-    "bp86/aug-cc-pvdz": (1.0865, 0.0000),  # MAPD: 18.26%, MAE: 0.620 kcal/mol
-    "bp86/cc-pvtz": (0.5913, 1.4541),  # MAPD: 18.13%, MAE: 0.609 kcal/mol
-    "bp86/cc-pvdz": (0.5526, 1.7320),  # MAPD: 36.18%, MAE: 1.223 kcal/mol
+    # bp86/aug-cc-pvtz RMSP: 25.05%, MAE: 0.522 kcal/mol on KB49
+    "bp86/aug-cc-pvtz": (0.7387, 1.0014),
+    # bp86/aug-cc-pvdz RMSP: 21.54%, MAE: 0.471 kcal/mol on KB49
+    "bp86/aug-cc-pvdz": (1.1152, 0.0000),
+    # bp86/cc-pvtz RMSP: 25.01%, MAE: 0.550 kcal/mol on KB49
+    "bp86/cc-pvtz": (0.3401, 2.3142),
+    # bp86/cc-pvdz RMSP: 51.54%, MAE: 1.072 kcal/mol on KB49
+    "bp86/cc-pvdz": (0.0000, 3.5912),
 
     # ---- CAM-B3LYP ----
-    "cam-b3lyp/aug-cc-pvtz": (0.3892, 2.5727),  # MAPD: 7.16%, MAE: 0.329 kcal/mol
-    "cam-b3lyp/aug-cc-pvdz": (0.4083, 2.7387),  # MAPD: 11.66%, MAE: 0.447 kcal/mol
-    "cam-b3lyp/cc-pvtz": (0.4410, 2.5056),  # MAPD: 19.49%, MAE: 0.711 kcal/mol
-    "cam-b3lyp/cc-pvdz": (0.1203, 3.7350),  # MAPD: 41.51%, MAE: 1.498 kcal/mol
+    # cam-b3lyp/aug-cc-pvtz RMSP: 9.10%, MAE: 0.358 kcal/mol on KB49
+    "cam-b3lyp/aug-cc-pvtz": (0.3550, 2.7695),
+    # cam-b3lyp/aug-cc-pvdz RMSP: 15.26%, MAE: 0.472 kcal/mol on KB49
+    "cam-b3lyp/aug-cc-pvdz": (0.1743, 3.5935),
+    # cam-b3lyp/cc-pvtz RMSP: 29.86%, MAE: 0.732 kcal/mol on KB49
+    "cam-b3lyp/cc-pvtz": (0.0000, 4.0242),
+    # cam-b3lyp/cc-pvdz RMSP: 67.15%, MAE: 1.555 kcal/mol on KB49
+    "cam-b3lyp/cc-pvdz": (0.0000, 4.3310),
 
     # ---- HF ----
-    "hf/aug-cc-pvtz": (0.3456, 2.0087),  # MAPD: 13.88%, MAE: 0.472 kcal/mol
-    "hf/aug-cc-pvdz": (0.4302, 1.9813),  # MAPD: 13.89%, MAE: 0.538 kcal/mol
-    "hf/cc-pvtz": (0.5442, 1.4730),  # MAPD: 13.46%, MAE: 0.424 kcal/mol
-    "hf/cc-pvdz": (0.5217, 1.7061),  # MAPD: 20.51%, MAE: 0.583 kcal/mol
+    # hf/aug-cc-pvtz RMSP: 16.75%, MAE: 0.444 kcal/mol on KB49
+    "hf/aug-cc-pvtz": (0.5964, 1.5149),
+    # hf/aug-cc-pvdz RMSP: 18.69%, MAE: 0.581 kcal/mol on KB49
+    "hf/aug-cc-pvdz": (0.3937, 2.3362),
+    # hf/cc-pvtz RMSP: 17.94%, MAE: 0.427 kcal/mol on KB49
+    "hf/cc-pvtz": (0.2274, 2.7048),
+    # hf/cc-pvdz RMSP: 33.02%, MAE: 0.518 kcal/mol on KB49
+    "hf/cc-pvdz": (0.0000, 3.6151),
 
     # ---- HSE06 ----
-    "hse06/aug-cc-pvtz": (0.5886, 2.0647),  # MAPD: 10.85%, MAE: 0.421 kcal/mol
-    "hse06/aug-cc-pvdz": (0.4495, 2.7766),  # MAPD: 14.33%, MAE: 0.505 kcal/mol
-    "hse06/cc-pvtz": (0.4717, 2.5112),  # MAPD: 19.51%, MAE: 0.701 kcal/mol
-    "hse06/cc-pvdz": (0.1149, 3.8501),  # MAPD: 36.89%, MAE: 1.319 kcal/mol
+    # hse06/aug-cc-pvtz RMSP: 14.32%, MAE: 0.439 kcal/mol on KB49
+    "hse06/aug-cc-pvtz": (0.3803, 2.8371),
+    # hse06/aug-cc-pvdz RMSP: 18.20%, MAE: 0.518 kcal/mol on KB49
+    "hse06/aug-cc-pvdz": (0.1554, 3.8738),
+    # hse06/cc-pvtz RMSP: 28.13%, MAE: 0.708 kcal/mol on KB49
+    "hse06/cc-pvtz": (0.0000, 4.1504),
+    # hse06/cc-pvdz RMSP: 58.65%, MAE: 1.372 kcal/mol on KB49
+    "hse06/cc-pvdz": (0.0000, 4.4662),
 
     # ---- LC-wPBE ----
-    "lc-wpbe/aug-cc-pvtz": (1.0292, 0.5824),  # MAPD: 9.01%, MAE: 0.269 kcal/mol
-    "lc-wpbe/aug-cc-pvdz": (1.3046, 0.0000),  # MAPD: 8.74%, MAE: 0.276 kcal/mol
-    "lc-wpbe/cc-pvtz": (0.5280, 2.1846),  # MAPD: 11.24%, MAE: 0.316 kcal/mol
-    "lc-wpbe/cc-pvdz": (0.2790, 3.2148),  # MAPD: 26.01%, MAE: 0.880 kcal/mol
+    # lc-wpbe/aug-cc-pvtz RMSP: 9.03%, MAE: 0.235 kcal/mol on KB49
+    "lc-wpbe/aug-cc-pvtz": (1.0101, 0.6984),
+    # lc-wpbe/aug-cc-pvdz RMSP: 11.31%, MAE: 0.280 kcal/mol on KB49
+    "lc-wpbe/aug-cc-pvdz": (1.3343, 0.0000),
+    # lc-wpbe/cc-pvtz RMSP: 18.09%, MAE: 0.316 kcal/mol on KB49
+    "lc-wpbe/cc-pvtz": (0.0000, 3.9450),
+    # lc-wpbe/cc-pvdz RMSP: 47.80%, MAE: 0.910 kcal/mol on KB49
+    "lc-wpbe/cc-pvdz": (0.0000, 4.2676),
 
     # ---- PBE ----
-    # noCP (KB49 RMSP fit)
-    "pbe/aug-cc-pvtz": (0.7110, 1.6463),  # MAPD: 13.12%, MAE: 0.446 kcal/mol
-    "pbe/aug-cc-pvdz": (0.5556, 2.3610),  # MAPD: 17.93%, MAE: 0.544 kcal/mol
-    "pbe/cc-pvtz": (0.4041, 2.6998),  # MAPD: 24.16%, MAE: 0.784 kcal/mol
-    "pbe/cc-pvdz": (0.0320, 4.0862),  # MAPD: 44.82%, MAE: 1.532 kcal/mol
-    # noCP Pople (prior fitting)
+    # pbe/aug-cc-pvtz RMSP: 17.91%, MAE: 0.490 kcal/mol on KB49
+    "pbe/aug-cc-pvtz": (0.4326, 2.6285),
+    # pbe/aug-cc-pvdz RMSP: 22.66%, MAE: 0.582 kcal/mol on KB49
+    "pbe/aug-cc-pvdz": (0.2236, 3.5855),
+    # pbe/cc-pvtz RMSP: 36.45%, MAE: 0.829 kcal/mol on KB49
+    "pbe/cc-pvtz": (0.0000, 4.1576),
+    # pbe/cc-pvdz RMSP: 72.35%, MAE: 1.616 kcal/mol on KB49
+    "pbe/cc-pvdz": (0.0000, 4.5106),
+    # Pople bases (prior fit)
     "pbe/6-31+g*": (0.699062, 1.710117),
     "pbe/6-31+g**": (0.704316, 1.709007),
 
     # ---- PBE0 ----
-    # noCP (KB49 RMSP fit)
-    "pbe0/aug-cc-pvtz": (0.5884, 2.0642),  # MAPD: 9.89%, MAE: 0.368 kcal/mol
-    "pbe0/aug-cc-pvdz": (0.4681, 2.7183),  # MAPD: 13.08%, MAE: 0.442 kcal/mol
-    "pbe0/cc-pvtz": (0.4823, 2.4796),  # MAPD: 18.49%, MAE: 0.645 kcal/mol
-    "pbe0/cc-pvdz": (0.1392, 3.7712),  # MAPD: 35.34%, MAE: 1.246 kcal/mol
-    # noCP Pople (prior fitting)
+    # pbe0/aug-cc-pvtz RMSP: 13.36%, MAE: 0.394 kcal/mol on KB49
+    "pbe0/aug-cc-pvtz": (0.4335, 2.6326),
+    # pbe0/aug-cc-pvdz RMSP: 17.06%, MAE: 0.460 kcal/mol on KB49
+    "pbe0/aug-cc-pvdz": (0.2308, 3.5971),
+    # pbe0/cc-pvtz RMSP: 27.10%, MAE: 0.654 kcal/mol on KB49
+    "pbe0/cc-pvtz": (0.0000, 4.1133),
+    # pbe0/cc-pvdz RMSP: 56.91%, MAE: 1.303 kcal/mol on KB49
+    "pbe0/cc-pvdz": (0.0000, 4.4230),
+    # Pople bases (prior fit)
     "pbe0/6-31+g*": (0.000000, 3.942401),
     "pbe0/6-31+g**": (0.000000, 3.957889),
 
     # ---- PW86PBE ----
-    "pw86pbe/aug-cc-pvtz": (1.1094, 0.3190),  # MAPD: 10.89%, MAE: 0.359 kcal/mol
-    "pw86pbe/aug-cc-pvdz": (1.1333, 0.4261),  # MAPD: 14.76%, MAE: 0.433 kcal/mol
-    "pw86pbe/cc-pvtz": (0.5056, 2.2769),  # MAPD: 21.24%, MAE: 0.654 kcal/mol
-    "pw86pbe/cc-pvdz": (0.1616, 3.5581),  # MAPD: 43.61%, MAE: 1.437 kcal/mol
+    # pw86pbe/aug-cc-pvtz RMSP: 14.91%, MAE: 0.394 kcal/mol on KB49
+    "pw86pbe/aug-cc-pvtz": (0.8925, 1.0867),
+    # pw86pbe/aug-cc-pvdz RMSP: 19.59%, MAE: 0.484 kcal/mol on KB49
+    "pw86pbe/aug-cc-pvdz": (0.8200, 1.5582),
+    # pw86pbe/cc-pvtz RMSP: 31.70%, MAE: 0.670 kcal/mol on KB49
+    "pw86pbe/cc-pvtz": (0.0000, 4.0182),
+    # pw86pbe/cc-pvdz RMSP: 68.84%, MAE: 1.481 kcal/mol on KB49
+    "pw86pbe/cc-pvdz": (0.0000, 4.3216),
 
     # ---- TPSS ----
-    "tpss/aug-cc-pvtz": (0.6362, 1.4995),  # MAPD: 10.19%, MAE: 0.337 kcal/mol
-    "tpss/aug-cc-pvdz": (0.6643, 1.6121),  # MAPD: 12.93%, MAE: 0.400 kcal/mol
-    "tpss/cc-pvtz": (0.5212, 1.9238),  # MAPD: 16.74%, MAE: 0.556 kcal/mol
-    "tpss/cc-pvdz": (0.3357, 2.7252),  # MAPD: 35.99%, MAE: 1.210 kcal/mol
+    # tpss/aug-cc-pvtz RMSP: 13.63%, MAE: 0.368 kcal/mol on KB49
+    "tpss/aug-cc-pvtz": (0.5851, 1.7527),
+    # tpss/aug-cc-pvdz RMSP: 16.55%, MAE: 0.426 kcal/mol on KB49
+    "tpss/aug-cc-pvdz": (0.4797, 2.3152),
+    # tpss/cc-pvtz RMSP: 25.55%, MAE: 0.580 kcal/mol on KB49
+    "tpss/cc-pvtz": (0.0000, 3.6975),
+    # tpss/cc-pvdz RMSP: 58.17%, MAE: 1.244 kcal/mol on KB49
+    "tpss/cc-pvdz": (0.0000, 3.9895),
 }
 
 _XDM_LOS_II_PARAMS_ANGSTROM: Dict[str, Tuple[float, float]] = {
