@@ -173,6 +173,48 @@ Python stacks identify Python call boundaries, not native CUDA kernel stacks.
 No automatic retry, grid export, production panel or environment provisioning
 is performed. Full RKS/grid/route gates remain necessary for later benchmarks.
 
+### Bounded recovery and complete RKS panel
+
+`recovery_job.sh` is a separately submitted, single-allocation runner, not a
+shared-allocation bypass. It reuses the pinned core/SDK/environments, checks
+compiled-source equivalence and hashes, then:
+
+1. Bounds native GPU4PySCF diagonalization of the actual peptide cc-pVTZ and
+   aug-cc-pVTZ core/overlap matrices to 180 seconds. Checks eigenvalues,
+   prescribed retained rank, projected residual and S-orthogonality against
+   independent CPU LAPACK controls.
+2. Only if that native gate fails with verified process/GPU cleanup, tests the
+   **explicit `cupy-canonical` algorithm control**, also bounded to 180 seconds.
+   This uses GPU CuPy standard Hermitian eigensolvers and canonical
+   orthogonalization at the unchanged absolute overlap cutoff. It is not a
+   CPU eigensolver, JK fallback, installed-package patch, or claim to fix the
+   unknown native cuSOLVER problem. Selection and both gate outcomes are saved.
+3. Runs the nine RKS, two exporter and PBE/WB97X matched-grid preflight gates.
+   Only after all pass, runs five rungs, both triple-zeta bases, peptide and
+   Protein83, three fresh-process repeats each. Diagnostic energy agreement,
+   actual coordinate/weight equality, overlap spectra/rank and consumed direct
+   JK routes gate timings. Full walltime includes imports; RSS and GPU memory
+   remain mandatory.
+
+Native is always the default for ordinary comparisons. Records using the
+alternative explicitly include `eigensolver.mode=cupy-canonical` and must not
+be presented as unmodified GPU4PySCF performance. Results from different
+eigensolver policies must not be pooled.
+
+The runner uses at most eight CPUs, 64 GiB application memory (16 GiB for the
+peptide preflight) within a separately requested 128 GiB allocation, retained
+job-owned project scratch and a 26,000-second overall payload budget. Each
+worker has a timeout; failure or unknown cleanup withholds further work.
+Recovery stages use a verified Linux subreaper: detached `setsid` workers are
+adopted, signalled and reaped within a bounded cleanup deadline, without sending
+diagnostic SIGUSR1 to arbitrary shells. Strict panel workers also require an
+EXITED supervisor, no surviving adopted descendants and empty selected-GPU
+process accounting before the next worker. Timed energy disagreement suppresses
+ratios and fails preflight/production completion, not merely a warning.
+No automatic resubmission, extra allocation, UKS gate or merge is performed.
+Submit with explicit free `embers` QoS and serialize behind any coordinated
+FDDS allocation; fresh inferno approval is required for paid work.
+
 ## Required NVIDIA dependency notice
 
 NVIDIA MAKES NO REPRESENTATION ABOUT THE SUITABILITY OF THESE LICENSED

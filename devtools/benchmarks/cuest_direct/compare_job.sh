@@ -1,13 +1,15 @@
 #!/bin/bash
-# Usage: bash compare_job.sh ABS_REPO HARNESS_COMMIT ABS_BUILD ABS_RUN ABS_DATA BUILD_JOB [H100|H200] [preflight|protein83] [embers|inferno]
+# Usage: bash compare_job.sh ABS_REPO HARNESS_COMMIT ABS_BUILD ABS_RUN ABS_DATA BUILD_JOB [H100|H200] [preflight|protein83] [embers|inferno] [native|cupy-canonical]
 # Default is a peptide-only direct/direct preflight. Paid jobs need fresh approval.
 set -euo pipefail
 umask 027
 repo=${1:?}; commit=${2:?}; build=${3:?}; run=${4:?}; data=${5:?}; build_job=${6:?}
 gpu=${7:-H100}; panel=${8:-preflight}; expected_qos=${9:-embers}
+eigensolver=${10:-native}
 [[ "$gpu" == H100 || "$gpu" == H200 ]]
 [[ "$panel" == preflight || "$panel" == protein83 ]]
 [[ "$expected_qos" == embers || "$expected_qos" == inferno ]]
+[[ "$eigensolver" == native || "$eigensolver" == cupy-canonical ]]
 [[ "$repo" == /* && "$build" == /* && "$run" == /* && "$data" == /* ]]
 [[ "$(git -C "$repo" rev-parse HEAD)" == "$commit" ]]
 [[ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]]
@@ -31,7 +33,8 @@ export LD_LIBRARY_PATH="$gpu_env/lib:$cuda12"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:?}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS" OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"
 # Use Phoenix persistent scratch, not its disappearing private /tmp bind mount.
-export TMPDIR="/storage/scratch1/3/awallace43/gpu-dft-direct/${SLURM_JOB_ID:?}"
+export TMPDIR="${CUEST_COMPARE_TMPDIR:-/storage/scratch1/3/awallace43/gpu-dft-direct/${SLURM_JOB_ID:?}}"
+[[ "$TMPDIR" == /* ]]
 mkdir -p "$TMPDIR/inputs/geometries"
 export SCRATCH="$TMPDIR" PSI_SCRATCH="$TMPDIR" PYSCF_TMPDIR="$TMPDIR"
 for system in peptide protein83; do
@@ -59,7 +62,7 @@ run_child() {
     (( terminated == 0 )) || exit 143
     (( status == 0 )) || exit "$status"
 }
-run_child "$gpu_env/bin/python" - "$repo" "$commit" "$build" "$build_job" "$run" "$panel" <<'PY'
+run_child "$gpu_env/bin/python" - "$repo" "$commit" "$build" "$build_job" "$run" "$panel" "$eigensolver" <<'PY'
 import hashlib, json, pathlib, sys
 repo, build, run = map(pathlib.Path, (sys.argv[1], sys.argv[3], sys.argv[5]))
 sys.path.insert(0, str(repo / "devtools/benchmarks/gpu_compare"))
@@ -76,7 +79,9 @@ config = json.loads((repo / "devtools/benchmarks/gpu_compare/config-cc-pvtz.json
 for key in ("auxbasis", "df_fitting_condition", "df_mode"):
     config.pop(key, None)
 config.update(jk_mode="conventional-direct",
-              memory_gib=16 if sys.argv[6] == "preflight" else 160)
+              pyscf_eigensolver=sys.argv[7],
+              require_energy_agreement=True,
+              memory_gib=16 if sys.argv[6] == "preflight" else 64)
 (run / "config-direct.json").write_text(json.dumps(config, indent=2))
 (run / "harness-build-identity.json").write_text(json.dumps(dict(
     harness_commit=sys.argv[2], compiled_commit=manifest["commit"],
@@ -97,6 +102,7 @@ assert len(cases) == 2 and all(not any(c.find(t) is not None for t in
     ("failure", "error", "skipped")) for c in cases)
 PY
 args=(--config "$run/config-direct.json" --jk-mode conventional-direct
+      --stop-on-worker-failure
       --psi-env "$psi_env" --psi-package "$package" --psi-cuda-lib "$cuda13"
       --psi-xc-lib "$xc" --gpu-env "$gpu_env" --cuda12-lib "$cuda12"
       --data "$TMPDIR/inputs" --threads "$OMP_NUM_THREADS")

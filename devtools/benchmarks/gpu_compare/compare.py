@@ -24,6 +24,7 @@ from grids import apply_pyscf_grid_settings, export_grid, grid_fingerprint, inst
 from protocol import (overlap_cutoff, configure_pyscf_overlap, capture_overlap, pyscf_df_policy,
                       molecular_geometry, capture_geometry)
 from direct import is_direct, jk_mode, make_rks, pyscf_direct_policy
+from eigensolver import eigensolver_policy
 
 HERE = Path(__file__).resolve().parent
 ENGINES = ("psi4", "pyscf")
@@ -450,7 +451,8 @@ def run_pyscf(a, c, atom, r):
     sync()
     try:
         policy = pyscf_direct_policy(mf, r) if direct else pyscf_df_policy(mf, c, r, sync)
-        with pyscf_timing_policy(policy, mf, timers, a.profile, direct):
+        with eigensolver_policy(mf, c, r, a.profile), \
+                pyscf_timing_policy(policy, mf, timers, a.profile, direct):
             sync()
             scf_start = time.perf_counter()
             energy = mf.kernel()
@@ -715,6 +717,9 @@ def summarize(records, c, systems):
                 row["comparison_eligible"] = (row["nbf_equal"] and auxiliary_ok
                                               and row["functional_parameters_equal"]
                                               and row["functional_components_equal"])
+                if c.get("require_energy_agreement"):
+                    row["numerical_energy_agreement_verified"] = not row["energy_review"]
+                    row["comparison_eligible"] &= row["numerical_energy_agreement_verified"]
                 if is_direct(c):
                     row["direct_verified"] = all(r.get("direct_verified") is True for r in all_good)
                     row["comparison_eligible"] &= row["direct_verified"]

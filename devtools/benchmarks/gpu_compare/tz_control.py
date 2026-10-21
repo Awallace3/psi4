@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import itertools
+import math
 
 from compare import (HERE, ENGINES, atomic_json, digest, engine_env,
                      expected_nbf, observed_worker, summarize, xyz)
@@ -58,6 +59,44 @@ def timing_gate(proofs):
                 for engines in proofs.values()))
 
 
+def energy_audit(records, config):
+    """Require a successful finite energy pair before spending timed repeats."""
+    pair = {r["engine"]: r for r in records}
+    if set(pair) != set(ENGINES) or not all(r.get("ok") for r in pair.values()):
+        return dict(verified=False, error="Both diagnostic SCFs must succeed")
+    energies = [pair[e].get("energy_hartree") for e in ENGINES]
+    if not all(isinstance(e, (int, float)) and math.isfinite(e) for e in energies):
+        return dict(verified=False, error="Missing/nonfinite diagnostic energy")
+    delta = energies[1] - energies[0]
+    threshold = config["energy_review_threshold_eh"]
+    return dict(verified=abs(delta) <= threshold, delta_pyscf_minus_psi4_eh=delta,
+                threshold_eh=threshold)
+
+
+def worker_cleanup(base, label, uuid):
+    """Subreaper catches detached descendants; NVML checks selected GPU only."""
+    from containment import tree
+    usage = json.loads((base / f"{label}.usage.json").read_text())
+    descendants = sorted(tree())
+    text = subprocess.check_output(
+        ["nvidia-smi", "-i", uuid, "--query-compute-apps=gpu_uuid,pid,used_gpu_memory",
+         "--format=csv,noheader,nounits"], text=True, timeout=10)
+    with (base / f"{label}.gpu-after.csv").open("x") as stream:
+        stream.write(text)
+    return dict(verified=(usage.get("state") == "EXITED" and
+                          usage.get("child_returncode") == 0 and
+                          not descendants and not text.strip()),
+                descendants=descendants, selected_gpu_empty=not text.strip(),
+                supervisor_state=usage.get("state"),
+                worker_returncode=usage.get("child_returncode"))
+
+
+def require_worker_success(record, strict, label):
+    if strict and (not record.get("ok") or
+                   record.get("worker_cleanup", {}).get("verified") is not True):
+        raise RuntimeError(f"Worker {label} failed/cleanup unknown; subsequent workers withheld")
+
+
 def shared_config(config, basis, source, info):
     result = dict(config, basis=basis, grid_mode="shared-cuest",
                   shared_grid=str(source.resolve()),
@@ -92,6 +131,12 @@ def attempt(a, base, config_path, engine, system, functional, label, profile, re
             raise RuntimeError("Diagnostic audit artifact changed before timing")
     record, interrupted = observed_worker(cmd, engine_env(engine, a), base, label, expected,
         gpu["uuid"], config["worker_timeout_s"], a.gpu_env / "bin/python")
+    strict = getattr(a, "stop_on_worker_failure", False)
+    if strict:
+        try:
+            record["worker_cleanup"] = worker_cleanup(base, label, gpu["uuid"])
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            record["worker_cleanup"] = dict(verified=False, error=str(exc))
     if record.get("ok") and record.get("gpu", {}).get("uuid") != gpu["uuid"]:
         record.update(ok=False, error="Different GPU selected")
     if record.get("ok") and not profile and audit and record.get("nmo") != audit["nmo"]:
@@ -103,6 +148,7 @@ def attempt(a, base, config_path, engine, system, functional, label, profile, re
           "actual grid points:", record.get("grid_points"),
           "nonzero:", record.get("grid_nonzero_weight_points"),
           record.get("error", ""), flush=True)
+    require_worker_success(record, strict, label)
     return record, output
 
 
@@ -111,6 +157,9 @@ def control(a):
         raise RuntimeError("Use an allocated compute-node GPU, not a login node")
     a.output.mkdir(parents=True, exist_ok=False)
     a._output_created = True
+    if getattr(a, "stop_on_worker_failure", False):
+        from containment import subreaper
+        subreaper()
     (a.output / "inputs/geometries").mkdir(parents=True)
     (a.output / "harness").mkdir()
     for path in HERE.iterdir():
@@ -223,6 +272,7 @@ def control(a):
             item["native_default_grid_comparison"] = native_proofs
             atomic_json(source_base / "native-default-grid-comparison.json", native_proofs)
             all_proofs = {}
+            energy_proofs = {}
             cohorts = []
             for basis in ("cc-pvtz", "aug-cc-pvtz"):
                 base = case / basis / "campaign"
@@ -255,6 +305,8 @@ def control(a):
                 for proof in proofs.values():
                     proof["overlap_rank_spectrum_verified"] = overlap_proof["verified"]
                 atomic_json(base / "overlap-proof.json", overlap_proof)
+                energy_proofs[basis] = energy_audit(records, shared)
+                atomic_json(base / "energy-proof.json", energy_proofs[basis])
                 if overlap_proof["verified"]:
                     audit_paths = [base / "overlap-proof.json", base / "grid-proof.json"]
                     audit_paths += [base / "results" / f"{engine}-audit" / f"overlap-spectrum.{ext}"
@@ -275,7 +327,7 @@ def control(a):
                     a._config_pins[config_path] = digest(config_path)
                 cohorts.append((basis, base, config_path, shared, records))
             # Four successful actual-mesh audits required BEFORE spending timing repeats.
-            audited = timing_gate(all_proofs)
+            audited = timing_gate(all_proofs) and all(p["verified"] for p in energy_proofs.values())
             if audited:
                 for basis, base, config_path, shared, records in cohorts:
                     failed = False
@@ -299,7 +351,8 @@ def control(a):
                 atomic_json(base / "summary.json", summary)
                 item["basis_runs"][basis] = summary[0]
             item["grid_audits_verified"] = audited
-            item["complete"] = audited and all(proof["verified"] for proof in native_proofs.values()) and all(row["complete"] and row["comparison_eligible"]
+            item["diagnostic_energy_audits"] = energy_proofs
+            item["complete"] = audited and all(proof["verified"] for proof in native_proofs.values()) and all(row["complete"] and row["comparison_eligible"] and row.get("energy_review") is False
                                                for row in item["basis_runs"].values())
             results.append(item)
             atomic_json(a.output / "control-results.json", results)
@@ -324,6 +377,7 @@ def main():
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--preflight", action="store_true")
+    parser.add_argument("--stop-on-worker-failure", action="store_true")
     parser.add_argument("--jk-mode", choices=("density-fitted", "conventional-direct"))
     parser.add_argument("--df-modes", choices=("native-strategy", "stored-df"),
                         nargs="+")

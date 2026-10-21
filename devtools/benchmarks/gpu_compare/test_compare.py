@@ -43,6 +43,15 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(row["psi4_over_pyscf_scf_time"], 2)
         self.assertEqual(row["psi4_over_pyscf_calculation_time"], 1.5)
 
+    def test_strict_energy_gate_suppresses_ratios_without_losing_measurements(self):
+        self.c["require_energy_agreement"] = True
+        row = self.row([self.record("psi4"), self.record("pyscf", energy_hartree=-99.)])
+        self.assertTrue(row["complete"])
+        self.assertTrue(row["energy_review"])
+        self.assertFalse(row["comparison_eligible"])
+        self.assertFalse(row["numerical_energy_agreement_verified"])
+        self.assertFalse(any(k.startswith("psi4_over_pyscf_") for k in row))
+
     def test_full_process_headline_includes_imports_and_rejects_missing_clock(self):
         self.c["headline_timing"] = "full_process_wall_s"
         records = [self.record("psi4", full_process_wall_s=10),
