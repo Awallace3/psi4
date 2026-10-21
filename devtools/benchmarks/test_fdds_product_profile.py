@@ -42,6 +42,17 @@ def incompatible():
 
 
 class TestProfile(unittest.TestCase):
+    def test_numpy_precedes_psi4_like_frozen_runner(self):
+        imports = []
+        sentinel = object()
+
+        def import_module(name):
+            imports.append(name)
+            return sentinel
+
+        self.assertIs(profile.load_driver(import_module), sentinel)
+        self.assertEqual(imports, ["numpy", "psi4.driver.procrouting.sapt.sapt_mp2_terms"])
+
     def test_exact_association_and_repeated_calls(self):
         records = []
         instrumented, digest = profile.instrument(fixture, records)

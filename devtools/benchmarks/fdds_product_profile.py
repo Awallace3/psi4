@@ -8,6 +8,7 @@ The benchmark and its provenance/route/energy checks remain authoritative.
 import ast
 import hashlib
 import inspect
+import importlib
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,13 @@ EXPECTED = {
     "metric_inv.dot(X_A_uc).dot(metric_inv)",
     "metric_inv.dot(X_A_coupled).dot(metric_inv)",
 }
+
+def load_driver(import_module=importlib.import_module):
+    # Match fdds_benchmark.py exactly: NumPy must initialize before Psi4.
+    # Reversing this selected GNU rather than Intel MKL threading in the
+    # preserved first diagnostic. Keep the strict runtime library audit.
+    import_module("numpy")
+    return import_module("psi4.driver.procrouting.sapt.sapt_mp2_terms")
 
 
 def instrument(function, records):
@@ -79,7 +87,7 @@ def main():
     runner, expected_driver_sha, destination, *arguments = sys.argv[1:]
     # The runner has independent exact stage/core guards. Hash the actual
     # imported scientific driver too; don't silently instrument another stage.
-    from psi4.driver.procrouting.sapt import sapt_mp2_terms
+    sapt_mp2_terms = load_driver()
     driver = Path(sapt_mp2_terms.__file__).resolve()
     actual_sha = hashlib.sha256(driver.read_bytes()).hexdigest()
     if actual_sha != expected_driver_sha:
