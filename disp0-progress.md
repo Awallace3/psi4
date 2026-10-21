@@ -2507,3 +2507,40 @@ unchangedkeychecks. Addedmissing/invalid/backwards/changedstart/changedend
 negatives;45localguards PASS4.772s. Scopedconfirmationd83e42a43 pending.
 Actualresourcepermission nowVALID forONEfreshreplacement, notyetrequested.
 Old14250580PREEMPTED/alloldroots/UNKNOWN remainunchanged; no old-IDretry.
+
+Finalreplacementcodepin **770ecf90108aa7783da766bf0402d8c267dcbbed**.
+Scopedtimestampfixreviewd83e42a43 confirmspriorblockerresolved/no scoped
+blocker; read-onlyreview, notindependentlyexecutedtests. Actual45PASS4.772s.
+Publicationbac804fe1 pendingreceipt. Nextfreshprivate04source/Git/quota
+turn underexistingowner/parentclearance; nofurtherquestion, ONEreplacement
+CPU8CPU48G2hemberschemx withpreapprovednew-own-IDflag0 incontroller, strict
+postproofthenimmediatebuildfollowup. Noallocationrequest atthisentry.
+
+Final04 staging **bb9e1ff67exit0**: exact770ecf9/pristine/0700uid3170273,
+science587same. Quota2026-10-21T14:44:36Z/1792593876:
+project6340.2/8192GB, scratch4835.5/15360GB/212096of1Mfiles,
+bytes/inodesample. RawquotaSHA
+32cacefa2b719ed69eb70a8b2d30e6891d7ab53f463f7f93051cd8c6eea08b9d,
+stderrempty; humanconservative1600GiBproject/9000GiBscratch+1M/700kfiles.
+
+**ACTUAL replacementCPU14254131GRANTED**, b0fb13320exit0.
+Nodeatl1-1-02-005-10-2, Accountgts-cs207-chemx/QOSembers/Partitioncpu-small,
+1node1task8CPU48G,TimeLimit2h,Start2026-10-21T10:46:00/
+End12:46:01America/New_York. BothReqTRES+AllocTRES exactcpu8/mem48G/node1,
+noGPU,BatchFlag0,Restarts0. PreapprovedONEnew-own-IDRequeue0correction
+SUCCEEDED; strictpostcontroller verifiesflag0 andunchangedresources/account/
+start/end/time. Noquestion/newallocationretry. RawacceptedID/flagintent/
+response/before-after/controller/allocationmanifest durable in
+`P/gits/psi4.disp0-opt064-20261021-04/interactive-attempt/`.
+Quota-reviewSHAa6be658bf130c4a98406678e66b2aee88e52f06598cbbc858fca0909192a3feb.
+
+**FirstactualCPUbuildclient launched immediately**, be4138c69,
+exclusive8CPU48G SAMEallocation, source770/fork064/science587. Freshactual
+controller/time budget checked; bounded<=6300s and remaininglease-minus90s.
+No logincompilation: allbuild work inside exclusive srun invoking tracked
+interactive_step.sh. No newallocation orGPUstep. Logs:
+`.../interactive-attempt/build-step-01/{launch-intent.json,controller-before.json,
+stdout,stderr,client-result.json}`. Actualnode-stepstart receiptcheck
+bbd025732 pending; no build/API/numerical/devicePASS inferred yet.
+Ownlease officialmonitor b53cf45bd -i300 and independentstepterminalevents
+avoidqueryloops. Owner+parentreceivedactualgrant/correction/launch receipts.
