@@ -1191,10 +1191,12 @@ def _grac_cation_ground_state(dft_functional, mol_cation, jk_obj, wfn_given, scf
     the SAD state, its n/pi cation states being nearly degenerate.
     """
     nelec_cation = wfn_given.nalpha() + wfn_given.nbeta() - 1
-    # Second-order steps on every cation SCF, whatever the tier: when the hole mixes two near-degenerate
-    # neutral orbitals (amide n/pi, ethane e_g, carboxylate O lone pairs) DIIS either stalls or "converges"
-    # 0.2-2 mEh above the ground state, under every tier. The neutral, and so the HOMO, is left alone.
-    core.set_local_option("SCF", "SOSCF", True)
+    # SAPT_DFT_GRAC_CATION_SOSCF: second-order steps on every cation SCF, whatever the tier. When the hole
+    # mixes two near-degenerate neutral orbitals (amide n/pi, ethane e_g, carboxylate O lone pairs) DIIS
+    # either stalls or "converges" 0.2-2 mEh above the ground state, under every tier. The neutral, and so
+    # the HOMO, is left alone.
+    if core.get_option("SAPT", "SAPT_DFT_GRAC_CATION_SOSCF"):
+        core.set_local_option("SCF", "SOSCF", True)
     best = None
     read_file = core.Wavefunction.build(mol_cation, core.get_global_option("BASIS")).get_scratch_filename(180)
     for guess in ("READ", "SAD"):

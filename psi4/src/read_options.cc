@@ -1175,14 +1175,19 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         /*- SAPT_DFT_GRAC_COMPUTE will enable automatically computing GRAC
          shifts prior to running SAPT(DFT). Note that the user must not specify
          a value for SAPT_DFT_GRAC_SHIFT_A or SAPT_DFT_GRAC_SHIFT_B to trigger
-         this GRAC computation. "SINGLE" will try only once to converge the
-         cation for computing a GRAC shift. "ITERATIVE" will adjust local Psi4
-         options ("LEVEL_SHIFT", "LEVEL_SHIFT_CUTOFF") to attempt to converge
-         the neutral/cation calculations. "ITERATIVE" will try 4 times to
-         converge the cation before failing the SAPT(DFT) computation. Both
-         modes converge the cation with "SOSCF" and keep the lower energy of
-         the READ (neutral orbitals) and SAD guesses. -*/
+         this GRAC computation. Each attempt converges the neutral, then the
+         cation from both the neutral orbitals (GUESS READ) and SAD, keeping
+         the lower cation energy. "SINGLE" makes one attempt with ADIIS.
+         "ITERATIVE" makes up to 4 attempts, the last three adding
+         "LEVEL_SHIFT"/"LEVEL_SHIFT_CUTOFF" and "MAXITER" 200, before failing
+         the SAPT(DFT) computation. -*/
     options.add_str("SAPT_DFT_GRAC_COMPUTE", "NONE", "NONE SINGLE ITERATIVE");
+    /*- Converge every GRAC cation SCF (both guesses, every attempt) with
+    second-order "SOSCF" steps; the neutral is unaffected. When the hole mixes
+    near-degenerate orbitals (amide n/pi, ethane e_g, carboxylate O lone
+    pairs), DIIS can stall or converge 0.2-2 mEh above the cation ground
+    state. Slower: 5-7x the cation SCF time on larger monomers. -*/
+    options.add_bool("SAPT_DFT_GRAC_CATION_SOSCF", false);
     /*- Compute or echo monomer GRAC shifts and stop before SAPT energies.
     Requires SINGLE or ITERATIVE and a non-HF functional. The returned dimer
     wavefunction has CURRENT ENERGY zero, not an interaction energy. -*/
