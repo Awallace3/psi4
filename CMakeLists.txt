@@ -265,6 +265,14 @@ message(STATUS "Psi4 staging: ${STAGED_INSTALL_PREFIX}")
 message(STATUS "CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
 add_subdirectory(external/common)
 add_subdirectory(external/upstream)
+if(ENABLE_cuEST)
+    # Discovery happens two directory scopes below this one; ordinary variables
+    # do not propagate upward. Forward the verified outer identity, never empty.
+    get_property(cuEST_IDENTITY_FILE GLOBAL PROPERTY PSI4_CUEST_IDENTITY)
+    if(NOT EXISTS "${cuEST_IDENTITY_FILE}")
+        message(FATAL_ERROR "Outer cuEST identity was not published")
+    endif()
+endif()
 # external projects manage their own OpenMP and c++YY flags, so only add to CXX_FLAGS for psi4-core
 include(custom_cxxstandard)
 include(custom_static_library)
@@ -392,7 +400,12 @@ ExternalProject_Add(psi4-core
               -Dsimint_DIR=${simint_DIR}
               -DLibxc_DIR=${Libxc_DIR}
               -DBrianQC_DIR=${BrianQC_DIR}
-              -DcuEST_ROOT=${cuEST_ROOT}
+   -DcuEST_ROOT=${cuEST_ROOT}
+   -DcuEST_INCLUDE_DIR=${cuEST_INCLUDE_DIR}
+   -DcuEST_LIBRARY=${cuEST_LIBRARY}
+   -DcuEST_CUDA_RUNTIME_ROOT=${cuEST_CUDA_RUNTIME_ROOT}
+   -DcuEST_PARENT_IDENTITY=${cuEST_IDENTITY_FILE}
+   -DcuEST_SUPERBUILD_INNER=ON
               -DFortran_ENABLED=${Fortran_ENABLED}
               -DLIBC_INTERJECT=${LIBC_INTERJECT}
               -DRESTRICT_KEYWORD=${RESTRICT_KEYWORD}

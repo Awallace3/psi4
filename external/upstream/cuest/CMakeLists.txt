@@ -1,9 +1,6 @@
 if(ENABLE_cuEST)
-    find_package(cuEST 0.2 CONFIG QUIET)  # edit in codedeps
-
-    if(NOT cuEST_FOUND)
-        find_package(cuEST MODULE QUIET)
-    endif()
+    # CONFIG packages/ambient libraries must not bypass the shared hash gate.
+    find_package(cuEST 0.2.50 EXACT MODULE REQUIRED)
 
     if(cuEST_FOUND)
         message(STATUS "${Cyan}Found cuEST${ColourReset}: ${cuEST_LIBRARY} (include: ${cuEST_INCLUDE_DIR})")

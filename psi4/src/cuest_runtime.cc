@@ -62,6 +62,9 @@
 
 #include "cuest_runtime.h"
 
+static_assert(CUEST_VER_MAJOR == 0 && CUEST_VER_MINOR == 2 && CUEST_VER_PATCH == 50,
+              "Psi4 requires the canonical cuEST 0.2.50 headers");
+
 using namespace psi;
 
 // Process-global handles. Deliberately at global scope, not in a namespace:
@@ -80,6 +83,15 @@ cuestHandle_t cuest_handle = 0;
 cudaStream_t stream_handle = 0;
 
 namespace {
+
+// Covers configuration/create failures as well as explicit destruction errors.
+// The C API destructor cannot throw; unwinding must retain the original error.
+struct CuestHandleParametersOwner {
+    cuestHandleParameters_t value = nullptr;
+    ~CuestHandleParametersOwner() noexcept {
+        if (value != nullptr) cuestParametersDestroy(CUEST_HANDLE_PARAMETERS, value);
+    }
+};
 
 // Tear down whatever is up, in reverse order of creation, swallowing errors.
 // Used both for the ordinary shutdown path and to unwind a partially completed
@@ -294,34 +306,44 @@ void cuest_init() {
         if (cusolver_status != CUSOLVER_STATUS_SUCCESS) {
             throw PSIEXCEPTION("cusolverDnCreate failed in cuest_init");
         }
-        cublasSetStream(cublas_handle, stream_handle);
-        cusolverDnSetStream(cusolver_handle, stream_handle);
+        cublas_status = cublasSetStream(cublas_handle, stream_handle);
+        if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+            throw PSIEXCEPTION("cublasSetStream failed in cuest_init");
+        }
+        cusolver_status = cusolverDnSetStream(cusolver_handle, stream_handle);
+        if (cusolver_status != CUSOLVER_STATUS_SUCCESS) {
+            throw PSIEXCEPTION("cusolverDnSetStream failed in cuest_init");
+        }
         // Declare & create the cuEST parameters and handle with reasonable defaults. Destroy param promptly.
-        cuestHandleParameters_t handle_parameters;
-        CHECK_CUEST(cuestParametersCreate(CUEST_HANDLE_PARAMETERS, &handle_parameters));
+        CuestHandleParametersOwner parameters;
+        CHECK_CUEST(cuestParametersCreate(CUEST_HANDLE_PARAMETERS, &parameters.value));
         CHECK_CUEST(cuestParametersConfigure(
             CUEST_HANDLE_PARAMETERS,
-            handle_parameters,
+            parameters.value,
             CUEST_HANDLE_PARAMETERS_CUDASTREAM,
             &stream_handle,
             sizeof(stream_handle)
         ));
         CHECK_CUEST(cuestParametersConfigure(
             CUEST_HANDLE_PARAMETERS,
-            handle_parameters,
+            parameters.value,
             CUEST_HANDLE_PARAMETERS_CUBLAS,
             &cublas_handle,
             sizeof(cublas_handle)
         ));
         CHECK_CUEST(cuestParametersConfigure(
             CUEST_HANDLE_PARAMETERS,
-            handle_parameters,
+            parameters.value,
             CUEST_HANDLE_PARAMETERS_CUSOLVER,
             &cusolver_handle,
             sizeof(cusolver_handle)
         ));
-        CHECK_CUEST(cuestCreate(handle_parameters, &cuest_handle));
-        CHECK_CUEST(cuestParametersDestroy(CUEST_HANDLE_PARAMETERS, handle_parameters));
+        CHECK_CUEST(cuestCreate(parameters.value, &cuest_handle));
+        CHECK_CUEST(cuestParametersDestroy(CUEST_HANDLE_PARAMETERS, parameters.value));
+        parameters.value = nullptr;
+        // The vendor getters require a valid handle and uint32_t output storage.
+        // Do not guess a no-argument/version-return ABI or trust the SONAME.
+        psi::cuest_runtime::native_version();
     } catch (...) {
         cuest_cleanup_noexcept();
         throw;
@@ -344,6 +366,20 @@ void ensure_cuest_initialized() {
 }  // namespace cuest_common
 
 namespace cuest_runtime {
+
+std::array<std::uint32_t, 3> native_version() {
+    if (cuest_handle == 0) {
+        throw PSIEXCEPTION("cuEST native version requires an already initialized Psi4 handle");
+    }
+    std::array<std::uint32_t, 3> version{};
+    CHECK_CUEST(cuestGetMajorVersion(cuest_handle, &version[0]));
+    CHECK_CUEST(cuestGetMinorVersion(cuest_handle, &version[1]));
+    CHECK_CUEST(cuestGetPatchVersion(cuest_handle, &version[2]));
+    if (version != std::array<std::uint32_t, 3>{0, 2, 50}) {
+        throw PSIEXCEPTION("cuEST native version is not the required 0.2.50");
+    }
+    return version;
+}
 
 void shutdown() {
     // No-op when cuEST was never brought up: a machine without a GPU, or a run

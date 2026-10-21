@@ -60,6 +60,8 @@ export PATH="$env/bin:$PATH"
 hash -r
 export LD_LIBRARY_PATH="$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export CUDA_HOME="$env" CUDA_PATH="$env"
+source "$root/devtools/cuest_sdk_env.sh"
+cuest_sdk_select "$root" "$env" "$out"
 selected_nvcc=$(realpath "$(command -v nvcc)")
 expected_nvcc=$(realpath "$env/bin/nvcc")
 printf 'Selected nvcc=%s; required nvcc=%s\n' "$selected_nvcc" "$expected_nvcc"
@@ -112,18 +114,25 @@ if [[ -z "${CUEST_FDDS_READONLY_BUILD_ROOT:-}" ]]; then
     -DEinsums_DIR="$deps/share/cmake/Einsums" \
     -DENABLE_Einsums=ON -DENABLE_OPENMP=ON -DENABLE_cuEST=ON \
     -DENABLE_dkh=OFF -DENABLE_XHOST=OFF \
-    -DcuEST_ROOT="$env" -DcuEST_INCLUDE_DIR="$env/include" \
-    -DcuEST_LIBRARY="$env/lib/libcuest.so" -DCMAKE_INSIST_FIND_PACKAGE_cuEST=ON \
+    "${cuest_args[@]}" -DCMAKE_INSIST_FIND_PACKAGE_cuEST=ON \
     -DCUDAToolkit_ROOT="$env" -DCUDAToolkit_NVCC_EXECUTABLE="$env/bin/nvcc" \
     -Dpsi4_CMAKE_UNITY_BUILD=ON > "$out/configure.log" 2>&1
 "$env/bin/cmake" --build "$build" -j "${SLURM_CPUS_PER_TASK:-4}" > "$out/build.log" 2>&1
+fi
+cores=("$build"/stage/lib/psi4/core*.so)
+test "${#cores[@]}" = 1
+if [[ -n "${CUEST_FDDS_READONLY_BUILD_ROOT:-}" ]]; then
+    : "${CUEST_FDDS_BINARY_IDENTITY:?original build-time core/SDK/CUDA closure receipt required}"
+    cuest_sdk_reuse_core "$env" "${cores[0]}" "$out" "$CUEST_FDDS_BINARY_IDENTITY"
+else
+    cuest_sdk_bind_core "$env" "${cores[0]}" "$out"
 fi
 eval "$("$build/stage/bin/psi4" --psiapi)"
 export EXPECTED_PSI4_PACKAGE="$build/stage/lib/psi4"
 export CUEST_DEPENDENCY_ENV="$env"
 cd "$out"
 "$env/bin/python" - <<'PY' > import.json
-import hashlib, json, os, subprocess
+import hashlib, json, os, subprocess, importlib.util
 from pathlib import Path
 import psi4
 p = Path(psi4.__file__).resolve().parent
@@ -147,13 +156,17 @@ packages = []
 for file in (Path(os.environ["CUEST_DEPENDENCY_ENV"]) / "conda-meta").glob("libcuest*.json"):
     data = json.loads(file.read_text())
     packages.append({k: data[k] for k in ("name", "version", "build")})
-assert any(p["name"] == "libcuest" and p["version"] == "0.2.2.2" for p in packages), packages
+spec = importlib.util.spec_from_file_location("cuest_contract", os.environ["CUEST_CONTRACT"])
+contract = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(contract)
+identity = contract.admit_runtime(core, json.loads(Path(os.environ["CUEST_CORE_IDENTITY"]).read_text()))
 print(json.dumps(dict(package=str(p), core=str(core), version=psi4.__version__,
                      core_sha256=core_hash,
                      linked_libraries=libraries,
                      linked_library_sha256={name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
                                             for name, path in libraries.items()},
                      binary_pin=os.environ.get("CUEST_FDDS_BINARY_PIN"),
+                     cuest_identity=identity,
                      cuest_packages=packages), indent=2))
 PY
 if [[ "$compile_only" == 1 ]]; then
@@ -166,7 +179,8 @@ if [[ "${CUEST_FDDS_FOCUSED:-0}" == 1 ]]; then
     # Preserve both focused outcomes even if the contribution process fails.
     set +e
 fi
-"$env/bin/python" -m pytest "$root/tests/pytests/test_cuest_fdds.py" -q -s \
+"$env/bin/python" "$root/devtools/cuest_run_admitted.py" \
+    --receipt "$out/fdds-runtime.json" --module pytest -- "$root/tests/pytests/test_cuest_fdds.py" -q -s \
     "${test_selection[@]}" --junitxml="$out/fdds.xml" > "$out/fdds.log" 2>&1
 contribution_status=$?
 if [[ "${CUEST_FDDS_FOCUSED:-0}" == 1 ]]; then
@@ -179,7 +193,8 @@ if [[ "${CUEST_FDDS_FOCUSED:-0}" == 1 ]]; then
         -ex 'handle SIGSEGV stop print nopass' \
         -ex 'break einsums::util::attach_debugger()' \
         -ex run -ex 'thread apply all bt 12' -ex quit \
-        --args "$env/bin/python" -X faulthandler -m pytest \
+        --args "$env/bin/python" -X faulthandler "$root/devtools/cuest_run_admitted.py" \
+        --receipt "$out/sapt-runtime.json" --module pytest -- \
         "$root/tests/pytests/test_cuest_fdds.py::test_saptdft_fdds_native_xc_gpu" \
         -vv -x -s --basetemp="$out/sapt-tmp" --junitxml="$out/sapt.xml" \
         > "$out/sapt-gdb.log" 2>&1
@@ -222,7 +237,8 @@ if [[ "${CUEST_FDDS_FOCUSED:-0}" == 1 &&
         -ex 'set breakpoint pending on' -ex 'handle SIGSEGV stop print nopass' \
         -ex 'break einsums::util::attach_debugger()' \
         -ex run -ex 'thread apply all bt 12' -ex quit \
-        --args "$env/bin/python" -X faulthandler -m pytest \
+        --args "$env/bin/python" -X faulthandler "$root/devtools/cuest_run_admitted.py" \
+        --receipt "$out/full-runtime.json" --module pytest -- \
         "$root/tests/pytests/test_cuest_fdds.py" -vv -s \
         --basetemp="$out/full-tmp" --junitxml="$out/full-fdds.xml" \
         > "$out/full-fdds-gdb.log" 2>&1

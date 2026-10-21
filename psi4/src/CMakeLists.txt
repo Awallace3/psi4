@@ -78,6 +78,13 @@ if(TARGET cuEST::cuEST)
       cuest_runtime.cc
       cuest_gemm.cc
     )
+  # Inspect actual compiler dependencies, not just a hashed but unused include
+  # directory. An old environment cuest.h shadowing the SDK is a build failure.
+  add_custom_command(TARGET core POST_BUILD
+    COMMAND "${Python_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/../cmake/cuest_header_dependencies.py"
+      --sdk-root "${cuEST_ROOT}" --build-directory "${CMAKE_BINARY_DIR}"
+      --generator "${CMAKE_GENERATOR}" --output "${CMAKE_BINARY_DIR}/cuest-header-dependencies.json"
+    VERBATIM)
 endif()
 
 get_property(psi4_binmodules GLOBAL PROPERTY LINKBINLIST)

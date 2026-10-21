@@ -4,10 +4,10 @@
 # Arguments: worktree, environment, commit, output, variant (host|cuda).
 #   host: LibXC from the environment (host LibXC derivative route)
 #   cuda: CUDA LibXC 7.1.2 (device derivative route)
-# Optional environment overrides (defaults reproduce the original sm_90 / cuEST 0.2.2 builds):
+# Optional environment overrides (canonical cuEST 0.2.50; historical builds stay immutable):
 #   CPKS_CUDA_ARCHS  CUDA architectures (default 90; must be embedded in CPKS_CUDA_LIBXC)
 #   CPKS_CUDA_LIBXC  CUDA LibXC prefix (default software/libxc-7.1.2-cuda)
-#   CPKS_CUEST_SDK   standalone cuEST SDK (lib/13, include); default: the environment's libcuest
+#   CUEST_SDK_ROOT (or CPKS_CUEST_SDK) canonical standalone SDK; never conda libcuest
 #   CPKS_BUILD_DIR   build directory name in the worktree (default build_cpks_<variant>)
 # The output gets runtime.env (LD_LIBRARY_PATH and expected prefixes) for the run scripts.
 set -euo pipefail
@@ -32,16 +32,10 @@ deps=/storage/project/r-cs207-0/awallace43/gits/psi4.saptdft-cuest-lifecycle-202
 software=/storage/project/r-cs207-0/awallace43/software
 export CUDA_HOME="$software/toolchains/cuda13" CUDA_PATH="$software/toolchains/cuda13"
 archs="${CPKS_CUDA_ARCHS:-90}"
-cuest_sdk="${CPKS_CUEST_SDK:-}"
-cuest_lib_dir="$env/lib"
-cuest_args=("-DcuEST_ROOT=$env" "-DcuEST_INCLUDE_DIR=$env/include" "-DcuEST_LIBRARY=$env/lib/libcuest.so")
-if [[ -n "$cuest_sdk" ]]; then
-    cuest_sdk=$(realpath "$cuest_sdk")
-    cuest_lib_dir="$cuest_sdk/lib/13"
-    test -f "$cuest_lib_dir/libcuest.so"
-    cuest_args=("-DcuEST_ROOT=$cuest_sdk" "-DcuEST_INCLUDE_DIR=$cuest_sdk/include"
-                "-DcuEST_LIBRARY=$cuest_lib_dir/libcuest.so")
-fi
+source "$root/devtools/cuest_sdk_env.sh"
+cuest_sdk_select "$root" "$env" "$out"
+cuest_sdk="$CUEST_SDK_ROOT"
+cuest_lib_dir="$cuest_sdk/lib/13"
 libxc="$env"
 cc="$env/bin/x86_64-conda-linux-gnu-cc"
 cxx="$env/bin/x86_64-conda-linux-gnu-c++"
@@ -74,12 +68,15 @@ else
     libxc_lib="$env/lib"
 fi
 # The SDK libcuest and the environment's share the soname libcuest.so.0: the SDK goes first.
-runtime_path="$cuest_lib_dir:$libxc_lib:$env/lib"
+runtime_path="$cuest_lib_dir:$libxc_lib:$env/targets/x86_64-linux/lib:$env/lib"
 export LD_LIBRARY_PATH="$runtime_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 {
     printf 'export LD_LIBRARY_PATH=%q\n' "$runtime_path"
     printf 'CPKS_EXPECTED_LIBXC=%q\nCPKS_EXPECTED_CUEST=%q\nCPKS_CUDA_ARCHS=%q\n' \
         "$libxc" "$cuest_lib_dir" "$archs"
+    printf 'export CUEST_SDK_ROOT=%q\nexport CUEST_CUDA_RUNTIME_ROOT=%q\n' "$CUEST_SDK_ROOT" "$CUEST_CUDA_RUNTIME_ROOT"
+    printf 'export CUEST_SDK_MANIFEST=%q\nexport CUEST_CONTRACT=%q\n' "$CUEST_SDK_MANIFEST" "$CUEST_CONTRACT"
+    printf 'export CUEST_CORE_IDENTITY=%q\n' "$out/cuest-core-identity.json"
 } > "$out/runtime.env"
 {
     "$cc" --version
@@ -149,6 +146,9 @@ ldd "$build"/stage/lib/psi4/core*.so > "$out/ldd.txt"
 grep -q "libcuest.so.0 => $cuest_lib_dir/" "$out/ldd.txt"
 grep -qE "libxc.so.[0-9]+ => $libxc/" "$out/ldd.txt"
 sha256sum "$build"/stage/lib/psi4/core*.so > "$out/core.sha256"
+cores=("$build"/stage/lib/psi4/core*.so)
+test "${#cores[@]}" = 1
+cuest_sdk_bind_core "$env" "${cores[0]}" "$out"
 test "$(git -C "$root" rev-parse HEAD)" = "$pin"
 test -z "$(git -C "$root" status --porcelain --untracked-files=no)"
 printf '%s %s\n' "$pin" "$variant" > "$out/BUILD_OK"

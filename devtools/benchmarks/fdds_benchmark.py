@@ -69,6 +69,39 @@ def libraries():
     return {p: digest(p) for p in sorted(paths)}
 
 
+def sdk_admit_before(psi4, arm):
+    """Future active GPU-capable replays cannot bless a historical old SDK.
+
+    Pure CPU-only builds remain usable without CUDA. These admission costs are
+    outside the explicitly measured df_fdds_dispersion interval.
+    """
+    if arm != "gpu" and not hasattr(psi4.core, "cuest_chain_gemm"):
+        return None
+    started = time.perf_counter()
+    bridge_file = Path(__file__).resolve().parents[1] / "cuest_run_admitted.py"
+    spec = importlib.util.spec_from_file_location("cuest_worker", bridge_file)
+    bridge = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bridge)
+    bridge.check_provider(psi4.core)  # presence/provenance only, no initialization
+    spec = importlib.util.spec_from_file_location("cuest_contract", os.environ["CUEST_CONTRACT"])
+    contract = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(contract)
+    expected = json.loads(Path(os.environ["CUEST_CORE_IDENTITY"]).read_text())
+    before = contract.admit_runtime(psi4.core.__file__, expected)
+    return contract, expected, bridge, before, time.perf_counter() - started
+
+
+def sdk_admit_after(psi4, arm, admission):
+    if admission is None:
+        return None
+    contract, expected, bridge, before, seconds = admission
+    started = time.perf_counter()
+    native = bridge.native_receipt(psi4.core) if arm == "gpu" else None
+    after = contract.admit_runtime(psi4.core.__file__, expected)
+    return {"before": before, "after": after, "native_version": native,
+            "admission_seconds_excluded_from_fdds": seconds + time.perf_counter() - started}
+
+
 def prepare(psi4, args):
     if args.system == "water":
         geometry = WATER
@@ -120,6 +153,7 @@ def prepare(psi4, args):
 
 
 def replay(psi4, args, metadata):
+    admission = sdk_admit_before(psi4, args.arm)
     from psi4.driver.procrouting.sapt import sapt_mp2_terms
     assert metadata["options"] == SCIENCE and metadata["functional"] == FUNCTIONAL
     assert digest(args.cache / "orbitals.npz") == metadata["orbitals_sha256"]
@@ -215,6 +249,7 @@ def replay(psi4, args, metadata):
         if args.arm == "gpu" and args.require_gpu_response_products and product_calls != 60:
             raise RuntimeError("Product candidate requires60 actual GPU chains, not packed Rtinv views")
         assert all(np.isfinite(v) for v in energies.values())
+        result["cuest_admission"] = sdk_admit_after(psi4, args.arm, admission)
         result["ok"] = True
     finally:
         setattr(pinv_owner, pinv_name, original)
@@ -258,6 +293,10 @@ def main():
     psi4.set_num_threads(args.threads)
     psi4.set_memory(args.memory)
     try:
+        if args.prepare:
+            # Preparation executes SCF before replay; admit the compiled SDK
+            # first without creating a CUDA handle for this CPU preparation.
+            sdk_admit_before(psi4, args.arm)
         metadata = prepare(psi4, args) if args.prepare else json.loads((args.cache / "metadata.json").read_text())
         print(json.dumps(replay(psi4, args, metadata), indent=2))
     finally:

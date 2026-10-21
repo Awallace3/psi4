@@ -30,6 +30,8 @@ unset GCC_ROOT CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH LIBRARY
 deps=/storage/project/r-cs207-0/awallace43/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage
 software=/storage/project/r-cs207-0/awallace43/software
 export CUDA_HOME="$software/toolchains/cuda13" CUDA_PATH="$software/toolchains/cuda13"
+source "$root/devtools/cuest_sdk_env.sh"
+cuest_sdk_select "$root" "$env" "$out"
 libxc="$env"
 cc="$env/bin/x86_64-conda-linux-gnu-cc"
 cxx="$env/bin/x86_64-conda-linux-gnu-c++"
@@ -51,6 +53,7 @@ else
     libxc_config="$libxc/lib/cmake/Libxc"
     export LD_LIBRARY_PATH="$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
+export LD_LIBRARY_PATH="$CUEST_SDK_ROOT/lib/13:$LD_LIBRARY_PATH"
 {
     "$cc" --version
     "$cxx" --version
@@ -94,8 +97,7 @@ fi
     "-DEinsums_DIR=$deps/share/cmake/Einsums" \
     -DENABLE_Einsums=ON -DENABLE_OPENMP=ON -DENABLE_cuEST=ON \
     -DENABLE_dkh=OFF -DENABLE_XHOST=OFF \
-    "-DcuEST_ROOT=$env" "-DcuEST_INCLUDE_DIR=$env/include" \
-    "-DcuEST_LIBRARY=$env/lib/libcuest.so" \
+    "${cuest_args[@]}" \
     -DCMAKE_INSIST_FIND_PACKAGE_cuEST=ON -Dpsi4_CMAKE_UNITY_BUILD=ON \
     "${cuda_args[@]}" > "$out/configure.log" 2>&1
 "$env/bin/cmake" --build "$build" -j "$OMP_NUM_THREADS" > "$out/build.log" 2>&1
@@ -109,11 +111,14 @@ if readelf --dyn-syms --wide "$build"/stage/lib/psi4/core*.so | grep ' UND cudaG
     exit 1
 fi
 eval "$("$build/stage/bin/psi4" --psiapi)"
+cores=("$build"/stage/lib/psi4/core*.so)
+test "${#cores[@]}" = 1
+cuest_sdk_bind_core "$env" "${cores[0]}" "$out"
 export EXPECTED_PSI4_PACKAGE="$build/stage/lib/psi4"
 export CUEST_DEPENDENCY_ENV="$env" EXPECTED_LIBXC_PREFIX="$libxc" GRID_VARIANT="$variant"
 cd "$out"
 "$env/bin/python" - <<'PY' > import.json
-import hashlib, json, os, subprocess
+import hashlib, json, os, subprocess, importlib.util
 from pathlib import Path
 import psi4
 package = Path(psi4.__file__).resolve().parent
@@ -131,13 +136,18 @@ xc = [Path(v) for k, v in libraries.items() if k.startswith("libxc.")]
 assert xc and all(p.is_relative_to(Path(os.environ["EXPECTED_LIBXC_PREFIX"])) for p in xc), libraries
 packages = [json.loads(p.read_text()) for p in
             (Path(os.environ["CUEST_DEPENDENCY_ENV"]) / "conda-meta").glob("libcuest*.json")]
-assert any(p["name"] == "libcuest" and p["version"] == "0.2.2.2" for p in packages), packages
+spec = importlib.util.spec_from_file_location("cuest_contract", os.environ["CUEST_CONTRACT"])
+contract = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(contract)
+identity = contract.admit_runtime(core, json.loads(Path(os.environ["CUEST_CORE_IDENTITY"]).read_text()))
 print(json.dumps(dict(package=str(package), core=str(core), version=psi4.__version__,
                      core_sha256=hashlib.sha256(core.read_bytes()).hexdigest(),
                      linked_libraries=libraries, variant=os.environ["GRID_VARIANT"],
+                     cuest_identity=identity,
                      cuest_packages=[{k:p[k] for k in ("name","version","build")} for p in packages]), indent=2))
 PY
-"$env/bin/python" -m pytest "$root/tests/pytests/test_dft_grid_switch.py" \
+"$env/bin/python" "$root/devtools/cuest_run_admitted.py" \
+    --receipt "$out/regressions-runtime.json" --module pytest -- "$root/tests/pytests/test_dft_grid_switch.py" \
     "$root/tests/pytests/test_scf_lifecycle.py" -q --junitxml="$out/regressions.xml" \
     > "$out/regressions.log" 2>&1
 "$env/bin/python" - <<'PY'
@@ -151,7 +161,8 @@ assert all(int(suite.get(k, "0")) == 0 for k in ("errors", "failures", "skipped"
 Path("REGRESSIONS_VERIFIED.json").write_text(json.dumps(counts, indent=2) + "\n")
 PY
 # Fresh processes keep scratch, options, timers and grid controls independent.
-"$env/bin/python" "$root/devtools/saptdft_xc_profile.py" --output "$out/profile" \
+"$env/bin/python" "$root/devtools/cuest_run_admitted.py" \
+    --receipt "$out/profile-runtime.json" --script "$root/devtools/saptdft_xc_profile.py" -- --output "$out/profile" \
     --threads "$OMP_NUM_THREADS" --use-cuest > "$out/profile.log" 2>&1
 "$env/bin/python" - <<'PY'
 import json, os

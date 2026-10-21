@@ -53,7 +53,7 @@ export EXPECTED_CUEST_DIR="$CPKS_EXPECTED_CUEST"
 # Never run Python from the source root (it shadows the staged package).
 cd "$out"
 "$env/bin/python" -P - <<'PY' > import.json
-import hashlib, json, os, subprocess
+import hashlib, json, os, subprocess, importlib.util
 from pathlib import Path
 import psi4
 package = Path(psi4.__file__).resolve().parent
@@ -74,25 +74,32 @@ cuest_dir = Path(os.environ["EXPECTED_CUEST_DIR"]).resolve()
 assert cuest and all(p.is_relative_to(cuest_dir) for p in cuest), libraries
 packages = [json.loads(p.read_text()) for p in
             (Path(os.environ["CUEST_DEPENDENCY_ENV"]) / "conda-meta").glob("libcuest*.json")]
-if cuest_dir == (Path(os.environ["CUEST_DEPENDENCY_ENV"]) / "lib").resolve():
-    assert any(p["name"] == "libcuest" and p["version"] == "0.2.2.2" for p in packages), packages
+spec = importlib.util.spec_from_file_location("cuest_contract", os.environ["CUEST_CONTRACT"])
+contract = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(contract)
+identity = contract.admit_runtime(core, json.loads(Path(os.environ["CUEST_CORE_IDENTITY"]).read_text()))
 print(json.dumps(dict(package=str(package), core=str(core), version=psi4.__version__,
                      core_sha256=hashlib.sha256(core.read_bytes()).hexdigest(),
                      linked_libraries=libraries, variant=os.environ["CPKS_VARIANT"],
+                     cuest_identity=identity,
                      cuest_library_sha256=hashlib.sha256(cuest[0].read_bytes()).hexdigest(),
                      cuest_packages=[{k: p[k] for k in ("name", "version", "build")} for p in packages]),
                 indent=2))
 PY
 # Regression tests: keep going on failure so the probe still records numbers.
 set +e
-"$env/bin/python" -P -m pytest "$root/tests/pytests/test_cuest_cphf.py" -v -s -p no:cacheprovider \
+"$env/bin/python" -P "$root/devtools/cuest_run_admitted.py" \
+    --receipt "$out/cphf-runtime.json" --module pytest -- \
+    "$root/tests/pytests/test_cuest_cphf.py" -v -s -p no:cacheprovider \
     --junitxml="$out/cphf.xml" > "$out/cphf.log" 2>&1
 cphf_status=$?
-"$env/bin/python" -P -m pytest "$root/tests/pytests/test_cuest_grac.py" \
+"$env/bin/python" -P "$root/devtools/cuest_run_admitted.py" \
+    --receipt "$out/regressions-runtime.json" --module pytest -- "$root/tests/pytests/test_cuest_grac.py" \
     "$root/tests/pytests/test_dft_grid_switch.py" -q -p no:cacheprovider \
     --junitxml="$out/regressions.xml" > "$out/regressions.log" 2>&1
 regressions_status=$?
-"$env/bin/python" -P "$root/devtools/cuest_xc_response_probe.py" "$out/probe" $sections \
+"$env/bin/python" -P "$root/devtools/cuest_run_admitted.py" \
+    --receipt "$out/probe-runtime.json" --script "$root/devtools/cuest_xc_response_probe.py" -- "$out/probe" $sections \
     > "$out/probe.log" 2>&1
 probe_status=$?
 set -e

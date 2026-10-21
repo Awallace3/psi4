@@ -14,6 +14,7 @@ about a complete interaction energy. --compact tests four representative grids.
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -108,6 +109,31 @@ def worker(args):
     return result
 
 
+def worker_result(completed, directory, final, initial, use_cuest):
+    """A scientific result cannot override a failed runtime-admission worker."""
+    def failed(message):
+        return {"status": "failed", "final": final, "initial": initial,
+                "error": message, "returncode": completed.returncode}
+    if completed.returncode != 0:
+        return failed(f"Worker exited {completed.returncode}: {completed.stderr[-4000:]}")
+    if not (directory / "result.json").exists():
+        return failed("Worker returned no result.json")
+    if use_cuest:
+        try:
+            receipt = json.loads((directory / "runtime-admission.json").read_text())
+            expected = json.loads(pathlib.Path(os.environ["CUEST_CORE_IDENTITY"]).read_text())
+            version = receipt.get("native_version")
+            if (receipt.get("status") != "passed" or type(receipt.get("payload_exit")) is not int
+                    or receipt.get("payload_exit") != 0
+                    or type(version) is not list or version != [0, 2, 50]
+                    or any(type(part) is not int for part in version)
+                    or not expected or receipt.get("before") != expected or receipt.get("after") != expected):
+                return failed("cuEST runtime-admission receipt did not pass")
+        except (OSError, ValueError, TypeError, KeyError):
+            return failed("cuEST runtime-admission receipt is absent or invalid")
+    return json.loads((directory / "result.json").read_text())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default="/tmp/saptdft-grid-sweep")
@@ -145,6 +171,14 @@ def main():
             command.append("--use-cuest")
         if args.full_sapt:
             command.append("--full-sapt")
+        if args.use_cuest:
+            # The outer sweep does not create a handle. Admission/version proof
+            # belongs in each actual scientific worker, not just its controller.
+            if not os.environ.get("CUEST_CORE_IDENTITY") or not os.environ.get("CUEST_CONTRACT"):
+                raise RuntimeError("GPU sweep requires the canonical cuEST runtime identity")
+            command = [sys.executable, str(pathlib.Path(__file__).with_name("cuest_run_admitted.py")),
+                       "--receipt", str(directory / "runtime-admission.json"),
+                       "--script", str(pathlib.Path(__file__).resolve()), "--", *command[2:]]
         try:
             completed = subprocess.run(command, cwd=directory, capture_output=True, text=True,
                                        timeout=args.case_timeout)
@@ -154,11 +188,8 @@ def main():
             completed = None
         if completed is None:
             pass
-        elif not (directory / "result.json").exists():
-            row = {"status": "failed", "final": final, "initial": initial,
-                   "error": completed.stderr[-4000:], "returncode": completed.returncode}
         else:
-            row = json.loads((directory / "result.json").read_text())
+            row = worker_result(completed, directory, final, initial, args.use_cuest)
         if row["status"] == "ok":
             if initial is None:
                 controls[tuple(final)] = row
