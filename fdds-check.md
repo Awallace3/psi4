@@ -1,5 +1,46 @@
 # FDDS cuEST implementation handoff
 
+## Next response-product candidate — not yet GPU validated
+
+Frozen scientific/test source `dcc8ac971310530688920efd0b2ba587a6e5cfd7`.
+Separate fresh native source/build at
+`/fastscratch/awallace43/fdds-performance-20261020/native-products-dcc8ac9713/`;
+native build/test workflowb4c2aef33 pending. Prior ada/core6f829 and fd2/core92e5
+stages/evidence stay immutable.
+
+The accepted diagnostic at harness25bf9d87cfe6657d7e27e4f53f03af26fcefc019
+observed8 product sites/80 calls (all3820-square), **29.021014s** total.
+Every group took3.619–3.636s across10 calls; original association/operands,
+22 general pseudoinverses, cutoff/science were unchanged. Strict library/
+core/cache/options identity and energy checks passed. Instrumentation
+bookkeeping measured≥.000655s, excluding added Python dispatch; the whole
+diagnostic wall is not a benchmark. Both diagnostic attempts are preserved
+in `build_fdds_cpu/product-profile-14214205/`.
+Attempt01 remains FAILED: importing Psi4 before NumPy selected GNU instead
+of Intel MKL threading. The fixed NumPy-first wrapper retained exact library
+checking, with a red→green regression; no provenance relaxation.
+
+The next candidate borrows only exact C-contiguous FP64 square NumPy
+buffers, keeps each two-GEMM intermediate on device and returns one array.
+No host packing, input mutation, generic DFHelper changes or solver changes.
+Noncontiguous/empty/unsupported/threshold/capacity cases fall back before
+enqueue; GPU runtime errors propagate after stream draining.
+Hybrid `Rtinv` transpose views deliberately remain native, so only6 sites/
+60 chains across ten quadrature points execute on GPU, targeting≈21.78s of the measured
+29.02s, not the inclusive95.66s contraction timer. Even eliminating this
+target entirely would provide only≈1.04x additional whole-FDDS speedup;
+no measured candidate speedup exists yet.
+
+Added5 native and7 GPU layout/freshness/alias/preflight cases; integrated
+tests additionally check unchanged pseudoinverse inputs/counts/rcond and
+actual60-chain routing. Planned full GPU gate93 unique/138 executions,
+zero skips; native expanded gate176. Separate harness will require all15
+matched baseGPU/candidateGPU/nativeCPU controls and no dropped samples.
+Matched timings require prior cleanup, native/GPU gates, static review and
+a fresh remaining-budget check; no new allocation. An isolated compile-only
+step may run while the separate workstation builds its native compatibility
+stage; neither is an active timing sample or GPU correctness execution.
+
 ## Latest audited performance status — supersedes historical progress below
 
 Scientific8dc714/test-driverfd2c09/core92e5:171 native tests pass and69 unique

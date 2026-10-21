@@ -15,7 +15,7 @@ class MetricComparisonTests(unittest.TestCase):
         for label in ("base-gpu-0", "candidate-gpu-0", "candidate-cpu-0", "candidate-gpu-1", "base-gpu-1"):
             base, cpu = label.startswith("base"), "-cpu-" in label
             package = "/base/psi4" if base else "/candidate/psi4"
-            result[label] = dict(ok=True, fdds_seconds=20 if cpu else 8 if base else 6,
+            result[label] = dict(system="protein83", ok=True, fdds_seconds=20 if cpu else 8 if base else 6,
                 cache_sha256="cache", metadata_sha256="metadata", runner_sha256="runner",
                 options={"basis": "unchanged"}, hostname="node", job_id="14214205", threads=8, memory="96 GiB",
                 libraries_sha256={package + "/core.cpython.so": "base" if base else "candidate",
@@ -26,14 +26,31 @@ class MetricComparisonTests(unittest.TestCase):
                 gpu_metric_timer_calls=0 if base or cpu else 12)
         return result
 
-    def run_audit(self, records):
+    def run_audit(self, records, route="metric"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for label, record in records.items():
                 p = root / ("protein83-" + label)
                 p.mkdir()
                 (p / "result.json").write_text(json.dumps(record))
-            return compare.audit(root, "protein83")
+            return compare.audit(root, "protein83", route)
+
+    def test_response_route_keeps_metric_and_requires_new_endpoint(self):
+        records = self.records()
+        for label, r in records.items():
+            cpu = "-cpu-" in label
+            r["gpu_metric_timer_calls"] = 0 if cpu else 12
+            r["gpu_response_timer_calls"] = 60 if label.startswith("candidate-gpu") else 0
+        self.assertEqual(self.run_audit(records, "response")["route"], "response")
+        records["candidate-gpu-1"]["gpu_response_timer_calls"] = 0
+        with self.assertRaises(AssertionError):
+            self.run_audit(records, "response")
+
+    def test_other_system_rejected(self):
+        records = self.records()
+        records["candidate-gpu-1"]["system"] = "nanotube"
+        with self.assertRaises(AssertionError):
+            self.run_audit(records)
 
     def test_all_controls_and_intentional_core_difference(self):
         got = self.run_audit(self.records())
