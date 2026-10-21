@@ -246,13 +246,13 @@ def copy_include(source, destination, writer, ancestors=frozenset()):
             writer.copy(path, destination / path.name)
 
 
-def closure(sdk, vendor_environment):
+def closure(sdk, vendor_environment, trace_runner=None):
     expected = {v["soname"]: v for v in sdk["libraries"].values()}
     environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C",
                    "LD_LIBRARY_PATH": f"{sdk['library_root']}:{vendor_environment}/lib"}
     result = {}
     for family, item in sdk["libraries"].items():
-        selected = contract.parse_loader(contract.command(
+        selected = contract.parse_loader((trace_runner or contract.command)(
             ["/usr/bin/ldd", item["path"]], env=environment))
         for name, path in selected.items():
             if name in expected:
@@ -266,7 +266,8 @@ def closure(sdk, vendor_environment):
     return result
 
 
-def provision(source, destination, lock, decompressor, vendor_environment=None, decoder_proof=None):
+def provision(source, destination, lock, decompressor, vendor_environment=None, decoder_proof=None,
+              *, trace_runner=None):
     start = time.monotonic()
     contract.require(destination.is_absolute() and source.is_absolute(), "Absolute paths required")
     contract.require(not destination.exists() and not destination.is_symlink(), "Fresh absent prefix required")
@@ -328,7 +329,14 @@ def provision(source, destination, lock, decompressor, vendor_environment=None, 
                          and observed["sha256"] == proof["sha256"]
                          and observed["soname"] == proof["soname"],
                          "External runtime identity changed during input preparation")
-    dependencies = closure(manifest, vendor_environment)
+    # The legacy input-only CLI keeps its existing inherited-budget audit.
+    # The optimized build may supply its independently bounded CPU trace worker;
+    # the SAME complete closure checks still run before either final manifest.
+    if trace_runner is None:
+        dependencies = closure(manifest, vendor_environment)
+    else:
+        dependencies = closure(manifest, vendor_environment, trace_runner)
+        trace_runner.check_complete(len(manifest["libraries"]))
     # Existing nvcc locator delegates to this vendor compiler. Bind it rather
     # than presenting a wrapper hash as the underlying compiler identity.
     compiler_chain = {"vendor_nvcc": contract.identity(vendor_environment / "bin/nvcc"),
@@ -360,10 +368,23 @@ def provision(source, destination, lock, decompressor, vendor_environment=None, 
         "sdk_manifest_sha256": contract.digest(destination / "sdk-manifest.json"),
         "closure": dependencies, "new_download_bytes": sum(p["size"] for p in PACKAGES),
         "written_before_receipt_bytes": writer.bytes, "elapsed_seconds": time.monotonic() - start,
-        "cpu_build_submission_go": False})
+        "cpu_build_submission_go": False,
+        **({"closure_execution": trace_runner.evidence} if trace_runner is not None else {})})
     return {"prefix": str(destination), "sdk_manifest_sha256": contract.digest(
         destination / "sdk-manifest.json"), "written_bytes": writer.bytes,
         "elapsed_seconds": time.monotonic() - start, "submission_go": False}
+
+
+def apply_input_limits():
+    """Unchanged archive/identity worker bounds, shared by both entrypoints."""
+    for key in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+        os.environ[key] = "1"
+    resource.setrlimit(resource.RLIMIT_AS, (1024**3, 1024**3))
+    resource.setrlimit(resource.RLIMIT_CPU, (110, 110))
+    os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
+    # External timeout --kill-after=5s 110s is additionally mandatory.
+    signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError("110s input deadline")))
+    signal.alarm(110)
 
 
 def main():
@@ -374,14 +395,7 @@ def main():
     parser.add_argument("--vendor-environment", type=Path, required=True)
     args = parser.parse_args()
     os.umask(0o077)
-    for key in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
-        os.environ[key] = "1"
-    resource.setrlimit(resource.RLIMIT_AS, (1024**3, 1024**3))
-    resource.setrlimit(resource.RLIMIT_CPU, (110, 110))
-    os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
-    # External timeout --kill-after=5s 110s is additionally mandatory.
-    signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError("110s input deadline")))
-    signal.alarm(110)
+    apply_input_limits()
     proof = verify_remote_decoder()
     print(json.dumps({"decoder_proof_before_real_extraction": proof}), flush=True)
     result = provision(args.source, args.destination, args.lock, decoder(),

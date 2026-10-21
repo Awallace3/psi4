@@ -24,7 +24,8 @@ RESOURCES = ["--account=gts-cs207-chemx", "--partition=cpu-small", "--qos=embers
 def scheduler_environment():
     # SBATCH_* overrides script directives. Neither test-only nor the actual
     # RPC may inherit another experiment's paid QoS/resources.
-    return {name: value for name, value in os.environ.items() if not name.startswith("SBATCH_")}
+    return {name: value for name, value in os.environ.items()
+            if not name.startswith(("SBATCH_", "SALLOC_"))}
 
 
 def require(ok, message):
@@ -82,13 +83,14 @@ def quota_admission(proof, expected_sha, now):
     return value
 
 
-def submit(source, pin, attempt, quota, quota_sha):
+def preflight(source, pin, attempt, quota, quota_sha, *, interactive=False):
     source, attempt, quota = Path(source), Path(attempt), Path(quota)
     require(re.fullmatch("[0-9a-f]{40}", pin), "Full immutable recipe pin required")
     require(source.is_absolute() and source.resolve() == source, "Canonical source required")
-    require(source.is_relative_to(P / "gits/psi4.disp0-opt064-20261021"),
+    require(source == P / "gits/psi4.disp0-opt064-20261021-02/source",
             "Not the new dedicated source namespace")
-    require(attempt == source.parent / "submission-attempt", "Wrong attempt namespace")
+    require(attempt == source.parent / ("interactive-attempt" if interactive else "submission-attempt"),
+            "Wrong attempt namespace")
     require(not attempt.exists() and not attempt.is_symlink(), "Attempt already exists: NEVER replay")
     require(attempt.parent.stat().st_uid == os.getuid()
             and not attempt.parent.stat().st_mode & 0o077, "Private owned parent required")
@@ -101,7 +103,8 @@ def submit(source, pin, attempt, quota, quota_sha):
               "payload_sha256": sha(payload), "einsums_fork": "https://github.com/Awallace3/Einsums.git",
               "einsums_pin": E2, "scientific_pin": SCIENCE,
               "old_input_submission": "UNKNOWN_RESERVED_UNTOUCHED_NOT_REPLAYED",
-              "authorization": "2026-10-21 user: start the build",
+              "authorization": "2026-10-21 user: yes, ONE corrected8CPU48G2hfreeembers build",
+              "mode": "INTERACTIVE_CPU_BUILD_DEBUG" if interactive else "BATCH",
               "resources": {"nodes": 1, "tasks": 1, "cpus": 8, "memory_gib": 48,
                             "seconds": 7200, "gpus": 0, "qos": "embers",
                             "account": "gts-cs207-chemx", "requeue": False},
@@ -129,7 +132,7 @@ def submit(source, pin, attempt, quota, quota_sha):
     queue = [line.split("|") for line in rows.splitlines() if line]
     require(all(len(row) == 3 for row in queue), "Malformed queue proof")
     require(sum(row[2] == "embers" for row in queue) < 50, "No embers headroom")
-    require(not any(row[1] == "disp0-opt064" for row in queue), "Duplicate optimized build")
+    require(not any(row[1].startswith("disp0-opt064") for row in queue), "Duplicate optimized build")
     scheduler_env = scheduler_environment()
     route = capture(["sbatch", "--test-only", *RESOURCES, str(batch)], env=scheduler_env)
     record(attempt, "test-only.json", route)  # preserve both streams, including simulated ID
@@ -138,6 +141,12 @@ def submit(source, pin, attempt, quota, quota_sha):
     require(re.search(r"\bpartition[ =:]cpu-small\b", text, re.I), "Unexpected/unproved CPU route")
     require(sha(batch) == intent["batch_sha256"] and sha(payload) == intent["payload_sha256"],
             "Recipe bytes changed during preflight")
+    return batch, intent, scheduler_env
+
+
+def submit(source, pin, attempt, quota, quota_sha):
+    source, attempt = Path(source), Path(attempt)
+    batch, intent, scheduler_env = preflight(source, pin, attempt, quota, quota_sha)
     argv = ["sbatch", "--parsable", *RESOURCES,
             f"--export=ALL,DISP0_OPT_SOURCE={source},DISP0_OPT_PIN={pin}", str(batch)]
     # Durable marker and parent fsync BEFORE the sole actual sbatch RPC.

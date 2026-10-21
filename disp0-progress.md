@@ -2358,3 +2358,52 @@ required; no actualrepair/build/retry/allocation authorized or performed
 by this diagnostic. Next resourceproposal remains ONE8CPU48G2h/freeembers/
 chemx CPUbuild, subject fresh approval/gates; do not replay14249189 or
 the oldUNKNOWN inputattempt. Allfailedroots unchanged.
+
+User **yes** grants ONE corrected same8CPU48G2hembers/chemx build. User then
+explicitly selects **one interactiveCPU allocation for build/debug rather
+than sbatching every attempt**, then GPU tests only after readiness. This
+REPLACES unsubmittedcorrectedbatch, not an extraallocation. No new allocation
+yet. Parent+FDDS informed; FDDS freshH200ownerpreflight was given precedence:
+ourworkLOCAL/noCPU-preparationSSHturn active. No GPUaction/window/borrow.
+
+Corrected SDK code preserves originaldefaultCLI/closurechecks and decoder
+1GiBAS/110sCPU+wall/onecore/128MiBwindow. New optimized entrypoint forks one
+8GiBvirtual-AS CPU loadertrace worker BEFORE decoderlimit; max6canonicalCUDA
+component/SONAME-major-bound requests,10sCPU/10stimeout each,70sCPU/110swall
+worker, rawstdout+stderr durablebeforereply. No retry/respawn/constructors/
+device/scientificwork. Both finalSDKmanifest/receipt remain AFTERcomplete
+mandatoryclosure+trace evidence. Audit1MiB reservedfrom512MiBwritecap.
+Oldhelperwithoutnewentrypoint has no admission bypass/versionoverride.
+
+Local redvirtualmapping regression failed as intended beforefix
+(1536MiBmmap/1GiBAS,errno12,0.231s), then passed with separatelybounded
+loadercapacity; no pages touched/CUDAlibraryloaded.39SDKguards PASS0.28s
+(newnegative: closurefailure producesneithermanifest),33combinedmock/metadata/
+configureguards PASS1.537s beforeadditionalIPCproof. BashsyntaxPASS.
+Oneintermediatetest-only FileNotFound-vsRuntimeError normalization corrected,
+not a numericalfailure. Two narrowread-only reviews active: SDKbudget seam
+d01c2d55c and interactiveprotocol d5c46a79b. No remote/currentjob yet.
+
+Actual localfork/IPC regression additionally observes decoder1GiBhardAS and
+worker8GiBhardAS after workerstartedBEFOREdecoderlimit. Workerrejects fake
+non-lddrequest, rawresponsecaptured; no libraryloaded. Combined34PASS4.070s.
+FDDSownerpreflight b8b80efdb0 nowTURNCOMPLETE/noactiveownerremoteoperation;
+weacknowledgedstillLOCAL and willnotifybeforeownboundedCPUprep.
+
+SDKreview d01c2d55c found oneblocker: timeout/oversize genericexceptionhandler
+discardedpartialloaderstreams. Fixed boundedstdout/stderr+explicitbytecounts/
+truncation/timeoutstatus/fail-closedreturn, fsyncedrawbeforeack. Added actual
+forkworker tests for timeoutpartial/oversize paths.36combinedguards
+PASS1.669s and39SDKguardsPASS0.29s. Narrowconfirmationdd7ba9065 pending;
+interactivecontrollerreviewd5c46a79b pending. No currentremoteCPUoperation.
+FDDS Gitstageba02d3335complete and ownerfinaladmission nowinprogress;
+ourCPUloginprep waits its shortadmission window, not its longGPUqueue client.
+No GPUwindow/borrow/jobactions onownerbehalf.
+
+FDDS14250361actual4hH200grant relayed; its exclusivegates active, but no
+CPU-preparationSSHturn held and ownCPUprepcleared. No holderborrow/GPUprobe.
+Independentfollowups d5c46a79b anddd7ba9065 hit artificialturnlimit and gave
+NOcommittedanswer, NOT counted asreviewPASS. KnownSDKblockerfixed+36/39
+testsPASS; directsourceinspectioncomplete. Freezingcurrentcode for Git
+staging/freshCPUpreflight; advisorydf014bf6e reviewsfrozenSDK/allocator
+withadequatebudget while independentpreparation proceeds. No allocationyet.

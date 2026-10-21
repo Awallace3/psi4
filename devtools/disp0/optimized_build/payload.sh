@@ -6,16 +6,21 @@ P=/storage/project/r-cs207-0/awallace43
 : "${DISP0_OPT_SOURCE:?}" "${DISP0_OPT_PIN:?}" "${DISP0_OPT_RUN:?}" "${SLURM_JOB_ID:?}"
 source_root="$DISP0_OPT_SOURCE"
 run="$DISP0_OPT_RUN"
+step_suffix=
+if [[ "${DISP0_OPT_INTERACTIVE:-0}" == 1 ]]; then
+    [[ "${SLURM_STEP_ID:?}" =~ ^[0-9]+$ ]]
+    step_suffix="-$SLURM_STEP_ID"
+fi
 E2=06404fa69ce9346443d7d4f19a250f6db9f0f62c
 SCIENCE=587e172a33afaadb00eb7f574a5089533f7fc755
 lock="$P/runs/saptdft-cuest-disp0/build-$SCIENCE-14196330/environment-explicit.txt"
 [[ "$(git -C "$source_root" rev-parse HEAD)" == "$DISP0_OPT_PIN" ]]
 [[ -z "$(git -C "$source_root" status --porcelain)" ]]
 git -C "$source_root" diff --exit-code "$SCIENCE" HEAD -- psi4/
-[[ "$run" == "$P/runs/saptdft-cuest-disp0/opt064-$DISP0_OPT_PIN-$SLURM_JOB_ID" ]]
+[[ "$run" == "$P/runs/saptdft-cuest-disp0/opt064-$DISP0_OPT_PIN-$SLURM_JOB_ID$step_suffix" ]]
 [[ "${SLURM_CPUS_PER_TASK:?}" == 8 && -z "${SLURM_JOB_GPUS:-}" ]]
 mkdir -m 0700 "$run"
-export TMPDIR="/storage/scratch1/3/awallace43/disp0-opt064-$SLURM_JOB_ID"
+export TMPDIR="/storage/scratch1/3/awallace43/disp0-opt064-$SLURM_JOB_ID$step_suffix"
 mkdir -m 0700 "$TMPDIR"
 export SCRATCH="$TMPDIR" PSI_SCRATCH="$TMPDIR"
 export CONDA_PKGS_DIRS="$run/conda-pkgs" PIP_CACHE_DIR="$run/pip-cache" XDG_CACHE_HOME="$run/cache"
@@ -37,9 +42,10 @@ cd "$source_root"
 # Independent NEW input preparation within THIS build job; old input attempt
 # remains UNKNOWN/RESERVED and is neither read as admission nor replayed.
 timeout --signal=TERM --kill-after=5s 110s "$P/miniconda/bin/python" -B \
-    devtools/disp0/provision_sdk_inputs.py \
+    devtools/disp0/optimized_build/prepare_inputs.py \
     --source "$P/software/toolchains/cuda13" --destination "$run/private-inputs" \
-    --vendor-environment "$P/miniconda/envs/p4cuest_sapt" --lock "$lock"
+    --vendor-environment "$P/miniconda/envs/p4cuest_sapt" --lock "$lock" \
+    --audit-log "$run/sdk-loader-audit.jsonl"
 "$P/miniconda/bin/python" -B - "$run" "$source_root" <<'PY'
 import json, sys
 from pathlib import Path

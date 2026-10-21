@@ -30,7 +30,7 @@ class SubmissionTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.p = Path(self.temp.name)
-        self.source = self.p / "gits/psi4.disp0-opt064-20261021/source"
+        self.source = self.p / "gits/psi4.disp0-opt064-20261021-02/source"
         self.source.mkdir(parents=True, mode=0o700)
         self.source.parent.chmod(0o700)
         scripts = self.source / "devtools/disp0/optimized_build"
@@ -104,11 +104,11 @@ class SubmissionTests(unittest.TestCase):
 
     def test_polluted_sbatch_environment_is_removed_and_resources_explicit(self):
         with patch.dict(submit.os.environ, {"SBATCH_QOS": "inferno", "SBATCH_TIMELIMIT": "24:00:00",
-                                           "SBATCH_GRES": "gpu:h200:1"}):
+                                           "SBATCH_GRES": "gpu:h200:1", "SALLOC_QOS": "inferno"}):
             self.invoke()
         self.assertEqual(len(self.scheduler_environments), 2)
         for env in self.scheduler_environments:
-            self.assertFalse(any(name.startswith("SBATCH_") for name in env))
+            self.assertFalse(any(name.startswith(("SBATCH_", "SALLOC_")) for name in env))
         for argv in [c for c in self.calls if c[0] == "sbatch"]:
             for resource in submit.RESOURCES:
                 self.assertIn(resource, argv)
@@ -217,7 +217,10 @@ class BuildGuards(unittest.TestCase):
     def test_executable_contract_is_tracked_despite_ignore_rules(self):
         result = subprocess.run(
             ["git", "ls-files", "--error-unmatch", "devtools/disp0/optimized_build/build.sbatch",
-             "devtools/disp0/optimized_build/payload.sh", "devtools/disp0/optimized_build/install_hook.cmake"],
+             "devtools/disp0/optimized_build/payload.sh", "devtools/disp0/optimized_build/install_hook.cmake",
+             "devtools/disp0/optimized_build/prepare_inputs.py",
+             "devtools/disp0/optimized_build/interactive_acquire.py",
+             "devtools/disp0/optimized_build/interactive_step.sh"],
             cwd=HERE.parents[2], capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
 

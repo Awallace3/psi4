@@ -1,5 +1,40 @@
 # Optimized Einsums2 fresh CPU build
 
+## Current authorization: one interactive CPU allocation
+
+After failed job14249189, user approved one corrected build, then explicitly
+requested an **interactive CPU node for build/debug instead of sbatching each
+attempt**. Current execution is ONE `salloc --no-shell`, 8CPU/48GiB/2h,
+freeembers/chemx, no GPU; the corrected batch proposal is superseded, not an
+additional job. Queue wait is bounded by `--immediate=600`; no allocation retry.
+Resource/account/route/quota/headroom/duplicate checks remain mandatory.
+`salloc` has no `--no-requeue` option; effective `Requeue=0`, `Restarts=0`,
+CPU-only RUNNING and exact resources are checked before any step is allowed.
+No automatic cancellation/release/job modification is performed by acquisition.
+
+Source namespace is now `P/gits/psi4.disp0-opt064-20261021-02/source`.
+The failed20261021 root and every earlier input/source/build are preserved.
+Acquisition uses permanent `interactive-attempt`, line-fsynced raw responses,
+durable accepted ID before controller query, and a grant manifest. Pending
+receipts are never grant proof. One owner; serial exclusive8CPU steps, with
+source/pin/job/step-qualified run/scratch and honest signal-aware status.
+Within-allocation debug does not authorize another allocation or scientific
+source/setting drift. Freeze final source/build provenance before correctness.
+
+The corrected input entrypoint `prepare_inputs.py` starts a **separate bounded
+CPU loader-trace process before** lowering the decoder's AS hard limit.
+Decoder remains1GiB/110s/oneCPU/128MiBwindow. A 1MiB evidence reserve tightens
+decoder writes to511MiB; aggregate bound remains512MiB. Loader worker:
+8GiB virtual AS,70sCPU/110swall, six serial canonical major-bound CUDA
+component requests,10sCPU/10s wall perldd, no respawn/retry/device constructors.
+Actual stdout/stderr is durable before each reply. Mandatory original closure
+and complete trace-count checks still precede BOTH final input manifests.
+No generic legacy-CLI admission is weakened; its original limits stay intact.
+An actual local fork/IPC test checks1GiB decoder/8GiB tracer inheritance without
+loading any library. This is not a GPU or realCUDA-positive proof.
+
+## Superseded first build proposal (history)
+
 User instruction on 2026-10-21: **start the build**. This is one new isolated
 8-CPU / 48-GiB / 2-hour, free `embers/gts-cs207-chemx` preparation job (16 CPUh
 maximum), subject to fresh source, exact CPU route, quota/headroom/duplicates.
@@ -51,7 +86,7 @@ filesystem available bytes/inodes and queue/headroom/CPU route are checked
 again within the submission invocation. No open SSH session across model
 review; no STDIN second phase.
 
-Fresh source namespace:
+First (failed14249189) source namespace:
 `P/gits/psi4.disp0-opt064-20261021/source`.
 Fresh run, env, source, CUDA locator, install, cache and job-owned persistent
 scratch paths are job/pin-qualified. Original roots/envs/locks are read only.

@@ -38,3 +38,35 @@ Execution admission remains fresh-source/route/quota/headroom/duplicates;
 full SDK/input identity checks occur in the new CPU job before configuration.
 Old input attempt UNKNOWN/RESERVED and all failed roots remain untouched.
 Actual optimized CPU build/API and signed physical/GPU checks remain unpassed.
+
+## Corrected decoder/loader boundary and interactive protocol
+
+Fresh user `yes` approves one corrected same-resource build; subsequent user
+instruction selects one interactiveCPU allocation rather than batch retries.
+Old14249189 and old UNKNOWN remain unchanged.
+
+- Red regression:1536MiB virtual mapping under inherited1GiB AS fails
+  `OSError: [Errno12] Cannot allocate memory`,0.231s. No physical pages touched.
+- Before final IPC test addition:33 local guards PASS1.537s, including
+  corrected mapping/separate budget and interactive acquisition mocks.
+-39 archive/input guards PASS0.28s, including new negative asserting neither
+  SDK manifest nor receipt is written when mandatory closure fails.
+- Both payload and interactive-step Bash syntax checks PASS.
+- Actual CUDA-positive loader trace, native build, APIs, physical/device tests
+  remain UNRUN; local virtual-map tests do not stand in for any of them.
+- Added actual local fork/IPC inheritance probe: decoder hardAS1GiB and
+  separately started worker actual hardAS8GiB observed; rejects non-ldd
+  request and captures raw response, no library loaded. Combined **34 PASS,
+  4.070s**. This is the final pre-review local run, not Phoenix readiness.
+
+SDK review `d01c2d55c` found one evidence blocker: timeout/oversize exception
+handling lost partial loader output. Fixed with bounded captured stdout/stderr,
+explicit timeout/truncation/byte counts, fail-closed status and worker-level
+fork regressions that verify durable raw-file/ack equality. **36 guards PASS
+1.669s**, **39 SDK guards PASS0.29s**. Narrow fix confirmation pending.
+
+Independent follow-ups `d5c46a79b` and `dd7ba9065` exhausted artificial
+turn limits and produced **no committed answer**; neither is counted as a pass.
+Known SDK blocker is addressed and worker-level tests pass. Freezing current
+code after direct inspection; advisory `df014bf6e` reviews the frozen SDK and
+interactive-allocator code while independent Git staging/preflight proceeds.

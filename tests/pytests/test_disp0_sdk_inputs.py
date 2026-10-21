@@ -131,7 +131,9 @@ def test_fresh_prefix_and_lock_reject_before_download(tmp_path):
         module.provision(source, source, lock, UncompressedFixture(), vendor)
 
 
-def test_complete_private_provision_preserves_sources_and_binds_separate_devlinks(tmp_path, monkeypatch):
+@pytest.mark.parametrize("closure_failure", [False, True])
+def test_complete_private_provision_preserves_sources_and_binds_separate_devlinks(
+        tmp_path, monkeypatch, closure_failure):
     source, vendor = tmp_path / "original-sdk", tmp_path / "vendor"
     for path in (source / "include", source / "bin", source / "nvvm",
                  source / "lib64", vendor / "lib", vendor / "bin"):
@@ -172,6 +174,15 @@ def test_complete_private_provision_preserves_sources_and_binds_separate_devlink
     monkeypatch.setattr(module.urllib.request, "urlopen", download)
     before = {str(p): p.read_bytes() for p in source.rglob("*") if p.is_file()}
     destination = tmp_path / "new-inputs"
+    if closure_failure:
+        def fail(*args):
+            raise RuntimeError("captured loader mapping failure")
+        monkeypatch.setattr(module, "closure", fail)
+        with pytest.raises(RuntimeError, match="loader mapping"):
+            module.provision(source, destination, lock, UncompressedFixture(), vendor)
+        assert not (destination / "sdk-manifest.json").exists()
+        assert not (destination / "provision-receipt.json").exists()
+        return
     result = module.provision(source, destination, lock, UncompressedFixture(), vendor)
     receipt = json.loads((destination / "provision-receipt.json").read_text())
     manifest = json.loads((destination / "sdk-manifest.json").read_text())
