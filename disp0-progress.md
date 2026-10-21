@@ -2261,3 +2261,52 @@ Pre-push tracking check caught repository ignore rules `build*`, `*.sh`,
 No remote/push/job used that incomplete pin. Explicitly force-adding the three
 reviewed configuration scripts and adding a Git-tracking regression before
 publishing the final complete pin. Content/reviewed scientific scope unchanged.
+
+Complete executable source pin **d097512fe4b01b55397b0df0075a474121ca852a**
+published and exact GitHub ref verified (bfbbe6ff7exit0). Final22local
+guards PASS2.291s including executable-files-tracked regression.
+
+CPU_PREPARATION turn **b392ad60a TURNCOMPLETE exit0**, no submission:
+fresh root `P/gits/psi4.disp0-opt064-20261021`, mode0700/uid3170273;
+source exactd097, pristine and scientificpsi4/ equal587. Both commits fetched
+via Git only; oldpartial/failed/UNKNOWN roots untouched. Batch/payload/hook/
+submit SHA256s retained in task output. Rawquota timestamp
+**2026-10-21T10:08:53Z** /1792577333, pace-quotaexit0/stderrempty:
+project6316.3/8192GB, unlimitedgroupfiles(0limit);
+scratch4936.0/15360GB and212159/1000000files. Projectphysicalavailable
+1966757888KiB and37280898762inodes; scratch1234121621144KiB and1325503256
+inodes. Conservative human-reviewed admission1600GiBproject+1Mfiles,
+9000GiBscratch+700kfiles; rawstdoutSHA
+1e427d596b3fcbac1dc09db821bbdee463274a823aafbf8516ed3902698c9134.
+This is manual interpretation of retained output, not parsing pace-quota's
+unstable display. >=64GiB/50k threshold comfortably satisfied.
+
+Next self-contained bounded submission **b9fd200c8** launched under fresh
+user/parent build authorization: source/quota/route(stderrretained)/live
+headroom/duplicate checks, durable newattempt+intent/dispatchmarker before
+sole actualsbatch, rawresponse+realID beforecontroller. No interactive stdin
+secondphase/model-review pause. New attempt:
+`P/gits/psi4.disp0-opt064-20261021/submission-attempt`.
+Actual acceptance/ID pending at this entry, NEVER infer/replay on ambiguity.
+No GPUquery/allocation/step, no login solve/install/compile, no oldinputreplay.
+
+**ACCEPTED CPU build14249189** — b9fd200c8exit0,
+SubmitTime2026-10-21T06:10:25America/New_York.
+Actualcontrollerexit0/stderrempty proves:
+`Account=gts-cs207-chemx QOS=embers Partition=cpu-small Requeue=0
+NumCPUs=8 NumTasks=1 ReqTRES=cpu=8,mem=48G,node=1 TimeLimit=02:00:00`.
+NoGPUrequest; initialstatePENDING/ReasonPriority, StartTimeUnknown/noETA.
+ExactlyONEactualsubmission. AcceptedID printed only after durable real-ID
+file; rawresponse retained beforecontroller. ReviewquotaproofSHA
+e7a37662ad1aceee7d4114765691dbb6e52ef1c1cbce8e09f5412ba76357f28e.
+Exactrecipe d097512fe4/fork064/science587. No oldinputattempt replay/change.
+Bothowner+parent received actualreceipt/effectiveroute/TURNCOMPLETE.
+
+Outputs: `P/runs/saptdft-cuest-disp0/logs/disp0-opt064-14249189.{out,err}`,
+status`14249189.opt064-status`, intended fresh run
+`P/runs/saptdft-cuest-disp0/opt064-d097512fe4b01b55397b0df0075a474121ca852a-14249189`,
+job-owned persistent scratch
+`/storage/scratch1/3/awallace43/disp0-opt064-14249189`.
+Event monitor **bc8981c53** uses installedwatch_jobs.sh -i300, including
+batch accounting; no submit/retry/GPU/jobchange. Build/API/signedphysics/device
+correctness remain unpassed pending actualartifacts and cleanbatch exit.
