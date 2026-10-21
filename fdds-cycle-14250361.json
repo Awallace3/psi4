@@ -128,5 +128,23 @@
   },
   "new_speedup_claim": true,
   "speedup_scope": "FDDS-only measured five-control comparison above; separate from old allocation",
+  "additional_same_binary_diagnostic": {
+    "controller_pin": "779e8b3da16fef2d3dec34d280709b668fb78b0c",
+    "task": "be45811c3",
+    "outcome": "failed",
+    "first_svd_off_worker_exit": 124,
+    "first_worker_timeout_seconds": 1050,
+    "svd_on_started": false,
+    "accepted_additional_controls": 0,
+    "extra_ratio_established": false,
+    "cleanup_verified_utc": "2026-10-21T14:51:01Z",
+    "cleanup_gpu_tables_empty": true,
+    "quarantined": false,
+    "audit_tasks": ["bac5ce5d4", "bea6324f0"],
+    "evidence": "build_fdds_cpu/cycle-20261021/pinv-samebinary-14250361",
+    "last_output": "Time Integration printed two frequency points at341s and601s before timeout",
+    "cause": "not established; native CPU SVD/thread-library attribution pending",
+    "prior_five_control_results_preserved": true
+  },
   "notes": "One actual grant; test-only14250360 is not the accepted job. Previous14214205 remains terminal and immutable. All compute uses the exclusive shared helper; no participant window is authorized."
 }

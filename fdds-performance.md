@@ -45,6 +45,22 @@ Next declared diagnostic is a separate same-binary SVD-off/on protein pair,
 not a new algorithm or a replacement for any sample above. It requires
 reviewed guard fixes, successful staging, free exclusive lease/verified
 cleanup and fresh>=2700s budget before a2400s helper. No new allocation.
+That extra diagnostic FAILED: first SVD-off worker timed out124 after1050s;
+SVD-on never started. It produced no accepted additional timing or ratio.
+Output reached only two integration points (341s/601s). Cleanup14:51:01Z
+verified empty/no quarantine. All failed outputs are retained under
+`build_fdds_cpu/cycle-20261021/pinv-samebinary-14250361/`.
+This is an unresolved large-system opt-out/performance observation, not proof
+of a numerical or CUDA failure and not erased by prior successful controls.
+
+A separate short library/CPU-pinv diagnostic uses frozen6164532028,
+two old/new-stage processes bounded180s each with20s Python stack dumps,
+480s exclusive helper and fresh>=660s admission. It is explicitly synthetic
+attribution, NOT FDDS timing/correctness or speedup evidence. It records
+actual threadpools, affinity, libraries and threading environment before/
+after a real2x2 GPU endpoint. No threading-layer override or scientific
+relaxation is made. Narrow reviewd13ea passed; three offline guards passed.
+Workflowbcb23da66/observerb00593fa6 are pending; no root cause claimed yet.
 
 ## Historical allocation14214205
 

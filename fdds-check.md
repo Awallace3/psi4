@@ -58,6 +58,13 @@ no quarantine. Cause is not established by logger-only stdout; bounded
 last-phase inspection and failed-evidence preservationbea6324f0 are pending.
 This failure is retained separately; it does not erase the prior five controls
 or justify a claim that large-system opt-out behavior has passed.
+Short diagnostic6164532028 (reviewd13ea PASS/three offline guards) is staged
+pristine and workflowbcb23da66 runs only two old/new-core CPU-pinv/library
+processes,180s each/480s helper/fresh>=660s admission. Random512/2048 inputs
+before/after a real2x2 cuEST endpoint are attribution only, not FDDS
+correctness or speedup evidence. Actual environment/affinity/threadpools/
+library paths and20s Python stacks are retained. It is not a blind rerun of
+the failed protein pair. No root cause or extra speedup is established.
 The next projection investigation is documented in
 `devtools/benchmarks/fdds_projection_next.md`; no projection arithmetic,
 integral screening, layout or algorithm has been changed.
