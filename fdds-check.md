@@ -32,10 +32,17 @@ and14 comparison guards pass. Candidate GPU correctness remains pending.
 
 Declared next timing subset is protein83 only, five controls:
 CPU0/baseGPU0/candidateGPU0/candidateGPU1/baseGPU1. External runner bytes are
-frozen d599720a06 for every arm. InitialCPU0/baseGPU0 workflowbf187a527 uses
-the immutable089c/core1448 stage while candidate preparation/build is local
-only; no allocation-side build/compute overlap. Neither new timing ratios nor
-successful candidate GPU execution are established by this note.
+frozen d599720a06 for every arm. InitialCPU0/baseGPU0 workflowbf187a527
+completed0 using immutable089c/core1448, with cleanup12:47:13Z verified empty.
+Fresh current-allocation CPU1903.076394798s/baseGPU781.647677682s gives a
+preliminary one-pair2.434698x for the **base**, not the new SVD candidate.
+Coupled/uncoupled errors2.832150355e-9/1.956602588e-11Eh. Routes nativeall0,
+GPU20/4/12/60/pinv0; all22 native pinvs remain105.482410s in the GPU arm.
+Local preserved artifacts `build_fdds_cpu/cycle-20261021/pinv-controls-14250361/`.
+Do not mix this new-node pair with old14214205 ratios. Allocation-side
+candidate compilebc3ad8d4f starts only after this completed step and fresh
+>=7200s admission for the whole remaining sequence. No new SVD candidate
+GPU correctness or speedup is established.
 
 On 2026-10-21 the user explicitly approved **one H200 / 8 CPU / 128 GiB /
 four-hour inferno interactive allocation**, account gts-cs207-chemx.

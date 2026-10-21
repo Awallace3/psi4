@@ -80,6 +80,19 @@
     "harness_review_task": "df163c501c7a25989605311bf24babf3d",
     "harness_review_outcome": "Static PASS after independently pinning the baseline closure; 14 comparison and 6 SVD offline guards passed. No candidate GPU execution is established.",
     "initial_base_controls_task": "bf187a527",
+    "initial_base_controls": {
+      "cpu_seconds": 1903.0763947980013,
+      "base_gpu_seconds": 781.6476776818745,
+      "preliminary_one_pair_cpu_over_base_gpu": 2.434698457036216,
+      "coupled_error_Eh": 2.832150354514784e-9,
+      "uncoupled_error_Eh": 1.9566025882822302e-11,
+      "native_pinv_seconds_in_cpu_arm": 109.17588960006833,
+      "native_pinv_seconds_in_gpu_arm": 105.48241002880968,
+      "cleanup_verified_utc": "2026-10-21T12:47:13Z",
+      "local_evidence": "build_fdds_cpu/cycle-20261021/pinv-controls-14250361",
+      "no_candidate_speedup_established": true
+    },
+    "candidate_compile_task": "bc3ad8d4f",
     "declared_controls": ["cpu0", "base-gpu0", "candidate-gpu0", "candidate-gpu1", "base-gpu1"],
     "system": "protein83",
     "runner_pin": "d599720a06b25a3d813f8b448c1ebb858a7477d4"
