@@ -79,7 +79,7 @@ class SetupBoundary(unittest.TestCase):
             out[...] = sum(coef*chain(factors,transposes) for coef,factors,transposes in terms)
 
         source = Path(__file__).resolve().parents[2]/"psi4/driver/procrouting/sapt/sapt_jk_terms_ein.py"
-        names = {"_store_dispersion0_components","dispersion0","dispersion0_cupy","fdisp0"}
+        names = {"_store_dispersion0_components","dispersion0","dispersion0_cuda","fdisp0"}
         functions = [n for n in ast.parse(source.read_text()).body
                      if isinstance(n,ast.FunctionDef) and n.name in names]
         namespace = {"core":core,"np":np,"time":time,"FDISP_BLOCK":24,
@@ -137,7 +137,7 @@ class SetupBoundary(unittest.TestCase):
             self.assertNotIn("Disp0 execution",result)
             self.assertEqual(cache["Disp0 execution"]["backend"],"STALE PREVIOUS GPU CALL")
 
-    def test_default_path_still_reaches_original_dfhelper_without_cupy(self):
+    def test_default_path_still_reaches_original_dfhelper_without_cuda(self):
         ns,cache,wave,*_=self.fixture()
         with self.assertRaisesRegex(AssertionError,"bypass DFHelper"):
             ns["dispersion0"](cache,wave,do_print=False)
@@ -154,7 +154,7 @@ class SetupBoundary(unittest.TestCase):
             ns["fdisp0"]({}, {}, None, None, None, None, False,
                          _canonical=False,_kernel_callback=lambda **kw:None)
 
-    def test_public_cupy_guards_precede_wavefunction_or_gpu_access(self):
+    def test_public_cuda_guards_precede_wavefunction_or_gpu_access(self):
         for option,value in (("SAPT_DFT_FUNCTIONAL","PBE0"),("SAPT_DFT_DO_DISP",False),
                              ("SAPT_DFT_D3_IE",True),("SAPT_DFT_D4_IE",True),
                              ("SAPT_DFT_DO_FSAPT","FISAPT"),("DO_DISP_EXCH_SINF",True),
@@ -162,7 +162,7 @@ class SetupBoundary(unittest.TestCase):
             ns,cache,_,_,_,options,_=self.fixture()
             options[("SAPT",option)]=value
             with self.subTest(option=option),self.assertRaises((ValueError,NotImplementedError)):
-                ns["dispersion0_cupy"](cache,None,provider_factory=lambda *a:None)
+                ns["dispersion0_cuda"](cache,None,provider_factory=lambda *a:None)
 
 
 if __name__=="__main__":

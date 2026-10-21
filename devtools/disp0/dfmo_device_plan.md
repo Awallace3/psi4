@@ -1,5 +1,17 @@
 # cuEST DFMO → Python/Einsums2 dispersion seam
 
+**Historical E2/CuPy investigation.** The user subsequently selected a
+CuPy-free Python/cuEST/cuBLAS path with custom CUDA kernels; current contract:
+`cuda_backend.md`. This document's original no-custom-kernel/CuPy proposals
+are history, not restrictions overriding that explicit user instruction.
+The mathematical factor/layout/gauge findings remain applicable.
+
+Direct LOCAL archive/header verification is now complete (no extraction):
+archive206185073 bytes,
+SHAa06e81489dea0b652bfc4451bcfe50d3032881a7eb6decc34cdbfc50a2076c0d;
+DFMO memberSHAc93868fcc871fd1fafea374661ad9bc188a3b40646e54eb6b906b5353f06775b.
+No actual native/device/rank semantics were verified.
+
 Status: **local investigation only; not implemented or runtime-ready**.
 No CUDA execution, remote query, allocation, source merge or speed claim.
 Psi4's undefined installed version metadata remains a separate import blocker.

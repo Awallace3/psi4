@@ -1,5 +1,113 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## Current LOCAL work — CuPy-free CUDA replacement / strict0.2.50
+
+User explicitly authorized custom CUDA kernels and dropping CuPy, superseding
+the earlier prohibition for this experimental backend only. The old CuPy
+prototype remains in Git history; working source replaces its modules/entrypoint
+with `dispersion0_cuda`, Python cuda-bindings runtime/NVRTC, direct cuEST0.2.50
+C-ABI, three native FP64 cuBLAS GEMMs and small packing/fused-denominator/
+signed-reduction kernels. No new automatic SAPT option/default/E2 change.
+No CuPy, `cuest.bindings`, `cuest_scf` or nvmath import/dependency in this path.
+
+LOCAL archive independently rehashed:206185073 bytes,
+SHA256a06e81489dea0b652bfc4451bcfe50d3032881a7eb6decc34cdbfc50a2076c0d.
+DFMO headerc93868fcc871fd1fafea374661ad9bc188a3b40646e54eb6b906b5353f06775b,
+paramsheaderce1b4313eab84d3027d0ad5202ca17e49baf41573f9c700c9089c6535051d882;
+contextheader eea9ba0be5a9f5739ed947f8b97d4819d7a4f019d52629a33832028d14c6a863
+defines **status(handle,uint32_t*)** Major/Minor/Patch getters. No native call
+or hidden handle creation occurred. Full streaming archive inventory task
+bb9742d5b is separate read-only provenance, not an SDK install.
+
+`sapt_cuest250_identity.py` requires exact canonical archive/whole header tree,
+CUDA13 nativeSHA65c9e559201ee589cb742b919cc1c5d80c45aa480b64aede17ac96aff9e4963c,
+native getter tuple0/2/50 from an explicit valid same-process handle, capability
+symbols, actual mapped function ownership and native/CUDA file hash+inode/device,
+and an explicitly rooted frozen-hash CUDA13.3 closure manifest. Python cuEST
+bindings cannot bypass this direct-C-ABI contract. This is distinct from
+the old CUDA/E2 build proof, which did not enable cuEST in Psi4.
+An inode/device negative went RED, then the explicit mapped-file identity
+comparison was added. **9 synthetic identity tests PASS,0.024s**.
+
+The actual kernel source bodies execute through a LOCAL C++ qualifier shim
+on one serial CPU thread in tests, with NumPy GEMM/factor stand-ins. **13 CPU
+serial-body/transport/setup tests PASS,0.672s**, including layoutsC/F,
+edges1/3/500, changed inputs, signed occupied-pair/total equations, cuBLAS
+descriptor, parameter/workspace transport, failed cleanup/no retry and guards.
+**This is NOT NVRTC compilation, CUDA parallel execution, native cuEST/cuBLAS,
+or physical SAPT validation.** NVRTC/device/rank/eigenvalue/scientific gates
+remain unpassed. Static reviewd28768ac is pending; new source not committed yet.
+
+New plan contract explicitly rejects defaultQR: full Coulomb1/range-separated0,
+MATRIXPOWER1/relative1/cutoff1e-12, no denominator clamp. These declarations
+do not prove native rank/negative-eigenvalue semantics or basis/gauge parity.
+Actual approved live-handle/basis/plan factory, complete correct Psi4 import,
+optional dependency lock and mapped CUDA closure remain missing. No borrowed
+window: owner14250361 is terminalTIMEOUT0:0 per its official watcher. No
+remote probes, resource/extension/retry/cancellation, dependency solve/install,
+old-root/stage/queued-job changes or speedup claim.
+
+LOCAL manifest inventorybb9742d5b completed0 (no extraction): **59 headers**.
+Full JSON receipt `.pi/tasks/01a154d8-a459-768d-83bd-c57c6a5dc42c-4065461/bb9742d5b.output`,
+SHA256496f97fa3811c6704c31079c9414b94bb37192ec840bc5d20d24bb22bfb77ec1.
+Header-tree compact sorted JSON with FULL archive-member keys:
+SHA256644fb4d1b64862e91d9278153aaeb78273a38717209e9ff91d10f4f9f1cecc85.
+CUDA13 shared member88186400 bytes/65c9e559201ee589cb742b919cc1c5d80c45aa480b64aede17ac96aff9e4963c;
+static member80756594 bytes/3e4e26b2fb9c3f45360814d1f31314ca19a609de528e3c8ea6c401b515dddcf4.
+Symlinks `.so -> .so.0 -> .so.0.2.50`. Full record/path/schema sent directly
+to PySCF and FDDS; Python binding artifact record remains null (unused by
+the new ctypes backend, not a verified external package).
+This archive/header proof does not certify matching runtime CUDA closure,
+actual native getter calls, rank/eigenvalue or GPU scientific correctness.
+
+Peer header serialization independently reproduced from the same59 records:
+sorted include-relative POSIX path +NUL+lowercase fileSHA+newline =>
+**3d26a7ef607d02ee294f66f11f1374f3badbd83430f5be28ed0a05e6c8d73d18**.
+Our644fb4d1... compactJSON values are `{bytes:int,sha256:str}`, not bareSHA.
+Both peers independently reconciled both algorithms; no header-byte discrepancy
+or cross-worktree permission bypass. No remote query occurred.
+
+Reviewd28768ac raised four concrete source issues, now addressed locally:
+mapped library hashing uses one openedFD/fstat and before/after fd+path identity;
+mapped/function ownership is checked BEFORE native version getters receive a
+handle; execution closure is separate from successful cleanup completion,
+with failed allocations retained and successful destroys cleared for explicit
+cleanup-only retry; negative nested subview offsets are rejected. Production
+`cuLaunchKernel` now receives `ct.addressof(parameters)` while typed argument
+holders stay alive. CPU ABI spies cover that actual marshalling function,
+all11 DFMO arguments/uint64 counts/kind49/workspace16/32-byte layouts,
+and denial before getters on map failure.
+
+Additional mixed-toolkit negative went RED: a self-consistent CUDA12 cuBLAS
+record with CUDART13 was initially accepted. Explicit CUDA13 major guards now
+reject it even if declared in a hash-consistent inventory. Same-FD replacement/
+inode/device negatives and cleanup/borrow lifecycle cases also pass.
+Latest local runs: **16 CPU serial-body/transport/setup PASS,0.924s**;
+**11 synthetic identity PASS,0.030s**; **58 build guards PASS,4.235s**;
+**96 legacy runtime guards PASS,4.49s**; AST/diff checks PASS.
+Scoped follow-upd52b40b1 pending. Exact cuda-bindings package/ABI lock, real
+NVRTC compilation/parallel execution and native cuEST calls remain UNRUN.
+FDDS's future builtin tuple/provider remains uncompiled here; we do not claim
+or invoke it on frozen old cores or impose Disp0 policies on RKS/PySCF.
+
+Scoped follow-upd52b40b1: **no scoped blocker found** on the four review
+fixes and launch marshalling/transport tests; read-only, not execution proof.
+The identity source now also requires all59 canonical headers and BOTH
+documented aggregate encodings. Executing its real `canonical_headers()` on
+the LOCAL archive passed with644fb4d1... and3d26a7ef... exactly, without
+extraction or native library calls.
+Final rerun: **16 CPU serial-body/transport/setup PASS,0.866s** and
+**11 synthetic identity PASS,0.034s**. Previous58/96 guard results retained.
+
+This source checkpoint replaces, rather than supplements, the optional CuPy
+backend. Remaining unresolved execution prerequisites are unchanged: repaired
+complete Psi4 installation/import, pinned cuda-bindings/library environment,
+audited same-process live-handle/basis/plan factory, explicit MATRIXPOWER/
+relative-cutoff/rank/negative-eigenvalue parity, real mapped CUDA closure,
+NVRTC compilation and actual device signed-component gate. All GPU/SLURM
+allocations remain terminal/unborrowed; no new resource action is authorized
+or performed. Phase2 broader F-SAPT is still blocked by the physicalGPU gate.
+
 ## Latest checkpoint — 2026-10-21 12:27 Eastern
 
 **Lease terminal update:** watcherb53cf45bd observed CPU14254131

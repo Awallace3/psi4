@@ -2541,7 +2541,7 @@ def dispersion0(cache, dimer_wfn, nfrozen_A=0, nfrozen_B=0, *, block_size=None, 
     return result
 
 
-def dispersion0_cupy(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen_B=0,
+def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen_B=0,
                      block_size=24, do_print=True):
     """Experimental explicit Python entrypoint; not an automatic driver option.
 
@@ -2553,23 +2553,26 @@ def dispersion0_cupy(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen
             or not core.get_option("SAPT", "SAPT_DFT_DO_DISP")
             or core.get_option("SAPT", "SAPT_DFT_D3_IE")
             or core.get_option("SAPT", "SAPT_DFT_D4_IE")):
-        raise ValueError("Experimental CuPy dispersion requires ordinary HF SAPT0, not DFT/D3/D4")
+        raise ValueError("Experimental CUDA dispersion requires ordinary HF SAPT0, not DFT/D3/D4")
     if (str(core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")).upper() != "NONE"
             or core.get_option("SAPT", "DO_DISP_EXCH_SINF")):
-        raise NotImplementedError("CuPy fragment/F-SAPT and S-inf dispersion are unsupported")
+        raise NotImplementedError("CUDA fragment/F-SAPT and S-inf dispersion are unsupported")
     if core.get_option("SAPT", "SAPT_DFT_EINSUMS_GPU"):
-        raise ValueError("Explicit CuPy and E2 GPU dispersion selections conflict")
+        raise ValueError("Explicit CUDA and E2 GPU dispersion selections conflict")
     if not callable(provider_factory):
         raise TypeError("An explicit audited cuEST plan/provider factory is required")
     if isinstance(block_size, bool) or not isinstance(block_size, int) or block_size < 1:
-        raise ValueError("CuPy compute block must be a positive integer")
+        raise ValueError("CUDA compute block must be a positive integer")
     if dimer_wfn.nirrep() != 1:
-        raise NotImplementedError("Experimental CuPy dispersion currently requires C1 symmetry")
+        raise NotImplementedError("Experimental CUDA dispersion currently requires C1 symmetry")
 
     def kernel(**inputs):
-        from .sapt_dispersion_cupy import blocked_dispersion
+        from .sapt_dispersion_cuda import blocked_dispersion
+        from .sapt_cuest_dfmo_cuda import CuESTDFMOProvider
         primary, auxiliary = inputs.pop("primary_basis"), inputs.pop("auxiliary_basis")
         with provider_factory(primary, auxiliary) as provider:
+            if not isinstance(provider, CuESTDFMOProvider):
+                raise TypeError("The CUDA entrypoint requires strict cuEST0.2.50 native admission")
             provider.validate_basis(primary, auxiliary)
             result = blocked_dispersion(provider, **inputs)
         return (result["Disp20 occupied pairs"], result["Exch-Disp20 occupied pairs"],
