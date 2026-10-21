@@ -70,6 +70,47 @@ ordering, auxiliary rank truncation and screening.
 
 ## Proposed Python-level producer boundary
 
+### NVIDIA Python example: caller-owned output is the useful direction
+
+User-linked NVIDIA `CUDALibrarySamples` inspected at commit
+`1c1c103ca6141c0a868dcfdb4c4c213b4588d872`, without imports, installation
+or execution:
+
+* `cuEST/python_examples/helpers/cuda_utils.py`, SHA256
+  `2016e51665a2642396da9fd10135749451b2a4a664eed5b8d186beaceba72fd8`,
+  uses `cuda.bindings.runtime.cudaMalloc/cudaFree`, explicit stream helpers
+  and synchronized host/device copies.
+* `cuEST/python_examples/3_density_fitting/df_mo_integrals/run.py`, SHA256
+  `208776d8a5aa8885f858bea9e5ae46cad49b8d8aed7d1e53073ffb4b07eb8f11`,
+  allocates coefficient and output device buffers in the caller, wraps their
+  addresses in `ce.Pointer`, and passes them to workspace query and
+  `cuestDFMOIntegralsCompute(...,outTensors=...)`. It finally copies outputs
+  to host and explicitly frees the device buffers.
+
+This demonstrates Python orchestration and **caller-managed allocation**,
+not an obligation to import a cuEST-owned allocation. Python ownership itself
+is not the fundamental obstacle. Prefer one owner:
+
+1. A Python-visible E2 device allocation, or a retained external allocation
+   owner, supplies storage.
+2. cuEST borrows its address for output; `ce.Pointer` alone is not assumed to
+   retain that owner or synchronize asynchronous consumers.
+3. A generic E2 binding registers the same buffer/layout and its device-current
+   epoch, waits on producer completion and retains the owner through graph
+   execution. No redundant host upload or premature free.
+
+This can avoid ownership transfer entirely. The remaining missing part is
+E2's exposed device-storage/graph handoff contract, not a new dispersion
+algorithm. A CuPy-owned buffer is another possible owner, but CuPy allocation
+does **not** add a missing E2 DLPack importer. Replacing E2 contractions with
+CuPy would change the requested backend and must not happen silently.
+
+The example itself performs D2H copying, not an E2 zero-copy handoff. Its
+random coefficients are not a physical SAPT validation. The fetched main
+branch and Python package dependencies also are not automatically compatible
+with the pinned cuEST0.2.50 native SDK; verify that exact binding/native pair
+before use and do not install the latest package as an implicit upgrade.
+
 Replace the DFHelper transformation/staging producer, not the SAPT equations:
 
 1. Build an audited full-Coulomb cuEST integral plan for the identical AO/RI
