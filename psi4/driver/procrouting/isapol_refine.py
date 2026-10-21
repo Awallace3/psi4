@@ -62,6 +62,8 @@ MAX_PARAMETERS = 4096
 #: CamCASP's weight index (the ``WEIGHT`` key of a ``.prss`` file).
 WEIGHT_TYPES = (0, 1, 2, 3, 4, 5, 6)
 
+PENALTY_SELECTIONS = ('current', 'explicit_subset', 'static_reference')
+
 TARGET_CONVENTION = 'v_pq = -d(phi_induced at R_p)/d(q at R_q); atomic units Eh/e^2'
 
 
@@ -237,6 +239,9 @@ class RefinementModel:
     provenance: str
     declared_variables: tuple = ()
     unpenalized_variables: tuple = ()
+    penalty_selection: str = 'current'
+    static_reference_sha256: str = ''
+    selection_sha256: str = ''
 
     @property
     def parameter_count(self):
@@ -347,7 +352,8 @@ def _validated_penalized_variables(penalized, declared):
 
 def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
                      weight_type=3, weight_coefficient=1e-3, provenance='',
-                     declared_variables=None, penalized_variables=None):
+                     declared_variables=None, penalized_variables=None,
+                     penalty_selection=None, static_reference_tensors=None):
     """Build the variable list CamCASP's ``.pdef`` plus ``Penalties`` block encodes.
 
     ``anchor_tensors[s]`` is site ``s``'s raw local polarizability at
@@ -387,9 +393,39 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
     select.  The declared-list completeness check above always uses this
     node's cutoff.  The helper knows nothing about other nodes: a caller that
     wants the static selection must pass it, as ``isapol_bounded`` does.
+
+    ``penalty_selection=None`` preserves both published call forms: current
+    cutoff without a subset, exact explicit subset with one (including empty).
+    An explicit ``'current'`` may not accompany a subset. ``'explicit_subset'``
+    requires one. ``'static_reference'`` requires one finite static tensor per
+    site and refuses a simultaneous subset, rather than choosing precedence.
+    It selects with the reference site's strict static cutoff, but anchors and
+    weights always use current tensors. Declared unselected extras stay free.
+    Static tensors certify caller-declared frequency/axes, not their own
+    identity. Hashes snapshot tensor bytes, not site/frame metadata.
     """
     sites = _validated_sites(sites)
     tensors = _validated_anchor_tensors(sites, anchor_tensors)
+    if penalty_selection is None:
+        penalty_selection = 'current' if penalized_variables is None else 'explicit_subset'
+    if penalty_selection not in PENALTY_SELECTIONS:
+        raise ValueError(f'penalty_selection must be one of {PENALTY_SELECTIONS}')
+    if penalty_selection == 'explicit_subset':
+        if penalized_variables is None:
+            raise ValueError('explicit_subset requires penalized_variables')
+    elif penalized_variables is not None:
+        raise ValueError('penalized_variables requires explicit_subset selection; ambiguous combination')
+    if penalty_selection == 'static_reference':
+        if static_reference_tensors is None:
+            raise ValueError('static_reference selection requires static_reference_tensors')
+        try:
+            selection_tensors = _validated_anchor_tensors(sites, static_reference_tensors)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'invalid static_reference_tensors: {exc}') from exc
+    else:
+        if static_reference_tensors is not None:
+            raise ValueError('static_reference_tensors requires static_reference selection')
+        selection_tensors = tensors
     if not np.isfinite(cutoff) or cutoff < 0.0:
         raise ValueError('cutoff must be finite and nonnegative')
     if not np.isfinite(frequency_au) or frequency_au < 0.0:
@@ -426,7 +462,7 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
             for col in range(row, site.component_count):
                 rank2 = component_rank(col)
                 alpha = float(tensor[row, col])
-                above = abs(alpha) > cutoff
+                above = abs(float(selection_tensors[reference][row, col])) > cutoff
                 label = (f'{site.label}_{COMPONENT_NAMES[row]}'
                          f'_{COMPONENT_NAMES[col]}_A')
                 if declared is not None and (site_type, row, col) not in declared:
@@ -465,6 +501,17 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
     if len(parameter_labels) > MAX_PARAMETERS:
         raise ValueError(f'refinement is limited to {MAX_PARAMETERS} parameters')
 
+    anchor_sha256 = _anchor_hash(tensors)
+    static_sha256 = _anchor_hash(selection_tensors) if penalty_selection == 'static_reference' else ''
+    # Canonical subset identity is independent of declaration order and current
+    # frequency anchors. Empty explicit selection is intentionally not "current".
+    selection_sha256 = (hashlib.sha256(repr(tuple(sorted(selected))).encode()).hexdigest()
+                        if selected is not None else '')
+    provenance = provenance or ('caller-supplied raw local polarizabilities; '
+                                'CamCASP write_pfit_local_symm variable construction')
+    if penalty_selection == 'static_reference':
+        provenance += (f'; penalty_selection=static_reference; '
+                       f'static_reference_sha256={static_sha256}; anchor_sha256={anchor_sha256}')
     return RefinementModel(
         sites=sites, site_types=tuple(ordered_types),
         reference_sites=tuple(first[t] for t in ordered_types),
@@ -475,12 +522,13 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
         cutoff=float(cutoff), weight_type=int(weight_type),
         weight_coefficient=float(weight_coefficient), frequency_au=float(frequency_au),
         nonsymmetric_parameter_count=nonsymmetric,
-        anchor_sha256=_anchor_hash(tensors),
+        anchor_sha256=anchor_sha256,
         copy_anchor_discrepancy=float(copy_discrepancy),
-        provenance=provenance or 'caller-supplied raw local polarizabilities; '
-                                 'CamCASP write_pfit_local_symm variable construction',
+        provenance=provenance,
         declared_variables=() if declared is None else tuple(declared_variables),
-        unpenalized_variables=tuple(unpenalized))
+        unpenalized_variables=tuple(unpenalized),
+        penalty_selection=penalty_selection, static_reference_sha256=static_sha256,
+        selection_sha256=selection_sha256)
 
 
 def _validated_points(points_bohr):
