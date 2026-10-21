@@ -100,23 +100,37 @@ Preservation: `build_fdds_cpu/alda-profile/gpu-14214205/{run,step}/`.
 Snapshot03:02:03Z RUNNING47:39 remaining, not a later budget guarantee.
 This rules out dense ALDA/LibXC as a large next offload target.
 
-### Timer-only projection split — frozen offline, not compiled/validated
+### Timer-only projection split — reviewed/staged, resource-gated DEFER
 
 Source/harness `6c133b4e5c63548d6d2228075058969464a6a0b5` adds only three
 coarse RAII timers outside complete OpenMP loops: AO integrals/collapse,
 inverse metric and auxiliary three-center overlap/collapse. Expected one
 call per region for the physical replay. One offline byte-reconstruction
 test passes: removing the timer class/three starts/three stops reproduces
-the exact accepted dcc8 C++ bytes. Bash syntax/diff checks pass; narrow
-static reviewd3d553 is pending. No numerical/compilation result for6c133.
+the exact accepted dcc8 C++ bytes. Bash syntax/diff checks pass. Initial
+reviewd3d553 failed its child turn limit and produced no committed answer,
+not a review pass. Replacement reviewd8a9e9 returned no confirmed bug:
+timers surround complete loops outside OpenMP, labels/lifetimes/stops are
+safe and all external native/GPU/budget/cleanup gates remain mandatory.
+Git-only stageb611 passed exact6c133/pristine/byte-reconstruction proof at
+`/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-density-profile-6c133b4e5c-v1`.
+No numerical/compilation result for6c133.
 Accepted scientific dcc8/corec457 and prior stages remain immutable.
 
-No compute until ALDA preservation completes, static review passes, separate
-roots are staged and an immediately fresh≥2340s remaining-budget gate
-passes, covering build≤900s, native176/GPU93 gates, one≤840s protein
-diagnostic, cleanup and expiry grace. If that margin no longer fits, defer
-without silently skipping any gate or submitting another allocation.
+ALDA preservation and static/source gates passed, but the immediately
+fresh owner snapshot2026-10-21T03:15:26Z showed RUNNING34:16 remaining:
+**2056s < required2340s** (284s short). Thus **DEFER: zero build, native/GPU
+test or diagnostic executions for6c133**. All prior steps had verified
+empty cleanup, no quarantine and a free common lease. No allocation-side
+compute, expiry extension, new allocation, participant resume or job-control
+action was taken. The required window includes build≤900s, native176/
+GPU93 gates, one≤840s protein diagnostic, cleanup and expiry grace; no
+gate was silently skipped to squeeze work into the expiry.
 This is not another15-control campaign and cannot establish a new ratio.
+Resource decision for later: explicitly approved sufficient allocation time
+after readiness gates; no standing new-job authority. Early release of the
+now-idle14214205 requires explicit approval; the old holder/watch remains
+untouched until approval or normal expiry.
 
 ### Historical preparation and scope
 
