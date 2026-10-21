@@ -60,6 +60,12 @@ accepted183-native/112-GPU SVD gates. Density counts0/1/2/4, one/two threads,
 signed nonsymmetric input, repeat calls, symmetry and input preservation
 are covered; higher-angular-momentum/uncontracted and memory gates remain
 required before a projection algorithm change.
+Expanded native regression b5e36796c then passed191/179.056s with zero
+failures/errors/skips (FDDS, CPSCF, SAD, lifecycle, basis reuse, grid switching
+and eight projection references). Test driver8fcf675936 uses unchanged
+scientific1d1/core1e731 CPU stage, not a new production build. Raw XML and
+provenance: `build_fdds_cpu/cycle-20261021/projection-reference-preparation/`.
+This does not expand the GPU suite or establish a projection speedup.
 
 ### Earlier cycle progress (historical pending descriptions below superseded)
 

@@ -48,6 +48,9 @@ failures/errors/skips, existing scientific1d1 CPU stage/core1e731,
 local `p4_ci` oncos-4a16505. Evidence:
 `build_fdds_cpu/cycle-20261021/projection-reference-preparation/native.xml`.
 This is not a new production build or GPU projection validation.
+Expanded seven-file native regression subsequently passed191/179.056s,
+zero failures/errors/skips, driver8fcf675936 and unchanged1d1/core1e731.
+See the same directory's `full-native.xml` and `provenance.json`.
 
 Additional production-change gates still needed: heterogeneous higher-L
 pure/cartesian and uncontracted shells; changed-input freshness; complete
