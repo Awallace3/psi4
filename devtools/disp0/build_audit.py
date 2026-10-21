@@ -242,8 +242,17 @@ def audit_link_commands(text, directory, run, source, sdk, scratch):
                 # Their @fragment lists are not compiler response files.
                 # Preserve their raw metadata, but never silently skip a
                 # compiler hidden behind an unrecognized wrapper.
-                require(not any(compiler_name.fullmatch(Path(t).name) for t in tokens[1:]),
-                        "Unrecognized compiler wrapper in build metadata")
+                for token in tokens[1:]:
+                    if not compiler_name.fullmatch(Path(token).name):
+                        continue
+                    key, separator, value = token.partition("=")
+                    if name == "cmake" and separator and key in (
+                            "-DCMAKE_C_COMPILER", "-DCMAKE_CXX_COMPILER",
+                            "-DCMAKE_Fortran_COMPILER", "-DCMAKE_CUDA_COMPILER"):
+                        require(compiler_allowed(value, run, sdk),
+                                f"Foreign CMake compiler declaration: {value}")
+                    else:
+                        raise RuntimeError(f"Unrecognized compiler wrapper in build metadata: {token}")
     return count
 
 

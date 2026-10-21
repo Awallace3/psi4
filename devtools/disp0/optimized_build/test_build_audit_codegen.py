@@ -68,6 +68,17 @@ class CodegenAudit(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.check(command)
 
+    def test_cmake_configuration_compiler_declarations_are_not_executed_wrappers(self):
+        cmake = self.run / "environment/bin/cmake"
+        self.assertEqual(self.check(
+            f"{cmake} -DCMAKE_CXX_COMPILER={self.compiler} -S {self.source} -B {self.run}/build"), 0)
+        for command in (
+                f"{cmake} -DCMAKE_CXX_COMPILER=/usr/bin/g++ -S {self.source}",
+                f"{cmake} -DOPAQUE_WRAPPER={self.compiler}",
+                f"unknown {self.compiler} -shared @hidden.rsp"):
+            with self.assertRaises(RuntimeError):
+                self.check(command)
+
     def test_validation_collects_independent_checks_but_requires_every_one(self):
         script = (HERE / "validate_install.sh").read_text()
         self.assertIn("SKIPPED_REQUIRES_INSTALLED_IDENTITY_PROOF", script)

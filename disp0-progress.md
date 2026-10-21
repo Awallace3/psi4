@@ -1,5 +1,41 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## Latest checkpoint — 2026-10-21 12:27 Eastern
+
+The optimized064 native/Python Einsums and whole Psi4 installation finished
+inside CPU allocation14254131. Original build step0 remains FAILED in its
+post-build audit; completion of compilation is not runtime readiness.
+
+Read-only validation613511b0dfe914ed4bd241040dc6fc1a25277570 ran as
+14254131.2, taskbd94438a1: **FAIL**. Independent status:
+audit1, installed identity1, API SKIPPED125, snapshots0, binary invariance0.
+The installed Psi4 refuses import because its generated version is undefined
+(`header.py` explicitly requires valid Git tags). No version-check bypass,
+Python metadata overlay or binary change was attempted. A separate audit
+classification also rejected a compiler-looking auxiliary argument; a bounded
+read-only same-allocation diagnosis is in progress. All raw errors retained in
+`P/runs/saptdft-cuest-disp0/validation-613511b0dfe914ed4bd241040dc6fc1a25277570-14254131-2/`.
+
+Current candidate is **not READY**. Actual installed API, physical signed
+components and CUDA numerical/device gates remain unpassed; Phase2 has not
+started. No GPU request or replacement CPU allocation follows automatically.
+Existing CPU lease ends12:46:01 Eastern; previous failed roots stay unchanged.
+
+Read-only diagnosticb12a679f0 (14254131.3) confirms the undefined installed
+metadata (`undefined+770ecf9`), shallow source=true, Git describe=770ecf9,
+and no tags. Source fallback requires release1.11. A future proper build must
+fetch and verify real annotatedv1.11 identity/history BEFORE version generation,
+not patch installed Python or disable `header.py`. Locally inspected tag object
+75fa0e14aa16a868a00eced50eaaa2f8658aa806 peels to
+f16f4ea2ff2351cc2ab877d9b3887fcf81c2a670.
+
+The exact remaining audit false positive is the CMake configure rule's
+`-DCMAKE_CXX_COMPILER=<approved GNU executable>`, not an executed wrapper.
+Narrow recognition validates only four explicit CMake compiler-definition
+keys against approved actual compiler identities; unknown wrappers/foreign
+compiler settings remain rejected. Local optimized-build guards **55PASS,
+1.852s**. This does not repair or accept the undefined installed Psi4 stage.
+
 ## Ownership and immutable launch pins
 
 Dedicated worktree: `saptdft-cuest-disp0`; branch: `saptdft_cuest_disp0`.
