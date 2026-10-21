@@ -5,7 +5,11 @@
 Frozen scientific/test source `dcc8ac971310530688920efd0b2ba587a6e5cfd7`.
 Separate fresh native source/build at
 `/fastscratch/awallace43/fdds-performance-20261020/native-products-dcc8ac9713/`;
-native build/test workflowb4c2aef33 pending. Prior ada/core6f829 and fd2/core92e5
+native build/test workflowb4c2aef33 **passed176 tests**, zero failures/errors/
+skips,177.642s, CPU core
+`61c19a574493d7399129faf2f1d7a2703f509260b8d63d1f8c4161b2ef311530`.
+Evidence: `build_fdds_cpu/response-products-dcc8ac9713/native/`.
+Prior ada/core6f829 and fd2/core92e5
 stages/evidence stay immutable.
 
 The accepted diagnostic at harness25bf9d87cfe6657d7e27e4f53f03af26fcefc019
