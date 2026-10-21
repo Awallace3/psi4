@@ -883,7 +883,8 @@ def _dispersion_nodes(refinements):
         if other.model.declared_variables != first.declared_variables:
             raise ValueError('every node must share one declared model; a supplied .pdef '
                              'variable list and a cutoff-derived one are different models')
-        for name in ('weight_type', 'weight_coefficient', 'cutoff'):
+        for name in ('weight_type', 'weight_coefficient', 'cutoff',
+                     'penalty_selection', 'static_reference_sha256', 'selection_sha256'):
             if getattr(other.model, name) != getattr(first, name):
                 raise ValueError(f'every node must share one penalty scheme; {name} differs')
     frequencies = tuple(float(r.model.frequency_au) for r in nodes)

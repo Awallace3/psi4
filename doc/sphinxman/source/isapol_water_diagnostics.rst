@@ -73,3 +73,31 @@ adds these labels/hashes. Dataclass repr/equality and reference-mode provenance
 identities therefore migrate; compare explicit scientific declarations, not
 cross-version repr/hash identity, to assess numerical compatibility. Legacy
 current/subset provenance strings are unchanged.
+
+Standalone angular consumers (dispersion layer)
+-----------------------------------------------
+
+``isapol_native_recoupled.refined_recoupled_dispersion`` accepts solved full
+PFIT tensors, explicit CP weights/provenance, maximum order and the existing
+shared bounded-response ledger. It can be used without the property, ISA or
+MBIS layers. Exact reciprocity and zero charge rows/columns are required;
+no trace-only reconstruction, repair or automatic density solve is performed.
+It delegates to the native anisotropic/recoupled models and tables. Isotropic
+and angular consumers independently refuse mixed selection policy, subset
+identity, static reference hash, cutoff or weight scheme before native result
+allocation; angular refusal precedes table-query allocation and ledger charge.
+
+Native sources include all real-CG records for the 13 defined ordered rank
+pairs and the C6--C12 recoupling tables. The (3,4), (4,3), (4,4) pairs remain
+structurally absent. Declared-model, shipped-table and unrestricted coverage
+are separate inventories, not interchangeable accuracy claims. Rank-2 input
+does not close unrestricted C8/C9/C10. MIT notices/attribution accompany both
+source and installed tables (``share/psi4/licenses/isapol``).
+
+``isapol_offline_orientation`` is a reusable supplied-local placement and
+contract adapter, with pure record-admission tests and separately named native
+invariant tests. It does not reconstruct missing C site tensors, alter local
+tensors when placing frames, execute an engine or infer sealed-runtime paths.
+The historical orientation batch/outlier/sealing orchestration is retained
+only as read-only source evidence, not shipped as an ordinary CI entrypoint.
+The native invariant suites are UNRUN until a separately authorized new build.
