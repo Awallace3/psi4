@@ -1,5 +1,74 @@
 # FDDS cuEST implementation handoff
 
+## Current resource and SDK directive (supersedes old running snapshots)
+
+**14250361 is terminal TIMEOUT, not an available shared GPU window.**
+Read-only accounting preserved by be2f25277 reports start07:28:05/end11:28:09
+Eastern on2026-10-21 (15:28:09Z), elapsed04:00:04, exit0:0.
+Official watcher observed terminal state15:30:57Z. No cancellation, extension,
+new allocation, borrowed RKS window or participant GPU step was launched.
+Final diagnostic cleanup15:07:02Z was independently audited: empty pre/post
+tables, no quarantine. Existing stage/output evidence remains immutable.
+
+Final short wait-policy diagnostic completed both processes normally.
+At2048, CPU pinv before/after GPU initialization was3.555/4.224s with default
+wait knobs and7.756/7.325s with PASSIVE/blocktime0. This small synthetic probe
+does **not** establish a mitigation, root cause, FDDS timing or speedup.
+Raw local evidence:
+`build_fdds_cpu/cycle-20261021/blas-wait-policy-14250361/`.
+The extra physical same-binary SVD-off/on attempt remains failed/unresolved.
+
+**All future active cuEST paths must require exact0.2.50.** All FDDS GPU
+results below used historical0.2.2, resolved at
+`/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt/lib/libcuest.so.0.2.2`,
+SHA256`2d5ba99c13b30cc86feab09f9c8911914599042fcbc3aa8f3ebe933c840d5783`.
+They are not0.2.50 validation/benchmarks. LOCAL strict CMake/build/runtime
+contract and regression tests are implemented; no old binary, job or shared
+environment was modified. See `devtools/cuest-sdk-0250.md`. Exact0.2.50
+vendor/CUDA compilation, native-version/device/scientific validation remain
+unrun.
+
+### Strict 0.2.50 local gate
+
+Source/provider commit:
+**`a323afa886b6753370d798aa9ae5410b83f4aa06`**.
+Final focused review `ddae8b8b16156a965affb0080d0530ecc` cleared mapping,
+grid-result admission and native ABI/lifetime checks, identifying the two
+unchecked stream setters. Follow-up `d64ffc9387292222317c51cea4b347338`
+gave narrow static clearance after their fix. The intervening four-turn
+follow-up attempt exhausted its budget without an answer; it is not clearance.
+
+Final combined offline gate: **200 passed, zero failures/errors/skips,
+15.536s**, with Python3.13.13/NumPy2.4.3 in local `p4_ci`, host GCC/G++13.3.0,
+CMake3.28.3 and Ninja1.11.1. Evidence:
+`build_fdds_cpu/sdk-contract-0250/final-reviewed-v8.xml`,
+SHA256`a4e760e01cd50248c8e85064a294d4781c904489afe6c0cdc75c5923db3aaaaf`.
+This includes host-only synthetic ELF/CMake/header-dependency tests, compiled
+C++ control-flow mocks, admission negative tests and retained benchmark guards;
+it is **not** a fresh full Psi4 build or real CUDA/cuEST execution.
+
+Admission now binds canonical whole-header/native bytes, matching CUDA closure,
+outer/inner configure identity, consumed header paths and actual executable core
+mapping. Active CPKS/FDDS/grid scientific workers check expected identities in
+their own process before/after work; failed post-admission cannot be hidden by
+an earlier successful science file. The private provider
+`core._cuest_runtime_version()` returns exactly a tuple of builtin integers
+`(0,2,50)` from the existing live handle, with checked vendor status and no hidden
+initialization. Parameter and stream-binding failures unwind and permit retry.
+
+The stream-binding regression first failed on the unchecked original calls:
+`stream-errors-red.xml`, one executed failure/1.886s. The fix is included in the
+200-pass final gate. Earlier retained/combined attempts failed collection because
+the benchmark module directory was missing from `PYTHONPATH`; v7/v8 corrected
+the invocation without changing retained tests. All failed logs remain under
+`build_fdds_cpu/sdk-contract-0250/`; they are not counted as passes.
+
+Remaining gate: freeze a separately authorized fresh 0.2.50 source/build/run,
+compile with the canonical vendor headers/native CUDA13 closure, prove actual
+same-process getter/maps and FDDS GPU routes, then rerun numerical and matched
+physical controls. No current GPU holder, new allocation or new performance
+claim follows from this offline contract gate.
+
 ## New cycle — opt-in SVD validated; modest whole-FDDS improvement
 
 Artifact audit b843319e5 accepted scientific
@@ -54,8 +123,8 @@ five minutes. **Additional diagnostic failed:** admission showed54:37 left,
 but the first SVD-off worker timed out124 at1050s; the on arm never started.
 Helperexit1, FAILED.json, no VERIFIED.json, no accepted extra timing/ratio.
 Artifact auditbac5ce5d4 confirmed cleanup14:51:01Z, empty pre/post GPU tables,
-no quarantine. Cause is not established by logger-only stdout; bounded
-last-phase inspection and failed-evidence preservationbea6324f0 are pending.
+no quarantine. Last-phase inspection/preservationbea6324f0 completed0:
+two integration points at341s/601s, no result.json. Cause is not established.
 This failure is retained separately; it does not erase the prior five controls
 or justify a claim that large-system opt-out behavior has passed.
 Short diagnostic6164532028 (reviewd13ea PASS/three offline guards) is staged
@@ -65,6 +134,23 @@ before/after a real2x2 cuEST endpoint are attribution only, not FDDS
 correctness or speedup evidence. Actual environment/affinity/threadpools/
 library paths and20s Python stacks are retained. It is not a blind rerun of
 the failed protein pair. No root cause or extra speedup is established.
+Audit/preservationbb938736e completed0: both processes finished normally;
+cleanup15:01:03Z empty/no quarantine. No periodic20s stack dump fired.
+At2048, CPU pinv base before/after GPU
+initialization2.234/8.166s; candidate7.723/5.212s. This variation does not
+demonstrate a new-core or CUDA regression or reproduce the protein timeout.
+Threadpoolctl was unavailable (no installation); affinity was the same
+eight CPUs, loaded MKL/LLVM OpenMP paths were the same. Raw:
+`build_fdds_cpu/cycle-20261021/blas-diagnostic-14250361/`.
+
+One final short hypothesis probebd2afaba8 uses the same reviewed616 worker,
+same candidate core and inputs, default wait knobs versus the diagnostic-only
+bundle OMP_WAIT_POLICY=PASSIVE/KMP_BLOCKTIME=0. Both keep eight threads,
+180s/process and480s helper with fresh>=660s admission. No production default,
+physics or benchmark setting is changed; no physical FDDS speedup/mitigation
+is established by this synthetic probe. Observerb00593fa6 remains the
+five-minute artifact observer. A complete new physical CPU/GPU comparison
+does not fit the remaining grant; no new allocation is authorized.
 The next projection investigation is documented in
 `devtools/benchmarks/fdds_projection_next.md`; no projection arithmetic,
 integral screening, layout or algorithm has been changed.
