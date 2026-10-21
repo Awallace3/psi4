@@ -214,6 +214,13 @@ class BuildGuards(unittest.TestCase):
             self.assertIn("#SBATCH " + flag, text)
         self.assertNotIn("#SBATCH --gres", text)
 
+    def test_executable_contract_is_tracked_despite_ignore_rules(self):
+        result = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "devtools/disp0/optimized_build/build.sbatch",
+             "devtools/disp0/optimized_build/payload.sh", "devtools/disp0/optimized_build/install_hook.cmake"],
+            cwd=HERE.parents[2], capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

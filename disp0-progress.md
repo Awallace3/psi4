@@ -2255,3 +2255,9 @@ Follow-up d8335ebad confirms review fixes, **no scoped blocker** (read-only,
 not a build/test). Freezing/publishing the executable optimized recipe and
 proceeding to the owner-cleared bounded Git/source/quota preparation. No
 actual accepted CPUjob yet; no GPUjob/request. ExistinginputUNKNOWN untouched.
+
+Pre-push tracking check caught repository ignore rules `build*`, `*.sh`,
+`install*` excluding the new batch/payload/hook from initial localc2c2611.
+No remote/push/job used that incomplete pin. Explicitly force-adding the three
+reviewed configuration scripts and adding a Git-tracking regression before
+publishing the final complete pin. Content/reviewed scientific scope unchanged.
