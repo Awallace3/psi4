@@ -21,6 +21,7 @@
 // by rounding and summation order.
 
 #include "xdm_gpu.h"
+#include "xdm_gpu_blocking.h"
 
 #include "hirshfeld.h"
 #include "xdm_data.h"
@@ -29,11 +30,16 @@
 
 #include "gau2grid/gau2grid.h"
 
+#include <cub/cub.cuh>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cfloat>
+#include <climits>
 #include <cmath>
+#include <cstdint>
+#include <optional>
 #include <string>
 
 // Process-global handles owned by cuest_runtime.cc; cublas_handle runs on stream_handle.
@@ -41,6 +47,10 @@ extern cublasHandle_t cublas_handle;
 extern cudaStream_t stream_handle;
 
 namespace psi {
+// libqt/qt.h; declared here for the same reason as below.
+void timer_on(const std::string& key);
+void timer_off(const std::string& key);
+
 namespace cuest_common {
 // cuESTCommon.h; declared here so nvcc does not parse the libmints headers it pulls in.
 void ensure_cuest_initialized();
@@ -68,6 +78,15 @@ void check_cuda(cudaError_t err, const char* what) {
         throw PSIEXCEPTION(std::string("XDM_GPU: ") + what + " failed: " + cudaGetErrorString(err));
     }
 }
+
+// Scoped psi4 timer that is closed on the way out of an exception too.
+struct QTimer {
+    const char* key;
+    explicit QTimer(const char* k) : key(k) { timer_on(key); }
+    ~QTimer() { timer_off(key); }
+    QTimer(const QTimer&) = delete;
+    QTimer& operator=(const QTimer&) = delete;
+};
 
 void check_cublas(cublasStatus_t status, const char* what) {
     if (status != CUBLAS_STATUS_SUCCESS) {
@@ -425,6 +444,169 @@ __global__ void moment_kernel(int n, bool restricted, DeviceAtoms at, const int*
     }
 }
 
+// ==> Density gather on the device (density_resident) <== //
+
+// Du (ncols x ncols, row-major) = D[col_func, col_func] for the chunk's union columns.
+__global__ void gather_density_kernel(int ncols, int nbf, const int* __restrict__ col_func,
+                                      const double* __restrict__ D, double* __restrict__ Du) {
+    const int i = blockIdx.y;
+    const std::size_t row = static_cast<std::size_t>(col_func[i]) * nbf;
+    for (int j = blockIdx.x * blockDim.x + threadIdx.x; j < ncols; j += gridDim.x * blockDim.x) {
+        Du[static_cast<std::size_t>(i) * ncols + j] = D[row + col_func[j]];
+    }
+}
+
+// ==> Device blocking (XDM_GRID_BLOCKING DEVICE) <== //
+
+// Per thread block: min and max of x, y, z over its grid-stride share of the points.
+__global__ void bbox_kernel(std::size_t n, const double* __restrict__ xyz, double* __restrict__ partial) {
+    __shared__ double red[6][block_size];
+    double v[6] = {DBL_MAX, DBL_MAX, DBL_MAX, -DBL_MAX, -DBL_MAX, -DBL_MAX};
+    const std::size_t stride = static_cast<std::size_t>(gridDim.x) * blockDim.x;
+    for (std::size_t p = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x; p < n; p += stride) {
+        for (int k = 0; k < 3; k++) {
+            const double c = xyz[3 * p + k];
+            v[k] = fmin(v[k], c);
+            v[3 + k] = fmax(v[3 + k], c);
+        }
+    }
+    for (int k = 0; k < 6; k++) red[k][threadIdx.x] = v[k];
+    __syncthreads();
+    for (int half = block_size / 2; half > 0; half >>= 1) {
+        if (threadIdx.x < half) {
+            for (int k = 0; k < 3; k++) red[k][threadIdx.x] = fmin(red[k][threadIdx.x], red[k][threadIdx.x + half]);
+            for (int k = 3; k < 6; k++) red[k][threadIdx.x] = fmax(red[k][threadIdx.x], red[k][threadIdx.x + half]);
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        for (int k = 0; k < 6; k++) partial[6 * blockIdx.x + k] = red[k][0];
+    }
+}
+
+// The host build's sieves (DFTGrid::host_blocks_from_cuest) and the Morton key of each kept
+// point; dropped points get dropped_key and sort to the end. index[p] = p for the sort.
+__global__ void key_kernel(std::size_t n, const double* __restrict__ xyz, const double* __restrict__ w,
+                           double weights_cutoff, bool distance_sieve, double max_distance2, int natom,
+                           const double* __restrict__ atom_xyz, double lox, double loy, double loz, double scale,
+                           std::uint64_t* __restrict__ keys, unsigned int* __restrict__ index,
+                           unsigned long long* __restrict__ nkept) {
+    const std::size_t p = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    bool keep = false;
+    if (p < n) {
+        const double x = xyz[3 * p], y = xyz[3 * p + 1], z = xyz[3 * p + 2];
+        keep = fabs(w[p]) >= weights_cutoff;
+        if (keep && distance_sieve) {
+            double R2 = DBL_MAX;
+            for (int a = 0; a < natom; a++) {
+                const double dx = x - atom_xyz[3 * a], dy = y - atom_xyz[3 * a + 1], dz = z - atom_xyz[3 * a + 2];
+                // No FMA contraction: the same rounding as the host sieve.
+                R2 = fmin(R2, __dadd_rn(__dadd_rn(__dmul_rn(dx, dx), __dmul_rn(dy, dy)), __dmul_rn(dz, dz)));
+            }
+            keep = R2 <= max_distance2;
+        }
+        keys[p] = keep ? blocking::morton_key(blocking::quantize(x, lox, scale), blocking::quantize(y, loy, scale),
+                                              blocking::quantize(z, loz, scale))
+                       : blocking::dropped_key;
+        index[p] = static_cast<unsigned int>(p);
+    }
+    const unsigned int ballot = __ballot_sync(0xffffffffu, keep);
+    if ((threadIdx.x & 31) == 0 && ballot) atomicAdd(nkept, static_cast<unsigned long long>(__popc(ballot)));
+}
+
+// Sorted structure-of-arrays copy of the kept points.
+__global__ void gather_points_kernel(std::size_t n, const unsigned int* __restrict__ index,
+                                     const double* __restrict__ xyz, const double* __restrict__ w,
+                                     double* __restrict__ out) {
+    const std::size_t p = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (p >= n) return;
+    const std::size_t i = index[p];
+    out[p] = xyz[3 * i];
+    out[n + p] = xyz[3 * i + 1];
+    out[2 * n + p] = xyz[3 * i + 2];
+    out[3 * n + p] = w[i];
+}
+
+// One thread block per grid block: BlockOPoints::bound() (mean centre, largest distance from
+// it), then BlockOPoints::populate()'s two-pass test for every shell, one warp per 32-shell
+// mask word. Bit k of word j is shell 32 j + k.
+__global__ void screen_kernel(const double* __restrict__ x, const double* __restrict__ y,
+                              const double* __restrict__ z, const unsigned long long* __restrict__ bstart,
+                              const int* __restrict__ bnp, int nshell, const double* __restrict__ center,
+                              const double* __restrict__ extent, int nword, unsigned int* __restrict__ mask) {
+    __shared__ double red[3][block_size];
+    __shared__ double cR[4];
+    const int b = blockIdx.x;
+    const std::size_t s0 = bstart[b];
+    const int np = bnp[b];
+
+    double sx = 0.0, sy = 0.0, sz = 0.0;
+    for (int q = threadIdx.x; q < np; q += blockDim.x) {
+        sx += x[s0 + q];
+        sy += y[s0 + q];
+        sz += z[s0 + q];
+    }
+    red[0][threadIdx.x] = sx;
+    red[1][threadIdx.x] = sy;
+    red[2][threadIdx.x] = sz;
+    __syncthreads();
+    for (int half = block_size / 2; half > 0; half >>= 1) {
+        if (threadIdx.x < half) {
+            for (int k = 0; k < 3; k++) red[k][threadIdx.x] += red[k][threadIdx.x + half];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        for (int k = 0; k < 3; k++) cR[k] = red[k][0] / np;
+    }
+    __syncthreads();
+    const double cx = cR[0], cy = cR[1], cz = cR[2];
+    double r2 = 0.0;
+    for (int q = threadIdx.x; q < np; q += blockDim.x) {
+        const double dx = x[s0 + q] - cx, dy = y[s0 + q] - cy, dz = z[s0 + q] - cz;
+        r2 = fmax(r2, dx * dx + dy * dy + dz * dz);
+    }
+    red[0][threadIdx.x] = r2;
+    __syncthreads();
+    for (int half = block_size / 2; half > 0; half >>= 1) {
+        if (threadIdx.x < half) red[0][threadIdx.x] = fmax(red[0][threadIdx.x], red[0][threadIdx.x + half]);
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) cR[3] = sqrt(red[0][0]);
+    __syncthreads();
+    const double R = cR[3];
+
+    const int lane = threadIdx.x % 32;
+    const int warp = threadIdx.x / 32;
+    const int nwarps = blockDim.x / 32;
+    for (int wd = warp; wd < nword; wd += nwarps) {
+        unsigned int bits = 0;
+        for (int k = 0; k < 32; k++) {
+            const int P = 32 * wd + k;
+            if (P >= nshell) break;
+            const double vx = center[3 * P], vy = center[3 * P + 1], vz = center[3 * P + 2];
+            const double Reff = sqrt((vx - cx) * (vx - cx) + (vy - cy) * (vy - cy) + (vz - cz) * (vz - cz));
+            if (Reff > R + extent[P]) continue;
+            const double Rp2 = extent[P] * extent[P];
+            bool found = false;
+            for (int q0 = 0; q0 < np; q0 += 32) {
+                const int q = q0 + lane;
+                bool hit = false;
+                if (q < np) {
+                    const double dx = x[s0 + q] - vx, dy = y[s0 + q] - vy, dz = z[s0 + q] - vz;
+                    hit = dx * dx + dy * dy + dz * dz < Rp2;
+                }
+                if (__any_sync(0xffffffffu, hit)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (found) bits |= 1u << k;
+        }
+        if (lane == 0) mask[static_cast<std::size_t>(b) * nword + wd] = bits;
+    }
+}
+
 template <typename T>
 struct DeviceArray {
     T* ptr = nullptr;
@@ -530,14 +712,29 @@ struct DeviceXDMIntegrator::Impl {
     int* d_layout = nullptr;
     std::size_t layout_capacity = 0;
 
-    // Host staging (pinned): x, y, z, w and the gathered density matrices; layout ints.
-    double* h_points = nullptr;  // 4 * max_chunk_points
-    double* h_dens = nullptr;    // nspin * max_cols^2
-    int* h_layout = nullptr;
-    std::size_t h_layout_capacity = 0;
+    // Host staging (pinned), double-buffered so one chunk is filled while the previous one's
+    // copies are in flight: x, y, z, w and the layout ints per slot. The gathered density
+    // matrices (only when the density is not resident) have one buffer and their own event.
+    static constexpr int nslot = 2;
+    int slot = 0;                           // slot of the chunk under construction
+    double* h_points[nslot] = {nullptr, nullptr};  // 4 * max_chunk_points each
+    int* h_layout[nslot] = {nullptr, nullptr};
+    std::size_t h_layout_capacity[nslot] = {0, 0};
+    cudaEvent_t copied[nslot] = {nullptr, nullptr};
+    bool copy_pending[nslot] = {false, false};
+    double* h_dens = nullptr;  // nspin * max_cols^2
+    cudaEvent_t dens_copied = nullptr;
+    bool dens_pending = false;
     std::size_t max_cols = 0;
-    cudaEvent_t copied = nullptr;
-    bool copy_pending = false;
+
+    // Full AO density matrices on the device, gathered per chunk by gather_density_kernel.
+    bool resident_D = false;
+    double* d_Dfull = nullptr;
+
+    // Device-blocked grid (add_device_blocks): the points are read in place, and a chunk is
+    // the contiguous point range [fill_start, fill_start + fill_points).
+    const double* dev_points[4] = {nullptr, nullptr, nullptr, nullptr};
+    std::size_t fill_start = 0;
 
     // Chunk under construction
     int fill_points = 0;
@@ -570,13 +767,18 @@ struct DeviceXDMIntegrator::Impl {
         device_allocs.clear();
         if (d_layout) cudaFree(d_layout);
         d_layout = nullptr;
-        if (h_points) cudaFreeHost(h_points);
+        for (int k = 0; k < nslot; k++) {
+            if (h_points[k]) cudaFreeHost(h_points[k]);
+            if (h_layout[k]) cudaFreeHost(h_layout[k]);
+            if (copied[k]) cudaEventDestroy(copied[k]);
+            h_points[k] = nullptr;
+            h_layout[k] = nullptr;
+            copied[k] = nullptr;
+        }
         if (h_dens) cudaFreeHost(h_dens);
-        if (h_layout) cudaFreeHost(h_layout);
-        h_points = h_dens = nullptr;
-        h_layout = nullptr;
-        if (copied) cudaEventDestroy(copied);
-        copied = nullptr;
+        h_dens = nullptr;
+        if (dens_copied) cudaEventDestroy(dens_copied);
+        dens_copied = nullptr;
     }
 
     // Device memory in use by the whole process, lowest free seen since construction.
@@ -596,41 +798,103 @@ struct DeviceXDMIntegrator::Impl {
         return (ncolloc + ngemm) * npts * ncols + nspin * ncols * ncols;
     }
 
-    // The pinned staging buffers are reused chunk to chunk; wait for the last copy out of them.
-    void wait_staging() {
-        if (copy_pending) {
-            check_cuda(cudaEventSynchronize(copied), "cudaEventSynchronize");
-            copy_pending = false;
+    // A staging slot is reused every other chunk; wait for the last copy out of it.
+    void wait_staging(int k) {
+        if (copy_pending[k]) {
+            QTimer t("XDM: staging wait");
+            check_cuda(cudaEventSynchronize(copied[k]), "cudaEventSynchronize");
+            copy_pending[k] = false;
         }
+    }
+    void wait_density_staging() {
+        if (dens_pending) {
+            QTimer t("XDM: staging wait");
+            check_cuda(cudaEventSynchronize(dens_copied), "cudaEventSynchronize");
+            dens_pending = false;
+        }
+    }
+
+    // Add one block. Host blocks are copied into the slot's staging; a device block (dev_start
+    // set) is its points' position in dev_points, and the chunk stretches to cover it.
+    void add(std::size_t npoints, const double* x, const double* y, const double* z, const double* w,
+             std::size_t dev_start, const int* shells, std::size_t nshells) {
+        if (npoints == 0) return;
+        if (npoints > max_chunk_points) {
+            throw PSIEXCEPTION("XDM_GPU: grid block larger than the device chunk.");
+        }
+        const bool device = dev_points[0] != nullptr;
+        // Columns this block would add to the chunk's shell union.
+        int new_cols = 0;
+        for (std::size_t i = 0; i < nshells; i++) {
+            if (union_index[shells[i]] < 0) new_cols += basis.nfunc[shells[i]];
+        }
+        const std::size_t P = device && fill_points > 0 ? dev_start + npoints - fill_start : fill_points + npoints;
+        const std::size_t ncols = fill_cols + new_cols;
+        if (fill_points > 0 && (P > max_chunk_points || work_need(P, ncols) > workspace_doubles)) {
+            flush();
+        }
+        if (fill_points == 0) {
+            wait_staging(slot);
+            std::size_t cols = 0;
+            for (std::size_t i = 0; i < nshells; i++) cols += basis.nfunc[shells[i]];
+            if (work_need(npoints, cols) > workspace_doubles) {
+                throw PSIEXCEPTION("XDM_GPU: one grid block does not fit the device workspace; raise XDM_GPU_MEMORY.");
+            }
+            fill_start = dev_start;
+        }
+
+        const int p0 = device ? static_cast<int>(dev_start - fill_start) : fill_points;
+        if (!device) {
+            const std::size_t cap = max_chunk_points;
+            double* h = h_points[slot];
+            std::copy(x, x + npoints, h + p0);
+            std::copy(y, y + npoints, h + cap + p0);
+            std::copy(z, z + npoints, h + 2 * cap + p0);
+            std::copy(w, w + npoints, h + 3 * cap + p0);
+        }
+
+        blk_point_offset.push_back(p0);
+        blk_npoints.push_back(static_cast<int>(npoints));
+        for (std::size_t i = 0; i < nshells; i++) {
+            const int g = shells[i];
+            int u = union_index[g];
+            if (u < 0) {
+                u = static_cast<int>(ushell_global.size());
+                union_index[g] = u;
+                ushell_global.push_back(g);
+                ushell_col.push_back(fill_cols);
+                for (int f = 0; f < basis.nfunc[g]; f++) col_func.push_back(basis.func_offset[g] + f);
+                fill_cols += basis.nfunc[g];
+            }
+            blk_shells.push_back(u);
+        }
+        blk_shell_offset.push_back(static_cast<int>(blk_shells.size()));
+        // A device chunk's points between blocks belong to blocks no shell reaches: their
+        // collocation stays zero, so they carry no density and add nothing to any moment.
+        fill_points = p0 + static_cast<int>(npoints);
     }
 
     void flush() {
         if (fill_points == 0) return;
-        wait_staging();
+        QTimer timer("XDM: chunk flush");
         const int P = fill_points;
         const int ncols = fill_cols;
         const int nblk = static_cast<int>(blk_npoints.size());
         const int nus = static_cast<int>(ushell_global.size());
+        const bool device = dev_points[0] != nullptr;
+        const int k = slot;
 
-        // Gather the union-column density matrices on the host.
-        for (int s = 0; s < nspin; s++) {
-            double* dst = h_dens + static_cast<std::size_t>(s) * ncols * ncols;
-            const double* src = D[s];
-            for (int i = 0; i < ncols; i++) {
-                const double* srow = src + static_cast<std::size_t>(col_func[i]) * basis.nbf;
-                double* drow = dst + static_cast<std::size_t>(i) * ncols;
-                for (int j = 0; j < ncols; j++) drow[j] = srow[col_func[j]];
-            }
-        }
-
-        // Layout ints: blk_point_offset, blk_npoints, blk_shell_offset, blk_shells, ushell_global, ushell_col
-        const std::size_t nlayout = 3 * static_cast<std::size_t>(nblk) + 1 + blk_shells.size() + 2 * nus;
-        if (nlayout > h_layout_capacity) {
-            if (h_layout) cudaFreeHost(h_layout);
-            h_layout_capacity = std::max(nlayout, 2 * h_layout_capacity);
+        // Layout ints: blk_point_offset, blk_npoints, blk_shell_offset, blk_shells, ushell_global,
+        // ushell_col, and col_func when the density is gathered on the device.
+        const std::size_t ncolf = resident_D ? static_cast<std::size_t>(ncols) : 0;
+        const std::size_t nlayout = 3 * static_cast<std::size_t>(nblk) + 1 + blk_shells.size() + 2 * nus + ncolf;
+        if (nlayout > h_layout_capacity[k]) {
+            if (h_layout[k]) cudaFreeHost(h_layout[k]);
+            h_layout[k] = nullptr;
+            h_layout_capacity[k] = std::max(nlayout, 2 * h_layout_capacity[k]);
             void* h = nullptr;
-            check_cuda(cudaMallocHost(&h, h_layout_capacity * sizeof(int)), "cudaMallocHost");
-            h_layout = static_cast<int*>(h);
+            check_cuda(cudaMallocHost(&h, h_layout_capacity[k] * sizeof(int)), "cudaMallocHost");
+            h_layout[k] = static_cast<int*>(h);
         }
         if (nlayout > layout_capacity) {
             check_cuda(cudaStreamSynchronize(stream_handle), "cudaStreamSynchronize");
@@ -643,41 +907,71 @@ struct DeviceXDMIntegrator::Impl {
             bytes += layout_capacity * sizeof(int);
             peak_bytes = std::max(peak_bytes, bytes);
         }
-        int* h = h_layout;
+        int* h = h_layout[k];
         std::copy(blk_point_offset.begin(), blk_point_offset.end(), h);
         std::copy(blk_npoints.begin(), blk_npoints.end(), h + nblk);
         std::copy(blk_shell_offset.begin(), blk_shell_offset.end(), h + 2 * nblk);
         std::copy(blk_shells.begin(), blk_shells.end(), h + 3 * nblk + 1);
         std::copy(ushell_global.begin(), ushell_global.end(), h + 3 * nblk + 1 + blk_shells.size());
         std::copy(ushell_col.begin(), ushell_col.end(), h + 3 * nblk + 1 + blk_shells.size() + nus);
+        const std::size_t col_func_at = 3 * static_cast<std::size_t>(nblk) + 1 + blk_shells.size() + 2 * nus;
+        if (resident_D) std::copy(col_func.begin(), col_func.end(), h + col_func_at);
 
         cudaStream_t st = stream_handle;
         const std::size_t cap = max_chunk_points;
-        double* d_x = d_points;
-        double* d_y = d_points + cap;
-        double* d_z = d_points + 2 * cap;
-        double* d_w = d_points + 3 * cap;
+        const double* d_x = device ? dev_points[0] + fill_start : d_points;
+        const double* d_y = device ? dev_points[1] + fill_start : d_points + cap;
+        const double* d_z = device ? dev_points[2] + fill_start : d_points + 2 * cap;
+        const double* d_w = device ? dev_points[3] + fill_start : d_points + 3 * cap;
         double* d_rho[2] = {d_points + 4 * cap, d_points + 5 * cap};
         double* d_q[2] = {d_points + 6 * cap, d_points + 7 * cap};
         double* d_b[2] = {d_points + 8 * cap, d_points + 9 * cap};
         double* d_pinv = d_points + 10 * cap;
 
-        for (int k = 0; k < 4; k++) {
-            check_cuda(cudaMemcpyAsync(d_points + k * cap, h_points + k * cap, P * sizeof(double),
-                                       cudaMemcpyHostToDevice, st),
-                       "cudaMemcpyAsync");
+        if (!device) {
+            for (int c = 0; c < 4; c++) {
+                check_cuda(cudaMemcpyAsync(d_points + c * cap, h_points[k] + c * cap, P * sizeof(double),
+                                           cudaMemcpyHostToDevice, st),
+                           "cudaMemcpyAsync");
+            }
         }
+        check_cuda(cudaMemcpyAsync(d_layout, h, nlayout * sizeof(int), cudaMemcpyHostToDevice, st), "cudaMemcpyAsync");
+        check_cuda(cudaEventRecord(copied[k], st), "cudaEventRecord");
+        copy_pending[k] = true;
+
         const std::size_t plane = static_cast<std::size_t>(P) * ncols;
         double* d_phi = d_work;
         double* d_T = d_work + ncolloc * plane;
         double* d_Du = d_T + ngemm * plane;
-        check_cuda(cudaMemcpyAsync(d_Du, h_dens, nspin * static_cast<std::size_t>(ncols) * ncols * sizeof(double),
-                                   cudaMemcpyHostToDevice, st),
-                   "cudaMemcpyAsync");
-        check_cuda(cudaMemcpyAsync(d_layout, h_layout, nlayout * sizeof(int), cudaMemcpyHostToDevice, st),
-                   "cudaMemcpyAsync");
-        check_cuda(cudaEventRecord(copied, st), "cudaEventRecord");
-        copy_pending = true;
+        if (resident_D) {
+            if (ncols > 0) {
+                const dim3 grid((ncols + 255) / 256, ncols);
+                for (int s = 0; s < nspin; s++) {
+                    gather_density_kernel<<<grid, 256, 0, st>>>(
+                        ncols, basis.nbf, d_layout + col_func_at,
+                        d_Dfull + static_cast<std::size_t>(s) * basis.nbf * basis.nbf,
+                        d_Du + static_cast<std::size_t>(s) * ncols * ncols);
+                    check_cuda(cudaGetLastError(), "XDM density gather kernel launch");
+                }
+            }
+        } else {
+            // Gather the union-column density matrices on the host.
+            wait_density_staging();
+            for (int s = 0; s < nspin; s++) {
+                double* dst = h_dens + static_cast<std::size_t>(s) * ncols * ncols;
+                const double* src = D[s];
+                for (int i = 0; i < ncols; i++) {
+                    const double* srow = src + static_cast<std::size_t>(col_func[i]) * basis.nbf;
+                    double* drow = dst + static_cast<std::size_t>(i) * ncols;
+                    for (int j = 0; j < ncols; j++) drow[j] = srow[col_func[j]];
+                }
+            }
+            check_cuda(cudaMemcpyAsync(d_Du, h_dens, nspin * static_cast<std::size_t>(ncols) * ncols * sizeof(double),
+                                       cudaMemcpyHostToDevice, st),
+                       "cudaMemcpyAsync");
+            check_cuda(cudaEventRecord(dens_copied, st), "cudaEventRecord");
+            dens_pending = true;
+        }
 
         ChunkLayout C;
         C.npoints = P;
@@ -724,6 +1018,7 @@ struct DeviceXDMIntegrator::Impl {
         sent += P;
         chunks += 1;
         sample_device_memory();
+        slot = (slot + 1) % nslot;
         fill_points = 0;
         fill_cols = 0;
         blk_point_offset.clear();
@@ -739,7 +1034,7 @@ struct DeviceXDMIntegrator::Impl {
 
 DeviceXDMIntegrator::DeviceXDMIntegrator(int natom, const int* atomic_nums, const std::array<double, 3>* atom_coords,
                                          const ProatomDensity& proatom, const XDMDeviceBasis& basis, const double* Da,
-                                         const double* Db, std::size_t workspace_bytes)
+                                         const double* Db, std::size_t workspace_bytes, bool resident_density)
     : impl_(new Impl) {
     cuest_common::ensure_cuest_initialized();
     Impl& m = *impl_;
@@ -829,7 +1124,23 @@ DeviceXDMIntegrator::DeviceXDMIntegrator(int natom, const int* atomic_nums, cons
         const std::size_t one_block = m.work_need(256, basis.nbf);
         m.workspace_doubles = std::max(m.workspace_doubles, one_block);
         m.max_cols = basis.nbf;
+        // The full density matrices move to the device when they take at most half the budget,
+        // and come out of it: the device footprint is the budget either way.
+        const std::size_t dfull = static_cast<std::size_t>(m.nspin) * basis.nbf * basis.nbf;
+        if (resident_density && dfull > 0 && 2 * dfull <= m.workspace_doubles &&
+            m.workspace_doubles - dfull >= one_block) {
+            m.resident_D = true;
+            m.workspace_doubles -= dfull;
+        }
         m.d_work = m.alloc<double>(m.workspace_doubles);
+        if (m.resident_D) {
+            const std::size_t nbf2 = static_cast<std::size_t>(basis.nbf) * basis.nbf;
+            m.d_Dfull = m.alloc<double>(dfull);
+            for (int s = 0; s < m.nspin; s++) {
+                check_cuda(cudaMemcpy(m.d_Dfull + s * nbf2, m.D[s], nbf2 * sizeof(double), cudaMemcpyHostToDevice),
+                           "cudaMemcpy");
+            }
+        }
         m.d_points = m.alloc<double>(11 * max_chunk_points);
         const std::size_t npartial = static_cast<std::size_t>(std::max(m.nactive, 1)) * moment_slots * nmoment;
         m.d_partials = m.alloc<double>(npartial);
@@ -837,15 +1148,20 @@ DeviceXDMIntegrator::DeviceXDMIntegrator(int natom, const int* atomic_nums, cons
         check_cuda(cudaMemset(m.d_partials, 0, npartial * sizeof(double)), "cudaMemset");
         check_cuda(cudaMemset(m.d_counts, 0, 2 * sizeof(unsigned long long)), "cudaMemset");
 
-        void* h = nullptr;
-        check_cuda(cudaMallocHost(&h, 4 * max_chunk_points * sizeof(double)), "cudaMallocHost");
-        m.h_points = static_cast<double*>(h);
-        h = nullptr;
-        const std::size_t dens_doubles = std::min<std::size_t>(
-            m.nspin * m.max_cols * m.max_cols, m.workspace_doubles);
-        check_cuda(cudaMallocHost(&h, dens_doubles * sizeof(double)), "cudaMallocHost");
-        m.h_dens = static_cast<double*>(h);
-        check_cuda(cudaEventCreateWithFlags(&m.copied, cudaEventDisableTiming), "cudaEventCreate");
+        for (int k = 0; k < Impl::nslot; k++) {
+            void* h = nullptr;
+            check_cuda(cudaMallocHost(&h, 4 * max_chunk_points * sizeof(double)), "cudaMallocHost");
+            m.h_points[k] = static_cast<double*>(h);
+            check_cuda(cudaEventCreateWithFlags(&m.copied[k], cudaEventDisableTiming), "cudaEventCreate");
+        }
+        if (!m.resident_D) {
+            void* h = nullptr;
+            const std::size_t dens_doubles =
+                std::min<std::size_t>(m.nspin * m.max_cols * m.max_cols, m.workspace_doubles);
+            check_cuda(cudaMallocHost(&h, dens_doubles * sizeof(double)), "cudaMallocHost");
+            m.h_dens = static_cast<double*>(h);
+            check_cuda(cudaEventCreateWithFlags(&m.dens_copied, cudaEventDisableTiming), "cudaEventCreate");
+        }
     } catch (...) {
         m.release();
         throw;
@@ -859,61 +1175,37 @@ DeviceXDMIntegrator::~DeviceXDMIntegrator() {
 void DeviceXDMIntegrator::add_block(std::size_t npoints, const double* x, const double* y, const double* z,
                                     const double* w, const std::vector<int>& shells) {
     Impl& m = *impl_;
-    if (npoints == 0) return;
-    if (npoints > max_chunk_points) {
-        throw PSIEXCEPTION("XDM_GPU: grid block larger than the device chunk.");
-    }
-    // Columns this block would add to the chunk's shell union.
-    int new_cols = 0;
-    for (int g : shells) {
-        if (m.union_index[g] < 0) new_cols += m.basis.nfunc[g];
-    }
-    const std::size_t P = m.fill_points + npoints;
-    const std::size_t ncols = m.fill_cols + new_cols;
-    if (m.fill_points > 0 && (P > max_chunk_points || m.work_need(P, ncols) > m.workspace_doubles)) {
-        m.flush();
-    }
-    m.wait_staging();
-    if (m.fill_points == 0) {
-        std::size_t cols = 0;
-        for (int g : shells) cols += m.basis.nfunc[g];
-        if (m.work_need(npoints, cols) > m.workspace_doubles) {
-            throw PSIEXCEPTION("XDM_GPU: one grid block does not fit the device workspace; raise XDM_GPU_MEMORY.");
-        }
-    }
-
-    const int p0 = m.fill_points;
-    const std::size_t cap = max_chunk_points;
-    std::copy(x, x + npoints, m.h_points + p0);
-    std::copy(y, y + npoints, m.h_points + cap + p0);
-    std::copy(z, z + npoints, m.h_points + 2 * cap + p0);
-    std::copy(w, w + npoints, m.h_points + 3 * cap + p0);
-
-    m.blk_point_offset.push_back(p0);
-    m.blk_npoints.push_back(static_cast<int>(npoints));
-    for (int g : shells) {
-        int u = m.union_index[g];
-        if (u < 0) {
-            u = static_cast<int>(m.ushell_global.size());
-            m.union_index[g] = u;
-            m.ushell_global.push_back(g);
-            m.ushell_col.push_back(m.fill_cols);
-            for (int f = 0; f < m.basis.nfunc[g]; f++) m.col_func.push_back(m.basis.func_offset[g] + f);
-            m.fill_cols += m.basis.nfunc[g];
-        }
-        m.blk_shells.push_back(u);
-    }
-    m.blk_shell_offset.push_back(static_cast<int>(m.blk_shells.size()));
-    m.fill_points += static_cast<int>(npoints);
+    if (m.dev_points[0]) throw PSIEXCEPTION("XDM_GPU: add_block after add_device_blocks.");
+    m.add(npoints, x, y, z, w, 0, shells.data(), shells.size());
 }
+
+void DeviceXDMIntegrator::add_device_blocks(const DeviceGridBlocks& grid) {
+    Impl& m = *impl_;
+    if (m.fill_points > 0 || m.sent > 0) throw PSIEXCEPTION("XDM_GPU: add_device_blocks after add_block.");
+    m.dev_points[0] = grid.x();
+    m.dev_points[1] = grid.y();
+    m.dev_points[2] = grid.z();
+    m.dev_points[3] = grid.w();
+    const auto& start = grid.block_start();
+    const auto& count = grid.block_npoints();
+    const auto& off = grid.shell_offset();
+    const auto& shells = grid.shells();
+    for (std::size_t b = 0; b < start.size(); b++) {
+        const std::size_t nsh = off[b + 1] - off[b];
+        if (nsh == 0) continue;
+        m.add(count[b], nullptr, nullptr, nullptr, nullptr, start[b], shells.data() + off[b], nsh);
+    }
+}
+
+bool DeviceXDMIntegrator::density_resident() const { return impl_->resident_D; }
 
 std::vector<std::array<double, DeviceXDMIntegrator::NMOMENT>> DeviceXDMIntegrator::finish(
     std::size_t& nbhole_failed, std::size_t& nbhole_total) {
     Impl& m = *impl_;
-    m.wait_staging();
     m.flush();
     check_cuda(cudaStreamSynchronize(stream_handle), "cudaStreamSynchronize");
-    m.copy_pending = false;
+    for (int k = 0; k < Impl::nslot; k++) m.copy_pending[k] = false;
+    m.dens_pending = false;
 
     std::vector<double> partials(static_cast<std::size_t>(std::max(m.nactive, 1)) * moment_slots * nmoment);
     unsigned long long counts[2] = {0, 0};
@@ -943,6 +1235,252 @@ std::size_t DeviceXDMIntegrator::device_in_use_at_start() const {
 }
 std::size_t DeviceXDMIntegrator::npoints() const { return impl_->sent + impl_->fill_points; }
 std::size_t DeviceXDMIntegrator::nchunks() const { return impl_->chunks; }
+
+// ==> DeviceGridBlocks <== //
+
+struct DeviceGridBlocks::Impl {
+    double* points = nullptr;  // x, y, z, w of the kept points, sorted: 4 * n
+    std::size_t n = 0;
+    std::vector<std::size_t> start, count;
+    std::vector<int> shell_offset{0}, shells;
+    std::size_t nwith = 0;
+    std::size_t peak = 0;
+    std::size_t resident = 0;
+    ~Impl() {
+        if (points) cudaFree(points);
+    }
+};
+
+namespace {
+// Device buffers of one blocking pass, freed in reverse on every exit and counted for the peak.
+struct Scratch {
+    std::vector<std::pair<void*, std::size_t>> live;
+    std::size_t bytes = 0, peak = 0;
+    void* get(std::size_t n) {
+        void* p = nullptr;
+        check_cuda(cudaMalloc(&p, std::max<std::size_t>(n, 1)), "cudaMalloc");
+        live.emplace_back(p, std::max<std::size_t>(n, 1));
+        bytes += live.back().second;
+        peak = std::max(peak, bytes);
+        return p;
+    }
+    void adopt(void* p, std::size_t n) {
+        live.emplace_back(p, n);
+        bytes += n;
+        peak = std::max(peak, bytes);
+    }
+    void put(void* p) {
+        for (auto it = live.begin(); it != live.end(); ++it) {
+            if (it->first == p) {
+                cudaFree(p);
+                bytes -= it->second;
+                live.erase(it);
+                return;
+            }
+        }
+    }
+    ~Scratch() {
+        for (auto it = live.rbegin(); it != live.rend(); ++it) cudaFree(it->first);
+    }
+};
+}  // namespace
+
+DeviceGridBlocks::DeviceGridBlocks(double* d_xyz, double* d_w, std::size_t npoints, double weights_cutoff,
+                                   double max_distance, int natom, const std::array<double, 3>* atom_coords,
+                                   int max_points, const XDMDeviceBasis& basis,
+                                   const std::vector<double>& shell_extents)
+    : impl_(new Impl) {
+    Scratch scratch;
+    // cuEST's arrays are ours from here on, so they are released on every exit.
+    scratch.adopt(d_xyz, 3 * npoints * sizeof(double));
+    scratch.adopt(d_w, npoints * sizeof(double));
+    cuest_common::ensure_cuest_initialized();
+    Impl& m = *impl_;
+    cudaStream_t st = stream_handle;
+    if (npoints > static_cast<std::size_t>(INT_MAX)) {
+        throw PSIEXCEPTION("XDM_GRID_BLOCKING DEVICE: more than INT_MAX grid points.");
+    }
+    if (static_cast<int>(shell_extents.size()) != basis.nshell()) {
+        throw PSIEXCEPTION("XDM_GRID_BLOCKING DEVICE: shell extents do not match the basis.");
+    }
+    const int n = static_cast<int>(npoints);
+    std::vector<std::uint64_t> keys;
+    unsigned int* d_index = nullptr;
+    {
+        std::optional<QTimer> stage;
+        stage.emplace("XDM: block keys");
+        // Lattice box from all points; the sieves run in the key kernel.
+        double lo[3] = {0.0, 0.0, 0.0};
+        double extent = 0.0;
+        if (n > 0) {
+            const int nb = std::min((n + block_size - 1) / block_size, 1024);
+            auto* d_partial = static_cast<double*>(scratch.get(6 * nb * sizeof(double)));
+            bbox_kernel<<<nb, block_size, 0, st>>>(npoints, d_xyz, d_partial);
+            check_cuda(cudaGetLastError(), "XDM bounding box kernel launch");
+            std::vector<double> partial(6 * nb);
+            check_cuda(cudaMemcpyAsync(partial.data(), d_partial, partial.size() * sizeof(double),
+                                       cudaMemcpyDeviceToHost, st),
+                       "cudaMemcpyAsync");
+            check_cuda(cudaStreamSynchronize(st), "cudaStreamSynchronize");
+            scratch.put(d_partial);
+            double hi[3] = {-DBL_MAX, -DBL_MAX, -DBL_MAX};
+            lo[0] = lo[1] = lo[2] = DBL_MAX;
+            for (int b = 0; b < nb; b++) {
+                for (int k = 0; k < 3; k++) {
+                    lo[k] = std::min(lo[k], partial[6 * b + k]);
+                    hi[k] = std::max(hi[k], partial[6 * b + 3 + k]);
+                }
+            }
+            for (int k = 0; k < 3; k++) extent = std::max(extent, hi[k] - lo[k]);
+        }
+        const double scale = extent > 0.0 ? static_cast<double>(blocking::morton_max) / extent : 1.0;
+
+        std::vector<double> axyz(3 * static_cast<std::size_t>(std::max(natom, 1)), 0.0);
+        for (int a = 0; a < natom; a++) {
+            for (int k = 0; k < 3; k++) axyz[3 * a + k] = atom_coords[a][k];
+        }
+        auto* d_atoms = static_cast<double*>(scratch.get(axyz.size() * sizeof(double)));
+        check_cuda(cudaMemcpyAsync(d_atoms, axyz.data(), axyz.size() * sizeof(double), cudaMemcpyHostToDevice, st),
+                   "cudaMemcpyAsync");
+        auto* d_keys_in = static_cast<std::uint64_t*>(scratch.get(npoints * sizeof(std::uint64_t)));
+        auto* d_index_in = static_cast<unsigned int*>(scratch.get(npoints * sizeof(unsigned int)));
+        auto* d_kept = static_cast<unsigned long long*>(scratch.get(sizeof(unsigned long long)));
+        check_cuda(cudaMemsetAsync(d_kept, 0, sizeof(unsigned long long), st), "cudaMemsetAsync");
+        if (n > 0) {
+            key_kernel<<<(n + block_size - 1) / block_size, block_size, 0, st>>>(
+                npoints, d_xyz, d_w, weights_cutoff, max_distance >= 0.0, max_distance * max_distance, natom, d_atoms,
+                lo[0], lo[1], lo[2], scale, d_keys_in, d_index_in, d_kept);
+            check_cuda(cudaGetLastError(), "XDM Morton key kernel launch");
+        }
+        unsigned long long kept = 0;
+        check_cuda(cudaMemcpyAsync(&kept, d_kept, sizeof(kept), cudaMemcpyDeviceToHost, st), "cudaMemcpyAsync");
+        check_cuda(cudaStreamSynchronize(st), "cudaStreamSynchronize");
+        scratch.put(d_kept);
+        scratch.put(d_atoms);
+        m.n = static_cast<std::size_t>(kept);
+
+        stage.reset();
+        stage.emplace("XDM: block sort");
+        // Stable radix sort: equal keys keep their cuEST order, so the result is deterministic.
+        auto* d_keys = static_cast<std::uint64_t*>(scratch.get(npoints * sizeof(std::uint64_t)));
+        d_index = static_cast<unsigned int*>(scratch.get(npoints * sizeof(unsigned int)));
+        std::size_t temp_bytes = 0;
+        check_cuda(cub::DeviceRadixSort::SortPairs(nullptr, temp_bytes, d_keys_in, d_keys, d_index_in, d_index, n, 0,
+                                                   64, st),
+                   "cub::DeviceRadixSort::SortPairs");
+        void* d_temp = scratch.get(temp_bytes);
+        check_cuda(cub::DeviceRadixSort::SortPairs(d_temp, temp_bytes, d_keys_in, d_keys, d_index_in, d_index, n, 0,
+                                                   64, st),
+                   "cub::DeviceRadixSort::SortPairs");
+        keys.resize(m.n);
+        check_cuda(cudaMemcpyAsync(keys.data(), d_keys, m.n * sizeof(std::uint64_t), cudaMemcpyDeviceToHost, st),
+                   "cudaMemcpyAsync");
+        check_cuda(cudaStreamSynchronize(st), "cudaStreamSynchronize");
+        scratch.put(d_temp);
+        scratch.put(d_keys_in);
+        scratch.put(d_index_in);
+        scratch.put(d_keys);
+    }
+    {
+        QTimer t("XDM: block gather");
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&m.points), std::max<std::size_t>(4 * m.n, 1) * sizeof(double)),
+                   "cudaMalloc");
+        scratch.bytes += 4 * m.n * sizeof(double);
+        scratch.peak = std::max(scratch.peak, scratch.bytes);
+        if (m.n > 0) {
+            gather_points_kernel<<<static_cast<unsigned int>((m.n + block_size - 1) / block_size), block_size, 0, st>>>(
+                m.n, d_index, d_xyz, d_w, m.points);
+            check_cuda(cudaGetLastError(), "XDM point gather kernel launch");
+        }
+        check_cuda(cudaStreamSynchronize(st), "cudaStreamSynchronize");
+        scratch.put(d_index);
+        scratch.put(d_xyz);
+        scratch.put(d_w);
+    }
+    {
+        QTimer t("XDM: block split");
+        blocking::split_sorted_keys(keys.data(), m.n, static_cast<std::size_t>(std::max(max_points, 1)), m.start,
+                                    m.count);
+        keys.clear();
+        keys.shrink_to_fit();
+    }
+    {
+        QTimer t("XDM: block screen");
+        const int nblk = static_cast<int>(m.start.size());
+        const int nshell = basis.nshell();
+        const int nword = (nshell + 31) / 32;
+        std::vector<unsigned int> mask(static_cast<std::size_t>(nblk) * nword, 0u);
+        if (nblk > 0 && nshell > 0) {
+            std::vector<unsigned long long> bstart(m.start.begin(), m.start.end());
+            std::vector<int> bnp(m.count.begin(), m.count.end());
+            auto* d_bstart = static_cast<unsigned long long*>(scratch.get(bstart.size() * sizeof(unsigned long long)));
+            auto* d_bnp = static_cast<int*>(scratch.get(bnp.size() * sizeof(int)));
+            auto* d_center = static_cast<double*>(scratch.get(basis.center.size() * sizeof(double)));
+            auto* d_extent = static_cast<double*>(scratch.get(shell_extents.size() * sizeof(double)));
+            auto* d_mask = static_cast<unsigned int*>(scratch.get(mask.size() * sizeof(unsigned int)));
+            check_cuda(cudaMemcpyAsync(d_bstart, bstart.data(), bstart.size() * sizeof(unsigned long long),
+                                       cudaMemcpyHostToDevice, st),
+                       "cudaMemcpyAsync");
+            check_cuda(cudaMemcpyAsync(d_bnp, bnp.data(), bnp.size() * sizeof(int), cudaMemcpyHostToDevice, st),
+                       "cudaMemcpyAsync");
+            check_cuda(cudaMemcpyAsync(d_center, basis.center.data(), basis.center.size() * sizeof(double),
+                                       cudaMemcpyHostToDevice, st),
+                       "cudaMemcpyAsync");
+            check_cuda(cudaMemcpyAsync(d_extent, shell_extents.data(), shell_extents.size() * sizeof(double),
+                                       cudaMemcpyHostToDevice, st),
+                       "cudaMemcpyAsync");
+            screen_kernel<<<nblk, block_size, 0, st>>>(m.points, m.points + m.n, m.points + 2 * m.n, d_bstart, d_bnp,
+                                                       nshell, d_center, d_extent, nword, d_mask);
+            check_cuda(cudaGetLastError(), "XDM shell screening kernel launch");
+            check_cuda(cudaMemcpyAsync(mask.data(), d_mask, mask.size() * sizeof(unsigned int), cudaMemcpyDeviceToHost,
+                                       st),
+                       "cudaMemcpyAsync");
+            check_cuda(cudaStreamSynchronize(st), "cudaStreamSynchronize");
+        }
+        // Shells in ascending order, as populate() lists them.
+        for (int b = 0; b < nblk; b++) {
+            const unsigned int* row = mask.data() + static_cast<std::size_t>(b) * nword;
+            for (int wd = 0; wd < nword; wd++) {
+                for (unsigned int bits = row[wd]; bits; bits &= bits - 1) {
+                    m.shells.push_back(32 * wd + __builtin_ctz(bits));
+                }
+            }
+            if (static_cast<int>(m.shells.size()) > m.shell_offset.back()) m.nwith++;
+            m.shell_offset.push_back(static_cast<int>(m.shells.size()));
+        }
+    }
+    m.peak = scratch.peak;
+    m.resident = 4 * m.n * sizeof(double);
+}
+
+DeviceGridBlocks::~DeviceGridBlocks() = default;
+
+std::size_t DeviceGridBlocks::npoints() const { return impl_->n; }
+std::size_t DeviceGridBlocks::nblocks() const { return impl_->start.size(); }
+std::size_t DeviceGridBlocks::nblocks_with_shells() const { return impl_->nwith; }
+const std::vector<std::size_t>& DeviceGridBlocks::block_start() const { return impl_->start; }
+const std::vector<std::size_t>& DeviceGridBlocks::block_npoints() const { return impl_->count; }
+const std::vector<int>& DeviceGridBlocks::shell_offset() const { return impl_->shell_offset; }
+const std::vector<int>& DeviceGridBlocks::shells() const { return impl_->shells; }
+const double* DeviceGridBlocks::x() const { return impl_->points; }
+const double* DeviceGridBlocks::y() const { return impl_->points + impl_->n; }
+const double* DeviceGridBlocks::z() const { return impl_->points + 2 * impl_->n; }
+const double* DeviceGridBlocks::w() const { return impl_->points + 3 * impl_->n; }
+std::size_t DeviceGridBlocks::peak_device_bytes() const { return impl_->peak; }
+std::size_t DeviceGridBlocks::resident_device_bytes() const { return impl_->resident; }
+
+void DeviceGridBlocks::copy_to_host(std::vector<double>& x, std::vector<double>& y, std::vector<double>& z,
+                                    std::vector<double>& w) const {
+    const std::size_t n = impl_->n;
+    std::vector<double>* out[4] = {&x, &y, &z, &w};
+    for (int k = 0; k < 4; k++) {
+        out[k]->resize(n);
+        if (n) {
+            check_cuda(cudaMemcpy(out[k]->data(), impl_->points + k * n, n * sizeof(double), cudaMemcpyDeviceToHost),
+                       "cudaMemcpy");
+        }
+    }
+}
 
 }  // namespace xdm
 }  // namespace psi

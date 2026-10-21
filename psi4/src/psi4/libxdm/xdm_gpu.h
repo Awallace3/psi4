@@ -62,6 +62,53 @@ struct XDMDeviceBasis {
 /// pure functions in gau2grid order ``order``, read off gau2grid itself.
 std::vector<double> xdm_pure_transform(int L, int order);
 
+/// cuEST's points blocked on the device (XDM_GRID_BLOCKING DEVICE). The host build's two
+/// sieves are applied, the kept points are sorted along a Morton curve and cut at octant
+/// boundaries into blocks of at most max_points, and each block's shells are screened with
+/// BlockOPoints' bound()/populate() test. The points stay on the device, block after block.
+class DeviceGridBlocks {
+   public:
+    /// @param d_xyz, d_w       cuEST's interleaved points and total weights (cudaMalloc'd);
+    ///                         taken over and freed as soon as the sorted copy exists
+    /// @param weights_cutoff   DFT_WEIGHTS_TOLERANCE: points with |w| below it are dropped
+    /// @param max_distance     with DFT_REMOVE_DISTANT_POINTS, BasisExtents::maxR(): points
+    ///                         farther than this from every atom are dropped; < 0 keeps them
+    /// @param shell_extents    BasisExtents::shell_extents(), one radius per shell
+    DeviceGridBlocks(double* d_xyz, double* d_w, std::size_t npoints, double weights_cutoff, double max_distance,
+                     int natom, const std::array<double, 3>* atom_coords, int max_points,
+                     const XDMDeviceBasis& basis, const std::vector<double>& shell_extents);
+    ~DeviceGridBlocks();
+    DeviceGridBlocks(const DeviceGridBlocks&) = delete;
+    DeviceGridBlocks& operator=(const DeviceGridBlocks&) = delete;
+
+    /// Points kept by the sieves (all of them sit in some block).
+    std::size_t npoints() const;
+    /// Blocks, including those no shell reaches (their shell list is empty).
+    std::size_t nblocks() const;
+    /// Blocks with at least one shell: the ones that are integrated.
+    std::size_t nblocks_with_shells() const;
+    const std::vector<std::size_t>& block_start() const;
+    const std::vector<std::size_t>& block_npoints() const;
+    /// Per-block significant shells, CSR: shells()[shell_offset()[b] .. shell_offset()[b + 1]).
+    const std::vector<int>& shell_offset() const;
+    const std::vector<int>& shells() const;
+    /// Device arrays of the sorted kept points, [npoints()] each.
+    const double* x() const;
+    const double* y() const;
+    const double* z() const;
+    const double* w() const;
+    /// The sorted points on the host, for DFTGrid::adopt_host_blocks().
+    void copy_to_host(std::vector<double>& x, std::vector<double>& y, std::vector<double>& z,
+                      std::vector<double>& w) const;
+    /// Peak device bytes held while blocking (cuEST's arrays included) and bytes held afterwards.
+    std::size_t peak_device_bytes() const;
+    std::size_t resident_device_bytes() const;
+
+   private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 class DeviceXDMIntegrator {
    public:
     /// @param atomic_nums      true atomic numbers [natom]; ghosts included, Z < 1 rows get no moments
@@ -70,9 +117,11 @@ class DeviceXDMIntegrator {
     ///                         Db == nullptr means restricted (beta = alpha)
     /// @param workspace_bytes  device budget for the per-chunk collocation, GEMM and density-matrix
     ///                         buffers; raised to the minimum that holds one grid block if smaller
+    /// @param resident_density allow the full density matrices to live on the device (taken out of
+    ///                         the budget when they fit in half of it); false gathers them on the host
     DeviceXDMIntegrator(int natom, const int* atomic_nums, const std::array<double, 3>* atom_coords,
                         const ProatomDensity& proatom, const XDMDeviceBasis& basis, const double* Da, const double* Db,
-                        std::size_t workspace_bytes);
+                        std::size_t workspace_bytes, bool resident_density = true);
     ~DeviceXDMIntegrator();
     DeviceXDMIntegrator(const DeviceXDMIntegrator&) = delete;
     DeviceXDMIntegrator& operator=(const DeviceXDMIntegrator&) = delete;
@@ -81,6 +130,16 @@ class DeviceXDMIntegrator {
     /// the host screening keeps for it (BlockOPoints::shells_local_to_global).
     void add_block(std::size_t npoints, const double* x, const double* y, const double* z, const double* w,
                    const std::vector<int>& shells);
+
+    /// Queue every block of a device-blocked grid. Its points are read in place on the device,
+    /// so nothing is staged through the host; blocks without shells are skipped, as the host
+    /// blockers drop them. Do not mix with add_block() in one integration.
+    void add_device_blocks(const DeviceGridBlocks& grid);
+
+    /// Whether the full density matrices live on the device (gathered per chunk there) rather
+    /// than being gathered on the host for every chunk. Decided at construction: when allowed,
+    /// they are resident if they fit in half of the workspace budget, which they are taken out of.
+    bool density_resident() const;
 
     /// Per-atom integrals, in this order.
     enum Moment { MM1, MM2, MM3, VOLUME, CHARGE, NMOMENT };

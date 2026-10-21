@@ -2105,6 +2105,10 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         density products of one batch of grid blocks. Larger batches run faster;
         raised automatically to the minimum that holds one grid block. !expert -*/
         options.add_int("XDM_GPU_MEMORY", 256);
+        /*- Keep the full AO density matrices on the device for |scf__xdm_gpu| and gather each
+        batch's columns there, instead of gathering them on the host for every batch. They are
+        kept only when they fit in half of |scf__xdm_gpu_memory|, and come out of it. !expert -*/
+        options.add_bool("XDM_GPU_RESIDENT_DENSITY", true);
         /*- Grid for the XDM moment integrals. ``PSI4`` builds the host DFT grid from the
         |scf__dft_radial_points| family of options. ``CUEST`` takes the points and Becke-partitioned
         weights of the cuEST grid built from the same options (the grid a cuEST SCF integrates on),
@@ -2112,6 +2116,13 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         |scf__xdm_gpu| and |globals__use_cuest| are on and |scf__dft_grid_orientation| has not been
         set (a no-CP many-body run sets it), and ``PSI4`` otherwise. -*/
         options.add_str("XDM_GRID", "AUTO", "AUTO PSI4 CUEST");
+        /*- Where the points of an |scf__xdm_grid| ``CUEST`` grid are blocked. ``HOST`` copies them to
+        the host and blocks them with ``OCTREE``. ``DEVICE`` sorts them along a Morton curve on the
+        GPU and cuts them at octant boundaries into blocks of at most |scf__dft_block_max_points|,
+        screening each block's shells there; with |scf__xdm_gpu| the points then never leave the
+        device. Both apply the same weight and distance sieves. ``AUTO`` is ``DEVICE`` for a
+        ``CUEST`` grid with |scf__xdm_gpu| and ``HOST`` otherwise. !expert -*/
+        options.add_str("XDM_GRID_BLOCKING", "AUTO", "AUTO HOST DEVICE");
         /*- Parameters defining the -NL/-V dispersion correction. First b, then C -*/
         options.add("NL_DISPERSION_PARAMETERS", new ArrayType());
         /*- Number of spherical points (A :ref:`Lebedev Points <table:lebedevorder>` number) for VV10 NL integration.

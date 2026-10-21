@@ -1344,15 +1344,35 @@ def test_xdm_cuest_grid_requires_cuest_build():
         psi4.energy("b3lyp-xdm", molecule=mol)
 
 
-def _xdm_on_grid(wfn, gpu, grid):
-    psi4.set_options({"XDM_GPU": gpu, "XDM_GRID": grid})
+def _xdm_on_grid(wfn, gpu, grid, blocking="AUTO", **options):
+    psi4.set_options({"XDM_GPU": gpu, "XDM_GRID": grid, "XDM_GRID_BLOCKING": blocking, **options})
     energy = wfn._disp_functor.compute_energy(wfn.molecule(), wfn)
     return energy, psi4.core.array_variable("XDM ATOMIC PROPERTIES").np.copy()
 
 
+def _cuest_grid_wfn(case):
+    geom, basis = _xdm_gpu_cases[case]
+    mol = psi4.geometry(geom + "\nsymmetry c1\nno_com\nno_reorient")
+    psi4.set_options({
+        "basis": basis,
+        "reference": "uks" if case == "uks" else "rks",
+        "dft_radial_points": 75,
+        "dft_spherical_points": 302,
+        "XDM_DISPERSION_PARAMETERS": [0.6, 1.4],
+        "XDM_GPU": False,
+    })
+    _, wfn = psi4.energy("b3lyp-xdm", molecule=mol, return_wfn=True)
+    return wfn
+
+
+def _max_rel(a, b):
+    """Largest relative difference per property column (charge .. polarizability)."""
+    return [float(np.max(np.abs(a[:, c] - b[:, c]) / np.maximum(np.abs(b[:, c]), 1.0e-300))) for c in range(2, 8)]
+
+
 @pytest.mark.xdm
 @pytest.mark.parametrize("case", list(_xdm_gpu_cases))
-def test_xdm_gpu_matches_host_on_cuest_grid(case):
+def test_xdm_gpu_matches_host_on_cuest_grid(case, record_property):
     """On cuEST's points the device and host XDM paths still agree to rounding."""
     if not psi4.addons("cuest"):
         pytest.skip("XDM_GRID CUEST needs a cuEST build")
@@ -1368,17 +1388,24 @@ def test_xdm_gpu_matches_host_on_cuest_grid(case):
     })
     _, wfn = psi4.energy("b3lyp-xdm", molecule=mol, return_wfn=True)
 
-    e_host, p_host = _xdm_on_grid(wfn, False, "CUEST")
-    e_gpu, p_gpu = _xdm_on_grid(wfn, True, "CUEST")
+    # Both on the host OCTREE blocks, so this is the integrators alone.
+    e_host, p_host = _xdm_on_grid(wfn, False, "CUEST", "HOST")
+    e_gpu, p_gpu = _xdm_on_grid(wfn, True, "CUEST", "HOST")
     assert abs(e_gpu - e_host) < 1.0e-9
     for col in (2, 3, 4, 5, 6, 7):
         np.testing.assert_allclose(p_gpu[:, col], p_host[:, col], rtol=1.0e-8, atol=0.0)
     np.testing.assert_array_equal(p_gpu[:, :2], p_host[:, :2])
 
-    # A different quadrature of the same density: close to the psi4 grid, not equal to it.
+    # A different quadrature of the same density: close to the psi4 grid, not equal to it. On the
+    # Phoenix runs (4-120 atoms, aug-cc-pVDZ, 75 x 302) the cuEST grid moved the XDM energy by at
+    # most 1.8e-4 relative, the volumes by 1.4e-4 and <M3^2> by 4.6e-3; these bounds are ~5x that.
     e_psi4, p_psi4 = _xdm_on_grid(wfn, False, "PSI4")
-    assert 0.0 < abs(e_host - e_psi4) < 1.0e-2 * abs(e_psi4)
-    np.testing.assert_allclose(p_host[:, 3], p_psi4[:, 3], rtol=1.0e-2)
+    rel = _max_rel(p_host, p_psi4)
+    record_property("cuest_vs_psi4_energy_rel", abs(e_host - e_psi4) / abs(e_psi4))
+    record_property("cuest_vs_psi4_property_rel", rel)
+    assert 0.0 < abs(e_host - e_psi4) < 1.0e-3 * abs(e_psi4)
+    np.testing.assert_allclose(p_host[:, 3], p_psi4[:, 3], rtol=1.0e-3)
+    np.testing.assert_allclose(p_host[:, 6], p_psi4[:, 6], rtol=2.5e-2)
 
 
 @pytest.mark.xdm
@@ -1404,3 +1431,62 @@ def test_xdm_grid_auto_follows_grid_orientation():
     assert _xdm_on_grid(wfn, False, "AUTO")[0] == _xdm_on_grid(wfn, False, "PSI4")[0]
     psi4.set_options({"DFT_GRID_ORIENTATION": "STANDARD"})
     assert _xdm_on_grid(wfn, True, "AUTO")[0] == e_psi4
+
+
+@pytest.mark.xdm
+def test_xdm_device_blocking_needs_cuest_grid():
+    mol = psi4.geometry("0 1\nO 0 0 0.117\nH 0 0.757 -0.467\nH 0 -0.757 -0.467\nsymmetry c1")
+    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.6, 1.4], "XDM_GRID": "PSI4",
+                      "XDM_GRID_BLOCKING": "DEVICE"})
+    with pytest.raises(RuntimeError, match="XDM_GRID_BLOCKING DEVICE needs XDM_GRID CUEST"):
+        psi4.energy("b3lyp-xdm", molecule=mol)
+
+
+@pytest.mark.xdm
+@pytest.mark.parametrize("case", list(_xdm_gpu_cases))
+def test_xdm_device_blocking_matches_host(case, record_property):
+    """Blocks cut on the device integrate like the host's: GPU vs host on the same device
+    partition, and device vs OCTREE partition of the same points (which differ only in which
+    shells each block screens out)."""
+    if not psi4.addons("cuest"):
+        pytest.skip("XDM_GRID_BLOCKING DEVICE needs a cuEST build")
+    wfn = _cuest_grid_wfn(case)
+    e_dev_host, p_dev_host = _xdm_on_grid(wfn, False, "CUEST", "DEVICE")
+    e_dev_gpu, p_dev_gpu = _xdm_on_grid(wfn, True, "CUEST", "DEVICE")
+    e_oct_gpu, p_oct_gpu = _xdm_on_grid(wfn, True, "CUEST", "HOST")
+    record_property("device_gpu_vs_host", [abs(e_dev_gpu - e_dev_host)] + _max_rel(p_dev_gpu, p_dev_host))
+    record_property("device_vs_octree", [abs(e_dev_gpu - e_oct_gpu)] + _max_rel(p_dev_gpu, p_oct_gpu))
+
+    assert abs(e_dev_gpu - e_dev_host) < 1.0e-9
+    for col in (2, 3, 4, 5, 6, 7):
+        np.testing.assert_allclose(p_dev_gpu[:, col], p_dev_host[:, col], rtol=1.0e-8, atol=0.0)
+    np.testing.assert_array_equal(p_dev_gpu[:, :2], p_dev_host[:, :2])
+
+    assert abs(e_dev_gpu - e_oct_gpu) < 1.0e-9
+    for col in (2, 3, 4, 5, 6, 7):
+        np.testing.assert_allclose(p_dev_gpu[:, col], p_oct_gpu[:, col], rtol=1.0e-8, atol=0.0)
+
+    # AUTO is DEVICE on a cuEST grid with XDM_GPU.
+    assert _xdm_on_grid(wfn, True, "CUEST", "AUTO")[0] == e_dev_gpu
+
+
+@pytest.mark.xdm
+@pytest.mark.parametrize("case", ["rks", "uks"])
+@pytest.mark.parametrize("blocking", ["HOST", "DEVICE"])
+def test_xdm_gpu_chunking_and_density_gather(case, blocking):
+    """Chunk size and where the density is gathered change only the summation grouping: the
+    default (density resident, large chunks), the host gather, and a minimal budget (one-block
+    chunks through both staging slots) agree to rounding."""
+    if not psi4.addons("cuest"):
+        pytest.skip("XDM_GPU needs a cuEST build")
+    wfn = _cuest_grid_wfn(case)
+    ref = _xdm_on_grid(wfn, True, "CUEST", blocking)
+    variants = [
+        _xdm_on_grid(wfn, True, "CUEST", blocking, XDM_GPU_RESIDENT_DENSITY=False),
+        _xdm_on_grid(wfn, True, "CUEST", blocking, XDM_GPU_MEMORY=1),
+    ]
+    psi4.set_options({"XDM_GPU_RESIDENT_DENSITY": True, "XDM_GPU_MEMORY": 256})
+    for e, p in variants:
+        assert abs(e - ref[0]) < 1.0e-12
+        np.testing.assert_allclose(p[:, 2:], ref[1][:, 2:], rtol=1.0e-12, atol=1.0e-14)
+        np.testing.assert_array_equal(p[:, :2], ref[1][:, :2])

@@ -110,11 +110,12 @@ XDMDeviceBasis describe_basis(const BasisSet& basis) {
 }
 
 // Device counterpart of the host block loop in integrate_properties: same grid blocks,
-// same screened shells, moments returned into ``atom_data``.
-void integrate_on_device(std::shared_ptr<Wavefunction> wfn, const DFTGrid& grid, const ProatomDensity& proatom,
-                         const std::vector<int>& atomic_nums, const std::vector<std::array<double, 3>>& atom_coords,
-                         SharedMatrix Da, SharedMatrix Db, std::vector<AtomicData>& atom_data, size_t& nbhole_failed,
-                         size_t& nbhole_total) {
+// same screened shells, moments returned into ``atom_data``. With ``device_blocks`` the
+// points never leave the device and ``grid`` has no host blocks.
+void integrate_on_device(std::shared_ptr<Wavefunction> wfn, const DFTGrid& grid, const DeviceGridBlocks* device_blocks,
+                         const ProatomDensity& proatom, const std::vector<int>& atomic_nums,
+                         const std::vector<std::array<double, 3>>& atom_coords, SharedMatrix Da, SharedMatrix Db,
+                         std::vector<AtomicData>& atom_data, size_t& nbhole_failed, size_t& nbhole_total) {
     const int natom = static_cast<int>(atomic_nums.size());
     const std::size_t budget = static_cast<std::size_t>(wfn->options().get_int("XDM_GPU_MEMORY")) << 20;
     std::unique_ptr<DeviceXDMIntegrator> device;
@@ -122,13 +123,18 @@ void integrate_on_device(std::shared_ptr<Wavefunction> wfn, const DFTGrid& grid,
         ScopedTimer t("XDM: device setup");
         device = std::make_unique<DeviceXDMIntegrator>(natom, atomic_nums.data(), atom_coords.data(), proatom,
                                                        describe_basis(*wfn->basisset()), Da->pointer()[0],
-                                                       Db ? Db->pointer()[0] : nullptr, budget);
+                                                       Db ? Db->pointer()[0] : nullptr, budget,
+                                                       wfn->options().get_bool("XDM_GPU_RESIDENT_DENSITY"));
     }
     {
         ScopedTimer t("XDM: device queue");
-        for (const auto& block : grid.blocks()) {
-            device->add_block(block->npoints(), block->x(), block->y(), block->z(), block->w(),
-                              block->shells_local_to_global());
+        if (device_blocks) {
+            device->add_device_blocks(*device_blocks);
+        } else {
+            for (const auto& block : grid.blocks()) {
+                device->add_block(block->npoints(), block->x(), block->y(), block->z(), block->w(),
+                                  block->shells_local_to_global());
+            }
         }
     }
     std::vector<std::array<double, DeviceXDMIntegrator::NMOMENT>> sums;
@@ -149,6 +155,8 @@ void integrate_on_device(std::shared_ptr<Wavefunction> wfn, const DFTGrid& grid,
     outfile->Printf("    Device buffers %.1f MiB; device memory grew %.1f MiB over %.1f MiB already in use.\n",
                     device->device_bytes() * mib, device->device_growth() * mib,
                     device->device_in_use_at_start() * mib);
+    outfile->Printf("    Density matrices %s.\n", device->density_resident() ? "resident on the device"
+                                                                          : "gathered on the host per chunk");
 }
 #endif
 
@@ -233,16 +241,63 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     // ATOMIC blocking needs the host atomic grids, which a cuEST grid never builds.
     str_opts["DFT_BLOCK_SCHEME"] = grid_kind == "CUEST" ? "OCTREE" : "ATOMIC";
 
+    // Where cuEST's points are blocked: HOST copies them out and blocks with OCTREE; DEVICE
+    // sorts and blocks them on the GPU, where a GPU integration then reads them in place.
+    std::string blocking = options.get_str("XDM_GRID_BLOCKING");
+    if (blocking == "AUTO") blocking = grid_kind == "CUEST" && use_gpu ? "DEVICE" : "HOST";
+    if (blocking == "DEVICE" && grid_kind != "CUEST") {
+        throw PSIEXCEPTION("XDM_GRID_BLOCKING DEVICE needs XDM_GRID CUEST: only cuEST's points live on the device.");
+    }
+
     std::shared_ptr<DFTGrid> grid;
+#ifdef USING_cuEST
+    std::unique_ptr<DeviceGridBlocks> device_blocks;
+#endif
     {
         ScopedTimer t("XDM: grid");
         grid = std::make_shared<DFTGrid>(mol, primary, int_opts, str_opts, options, grid_kind == "CUEST");
 #ifdef USING_cuEST
-        if (grid_kind == "CUEST") grid->host_blocks_from_cuest();
+        if (grid_kind == "CUEST" && blocking == "HOST") grid->host_blocks_from_cuest();
+        if (blocking == "DEVICE") {
+            double *d_xyz = nullptr, *d_w = nullptr;
+            size_t ncuest = 0;
+            {
+                ScopedTimer tp("cuEST points");
+                ncuest = grid->cuest_device_points(&d_xyz, &d_w);
+            }
+            ScopedTimer tb("device blocking");
+            std::vector<std::array<double, 3>> centres(natom);
+            for (int a = 0; a < natom; a++) centres[a] = {mol->x(a), mol->y(a), mol->z(a)};
+            auto extents = grid->cuest_extents();
+            const auto Rp = extents->shell_extents();
+            std::vector<double> shell_extents(Rp->pointer(), Rp->pointer() + primary->nshell());
+            device_blocks = std::make_unique<DeviceGridBlocks>(
+                d_xyz, d_w, ncuest, grid->weights_cutoff(), grid->removes_distant_points() ? extents->maxR() : -1.0,
+                natom, centres.data(), grid->cuest_max_points(), describe_basis(*primary), shell_extents);
+            if (!use_gpu) {
+                // The host integrator walks host blocks: hand it the device partition.
+                std::vector<double> x, y, z, w;
+                device_blocks->copy_to_host(x, y, z, w);
+                grid->adopt_host_blocks(std::move(x), std::move(y), std::move(z), std::move(w),
+                                        device_blocks->block_start(), device_blocks->block_npoints());
+                device_blocks.reset();
+            }
+        }
 #endif
     }
-    outfile->Printf("\n  XDM grid: %s, %d points in %zu blocks.\n", grid_kind == "CUEST" ? "cuEST" : "psi4",
-                    grid->npoints(), grid->blocks().size());
+#ifdef USING_cuEST
+    if (device_blocks) {
+        const double mib = 1.0 / (1024.0 * 1024.0);
+        outfile->Printf("\n  XDM grid: cuEST, %zu points in %zu blocks (%zu with shells), blocked on the device.\n",
+                        device_blocks->npoints(), device_blocks->nblocks(), device_blocks->nblocks_with_shells());
+        outfile->Printf("    Device blocking peak %.1f MiB; %.1f MiB of points kept for the integration.\n",
+                        device_blocks->peak_device_bytes() * mib, device_blocks->resident_device_bytes() * mib);
+    } else
+#endif
+    {
+        outfile->Printf("\n  XDM grid: %s, %d points in %zu blocks%s.\n", grid_kind == "CUEST" ? "cuEST" : "psi4",
+                        grid->npoints(), grid->blocks().size(), blocking == "DEVICE" ? ", blocked on the device" : "");
+    }
 
     int max_points = grid->max_points();
     int max_functions = grid->max_functions();
@@ -301,8 +356,8 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
 
 #ifdef USING_cuEST
     if (use_gpu) {
-        integrate_on_device(wfn, *grid, proatom, atomic_nums, atom_coords, Da, restricted ? nullptr : Db, atom_data,
-                            nbhole_failed, nbhole_total);
+        integrate_on_device(wfn, *grid, device_blocks.get(), proatom, atomic_nums, atom_coords, Da,
+                            restricted ? nullptr : Db, atom_data, nbhole_failed, nbhole_total);
     } else
 #endif
     {

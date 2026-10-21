@@ -4514,14 +4514,10 @@ void DFTGrid::buildGridFromOptions(std::map<std::string, int> int_opts_map,
 }
 
 #ifdef USING_cuEST
-void DFTGrid::host_blocks_from_cuest() {
+size_t DFTGrid::cuest_device_points(double **d_xyz_out, double **d_w_out) {
     if (!cuest_molecular_grid_ || !cuest_extents_) {
-        throw PSIEXCEPTION("DFTGrid::host_blocks_from_cuest: this grid was not built with use_cuest.");
+        throw PSIEXCEPTION("DFTGrid::cuest_device_points: this grid was not built with use_cuest.");
     }
-    if (npoints_) {
-        throw PSIEXCEPTION("DFTGrid::host_blocks_from_cuest: the host points already exist.");
-    }
-    timer_on("cuEST points");
     uint64_t ncuest = 0;
     CHECK_CUEST(cuestQuery(cuest_handle, CUEST_MOLECULARGRID, cuest_molecular_grid_, CUEST_MOLECULARGRID_NUM_POINT,
                            &ncuest, sizeof(uint64_t)));
@@ -4544,7 +4540,9 @@ void DFTGrid::host_blocks_from_cuest() {
     if (cudaMalloc(reinterpret_cast<void **>(&d_xyz), 3 * ncuest * sizeof(double)) != cudaSuccess ||
         cudaMalloc(reinterpret_cast<void **>(&d_w), ncuest * sizeof(double)) != cudaSuccess) {
         cudaFree(d_xyz);
-        throw PSIEXCEPTION("DFTGrid::host_blocks_from_cuest: cudaMalloc failed for the grid points.");
+        CHECK_CUEST(cuestXCIntPlanDestroy(plan));
+        cuest_common::freeWorkspace(plan_ws);
+        throw PSIEXCEPTION("DFTGrid::cuest_device_points: cudaMalloc failed for the grid points.");
     }
     cuestXCIntegrationGridComputeParameters_t grid_params;
     CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONGRIDCOMPUTE_PARAMETERS, &grid_params));
@@ -4562,15 +4560,35 @@ void DFTGrid::host_blocks_from_cuest() {
                                                 weight_params, tmp_ws, d_w));
     cuest_common::freeWorkspace(tmp_ws);
     CHECK_CUEST(cuestParametersDestroy(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, weight_params));
+    // The computes may still be running on cuEST's stream; finish them before the plan goes.
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+        cudaFree(d_xyz);
+        cudaFree(d_w);
+        throw PSIEXCEPTION("DFTGrid::cuest_device_points: computing the grid points failed.");
+    }
+    CHECK_CUEST(cuestXCIntPlanDestroy(plan));
+    cuest_common::freeWorkspace(plan_ws);
+    *d_xyz_out = d_xyz;
+    *d_w_out = d_w;
+    return static_cast<size_t>(ncuest);
+}
 
+void DFTGrid::host_blocks_from_cuest() {
+    if (!cuest_molecular_grid_ || !cuest_extents_) {
+        throw PSIEXCEPTION("DFTGrid::host_blocks_from_cuest: this grid was not built with use_cuest.");
+    }
+    if (npoints_) {
+        throw PSIEXCEPTION("DFTGrid::host_blocks_from_cuest: the host points already exist.");
+    }
+    timer_on("cuEST points");
+    double *d_xyz = nullptr, *d_w = nullptr;
+    const uint64_t ncuest = cuest_device_points(&d_xyz, &d_w);
     std::vector<double> xyz(3 * ncuest), w(ncuest);
     const bool copied = cudaMemcpy(xyz.data(), d_xyz, xyz.size() * sizeof(double), cudaMemcpyDeviceToHost) ==
                             cudaSuccess &&
                         cudaMemcpy(w.data(), d_w, w.size() * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess;
     cudaFree(d_xyz);
     cudaFree(d_w);
-    CHECK_CUEST(cuestXCIntPlanDestroy(plan));
-    cuest_common::freeWorkspace(plan_ws);
     if (!copied) throw PSIEXCEPTION("DFTGrid::host_blocks_from_cuest: copying the grid points to the host failed.");
     timer_off("cuEST points");
 
@@ -4621,6 +4639,54 @@ void DFTGrid::host_blocks_from_cuest() {
     collocation_size_ = blocker.collocation_size();
     blocks_ = blocker.blocks();
     timer_off("post-process grid");
+}
+
+void DFTGrid::adopt_host_blocks(std::vector<double> x, std::vector<double> y, std::vector<double> z,
+                                std::vector<double> w, const std::vector<size_t> &block_start,
+                                const std::vector<size_t> &block_npoints) {
+    if (!cuest_extents_) {
+        throw PSIEXCEPTION("DFTGrid::adopt_host_blocks: this grid was not built with use_cuest.");
+    }
+    if (npoints_) {
+        throw PSIEXCEPTION("DFTGrid::adopt_host_blocks: the host points already exist.");
+    }
+    const size_t n = x.size();
+    if (y.size() != n || z.size() != n || w.size() != n || block_start.size() != block_npoints.size()) {
+        throw PSIEXCEPTION("DFTGrid::adopt_host_blocks: inconsistent point or block arrays.");
+    }
+    // Owned like the blockers' arrays: MolecularGrid's destructor delete[]s them.
+    x_ = new double[n];
+    y_ = new double[n];
+    z_ = new double[n];
+    w_ = new double[n];
+    std::copy(x.begin(), x.end(), x_);
+    std::copy(y.begin(), y.end(), y_);
+    std::copy(z.begin(), z.end(), z_);
+    std::copy(w.begin(), w.end(), w_);
+    npoints_ = static_cast<int>(n);
+    extents_ = cuest_extents_;
+    MolecularGrid::primary_ = cuest_extents_->basis();
+
+    blocks_.clear();
+    max_points_ = 0;
+    for (size_t A = 0; A < block_start.size(); A++) {
+        if (block_npoints[A] == 0) continue;
+        if (block_start[A] + block_npoints[A] > n) {
+            throw PSIEXCEPTION("DFTGrid::adopt_host_blocks: a block runs past the last point.");
+        }
+        const size_t s0 = block_start[A];
+        auto bop = std::make_shared<BlockOPoints>(A, block_npoints[A], &x_[s0], &y_[s0], &z_[s0], &w_[s0], extents_);
+        if (bop->local_nbf()) {
+            blocks_.push_back(bop);
+            max_points_ = std::max(max_points_, static_cast<int>(block_npoints[A]));
+        }
+    }
+    max_functions_ = 0;
+    collocation_size_ = 0;
+    for (const auto &block : blocks_) {
+        collocation_size_ += block->local_nbf() * block->npoints();
+        max_functions_ = std::max(max_functions_, static_cast<int>(block->local_nbf()));
+    }
 }
 #endif
 

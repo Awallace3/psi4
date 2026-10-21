@@ -253,6 +253,19 @@ class DFTGrid : public MolecularGrid {
     /// (ATOMIC needs the host atomic grids, which a cuEST grid never builds). Afterwards
     /// blocks(), npoints(), etc. describe the same points cuest_grid() integrates over.
     void host_blocks_from_cuest();
+    /// cuEST's points (interleaved x, y, z) and total weights, left on the device. Allocated with
+    /// cudaMalloc; the caller owns *d_xyz and *d_w. Returns the point count. Unsieved.
+    size_t cuest_device_points(double** d_xyz, double** d_w);
+    /// Install host blocks over a partition computed elsewhere (XDM's device blocking). x/y/z/w hold
+    /// the points block after block; block_start/block_npoints index them. Each block's shells are
+    /// screened on the host as usual, and blocks no basis function reaches are dropped, as OCTREE does.
+    void adopt_host_blocks(std::vector<double> x, std::vector<double> y, std::vector<double> z,
+                           std::vector<double> w, const std::vector<size_t>& block_start,
+                           const std::vector<size_t>& block_npoints);
+    std::shared_ptr<BasisExtents> cuest_extents() const { return cuest_extents_; }
+    int cuest_max_points() const { return cuest_max_points_; }
+    double weights_cutoff() const { return MolecularGrid::options_.weights_cutoff; }
+    bool removes_distant_points() const { return MolecularGrid::options_.remove_distant_points; }
 #endif
 
     /// The `use_cuest` flag requests a GPU-resident cuEST grid *instead of* the host grid: when
