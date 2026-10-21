@@ -2493,3 +2493,17 @@ reference, ownUID/jobname+completeTRES proof, onefsyncedupdate and actual
 unchangedresource/start/end/timeproof beforeGO. Defaults remainstrict.
 Newfreshnumberedsource namespace avoids codeeditingjusttoselect04; no
 attemptreuse/adoption.42localguards PASS2.524s. No remoteactionfromtests.
+
+Parent's explicit message, read in localworkmuxcapture, confirms fresh
+replacementapproval **alreadygranted/valid; doNOTwaitanotherapproval**:
+ONE8CPU48G2hembers/chemx, bundledONEnewownIDRequeue0(ifneeded), verify
+unchangedactualresources/time, thenauto-startbuild. NoGPU/ambiguousretry.
+FDDSowneragaincleared boundedCPU-onlyGit/quota turn; noownerprobeinflight
+exceptitsown5minobserver; noGPUwindow/borrow. No morequestionnaire.
+
+Reviewd132 found onlymissingStartTime/EndTime proof couldcompareNone.
+Fixed mandatoryfullISOseconds/realcalendar/positiveinterval and direct
+unchangedkeychecks. Addedmissing/invalid/backwards/changedstart/changedend
+negatives;45localguards PASS4.772s. Scopedconfirmationd83e42a43 pending.
+Actualresourcepermission nowVALID forONEfreshreplacement, notyetrequested.
+Old14250580PREEMPTED/alloldroots/UNKNOWN remainunchanged; no old-IDretry.

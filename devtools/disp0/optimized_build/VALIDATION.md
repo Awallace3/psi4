@@ -89,3 +89,11 @@ with own UID/job-name checks, single durable update and unchanged-resource/
 time verification. New negative/positive mocks cover missing approval,
 already-zero/no update, exactly one authorized update and wrong owner/name.
 **42 local guards PASS2.524s**. No replacement allocation requested by tests.
+
+Reviewd132 caught missing start/end timestamps being treated as equalNone.
+Fixed mandatory full ISO timestamps, valid calendar/positive interval, direct
+post-update key comparison; missing/malformed/backwards and changed start/end
+negative regressions. **45 guards PASS4.772s**. Scoped confirmation pending.
+Parent explicitly confirmed fresh replacement authority already valid:
+one8CPU/48GiB/2hfreeembers/chemx, bundled new-own-ID flag correction and
+immediate build without another approval question.

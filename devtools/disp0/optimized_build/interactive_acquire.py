@@ -1,5 +1,6 @@
 """Acquire ONE bounded CPU allocation. No build, retry, release or GPU request."""
 import argparse
+import datetime
 import json
 import os
 from pathlib import Path
@@ -52,6 +53,16 @@ def validate_controller(text, job, *, before_approved_correction=False):
     admission.require(fields.get("NodeList") not in (None, "", "(null)"), "No node grant proof")
     validate_tres(fields.get("ReqTRES"))
     validate_tres(fields.get("AllocTRES"))
+    times = {}
+    for key in ("StartTime", "EndTime"):
+        value = fields.get(key, "")
+        admission.require(re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}",
+                                       value) is not None, f"Missing/invalid {key} proof")
+        try:
+            times[key] = datetime.datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid {key} calendar value") from exc
+    admission.require(times["EndTime"] > times["StartTime"], "Invalid allocation time interval")
     return fields
 
 
@@ -113,7 +124,7 @@ def acquire(source, pin, attempt, quota, quota_sha, *, correct_requeue=False, ap
         for key in ("Account", "QOS", "Partition", "NumCPUs", "NumTasks", "NumNodes",
                     "MinMemoryNode", "TimeLimit", "ReqTRES", "AllocTRES", "StartTime",
                     "EndTime", "NodeList", "Restarts"):
-            admission.require(final.get(key) == fields.get(key), f"Unexpected allocation change: {key}")
+            admission.require(final[key] == fields[key], f"Unexpected allocation change: {key}")
         fields = final
     admission.record(attempt, "allocation.json",
                      {"status": "ALLOCATED_CPU_ONLY", "job_id": job, "fields": fields,

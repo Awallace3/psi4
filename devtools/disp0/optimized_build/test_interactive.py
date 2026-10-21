@@ -18,7 +18,8 @@ FIELDS = (f"JobId={JOB} JobName=disp0-opt064-i UserId=fixture({os.getuid()}) "
           "Account=gts-cs207-chemx QOS=embers JobState=RUNNING Requeue=0 "
           "Restarts=0 NumCPUs=8 NumTasks=1 NumNodes=1 TimeLimit=02:00:00 Partition=cpu-small "
           "MinMemoryNode=48G BatchFlag=0 NodeList=fixture-node ReqTRES=cpu=8,mem=48G,node=1 "
-          "AllocTRES=cpu=8,mem=48G,node=1,billing=2432")
+          "AllocTRES=cpu=8,mem=48G,node=1,billing=2432 "
+          "StartTime=2026-10-21T10:00:00 EndTime=2026-10-21T12:00:00")
 
 
 class InteractiveTests(unittest.TestCase):
@@ -156,6 +157,36 @@ class InteractiveTests(unittest.TestCase):
                      FIELDS.replace("JobName=disp0-opt064-i", "JobName=another-agent")):
             with self.assertRaises(RuntimeError):
                 module.validate_controller(text, JOB)
+
+    def test_missing_or_invalid_timestamps_are_not_time_preservation_proof(self):
+        for text in (
+                FIELDS.replace(" StartTime=2026-10-21T10:00:00", ""),
+                FIELDS.replace(" EndTime=2026-10-21T12:00:00", ""),
+                FIELDS.replace("EndTime=2026-10-21T12:00:00", "EndTime=Unknown"),
+                FIELDS.replace("EndTime=2026-10-21T12:00:00", "EndTime=2026-02-30T12:00:00"),
+                FIELDS.replace("EndTime=2026-10-21T12:00:00", "EndTime=2026-10-21T09:00:00")):
+            with self.assertRaises(RuntimeError):
+                module.validate_controller(text, JOB)
+
+    def changed_time_rejected_after_flag(self, key, old, new):
+        original = self.capture
+        def changed(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[:2] == ["scontrol", "show"] and self.updates:
+                result["stdout"] = result["stdout"].replace(f"{key}={old}", f"{key}={new}")
+            return result
+        self.capture = changed
+        self.controller = FIELDS.replace("Requeue=0", "Requeue=1")
+        with self.assertRaisesRegex(RuntimeError, "Unexpected allocation change: " + key):
+            self.invoke(correct_requeue=True, approval_reference="FIXTURE_EXPLICIT_NEW_ID_APPROVAL")
+        self.assertEqual(self.updates, 1)
+        self.assertFalse((self.attempt / "allocation.json").exists())
+
+    def test_changed_end_time_rejected_after_approved_flag_update(self):
+        self.changed_time_rejected_after_flag("EndTime", "2026-10-21T12:00:00", "2026-10-21T12:00:01")
+
+    def test_changed_start_time_rejected_after_approved_flag_update(self):
+        self.changed_time_rejected_after_flag("StartTime", "2026-10-21T10:00:00", "2026-10-21T10:00:01")
 
 
 if __name__ == "__main__":
