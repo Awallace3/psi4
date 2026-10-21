@@ -306,6 +306,15 @@ def refine_streamed(models, points_bohr, packed_targets, *, target_origin=None, 
     declaration.fixed = [False]*model.parameter_count
     declaration.fixed_values = [0.]*model.parameter_count
     declaration.provenance = model.provenance
+    if model.penalty_selection == 'static_reference':
+        # This declaration is shared by every frequency; a first-node current
+        # anchor hash cannot certify all nodes. Full per-node provenance stays
+        # on each RefinementResult.model and bounded frequency diagnostics.
+        declaration.provenance = (
+            f'{generation_record}; shared native declaration: site/channel/parameter inventory; '
+            'penalty_selection=static_reference; '
+            f'static_reference_sha256={model.static_reference_sha256}; '
+            'per-node current anchors/strengths/provenance: RefinementResult.model')
     cloud = core.IsaPfitCloudRows()
     cloud.label, cloud.points, cloud.full_row_count = 'complete cloud', npoint, row_count
     cloud.maximum_block_rows = block_rows

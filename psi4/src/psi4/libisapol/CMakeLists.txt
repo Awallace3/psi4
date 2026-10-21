@@ -18,12 +18,20 @@ list(APPEND sources
   fit_points.cc
   t_functions.cc
   isotropic_dispersion.cc
+  anisotropic_dispersion.cc
+  realcg_tables.cc
+  recoupling_tables.cc
+  recoupled_dispersion.cc
   )
 
 # Keep the heavy Libint2 engine implementation out of the Gaussian-kernel unity TU.
 set_source_files_properties(aux_coulomb.cc orbital_coulomb.cc harmonic_transform.cc PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 set_source_files_properties(native_response.cc PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 psi4_add_module(lib isapol sources)
+
+# Keep upstream permission/attribution with installations containing the tables.
+install(FILES RECOUPLED_CAMCASP_LICENSE ANGULAR_NOTICE realcg_manifest.txt
+  DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/psi4/licenses/isapol)
 
 target_link_libraries(isapol
   PRIVATE

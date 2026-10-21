@@ -26,7 +26,8 @@ from .isapol_refine import RefinementSite
 from .scf_proc._scf_seal import correction_state
 
 
-TASKS = frozenset(('ATOMIC_REFINED_POLARIZABILITIES', 'ATOMIC_REFINED_DISPERSION'))
+RECOUPLED_TASK = 'ATOMIC_REFINED_RECOUPLED_DISPERSION'
+TASKS = frozenset(('ATOMIC_REFINED_POLARIZABILITIES', 'ATOMIC_REFINED_DISPERSION', RECOUPLED_TASK))
 OPTION_MAP = {
     'auxiliary_basis': 'ATOMIC_PROPERTY_AUXILIARY_BASIS',
     'radial_points': 'ATOMIC_RESPONSE_RADIAL_POINTS',
@@ -74,6 +75,7 @@ def settings(preset, overrides):
         declared_variables=None,  # process_data.F90:2040-2150 cutoff-derived pdef
         max_refinement_parameters=MAX_PARAMETERS,  # explicit finite opt-in up to 72
         response='reference_h2h1', fdds=None,  # explicit native FDDS only on request
+        recoupled_dispersion=False,  # explicit angular local-axis coefficients only
         scratch_directory=None,
         resources=None, log=None)  # None: numeric budget = psi4.set_memory
     unknown = set(overrides)-set(values)
@@ -176,11 +178,15 @@ def run(wfn, tasks, *, preset, **kwargs):
     the reference H2H1 unless ``response='native_fdds'`` and ``fdds`` are given.
     """
     if not tasks or any(task not in TASKS for task in tasks) or len(set(tasks)) != len(tasks):
-        raise ValueError('BOUNDED_DF accepts only ATOMIC_REFINED_POLARIZABILITIES and ATOMIC_REFINED_DISPERSION')
+        raise ValueError('BOUNDED_DF accepts only '+', '.join(sorted(TASKS)))
     if not isinstance(wfn, core.Wavefunction):
         raise TypeError('BOUNDED_DF requires a live Psi4 Wavefunction')
     try:
+        if RECOUPLED_TASK in tasks and 'recoupled_dispersion' in kwargs:
+            raise TypeError('recoupled task and recoupled_dispersion keyword are duplicate declarations')
         v = settings(preset, kwargs)
+        if RECOUPLED_TASK in tasks:
+            v['recoupled_dispersion'] = True
         log = v['log'] if v['log'] is not None else _lg.StageLog(v['verbosity'])
         if not isinstance(log, _lg.StageLog):
             raise TypeError('log must be a StageLog')
@@ -189,6 +195,8 @@ def run(wfn, tasks, *, preset, **kwargs):
                                                      ('response', v['response'])))
             # Refuse a bad limit before any grid, basis or lattice is built.
             check_max_parameters(v['max_refinement_parameters'], 'max_refinement_parameters')
+            if type(v['recoupled_dispersion']) is not bool:
+                raise TypeError('recoupled_dispersion must be an explicit bool')
             mol = wfn.molecule()
             sites, bonds = preset_sites(mol, preset, v['rank_limit'], v['hydrogen_rank_limit'])
             if v['sites'] is not None:
@@ -232,7 +240,7 @@ def run(wfn, tasks, *, preset, **kwargs):
                 'localization_rank_limit', 'weight_type', 'weight_coefficient', 'cutoff',
                 'resources', 'scf_correction', 'expected_grac_shift', 'max_order', 'scratch_directory',
                 'distribution', 'distributed_moments', 'response', 'fdds',
-                'partition_recipe', 'partition_grid')
+                'partition_recipe', 'partition_grid', 'recoupled_dispersion')
         result = bounded_properties(wfn, recipe, caller_converged=True,
             sites=sites, bonds=bonds, quadrature=quadrature, response_grid=grid,
             lattice_options=lattice, declared_variables=v['declared_variables'],
