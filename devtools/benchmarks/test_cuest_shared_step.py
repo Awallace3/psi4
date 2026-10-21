@@ -101,6 +101,24 @@ class SharedStepTests(unittest.TestCase):
                                capture_output=True, timeout=5)
             self.assertEqual(p.returncode, expected)
 
+    def test_acquisition_requires_current_explicit_paid_time_ceiling(self):
+        controller = self.script.with_name("cuest_interactive_allocate.sh").read_text()
+        self.assertIn('${CUEST_SHARED_WALLTIME:?', controller)
+        guard = next(line for line in controller.splitlines()
+                     if line.startswith('[[ "$CUEST_SHARED_WALLTIME"'))
+        for value, expected in [("04:00:00", 0), ("08:00:00", 0),
+                                ("04:00:01", 1), ("", 1), ("24:00:00", 1)]:
+            p = subprocess.run(
+                ["bash", "-c", 'CUEST_SHARED_WALLTIME=$1; ' + guard, "test", value],
+                capture_output=True, timeout=5)
+            self.assertEqual(p.returncode, expected)
+        self.assertIn('--time="$CUEST_SHARED_WALLTIME"', controller)
+        self.assertNotIn('--time=08:00:00', controller)
+        self.assertLess(controller.index('REQUEST_INTENT.json'),
+                        controller.index('salloc --no-shell --account='))
+        self.assertLess(controller.index('os.fsync(fd)'),
+                        controller.index('salloc --no-shell --account='))
+
 
 if __name__ == "__main__":
     unittest.main()

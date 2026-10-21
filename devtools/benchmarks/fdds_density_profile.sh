@@ -6,16 +6,33 @@ pin=${2:?source/harness pin}
 out=$(realpath "${3:?fresh output}")
 P=/storage/project/r-cs207-0/awallace43
 env=$P/miniconda/envs/p4cuest_sapt
+: "${CUEST_DENSITY_REFERENCE:?accepted unchanged-science reference}"
+test -r "$CUEST_DENSITY_REFERENCE" && test -s "$CUEST_DENSITY_REFERENCE"
+# Reject unusable control evidence before spending the validation/replay window.
+"$env/bin/python" - "$CUEST_DENSITY_REFERENCE" <<'PY'
+import json,math,sys
+from pathlib import Path
+d=json.loads(Path(sys.argv[1]).read_text())
+assert d["ok"] is True
+assert d["energies_Eh"] and all(math.isfinite(v) for v in d["energies_Eh"].values())
+for k in ("cache_sha256","metadata_sha256","runner_sha256","options","threads",
+          "memory","numpy_version","numpy_configuration","libraries_sha256","psi4_package","job_id"):
+    assert k in d,k
+PY
 test "$(git -C "$root" rev-parse HEAD)" = "$pin"
 test -z "$(git -C "$root" status --porcelain --untracked-files=no)"
-test "$SLURM_JOB_ID" = 14214205
+: "${CUEST_DENSITY_JOB_ID:?pin the newly granted job}"
+test "$SLURM_JOB_ID" = "$CUEST_DENSITY_JOB_ID"
 test "$SLURM_CPUS_PER_TASK" = 8
-scratch=/var/tmp/awallace43-fdds-14214205-v2
+: "${CUEST_DENSITY_SCRATCH:?verified private local storage}"
+scratch=$CUEST_DENSITY_SCRATCH
+[[ "$scratch" == /var/tmp/awallace43-fdds-"$SLURM_JOB_ID"-* ]]
 test -s "$scratch/STORAGE_VERIFIED.json"
 export TMPDIR="$scratch" SCRATCH="$scratch" PSI_SCRATCH="$scratch"
 export OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8
 export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 PYTHONFAULTHANDLER=1
-compile="$P/runs/psi4-fdds/20261021-density-profile-compile-01"
+: "${CUEST_DENSITY_COMPILE_OUTPUT:?fresh isolated compile evidence}"
+compile=$CUEST_DENSITY_COMPILE_OUTPUT
 test -s "$compile/BUILD_ONLY.txt"
 hash=$("$env/bin/python" - "$compile/import.json" <<'PY'
 import json,sys
@@ -45,15 +62,17 @@ timeout --signal=TERM --kill-after=30s 840s "$env/bin/python" \
     --expected-package "$root/build_fdds_validation/stage/lib/psi4" \
     --require-gpu-exchange --require-gpu-metric --require-gpu-response-products \
     > "$out/replay.log" 2>&1
-"$env/bin/python" - "$out" "$P/runs/psi4-fdds/20261021-alda-profile-01/replay/result.json" <<'PY'
+"$env/bin/python" - "$out" "$CUEST_DENSITY_REFERENCE" <<'PY'
 from pathlib import Path
 import json,math,sys
 out=Path(sys.argv[1]);a=json.loads((out/"replay/result.json").read_text())
 b=json.loads(Path(sys.argv[2]).read_text());p=json.loads((out/"profile.json").read_text())
 assert a["ok"] and b["ok"] and p["valid"] and p["sites"]==13 and len(p["records"])==19
 for k in ("cache_sha256","metadata_sha256","runner_sha256","options","threads",
-          "memory","hostname","job_id","numpy_version","numpy_configuration"):
+          "memory","numpy_version","numpy_configuration"):
     assert a[k]==b[k],k
+# This is numerical attribution, not a cross-allocation speed comparison.
+assert str(a["job_id"]) == __import__("os").environ["CUEST_DENSITY_JOB_ID"]
 deps=lambda d:{p:h for p,h in d["libraries_sha256"].items()
                if not (Path(p).parent==Path(d["psi4_package"]).parent and Path(p).name.startswith("core.cpython"))}
 assert deps(a)==deps(b)
@@ -69,7 +88,8 @@ errors={k:abs(a["energies_Eh"][k]-v) for k,v in b["energies_Eh"].items()}
 assert max(errors.values())<=1e-5,errors
 with (out/"AUDIT_PENDING.json").open("x") as f:
     json.dump({"diagnostic_only":True,"no_speedup_claim":True,"projection_phases_seconds":phases,
-               "errors_Eh":errors,"note":"Three nested projection regions; includes integrals/packing/contractions, not pure BLAS"},f,indent=2)
+               "job_id":a["job_id"],"reference_job_id":b["job_id"],
+               "errors_Eh":errors,"note":"Three nested projection regions; includes integrals/packing/contractions, not pure BLAS; reference may be a prior allocation, no timing ratio"},f,indent=2)
 PY
 test "$(git -C "$root" rev-parse HEAD)" = "$pin"
 test -z "$(git -C "$root" status --porcelain --untracked-files=no)"

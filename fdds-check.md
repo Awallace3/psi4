@@ -1,6 +1,16 @@
 # FDDS cuEST implementation handoff
 
-## Allocation closed — no live GPU resource
+## New cycle authorized — preparation only, no new grant yet
+
+On 2026-10-21 the user explicitly approved **one H200 / 8 CPU / 128 GiB /
+four-hour inferno interactive allocation**, account gts-cs207-chemx.
+This replaces the historical "no standing approval" state below, not the
+terminal state of old job14214205. New controller/harness guards and a fresh
+isolated native build of timer-only6c133 are in preparation. No new request,
+grant, GPU execution or speedup is established by this note.
+Scope/gates: `devtools/benchmarks/fdds_cycle_20261021.md`.
+
+## Previous allocation closed — no live GPU resource
 
 Established watcherbda4c38b4 confirmed14214205 **TIMEOUT**, exit0:0,
 elapsed08:00:08, at2026-10-21T03:53:00Z (`ALL-TERMINAL`).
@@ -20,8 +30,8 @@ Root summary: `fdds-allocation-14214205-terminal.json`.
 
 Latest numerically validated scientific source remains **dcc8ac9713/corec457**.
 The later6c133 timer-only source is reviewed/staged but uncompiled and
-resource-deferred, not a successor GPU-validation pass. A later sufficient
-resource decision would require fresh explicit approval; none is standing.
+resource-deferred in that cycle, not a successor GPU-validation pass.
+The newly authorized cycle above must establish its own build/test evidence.
 
 ## Response-product iteration — independent GPU/timing audit passed
 

@@ -39,6 +39,22 @@ class ProgressWatchTests(unittest.TestCase):
             self.assertFalse(watch.official_terminal(s))
         self.assertTrue(watch.official_terminal("2026-10-21 ALL-TERMINAL 14214205 (SLURM state only)"))
 
+    def test_other_allocation_terminal_never_closes_current_watch(self):
+        self.assertFalse(watch.official_terminal("ALL-TERMINAL 14214205", 99))
+        self.assertFalse(watch.official_terminal("ALL-TERMINAL 990", 99))
+        self.assertFalse(watch.official_terminal("ALL-TERMINAL ", 99))
+        self.assertTrue(watch.official_terminal("time ALL-TERMINAL 99", 99))
+
+    def test_only_approved_manifest_root_is_rendered(self):
+        path = "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-shared/new-cycle/allocation.json"
+        script = watch.remote_script(path)
+        self.assertIn(repr(path), script)
+        self.assertNotIn("MANIFEST_LITERAL", script)
+        compile(script, "<remote-observer>", "exec")
+        for bad in ("/tmp/allocation.json", path.replace("allocation.json", "other.json")):
+            with self.assertRaises(ValueError):
+                watch.remote_script(bad)
+
 
 if __name__ == "__main__":
     unittest.main()

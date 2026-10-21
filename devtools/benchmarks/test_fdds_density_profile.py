@@ -24,6 +24,19 @@ class TimerOnly(unittest.TestCase):
         self.assertEqual((starts, stops), (3, 3))
         self.assertEqual(current, accepted)
 
+    def test_new_allocation_identity_is_explicit_and_not_a_timing_ratio(self):
+        script = Path(__file__).with_name("fdds_density_profile.sh").read_text()
+        for name in ("JOB_ID", "SCRATCH", "COMPILE_OUTPUT", "REFERENCE"):
+            self.assertIn('${CUEST_DENSITY_' + name + ':?', script)
+        self.assertNotIn('test "$SLURM_JOB_ID" = 14214205', script)
+        self.assertIn('str(a["job_id"])', script)
+        self.assertIn('"no_speedup_claim":True', script)
+        self.assertLess(script.index('test "$SLURM_JOB_ID"'), script.index('bash "$root/'))
+        self.assertLess(script.index('${CUEST_DENSITY_REFERENCE:?'), script.index('bash "$root/'))
+        self.assertLess(script.index('d=json.loads(Path(sys.argv[1]).read_text())'),
+                        script.index('bash "$root/'))
+        self.assertLess(script.index('assert d["ok"] is True'), script.index('timeout --signal=TERM'))
+
 
 if __name__ == "__main__":
     unittest.main()

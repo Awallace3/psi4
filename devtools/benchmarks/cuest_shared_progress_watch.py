@@ -12,7 +12,7 @@ import time
 
 REMOTE = r"""
 import fcntl,json,pathlib,time
-r=pathlib.Path('/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-shared/20261020-interactive-02')
+r=pathlib.Path(MANIFEST_LITERAL).parent
 m=json.loads((r/'allocation.json').read_text())
 out=dict(manifest_status=m['status'],job_id=m.get('job_id'),quarantined=(r/'QUARANTINED').exists())
 try:
@@ -26,39 +26,16 @@ for p in sorted((r/'steps').glob('*')):
  out['steps'].append(dict(name=p.name,terminal=(p/'TERMINAL').exists(),
   cleanup=(p/'GPU_CLEANUP_VERIFIED').exists(),
   exit_code=(p/'exit-code.txt').read_text().strip() if (p/'exit-code.txt').exists() else None))
-out['results']={}
-campaign=pathlib.Path('/storage/project/r-cs207-0/awallace43/runs/psi4-fdds')
-for base in (campaign/'20261020-interactive-01').glob('matched-14214205*'):
- for p in base.glob('*/result.json'):
-  d=json.loads(p.read_text())
-  out['results'][base.name+'/'+p.parent.name]=dict(ok=d.get('ok'),seconds=d.get('fdds_seconds'))
-candidate=campaign/'20261020-metric-fold-01'
-if candidate.exists():
- out['candidate']={}
- for name in ['validation/configure.log','validation/build.log','validation/fdds.log',
-              'validation/full-fdds-gdb.log','validation-driver.log']:
-  p=candidate/name
-  if p.exists():
-   # Status only: an artifact/log is NOT a correctness pass.
-   out['candidate'][name]=dict(bytes=p.stat().st_size,age_seconds=int(time.time()-p.stat().st_mtime))
- v=candidate/'validation/VERIFIED.json'
- if v.exists():out['candidate']['validation_report']=json.loads(v.read_text())
- for p in (candidate/'pairs').glob('*/result.json'):
-  d=json.loads(p.read_text())
-  out['results']['metric-candidate/'+p.parent.name]=dict(ok=d.get('ok'),seconds=d.get('fdds_seconds'))
-out['response_candidates']={}
-for base in campaign.glob('20261020-response-products-*'):
- status={}
- for name in ['configure.log','build.log','validation-driver.log','validation/build.log',
-              'validation/fdds.log','validation/full-fdds-gdb.log']:
-  p=base/name
-  if p.exists():status[name]=dict(bytes=p.stat().st_size,age_seconds=int(time.time()-p.stat().st_mtime))
- for p in (base/'pairs').glob('*/result.json'):
-  d=json.loads(p.read_text())
-  out['results'][base.name+'/'+p.parent.name]=dict(ok=d.get('ok'),seconds=d.get('fdds_seconds'))
- out['response_candidates'][base.name]=status
 print(json.dumps(out,sort_keys=True))
 """
+
+
+def remote_script(manifest):
+    path = Path(manifest)
+    prefix = Path("/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-shared")
+    if path.name != "allocation.json" or path.parent.parent != prefix:
+        raise ValueError("Manifest must belong to one approved campaign child")
+    return REMOTE.replace("MANIFEST_LITERAL", repr(str(path)))
 
 
 def action(snapshot):
@@ -75,37 +52,45 @@ def action(snapshot):
     return "ACTIVE_LEASE_CPU_CONTROL_OR_GPU_WORK"
 
 
-def official_terminal(log):
+def official_terminal(log, job_id=14214205):
     # Only a positive official-watcher event counts; absent/failed queries do not.
-    return any("ALL-TERMINAL 14214205" in line for line in log.splitlines())
+    return any(line.split("ALL-TERMINAL ", 1)[-1].split()[0] == str(job_id)
+               for line in log.splitlines() if "ALL-TERMINAL " in line
+               and line.split("ALL-TERMINAL ", 1)[-1].split())
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--phx", type=Path, required=True)
     p.add_argument("--lifetime-log", type=Path, required=True)
+    p.add_argument("--manifest", type=Path, required=True)
+    p.add_argument("--job-id", type=int, required=True)
     p.add_argument("--interval", type=int, default=300)
     p.add_argument("--initial-delay", type=int, choices=(0, 300), default=0,
                    help="Allow a bounded handoff before the first artifact check.")
     args = p.parse_args()
+    assert args.job_id > 0
+    script = remote_script(args.manifest)
     assert args.interval >= 300
     deadline = time.monotonic() + args.initial_delay
     if args.initial_delay:
         print("HANDOFF_FIRST_CHECK_IN_300_SECONDS", flush=True)
         time.sleep(args.initial_delay)
     while True:
-        if args.lifetime_log.exists() and official_terminal(args.lifetime_log.read_text()):
+        if args.lifetime_log.exists() and official_terminal(args.lifetime_log.read_text(), args.job_id):
             print("OFFICIAL_ALLOCATION_TERMINAL_REQUIRE_ARTIFACT_AUDIT", flush=True)
             return
         stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         try:
             result = subprocess.run(
-                [str(args.phx), "python3 -"], input=REMOTE,
+                [str(args.phx), "python3 -"], input=script,
                 text=True, capture_output=True, timeout=120,
             )
             if result.returncode:
                 raise RuntimeError(f"SSH exit{result.returncode}: {result.stderr[-500:]}")
             snapshot = json.loads(result.stdout)
+            if int(snapshot["job_id"]) != args.job_id:
+                raise ValueError("Manifest job differs from pinned observer job")
             decision = action(snapshot)
             print(stamp, decision, json.dumps(snapshot, sort_keys=True), flush=True)
             if decision.startswith("ALERT_"):

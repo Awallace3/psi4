@@ -1,7 +1,9 @@
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
     "storage_probe", Path(__file__).with_name("fdds_local_storage_probe.py"))
@@ -33,6 +35,14 @@ class StorageProbeTests(unittest.TestCase):
             for size in (0, -1):
                 with self.assertRaises(ValueError):
                     probe.write_read_probe(Path(d), size)
+
+    def test_job_binding_rejected_before_storage_mutation(self):
+        for env in ({"SLURM_JOB_ID": "1", "CUEST_STORAGE_JOB_ID": "2"},
+                    {"SLURM_JOB_ID": "0", "CUEST_STORAGE_JOB_ID": "0"}):
+            with patch.dict(os.environ, env, clear=True), patch.object(Path, "mkdir") as mkdir:
+                with self.assertRaises(AssertionError):
+                    probe.main()
+                mkdir.assert_not_called()
 
 
 if __name__ == "__main__":
