@@ -98,9 +98,10 @@ class PSI_API VBase {
     // GRAC data
     bool grac_initialized_;
 
-    /// Leave the VV10 kernel out of compute_Vx instead of refusing a VV10 functional. Only for callers
-    /// that can use an approximate orbital Hessian, e.g., SOSCF, where it changes the step and not the
-    /// stationary point.
+    /// Leave the VV10 kernel (vv10_nlc_vx) out of compute_Vx. An explicit fallback, off by default and
+    /// set by nothing in Psi4: the kernel costs one O(N_grid^2) VV10 pass per perturbation, and a caller
+    /// that can use an approximate orbital Hessian (SOSCF changes the step, not the stationary point)
+    /// may trade it away. Wrong for response properties.
     bool vx_neglect_vv10_ = false;
 
     // VV10 dispersion, return vv10_nlc energy
@@ -108,6 +109,10 @@ class PSI_API VBase {
                             std::vector<std::map<std::string, SharedVector>>& vv10_cache,
                             std::vector<std::shared_ptr<PointFunctions>>& nl_point_workers, int ansatz = 1);
     double vv10_nlc(SharedMatrix D, SharedMatrix ret);
+    /// ret[k] += alpha * d/dl V_vv10(D + l Dx[k]) at l = 0, D and Dx[k] in vv10_nlc's convention
+    /// (C1 AO, rho = 2 phi D phi); Dx[k] need not be symmetric.
+    void vv10_nlc_vx(SharedMatrix D, const std::vector<SharedMatrix>& Dx, const std::vector<SharedMatrix>& ret,
+                     double alpha);
     SharedMatrix vv10_nlc_gradient(SharedMatrix D);
 
     /// Set things up

@@ -292,22 +292,6 @@ void HF::damping_update(double damping_percentage) {
         "type of SCF wavefunction yet.");
 }
 
-std::vector<SharedMatrix> HF::soscf_cphf_solve(std::vector<SharedMatrix> x_vec, double conv_tol, int max_iter,
-                                               int print_lvl) {
-    auto potential = V_potential();
-    const bool neglect_vv10 = potential && functional_->needs_vv10() && !potential->vx_neglect_vv10();
-    if (!neglect_vv10) return cphf_solve(x_vec, conv_tol, max_iter, print_lvl);
-    potential->set_vx_neglect_vv10(true);
-    try {
-        auto ret = cphf_solve(x_vec, conv_tol, max_iter, print_lvl);
-        potential->set_vx_neglect_vv10(false);
-        return ret;
-    } catch (...) {
-        potential->set_vx_neglect_vv10(false);
-        throw;
-    }
-}
-
 int HF::soscf_update(double soscf_conv, int soscf_min_iter, int soscf_max_iter, bool soscf_print) {
     throw PSIEXCEPTION(
         "Sorry, second-order convergence has not been implemented for this "

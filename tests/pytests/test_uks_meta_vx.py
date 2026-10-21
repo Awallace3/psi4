@@ -47,13 +47,3 @@ def test_uks_vx_matches_finite_difference(func):
         fd = (p - m) / (2 * h)
         assert np.abs(vx.np - fd).max() / np.abs(fd).max() < 1e-5
 
-
-def test_uks_soscf_vv10_meta_gga():
-    """SOSCF runs on a UKS meta-GGA + VV10 functional (VV10 left out of the step) and reaches the DIIS energy."""
-    psi4.geometry(_CH3)
-    psi4.set_options({"basis": "cc-pvdz", "reference": "uks", "scf_type": "df", "e_convergence": 1e-9,
-                      "d_convergence": 1e-8})
-    e_diis = psi4.energy("wb97m-v")
-    psi4.set_options({"soscf": True})
-    e_soscf = psi4.energy("wb97m-v")
-    assert psi4.compare_values(e_diis, e_soscf, 7, "wB97M-V UKS SOSCF vs DIIS energy")

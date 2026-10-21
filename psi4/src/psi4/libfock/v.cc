@@ -1050,6 +1050,187 @@ double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
     timer_off("V: VV10");
     return vv10_e;
 }
+void VBase::vv10_nlc_vx(SharedMatrix D, const std::vector<SharedMatrix>& Dx, const std::vector<SharedMatrix>& ret,
+                        double alpha) {
+    timer_on("V: VV10 Vx");
+
+    // => VV10 Grid and Cache, as in vv10_nlc <=
+    std::map<std::string, std::string> opt_map;
+    opt_map["DFT_PRUNING_SCHEME"] = "FLAT";
+
+    std::map<std::string, int> opt_int_map;
+    opt_int_map["DFT_RADIAL_POINTS"] = options_.get_int("DFT_VV10_RADIAL_POINTS");
+    opt_int_map["DFT_SPHERICAL_POINTS"] = options_.get_int("DFT_VV10_SPHERICAL_POINTS");
+
+    DFTGrid nlgrid = DFTGrid(primary_->molecule(), primary_, opt_int_map, opt_map, options_);
+    std::vector<std::map<std::string, SharedVector>> vv10_cache;
+    std::vector<std::shared_ptr<PointFunctions>> nl_point_workers;
+    prepare_vv10_cache(nlgrid, D, vv10_cache, nl_point_workers);
+
+    const size_t nvec = Dx.size();
+    const size_t nblocks = nlgrid.blocks().size();
+    const int max_points = nlgrid.max_points();
+    const int max_functions = nlgrid.max_functions();
+
+    // Per-thread scratch: per perturbation drho, d(grad rho) (x, y, z), dgamma, dv_rho, dv_gamma
+    struct Scratch {
+        SharedMatrix Dl, Vl;
+        std::vector<std::vector<double>> drho, dx, dy, dz, dgamma, dv_rho, dv_gamma;
+        std::vector<double> v_gamma;
+    };
+    std::vector<Scratch> R(num_threads_);
+    for (auto& r : R) {
+        r.Dl = std::make_shared<Matrix>("Dx local", max_functions, max_functions);
+        r.Vl = std::make_shared<Matrix>("Vx local", max_functions, max_functions);
+        for (auto* v : {&r.drho, &r.dx, &r.dy, &r.dz, &r.dgamma, &r.dv_rho, &r.dv_gamma}) {
+            v->assign(nvec, std::vector<double>(max_points));
+        }
+        r.v_gamma.resize(max_points);
+    }
+
+    // First-order density on a block (points already computed): drho = 2 phi Dx_sym phi and its gradient,
+    // the RKSFunctions convention, and dgamma = 2 grad rho . d(grad rho).
+    auto perturb = [&](int rank, const std::shared_ptr<BlockOPoints>& block, size_t k) {
+        auto& r = R[rank];
+        auto pworker = nl_point_workers[rank];
+        const auto& function_map = block->functions_local_to_global();
+        const int nlocal = function_map.size();
+        const int npoints = block->npoints();
+        double** Tp = pworker->scratch()[0]->pointer();
+        double** Dlp = r.Dl->pointer();
+        double** Dxp = Dx[k]->pointer();
+        double** phi = pworker->basis_value("PHI")->pointer();
+        double** phi_x = pworker->basis_value("PHI_X")->pointer();
+        double** phi_y = pworker->basis_value("PHI_Y")->pointer();
+        double** phi_z = pworker->basis_value("PHI_Z")->pointer();
+        const double* rho_x = pworker->point_value("RHO_AX")->pointer();
+        const double* rho_y = pworker->point_value("RHO_AY")->pointer();
+        const double* rho_z = pworker->point_value("RHO_AZ")->pointer();
+        const size_t coll_funcs = pworker->basis_value("PHI")->ncol();
+        for (int ml = 0; ml < nlocal; ml++) {
+            for (int nl = 0; nl < nlocal; nl++) {
+                Dlp[ml][nl] = Dxp[function_map[ml]][function_map[nl]] + Dxp[function_map[nl]][function_map[ml]];
+            }
+        }
+        // T = phi (Dx + Dx^T)
+        C_DGEMM('N', 'N', npoints, nlocal, nlocal, 1.0, phi[0], coll_funcs, Dlp[0], max_functions, 0.0, Tp[0],
+                max_functions);
+        for (int P = 0; P < npoints; P++) {
+            r.drho[k][P] = C_DDOT(nlocal, phi[P], 1, Tp[P], 1);
+            r.dx[k][P] = 2.0 * C_DDOT(nlocal, phi_x[P], 1, Tp[P], 1);
+            r.dy[k][P] = 2.0 * C_DDOT(nlocal, phi_y[P], 1, Tp[P], 1);
+            r.dz[k][P] = 2.0 * C_DDOT(nlocal, phi_z[P], 1, Tp[P], 1);
+            r.dgamma[k][P] = 2.0 * (rho_x[P] * r.dx[k][P] + rho_y[P] * r.dy[k][P] + rho_z[P] * r.dz[k][P]);
+        }
+    };
+
+    // => Pass 1: the perturbed cache (dRHO, dW0, dKAPPA), sieved and stitched as in prepare_vv10_cache <=
+    int rank = 0;
+    std::vector<std::vector<std::map<std::string, SharedVector>>> dtmp(nvec, std::vector<std::map<std::string, SharedVector>>(nblocks));
+#pragma omp parallel for private(rank) schedule(guided) num_threads(num_threads_)
+    for (size_t Q = 0; Q < nblocks; Q++) {
+#ifdef _OPENMP
+        rank = omp_get_thread_num();
+#endif
+        auto block = nlgrid.blocks()[Q];
+        auto pworker = nl_point_workers[rank];
+        pworker->compute_points(block);
+        for (size_t k = 0; k < nvec; k++) {
+            perturb(rank, block, k);
+            dtmp[k][Q] = functional_workers_[rank]->compute_vv10_cache_response(
+                pworker->point_values(), R[rank].drho[k].data(), R[rank].dgamma[k].data(), vv10_rho_cutoff_,
+                block->npoints());
+        }
+    }
+    const size_t ncache = vv10_cache[0]["W"]->dimpi()[0];
+    std::vector<std::map<std::string, SharedVector>> vv10_dcache(nvec);
+    for (size_t k = 0; k < nvec; k++) {
+        for (const char* key : {"DRHO", "DW0", "DKAPPA"}) {
+            auto full = std::make_shared<Vector>(key, ncache);
+            size_t offset = 0;
+            for (size_t Q = 0; Q < nblocks; Q++) {
+                const size_t csize = dtmp[k][Q][key]->dimpi()[0];
+                C_DCOPY(csize, dtmp[k][Q][key]->pointer(), 1, full->pointer() + offset, 1);
+                offset += csize;
+            }
+            if (offset != ncache) throw PSIEXCEPTION("V: VV10 Vx perturbed cache does not match the VV10 cache.");
+            vv10_dcache[k][key] = full;
+        }
+    }
+    dtmp.clear();
+
+    // => Pass 2: response potential on each block, integrated as rks_integrator integrates V <=
+    // dV = int dv_rho phi phi + 2 (dv_gamma grad rho + v_gamma d(grad rho)) . grad(phi phi)
+#pragma omp parallel for private(rank) schedule(guided) num_threads(num_threads_)
+    for (size_t Q = 0; Q < nblocks; Q++) {
+#ifdef _OPENMP
+        rank = omp_get_thread_num();
+#endif
+        auto& r = R[rank];
+        auto block = nlgrid.blocks()[Q];
+        auto fworker = functional_workers_[rank];
+        auto pworker = nl_point_workers[rank];
+        pworker->compute_points(block);
+
+        std::vector<const double*> drho_p(nvec), dgamma_p(nvec);
+        std::vector<double*> dv_rho_p(nvec), dv_gamma_p(nvec);
+        for (size_t k = 0; k < nvec; k++) {
+            perturb(rank, block, k);
+            drho_p[k] = r.drho[k].data();
+            dgamma_p[k] = r.dgamma[k].data();
+            dv_rho_p[k] = r.dv_rho[k].data();
+            dv_gamma_p[k] = r.dv_gamma[k].data();
+        }
+        fworker->compute_vv10_kernel_response(pworker->point_values(), vv10_cache, vv10_dcache, block, drho_p,
+                                              dgamma_p, r.v_gamma.data(), dv_rho_p, dv_gamma_p);
+
+        const auto& function_map = block->functions_local_to_global();
+        const int nlocal = function_map.size();
+        const int npoints = block->npoints();
+        const double* w = block->w();
+        double** Tp = pworker->scratch()[0]->pointer();
+        double** V2p = r.Vl->pointer();
+        double** phi = pworker->basis_value("PHI")->pointer();
+        double** phi_x = pworker->basis_value("PHI_X")->pointer();
+        double** phi_y = pworker->basis_value("PHI_Y")->pointer();
+        double** phi_z = pworker->basis_value("PHI_Z")->pointer();
+        const double* rho_x = pworker->point_value("RHO_AX")->pointer();
+        const double* rho_y = pworker->point_value("RHO_AY")->pointer();
+        const double* rho_z = pworker->point_value("RHO_AZ")->pointer();
+        const size_t coll_funcs = pworker->basis_value("PHI")->ncol();
+
+        for (size_t k = 0; k < nvec; k++) {
+            for (int P = 0; P < npoints; P++) {
+                std::fill(Tp[P], Tp[P] + nlocal, 0.0);
+                const double vg = r.v_gamma[P];
+                const double dvg = r.dv_gamma[k][P];
+                C_DAXPY(nlocal, 0.5 * w[P] * r.dv_rho[k][P], phi[P], 1, Tp[P], 1);
+                C_DAXPY(nlocal, 2.0 * w[P] * (dvg * rho_x[P] + vg * r.dx[k][P]), phi_x[P], 1, Tp[P], 1);
+                C_DAXPY(nlocal, 2.0 * w[P] * (dvg * rho_y[P] + vg * r.dy[k][P]), phi_y[P], 1, Tp[P], 1);
+                C_DAXPY(nlocal, 2.0 * w[P] * (dvg * rho_z[P] + vg * r.dz[k][P]), phi_z[P], 1, Tp[P], 1);
+            }
+            C_DGEMM('T', 'N', nlocal, nlocal, npoints, 1.0, phi[0], coll_funcs, Tp[0], max_functions, 0.0, V2p[0],
+                    max_functions);
+
+            double** Vp = ret[k]->pointer();
+            for (int ml = 0; ml < nlocal; ml++) {
+                const int mg = function_map[ml];
+                for (int nl = 0; nl < ml; nl++) {
+                    const int ng = function_map[nl];
+                    const double val = alpha * (V2p[ml][nl] + V2p[nl][ml]);
+#pragma omp atomic update
+                    Vp[mg][ng] += val;
+#pragma omp atomic update
+                    Vp[ng][mg] += val;
+                }
+#pragma omp atomic update
+                Vp[mg][mg] += alpha * 2.0 * V2p[ml][ml];
+            }
+        }
+    }
+
+    timer_off("V: VV10 Vx");
+}
 SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
     /* Not yet finished, missing several components*/
     throw PSIEXCEPTION("V: Cannot compute VV10 gradient contribution.");
@@ -1759,9 +1940,6 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
         throw PSIEXCEPTION("Vx: RKS input and output sizes should be the same.");
     }
 
-    if (functional_->needs_vv10() && !vx_neglect_vv10_) {
-        throw PSIEXCEPTION("Vx: RKS cannot compute VV10 Vx contribution.");
-    }
 
     // => Initialize variables, esp. pointers and matrices <=
     // Thread info
@@ -2104,6 +2282,12 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
             }
             parallel_timer_off("V_XCd", rank);
         }
+    }
+
+    // VV10 depends on the total density alone, so a triplet perturbation leaves it unchanged. RKS Vx is
+    // 1/2 dV/dl for Da -> Da + l Dx, and vv10_nlc takes Da.
+    if (functional_->needs_vv10() && singlet && !vx_neglect_vv10_) {
+        vv10_nlc_vx(D_AO_[0], Dx_vec, Vx_AO, 0.5);
     }
 
     // Set the result
@@ -3399,9 +3583,6 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
         throw PSIEXCEPTION("Vx: UKS input should occur in alpha and beta pairs.");
     }
 
-    if (functional_->needs_vv10() && !vx_neglect_vv10_) {
-        throw PSIEXCEPTION("V: UKS cannot compute VV10 Vx contribution.");
-    }
 
     // => Initialize variables, esp. pointers and matrices <=
     // Thread info
@@ -3997,6 +4178,26 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
                 Vbxp[mg][mg] += Vbx_localp[ml][ml];
             }
             parallel_timer_off("V_XCd", rank);
+        }
+    }
+
+    // VV10 sees Ds = (Da + Db) / 2 (see compute_V) and adds the same potential to both spins
+    if (functional_->needs_vv10() && !vx_neglect_vv10_) {
+        SharedMatrix Ds = D_AO_[0]->clone();
+        Ds->axpy(1.0, D_AO_[1]);
+        Ds->scale(0.5);
+        std::vector<SharedMatrix> Dsx, Vsx;
+        for (size_t i = 0; i < (Dx_vec.size() / 2); i++) {
+            auto M = Dx_vec[2 * i]->clone();
+            M->axpy(1.0, Dx_vec[2 * i + 1]);
+            M->scale(0.5);
+            Dsx.push_back(M);
+            Vsx.push_back(std::make_shared<Matrix>("VV10 Vx AO Temp", nbf_, nbf_));
+        }
+        vv10_nlc_vx(Ds, Dsx, Vsx, 1.0);
+        for (size_t i = 0; i < Vsx.size(); i++) {
+            Vax_AO[i]->add(Vsx[i]);
+            Vbx_AO[i]->add(Vsx[i]);
         }
     }
 

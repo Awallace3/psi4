@@ -194,6 +194,23 @@ class SuperFunctional {
                                const std::vector<std::map<std::string, SharedVector>>& vv10_cache,
                                std::shared_ptr<BlockOPoints> block, int npoints = -1, bool do_grad = false);
 
+    // Sieved first-order changes (DRHO, DW0, DKAPPA) of the VV10 cache under a density perturbation
+    // (drho, dgamma) on the block points; the sieve is the one compute_vv10_cache applies at rho_thresh.
+    std::map<std::string, SharedVector> compute_vv10_cache_response(const std::map<std::string, SharedVector>& vals,
+                                                                    const double* drho, const double* dgamma,
+                                                                    double rho_thresh, int npoints);
+
+    // Linear response of the VV10 potential on the block points. For each perturbation k, given at the
+    // block points (drho[k], dgamma[k]) and on the cache grid (vv10_dcache[k], from
+    // compute_vv10_cache_response), fills dv_rho[k] and dv_gamma[k], the first-order changes of V_RHO_A
+    // and V_GAMMA_AA from compute_vv10_kernel. v_gamma receives the unperturbed V_GAMMA_AA.
+    void compute_vv10_kernel_response(const std::map<std::string, SharedVector>& vals,
+                                      const std::vector<std::map<std::string, SharedVector>>& vv10_cache,
+                                      const std::vector<std::map<std::string, SharedVector>>& vv10_dcache,
+                                      std::shared_ptr<BlockOPoints> block, const std::vector<const double*>& drho,
+                                      const std::vector<const double*>& dgamma, double* v_gamma,
+                                      const std::vector<double*>& dv_rho, const std::vector<double*>& dv_gamma);
+
     // => Input/Output <= //
 
     std::map<std::string, SharedVector>& values() { return values_; }

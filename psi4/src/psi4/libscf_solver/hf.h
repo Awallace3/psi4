@@ -401,10 +401,6 @@ class HF : public Wavefunction {
     virtual std::vector<SharedMatrix> cphf_Hx(std::vector<SharedMatrix> x);
     virtual std::vector<SharedMatrix> cphf_solve(std::vector<SharedMatrix> x_vec, double conv_tol = 1.e-4,
                                                  int max_iter = 10, int print_lvl = 1);
-    /// cphf_solve for the SOSCF step. A VV10 functional's orbital Hessian is taken without the VV10
-    /// kernel, which Vx does not provide; an approximate Hessian changes the step, not the converged orbitals.
-    std::vector<SharedMatrix> soscf_cphf_solve(std::vector<SharedMatrix> x_vec, double conv_tol, int max_iter,
-                                               int print_lvl);
 
     // CPHF data
     bool cphf_converged() { return cphf_converged_; }
