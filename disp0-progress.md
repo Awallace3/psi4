@@ -2613,3 +2613,14 @@ fixesfalsecompileridentificationofsource*.cc arguments.
 ExactauxruleREDreproobserved;52localguardsPASS3.624s and96legacyruntime
 guardsPASS4.87s. Scopedreviewd2fe2a235 pending whilenewGitvalidatorprepared.
 No native/source/binary/reinstallchanges; continue SAMECPUlease only.
+
+Reviewd2fe2a235 foundopaque `sh -c` couldhidecompilerinone token.
+NewREDwrapperregression observed, then rejectopaque shells/env/cache/
+inlinePython/CMakecompilerwrappers beforeauxfallback; no compiler/rsp
+relaxation.54localguardsPASS5.610s+96legacyPASS3.89s+BashsyntaxPASS.
+Validationcontinuation now collects audit+identity diagnostics together,
+APIonlyifidentityPASS, overallANDallchecks mandatory; fullerrorfilesretained,
+boundedtailsprintedatfailure toavoidanotherdiagnosticSSHroundtrip.
+No compiledartifact/source/flagchange. ContinueCPU14254131withfreshmetadata
+outputs only; sourcevalidationfix publication+Gitstage+nodeexecution chained
+to reduceidle latency, not anotherresource job.

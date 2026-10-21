@@ -68,13 +68,42 @@ with Path(sys.argv[2]).open('x') as stream:
 PY
 }
 snapshot "$out/binaries-before.json"
+set +e
 "$env/bin/python" -B "$validator/devtools/disp0/build_audit.py" \
     --run "$run" --source "$compiled_source" \
     --scratch "/storage/scratch1/3/awallace43/disp0-opt064-$SLURM_JOB_ID-0" \
-    --artifact-dir "$out/effective-build-audit" --out "$out/effective-build-audit.json"
-cd "$out"
-"$env/bin/python" -B "$validator/devtools/disp0/optimized_build/proof.py" > "$out/installed-proof.json"
-"$env/bin/python" -B "$validator/devtools/disp0_einsums_api_probe.py" > "$out/api-probe.json"
+    --artifact-dir "$out/effective-build-audit" --out "$out/effective-build-audit.json" \
+    > "$out/audit.stdout" 2> "$out/audit.stderr"
+audit_code=$?
+cd "$out" || exit 1
+"$env/bin/python" -B "$validator/devtools/disp0/optimized_build/proof.py" \
+    > "$out/installed-proof.json" 2> "$out/installed-proof.stderr"
+proof_code=$?
+api_code=125
+if (( proof_code == 0 )); then
+    "$env/bin/python" -B "$validator/devtools/disp0_einsums_api_probe.py" \
+        > "$out/api-probe.json" 2> "$out/api-probe.stderr"
+    api_code=$?
+else
+    printf 'SKIPPED_REQUIRES_INSTALLED_IDENTITY_PROOF\n' > "$out/api-probe.skipped"
+fi
 snapshot "$out/binaries-after.json"
+snapshot_code=$?
 cmp "$out/binaries-before.json" "$out/binaries-after.json"
+binary_code=$?
+"$env/bin/python" -B - "$out" "$audit_code" "$proof_code" "$api_code" "$snapshot_code" "$binary_code" <<'PY'
+import json,sys
+from pathlib import Path
+names=('audit','installed_identity','api','snapshot','binary_invariance')
+with (Path(sys.argv[1])/'checks.json').open('x') as stream:
+    json.dump(dict(zip(names,map(int,sys.argv[2:]))),stream,indent=2,sort_keys=True)
+PY
+checks_code=$?
+set -e
+printf 'VALIDATION_CHECKS audit=%s identity=%s api=%s snapshot=%s binary=%s\n' \
+    "$audit_code" "$proof_code" "$api_code" "$snapshot_code" "$binary_code"
+for error_file in "$out/audit.stderr" "$out/installed-proof.stderr" "$out/api-probe.stderr"; do
+    if [[ -s "$error_file" ]]; then printf '=== %s ===\n' "$error_file"; tail -n 16 "$error_file"; fi
+done
+(( audit_code == 0 && proof_code == 0 && api_code == 0 && snapshot_code == 0 && binary_code == 0 && checks_code == 0 ))
 printf 'COMPLETED_INSTALL_VALIDATION_ONLY_NO_DEVICE_OR_PHYSICAL_PASS out=%s\n' "$out"

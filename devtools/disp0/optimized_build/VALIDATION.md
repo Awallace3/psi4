@@ -128,3 +128,12 @@ cache wrappers and unidentified compiler wrappers still reject; `.cc` source
 arguments are no longer mistaken for compiler executables. Auxiliary rules
 remain captured raw, not falsely labeled semantically audited.
 **52 guards PASS3.624s**, **96 legacy runtime guards PASS4.87s**.
+
+Classifier review caught opaque `sh -c` wrappers hiding a compiler in one
+token. Added a red regression, then fail-closed shell/env/cache and opaque
+inline-Python/CMake wrapper rejection before auxiliary fallback.
+**54 local guards PASS5.610s**, **96 legacy PASS3.89s**, Bash syntax PASS.
+The continuation now collects independent audit and identity diagnostics in
+one step; API runs only after identity passes. Success still requires EVERY
+audit/identity/API/snapshot/binary-invariance check zero; partial results never
+become admission. Full errors retained and bounded tails printed automatically.

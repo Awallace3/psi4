@@ -58,6 +58,25 @@ class CodegenAudit(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.check(command)
 
+    def test_opaque_shell_and_environment_compiler_wrappers_are_rejected(self):
+        for command in (
+                f"/bin/sh -c '{self.compiler} -shared @{self.run}/hidden.rsp'",
+                f"/bin/bash -c '/usr/bin/g++ -shared -o {self.run}/foreign.so'",
+                f"/usr/bin/env sh -c '{self.compiler} -shared @hidden.rsp'",
+                f"{self.run}/environment/bin/python -c 'import os; os.system(\"/usr/bin/g++ @hidden.rsp\")'",
+                f"{self.run}/environment/bin/cmake -E env sh -c '{self.compiler} @hidden.rsp'"):
+            with self.assertRaises(RuntimeError):
+                self.check(command)
+
+    def test_validation_collects_independent_checks_but_requires_every_one(self):
+        script = (HERE / "validate_install.sh").read_text()
+        self.assertIn("SKIPPED_REQUIRES_INSTALLED_IDENTITY_PROOF", script)
+        self.assertIn("audit_code == 0 && proof_code == 0 && api_code == 0", script)
+        self.assertIn("snapshot_code == 0 && binary_code == 0 && checks_code == 0", script)
+        self.assertIn('"$out/audit.stderr"', script)
+        self.assertIn('"$out/installed-proof.stderr"', script)
+        self.assertIn('"$out/binaries-after.json"', script)
+
 
 if __name__ == "__main__":
     unittest.main()

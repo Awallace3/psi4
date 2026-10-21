@@ -215,8 +215,18 @@ def audit_link_commands(text, directory, run, source, sdk, scratch):
         working = Path(directory)
         for tokens in segments:
             program = tokens[0]
+            name = Path(program).name
             require(not any(Path(t).name in ("ccache", "sccache") for t in tokens),
                     "Unapproved compiler-cache wrapper")
+            require("$" not in program and "`" not in program, "Unexpanded executable in build metadata")
+            require(name not in ("sh", "bash", "dash", "zsh", "ksh", "csh", "tcsh", "fish",
+                                 "env", "nice", "time", "timeout", "xargs", "distcc", "icecc"),
+                    "Opaque shell/compiler wrapper in build metadata")
+            require(not (name.startswith("python") and any(t in ("-c", "-m") for t in tokens[1:2])),
+                    "Opaque inline Python wrapper in build metadata")
+            require(not (name == "cmake" and len(tokens) > 2 and tokens[1] == "-E"
+                         and tokens[2] in ("env", "cmake_link_script", "__run_co_compile")),
+                    "Opaque CMake compiler wrapper in build metadata")
             if program == "cd":
                 require(len(tokens) == 2, "Uninspectable working-directory command")
                 safe_path(tokens[1], working, allowed)
