@@ -63,7 +63,7 @@ def publish(pending, verified, result):
     os.rename(pending, verified)
 
 
-def summarize(samples, expected_solver):
+def summarize(samples, expected_solver, expected_base):
     assert set(samples) == set(ORDER), "All five declared controls are mandatory"
     reference = samples["cpu0"]
     errors = {}
@@ -85,7 +85,7 @@ def summarize(samples, expected_solver):
                                       "gpu_pinv_timer_calls"))
         assert routes == ((0, 0, 0, 0, 0) if label == "cpu0"
                           else (20, 4, 12, 60, 22 if candidate else 0)), (label, routes)
-        expected = dict(dependencies(reference))
+        expected = dict(expected_base)
         if candidate:
             expected.update(expected_solver)
         assert dependencies(d) == expected, (label, "exact dependency mismatch")
@@ -156,6 +156,16 @@ def main():
                CUEST_FDDS_FOCUSED="1", CUEST_FDDS_FULL_AFTER_FOCUSED="1")
     samples = {k: read(args.controls / k / "result.json") for k in ORDER[:2]}
     base_compiled = read(args.controls.parent / "20261021-density-cycle-compile-01/import.json")
+    base_profile = read(args.controls.parent / "20261021-density-cycle-profile-01/replay/result.json")
+    assert base_profile["ok"] and base_profile["core_sha256"] == base_compiled["core_sha256"]
+    assert base_profile["binary_pin"] == args.base_pin and str(base_profile["job_id"]) == args.job_id
+    expected_base = dependencies(base_profile)
+    # cuEST already loads cuSOLVER transitively in the accepted baseline. Pin
+    # that exact map independently, rather than trusting a new CPU control's
+    # map or incorrectly banning an existing dependency. Only truly NEW solver
+    # paths are candidate-only, and every such path/hash comes from compiled ELF.
+    for name, path in base_compiled["linked_libraries"].items():
+        assert expected_base[path] == base_compiled["linked_library_sha256"][name]
     for d in samples.values():
         assert d["core_sha256"] == base_compiled["core_sha256"]
         assert d["binary_pin"] == args.base_pin and d["runner_sha256"] == sha(benchmark)
@@ -204,7 +214,7 @@ def main():
             # spending the second candidate timing window.
             energy_errors(samples[label]["energies_Eh"], samples["cpu0"]["energies_Eh"])
             assert samples[label]["gpu_pinv_timer_calls"] == (22 if candidate else 0)
-        result = summarize(samples, expected_solver)
+        result = summarize(samples, expected_solver, expected_base)
         assert str(samples["cpu0"]["job_id"]) == args.job_id
         result.update(candidate_pin=args.pin, base_pin=args.base_pin, runner_pin=args.runner_pin,
                       native=native_counts, gpu=report)

@@ -12,6 +12,7 @@ spec.loader.exec_module(compare)
 
 class ComparisonGuards(unittest.TestCase):
     solver = {"/env/libcusolver.so": "solver"}
+    baseline = {"/env/libmkl.so": "mkl", "/env/libcuest.so": "cuest"}
 
     def samples(self):
         samples = {}
@@ -38,7 +39,7 @@ class ComparisonGuards(unittest.TestCase):
         return samples
 
     def test_all_five_controls_and_two_medians(self):
-        r = compare.summarize(self.samples(), self.solver)
+        r = compare.summarize(self.samples(), self.solver, self.baseline)
         self.assertEqual(r["accepted_controls"], list(compare.ORDER))
         self.assertEqual(r["base_gpu_over_candidate_gpu"], 610. / 555.)
         self.assertEqual(r["native_cpu_over_candidate_gpu"], 1000. / 555.)
@@ -47,13 +48,13 @@ class ComparisonGuards(unittest.TestCase):
         s = self.samples()
         del s["base-gpu1"]
         with self.assertRaises(AssertionError):
-            compare.summarize(s, self.solver)
+            compare.summarize(s, self.solver, self.baseline)
 
     def test_missing_gpu_pinv_route_rejected(self):
         s = self.samples()
         s["candidate-gpu0"]["gpu_pinv_timer_calls"] = 0
         with self.assertRaises(AssertionError):
-            compare.summarize(s, self.solver)
+            compare.summarize(s, self.solver, self.baseline)
 
     def test_job_science_runner_or_scope_drift_rejected(self):
         for key, value in (("job_id", "43"), ("options", {}), ("runner_sha256", "other"),
@@ -61,32 +62,32 @@ class ComparisonGuards(unittest.TestCase):
             s = self.samples()
             s["candidate-gpu0"][key] = value
             with self.assertRaises(AssertionError):
-                compare.summarize(s, self.solver)
+                compare.summarize(s, self.solver, self.baseline)
 
     def test_energy_failure_not_dropped(self):
         s = self.samples()
         s["candidate-gpu1"]["energies_Eh"]["Disp20"] += 2.e-5
         with self.assertRaises(AssertionError):
-            compare.summarize(s, self.solver)
+            compare.summarize(s, self.solver, self.baseline)
 
     def test_invalid_time_or_failed_worker_rejected(self):
         for key, value in (("fdds_seconds", float("inf")), ("fdds_seconds", -1.), ("ok", False)):
             s = self.samples()
             s["candidate-gpu0"][key] = value
             with self.assertRaises(AssertionError):
-                compare.summarize(s, self.solver)
+                compare.summarize(s, self.solver, self.baseline)
 
     def test_common_dependency_drift_rejected(self):
         s = self.samples()
         s["candidate-gpu0"]["libraries_sha256"]["/env/libmkl.so"] = "changed"
         with self.assertRaises(AssertionError):
-            compare.summarize(s, self.solver)
+            compare.summarize(s, self.solver, self.baseline)
 
     def test_unexpected_new_dependency_rejected(self):
         s = self.samples()
         s["candidate-gpu0"]["libraries_sha256"]["/elsewhere/libmkl-new.so"] = "new"
         with self.assertRaises(AssertionError):
-            compare.summarize(s, self.solver)
+            compare.summarize(s, self.solver, self.baseline)
 
     def test_nonfinite_reference_or_sample_energy_rejected(self):
         for label in ("cpu0", "candidate-gpu0"):
@@ -94,7 +95,7 @@ class ComparisonGuards(unittest.TestCase):
                 s = self.samples()
                 s[label]["energies_Eh"]["Disp20,FDDS (unc)"] = bad
                 with self.assertRaises(AssertionError):
-                    compare.summarize(s, self.solver)
+                    compare.summarize(s, self.solver, self.baseline)
 
     def test_additional_wrong_solver_or_baseline_solver_rejected(self):
         for label, path, digest in (("base-gpu1", "/env/libcusolver.so", "solver"),
@@ -104,7 +105,21 @@ class ComparisonGuards(unittest.TestCase):
             s = self.samples()
             s[label]["libraries_sha256"][path] = digest
             with self.assertRaises(AssertionError):
-                compare.summarize(s, self.solver)
+                compare.summarize(s, self.solver, self.baseline)
+
+    def test_solver_inserted_in_all_non_candidate_arms_is_not_trusted(self):
+        s = self.samples()
+        for label in ("cpu0", "base-gpu0", "base-gpu1"):
+            s[label]["libraries_sha256"].update(self.solver)
+        with self.assertRaises(AssertionError):
+            compare.summarize(s, self.solver, self.baseline)
+
+    def test_preexisting_solver_is_allowed_only_when_independently_pinned(self):
+        s = self.samples()
+        for label in ("cpu0", "base-gpu0", "base-gpu1"):
+            s[label]["libraries_sha256"].update(self.solver)
+        r = compare.summarize(s, self.solver, dict(self.baseline, **self.solver))
+        self.assertEqual(len(r["accepted_controls"]), 5)
 
     def test_baseline_worker_provenance_is_not_candidate(self):
         env = compare.worker_environment({"CUEST_FDDS_BINARY_PIN": "new"},
