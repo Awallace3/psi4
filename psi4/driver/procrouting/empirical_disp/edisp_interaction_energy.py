@@ -272,6 +272,61 @@ def sapt_dft_d3_interaction_energy(
     )
 
 
+def build_sapt_dft_xdm_functor(functional_name: str, xdm_model: str) -> empirical_dispersion.XDMDispersionFunctor:
+    """Validate a dft-xdm(sapt) request and build its XDM functor, before any SCF runs.
+
+    Parameters
+    ----------
+    functional_name : str
+        ``SAPT_DFT_FUNCTIONAL``; the bare XC functional of the delta-DFT segment.
+    xdm_model : str
+        XDM damping-parameter model (``kb49`` or ``los-ii``), used when
+        ``XDM_DISPERSION_PARAMETERS`` is not set.
+
+    Returns
+    -------
+    empirical_dispersion.XDMDispersionFunctor
+        Functor with counterpoise damping parameters, since the delta-DFT
+        monomers are counterpoise subsystems.
+    """
+    from .. import dft
+    from ..dft import dft_builder
+    from ..proc import _reference_xdm_superfunctional
+
+    name = functional_name.lower()
+    definition = dft_builder.functionals.get(name)
+    if definition is not None and "dispersion" in definition:
+        raise ValidationError(
+            f"DFT-XDM(SAPT): SAPT_DFT_FUNCTIONAL ({functional_name}) already carries a "
+            f"{definition['dispersion'].get('type', '')} dispersion correction, which would be counted "
+            "twice. Set SAPT_DFT_FUNCTIONAL to the bare functional (e.g. b3lyp for b3lyp-xdm); "
+            "dft-xdm(sapt) adds XDM itself.")
+
+    reference = _reference_xdm_superfunctional(name, True)
+    if core.has_option_changed("SCF", "XDM_DISPERSION_PARAMETERS"):
+        params = core.get_option("SCF", "XDM_DISPERSION_PARAMETERS")
+        if len(params) != 2 or not all(np.isfinite(float(p)) for p in params):
+            raise ValidationError("XDM_DISPERSION_PARAMETERS must contain exactly two finite values: [a1, a2_angstrom].")
+        a1, a2_ang = (float(p) for p in params)
+    else:
+        a1 = a2_ang = None
+        superfunc = dft.build_superfunctional(name, True)[0]
+        if reference is None or abs(superfunc.x_alpha() - reference.x_alpha()) >= 1.0e-10:
+            raise ValidationError(
+                f"DFT-XDM(SAPT): automatic XDM damping parameters require {functional_name} with its fitted "
+                "exact-exchange fraction. Provide [a1, a2] through XDM_DISPERSION_PARAMETERS for modified exchange.")
+    # Fitted range-separated functionals pass the range check against their reference.
+    return empirical_dispersion.XDMDispersionFunctor(
+        functional_name=name,
+        basis_name=core.get_global_option("BASIS"),
+        a1=a1,
+        a2_ang=a2_ang,
+        model=xdm_model,
+        counterpoise=True,
+        expected_x_omega=reference.x_omega() if reference is not None else None,
+        expected_x_beta=reference.x_beta() if reference is not None else None)
+
+
 def sapt_dft_xdm_interaction_energy(
     sapt_dimer: core.Molecule,
     monomerA: core.Molecule,
@@ -279,8 +334,7 @@ def sapt_dft_xdm_interaction_energy(
     dimer_wfn: core.Wavefunction,
     monomerA_wfn: core.Wavefunction,
     monomerB_wfn: core.Wavefunction,
-    xdm_functional_name: str,
-    xdm_model: str,
+    xdm_functor: empirical_dispersion.XDMDispersionFunctor,
     data: dict[str, object],
 ) -> dict[str, object]:
     """Compute the SAPT(DFT) counterpoise XDM interaction energy.
@@ -305,11 +359,8 @@ def sapt_dft_xdm_interaction_energy(
         Converged delta-DFT monomer A wavefunction in the dimer basis.
     monomerB_wfn : core.Wavefunction
         Converged delta-DFT monomer B wavefunction in the dimer basis.
-    xdm_functional_name : str
-        XC functional of the delta-DFT wavefunctions, without ``-xdm``.
-    xdm_model : str
-        XDM damping-parameter model (``kb49`` or ``los-ii``), used when
-        ``XDM_DISPERSION_PARAMETERS`` is not set.
+    xdm_functor : empirical_dispersion.XDMDispersionFunctor
+        Functor from :func:`build_sapt_dft_xdm_functor`, built before the SCFs.
     data : dict[str, object]
         Result dictionary updated in place.
 
@@ -318,19 +369,6 @@ def sapt_dft_xdm_interaction_energy(
     dict[str, object]
         Updated ``data`` dictionary containing XDM terms.
     """
-
-    if core.has_option_changed("SCF", "XDM_DISPERSION_PARAMETERS"):
-        params = core.get_option("SCF", "XDM_DISPERSION_PARAMETERS")
-        if len(params) != 2 or not all(np.isfinite(float(p)) for p in params):
-            raise ValidationError("XDM_DISPERSION_PARAMETERS must contain exactly two finite values: [a1, a2_angstrom].")
-        a1, a2_ang = (float(p) for p in params)
-        xdm_functor = empirical_dispersion.XDMDispersionFunctor(
-            functional_name=xdm_functional_name, a1=a1, a2_ang=a2_ang, model=xdm_model)
-    else:
-        xdm_functor = empirical_dispersion.XDMDispersionFunctor(functional_name=xdm_functional_name,
-                                                                basis_name=core.get_global_option("BASIS"),
-                                                                model=xdm_model,
-                                                                counterpoise=True)
 
     core.print_out("         " + "Supermolecular XDM Interaction Energy E_IE = E_IJ - E_I - E_J".center(58) + "\n")
     core.print_out("         " + "(counterpoise monomers carry superposed ghost-centre moments)".center(58) + "\n\n")

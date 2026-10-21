@@ -297,9 +297,11 @@ interaction energies with ghost-centre superposition::
 
    energy('b3lyp-xdm(los-ii)', bsse_type='cp')
 
-KB49 has no counterpoise fit for the Pople bases, so counterpoise ``-XDM``
-energies with those bases require |scf__xdm_dispersion_parameters|, as does
-``dft-xdm(sapt)``, whose delta-DFT monomers are counterpoise subsystems. Because the cluster
+``dft-xdm(sapt)`` (see :ref:`sec:saptdft`) also uses the counterpoise fit,
+since its delta-DFT monomers are counterpoise subsystems. KB49 has no
+counterpoise fit for the Pople bases, so counterpoise ``-XDM`` and
+``dft-xdm(sapt)`` energies with those bases require
+|scf__xdm_dispersion_parameters|. Because the cluster
 tasks are shared, requesting ``'nocp'`` together with ``'cp'`` or ``'vmfc'``
 also requires explicit parameters; otherwise run them separately. When
 running counterpoise subsystem jobs outside the many-body driver (for

@@ -1304,6 +1304,86 @@ symmetry c1
     ie_superposed = xdm_e["D"] - superposed("A", "B") - superposed("B", "A")
     ie_bare = xdm_e["D"] - xdm_e["A"] - xdm_e["B"]
 
-    assert compare_values(ie_superposed, xdm_ie, 8, "dft-xdm(sapt) XDM IE vs standalone CP superposition")
+    assert compare_values(ie_superposed, xdm_ie, 10, "dft-xdm(sapt) XDM IE vs standalone CP superposition")
     assert abs(ie_bare - xdm_ie) > 1.0e-5, "the ghost superposition correction was not applied"
     assert xdm_ie < 0.0 and sapt_disp < 0.0
+
+
+_WATER_DIMER_SAPT = """
+0 1
+O  -1.551007  -0.114520   0.000000
+H  -1.934259   0.762503   0.000000
+H  -0.599677   0.040712   0.000000
+--
+0 1
+O   1.350625   0.111469   0.000000
+H   1.680398  -0.373741  -0.758561
+H   1.680398  -0.373741   0.758561
+units angstrom
+no_com
+no_reorient
+symmetry c1
+"""
+
+
+@pytest.mark.xdm
+@pytest.mark.sapt
+def test_sapt_dft_xdm_validates_before_scf():
+    """dft-xdm(sapt) rejects a dispersion-suffixed functional and a missing fit before any SCF runs."""
+    from psi4.driver.procrouting.empirical_disp.edisp_interaction_energy import build_sapt_dft_xdm_functor
+
+    psi4.core.clean_variables()
+    mol = psi4.geometry(_WATER_DIMER_SAPT)
+    psi4.set_options({"basis": "cc-pvdz", "sapt_dft_grac_shift_a": 0.1307, "sapt_dft_grac_shift_b": 0.1307})
+
+    for functional in ("b3lyp-xdm", "b3lyp-d3bj"):
+        psi4.set_options({"sapt_dft_functional": functional, "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
+        with pytest.raises(psi4.ValidationError, match="would be counted twice"):
+            psi4.energy("dft-xdm(sapt)", molecule=mol)
+    psi4.core.revoke_global_option_changed("XDM_DISPERSION_PARAMETERS")
+    psi4.core.revoke_local_option_changed("SCF", "XDM_DISPERSION_PARAMETERS")
+
+    psi4.set_options({"sapt_dft_functional": "b3lyp"})
+    with pytest.raises(psi4.ValidationError, match=re.escape("b3lyp/cc-pvdz with model los-ii (counterpoise)")):
+        psi4.energy("dft-xdm(sapt)(los-ii)", molecule=mol)
+    psi4.set_options({"sapt_dft_functional": "wb97x"})
+    with pytest.raises(psi4.ValidationError, match=re.escape("No fitted BJ parameters for wb97x/cc-pvdz")):
+        psi4.energy("dft-xdm(sapt)", molecule=mol)
+    assert not psi4.core.has_variable("SCF TOTAL ENERGY"), "an SCF ran before the XDM setup was validated"
+
+    # Without explicit parameters the counterpoise table is used, including range-separated functionals.
+    psi4.set_options({"basis": "aug-cc-pvtz"})
+    functor = build_sapt_dft_xdm_functor("cam-b3lyp", "kb49")
+    a1, a2_bohr = functor._damping
+    assert compare_values(0.2880, a1, 10, "cam-b3lyp/aug-cc-pvtz CP a1")
+    assert compare_values(2.9175, a2_bohr * psi4.constants.bohr2angstroms, 10, "cam-b3lyp/aug-cc-pvtz CP a2")
+
+
+@pytest.mark.xdm
+@pytest.mark.sapt
+@pytest.mark.fsapt
+def test_sapt_dft_xdm_lrc_fsapt(tmp_path):
+    """Range-separated dft-xdm(sapt) runs; dispersion is XDM IE + dDFT - dHF and F-SAPT writes Empirical_Disp."""
+    mol = psi4.geometry(_WATER_DIMER_SAPT)
+    fsapt_dir = tmp_path / "fsapt"
+    psi4.set_options({
+        "basis": "sto-3g",
+        "scf_type": "df",
+        "sapt_dft_functional": "cam-b3lyp",
+        "sapt_dft_grac_shift_a": 0.1307,
+        "sapt_dft_grac_shift_b": 0.1307,
+        "sapt_dft_do_fsapt": "FISAPT",
+        "fisapt_fsapt_filepath": str(fsapt_dir) + "/",
+        "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
+    })
+    _, wfn = psi4.energy("dft-xdm(sapt)", molecule=mol, return_wfn=True)
+
+    disp = psi4.variable("SAPT DISP ENERGY")
+    identity = psi4.variable("SAPT(DFT) XDM IE") + psi4.variable("SAPT(DFT) DELTA DFT") - psi4.variable("SAPT(DFT) DELTA HF")
+    assert compare_values(identity, disp, 10, "dft-xdm(sapt) dispersion = XDM IE + dDFT - dHF")
+
+    on_disk = fsapt_dir / "Empirical_Disp.dat"
+    assert on_disk.is_file(), "F-SAPT did not write the XDM pair energies"
+    pairs = np.asarray(wfn.variable("FSAPT_EMPIRICAL_DISP"))
+    assert pairs.sum() < 0.0
+    np.testing.assert_allclose(np.loadtxt(on_disk).reshape(pairs.shape), pairs, rtol=0.0, atol=1.0e-12)

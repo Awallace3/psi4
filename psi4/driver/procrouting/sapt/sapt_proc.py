@@ -193,7 +193,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     e_disp_param_name = None
     do_xdm = False
-    xdm_model = None
+    xdm_functor = None
     supported_functionals_edisp = ["hf", "pbe0", "b3lyp"]
 
     # SAPT_DFT_D4_IE and SAPT_DFT_D3_IE control whether to run -D3/-D4.
@@ -313,6 +313,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         if len(model_tags) > 1:
             raise ValidationError(f"DFT-XDM(SAPT): at most one XDM damping model may be given, got {model_tags}.")
         xdm_model = normalize_xdm_model(model_tags[0] if model_tags else "kb49")
+        # Fails here, before the SCFs, on a missing fit or an unsupported functional.
+        xdm_functor = edisp_interaction_energy.build_sapt_dft_xdm_functor(sapt_dft_functional, xdm_model)
         core.set_global_option("SAPT_DFT_DO_DISP", 0)
         core.set_global_option("SAPT_DFT_D3_IE", 0)
         core.set_global_option("SAPT_DFT_D4_IE", 0)
@@ -978,8 +980,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             dimer_wfn=dft_wfn_dimer,
             monomerA_wfn=dft_wfn_monomer_a,
             monomerB_wfn=dft_wfn_monomer_b,
-            xdm_functional_name=sapt_dft_functional.lower(),
-            xdm_model=xdm_model,
+            xdm_functor=xdm_functor,
             data=data,
         )
         core.timer_off("SAPT(DFT):XDM Interaction Energy")
