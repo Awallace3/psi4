@@ -40,9 +40,13 @@ Coupled/uncoupled errors2.832150355e-9/1.956602588e-11Eh. Routes nativeall0,
 GPU20/4/12/60/pinv0; all22 native pinvs remain105.482410s in the GPU arm.
 Local preserved artifacts `build_fdds_cpu/cycle-20261021/pinv-controls-14250361/`.
 Do not mix this new-node pair with old14214205 ratios. Allocation-side
-candidate compilebc3ad8d4f starts only after this completed step and fresh
->=7200s admission for the whole remaining sequence. No new SVD candidate
-GPU correctness or speedup is established.
+candidate compilebc3ad8d4f completed0 only after this completed step and fresh
+9605s admission for the whole remaining sequence. Nextb2686b483 audits
+import/cuSOLVER/core/compile cleanup, requires fresh>=4800s, then runs the
+112-unique/176-execution GPU gate and all three remaining protein controls
+under one bounded4300s exclusive helper. A first physical candidate failing
+finite energies,1e-5Eh or22 GPU pinv calls stops before the second timing.
+No new SVD candidate GPU correctness or speedup is established yet.
 
 On 2026-10-21 the user explicitly approved **one H200 / 8 CPU / 128 GiB /
 four-hour inferno interactive allocation**, account gts-cs207-chemx.

@@ -55,7 +55,7 @@
     "source_pin": "1d1c593db90e7deb54d74c99f95d915d021acbd1",
     "comparison_harness_pin": "d0b102e9d09436aacf79cb6c95d808a2c1fdae1c",
     "scope": "opt-in general FP64 SVD pseudoinverse, unchanged strict relative cutoff",
-    "status": "unvalidated",
+    "status": "native_and_compile_passed_gpu_gate_running",
     "native_build_task": "bdebb7cc3",
     "native_gate": {
       "tests": 183,
@@ -93,6 +93,10 @@
       "no_candidate_speedup_established": true
     },
     "candidate_compile_task": "bc3ad8d4f",
+    "candidate_compile_outcome": "exit0; strict native183 gate and initial-control cleanup audited before launch, 9605 seconds remaining at admission",
+    "gpu_gate_and_remaining_controls_task": "b2686b483",
+    "gpu_gate_expected_unique_tests": 112,
+    "gpu_gate_expected_executions": 176,
     "declared_controls": ["cpu0", "base-gpu0", "candidate-gpu0", "candidate-gpu1", "base-gpu1"],
     "system": "protein83",
     "runner_pin": "d599720a06b25a3d813f8b448c1ebb858a7477d4"
