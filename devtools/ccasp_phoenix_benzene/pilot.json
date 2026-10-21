@@ -1,0 +1,46 @@
+{
+  "schema": "ccasp-phoenix-benzene-pilot/1",
+  "candidate_base": "6f147f4829ffc83c868b9e78618ebe7c4f17fbdb",
+  "historical_profile_sha256": "8b421b5a85d6c3b42676e5f724d89d3206aa18874300366ddf6493645dc13ff1",
+  "fixture_sha256": "dbfd1bfcb832ed28c94b486962c253f1e3fb8295617557d11e5cdf17631bb8dd",
+  "source_dataframe_sha256": "bced9b8282e26d1818ae51dfe8eb09488b9dce3cf043a0fcc9a4728f7da3e9dc",
+  "system": "S66x8 24_Benzene-Benzene_pi-pi_1.00 monomer A, index 3806",
+  "permutation": [0, 2, 4, 6, 8, 10, 1, 3, 5, 7, 9, 11],
+  "scf": {
+    "method": "pbe0",
+    "options": {
+      "basis": "aug-cc-pvtz", "puream": true, "reference": "rks",
+      "scf_type": "pk", "e_convergence": 1e-11, "d_convergence": 1e-10,
+      "ints_tolerance": 1e-10, "s_tolerance": 1e-7, "soscf": false,
+      "dft_radial_points": 75, "dft_spherical_points": 302
+    },
+    "grac": "NONE"
+  },
+  "isa": {
+    "tail_r1_multiplier": 1.5, "tail_fit_type": 3, "tail_fit_policy": "always",
+    "tail_activation": 1e-6, "drho_refinement_iterations": 10,
+    "q_grid": [200, 590], "auxiliary_nbf": 1146
+  },
+  "response": {
+    "model": "reference_h2h1", "kernel": "ALDA+CHF",
+    "auxiliary_basis": "aug-cc-pvtz-ri", "representation": "Cartesian",
+    "grid": [100, 200], "rho_eps": 1e-8, "f_max": 600.0,
+    "fd_delta": 0.01, "fd_alpha": 1.0, "shell_cutoff": 1e-8,
+    "charge_penalty": 1000.0, "anchor_eta": 0.0005, "target_eta": 0.0,
+    "nonlocal_rank": 4, "lw_rank": 2, "production_tolerance": 1e-6
+  },
+  "quadrature": {"n_freq": 10, "beta": 0.5, "includes_static": true},
+  "refinement": {
+    "npoints": 2000, "seed": 1, "lower_limit": 2.0, "upper_limit": 4.0,
+    "weight_type": 3, "weight_coefficient": 0.001, "cutoff": 0.0001,
+    "rank_limit": 2, "hydrogen_rank_limit": 2, "max_refinement_parameters": 72,
+    "penalty_selection": "current candidate's integrated static_reference policy"
+  },
+  "dispersion": {"max_order": 10, "recoupled_dispersion": true},
+  "resources": {
+    "numerical_threads": 1, "psi4_memory_bytes": 25769803776,
+    "max_work": 64000000000000, "max_io_bytes": 68719476736, "capacity": "large",
+    "proposed_slurm_mem_gib": 48, "proposed_slurm_cpus": 8,
+    "proposed_wall_hours": 6, "scratch_budget_gib": 200, "required_free_scratch_gib": 400
+  }
+}
