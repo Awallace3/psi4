@@ -21,6 +21,8 @@ spec = importlib.util.spec_from_file_location("_isapol_density_reference_source"
 reference = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = reference
 spec.loader.exec_module(reference)
+POST_IMPORT_QUANTUM_MODULES = {name for name in sys.modules
+                             if name.split(".")[0] in ("psi4", "adcc", "pylibxc")}
 assert Path(reference.__file__).resolve() == SOURCE
 print(f"TESTED_MODULE={reference.__file__}; PSI4_IMPORTED={'psi4' in sys.modules}", flush=True)
 
@@ -200,9 +202,25 @@ class FiniteDensityReferenceTests(unittest.TestCase):
         # The diagnostic port must leave this production module untouched.
         self.assertEqual(hashlib.sha256(SOURCE.with_name("isapol_native_factors.py").read_bytes()).hexdigest(),
                          "7d0187360751024d6774307d486beec7ab77c5d2c45f7bffa3fcf30b5f3bbc43")
-        self.assertEqual({name for name in sys.modules
-                          if name.split(".")[0] in ("psi4", "adcc", "pylibxc")},
-                         INITIAL_QUANTUM_MODULES)
+        # Compare only the diagnostic import boundary, not later pytest work.
+        self.assertEqual(POST_IMPORT_QUANTUM_MODULES, INITIAL_QUANTUM_MODULES)
+
+    def test_import_snapshot_ignores_unrelated_later_fixture_modules(self):
+        from types import ModuleType
+        missing = object()
+        for root in ("psi4", "adcc", "pylibxc"):
+            name = root + "._unrelated_collection_fixture"
+            previous = sys.modules.get(name, missing)
+            with self.subTest(module=name):
+                try:
+                    sys.modules[name] = ModuleType(name)
+                    self.assertIn(name, sys.modules)
+                    self.test_accepted_direct_builder_bytes_and_no_quantum_imports()
+                finally:
+                    if previous is missing:
+                        del sys.modules[name]
+                    else:
+                        sys.modules[name] = previous
 
 
 class NativeWaterReferenceTests(unittest.TestCase):
