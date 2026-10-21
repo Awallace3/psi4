@@ -36,6 +36,27 @@ keys against approved actual compiler identities; unknown wrappers/foreign
 compiler settings remain rejected. Local optimized-build guards **55PASS,
 1.852s**. This does not repair or accept the undefined installed Psi4 stage.
 
+Actual validation5bcf985b455974f7a60efc7a924cad7f4156797d as14254131.4,
+taskb54dedd95: **effective build/header/link audit PASS**; installed identity
+FAIL solely at Psi4's undefined-version import check, API SKIPPED125;
+binary snapshots/invariance PASS. Separate standalone E2 diagnostic imported
+the installed cp313 Python core with one mapped installed
+`libEinsums-abi1.so.1`; sealed world reports exact
+06404fa69ce9346443d7d4f19a250f6db9f0f62c, GNU14, E2 major2.
+RuntimeTensorD, RuntimeTensorViewD, MemoryPool and asarray are present.
+This is standalone import/symbol evidence ONLY, not joint-stage identity,
+operation/API semantics, physical correctness or CUDA execution.
+
+Offline corrective contract4cf3eb280d51b47409369d4559d05b5f60d81378 adds
+the version-history guard before SDK/dependency work; **58 local tests PASS,
+3.346s**, Bash syntax PASS. Executing the real upstream version generator
+against this clean LOCAL full-history checkout passed and generated
+1.12a1.dev660+4cf3eb2 with the verified annotated1.11 identity. No remote
+stage was changed. Next proper installation must regenerate metadata using
+verified source history through the upstream build/install process, with
+preserved old roots and complete-package/binary provenance; do not copy a
+Python-only overlay, patch version strings or disable the import guard.
+
 ## Ownership and immutable launch pins
 
 Dedicated worktree: `saptdft-cuest-disp0`; branch: `saptdft_cuest_disp0`.
