@@ -66,6 +66,26 @@ class FrozenProposalTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             freeze([row], {}, [])
 
+    def test_unchanged_baseline_psi4_theme_allowed(self):
+        row = self.record("sphinx-psi-theme")
+        row["url"] = row["url"].replace("/conda-forge/", "/psi4/")
+        lock, records = freeze([row], {}, [])
+        self.assertIn("/psi4/", lock)
+        self.assertEqual(records[row["name"]]["md5"], row["md5"])
+
+    def test_new_nonbaseline_channel_rejected(self):
+        row = self.record("sphinx-psi-theme")
+        row["url"] = row["url"].replace("/conda-forge/", "/psi4/")
+        with self.assertRaises(RuntimeError):
+            freeze([], {"LINK": [row]}, [])
+
+    def test_changed_baseline_other_channel_hash_rejected(self):
+        row = self.record("sphinx-psi-theme")
+        row["url"] = row["url"].replace("/conda-forge/", "/psi4/")
+        altered = dict(row, md5="c" * 32)
+        with self.assertRaises(RuntimeError):
+            freeze([row], {"LINK": [altered]}, [])
+
 
 if __name__ == "__main__":
     unittest.main()

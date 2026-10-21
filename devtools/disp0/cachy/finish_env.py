@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
 from bootstrap_env import run
 
@@ -21,6 +22,7 @@ def identity(record):
 
 def freeze(baseline, actions, cached):
     records = {r["name"]: r for r in baseline}
+    original = dict(records)
     for record in actions.get("UNLINK", []):
         records.pop(record["name"], None)
     available = {identity(r): r for r in cached}
@@ -38,8 +40,17 @@ def freeze(baseline, actions, cached):
         checksum = record.get("md5")
         if not url or not checksum:
             raise RuntimeError(f"Missing exact archive identity for {name}; do not solve again")
-        if not url.startswith("https://conda.anaconda.org/conda-forge/"):
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or parsed.netloc != "conda.anaconda.org" or parsed.query:
             raise RuntimeError(f"Unexpected package origin for {name}")
+        if not parsed.path.startswith("/conda-forge/"):
+            # Baseline doc/theme artifacts can originate in Psi4's channel.
+            # Permit only an EXACT unchanged existing URL/hash/build, never a
+            # newly solved package or a channel substitution.
+            old = original.get(name)
+            if (not old or identity(old) != identity(record) or
+                    old.get("url") != url or old.get("md5") != checksum):
+                raise RuntimeError(f"Unreviewed new package origin for {name}")
         lines.append(url.split("#")[0] + "#" + checksum)
     return "\n".join(lines) + "\n", records
 
@@ -47,13 +58,15 @@ def freeze(baseline, actions, cached):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--attempt", choices=("development-install-02", "development-install-03"),
+                        default="development-install-02")
     args = parser.parse_args()
     root = args.root.resolve(strict=True)
     source, metadata = root / "source", root / "metadata"
     if subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip():
         raise RuntimeError("Source must be clean")
     # NEW receipt/prefix only. The failed first recipe remains immutable.
-    logs = metadata / "development-install-02"
+    logs = metadata / args.attempt
     logs.mkdir(mode=0o700)
     runtime, clang = root / "environment-v2", root / "clang23"
     if runtime.exists() or clang.exists():
