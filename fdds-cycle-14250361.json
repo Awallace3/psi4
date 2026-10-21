@@ -53,10 +53,19 @@
   },
   "next_candidate": {
     "source_pin": "1d1c593db90e7deb54d74c99f95d915d021acbd1",
-    "comparison_harness_pin": "b1b7566094b2d4548b98ae102224841b83c106a7",
+    "comparison_harness_pin": "d0b102e9d09436aacf79cb6c95d808a2c1fdae1c",
     "scope": "opt-in general FP64 SVD pseudoinverse, unchanged strict relative cutoff",
     "status": "unvalidated",
     "native_build_task": "bdebb7cc3",
+    "native_gate": {
+      "tests": 183,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 179.019,
+      "core_sha256": "1e731019754305332f132f0ef44e075f0a59dd1ffbc6221876cf52f982571e06",
+      "evidence": "build_fdds_cpu/cycle-20261021/native-pinv-1d1c593db9-v1"
+    },
     "historical_pre_alignment_native_gate": {
       "source_pin": "5305cb2d8bf87a1e282c56814968a568d8b526d1",
       "task": "b519ce12d",
@@ -68,7 +77,8 @@
     },
     "read_only_review_task": "d9d187c5f22aeda1d11acebe4fd44e097",
     "review_findings": "Unaligned C-contiguous FP64 input could reach typed host reads; final source rejects it before scan/CUDA initialization and adds offset-one regression. Other layout/cutoff/lifetime/workspace/status checks passed static review.",
-    "harness_review_task": "d23a6937dba276f211ba88c381920eba5",
+    "harness_review_task": "df163c501c7a25989605311bf24babf3d",
+    "harness_review_outcome": "Static PASS after independently pinning the baseline closure; 14 comparison and 6 SVD offline guards passed. No candidate GPU execution is established.",
     "initial_base_controls_task": "bf187a527",
     "declared_controls": ["cpu0", "base-gpu0", "candidate-gpu0", "candidate-gpu1", "base-gpu1"],
     "system": "protein83",

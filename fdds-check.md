@@ -20,10 +20,15 @@ hybrid calls. No solve/Hermitian substitution. Static reviewd9d187 verified
 layout/cutoff/workspace/status/lifetime but found unaligned NumPy typed reads;
 1d1 rejects those before scan/CUDA initialization and adds an offset-one
 regression. Historical5305 native183 passed/178.547s, zero skips/errors/failures.
-Fresh final-pin native183 buildbdebb7cc3 is running, not assumed equivalent.
-Comparison harnessb1b7566094 fixes four reviewdbc10 guards (finite energies,
+Fresh final-pin native183 buildbdebb7cc3 **passed183/179.019s**, zero
+failures/errors/skips, core1e731019754305332f132f0ef44e075f0a59dd1ffbc6221876cf52f982571e06.
+Raw evidence `build_fdds_cpu/cycle-20261021/native-pinv-1d1c593db9-v1/`.
+Comparison harnessd0b102e9d0 fixes four reviewdbc10 guards (finite energies,
 publication ordering, per-arm environment provenance, exact solver dependency
-identity); re-reviewd23 is pending. Six SVD contract and12 harness guards pass.
+identity), then pins the complete baseline closure independently rather than
+trusting CPU0. cuSOLVER already exists transitively in the actual baseline;
+it is not incorrectly forbidden. Final reviewdf163 passed; six SVD contract
+and14 comparison guards pass. Candidate GPU correctness remains pending.
 
 Declared next timing subset is protein83 only, five controls:
 CPU0/baseGPU0/candidateGPU0/candidateGPU1/baseGPU1. External runner bytes are
