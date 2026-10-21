@@ -96,3 +96,40 @@ No GPU allocation/window, remote query or dependency installation follows
 from this implementation checkpoint. The FDDS owner must first grant a live
 serialized window after actual runtime readiness. No >10x speedup or broader
 F-SAPT coverage is established.
+
+## NVIDIA MP2 example as the concrete implementation reference
+
+User-linked `cuEST/cuest_scf_examples/examples/mp2-1`, inspected read-only at
+NVIDIA/CUDALibrarySamples commit
+`e4fc2d0050a6c4d83d1808103a6afedc9e8b7642` (a different main snapshot from
+the previously inspected Python DFMO example):
+
+* `cuest_mo_int_helper.py` SHA256
+  `1351c31d9d2948a347ddaa6c5964173edc8d722af07187a61b1a0403322fbd88`
+  gives a concrete high-level plan path: CuestAOBasis → CuestAOPairList →
+  CuestDFIntPlan → DFMO, with RI fitting cutoff and direct/recompute selection.
+* `cuest_scf/cuest_df_int_plan.py` explicitly configures full-Coulomb exchange
+  scale1, range-separated scale/omega0, fitting cutoff and direct mode; retains
+  persistent workspace and primary/auxiliary/pair-list wrappers. This is a
+  useful factory implementation reference, not proof of exact0.2.50 Python
+  compatibility or of Psi4 basis conversion.
+* Coefficients in `compute_3c_integral` use MO-major AO rows and pointer offsets
+  `offset*nao*sizeof(double)`, consistent with our explicit C-order coefficient
+  upload. `test.py` uses `B[Q,i,a]` through `i*nvir` offsets and
+  `lda=nocc*nvir`. Validate the exact selected SDK's layout numerically before
+  treating this example convention as runtime proof.
+
+Reuse that architecture rather than inventing a different integral engine.
+SAPT direct dispersion is the intermonomer direct-MP2-like contraction, but
+retains separate A/B HF orbitals and denominators. SAPT exchange-dispersion
+still requires the ten transformed factor pairs and overlap/potential
+corrections; the example's ordinary MP2 same-spin exchange is not a substitute.
+Its triangular occupied-pair symmetry/prefactors are not the A×B pair domain.
+
+Do not copy its full `B_ia` materialization/per-occupied-pair launch strategy
+in place of our reviewed bounded slabs/three-GEMM block kernel. Do not adopt
+its sample SCF/basis/screening settings as our scientific protocol.
+`kernel_helper.py` JIT-compiles a custom CUDA amplitude kernel and clamps tiny
+denominators; our path instead keeps existing CuPy division/reduction operations,
+the exact signed HF denominators and declared validation tolerances. No new
+custom CUDA scientific kernel is required.
