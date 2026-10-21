@@ -2202,3 +2202,56 @@ Chronology is consistent with a late call to an exited session, but does not
 independently certify zero delivered bytes. No predeadline phase2 dispatch
 is recorded. UNKNOWN/RESERVED/NEVERREPLAY retained; no remote queries,
 additional turns, resource approval or submission inferred.
+
+## 2026-10-21 — user requests optimized-branch build
+
+User: **start the build**. Parent confirms proceed with one isolated CPU-only
+build pinned to fork06404fa69ce9346443d7d4f19a250f6db9f0f62c, Psi4 scientific
+587e172a33 unchanged. FDDS owner reports no active owner remote operations,
+terminal14214205/no holder and clears a bounded CPU-preparation SSH turn.
+This supersedes the general remote preparation hold for this NEW build only;
+old input submission UNKNOWN/approvalRESERVED/NEVERREPLAY stays unchanged.
+No GPU request/step or paid allocation.
+
+Local comparison-agent consultation/source audit is recorded in
+`devtools/disp0/optimized_einsums2_branch_review.md` (commit6926a49660).
+The optimized target is fork`perf/fdisp0-hotpaths`064, not stockd17 nor
+the misleading local branch alias10be. All supplied prior comparison evidence
+is CPU-only; local064-like binary dirty, remote clean064 claim not remotely
+reverified. No old binary/driver overlay is used for the new build.
+
+Fresh executable recipe: `devtools/disp0/optimized_build/`.
+Resources: ONE1node/1task/8CPU/48GiB/2h/freeembers/gts-cs207-chemx/noGPU/
+no-requeue/no retry, maximum16CPUh. Complete private CUDA13 inputs are
+prepared within the build job with existing exact-archive/runtime binding
+guards, before any configuration. Original explicit runtime lock unchanged;
+separate fresh build-only LLVM/Clang23.1.2 environment, explicit solved lock
+retained; sourceApiary1.2 as required by exact064. Whole native+Python
+installation uses upstream064's own rules with deliberate installed RUNPATH;
+no d17 package-copy hook. New source/env/build/install/cache/scratch roots,
+all old failures/prefixes/parent roots untouched.
+
+Submission is a new self-contained one-shot noninteractive command: permanent
+intent+file/directory fsync, fresh CPU route/stdout+stderr/quota/headroom/
+duplicates, dispatch-intent fsync BEFORE sole sbatch, raw reply+real durable
+jobID BEFORE controller query; reentry/reply-loss never permits replay.
+13 local mock/metadata guards PASS1.203s; both Bash syntax checks PASS.
+Complete-input guard rerun and narrow read-only build reviews pending.
+No remote command, real submission or accepted job ID yet at this entry.
+CPU build/import/ELF/API proof remains distinct from signed physical/device
+correctness; historical26/64 is not a validation of this optimized stage.
+
+Narrow reviews d90202093/d3bf5e8c1 retrieved. Whole Waggle native+Python
+companion and generated clean064 GitInfo are now required. Resource inheritance
+blocker fixed: removeSBATCH_* from bothscheduler-call environments and pass
+all authorizedresources explicitly on bothCLIcalls. Exact064 auto-ccache
+disabled withEINSUMS_WITH_CCACHE=OFF. Final21localguards PASS2.694s plus
+Bashsyntax; 38existingSDKinputguards PASS0.27s with existingpytest-capable
+interpreter. InitialsystemPython rerun failedbeforecollection(No pytest),
+not an inputguardnumericalfailure; no install. Scientific psi4/ diff versus
+587 empty. Narrow review-fix follow-up pending; execution not yet begun.
+
+Follow-up d8335ebad confirms review fixes, **no scoped blocker** (read-only,
+not a build/test). Freezing/publishing the executable optimized recipe and
+proceeding to the owner-cleared bounded Git/source/quota preparation. No
+actual accepted CPUjob yet; no GPUjob/request. ExistinginputUNKNOWN untouched.
