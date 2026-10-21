@@ -40,6 +40,11 @@ build; cross-platform bitwise identity is not claimed. This section covers the
 building blocks used for distributed moments. No end-user property keyword uses them yet.
 Units are bohr and atomic units throughout, on global Cartesian axes.
 
+.. toctree::
+   :maxdepth: 1
+
+   isapol_water_diagnostics
+
 Explicit bases
    ``psi4.driver.procrouting.isapol_basis`` holds the immutable
    ``ShellRecipe``/``BasisRecipe`` descriptors, whose shell coefficients already
