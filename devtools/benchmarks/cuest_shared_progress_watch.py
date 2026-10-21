@@ -46,6 +46,17 @@ if candidate.exists():
  for p in (candidate/'pairs').glob('*/result.json'):
   d=json.loads(p.read_text())
   out['results']['metric-candidate/'+p.parent.name]=dict(ok=d.get('ok'),seconds=d.get('fdds_seconds'))
+out['response_candidates']={}
+for base in campaign.glob('20261020-response-products-*'):
+ status={}
+ for name in ['configure.log','build.log','validation-driver.log','validation/build.log',
+              'validation/fdds.log','validation/full-fdds-gdb.log']:
+  p=base/name
+  if p.exists():status[name]=dict(bytes=p.stat().st_size,age_seconds=int(time.time()-p.stat().st_mtime))
+ for p in (base/'pairs').glob('*/result.json'):
+  d=json.loads(p.read_text())
+  out['results'][base.name+'/'+p.parent.name]=dict(ok=d.get('ok'),seconds=d.get('fdds_seconds'))
+ out['response_candidates'][base.name]=status
 print(json.dumps(out,sort_keys=True))
 """
 
