@@ -1,0 +1,32 @@
+{
+  "schema": "ccasp-phoenix-build-smoke/1",
+  "accepted_adapter_commit": "32229e6d10817cd8682e9fdfcabf994e1e588c7e",
+  "accepted_adapter_review_sha256": "a912115497d21f208b97834ff4e3e57c8b852e930930f8bb5e06cadb3c475e59",
+  "source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-build-smoke-v1",
+  "environment": "/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt",
+  "dependency_source": "/storage/project/r-cs207-0/awallace43/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage",
+  "einsums_library_sha256": "cf1f411130bc902a3ca74280cf23b3e7f325843de8cf38ec4a95fcb6f917faf2",
+  "run": "/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-001",
+  "scratch_parent": "/storage/scratch1/3/awallace43/ccasp-phoenix-benzene-pilot-20261021",
+  "build_directory": "build_ccasp_phoenix_benzene",
+  "allocation": {
+    "account": "gts-cs207-chemx", "partition": "cpu-small", "qos": "embers",
+    "nodes": 1, "tasks": 1, "cpus": 8, "mem": "48G", "time": "08:00:00",
+    "compiler_parallelism": 1, "numerical_threads": 1, "gpu": false
+  },
+  "selectors": [
+    "test_isapol_restricted_state.py::test_restricted_state_snapshot_matches_native_wavefunction",
+    "test_isapol_recoupled_dispersion.py::test_closed_dipole_and_sine_rank_one_symmetry",
+    "test_isapol_recoupled_dispersion.py::test_frames_metadata_no_rotation_no_distance_and_ordered_pairs",
+    "test_isapol_bounded_oeprop.py::test_refinement_parameter_limit_defaults_to_64_and_passes_through",
+    "test_isapol_bounded_oeprop.py::test_live_oeprop_publishes_latest_result_and_clears_it_on_refusal"
+  ],
+  "scientific_scope": "Tiny HF/STO-3G restricted water snapshot; analytic angular tensors; opt-in ABI and small PBE0/STO-3G water property chain. No benzene or ISA benchmark.",
+  "environment_deviation": "p4cuest_sapt selected instead of p4qca because reused Einsums 1.1.3 was compiled with this exact existing GCC/Python prefix and its unchanged RPATH points here. Its bundled 1.1.2 must never load.",
+  "accepted_adapter_hashes": {
+    "README.md": "4a87d18c619d848fd5106bb47bae4b327fe18d0ea9a39424258e5d65dbf7d59f",
+    "pilot.json": "19170c907137c7883dfbceaa4a23e4b919ec2d97dac38343dc4559b8bffb0f0b",
+    "pilot.py": "32389d74713831a46b46638e579bdf646319b45480f69765f51c786845e21a74",
+    "test_source_contract.py": "c6d472f0030506c314753feda0e52f36ff1d7d1f3e7533316b9c2eb0214d79ae"
+  }
+}
