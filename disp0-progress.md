@@ -17,6 +17,23 @@ It records raw solver/install failures; no implicit CUDA13.2 fallback.
 Actual creation/compilation/import/device results will be separate receipts.
 No Phoenix allocation or environment changes are part of this migration.
 
+Cachy staging actually completed at source `ac75cab59ab4a5c7444a6ebceb917f114551129f`,
+with clean private Git worktree and exact annotatedv1.11 release tag. Canonical
+cuEST archive/native/all59headers verified and installed as private artifact
+under `dependencies/cuest/cuest_PID`; no native/device execution. E2064 and
+LibXC7.1.2/f1eb21e8d6743ed5ba519b8950c1ae02c3f5acd9 sources cloned clean.
+
+First bootstrap: source-version/baseline clone PASS; full cuda-toolkit13.3
+dry-run FAILED (optional Nsight GUI/alsa baseline conflict), no CUDA installation.
+Preserved metadata/bootstrap-01 and baseline environment. Development-only
+cuda-libraries-dev13.3 + nvcc13.3.73 proposal PASS,61 linked/3 unlinked packages;
+includes genuine matching cusparse/nvJitLink headers/runtime without GUI tools.
+`finish_env.py` freezes that proposal (raw hashes retained), creates NEW
+environment-v2 and private LLVM23, rather than adopting/replaying a failed prefix.
+Actual installation remains pending this record. User will launch the remote
+agent; do not launch a duplicate. Remote Pi1.3 lists gpt-5.5 but lacks the newer
+auth-check CLI; existing credentials are configured, not model-call validated.
+
 ## Current LOCAL work — CuPy-free CUDA replacement / strict0.2.50
 
 User explicitly authorized custom CUDA kernels and dropping CuPy, superseding

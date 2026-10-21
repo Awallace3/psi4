@@ -6,6 +6,8 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+sys.path.insert(0, str(Path(__file__).parent))
+from finish_env import freeze
 
 spec = importlib.util.spec_from_file_location("bootstrap", Path(__file__).with_name("bootstrap_env.py"))
 bootstrap = importlib.util.module_from_spec(spec)
@@ -37,6 +39,32 @@ class TransportTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.exercise("import time; time.sleep(30)", 0.05)
         self.assertEqual(self.result()["exit"], 124)
+
+
+class FrozenProposalTests(unittest.TestCase):
+    def record(self, name, version="1"):
+        return dict(name=name, version=version, build="0",
+                    url=f"https://conda.anaconda.org/conda-forge/linux-64/{name}-{version}-0.conda",
+                    sha256="a" * 64, md5="b" * 32)
+
+    def test_exact_replacement_and_removal(self):
+        old, removed, new = self.record("x"), self.record("y"), self.record("x", "2")
+        lock, expected = freeze([old, removed], {"UNLINK": [old, removed], "LINK": [new]}, [])
+        self.assertEqual(set(expected), {"x"})
+        self.assertIn("x-2-0.conda#" + "b" * 32, lock)
+        self.assertNotIn("x-1-0", lock)
+
+    def test_missing_hash_rejected(self):
+        row = self.record("x")
+        del row["md5"]
+        with self.assertRaises(RuntimeError):
+            freeze([], {"LINK": [row]}, [])
+
+    def test_foreign_origin_rejected(self):
+        row = self.record("x")
+        row["url"] = "https://example.invalid/x.conda"
+        with self.assertRaises(RuntimeError):
+            freeze([row], {}, [])
 
 
 if __name__ == "__main__":
