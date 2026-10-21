@@ -180,6 +180,9 @@ def test_fdds_gpu_pseudoinverse_preflight_errors(fdds_factory):
     endpoint = psi4.core._cuest_fdds_pinv
     a = np.eye(5)
     psi4.core.clean_timers()
+    unaligned = np.ndarray((5, 5), dtype=np.float64, buffer=bytearray(201), offset=1)
+    assert unaligned.flags.c_contiguous and not unaligned.flags.aligned
+    assert endpoint(unaligned, 1.e-13, 0) is None
     with pytest.raises(RuntimeError, match="negative threshold"):
         endpoint(a, 1.e-13, -1)
     for cutoff in (-1., np.nan, np.inf):

@@ -64,6 +64,14 @@ class ContractTests(unittest.TestCase):
             self.assertEqual([(k.arg, ast.literal_eval(k.value)) for k in call.keywords],
                              [("rcond", 1.e-13)])
 
+    def test_alignment_guard_precedes_typed_host_reads(self):
+        cpp = (ROOT / "psi4/src/cuest_gemm.cc").read_text()
+        begin = cpp.index("py::object cuest_fdds_pinv(")
+        end = cpp.index("/// Private FDDS NumPy endpoint.", begin)
+        code = cpp[begin:end]
+        self.assertLess(code.index("% alignof(double)"), code.index("static_cast<const double*>"))
+        self.assertLess(code.index("% alignof(double)"), code.index("ensure_cuest_initialized"))
+
 
 if __name__ == "__main__":
     unittest.main()

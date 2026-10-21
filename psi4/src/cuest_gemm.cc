@@ -55,6 +55,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cmath>
 #include <memory>
 #include <limits>
@@ -238,6 +239,9 @@ py::object cuest_fdds_pinv(const py::array& input, double rcond, int min_dim) {
         throw PSIEXCEPTION("cuEST FDDS pseudoinverse: finite nonnegative rcond required");
     if (input.ndim() != 2 || !input.dtype().is(py::dtype::of<double>()) ||
         !(input.flags() & py::array::c_style)) return py::none();
+    // C-contiguous NumPy views may nevertheless have a byte-offset buffer.
+    // Reject before the typed finite-value scan (unaligned double reads are UB).
+    if (reinterpret_cast<std::uintptr_t>(input.data()) % alignof(double)) return py::none();
     const size_t q = input.shape(0);
     if (!q || input.shape(1) != q || q > static_cast<size_t>(std::numeric_limits<int>::max()) ||
         q < static_cast<size_t>(min_dim)) return py::none();
