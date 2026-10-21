@@ -1,13 +1,38 @@
 # FDDS cuEST implementation handoff
 
-## New cycle authorized — preparation only, no new grant yet
+## New cycle authorized — acquisition started, no new grant established yet
 
 On 2026-10-21 the user explicitly approved **one H200 / 8 CPU / 128 GiB /
 four-hour inferno interactive allocation**, account gts-cs207-chemx.
 This replaces the historical "no standing approval" state below, not the
-terminal state of old job14214205. New controller/harness guards and a fresh
-isolated native build of timer-only6c133 are in preparation. No new request,
-grant, GPU execution or speedup is established by this note.
+terminal state of old job14214205. Frozen harness/controller
+`089c4a63163257ee339ba48877a845c11cc84c9a` is staged pristine at
+`/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-cycle-089c4a6316-20261021-v1`.
+Twenty-four offline controller/storage/timer/observer guards passed. Narrow
+reviewd952 identified a late reference-validation guard; it now runs before
+any paid validation/replay and has an ordering regression. First reviewdbf9
+hit a tool limit and is not treated as a pass.
+
+Fresh native timer-only source6c133 built and passed **176 tests, zero
+failures/errors/skips, 178.672s**, workflowb7f00ba8a.
+Core SHA256 `147e56bdb3068476fa545c90e5e9ee8f8b3e979f9b103d72eead758d19e120e0`.
+Local package:
+`/fastscratch/awallace43/fdds-performance-20261021/native-density-6c133b4e5c-v1/build/stage/lib/psi4`.
+Raw XML/logs/provenance:
+`build_fdds_cpu/cycle-20261021/native-density-6c133b4e5c-v1/`.
+
+Git stagingba02d3335 passed. Initial readonly preflightb8b80efdb passed at
+11:16:44Z: no related queued/running FDDS request; project filesystem1.9TB
+free; dependencies, accepted stage and protein cache exist. Test-only14250291
+is simulated, NOT an accepted job. Scheduler estimateNovember4 is not a
+guaranteed start.
+
+Single acquisition workflowbb6dbd345 was started after these gates, with fresh
+account/duplicate/test-only admission before dispatch, explicit04:00:00 and
+durable request intent. Intended new run:
+`/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-shared/20261021-fdds-4h-01`.
+No accepted ID or grant has yet been audited; do not replay an ambiguous
+request. No new GPU execution or speedup is established by this note.
 Scope/gates: `devtools/benchmarks/fdds_cycle_20261021.md`.
 
 ## Previous allocation closed — no live GPU resource
