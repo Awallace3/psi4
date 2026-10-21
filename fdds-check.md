@@ -14,10 +14,16 @@ uncoupled0 versus the prior accepted numerical reference.
 
 The dominant projection region includes integral generation, not merely a
 BLAS contraction. The next bounded implementation is opt-in general FP64
-cuSOLVER SVD, source5305cb2d8b, **not yet validated**. CUEST_FDDS_PINV defaults
+cuSOLVER SVD, final source**1d1c593db9**, **not yet GPU validated**. CUEST_FDDS_PINV defaults
 false; four original sites retain strict1e-13 relative rank cutoff and22
-hybrid calls. No solve/Hermitian substitution. Twenty-nine offline guards
-passed; native183-test buildb519ce12d and static reviewd9d187 are pending.
+hybrid calls. No solve/Hermitian substitution. Static reviewd9d187 verified
+layout/cutoff/workspace/status/lifetime but found unaligned NumPy typed reads;
+1d1 rejects those before scan/CUDA initialization and adds an offset-one
+regression. Historical5305 native183 passed/178.547s, zero skips/errors/failures.
+Fresh final-pin native183 buildbdebb7cc3 is running, not assumed equivalent.
+Comparison harnessb1b7566094 fixes four reviewdbc10 guards (finite energies,
+publication ordering, per-arm environment provenance, exact solver dependency
+identity); re-reviewd23 is pending. Six SVD contract and12 harness guards pass.
 
 Declared next timing subset is protein83 only, five controls:
 CPU0/baseGPU0/candidateGPU0/candidateGPU1/baseGPU1. External runner bytes are
