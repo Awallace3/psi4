@@ -50,7 +50,14 @@ Follow-up reviewdd2c4fa passed and five offline guards passed.
 Stageb0784a0c4 completed0; fresh14:31:53Z showed56:12 remaining.
 Workflowbe45811c3 performs a new>=2700s/cleanup/lease/account admission before
 its2400s exclusive helper; each control1050s. Observerb1cab3c45 checks every
-five minutes. No additional diagnostic result is established yet.
+five minutes. **Additional diagnostic failed:** admission showed54:37 left,
+but the first SVD-off worker timed out124 at1050s; the on arm never started.
+Helperexit1, FAILED.json, no VERIFIED.json, no accepted extra timing/ratio.
+Artifact auditbac5ce5d4 confirmed cleanup14:51:01Z, empty pre/post GPU tables,
+no quarantine. Cause is not established by logger-only stdout; bounded
+last-phase inspection and failed-evidence preservationbea6324f0 are pending.
+This failure is retained separately; it does not erase the prior five controls
+or justify a claim that large-system opt-out behavior has passed.
 The next projection investigation is documented in
 `devtools/benchmarks/fdds_projection_next.md`; no projection arithmetic,
 integral screening, layout or algorithm has been changed.
