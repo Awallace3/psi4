@@ -101,10 +101,11 @@ def prepare(commit, tree):
 
 
 def call(label, argv):
+    argv = list(map(str, argv))
     write(RUN / "metadata" / (label + "-argv.json"), argv)
-    print(label + ": " + " ".join(map(str, argv)), flush=True)
+    print(label + ": " + " ".join(argv), flush=True)
     with (RUN / "logs" / (label + ".log")).open("x") as f:
-        p = subprocess.run(list(map(str, argv)), cwd=RUN, stdout=f, stderr=subprocess.STDOUT)
+        p = subprocess.run(argv, cwd=RUN, stdout=f, stderr=subprocess.STDOUT)
     write(RUN / "metadata" / (label + "-exit.json"), dict(returncode=p.returncode))
     p.check_returncode()
 

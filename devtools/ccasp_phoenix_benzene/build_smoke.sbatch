@@ -8,13 +8,13 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
 #SBATCH --time=08:00:00
-#SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-001/logs/%x-%j.out
-#SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-001/logs/%x-%j.err
+#SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-002/logs/%x-%j.out
+#SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-002/logs/%x-%j.err
 # No dependency, retry, GPU, watchdog, requeue request or benchmark driver.
 set -euo pipefail
 umask 027
-ROOT=/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-build-smoke-v1
-RUN=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-001
+ROOT=/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-build-smoke-v2
+RUN=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-002
 ENV=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt
 test "$#" = 2
 COMMIT=$1

@@ -1,5 +1,13 @@
 # One private Phoenix build/smoke allocation — proposal, not submitted
 
+Attempt002 preserves failed job14254085 and its source/run directories.
+That job failed before CMake because command recording tried to JSON-serialize
+`Path` arguments. `call` now normalizes argv once before recording and executing
+it. Two stdlib-only regression cases cover identical recorded/executed argv and
+preservation of a nonzero child exit code; they execute no external command.
+Attempt002 uses a new pinned `build-smoke-v2` source, `build-smoke-002` run and
+`-attempt002` scratch parent. Resources, dependencies and science are unchanged.
+
 The four original adapter files at `32229e6d10817cd8682e9fdfcabf994e1e588c7e`
 are unchanged. Independent adapter review is statically READY, answer SHA256
 `a912115497d21f208b97834ff4e3e57c8b852e930930f8bb5e06cadb3c475e59`.
