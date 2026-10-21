@@ -1,5 +1,35 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## CURRENT factory ABI/policy component — CPU fixtures only
+
+`sapt_cuest_factory_abi.py` adds canonical constructor/workspace/destroy/
+parameter ABI and mapped ownership checks for every factory symbol before
+native use. It freezes the CUDA manifest, checks the session/cuBLAS closure,
+and never creates a hidden handle merely to query version. Typed parameter
+round trips explicitly request stream ownership, native-owned BLAS/solver,
+one JIT thread, full Coulomb/MATRIXPOWER1/relative1/cutoff1e-12/LRC0/direct0.
+An explicitly owned same-process context can be set/read back to native FP64.
+Native/readback/map/device errors permanently disable further computation.
+
+**9 new CPU ABI/policy tests PASS,0.025s;10 basis tests PASS,0.007s;
+22 CUDA CPU fixtures PASS,1.173s;12 synthetic identity PASS,0.018s**,
+diff check PASS; `../runs/factory-abi-01/`. Scoped reviewer `da870d...`
+exceeded its24-tool-call limit without an answer; NOT a review pass.
+An independent GNU14.3 C++ header compile probe is now running against exact
+canonical headers, including workspace offsets, enum/policy IDs and all new
+factory signatures, with an intentionally wrong uint32 primitive-count
+negative control. It performs no link, native invocation or device work.
+Artifacts: `../runs/factory-header-abi-01/`; **PASS**: GNU14.3 compiled all17
+new factory wire signatures, workspace layouts and enum/policy IDs while
+consuming all59 canonical headers. Positive compile0 with no diagnostics;
+intentional uint32 primitive-count negative compile1 failed exactly at
+`cuestAOShellCreate wire signature mismatch`. This is actual compiler/header
+evidence, NOT invocation of native constructors/getters or CUDA execution.
+This component does NOT construct/destroy live native objects, implement the
+owner graph, admit normalization/layout/rank semantics, or yield a production
+provider. It is NOT native ABI execution or GPU proof. Native ownership and
+all numerical gates remain unfinished; no host-factor/DFHelper fallback.
+
 ## CURRENT factory development — separate owned Cachy worktree
 
 Main compilation checkout stays frozen clean at `a7204feec` while native Psi4
