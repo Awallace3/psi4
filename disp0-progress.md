@@ -2310,3 +2310,51 @@ job-owned persistent scratch
 Event monitor **bc8981c53** uses installedwatch_jobs.sh -i300, including
 batch accounting; no submit/retry/GPU/jobchange. Build/API/signedphysics/device
 correctness remain unpassed pending actualartifacts and cleanbatch exit.
+
+**14249189 FAILED1:0**, including.batch/.0, elapsed48s (start06:11:01,
+epilog06:11:49Eastern), signalled0. Eventmonitorbc8981c53exit0 at10:16:34Z
+reports negativeaccounting; not success. Bounded ownartifactinspection
+b2fcb375cexit0 confirms actualprologchemx/cpu-small/embers, status exit1/
+signalled0 and exactfresh run above.
+
+Failure BEFOREconfiguration/compilation/environmentcreation:
+`provision_sdk_inputs.provision -> closure -> runtime_contract.command`
+`/usr/bin/ldd` on canonical
+`P/miniconda/envs/p4cuest_sapt/targets/x86_64-linux/lib/libcusolver.so.12.2.6.9`
+returned1. `check_output` exception did not retain the failedloader's stdout
+in the log, so underlyingloaderdiagnostic is notproved. Do not classify the
+hash-pinned headers/runtime invalid, or this as GPU/formula/numericalfailure.
+Actualremotezstd0.19streamingwindownegative/positive proofPASS beforepackage
+extraction. ABSENT: private-inputs/sdk-manifest.json, provision-receipt.json,
+cuda13/sdk-contract.json, bothenvexplicitlocks, configure/buildlogs,
+installedproof/APIresult. No SDK/build/runtime/device admission.
+
+Oneadditional bounded **READ-ONLY ELF program-header metadata** check
+b7ac30031 inspects PT_LOAD virtualspan versus inheritedprovisioner1GiB
+RLIMIT_AS (a hypothesis, not yet confirmed). No ldd rerun/libraryload/CUDA
+call/provision/source-envmutation/newallocation. No automaticretry. Preserve
+failedjob/run/privateinputpartial/scratch and oldUNKNOWN attempt unchanged.
+
+ELFmetadata b7ac30031exit0: cuSolverfile167967544B, twoPT_LOAD segments,
+ownminimalmappedspan170224600B (<1GiB). This does NOT by itself establish
+the aggregateclosurebudget or explain the failure. Therefore one bounded
+load/resolve-only diagnostic **ba3e8f69a** captured stdout+stderr under the
+SAME1GiBAS/10sCPU cap,15s timeout; no constructors/device/scientificwork,
+no provisioning/newallocation/fallback. Actualexit1/stderrempty/stdout:
+`libcusolver.so.12.2.6.9: error while loading shared libraries:
+libcublasLt.so.13: failed to map segment from shared object`.
+The failing check is inability to map a transitiveCUDA dependency under the
+inputprocessaddress-spacebudget, not a missingheader/SONAME/numericalerror.
+No unconstrainedtrace or highercap trial was run; completeSDK/runtime
+correctness remains unproved.
+
+Narrow correction proposal: preserve1GiB/110s/128MiBwindow/512MiBwrite
+archive-decoder limits unchanged; perform actual captured load/resolve
+closure audit in a separate explicitly bounded CPU-preparation process,
+not inheriting the decoder'sAShardlimit. Keep both phases mandatory and
+write finaladmission ONLY after both pass; preserve allfailurestdout/stderr.
+No scientificE2/Psi4 source/flag/tolerance changes. Tests/review/freshpin
+required; no actualrepair/build/retry/allocation authorized or performed
+by this diagnostic. Next resourceproposal remains ONE8CPU48G2h/freeembers/
+chemx CPUbuild, subject fresh approval/gates; do not replay14249189 or
+the oldUNKNOWN inputattempt. Allfailedroots unchanged.
