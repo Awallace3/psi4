@@ -55,7 +55,32 @@
     "source_pin": "1d1c593db90e7deb54d74c99f95d915d021acbd1",
     "comparison_harness_pin": "d0b102e9d09436aacf79cb6c95d808a2c1fdae1c",
     "scope": "opt-in general FP64 SVD pseudoinverse, unchanged strict relative cutoff",
-    "status": "native_and_compile_passed_gpu_gate_running",
+    "status": "native_gpu_and_five_controls_passed",
+    "artifact_audit_task": "b843319e5",
+    "gpu_gate_actual": {
+      "unique_tests": 112,
+      "executions": 176,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "focused_seconds": 5.222,
+      "sapt_seconds": 9.835,
+      "full_seconds": 20.039,
+      "core_sha256": "79f0153405716a26aa3dcbf30d1e4c5eba0e9b8ff21c62b41486fcd336afbc4e"
+    },
+    "accepted_five_control_seconds": {
+      "cpu0": 1903.0763947980013,
+      "base-gpu0": 781.6476776818745,
+      "candidate-gpu0": 756.8771183199715,
+      "candidate-gpu1": 767.1255298638716,
+      "base-gpu1": 766.7000597401056
+    },
+    "cpu_over_candidate_median": 2.497471243984912,
+    "base_gpu_over_candidate_median": 1.0159744402459858,
+    "candidate_max_coupled_error_Eh": 2.039803431198861e-9,
+    "candidate_max_uncoupled_error_Eh": 1.9566025882822302e-11,
+    "candidate_cleanup_verified_utc": "2026-10-21T13:34:45Z",
+    "comparison_limit": "One CPU and two GPU samples per build, FDDS only; modest incremental difference, not a confidence interval or whole-SAPT result.",
     "native_build_task": "bdebb7cc3",
     "native_gate": {
       "tests": 183,
@@ -101,6 +126,7 @@
     "system": "protein83",
     "runner_pin": "d599720a06b25a3d813f8b448c1ebb858a7477d4"
   },
-  "new_speedup_claim": false,
+  "new_speedup_claim": true,
+  "speedup_scope": "FDDS-only measured five-control comparison above; separate from old allocation",
   "notes": "One actual grant; test-only14250360 is not the accepted job. Previous14214205 remains terminal and immutable. All compute uses the exclusive shared helper; no participant window is authorized."
 }

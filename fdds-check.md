@@ -1,6 +1,46 @@
 # FDDS cuEST implementation handoff
 
-## New cycle — projection gate passed; opt-in SVD candidate unvalidated
+## New cycle — opt-in SVD validated; modest whole-FDDS improvement
+
+Artifact audit b843319e5 accepted scientific
+`1d1c593db90e7deb54d74c99f95d915d021acbd1`, CUDA core
+`79f0153405716a26aa3dcbf30d1e4c5eba0e9b8ff21c62b41486fcd336afbc4e`,
+comparison harness `d0b102e9d09436aacf79cb6c95d808a2c1fdae1c`.
+Native183 passed/179.019s; GPU112 unique/176 executions passed with zero
+failures/errors/skips (focused63/5.222s, SAPT1/9.835s, full112/20.039s).
+Both physical candidate samples executed all22 GPU pseudoinverses.
+General SVD and strict1e-13 cutoff remain unchanged; the option stays off
+by default. Explicit post-enqueue fault injection/forced capacity tests remain
+coverage gaps, not tested paths.
+
+All five declared protein83 controls completed on14250361, same cache,
+local-XFS storage, H200, eight threads and96GiB application memory:
+
+| Arm | FDDS seconds |
+|---|---:|
+| CPU0 |1903.076394798|
+| Base GPU0 |781.647677682|
+| SVD GPU0 |756.877118320|
+| SVD GPU1 |767.125529864|
+| Base GPU1 |766.700059740|
+
+Median GPU comparison gives **1.015974x incremental**, and CPU0 versus
+candidate median **2.497471x**. This is one CPU/two GPU samples per build,
+not a confidence interval or a robust large incremental speedup. FDDS only:
+SCF and subsequent exchange-dispersion are excluded. Do not combine with
+old14214205 timings. Maximum candidate coupled/uncoupled errors are
+2.039803431e-9/1.956602588e-11Eh; all base/candidate energy comparisons
+remain below1e-5Eh. Cleanup13:34:45Z verified empty pre/post GPU tables,
+exit0, no quarantine. Remote run:
+`/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261021-pinv-candidate-01`.
+Raw local preservation is in progress under
+`build_fdds_cpu/cycle-20261021/pinv-candidate-14250361/`
+and `pinv-controls-14250361/`.
+
+Fresh owner snapshot14:23:20Z:14250361 RUNNING,1:04:45 remaining.
+No new allocation or participant work is authorized by this result.
+
+### Earlier cycle progress (historical pending descriptions below superseded)
 
 Projection attribution on14250361 passed its independent artifact audit:
 source089c/core1448, **93 unique tests/138 executions**, zero failures/errors/
