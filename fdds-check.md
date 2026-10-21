@@ -41,6 +41,15 @@ a fresh remaining-budget check; no new allocation. An isolated compile-only
 step may run while the separate workstation builds its native compatibility
 stage; neither is an active timing sample or GPU correctness execution.
 
+Read-only reviewdff5b462dee167a895c10de234562da80 found no confirmed
+correctness/safety defect in dcc8. Owners/stream ordering/three-buffer reuse/
+exception draining and counts were checked statically. Capacity exhaustion,
+overflow and post-enqueue faults remain un-injected. NumPy's pinv output
+layout is not an API guarantee: the pinned local probe confirmed C output/
+F transpose, but the actual GPU60-chain gate must establish this at runtime.
+The full-SAPT test checks frequency routing; integrated FDDS and physical
+benchmarks separately require the new response endpoint.
+
 ## Latest audited performance status — supersedes historical progress below
 
 Scientific8dc714/test-driverfd2c09/core92e5:171 native tests pass and69 unique
