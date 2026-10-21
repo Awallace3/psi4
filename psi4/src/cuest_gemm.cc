@@ -65,6 +65,7 @@
 #include <cuda_runtime.h>
 
 #include "psi4/pybind11.h"
+#include <pybind11/numpy.h>
 
 #include "psi4/libmints/matrix.h"
 #include "psi4/libpsi4util/exception.h"
@@ -200,6 +201,64 @@ struct MetricTimer {
     explicit MetricTimer(const char* name_) : name(name_) { timer_on(name); }
     ~MetricTimer() { timer_off(name); }
 };
+}
+
+/// Private FDDS NumPy endpoint. Unsupported inputs/capacity return None before
+/// enqueue; CUDA/cuBLAS failures propagate, never trigger a CPU retry.
+py::object cuest_fdds_dot3(const py::array& a, const py::array& b, const py::array& c, int min_dim) {
+    if (min_dim < 0) throw PSIEXCEPTION("cuEST FDDS products: negative threshold");
+    for (const auto* value : {&a, &b, &c}) {
+        if (value->ndim() != 2 || !value->dtype().is(py::dtype::of<double>()) ||
+            !(value->flags() & py::array::c_style))
+            return py::none();
+    }
+    const size_t q = a.shape(0);
+    if (!q || q > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+        a.shape(1) != q || b.shape(0) != q || b.shape(1) != q ||
+        c.shape(0) != q || c.shape(1) != q ||
+        static_cast<long double>(q) * q * q <
+            static_cast<long double>(min_dim) * min_dim * min_dim)
+        return py::none();
+    const size_t count = fdds_product(q, q), bytes = fdds_product(count, sizeof(double));
+    const size_t storage = fdds_product(3, bytes);
+    cuest_common::ensure_cuest_initialized();
+    size_t free = 0, total = 0;
+    check_cuda(cudaMemGetInfo(&free, &total), "FDDS product capacity");
+    if (storage > (free / 5) * 4) return py::none();
+    cublasPointerMode_t mode;
+    check_cublas(cublasGetPointerMode(cublas_handle, &mode), "FDDS product pointer mode");
+    if (mode != CUBLAS_POINTER_MODE_HOST)
+        throw PSIEXCEPTION("cuEST FDDS products: shared cuBLAS handle requires HOST pointer mode");
+    cudaStream_t stream = nullptr;
+    check_cublas(cublasGetStream(cublas_handle, &stream), "FDDS product stream");
+    MetricTimer timer("cuEST FDDS: response products");  // all allocation/transfer/compute/completion
+    py::array_t<double> result({static_cast<py::ssize_t>(q), static_cast<py::ssize_t>(q)});
+    DeviceBuffer left(count, "FDDS product left"), right(count, "FDDS product right"),
+                 intermediate(count, "FDDS product intermediate");
+    // All borrowed py::array argument owners, and result's owner, remain live
+    // through this guard's stream drain, including exception unwinding. No
+    // forcecast/packing copies or caller input writes are performed.
+    FDDSEnqueueGuard guard{stream};
+    check_cuda(cudaMemcpyAsync(left.get(), a.data(), bytes, cudaMemcpyHostToDevice, stream),
+               "FDDS product A upload");
+    check_cuda(cudaMemcpyAsync(right.get(), b.data(), bytes, cudaMemcpyHostToDevice, stream),
+               "FDDS product B upload");
+    const double one = 1.0, zero = 0.0;
+    // Row-major AB is column-major B^T A^T. Preserve (AB)C association;
+    // stream order makes it safe to recycle A storage for C after this GEMM.
+    check_cublas(cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, q, q, q,
+                             &one, right.get(), q, left.get(), q, &zero, intermediate.get(), q),
+                 "FDDS product AB GEMM");
+    check_cuda(cudaMemcpyAsync(left.get(), c.data(), bytes, cudaMemcpyHostToDevice, stream),
+               "FDDS product C upload");
+    check_cublas(cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, q, q, q,
+                             &one, left.get(), q, intermediate.get(), q, &zero, right.get(), q),
+                 "FDDS product (AB)C GEMM");
+    check_cuda(cudaMemcpyAsync(result.mutable_data(), right.get(), bytes, cudaMemcpyDeviceToHost, stream),
+               "FDDS product download");
+    check_cuda(cudaStreamSynchronize(stream), "FDDS product completion");
+    guard.complete = true;
+    return result;
 }
 
 size_t CuestDFMetric::capacity(size_t q, size_t requested) {
@@ -696,6 +755,8 @@ std::vector<SharedMatrix> cuest_chain_gemm(const std::vector<SharedMatrix>& tens
 }  // namespace psi
 
 void export_cuest_gemm(py::module& m) {
+    m.def("_cuest_fdds_dot3", &psi::cuest_fdds_dot3, "a"_a, "b"_a, "c"_a, "min_dim"_a,
+          "Internal FDDS FP64 (A B) C. None means unsupported before enqueue; GPU failures throw.");
     m.def("cuest_chain_gemm", &psi::cuest_chain_gemm, "tensors"_a, "transposes"_a, "prefactors_AB"_a,
           "return_tensors"_a,
           "Multiply a chain of matrices on the GPU with cuBLAS, keeping intermediates device-resident. "

@@ -2,6 +2,8 @@ import importlib.util
 import ast
 from pathlib import Path
 import unittest
+import subprocess
+import tempfile
 
 spec = importlib.util.spec_from_file_location("profile_products", Path(__file__).with_name("fdds_product_profile.py"))
 profile = importlib.util.module_from_spec(spec)
@@ -73,14 +75,20 @@ class TestProfile(unittest.TestCase):
         self.assertNotIn("_fdds_profile_product", globals())
 
     def test_actual_frozen_driver_has_exact_eight_sites(self):
-        source = Path(__file__).resolve().parents[2] / "psi4/driver/procrouting/sapt/sapt_mp2_terms.py"
-        tree = ast.parse(source.read_text())
-        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
-                        and n.name == "df_fdds_dispersion")
-        namespace = {}
-        exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"), namespace)
-        transformed, _ = profile.instrument(namespace["df_fdds_dispersion"], [])
-        self.assertEqual(len(transformed.profile_ast_sha256), 64)
+        root = Path(__file__).resolve().parents[2]
+        frozen = subprocess.check_output([
+            "git", "show", "ada1a1d2128d6d6f3f5b89952b08f6ffd4ca5917:"
+            "psi4/driver/procrouting/sapt/sapt_mp2_terms.py"], cwd=root, text=True)
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "frozen_driver.py"
+            source.write_text(frozen)
+            tree = ast.parse(frozen)
+            function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                            and n.name == "df_fdds_dispersion")
+            namespace = {}
+            exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"), namespace)
+            transformed, _ = profile.instrument(namespace["df_fdds_dispersion"], [])
+            self.assertEqual(len(transformed.profile_ast_sha256), 64)
 
 
 if __name__ == "__main__":

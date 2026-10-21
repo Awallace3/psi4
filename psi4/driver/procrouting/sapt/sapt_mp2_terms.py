@@ -86,6 +86,19 @@ def _compute_fxc(PQrho, half_Saux, halfp_Saux, x_alpha, rho_thresh=1.e-8):
     return core.triplet(halfp_Saux, tmp, halfp_Saux, False, False, False)
 
 
+def _fdds_dot3(a, b, c):
+    """Exact original association; unsupported preflight retains native NumPy.
+
+    The private GPU endpoint borrows—not forcecasts—arrays and drains before
+    returning. Runtime failures propagate; they must not cause CPU retries.
+    """
+    if core.get_global_option("USE_CUEST") and hasattr(core, "_cuest_fdds_dot3"):
+        result = core._cuest_fdds_dot3(a, b, c, core.get_global_option("CUEST_GEMM_MIN_DIM"))
+        if result is not None:
+            return result
+    return a.dot(b).dot(c)
+
+
 def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points=10, leg_lambda=0.3, do_print=True):
 
     rho_thresh = core.get_option("SAPT", "SAPT_FDDS_V2_RHO_CUTOFF")
@@ -175,7 +188,7 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
 
             # K matrices
             K_A = -x_alpha * aux_dict["K1LD"] - x_alpha * aux_dict["K2LD"] + x_alpha * x_alpha * aux_dict["K21L"]
-            KRS_A = K_A.dot(Rtinv_A).dot(metric)
+            KRS_A = _fdds_dot3(K_A, Rtinv_A, metric)
         else:
             X_A = fdds_obj.form_unc_amplitude("A", omega)
             X_A.scale(-1.0)
@@ -183,12 +196,12 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
             X_A_uc = X_A.copy()
 
         # Coupled A
-        XSW_A = X_A.dot(metric_inv).dot(W_A)
+        XSW_A = _fdds_dot3(X_A, metric_inv, W_A)
         if is_hybrid:
             XSW_A += 0.25 * KRS_A
 
         amplitude = np.linalg.pinv(metric - XSW_A, rcond=1.e-13)
-        X_A_coupled = X_A + XSW_A.dot(amplitude).dot(X_A)
+        X_A_coupled = X_A + _fdds_dot3(XSW_A, amplitude, X_A)
 
         del X_A, XSW_A, amplitude
         if is_hybrid:
@@ -203,7 +216,7 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
 
             # K matrices
             K_B = -x_alpha * aux_dict["K1LD"] - x_alpha * aux_dict["K2LD"] + x_alpha * x_alpha * aux_dict["K21L"]
-            KRS_B = K_B.dot(Rtinv_B).dot(metric)
+            KRS_B = _fdds_dot3(K_B, Rtinv_B, metric)
         else:
             X_B = fdds_obj.form_unc_amplitude("B", omega)
             X_B.scale(-1.0)
@@ -211,12 +224,12 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
             X_B_uc = X_B.copy()
 
         # Coupled B
-        XSW_B = X_B.dot(metric_inv).dot(W_B)
+        XSW_B = _fdds_dot3(X_B, metric_inv, W_B)
         if is_hybrid:
             XSW_B += 0.25 * KRS_B
 
         amplitude = np.linalg.pinv(metric - XSW_B, rcond=1.e-13)
-        X_B_coupled = X_B + XSW_B.dot(amplitude).dot(X_B)
+        X_B_coupled = X_B + _fdds_dot3(XSW_B, amplitude, X_B)
 
         del X_B, XSW_B, amplitude
         if is_hybrid:
@@ -229,11 +242,11 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
         X_B_coupled = _symmetrize(X_B_coupled)
 
         # Combine
-        tmp_uc = metric_inv.dot(X_A_uc).dot(metric_inv)
+        tmp_uc = _fdds_dot3(metric_inv, X_A_uc, metric_inv)
         value_uc = np.dot(tmp_uc.flatten(), X_B_uc.flatten())
         del tmp_uc
 
-        tmp_c = metric_inv.dot(X_A_coupled).dot(metric_inv)
+        tmp_c = _fdds_dot3(metric_inv, X_A_coupled, metric_inv)
         value_c = np.dot(tmp_c.flatten(), X_B_coupled.flatten())
 
         # Tally

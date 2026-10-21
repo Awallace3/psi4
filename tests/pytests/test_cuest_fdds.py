@@ -69,6 +69,81 @@ def _timer_calls():
     return sum(v["n_calls"] for k, v in psi4.core.get_timer_dict().items()
                if "cuEST FDDS: contractions" in k)
 
+def _product_timer_calls():
+    return sum(v["n_calls"] for k, v in psi4.core.get_timer_dict().items()
+               if "cuEST FDDS: response products" in k)
+
+
+@pytest.mark.parametrize("kind", ["square", "rectangular", "float32", "strided", "empty"])
+def test_fdds_native_response_products(fdds_factory, kind):
+    from psi4.driver.procrouting.sapt.sapt_mp2_terms import _fdds_dot3
+    rng = np.random.default_rng(524)
+    a, b, c = (rng.normal(size=(17, 17)) for _ in range(3))
+    if kind == "rectangular":
+        a = a[:5]
+    elif kind == "float32":
+        a, b, c = (x.astype(np.float32) for x in (a, b, c))
+    elif kind == "strided":
+        a, b, c = (x.T for x in (a, b, c))
+    elif kind == "empty":
+        a, b, c = (np.empty((0, 0)) for _ in range(3))
+    originals = [x.copy() for x in (a, b, c)]
+    psi4.core.clean_timers()
+    result = _fdds_dot3(a, b, c)
+    np.testing.assert_array_equal(result, a.dot(b).dot(c))
+    for actual, expected in zip((a, b, c), originals):
+        np.testing.assert_array_equal(actual, expected)
+    assert _product_timer_calls() == 0
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+@pytest.mark.parametrize("q", [5, 17])
+def test_fdds_gpu_response_products(fdds_factory, q):
+    from psi4.driver.procrouting.sapt.sapt_mp2_terms import _fdds_dot3
+    rng = np.random.default_rng(871)
+    for enabled, threshold in ((False, 0), (True, 10**9), (True, 0)):
+        psi4.set_options({"use_cuest": enabled, "cuest_gemm_min_dim": threshold})
+        for _ in range(3):
+            a, b, c = (rng.normal(size=(q, q)) for _ in range(3))
+            originals = [x.copy() for x in (a, b, c)]
+            psi4.core.clean_timers()
+            actual = _fdds_dot3(a, b, c)
+            np.testing.assert_allclose(actual, a.dot(b).dot(c), rtol=2.e-13, atol=2.e-13)
+            assert _product_timer_calls() == int(enabled and threshold == 0)
+            for value, original in zip((a, b, c), originals):
+                np.testing.assert_array_equal(value, original)
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+@pytest.mark.parametrize("kind", ["rectangular", "float32", "strided", "empty"])
+def test_fdds_gpu_response_product_fallback(fdds_factory, kind):
+    psi4.set_options({"use_cuest": True, "cuest_gemm_min_dim": 0})
+    # Reuse the exact public helper/native contract, but force GPU eligibility
+    # controls: unsupported layouts/dtypes still execute original NumPy dots.
+    test_fdds_native_response_products(fdds_factory, kind)
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+def test_fdds_gpu_response_product_alias_and_preflight(fdds_factory):
+    from psi4.driver.procrouting.sapt.sapt_mp2_terms import _fdds_dot3
+    psi4.set_options({"use_cuest": True, "cuest_gemm_min_dim": 0})
+    a = np.random.default_rng(777).normal(size=(17, 17))
+    original = a.copy()
+    a.flags.writeable = False
+    with pytest.raises(RuntimeError, match="negative threshold"):
+        psi4.core._cuest_fdds_dot3(a, a, a, -1)
+    psi4.core.clean_timers()
+    result = _fdds_dot3(a, a, a)
+    assert _product_timer_calls() == 1
+    np.testing.assert_allclose(result, a.dot(a).dot(a), rtol=2.e-13, atol=2.e-13)
+    np.testing.assert_array_equal(a, original)
+    assert not np.shares_memory(result, a)
+
 def _contribution_budget(naux, dimensions, hybrid):
     """Small host budget; predict whole-occupied blocking before device limits."""
     fixed = {}
@@ -517,13 +592,23 @@ def test_fdds_gpu_negative_threshold(fdds_factory):
 @pytest.mark.cuest
 @pytest.mark.parametrize("hybrid", [False, True])
 @pytest.mark.parametrize("occupied", [(3, 3), (2, 3)], ids=["equal", "unequal"])
-def test_fdds_integrated_gpu_energy(fdds_factory, hybrid, occupied):
+def test_fdds_integrated_gpu_energy(fdds_factory, hybrid, occupied, monkeypatch):
     """Actual ALDA kernel, hybrid terms, pseudoinverse and default quadrature."""
     from psi4.driver.procrouting.sapt.sapt_mp2_terms import df_fdds_dispersion
     fdds_factory(occupied=occupied)
     primary, auxiliary, cache = fdds_factory.inputs
     results = []
+    pinv_reference = None
+    original_pinv = np.linalg.pinv
     for enabled, threshold in ((False, 0), (True, 10**9), (True, 0)):
+        pinv_inputs = []
+
+        def captured_pinv(a, *args, **kwargs):
+            assert not args and kwargs == {"rcond": 1.e-13}
+            pinv_inputs.append(a.copy())
+            return original_pinv(a, *args, **kwargs)
+
+        monkeypatch.setattr(np.linalg, "pinv", captured_pinv)
         psi4.set_options({"use_cuest": enabled, "cuest_gemm_min_dim": threshold})
         psi4.core.clean_timers()
         start = time.perf_counter()
@@ -531,6 +616,15 @@ def test_fdds_integrated_gpu_energy(fdds_factory, hybrid, occupied):
                                     do_print=False)
         elapsed = time.perf_counter() - start
         assert _timer_calls() == (20 if enabled and threshold == 0 else 0)
+        # Hybrid Rtinv is a transpose view: preserve native KRS products rather
+        # than silently packing it. Other six chains per point are eligible.
+        assert _product_timer_calls() == (60 if enabled and threshold == 0 else 0)
+        assert len(pinv_inputs) == (22 if hybrid else 20)
+        if pinv_reference is None:
+            pinv_reference = pinv_inputs
+        else:
+            for actual_input, reference_input in zip(pinv_inputs, pinv_reference):
+                np.testing.assert_allclose(actual_input, reference_input, rtol=2.e-12, atol=2.e-12)
         assert set(result) == {"Disp20,FDDS (unc)", "Disp20"}
         assert all(np.isfinite(v) for v in result.values())
         results.append(result)
