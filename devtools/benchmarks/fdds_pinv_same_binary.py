@@ -16,6 +16,8 @@ import subprocess
 PIN = "1d1c593db90e7deb54d74c99f95d915d021acbd1"
 CORE = "79f0153405716a26aa3dcbf30d1e4c5eba0e9b8ff21c62b41486fcd336afbc4e"
 RUNNER = "d599720a06b25a3d813f8b448c1ebb858a7477d4"
+REFERENCE_SHA = "eb47be3a3335f09af2740a0f9684c637bb8afe563c7ba716f3a5eddd4258c2e0"
+ENERGY_KEYS = {"Disp20", "Disp20,FDDS (unc)"}
 
 
 def read(path):
@@ -51,7 +53,7 @@ def validate(sample, reference, enabled):
                                     "gpu_pinv_timer_calls")) == (20, 4, 12, 60, 22 if enabled else 0)
     assert len(sample["pinv_calls"]) == 22
     assert math.isfinite(sample["fdds_seconds"]) and sample["fdds_seconds"] > 0
-    assert set(sample["energies_Eh"]) == set(reference["energies_Eh"])
+    assert set(sample["energies_Eh"]) == set(reference["energies_Eh"]) == ENERGY_KEYS
     errors = {}
     for key, value in sample["energies_Eh"].items():
         baseline = reference["energies_Eh"][key]
@@ -71,12 +73,14 @@ def main():
     source(a.stage, PIN)
     source(a.runner, RUNNER)
     reference = read(a.reference)
+    assert sha(a.reference) == REFERENCE_SHA
     assert reference["binary_pin"] == PIN and reference["core_sha256"] == CORE
     assert reference["system"] == "protein83" and reference["natom"] == 83
     assert reference["threads"] == 8 and reference["memory"] == "96 GiB"
     assert str(reference["job_id"]) == "14250361"
     accepted = read(a.accepted)
     assert accepted["candidate_pin"] == PIN
+    assert accepted["samples"]["candidate-gpu0"] == reference["fdds_seconds"]
     assert len(accepted["accepted_controls"]) == 5
     assert accepted["gpu"]["unique_full_suite_tests"] == 112
     assert accepted["gpu"]["executed_tests_including_repeats"] == 176
