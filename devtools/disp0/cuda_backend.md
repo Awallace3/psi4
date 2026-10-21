@@ -117,6 +117,13 @@ auxiliary ordering and common factor gauge, and explicitly configure:
 * relative conditioning1, fitting cutoff1e-12 and metric−1/2 factors.
 * native FP64 math mode1 (set by the factory, read back by the provider).
 
+`sapt_cuest_basis.py` implements structural-only basis preflight without
+initializing CUDA or selecting a native coefficient convention. It retains
+all three exported Psi4 coefficient variants and detects unsupported basis
+structures and subsequent changes. This is NOT native normalization,
+component-order, coordinate-unit or output-layout admission, and it cannot
+yield a production provider. A fake-shell CPU pass is not native basis proof.
+
 Negative eigenvalue treatment, relative rank truncation and contracted-factor/
 signed-energy parity require actual comparisons against native Psi4.
 Those Disp0 policies must NOT be imposed on PySCF/RKS's separate absolute1e-7

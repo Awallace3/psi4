@@ -1,5 +1,46 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## CURRENT factory development — separate owned Cachy worktree
+
+Main compilation checkout stays frozen clean at `a7204feec` while native Psi4
+builds. Factory development is isolated in `../factory-source` on owned branch
+`cachy/disp0-native-factory`; no merge into another agent's branch or master.
+
+New `sapt_cuest_basis.py` performs only structural public-API preflight: exact
+shell centers/offsets/geometry, actual `nbf()` versus Cartesian `nao()`, separate
+primary/RI representation flags, three uninterpreted coefficient variants and
+immutable fingerprints. Rejects ECP, Cartesian RI, mixed representations,
+angular-momentum holes, missing centers, unadmitted permutations, nonfinite
+data and changed inputs. It never generates factors or initializes CUDA.
+Native normalization/component/unit/layout policy remains unadmitted; this
+module cannot create or admit a production provider.
+
+**8 new CPU structural tests PASS,0.004s;22 existing CPU CUDA fixtures
+PASS,1.036s;12 synthetic identity fixtures PASS,0.021s**.
+Logs `../runs/factory-basis-01/`. Review confirmed the exported API and
+structural-only scope, but found that owning-molecule coordinates could change
+independently of stored shell coordinates. Snapshots now include both and
+reject moved/stale disagreement; changed-input detection covers molecule-only,
+shell-only and consistent dual movement plus all3 coefficient variants.
+Rerun: **10 basis tests PASS,0.007s;22 CPU CUDA fixtures PASS,1.266s;
+12 identity fixtures PASS,0.019s**, diff check PASS. Logs:
+`../runs/factory-basis-02/`. Narrow confirmation delegate `ddccdb...` exceeded
+its6-turn limit and produced no committed answer; NOT counted as a review pass.
+The reported gap is addressed by direct source inspection and the explicit
+geometry/mutation regressions, not by an unavailable follow-up opinion.
+Native resource/basis/plan construction, native numerical conversion and signed
+Disp0 GPU gate remain unfinished. Production still has no DFHelper fallback.
+
+Dependency update: GPU LibXC7.1.2 actual device-buffer LDA diagnostic PASS,
+21 FP64 EXC/VXC/FXC outputs versus analytic exchange and explicitly host-mode
+same-build evaluation, maximum absolute discrepancy2.8421709430404007e-14.
+PID66536/expected3090UUID/runtime13030/maps/native hashes retained in
+`../runs/libxc-gpu-smoke-02/`. This is NOT cuEST/Disp0 execution evidence.
+Whole E2/Waggle and native CPU Psi4 builds remain in progress. Psi4 build01
+was stopped when inner Ninja lacked a job cap; isolated nested-build RED/GREEN
+verified `CMAKE_BUILD_PARALLEL_LEVEL=1`, and fresh build02 uses it. Stopped
+artifacts are retained, not adopted. Full receipts: `../metadata/SETUP_STATUS.md`.
+
 ## CURRENT directive — no DFHelper in production dispersion
 
 Read mandatory `../metadata/NO_DFHELPER.md`. Production is strictly cuEST0.2.50
