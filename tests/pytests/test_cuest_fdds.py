@@ -18,6 +18,7 @@ def fdds_factory():
     previous_subtype = psi4.core.get_global_option("SCF_SUBTYPE")
     psi4.set_options({"use_cuest": False, "cuest_xc": False,
                       "cuest_mixed_precision": False, "cuest_gemm_min_dim": 0,
+                      "cuest_fdds_pinv": False,
                       "scf_subtype": "auto"})
     mol = psi4.geometry("""
         He 0 0 0
@@ -56,6 +57,7 @@ def fdds_factory():
     yield make
     psi4.core.set_memory_bytes(500 * 1024**2)
     psi4.set_options({"use_cuest": False, "cuest_gemm_min_dim": 256,
+                      "cuest_fdds_pinv": False,
                       "scf_subtype": previous_subtype})
 
 
@@ -72,6 +74,144 @@ def _timer_calls():
 def _product_timer_calls():
     return sum(v["n_calls"] for k, v in psi4.core.get_timer_dict().items()
                if "cuEST FDDS: response products" in k)
+
+def _pinv_timer_calls():
+    return sum(v["n_calls"] for k, v in psi4.core.get_timer_dict().items()
+               if "cuEST FDDS: pseudoinverse" in k)
+
+
+@pytest.mark.parametrize("kind", ["square", "rectangular", "strided", "float32", "empty", "rankdef"])
+def test_fdds_native_pseudoinverse(fdds_factory, kind):
+    from psi4.driver.procrouting.sapt.sapt_mp2_terms import _fdds_pinv
+    a = np.random.default_rng(119).normal(size=(7, 7))
+    if kind == "rectangular":
+        a = a[:4]
+    elif kind == "strided":
+        a = a.T
+    elif kind == "float32":
+        a = a.astype(np.float32)
+    elif kind == "empty":
+        a = np.empty((0, 0))
+    elif kind == "rankdef":
+        a[:, 2] = a[:, 0] - a[:, 1]
+    original = a.copy()
+    psi4.core.clean_timers()
+    for opted_in in (False, True):
+        psi4.set_options({"use_cuest": False, "cuest_fdds_pinv": opted_in})
+        np.testing.assert_array_equal(_fdds_pinv(a, rcond=1.e-13), np.linalg.pinv(a, rcond=1.e-13))
+    np.testing.assert_array_equal(a, original)
+    assert _pinv_timer_calls() == 0
+
+
+def test_fdds_pseudoinverse_error_never_retries_cpu(fdds_factory, monkeypatch):
+    from psi4.driver.procrouting.sapt.sapt_mp2_terms import _fdds_pinv
+    monkeypatch.setattr(psi4.core, "get_global_option",
+                        lambda key: {"USE_CUEST": True, "CUEST_FDDS_PINV": True,
+                                     "CUEST_GEMM_MIN_DIM": 0}[key])
+    def failed_endpoint(*args):
+        raise RuntimeError("injected endpoint failure")
+    def forbidden_retry(*args, **kwargs):
+        pytest.fail("An endpoint failure must not trigger a NumPy retry")
+    monkeypatch.setattr(psi4.core, "_cuest_fdds_pinv", failed_endpoint, raising=False)
+    monkeypatch.setattr(np.linalg, "pinv", forbidden_retry)
+    with pytest.raises(RuntimeError, match="injected endpoint failure"):
+        _fdds_pinv(np.eye(5))
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+@pytest.mark.parametrize("kind", ["random5", "random17", "rankdef", "zero", "cutoff"])
+def test_fdds_gpu_pseudoinverse(fdds_factory, kind):
+    from psi4.driver.procrouting.sapt.sapt_mp2_terms import _fdds_pinv
+    rng = np.random.default_rng(763)
+    for enabled, opted_in, threshold in ((False, True, 0), (True, False, 0),
+                                         (True, True, 10**9), (True, True, 0)):
+        psi4.set_options({"use_cuest": enabled, "cuest_fdds_pinv": opted_in,
+                          "cuest_gemm_min_dim": threshold})
+        for repeat in range(2):  # changed inputs, no stale device factors
+            q = 17 if kind == "random17" else 5
+            a = rng.normal(size=(q, q))
+            if kind == "rankdef":
+                a = np.outer(a[:, 0], a[0])
+            elif kind == "zero":
+                a.fill(0)
+            elif kind == "cutoff":
+                a = np.diag([1., 2.e-13, 1.e-13, 5.e-14, 0.])
+            original = a.copy()
+            a.flags.writeable = False
+            psi4.core.clean_timers()
+            actual = _fdds_pinv(a, rcond=1.e-13)
+            reference = np.linalg.pinv(a, rcond=1.e-13)
+            np.testing.assert_allclose(actual, reference, rtol=2.e-11, atol=5.e-12)
+            assert _pinv_timer_calls() == int(enabled and opted_in and threshold == 0)
+            np.testing.assert_array_equal(a, original)
+            assert not np.shares_memory(a, actual)
+            if kind == "cutoff":
+                # Equality at 1e-13 is discarded; 2e-13 is retained.
+                assert np.count_nonzero(np.diag(actual)) == 2
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+@pytest.mark.parametrize("kind", ["rectangular", "strided", "float32", "empty"])
+def test_fdds_gpu_pseudoinverse_fallback(fdds_factory, kind):
+    from psi4.driver.procrouting.sapt.sapt_mp2_terms import _fdds_pinv
+    a = np.random.default_rng(119).normal(size=(7, 7))
+    if kind == "rectangular":
+        a = a[:4]
+    elif kind == "strided":
+        a = a.T
+    elif kind == "float32":
+        a = a.astype(np.float32)
+    else:
+        a = np.empty((0, 0))
+    psi4.set_options({"use_cuest": True, "cuest_fdds_pinv": True, "cuest_gemm_min_dim": 0})
+    psi4.core.clean_timers()
+    np.testing.assert_array_equal(_fdds_pinv(a), np.linalg.pinv(a, rcond=1.e-13))
+    assert _pinv_timer_calls() == 0
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+def test_fdds_gpu_pseudoinverse_preflight_errors(fdds_factory):
+    endpoint = psi4.core._cuest_fdds_pinv
+    a = np.eye(5)
+    psi4.core.clean_timers()
+    with pytest.raises(RuntimeError, match="negative threshold"):
+        endpoint(a, 1.e-13, -1)
+    for cutoff in (-1., np.nan, np.inf):
+        with pytest.raises(RuntimeError, match="rcond"):
+            endpoint(a, cutoff, 0)
+    a[0, 0] = np.nan
+    with pytest.raises(RuntimeError, match="nonfinite input"):
+        endpoint(a, 1.e-13, 0)
+    assert _pinv_timer_calls() == 0
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+@pytest.mark.parametrize("hybrid", [False, True])
+def test_fdds_gpu_pseudoinverse_integrated(fdds_factory, hybrid):
+    from psi4.driver.procrouting.sapt.sapt_mp2_terms import df_fdds_dispersion
+    fdds_factory(occupied=(2, 3))
+    primary, auxiliary, cache = fdds_factory.inputs
+    reference = None
+    for enabled, opted_in in ((False, False), (True, False), (True, True)):
+        psi4.set_options({"use_cuest": enabled, "cuest_fdds_pinv": opted_in,
+                          "cuest_gemm_min_dim": 0})
+        psi4.core.clean_timers()
+        actual = df_fdds_dispersion(primary, auxiliary, cache, hybrid, .25 if hybrid else 0.,
+                                    do_print=False)
+        assert _pinv_timer_calls() == ((22 if hybrid else 20) if opted_in else 0)
+        if reference is None:
+            reference = actual
+        errors = {key: abs(actual[key] - value) for key, value in reference.items()}
+        assert max(errors.values()) < 1.e-10, errors
+        print("FDDS pseudoinverse integrated", hybrid, enabled, opted_in, errors)
 
 
 @pytest.mark.parametrize("kind", ["square", "rectangular", "float32", "strided", "empty"])

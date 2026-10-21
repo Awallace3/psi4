@@ -72,6 +72,7 @@ target_sources(core
 # cuest_gemm.cc rides along on the same switch: it needs no cuEST call of its
 # own, but it borrows the cuBLAS handle cuest_runtime.cc owns.
 if(TARGET cuEST::cuEST)
+  target_link_libraries(core PRIVATE CUDA::cusolver)
   target_sources(core
     PRIVATE
       cuest_runtime.cc

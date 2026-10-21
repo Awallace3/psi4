@@ -236,6 +236,13 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     nonempty blocks, not unsupported layouts or out-of-memory work. No effect unless
     |globals__use_cuest| is true. -*/
     options.add_int("CUEST_GEMM_MIN_DIM", 256);
+    /*- Opt in to FDDS general FP64 cuSOLVER SVD pseudoinverses. Preserves the
+    original relative singular-value cutoff (1e-13 in FDDS); does not assume
+    symmetry or replace a rank-truncated pseudoinverse with a solve. Only
+    eligible square C-contiguous FP64 arrays use the device; small/unsupported
+    inputs or preflight capacity rejection retain NumPy. GPU runtime/solver
+    failures raise without CPU retry. Requires |globals__use_cuest|. -*/
+    options.add_bool("CUEST_FDDS_PINV", false);
 
     // Note that case-insensitive options are only functional as
     //   globals, not as module-level, and should be defined sparingly

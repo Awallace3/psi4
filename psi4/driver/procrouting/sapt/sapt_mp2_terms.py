@@ -98,6 +98,15 @@ def _fdds_dot3(a, b, c):
             return result
     return a.dot(b).dot(c)
 
+def _fdds_pinv(a, rcond=1.e-13):
+    """Opt-in general SVD; native semantics and cutoff are unchanged."""
+    if (core.get_global_option("USE_CUEST") and core.get_global_option("CUEST_FDDS_PINV")
+            and hasattr(core, "_cuest_fdds_pinv")):
+        result = core._cuest_fdds_pinv(a, rcond, core.get_global_option("CUEST_GEMM_MIN_DIM"))
+        if result is not None:
+            return result
+    return np.linalg.pinv(a, rcond=rcond)
+
 
 def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points=10, leg_lambda=0.3, do_print=True):
 
@@ -171,8 +180,8 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
         # with np.printoptions(threshold=sys.maxsize):
         #     print("R_A SANITIZED", R_A)
         #     print("R_B SANITIZED", R_B)
-        Rtinv_A = np.linalg.pinv(R_A, rcond=1.e-13).transpose()
-        Rtinv_B = np.linalg.pinv(R_B, rcond=1.e-13).transpose()
+        Rtinv_A = _fdds_pinv(R_A, rcond=1.e-13).transpose()
+        Rtinv_B = _fdds_pinv(R_B, rcond=1.e-13).transpose()
 
     for point, weight in zip(*np.polynomial.legendre.leggauss(leg_points)):
 
@@ -200,7 +209,7 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
         if is_hybrid:
             XSW_A += 0.25 * KRS_A
 
-        amplitude = np.linalg.pinv(metric - XSW_A, rcond=1.e-13)
+        amplitude = _fdds_pinv(metric - XSW_A, rcond=1.e-13)
         X_A_coupled = X_A + _fdds_dot3(XSW_A, amplitude, X_A)
 
         del X_A, XSW_A, amplitude
@@ -228,7 +237,7 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
         if is_hybrid:
             XSW_B += 0.25 * KRS_B
 
-        amplitude = np.linalg.pinv(metric - XSW_B, rcond=1.e-13)
+        amplitude = _fdds_pinv(metric - XSW_B, rcond=1.e-13)
         X_B_coupled = X_B + _fdds_dot3(XSW_B, amplitude, X_B)
 
         del X_B, XSW_B, amplitude

@@ -55,6 +55,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cmath>
 #include <memory>
 #include <limits>
 #include <sstream>
@@ -63,6 +64,7 @@
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
+#include <cusolverDn.h>
 
 #include "psi4/pybind11.h"
 #include <pybind11/numpy.h>
@@ -201,6 +203,117 @@ struct MetricTimer {
     explicit MetricTimer(const char* name_) : name(name_) { timer_on(name); }
     ~MetricTimer() { timer_off(name); }
 };
+
+void check_cusolver(cusolverStatus_t status, const char* what) {
+    if (status != CUSOLVER_STATUS_SUCCESS) {
+        std::ostringstream message;
+        message << "cuEST FDDS pseudoinverse: " << what << " failed (cuSOLVER status "
+                << static_cast<int>(status) << ")";
+        throw PSIEXCEPTION(message.str());
+    }
+}
+
+struct FDDSSolver {
+    cusolverDnHandle_t handle = nullptr;
+    explicit FDDSSolver(cudaStream_t stream) {
+        auto status = cusolverDnCreate(&handle);
+        if (status == CUSOLVER_STATUS_SUCCESS) status = cusolverDnSetStream(handle, stream);
+        if (status != CUSOLVER_STATUS_SUCCESS) {
+            if (handle) cusolverDnDestroy(handle);
+            handle = nullptr;
+            check_cusolver(status, "create/set shared stream");
+        }
+    }
+    ~FDDSSolver() { if (handle) cusolverDnDestroy(handle); }
+    FDDSSolver(const FDDSSolver&) = delete;
+    FDDSSolver& operator=(const FDDSSolver&) = delete;
+};
+}
+
+/// General (not Hermitian) FP64 SVD, with NumPy's strict relative cutoff.
+/// No ordinary inverse/solve, rank approximation or singular-value regularizer.
+py::object cuest_fdds_pinv(const py::array& input, double rcond, int min_dim) {
+    if (min_dim < 0) throw PSIEXCEPTION("cuEST FDDS pseudoinverse: negative threshold");
+    if (!std::isfinite(rcond) || rcond < 0.0)
+        throw PSIEXCEPTION("cuEST FDDS pseudoinverse: finite nonnegative rcond required");
+    if (input.ndim() != 2 || !input.dtype().is(py::dtype::of<double>()) ||
+        !(input.flags() & py::array::c_style)) return py::none();
+    const size_t q = input.shape(0);
+    if (!q || input.shape(1) != q || q > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+        q < static_cast<size_t>(min_dim)) return py::none();
+    const size_t count = fdds_product(q, q), bytes = fdds_product(count, sizeof(double));
+    const auto* values = static_cast<const double*>(input.data());
+    for (size_t i = 0; i < count; ++i)
+        if (!std::isfinite(values[i]))
+            throw PSIEXCEPTION("cuEST FDDS pseudoinverse: nonfinite input");
+    cuest_common::ensure_cuest_initialized();
+    cudaStream_t stream = nullptr;
+    check_cublas(cublasGetStream(cublas_handle, &stream), "FDDS pseudoinverse stream");
+    cublasPointerMode_t mode;
+    check_cublas(cublasGetPointerMode(cublas_handle, &mode), "FDDS pseudoinverse pointer mode");
+    if (mode != CUBLAS_POINTER_MODE_HOST)
+        throw PSIEXCEPTION("cuEST FDDS pseudoinverse: shared cuBLAS handle requires HOST pointer mode");
+    FDDSSolver solver(stream);  // owned handle, cuEST's stream, no external handle mutation
+    const int n = static_cast<int>(q);
+    int workspace = 0;
+    check_cusolver(cusolverDnDgesvd_bufferSize(solver.handle, n, n, &workspace), "workspace query");
+    if (workspace < 0) throw PSIEXCEPTION("cuEST FDDS pseudoinverse: invalid workspace size");
+    const size_t elements = fdds_sum(fdds_product(3, count),
+        fdds_sum(fdds_product(2, q), fdds_sum(static_cast<size_t>(workspace), 1)));
+    const size_t storage = fdds_product(elements, sizeof(double));
+    size_t free = 0, total = 0;
+    check_cuda(cudaMemGetInfo(&free, &total), "FDDS pseudoinverse capacity");
+    if (storage > (free / 5) * 4) return py::none();  // no allocations/enqueue yet
+
+    MetricTimer timer("cuEST FDDS: pseudoinverse");
+    py::array_t<double> result({static_cast<py::ssize_t>(q), static_cast<py::ssize_t>(q)});
+    DeviceBuffer a(count, "SVD input/scaled VT"), u(count, "SVD U"), vt(count, "SVD VT/output"),
+                 singular(q, "SVD singular values"), rwork(q, "SVD rwork"),
+                 work(static_cast<size_t>(workspace), "SVD workspace"), info(1, "SVD status");
+    std::vector<double> host_singular(q), inverse(q);
+    int host_info = 0;
+    // Borrowed input, output and host vectors live through completion/error drain.
+    // Capacity fallback is pre-enqueue only; every solver/runtime error propagates.
+    FDDSEnqueueGuard guard{stream};
+    check_cuda(cudaMemcpyAsync(a.get(), input.data(), bytes, cudaMemcpyHostToDevice, stream),
+               "FDDS SVD input upload");
+    // Row-major A is column-major A^T. SVD is consequently of A^T, not a
+    // symmetrized matrix. Reconstruct (A^T)^+ below; its raw buffer is A^+ row-major.
+    check_cusolver(cusolverDnDgesvd(solver.handle, 'A', 'A', n, n, a.get(), n,
+                                   singular.get(), u.get(), n, vt.get(), n,
+                                   work.get(), workspace, rwork.get(),
+                                   reinterpret_cast<int*>(info.get())), "general FP64 SVD");
+    check_cuda(cudaMemcpyAsync(&host_info, info.get(), sizeof(int), cudaMemcpyDeviceToHost, stream),
+               "FDDS SVD status download");
+    check_cuda(cudaMemcpyAsync(host_singular.data(), singular.get(), q * sizeof(double),
+                               cudaMemcpyDeviceToHost, stream), "FDDS singular values download");
+    check_cuda(cudaStreamSynchronize(stream), "FDDS SVD completion");
+    if (host_info != 0)
+        throw PSIEXCEPTION("cuEST FDDS pseudoinverse: SVD did not converge or invalid solver argument");
+    const double cutoff = rcond * host_singular.front();
+    for (size_t i = 0; i < q; ++i) {
+        const double s = host_singular[i];
+        if (!std::isfinite(s) || s < 0.0)
+            throw PSIEXCEPTION("cuEST FDDS pseudoinverse: invalid singular value");
+        inverse[i] = s > cutoff ? 1.0 / s : 0.0;  // exactly NumPy's strict > policy
+        if (!std::isfinite(inverse[i]))
+            throw PSIEXCEPTION("cuEST FDDS pseudoinverse: reciprocal singular value overflow");
+    }
+    // Only O(n) singular values travel through the host; all O(n^2) SVD factors
+    // and reconstruction intermediates remain resident in the same three buffers.
+    check_cuda(cudaMemcpyAsync(singular.get(), inverse.data(), q * sizeof(double),
+                               cudaMemcpyHostToDevice, stream), "FDDS inverse singular values upload");
+    check_cublas(cublasDdgmm(cublas_handle, CUBLAS_SIDE_LEFT, n, n, vt.get(), n,
+                            singular.get(), 1, a.get(), n), "FDDS singular-value scaling");
+    const double one = 1.0, zero = 0.0;
+    check_cublas(cublasDgemm(cublas_handle, CUBLAS_OP_T, CUBLAS_OP_T, n, n, n,
+                            &one, a.get(), n, u.get(), n, &zero, vt.get(), n),
+                 "FDDS pseudoinverse reconstruction");
+    check_cuda(cudaMemcpyAsync(result.mutable_data(), vt.get(), bytes, cudaMemcpyDeviceToHost, stream),
+               "FDDS pseudoinverse download");
+    check_cuda(cudaStreamSynchronize(stream), "FDDS pseudoinverse completion");
+    guard.complete = true;
+    return result;
 }
 
 /// Private FDDS NumPy endpoint. Unsupported inputs/capacity return None before
@@ -755,6 +868,8 @@ std::vector<SharedMatrix> cuest_chain_gemm(const std::vector<SharedMatrix>& tens
 }  // namespace psi
 
 void export_cuest_gemm(py::module& m) {
+    m.def("_cuest_fdds_pinv", &psi::cuest_fdds_pinv, "a"_a, "rcond"_a, "min_dim"_a,
+          "Internal FDDS general FP64 SVD pseudoinverse. None is pre-enqueue fallback; failures throw.");
     m.def("_cuest_fdds_dot3", &psi::cuest_fdds_dot3, "a"_a, "b"_a, "c"_a, "min_dim"_a,
           "Internal FDDS FP64 (A B) C. None means unsupported before enqueue; GPU failures throw.");
     m.def("cuest_chain_gemm", &psi::cuest_chain_gemm, "tensors"_a, "transposes"_a, "prefactors_AB"_a,

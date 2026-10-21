@@ -130,6 +130,7 @@ p = Path(psi4.__file__).resolve().parent
 assert p == Path(os.environ["EXPECTED_PSI4_PACKAGE"]).resolve(), p
 assert hasattr(psi4.core, "cuest_chain_gemm")
 assert hasattr(psi4.core.FDDS_Dispersion, "gpu_contraction_blocks")
+assert hasattr(psi4.core, "_cuest_fdds_pinv")
 core = Path(psi4.core.__file__)
 core_hash = hashlib.sha256(core.read_bytes()).hexdigest()
 expected_hash = os.environ.get("CUEST_FDDS_EXPECTED_CORE_SHA256")
@@ -140,7 +141,7 @@ assert "not found" not in ldd, ldd
 libraries = {}
 for line in ldd.splitlines():
     words = line.split()
-    if "=>" in words and any(k in words[0].lower() for k in ("cuest", "libxc", "cublas", "cudart")):
+    if "=>" in words and any(k in words[0].lower() for k in ("cuest", "libxc", "cublas", "cudart", "cusolver")):
         libraries[words[0]] = str(Path(words[words.index("=>") + 1]).resolve())
 packages = []
 for file in (Path(os.environ["CUEST_DEPENDENCY_ENV"]) / "conda-meta").glob("libcuest*.json"):
@@ -161,7 +162,7 @@ if [[ "$compile_only" == 1 ]]; then
 fi
 test_selection=()
 if [[ "${CUEST_FDDS_FOCUSED:-0}" == 1 ]]; then
-    test_selection=(-k 'test_fdds_contribution_fixture_budget or test_fdds_gpu_contributions or test_fdds_native_exchange_preprocessing or test_fdds_gpu_exchange_preprocessing or test_fdds_gpu_metric_fold or test_fdds_gpu_metric_layout or response_product')
+    test_selection=(-k 'test_fdds_contribution_fixture_budget or test_fdds_gpu_contributions or test_fdds_native_exchange_preprocessing or test_fdds_gpu_exchange_preprocessing or test_fdds_gpu_metric_fold or test_fdds_gpu_metric_layout or response_product or pseudoinverse')
     # Preserve both focused outcomes even if the contribution process fails.
     set +e
 fi
@@ -196,7 +197,7 @@ focused = os.environ.get("CUEST_FDDS_FOCUSED", "0") == "1"
 if focused:
     assert int(os.environ["CUEST_FDDS_CONTRIBUTION_STATUS"]) == 0, "contribution subprocess failed"
     assert int(os.environ["CUEST_FDDS_GDB_STATUS"]) == 0, "GDB subprocess failed or timed out"
-assert int(suite.get("tests")) == (44 if focused else 93), counts
+assert int(suite.get("tests")) == (63 if focused else 112), counts
 assert all(int(suite.get(k, "0")) == 0 for k in ("errors", "failures", "skipped")), counts
 if focused:
     log = Path("sapt-gdb.log").read_text()
@@ -207,7 +208,7 @@ if focused:
     assert int(sapt.get("tests")) == 1, sapt_counts
     assert all(int(sapt.get(k, "0")) == 0 for k in ("errors", "failures", "skipped")), sapt_counts
     counts = {"mode": "focused_only_not_full_suite", "contribution_tests": counts,
-              "sapt_gpu_test": sapt_counts, "executed_tests": 45}
+              "sapt_gpu_test": sapt_counts, "executed_tests": 64}
 Path("VERIFIED.json").write_text(json.dumps(counts, indent=2) + "\n")
 print(json.dumps(counts, indent=2))
 PY
@@ -234,11 +235,11 @@ assert not re.search(r"received signal|hit Breakpoint|^Breakpoint \d+,", log, re
 assert "exited normally" in log, "full suite inferior did not exit normally"
 suite = ElementTree.parse("full-fdds.xml").find("testsuite")
 counts = dict(suite.attrib)
-assert int(suite.get("tests")) == 93, counts
+assert int(suite.get("tests")) == 112, counts
 assert all(int(suite.get(k, "0")) == 0 for k in ("errors", "failures", "skipped")), counts
 focused = json.loads(Path("FOCUSED_VERIFIED.json").read_text())
 result = {"mode": "focused_then_full", "focused": focused, "full": counts,
-          "executed_tests_including_repeats": 138, "unique_full_suite_tests": 93}
+          "executed_tests_including_repeats": 176, "unique_full_suite_tests": 112}
 Path("VERIFIED.json").write_text(json.dumps(result, indent=2) + "\n")
 print(json.dumps(result, indent=2))
 PY
