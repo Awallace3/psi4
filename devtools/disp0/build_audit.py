@@ -29,7 +29,12 @@ def roots(run, source, sdk, scratch):
 
 def safe_path(value, directory, allowed):
     value = value.strip("'\"")
-    if not value or value.startswith(("$ORIGIN", "${ORIGIN}")) or value == "/dev/null":
+    if not value or value == "/dev/null":
+        return
+    # Ninja's shell-escaped linker token is still the literal ELF $ORIGIN.
+    # Recognize ONLY that token, not arbitrary escaped variables/prefix lookalikes.
+    if re.fullmatch(r"\\?\$(?:ORIGIN|\{ORIGIN\})(?:/[A-Za-z0-9_.+-]*)*", value):
+        require(not any(token in value for token in BAD), f"Foreign origin-relative build path: {value}")
         return
     require("$" not in value and not any(token in value for token in BAD),
             f"Uninspectable/foreign build path: {value}")
@@ -203,11 +208,20 @@ def audit_link_commands(text, directory, run, source, sdk, scratch):
     return count
 
 
-def capture(run, source, scratch):
+def audit_output_directory(run, artifact_dir=None):
+    run = Path(run).resolve()
+    output = Path(artifact_dir) if artifact_dir is not None else run / "effective-build-audit"
+    if artifact_dir is not None:
+        require(output.is_absolute() and not output.resolve().is_relative_to(run),
+                "Revalidation evidence must be outside the preserved failed run")
+    output.mkdir()  # Never overwrite old partial audits or a previous validation.
+    return output
+
+
+def capture(run, source, scratch, artifact_dir=None):
     run = Path(run).resolve()
     sdk = json.loads((run / "cuda13/sdk-contract.json").read_text())
-    output = run / "effective-build-audit"
-    output.mkdir()  # preserve any earlier failed audit, never overwrite
+    output = audit_output_directory(run, artifact_dir)
     databases, counts = [], {"compile": 0, "dependencies": 0, "links": 0}
     observed = set()
     records = {}
@@ -265,8 +279,9 @@ def main():
     parser = argparse.ArgumentParser()
     for name in ("run", "source", "scratch", "out"):
         parser.add_argument("--" + name, required=True)
+    parser.add_argument("--artifact-dir", help="Fresh external evidence directory; input build stays read-only")
     args = parser.parse_args()
-    write_new(args.out, capture(args.run, args.source, args.scratch))
+    write_new(args.out, capture(args.run, args.source, args.scratch, args.artifact_dir))
 
 
 if __name__ == "__main__":

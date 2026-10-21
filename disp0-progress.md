@@ -2544,3 +2544,46 @@ stdout,stderr,client-result.json}`. Actualnode-stepstart receiptcheck
 bbd025732 pending; no build/API/numerical/devicePASS inferred yet.
 Ownlease officialmonitor b53cf45bd -i300 and independentstepterminalevents
 avoidqueryloops. Owner+parentreceivedactualgrant/correction/launch receipts.
+
+Build-startreceipt **bbd025732exit0** proves actualnode srunprolog10:47:35,
+CPU14254131/embers/Requeue0. RepairedSDKhelper **PASS49.297034s**,
+23,420,568Bwritten; actualremotezstd0.19negative/positivewindowproofpassed,
+mandatoryseparatelyboundedloaderclosure finished and helper cleanlyreturned.
+SDKmanifestSHA **04c087d7d61535d6f0906bd871aff32024eb46914e4ba5e3b2af977e5d3f91d2**,
+prefix`P/runs/saptdft-cuest-disp0/opt064-770ecf90108aa7783da766bf0402d8c267dcbbed-14254131-0/private-inputs`.
+Stderrempty/client-resultabsent atthisone-timecheck; mainbuildcontinues,
+notCPUAPI/physical/devicePASS. Inputsubmission_go=false correctlyremains
+not an overallscientific/runtimeadmission. Parent+ownerreceivedthismilestone.
+
+IndependentREAD-ONLYphase1readinessaudit **dd72e6f602exit0** completed while
+buildruns; nocommands/mutations/GPUactions. Existinggpu_gate.sbatch/old
+payloadsadmitd17/orfailedrecovery, notnew064opt064interactive step. Do NOT
+submitstandaloneoldwrapper or relabeloldfailedbuild. Minimumfuturework:
+separateoptimizedadmission withcompleteinstalledpackage/stage+binarytuple/
+ELF/closure/actualprocessmaps, cleanjob.STEP/nonsignalledstatus(not.batch),
+matching-stageAPIandindependentsignednative/eager/defaultCPUreferences
+(26/64focus/tolerancesretained), CPU-preparedforwardlogger, thenowner-assigned
+GPUwindowonly. PreserveexistingcuBLAS/naturalplacement/edgeCPUfallback/
+strides/replay/pool/shadowfreshness and signedcomponentguards. Thisis a
+proposalONLY; task21pendingblockedbybuild19. NotREADY/noPhase2expansion.
+
+MainCPUstep **be4138c69exit1**, clientelapsed2596.564s,
+node-status14254131-0 exit1/signalled0; originalfailure preserved.
+Actualboundedinspection b67dad02dexit0 atRunTime45:17 shows SAMElease
+14254131RUNNING/Requeue0/End12:46:01. Both E2064native/Python build+install
+and Psi4whole-stageinstall completed before failure. Exactfailure is metadata
+parser: `build_audit.safe_path` rejects literal Ninja-escaped `\\$ORIGIN/../`.
+This is NOT a compilation/numerical/GPUerror. Runtime/API stillunexecuted.
+Rawcompiler/installation logs, both explicitlocks, headerABI proof and
+767372-byteprivateSDKcontract exist; no installedprefix repair performed.
+
+Narrowparserfix recognizesanchoredexactescaped/unescapedORIGIN only;
+unknownvars/lookalikes/foreignCUDAstillfail. Redexactrepro observed beforefix.
+Externalnewartifact-dir option keepsfailedrun/partialaudit READ-ONLY;
+defaultlegacybehavior preserved.48localguards PASS5.275s +96existingruntime
+guards PASS4.60s; oneintermediatefixturefailedwrongcompilerallowedroot,
+correctedfixtureonly. Newtrackedvalidate_install.sh performs ONLY same-node
+read-onlyaudit/installedproof/API withbefore-afterbinaryhash equality,
+newvalidation/scratch outputs, no configure/build/install/RPATHpatch/science
+changes; oldfailedstep staysfailed. Scopedreviewdf9995ba8 active while
+independentGit stagingproceeds. SAMECPUallocation, no newallocation/GPU.

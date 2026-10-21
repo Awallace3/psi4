@@ -97,3 +97,24 @@ negative regressions. **45 guards PASS4.772s**. Scoped confirmation pending.
 Parent explicitly confirmed fresh replacement authority already valid:
 one8CPU/48GiB/2hfreeembers/chemx, bundled new-own-ID flag correction and
 immediate build without another approval question.
+
+## Live build step0: compilation/install completed, audit parser failed
+
+14254131.0 exited1/nonsignalled after2596.56s. Both Einsums native/Python
+and whole Psi4 stage reached installation. The subsequent metadata audit
+rejected literal Ninja-escaped `\$ORIGIN/../`; no installed proof/API ran.
+The failed step/result/partial audit remain unchanged.
+
+Exact local regression reproduced that rejection before fix. Anchored literal
+ORIGIN recognition now accepts only exact escaped/unescaped forms; unknown
+variables/lookalikes and foreign CUDA paths still reject. An optional fresh
+external audit directory prevents writes into the preserved build run.
+**48 local guards PASS5.275s**, **96 legacy runtime guards PASS4.60s**,
+validation continuation Bash syntax PASS. No binary/linker/scientific-source
+change, configure/build/install or RPATH patch is involved.
+
+`validate_install.sh` is a new same-allocation validation continuation. It
+reads the completed immutable step0 install, writes ONLY new validation/scratch
+outputs, audits effective metadata, runs installed-world/API checks and
+requires the selected binary tuple unchanged before/after. Original step0
+is not relabeled successful. GPU/physical correctness remains unpassed.
