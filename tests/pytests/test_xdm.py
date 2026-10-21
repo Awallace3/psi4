@@ -158,10 +158,11 @@ units angstrom
     # CP and noCP take different damping parameters but share the dimer task.
     with pytest.raises(psi4.ValidationError, match="run bsse_type='nocp' separately"):
         task_planner("energy", "b3lyp-xdm", dimer, bsse_type=["nocp", "vmfc"])
-    # KB49 has no counterpoise fit; the subtask's error reaches the driver through QCEngine.
+    # KB49 has no counterpoise fit for Pople bases; the subtask's error reaches the driver through QCEngine.
     from qcengine.exceptions import InputError
-    with pytest.raises(InputError, match=re.escape("No fitted BJ parameters for b3lyp/aug-cc-pvdz with model kb49 (counterpoise)")):
-        psi4.energy("b3lyp-xdm", molecule=dimer, bsse_type="cp")
+    with pytest.raises(InputError, match=re.escape("No fitted BJ parameters for b3lyp/6-31+g* with model kb49 (counterpoise)")):
+        psi4.energy("b3lyp-xdm/6-31+g*", molecule=dimer, bsse_type="cp")
+    psi4.set_options({"basis": "aug-cc-pvdz"})  # the slash basis above persists
     with pytest.raises(NotImplementedError, match="through composite \\(CBS\\) methods are not implemented"):
         task_planner("energy", "b3lyp-xdm/cc-pv[d,t]z", dimer, bsse_type="cp")
     with pytest.raises(NotImplementedError, match="Counterpoise-based XDM gradients are not implemented"):
@@ -221,15 +222,16 @@ units angstrom
     psi4.set_options({"XDM_COUNTERPOISE": True})
     e_los_ii_cp = psi4.energy("b3lyp-xdm(los-ii)", molecule=mol)
     assert not np.isclose(e_los_ii_cp, e_los_ii, rtol=0.0, atol=1.0e-8)
-    with pytest.raises(psi4.ValidationError, match=re.escape("with model kb49 (counterpoise)")):
-        psi4.energy("b3lyp-xdm", molecule=mol)
+    with pytest.raises(psi4.ValidationError, match=re.escape("b3lyp/6-31+g* with model kb49 (counterpoise)")):
+        psi4.energy("b3lyp-xdm/6-31+g*", molecule=mol)
 
     from psi4.driver.procrouting.xdm_params import get_xdm_bj_params
     assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz", model="los-ii") == (0.362043, 2.452093)
     assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz", model="los-ii", counterpoise=True) == (0.3880, 2.1781)
     assert get_xdm_bj_params("pbe0", "aug-cc-pvdz", model="LOS-II", counterpoise=True) == (0.1592, 3.3865)
+    assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz", counterpoise=True) == (0.5915, 1.5540)
     with pytest.raises(KeyError):
-        get_xdm_bj_params("b3lyp", "aug-cc-pvdz", counterpoise=True)
+        get_xdm_bj_params("b3lyp", "6-31+g*", counterpoise=True)
 
 
 @pytest.mark.xdm
