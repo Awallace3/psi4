@@ -43,8 +43,45 @@ Evidence root:
 Remote run `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261020-response-products-01`.
 Owner snapshot2026-10-21T02:38:54Z: RUNNING1:10:47 remaining; the
 exclusive step has finished. No new allocation authority is inferred.
-Next preparation/ALDA investigation is read-only; further compute requires
-fresh cleanup/budget gates within the existing grant.
+The next preparation/ALDA investigation led to the bounded diagnostic
+below; compute requires fresh cleanup/budget gates within this grant.
+
+### Final-window ALDA attribution diagnostic — pending, not an optimization
+
+Read-only investigationd0a3b711 found no justified next optimization from
+the inclusive contraction/XC timers. The selected next step is a single
+protein83 ALDA attribution replay on unchanged scientificdcc8/corec457.
+Harness `c22bd043ae38cf91454e8b00d173f768f10da221` instruments private AST
+copies only: seven driver sites plus six `_compute_fxc` sites, exactly
+19 successful calls. It measures density projection, both overlap powers,
+inclusive ALDA A/B, leveling, density eigensolver, LibXC exchange/correlation,
+back rotation, undo leveling and potential conversions. Inclusive ALDA
+records contain nested records and must not be summed with them.
+No pinv, operands, multiplication association, cache, cutoff or core changes.
+
+Seven stdlib AST/order/freshness/exception/namespace/publication guards pass.
+Real water on the exact dcc8 native stage observed13 sites/19 calls/22pinv,
+zero GPU routes; same-source uninstrumented control differs by
+7.107304762e-12Eh coupled/0 uncoupled. This is an instrumentation gate,
+not a speedup comparison. Native evidence:
+`build_fdds_cpu/alda-profile/native-water-01/`.
+Reviewdfe55 found no scientific-semantic defect and identified one marker
+ordering bug. Fixed before GPU launch: audit remains pending until all
+final source/harness pin/pristine checks pass, then VERIFIED is renamed
+atomically. Runner-failure restoration/invalid-profile regression added.
+SIGTERM/SIGKILL may leave no profile; absence is never success.
+
+Workflowb9a12804e stages a fresh c22 harness (old6f818 stage stays unused),
+requires all prior cleanup, free common lock, accepted93/138 validation,
+exact pins and fresh RUNNING allocation time≥1080s, then uses only the
+existing shared helper `fdds-alda-profile-c22b-v1`:900s outer bound,
+840s process plus30s kill grace. It does not build or submit a new job.
+One diagnostic replay, no CPU ratio, no extrapolated protein speedup and
+no silently omitted controls. Exact reference libraries/import/core/cache/
+science/8threads/96GiB/localXFS and GPU60/12/20/4 routes remain required.
+Remote output:
+`/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261021-alda-profile-01`.
+GPU completion, attribution and cleanup are not yet established here.
 
 ### Historical preparation and scope
 
