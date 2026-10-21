@@ -8,6 +8,16 @@ preservation of a nonzero child exit code; they execute no external command.
 Attempt002 uses a new pinned `build-smoke-v2` source, `build-smoke-002` run and
 `-attempt002` scratch parent. Resources, dependencies and science are unchanged.
 
+Attempt002 reached CMake and correctly refused the selected environment's
+outdated QCElemental. Attempt003 preserves that failure and exposes ONLY the
+already-installed QCElemental0.50.4, QCEngine0.50.0 and OptKing0.5.0 packages
+and exact dist-info directories from the same old dependency stage through
+`run/deps/python`. No old Psi4 package, installation, download, requirement
+change or whole-prefix overlay is involved. An explicit compute-only import/
+version/path check runs before CMake; the native smoke verifies the same
+module identities. New source/run/scratch are `build-smoke-v3`,
+`build-smoke-003`, and `-attempt003`. Resources and science remain unchanged.
+
 The four original adapter files at `32229e6d10817cd8682e9fdfcabf994e1e588c7e`
 are unchanged. Independent adapter review is statically READY, answer SHA256
 `a912115497d21f208b97834ff4e3e57c8b852e930930f8bb5e06cadb3c475e59`.

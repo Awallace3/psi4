@@ -70,7 +70,7 @@ def main():
     # Process-local selection only; existing ELF/RPATH and numerical defaults untouched.
     handle = ctypes.CDLL(str(library), mode=os.RTLD_NOW | os.RTLD_GLOBAL)
     closure("preloaded")
-    sys.path[:0] = [str(STAGE / "lib"), str(DEPS / "lib"),
+    sys.path[:0] = [str(STAGE / "lib"), str(DEPS / "lib"), str(DEPS / "python"),
                     str(E / "lib/python3.13/site-packages")]
     os.environ["PSIDATADIR"] = str(STAGE / "share/psi4")
     import numpy
@@ -78,6 +78,14 @@ def main():
     import einsums
     import psi4
     from psi4 import core
+    import importlib
+    python_dependencies = {}
+    for name, version in P["python_dependencies"].items():
+        module = importlib.import_module(name)
+        if (module.__version__ != version or not Path(module.__file__).resolve().is_relative_to(
+                (D / "lib" / name).resolve())):
+            raise ValueError("wrong isolated Python dependency: " + name)
+        python_dependencies[name] = dict(version=module.__version__, path=module.__file__)
     core_pin = json.loads((R / "metadata/core.json").read_text())
     if Path(core.__file__).resolve() != Path(core_pin["path"]) or sha(core.__file__) != core_pin["sha256"]:
         raise ValueError("wrong private core")
@@ -101,6 +109,7 @@ def main():
     write("imports.json", dict(python=sys.executable, numpy=numpy.__version__, adcc=adcc.__version__,
         psi4=psi4.__file__, core=core.__file__, core_sha256=sha(core.__file__),
         data=core.get_datadir(), einsums=einsums.__file__, einsums_extension=einsums.core.__file__,
+        python_dependencies=python_dependencies,
         backend_equivalence="not claimed"))
     os.environ["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     os.environ.pop("PYTEST_ADDOPTS", None)

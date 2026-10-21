@@ -1,6 +1,7 @@
 # Psi4 Developers; SPDX-License-Identifier: LGPL-3.0-only
 """One concrete Phoenix build recipe. prepare is stdlib/data-only; run requires allocation."""
 import argparse
+from email.parser import Parser
 import hashlib
 import json
 import os
@@ -24,6 +25,23 @@ INNER = BUILD / "psi4-core-prefix/src/psi4-core-build"
 STAGE = BUILD / "stage"
 CM = str(ENV / "bin/cmake")
 PY = str(ENV / "bin/python3.13")
+
+
+def stage_python_dependencies(source, destination):
+    """Expose only three already-installed pure-Python packages and metadata."""
+    links = {}
+    destination.mkdir(parents=True, exist_ok=False)
+    for package, version in PLAN["python_dependencies"].items():
+        module = source / "lib" / package
+        metadata = source / "lib" / f"{package}-{version}.dist-info"
+        record = Parser().parsestr((metadata / "METADATA").read_text())
+        if not module.is_dir() or record.get("Version") != version:
+            raise ValueError("missing exact Python dependency: " + package)
+        for src in (module, metadata):
+            dst = destination / src.name
+            dst.symlink_to(src, target_is_directory=True)
+            links[str(dst)] = str(src.resolve())
+    return links
 
 
 def sha(p):
@@ -92,6 +110,7 @@ def prepare(commit, tree):
             link("lib/" + stem + suffix)
     for name in ("__init__.py", "utils.py", "core.cpython-313-x86_64-linux-gnu.so"):
         link("lib/einsums/" + name)
+    links.update(stage_python_dependencies(OLD, DEPS / "python"))
     if (DEPS / "include/psi4").exists() or (DEPS / "lib/psi4").exists():
         raise ValueError("unrelated Psi4 exposed")
     write(RUN / "metadata/preparation.json", dict(commit=commit, tree=tree,
@@ -266,6 +285,8 @@ def run(commit, tree):
     write(RUN / "metadata/allocation.json", dict(commit=commit, tree=tree, host=host,
         job_id=os.environ["SLURM_JOB_ID"], scratch=str(scratch), free_scratch_bytes=free,
         environment=str(ENV), compiler_frontends=frontends, started_unix=time.time()))
+    call("python-dependency-imports", [PY, "-I", "-S", "-B",
+                                     HERE / "python_dependency_check.py"])
     call("outer-configure", [CM, "-S", SOURCE, "-B", BUILD, "-G", "Ninja", *options()])
     graph(BUILD, False)
     for package in ("lapack", "hdf5"):

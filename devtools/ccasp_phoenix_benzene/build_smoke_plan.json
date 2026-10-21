@@ -2,12 +2,17 @@
   "schema": "ccasp-phoenix-build-smoke/1",
   "accepted_adapter_commit": "32229e6d10817cd8682e9fdfcabf994e1e588c7e",
   "accepted_adapter_review_sha256": "a912115497d21f208b97834ff4e3e57c8b852e930930f8bb5e06cadb3c475e59",
-  "source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-build-smoke-v2",
+  "source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-build-smoke-v3",
   "environment": "/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt",
   "dependency_source": "/storage/project/r-cs207-0/awallace43/gits/psi4.saptdft-cuest-lifecycle-20261003/build_lifecycle/stage",
+  "python_dependencies": {
+    "qcelemental": "0.50.4",
+    "qcengine": "0.50.0",
+    "optking": "0.5.0"
+  },
   "einsums_library_sha256": "cf1f411130bc902a3ca74280cf23b3e7f325843de8cf38ec4a95fcb6f917faf2",
-  "run": "/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-002",
-  "scratch_parent": "/storage/scratch1/3/awallace43/ccasp-phoenix-benzene-pilot-20261021-attempt002",
+  "run": "/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-003",
+  "scratch_parent": "/storage/scratch1/3/awallace43/ccasp-phoenix-benzene-pilot-20261021-attempt003",
   "build_directory": "build_ccasp_phoenix_benzene",
   "allocation": {
     "account": "gts-cs207-chemx", "partition": "cpu-small", "qos": "embers",

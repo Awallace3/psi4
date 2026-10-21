@@ -8,13 +8,13 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
 #SBATCH --time=08:00:00
-#SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-002/logs/%x-%j.out
-#SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-002/logs/%x-%j.err
+#SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-003/logs/%x-%j.out
+#SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-003/logs/%x-%j.err
 # No dependency, retry, GPU, watchdog, requeue request or benchmark driver.
 set -euo pipefail
 umask 027
-ROOT=/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-build-smoke-v2
-RUN=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-002
+ROOT=/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-build-smoke-v3
+RUN=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-003
 ENV=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt
 test "$#" = 2
 COMMIT=$1
@@ -49,6 +49,7 @@ unset MKL_THREADING_LAYER MKL_INTERFACE_LAYER MKL_SERVICE_FORCE_INTEL
 export PATH="$ENV/bin:/usr/bin:/bin"
 export CONDA_PREFIX="$ENV"
 export LD_LIBRARY_PATH="$RUN/deps/lib:$ENV/lib"
+export PYTHONPATH="$RUN/deps/python"
 export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 export OMP_DYNAMIC=FALSE MKL_DYNAMIC=FALSE

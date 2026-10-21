@@ -2,7 +2,9 @@
 """Stdlib-only regression tests for build command recording, with no child execution."""
 import importlib.util
 import json
+import os
 from pathlib import Path
+import runpy
 import subprocess
 import tempfile
 import unittest
@@ -57,6 +59,47 @@ class BuildCallTests(unittest.TestCase):
 
     def test_child_failure_preserves_arguments_and_exit_code(self):
         self.exercise(7)
+
+    def test_python_prefix_exposes_only_exact_packages_and_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "old"
+            destination = Path(tmp) / "isolated"
+            for package, version in BUILD.PLAN["python_dependencies"].items():
+                module = source / "lib" / package
+                module.mkdir(parents=True)
+                (module / "__init__.py").write_text("raise RuntimeError('must not import')\n")
+                info = source / "lib" / f"{package}-{version}.dist-info"
+                info.mkdir()
+                (info / "METADATA").write_text(f"Name: {package}\nVersion: {version}\n")
+            (source / "lib/psi4").mkdir()
+            links = BUILD.stage_python_dependencies(source, destination)
+            expected = {
+                name
+                for package, version in BUILD.PLAN["python_dependencies"].items()
+                for name in (package, f"{package}-{version}.dist-info")
+            }
+            self.assertEqual({p.name for p in destination.iterdir()}, expected)
+            self.assertEqual(len(links), 6)
+            self.assertFalse((destination / "psi4").exists())
+            self.assertTrue(all(Path(dst).resolve() == Path(src) for dst, src in links.items()))
+
+    def test_python_prefix_refuses_wrong_metadata_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "old"
+            (source / "lib/qcelemental").mkdir(parents=True)
+            info = source / "lib/qcelemental-0.50.4.dist-info"
+            info.mkdir()
+            (info / "METADATA").write_text("Name: qcelemental\nVersion: 0.30.1\n")
+            with self.assertRaisesRegex(ValueError, "qcelemental"):
+                BUILD.stage_python_dependencies(source, Path(tmp) / "isolated")
+
+    def test_dependency_import_gate_refuses_non_compute_execution(self):
+        with mock.patch.dict(os.environ, {"SLURM_JOB_ID": ""}):
+            with self.assertRaisesRegex(ValueError, "compute allocation only"):
+                runpy.run_path(
+                    str(Path(__file__).with_name("python_dependency_check.py")),
+                    run_name="__main__",
+                )
 
 
 if __name__ == "__main__":
