@@ -15,7 +15,7 @@ Distributions are the analytic DF-centre producer (default), supplied
 No partition is inferred from another, and no MBIS partition is available.
 """
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 
 import numpy as np
@@ -54,6 +54,7 @@ class BoundedProperties:
     diagnostics: tuple
     resources: dict
     provenance: dict
+    recoupled_dispersion: object = None
 
     @property
     def refined_tensors(self):
@@ -106,6 +107,83 @@ def check_max_parameters(value, name='max_parameters'):
     return value
 
 
+def _refinement_node(sites, anchors, omega, *, cutoff, weight_type, weight_coefficient,
+                     declared, static_penalized, static_reference, provenance):
+    """Published static-mask construction, with a separate reference snapshot.
+
+    Keep the published current-node completeness check even for explicit masks:
+    undeclared new current components remain an error, not silently discarded.
+    """
+    if static_reference is None:
+        static_reference = (omega, refine._validated_anchor_tensors(sites, anchors))
+    model = refine.refinement_model(sites, anchors, frequency_au=omega, cutoff=cutoff,
+        weight_type=weight_type, weight_coefficient=weight_coefficient,
+        declared_variables=declared, penalized_variables=static_penalized, provenance=provenance)
+    if declared is None:
+        declared = model.parameter_labels
+        derived = model
+        model = refine.refinement_model(sites, anchors, frequency_au=omega, cutoff=cutoff,
+            weight_type=weight_type, weight_coefficient=weight_coefficient,
+            declared_variables=declared, provenance=provenance)
+        if (model.parameter_entries, model.anchors, model.strengths) != (
+                derived.parameter_entries, derived.anchors, derived.strengths):
+            raise RuntimeError('cutoff-derived variable list does not reproduce its own model')
+    if static_penalized is None:
+        unpenalized = set(model.unpenalized_variables)
+        static_penalized = tuple(n for n in model.parameter_labels if n not in unpenalized)
+    if static_reference[0] == 0.:
+        static_hash = refine._anchor_hash(static_reference[1])
+        model = replace(model, penalty_selection='static_reference',
+            static_reference_sha256=static_hash, selection_sha256='',
+            provenance=(model.provenance + '; penalty_selection=static_reference; '
+                        f'static_reference_sha256={static_hash}; anchor_sha256={model.anchor_sha256}'))
+    else:
+        # Published all-dynamic grids select from their first node as well.
+        # Preserve that admitted call form without mislabelling it "static".
+        subset_hash = hashlib.sha256(repr(tuple(sorted(static_penalized))).encode()).hexdigest()
+        model = replace(model, penalty_selection='explicit_subset', selection_sha256=subset_hash)
+    return model, declared, static_penalized, static_reference
+
+
+def refinement_models(sites, frequency_anchors, *, cutoff, weight_type, weight_coefficient,
+                      declared_variables=None, provenance=''):
+    """Engine-free builder with the same STATIC default as bounded_properties.
+
+    Not cleanup's per-current-node default. It retains the published subset
+    construction/completeness behavior and adds immutable reference identity.
+    """
+    nodes = tuple(frequency_anchors)
+    if not nodes:
+        raise ValueError('at least one frequency/anchor node required')
+    sites = refine._validated_sites(sites)
+    declared = None if declared_variables is None else tuple(declared_variables)
+    static_penalized = reference = None
+    models = []
+    for omega, anchors in nodes:
+        model, declared, static_penalized, reference = _refinement_node(sites, anchors, omega,
+            cutoff=cutoff, weight_type=weight_type, weight_coefficient=weight_coefficient,
+            declared=declared, static_penalized=static_penalized, static_reference=reference,
+            provenance=provenance)
+        models.append(model)
+    return tuple(models)
+
+
+def _refined_dispersions(results, quadrature, max_order, ledger, *, recoupled=False, log, wfn=None):
+    """Optional angular contraction precedes any isotropic publication.
+
+    An ordinary call never imports the angular consumer or queries its tables.
+    A failed optional contraction therefore cannot leave new QCVariables behind.
+    """
+    angular = None
+    if recoupled:
+        from .isapol_native_recoupled import refined_recoupled_dispersion
+        angular = refined_recoupled_dispersion(results, cp_weights=quadrature.cp_weights,
+            quadrature_provenance=quadrature.provenance, max_order=max_order, ledger=ledger)
+    isotropic = refine.refined_isotropic_dispersion(results, cp_weights=quadrature.cp_weights,
+        quadrature_provenance=quadrature.provenance, max_order=max_order, log=log, wfn=wfn)
+    return isotropic, angular
+
+
 def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution='df_centre_analytic',
                        sites, bonds, quadrature, response_grid, smoothing,
                        shell_cutoff, charge_penalty, anchor_metric_damping,
@@ -115,7 +193,8 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                        declared_variables=None, max_parameters=MAX_PARAMETERS, max_order=10,
                        scratch_directory=None, log=None,
                        distributed_moments=None, response='reference_h2h1', fdds=None,
-                       publish_qcvariables=False, partition_recipe=None, partition_grid=None):
+                       publish_qcvariables=False, partition_recipe=None, partition_grid=None,
+                       recoupled_dispersion=False):
     """Run the complete native chain under one explicit resource contract.
 
     Scientific scope: canonical restricted C1 PBE0, NONE or FIXED_GRAC, plain
@@ -156,6 +235,9 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
     for timings, diagnostics and the dispersion tables. ``publish_qcvariables`` publishes the refined-dispersion
     QCVariables on ``wfn`` after a successful contraction (the oeprop route);
     by default nothing is written to the wavefunction.
+    ``recoupled_dispersion=True`` additionally contracts full refined local
+    tensors into local-axis Cn(t,u,J) under the SAME cumulative ledger. It is
+    opt-in, not an orientation-resolved energy or replacement isotropic model.
     """
     if log is None:
         log = _lg.StageLog(1)
@@ -198,6 +280,14 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
             seen.add(tuple(sorted(edge)))
         if type(max_order) is not int or max_order not in refine.DISPERSION_ORDERS:
             raise ValueError('max_order must be 6, 8, 10 or 12')
+        if type(recoupled_dispersion) is not bool:
+            raise TypeError('recoupled_dispersion must be an explicit bool')
+        angular_plan = None
+        if recoupled_dispersion:
+            from .isapol_native_recoupled import recoupled_plan
+            angular_plan = recoupled_plan(sites, len(quadrature.frequencies), max_order)
+            if angular_plan[0] > resources.max_bytes:
+                raise ValueError('native recoupled preflight: shared numeric byte resource limit')
         if type(weight_type) is not int or weight_type not in refine.WEIGHT_TYPES:
             raise ValueError('invalid weight_type')
         for name, value in (('weight_coefficient', weight_coefficient), ('cutoff', cutoff)):
@@ -235,6 +325,8 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
             response=response, fdds=fdds)
         with runner as solver:
             ledger, auxiliary = solver.ledger, solver.auxiliary
+            if angular_plan is not None:
+                ledger.admit('native recoupled preflight', angular_plan[0])
             p = auxiliary.nfunction
             q, nf = 25*len(sites), len(quadrature.frequencies)
             source = dict(state_sha256=solver.state_sha256, auxiliary_sha256=solver.auxiliary_sha256,
@@ -246,7 +338,11 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                           weight_type=weight_type, weight_coefficient=weight_coefficient, cutoff=cutoff,
                           declared_variables=declared_variables, model=solver.model,
                           response=response, lw_residual_policy=solver.lw_residual_policy,
-                          lw_disclosure=solver.lw_disclosure)
+                          lw_disclosure=solver.lw_disclosure,
+                          penalty_selection=('static_reference' if quadrature.frequencies[0] == 0.
+                                             else 'first_node_subset'),
+                          selection_reference_frequency_au=quadrature.frequencies[0],
+                          recoupled_dispersion=recoupled_dispersion)
             def produce_moments(ledger):
                 if distribution == 'supplied':
                     return distributed_moments
@@ -282,6 +378,10 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
             else:
                 solve_record, localization = 'native Psi4 declared-AUX FDDS solve', 'Reported-input'
             static_penalized = None
+            static_reference = None
+            reference_bytes = 8*sum(s.component_count**2 for s in sites)
+            ledger.reserved += reference_bytes
+            ledger.admit('retained static reference tensors', 0)
             for node, omega in enumerate(quadrature.frequencies, 1):
                 tag = f'node {node}/{nf}, omega={omega:.12g} au'
                 solved = solver.solve(omega)
@@ -313,34 +413,19 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                 # every later node penalizes exactly that selection, each with its
                 # own anchor (process_data.F90:2112-2134, 2269-2275). Declared
                 # extras the static cutoff did not select stay free at every node.
-                model = refine.refinement_model(sites, anchors, frequency_au=omega, cutoff=cutoff,
-                    weight_type=weight_type, weight_coefficient=weight_coefficient,
-                    declared_variables=declared_variables, penalized_variables=static_penalized,
+                model, declared_variables, static_penalized, static_reference = _refinement_node(
+                    sites, anchors, omega, cutoff=cutoff, weight_type=weight_type,
+                    weight_coefficient=weight_coefficient, declared=declared_variables,
+                    static_penalized=static_penalized, static_reference=static_reference,
                     provenance=source['model'])
-                if declared_variables is None:
-                    # localize.py runs process on the first (static) node while no
-                    # .pdef exists; process writes it (process_data.F90:2046-2058)
-                    # and every later node reads that file, not its own cutoff scan.
-                    # Every node then carries that one declared list, so stage06
-                    # sees a single declared model; on this node the explicit
-                    # list reproduces the cutoff scan exactly.
-                    declared_variables = model.parameter_labels
-                    derived = model
-                    model = refine.refinement_model(sites, anchors, frequency_au=omega, cutoff=cutoff,
-                        weight_type=weight_type, weight_coefficient=weight_coefficient,
-                        declared_variables=declared_variables, provenance=source['model'])
-                    if (model.parameter_entries, model.anchors, model.strengths) != (
-                            derived.parameter_entries, derived.anchors, derived.strengths):
-                        raise RuntimeError('cutoff-derived variable list does not reproduce its own model')
-                    del derived
-                    log.items((('cutoff-derived variables from this node', len(declared_variables)),))
-                if static_penalized is None:
-                    unpenalized = set(model.unpenalized_variables)
-                    static_penalized = tuple(n for n in model.parameter_labels if n not in unpenalized)
                 local_tensors.append(local.raw_local)
                 diagnostics.append(dict(frequency=omega, response_residual=residual,
                     localization_residual=local.frequency_diagnostics[0].residuals.maximum,
-                    response_diagnostics=response_diagnostics))
+                    response_diagnostics=response_diagnostics,
+                    penalty_selection=model.penalty_selection,
+                    static_reference_sha256=model.static_reference_sha256,
+                    anchor_sha256=model.anchor_sha256, penalty_anchors=model.anchors,
+                    penalty_strengths=model.strengths, refinement_provenance=model.provenance))
                 log.items((('maximum localization residual', diagnostics[-1]['localization_residual']),))
                 # The fitting phase owns only the AUX coefficient response and its
                 # small model; do not carry full nonlocal/LW input snapshots into
@@ -361,6 +446,11 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                 models.append(model)
                 del coefficient, model
             solver.release()
+            source['static_reference_sha256'] = models[0].static_reference_sha256
+            source['selection_reference_sha256'] = refine._anchor_hash(static_reference[1])
+            source['refinement_variables'] = models[0].parameter_labels
+            del static_reference
+            ledger.reserved -= reference_bytes
             count, channels = models[0].parameter_count, models[0].channel_count
             log.stage('Complete-cloud PFIT',
                       (('parameters', count), ('rows per pass', row_count),
@@ -377,8 +467,8 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
             for node, result in enumerate(results, 1):
                 log.items(((f'node {node} solver status', str(result.status)),
                            (f'node {node} maximum parameter change from anchor', result.anchor_shift_maxabs)))
-            dispersion = refine.refined_isotropic_dispersion(results, cp_weights=quadrature.cp_weights,
-                quadrature_provenance=quadrature.provenance, max_order=max_order, log=log,
+            dispersion, angular = _refined_dispersions(results, quadrature, max_order, ledger,
+                recoupled=recoupled_dispersion, log=log,
                 wfn=wfn if publish_qcvariables else None)
             log.stage('Bounded resource totals')
             log.items((('site pairs', len(dispersion.pairs)), ('peak planned numeric bytes', ledger.peak),
@@ -388,4 +478,4 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
         return BoundedProperties(quadrature.frequencies, tuple(local_tensors), tuple(results), dispersion,
             tuple(diagnostics), dict(maximum_numeric_plan=ledger.peak, charged_work=ledger.work,
             charged_io_bytes=ledger.io, frequency_rhs=rhs, fit_rows=nf*npoint*(npoint+1),
-            stages=ledger.stages), dict(source, stability=stability))
+            stages=ledger.stages), dict(source, stability=stability), angular)

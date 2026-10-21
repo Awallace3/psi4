@@ -43,6 +43,11 @@ public ``isapol_bounded.bounded_properties`` orchestration are described in
 :ref:`sec:isapol`.
 Units are bohr and atomic units throughout, on global Cartesian axes.
 
+.. toctree::
+   :maxdepth: 1
+
+   isapol_water_diagnostics
+
 Explicit bases
    ``psi4.driver.procrouting.isapol_basis`` holds the immutable
    ``ShellRecipe``/``BasisRecipe`` descriptors, whose shell coefficients already

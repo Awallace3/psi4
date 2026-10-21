@@ -70,10 +70,14 @@ refused.
 Requesting a computation
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-The two refined tasks are passed to :py:func:`~psi4.driver.oeprop` together
+The refined tasks are passed to :py:func:`~psi4.driver.oeprop` together
 with an explicit backend and a molecule preset.  Both run the same full chain;
 any other ``ATOMIC_*`` request, or one without ``atomic_backend='BOUNDED_DF'``,
 is refused.
+
+The additional explicit task ``ATOMIC_REFINED_RECOUPLED_DISPERSION`` requests
+full local-axis angular coefficients as described below. Combined tasks still
+execute one shared response/localization/refinement chain.
 
 .. _`table:isapol_tasks`:
 
@@ -178,6 +182,52 @@ property request without any ``ATOMIC_*`` name and without ``atomic_backend``
 is ordinary :py:func:`~psi4.driver.oeprop` and touches none of this.
 
 
+Explicit angular coefficients
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Request ``ATOMIC_REFINED_RECOUPLED_DISPERSION`` with the same explicit backend
+and preset. The returned ``r.recoupled_dispersion`` retains full local-axis
+real Racah/no-CS :math:`C_n(t,u,J)`, all ordered site pairs, exact CP weights
+and declared/table/unrestricted coverage inventories. It is not an oriented
+scalar :math:`C_n`, a dimer energy or a trace-only reconstruction.
+``r.dispersion`` remains the original isotropic result. The seven original
+positional fields of ``BoundedProperties`` are unchanged; the additional
+field defaults to ``None``. Ordinary tasks do no angular work.
+
+Direct ``bounded_properties(..., recoupled_dispersion=True)`` or the same
+explicit keyword on an existing oeprop task is also available. Do not combine
+that keyword with the angular task: duplicate declarations are refused.
+The angular task alone publishes no new QCVariable namespace; include
+``ATOMIC_REFINED_DISPERSION`` to publish the existing isotropic namespace.
+Optional contraction occurs before isotropic publication, and the existing
+request-level failure/cleanup contract remains in force.
+
+All routes use the existing ``BoundedResponse`` and the same cumulative
+numeric/work/I/O ledger. Angular planning is charged before response
+preparation; final contraction is admitted against cumulative resources.
+The default 64-variable allowance and explicit maximum-72 admission option,
+supplied/analytic distributions and reference/native-FDDS response options
+are unchanged. No ISA or MBIS dependency is introduced at this layer.
+
+The published STATIC selection default is preserved, not replaced by cleanup's
+current-node selection: the first node freezes the penalized subset and every
+later node uses its own anchors/weights, with declared extras free. Legacy
+all-dynamic quadratures retain their first-node subset without a false static
+claim. The published undeclared-current-component refusal is also retained.
+The first-node tensors now have a separately charged, immutable snapshot until
+the sweep finishes; resource ceilings themselves are not enlarged.
+
+For static-first sweeps, models/diagnostics now label ``static_reference``,
+retain a common reference SHA256 and separate current anchor hashes/strengths
+at each frequency. All-dynamic sweeps label ``first_node_subset`` in campaign
+provenance and ``explicit_subset`` on models. The shared native PFIT declaration
+labels only the shared inventory/reference, never a first-node current hash as
+certifying all nodes. These provenance/repr identities migrate, not the
+published selection numerics. See :doc:`isapol_water_diagnostics` for limitations
+and standalone diagnostic procedures. No production density caller/default is
+changed, and no integrated compiled validation is claimed by this source port.
+
+
 Preset settings
 ^^^^^^^^^^^^^^^
 
@@ -219,7 +269,7 @@ Additional keyword arguments accept ``auxiliary_recipe``, ``response_grid``,
 ``distribution``,
 ``distributed_moments``, ``partition_recipe``, ``partition_grid``,
 ``response``, ``fdds``, ``resources``,
-``max_order``, ``scratch_directory`` and ``log``.  Object
+``max_order``, ``scratch_directory``, ``recoupled_dispersion`` and ``log``.  Object
 arguments replace the corresponding generated object; scalar generation options
 then have no effect on that object.  Unknown keyword arguments are rejected.
 

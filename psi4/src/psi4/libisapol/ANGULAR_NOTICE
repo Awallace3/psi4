@@ -1,0 +1,15 @@
+Angular numerical conventions and tabulated records originate from CamCASP
+6.0 by Alston J. Misquitta and Anthony J. Stone.
+Copyright (c) 2019 Anthony Stone.
+
+The MIT permission and disclaimer are reproduced in RECOUPLED_CAMCASP_LICENSE
+in this directory; retain them with source and binary distributions containing
+these tables or substantial portions of the derived recoupling implementation.
+realcg_manifest.txt binds the upstream numerical sources, including C6..C12
+recoupling sources. The shipped table payloads are realcg_data.inc and
+recoupling_data.inc; no upstream executable is included or invoked.
+
+Psi4 additions retain their file-level LGPL-3.0-only notices. The independent
+anisotropic differential contraction is not an upstream source extraction.
+Missing real-CG ordered pairs (3,4), (4,3), (4,4) are structurally absent, not
+zero-valued data; declared/table/unrestricted rank coverage are distinct.

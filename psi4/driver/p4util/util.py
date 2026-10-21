@@ -64,11 +64,13 @@ def oeprop(wfn: core.Wavefunction, *args: List[str], **kwargs):
     :type title: str
     :param title: label prepended to all psivars computed
 
-    :param atomic_backend: optional explicit ``BOUNDED_DF`` backend for the two
+    :param atomic_backend: optional explicit ``BOUNDED_DF`` backend for the
         ATOMIC_REFINED_* tasks. Requires ``preset='water'`` or ``'benzene'``;
         kwargs override changed Psi4 options and preset values. This model
         does not run SCF. ATOMIC_* properties are refused without it. Access the
         owned BoundedProperties result with ``psi4.atomic_property_result(wfn)``.
+        ``ATOMIC_REFINED_RECOUPLED_DISPERSION`` additionally requests the owned
+        full local-axis angular coefficients; ordinary tasks do no recoupling.
 
     :examples:
 
@@ -451,4 +453,3 @@ def libint2_print_out() -> None:
     core.print_out(f"    Onebody   basis highest AM E, G, H:  {', '.join(('-' if d is None else str(d)) for d in ams['onebody'])}\n")
     # excluding sph_emultipole
     core.print_out(f"    Solid Harmonics ordering:            {core.libint2_solid_harmonics_ordering()}\n")
-
