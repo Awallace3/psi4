@@ -1,5 +1,22 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## Cachy migration — private setup in progress
+
+User requested a dedicated worktree and local agent on `cachy:gits/psi4`
+to avoid Phoenix GPU queues. Read-only probes identified RTX3090/24GiB
+(UUID GPU-d36fd194-bdd6-3d53-96c9-6a67e3225eac), driver615.78.08,
+Ryzen2700X/32GiB RAM. Existing desktop GPU contexts stay untouched.
+Existing master and three sibling worktrees/environments are preserved.
+Private setup target: `/home/amwalla3/gits/psi4-disp0-cachy/`.
+
+`devtools/disp0/cachy/AGENT_HANDOFF.md` records exact scientific/dependency
+pins, current native factory/import blockers and the unpassed GPU gate.
+`bootstrap_env.py` creates NEW private cp313/GNU14.3/CUDA13.3 and LLVM23
+prefixes, excluding installed Psi4/Einsums1 packages from the baseline.
+It records raw solver/install failures; no implicit CUDA13.2 fallback.
+Actual creation/compilation/import/device results will be separate receipts.
+No Phoenix allocation or environment changes are part of this migration.
+
 ## Current LOCAL work — CuPy-free CUDA replacement / strict0.2.50
 
 User explicitly authorized custom CUDA kernels and dropping CuPy, superseding
