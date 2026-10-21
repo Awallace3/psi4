@@ -138,13 +138,14 @@ Grimme correction.  For example::
    energy('b3lyp-xdm')
 
 ``-XDM`` selects the KB49 damping model. Use ``-XDM(KB49)`` explicitly or
-``-XDM(LOS-II)`` for the LoS-II refit, which is fitted only for the
-functional/basis combinations in :ref:`table:xdmlosiiparams` and
-:ref:`table:xdmlosiicpparams`. KB49 has no-CP and counterpoise fits for every
-functional in :ref:`table:xdmfuncs` with aug-cc-pV[DT]Z and cc-pV[DT]Z. Each model keeps separate no-CP and
-counterpoise fits; the counterpoise set is selected automatically for
-``bsse_type='cp'`` and ``'vmfc'`` (see below). Any other combination
-requires |scf__xdm_dispersion_parameters|.
+``-XDM(LOS-II)`` for the LoS-II refit. KB49 has no-CP and counterpoise fits
+for every functional in :ref:`table:xdmfuncs` with aug-cc-pV[DT]Z and
+cc-pV[DT]Z. ``-XDM(LOS-II)`` is defined only for ``b3lyp-xdm(los-ii)`` and
+``pbe0-xdm(los-ii)``, with fits for the basis sets in
+:ref:`table:xdmlosiiparams` and :ref:`table:xdmlosiicpparams`. Each model
+keeps separate no-CP and counterpoise fits; the counterpoise set is selected
+automatically for ``bsse_type='cp'`` and ``'vmfc'`` (see below). A defined
+method with an unfitted basis requires |scf__xdm_dispersion_parameters|.
 
 The dispersion correction is available after a calculation in the
 PSI variable :psivar:`DISPERSION CORRECTION ENERGY`.
@@ -196,6 +197,20 @@ Damping Parameters
 The BJ damping parameters :math:`(a_1, a_2)` are looked up automatically from
 an internal table keyed by ``functional/basis``.  Because XDM coefficients are
 density-derived, :math:`(a_1, a_2)` vary with both functional and basis set.
+
+The KB49 parameters minimize the root-mean-square percent error of the
+interaction energies of the 49 KB49 dimers, computed with |PSIfour| 1.12
+(density fitting, frozen core, a (99, 590) DFT grid). The no-CP set was fitted
+with |scf__dft_grid_orientation| ``INPUT``; the counterpoise set superposes
+ghost-centre moments (see **Ghost Atoms**). The RMSP and MAE of every fit are
+recorded next to its entry in ``psi4/driver/procrouting/xdm_params.py``.
+
+.. warning:: No-CP interaction energies in cc-pVDZ and cc-pVTZ are not
+   recommended with XDM. Basis-set superposition error overbinds these
+   dimers, and most of the no-CP fits reach the bound :math:`a_1 = 0` with
+   KB49 errors of 33--72% (cc-pVDZ) and 18--36% (cc-pVTZ) RMSP. Use
+   ``bsse_type='cp'`` (12--26% and 9--23% RMSP) or an augmented basis set.
+   The no-CP parameters for these basis sets are kept for completeness.
 
 .. _`table:xdmparams`:
 
@@ -429,6 +444,12 @@ Keywords summarized:
    | |scf__dft_radial_points|         | Number of radial points for the DFT grid. Affects the XDM integration accuracy.               |
    +----------------------------------+-----------------------------------------------------------------------------------------------+
    | |scf__basis|                     | Orbital basis set. Used with the functional name to look up fitted :math:`(a_1, a_2)` values. |
+   +----------------------------------+-----------------------------------------------------------------------------------------------+
+   | |scf__xdm_counterpoise|          | Use the counterpoise damping fit. Set automatically on every task of ``bsse_type='cp'`` or    |
+   |                                  | ``'vmfc'``; set by hand only for counterpoise subsystem jobs run outside the many-body driver.|
+   +----------------------------------+-----------------------------------------------------------------------------------------------+
+   | |scf__dft_grid_orientation|      | ``STANDARD`` or ``INPUT`` axes for the DFT grid. Set to ``INPUT`` automatically on every task |
+   |                                  | of ``bsse_type='nocp'`` (any DFT functional) so subsystems share grid points.                 |
    +----------------------------------+-----------------------------------------------------------------------------------------------+
 
 
