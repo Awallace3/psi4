@@ -46,6 +46,12 @@ signatures are **status(handle,uint32_t*)**, independently read from the actual
 same-process handle and plan; we never create a hidden handle or reuse one
 serialized from another PID.
 
+The admitted handle must already use native FP64 math mode1; cuEST's default
+mode0 may use mixed precision even with FP64 input/output buffers. Its owner
+must explicitly set the mode. The provider reads it back after mapped-symbol
+admission and before every DFMO batch, rejecting/invalidation on disagreement
+or getter failure rather than silently changing a borrowed handle's policy.
+
 Admission verifies the native getter result0/2/50, required DFMO symbols,
 actual function-address ownership in mapped canonical cuEST bytes, and every
 recognized loaded CUDA toolkit library against an explicitly rooted,
@@ -81,6 +87,7 @@ auxiliary ordering and common factor gauge, and explicitly configure:
 * full Coulomb exchange fraction1, range-separated fraction/omega0;
 * fitting algorithm **MATRIXPOWER1**, not defaultQR0;
 * relative conditioning1, fitting cutoff1e-12 and metric−1/2 factors.
+* native FP64 math mode1 (set by the factory, read back by the provider).
 
 Negative eigenvalue treatment, relative rank truncation and contracted-factor/
 signed-energy parity require actual comparisons against native Psi4.

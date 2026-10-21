@@ -137,6 +137,7 @@ def configure_abi(native):
         "cuestGetMajorVersion":[pointer,ct.POINTER(ct.c_uint32)],
         "cuestGetMinorVersion":[pointer,ct.POINTER(ct.c_uint32)],
         "cuestGetPatchVersion":[pointer,ct.POINTER(ct.c_uint32)],
+        "cuestGetMathMode":[pointer,ct.POINTER(ct.c_int)],
         "cuestParametersCreate":[ct.c_int,ct.POINTER(pointer)],
         "cuestParametersDestroy":[ct.c_int,pointer],
         "cuestDFMOIntegralsComputeWorkspaceQuery":
@@ -166,6 +167,22 @@ def native_version(native, handle):
         version.append(value.value)
     require(tuple(version) == SDK_VERSION, f"Native cuEST must be0.2.50, not {version}")
     return tuple(version)
+
+
+def native_math_mode(native, handle):
+    """Read the admitted live handle's mode; FP64 buffers alone do not prove it.
+
+    Canonical0.2.50 context_api.h uses an enum output, not uint32_t. Default
+    mode0 may use mixed precision; native FP64 mode1 must be set by the owner.
+    Never silently mutate a borrowed handle to make it pass admission.
+    """
+    require(isinstance(handle,int) and not isinstance(handle,bool) and 0 < handle < 2**64,
+            "A valid nonnull admitted cuEST handle is required")
+    mode = ct.c_int()
+    status = native.cuestGetMathMode(ct.c_void_p(handle),ct.byref(mode))
+    require(status == 0, f"Native cuEST math mode query failed: {status}")
+    require(mode.value == 1, f"Native cuEST FP64 math mode1 required, not {mode.value}")
+    return mode.value
 
 
 def mapped_rows(text):

@@ -26,18 +26,25 @@ class Session(CPUSession):
 
 
 class Native:
-    def __init__(self,ao,order,version=(0,2,50)):
+    def __init__(self,ao,order,version=(0,2,50),math_mode=1,math_code=0):
         self.ao,self.order=ao,order
+        self.math_mode,self.math_code=math_mode,math_code
         self.created=self.destroyed=self.computed=0
         self.query_code=self.compute_code=self.destroy_code=0
         self.cuestParametersCreate=Mock(side_effect=self.create)
         self.cuestParametersDestroy=Mock(side_effect=self.destroy)
         self.cuestDFMOIntegralsComputeWorkspaceQuery=Mock(side_effect=self.query)
         self.cuestDFMOIntegralsCompute=Mock(side_effect=self.compute)
+        self.cuestGetMathMode=Mock(side_effect=self.get_math_mode)
         for name,value in zip(("Major","Minor","Patch"),version):
             def get(handle,out,value=value):
                 out._obj.value=value;return 0
             setattr(self,"cuestGet"+name+"Version",Mock(side_effect=get))
+    def get_math_mode(self,handle,out):
+        assert isinstance(handle,ct.c_void_p) and handle.value==123
+        assert isinstance(out._obj,ct.c_int)
+        out._obj.value=self.math_mode
+        return self.math_code
     def create(self,kind,out):
         assert kind==49
         out._obj.value=1234;self.created+=1;return 0
@@ -67,8 +74,9 @@ class Native:
 
 
 class Transport(unittest.TestCase):
-    def fixture(self,order="C",version=(0,2,50),audit_error=None,**changes):
-        ao,sp,_,_=inputs();session=Session();native=Native(ao,order,version)
+    def fixture(self,order="C",version=(0,2,50),audit_error=None,
+                math_mode=1,math_code=0,**changes):
+        ao,sp,_,_=inputs();session=Session();native=Native(ao,order,version,math_mode,math_code)
         self.native_attempt=native
         primary=types.SimpleNamespace(nbf=lambda:ao.shape[1])
         aux=types.SimpleNamespace(nbf=lambda:ao.shape[0])
@@ -131,6 +139,53 @@ class Transport(unittest.TestCase):
         self.native_attempt.cuestGetMajorVersion.assert_not_called()
         self.native_attempt.cuestGetMinorVersion.assert_not_called()
         self.native_attempt.cuestGetPatchVersion.assert_not_called()
+        self.native_attempt.cuestGetMathMode.assert_not_called()
+
+    def test_native_fp64_mode_is_required_not_merely_fp64_output_buffers(self):
+        for mode in (0,2,-1):
+            with self.subTest(mode=mode),self.assertRaisesRegex(RuntimeError,"FP64"):
+                self.fixture(math_mode=mode)
+            self.assertEqual(self.native_attempt.created,0)
+        with self.assertRaisesRegex(RuntimeError,"math mode query failed: 7"):
+            self.fixture(math_code=7)
+
+    def test_changed_math_mode_invalidates_provider_before_dfmo_allocation(self):
+        p,s,n,_,sp=self.fixture()
+        n.math_mode=0
+        with self.assertRaisesRegex(RuntimeError,"FP64"):
+            p.compute({"x":(sp["r"],sp["a"])})
+        self.assertTrue(p.failed)
+        self.assertEqual(n.created,0)
+        self.assertEqual(s.live_bytes,0)
+        n.math_mode=1
+        with self.assertRaisesRegex(RuntimeError,"invalidated"):
+            p.compute({"x":(sp["r"],sp["a"])})
+
+    def test_compute_math_query_status_or_exception_invalidates_without_allocation(self):
+        for exception in (False,True):
+            with self.subTest(exception=exception):
+                p,s,n,_,sp=self.fixture()
+                n.math_code=7
+                if exception:
+                    n.cuestGetMathMode.side_effect=RuntimeError("query exception")
+                with self.assertRaisesRegex(RuntimeError,"query exception" if exception
+                                             else "math mode query failed: 7"):
+                    p.compute({"x":(sp["r"],sp["a"])})
+                self.assertTrue(p.failed)
+                self.assertEqual(n.created,0)
+                self.assertEqual(s.live_bytes,0)
+                n.math_code=0
+                with self.assertRaisesRegex(RuntimeError,"invalidated"):
+                    p.compute({"x":(sp["r"],sp["a"])})
+
+    def test_report_reads_actual_mode_and_rejects_drift(self):
+        p,s,n,_,_=self.fixture()
+        with patch.object(dfmo.identity,"audit_maps",
+                          return_value={"cuda_mapped_sha256":{s.blas_path:s.blas_sha256}}):
+            self.assertEqual(p.report()["native_math_mode"],1)
+            n.math_mode=0
+            with self.assertRaisesRegex(RuntimeError,"FP64"):
+                p.report()
 
 
 if __name__=="__main__":
