@@ -45,3 +45,31 @@ Preserve the original ``water_df_variant_approved_006`` and all old HOLDs.
 The 506 C-SLATER weight print-interval violations remain unresolved; grid
 ordering agreement is not weight, field, property or CamCASP parity.
 Never rerun a sealed lab harness into its historical output ID.
+
+Refinement selection metadata (PFIT layer)
+-----------------------------------------
+
+The published direct-helper API ``refinement_model(...,
+penalized_variables=...)`` is retained, including an empty explicit subset.
+With no new keyword, no subset means current-node cutoff selection; a supplied
+subset means exactly that subset, with the published current-node declaration
+completeness check. Current tensors still supply all anchors/weights; declared
+extras outside selection remain free. No existing call changes numerically.
+
+An opt-in ``penalty_selection='static_reference'`` instead requires
+``static_reference_tensors`` in the same site order/shapes/axes. Selection uses
+the first site's strict ``abs(value)>cutoff`` scan within each COPY type;
+current tensors still supply selected anchors, including small/zero values.
+References under any other policy, a subset with explicit ``'current'`` or
+``'static_reference'``, or ``'explicit_subset'`` without a subset are refused.
+There is no silent precedence between two selection declarations.
+
+Models gain ``penalty_selection``, ``static_reference_sha256`` and
+``selection_sha256``. Legacy subset calls are labelled ``explicit_subset``;
+their canonical subset hash is independent of order/frequency. Static hashes
+snapshot all reference tensors as little-endian binary64 bytes, not site/frame
+metadata; current ``anchor_sha256`` is separate. Reference policy provenance
+adds these labels/hashes. Dataclass repr/equality and reference-mode provenance
+identities therefore migrate; compare explicit scientific declarations, not
+cross-version repr/hash identity, to assess numerical compatibility. Legacy
+current/subset provenance strings are unchanged.
