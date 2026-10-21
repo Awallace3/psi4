@@ -66,9 +66,18 @@ summary = {"diagnostic_only": True, "groups": groups, "errors_Eh": errors,
            "no_optimized_speedup_claim": True,
            "inclusive_groups": ["alda_A_inclusive", "alda_B_inclusive"],
            "bookkeeping_seconds_lower_bound": p["bookkeeping_seconds_lower_bound"]}
-with (out / "VERIFIED.json").open("x") as f:
+with (out / "AUDIT_PENDING.json").open("x") as f:
     json.dump(summary, f, indent=2)
 print(json.dumps(summary))
 PY
 test "$(git -C "$root" rev-parse HEAD)" = "$pin"
+test -z "$(git -C "$root" status --porcelain --untracked-files=no)"
+test "$(git -C "$source" rev-parse HEAD)" = "$source_pin"
 test -z "$(git -C "$source" status --porcelain --untracked-files=no)"
+# A late provenance failure must never leave a success marker.
+"$env/bin/python" - "$out" <<'PY'
+import os, pathlib, sys
+out = pathlib.Path(sys.argv[1])
+assert not (out / "VERIFIED.json").exists()
+os.rename(out / "AUDIT_PENDING.json", out / "VERIFIED.json")
+PY

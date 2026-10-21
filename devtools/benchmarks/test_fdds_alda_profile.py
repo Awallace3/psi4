@@ -1,8 +1,12 @@
 """Offline stdlib AST/ordering/failure guards; these are not GPU tests."""
 import ast
-import inspect
+import hashlib
+import json
 from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import fdds_alda_profile as profile
 
@@ -80,6 +84,33 @@ class Guards(unittest.TestCase):
         self.assertEqual(copied(), 42)
         self.assertEqual(calls, [(5, 3)])
         self.assertIs(original.__globals__["target"], target)
+
+    def test_runner_failure_restores_driver_and_publishes_invalid_profile(self):
+        fake = SimpleNamespace(__file__=__file__, df_fdds_dispersion=original, _compute_fxc=original)
+        expected = {"target(operand(), factor=3)": "target"}
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "profile.json"
+            sha = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+            with patch.object(profile, "load_driver", return_value=fake), \
+                    patch.object(profile, "DRIVER_SITES", expected), \
+                    patch.object(profile, "FXC_SITES", expected), \
+                    patch.object(profile.sys, "argv", ["profile", "runner", sha, str(output)]), \
+                    patch.object(profile.runpy, "run_path", side_effect=ValueError("runner failed")):
+                with self.assertRaisesRegex(ValueError, "runner failed"):
+                    profile.main()
+            self.assertIs(fake.df_fdds_dispersion, original)
+            self.assertIs(fake._compute_fxc, original)
+            result = json.loads(output.read_text())
+            self.assertFalse(result["valid"])
+            self.assertEqual(result["records"], [])
+
+    def test_success_marker_is_after_final_provenance_guards(self):
+        script = Path(__file__).with_name("fdds_alda_profile.sh").read_text()
+        self.assertNotIn('(out / "VERIFIED.json").open', script)
+        publish = script.index('os.rename(out / "AUDIT_PENDING.json", out / "VERIFIED.json")')
+        self.assertGreater(publish, script.rindex('test "$(git -C "$source" rev-parse HEAD)"'))
+        self.assertGreater(publish, script.rindex('test -z "$(git -C "$source" status'))
+        self.assertGreater(publish, script.rindex('test -z "$(git -C "$root" status'))
 
 
 if __name__ == "__main__":
