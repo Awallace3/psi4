@@ -77,3 +77,15 @@ Fixed by mandatory parseable requested+allocated CPU/node/memory proof and GPU
 rejection in both, with negative regressions and unit-normalized48GiB positive.
 **38 combined guards PASS2.012s**. Narrow TRES-fix confirmation pending.
 No resource shape/science change; new03 source rather than adopting staged02.
+
+Live14250580 proved Phoenix's interactive default is Requeue1. The strict
+guard correctly refused GO but the lease was unused before accounting
+PREEMPTED0:0 at09:46:30Eastern. Do not infer build success from exit0.
+The later old-ID flag correction made no update because its initial controller
+query failed. Evidence and source03 remain immutable.
+
+Prepared explicit opt-in correction for a separately approved NEW own ID,
+with own UID/job-name checks, single durable update and unchanged-resource/
+time verification. New negative/positive mocks cover missing approval,
+already-zero/no update, exactly one authorized update and wrong owner/name.
+**42 local guards PASS2.524s**. No replacement allocation requested by tests.

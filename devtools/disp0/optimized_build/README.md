@@ -8,17 +8,31 @@ attempt**. Current execution is ONE `salloc --no-shell`, 8CPU/48GiB/2h,
 freeembers/chemx, no GPU; the corrected batch proposal is superseded, not an
 additional job. Queue wait is bounded by `--immediate=600`; no allocation retry.
 Resource/account/route/quota/headroom/duplicate checks remain mandatory.
-`salloc` has no `--no-requeue` option; effective `Requeue=0`, `Restarts=0`,
-CPU-only RUNNING and exact resources are checked before any step is allowed.
-No automatic cancellation/release/job modification is performed by acquisition.
+`salloc` has no `--no-requeue` option; Phoenix26.05.4 actually granted14250580
+with defaultRequeue1. Effective `Requeue=0`, `Restarts=0`, CPU-only RUNNING
+and exact resources are still required before any step. A replacement request
+may use `--correct-requeue --approval-reference <explicit-new-own-ID-approval>`:
+after checking own user/job name and all resource fields, make ONE durable
+own-ID `Requeue=0` update, verify unchanged resources/account/start/end/time,
+then emit GO. Defaults do not permit this correction; missing approval rejects
+before allocation. No automatic cancellation/release/allocation retry.
 
-Final source namespace is `P/gits/psi4.disp0-opt064-20261021-03/source`.
+The consumed first interactive source is
+`P/gits/psi4.disp0-opt064-20261021-03/source`; any separately approved
+replacement gets a NEW private numbered source root (e.g.04), never adoption
+or replay of03. Preflight permits only canonical owned
+`P/gits/psi4.disp0-opt064-YYYYMMDD-NN/source` roots, exact clean Git pin and
+one absent attempt per root.
 The staged6d1a0e9f/-02 controller was not used for acquisition: final review
 required proof of BOTH requested and allocated TRES. The corrected controller
 requires present/parseable CPU8/node1/mem48GiB in both, rejects GPU resources
 in both, and normalizes equivalent Slurm memory units. Stage-02 stays immutable;
 its fresh hash-bound quota evidence may still support the same filesystems.
 The failed20261021 root and every earlier input/source/build are preserved.
+Allocation14250580 subsequently reached actual accounting PREEMPTED0:0,
+07:46:19–09:46:30Eastern, while the policy guard prevented every build step.
+It is not a successful build or current holder. A later explicitly approved
+old-ID correction failed its FIRST controller read; no update RPC occurred.
 Acquisition uses permanent `interactive-attempt`, line-fsynced raw responses,
 durable accepted ID before controller query, and a grant manifest. Pending
 receipts are never grant proof. One owner; serial exclusive8CPU steps, with

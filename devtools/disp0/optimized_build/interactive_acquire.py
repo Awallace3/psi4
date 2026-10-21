@@ -35,23 +35,34 @@ def accepted_id(line):
     return match.group(1) if match else None
 
 
-def validate_controller(text, job):
+def validate_controller(text, job, *, before_approved_correction=False):
     fields = dict(token.split("=", 1) for token in text.split() if "=" in token)
     expected = {"JobId": job, "Account": "gts-cs207-chemx", "QOS": "embers",
-                "JobState": "RUNNING", "Requeue": "0", "Restarts": "0",
+                "JobName": "disp0-opt064-i",
+                "JobState": "RUNNING", "Restarts": "0",
                 "NumCPUs": "8", "NumTasks": "1", "NumNodes": "1", "TimeLimit": "02:00:00",
                 "Partition": "cpu-small", "MinMemoryNode": "48G", "BatchFlag": "0"}
     admission.require(all(fields.get(k) == v for k, v in expected.items()),
                       f"Wrong effective interactive CPU allocation: {fields}")
+    owner = re.fullmatch(r"[^()]+\(([0-9]+)\)", fields.get("UserId", ""))
+    admission.require(owner is not None and int(owner.group(1)) == os.getuid(),
+                      "Allocation is not owned by this user")
+    allowed = ("0", "1") if before_approved_correction else ("0",)
+    admission.require(fields.get("Requeue") in allowed, "Wrong effective requeue policy")
     admission.require(fields.get("NodeList") not in (None, "", "(null)"), "No node grant proof")
     validate_tres(fields.get("ReqTRES"))
     validate_tres(fields.get("AllocTRES"))
     return fields
 
 
-def acquire(source, pin, attempt, quota, quota_sha):
+def acquire(source, pin, attempt, quota, quota_sha, *, correct_requeue=False, approval_reference=None):
+    admission.require(not correct_requeue or approval_reference,
+                      "Explicit new-own-ID flag correction approval required")
     _, intent, environment = admission.preflight(
         source, pin, attempt, quota, quota_sha, interactive=True)
+    if correct_requeue:
+        admission.record(attempt, "flag-correction-approval.json",
+                         {"reference": approval_reference, "scope": "ONE Requeue=0 on this NEW own ID only"})
     # salloc has no --no-requeue option. Interactive allocations have no batch
     # script to replay; effective Requeue=0/Restarts=0 is mandatory before GO.
     resources = [value for value in admission.RESOURCES if value != "--no-requeue"]
@@ -60,7 +71,7 @@ def acquire(source, pin, attempt, quota, quota_sha):
     admission.record(attempt, "dispatch-intent.json",
                      {"argv": argv, "timestamp_unix": time.time(),
                       "queue_wait_seconds": WAIT_SECONDS, "no_retry": True,
-                      "release": "NO automatic release/job changes by this acquisition helper"})
+                      "release": "NO automatic release; only explicitly approved own-ID flag correction"})
     job = None
     # One noninteractive invocation. Every received line is durable before
     # acceptance is printed or any controller is queried.
@@ -86,7 +97,24 @@ def acquire(source, pin, attempt, quota, quota_sha):
     admission.require(status == 0 and job is not None, "No verified grant; NEVER replay acquisition")
     response = admission.capture(["scontrol", "show", "job", job, "-o"], timeout=10)
     admission.record(attempt, "controller.json", response)
-    fields = validate_controller(admission.checked(response), job)
+    fields = validate_controller(admission.checked(response), job,
+                                 before_approved_correction=correct_requeue)
+    if fields["Requeue"] == "1":
+        admission.require(correct_requeue and approval_reference, "No flag update authority")
+        argv = ["scontrol", "update", f"JobId={job}", "Requeue=0"]
+        admission.record(attempt, "flag-update-intent.json",
+                         {"argv": argv, "approval": approval_reference, "timestamp_unix": time.time()})
+        update = admission.capture(argv, timeout=10)
+        admission.record(attempt, "flag-update-response.json", update)
+        admission.checked(update)
+        after = admission.capture(["scontrol", "show", "job", job, "-o"], timeout=10)
+        admission.record(attempt, "controller-after-flag.json", after)
+        final = validate_controller(admission.checked(after), job)
+        for key in ("Account", "QOS", "Partition", "NumCPUs", "NumTasks", "NumNodes",
+                    "MinMemoryNode", "TimeLimit", "ReqTRES", "AllocTRES", "StartTime",
+                    "EndTime", "NodeList", "Restarts"):
+            admission.require(final.get(key) == fields.get(key), f"Unexpected allocation change: {key}")
+        fields = final
     admission.record(attempt, "allocation.json",
                      {"status": "ALLOCATED_CPU_ONLY", "job_id": job, "fields": fields,
                       "source": str(source), "recipe_pin": pin, "intent": intent,
@@ -102,9 +130,12 @@ def main():
     parser.add_argument("--attempt", type=Path, required=True)
     parser.add_argument("--quota-proof", type=Path, required=True)
     parser.add_argument("--quota-sha256", required=True)
+    parser.add_argument("--correct-requeue", action="store_true")
+    parser.add_argument("--approval-reference")
     args = parser.parse_args()
     os.umask(0o077)
-    acquire(args.source, args.pin, args.attempt, args.quota_proof, args.quota_sha256)
+    acquire(args.source, args.pin, args.attempt, args.quota_proof, args.quota_sha256,
+            correct_requeue=args.correct_requeue, approval_reference=args.approval_reference)
 
 
 if __name__ == "__main__":

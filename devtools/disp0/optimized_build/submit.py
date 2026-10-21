@@ -87,7 +87,8 @@ def preflight(source, pin, attempt, quota, quota_sha, *, interactive=False):
     source, attempt, quota = Path(source), Path(attempt), Path(quota)
     require(re.fullmatch("[0-9a-f]{40}", pin), "Full immutable recipe pin required")
     require(source.is_absolute() and source.resolve() == source, "Canonical source required")
-    require(source == P / "gits/psi4.disp0-opt064-20261021-03/source",
+    require(source.name == "source" and source.parent.parent == P / "gits"
+            and re.fullmatch(r"psi4\.disp0-opt064-[0-9]{8}-[0-9]{2}", source.parent.name),
             "Not the new dedicated source namespace")
     require(attempt == source.parent / ("interactive-attempt" if interactive else "submission-attempt"),
             "Wrong attempt namespace")

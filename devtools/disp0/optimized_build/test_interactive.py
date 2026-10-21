@@ -2,6 +2,7 @@
 import contextlib
 import importlib.util
 import io
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -13,7 +14,8 @@ sys.path.insert(0, str(HERE))
 import interactive_acquire as module
 
 JOB = "987654"
-FIELDS = (f"JobId={JOB} Account=gts-cs207-chemx QOS=embers JobState=RUNNING Requeue=0 "
+FIELDS = (f"JobId={JOB} JobName=disp0-opt064-i UserId=fixture({os.getuid()}) "
+          "Account=gts-cs207-chemx QOS=embers JobState=RUNNING Requeue=0 "
           "Restarts=0 NumCPUs=8 NumTasks=1 NumNodes=1 TimeLimit=02:00:00 Partition=cpu-small "
           "MinMemoryNode=48G BatchFlag=0 NodeList=fixture-node ReqTRES=cpu=8,mem=48G,node=1 "
           "AllocTRES=cpu=8,mem=48G,node=1,billing=2432")
@@ -30,6 +32,7 @@ class InteractiveTests(unittest.TestCase):
         self.controller = FIELDS
         self.rpcs = 0
         self.queries = 0
+        self.updates = 0
 
     def preflight(self, *args, **kwargs):
         if self.attempt.exists():
@@ -53,16 +56,23 @@ class InteractiveTests(unittest.TestCase):
         return Process()
 
     def capture(self, argv, **kwargs):
+        if argv[:2] == ["scontrol", "update"]:
+            self.assertEqual(argv, ["scontrol", "update", f"JobId={JOB}", "Requeue=0"])
+            self.assertTrue((self.attempt / "flag-update-intent.json").exists())
+            self.updates += 1
+            self.controller = self.controller.replace("Requeue=1", "Requeue=0")
+            return {"argv": argv, "exit": 0, "stdout": "", "stderr": ""}
         self.queries += 1
         self.assertEqual((self.attempt / "accepted-job-id.txt").read_text(), JOB + "\n")
         self.assertIn("Granted", (self.attempt / "salloc.raw").read_text())
         return {"argv": argv, "exit": 0, "stdout": self.controller, "stderr": ""}
 
-    def invoke(self):
+    def invoke(self, **kwargs):
         with patch.object(module.admission, "preflight", self.preflight), patch.object(
                 module.subprocess, "Popen", self.popen), patch.object(
                 module.admission, "capture", self.capture), contextlib.redirect_stdout(io.StringIO()):
-            module.acquire(self.root / "source", "a" * 40, self.attempt, self.root / "quota", "b" * 64)
+            module.acquire(self.root / "source", "a" * 40, self.attempt,
+                           self.root / "quota", "b" * 64, **kwargs)
 
     def test_one_acquisition_and_durable_id_before_controller(self):
         self.invoke()
@@ -121,6 +131,31 @@ class InteractiveTests(unittest.TestCase):
         self.assertEqual(self.rpcs, 1)
         self.assertEqual(self.queries, 0)
         self.assertTrue((self.attempt / "salloc.raw").exists())
+
+    def test_explicit_new_id_flag_authority_corrects_once_before_go(self):
+        self.controller = FIELDS.replace("Requeue=0", "Requeue=1")
+        self.invoke(correct_requeue=True, approval_reference="FIXTURE_EXPLICIT_NEW_ID_APPROVAL")
+        self.assertEqual(self.rpcs, 1)
+        self.assertEqual(self.updates, 1)
+        self.assertEqual(self.queries, 2)
+        self.assertTrue((self.attempt / "allocation.json").exists())
+
+    def test_no_approval_cannot_request_flag_correction(self):
+        with self.assertRaisesRegex(RuntimeError, "approval required"):
+            self.invoke(correct_requeue=True)
+        self.assertEqual(self.rpcs, 0)
+        self.assertEqual(self.updates, 0)
+
+    def test_no_flag_rpc_when_already_zero(self):
+        self.invoke(correct_requeue=True, approval_reference="FIXTURE_EXPLICIT_NEW_ID_APPROVAL")
+        self.assertEqual(self.updates, 0)
+        self.assertEqual(self.rpcs, 1)
+
+    def test_wrong_owner_or_name_not_admitted(self):
+        for text in (FIELDS.replace(f"({os.getuid()})", f"({os.getuid()+1})"),
+                     FIELDS.replace("JobName=disp0-opt064-i", "JobName=another-agent")):
+            with self.assertRaises(RuntimeError):
+                module.validate_controller(text, JOB)
 
 
 if __name__ == "__main__":

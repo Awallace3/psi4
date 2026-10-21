@@ -2425,3 +2425,71 @@ memoryunitnormalization and missing/overalloc/GPU-only-allocated negatives.
 controllerintoNEW03/source (no reset/adoption). Quotaevidencefrom02 may
 be reused whilefresh/hash-bound for SAMEproject+scratch filesystems.
 No science/resource-budget change or extraallocation.
+
+Final source pin **10ea8add2ab049d293d0ea088d9e2c282c752f82**.
+Reviewd428f3ea1 confirms requested/allocatedTRESblockerresolved, **no scoped
+blocker**; no commands/tests executedbyreviewer. Actuallocal38PASS2.012s,
+SDK39PASS0.29s remain executed evidence. Pushb8c897f0b pendingreceipt.
+
+Stage02 **b61b89406 TURNCOMPLETE exit0**: exact6d, clean0700/uid3170273,
+science587unchanged; noallocation. ActualSlurm26.05.4; sallochelp records
+--immediate[=secs] and no--no-requeue, rawhelpSHA
+055a615afc836c1f783f84c180eca82608d1fc846d25b6b213998f27b2a2a1c3.
+Freshquota2026-10-21T11:35:38Z/1792582538:
+project6317.6/8192GB, fileslimit0(unlimited);
+scratch4876.0/15360GB,212542/1Mfiles. Projectphysicalavailable1965267968KiB/
+37280862699inodes; scratch1234220843848KiB/1325641389inodes.
+RawquotaSHA b1e7421dd01537fa7a361c268e241cab9f5837dc3070a6a67038df01d53eb766,
+stderrempty. Humanconservativequota1600GiBproject+1Mfiles and9000GiBscratch+
+700kfiles comfortably >64GiB/50k thresholds. No display-format parsing.
+NextNEW03Gitstage preserves02; samefreshhash-bound quota canbe used if
+<600s old atfinalpreflight. Freshqueue/headroom/routechecks stillinside
+durableone-shotacquisition. Actualallocationnotrequestedyet atthisentry.
+
+10eapublicationb8c897f0bPASS/exactremoteSHA. FinalNEW03 stage
+**bccf77c14TURNCOMPLETE exit0**: exact10ea/pristine/0700uid3170273,
+science587equal. Noreset/adoptionof02. Freshquotatimestamp
+**2026-10-21T11:44:20Z**/1792583060: project6318.1/8192GB;
+scratch5054.8/15360GB and212658/1Mfiles; physbytes/inodesample.
+RawstdoutSHA95e53faee50f40c3339a6b5147c93e3d007b545c3dba3fd6a9635c8d2d41e99d,
+stderrempty. Sameconservative1600GiBproject/9000GiBscratch+1M/700kinodes
+humanadmission; noquotaformatparser. ActualSALLOChelp/versionalready26.05.4.
+
+**ONEinteractiveCPU acquisitionb40cff0bd launched**: freshsource/route/
+headroom/duplicates/quota gates insidepermanent03/interactive-attempt,
+then one `salloc --no-shell --immediate=600` with1node1task8CPU48G2h/
+explicitfreeembers/gts-cs207-chemx/noGPU. Noextra correctedbatchjob,
+no allocationretry. Self-containedconfiguredSSH PHX_TIMEOUT700/backend730,
+not anopen stdin/model-review session. Everyaccepted/rawlinefsynced,
+realIDdurableBEFOREcontroller; requireRUNNING+exactbothReqTRES/AllocTRES/
+Requeue0/Restarts0 beforeCPUbuildGO. Request/grantreceipt pending atthisentry;
+do not infer acceptedID/state. Finalreviewd428 scopedPASS. Owner+parent
+notified CPUprepturnclosed/acquisitionactive; no GPUqueries/holderborrow.
+
+**Actual14250580CPUgrant**, b40cff0bd: nodeatl1-1-02-006-8-2,
+chemx/cpu-small/embers,8CPU48G2h,Req/AllocTRESexactnogpu,Restarts0,
+BatchFlag0. AcceptedID/raw/controllerdurable. Controllerguardstopped on
+site **Requeue1** default, so acquisitiontaskexit1 did NOT mean noallocation.
+Allocationmanifest/CPUbuildGO was NOTwritten; no srunbuildstep launched.
+JobStart07:46:19/EndTime09:46:21Eastern. User/coordinatorexplicitlyapproved
+ONEold-IDflagupdateRequeue0; questionnaire resolved with that approval, no
+newapprovalasked. Subsequent user says tryagain.
+
+Atresume10:22Eastern, one correction **b3e625dbf** failed FIRST
+`scontrol show job14250580`: exit1/Invalidjobid. Saved authorization+before
+query; branch never reached update-intent/RPC. **No flagupdate performed**.
+Neverreplaythisattempt. One boundedownaccounting **bed1afb83exit0** proves
+terminal **PREEMPTED0:0**, elapsed02:00:11,07:46:19–09:46:30Eastern,
+sameCPU node; queueempty. No currentCPUholder. No compilation/API/physical/
+GPUvalidation occurred; leasewasheldunused whilepolicyguardblocked.
+Oldsource03/attempt/correctionrecords/failed14249189/oldUNKNOWN unchanged.
+
+Parent+ownerinformed exactactualterminalrecord, no update/newallocation.
+FreshONEreplacementCPU8CPU48G2hembersdecision requested with bundled
+permission ONEnew-own-IDRequeue0(ifsite1) and immediatebuildfollowup with
+no morehumanquestion. **Replacementnotyetrequested/authorized atthisentry**.
+Localcontrollerprep now has explicit opt-inflagcorrection requiring approval
+reference, ownUID/jobname+completeTRES proof, onefsyncedupdate and actual
+unchangedresource/start/end/timeproof beforeGO. Defaults remainstrict.
+Newfreshnumberedsource namespace avoids codeeditingjusttoselect04; no
+attemptreuse/adoption.42localguards PASS2.524s. No remoteactionfromtests.
