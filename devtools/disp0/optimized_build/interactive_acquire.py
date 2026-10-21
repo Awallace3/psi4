@@ -12,6 +12,24 @@ import submit as admission
 WAIT_SECONDS = 600
 
 
+def validate_tres(value):
+    admission.require(isinstance(value, str) and value and value != "(null)", "Missing TRES proof")
+    fields = {}
+    for token in value.split(","):
+        pair = token.split("=", 1)
+        admission.require(len(pair) == 2 and pair[0] and pair[1] and pair[0] not in fields,
+                          "Malformed/duplicate TRES proof")
+        fields[pair[0]] = pair[1]
+    admission.require(not any("gpu" in key.lower() or key.startswith(("gres/mps", "gres/shard"))
+                              for key in fields), "GPU resource in CPU allocation")
+    admission.require(fields.get("cpu") == "8" and fields.get("node") == "1", "Wrong CPU/node TRES")
+    memory = re.fullmatch(r"([0-9]+)([KMGT]?)", fields.get("mem", ""))
+    admission.require(memory is not None, "Malformed memory TRES")
+    factor = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}[memory.group(2)]
+    admission.require(int(memory.group(1)) * factor == 48 * 1024**3, "Wrong memory TRES")
+    return fields
+
+
 def accepted_id(line):
     match = re.search(r"salloc: (?:Pending job allocation|Granted job allocation) ([1-9][0-9]*)\b", line)
     return match.group(1) if match else None
@@ -21,12 +39,13 @@ def validate_controller(text, job):
     fields = dict(token.split("=", 1) for token in text.split() if "=" in token)
     expected = {"JobId": job, "Account": "gts-cs207-chemx", "QOS": "embers",
                 "JobState": "RUNNING", "Requeue": "0", "Restarts": "0",
-                "NumCPUs": "8", "NumTasks": "1", "TimeLimit": "02:00:00",
+                "NumCPUs": "8", "NumTasks": "1", "NumNodes": "1", "TimeLimit": "02:00:00",
                 "Partition": "cpu-small", "MinMemoryNode": "48G", "BatchFlag": "0"}
     admission.require(all(fields.get(k) == v for k, v in expected.items()),
                       f"Wrong effective interactive CPU allocation: {fields}")
-    admission.require(fields.get("NodeList") not in (None, "", "(null)")
-                      and "gres/gpu" not in fields.get("ReqTRES", ""), "No CPU-only grant proof")
+    admission.require(fields.get("NodeList") not in (None, "", "(null)"), "No node grant proof")
+    validate_tres(fields.get("ReqTRES"))
+    validate_tres(fields.get("AllocTRES"))
     return fields
 
 

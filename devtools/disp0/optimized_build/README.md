@@ -12,7 +12,12 @@ Resource/account/route/quota/headroom/duplicate checks remain mandatory.
 CPU-only RUNNING and exact resources are checked before any step is allowed.
 No automatic cancellation/release/job modification is performed by acquisition.
 
-Source namespace is now `P/gits/psi4.disp0-opt064-20261021-02/source`.
+Final source namespace is `P/gits/psi4.disp0-opt064-20261021-03/source`.
+The staged6d1a0e9f/-02 controller was not used for acquisition: final review
+required proof of BOTH requested and allocated TRES. The corrected controller
+requires present/parseable CPU8/node1/mem48GiB in both, rejects GPU resources
+in both, and normalizes equivalent Slurm memory units. Stage-02 stays immutable;
+its fresh hash-bound quota evidence may still support the same filesystems.
 The failed20261021 root and every earlier input/source/build are preserved.
 Acquisition uses permanent `interactive-attempt`, line-fsynced raw responses,
 durable accepted ID before controller query, and a grant manifest. Pending

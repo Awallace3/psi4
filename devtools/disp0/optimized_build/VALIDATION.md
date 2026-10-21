@@ -70,3 +70,10 @@ turn limits and produced **no committed answer**; neither is counted as a pass.
 Known SDK blocker is addressed and worker-level tests pass. Freezing current
 code after direct inspection; advisory `df014bf6e` reviews the frozen SDK and
 interactive-allocator code while independent Git staging/preflight proceeds.
+
+Final advisory `df014bf6e`: no remaining SDK evidence/budget blocker; one
+allocator blocker (missing requested TRES and GPU resources only in AllocTRES).
+Fixed by mandatory parseable requested+allocated CPU/node/memory proof and GPU
+rejection in both, with negative regressions and unit-normalized48GiB positive.
+**38 combined guards PASS2.012s**. Narrow TRES-fix confirmation pending.
+No resource shape/science change; new03 source rather than adopting staged02.

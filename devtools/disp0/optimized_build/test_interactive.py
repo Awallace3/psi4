@@ -14,8 +14,9 @@ import interactive_acquire as module
 
 JOB = "987654"
 FIELDS = (f"JobId={JOB} Account=gts-cs207-chemx QOS=embers JobState=RUNNING Requeue=0 "
-          "Restarts=0 NumCPUs=8 NumTasks=1 TimeLimit=02:00:00 Partition=cpu-small "
-          "MinMemoryNode=48G BatchFlag=0 NodeList=fixture-node ReqTRES=cpu=8,mem=48G,node=1")
+          "Restarts=0 NumCPUs=8 NumTasks=1 NumNodes=1 TimeLimit=02:00:00 Partition=cpu-small "
+          "MinMemoryNode=48G BatchFlag=0 NodeList=fixture-node ReqTRES=cpu=8,mem=48G,node=1 "
+          "AllocTRES=cpu=8,mem=48G,node=1,billing=2432")
 
 
 class InteractiveTests(unittest.TestCase):
@@ -94,6 +95,24 @@ class InteractiveTests(unittest.TestCase):
         for text in (FIELDS + ",gres/gpu=1", FIELDS.replace("Requeue=0", "Requeue=1")):
             with self.assertRaises(RuntimeError):
                 module.validate_controller(text, JOB)
+
+    def test_missing_or_gpu_only_allocated_tres_is_not_cpu_proof(self):
+        for text in (
+                FIELDS.replace("ReqTRES=cpu=8,mem=48G,node=1 ", ""),
+                FIELDS.replace("AllocTRES=cpu=8,mem=48G,node=1,billing=2432", ""),
+                FIELDS.replace("AllocTRES=cpu=8,mem=48G,node=1,billing=2432",
+                               "AllocTRES=cpu=8,mem=48G,node=1,gres/gpu=1"),
+                FIELDS.replace("AllocTRES=cpu=8", "AllocTRES=cpu=16"),
+                FIELDS.replace("AllocTRES=cpu=8,mem=48G", "AllocTRES=cpu=8,mem=96G")):
+            with self.assertRaises(RuntimeError):
+                module.validate_controller(text, JOB)
+
+    def test_tres_is_parseable_unique_and_memory_unit_equivalent(self):
+        module.validate_tres("cpu=8,mem=49152M,node=1,billing=2432")
+        for text in (None, "", "(null)", "cpu=8,mem=48G,node=1,cpu=16",
+                     "cpu=8,mem=48G,node=1,broken", "cpu=8,mem=48M,node=1"):
+            with self.assertRaises(RuntimeError):
+                module.validate_tres(text)
 
     def test_unparseable_reply_is_unknown_not_absence(self):
         self.lines = "unexpected response\n"

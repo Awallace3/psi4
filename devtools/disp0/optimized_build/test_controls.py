@@ -30,7 +30,7 @@ class SubmissionTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.p = Path(self.temp.name)
-        self.source = self.p / "gits/psi4.disp0-opt064-20261021-02/source"
+        self.source = self.p / "gits/psi4.disp0-opt064-20261021-03/source"
         self.source.mkdir(parents=True, mode=0o700)
         self.source.parent.chmod(0o700)
         scripts = self.source / "devtools/disp0/optimized_build"

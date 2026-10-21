@@ -2407,3 +2407,21 @@ NOcommittedanswer, NOT counted asreviewPASS. KnownSDKblockerfixed+36/39
 testsPASS; directsourceinspectioncomplete. Freezingcurrentcode for Git
 staging/freshCPUpreflight; advisorydf014bf6e reviewsfrozenSDK/allocator
 withadequatebudget while independentpreparation proceeds. No allocationyet.
+
+Frozen executable correction pin **6d1a0e9f138e250bbc832046f1b6c802e731288e**.
+Narrow allocator review **de16fa371** retrieved: **no scopedblocker**, given
+testedpreflightguarantees; oneRPC/durableintent+raw+ID/controllerCPUresource/
+Requeue0/Restarts0 guards confirmed. Livecontroller acceptance stillunproved.
+Publication b524b344e pendingterminalreceipt atthisentry; no allocationyet.
+
+Publication6d b524b344ePASS/exactGitHubref. CPUstage02b61b89406 active.
+Finaladvisorydf014bf6e retrieved: SDKtimeout/outputevidencefix and budget
+separation have **noadditionalblocker**. Oneallocatorblocker: absentReqTRES
+or GPU onlyinAllocTRES couldpass. TightenedcontrollerrequiresBOTHpresent/
+parseable CPU8/node1/memexact48GiB, rejectsGPUinboth, NumNodes1 required;
+memoryunitnormalization and missing/overalloc/GPU-only-allocated negatives.
+38combinedguards PASS2.012s. Scopedfixconfirmationd428f3ea1 pending.
+6dcontroller has NOTrequestedallocation; preserve staged02 and freezefixed
+controllerintoNEW03/source (no reset/adoption). Quotaevidencefrom02 may
+be reused whilefresh/hash-bound for SAMEproject+scratch filesystems.
+No science/resource-budget change or extraallocation.
