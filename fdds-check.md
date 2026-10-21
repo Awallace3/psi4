@@ -1,6 +1,6 @@
 # FDDS cuEST implementation handoff
 
-## New cycle authorized — acquisition started, no new grant established yet
+## New cycle granted — 14250361, CUDA build active
 
 On 2026-10-21 the user explicitly approved **one H200 / 8 CPU / 128 GiB /
 four-hour inferno interactive allocation**, account gts-cs207-chemx.
@@ -27,12 +27,20 @@ free; dependencies, accepted stage and protein cache exist. Test-only14250291
 is simulated, NOT an accepted job. Scheduler estimateNovember4 is not a
 guaranteed start.
 
-Single acquisition workflowbb6dbd345 was started after these gates, with fresh
+Single acquisition workflowbb6dbd345 completed0 after these gates, with fresh
 account/duplicate/test-only admission before dispatch, explicit04:00:00 and
-durable request intent. Intended new run:
+durable request intent. Actual **job14250361** granted on H200
+`GPU-7b97881b-0162-f053-5bca-fd4cf7d96ded`,
+nodeatl1-1-02-012-23-0.pace.gatech.edu, eight CPUs/128GiB,
+gts-cs207-chemx/inferno. Prolog observed11:28:07Z. Actual run:
 `/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-shared/20261021-fdds-4h-01`.
-No accepted ID or grant has yet been audited; do not replay an ambiguous
-request. No new GPU execution or speedup is established by this note.
+Fresh squeue account/QoS/remaining-budget gate passed before exclusive step
+fdds-density-compile-089c-v1 (workflowbbe0c83a1): private local-XFS probe then
+fresh CUDA-enabled compile/import, not numerical GPU validation. Official
+watcherb95c3316a and five-minute artifact observerbee247c83 are active.
+Test-only14250360 was simulated; actual14250361 is the sole accepted request.
+New numerical GPU validation and speedup are still pending.
+Root receipt: `fdds-cycle-14250361.json`.
 Scope/gates: `devtools/benchmarks/fdds_cycle_20261021.md`.
 
 ## Previous allocation closed — no live GPU resource
