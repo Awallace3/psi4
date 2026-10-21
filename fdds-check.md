@@ -1,6 +1,30 @@
 # FDDS cuEST implementation handoff
 
-## New cycle granted — 14250361, CUDA build active
+## New cycle — projection gate passed; opt-in SVD candidate unvalidated
+
+Projection attribution on14250361 passed its independent artifact audit:
+source089c/core1448, **93 unique tests/138 executions**, zero failures/errors/
+skips (focused44/4.905s, SAPT1/10.310s, full93/19.478s). Cleanup
+2026-10-21T11:50:26Z, empty pre/post GPU tables, no quarantine.
+Exact coarse phases: AO integrals+collapse11.349539582s,
+inverse metric0.002365835s, **auxiliary three-center overlap+collapse
+85.777103891s**. Diagnostic whole FDDS778.995161860s is not a benchmark or
+cross-allocation timing comparison. Coupled difference1.896332735e-10Eh,
+uncoupled0 versus the prior accepted numerical reference.
+
+The dominant projection region includes integral generation, not merely a
+BLAS contraction. The next bounded implementation is opt-in general FP64
+cuSOLVER SVD, source5305cb2d8b, **not yet validated**. CUEST_FDDS_PINV defaults
+false; four original sites retain strict1e-13 relative rank cutoff and22
+hybrid calls. No solve/Hermitian substitution. Twenty-nine offline guards
+passed; native183-test buildb519ce12d and static reviewd9d187 are pending.
+
+Declared next timing subset is protein83 only, five controls:
+CPU0/baseGPU0/candidateGPU0/candidateGPU1/baseGPU1. External runner bytes are
+frozen d599720a06 for every arm. InitialCPU0/baseGPU0 workflowbf187a527 uses
+the immutable089c/core1448 stage while candidate preparation/build is local
+only; no allocation-side build/compute overlap. Neither new timing ratios nor
+successful candidate GPU execution are established by this note.
 
 On 2026-10-21 the user explicitly approved **one H200 / 8 CPU / 128 GiB /
 four-hour inferno interactive allocation**, account gts-cs207-chemx.
@@ -39,11 +63,12 @@ fdds-density-compile-089c-v1 (workflowbbe0c83a1): private local-XFS probe then
 fresh CUDA-enabled compile/import, not numerical GPU validation. Official
 watcherb95c3316a and five-minute artifact observerbee247c83 are active.
 Test-only14250360 was simulated; actual14250361 is the sole accepted request.
-New numerical GPU validation and speedup are still pending.
+Projection GPU validation is now passed as recorded above; SVD candidate
+validation and new matched speedups remain pending.
 Root receipt: `fdds-cycle-14250361.json`.
 Scope/gates: `devtools/benchmarks/fdds_cycle_20261021.md`.
 
-## Previous allocation closed — no live GPU resource
+## Historical allocation14214205 closed — separate from active14250361
 
 Established watcherbda4c38b4 confirmed14214205 **TIMEOUT**, exit0:0,
 elapsed08:00:08, at2026-10-21T03:53:00Z (`ALL-TERMINAL`).
@@ -61,10 +86,10 @@ Local raw accounting/release evidence:
 `build_fdds_cpu/allocation-14214205-terminal/`.
 Root summary: `fdds-allocation-14214205-terminal.json`.
 
-Latest numerically validated scientific source remains **dcc8ac9713/corec457**.
-The later6c133 timer-only source is reviewed/staged but uncompiled and
-resource-deferred in that cycle, not a successor GPU-validation pass.
-The newly authorized cycle above must establish its own build/test evidence.
+The latest accepted optimized speedup source from that cycle remains
+**dcc8ac9713/corec457**. Later6c133 timer-only source was uncompiled and
+resource-deferred in that cycle. Its equivalent089c build has now passed
+the new cycle's gates above; this does not establish an SVD optimization pass.
 
 ## Response-product iteration — independent GPU/timing audit passed
 

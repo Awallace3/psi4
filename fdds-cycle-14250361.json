@@ -28,7 +28,40 @@
     "core_sha256": "147e56bdb3068476fa545c90e5e9ee8f8b3e979f9b103d72eead758d19e120e0",
     "evidence": "build_fdds_cpu/cycle-20261021/native-density-6c133b4e5c-v1"
   },
-  "new_gpu_validation": "pending",
+  "projection_gpu_validation": {
+    "source_pin": "089c4a63163257ee339ba48877a845c11cc84c9a",
+    "core_sha256": "1448dfe15d6ec9009da1f8e33ccd89acd556f15871e0dcce162d04757868d7d3",
+    "unique_tests": 93,
+    "executions": 138,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "focused_seconds": 4.905,
+    "sapt_seconds": 10.310,
+    "full_seconds": 19.478,
+    "projection_phases_seconds": {
+      "AO_integrals_and_collapse": 11.349539582,
+      "inverse_metric": 0.002365835,
+      "auxiliary_overlap_and_collapse": 85.777103891
+    },
+    "diagnostic_whole_fdds_seconds_not_a_benchmark": 778.9951618600171,
+    "coupled_error_Eh": 1.8963327349380554e-10,
+    "uncoupled_error_Eh": 0.0,
+    "cleanup_verified_utc": "2026-10-21T11:50:26Z",
+    "audit_task": "b8ba2c8eb",
+    "remote_output": "/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261021-density-cycle-profile-01"
+  },
+  "next_candidate": {
+    "source_pin": "5305cb2d8bf87a1e282c56814968a568d8b526d1",
+    "scope": "opt-in general FP64 SVD pseudoinverse, unchanged strict relative cutoff",
+    "status": "unvalidated",
+    "native_build_task": "b519ce12d",
+    "read_only_review_task": "d9d187c5f22aeda1d11acebe4fd44e097",
+    "initial_base_controls_task": "bf187a527",
+    "declared_controls": ["cpu0", "base-gpu0", "candidate-gpu0", "candidate-gpu1", "base-gpu1"],
+    "system": "protein83",
+    "runner_pin": "d599720a06b25a3d813f8b448c1ebb858a7477d4"
+  },
   "new_speedup_claim": false,
   "notes": "One actual grant; test-only14250360 is not the accepted job. Previous14214205 remains terminal and immutable. All compute uses the exclusive shared helper; no participant window is authorized."
 }
