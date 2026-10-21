@@ -1,5 +1,35 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## CURRENT directive — no DFHelper in production dispersion
+
+Read mandatory `../metadata/NO_DFHELPER.md`. Production is strictly cuEST0.2.50
+DFMO → device metric-transformed factors → cuBLAS/custom CUDA kernels.
+No direct/indirect DFHelper, host-factor cache/disk transforms, NumPy producer
+or silent fallback. Keep existing default/non-HF CPU paths and explicitly
+separate correctness oracles unchanged. An unfinished factory means BLOCKED.
+
+Actual source call-chain audit: `dispersion0_cuda` passes a canonical callback;
+`fdisp0` invokes it and returns before constructing DFHelper. Only12 orbital
+spaces/8 rank-one corrections/energies/basis objects cross into the callback,
+not cached DF factors. The strict provider uploads coefficients, calls native
+DFMO into owned device output, and the consumer rejects host/foreign-session
+factor buffers before device packing/cuBLAS/reduction. No fallback was found.
+Native basis/plan factory and real DFMO provenance remain unimplemented/unproven.
+
+Added public-entrypoint CPU regressions with poisoned cached DFHelper and all
+ten host-factor names, stale CPU provenance, factory/native failures and wrong
+provider rejection. **22 CPU CUDA fixtures PASS,0.990s;12 identity fixtures
+PASS,0.020s**, diff check PASS. Logs `../runs/no-dfhelper-audit-01/`.
+These tests are explicitly CPU orchestration spies, NOT GPU execution proof.
+
+Dependency progress: exact Catch2 and mimalloc private builds resolved two
+Einsums fallback configure/export failures without modifying064. Fresh config03
+PASS,25.12s. Whole Einsums/Waggle build04 is running with native Python prefix
+installation, one job. Separate GPU LibXC7.1.2 build/install PASS
+(691.93s build, sm86/GNU14.3/CUDA13.3); its tiny standalone device diagnostic
+is pending, not a SAPT gate. CPU LibXC remains distinct. Exact commands/failure
+logs and updated receipts are under `../metadata/SETUP_STATUS.md` and `../runs/`.
+
 ## CURRENT Cachy continuation — private native build started
 
 Clean starting HEAD/source receipt `af13b713b14282d3b9e55301eff842002c78962b`.

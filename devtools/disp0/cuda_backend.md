@@ -5,6 +5,34 @@ backend, selecting small CUDA kernels patterned after NVIDIA's MP2 example.
 The CuPy prototype is preserved in Git history at5b161a5736, not retained as
 an unchecked alternate execution path. No CuPy dependency/import is used.
 
+## Mandatory production factor provenance
+
+Production dispersion must use **cuEST0.2.50 DFMO → device-resident,
+metric-transformed MO factors → cuBLAS/custom CUDA**, orchestrated from Python.
+No DFHelper integral generation, transforms, packing or storage may feed this
+route, including indirectly through cached factors or disk tensors. No NumPy
+factor producer or implicit CPU/DFHelper fallback is permitted.
+
+The actual explicit call chain is `dispersion0_cuda` → canonical setup callback
+in `fdisp0` (returns BEFORE the DFHelper branch) → strict `CuESTDFMOProvider`
+→ `cuestDFMOIntegralsCompute` into session-owned device output → device packing,
+three cuBLAS products and signed CUDA reduction. Host arrays at this boundary
+are orbital coefficients, energies and rank-one corrections, not DF factors.
+Final occupied-pair components are downloaded for common placement/sum rules.
+The factor consumer rejects host arrays or buffers from a different session.
+
+Factory/native failure must propagate; the missing live native factory means
+**BLOCKED**, never permission to substitute a host producer. Existing default
+CPU/non-HF routes remain intact. An explicitly separate CPU/native FISAPT oracle
+may use DFHelper only for correctness reference; neither its factors nor its
+caches may feed production. Keep reference and production timings distinct,
+and include host setup/transfers/cleanup in whole-call production timing.
+
+CPU orchestration negatives poison cached DFHelper/host-factor entries and
+exercise the public CUDA entrypoint. They also require factory/native failures
+and wrong providers to reject without reaching the forbidden DFHelper sentinel.
+These guards are source/CPU evidence only, not native factor provenance proof.
+
 ## Architecture / dependencies
 
 * Python retains canonical SAPT orchestration and all setup equations.
