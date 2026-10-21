@@ -129,6 +129,9 @@ def replay(psi4, args, metadata):
     molecule.update_geometry()
     psi4.set_options({**SCIENCE, "use_cuest": args.arm == "gpu",
                       "cuest_xc": False, "cuest_sad": False, "cuest_gemm_min_dim": 0})
+    if args.gpu_pinv:
+        assert args.arm == "gpu"
+        psi4.set_options({"cuest_fdds_pinv": True})
     primary = psi4.core.BasisSet.build(molecule, "BASIS", SCIENCE["basis"])
     auxiliary = psi4.core.BasisSet.build(molecule, "DF_BASIS_MP2", SCIENCE["df_basis_mp2"],
                                         "RIFIT", SCIENCE["basis"])
@@ -145,6 +148,7 @@ def replay(psi4, args, metadata):
         "cache_sha256": metadata["orbitals_sha256"], "metadata_sha256": digest(args.cache / "metadata.json"),
         "psi4_package": psi4.__file__, "core_sha256": digest(psi4.core.__file__),
         "job_id": os.environ.get("SLURM_JOB_ID"), "hostname": os.uname().nodename,
+        "gpu_pinv_requested": args.gpu_pinv,
     }
     config = io.StringIO()
     with contextlib.redirect_stdout(config):
@@ -152,7 +156,12 @@ def replay(psi4, args, metadata):
     result["numpy_version"] = np.__version__
     result["numpy_configuration"] = config.getvalue()
     pinv_calls = []
-    original = np.linalg.pinv
+    # New candidates route pinv through the narrow FDDS helper; old frozen
+    # stages do not have it. Count all 22 operations with either stage, without
+    # changing the selected implementation or numerical arguments.
+    pinv_owner = sapt_mp2_terms if hasattr(sapt_mp2_terms, "_fdds_pinv") else np.linalg
+    pinv_name = "_fdds_pinv" if pinv_owner is sapt_mp2_terms else "pinv"
+    original = getattr(pinv_owner, pinv_name)
 
     def timed_pinv(a, *positional, **kwargs):
         start = time.perf_counter()
@@ -161,7 +170,7 @@ def replay(psi4, args, metadata):
         finally:
             pinv_calls.append({"shape": list(a.shape), "seconds": time.perf_counter() - start})
 
-    np.linalg.pinv = timed_pinv
+    setattr(pinv_owner, pinv_name, timed_pinv)
     psi4.core.clean_timers()
     start = time.perf_counter()
     try:
@@ -184,6 +193,11 @@ def replay(psi4, args, metadata):
         product_calls = sum(int(value["n_calls"]) for key, value in psi4.core.get_timer_dict().items()
                             if "cuEST FDDS: response products" in key)
         result["gpu_response_timer_calls"] = product_calls
+        pinv_gpu_calls = sum(int(value["n_calls"]) for key, value in psi4.core.get_timer_dict().items()
+                             if "cuEST FDDS: pseudoinverse" in key)
+        result["gpu_pinv_timer_calls"] = pinv_gpu_calls
+        if pinv_gpu_calls != (22 if args.gpu_pinv else 0):
+            raise RuntimeError("Pseudoinverse route does not match the declared control")
         if args.arm == "gpu" and calls == 0:
             raise RuntimeError("Forced GPU benchmark did not execute FDDS GPU contractions")
         if args.arm == "cpu" and calls:
@@ -203,7 +217,7 @@ def replay(psi4, args, metadata):
         assert all(np.isfinite(v) for v in energies.values())
         result["ok"] = True
     finally:
-        np.linalg.pinv = original
+        setattr(pinv_owner, pinv_name, original)
         result.setdefault("fdds_seconds", time.perf_counter() - start)
         result["pinv_calls"] = pinv_calls
         result["pinv_seconds"] = sum(v["seconds"] for v in pinv_calls)
@@ -224,6 +238,8 @@ def main():
     p.add_argument("--require-gpu-exchange", action="store_true")
     p.add_argument("--require-gpu-metric", action="store_true")
     p.add_argument("--require-gpu-response-products", action="store_true")
+    p.add_argument("--gpu-pinv", action="store_true",
+                   help="Opt in to the candidate's exact general-SVD GPU pseudoinverses.")
     p.add_argument("--threads", type=int, default=16)
     p.add_argument("--memory", default="96 GiB")
     p.add_argument("--binary-pin", required=True)
