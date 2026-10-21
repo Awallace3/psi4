@@ -1,0 +1,33 @@
+{
+  "status": "allocation_terminal",
+  "job_id": 14214205,
+  "outcome": "timed_out",
+  "accounting_state": "TIMEOUT",
+  "accounting_exit_code": "0:0",
+  "accounting_elapsed": "08:00:08",
+  "terminal_observed_utc": "2026-10-21T03:53:00Z",
+  "confirmation": "Established official watcher emitted ALL-TERMINAL 14214205",
+  "official_watcher_task": "bda4c38b4",
+  "early_release": {
+    "explicit_user_approval": true,
+    "attempt_task": "b5579598e",
+    "attempt_start_utc": "2026-10-21T08:49:40.028000+00:00",
+    "attempt_end_utc": "2026-10-21T08:49:42.191000+00:00",
+    "outcome": "guard_stopped_before_cancellation",
+    "identity_query_exit_code": 1,
+    "identity_query_stderr": "slurm_load_jobs error: Invalid job id specified",
+    "scancel_invoked": false,
+    "blind_retry": false,
+    "note": "Allocation expired before the guarded attempt; not an early-release success."
+  },
+  "last_response_step": {"step_id": "14214205.22", "state": "COMPLETED", "exit_code": "0:0", "elapsed": "01:20:58", "cleanup_verified": true},
+  "last_alda_step": {"step_id": "14214205.23", "state": "COMPLETED", "exit_code": "0:0", "elapsed": "00:09:31", "cleanup_verified": true},
+  "latest_validated_source_pin": "dcc8ac971310530688920efd0b2ba587a6e5cfd7",
+  "latest_validated_core_sha256": "c4579a401c5c7fb81d009694c569124636f9d7205668e3a6da20597bb649293f",
+  "deferred_uncompiled_timer_pin": "6c133b4e5c63548d6d2228075058969464a6a0b5",
+  "accepted_evidence_preserved": true,
+  "evidence_directory": "build_fdds_cpu/allocation-14214205-terminal",
+  "new_allocation_submitted": false,
+  "other_job_control_action": false,
+  "participants_resumed": false
+}

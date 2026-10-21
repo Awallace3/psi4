@@ -1,5 +1,28 @@
 # FDDS cuEST implementation handoff
 
+## Allocation closed — no live GPU resource
+
+Established watcherbda4c38b4 confirmed14214205 **TIMEOUT**, exit0:0,
+elapsed08:00:08, at2026-10-21T03:53:00Z (`ALL-TERMINAL`).
+The response-product and ALDA steps had already completed0:0 with verified
+empty cleanup. Allocation expiry does not invalidate their accepted results.
+
+The explicitly approved early-release attemptb5579598e ran at
+08:49:40–08:49:42Z, after allocation expiry. Its fresh identity guard
+received `squeue` exit1, `slurm_load_jobs error: Invalid job id specified`,
+and stopped **before the `scancel` invocation**. No cancellation command,
+other job change or blind replay occurred. Do not report an early-release
+success: the actual allocation ended by timeout. No replacement resource,
+participant resume or further compute was launched.
+Local raw accounting/release evidence:
+`build_fdds_cpu/allocation-14214205-terminal/`.
+Root summary: `fdds-allocation-14214205-terminal.json`.
+
+Latest numerically validated scientific source remains **dcc8ac9713/corec457**.
+The later6c133 timer-only source is reviewed/staged but uncompiled and
+resource-deferred, not a successor GPU-validation pass. A later sufficient
+resource decision would require fresh explicit approval; none is standing.
+
 ## Response-product iteration — independent GPU/timing audit passed
 
 Scientific/test `dcc8ac971310530688920efd0b2ba587a6e5cfd7`,
@@ -128,9 +151,9 @@ GPU93 gates, one≤840s protein diagnostic, cleanup and expiry grace; no
 gate was silently skipped to squeeze work into the expiry.
 This is not another15-control campaign and cannot establish a new ratio.
 Resource decision for later: explicitly approved sufficient allocation time
-after readiness gates; no standing new-job authority. Early release of the
-now-idle14214205 requires explicit approval; the old holder/watch remains
-untouched until approval or normal expiry.
+after readiness gates; no standing new-job authority. Historical early
+release was later explicitly approved, but its guarded attempt found the
+allocation already expired; see the final accounting section above.
 
 ### Historical preparation and scope
 

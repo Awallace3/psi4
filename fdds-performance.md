@@ -3,6 +3,15 @@
 User authorized inferno for this campaign. No changes to shared environments,
 old frozen source/build/run directories or other agents' jobs.
 
+Allocation14214205 is now terminal: official watcher reported TIMEOUT,
+08:00:08 elapsed, at2026-10-21T03:53:00Z. All accepted measurements below
+finished and were preserved before expiry. An approved early-release attempt
+later stopped at its fresh invalid-job-ID guard before invoking cancellation;
+no replacement or other job-control action occurred. See
+`fdds-allocation-14214205-terminal.json`. The reviewed timer-only6c133
+projection split was resource-deferred and never compiled/tested; the latest
+validated scientific tuple remains dcc8/corec457 below.
+
 ## Latest accepted iteration: exact response products
 
 Scientific/test `dcc8ac971310530688920efd0b2ba587a6e5cfd7`,
