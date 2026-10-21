@@ -118,3 +118,13 @@ reads the completed immutable step0 install, writes ONLY new validation/scratch
 outputs, audits effective metadata, runs installed-world/API checks and
 requires the selected binary tuple unchanged before/after. Original step0
 is not relabeled successful. GPU/physical correctness remains unpassed.
+
+Validation step1 stopped after52.88s on an unexpanded `@` token. Actual
+captured Ninja JSON identifies only Apiary's Python stub-generator fragment
+list, not a compiler response. Exact local auxiliary-rule regression went
+red, then passed after separating shell command segments/actual compiler
+positions. Actual compiler/link responses, foreign compilers/includes/cwd,
+cache wrappers and unidentified compiler wrappers still reject; `.cc` source
+arguments are no longer mistaken for compiler executables. Auxiliary rules
+remain captured raw, not falsely labeled semantically audited.
+**52 guards PASS3.624s**, **96 legacy runtime guards PASS4.87s**.

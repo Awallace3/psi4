@@ -2587,3 +2587,29 @@ read-onlyaudit/installedproof/API withbefore-afterbinaryhash equality,
 newvalidation/scratch outputs, no configure/build/install/RPATHpatch/science
 changes; oldfailedstep staysfailed. Scopedreviewdf9995ba8 active while
 independentGit stagingproceeds. SAMECPUallocation, no newallocation/GPU.
+
+Frozenvalidatorfix **45bc49eda03a556beb564ca68368685ab99ae6a2**.
+Reviewdf9995ba8 confirms **no scopedblocker** in exactORIGIN/pathguard,
+externalfreshoutputs andread-onlybinary-invariancecontinuation; no commands/
+remotetest byreviewer. Publicationb637ded02 pendingreceipt. No recompile/
+install/binarymodification performed; originalcompiledprefix andfailed
+step0status preserved. Nextnewprivatevalidatorcheckout viaGit, sameCPUstep
+with boundedremainingtime; runtime/API/signedphysics/GPUstillnotpassed.
+
+Validationclient **bb8e709ccexit1**, elapsed52.8829s, actualstep1 status
+exit1/signalled0. No installedproof/APIran: effective-auditstopped on
+`Unexpanded compiler/link response file`. Originalstep0/build/install and
+allpartialvalidation1outputs unchanged. Snapshotb63dfaa1a proves SAMElease
+RUNNING/Requeue0 at11:56:51Eastern, End12:46:01; no newallocation.
+
+BoundedREAD-ONLYmetadata b176b96ccexit0 identifies EXACToffendingrule:
+`python .../apiary_aggregate_stubs.py @generated/pybind/.stubs.fragments
+--overlay-class-regex ... && cmake -E touch ...`. Among2168top-level
+Ninjaentries, oneunexpanded@entry is this auxiliaryPythonrule; compiler
+responseexpansion is NOTweakened. Newparserseparatesshellsegments, checks
+actualcompilerposition/approvedfrontend, validatescd, rejectsforeignflags/
+caches/unknowncompilerwrappers; fullauxiliarycommands capturedRAW. Also
+fixesfalsecompileridentificationofsource*.cc arguments.
+ExactauxruleREDreproobserved;52localguardsPASS3.624s and96legacyruntime
+guardsPASS4.87s. Scopedreviewd2fe2a235 pending whilenewGitvalidatorprepared.
+No native/source/binary/reinstallchanges; continue SAMECPUlease only.

@@ -194,17 +194,46 @@ def audit_dependencies(text, directory, run, source, sdk, scratch, hash_cache=No
 def audit_link_commands(text, directory, run, source, sdk, scratch):
     allowed = roots(run, source, sdk, scratch)
     count = 0
+    compiler_name = re.compile(
+        r"^(?:[A-Za-z0-9_]+-)*(?:g\+\+|c\+\+|gcc|cc|gfortran|nvcc|clang\+\+|clang|icx|icpx|ifort|ifx|flang)"
+        r"(?:-[0-9.]+)?$")
     for line in text.splitlines():
         if not line.strip():
             continue
-        tokens = shlex.split(line)
-        audit_tokens(tokens, directory, allowed)
-        for token in tokens:
-            name = Path(token).name
-            if token.startswith("/") and re.search(r"(g\+\+|c\+\+|gcc|cc|gfortran|nvcc)$", name):
-                require(compiler_allowed(token, run, sdk), f"Foreign compiler/linker command: {token}")
-        if "-shared" in tokens or any(token.startswith("-Wl,-soname,") for token in tokens):
-            count += 1
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        segments, segment = [], []
+        for token in lexer:
+            if token in ("&&", "||", ";", "|"):
+                if segment:
+                    segments.append(segment)
+                    segment = []
+            else:
+                segment.append(token)
+        if segment:
+            segments.append(segment)
+        working = Path(directory)
+        for tokens in segments:
+            program = tokens[0]
+            require(not any(Path(t).name in ("ccache", "sccache") for t in tokens),
+                    "Unapproved compiler-cache wrapper")
+            if program == "cd":
+                require(len(tokens) == 2, "Uninspectable working-directory command")
+                safe_path(tokens[1], working, allowed)
+                working = (working / tokens[1]).resolve()
+            elif compiler_name.fullmatch(Path(program).name):
+                require(compiler_allowed(program, run, sdk),
+                        f"Foreign compiler/linker command: {program}")
+                audit_tokens(tokens, working, allowed)
+                if "-shared" in tokens or any(t.startswith("-Wl,-soname,") for t in tokens):
+                    count += 1
+            else:
+                # Full compdb includes Python/CMake code-generation rules.
+                # Their @fragment lists are not compiler response files.
+                # Preserve their raw metadata, but never silently skip a
+                # compiler hidden behind an unrecognized wrapper.
+                require(not any(compiler_name.fullmatch(Path(t).name) for t in tokens[1:]),
+                        "Unrecognized compiler wrapper in build metadata")
     return count
 
 
@@ -272,7 +301,7 @@ def capture(run, source, scratch, artifact_dir=None):
     return {"status": "EFFECTIVE_BUILD_INPUTS_AUDITED", "counts": counts,
             "observed_cuda_headers": sorted(observed), "compile_databases": databases,
             "file_sha256": records, "source": str(Path(source).resolve()), "run": str(run),
-            "scope": "Actual command/dependency metadata only; no device correctness claim"}
+            "scope": "Compiler/link/dependency paths audited; auxiliary Ninja rules captured raw; no device correctness"}
 
 
 def main():
