@@ -3,6 +3,51 @@
 User authorized inferno for this campaign. No changes to shared environments,
 old frozen source/build/run directories or other agents' jobs.
 
+## New allocation14250361: general GPU SVD pseudoinverse
+
+Separate from all14214205 results below. Source
+`1d1c593db90e7deb54d74c99f95d915d021acbd1`, core
+`79f0153405716a26aa3dcbf30d1e4c5eba0e9b8ff21c62b41486fcd336afbc4e`,
+harness `d0b102e9d09436aacf79cb6c95d808a2c1fdae1c`.
+Native183 passes/179.019s; GPU112 unique/176 executions pass with zero
+failures/errors/skips. Physical candidate executes22 GPU general SVD
+pseudoinverses, preserving strict1e-13 cutoff; opt-in remains defaultfalse.
+
+Protein83 only, same physical cache/settings, H200, eight threads,
+96GiB application memory and local-XFS scratch; five retained controls:
+
+| Arm | Whole FDDS s | 22 pseudoinverses s |
+|---|---:|---:|
+| CPU0 |1903.076395|109.175890|
+| Base GPU0 |781.647678|105.482410|
+| SVD GPU0 |756.877118|38.453702|
+| SVD GPU1 |767.125530|36.284479|
+| Base GPU1 |766.700060|103.934107|
+
+Median whole-FDDS ratios: CPU/candidate **2.497471x**, baseGPU/candidate
+**1.015974x**. The much larger SVD kernel reduction did not become an
+equivalent whole-workflow improvement. Two GPU samples/build and one CPU
+sample are not a confidence interval; the modest incremental difference
+needs further isolation. Do not pool with old-node ratios or extrapolate
+to peptide/nanotube or whole SAPT.
+
+Maximum candidate coupled/uncoupled differences:
+2.039803431e-9/1.956602588e-11Eh. Both remain below unchanged1e-5Eh gate.
+Source/import/core/library/runner/cache/science/route and all five controls
+audited; cleanup13:34:45Z empty. Actual cuSOLVER12.2.6.9,
+CUDA13.3.29/cuBLAS13.6.0.2/libcuest0.2.2. cuSOLVER was already a
+transitive baseline dependency, not an SDK/environment upgrade.
+Raw local copies:
+`build_fdds_cpu/cycle-20261021/pinv-candidate-14250361/`
+and `pinv-controls-14250361/`.
+
+Next declared diagnostic is a separate same-binary SVD-off/on protein pair,
+not a new algorithm or a replacement for any sample above. It requires
+reviewed guard fixes, successful staging, free exclusive lease/verified
+cleanup and fresh>=2700s budget before a2400s helper. No new allocation.
+
+## Historical allocation14214205
+
 Allocation14214205 is now terminal: official watcher reported TIMEOUT,
 08:00:08 elapsed, at2026-10-21T03:53:00Z. All accepted measurements below
 finished and were preserved before expiry. An approved early-release attempt
@@ -10,9 +55,9 @@ later stopped at its fresh invalid-job-ID guard before invoking cancellation;
 no replacement or other job-control action occurred. See
 `fdds-allocation-14214205-terminal.json`. The reviewed timer-only6c133
 projection split was resource-deferred and never compiled/tested; the latest
-validated scientific tuple remains dcc8/corec457 below.
+validated scientific tuple at that allocation's close was dcc8/corec457 below.
 
-## Latest accepted iteration: exact response products
+## Earlier accepted iteration: exact response products
 
 Scientific/test `dcc8ac971310530688920efd0b2ba587a6e5cfd7`,
 harness `b776f35d59a6d517b9bd92b649b5ebffbea5a55c`,

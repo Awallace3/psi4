@@ -33,12 +33,33 @@ old14214205 timings. Maximum candidate coupled/uncoupled errors are
 remain below1e-5Eh. Cleanup13:34:45Z verified empty pre/post GPU tables,
 exit0, no quarantine. Remote run:
 `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261021-pinv-candidate-01`.
-Raw local preservation is in progress under
+Raw local preservation b33dd01ae completed0 and independent local XML,
+all-five-control and cleanup audit passed under
 `build_fdds_cpu/cycle-20261021/pinv-candidate-14250361/`
 and `pinv-controls-14250361/`.
 
 Fresh owner snapshot14:23:20Z:14250361 RUNNING,1:04:45 remaining.
 No new allocation or participant work is authorized by this result.
+
+Separate final diagnostic controller
+`779e8b3da16fef2d3dec34d280709b668fb78b0c` runs the same frozen
+candidate binary with SVD off then on, not a new algorithm or replacement
+for accepted samples. Review found vacuous empty-energy acceptance; exact
+component keys plus accepted-reference SHA and timing binding fix it.
+Follow-up reviewdd2c4fa passed and five offline guards passed.
+Stageb0784a0c4 completed0; fresh14:31:53Z showed56:12 remaining.
+Workflowbe45811c3 performs a new>=2700s/cleanup/lease/account admission before
+its2400s exclusive helper; each control1050s. Observerb1cab3c45 checks every
+five minutes. No additional diagnostic result is established yet.
+The next projection investigation is documented in
+`devtools/benchmarks/fdds_projection_next.md`; no projection arithmetic,
+integral screening, layout or algorithm has been changed.
+Eight new independent small projection-reference native tests passed2.124s
+against existing1d1/core1e731 CPU stage. Their count is separate from the
+accepted183-native/112-GPU SVD gates. Density counts0/1/2/4, one/two threads,
+signed nonsymmetric input, repeat calls, symmetry and input preservation
+are covered; higher-angular-momentum/uncontracted and memory gates remain
+required before a projection algorithm change.
 
 ### Earlier cycle progress (historical pending descriptions below superseded)
 
