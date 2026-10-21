@@ -10,9 +10,10 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gpu_compare"))
-from compare import atomic_json, digest
+from compare import atomic_json, digest, engine_env
 from containment import run_contained
 from protocol import verify_compiled_sources
+from cuest_sdk import verify_build_manifest
 
 
 def probe_passed(path, mode):
@@ -47,8 +48,15 @@ def main():
     stages = []
     gpu_python = str(a.gpu_env / "bin/python")
     scripts = a.repo / "devtools/benchmarks/gpu_compare"
+    a.threads = 8
+    gpu_environment = engine_env("pyscf", a)
+    # Fail closed BEFORE any CUDA device/canary subprocess. A self-consistent
+    # old SDK manifest is not independent 0.2.50 admission.
+    manifest = json.loads((a.build / "build-manifest.json").read_text())
+    verify_build_manifest(manifest)
     device = json.loads(subprocess.check_output(
-        [gpu_python, str(scripts / "compare.py"), "device"], text=True, timeout=45))
+        [gpu_python, str(scripts / "compare.py"), "device"],
+        env=gpu_environment, text=True, timeout=45))
     device["name"] = subprocess.check_output(
         ["nvidia-smi", "-i", device["uuid"], "--query-gpu=name",
          "--format=csv,noheader"], text=True, timeout=10).strip()
@@ -68,7 +76,6 @@ def main():
             raise RuntimeError("GPU cleanup/exclusivity unverified; further work withheld")
 
     idle("before")
-    manifest = json.loads((a.build / "build-manifest.json").read_text())
     verify_compiled_sources(a.repo, manifest["commit"], a.commit)
     if manifest["job_id"] != a.build_job:
         raise RuntimeError("Wrong compiled build job")
@@ -103,7 +110,7 @@ def main():
         stages.append(row)
         atomic_json(a.output / "stages.json", stages)
         try:
-            rc = run_contained(command, row["bound_s"], cleanup, grace=20)
+            rc = run_contained(command, row["bound_s"], cleanup, grace=20, env=gpu_environment)
             if not cleanup.get("cleanup_verified"):
                 rc = 125
             row["exit_code"] = rc

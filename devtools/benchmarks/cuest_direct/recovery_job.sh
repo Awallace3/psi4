@@ -5,6 +5,8 @@ set -euo pipefail
 umask 027
 repo=${1:?}; commit=${2:?}; build=${3:?}; run=${4:?}; data=${5:?}
 build_job=${6:?}; gpu=${7:-H200}; qos=${8:-embers}
+: "${GPU_COMPARE_CUDA12_RECEIPT:?absolute independently reviewed CUDA12 receipt}"
+: "${GPU_COMPARE_CUDA12_RECEIPT_SHA256:?independent reviewed CUDA12 receipt SHA256}"
 [[ "$repo" == /* && "$build" == /* && "$run" == /* && "$data" == /* ]]
 [[ "$(git -C "$repo" rev-parse HEAD)" == "$commit" ]]
 [[ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]]

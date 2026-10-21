@@ -50,7 +50,7 @@ def birth(pid):
         return None
 
 
-def run_contained(command, seconds, cleanup_report, grace=20):
+def run_contained(command, seconds, cleanup_report, grace=20, *, env=None):
     subreaper()
     started = time.monotonic()
     tracked = {}
@@ -62,7 +62,7 @@ def run_contained(command, seconds, cleanup_report, grace=20):
                 tracked[pid] = token
 
     with deferred_launch_interrupts() as (restore, pending, previous):
-        child = subprocess.Popen(command, start_new_session=True)
+        child = subprocess.Popen(command, start_new_session=True, **({"env": env} if env is not None else {}))
         try:
             restore()
             for signum in pending:

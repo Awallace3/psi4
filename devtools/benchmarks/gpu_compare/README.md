@@ -564,3 +564,63 @@ because of zero-weight padding; eligibility requires the actual nonzero
 coordinate/total-weight multiset and overlap spectrum/rank proofs.
 The separately compiled cuEST0.2.50 **four-center direct** adapter and its H100
 debug tests are not mixed into these H200 DF timings.
+
+### Future-only strict cuEST 0.2.50 admission
+
+`cuest-sdk-0.2.50.json` independently pins canonical SDK header and CUDA13
+library bytes, plus exported four-center direct, DFMO and version capabilities.
+It also requires the complete 59-header tree: sorted include-relative POSIX
+path, NUL, lowercase file SHA256, newline; aggregate
+`3d26a7ef607d02ee294f66f11f1374f3badbd83430f5be28ed0a05e6c8d73d18`.
+The separately reconciled full-archive-path JSON digest uses a different
+serialization and is not substituted for this tree digest.
+`cuest_sdk.py` statically checks those files without loading cuEST. New builds
+require an explicit SDK (`lib/13` only, no environment or `lib` fallback), capture
+header hashes before and after compilation, and pin the resolved CUDA
+user-library closure. A self-consistent old build manifest is not sufficient.
+
+Future Psi4 workers require the FDDS-owned builtin
+`psi4.core._cuest_runtime_version()` from the pinned staged extension. The early
+check verifies its **presence only**; it must not create/query a handle. Only
+after an actual energy/JK route has created a live handle does the worker call
+the bridge, requiring exactly `tuple(int, int, int) == (0, 2, 50)`. The bridge
+must check all native getter statuses, raise on absent/non-live handles or a
+version mismatch, and never initialize implicitly. The vendor getters take
+`(cuestHandle_t, uint32_t*)`; no guessed no-argument vendor call, NULL handle,
+mangled global handle, or hidden diagnostic handle is permitted.
+
+Each Psi4 worker additionally checks actual mapped cuEST inode/device and file
+hash, mapped executable addresses for the required API symbols, and the actual
+mapped CUDA user-library closure against the build receipt. The driver is not
+a toolkit library and remains part of separate GPU provenance. GPU4PySCF stays
+in its separate CUDA12 process and rejects mapped cuEST/CUDA13; SDK paths are
+prepended only to the Psi4 subprocess environment. Provenance checks remain
+inside `full_process_wall_s`, not silently subtracted from headline timing.
+
+The CUDA12 arm additionally requires an independently reviewed inventory file
+and its independent hash in `GPU_COMPARE_CUDA12_RECEIPT` (absolute path) and
+`GPU_COMPARE_CUDA12_RECEIPT_SHA256`. Its schema is
+`{"schema": 1, "cuda_major": 12, "python_prefix": "...", "libraries": {...}}`;
+`libraries` maps each CUDA user-library SONAME to its absolute resolved `path`
+and `sha256`. It must include `libcudart.so.12` and every CUDA user-library that
+the actual run maps, including cuBLAS/cuSOLVER/cuTENSOR where used. Both
+environment identity and ABI families are checked; CUDA12 cudart alone cannot
+hide a CUDA13 cuBLAS mapping. Unknown/unpinned mappings or a missing inventory
+fail closed. No inventory has been captured/reviewed for this new contract yet;
+the guard does not silently generate a self-consistent inventory from whatever
+happens to be loaded. Such capture/review is a separate future setup task.
+Preliminary device discovery and eigensolver subprocesses get the same explicit
+sanitized CUDA12 environment as the workers, and check mapped isolation before
+device initialization and again afterward. These changes do not rewrite the
+old queued launcher's environment.
+
+These are **local future guards**, not a retroactive certification. The new
+native bridge has no reviewed final provider pin/device execution receipt yet;
+missing/old providers fail closed. Offline mock tests do not establish native
+version execution, DFMO numerical correctness or a completed direct/direct
+comparison. The frozen `86feda59ec84e82eb8c90685c2d9d2c8fbc09237` checkout,
+existing `2e542f9` build, environments, and queued job14254253 are unchanged.
+That old payload pins library bytes but does not implement this independent
+exact-version/header/provider admission. Any future run needs its own reviewed
+build and authorization; this guard work submits nothing. Scientific settings,
+including the RKS absolute `1e-7` overlap cutoff, are unchanged.

@@ -16,6 +16,13 @@ class ContainmentTests(unittest.TestCase):
                                        2, proof, grace=.5), 42)
         self.assertTrue(proof["cleanup_verified"])
 
+    def test_explicit_environment_reaches_contained_child(self):
+        proof = {}
+        code = "import os; assert os.environ == {'SAFE': 'pinned', 'LC_CTYPE': 'C.UTF-8'} or os.environ == {'SAFE': 'pinned'}"
+        self.assertEqual(run_contained([sys.executable, "-c", code],
+                                       2, proof, grace=.5, env={"SAFE": "pinned"}), 0)
+        self.assertTrue(proof["cleanup_verified"])
+
     def test_timeout_kills_signal_resistant_process(self):
         proof = {}
         code = "import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)"

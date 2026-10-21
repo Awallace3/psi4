@@ -67,7 +67,10 @@ import hashlib, json, pathlib, sys
 repo, build, run = map(pathlib.Path, (sys.argv[1], sys.argv[3], sys.argv[5]))
 sys.path.insert(0, str(repo / "devtools/benchmarks/gpu_compare"))
 from protocol import verify_compiled_sources
+from cuest_sdk import read_cuda12_receipt, verify_build_manifest
 manifest = json.loads((build / "build-manifest.json").read_text())
+verify_build_manifest(manifest)
+read_cuda12_receipt()
 assert manifest["job_id"] == sys.argv[4] and manifest["cuest_direct_jk_available"]
 assert manifest["package"] == str(build / "build/stage/lib/psi4")
 core = next(pathlib.Path(manifest["package"]).glob("core*.so"))
@@ -88,11 +91,12 @@ config.update(jk_mode="conventional-direct",
     compiled_inputs_unchanged=True), indent=2))
 PY
 compiled=$("$gpu_env/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$build/build-manifest.json")
+sdk_lib=$("$gpu_env/bin/python" -c 'import json,pathlib,sys; print(pathlib.Path(json.load(open(sys.argv[1]))["cuest_library"]).parent)' "$build/build-manifest.json")
 run_child /usr/bin/timeout --signal=TERM --kill-after=30s 600 \
     /bin/bash "$repo/devtools/benchmarks/cuest_direct/run_validation.sh" \
     "$repo" "$commit" "$build" "$run/direct-validation" "$expected_qos" "$compiled" "$gpu" rks
 run_child /usr/bin/env PYTHONPATH="$package/..:$repo/tests/pytests" \
-    LD_LIBRARY_PATH="$psi_env/lib:$xc:$cuda13" \
+    LD_LIBRARY_PATH="$sdk_lib:$psi_env/lib:$xc:$cuda13" \
     "$psi_env/bin/python" -m pytest --noconftest "$repo/tests/pytests/test_cuest_grid_export.py" \
     -q --basetemp="$TMPDIR/exporter-pytest" --junitxml="$run/exporter-tests.xml"
 run_child "$gpu_env/bin/python" - "$run/exporter-tests.xml" <<'PY'

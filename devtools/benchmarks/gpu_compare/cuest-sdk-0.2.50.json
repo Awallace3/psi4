@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "version": [0, 2, 50],
+  "archive_bytes": 206185073,
+  "archive_sha256": "a06e81489dea0b652bfc4451bcfe50d3032881a7eb6decc34cdbfc50a2076c0d",
+  "cuda_major": 13,
+  "library_sha256": "65c9e559201ee589cb742b919cc1c5d80c45aa480b64aede17ac96aff9e4963c",
+  "header_tree": {
+    "files": 59,
+    "sha256": "3d26a7ef607d02ee294f66f11f1374f3badbd83430f5be28ed0a05e6c8d73d18",
+    "serialization": "include-relative-path-nul-sha256-newline-v1"
+  },
+  "headers": {
+    "cuest.h": "1220c8209af57c914dc976244f00a81b6f1922ee2feb4b31d5c594439c22b4aa",
+    "cuest/context/context_api.h": "eea9ba0be5a9f5739ed947f8b97d4819d7a4f019d52629a33832028d14c6a863",
+    "cuest/types/cuest_types.h": "bde13dae10e1da493efbe2486c25d6e0b815d789aed967f77717e1922c65e67d",
+    "cuest/types/cuest_parameter_types.h": "ce1b4313eab84d3027d0ad5202ca17e49baf41573f9c700c9089c6535051d882",
+    "cuest/density_fitted_integrals/density_fitted_mo_integrals_compute_api.h": "c93868fcc871fd1fafea374661ad9bc188a3b40646e54eb6b906b5353f06775b",
+    "cuest/parameters/parameter_api.h": "1c32d0ea8d3e020c1a7663fa96f66b29d9de5f8b6c54dd785ec86b33c5533781",
+    "cuest/types/workspace_api.h": "a413ae8984034467cc0b8271b2d0b3cefbd3d23cf62706c7ddb0fe531eb8d1e1",
+    "cuest/integral_plans/direct_integral_plan_api.h": "7bf40c4ce030f56f6a0379afa1f166cdc70e6e2570e9134fd17474f66f768666",
+    "cuest/direct_integrals/direct_coulomb_compute_api.h": "166f7831b59255cf11df5426cf432e9277535ffb470ef616671e0351a1a5c5f9",
+    "cuest/direct_integrals/direct_exchange_compute_api.h": "94cecc0c8d39021589ec13751bcdb596f2b09e91f3d1e1aa696c753fdd51a577",
+    "cuest/integral_plans/density_fitted_integral_plan_api.h": "ceed60c3c738603eec85b9c1a8ef87110d24424ed78e9a93cb7f7f584f8f88fa"
+  },
+  "symbols": {
+    "direct_jk": ["cuestDirectIntPlanCreate", "cuestDirectIntPlanCreateWorkspaceQuery", "cuestDirectIntPlanDestroy", "cuestDirectCoulombCompute", "cuestDirectCoulombComputeWorkspaceQuery", "cuestDirectSymmetricExchangeCompute", "cuestDirectSymmetricExchangeComputeWorkspaceQuery"],
+    "dfmo": ["cuestDFIntPlanCreate", "cuestDFIntPlanCreateWorkspaceQuery", "cuestDFIntPlanDestroy", "cuestDFMOIntegralsCompute", "cuestDFMOIntegralsComputeWorkspaceQuery"],
+    "version": ["cuestGetMajorVersion", "cuestGetMinorVersion", "cuestGetPatchVersion"]
+  },
+  "native_version_abi": "cuest-status-handle-u32ptr-v1",
+  "native_version_getters_require_valid_handle": true,
+  "native_version_provider": "_cuest_runtime_version",
+  "native_version_provider_status": "FDDS-owned proposed bridge: builtin, existing live handle only, status checked, exact tuple of three ints; native execution not validated",
+  "scope": "Identity/capability admission only; no DFMO or RKS scientific plan policies"
+}

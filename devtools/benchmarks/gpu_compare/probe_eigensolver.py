@@ -10,6 +10,7 @@ from compare import (atomic_json, capture_geometry, cuda_identity, digest,
                      molecular_geometry, runtime_libraries, versions, xyz)
 from eigensolver import eigensolver_policy
 from protocol import configure_pyscf_overlap
+from cuest_sdk import runtime_identity
 
 
 def main():
@@ -28,11 +29,13 @@ def main():
     from pyscf import gto, lib
     from gpu4pyscf.dft.rks import RKS
     import gpu4pyscf
+    sdk_import_identity = runtime_identity("pyscf")
     c = json.loads(a.config.read_text())
     c["pyscf_eigensolver"] = a.mode
     lib.num_threads(c["threads"])
     cp.cuda.Device(0).use()
     r = dict(config=c, diagnostic_only=True, headline_timing_eligible=False,
+             sdk_import_identity=sdk_import_identity,
              config_sha256=digest(a.config), geometry_sha256=digest(a.xyz),
              gpu=cuda_identity(cp.cuda.runtime), versions=versions(), basis_cases=[])
     atom = xyz(a.xyz, "peptide")
@@ -71,7 +74,8 @@ def main():
         r["basis_cases"].append(case)
         atomic_json(a.output / "progress.json", r)
     root = Path(gpu4pyscf.__file__).resolve().parent
-    r.update(passed=True, runtime_libraries=runtime_libraries(),
+    r.update(passed=True, sdk_runtime_identity=runtime_identity("pyscf"),
+             runtime_libraries=runtime_libraries(),
              installed_source_sha256={str(root / name): digest(root / name) for name in
                  ("lib/cusolver.py", "lib/cupy_helper.py", "scf/hf.py")})
     atomic_json(a.output / "result.json", r)

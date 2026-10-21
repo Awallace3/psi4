@@ -25,6 +25,7 @@ from protocol import (overlap_cutoff, configure_pyscf_overlap, capture_overlap, 
                       molecular_geometry, capture_geometry)
 from direct import is_direct, jk_mode, make_rks, pyscf_direct_policy
 from eigensolver import eigensolver_policy
+from cuest_sdk import manifest_for_package, read_cuda12_receipt, runtime_identity
 
 HERE = Path(__file__).resolve().parent
 ENGINES = ("psi4", "pyscf")
@@ -358,6 +359,7 @@ def run_pyscf(a, c, atom, r):
         from gpu4pyscf.dft import rks
         # Prefer failure to a CPU or CuPy contraction fallback.
         from gpu4pyscf.lib import cutensor
+    r["sdk_import_identity"] = runtime_identity("pyscf")
     r["imports_wall_s"] = time.perf_counter() - import_start
     r["import_warnings"] = [str(w.message) for w in captured]
     assert not any("using cupy as the tensor contraction engine" in w.lower()
@@ -515,6 +517,8 @@ def psi4_direct_evidence(backend, text, timer_paths, df_scf_guess):
 def run_psi4(a, c, atom, r):
     import_start = time.perf_counter()
     import psi4
+    r["sdk_import_identity"] = runtime_identity(
+        "psi4", psi4.core, a.psi_package, require_version=False)
     r["imports_wall_s"] = time.perf_counter() - import_start
     assert Path(psi4.__file__).resolve().parent == a.psi_package.resolve()
     if getattr(a, "export_grid", False):
@@ -618,6 +622,13 @@ def worker(a):
         assert math.isfinite(r["energy_hartree"])
         r["runtime_libraries"] = runtime_libraries()
         validate_cuda_route(r)
+        # No live-handle call before the actual Psi4 JK/energy route. Missing or
+        # old native providers and unmapped/mixed SDKs cannot produce ok=True.
+        if a.engine == "psi4":
+            import psi4
+            r["sdk_runtime_identity"] = runtime_identity("psi4", psi4.core, a.psi_package)
+        else:
+            r["sdk_runtime_identity"] = runtime_identity("pyscf")
         r["ok"] = True
     except Exception as exc:
         r.update(error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
@@ -765,13 +776,17 @@ def summarize(records, c, systems):
 
 def engine_env(engine, a):
     env = dict(os.environ, PYTHONNOUSERSITE="1")
-    for key in ("LD_PRELOAD", "PSIDATADIR", "PYSCF_CONFIG_FILE", "PYSCF_EXT_PATH"):
+    for key in ("LD_PRELOAD", "PYTHONHOME", "PSIDATADIR", "PYSCF_CONFIG_FILE",
+                "PYSCF_EXT_PATH", "CUPY_CUDA_LIB_PATH"):
         env.pop(key, None)
     # Never allow Psi4's CUDA13 libraries into the CUDA12 PySCF process.
     root = a.psi_env if engine == "psi4" else a.gpu_env
     libraries = [root / "lib", a.psi_cuda_lib if engine == "psi4" else a.cuda12_lib]
     if engine == "psi4" and getattr(a, "psi_xc_lib", None):
         libraries.insert(1, a.psi_xc_lib)
+    if engine == "psi4":
+        manifest = manifest_for_package(a.psi_package)
+        libraries.insert(0, Path(manifest["cuest_library"]).parent)
     env["LD_LIBRARY_PATH"] = ":".join(map(str, libraries))
     env["PYTHONPATH"] = str(a.psi_package.parent) if engine == "psi4" else ""
     if engine == "pyscf":
@@ -779,6 +794,10 @@ def engine_env(engine, a):
         env["CUDA_HOME"] = str(a.cuda12_lib.parent)
     else:
         env["CUDA_PATH"] = env["CUDA_HOME"] = str(a.psi_cuda_lib.parent)
+    cuda = a.psi_cuda_lib.parent if engine == "psi4" else a.cuda12_lib.parent
+    env["PATH"] = f"{root}/bin:{cuda}/bin:/usr/bin:/bin"
+    if engine == "pyscf":
+        read_cuda12_receipt(a.gpu_env)
     env["OMP_NUM_THREADS"] = str(a.threads)
     env["MKL_NUM_THREADS"] = str(a.threads)
     env["OPENBLAS_NUM_THREADS"] = str(a.threads)
@@ -1027,8 +1046,11 @@ def main():
     a = p.parse_args()
     if a.action == "device":
         import cupy
+        runtime_identity("pyscf")
         cupy.cuda.Device(0).use()
-        print(json.dumps(cuda_identity(cupy.cuda.runtime)))
+        device = cuda_identity(cupy.cuda.runtime)
+        device["cuda_identity_receipt"] = runtime_identity("pyscf")
+        print(json.dumps(device))
         return 0
     for key, value in vars(a).items():
         if isinstance(value, Path):

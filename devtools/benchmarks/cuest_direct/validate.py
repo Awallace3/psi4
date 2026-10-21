@@ -5,7 +5,10 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gpu_compare"))
+from cuest_sdk import verify_build_manifest, runtime_identity
 
 
 RKS_CASES = tuple(
@@ -49,6 +52,7 @@ def main():
                         help="RKS excludes UKS and unrelated DF regression tests")
     args = parser.parse_args()
     manifest = json.loads((args.build / "build-manifest.json").read_text())
+    verify_build_manifest(manifest)
     compiled_commit = args.compiled_commit or args.commit
     assert manifest["commit"] == compiled_commit
     assert manifest["cuest_direct_jk_available"], "Direct API compile/link probe failed"
@@ -63,6 +67,7 @@ def main():
 
     package = Path(manifest["package"]).resolve()
     assert Path(psi4.__file__).resolve().parent == package
+    import_identity = runtime_identity("psi4", psi4.core, package, require_version=False)
     core = next(package.glob("core*.so"))
     assert hashlib.sha256(core.read_bytes()).hexdigest() == manifest["core_sha256"]
     library = Path(manifest["cuest_library"])
@@ -104,6 +109,7 @@ def main():
     cases = root.findall(".//testcase")
     failures = [c.attrib["name"] for c in cases if c.find("failure") is not None or c.find("error") is not None]
     skips = [c.attrib["name"] for c in cases if c.find("skipped") is not None]
+    native_identity = runtime_identity("psi4", psi4.core, package)
     success = validation_success(result, cases, args.suite)
     report = dict(
         success=success, suite=args.suite, pytest_exit=int(result), tests=len(cases), failures=failures, skips=skips,
@@ -112,6 +118,7 @@ def main():
         qos=os.environ["SLURM_JOB_QOS"], gpu=gpu, expected_gpu=args.expected_gpu,
         core_sha256=manifest["core_sha256"],
         cuest_library_sha256=manifest["cuest_library_sha256"], linkage=linkage,
+        sdk_import_identity=import_identity, sdk_runtime_identity=native_identity,
         protocol="CPU DIRECT vs cuEST four-center DIRECT; CPU XC isolates JK numerics. "
                  "Separate CUDA-XC smoke; DF-JK and UKS tests only in full suite. Native CPU/device grids "
                  "are NOT claimed identical by the GPU-XC smoke.",
