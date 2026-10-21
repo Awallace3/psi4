@@ -105,6 +105,8 @@ class CUDASession:
             raise ValueError("Explicit live-buffer/native allocation budgets required")
         self.runtime, self.driver, self.nvrtc = runtime, driver, nvrtc
         self.allocations = []
+        self.native_owners = []
+        self.scope_depth = 0
         self.live_bytes = self.peak_live_bytes = 0
         self.limit, self.native_bytes = memory_limit_bytes, native_persistent_bytes
         self.failed = self.closed = False
@@ -208,6 +210,7 @@ class CUDASession:
     def scope(self):
         self.check()
         start, primary = len(self.allocations), None
+        self.scope_depth = getattr(self,"scope_depth",0) + 1
         try:
             yield
         except BaseException as error:
@@ -223,6 +226,34 @@ class CUDASession:
                 # Retain failed frees for explicit final cleanup; never lose
                 # their ownership or pretend their bytes were released.
                 self.allocations[start:] = [item for item in pending if not item.freed]
+                self.scope_depth -= 1
+
+    def retain_native_owner(self, owner):
+        """Keep native dependents alive before they borrow this session's buffers.
+
+        Persistent native workspaces cannot be constructed in a temporary scope.
+        Native owners must complete destruction before the session frees any
+        allocations, module, BLAS handle or borrowed stream.
+        """
+        self.check()
+        if getattr(self,"scope_depth",0):
+            raise ValueError("Native owners must be created outside temporary CUDA scopes")
+        if (not callable(getattr(owner,"close",None))
+                or getattr(owner,"cleanup_complete",None) is not False):
+            raise ValueError("An unfinished explicit native cleanup owner is required")
+        if any(item is owner for item in self.native_owners):
+            raise ValueError("Native owner is already retained")
+        self.native_owners.append(owner)
+
+    def release_native_owner(self, owner):
+        # Cleanup-only retry is permitted after execution is closed/invalidated.
+        if getattr(owner,"cleanup_complete",None) is not True:
+            raise RuntimeError("Native owner has not completed cleanup")
+        for index,item in enumerate(self.native_owners):
+            if item is owner:
+                del self.native_owners[index]
+                return
+        raise ValueError("Native owner is not retained by this session")
 
     def _setup_blas(self):
         specs = {
@@ -327,6 +358,18 @@ class CUDASession:
         # Execution is permanently disabled, even if an explicit cleanup-only
         # retry is later needed. Successfully destroyed resources are cleared.
         self.closed = True
+        owners = tuple(getattr(self,"native_owners",()))
+        if owners:
+            try:
+                cleanup(None,[owner.close for owner in reversed(owners)])
+                if self.native_owners:
+                    raise RuntimeError("Native dependents still retain CUDA session resources")
+            except BaseException:
+                # Never free persistent native workspaces or destroy borrowed
+                # handles/stream after failed native cleanup. Owners remain
+                # strongly retained for an explicit cleanup-only retry.
+                self.failed = True
+                raise
         actions = [self.synchronize_device,
                    *(allocation.free for allocation in reversed(self.allocations))]
         if self.handle is not None:

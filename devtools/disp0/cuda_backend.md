@@ -139,6 +139,12 @@ allocation plus a declared aggregate of all native persistent owners, but
 does not claim total-VRAM certification. Actual peak/context/library/internal
 allocation accounting remains part of the GPU gate.
 
+Explicit native-owner leases prevent session teardown from freeing persistent
+workspaces or destroying borrowed stream/BLAS/module resources after failed or
+incomplete native destruction. Native owners must unregister only after cleanup
+completion; registration inside temporary allocation scopes is forbidden.
+This retention mechanism does not itself implement a native plan owner graph.
+
 ## Validation status
 
 CPU-only tests execute the actual kernel bodies through a C++ qualifier shim

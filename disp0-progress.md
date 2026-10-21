@@ -1,5 +1,27 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## CURRENT native-owner session leases — lifecycle groundwork only
+
+CUDA sessions now retain explicit native cleanup owners. Persistent owners
+cannot be registered inside temporary allocation scopes. Session close must
+finish native destruction/unregistration before freeing device allocations
+or destroying its module/BLAS/borrowed stream; failed native close retains
+all those dependencies, permanently disables execution and permits only
+cleanup continuation. Primary computation exceptions remain primary.
+
+A CPU negative control executed the old actual `close` body and observed it
+free dependencies while a fake native owner remained live; the guarded body
+rejects and retains them. **27 CUDA CPU tests PASS,1.113s;31 cuEST structural/
+ABI/identity tests PASS,0.047s**. `../runs/native-owner-leases-01/`.
+Scoped read-only lease review found no blocker. Its requested coverage gaps
+are added: multiple-owner reverse cleanup/partial success/retry without
+reclosing successful owners; completed-but-still-registered owner blocking;
+nested scopes with computation/cleanup failure and depth restoration.
+Final rerun: **31 CUDA CPU tests PASS,0.928s;31 cuEST structural/ABI/identity
+tests PASS,0.050s**, diff check PASS; `../runs/native-owner-leases-02/`.
+The actual native context/basis/pair-list/plan
+resource graph and all production numerical admission remain unfinished.
+
 ## CURRENT factory ABI/policy component — CPU fixtures only
 
 `sapt_cuest_factory_abi.py` adds canonical constructor/workspace/destroy/
