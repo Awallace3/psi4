@@ -1,0 +1,32 @@
+{
+  "status": "diagnostic_attribution_audited",
+  "diagnostic_only": true,
+  "not_speedup_benchmark": true,
+  "job_id": 14214205,
+  "source_pin": "dcc8ac971310530688920efd0b2ba587a6e5cfd7",
+  "harness_pin": "c22bd043ae38cf91454e8b00d173f768f10da221",
+  "core_sha256": "c4579a401c5c7fb81d009694c569124636f9d7205668e3a6da20597bb649293f",
+  "sites": 13,
+  "successful_calls": 19,
+  "xc_envelope_seconds": 105.762706728,
+  "density_projection_seconds": 97.1705119239632,
+  "overlap_powers_seconds": [2.526359339011833, 2.5310748999472708],
+  "inclusive_alda_seconds": [1.6945463499287143, 1.6803208769997582],
+  "nested_alda_totals_seconds": {
+    "density_leveling": 1.6020443650195375,
+    "density_diagonalization": 0.4769558780826628,
+    "libxc_exchange": 0.0004219230031594634,
+    "libxc_correlation": 0.0021917690755799413,
+    "back_rotation": 0.3884101789444685,
+    "undo_leveling": 0.8255290109664202
+  },
+  "nested_timers_must_not_be_summed_with_inclusive": true,
+  "bookkeeping_lower_bound_seconds": 0.0003825549501925707,
+  "energy_errors_Eh": {"coupled": 1.2657855059244882e-9, "uncoupled": 0.0},
+  "cleanup_verified_utc": "2026-10-21T03:01:13Z",
+  "before_gpu_processes": 0,
+  "after_gpu_processes": 0,
+  "audit_task": "bd111c6d3",
+  "evidence_directory": "build_fdds_cpu/alda-profile/gpu-14214205",
+  "conclusion": "Density projection dominates; dense ALDA and LibXC are not justified large offload targets."
+}

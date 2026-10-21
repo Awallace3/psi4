@@ -46,7 +46,7 @@ exclusive step has finished. No new allocation authority is inferred.
 The next preparation/ALDA investigation led to the bounded diagnostic
 below; compute requires fresh cleanup/budget gates within this grant.
 
-### Final-window ALDA attribution diagnostic — pending, not an optimization
+### ALDA attribution diagnostic — independently accepted, not an optimization
 
 Read-only investigationd0a3b711 found no justified next optimization from
 the inclusive contraction/XC timers. The selected next step is a single
@@ -81,7 +81,42 @@ no silently omitted controls. Exact reference libraries/import/core/cache/
 science/8threads/96GiB/localXFS and GPU60/12/20/4 routes remain required.
 Remote output:
 `/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261021-alda-profile-01`.
-GPU completion, attribution and cleanup are not yet established here.
+Workflowb9a12804e/helper finished0. Independent auditbd111c6d3 confirmed
+all13 sites/19 successful calls, exact source/core/driver/AST/harness hashes,
+all reference libraries/options/cache/imports and60/12/20/4 GPU routes,
+22 original pseudoinverses and finite energies. Coupled difference from
+the accepted dcc8 GPU reference1.265785506e-9Eh; uncoupled0. Empty pre/post
+GPU process tables and cleanup verified2026-10-21T03:01:13Z, no quarantine.
+
+Measured projection **97.170512s** dominates the105.762707s XC envelope.
+Overlap powers2.526359/2.531075s; inclusive ALDA A/B1.694546/1.680321s.
+Across both monomers, nested leveling1.602044s, density diagonalization
+.476956s, LibXC exchange/correlation.000422/.002192s, back rotation
+.388410s and undo leveling.825529s. These nested records are not additive
+with inclusive ALDA. Bookkeeping measured≥.000382555s, excluding added
+dispatch/argument evaluation; do not correct the559.695448s diagnostic
+whole wall into a new speedup benchmark.
+Preservation: `build_fdds_cpu/alda-profile/gpu-14214205/{run,step}/`.
+Snapshot03:02:03Z RUNNING47:39 remaining, not a later budget guarantee.
+This rules out dense ALDA/LibXC as a large next offload target.
+
+### Timer-only projection split — frozen offline, not compiled/validated
+
+Source/harness `6c133b4e5c63548d6d2228075058969464a6a0b5` adds only three
+coarse RAII timers outside complete OpenMP loops: AO integrals/collapse,
+inverse metric and auxiliary three-center overlap/collapse. Expected one
+call per region for the physical replay. One offline byte-reconstruction
+test passes: removing the timer class/three starts/three stops reproduces
+the exact accepted dcc8 C++ bytes. Bash syntax/diff checks pass; narrow
+static reviewd3d553 is pending. No numerical/compilation result for6c133.
+Accepted scientific dcc8/corec457 and prior stages remain immutable.
+
+No compute until ALDA preservation completes, static review passes, separate
+roots are staged and an immediately fresh≥2340s remaining-budget gate
+passes, covering build≤900s, native176/GPU93 gates, one≤840s protein
+diagnostic, cleanup and expiry grace. If that margin no longer fits, defer
+without silently skipping any gate or submitting another allocation.
+This is not another15-control campaign and cannot establish a new ratio.
 
 ### Historical preparation and scope
 
