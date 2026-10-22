@@ -1,5 +1,26 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## LATEST — native physical fragment electrostatics passes
+
+Whole stage07/source551c06038 connects spherical JKFIT DFMO, native FP64 point
+potentials and GPU atom/orbital algebra. Water-Ne, shifted/frozen water-Ne and
+frozen water-water each pass two calls against separate native C++/Python
+references. Full-matrix maxerror1.2878587085651816e-13Eh; GPU global-sum error
+1.4339640586058522e-12Eh. Six native DFMO and56potential calls in aggregate,
+zero coefficient H2D and complete zero-byte/native-owner cleanup. Device
+diagonal factors remain tied to the original shared JKFIT provider/gauge.
+Receipts: sibling `runs/fragment-elst-gpu-01` through `-03`.
+
+The CPU oracle explicitly requests spherical JKFIT; its initial attempt
+correctly rejected the legacy cache's Cartesian fitting set. Runtime guards
+were not relaxed. This is two-fragment/C/no-external fragment elst with raw
+CPU IBO/upstream reference inputs, not complete FISAPT or GPU localization.
+
+First-order fragment exchange sourcebc1b3aeb7 passes163CPU/mock/serial
+executions and actual GPU primitives48checks/112DGEMMs (max3.469e-17).
+Native-factor physical exchange, induction/response, localization, link/
+external/scaled terms and default dispatch remain open.
+
 ## LATEST — fragment electrostatic algebra passes actual GPU feedback
 
 Source9de9a88e2 adds GPU diagonal JKFIT-factor extraction, nuclear repulsion,

@@ -103,6 +103,13 @@ download factors, close their enclosing scope, or overwrite canonical Elst.
 physical/native-C++ matrix comparison are pending. No default driver dispatch,
 GPU IBO localization, external/link/scaled or remaining-term claim.
 
+UPDATE: whole stage07/source551c06038 passes physical native fragment elst for
+water-Ne, shifted/frozenwater-Ne, frozenwater-water, two calls each. Full-matrix
+maxerror1.288e-13Eh, GPUglobal1.434e-12Eh;6nativeDFMO/56point-potential calls,
+coefficientH2D0, cleanup0bytes/owners (`runs/fragment-elst-gpu-01` through `-03`).
+The independent oracle explicitly builds spherical JKFIT; its first attempt
+correctly rejected an inherited Cartesian set. No runtime conversion/fallback.
+
 ## Fragment exchange groundwork
 
 `fexch_device` implements the three unscaled localized first-order S^2 terms
