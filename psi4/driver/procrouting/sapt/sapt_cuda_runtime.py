@@ -105,6 +105,8 @@ class CUDASession:
             raise ValueError("Explicit live-buffer/native allocation budgets required")
         self.runtime, self.driver, self.nvrtc = runtime, driver, nvrtc
         self.allocations = []
+        self.native_owners = []
+        self.scope_depth = 0
         self.live_bytes = self.peak_live_bytes = 0
         self.limit, self.native_bytes = memory_limit_bytes, native_persistent_bytes
         self.failed = self.closed = False
@@ -172,7 +174,18 @@ class CUDASession:
         array = np.ascontiguousarray(array)
         if array.dtype != np.float64:
             raise ValueError("Only native FP64 host uploads are accepted")
-        result = self.empty(array.shape)
+        return self._upload_array(array)
+
+    def upload_indices(self, array):
+        """Explicit int64 METADATA transport, not a numerical upload fallback."""
+        array = np.ascontiguousarray(array)
+        if (array.dtype != np.int64 or array.ndim != 1 or not array.size
+                or np.any(array < 0)):
+            raise ValueError("Nonempty nonnegative native int64 metadata indices required")
+        return self._upload_array(array)
+
+    def _upload_array(self, array):
+        result = self.empty(array.shape,dtype=array.dtype)
         self.rt(self.runtime.cudaMemcpyAsync(
             result.pointer, array.ctypes.data, array.nbytes,
             self.runtime.cudaMemcpyKind.cudaMemcpyHostToDevice, self.stream))
@@ -208,6 +221,7 @@ class CUDASession:
     def scope(self):
         self.check()
         start, primary = len(self.allocations), None
+        self.scope_depth = getattr(self,"scope_depth",0) + 1
         try:
             yield
         except BaseException as error:
@@ -217,12 +231,44 @@ class CUDASession:
         finally:
             pending = self.allocations[start:]
             try:
-                cleanup(primary, [self.synchronize_device,
-                                  *(item.free for item in reversed(pending))])
+                def release():
+                    # Native compute may still borrow these buffers. Failed
+                    # synchronization must retain them for cleanup-only retry.
+                    self.synchronize_device()
+                    cleanup(None, [item.free for item in reversed(pending)])
+                cleanup(primary, [release])
             finally:
                 # Retain failed frees for explicit final cleanup; never lose
                 # their ownership or pretend their bytes were released.
                 self.allocations[start:] = [item for item in pending if not item.freed]
+                self.scope_depth -= 1
+
+    def retain_native_owner(self, owner):
+        """Keep native dependents alive before they borrow this session's buffers.
+
+        Persistent native workspaces cannot be constructed in a temporary scope.
+        Native owners must complete destruction before the session frees any
+        allocations, module, BLAS handle or borrowed stream.
+        """
+        self.check()
+        if getattr(self,"scope_depth",0):
+            raise ValueError("Native owners must be created outside temporary CUDA scopes")
+        if (not callable(getattr(owner,"close",None))
+                or getattr(owner,"cleanup_complete",None) is not False):
+            raise ValueError("An unfinished explicit native cleanup owner is required")
+        if any(item is owner for item in self.native_owners):
+            raise ValueError("Native owner is already retained")
+        self.native_owners.append(owner)
+
+    def release_native_owner(self, owner):
+        # Cleanup-only retry is permitted after execution is closed/invalidated.
+        if getattr(owner,"cleanup_complete",None) is not True:
+            raise RuntimeError("Native owner has not completed cleanup")
+        for index,item in enumerate(self.native_owners):
+            if item is owner:
+                del self.native_owners[index]
+                return
+        raise ValueError("Native owner is not retained by this session")
 
     def _setup_blas(self):
         specs = {
@@ -278,7 +324,18 @@ class CUDASession:
             self.rt(nv.nvrtcGetPTX(program, ptx))
             self.ptx_sha256 = hashlib.sha256(ptx).hexdigest()
             self.module = self.rt(dr.cuModuleLoadData(bytes(ptx)))
-            for name in ("pack_factors", "reduce_dispersion"):
+            for name in ("pack_factors", "reduce_dispersion", "matrix_window",
+                         "fragment_scale_factor", "apply_fragment_scale",
+                         "linear_combination", "reduce_components", "permute_occupied_a",
+                         "make_amplitudes", "rotation_error", "reduce_localized_dispersion",
+                         "diagonal_factors", "scatter_matrix", "fragment_nuclear", "reduce_values",
+                         "reduce_fragment_exchange", "make_single_amplitudes", "reduce_induction_source",
+                         "matrix_error", "single_gap_error", "trace_factors",
+                         "rhf_response_product", "response_dot", "response_precondition",
+                         "response_step", "response_direction", "response_metrics",
+                         "inverse_sqrt_weights", "scale_eigenvector_rows", "gather_indexed_matrix",
+                         "set_identity", "ibo_objective", "ibo_pair", "ibo_sweep_finish",
+                         "ibo_fock_diagonal", "ibo_permutation", "ibo_charges", "ibo_population_error"):
                 self.functions[name] = self.rt(dr.cuModuleGetFunction(self.module, name.encode()))
         except BaseException as error:
             primary = error
@@ -321,14 +378,46 @@ class CUDASession:
                    ct.byref(beta), out.pointer, n)
         return out
 
+    def gemm(self, left, right):
+        """C-order[M,K] @ C-order[K,N], native FP64 and no host intermediates."""
+        self.check()
+        if (len(left.shape) != 2 or len(right.shape) != 2
+                or left.dtype != np.float64 or right.dtype != np.float64
+                or left.allocation.session is not self or right.allocation.session is not self):
+            raise ValueError("GEMM needs FP64 arrays owned by this CUDA session")
+        m, k = left.shape
+        kr, n = right.shape
+        if k != kr or max(k,m,n) > 2**31-1 or left.order != "C" or right.order != "C":
+            raise ValueError("Unsupported GEMM extent/layout")
+        out = self.empty((m,n))
+        alpha, beta = ct.c_double(1.0), ct.c_double(0.0)
+        self._blas("cublasDgemm_v2", self.handle, 0, 0, n, m, k,
+                   ct.byref(alpha), right.pointer, n, left.pointer, k,
+                   ct.byref(beta), out.pointer, n)
+        return out
+
     def close(self):
         if self.cleanup_complete:
             return
         # Execution is permanently disabled, even if an explicit cleanup-only
         # retry is later needed. Successfully destroyed resources are cleared.
         self.closed = True
-        actions = [self.synchronize_device,
-                   *(allocation.free for allocation in reversed(self.allocations))]
+        owners = tuple(getattr(self,"native_owners",()))
+        if owners:
+            try:
+                cleanup(None,[owner.close for owner in reversed(owners)])
+                if self.native_owners:
+                    raise RuntimeError("Native dependents still retain CUDA session resources")
+            except BaseException:
+                # Never free persistent native workspaces or destroy borrowed
+                # handles/stream after failed native cleanup. Owners remain
+                # strongly retained for an explicit cleanup-only retry.
+                self.failed = True
+                raise
+        # Do not continue to resource destruction after failed synchronization.
+        # Execution stays disabled and all resources remain owned for retry.
+        self.synchronize_device()
+        actions = [allocation.free for allocation in reversed(self.allocations)]
         if self.handle is not None:
             def destroy_handle():
                 self._blas("cublasDestroy_v2",self.handle)

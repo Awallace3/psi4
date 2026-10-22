@@ -59,11 +59,16 @@ class SetupBoundary(unittest.TestCase):
                    ("SAPT","DO_DISP_EXCH_SINF"):False,
                    ("SAPT","SAPT_DFT_EINSUMS_GPU"):False,
                    ("FISAPT","FISAPT_LINK_ASSIGNMENT"):"SAO0",
+                   ("FISAPT","SSAPT0_SCALE"):False,
+                   ("FISAPT","FISAPT_EXCH_PARPERP"):False,
                    ("DFMP2","DF_BASIS_MP2"):"fixture-ri"}
-        primary = types.SimpleNamespace(nbf=lambda:nao)
-        auxiliary = types.SimpleNamespace(nbf=lambda:qa)
+        def basis(size):
+            shell = types.SimpleNamespace(is_pure=lambda:True,is_cartesian=lambda:False)
+            return types.SimpleNamespace(nbf=lambda:size,nshell=lambda:1,shell=lambda i:shell)
+        primary,auxiliary = basis(nao),basis(qa)
         wave = types.SimpleNamespace(nirrep=lambda:1, basisset=lambda:primary,
-                                     molecule=lambda:types.SimpleNamespace(natom=lambda:2))
+                                     molecule=lambda:types.SimpleNamespace(
+                                         natom=lambda:2,get_fragments=lambda:[[0,1],[1,2]]))
         timers = []
 
         def forbidden(*a,**kw):
@@ -88,7 +93,7 @@ class SetupBoundary(unittest.TestCase):
             out[...] = sum(coef*chain(factors,transposes) for coef,factors,transposes in terms)
 
         source = Path(__file__).resolve().parents[2]/"psi4/driver/procrouting/sapt/sapt_jk_terms_ein.py"
-        names = {"_store_dispersion0_components","dispersion0","dispersion0_cuda","fdisp0"}
+        names = {"_store_dispersion0_components","dispersion0","dispersion0_cuda","fdisp0_cuda","fdisp0"}
         functions = [n for n in ast.parse(source.read_text()).body
                      if isinstance(n,ast.FunctionDef) and n.name in names]
         namespace = {"core":core,"np":np,"time":time,"FDISP_BLOCK":24,
@@ -174,10 +179,49 @@ class SetupBoundary(unittest.TestCase):
             with self.subTest(option=option),self.assertRaises((ValueError,NotImplementedError)):
                 ns["dispersion0_cuda"](cache,None,provider_factory=lambda *a:None)
 
+    def test_public_cuda_rejects_cartesian_primary_before_setup_and_aux_before_factory(self):
+        for role in ("primary","auxiliary"):
+            ns,cache,wave,primary,auxiliary,*_=self.fixture()
+            basis = primary if role == "primary" else auxiliary
+            basis.shell = lambda i:types.SimpleNamespace(is_pure=lambda:False,is_cartesian=lambda:True)
+            factory = Mock(side_effect=AssertionError("Cartesian basis reached native factory"))
+            if role == "primary":
+                ns["dispersion0"] = Mock(side_effect=AssertionError("Cartesian primary reached setup"))
+            with self.assertRaisesRegex(NotImplementedError,"spherical "+role):
+                ns["dispersion0_cuda"](cache,wave,provider_factory=factory,do_print=False)
+            factory.assert_not_called()
+
+    def test_public_cuda_zero_spaces_invalid_frozen_counts_and_symmetry(self):
+        for empty in ("a","b","r","s"):
+            ns,cache,wave,*_=self.fixture()
+            cache["Disp0 execution"]={"backend":"STALE PREVIOUS CALL"}
+            kwargs={"nfrozen_A":3} if empty=="a" else {"nfrozen_B":4} if empty=="b" else {}
+            if empty in ("r","s"):
+                side="A" if empty=="r" else "B"
+                cache["Cvir_"+side]=Matrix.from_array(np.empty((7,0)))
+                cache["eps_vir_"+side]=Matrix.from_array(np.empty(0))
+            factory=Mock(side_effect=AssertionError("Zero-space call entered factory"))
+            result=ns["dispersion0_cuda"](cache,wave,provider_factory=factory,**kwargs)
+            self.assertEqual(result,{"Disp20,u":0.0,"Exch-Disp20,u":0.0})
+            self.assertEqual(cache["Disp0 execution"]["backend"],"STALE PREVIOUS CALL")
+            factory.assert_not_called()
+        for kwargs in ({"nfrozen_A":True},{"nfrozen_B":-1},{"nfrozen_A":4},
+                       {"nfrozen_B":5},{"nfrozen_A":1.5}):
+            ns,cache,wave,*_=self.fixture()
+            factory=Mock(side_effect=AssertionError("Invalid count entered factory"))
+            with self.assertRaises(ValueError):
+                ns["dispersion0_cuda"](cache,wave,provider_factory=factory,**kwargs)
+            factory.assert_not_called()
+        ns,cache,wave,*_=self.fixture()
+        wave.nirrep=lambda:2
+        with self.assertRaisesRegex(NotImplementedError,"C1"):
+            ns["dispersion0_cuda"](cache,wave,provider_factory=lambda *a:None)
+
     def test_public_cuda_ignores_poisoned_host_factors_and_cached_dfhelper(self):
         # Execute the public route and its actual callback/type boundary. This
         # is a CPU orchestration spy, NOT native admission or factor execution.
         ns,cache,wave,primary,auxiliary,*_=self.fixture()
+        before={key:value.np.copy() for key,value in cache.items()}
         class ForbiddenHostFactor:
             def __getattr__(self,name):
                 raise AssertionError("Production must not read cached host factors/DFHelper")
@@ -190,11 +234,23 @@ class SetupBoundary(unittest.TestCase):
         cache["Disp0 execution"]={"backend":"STALE CPU DFHelper provenance"}
         dfmo=importlib.import_module(PACKAGE+".sapt_cuest_dfmo_cuda")
         backend=importlib.import_module(PACKAGE+".sapt_dispersion_cuda")
+        setup=importlib.import_module(PACKAGE+".sapt_dispersion_cuda_setup")
         # Deliberately uninitialized adapter; only the orchestration/type
         # boundary is under test, and no native/CUDA API is invoked.
         provider=object.__new__(dfmo.CuESTDFMOProvider)
         provider.validate_basis=Mock()
         events=[]
+        provider.closed=provider.failed=False
+        provider.assert_identity=Mock()
+        provider.close=Mock(side_effect=lambda:events.append("provider close"))
+        provider.prepare_device_compute=Mock(side_effect=lambda:events.append("prepare device"))
+        @contextlib.contextmanager
+        def scope():
+            events.append("scope enter")
+            try:yield
+            finally:events.append("scope exit")
+        provider.session=types.SimpleNamespace(scope=scope)
+        ns["dispersion0"]=Mock(side_effect=AssertionError("GPU route reached CPU setup"))
         @contextlib.contextmanager
         def factory(p,a):
             self.assertIs(p,primary);self.assertIs(a,auxiliary)
@@ -203,45 +259,191 @@ class SetupBoundary(unittest.TestCase):
             finally:events.append("factory exit")
         def kernel(p,**kwargs):
             self.assertIs(p,provider)
-            self.assertEqual(events,["factory enter"])
+            self.assertEqual(events,["factory enter","prepare device","scope enter"])
             self.assertEqual(set(kwargs),{"spaces","corrections","energies","block_size"})
             self.assertEqual(len(kwargs["spaces"]),12)
             self.assertEqual(len(kwargs["corrections"]),8)
-            return {"Disp20 occupied pairs":np.full((2,2),-.25),
-                    "Exch-Disp20 occupied pairs":np.full((2,2),.125),
+            return {"Disp20,u":-1.,"Exch-Disp20,u":.5,
                     "Disp0 execution":{"scope":"CPU orchestration spy ONLY"}}
-        with patch.object(backend,"blocked_dispersion",side_effect=kernel) as compute:
+        def raw_setup(session,matrices,energies,**kwargs):
+            self.assertIs(session,provider.session)
+            self.assertEqual(kwargs,{"frozen_a":1,"frozen_b":2})
+            self.assertEqual(set(matrices),{"S","D_A","P_A","V_A","J_A","K_A",
+                "D_B","P_B","V_B","J_B","K_B","K_O","Cocc_A","Cocc_B","Cvir_A","Cvir_B"})
+            np.testing.assert_array_equal(matrices["Cocc_A"],cache["Cocc_A"].np)
+            self.assertEqual(set(energies),set("arbs"))
+            return dict.fromkeys(range(12)),dict.fromkeys(range(8)),dict.fromkeys("arbs")
+        with patch.object(backend,"blocked_device_dispersion",side_effect=kernel) as compute,patch.object(
+                setup,"prepare_hf",side_effect=raw_setup):
             result=ns["dispersion0_cuda"](cache,wave,provider_factory=factory,
                                            nfrozen_A=1,nfrozen_B=2,do_print=False)
         provider.validate_basis.assert_called_once_with(primary,auxiliary)
         compute.assert_called_once()
-        self.assertEqual(events,["factory enter","factory exit"])
+        self.assertEqual(events,["factory enter","prepare device","scope enter",
+                                 "scope exit","provider close","factory exit"])
         self.assertEqual(result["Disp20,u"],-1.)
         self.assertEqual(result["Exch-Disp20,u"],.5)
-        self.assertEqual(result["Disp0 execution"]["scope"],"CPU orchestration spy ONLY")
+        self.assertIn("Spherical HF dispersion",result["Disp0 execution"]["scope"])
         self.assertNotIn("backend",result["Disp0 execution"])
         self.assertIs(cache["dfh"],poison)
+        for key,value in before.items():
+            np.testing.assert_array_equal(cache[key].np,value)
 
     def test_public_cuda_factory_or_native_failure_never_falls_back_to_dfhelper(self):
         dfmo=importlib.import_module(PACKAGE+".sapt_cuest_dfmo_cuda")
         backend=importlib.import_module(PACKAGE+".sapt_dispersion_cuda")
+        setup=importlib.import_module(PACKAGE+".sapt_dispersion_cuda_setup")
         for phase in ("factory","native","wrong provider"):
             ns,cache,wave,*_=self.fixture()
             provider=object.__new__(dfmo.CuESTDFMOProvider)
             provider.validate_basis=Mock()
+            provider.closed=provider.failed=False
+            provider.assert_identity=Mock()
+            provider.close=Mock()
+            provider.prepare_device_compute=Mock()
+            provider.session=types.SimpleNamespace(scope=contextlib.nullcontext)
             @contextlib.contextmanager
             def factory(*args):
                 if phase=="factory":
                     raise RuntimeError("missing live cuEST factory")
                 yield object() if phase=="wrong provider" else provider
             with self.subTest(phase=phase),patch.object(
-                    backend,"blocked_dispersion",side_effect=RuntimeError("native DFMO failure")) as compute:
+                    backend,"blocked_device_dispersion",
+                    side_effect=RuntimeError("native DFMO failure")) as compute,patch.object(
+                    setup,"prepare_hf",return_value=(None,None,None)):
                 expected=TypeError if phase=="wrong provider" else RuntimeError
                 message=("strict cuEST" if phase=="wrong provider" else
                          "missing live cuEST" if phase=="factory" else "native DFMO")
                 with self.assertRaisesRegex(expected,message):
                     ns["dispersion0_cuda"](cache,wave,provider_factory=factory,do_print=False)
                 self.assertEqual(compute.call_count,1 if phase=="native" else 0)
+
+    def test_public_exception_cleanup_precedes_factory_teardown_and_preserves_primary(self):
+        dfmo=importlib.import_module(PACKAGE+".sapt_cuest_dfmo_cuda")
+        backend=importlib.import_module(PACKAGE+".sapt_dispersion_cuda")
+        setup=importlib.import_module(PACKAGE+".sapt_dispersion_cuda_setup")
+        for phase in ("prepare","setup","kernel"):
+            ns,cache,wave,*_=self.fixture()
+            events=[]
+            provider=object.__new__(dfmo.CuESTDFMOProvider)
+            provider.closed=provider.failed=False
+            provider.assert_identity=Mock()
+            provider.validate_basis=Mock()
+            def fail():
+                raise RuntimeError("original "+phase+" failure")
+            def close():
+                events.append("provider close")
+                raise RuntimeError("secondary cleanup failure")
+            provider.close=close
+            provider.prepare_device_compute=fail if phase=="prepare" else Mock()
+            @contextlib.contextmanager
+            def scope():
+                events.append("scope enter")
+                try:yield
+                finally:events.append("scope exit")
+            provider.session=types.SimpleNamespace(scope=scope)
+            @contextlib.contextmanager
+            def factory(*args):
+                events.append("factory enter")
+                try:yield provider
+                finally:events.append("factory exit")
+            with patch.object(setup,"prepare_hf",
+                              side_effect=(RuntimeError("original setup failure") if phase=="setup" else None),
+                              return_value=(None,None,None)),patch.object(
+                    backend,"blocked_device_dispersion",
+                    side_effect=RuntimeError("original kernel failure")):
+                with self.assertRaisesRegex(RuntimeError,"original "+phase+" failure") as caught:
+                    ns["dispersion0_cuda"](cache,wave,provider_factory=factory,do_print=False)
+            self.assertEqual(events[-2:],["provider close","factory exit"])
+            if phase!="prepare":
+                self.assertEqual(events[-3],"scope exit")
+            self.assertIn("secondary cleanup failure",caught.exception.__notes__[0])
+
+    def localized(self):
+        ns,cache,wave,primary,auxiliary,options,timers=self.fixture()
+        options[("SAPT","SAPT_DFT_DO_FSAPT")]="SAPTDFT"
+        options[("FISAPT","FISAPT_LINK_ASSIGNMENT")]="C"
+        for side,frozen in (("A",1),("B",2)):
+            full=cache["Cocc_"+side].np
+            cache["Lfocc0"+side]=Matrix.from_array(full[:,:frozen])
+            cache["Caocc0"+side]=Matrix.from_array(full[:,frozen:])
+            cache["Uaocc0"+side]=Matrix.from_array(np.eye(full.shape[1]-frozen))
+        return ns,cache,wave,primary,auxiliary,options,timers
+
+    def test_fragment_placement_preserves_zero_slots_frozen_offsets_and_cache(self):
+        ns,cache,wave,*_=self.localized()
+        before={key:value.np.copy() for key,value in cache.items()}
+        captured={}
+        def compute(_cache,_wave,**kw):
+            self.assertIs(_cache,cache);self.assertIs(_wave,wave);captured.update(kw)
+            return {"Disp20,u":-1.,"Exch-Disp20,u":.5,"Disp0,u":-.5,
+                "Disp20 occupied pairs":np.full((2,2),-.25),
+                "Exch-Disp20 occupied pairs":np.full((2,2),.125),
+                "Disp0 occupied pairs":np.full((2,2),-.125),
+                "Disp0 execution":{"scope":"CPU orchestration spy ONLY"}}
+        ns["dispersion0_cuda"]=compute
+        result=ns["fdisp0_cuda"](cache,wave,provider_factory=lambda *a:None,do_print=False)
+        self.assertEqual((captured["nfrozen_A"],captured["nfrozen_B"]),(1,2))
+        self.assertTrue(captured["_return_pairs"])
+        self.assertEqual(result["Disp_AB"].np.shape,(6,7))
+        expected=np.zeros((6,7));expected[3:5,4:6]=-.125
+        np.testing.assert_array_equal(result["Disp_AB"].np,expected)
+        self.assertEqual(result["sDisp_AB"].np.shape,(1,1))
+        self.assertNotIn("Disp_AB",cache)
+        for key,value in before.items():np.testing.assert_array_equal(cache[key].np,value)
+
+    def test_fragment_guards_reject_link_scale_external_and_mismatched_active_orbitals(self):
+        for failure in ("link","scale","parperp","external","active"):
+            ns,cache,wave,_,_,options,_=self.localized()
+            if failure=="link":options[("FISAPT","FISAPT_LINK_ASSIGNMENT")]="SIAO0"
+            elif failure=="scale":options[("FISAPT","SSAPT0_SCALE")]=True
+            elif failure=="parperp":options[("FISAPT","FISAPT_EXCH_PARPERP")]=True
+            elif failure=="external":cache["external_potentials"]={"A":object()}
+            else:cache["Caocc0A"].np[0,0]+=.2
+            ns["dispersion0_cuda"]=Mock(side_effect=AssertionError("Invalid fragment entered GPU route"))
+            with self.assertRaises((ValueError,NotImplementedError)):
+                ns["fdisp0_cuda"](cache,wave,provider_factory=lambda *a:None,do_print=False)
+
+    def test_public_localized_route_uploads_only_raw_rotations_after_gpu_setup(self):
+        ns,cache,wave,*_=self.localized()
+        dfmo=importlib.import_module(PACKAGE+".sapt_cuest_dfmo_cuda")
+        backend=importlib.import_module(PACKAGE+".sapt_dispersion_cuda")
+        setup=importlib.import_module(PACKAGE+".sapt_dispersion_cuda_setup")
+        provider=object.__new__(dfmo.CuESTDFMOProvider)
+        provider.closed=provider.failed=False
+        provider.assert_identity=Mock();provider.validate_basis=Mock()
+        provider.prepare_device_compute=Mock();provider.close=Mock()
+        provider.session=types.SimpleNamespace(scope=contextlib.nullcontext,
+            upload=Mock(side_effect=lambda value:("device rotation",id(value))))
+        @contextlib.contextmanager
+        def factory(*args):yield provider
+        def kernel(_provider,**kw):
+            self.assertIs(_provider,provider)
+            self.assertEqual(len(kw["rotations"]),2)
+            self.assertEqual(provider.session.upload.call_count,2)
+            return {"Disp20,u":-1.,"Exch-Disp20,u":.5,"Disp0,u":-.5,
+                "Disp20 occupied pairs":np.full((2,2),-.25),
+                "Exch-Disp20 occupied pairs":np.full((2,2),.125),
+                "Disp0 occupied pairs":np.full((2,2),-.125),
+                "Disp0 execution":{"occupied_representation":"localized"}}
+        with patch.object(setup,"prepare_hf",return_value=(object(),object(),object())),patch.object(
+                backend,"blocked_device_dispersion",side_effect=kernel):
+            result=ns["fdisp0_cuda"](cache,wave,provider_factory=factory,do_print=False)
+        self.assertEqual(result["Disp0 execution"]["occupied_representation"],"localized")
+
+    def test_fragment_zero_active_has_no_factory_or_inherited_provenance(self):
+        ns,cache,wave,*_=self.localized()
+        full=cache["Cocc_A"].np
+        cache["Lfocc0A"]=Matrix.from_array(full)
+        cache["Caocc0A"]=Matrix.from_array(full[:,:0])
+        cache["Uaocc0A"]=Matrix.from_array(np.empty((0,0)))
+        cache["Disp0 execution"]={"backend":"STALE PREVIOUS GPU"}
+        factory=Mock(side_effect=AssertionError("Empty active space entered factory"))
+        result=ns["fdisp0_cuda"](cache,wave,provider_factory=factory,do_print=False)
+        self.assertEqual((result["Disp20,u"],result["Exch-Disp20,u"]),(0.,0.))
+        self.assertNotIn("Disp0 execution",result)
+        self.assertFalse(np.any(result["Disp_AB"].np))
+        factory.assert_not_called()
 
 
 if __name__=="__main__":

@@ -2542,19 +2542,21 @@ def dispersion0(cache, dimer_wfn, nfrozen_A=0, nfrozen_B=0, *, block_size=None, 
 
 
 def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen_B=0,
-                     block_size=24, do_print=True):
+                     block_size=24, do_print=True, _localized=None, _return_pairs=False):
     """Experimental explicit Python entrypoint; not an automatic driver option.
 
     provider_factory(primary_basis, auxiliary_basis) must be a context manager
-    yielding the audited cuEST DFMO adapter. Existing E2 canonical setup remains;
-    host DFHelper construction/transformation/packing is completely bypassed.
+    yielding the audited cuEST DFMO adapter. Raw upstream HF matrices are
+    uploaded once; dispersion setup, DFMO packing, contractions and signed
+    reductions execute on GPU. No E2 CPU setup or host factor path is used.
     """
     if (str(core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")).upper() != "HF"
             or not core.get_option("SAPT", "SAPT_DFT_DO_DISP")
             or core.get_option("SAPT", "SAPT_DFT_D3_IE")
             or core.get_option("SAPT", "SAPT_DFT_D4_IE")):
         raise ValueError("Experimental CUDA dispersion requires ordinary HF SAPT0, not DFT/D3/D4")
-    if (str(core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")).upper() != "NONE"
+    fragment_mode=str(core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")).upper()
+    if ((fragment_mode!="NONE" if _localized is None else fragment_mode not in ("SAPTDFT","FISAPT"))
             or core.get_option("SAPT", "DO_DISP_EXCH_SINF")):
         raise NotImplementedError("CUDA fragment/F-SAPT and S-inf dispersion are unsupported")
     if core.get_option("SAPT", "SAPT_DFT_EINSUMS_GPU"):
@@ -2565,21 +2567,185 @@ def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen
         raise ValueError("CUDA compute block must be a positive integer")
     if dimer_wfn.nirrep() != 1:
         raise NotImplementedError("Experimental CUDA dispersion currently requires C1 symmetry")
+    from .sapt_cuest_basis import require_spherical_basis
+    require_spherical_basis(dimer_wfn.basisset(),role="primary")
 
-    def kernel(**inputs):
-        from .sapt_dispersion_cuda import blocked_dispersion
-        from .sapt_cuest_dfmo_cuda import CuESTDFMOProvider
-        primary, auxiliary = inputs.pop("primary_basis"), inputs.pop("auxiliary_basis")
-        with provider_factory(primary, auxiliary) as provider:
-            if not isinstance(provider, CuESTDFMOProvider):
-                raise TypeError("The CUDA entrypoint requires strict cuEST0.2.50 native admission")
+    if (type(nfrozen_A) is not int or type(nfrozen_B) is not int
+            or min(nfrozen_A,nfrozen_B) < 0):
+        raise ValueError("Frozen occupied counts must be nonnegative integers")
+    counts = {name:cache[key].np.shape[1] for name,key in
+              (("a","Cocc_A"),("b","Cocc_B"),("r","Cvir_A"),("s","Cvir_B"))}
+    if nfrozen_A > counts["a"] or nfrozen_B > counts["b"]:
+        raise ValueError("Frozen occupied count exceeds upstream HF space")
+    if (nfrozen_A == counts["a"] or nfrozen_B == counts["b"]
+            or counts["r"] == 0 or counts["s"] == 0):
+        return {"Disp20,u":0.0,"Exch-Disp20,u":0.0}
+    if _localized is not None:
+        if not isinstance(_localized,(tuple,list)) or len(_localized)!=2:
+            raise ValueError("Two active occupied localization rotations required")
+        for value,size in zip(_localized,(counts["a"]-nfrozen_A,counts["b"]-nfrozen_B)):
+            if (not isinstance(value,np.ndarray) or value.dtype!=np.float64
+                    or value.shape!=(size,size) or not np.isfinite(value).all()):
+                raise ValueError("Invalid raw active occupied localization rotation")
+
+    from .sapt_dispersion_cuda import blocked_device_dispersion
+    from .sapt_dispersion_cuda_setup import prepare_hf
+    from .sapt_cuest_dfmo_cuda import CuESTDFMOProvider
+    started = time.perf_counter()
+    primary = dimer_wfn.basisset()
+    auxiliary = core.BasisSet.build(
+        dimer_wfn.molecule(),"DF_BASIS_MP2",core.get_option("DFMP2","DF_BASIS_MP2"),
+        "RIFIT",core.get_global_option("BASIS"))
+    require_spherical_basis(auxiliary,role="auxiliary")
+    names = ("S","D_A","P_A","V_A","J_A","K_A","D_B","P_B","V_B","J_B","K_B","K_O",
+             "Cocc_A","Cocc_B","Cvir_A","Cvir_B")
+    matrices = {name:np.asarray(cache[name].np) for name in names}
+    energies = {name:np.asarray(cache[key].np) for name,key in
+                (("a","eps_occ_A"),("b","eps_occ_B"),("r","eps_vir_A"),("s","eps_vir_B"))}
+    with provider_factory(primary,auxiliary) as provider:
+        if not isinstance(provider,CuESTDFMOProvider):
+            raise TypeError("The CUDA entrypoint requires strict cuEST0.2.50 native admission")
+        # Provider parameters are owned/closed before the factory may destroy
+        # its borrowed plan; construction must precede any temporary scope.
+        with provider:
             provider.validate_basis(primary, auxiliary)
-            result = blocked_dispersion(provider, **inputs)
-        return (result["Disp20 occupied pairs"], result["Exch-Disp20 occupied pairs"],
-                result["Disp0 execution"])
+            provider.prepare_device_compute()
+            with provider.session.scope():
+                spaces,corrections,e = prepare_hf(
+                    provider.session,matrices,energies,frozen_a=nfrozen_A,frozen_b=nfrozen_B)
+                extra={}
+                if _localized is not None:
+                    extra["rotations"]=tuple(provider.session.upload(value) for value in _localized)
+                result = blocked_device_dispersion(
+                    provider,spaces=spaces,corrections=corrections,energies=e,block_size=block_size,**extra)
+    execution = dict(result["Disp0 execution"])
+    execution["entrypoint_seconds_including_factory_setup_cleanup"] = time.perf_counter()-started
+    execution["raw_hf_numerical_setup"] = "owned cuBLAS/custom CUDA"
+    execution["scope"] = ("Spherical HF dispersion from upstream matrices, including raw upload, "
+                          "GPU setup/device DFMO/packing/contractions/pair/global reductions "
+                          "and owned cleanup; excludes upstream SCF/elst/exch/induction")
+    if do_print:
+        core.print_out(f'    CUDA Disp20,u = {result["Disp20,u"]:.12e} Eh\n'
+                       f'    CUDA Exch-Disp20,u = {result["Exch-Disp20,u"]:.12e} Eh\n')
+    output={"Disp20,u":result["Disp20,u"],"Exch-Disp20,u":result["Exch-Disp20,u"],
+            "Disp0 execution":execution}
+    if _return_pairs:
+        output.update({name:result[name] for name in (
+            "Disp20 occupied pairs","Exch-Disp20 occupied pairs","Disp0 occupied pairs","Disp0,u")})
+    return output
 
-    return dispersion0(cache, dimer_wfn, nfrozen_A, nfrozen_B, block_size=block_size,
-                       do_print=do_print, _kernel_callback=kernel)
+
+def fisapt_cuda(cache,dimer_wfn,wfn_A,wfn_B,*,provider_factory,block_size=24,scalars=None):
+    """Bounded automatic GPU fragment continuation; never CPU localization/factors."""
+    from .sapt_cuest_basis import require_spherical_basis
+    from .sapt_fisapt_workflow_cuda import fragment_terms, HF_FIELDS
+    mol=dimer_wfn.molecule()
+    # Molecule::get_fragments returns [first,last_exclusive) pairs, NOT atom lists.
+    fragments=[list(range(first,last)) for first,last in mol.get_fragments()]
+    if (dimer_wfn.nirrep()!=1 or len(fragments)!=2
+            or sorted(i for f in fragments for i in f)!=list(range(mol.natom()))):
+        raise NotImplementedError("GPU FISAPT requires exactly two unlinked C1 fragments")
+    primary=dimer_wfn.basisset()
+    require_spherical_basis(primary,role="primary")
+    jkfit=core.BasisSet.build(mol,"DF_BASIS_SCF",core.get_option("SCF","DF_BASIS_SCF"),
+                            "JKFIT",core.get_global_option("BASIS"),puream=1)
+    rifit=core.BasisSet.build(mol,"DF_BASIS_MP2",core.get_option("DFMP2","DF_BASIS_MP2"),
+                            "RIFIT",core.get_global_option("BASIS"),puream=1)
+    minimal=core.BasisSet.build(mol,"BASIS",core.get_global_option("MINAO_BASIS"),puream=1)
+    for value in (jkfit,rifit,minimal):require_spherical_basis(value,role="auxiliary")
+    matrices={n:np.asarray(cache[n].np) for n in (*HF_FIELDS,"J_O")}
+    energies={n:np.asarray(cache[key].np) for n,key in zip("abrs",
+              ("eps_occ_A","eps_occ_B","eps_vir_A","eps_vir_B"))}
+    frozen=tuple(w.basisset().n_frozen_core(core.get_global_option("FREEZE_CORE"),w.molecule())
+                 for w in (wfn_A,wfn_B))
+    xyz=np.array([[mol.x(i),mol.y(i),mol.z(i)] for i in range(mol.natom())],dtype=np.float64)
+    charges=[np.zeros(mol.natom(),dtype=np.float64) for _ in fragments]
+    for values,fragment in zip(charges,fragments):
+        for i in fragment:values[i]=mol.Z(i)
+    scaling={}
+    if core.get_option("FISAPT","FISAPT_FSAPT_EXCH_SCALE"):
+        if scalars is None or "Exch10" not in scalars:
+            raise ValueError("GPU fragment exchange scaling requires canonical Exch10")
+        scaling["exchange"]=np.array([scalars["Exch10"]],dtype=np.float64)
+    if core.get_option("FISAPT","FISAPT_FSAPT_IND_SCALE"):
+        if scalars is None or any(n not in scalars for n in ("Ind20,r","Exch-Ind20,r")):
+            raise ValueError("GPU fragment induction scaling requires canonical coupled HF scalars")
+        scaling["induction"]=np.array([scalars["Ind20,r"],scalars["Exch-Ind20,r"],
+                                       scalars.get("Delta HF Correction",0.)],dtype=np.float64)
+    started=time.perf_counter()
+    with provider_factory(primary,jkfit) as provider:
+        with provider:
+            provider.validate_basis(primary,jkfit)
+            arrays,data=fragment_terms(provider,rifit,minimal,matrices,energies,xyz,*charges,
+                                       frozen=frozen,block_size=block_size,scaling=scaling)
+    work=dict(cache)
+    work.update({name:core.Matrix.from_array(value) for name,value in arrays.items()})
+    for side,values in zip(("A","B"),charges):
+        work["Z"+side]=core.Vector.from_array(values)
+        work["Z"+side].name="Z"+side
+    data["FISAPT execution"]["entrypoint_seconds_including_factory_cleanup"]=time.perf_counter()-started
+    return work,data
+
+
+def fisapt_cuda_drop(cache,dimer_wfn):
+    """Serialize final GPU results with the existing writer, no native FISAPT.
+
+    The writer only needs molecule/vectors/matrices accessors. A data-only
+    adapter avoids constructing a CPU FISAPT/DFHelper object just for output.
+    Scalar/wavefunction variables are already set by the public SAPT driver.
+    """
+    from types import SimpleNamespace
+    from ... import p4util
+    from . import fisapt_proc
+    adapter=SimpleNamespace(molecule=dimer_wfn.molecule,
+        vectors=lambda:{name:cache[name] for name in ("ZA","ZB")},
+        matrices=lambda:cache)
+    stash=p4util.OptionsState(["FISAPT","FISAPT_DO_FSAPT_DISP"])
+    try:
+        core.set_local_option("FISAPT","FISAPT_DO_FSAPT_DISP",core.get_option("SAPT","SAPT_DFT_DO_DISP"))
+        fisapt_proc.fisapt_fdrop(adapter)
+    finally:
+        stash.restore()
+
+
+def fdisp0_cuda(cache,dimer_wfn,*,provider_factory,block_size=24,do_print=True):
+    """Explicit unscaled two-fragment HF LO dispersion; return a new cache.
+
+    Localization is an upstream input, NOT certified GPU work by this call.
+    C-link assignment with exactly two fragments/no external potentials only.
+    Atom/frozen/external slots are zero; the active pair sum is formed on GPU.
+    """
+    if (str(core.get_option("FISAPT","FISAPT_LINK_ASSIGNMENT")).upper()!="C"
+            or core.get_option("FISAPT","SSAPT0_SCALE")
+            or core.get_option("FISAPT","FISAPT_EXCH_PARPERP")
+            or cache.get("external_potentials")):
+        raise NotImplementedError("CUDA fragment dispersion link/scaling/external cases are not implemented")
+    mol=dimer_wfn.molecule()
+    if len(mol.get_fragments())!=2:
+        raise NotImplementedError("CUDA fragment dispersion currently requires two fragments")
+    needed=("Lfocc0A","Lfocc0B","Caocc0A","Caocc0B","Uaocc0A","Uaocc0B")
+    if any(name not in cache for name in needed):
+        raise ValueError("Complete active/frozen/localized occupied cache required")
+    nf=tuple(cache["Lfocc0"+side].np.shape[1] for side in ("A","B"))
+    for side,frozen in zip(("A","B"),nf):
+        full=np.asarray(cache["Cocc_"+side].np)
+        if (frozen>full.shape[1] or cache["Lfocc0"+side].np.shape[0]!=full.shape[0]
+                or not np.array_equal(cache["Caocc0"+side].np,full[:,frozen:])):
+            raise ValueError("Fragment canonical active/frozen cache differs from raw HF orbitals")
+    work=dict(cache);work.pop("Disp0 execution",None)
+    occupied=tuple(cache["Cocc_"+side].np.shape[1] for side in ("A","B"))
+    matrix=core.Matrix("Disp_AB",mol.natom()+occupied[0]+1,mol.natom()+occupied[1]+1)
+    result=dispersion0_cuda(cache,dimer_wfn,provider_factory=provider_factory,
+        nfrozen_A=nf[0],nfrozen_B=nf[1],block_size=block_size,do_print=do_print,
+        _localized=tuple(np.asarray(cache["Uaocc0"+side].np) for side in ("A","B")),_return_pairs=True)
+    if "Disp0 occupied pairs" in result:
+        pairs=result["Disp0 occupied pairs"]
+        matrix.np[mol.natom()+nf[0]:mol.natom()+nf[0]+pairs.shape[0],
+                  mol.natom()+nf[1]:mol.natom()+nf[1]+pairs.shape[1]]=pairs
+    work.update({"Disp_AB":matrix,"Disp20,u":result["Disp20,u"],"Exch-Disp20,u":result["Exch-Disp20,u"],
+                 "sDisp_AB":core.Matrix("sDisp_AB",1,1)})
+    if "Disp0 execution" in result:work["Disp0 execution"]=result["Disp0 execution"]
+    return work
 
 
 def fdisp0(
@@ -3444,6 +3610,53 @@ def fdisp0(
     return cache
 
 
+# Present only in a cuEST-enabled build; see psi4/src/cuest_gemm.cc.
+_HAVE_CUEST_GEMM = hasattr(core, "cuest_chain_gemm")
+
+
+def _chain_gemm_work(tensors: list, transposes: list[str]) -> int:
+    """Return the largest ``m * k * n`` among the links of a gemm chain.
+
+    Follows the same shape rules as :func:`chain_gemm_einsums` itself: only the
+    first left operand may be transposed, and the row count of the running
+    product never changes after the first link.
+    """
+    rows, cols = tensors[0].shape
+    if transposes[0] == "T":
+        rows, cols = cols, rows
+    largest = 0
+    for i in range(len(tensors) - 1):
+        b_rows, b_cols = tensors[i + 1].shape
+        if transposes[i + 1] == "T":
+            b_rows, b_cols = b_cols, b_rows
+        largest = max(largest, rows * cols * b_cols)
+        cols = b_cols
+    return largest
+
+
+def _use_cuest_gemm(tensors: list, transposes: list[str], prefactors_C: list[float]) -> bool:
+    """Whether a gemm chain is worth sending to cuBLAS.
+
+    A chain has to earn the two PCIe transfers that bracket it, so small ones
+    stay on the CPU; ``CUEST_GEMM_MIN_DIM`` sets the crossover, expressed as the
+    dimension of a square product.  ``prefactors_C`` is the other bar: the GPU
+    path always accumulates into a fresh matrix, so a caller that actually wants
+    a non-zero beta gets the einsums path.
+    """
+    if not _HAVE_CUEST_GEMM or len(tensors) < 2:
+        return False
+    # The native binding takes SharedMatrix, not an Einsums tensor. The v2
+    # out="tensor" continuation must keep its existing Einsums-owned path.
+    if any(not isinstance(value, core.Matrix) for value in tensors):
+        return False
+    if not core.get_global_option("USE_CUEST"):
+        return False
+    if prefactors_C is not None and any(prefactors_C):
+        return False
+    min_dim = core.get_global_option("CUEST_GEMM_MIN_DIM")
+    return _chain_gemm_work(tensors, transposes) >= min_dim**3
+
+
 def chain_gemm_einsums(
     tensors: list,
     transposes: list[str] = None,
@@ -3488,6 +3701,22 @@ def chain_gemm_einsums(
         prefactors_C = [0.0] * (N - 1)
     if prefactors_AB is None:
         prefactors_AB = [1.0] * (N - 1)
+    if _use_cuest_gemm(tensors, transposes, prefactors_C):
+        # One upload, one download: the running product stays on the device for
+        # the whole chain rather than round-tripping through host memory at
+        # every link.  prefactors_C is deliberately not forwarded -- C is
+        # allocated and zeroed immediately before each gemm below, so beta only
+        # ever multiplies zero, and _use_cuest_gemm has already refused any
+        # chain that asks for something else.
+        convert = _ein if out == "tensor" else (lambda value: value)
+        if return_tensors is None:
+            flags = [False] * (N - 2) + [True]
+            return convert(core.cuest_chain_gemm(tensors, transposes, prefactors_AB, flags)[0])
+        flags = [bool(r) for r in return_tensors][: N - 1]
+        flags += [False] * (N - 1 - len(flags))
+        return [convert(value) for value in
+                core.cuest_chain_gemm(tensors, transposes, prefactors_AB, flags)]
+
     # one boundary crossing per input factor, then stay in einsums
     ein_inputs = [_ein(t, name=f"chain_in{i}") for i, t in enumerate(tensors)]
     computed_tensors = [ein_inputs[0]]

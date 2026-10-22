@@ -1,5 +1,66 @@
 # Experimental Python/cuEST CUDA dispersion — CuPy-free
 
+## Automatic public HF selection with USE_CUEST
+
+As requested, ordinary HF dispersion now selects the custom CUDA/cuEST route
+automatically when `USE_CUEST=true`, independently of the old MP2 algorithm
+default. The caller must inject `cuda_provider_factory(primary, auxiliary)`,
+a context manager yielding the strictly audited `CuESTDFMOProvider`.
+There are no hardcoded SDK paths or implicit native-handle/factor fallbacks.
+
+```python
+psi4.set_options({
+    "USE_CUEST": True,
+    "CUEST_MIXED_PRECISION": False,
+    "SAPT_DFT_FUNCTIONAL": "HF",
+    "SAPT_DFT_USE_EINSUMS": True,
+})
+energy, wave = psi4.energy(
+    "sapt(dft)", molecule=dimer, return_wfn=True,
+    cuda_provider_factory=audited_factory,
+    cuda_dispersion_block_size=24,
+)
+execution = wave._sapt_cuda_dispersion_execution
+```
+
+Missing factory configuration is rejected before SCF. Automatic HF selection
+requires native FP64, ordinary dispersion, spherical/C1 inputs and the current
+Einsums2 SAPT cache. Fragment-driver wiring, external potentials and conflicting
+E2 GPU-dispersion selections fail closed; no CPU dispersion retry follows native
+failure. Structured diagnostics are not inserted into scalar QCVariables.
+`USE_CUEST=false` and existing non-HF/empirical routes remain unchanged.
+
+Public dispatch guards and whole native05/source2bded81c9 pass240CPU/mock/serial
+tests. The first real public water-Ne/block500 GPU HF -> automatic dispersion
+run passes; a separate CPU raw-Coulomb oracle in its exact GPU HF gauge agrees
+to2.054e-18Eh on signed occupied pairs. Block/frozen extensions are running.
+This is not complete/default FISAPT, certified upstream cache placement or
+matched speedup proof. See the CURRENT progress section for retained receipts.
+
+## Current target and uncompleted GPU scope
+
+User requires spherical primary and spherical RI bases only, functional=HF,
+both signed Disp20 and Exch-Disp20, with all production dispersion numerical
+work on GPU. Existing GPU SCF/elst/exch/induction paths are outside current
+reimplementation. All FISAPT terms follow only after the HF dispersion gate.
+No Cartesian calculation case is a supported target; historical diagnostics
+and negative Cartesian-input rejection tests are not production support.
+
+The explicit raw-HF route uploads upstream matrices and performs dispersion
+setup, coefficient packing, native DFMO, contractions and signed pair/global
+reductions on GPU. Both Disp20 and Exch-Disp20 pass bounded physical gates,
+including unequal/frozen spaces and block-size changes. It no longer uses the
+legacy host-setup callback or host coefficient packing/reduction route.
+
+Native GPU overlap, metric powers, IAO assembly and full ordered IBO localization
+also pass bounded physical gates. All core unscaled two-fragment term families
+have separate physical GPU evidence; downstream tests using the original GPU
+IBO buffers are in progress. Current raw HF/upstream inputs remain explicitly
+CPU fixtures, not a resident SCF/full-workflow claim. Automatic driver dispatch,
+scaled/link/external cases, resident upstream handoff and matched performance
+remain open. CPU scalar control and separate oracles are allowed; numerical
+CPU fallback is not. See `disp0-progress.md` for current receipts.
+
 User explicitly superseded the earlier no-custom-CUDA restriction for this
 backend, selecting small CUDA kernels patterned after NVIDIA's MP2 example.
 The CuPy prototype is preserved in Git history at5b161a5736, not retained as
@@ -13,13 +74,13 @@ No DFHelper integral generation, transforms, packing or storage may feed this
 route, including indirectly through cached factors or disk tensors. No NumPy
 factor producer or implicit CPU/DFHelper fallback is permitted.
 
-The actual explicit call chain is `dispersion0_cuda` → canonical setup callback
-in `fdisp0` (returns BEFORE the DFHelper branch) → strict `CuESTDFMOProvider`
-→ `cuestDFMOIntegralsCompute` into session-owned device output → device packing,
-three cuBLAS products and signed CUDA reduction. Host arrays at this boundary
-are orbital coefficients, energies and rank-one corrections, not DF factors.
-Final occupied-pair components are downloaded for common placement/sum rules.
-The factor consumer rejects host arrays or buffers from a different session.
+The explicit chain is `dispersion0_cuda` → `prepare_hf` (cuBLAS/CUDA setup) →
+`blocked_device_dispersion` → strict `CuESTDFMOProvider.compute_device` →
+`cuestDFMOIntegralsCompute` into session-owned device output → device packing,
+three cuBLAS products and signed CUDA pair/global reductions. Host inputs are
+raw upstream HF matrices and energies, not prepared dispersion corrections or
+DF factors. Final outputs are downloaded after GPU reductions. The factor
+consumer rejects host arrays or buffers from a different session.
 
 Factory/native failure must propagate; the missing live native factory means
 **BLOCKED**, never permission to substitute a host producer. Existing default
@@ -48,12 +109,14 @@ Optional Python dependency: **cuda-bindings**, not CuPy. NumPy and ctypes
 remain host-side tools. The cuEST C ABI is called directly with ctypes, so
 this backend does not install/import `cuest.bindings` or `cuest_scf`.
 Native CUDA13.3 runtime/NVRTC/driver, cuBLAS and canonical cuEST0.2.50 are
-still required. No solve/install or matching new dependency lock exists yet.
+still required. Cachy's private coherent install and exact corrected dependency
+lock are recorded in the sibling setup receipt; this is not portable-machine
+or production numerical certification.
 We do not replace this with nvmath or another implicit package dependency.
 
-`dispersion0_cuda(...,provider_factory=...)` is an explicit experimental Python
-entrypoint, not a new automatic SAPT option. It shares the existing E2 orbital/
-correction setup and original component placement, but bypasses host DFHelper.
+`dispersion0_cuda(...,provider_factory=...)` remains the explicit low-level
+entrypoint used by automatic `USE_CUEST` HF dispatch. It implements the canonical
+orbital/correction equations with owned GPU operations and bypasses DFHelper.
 Default/non-HF/CPU/E2 dispatch is unchanged. HF, ordinary dispersion, C1,
 frozen-space, fragment/S-inf and conflicting-backend guards remain explicit.
 
@@ -100,7 +163,22 @@ are capabilities/provenance, **not** DFMO numerical/rank proof.
 
 Map hashing compares each mapping's inode/device against an opened file's
 `fstat`, hashes that same descriptor, and verifies before/after fd/path
-fingerprints. Mapped ownership is admitted before version getter calls.
+fingerprints. Btrfs maps/mountinfo superblock devices may differ from subvolume
+`st_dev`; these mappings remain fail-closed. A proposed fdinfo/mountinfo/path-link
+exception was rejected because stable cross-subvolume overmounts can make
+different mapped/opened files present identical observations. No such fallback
+is installed: descriptor pathname evidence must not replace backing-file proof.
+Mapped ownership is admitted before version getter calls.
+An explicit byte-identical private tmpfs locator deployment now passes real
+fresh-process toolkit/cuEST loading, original strict mapped-file proof and
+actual resolver-pointer checks on Cachy. Dependency loading occurs after the
+matching native core but before first E2 request; all owners remain retained.
+Original environment/SDK/whole installed stage are unchanged. See
+`../runs/native-loader-device-01/` from the repository root. This loader-only
+probe issued no cuEST construction/version getter, DFMO or custom-kernel API;
+ELF initializers may execute. Core pathname/file-hash evidence assumes a trusted
+frozen install; system-driver file hash plus mapped pointer path is separately
+scoped, not claimed as strict mapped-byte proof.
 Known CUDA13 toolkit families reject a self-consistent CUDA12 BLAS entry even
 when CUDART reports13. Failed final cleanup retains failed resources and
 permanently disables execution; an explicit cleanup-only retry is possible,
@@ -108,14 +186,31 @@ never an automatic computation/allocation/resource-job retry.
 
 ## Plan and resource prerequisites
 
-An audited AO/RI basis/plan factory is still missing. It must preserve exact
-Psi4 AO and independent RI spherical/Cartesian conventions, normalization,
-auxiliary ordering and common factor gauge, and explicitly configure:
+The explicit owned factory remains diagnostic-scoped, not general production
+admission. Its spherical normalization/order/unit and bounded signed-factor/
+physical gates now pass. It preserves exact primary/RI identities and a common
+auxiliary gauge, and explicitly configures:
 
 * full Coulomb exchange fraction1, range-separated fraction/omega0;
 * fitting algorithm **MATRIXPOWER1**, not defaultQR0;
 * relative conditioning1, fitting cutoff1e-12 and metric−1/2 factors.
 * native FP64 math mode1 (set by the factory, read back by the provider).
+
+`sapt_cuest_basis.py` implements structural-only basis preflight without
+initializing CUDA or selecting a native coefficient convention. It retains
+all three exported Psi4 coefficient variants and detects unsupported basis
+structures and subsequent changes. This is NOT native normalization,
+component-order, coordinate-unit or output-layout admission, and it cannot
+yield a production provider. A fake-shell CPU pass is not native basis proof.
+
+`sapt_cuest_plan_owner.py` implements diagnostic resource construction and
+dependency-ordered cleanup, but requires an explicitly unvalidated coefficient
+candidate and cannot yield a production factor provider. It retains queried
+persistent/creation workspaces, rejects dimension disagreement and ambiguous
+native outcomes, and separates accounted workspace bytes from unmeasured opaque
+internals. Native construction and bounded numerical conversion now have
+separate device receipts; CPU fake-handle/lifecycle tests alone are not that
+evidence.
 
 Negative eigenvalue treatment, relative rank truncation and contracted-factor/
 signed-energy parity require actual comparisons against native Psi4.
@@ -132,6 +227,12 @@ allocation plus a declared aggregate of all native persistent owners, but
 does not claim total-VRAM certification. Actual peak/context/library/internal
 allocation accounting remains part of the GPU gate.
 
+Explicit native-owner leases prevent session teardown from freeing persistent
+workspaces or destroying borrowed stream/BLAS/module resources after failed or
+incomplete native destruction. Native owners must unregister only after cleanup
+completion; registration inside temporary allocation scopes is forbidden.
+This retention mechanism does not itself implement a native plan owner graph.
+
 ## Validation status
 
 CPU-only tests execute the actual kernel bodies through a C++ qualifier shim
@@ -141,8 +242,9 @@ exercise parallel synchronization or execute CUDA/cuEST/cuBLAS**.
 Identity negatives use explicit synthetic files/callbacks/maps, not loaded SDK
 evidence. Actual local archive inspection is streaming read-only, no extraction.
 
-Runtime prerequisites still include the corrected complete Psi4 installation,
-exact optional dependency lock, audited native basis/plan factory and loaded
-closure/valid-handle provider. Actual GPU numerical and placement gates remain
-unpassed. Allocation14250361 is terminal; no new window, remote probe, resource
-job, build/install, retry or speedup claim follows from this source checkpoint.
+Runtime prerequisites include the coherent whole Psi4 installation, exact
+dependency lock, owned native basis/plan factory and loaded-closure/live-handle
+provider. These and bounded physical GPU gates pass on Cachy's local3090;
+see the CURRENT progress section and sibling receipts. This does not certify
+another machine, general/default/full-FISAPT coverage or a speedup. Historical
+Phoenix allocation14250361 is terminal and outside this local workflow.

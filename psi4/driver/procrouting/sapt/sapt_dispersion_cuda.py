@@ -9,8 +9,8 @@ from .sapt_dispersion_cuda_kernels import CUDA_SOURCE
 from .sapt_dispersion_device_common import coefficient_pairs, validate_inputs
 
 
-def _factor_batch(session, provider, pairs):
-    factors = provider.compute(pairs)
+def _factor_batch(session, provider, pairs, *, device=False):
+    factors = provider.compute_device(pairs) if device else provider.compute(pairs)
     if set(factors) != set(pairs):
         raise ValueError("Incomplete DFMO batch")
     for name, (left, right) in pairs.items():
@@ -99,5 +99,105 @@ def blocked_dispersion(provider, spaces, corrections, energies, *, block_size=24
             "scope": "CuPy-free Python/cuEST/cuBLAS plus FP64 packing/reduction kernels; "
                      "excludes upstream orbital setup and borrowed-plan creation/cleanup",
             "producer": producer_report,
+        },
+    }
+
+
+def blocked_device_dispersion(provider, spaces, corrections, energies, *, block_size=24, rotations=None):
+    """GPU-only numerical continuation of prepare_hf, including global sums.
+
+    All inputs must be device outputs of validated raw-HF preparation on this
+    session. The provider must prepare persistent DFMO parameters before the
+    caller enters its enclosing setup/compute scope. No host coefficient upload,
+    correction staging or CPU numerical fallback is used here.
+    """
+    from .sapt_dispersion_cuda_setup import DeviceMath, coefficient_pairs as device_pairs
+    from .sapt_dispersion_cuda_setup import finish_components
+    if type(block_size) is not int or block_size < 1:
+        raise ValueError("CUDA dispersion block_size must be a positive integer")
+    session = provider.session
+    m = DeviceMath(session)
+    if set(energies) != set("arbs"):
+        raise ValueError("Complete device energy vectors required")
+    for value in energies.values():
+        m.require(value)
+        if len(value.shape) != 1:
+            raise ValueError("Device energies must be vectors")
+    a,nr,b,ns = (energies[name].size for name in "arbs")
+    sizes = {"a":a,"r":nr,"b":b,"s":ns}
+    needed = ("a","r","b","s","r1","s1","a2","b2","r3","s3","a4","b4")
+    shapes = {"Qar":("a","r"),"SBar":("a","r"),"Qbr":("b","r"),"Sbr":("b","r"),
+              "SAbs":("b","s"),"Qbs":("b","s"),"Sas":("a","s"),"Qas":("a","s")}
+    if set(spaces) != set(needed) or set(corrections) != set(shapes):
+        raise ValueError("Complete prepared device spaces/corrections required")
+    for name,value in spaces.items():
+        m.require(value)
+        if value.shape != (provider.nao,sizes[name[0]]):
+            raise ValueError("Incompatible prepared device AO coefficients")
+    for name,value in corrections.items():
+        m.require(value)
+        if value.shape != tuple(sizes[index] for index in shapes[name]):
+            raise ValueError("Incompatible prepared device correction")
+    if rotations is not None:
+        from .sapt_fisapt_cuda import validate_rotations,localized_dispersion_block
+        if not isinstance(rotations,(tuple,list)) or len(rotations)!=2:
+            raise ValueError("Two active occupied rotations required")
+        for rotation in rotations:m.require(rotation)
+        if rotations[0].shape!=(a,a) or rotations[1].shape!=(b,b):
+            raise ValueError("Occupied rotation dimensions differ from active spaces")
+        validate_rotations(session,*rotations)
+    started = time.perf_counter()
+    q,count = provider.naux,0
+    with session.scope():
+        d,x = session.empty((a,b),zero=True),session.empty((a,b),zero=True)
+        for r0 in range(0,nr,block_size):
+            R = min(block_size,nr-r0)
+            with session.scope():
+                rf = _factor_batch(session,provider,device_pairs(session,spaces,"r",r0,R),device=True)
+                tails = {name:m.window(corrections[name],r0,R)
+                         for name in ("Qar","SBar","Qbr","Sbr")}
+                af = _pack(session,q,rf,"Aar","Dar",None,"Ear",tails["Qar"],tails["SBar"])
+                cb = _pack(session,q,rf,"Bbr","Cbr",None,None,tails["Qbr"],tails["Sbr"])
+                for s0 in range(0,ns,block_size):
+                    S = min(block_size,ns-s0)
+                    with session.scope():
+                        sf = _factor_batch(session,provider,device_pairs(session,spaces,"s",s0,S),device=True)
+                        st = {name:m.window(corrections[name],s0,S)
+                              for name in ("SAbs","Qbs","Sas","Qas")}
+                        fa = _pack(session,q,sf,"Dbs","Abs","Ebs",None,st["SAbs"],st["Qbs"])
+                        bc = _pack(session,q,sf,"Bas","Cas",None,None,st["Sas"],st["Qas"])
+                        v = session.gemm_at_b(af.view((q,R*a)),fa.view((q,S*b),offset=q*S*b*8))
+                        direct,crossed = session.gemm_at_b(af,fa),session.gemm_at_b(bc,cb)
+                        if rotations is None:
+                            session.launch("reduce_dispersion",min(65535,a*b),128,
+                                           [a,b,R,S,r0,s0,energies["a"],energies["b"],
+                                            energies["r"],energies["s"],v,direct,crossed,d,x])
+                        else:
+                            localized_dispersion_block(session,v,direct,crossed,energies,
+                                *rotations,d,x,R=R,S=S,r0=r0,s0=s0)
+                        count += 1
+        combined,components = finish_components(session,d,x)
+        d_host,x_host = session.download(d),session.download(x)
+        combined_host,scalar_host = session.download(combined),session.download(components)
+    if any(not np.isfinite(value).all() for value in (d_host,x_host,combined_host,scalar_host)):
+        raise FloatingPointError("Nonfinite signed CUDA dispersion components")
+    return {
+        "Disp20,u":float(scalar_host[0]), "Exch-Disp20,u":float(scalar_host[1]),
+        "Disp0,u":float(scalar_host[2]),
+        "Disp20 occupied pairs":d_host, "Exch-Disp20 occupied pairs":x_host,
+        "Disp0 occupied pairs":combined_host,
+        "Disp0 execution":{
+            "backend":("CUDA_CUEST_LOCALIZED_DEVICE_EXPERIMENTAL" if rotations is not None
+                       else "CUDA_CUEST_DEVICE_INPUT_EXPERIMENTAL"),
+            "occupied_representation":"localized" if rotations is not None else "canonical",
+            "compute_blocks":count,"block_size":block_size,
+            "blocked_execution_seconds":time.perf_counter()-started,
+            "owned_peak_device_bytes_session_lifetime":session.peak_live_bytes,
+            "declared_native_persistent_bytes":session.native_bytes,
+            "cuda_source_sha256":hashlib.sha256(CUDA_SOURCE.encode()).hexdigest(),
+            "actual_gpu_execution_verified":False,
+            "scope":"Device-input DFMO and GPU packing/contractions/pair/global reductions; "
+                    "excludes raw HF upload/setup and plan creation/cleanup",
+            "producer":provider.report(),
         },
     }

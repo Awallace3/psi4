@@ -96,6 +96,44 @@ def _validate_einsums_dispersion(do_dft, do_disp, fsapt_type, use_einsums):
         gpu_runtime()  # never silently accept CPU/mock for an explicit request
 
 
+def _automatic_cuda_dispersion(do_dft, do_disp, fsapt_type, use_einsums,
+                               provider_factory, external_potentials=None, block_size=24):
+    """Select the explicit cuEST/CUDA continuation, never a CPU factor fallback."""
+    selected = (core.get_global_option("USE_CUEST") and not do_dft and do_disp
+                and not core.get_option("SAPT", "SAPT_DFT_D3_IE")
+                and not core.get_option("SAPT", "SAPT_DFT_D4_IE"))
+    if selected and not callable(provider_factory):
+        raise ValidationError("USE_CUEST HF dispersion requires an audited cuda_provider_factory.")
+    if selected:
+        if core.get_global_option("CUEST_MIXED_PRECISION"):
+            raise ValidationError("Automatic cuEST HF dispersion requires native FP64: set CUEST_MIXED_PRECISION=false.")
+        if core.get_option("SAPT","DO_DISP_EXCH_SINF"):
+            raise ValidationError("Automatic cuEST HF dispersion does not support S-inf exchange-dispersion.")
+        if fsapt_type != "NONE":
+            if (fsapt_type not in ("SAPTDFT","FISAPT")
+                    or core.get_option("SAPT","SAPT_DFT_INDUCTION_TYPE") not in ("CPHF","CPKS")
+                    or str(core.get_option("FISAPT","FISAPT_LINK_ASSIGNMENT")).upper()!="C"
+                    or not core.get_option("FISAPT","FISAPT_FSAPT_IND_RESPONSE")
+                    or any(core.get_option("FISAPT",key) for key in (
+                        "SSAPT0_SCALE","FISAPT_EXCH_PARPERP"))):
+                raise ValidationError("Automatic cuEST FISAPT currently requires C-assignment, "
+                                      "coupled HF induction, no SSAPT0 or parallel/perpendicular exchange.")
+        if not use_einsums:
+            raise ValidationError("Automatic cuEST HF dispersion currently requires Einsums2 SAPT cache support.")
+        if core.get_option("SAPT", "SAPT_DFT_EINSUMS_GPU"):
+            raise ValidationError("Automatic cuEST CUDA dispersion conflicts with E2 GPU dispersion selection.")
+        # The outer driver normalizes absence to an empty/all-None mapping.
+        # Do not use array truthiness to classify actual external fields.
+        has_external = external_potentials is not None and (
+            not isinstance(external_potentials, dict)
+            or any(value is not None for value in external_potentials.values()))
+        if has_external:
+            raise ValidationError("Automatic cuEST HF dispersion does not yet support external potentials.")
+        if type(block_size) is not int or block_size < 1:
+            raise ValidationError("CUDA dispersion block size must be a positive integer.")
+    return selected
+
+
 def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     """Run SAPT(DFT) while restoring all driver-managed options and timers."""
     optstash = p4util.OptionsState(
@@ -140,6 +178,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         The dimer wavefunction with SAPT(DFT) results stored as variables.
     """
     core.prepare_options_for_module("SAPT")
+    cuda_provider_factory = kwargs.pop("cuda_provider_factory", None)
+    cuda_dispersion_block_size = kwargs.pop("cuda_dispersion_block_size", 24)
     induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper()
@@ -332,6 +372,9 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     sapt_dft_D3_IE = core.get_option("SAPT", "SAPT_DFT_D3_IE")
     do_dft = sapt_dft_functional != "HF"
+    _automatic_cuda_dispersion(
+        do_dft, do_disp, fsapt_type, einsums_available and use_einsums,
+        cuda_provider_factory, kwargs.get("external_potentials"), cuda_dispersion_block_size)
     _validate_einsums_dispersion(do_dft, do_disp, fsapt_type, use_einsums)
     if shift_only and grac_compute == "NONE":
         raise ValidationError("SAPT_DFT_GRAC_SHIFT_ONLY=true contradicts SAPT_DFT_GRAC_COMPUTE=NONE.")
@@ -992,6 +1035,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         do_delta_dft=do_delta_dft,
         do_disp=do_disp,
         fsapt_induction_data=fsapt_induction_data,
+        cuda_provider_factory=cuda_provider_factory,
+        cuda_dispersion_block_size=cuda_dispersion_block_size,
     )
 
     # Copy data back into globals
@@ -1194,11 +1239,19 @@ def compute_GRAC_shift(
                 core.print_out(
                     f"\n\n  ==> GRAC {label} Electron Removed Molecule: charge={mol_cation.molecular_charge()} mult={mol_cation.multiplicity()} <==\n\n"
                 )
+                cation_kwargs = dict(scf_kwargs)
+                if core.get_option("SAPT", "SAPT_DFT_GRAC_SEED_CATION"):
+                    # Same geometry and basis as the neutral, one electron short,
+                    # so its converged orbitals start much closer than a fresh SAD
+                    # guess.  Opt-in: that same closeness can hold the cation in
+                    # the neutral's state, which is what the convergence tiers
+                    # above are there to break out of.
+                    cation_kwargs["guess_wfn"] = wfn_given
                 wfn_cation = run_scf(
                     dft_functional.lower(),
                     molecule=mol_cation,
                     jk=jk_obj,
-                    **scf_kwargs,
+                    **cation_kwargs,
                 )
             except ConvergenceError:
                 # A failed attempt's wavefunctions are still bound in this
@@ -1329,6 +1382,9 @@ def sapt_dft(
     do_delta_dft: bool = False,
     do_disp: bool = True,
     fsapt_induction_data: tuple | None = None,
+    *,
+    cuda_provider_factory=None,
+    cuda_dispersion_block_size=24,
 ) -> dict:
     """Compute the SAPT(DFT) interaction energy components.
 
@@ -1367,6 +1423,11 @@ def sapt_dft(
     fsapt_induction_data : tuple or None, optional
         Private transport of SAPT0 monomer wavefunctions, cache, and scalar data
         used to partition CPHF induction with the FISAPT implementation.
+    cuda_provider_factory : callable or None, optional
+        Audited explicit cuEST0.2.50 provider context factory. Required when
+        USE_CUEST selects ordinary HF dispersion; no CPU factor fallback.
+    cuda_dispersion_block_size : int, optional
+        Positive virtual compute-block edge for automatic cuEST HF dispersion.
 
     Returns
     -------
@@ -1399,6 +1460,10 @@ def sapt_dft(
 
     induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
     fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper()
+    use_cuda_dispersion = _automatic_cuda_dispersion(
+        do_dft, do_disp, fsapt_type,
+        einsums_available and core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS"),
+        cuda_provider_factory, external_potentials, cuda_dispersion_block_size)
     _validate_einsums_dispersion(
         do_dft, do_disp, fsapt_type,
         einsums_available and core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS"))
@@ -1473,8 +1538,26 @@ def sapt_dft(
     sapt_jk.set_do_K(True)
 
     if wfn_A.functional().is_x_lrc():
+        if core.get_global_option("USE_CUEST"):
+            raise ValidationError(
+                "SAPT(DFT) with a range-separated SAPT_DFT_FUNCTIONAL is not supported under "
+                "USE_CUEST: cuEST returns the full- and long-range exchange summed into a single "
+                "K, so the separate K and wK the SAPT exchange formulas need are not available. "
+                "Use a global hybrid (e.g. PBE0) for SAPT_DFT_FUNCTIONAL, or set USE_CUEST false."
+            )
         sapt_jk.set_do_wK(True)
         sapt_jk.set_omega(wfn_A.functional().x_omega())
+    else:
+        # SAPT's exchange formulas want the bare exchange operator, but this JK
+        # object is usually inherited from a monomer DFT SCF (`wfn_B.jk()`).
+        # Under cuEST the exact-exchange fraction is folded into the DF integral
+        # plan -- which is why RHF::form_G sets alpha to 1.0 for cuEST -- so an
+        # inherited builder hands back K already scaled by the functional's
+        # x_alpha (0.25 for PBE0), silently shrinking Exch10.  Asking for the
+        # unscaled operator here is a no-op for the CPU builders, whose K never
+        # carried the fraction in the first place.
+        sapt_jk.set_omega_alpha(1.0)
+        sapt_jk.set_omega_beta(0.0)
 
     use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
 
@@ -1557,7 +1640,15 @@ def sapt_dft(
     core.timer_off("SAPT(DFT):ind")
 
     # Use DFHelper before deleting the JK object for dispersion
-    if do_fsapt and fsapt_type == "SAPTDFT" and use_einsums:
+    if do_fsapt and use_cuda_dispersion:
+        core.timer_on("SAPT(DFT): GPU F-SAPT")
+        cache, fragment_data = jk_terms.fisapt_cuda(
+            cache, dimer_wfn, wfn_A, wfn_B, provider_factory=cuda_provider_factory,
+            block_size=cuda_dispersion_block_size, scalars=data)
+        dimer_wfn._sapt_cuda_fisapt_execution = fragment_data.pop("FISAPT execution")
+        data.update(fragment_data)
+        core.timer_off("SAPT(DFT): GPU F-SAPT")
+    elif do_fsapt and fsapt_type == "SAPTDFT" and use_einsums:
         core.timer_on("SAPT(DFT):Localize Orbitals")
         jk_terms.localization(cache, dimer_wfn)
         core.timer_off("SAPT(DFT):Localize Orbitals")
@@ -1738,7 +1829,14 @@ def sapt_dft(
 
         if not do_fsapt:
             core.timer_on("MP2 disp")
-            if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "EINSUMS":
+            if use_cuda_dispersion:
+                mp2_disp = jk_terms.dispersion0_cuda(
+                    cache, dimer_wfn, provider_factory=cuda_provider_factory,
+                    nfrozen_A=nfrozen_A, nfrozen_B=nfrozen_B,
+                    block_size=cuda_dispersion_block_size, do_print=True)
+                # Keep structured diagnostics out of scalar QCVariables.
+                dimer_wfn._sapt_cuda_dispersion_execution = mp2_disp.pop("Disp0 execution", {})
+            elif core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "EINSUMS":
                 mp2_disp = sapt_mp2.df_mp2_einsums_dispersion(
                     dimer_wfn, cache, nfrozen_A, nfrozen_B, do_print=True)
             elif core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
@@ -1794,7 +1892,9 @@ def sapt_dft(
         core.timer_off("SAPT(DFT):disp")
 
     # Now do F-SAPT on dispersion if requested
-    if do_fsapt and fsapt_type == "SAPTDFT" and use_einsums:
+    if do_fsapt and use_cuda_dispersion:
+        pass  # All fragment terms, including dispersion, consumed the same device IBO gauge above.
+    elif do_fsapt and fsapt_type == "SAPTDFT" and use_einsums:
         # Because dispersion is defined differently between SAPT0 (E_disp20 =
         # -4\sigma_{abrs} |(ar|bs)|^2 / (epsilon_a + epsilon_b)) and SAPT(DFT)
         # with FDDS dispersion, we will only implement F-SAPT for the SAPT0
@@ -1854,7 +1954,8 @@ def sapt_dft(
     )
 
     # because FISAPT_obj drop sets core variables, avoid setting them twice
-    if core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH").upper() != "NONE" and do_fsapt:
+    if (core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH").upper() != "NONE"
+            and do_fsapt and not use_cuda_dispersion):
         FISAPT_obj = saptdft_fisapt.drop_saptdft_variables(
             dimer_wfn, wfn_A, wfn_B, cache, data
         )
@@ -1879,6 +1980,8 @@ def sapt_dft(
             _set_fsapt_var("FSAPT_EMPIRICAL_DISP", cache["FSAPT_EMPIRICAL_DISP"])
         else:
             _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
+        if use_cuda_dispersion and core.get_option("FISAPT","FISAPT_FSAPT_FILEPATH").upper()!="NONE":
+            jk_terms.fisapt_cuda_drop(cache,dimer_wfn)
     return data
 
 

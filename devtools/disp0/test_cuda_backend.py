@@ -4,6 +4,7 @@ NOT NVRTC compilation, CUDA parallel execution, cuEST, cuBLAS or physics proof.
 """
 import contextlib
 import ctypes as ct
+import _ctypes
 import importlib
 from pathlib import Path
 import shutil
@@ -122,6 +123,7 @@ class Kernels(unittest.TestCase):
         cls.temp=tempfile.TemporaryDirectory(prefix="disp0-cuda-serial-")
         folder=Path(cls.temp.name)
         shim="""
+        #include <cmath>
         #define __global__
         #define __device__
         #define __forceinline__
@@ -143,6 +145,11 @@ class Kernels(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        # CDLL does not close its dlopen handle on collection. Unlinking first
+        # leaves a deleted mapped .so and correctly trips later identity guards.
+        # No kernel callback may escape this serial test class's lifetime.
+        _ctypes.dlclose(cls.lib._handle)
+        cls.lib = None
         cls.temp.cleanup()
 
     def test_actual_kernel_bodies_block_edges_orders_changed_inputs_and_sums(self):

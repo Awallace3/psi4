@@ -1,5 +1,852 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## CURRENT — frozen scaled GPU FISAPT and standard files pass
+
+Whole native10/source9cc6784336e5c0ab6d1e99180b66e031e1d95a75 passes
+import13 and the real public frozen water-dimer/block5 route with both standard
+exchange/induction scaling flags, nonzero delta-HF and normal F-SAPT output.
+All11files are present, geometry/charge assignments match and every serialized
+matrix roundtrips EXACTLY to the final GPU result. CPU FISAPT construction,
+DFHelper and CPU localization alternatives remain poisoned throughout.
+Receipts: automatic-cuest-fisapt-scaled-03 and independent fresh CPU05
+automatic-fisapt-cpu-oracle-07.244CPU/mock/serial executions also pass.
+
+Independent frozen-case errors: elst1.389e-13Eh, scaled exchange9.867e-18,
+scaled directional induction≤2.245e-13, Disp/ExchDisp pairs4.178e-18/1.018e-18,
+signed globals7.156e-18/8.132e-19. GPU scaling factors1.000454362826734
+(exchange) and1.1965654041091784 (induction); independent factors agree.
+All seven actual CUDA ratio/application/invalid-denominator/overflow checks
+pass in fresh sessions with complete cleanup.
+
+Current route: USE_CUEST=true, CUEST_MIXED_PRECISION=false, PUREAM=true,
+SAPT_DFT_FUNCTIONAL=HF, SAPT_DFT_USE_EINSUMS=true,
+SAPT_DFT_DO_FSAPT=FISAPT, FISAPT_LINK_ASSIGNMENT=C,
+FISAPT_FSAPT_IND_RESPONSE=true, SSAPT0_SCALE=false,
+FISAPT_EXCH_PARPERP=false, a C1 two-fragment molecule and an explicitly
+audited cuda_provider_factory passed to public energy('sapt(dft)').
+Exchange/induction scaling and the standard output filepath are supported.
+Leave the ordinary MP2 algorithm default; no separate CUDA enum is needed.
+
+Scope remains bounded: spherical SPDF, unlinked two-fragment HF, admitted
+small localization/response dimensions. Links/third subsystem, external
+fields, SSAPT0, zero-roundtrip resident SCF/cache handoff and matched large
+performance remain unfinished. CPU scalar control/raw-input transport and
+final file formatting are explicit; all new term/localization/response
+numerics execute on GPU. No default/general/protein-scale/speedup claim.
+
+## CURRENT — GPU exchange/delta-HF scaling qualified; output writer next
+
+Native09/source18c256a00820f600648793f9d1c6cc7bd80ea997 passes whole
+import12, seven actual CUDA scaling edge checks and public water-Ne with
+exchange normalization plus nonzero delta-HF induction scaling. Independent
+CPU05 all-term oracle passes (automatic-cuest-fisapt-scaled-02 and
+automatic-fisapt-cpu-oracle-06). GPU factors: exchange1.000114919793474,
+induction1.6188612344572146; independent factors agree within1.275e-13/0.
+All signed raw components remain independently checked. No zero-denominator
+clamp, retry, CPU factor/localization or response fallback is introduced.
+
+Next slice enables the standard F-SAPT file-output option by passing final
+matrices/charge metadata to the existing stateless fisapt_fdrop writer through
+a data-only adapter. It does NOT construct core.FISAPT or DFHelper for output.
+GPU numerical output remains unchanged; geometry/plain-text serialization is
+explicit host I/O. Public dispatch red/green covers the non-NONE filepath.
+Whole installation and real frozen/scaled GPU/file/CPU-oracle gate remain
+required before claiming that new output route qualified.
+
+## CURRENT — integrated GPU FISAPT passes three physical systems
+
+Whole native07/source140b400302949a6165e9f988947904fc339acb8a passes
+public automatic USE_CUEST HF fragment execution AND independent fresh CPU05
+all-term oracles for water-Ne/block500, shifted/frozen water-Ne/block5 and
+frozen water-water/block500. All retain ONE original GPU IBO gauge across
+JKFIT/RIFIT on ONE session. CPU factor/localizer/native-FISAPT alternatives
+are poisoned in production. Signed components, full matrix slots and cleanup
+are checked. Receipts automatic-cuest-fisapt-02…04 and
+automatic-fisapt-cpu-oracle-02…04.
+
+For water-Ne, independent matrix errors: elst8.716e-14Eh, S² exchange5.449e-17,
+all signed uncoupled/coupled induction≤3.749e-13; Disp/ExchDisp pair errors
+2.572e-18/1.546e-19, global4.364e-18/3.804e-19. Zero live bytes/native owners
+after teardown, explicitpeak16,194,464B. Whole diagnostic243.306s is NOT a
+speedup claim; repeated audit hashing remains a measured overhead.
+
+Next source slice adds optional native canonical-exchange normalization and
+coupled-induction delta-HF scaling on GPU. Raw signed component matrices remain
+unscaled outputs; Exch_AB/IndAB_AB/IndBA_AB receive the requested normalization.
+Canonical scalar inputs are uploaded, ratio/matrix arithmetic runs in FP64
+CUDA; zero denominators/nonfinite ratios fail closed, with no clamp/fallback.
+Public-entry scaling red/green passes. Actual scaled GPU edge checks plus a
+nonzero-delta-HF physical CPU oracle are required before qualification.
+
+Native08/source56374efdb whole build/import11 passed;243CPU/mock/serial tests
+pass. The first scaled GPU attempt caught missing runtime registration for
+the two new compiled kernels (KeyError before term execution). Both are now
+registered. GPU diagnostic negatives use independent fresh sessions, respecting
+permanent invalidation after an expected numerical rejection; no execution
+retry or session-policy weakening.
+
+Still unsupported: links/third subsystem, external fields, SSAPT0, default
+file-output route and larger admitted dimensions. Raw upstream HF arrays are
+host transport inputs, not a zero-roundtrip resident SCF handoff.
+
+## CURRENT — shared-session FISAPT orchestration (GPU qualification pending)
+
+Native06/sourceaccdb765e coherent whole build/import passed. First integrated
+public GPU run reached fragment orchestration but rejected its atom partition:
+Molecule.get_fragments() returns [first,last_exclusive) ranges, not atom lists.
+The adapter and independent CPU oracle now expand those documented ranges.
+The failed run automatic-cuest-fisapt-01 is preserved; it is not DFMO/term proof.
+An additional public-entry red/green test rejects unsupported S-inf dispersion
+before cache/SCF rather than accepting an unsupported fragment request.
+
+All six real public automatic HF dispersion runs now pass: water-Ne,
+shifted/frozen water-Ne and frozen water-water, each at blocks500/5.
+Independent fresh-process CPU raw-integral oracles pass in the exact GPU HF
+gauge: signed pair maxima5.208e-18/1.171e-18Eh; signed global maxima
+8.484e-18/1.722e-18Eh. Receipts automatic-cuest-driver-02…07 and
+automatic-cuest-pair-oracle-01…06. No CPU reference factors feed production.
+
+New orchestration wires the public fragment driver to owned native overlap,
+IAO/IBO, elst, unscaled S² exchange, signed uncoupled/coupled induction and
+localized dispersion. An owned-provider sibling capability creates distinct
+JKFIT/RIFIT plans on ONE original CUDA session/stream. One resident IBO U/L
+per monomer is retained unchanged across all terms; LIFO native leases close
+the sibling before its parent. Borrowed providers cannot guess ownership.
+
+Initial explicit scope: two unlinked C1 spherical HF fragments, C assignment,
+coupled response, no scaling/external fields, output filepath NONE. Existing
+unsupported defaults fail closed; CPU/non-HF routes remain unchanged.
+Raw upstream HF arrays still cross the host boundary; final dispersion-matrix
+slot placement is host output formatting, not a resident SCF handoff.
+241 CPU/mock/serial executions pass, including the public fragment dispatch
+red/green contract. A coherent whole install and actual integrated GPU gate
+are required before claiming this new orchestration numerically qualified.
+
+Measured diagnostic profile (automatic-cuest-profile-01):93 map audits consumed
+80.039s of111.363s; repeated hash.update alone60.456s and buffered reads14.624s.
+This identifies a concrete validation-overhead culprit, not Pi latency or
+matched application speedup. No identity-check relaxation/cache is implemented.
+
+## CURRENT — automatic USE_CUEST HF dispersion driver wiring
+
+User selected automatic public dispatch, not a separate CUDA algorithm option.
+Ordinary HF + USE_CUEST now selects the strict custom CUDA/cuEST continuation,
+requiring an injected audited cuda_provider_factory and native FP64 before SCF.
+The old default MP2 algorithm does not override that selection. Factory/block
+kwargs are consumed before SCF and forwarded to the dispersion continuation.
+Execution diagnostics stay on the wavefunction, not scalar QCVariables.
+
+Public-seam CPU tests cover selection, missing configuration before SCF,
+unsupported fragment/external/backend/block requests, native failure without
+CPU retry, native FP64 policy, and unchanged CPU/E2/non-HF/empirical routes.
+Whole coherent install and real combined GPU-driver qualification are next;
+prior separate GPU HF/dispersion/FISAPT numeric receipts remain independently
+valid. No full FISAPT driver, upstream-residency or performance claim.
+
+Native04/source4132ae764 whole install and239CPU/mock/serial tests passed.
+The first real public-driver run then exposed an absence-normalization guard:
+the outer driver passes an empty mapping instead of None for no external field.
+The guard now admits empty/all-None mappings while still rejecting actual
+external values (without NumPy array truth tests).240CPU/mock/serial tests and
+whole native05/source2bded81c9 pass. The real public USE_CUEST run for water-Ne,
+block500, now passes with the old algorithm default SAPT and CPU alternatives
+poisoned (`runs/automatic-cuest-driver-02`): Disp20=-8.735392964583837e-5Eh,
+ExchDisp20=+6.6461083657762646e-6Eh. Missing factory rejects before SCF;
+actual native SDK0.2.50/mathmode1,2DFMOcalls, coefficientH2D0 and clean teardown.
+
+A separate CPU05 process recomputed raw Coulomb integrals/pairs from the exact
+downloaded GPU HF gauge (`runs/automatic-cuest-pair-oracle-01`): Disp pair
+maxerror2.054e-18Eh, ExchDisp pair1.792e-19, global4.229e-18/4.803e-19.
+No CPU factors feed production. Five additional block/frozen driver/oracle
+probes are running. This certifies the bounded GPU HF -> automatic dispersion
+continuation, not upstream-cache/other-term placement, full FISAPT or speedup.
+
+## CURRENT — native GPU IBO localization passes
+
+Whole stage14/source1c9214f16 passes native overlap -> cuSOLVER metric powers ->
+IAOs -> ordered CUDA Jacobi -> resident L/U/F/Q for water-Ne, shifted/frozen
+water-Ne and frozen water-water, both monomers twice. All12localizations
+converged in3–6sweeps at1e-12; CPU objective maxdelta4.663e-15. Atomic population
+operator gauge error≤3.332e-12; orthonormality, Fock/weights and frozen blocks
+pass. Zero live allocations/native owners after teardown, explicitpeak3,651,052B.
+Receipt: sibling `runs/ibo-device-01`.97actual GPU ordered-Jacobi primitive
+checks and226CPU/mock/serial test executions separately pass.
+
+Both signed dispersion and all core unscaled two-fragment/C/no-external term
+families, including coupled response, already pass bounded physical GPU gates.
+Those previous term tests supplied CPU IBO rotations. New native GPU IBO ->
+signed localized dispersion passes all three systems at blocks500/5, retaining
+the original GPU rotations into contractions; max signed pair/global error
+2.146e-15Eh,208DFMOcalls, coefficientH2D0 and clean teardown. Receipts:
+`gpu-ibo-dispersion-01` through`-03`. The shared-term native GPU IBO chain
+`gpu-ibo-shared-terms-01` through`-03` also passes all three systems twice:
+elst matrixmax5.231e-11Eh/global1.299e-12, S² exchange3.923e-14/1.200e-14,
+all signed uncoupled/coupled induction matrices≤2.001e-14/global3.534e-15.
+Thirty-six DFMO/112potentials, coefficientH2D0, zero-byte/native-owner cleanup.
+Separate CPU oracles use downloaded GPU rotations only to choose an identical
+comparison gauge; CPU localized orbitals, rotations, factors and response
+solutions never feed the new GPU chains.
+
+Raw HF/upstream matrices remain CPU correctness fixtures. Reusing existing GPU
+SCF and providing an explicit resident-buffer/stream/lifetime handoff, automatic
+driver integration, scaled/link/external cases and full-workflow/matched timing
+remain unfinished. No general full-FISAPT/default or speedup claim.
+
+The existing native `USE_CUEST` SCF implementation is on
+`origin/saptdft_cuest` at9317f406b, absent from this staged CPU-native-core
+worktree. Reuse that implementation; do not introduce a new SCF solver.
+Its host Matrix accessors must not be mislabeled a resident device handoff.
+
+Owned native-SCF integration now incorporates that exact existing branch.
+The only conflict, `chain_gemm_einsums`, preserves both native cuEST dispatch
+and the v2 input-conversion hoist; native outputs honor out="tensor", and E2
+tensor inputs are not passed into a SharedMatrix-only binding.231CPU/mock/
+serial executions pass, including5new bridge regressions. A fresh native-cuEST
+whole build/import and actual USE_CUEST SCF test are next; the prior numerical
+proof remains pinned to whole14/source1c9214f16, not this new native core.
+
+Native cuEST core build/install at e09111f07 now passes coherent import,
+CPU-default smoke and original canonical SDK/symbol/CUDA-map checks
+(`runs/psi4-cuest-import-05`). Versioned-library discovery and private SONAME
+aliases preserve SDK bytes. Because the cuEST-linked core's inherited RPATH
+otherwise selects Btrfs toolkit copies, exact vendor DSOs are deliberately
+loaded after verifying the core file hash and before its module import; matching
+core still precedes E2. No binary/RPATH patch or LD_PRELOAD is used.
+
+A narrow `core.cuest_runtime_info()` binding is being staged next. It observes
+existing runtime ownership booleans and native version/math mode, without
+initialization, policy mutation, raw handle exposure or reset. Actual-header
+C++ syntax/ABI compile passes. Runtime laziness and post-HF FP64 readback remain
+pending the new coherent whole incremental native installation.
+
+Whole native03/source9861a9043 and actual existing native GPU HF now pass
+(`runs/native-gpu-hf-01`): spherical H2/water/water-Ne, independent CPU runs
+first, then USE_CUEST GPU runs. Maximum HF energy difference1.713e-10Eh,
+density6.370e-10, occupied-energy4.047e-11. Runtime-info observation is inactive
+before/after CPU references, then confirms all four existing runtime resources,
+native0.2.50 and actual FP64 math mode1 after GPU HF. No CPU DFJK fallback
+banners; process-global runtime is retained until normal module finalization.
+This proves the reused GPU HF engine, not yet a combined default driver run
+through the new dispersion/fragment-term modules.
+
+Older milestone sections below are retained history, not current blockers.
+
+## LATEST — physical coupled fragment response GPU gate passes
+
+Whole stage11/sourcef7fd2d7ca passes three systems twice, checking both coupled
+signed directional components/combined matrices, preserved uncoupled matrices,
+and native GPU Hessian changed trials against explicit CPU JK. Independent
+dense source solves avoid the native coupled-find source-load bug.
+Max coupled Ind matrix5.965e-15Eh, Exch-Ind6.171e-15, combined4.746e-15;
+native Hx6.409e-13. PCG0–16iterations, true relative residual≤9.819e-11 at the
+declared1e-10/1e-12 policy.30DFMO/112potentials, coefficientH2D0, clean teardown.
+Receipts: sibling `runs/fragment-coupled-gpu-01` through `-03`.
+
+All core unscaled two-fragment/C/no-external term numerics now pass these
+bounded GPU gates, including coupled response. CPU HF/IBO reference inputs
+remain explicitly upstream; this is not GPU localization/resident handoff,
+complete default/link/external/scaled FISAPT or a performance claim.
+
+Localization foundations: native union overlap PP/MM/PM maps pass water-Ne and
+custom spherical SPDF. Owned FP64 cuSOLVER powers pass194CPU/mock/serial tests
+and header ABI; whole stage12 passes, actual native powers are running.
+New overlap adapter/device-only gathers and int64 metadata transport pass
+206CPU/mock/serial executions; GPU gather/native adapter gates are next.
+
+## LATEST — signed uncoupled fragment induction physical GPU gate passes
+
+Whole stage10/source1d87a0643 passes water-Ne, shifted/frozenwater-Ne and frozen
+water-water twice each, separately checking both Ind20u and Exch-Ind20u
+directions plus combined full matrices. Max Ind20u matrix1.084e-16Eh,
+Exch-Ind20u5.329e-17Eh, combined7.357e-17Eh. All-component global max8.271e-16Eh.
+Twelve native DFMO/112point-potential calls, coefficientH2D0 and clean
+zero-byte/native-owner teardown. Native generalized-density/projected-JP
+factors share the original JKFIT gauge; no CPU J_P or factors feed production.
+Receipts: sibling `runs/fragment-find20u-gpu-01` through `-03`.
+
+The bounded unscaled/two-fragment/C/no-external **uncoupled term-family**
+numerical gates now cover localized dispersion, elst, S^2 exchange, Ind20u and
+Exch-Ind20u. This is NOT full FISAPT: coupled response, GPU IBO localization,
+upstream resident handoff, links/external/scaling/default integration remain.
+
+Current sourcecac961ead adds a bounded resident RHF Hessian/PCG,184CPU/mock/
+serial executions passing; actual GPU response primitive testing is running.
+Native-factor/coupled physical response is not yet qualified.
+
+## LATEST — native directional Ind20u physical GPU gate passes
+
+Whole stage09/source99bbbcb9f passes water-Ne, shifted/frozenwater-Ne and frozen
+water-water, two calls each, for both full directional Ind20u matrices, nuclear
+and electronic source cells and reserved zero slots. Independent native find
+(response/scaling off) and explicit CPU source equations agree. Max fullmatrix
+error1.0836431307403166e-16Eh/global8.271920474978156e-16Eh.
+Twelve native DFMO/112point-potential calls aggregate, coefficientH2D0,
+cleanup0bytes/nativeowners. Shared JKFIT diagonal factors survive every stage.
+Receipts: sibling `runs/fragment-ind20u-gpu-01` through `-03`.
+
+Current runtime1d87a0643 additionally wires both signed Ind20u/Exch-Ind20u and
+GPU-combined directional matrices via native projected-JP factors.175CPU/mock/
+serial executions and actual target primitives52checks/216DGEMMs pass. Whole
+stage10 and independent signed CPU/native matrix references pass; the physical
+signed GPU gate is running. Coupled response, GPU IBO localization, link/
+external/scaled/default integration and complete workflow remain open.
+
+## LATEST — shared native fragment electrostatics/exchange physical gate passes
+
+Whole stage08/source8aebb7b16 passes water-Ne, shifted/frozen water-Ne and frozen
+water-water, each twice, with the same live spherical JKFIT provider/gauge.
+Unscaled first-order S^2 exchange fullmatrix maxerror2.640777678995787e-16Eh,
+global3.6185925133061514e-16Eh. Simultaneous fragment elst remains correct:
+matrix1.296e-13/global1.421e-12Eh. Twelve native DFMO and56point-potential calls;
+zero coefficient H2D, zero live device bytes/native owners after teardown.
+Receipts: sibling `runs/fragment-exchange-gpu-01` through `-03`.
+
+This is not scaled Exch10, coupled induction, GPU IBO localization, link/external
+coverage or automatic default dispatch. Both signed Disp20/Exch-Disp20 and
+localized dispersion remain separately qualified by earlier gates.
+Next: uncoupled directional Ind20u/Exch-Ind20u using resident shared JKFIT
+diagonal factors, canonical denominators before localization, all occupied
+targets (including frozen) and full nuclear/electronic source slots.
+
+## LATEST — native physical fragment electrostatics passes
+
+Whole stage07/source551c06038 connects spherical JKFIT DFMO, native FP64 point
+potentials and GPU atom/orbital algebra. Water-Ne, shifted/frozen water-Ne and
+frozen water-water each pass two calls against separate native C++/Python
+references. Full-matrix maxerror1.2878587085651816e-13Eh; GPU global-sum error
+1.4339640586058522e-12Eh. Six native DFMO and56potential calls in aggregate,
+zero coefficient H2D and complete zero-byte/native-owner cleanup. Device
+diagonal factors remain tied to the original shared JKFIT provider/gauge.
+Receipts: sibling `runs/fragment-elst-gpu-01` through `-03`.
+
+The CPU oracle explicitly requests spherical JKFIT; its initial attempt
+correctly rejected the legacy cache's Cartesian fitting set. Runtime guards
+were not relaxed. This is two-fragment/C/no-external fragment elst with raw
+CPU IBO/upstream reference inputs, not complete FISAPT or GPU localization.
+
+First-order fragment exchange sourcebc1b3aeb7 passes163CPU/mock/serial
+executions and actual GPU primitives48checks/112DGEMMs (max3.469e-17).
+Native-factor physical exchange, induction/response, localization, link/
+external/scaled terms and default dispatch remain open.
+
+## LATEST — fragment electrostatic algebra passes actual GPU feedback
+
+Source9de9a88e2 adds GPU diagonal JKFIT-factor extraction, nuclear repulsion,
+atom/orbital matrix placement, electronic pairs, AO-potential contractions and
+global reduction. 151CPU/mock/serial executions pass. Actual RTX3090 feedback
+passes32checks/392DGEMMs in3.550s, maxabs6.821e-13, zero live device bytes;
+sibling receipt `runs/gpu-fisapt-elst-primitives-01`.
+
+This uses synthetic factor/AO-potential inputs, not native cuEST factor or
+physical fragment-elst coverage. Native point-charge qualification and coupled
+JKFIT/full-matrix testing remain next. No automatic full-FISAPT GPU claim.
+
+## LATEST — localized FISAPT dispersion physical matrices pass
+
+Explicit `fdisp0_cuda` at `d8710cf97` is coherently installed in whole stage06
+(`1.12a1.dev689+d8710cf`,898Python/154driver files; native core unchanged).
+It passes water-Ne5x5, shifted/frozen water-Ne4x4, and frozen water-water4x4,
+each at blocks500/5 with actual nontrivial IBO input rotations.
+
+Independent native C++ PAIR/BLOCKED and Python fragment references agree.
+Actual GPU native-factor/localized signed pairs and globals pass; full native
+`Disp_AB` matrices—including atom/frozen/external zero slots and active
+offsets—have maxerror6.799980500557523e-18Eh. Six physical block probes,
+208nativeFP64DFMO calls, no coefficient H2D staging, zero live bytes/native
+owners after all cleanups. Max scalar-or-pair error3.1929753979698106e-17Eh.
+Receipts: sibling `runs/localized-fisapt-gpu-01` through `-03`.
+
+This is unscaled two-fragment HF/C-assignment/no-external dispersion coverage,
+NOT all FISAPT terms or GPU localization: IBO construction/upstream cache are
+explicit separate CPU reference inputs in these tests. Link/SIAO/PAR-PERP,
+external and scaled cases fail closed. No automatic CUDA dispatch or speedup.
+Fragment electrostatics is next; native FP64 potential qualification is running.
+Exchange, induction/response, localization and complete workflow remain open.
+
+## LATEST — supported HF gate complete; FISAPT expansion started
+
+All five larger spherical cc-pVDZ physical configurations pass GPU
+Disp20/Exch-Disp20 and occupied pairs at blocks500/5: water-He5x1, frozen
+water-He4x1, water-Ne5x5, reversed Ne-water5x5, shifted/frozen water-Ne4x4.
+Their248native DFMO calls have zero coefficient H2D staging and complete
+zero-live-byte/owner cleanup. Max scalar-or-pair error1.1344735779050472e-17Eh.
+First H2 cases below additionally pass blocks1/5/500.
+
+Spherical F overlap/kinetic and changed-input complete DFMO Grams pass.
+Six tiny PSD duplicate/near-duplicate native probes also match high-precision
+relative1e-12 retained/discarded-mode predictions, including cases that reject
+an absolute cutoff interpretation. This is observable support classification,
+not ill-conditioned FP64 energy accuracy, arbitrary negative-metric support or
+a native effective-rank query.
+
+The supported C1/HF/spherical-SPDF/full-Coulomb dispersion correctness gate is
+complete. No general factory/default-driver/speedup claim. Expansion now targets
+all FISAPT terms while reusing existing canonical GPU upstream paths.
+See `devtools/disp0/fisapt_cuda_coverage.md`.
+
+First localized-pair primitive increment `f1a138901` passes actual CUDA:
+32checks/145DGEMMs in3.440s, maxabs7.958e-13, including nonorthogonal rejection
+and zero-live-byte cleanup. The next source increment wires real device DFMO
+blocks to occupied rotations and adds explicit `fdisp0_cuda` for unscaled
+two-fragment HF/C assignment/no external potentials, with native frozen offsets.
+141CPU/mock/serial executions pass. Coherent whole installation and real
+localized physical validation are pending; no full-FISAPT GPU claim.
+
+## LATEST — raw-input physical HF GPU dispersion passes both first dimers
+
+Runtime source `af31e4a7fe4f43d94478a5a6595fd8f8d11a7286` is coherently
+whole-built/installed in sibling `install/psi4-cpu-05`; whole import/version/
+native-core, 897Python files/153driver files and fresh source/manifest checks
+pass. No Python overlay. Later changes in this progress document are docs only.
+
+**Actual explicit public `dispersion0_cuda` passes spherical cc-pVDZ H2-H2 and
+H2-He at blocks1/5/500**, both signed Disp20 and Exch-Disp20 and independent
+occupied pairs. Six successful physical cases, 626real FP64 cuEST0.2.50 DFMO
+calls, max component error1.8295911660692887e-18Eh vs native CPU references.
+All six use zero coefficient H2D staging during DFMO; raw input HF matrices are
+uploaded once and corrected orbital spaces/tails are prepared on GPU.
+CUDA/cuBLAS cover packing, contractions, denominators, signed pair reduction,
+pair combination and final global reductions. Production DFHelper sentinel
+throws; no CPU reference factors or CPU-prepared corrections enter this path.
+All six finish with zero live device bytes/native owners and complete cleanup.
+Receipts: sibling `runs/physical-hf-raw-gpu-02` through `-07`.
+Failed `-01` was a missing --psiapi launcher environment, retained separately.
+
+Standalone actual GPU setup/window/packing/global tests also pass138checks in
+3.355s, max1.421e-14, including unequal/frozen synthetic spaces. The revised
+runtime source has125CPU/mock/serial test executions passing. Source reviews
+conditionally cleared equations, layout, native lifetimes and public routing;
+the real device receipts—not those reviews—are execution evidence.
+
+Limits: upstream HF/cache creation in these physical fixtures is explicitly CPU
+reference preparation, not a whole-SAPT GPU or performance claim. The tested
+dispersion computation from those raw inputs is GPU numerical work. Existing
+user GPU SCF/elst/exch/induction paths are not replaced. Both dimers have one
+occupied orbital per monomer; unequal occupied physical spaces/frozen cores and
+shifted/reversed geometries remain broader gates. Spherical F-shell semantic/
+DFMO qualification is running before larger physical cases. Rank/cutoff boundary
+semantics and general production-factory admission remain unqualified. No
+automatic CUDA driver option, all-FISAPT coverage or speedup claim.
+
+The earlier CURRENT sections below preserve chronological implementation state;
+their “not wired/not installed/no physical GPU pass” statements are superseded
+by the bounded milestone above, not promoted into general scientific admission.
+
+## CURRENT user scope — spherical-only HF dispersion, fully GPU numerics
+
+Use spherical primary AND spherical RI bases only. No Cartesian calculation
+case is part of the target workflow; earlier Cartesian diagnostics below are
+historical evidence, not a supported target. Prior proposed Cartesian-AO/pureRI
+case was superseded/cancelled by the user. Negative Cartesian-rejection tests
+remain distinct from supported calculations.
+
+Focus now is `SAPT_DFT_FUNCTIONAL=HF` Disp20 AND Exch-Disp20, with the complete
+dispersion numerical path on GPU from HF/upstream SAPT inputs. Reuse the user's
+existing GPU SCF/elst/exch/induction paths; do not broaden into reimplementing
+them. CPU orchestration/validation and explicitly separate correctness oracles
+are not production numerical fallback. After this dispersion gate, advance to
+all FISAPT terms.
+
+Actual native factor/contraction/occupied-pair kernel fixtures passed below,
+but this is NOT proof of whole-GPU dispersion setup: reference/diagnostic setup
+explicitly ran on CPU, the late callback materializes setup via `np.asarray`,
+DFMO coefficient packing uses host transpose/concatenation, and final global
+sums currently use host NumPy. Production E2 graph placement must be audited
+rather than inferred from the CPU-reference mode. Remaining CPU numerics and
+avoidable host staging must be replaced by verified fail-closed GPU operations.
+First pure H2 physical CPU references pass; physical GPU diagnostics/public
+factory/end-to-end GPU readiness remain unpassed. See sibling
+`../metadata/GPU_SCOPE_REQUIREMENTS.json`. Strict spherical-only admission at
+the public/factory boundary is also a remaining implementation gate.
+
+### In-progress GPU numerical setup (not yet wired or device-qualified)
+
+Default E2 replay is not being used as a force-GPU contract: inspected placement
+is cost/budget dependent, dispatch can CPU-fallback, and replay flushes device
+shadows to host. This does not rule out other E2 interfaces; none was established
+for this requirement. The selected route extends the already tested owned
+cuBLAS/custom-CUDA implementation for dispersion only.
+
+New `sapt_dispersion_cuda_setup.py` forms twelve orbital spaces and eight
+correction matrices from raw upstream HF inputs using device matrix products
+and integer-weight combinations, including frozen occupied column selection
+and nonsymmetric `K_O.T` in Qbr. New kernels cover device windows/transposes,
+linear combinations, pair combination and final signed global reductions.
+The new module is NOT connected to `dispersion0_cuda` or device-input DFMO yet.
+Existing installed stage03 remains unchanged; no new GPU/physical claim.
+
+CPU serial-shim/descriptor/transport/owner tests: 67 PASS. These are not NVRTC
+or parallel CUDA evidence. Two new lifetime tests first failed against the old
+cleanup behavior; synchronization failure now retains temporary/session buffers,
+BLAS handle, module and stream for cleanup-only retry, rather than freeing
+possibly in-flight buffers. Narrow source review is recorded below. Next required:
+device coefficient packing/DFMO lifetime integration, public spherical guards,
+raw-input entrypoint wiring, new coherent whole installation and actual device
+plus physical signed gates. F-shell qualification remains pending.
+
+Narrow review `d8d176e87d1b8a42361e69257b7e9eebe` returned a conditional
+source pass: no concrete equation/layout/cleanup defect found; no tests were
+run by the reviewer. Expanded combined CPU suite initially failed one live
+identity check because serial-shim teardown unlinked a still-dlopen'd `.so`.
+The strict guard correctly rejected that deleted mapped binary and was not
+changed. Test teardown now closes its library before deleting the file.
+Previously failing test order now passes all102tests (1.399s); diff check passes.
+Task33 complete. This remains source/CPU evidence only.
+
+### In-progress device-input integration
+
+Setup primitives are committed at `f70cb2753`. Further uncommitted integration
+now packs transposed/batched DFMO coefficients entirely on device, prepares an
+owned persistent parameter49 object outside temporary scopes, and retains
+native call host/descriptors/workspaces through synchronization or teardown.
+Ambiguous native create/destroy outcomes quarantine ownership; cleanup checks
+PID, original device and admitted mapped closure before destruction.
+
+The new device-input block loop keeps correction slicing, factors, three GEMMs,
+denominators, signed pair reductions, pair combination and global sums on GPU.
+The explicit public HF CUDA entrypoint now routes raw upstream matrices into
+GPU setup directly, rather than using the old late CPU-setup callback. Actual
+shell flags reject Cartesian primary/RI (including S/P with nbf==nao); default
+CPU/non-HF paths remain untouched. Provider parameters close before the factory
+may destroy its borrowed plan. Zero-space calls avoid the factory.
+
+120 combined CPU fake-C-ABI/serial-shim/ownership/orchestration test executions
+PASS1.726s, with changed inputs and blocks1/3/5/500, no coefficient H2D inside
+device compute, signed pairs/global sums and cleanup failure tests.
+This is NOT native/GPU evidence and no new installation has been made.
+Device lifetime review `d867e2fbe251e369a096bceaadddda51e` and raw-entrypoint
+review `d052062a27a6212969f0953580cbf699f` are pending; their scopes are frozen.
+Remaining: review fixes, coherent whole stage04, actual device setup/DFMO/block
+integration and physical HF signed gates. Broader FISAPT is still blocked.
+
+Device lifetime review `d867e2fbe251e369a096bceaadddda51e` has now returned a
+conditional source pass with no concrete defects found: persistent parameter
+lease, batch packing/output offsets, pending call lifetimes, cleanup admission/
+quarantine, five-pair block layouts and GPU final reductions. Reviewer ran no
+tests. Public-entrypoint review remains pending; no device execution claim.
+
+Public review `d052062a27a6212969f0953580cbf699f` returned conditional source
+PASS with no concrete bug. Follow-up tests now cover CUDA zero spaces, invalid
+frozen counts/C1, unchanged cache arrays, and cleanup ordering/primary-error
+preservation after parameter preparation, setup or kernel failures.
+Provider init/revalidation also directly reject Cartesian primary/RI shells.
+Parent hardening adds conservative reverse-native-lease admission before
+provider parameter or diagnostic borrowed-plan teardown: a still-retained child
+blocks every parent destructor, including after child cleanup failure.
+125 CPU/mock/serial test executions PASS2.312s; follow-up review
+`d21f23c370847420e1a6f11ef0b888669` pending. All runtime source remains frozen.
+
+Whole stage04 preparation is underway outside source. Original stage03 full
+config/build/import/source-version chain and Python/core hashes re-admitted
+PASS, then read-only whole-build reflink preservation task `bbd1dc73e` launched.
+New staging helpers have six offline tests/five-script syntax PASS; separate
+review `dbe3618bbc0bdce50f3a0ce140ed26433` pending. No configure/build04 or new
+device execution yet. Successful f70cb2753 push completed; subsequent integration
+is still uncommitted pending follow-up review.
+
+Follow-up review `d21f23c370847420e1a6f11ef0b888669` returned conditional source
+PASS, no concrete defect in lease-order teardown, cleanup retries/quarantine,
+provider spherical checks or exception orchestration tests. Reviewer ran no
+tests; no native cleanup/device validation is inferred. The reviewed integration
+is ready for source freeze and whole-stage04 build, not production admission.
+
+## CURRENT native gate — cuEST/cuBLAS/CUDA fixtures pass; physical SAPT pending
+
+Private dependencies now build/install/import coherently: exact Einsums064
+CUDA86 with whole matching Waggle, private HDF51.14.6, CPU LibXC7.0 for the
+oracle and separate GPU LibXC7.1.2. Whole reviewed factory-stage03 at58bd62caf
+passes core/metadata/all896Python-file identity and native CPU smoke; no overlays.
+E2's7used host-API fixtures pass. The separate CPU/native FISAPT suite passes
+22tests/1expected mock-only skip with64signed comparisons, max1.003e-17Eh.
+This CPU oracle's DFHelper factors never feed a production GPU calculation.
+
+Real native attempt01 stopped at binding-version admission. The user approved
+a scoped-prefix-lock correction of only cuda-bindings13.4.4→exact13.3.0.
+All13855protected files/483other package records remained unchanged; old payload,
+exact archives and corrected explicit lock are retained. Bound/direct canonical
+CUDA versions now both13030; fresh whole-stage/E2/API checks pass.
+
+Native attempt02 reached actual NVRTC13.3 compilation/module load on canonical
+3090 UUID/PCI/cap8.6 (PTX SHA404cb7d2...287f0e2), but launched no kernel and
+made no cuEST constructor call. It rejected a Btrfs identity discrepancy:
+same inode, maps/mountinfo superblock device0:34 versus fstat subvolume0:51.
+Session cleanup completed, no live allocations/native owners remained.
+
+Live non-executable RED reproducer isolated that filesystem behavior. Review
+rejected the proposed fdinfo/mountinfo/path-link fallback: two overmounted
+Btrfs subvolumes can present the same path/inode/raw-device while the mapped
+and opened files differ. A stable descriptor mount record identifies only the
+opened file, not the VMA's backing mount. The adversarial negative went RED
+against the proposal, which was withdrawn completely. **56cuEST+31CUDA guards
+now PASS with the original strict runtime code**, byte-identical to installed03.
+No Btrfs exception was installed. Prior positive probe evidence did not prove
+safe alias admission.
+
+Explicit byte-identical deployment to private executable tmpfs now PASSES:
+2268files/1787961811bytes, original CUDA16-file native closure,2192CUDA includes,
+canonical59cuEST headers/native. Destination hashes/inventory, owner/mode,
+host/tmpfs/cgroup-ancestor headroom and original strict live executable-mmap
+identity checks pass. Original ENV/SDK/E2/Psi4 remain unchanged; no RPATH,
+Python-overlay, mount-namespace or runtime-guard patch.
+
+Fresh-process loader-only probe PASSES: exact58bd core before deliberate
+dependency callback, callback before first E2 request; real singleE2 world,
+approved binding package, runtime13030/NVRTC13.3 and canonical3090 identity.
+Actual toolkit/cuEST mapped-byte checks and NVRTC/driver resolver/cuBLAS
+pointer ownership pass; canonical cuEST DSO/17factory symbols audited,
+9DSO owners retained through process completion. No intentional cuEST
+construction/version getter, DFMO or custom-kernel API was issued. ELF
+initializers may execute. Core proof assumes a trusted frozen install using
+pathname/file hash; system-driver proof uses canonical file hash and mapped
+pointer path, not strict mapped-byte identity. Toolkit/cuEST proof is stronger.
+
+Loader review conditionally cleared the controlled probe;27offline synthetic
+guards pass. Tiny construction harness now accepts explicit paired staging/
+loader proofs, binds completed prior result/report to the same whole stage,
+and re-admits all live loader inputs in the fresh child. Combined38offline
+tests pass. Construction handoff review conditionally cleared the controlled
+attempt, then **native-plan-device-03 PASSED**52.940s plus NVML postflight.
+Actual owned context reports0/2/50 and passes native FP64 checks. H2 STO-3G
+2AO/cc-pVDZ-RI28aux bases, primary pair list and DF integral plan constructed.
+Stream and full-Coulomb/MATRIXPOWER/relative-cutoff policy readback pass.
+Reverse native and session cleanup complete,0live bytes/retained native
+owners/ambiguous outcomes. Peak explicit allocations746752bytes; opaque native
+memory and total peak remain unmeasured.9deployment DSO owners retained through
+cleanup. NVRTC compile/module load succeeds; no custom kernel launch.
+Coefficient candidate remains UNVALIDATED_PSI4_COEF. Construction success does
+not admit normalization/components/units/metric rank/layout or DFMO numerics.
+
+New independent semantic gate **PASS**: complete real cuEST device overlap and
+kinetic matrices for two-center Cartesian20AO/pure18AO S/P/D fixtures. Off-center
+allXYZ displacement, single primitives and unequal-exponent mixed-sign
+contractions; known-input analytic Gaussian/Racah oracle and exactPsi4 reference
+agree. Device maxabs vs analytic4.441e-15, vs Psi43.553e-15, unchanged
+rtol1e-11/atol1e-12, no fitted rescaling/permutation. Seven added API signatures/
+enums/workspace layout compiler-witnessed, intended wrong-count negative fails;
+actual mapped-symbol ownership checked.50offline guard/oracle tests pass.
+Actual native compute and full cleanup pass82.695s plus NVML postflight,
+0live tracked allocations/native owners. Explicit allocation peaks613632bytes
+Cartesian/611648bytes pure; opaque native peak remains unmeasured.
+No CPU reference integral/factor uploaded. This supports coef()/normalization/
+pure ordering/Bohr conventions for these S/P/D fixtures only. Higher-L/arbitrary
+bases, RI metric/rank, storage orientation, DFMO output and signed SAPT remain
+unqualified. Symmetric S/T do not establish row/column-major layout.
+
+**FIRST real DFMO diagnostic PASS**99.327s plus NVML postflight: Cartesian20/
+pure18 primary, pure18 RI, well-conditioned Coulomb metric condition113.60.
+Direct native DFMO only, no production-provider instantiation and no CPU
+reference factors uploaded. Three C-order identity/rectangular/reversed batches
+and standalone/changed/repeated calls, four real computes per representation.
+Full signed cross-Grams vs isolated independent Mints metric/three-center oracle
+max1.776e-13 Cartesian/8.172e-14 pure; changed-input Gram max3.126e-13.
+Linearity/transpose/batch/repeat checks pass, wrongF/double-whitening reject;
+unchanged rtol1e-11/atol1e-12. All10 checks required, not merely printed.
+Full native/session cleanup,0live tracked bytes/native owners; explicit peaks
+1219072/1121056bytes, opaque native peak unmeasured.59offline guard/oracle
+tests pass. No runtime/whole-stage overlay or scientific pin relaxation.
+This qualifies only these full-rank S/P/D DFMO fixtures, not retained native
+rank/cutoff boundaries/higherL/arbitrary bases/production factory.
+Signed physical SAPT gate remains unpassed.
+
+**FIRST actual cuEST→cuBLAS/custom CUDA numerical pipeline PASS**134.859s
+plus NVML postflight. Synthetic orbital/correction inputs on Cartesian20/
+pure18 primary/pure18RI; seeds19/20, blocks1/3/5/500.16native DFMO calls retain
+original device output buffers; only device-to-device factor slabs feed the
+unchanged backend. Actual280pack+104reduce kernel launches and312DGEMMs,
+all64signed pair/global checks pass at unchanged rtol1e-11/atol1e-12.
+Worstabs pair errors Disp3.608e-16/ExchDisp3.054e-16; summed errors
+6.662e-16/4.997e-16. Independent raw-Coulomb scalar oracle is comparison-only;
+no CPU factor uploads or DFHelper fallback. NaN poison and stale/changed-input
+controls, exact call counts, persistent/temporary scope lifetimes and complete
+native/session cleanup pass.0live bytes/native owners, explicit peaks
+1377232/1271056bytes, opaque native peak unmeasured.65offline tests also pass.
+Synthetic algebra is NOT physical HF/SCF SAPT or general production admission.
+Source blanket readiness metadata stays conservative/false; receipt is bounded
+evidence. No speedup or F-SAPT expansion claim.
+
+Receipts: `../runs/native-plan-device-01/`, `native-plan-device-02/`,
+`cuda-runtime-version-probe-02/`, `binding-pin-apply-01/`,
+`btrfs-identity-red-01/`, `btrfs-identity-green-01/`,
+`mapped-identity-live-{red,green}-01/`, `btrfs-overmount-red-01/`,
+`btrfs-overmount-strict-green-01/`, `cpu-signed-01/`.
+New deployment receipts: `../runs/native-tmpfs-stage-01/`,
+`native-loader-inputs-01/`, `native-loader-device-01/`.
+Native construction receipt: `../runs/native-plan-device-03/`.
+Semantic receipts: `../runs/basis-semantic-cpu-01/`, `basis-semantic-abi-01/`,
+`native-plan-basis-semantic-01/`; plan: `../metadata/BASIS_SEMANTIC_GATE.md`.
+DFMO receipts: `../runs/dfmo-cpu-oracle-02/`, `dfmo-abi-02/`,
+`native-plan-dfmo-semantic-01/`; plan: `../metadata/DFMO_DIAGNOSTIC_GATE.md`.
+Actual kernel pipeline: `../runs/native-plan-cuest-kernel-01/`;
+plan: `../metadata/CUDA_KERNEL_GATE.md`.
+Current full chronology: `../metadata/SETUP_STATUS.md`.
+Production still BLOCKED: no general basis/layout/rank/production-factory admission,
+or signed physical GPU gate. No DFHelper fallback,
+F-SAPT expansion or speedup claim. Following entries preserve earlier states.
+
+## PRIOR dependency rebuild — private HDF5 discovery proved
+
+Whole Einsums build04 FAILED at executable link346/347 after3303.60s; no
+installation or runtime import proof. `calibrate_hardware` linked system
+`/usr/lib/libhdf5.so.320.2.0` (config2.2.0), requiring GLIBC2.38 `__isoc23_*`
+symbols unavailable in the private GNU14.3 sysroot. Failed artifacts retained.
+The private environment already has HDF51.14.6 and its `h5cc`, but no HDF5
+CMake config; default FindHDF5 preferred the system config before the wrapper.
+
+Exact E2 `FindTargetHDF5` minimal discovery/link/runtime probe **PASS**.
+RED reproduced the foreign2.2.0 selection and `__isoc23_` link failure.
+The sole GREEN discovery change `HDF5_ROOT=<private environment>` selected
+private1.14.6 headers/library; linking and actual `H5get_libversion`/`dladdr`
+confirmed1.14.6 at `environment-v2/lib/libhdf5.so.310.5.1`, SHA256
+`e687f5de4db1dff2e01c199ff4cdf9767e72c14b05b1fe297960a2522a165500`.
+The new pre-build cache/library-origin guard rejected the RED cache and
+accepted GREEN. No compiler/sysroot, E2/scientific pin, tolerance or validation
+bypass. Fresh one-job build05 STARTED, with HDF5 admission required before
+compilation; full build/install/import results remain pending. No failed04 reuse.
+Receipts: `../runs/einsums-064-build-04/`, `../runs/hdf5-prefix-probe-01/`,
+`../runs/einsums-064-build-05/`.
+
+Whole native Psi402 build/install **PASS**,3824.25s/0.924s, source frozen clean
+at a7204feec throughout. Independent installed `--psiapi`/core/Python inventory,
+CPU LibXC maps and H2 PK/direct smoke are running at
+`../runs/psi4-cpu-import-01/`; import result is not yet claimed. Native E1
+remains OFF; whole Python E2 build and subsequent coherent E2 import are
+separate pending milestones. This stage does not contain the unmerged factory
+branch, and no new-module overlay is installed into it.
+
+## CURRENT diagnostic native resource factory — implemented, not device-admitted
+
+`sapt_cuest_plan_owner.py` now constructs an explicitly requested diagnostic
+context, parameter owners, all AO shells, primary/RI bases, primary pair list
+and one full-Coulomb MATRIXPOWER DF plan. It checks owned native version/FP64,
+parameter readback, native basis dimensions and exact basis snapshots. Stream/
+workspace/parent lifetimes are retained through reverse-order cleanup; creation
+temporaries remain conservatively live for these initial small-case diagnostics.
+
+Failed cleanup stops before parent release. Retry is explicit cleanup-only;
+ambiguous creation/destruction outcomes never receive speculative destructor
+calls. Post-destroy synchronization failure retains retired host inputs and
+parents without re-destroying a completed native object. Known workspace
+subtotals are distinguished from the declared allowance for unmeasured opaque
+native internals. No total-VRAM or native-memory-certification claim.
+
+The required coefficient candidate is explicitly `UNVALIDATED_PSI4_COEF`.
+This class cannot yield a production factor provider and performs no DFMO
+compute, DFHelper work or CPU integral/factor generation. Normalization/
+component/unit/layout/metric/rank/signed physical admission remain unpassed.
+
+**49 cuEST CPU structural/ABI/identity/owner tests PASS,0.202s;31 CUDA CPU
+fixtures PASS,0.907s**, diff check PASS; `../runs/native-plan-owner-03/`.
+Resource-graph review found a P1: an owner registered before a temporary
+session scope could delay construction into that scope, whose exit would free
+borrowed workspaces. Exact delayed-build/enter regressions went RED; construction
+guards now reject at build/native-create/workspace boundaries before resource
+creation. Existing-built native workspaces survive a later scope's cleanup
+failure. Fake destruction now checks persistent AND creation-temporary device/
+host buffers, and shell/basis/pair inputs survive forced GC through a failed
+post-destroy synchronization, then release only after explicit successful retry.
+**52 cuEST CPU tests PASS,0.238s;31 CUDA CPU tests PASS,0.872s**, diff check
+PASS; `../runs/native-plan-scope-red-01/` and `native-plan-scope-green-01/`.
+Narrow confirmation d46b8b **closed the P1 with no new scoped blocker**;
+read-only review of owner/tests, not an independent test/native run.
+Reviewed-state rerun **52 cuEST CPU tests PASS,0.231s;31 CUDA CPU tests
+PASS,0.861s**, diff check PASS; `../runs/native-plan-reviewed-01/`.
+Header compile probe02 **PASS**, including
+the exact native basis query IDs used here, retaining17-signature/all59-header
+and wrong-count negative controls. Native constructor/DFMO execution remains UNRUN.
+
+## CURRENT native-owner session leases — lifecycle groundwork only
+
+CUDA sessions now retain explicit native cleanup owners. Persistent owners
+cannot be registered inside temporary allocation scopes. Session close must
+finish native destruction/unregistration before freeing device allocations
+or destroying its module/BLAS/borrowed stream; failed native close retains
+all those dependencies, permanently disables execution and permits only
+cleanup continuation. Primary computation exceptions remain primary.
+
+A CPU negative control executed the old actual `close` body and observed it
+free dependencies while a fake native owner remained live; the guarded body
+rejects and retains them. **27 CUDA CPU tests PASS,1.113s;31 cuEST structural/
+ABI/identity tests PASS,0.047s**. `../runs/native-owner-leases-01/`.
+Scoped read-only lease review found no blocker. Its requested coverage gaps
+are added: multiple-owner reverse cleanup/partial success/retry without
+reclosing successful owners; completed-but-still-registered owner blocking;
+nested scopes with computation/cleanup failure and depth restoration.
+Final rerun: **31 CUDA CPU tests PASS,0.928s;31 cuEST structural/ABI/identity
+tests PASS,0.050s**, diff check PASS; `../runs/native-owner-leases-02/`.
+The diagnostic context/basis/pair-list/plan graph is implemented above;
+actual native execution and all production numerical admission remain unpassed.
+
+## CURRENT factory ABI/policy component — CPU fixtures only
+
+`sapt_cuest_factory_abi.py` adds canonical constructor/workspace/destroy/
+parameter ABI and mapped ownership checks for every factory symbol before
+native use. It freezes the CUDA manifest, checks the session/cuBLAS closure,
+and never creates a hidden handle merely to query version. Typed parameter
+round trips explicitly request stream ownership, native-owned BLAS/solver,
+one JIT thread, full Coulomb/MATRIXPOWER1/relative1/cutoff1e-12/LRC0/direct0.
+An explicitly owned same-process context can be set/read back to native FP64.
+Native/readback/map/device errors permanently disable further computation.
+
+**9 new CPU ABI/policy tests PASS,0.025s;10 basis tests PASS,0.007s;
+22 CUDA CPU fixtures PASS,1.173s;12 synthetic identity PASS,0.018s**,
+diff check PASS; `../runs/factory-abi-01/`. Scoped reviewer `da870d...`
+exceeded its24-tool-call limit without an answer; NOT a review pass.
+An independent GNU14.3 C++ header compile probe is now running against exact
+canonical headers, including workspace offsets, enum/policy IDs and all new
+factory signatures, with an intentionally wrong uint32 primitive-count
+negative control. It performs no link, native invocation or device work.
+Artifacts: `../runs/factory-header-abi-01/`; **PASS**: GNU14.3 compiled all17
+new factory wire signatures, workspace layouts and enum/policy IDs while
+consuming all59 canonical headers. Positive compile0 with no diagnostics;
+intentional uint32 primitive-count negative compile1 failed exactly at
+`cuestAOShellCreate wire signature mismatch`. This is actual compiler/header
+evidence, NOT invocation of native constructors/getters or CUDA execution.
+This component does NOT construct/destroy live native objects, implement the
+owner graph, admit normalization/layout/rank semantics, or yield a production
+provider. It is NOT native ABI execution or GPU proof. Native ownership and
+all numerical gates remain unfinished; no host-factor/DFHelper fallback.
+
+## CURRENT factory development — separate owned Cachy worktree
+
+Main compilation checkout stays frozen clean at `a7204feec` while native Psi4
+builds. Factory development is isolated in `../factory-source` on owned branch
+`cachy/disp0-native-factory`; no merge into another agent's branch or master.
+
+New `sapt_cuest_basis.py` performs only structural public-API preflight: exact
+shell centers/offsets/geometry, actual `nbf()` versus Cartesian `nao()`, separate
+primary/RI representation flags, three uninterpreted coefficient variants and
+immutable fingerprints. Rejects ECP, Cartesian RI, mixed representations,
+angular-momentum holes, missing centers, unadmitted permutations, nonfinite
+data and changed inputs. It never generates factors or initializes CUDA.
+Native normalization/component/unit/layout policy remains unadmitted; this
+module cannot create or admit a production provider.
+
+**8 new CPU structural tests PASS,0.004s;22 existing CPU CUDA fixtures
+PASS,1.036s;12 synthetic identity fixtures PASS,0.021s**.
+Logs `../runs/factory-basis-01/`. Review confirmed the exported API and
+structural-only scope, but found that owning-molecule coordinates could change
+independently of stored shell coordinates. Snapshots now include both and
+reject moved/stale disagreement; changed-input detection covers molecule-only,
+shell-only and consistent dual movement plus all3 coefficient variants.
+Rerun: **10 basis tests PASS,0.007s;22 CPU CUDA fixtures PASS,1.266s;
+12 identity fixtures PASS,0.019s**, diff check PASS. Logs:
+`../runs/factory-basis-02/`. Narrow confirmation delegate `ddccdb...` exceeded
+its6-turn limit and produced no committed answer; NOT counted as a review pass.
+The reported gap is addressed by direct source inspection and the explicit
+geometry/mutation regressions, not by an unavailable follow-up opinion.
+Native resource/basis/plan construction, native numerical conversion and signed
+Disp0 GPU gate remain unfinished. Production still has no DFHelper fallback.
+
+Dependency update: GPU LibXC7.1.2 actual device-buffer LDA diagnostic PASS,
+21 FP64 EXC/VXC/FXC outputs versus analytic exchange and explicitly host-mode
+same-build evaluation, maximum absolute discrepancy2.8421709430404007e-14.
+PID66536/expected3090UUID/runtime13030/maps/native hashes retained in
+`../runs/libxc-gpu-smoke-02/`. This is NOT cuEST/Disp0 execution evidence.
+Whole E2/Waggle and native CPU Psi4 builds remain in progress. Psi4 build01
+was stopped when inner Ninja lacked a job cap; isolated nested-build RED/GREEN
+verified `CMAKE_BUILD_PARALLEL_LEVEL=1`, and fresh build02 uses it. Stopped
+artifacts are retained, not adopted. Full receipts: `../metadata/SETUP_STATUS.md`.
+
 ## CURRENT directive — no DFHelper in production dispersion
 
 Read mandatory `../metadata/NO_DFHELPER.md`. Production is strictly cuEST0.2.50

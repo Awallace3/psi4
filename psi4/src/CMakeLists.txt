@@ -66,6 +66,19 @@ target_sources(core
     python_data_type.cc
   )
 
+# GPU discovery/health checking and cuEST+CUDA handle lifetime, kept out of
+# core.cc. Only compiled when cuEST is enabled; core.cc includes
+# cuest_runtime.h unconditionally and gets no-op inline stubs otherwise.
+# cuest_gemm.cc rides along on the same switch: it needs no cuEST call of its
+# own, but it borrows the cuBLAS handle cuest_runtime.cc owns.
+if(TARGET cuEST::cuEST)
+  target_sources(core
+    PRIVATE
+      cuest_runtime.cc
+      cuest_gemm.cc
+    )
+endif()
+
 get_property(psi4_binmodules GLOBAL PROPERTY LINKBINLIST)
 get_property(psi4_libmodules GLOBAL PROPERTY LINKLIBLIST)
 target_link_libraries(core

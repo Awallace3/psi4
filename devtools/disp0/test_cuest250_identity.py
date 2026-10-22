@@ -2,6 +2,7 @@
 import ctypes as ct
 import importlib
 import json
+import mmap
 import os
 from pathlib import Path
 import sys
@@ -160,6 +161,70 @@ class Identity(unittest.TestCase):
             parts[field]=value;lines[0]=" ".join(parts)
             with self.subTest(field=field),self.assertRaisesRegex(RuntimeError,"inode/device"):
                 self.audit(native,proof,manifest,"\n".join(lines))
+
+    def test_live_non_executable_mapping_uses_kernel_filesystem_device_identity(self):
+        _,_,proof,_,_=self.fixture()
+        path=Path(proof["native_path"])
+        with path.open("rb") as stream,mmap.mmap(stream.fileno(),0,access=mmap.ACCESS_READ):
+            rows=identity.mapped_rows(Path("/proc/self/maps").read_text())
+            stat=path.stat()
+            observed={(inode,device) for _,_,name,inode,device in rows if name==str(path)}
+            expected={(stat.st_ino,(os.major(stat.st_dev),os.minor(stat.st_dev)))}
+            if observed==expected:
+                self.assertEqual(identity.mapped_file_digest(str(path),rows),identity.file_digest(path))
+            else:
+                with self.assertRaisesRegex(RuntimeError,"inode/device"):
+                    identity.mapped_file_digest(str(path),rows)
+
+    def btrfs_fixture(self):
+        _,_,proof,_,_=self.fixture()
+        path=proof["native_path"];stat=Path(path).stat()
+        device=(65534,65533)  # Deliberately distinct from the descriptor's st_dev.
+        rows=[(4096,8192,path,stat.st_ino,device)]
+        record={"mnt_id":64,"inode":stat.st_ino,"device":device,
+                "fstype":"btrfs","record":"synthetic descriptor-bound mount record"}
+        return path,rows,record
+
+    def test_btrfs_subvolume_device_cannot_be_admitted_by_descriptor_path_metadata(self):
+        path,rows,record=self.btrfs_fixture()
+        with patch.object(identity,"_fd_mount_record",return_value=record,create=True), \
+                patch.object(identity,"_current_path_mappings",return_value=rows,create=True), \
+                patch.object(identity.os,"readlink",return_value=path):
+            with self.assertRaisesRegex(RuntimeError,"inode/device"):
+                identity.mapped_file_digest(path,rows)
+
+    def test_stable_overmount_with_colliding_btrfs_inode_observations_must_reject(self):
+        # A VMA from subvolume A and an opened file in overmounted subvolume B
+        # can have the same path/inode/raw superblock device, even though their
+        # contents differ. Descriptor mountinfo identifies B, not A's backing
+        # mount. These observations must never authorize hashing B as mapped A.
+        path,rows,record=self.btrfs_fixture()
+        mapped_payload=b"noncanonical old mapped subvolume A"
+        self.assertNotEqual(identity.file_digest(path),
+                            __import__("hashlib").sha256(mapped_payload).hexdigest())
+        with patch.object(identity,"_fd_mount_record",return_value=record,create=True), \
+                patch.object(identity,"_current_path_mappings",return_value=rows,create=True), \
+                patch.object(identity.os,"readlink",return_value=path):
+            with self.assertRaisesRegex(RuntimeError,"inode/device"):
+                identity.mapped_file_digest(path,rows)
+
+    def test_btrfs_normalization_rejects_wrong_inode_device_fs_link_or_liveness(self):
+        for failure in ("inode","fd-inode","device","filesystem","link","unmapped","mixed-devices"):
+            path,rows,record=self.btrfs_fixture()
+            link,current=path,list(rows)
+            if failure=="inode":rows=[(*rows[0][:3],rows[0][3]+1,rows[0][4])]
+            elif failure=="fd-inode":record["inode"]+=1
+            elif failure=="device":record["device"]=(1,2)
+            elif failure=="filesystem":record["fstype"]="ext4"
+            elif failure=="link":link="/foreign/replaced.so"
+            elif failure=="unmapped":current=[]
+            else:rows.append((8192,12288,path,record["inode"],(1,2)))
+            with self.subTest(failure=failure), \
+                    patch.object(identity,"_fd_mount_record",return_value=record,create=True), \
+                    patch.object(identity,"_current_path_mappings",return_value=current,create=True), \
+                    patch.object(identity.os,"readlink",return_value=link):
+                with self.assertRaisesRegex(RuntimeError,"inode/device"):
+                    identity.mapped_file_digest(path,rows)
 
     def test_opened_mapped_inode_cannot_be_replaced_during_hash(self):
         _,native,proof,manifest,text=self.fixture()
