@@ -127,6 +127,7 @@ if [[ -n "${CUEST_FDDS_READONLY_BUILD_ROOT:-}" ]]; then
 else
     cuest_sdk_bind_core "$env" "${cores[0]}" "$out"
 fi
+export PYTHONPATH="${PYTHONPATH:-}"
 eval "$("$build/stage/bin/psi4" --psiapi)"
 export EXPECTED_PSI4_PACKAGE="$build/stage/lib/psi4"
 export CUEST_DEPENDENCY_ENV="$env"

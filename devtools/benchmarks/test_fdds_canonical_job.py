@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import pytest
 import json
+import os
 import sys
 
 from fdds_canonical_submit import accepted_id, durable
@@ -83,3 +84,20 @@ def test_real_descendant_containment(kind, expected, tmp_path):
     assert supervised([sys.executable, "-c", body], .3, tmp_path, grace=.2) == expected
     receipt = json.loads((tmp_path / "containment.json").read_text())
     assert receipt["cleanup_verified"] and not receipt["remaining"]
+
+
+@pytest.mark.parametrize("inherited", [None, "/existing/python/path"])
+def test_psiapi_nounset_initialization(inherited):
+    initialization = 'export PYTHONPATH="${PYTHONPATH:-}"'
+    for filename in ("fdds_canonical_payload.sh", "fdds_validate.sh"):
+        text = (ROOT / filename).read_text()
+        assert text.index(initialization) < text.index('eval "$(')
+    env = {"PATH": os.environ["PATH"]}
+    if inherited is not None:
+        env["PYTHONPATH"] = inherited
+    result = subprocess.run(
+        ["bash", "-uc", initialization + "\n"
+         "eval 'export PYTHONPATH=/new/stage/lib:$PYTHONPATH'\n"
+         'printf "%s" "$PYTHONPATH"'],
+        env=env, check=True, capture_output=True, text=True)
+    assert result.stdout == "/new/stage/lib:" + (inherited or "")

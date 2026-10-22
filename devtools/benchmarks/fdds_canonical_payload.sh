@@ -19,6 +19,9 @@ set -u
 export PATH="$dep/bin:/opt/slurm/current/bin:/usr/bin:/bin"
 export LD_LIBRARY_PATH="$dep/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONNOUSERSITE=1
+# psi4 --psiapi emits an append to $PYTHONPATH; nounset must not make a
+# legitimate initially unset variable abort the staged-package import gate.
+export PYTHONPATH="${PYTHONPATH:-}"
 export OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8
 # Validation fixtures are small. Avoid the long-lived /tmp bind mount and
 # network-intensive protein timings in this first canonical-version gate.
