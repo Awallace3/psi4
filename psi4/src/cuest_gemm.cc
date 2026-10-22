@@ -57,6 +57,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -64,6 +65,7 @@
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
+#include <cusolverDn.h>
 
 #include "psi4/pybind11.h"
 
@@ -76,6 +78,8 @@ namespace py = pybind11;
 using namespace pybind11::literals;
 
 extern cublasHandle_t cublas_handle;
+extern cusolverDnHandle_t cusolver_handle;
+extern cudaStream_t stream_handle;
 
 namespace psi {
 
@@ -331,6 +335,31 @@ std::vector<SharedMatrix> cuest_chain_gemm(const std::vector<SharedMatrix>& tens
 }  // namespace psi
 
 void export_cuest_gemm(py::module& m) {
+    m.def("cuest_runtime_info", []() {
+        // Observe only: in particular, do NOT call ensure_cuest_initialized().
+        // CPU work in a cuEST-enabled build must remain lazy and GPU-free.
+        py::dict info;
+        const bool initialized = cuest_handle && cublas_handle && cusolver_handle && stream_handle;
+        info["initialized"] = initialized;
+        info["has_cuest"] = cuest_handle != nullptr;
+        info["has_cublas"] = cublas_handle != nullptr;
+        info["has_cusolver"] = cusolver_handle != nullptr;
+        info["has_stream"] = stream_handle != nullptr;
+        info["native_version"] = py::none();
+        info["native_math_mode"] = py::none();
+        if (initialized) {
+            uint32_t major = 0, minor = 0, patch = 0;
+            auto mode = static_cast<cuestMathMode_t>(-1);
+            CHECK_CUEST(cuestGetMajorVersion(cuest_handle, &major));
+            CHECK_CUEST(cuestGetMinorVersion(cuest_handle, &minor));
+            CHECK_CUEST(cuestGetPatchVersion(cuest_handle, &patch));
+            CHECK_CUEST(cuestGetMathMode(cuest_handle, &mode));
+            info["native_version"] = py::make_tuple(major, minor, patch);
+            info["native_math_mode"] = static_cast<int>(mode);
+        }
+        return info;
+    }, "Observe the existing native cuEST runtime without initializing it, changing its policy, "
+       "exporting raw handles, or resetting the device.");
     m.def("cuest_chain_gemm", &psi::cuest_chain_gemm, "tensors"_a, "transposes"_a, "prefactors_AB"_a,
           "return_tensors"_a,
           "Multiply a chain of matrices on the GPU with cuBLAS, keeping intermediates device-resident. "

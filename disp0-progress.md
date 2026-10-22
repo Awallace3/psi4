@@ -44,6 +44,20 @@ serial executions pass, including5new bridge regressions. A fresh native-cuEST
 whole build/import and actual USE_CUEST SCF test are next; the prior numerical
 proof remains pinned to whole14/source1c9214f16, not this new native core.
 
+Native cuEST core build/install at e09111f07 now passes coherent import,
+CPU-default smoke and original canonical SDK/symbol/CUDA-map checks
+(`runs/psi4-cuest-import-05`). Versioned-library discovery and private SONAME
+aliases preserve SDK bytes. Because the cuEST-linked core's inherited RPATH
+otherwise selects Btrfs toolkit copies, exact vendor DSOs are deliberately
+loaded after verifying the core file hash and before its module import; matching
+core still precedes E2. No binary/RPATH patch or LD_PRELOAD is used.
+
+A narrow `core.cuest_runtime_info()` binding is being staged next. It observes
+existing runtime ownership booleans and native version/math mode, without
+initialization, policy mutation, raw handle exposure or reset. Actual-header
+C++ syntax/ABI compile passes. Runtime laziness and post-HF FP64 readback remain
+pending the new coherent whole incremental native installation.
+
 Older milestone sections below are retained history, not current blockers.
 
 ## LATEST — physical coupled fragment response GPU gate passes
