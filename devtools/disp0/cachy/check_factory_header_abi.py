@@ -91,6 +91,11 @@ static_assert(offsetof(cuestWorkspace_t,deviceBufferSizeInBytes)==24, "workspace
         "CUEST_DFINTPLAN_PARAMETERS_LRC_EXCHANGE_OMEGA":5,
         "CUEST_DFINTPLAN_PARAMETERS_THREE_INDEX_INTEGRAL_DIRECT":6,
         "CUEST_DFINTPLAN_PARAMETERS_FITTING_ALGORITHM_MATRIXPOWER":1,
+        "CUEST_AOBASIS":2, "CUEST_AOBASIS_IS_PURE":0,
+        "CUEST_AOBASIS_IS_CART":1, "CUEST_AOBASIS_IS_MIXED":2,
+        "CUEST_AOBASIS_NUM_ATOM":3, "CUEST_AOBASIS_NUM_SHELL":4,
+        "CUEST_AOBASIS_NUM_AO":5, "CUEST_AOBASIS_NUM_CART":6,
+        "CUEST_AOBASIS_NUM_PRIMITIVE":7, "CUEST_AOBASIS_MAX_L":8,
     }
     preamble += "\n".join(f'static_assert({name}=={value}, "{name}");'
                           for name,value in constants.items())+"\n"

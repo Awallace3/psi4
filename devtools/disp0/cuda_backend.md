@@ -108,7 +108,7 @@ never an automatic computation/allocation/resource-job retry.
 
 ## Plan and resource prerequisites
 
-An audited AO/RI basis/plan factory is still missing. It must preserve exact
+An admitted production AO/RI basis/plan factory is still missing. It must preserve exact
 Psi4 AO and independent RI spherical/Cartesian conventions, normalization,
 auxiliary ordering and common factor gauge, and explicitly configure:
 
@@ -123,6 +123,14 @@ all three exported Psi4 coefficient variants and detects unsupported basis
 structures and subsequent changes. This is NOT native normalization,
 component-order, coordinate-unit or output-layout admission, and it cannot
 yield a production provider. A fake-shell CPU pass is not native basis proof.
+
+`sapt_cuest_plan_owner.py` implements diagnostic resource construction and
+dependency-ordered cleanup, but requires an explicitly unvalidated coefficient
+candidate and cannot yield a production factor provider. It retains queried
+persistent/creation workspaces, rejects dimension disagreement and ambiguous
+native outcomes, and separates accounted workspace bytes from unmeasured opaque
+internals. Native construction and numerical conversion still require device
+validation; CPU fake-handle/lifecycle tests are not that evidence.
 
 Negative eigenvalue treatment, relative rank truncation and contracted-factor/
 signed-energy parity require actual comparisons against native Psi4.

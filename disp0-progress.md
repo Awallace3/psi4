@@ -1,5 +1,76 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## CURRENT dependency rebuild — private HDF5 discovery proved
+
+Whole Einsums build04 FAILED at executable link346/347 after3303.60s; no
+installation or runtime import proof. `calibrate_hardware` linked system
+`/usr/lib/libhdf5.so.320.2.0` (config2.2.0), requiring GLIBC2.38 `__isoc23_*`
+symbols unavailable in the private GNU14.3 sysroot. Failed artifacts retained.
+The private environment already has HDF51.14.6 and its `h5cc`, but no HDF5
+CMake config; default FindHDF5 preferred the system config before the wrapper.
+
+Exact E2 `FindTargetHDF5` minimal discovery/link/runtime probe **PASS**.
+RED reproduced the foreign2.2.0 selection and `__isoc23_` link failure.
+The sole GREEN discovery change `HDF5_ROOT=<private environment>` selected
+private1.14.6 headers/library; linking and actual `H5get_libversion`/`dladdr`
+confirmed1.14.6 at `environment-v2/lib/libhdf5.so.310.5.1`, SHA256
+`e687f5de4db1dff2e01c199ff4cdf9767e72c14b05b1fe297960a2522a165500`.
+The new pre-build cache/library-origin guard rejected the RED cache and
+accepted GREEN. No compiler/sysroot, E2/scientific pin, tolerance or validation
+bypass. Fresh one-job build05 STARTED, with HDF5 admission required before
+compilation; full build/install/import results remain pending. No failed04 reuse.
+Receipts: `../runs/einsums-064-build-04/`, `../runs/hdf5-prefix-probe-01/`,
+`../runs/einsums-064-build-05/`.
+
+Whole native Psi402 build/install **PASS**,3824.25s/0.924s, source frozen clean
+at a7204feec throughout. Independent installed `--psiapi`/core/Python inventory,
+CPU LibXC maps and H2 PK/direct smoke are running at
+`../runs/psi4-cpu-import-01/`; import result is not yet claimed. Native E1
+remains OFF; whole Python E2 build and subsequent coherent E2 import are
+separate pending milestones. This stage does not contain the unmerged factory
+branch, and no new-module overlay is installed into it.
+
+## CURRENT diagnostic native resource factory — implemented, not device-admitted
+
+`sapt_cuest_plan_owner.py` now constructs an explicitly requested diagnostic
+context, parameter owners, all AO shells, primary/RI bases, primary pair list
+and one full-Coulomb MATRIXPOWER DF plan. It checks owned native version/FP64,
+parameter readback, native basis dimensions and exact basis snapshots. Stream/
+workspace/parent lifetimes are retained through reverse-order cleanup; creation
+temporaries remain conservatively live for these initial small-case diagnostics.
+
+Failed cleanup stops before parent release. Retry is explicit cleanup-only;
+ambiguous creation/destruction outcomes never receive speculative destructor
+calls. Post-destroy synchronization failure retains retired host inputs and
+parents without re-destroying a completed native object. Known workspace
+subtotals are distinguished from the declared allowance for unmeasured opaque
+native internals. No total-VRAM or native-memory-certification claim.
+
+The required coefficient candidate is explicitly `UNVALIDATED_PSI4_COEF`.
+This class cannot yield a production factor provider and performs no DFMO
+compute, DFHelper work or CPU integral/factor generation. Normalization/
+component/unit/layout/metric/rank/signed physical admission remain unpassed.
+
+**49 cuEST CPU structural/ABI/identity/owner tests PASS,0.202s;31 CUDA CPU
+fixtures PASS,0.907s**, diff check PASS; `../runs/native-plan-owner-03/`.
+Resource-graph review found a P1: an owner registered before a temporary
+session scope could delay construction into that scope, whose exit would free
+borrowed workspaces. Exact delayed-build/enter regressions went RED; construction
+guards now reject at build/native-create/workspace boundaries before resource
+creation. Existing-built native workspaces survive a later scope's cleanup
+failure. Fake destruction now checks persistent AND creation-temporary device/
+host buffers, and shell/basis/pair inputs survive forced GC through a failed
+post-destroy synchronization, then release only after explicit successful retry.
+**52 cuEST CPU tests PASS,0.238s;31 CUDA CPU tests PASS,0.872s**, diff check
+PASS; `../runs/native-plan-scope-red-01/` and `native-plan-scope-green-01/`.
+Narrow confirmation d46b8b **closed the P1 with no new scoped blocker**;
+read-only review of owner/tests, not an independent test/native run.
+Reviewed-state rerun **52 cuEST CPU tests PASS,0.231s;31 CUDA CPU tests
+PASS,0.861s**, diff check PASS; `../runs/native-plan-reviewed-01/`.
+Header compile probe02 **PASS**, including
+the exact native basis query IDs used here, retaining17-signature/all59-header
+and wrong-count negative controls. Native constructor/DFMO execution remains UNRUN.
+
 ## CURRENT native-owner session leases — lifecycle groundwork only
 
 CUDA sessions now retain explicit native cleanup owners. Persistent owners
@@ -19,8 +90,8 @@ reclosing successful owners; completed-but-still-registered owner blocking;
 nested scopes with computation/cleanup failure and depth restoration.
 Final rerun: **31 CUDA CPU tests PASS,0.928s;31 cuEST structural/ABI/identity
 tests PASS,0.050s**, diff check PASS; `../runs/native-owner-leases-02/`.
-The actual native context/basis/pair-list/plan
-resource graph and all production numerical admission remain unfinished.
+The diagnostic context/basis/pair-list/plan graph is implemented above;
+actual native execution and all production numerical admission remain unpassed.
 
 ## CURRENT factory ABI/policy component — CPU fixtures only
 
