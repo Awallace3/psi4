@@ -86,20 +86,27 @@ class BasisPreflight(unittest.TestCase):
         self.assertEqual(result.fingerprint,basis_api.snapshot_basis(basis,role="primary").fingerprint)
         with self.assertRaises(FrozenInstanceError): result.nbf = 0
 
-    def test_independent_cartesian_primary_and_pure_auxiliary_conventions(self):
+    def test_cartesian_primary_rejects_even_with_spherical_auxiliary(self):
         primary = Basis([Shell(0,0,False),Shell(0,1,False),Shell(0,2,False),Shell(1,0,False)])
         auxiliary = Basis([Shell(0,0),Shell(0,1),Shell(1,0)])
-        p,a = basis_api.snapshot_pair(primary,auxiliary)
-        self.assertEqual((p.nbf,a.nbf),(11,5))
-        self.assertTrue(all(not s.pure for s in p.shells))
-        self.assertTrue(all(s.pure for s in a.shells))
+        with self.assertRaisesRegex(NotImplementedError,"spherical primary"):
+            basis_api.snapshot_pair(primary,auxiliary)
+
+    def test_spherical_guards_check_flags_even_when_sp_dimensions_are_equal(self):
+        for role in ("primary","auxiliary"):
+            for am in (0,1):
+                basis = Basis([Shell(0,am,False)],1)
+                self.assertEqual(basis.nbf(),basis.nao())
+                with self.assertRaisesRegex(NotImplementedError,"spherical "+role):
+                    basis_api.require_spherical_basis(basis,role=role)
+        basis_api.require_spherical_basis(Basis(),role="primary")
 
     def test_ecp_cartesian_auxiliary_mixed_missing_center_holes_and_order_reject(self):
         ecp = Basis(); ecp.ecp = True
         examples = [
             (ecp,"primary","ECP"),
-            (Basis([Shell(0,0,False)],1),"auxiliary","already be pure"),
-            (Basis([Shell(0,0),Shell(0,1,False)],1),"primary","mix pure"),
+            (Basis([Shell(0,0,False)],1),"auxiliary","spherical auxiliary"),
+            (Basis([Shell(0,0),Shell(0,1,False)],1),"primary","spherical primary"),
             (Basis([Shell(0,0)],2),"primary","Every native"),
             (Basis([Shell(0,0),Shell(0,2)],1),"primary","holes"),
             (Basis([Shell(0,0),Shell(1,0),Shell(0,1)]),"primary","non-center"),

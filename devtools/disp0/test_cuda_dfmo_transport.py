@@ -78,8 +78,10 @@ class Transport(unittest.TestCase):
                 math_mode=1,math_code=0,**changes):
         ao,sp,_,_=inputs();session=Session();native=Native(ao,order,version,math_mode,math_code)
         self.native_attempt=native
-        primary=types.SimpleNamespace(nbf=lambda:ao.shape[1])
-        aux=types.SimpleNamespace(nbf=lambda:ao.shape[0])
+        def basis(size):
+            return types.SimpleNamespace(nbf=lambda:size,nshell=lambda:1,
+                shell=lambda i:types.SimpleNamespace(is_pure=lambda:True,is_cartesian=lambda:False))
+        primary,aux=basis(ao.shape[1]),basis(ao.shape[0])
         manifest={"scope":"EXPLICIT CPU ADMISSION MOCK, NOT A CUDA MANIFEST"}
         sha=hashlib.sha256(json.dumps(manifest,sort_keys=True,separators=(",",":")).encode()).hexdigest()
         kwargs=dict(session=session,sdk_root="CPU SDK FIXTURE",archive="CPU ARCHIVE FIXTURE",
@@ -186,6 +188,20 @@ class Transport(unittest.TestCase):
             n.math_mode=0
             with self.assertRaisesRegex(RuntimeError,"FP64"):
                 p.report()
+
+    def test_provider_rejects_cartesian_at_creation_and_revalidates_actual_shells(self):
+        for role in ("primary","auxiliary"):
+            cartesian=types.SimpleNamespace(nbf=lambda:7,nshell=lambda:1,
+                shell=lambda i:types.SimpleNamespace(is_pure=lambda:False,is_cartesian=lambda:True))
+            with self.assertRaisesRegex(NotImplementedError,"spherical "+role):
+                self.fixture(**{role+"_basis":cartesian})
+            self.native_attempt.cuestGetMajorVersion.assert_not_called()
+            self.assertEqual(self.native_attempt.created,0)
+            p,s,n,_,_=self.fixture()
+            basis=getattr(p,role+"_basis")
+            basis.shell=cartesian.shell
+            with self.assertRaisesRegex(NotImplementedError,"spherical "+role):
+                p.validate_basis(p.primary_basis,p.auxiliary_basis)
 
 
 if __name__=="__main__":

@@ -47,6 +47,26 @@ class DeviceMath:
                             [out.size,alpha,beta,left,right,out])
         return out
 
+    def pack_coefficients(self, matrices):
+        """Concatenate transposed AO coefficient matrices on device for DFMO."""
+        matrices = tuple(matrices)
+        if not matrices:
+            raise ValueError("DFMO coefficient list cannot be empty")
+        for value in matrices:
+            self.require(value)
+            if len(value.shape) != 2 or value.shape[0] != matrices[0].shape[0]:
+                raise ValueError("DFMO coefficients require one common AO dimension")
+        nao = matrices[0].shape[0]
+        out = self.session.empty((sum(value.shape[1] for value in matrices),nao))
+        offset = 0
+        for value in matrices:
+            rows,columns = value.shape
+            target = out.view((columns,rows),offset=offset)
+            self.session.launch("matrix_window",min(65535,(value.size+255)//256),256,
+                                [rows,columns,0,columns,True,value,target])
+            offset += value.nbytes
+        return out
+
     def product(self, *values):
         if len(values) < 2:
             raise ValueError("Matrix product requires at least two factors")
@@ -156,3 +176,19 @@ def finish_components(session, disp, exch):
     scalars = session.empty((3,))
     session.launch("reduce_components",1,128,[disp.size,disp,exch,scalars])
     return combined,scalars
+
+
+def coefficient_pairs(session, spaces, side, start, columns):
+    """Device-only counterpart of the canonical five-pair DFMO slab contract."""
+    m = DeviceMath(session)
+    if side == "r":
+        r,r1,r3 = (m.window(spaces[name],start,columns) for name in ("r","r1","r3"))
+        return {"Aar":(r,spaces["a"]), "Bbr":(r1,spaces["b"]),
+                "Cbr":(r,spaces["b2"]), "Dar":(r3,spaces["a"]),
+                "Ear":(r,spaces["a4"])}
+    if side != "s":
+        raise ValueError("DFMO side must be r or s")
+    s,s1,s3 = (m.window(spaces[name],start,columns) for name in ("s","s1","s3"))
+    return {"Abs":(s,spaces["b"]), "Bas":(s1,spaces["a"]),
+            "Cas":(s,spaces["a2"]), "Dbs":(s3,spaces["b"]),
+            "Ebs":(s,spaces["b4"])}

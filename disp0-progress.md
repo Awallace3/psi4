@@ -61,6 +61,63 @@ changed. Test teardown now closes its library before deleting the file.
 Previously failing test order now passes all102tests (1.399s); diff check passes.
 Task33 complete. This remains source/CPU evidence only.
 
+### In-progress device-input integration
+
+Setup primitives are committed at `f70cb2753`. Further uncommitted integration
+now packs transposed/batched DFMO coefficients entirely on device, prepares an
+owned persistent parameter49 object outside temporary scopes, and retains
+native call host/descriptors/workspaces through synchronization or teardown.
+Ambiguous native create/destroy outcomes quarantine ownership; cleanup checks
+PID, original device and admitted mapped closure before destruction.
+
+The new device-input block loop keeps correction slicing, factors, three GEMMs,
+denominators, signed pair reductions, pair combination and global sums on GPU.
+The explicit public HF CUDA entrypoint now routes raw upstream matrices into
+GPU setup directly, rather than using the old late CPU-setup callback. Actual
+shell flags reject Cartesian primary/RI (including S/P with nbf==nao); default
+CPU/non-HF paths remain untouched. Provider parameters close before the factory
+may destroy its borrowed plan. Zero-space calls avoid the factory.
+
+120 combined CPU fake-C-ABI/serial-shim/ownership/orchestration test executions
+PASS1.726s, with changed inputs and blocks1/3/5/500, no coefficient H2D inside
+device compute, signed pairs/global sums and cleanup failure tests.
+This is NOT native/GPU evidence and no new installation has been made.
+Device lifetime review `d867e2fbe251e369a096bceaadddda51e` and raw-entrypoint
+review `d052062a27a6212969f0953580cbf699f` are pending; their scopes are frozen.
+Remaining: review fixes, coherent whole stage04, actual device setup/DFMO/block
+integration and physical HF signed gates. Broader FISAPT is still blocked.
+
+Device lifetime review `d867e2fbe251e369a096bceaadddda51e` has now returned a
+conditional source pass with no concrete defects found: persistent parameter
+lease, batch packing/output offsets, pending call lifetimes, cleanup admission/
+quarantine, five-pair block layouts and GPU final reductions. Reviewer ran no
+tests. Public-entrypoint review remains pending; no device execution claim.
+
+Public review `d052062a27a6212969f0953580cbf699f` returned conditional source
+PASS with no concrete bug. Follow-up tests now cover CUDA zero spaces, invalid
+frozen counts/C1, unchanged cache arrays, and cleanup ordering/primary-error
+preservation after parameter preparation, setup or kernel failures.
+Provider init/revalidation also directly reject Cartesian primary/RI shells.
+Parent hardening adds conservative reverse-native-lease admission before
+provider parameter or diagnostic borrowed-plan teardown: a still-retained child
+blocks every parent destructor, including after child cleanup failure.
+125 CPU/mock/serial test executions PASS2.312s; follow-up review
+`d21f23c370847420e1a6f11ef0b888669` pending. All runtime source remains frozen.
+
+Whole stage04 preparation is underway outside source. Original stage03 full
+config/build/import/source-version chain and Python/core hashes re-admitted
+PASS, then read-only whole-build reflink preservation task `bbd1dc73e` launched.
+New staging helpers have six offline tests/five-script syntax PASS; separate
+review `dbe3618bbc0bdce50f3a0ce140ed26433` pending. No configure/build04 or new
+device execution yet. Successful f70cb2753 push completed; subsequent integration
+is still uncommitted pending follow-up review.
+
+Follow-up review `d21f23c370847420e1a6f11ef0b888669` returned conditional source
+PASS, no concrete defect in lease-order teardown, cleanup retries/quarantine,
+provider spherical checks or exception orchestration tests. Reviewer ran no
+tests; no native cleanup/device validation is inferred. The reviewed integration
+is ready for source freeze and whole-stage04 build, not production admission.
+
 ## CURRENT native gate — cuEST/cuBLAS/CUDA fixtures pass; physical SAPT pending
 
 Private dependencies now build/install/import coherently: exact Einsums064

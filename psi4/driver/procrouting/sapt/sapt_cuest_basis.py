@@ -33,6 +33,24 @@ def _real(value, label, *, positive=False):
     return value
 
 
+def require_spherical_basis(basis, *, role):
+    """Reject Cartesian/mixed shells before numerical setup or factory entry.
+
+    Inspect the actual shell representation, not just nbf/nao (identical for
+    S/P shells) or a global option that may not describe the built basis.
+    No conversion or option mutation is performed.
+    """
+    if role not in ("primary","auxiliary"):
+        raise ValueError("Basis role must be primary or auxiliary")
+    for index in range(_count(basis.nshell(),"shell count",minimum=1)):
+        shell = basis.shell(index)
+        pure,cartesian = shell.is_pure(),shell.is_cartesian()
+        if not isinstance(pure,bool) or not isinstance(cartesian,bool) or pure == cartesian:
+            raise ValueError("Shell representation flags are inconsistent")
+        if not pure:
+            raise NotImplementedError(f"CUDA dispersion requires spherical {role} basis shells only")
+
+
 @dataclass(frozen=True)
 class ShellSnapshot:
     index: int
@@ -82,7 +100,8 @@ def snapshot_basis(basis, *, role):
 
     Initial structural scope rejects ECP, non-center-contiguous shell order,
     missing centers, angular-momentum holes, and mixed shell representations.
-    Auxiliary shells must already be pure; no implicit Cartesian conversion.
+    Primary and auxiliary shells must already be spherical; no Cartesian case
+    or implicit conversion is supported.
     Shell and owning-molecule coordinates must agree exactly; independently
     moved/stale bases are unsupported. This is NOT a cuEST coordinate-unit proof.
     """
@@ -113,8 +132,8 @@ def snapshot_basis(basis, *, role):
         pure, cartesian = shell.is_pure(), shell.is_cartesian()
         if not isinstance(pure, bool) or not isinstance(cartesian, bool) or pure == cartesian:
             raise ValueError("Shell representation flags are inconsistent")
-        if role == "auxiliary" and not pure:
-            raise NotImplementedError("cuEST DF auxiliary basis must already be pure")
+        if not pure:
+            raise NotImplementedError(f"CUDA dispersion requires spherical {role} basis shells only")
         nprimitive = _count(shell.nprimitive, "primitive count", minimum=1)
         nf = _count(shell.nfunction, "shell function count", minimum=1)
         nc = _count(shell.ncartesian, "shell Cartesian count", minimum=1)

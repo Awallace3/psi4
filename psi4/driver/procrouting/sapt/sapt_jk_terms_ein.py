@@ -2546,8 +2546,9 @@ def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen
     """Experimental explicit Python entrypoint; not an automatic driver option.
 
     provider_factory(primary_basis, auxiliary_basis) must be a context manager
-    yielding the audited cuEST DFMO adapter. Existing E2 canonical setup remains;
-    host DFHelper construction/transformation/packing is completely bypassed.
+    yielding the audited cuEST DFMO adapter. Raw upstream HF matrices are
+    uploaded once; dispersion setup, DFMO packing, contractions and signed
+    reductions execute on GPU. No E2 CPU setup or host factor path is used.
     """
     if (str(core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")).upper() != "HF"
             or not core.get_option("SAPT", "SAPT_DFT_DO_DISP")
@@ -2565,21 +2566,58 @@ def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen
         raise ValueError("CUDA compute block must be a positive integer")
     if dimer_wfn.nirrep() != 1:
         raise NotImplementedError("Experimental CUDA dispersion currently requires C1 symmetry")
+    from .sapt_cuest_basis import require_spherical_basis
+    require_spherical_basis(dimer_wfn.basisset(),role="primary")
 
-    def kernel(**inputs):
-        from .sapt_dispersion_cuda import blocked_dispersion
-        from .sapt_cuest_dfmo_cuda import CuESTDFMOProvider
-        primary, auxiliary = inputs.pop("primary_basis"), inputs.pop("auxiliary_basis")
-        with provider_factory(primary, auxiliary) as provider:
-            if not isinstance(provider, CuESTDFMOProvider):
-                raise TypeError("The CUDA entrypoint requires strict cuEST0.2.50 native admission")
+    if (type(nfrozen_A) is not int or type(nfrozen_B) is not int
+            or min(nfrozen_A,nfrozen_B) < 0):
+        raise ValueError("Frozen occupied counts must be nonnegative integers")
+    counts = {name:cache[key].np.shape[1] for name,key in
+              (("a","Cocc_A"),("b","Cocc_B"),("r","Cvir_A"),("s","Cvir_B"))}
+    if nfrozen_A > counts["a"] or nfrozen_B > counts["b"]:
+        raise ValueError("Frozen occupied count exceeds upstream HF space")
+    if (nfrozen_A == counts["a"] or nfrozen_B == counts["b"]
+            or counts["r"] == 0 or counts["s"] == 0):
+        return {"Disp20,u":0.0,"Exch-Disp20,u":0.0}
+
+    from .sapt_dispersion_cuda import blocked_device_dispersion
+    from .sapt_dispersion_cuda_setup import prepare_hf
+    from .sapt_cuest_dfmo_cuda import CuESTDFMOProvider
+    started = time.perf_counter()
+    primary = dimer_wfn.basisset()
+    auxiliary = core.BasisSet.build(
+        dimer_wfn.molecule(),"DF_BASIS_MP2",core.get_option("DFMP2","DF_BASIS_MP2"),
+        "RIFIT",core.get_global_option("BASIS"))
+    require_spherical_basis(auxiliary,role="auxiliary")
+    names = ("S","D_A","P_A","V_A","J_A","K_A","D_B","P_B","V_B","J_B","K_B","K_O",
+             "Cocc_A","Cocc_B","Cvir_A","Cvir_B")
+    matrices = {name:np.asarray(cache[name].np) for name in names}
+    energies = {name:np.asarray(cache[key].np) for name,key in
+                (("a","eps_occ_A"),("b","eps_occ_B"),("r","eps_vir_A"),("s","eps_vir_B"))}
+    with provider_factory(primary,auxiliary) as provider:
+        if not isinstance(provider,CuESTDFMOProvider):
+            raise TypeError("The CUDA entrypoint requires strict cuEST0.2.50 native admission")
+        # Provider parameters are owned/closed before the factory may destroy
+        # its borrowed plan; construction must precede any temporary scope.
+        with provider:
             provider.validate_basis(primary, auxiliary)
-            result = blocked_dispersion(provider, **inputs)
-        return (result["Disp20 occupied pairs"], result["Exch-Disp20 occupied pairs"],
-                result["Disp0 execution"])
-
-    return dispersion0(cache, dimer_wfn, nfrozen_A, nfrozen_B, block_size=block_size,
-                       do_print=do_print, _kernel_callback=kernel)
+            provider.prepare_device_compute()
+            with provider.session.scope():
+                spaces,corrections,e = prepare_hf(
+                    provider.session,matrices,energies,frozen_a=nfrozen_A,frozen_b=nfrozen_B)
+                result = blocked_device_dispersion(
+                    provider,spaces=spaces,corrections=corrections,energies=e,block_size=block_size)
+    execution = dict(result["Disp0 execution"])
+    execution["entrypoint_seconds_including_factory_setup_cleanup"] = time.perf_counter()-started
+    execution["raw_hf_numerical_setup"] = "owned cuBLAS/custom CUDA"
+    execution["scope"] = ("Spherical HF dispersion from upstream matrices, including raw upload, "
+                          "GPU setup/device DFMO/packing/contractions/pair/global reductions "
+                          "and owned cleanup; excludes upstream SCF/elst/exch/induction")
+    if do_print:
+        core.print_out(f'    CUDA Disp20,u = {result["Disp20,u"]:.12e} Eh\n'
+                       f'    CUDA Exch-Disp20,u = {result["Exch-Disp20,u"]:.12e} Eh\n')
+    return {"Disp20,u":result["Disp20,u"],"Exch-Disp20,u":result["Exch-Disp20,u"],
+            "Disp0 execution":execution}
 
 
 def fdisp0(

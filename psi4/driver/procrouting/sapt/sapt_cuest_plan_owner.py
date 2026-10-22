@@ -307,6 +307,9 @@ class DiagnosticPlanOwner:
         self.closed = True
         self.api.failed = True
         try:
+            owners = self.session.native_owners
+            if not owners or owners[-1] is not self:
+                raise RuntimeError("Later native leases must finish before borrowed plan teardown")
             if any(r.uncertain for r in self.resources):
                 raise RuntimeError("Ambiguous native outcome retained; speculative cleanup is forbidden")
             _cleanup_admission(self.api)

@@ -216,6 +216,28 @@ class PlanOwner(unittest.TestCase):
             self.assertTrue(session.failed)
             with self.assertRaisesRegex(RuntimeError,"Closed/invalidated"): owner.build()
 
+    def test_failed_child_lease_keeps_plan_and_every_parent_resource_owned(self):
+        owner,session,native,*_ = self.fixture()
+        owner.build()
+        before=list(native.events)
+        resources=tuple(owner.resources)
+        live=session.live_bytes
+        child=types.SimpleNamespace(cleanup_complete=False,close=lambda:None)
+        session.retain_native_owner(child)
+        with self.assertRaisesRegex(RuntimeError,"Later native leases"):
+            owner.close()
+        self.assertEqual(native.events,before)
+        self.assertEqual(tuple(owner.resources),resources)
+        self.assertEqual(session.live_bytes,live)
+        self.assertEqual(session.native_owners,[owner,child])
+        self.assertFalse(owner.cleanup_complete)
+        child.cleanup_complete=True
+        session.release_native_owner(child)
+        owner.retry_cleanup()
+        self.assertTrue(owner.cleanup_complete)
+        self.assertEqual(native.objects,{})
+        self.assertEqual(session.live_bytes,0)
+
     def test_wrong_native_version_or_basis_dimension_rejects_and_unwinds(self):
         for failure in ("version","dimension"):
             owner,session,native,*_ = self.fixture()
