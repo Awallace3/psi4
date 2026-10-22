@@ -257,3 +257,11 @@ validated metadata transport accepts int64 indices.206CPU/mock/serial
 executions pass union maps, changed/scattered/filtered block extraction,
 metadata policy, aliases and lifetime guards. Actual GPU gather/native-adapter
 validation is pending; GPU IBO assembly/Jacobi remains unimplemented.
+
+`sapt_fisapt_iao_cuda` now implements the exact local2.cc IAO matrix recipe:
+shared native overlap inverse roots, full-occupied tilde projector/densities,
+AN metric normalization and occupied IAO coordinates, all CUDA/cuBLAS/native
+powers.215CPU/mock/serial executions pass changed inputs, overlap-root reuse,
+IAO metric/population invariants and occupied-rotation invariance.
+Actual native overlap/IAO assembly validation is pending. Ordered Jacobi,
+orbital reordering/weights and complete GPU IBO remain unimplemented.
