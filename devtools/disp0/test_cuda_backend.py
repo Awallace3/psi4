@@ -123,6 +123,7 @@ class Kernels(unittest.TestCase):
         cls.temp=tempfile.TemporaryDirectory(prefix="disp0-cuda-serial-")
         folder=Path(cls.temp.name)
         shim="""
+        #include <cmath>
         #define __global__
         #define __device__
         #define __forceinline__

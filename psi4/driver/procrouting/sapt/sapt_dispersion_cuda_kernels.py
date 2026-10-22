@@ -5,6 +5,59 @@ No CUDA work occurs at import. No fast-math, denominator clamp or atomics.
 
 CUDA_SOURCE = r'''
 extern "C" {
+// C-order [Q,O,O] -> [Q,O]. Retain the native DFMO metric gauge.
+__global__
+void diagonal_factors(long long Q, long long O, const double* input, double* output) {
+    for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         i<Q*O; i+=(long long)blockDim.x*gridDim.x) {
+        const long long q=i/O, o=i%O;
+        output[i]=input[(q*O+o)*O+o];
+    }
+}
+
+// Each output slot has exactly one writer. Different calls use one stream.
+__global__
+void scatter_matrix(long long rows, long long cols, long long stride,
+                    long long row0, long long col0, long long weight,
+                    const double* input, double* output) {
+    for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         i<rows*cols; i+=(long long)blockDim.x*gridDim.x)
+        output[(row0+i/cols)*stride+col0+i%cols]+=(double)weight*input[i];
+}
+
+// Both sides use the full dimer atom index, including zero-charge ghost slots.
+// Distinct coincident charged centers deliberately produce Inf, never a clamp.
+__global__
+void fragment_nuclear(long long N, const double* xyz,
+                      const double* za, const double* zb, double* output) {
+    for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         i<N*N; i+=(long long)blockDim.x*gridDim.x) {
+        const long long a=i/N, b=i%N;
+        double value=0.0;
+        if (a!=b && za[a]!=0.0 && zb[b]!=0.0) {
+            const double x=xyz[3*a]-xyz[3*b];
+            const double y=xyz[3*a+1]-xyz[3*b+1];
+            const double z=xyz[3*a+2]-xyz[3*b+2];
+            value=za[a]*zb[b]/sqrt(x*x+y*y+z*z);
+        }
+        output[i]=value;
+    }
+}
+
+__global__
+void reduce_values(long long count, const double* input, double* output) {
+    __shared__ double sums[128];
+    double value=0.0;
+    for (long long i=threadIdx.x; i<count; i+=blockDim.x) value+=input[i];
+    sums[threadIdx.x]=value;
+    __syncthreads();
+    for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+        if (threadIdx.x<stride) sums[threadIdx.x]+=sums[threadIdx.x+stride];
+        __syncthreads();
+    }
+    if (threadIdx.x==0) output[0]=sums[0];
+}
+
 // C-order [r,a,s,b] <-> [r,s,b,a], for occupied-only LO rotations.
 __global__
 void permute_occupied_a(long long R, long long A, long long S, long long B,

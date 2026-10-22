@@ -315,7 +315,8 @@ class CUDASession:
             self.module = self.rt(dr.cuModuleLoadData(bytes(ptx)))
             for name in ("pack_factors", "reduce_dispersion", "matrix_window",
                          "linear_combination", "reduce_components", "permute_occupied_a",
-                         "make_amplitudes", "rotation_error", "reduce_localized_dispersion"):
+                         "make_amplitudes", "rotation_error", "reduce_localized_dispersion",
+                         "diagonal_factors", "scatter_matrix", "fragment_nuclear", "reduce_values"):
                 self.functions[name] = self.rt(dr.cuModuleGetFunction(self.module, name.encode()))
         except BaseException as error:
             primary = error

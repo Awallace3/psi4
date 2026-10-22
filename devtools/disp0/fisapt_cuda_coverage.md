@@ -60,9 +60,9 @@ reference input; it is not full-FISAPT GPU coverage.
 
 ## Next gates
 
-1. Wire localized dispersion to real device DFMO and compare full localized
-   pair matrices and canonical/LO global conservation with native FISAPT.
-   Preserve frozen offsets; reject unimplemented link/external/S-inf cases.
+1. Localized dispersion native-factor/full-matrix gate above is complete for
+   the stated unscaled/C-assignment/no-external scope. Keep unsupported cases
+   fail-closed; localization itself remains outside that coverage.
 2. Qualify actual JKFIT angular momenta and atomwise nuclear/external-potential
    native interfaces. Port fragment elst/exch with no host factor provider.
 3. Port fragment induction/response and localization/partition numerical work,
@@ -70,3 +70,18 @@ reference input; it is not full-FISAPT GPU coverage.
    layout, group sum, repeated call, lifetime and final total independently.
 
 No automatic CUDA option or full-FISAPT GPU claim is enabled by this document.
+
+## Fragment electrostatics groundwork
+
+`sapt_fisapt_elst_cuda.py` supplies device diagonal extraction, nuclear
+repulsion, weighted atom/orbital block placement, cuBLAS electronic pair and
+AO-potential contractions, and GPU scalar reduction. It includes all ordinary
+occupied orbitals (frozen included) and preserves the final external zero slot.
+Diagonal factors stay on device for later shared-JKFIT fragment induction.
+Distinct coincident charged centers produce nonfinite output, never a clamp;
+a public caller must reject nonfinite reported values.
+
+151 CPU/mock/serial executions pass, including changed inputs, unequal spaces,
+all matrix slots, retained factors and layout/session/alias guards. Actual GPU
+primitive feedback and native point-charge qualification are pending. There is
+not yet a native-provider-coupled `felst_cuda` or fragment-elst coverage claim.
