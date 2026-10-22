@@ -565,7 +565,7 @@ coordinate/total-weight multiset and overlap spectrum/rank proofs.
 The separately compiled cuEST0.2.50 **four-center direct** adapter and its H100
 debug tests are not mixed into these H200 DF timings.
 
-### Future-only strict cuEST 0.2.50 admission
+### Strict cuEST 0.2.50 source admission (real build/device gates still pending)
 
 `cuest-sdk-0.2.50.json` independently pins canonical SDK header and CUDA13
 library bytes, plus exported four-center direct, DFMO and version capabilities.
@@ -614,9 +614,27 @@ sanitized CUDA12 environment as the workers, and check mapped isolation before
 device initialization and again afterward. These changes do not rewrite the
 old queued launcher's environment.
 
-These are **local future guards**, not a retroactive certification. The new
-native bridge has no reviewed final provider pin/device execution receipt yet;
-missing/old providers fail closed. Offline mock tests do not establish native
+The reviewed native provider/admission source from
+`a323afa886b6753370d798aa9ae5410b83f4aa06` is now integrated selectively, not
+merged with dispersion changes. Exact CMake SDK admission, outer/inner identity
+forwarding, consumed-header auditing and version/initialization cleanup are
+included. This branch retains its direct-JK compile/link probe, grid exporter
+and cuEST/CUDA-LibXC RPATH precedence.
+
+`build_grid_export.sh` now requires a sixth argument: the explicit **resolved
+CUDA runtime closure prefix**, passed as `cuEST_CUDA_RUNTIME_ROOT`. A read-only
+Phoenix path check found `software/toolchains/cuda13/lib64` symlinks resolve to
+`miniconda/envs/p4cuest_sapt/targets/x86_64-linux/lib`; the runtime prefix for
+that installation is the `p4cuest_sapt` environment, **not** the `cuda13` shim.
+This path check is not a CUDA/hash/device admission receipt. The fresh build
+must validate the entire resolved closure. CMake outer/inner identities remain
+separate from the comparison SDK JSON; the build manifest also retains native
+core/closure identity and actual consumed-header hashes. A missing compiled
+direct-JK capability is a build failure.
+
+These are **local source changes**, not a retroactive certification. No real
+strict core or device execution receipt exists yet; missing/old providers
+fail closed. Offline mock tests do not establish native
 version execution, DFMO numerical correctness or a completed direct/direct
 comparison. The frozen `86feda59ec84e82eb8c90685c2d9d2c8fbc09237` checkout,
 existing `2e542f9` build, environments, and queued job14254253 are unchanged.
@@ -624,3 +642,7 @@ That old payload pins library bytes but does not implement this independent
 exact-version/header/provider admission. Any future run needs its own reviewed
 build and authorization; this guard work submits nothing. Scientific settings,
 including the RKS absolute `1e-7` overlap cutoff, are unchanged.
+
+See `outputs/gpu-dft-strict-provider-preparation.md` for the fresh-build and
+independent CUDA12 inventory preparation checklist. Keep queued job14254253 and
+all historical stages immutable; do not submit a duplicate GPU comparison.

@@ -32,6 +32,9 @@
 #ifndef _psi_src_cuest_runtime_h_
 #define _psi_src_cuest_runtime_h_
 
+#include <array>
+#include <cstdint>
+
 /*! \file cuest_runtime.h
  *  \brief Psi4-module-lifetime interface to the cuEST/CUDA runtime.
  *
@@ -73,6 +76,11 @@ constexpr bool built_with_cuest() {
  *  immediately.  Called from psi4_python_module_finalize().
  */
 void shutdown();
+
+/*! Checked native version from an already live Psi4-owned handle.
+ *  Never initializes CUDA or creates a diagnostic handle.
+ */
+std::array<std::uint32_t, 3> native_version();
 
 #else
 

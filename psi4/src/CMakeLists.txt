@@ -77,6 +77,13 @@ if(TARGET cuEST::cuEST)
       cuest_runtime.cc
       cuest_gemm.cc
     )
+  target_link_libraries(core PRIVATE CUDA::cusolver)
+  # Verify actual compiler dependencies, not merely an unused SDK tree.
+  add_custom_command(TARGET core POST_BUILD
+    COMMAND "${Python_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/../cmake/cuest_header_dependencies.py"
+      --sdk-root "${cuEST_ROOT}" --build-directory "${CMAKE_BINARY_DIR}"
+      --generator "${CMAKE_GENERATOR}" --output "${CMAKE_BINARY_DIR}/cuest-header-dependencies.json"
+    VERBATIM)
 endif()
 
 get_property(psi4_binmodules GLOBAL PROPERTY LINKBINLIST)

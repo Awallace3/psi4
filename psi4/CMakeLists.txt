@@ -249,7 +249,10 @@ else()
 endif()
 
 if(${ENABLE_cuEST})
-    find_package(cuEST MODULE REQUIRED)
+    find_package(cuEST 0.2.50 EXACT MODULE REQUIRED)
+    # An older dependency-environment cuest.h must not shadow this SDK.
+    include_directories(BEFORE "${cuEST_INCLUDE_DIR}")
+    set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
     get_property(_loc TARGET cuEST::cuEST PROPERTY LOCATION)
     list(APPEND _addons ${_loc})
     message(STATUS "${Cyan}Using cuEST${ColourReset}: ${cuEST_DIR}")
@@ -497,4 +500,3 @@ configure_package_config_file(
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${psi4_INSTALL_CMAKEDIR}/psi4Config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/${psi4_INSTALL_CMAKEDIR}/psi4ConfigVersion.cmake
         DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKECONFIG_INSTALL_DIR})
-

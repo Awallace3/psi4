@@ -31,6 +31,6 @@
   "native_version_abi": "cuest-status-handle-u32ptr-v1",
   "native_version_getters_require_valid_handle": true,
   "native_version_provider": "_cuest_runtime_version",
-  "native_version_provider_status": "FDDS-owned proposed bridge: builtin, existing live handle only, status checked, exact tuple of three ints; native execution not validated",
+  "native_version_provider_status": "Source integrated from reviewed a323afa886b6753370d798aa9ae5410b83f4aa06: builtin, existing live handle only, status checked, exact tuple of three ints; real build and native execution not validated",
   "scope": "Identity/capability admission only; no DFMO or RKS scientific plan policies"
 }

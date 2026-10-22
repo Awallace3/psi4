@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run on a compute node under explicit QoS, not on a login node.
-# Usage: /bin/bash build_grid_export.sh ABS_REPO COMMIT ABS_RUN embers|inferno ABS_CUEST_SDK
+# Usage: /bin/bash build_grid_export.sh ABS_REPO COMMIT ABS_RUN embers|inferno ABS_CUEST_SDK ABS_CUDA_RUNTIME_ROOT
 # inferno is permitted only for a specifically user-authorized submission.
 # The historical CUDA-LibXC stage is read-only and is never rebuilt here.
 set -euo pipefail
@@ -25,6 +25,10 @@ test -r "$sdk_lib/libcuest.so"
 export CUEST_SELECTED_SDK="$sdk" CUEST_SELECTED_LIBRARY="$sdk_lib/libcuest.so"
 toolchains=/storage/project/r-cs207-0/awallace43/software/toolchains
 cuda="$toolchains/cuda13"
+# Toolkit paths are symlinks into the dependency environment. Admission binds
+# resolved CUDA files, not the toolkit directory's version-like label.
+cuda_runtime=${6:?explicit resolved CUDA runtime closure prefix required}
+[[ "$cuda_runtime" == /* && -d "$cuda_runtime" ]]
 xc=/storage/project/r-cs207-0/awallace43/software/libxc-7.1.2-cuda
 source /etc/profile.d/z00_lmod_pace.sh
 module load cmake
@@ -53,7 +57,8 @@ cmake -S "$repo" -B "$run/build" -G Ninja \
     -DPython_EXECUTABLE="$env_root/bin/python" \
     -DLibint2_DIR="$env_root/lib/cmake/libint2" \
     -DLibxc_DIR="$xc/lib64/cmake/Libxc" \
-    -DcuEST_ROOT="$sdk" -DcuEST_INCLUDE_DIR="$sdk/include" \
+    -DcuEST_ROOT="$sdk" -DcuEST_CUDA_RUNTIME_ROOT="$cuda_runtime" \
+    -DcuEST_INCLUDE_DIR="$sdk/include" \
     -DcuEST_LIBRARY="$sdk_lib/libcuest.so" -DENABLE_cuEST=ON \
     -DBLAS_LIBRARIES="$env_root/lib/libmkl_rt.so" \
     -DLAPACK_LIBRARIES="$env_root/lib/libmkl_rt.so" \
@@ -122,6 +127,25 @@ if not cache.exists():
     direct_available = any("cuEST_HAS_DIRECT_JK:INTERNAL=1" in p.read_text() for p in matches)
 else:
     direct_available = "cuEST_HAS_DIRECT_JK:INTERNAL=1" in cache.read_text()
+assert direct_available, "Strict build must retain compiled/linked four-center direct JK"
+# Keep comparison SDK JSON separate from the CMake contract's identity schema.
+sys.path.insert(0, str(Path(repo) / "cmake"))
+from cuest_sdk_contract import compare_identity, snapshot_core, validate_sdk
+cmake_receipts = sorted((run / "build").rglob("cuest-sdk-identity.json"))
+assert len(cmake_receipts) == 2, ("outer/inner admission receipts required", cmake_receipts)
+cmake_sdk = json.loads(cmake_receipts[0].read_text())
+for path in cmake_receipts:
+    compare_identity(json.loads(path.read_text()), cmake_sdk)
+compare_identity(validate_sdk(cmake_sdk["sdk_root"], cmake_sdk["cuda_major"],
+                              cmake_sdk["cuda_root"], cmake_sdk["cudart"]), cmake_sdk)
+header_receipts = list((run / "build").rglob("cuest-header-dependencies.json"))
+assert len(header_receipts) == 1, ("consumed-header audit required", header_receipts)
+compiled_headers = json.loads(header_receipts[0].read_text())
+assert compiled_headers and any(Path(path).name == "cuest.h" for path in compiled_headers)
+for path, digest in compiled_headers.items():
+    assert Path(path).resolve().is_relative_to(sdk / "include")
+    assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest
+native_build_identity = snapshot_core(core, cmake_sdk)
 assert subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip() == commit
 assert not subprocess.check_output(
     ["git", "-C", repo, "status", "--porcelain", "--untracked-files=no"], text=True).strip()
@@ -132,6 +156,8 @@ manifest = dict(
     cuest_sdk=str(sdk), cuest_library=str(library),
     cuest_library_sha256=hashlib.sha256(library.read_bytes()).hexdigest(),
     cuest_sdk_identity=sdk_identity, cuda_linkage_identity=cuda_linkage_identity(linkage),
+    cuest_cmake_identity=cmake_sdk, cuest_native_build_identity=native_build_identity,
+    cuest_consumed_headers=compiled_headers,
     cuest_direct_jk_available=direct_available,
     note="New instrumented comparison implementation; historical stage unchanged. CUDA grid export still requires allocated-GPU validation.",
 )
