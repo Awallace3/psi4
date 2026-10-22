@@ -49,11 +49,16 @@ class BenzeneJobTests(unittest.TestCase):
             JOB.validate_libraries(loaded)
 
     def test_driver_uses_accepted_build_and_fresh_output(self):
-        argv = JOB.pilot_arguments("12345")
+        argv = JOB.pilot_arguments("12345", "driver-commit", "driver-tree", "/private/probe.json", "pin")
         options = dict(zip(argv[1::2], argv[2::2]))
         self.assertEqual(options["--commit"], JOB.BUILD_COMMIT)
         self.assertEqual(options["--core-sha256"], JOB.CORE_SHA)
         self.assertEqual(options["--stage"], str(JOB.STAGE))
+        self.assertEqual(options["--driver-source"], str(JOB.HERE.parent.parent))
+        self.assertEqual(options["--driver-commit"], "driver-commit")
+        self.assertEqual(options["--driver-tree"], "driver-tree")
+        self.assertEqual(options["--native-tree"], JOB.BUILD_TREE)
+        self.assertEqual(options["--basis-manifest-sha256"], "pin")
         self.assertEqual(options["--out"], str(JOB.RUN / "results"))
         self.assertEqual(options["--scratch"], str(JOB.SCRATCH / "P-12345"))
 

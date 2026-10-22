@@ -9,20 +9,23 @@
 #SBATCH --mem=48G
 #SBATCH --time=06:00:00
 #SBATCH --nodelist=atl1-1-02-007-23-1
-#SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-002/logs/%x-%j.out
-#SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-002/logs/%x-%j.err
+# P003 is NOT authorized by basis-probe preparation. Requires reviewed manifest.
+#SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-003/logs/%x-%j.out
+#SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-003/logs/%x-%j.err
 set -euo pipefail
 umask 027
-ROOT=/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-science-launch-v2
+ROOT=/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-science-launch-v3
 BUILD=/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-build-smoke-v3
-RUN=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-002
+RUN=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-003
 DEPS=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-003/deps
-SCRATCH=/storage/scratch1/3/awallace43/ccasp-phoenix-benzene-pilot-20261021-science002
+SCRATCH=/storage/scratch1/3/awallace43/ccasp-phoenix-benzene-pilot-20261021-science003
 ENV=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt
 STAGE="$BUILD/build_ccasp_phoenix_benzene/stage"
-test "$#" = 2
+test "$#" = 4
 COMMIT=$1
 TREE=$2
+BASIS_MANIFEST=$3
+BASIS_MANIFEST_SHA=$4
 test -d "$RUN/logs" && test -w "$RUN/logs"
 set -o noclobber
 printf '%s\n' "$SLURM_JOB_ID" > "$RUN/metadata/job-started"
@@ -61,7 +64,8 @@ eval "$psiapi"
 cd "$RUN"
 /opt/slurm/current/bin/srun --ntasks=1 --cpus-per-task=8 --cpu-bind=none \
     "$ENV/bin/python3.13" -I -S -B "$ROOT/devtools/ccasp_phoenix_benzene/benzene_job.py" \
-    run --commit "$COMMIT" --tree "$TREE" &
+    run --commit "$COMMIT" --tree "$TREE" \
+    --basis-manifest "$BASIS_MANIFEST" --basis-manifest-sha256 "$BASIS_MANIFEST_SHA" &
 child=$!
 set +e
 wait "$child"

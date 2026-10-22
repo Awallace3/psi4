@@ -1,5 +1,13 @@
 # Phoenix-only benzene P pilot — prepared, NOT authorized to execute
 
+**Current correction:** see `BASIS_ADMISSION.md` and `SCIENCE_JOB.md`. The
+readiness-only description below is historical preparation context. Native
+build15cc/v3 later passed five small smokes; P002 converged its own SCF then
+refused AUX admission before ISA. The corrected driver/helper now have a
+separate source pin from that unchanged accepted native stage. A native
+basis-only probe and its reviewed exact-shell manifest are required before
+any separately granted P003. No old build review is claimed for this correction.
+
 Candidate base: `6f147f4829ffc83c868b9e78618ebe7c4f17fbdb`.
 This directory changes no inherited scientific source, fixture or default.
 The new adapter is statically inspected only: **no scientific imports, builds,

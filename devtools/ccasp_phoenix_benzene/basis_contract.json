@@ -1,0 +1,15 @@
+{
+  "schema": "ccasp-benzene-basis-contract/1",
+  "native_commit": "15cc9a7a9a2bd60e43ebc2533ec99686bca58374",
+  "native_tree": "8f0aa8fabd476aafc6bc49b824c60ac935a86753",
+  "native_core_sha256": "b283901ddac01e6bf7210a7461fb71cd5b2333cf9e42b99d60271959b40ac7eb",
+  "coefficient_policy": "Raw GBS tokens and GaussianShell.coef native-normalized binary64 data are distinct records; no normalization formula or tolerance is introduced.",
+  "basis_files": {
+    "aug-cc-pvtz.gbs": "235b70809d1f205815c72046ab7319b291c4fe826b93f83dea876502dbb0a53c",
+    "aug-cc-pvtz-ri.gbs": "b657d18ba2a0931a337afd8e8bc7d11b047456d2871db9973d16aa5402c7cb41"
+  },
+  "main": {"nbf": 414, "nao": 480, "has_puream": true, "nshell": 138, "max_am": 3},
+  "auxiliary": {"nbf": 1146, "nao": 1146, "has_puream": false, "nshell": 252, "max_am": 4},
+  "unscoped_auxiliary_prediction": {"nbf": 912, "nao": 1146, "has_puream": true, "nshell": 252, "max_am": 4},
+  "prediction_status": "GBS/static-source deduction, not a native observation until the separately granted basis-only probe executes"
+}

@@ -7,6 +7,7 @@ watchdog, private monkeypatch, second partition or external comparator is used.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -32,7 +33,39 @@ def git(source, *args):
     return subprocess.check_output(["git", "-C", str(source), *args], text=True).strip()
 
 
-def recipe(molecule, cfg):
+def basis_tools():
+    spec = importlib.util.spec_from_file_location(
+        "ccasp_benzene_basis_admission", Path(__file__).with_name("basis_admission.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def basis_binding(args, cfg_path):
+    driver = Path(args.driver_source).resolve()
+    return dict(
+        native=dict(source=str(Path(args.source).resolve()), commit=args.commit, tree=args.native_tree,
+                    stage=str(Path(args.stage).resolve()), core_sha256=args.core_sha256),
+        driver=dict(source=str(driver), commit=args.driver_commit, tree=args.driver_tree,
+                    files_sha256={name: sha(driver / "devtools/ccasp_phoenix_benzene" / name)
+                                  for name in ("pilot.py", "basis_admission.py",
+                                               "basis_contract.json", "pilot.json")}),
+        fixture_sha256=sha(args.fixture), config_sha256=sha(cfg_path))
+
+
+def make_molecule(psi4, cfg, raw):
+    xyz = [raw["qcel_geometry_bohr_float64"][i] for i in cfg["permutation"]]
+    geom = ["0 1", "units bohr", "no_com", "no_reorient", "symmetry c1"]
+    geom += [f"{'C' if i < 6 else 'H'} {x:.8f} {y:.8f} {z:.8f}"
+             for i, (x, y, z) in enumerate(xyz)]
+    molecule = psi4.geometry("\n".join(geom))
+    actual = [[molecule.x(i), molecule.y(i), molecule.z(i)] for i in range(molecule.natom())]
+    if actual != xyz:
+        raise ValueError("supplied dimer-frame coordinates changed")
+    return molecule, xyz
+
+
+def recipe(molecule, cfg, *, auxiliary_native):
     """Definitions from recipe56o (b6d0bb1c...), not archived run state.
 
     Even-tempered C 2**(8..-3), H 2**(5..-2), normalized primitive s shells:
@@ -55,9 +88,11 @@ def recipe(molecule, cfg):
             raise ValueError("C/H topology mismatch")
         if not 2.4 < np.linalg.norm(xyz[i] - xyz[(i + 1) % 6]) < 2.9:
             raise ValueError("noncyclic ring")
-    native = core.BasisSet.build(molecule, "DF_BASIS_SCF", "aug-cc-pVTZ-RI", puream=0)
-    if native.nbf() != cfg["auxiliary_nbf"]:
-        raise ValueError("Cartesian response AUX must have 1146 functions")
+    native = auxiliary_native  # already admitted under the scoped Cartesian PUREAM state
+    actual = {k: getattr(native, k)() for k in ("nbf", "nao", "has_puream", "nshell", "max_am")}
+    if (actual != basis_tools().contract()["auxiliary"]
+            or native.nbf() != cfg["auxiliary_nbf"]):
+        raise ValueError("Cartesian response AUX mismatch; ACTUAL " + repr(actual))
     centres = tuple(map(tuple, xyz))
     shells = tuple(ShellRecipe(int(native.shell_to_center(i)), int(native.shell(i).am),
         tuple(native.shell(i).exp(k) for k in range(native.shell(i).nprimitive)),
@@ -149,7 +184,9 @@ def export(result, quadrature, out):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    for arg in ("source", "commit", "stage", "core-sha256", "fixture", "out", "scratch"):
+    for arg in ("source", "commit", "native-tree", "stage", "core-sha256",
+                "driver-source", "driver-commit", "driver-tree",
+                "basis-manifest", "basis-manifest-sha256", "fixture", "out", "scratch"):
         ap.add_argument("--" + arg, required=True)
     args = ap.parse_args()
     # Refuse before scientific imports, directory creation or any numerical work.
@@ -163,14 +200,28 @@ def main():
                                 (args.source, args.stage, args.fixture))
     cfg_path = Path(__file__).with_name("pilot.json")
     cfg = json.loads(cfg_path.read_text())
-    if git(source, "rev-parse", "HEAD") != args.commit or git(source, "status", "--porcelain"):
-        raise SystemExit("source commit/clean-state mismatch")
-    git(source, "merge-base", "--is-ancestor", cfg["candidate_base"], args.commit)
-    changed = git(source, "diff", "--name-only", cfg["candidate_base"], args.commit).splitlines()
-    if any(not p.startswith("devtools/ccasp_phoenix_benzene/") for p in changed):
-        raise SystemExit("inherited scientific source changed")
-    if not Path(__file__).resolve().is_relative_to(source) or not stage.is_relative_to(source):
-        raise SystemExit("driver and private stage must belong to pinned source")
+    driver_source = Path(args.driver_source).resolve()
+    for root, commit, tree in ((source, args.commit, args.native_tree),
+                               (driver_source, args.driver_commit, args.driver_tree)):
+        if (git(root, "rev-parse", "HEAD") != commit
+                or git(root, "rev-parse", "HEAD^{tree}") != tree
+                or git(root, "status", "--porcelain")):
+            raise SystemExit("source commit/tree/clean-state mismatch: " + str(root))
+        git(root, "merge-base", "--is-ancestor", cfg["candidate_base"], commit)
+        changed = git(root, "diff", "--name-only", cfg["candidate_base"], commit).splitlines()
+        if any(not p.startswith("devtools/ccasp_phoenix_benzene/") for p in changed):
+            raise SystemExit("inherited scientific source changed")
+    if (not Path(__file__).resolve().is_relative_to(driver_source)
+            or stage != source / "build_ccasp_phoenix_benzene/stage"):
+        raise SystemExit("corrected driver and accepted native stage have invalid separate roots")
+    tools = basis_tools()
+    if (args.commit != tools.contract()["native_commit"]
+            or args.native_tree != tools.contract()["native_tree"]
+            or args.core_sha256 != tools.contract()["native_core_sha256"]):
+        raise SystemExit("not the accepted immutable v3 native source/core")
+    if sha(args.basis_manifest) != args.basis_manifest_sha256:
+        raise SystemExit("private basis-admission manifest hash mismatch")
+    manifest = json.loads(Path(args.basis_manifest).read_text())
     if sha(fixture) != cfg["fixture_sha256"]:
         raise SystemExit("geometry fixture hash mismatch")
     raw = json.loads(fixture.read_text())
@@ -194,16 +245,22 @@ def main():
     for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
         os.environ[name] = "1"
     record = dict(status="started", science_pass=False, commit=args.commit,
+        native_source=str(source), native_tree=args.native_tree,
+        driver_source=str(driver_source), driver_commit=args.driver_commit, driver_tree=args.driver_tree,
+        basis_manifest=str(Path(args.basis_manifest).resolve()),
+        basis_manifest_sha256=args.basis_manifest_sha256,
         job_id=os.environ["SLURM_JOB_ID"], host=host, allocated_node=allocated_node,
         config_sha256=sha(cfg_path),
         fixture_sha256=sha(fixture), started_unix=time.time(),
         failure_capture="SCF record, log and traceback only; no pre-LW tensor capture adapter",
         orbital_source="own native PBE0 SCF; no C state or historical overlay")
     write_json(out / "started.json", record)
+    admission = {}
     try:
         import numpy as np
         import psi4
         from psi4 import core
+        from psi4.driver.p4util import OptionsState
         from psi4.driver.procrouting.isapol_bounded_response import BoundedResources
         from psi4.driver.procrouting.isapol_native import Quadrature
         from psi4.driver.procrouting.isapol_native_propagator import KernelSmoothing
@@ -219,20 +276,22 @@ def main():
         psi4.set_output_file(str(out / "psi4.out"), False)
         psi4.set_memory(cfg["resources"]["psi4_memory_bytes"])
         psi4.set_num_threads(1)
-        xyz = [raw["qcel_geometry_bohr_float64"][i] for i in cfg["permutation"]]
-        geom = ["0 1", "units bohr", "no_com", "no_reorient", "symmetry c1"]
-        geom += [f"{'C' if i < 6 else 'H'} {x:.8f} {y:.8f} {z:.8f}"
-                 for i, (x, y, z) in enumerate(xyz)]
-        molecule = psi4.geometry("\n".join(geom))
-        if not np.array_equal(molecule.geometry().np, np.asarray(xyz)):
-            raise ValueError("supplied dimer-frame coordinates changed")
+        molecule, xyz = make_molecule(psi4, cfg, raw)
         psi4.set_options(cfg["scf"]["options"])
+        binding = basis_binding(args, cfg_path)
+        _, part = tools.admit_before_scf(
+            core, OptionsState, molecule, source, stage, admission, manifest, binding,
+            lambda auxiliary: recipe(molecule, cfg["isa"], auxiliary_native=auxiliary))
+        write_json(out / "basis-identities-before-scf.json", admission)
         energy, wfn = psi4.energy(cfg["scf"]["method"], molecule=molecule, return_wfn=True)
         if wfn.functional().grac_shift() != 0:
             raise ValueError("unexpected GRAC shift")
         write_json(out / "scf.json", dict(energy_Eh=float(energy), own_scf=True,
                    geometry_bohr=xyz, nbf=wfn.basisset().nbf(), commit=args.commit))
-        part = recipe(molecule, cfg["isa"])
+        try:
+            tools.compare_scf_main(wfn.basisset(), admission["main"], admission)
+        finally:
+            write_json(out / "basis-identities-after-scf.json", admission.get("actual_scf_main"))
         grid_options = core.IsaGridOptions()
         grid_options.radial_points, grid_options.spherical_points = cfg["isa"]["q_grid"]
         grid = core.IsaGrid(molecule.clone(), grid_options)
@@ -259,6 +318,7 @@ def main():
     except Exception as error:
         record.update(status="failed", error=f"{type(error).__name__}: {error}",
                       traceback=traceback.format_exc())
+    record["basis_admission"] = admission
     record["finished_unix"] = time.time()
     write_json(out / "result.json", record)
     return 0 if record["science_pass"] else 1
