@@ -1194,7 +1194,9 @@ def _grac_cation_ground_state(dft_functional, mol_cation, jk_obj, wfn_given, scf
     # SAPT_DFT_GRAC_CATION_SOSCF: second-order steps on every cation SCF, whatever the tier. When the hole
     # mixes two near-degenerate neutral orbitals (amide n/pi, ethane e_g, carboxylate O lone pairs) DIIS
     # either stalls or "converges" 0.2-2 mEh above the ground state, under every tier. The neutral, and so
-    # the HOMO, is left alone.
+    # the HOMO, is left alone. WARNING: for a VV10 functional (wB97M-V) the SOSCF Hessian omits the VV10
+    # kernel unless SOSCF_VV10_KERNEL (HF::soscf_cphf_solve prints a warning); the converged cation does not
+    # depend on it (checked to 1e-11 Eh on ethane, acetate, NMA), only the step does.
     if core.get_option("SAPT", "SAPT_DFT_GRAC_CATION_SOSCF"):
         core.set_local_option("SCF", "SOSCF", True)
     best = None

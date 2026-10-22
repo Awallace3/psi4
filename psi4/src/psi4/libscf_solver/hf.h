@@ -401,6 +401,12 @@ class HF : public Wavefunction {
     virtual std::vector<SharedMatrix> cphf_Hx(std::vector<SharedMatrix> x);
     virtual std::vector<SharedMatrix> cphf_solve(std::vector<SharedMatrix> x_vec, double conv_tol = 1.e-4,
                                                  int max_iter = 10, int print_lvl = 1);
+    /// cphf_solve for the SOSCF step. Unless SOSCF_VV10_KERNEL, a VV10 functional's orbital Hessian
+    /// is taken WITHOUT the VV10 kernel (VBase::set_vx_neglect_vv10), with a warning in the output.
+    std::vector<SharedMatrix> soscf_cphf_solve(std::vector<SharedMatrix> x_vec, double conv_tol, int max_iter,
+                                               int print_lvl);
+    /// The SOSCF VV10-kernel warning has been printed for this wavefunction
+    bool soscf_vv10_warned_ = false;
 
     // CPHF data
     bool cphf_converged() { return cphf_converged_; }
