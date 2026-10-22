@@ -203,3 +203,12 @@ dense CPU solutions, changed RHS, zero RHS, sign and lifetime/failure guards.
 Actual GPU primitive feedback is next. Native-factor response Hx/solutions,
 fragment source integration and physical coupled-response qualification remain
 pending. The known native find coupled-source bug is not used as an oracle.
+
+UPDATE: signed uncoupled native-factor induction gate passes three systems
+twice on whole stage10/source1d87a0643 (`fragment-find20u-gpu-01`–`03`).
+Ind20u matrixmax1.084e-16Eh, Exch-Ind20u5.329e-17, combined7.357e-17;
+all-component globalmax8.271e-16.12DFMO/112potentials, coefficientH2D0,
+cleanup0bytes/owners. Together with earlier localized dispersion/elst/exchange
+gates, this covers the stated bounded UNCOUPLED/unscaled term-family scope
+only. Coupled response, GPU localization, upstream resident handoff and complete
+default/link/external/scaled FISAPT remain unqualified.

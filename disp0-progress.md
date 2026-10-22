@@ -1,5 +1,25 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## LATEST — signed uncoupled fragment induction physical GPU gate passes
+
+Whole stage10/source1d87a0643 passes water-Ne, shifted/frozenwater-Ne and frozen
+water-water twice each, separately checking both Ind20u and Exch-Ind20u
+directions plus combined full matrices. Max Ind20u matrix1.084e-16Eh,
+Exch-Ind20u5.329e-17Eh, combined7.357e-17Eh. All-component global max8.271e-16Eh.
+Twelve native DFMO/112point-potential calls, coefficientH2D0 and clean
+zero-byte/native-owner teardown. Native generalized-density/projected-JP
+factors share the original JKFIT gauge; no CPU J_P or factors feed production.
+Receipts: sibling `runs/fragment-find20u-gpu-01` through `-03`.
+
+The bounded unscaled/two-fragment/C/no-external **uncoupled term-family**
+numerical gates now cover localized dispersion, elst, S^2 exchange, Ind20u and
+Exch-Ind20u. This is NOT full FISAPT: coupled response, GPU IBO localization,
+upstream resident handoff, links/external/scaling/default integration remain.
+
+Current sourcecac961ead adds a bounded resident RHF Hessian/PCG,184CPU/mock/
+serial executions passing; actual GPU response primitive testing is running.
+Native-factor/coupled physical response is not yet qualified.
+
 ## LATEST — native directional Ind20u physical GPU gate passes
 
 Whole stage09/source99bbbcb9f passes water-Ne, shifted/frozenwater-Ne and frozen
