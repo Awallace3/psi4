@@ -1,5 +1,45 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## LATEST — raw-input physical HF GPU dispersion passes both first dimers
+
+Runtime source `af31e4a7fe4f43d94478a5a6595fd8f8d11a7286` is coherently
+whole-built/installed in sibling `install/psi4-cpu-05`; whole import/version/
+native-core, 897Python files/153driver files and fresh source/manifest checks
+pass. No Python overlay. Later changes in this progress document are docs only.
+
+**Actual explicit public `dispersion0_cuda` passes spherical cc-pVDZ H2-H2 and
+H2-He at blocks1/5/500**, both signed Disp20 and Exch-Disp20 and independent
+occupied pairs. Six successful physical cases, 626real FP64 cuEST0.2.50 DFMO
+calls, max component error1.8295911660692887e-18Eh vs native CPU references.
+All six use zero coefficient H2D staging during DFMO; raw input HF matrices are
+uploaded once and corrected orbital spaces/tails are prepared on GPU.
+CUDA/cuBLAS cover packing, contractions, denominators, signed pair reduction,
+pair combination and final global reductions. Production DFHelper sentinel
+throws; no CPU reference factors or CPU-prepared corrections enter this path.
+All six finish with zero live device bytes/native owners and complete cleanup.
+Receipts: sibling `runs/physical-hf-raw-gpu-02` through `-07`.
+Failed `-01` was a missing --psiapi launcher environment, retained separately.
+
+Standalone actual GPU setup/window/packing/global tests also pass138checks in
+3.355s, max1.421e-14, including unequal/frozen synthetic spaces. The revised
+runtime source has125CPU/mock/serial test executions passing. Source reviews
+conditionally cleared equations, layout, native lifetimes and public routing;
+the real device receipts—not those reviews—are execution evidence.
+
+Limits: upstream HF/cache creation in these physical fixtures is explicitly CPU
+reference preparation, not a whole-SAPT GPU or performance claim. The tested
+dispersion computation from those raw inputs is GPU numerical work. Existing
+user GPU SCF/elst/exch/induction paths are not replaced. Both dimers have one
+occupied orbital per monomer; unequal occupied physical spaces/frozen cores and
+shifted/reversed geometries remain broader gates. Spherical F-shell semantic/
+DFMO qualification is running before larger physical cases. Rank/cutoff boundary
+semantics and general production-factory admission remain unqualified. No
+automatic CUDA driver option, all-FISAPT coverage or speedup claim.
+
+The earlier CURRENT sections below preserve chronological implementation state;
+their “not wired/not installed/no physical GPU pass” statements are superseded
+by the bounded milestone above, not promoted into general scientific admission.
+
 ## CURRENT user scope — spherical-only HF dispersion, fully GPU numerics
 
 Use spherical primary AND spherical RI bases only. No Cartesian calculation
