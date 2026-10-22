@@ -48,7 +48,9 @@ Optional Python dependency: **cuda-bindings**, not CuPy. NumPy and ctypes
 remain host-side tools. The cuEST C ABI is called directly with ctypes, so
 this backend does not install/import `cuest.bindings` or `cuest_scf`.
 Native CUDA13.3 runtime/NVRTC/driver, cuBLAS and canonical cuEST0.2.50 are
-still required. No solve/install or matching new dependency lock exists yet.
+still required. Cachy's private coherent install and exact corrected dependency
+lock are recorded in the sibling setup receipt; this is not portable-machine
+or production numerical certification.
 We do not replace this with nvmath or another implicit package dependency.
 
 `dispersion0_cuda(...,provider_factory=...)` is an explicit experimental Python
@@ -106,6 +108,16 @@ exception was rejected because stable cross-subvolume overmounts can make
 different mapped/opened files present identical observations. No such fallback
 is installed: descriptor pathname evidence must not replace backing-file proof.
 Mapped ownership is admitted before version getter calls.
+An explicit byte-identical private tmpfs locator deployment now passes real
+fresh-process toolkit/cuEST loading, original strict mapped-file proof and
+actual resolver-pointer checks on Cachy. Dependency loading occurs after the
+matching native core but before first E2 request; all owners remain retained.
+Original environment/SDK/whole installed stage are unchanged. See
+`../runs/native-loader-device-01/` from the repository root. This loader-only
+probe issued no cuEST construction/version getter, DFMO or custom-kernel API;
+ELF initializers may execute. Core pathname/file-hash evidence assumes a trusted
+frozen install; system-driver file hash plus mapped pointer path is separately
+scoped, not claimed as strict mapped-byte proof.
 Known CUDA13 toolkit families reject a self-consistent CUDA12 BLAS entry even
 when CUDART reports13. Failed final cleanup retains failed resources and
 permanently disables execution; an explicit cleanup-only retry is possible,

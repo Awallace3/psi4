@@ -1,6 +1,6 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
-## CURRENT native gate — retain strict mapping proof; Btrfs fallback rejected
+## CURRENT native gate — strict tmpfs loader passes; construction still pending
 
 Private dependencies now build/install/import coherently: exact Einsums064
 CUDA86 with whole matching Waggle, private HDF51.14.6, CPU LibXC7.0 for the
@@ -30,14 +30,39 @@ opened file, not the VMA's backing mount. The adversarial negative went RED
 against the proposal, which was withdrawn completely. **56cuEST+31CUDA guards
 now PASS with the original strict runtime code**, byte-identical to installed03.
 No Btrfs exception was installed. Prior positive probe evidence did not prove
-safe alias admission. Investigating an explicitly pinned, byte-identical native
-closure on compatible non-Btrfs storage; no deployment or new native attempt yet.
+safe alias admission.
+
+Explicit byte-identical deployment to private executable tmpfs now PASSES:
+2268files/1787961811bytes, original CUDA16-file native closure,2192CUDA includes,
+canonical59cuEST headers/native. Destination hashes/inventory, owner/mode,
+host/tmpfs/cgroup-ancestor headroom and original strict live executable-mmap
+identity checks pass. Original ENV/SDK/E2/Psi4 remain unchanged; no RPATH,
+Python-overlay, mount-namespace or runtime-guard patch.
+
+Fresh-process loader-only probe PASSES: exact58bd core before deliberate
+dependency callback, callback before first E2 request; real singleE2 world,
+approved binding package, runtime13030/NVRTC13.3 and canonical3090 identity.
+Actual toolkit/cuEST mapped-byte checks and NVRTC/driver resolver/cuBLAS
+pointer ownership pass; canonical cuEST DSO/17factory symbols audited,
+9DSO owners retained through process completion. No intentional cuEST
+construction/version getter, DFMO or custom-kernel API was issued. ELF
+initializers may execute. Core proof assumes a trusted frozen install using
+pathname/file hash; system-driver proof uses canonical file hash and mapped
+pointer path, not strict mapped-byte identity. Toolkit/cuEST proof is stronger.
+
+Loader review conditionally cleared the controlled probe;27offline synthetic
+guards pass. Tiny construction harness now accepts explicit paired staging/
+loader proofs, binds completed prior result/report to the same whole stage,
+and re-admits all live loader inputs in the fresh child. Combined38offline
+tests pass. Construction handoff review pending; no new construction attempt.
 
 Receipts: `../runs/native-plan-device-01/`, `native-plan-device-02/`,
 `cuda-runtime-version-probe-02/`, `binding-pin-apply-01/`,
 `btrfs-identity-red-01/`, `btrfs-identity-green-01/`,
 `mapped-identity-live-{red,green}-01/`, `btrfs-overmount-red-01/`,
 `btrfs-overmount-strict-green-01/`, `cpu-signed-01/`.
+New deployment receipts: `../runs/native-tmpfs-stage-01/`,
+`native-loader-inputs-01/`, `native-loader-device-01/`.
 Current full chronology: `../metadata/SETUP_STATUS.md`.
 Production still BLOCKED: no admitted normalization/layout/rank, DFMO compute,
 custom-kernel numerical execution or signed GPU gate. No DFHelper fallback,
