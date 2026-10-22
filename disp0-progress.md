@@ -18,7 +18,10 @@ signed localized dispersion passes all three systems at blocks500/5, retaining
 the original GPU rotations into contractions; max signed pair/global error
 2.146e-15Eh,208DFMOcalls, coefficientH2D0 and clean teardown. Receipts:
 `gpu-ibo-dispersion-01` through`-03`. The shared-term native GPU IBO chain
-`gpu-ibo-shared-terms-*` is still running; no pass inferred before completion.
+`gpu-ibo-shared-terms-01` through`-03` also passes all three systems twice:
+elst matrixmax5.231e-11Eh/global1.299e-12, S² exchange3.923e-14/1.200e-14,
+all signed uncoupled/coupled induction matrices≤2.001e-14/global3.534e-15.
+Thirty-six DFMO/112potentials, coefficientH2D0, zero-byte/native-owner cleanup.
 Separate CPU oracles use downloaded GPU rotations only to choose an identical
 comparison gauge; CPU localized orbitals, rotations, factors and response
 solutions never feed the new GPU chains.
