@@ -2,6 +2,14 @@
 
 ## CURRENT — shared-session FISAPT orchestration (GPU qualification pending)
 
+Native06/sourceaccdb765e coherent whole build/import passed. First integrated
+public GPU run reached fragment orchestration but rejected its atom partition:
+Molecule.get_fragments() returns [first,last_exclusive) ranges, not atom lists.
+The adapter and independent CPU oracle now expand those documented ranges.
+The failed run automatic-cuest-fisapt-01 is preserved; it is not DFMO/term proof.
+An additional public-entry red/green test rejects unsupported S-inf dispersion
+before cache/SCF rather than accepting an unsupported fragment request.
+
 All six real public automatic HF dispersion runs now pass: water-Ne,
 shifted/frozen water-Ne and frozen water-water, each at blocks500/5.
 Independent fresh-process CPU raw-integral oracles pass in the exact GPU HF

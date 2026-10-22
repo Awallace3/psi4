@@ -2640,7 +2640,8 @@ def fisapt_cuda(cache,dimer_wfn,wfn_A,wfn_B,*,provider_factory,block_size=24):
     from .sapt_cuest_basis import require_spherical_basis
     from .sapt_fisapt_workflow_cuda import fragment_terms, HF_FIELDS
     mol=dimer_wfn.molecule()
-    fragments=mol.get_fragments()
+    # Molecule::get_fragments returns [first,last_exclusive) pairs, NOT atom lists.
+    fragments=[list(range(first,last)) for first,last in mol.get_fragments()]
     if (dimer_wfn.nirrep()!=1 or len(fragments)!=2
             or sorted(i for f in fragments for i in f)!=list(range(mol.natom()))):
         raise NotImplementedError("GPU FISAPT requires exactly two unlinked C1 fragments")

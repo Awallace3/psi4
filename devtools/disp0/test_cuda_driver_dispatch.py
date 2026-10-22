@@ -83,7 +83,7 @@ class AutomaticCudaDriver(unittest.TestCase):
 
     def test_use_cuest_fragment_driver_selects_shared_gpu_terms_without_cpu_localization(self):
         ns,_,options,_,terms,mp2,wave=self.fixture()
-        options.update({("SAPT","SAPT_DFT_DO_FSAPT"):"SAPTDFT",
+        options.update({("SAPT","SAPT_DFT_DO_FSAPT"):"FISAPT",
                         ("SAPT","SAPT_DFT_INDUCTION_TYPE"):"CPHF",
                         ("FISAPT","FISAPT_LINK_ASSIGNMENT"):"C",
                         ("FISAPT","FISAPT_FSAPT_IND_RESPONSE"):True})
@@ -147,6 +147,14 @@ class AutomaticCudaDriver(unittest.TestCase):
         ns,_,_,global_options,terms,_,wave=self.fixture()
         global_options["CUEST_MIXED_PRECISION"]=True
         with self.assertRaisesRegex(ValidationError,"FP64"):
+            ns["sapt_dft"](wave,wave,wave,do_dft=False,sapt_jk=Mock(),print_header=False,
+                           cuda_provider_factory=Mock())
+        terms.build_sapt_jk_cache.assert_not_called()
+
+    def test_unsupported_sinf_dispersion_fails_before_cache_setup(self):
+        ns,_,options,_,terms,_,wave=self.fixture()
+        options[("SAPT","DO_DISP_EXCH_SINF")]=True
+        with self.assertRaisesRegex(ValidationError,"S-inf"):
             ns["sapt_dft"](wave,wave,wave,do_dft=False,sapt_jk=Mock(),print_header=False,
                            cuda_provider_factory=Mock())
         terms.build_sapt_jk_cache.assert_not_called()

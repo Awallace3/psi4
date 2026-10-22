@@ -107,6 +107,8 @@ def _automatic_cuda_dispersion(do_dft, do_disp, fsapt_type, use_einsums,
     if selected:
         if core.get_global_option("CUEST_MIXED_PRECISION"):
             raise ValidationError("Automatic cuEST HF dispersion requires native FP64: set CUEST_MIXED_PRECISION=false.")
+        if core.get_option("SAPT","DO_DISP_EXCH_SINF"):
+            raise ValidationError("Automatic cuEST HF dispersion does not support S-inf exchange-dispersion.")
         if fsapt_type != "NONE":
             if (fsapt_type not in ("SAPTDFT","FISAPT")
                     or core.get_option("SAPT","SAPT_DFT_INDUCTION_TYPE") not in ("CPHF","CPKS")
