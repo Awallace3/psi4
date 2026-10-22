@@ -5,6 +5,56 @@ No CUDA work occurs at import. No fast-math, denominator clamp or atomics.
 
 CUDA_SOURCE = r'''
 extern "C" {
+// Copy a column window, optionally transposed, without staging on the host.
+__global__
+void matrix_window(long long rows, long long stride, long long start,
+                   long long columns, int transpose,
+                   const double* input, double* output) {
+    for (long long i = (long long)blockIdx.x*blockDim.x + threadIdx.x;
+         i < rows*columns; i += (long long)blockDim.x*gridDim.x) {
+        const long long row = i/columns, col = i%columns;
+        output[transpose ? col*rows+row : i] = input[row*stride+start+col];
+    }
+}
+
+__global__
+void linear_combination(long long count, long long alpha, long long beta,
+                        const double* left, const double* right, double* output) {
+    for (long long i = (long long)blockIdx.x*blockDim.x + threadIdx.x;
+         i < count; i += (long long)blockDim.x*gridDim.x) {
+        output[i] = (double)alpha*left[i] + (double)beta*right[i];
+    }
+}
+
+// Final global signed components, not a host NumPy sum. Launch one 128-thread
+// block; downloads are reporting only. No atomics or cross-block race.
+__global__
+void reduce_components(long long count, const double* disp, const double* exch,
+                       double* components) {
+    __shared__ double ds[128];
+    __shared__ double xs[128];
+    double d = 0.0, x = 0.0;
+    for (long long i = threadIdx.x; i < count; i += blockDim.x) {
+        d += disp[i];
+        x += exch[i];
+    }
+    ds[threadIdx.x] = d;
+    xs[threadIdx.x] = x;
+    __syncthreads();
+    for (unsigned int stride = blockDim.x/2; stride; stride /= 2) {
+        if (threadIdx.x < stride) {
+            ds[threadIdx.x] += ds[threadIdx.x+stride];
+            xs[threadIdx.x] += xs[threadIdx.x+stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        components[0] = ds[0];
+        components[1] = xs[0];
+        components[2] = ds[0]+xs[0];
+    }
+}
+
 __device__ __forceinline__
 double factor(const double* p, long long q, long long v, long long o,
               long long Q, long long V, long long O, int fortran_order) {

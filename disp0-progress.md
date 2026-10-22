@@ -27,6 +27,40 @@ factory/end-to-end GPU readiness remain unpassed. See sibling
 `../metadata/GPU_SCOPE_REQUIREMENTS.json`. Strict spherical-only admission at
 the public/factory boundary is also a remaining implementation gate.
 
+### In-progress GPU numerical setup (not yet wired or device-qualified)
+
+Default E2 replay is not being used as a force-GPU contract: inspected placement
+is cost/budget dependent, dispatch can CPU-fallback, and replay flushes device
+shadows to host. This does not rule out other E2 interfaces; none was established
+for this requirement. The selected route extends the already tested owned
+cuBLAS/custom-CUDA implementation for dispersion only.
+
+New `sapt_dispersion_cuda_setup.py` forms twelve orbital spaces and eight
+correction matrices from raw upstream HF inputs using device matrix products
+and integer-weight combinations, including frozen occupied column selection
+and nonsymmetric `K_O.T` in Qbr. New kernels cover device windows/transposes,
+linear combinations, pair combination and final signed global reductions.
+The new module is NOT connected to `dispersion0_cuda` or device-input DFMO yet.
+Existing installed stage03 remains unchanged; no new GPU/physical claim.
+
+CPU serial-shim/descriptor/transport/owner tests: 67 PASS. These are not NVRTC
+or parallel CUDA evidence. Two new lifetime tests first failed against the old
+cleanup behavior; synchronization failure now retains temporary/session buffers,
+BLAS handle, module and stream for cleanup-only retry, rather than freeing
+possibly in-flight buffers. Narrow source review is recorded below. Next required:
+device coefficient packing/DFMO lifetime integration, public spherical guards,
+raw-input entrypoint wiring, new coherent whole installation and actual device
+plus physical signed gates. F-shell qualification remains pending.
+
+Narrow review `d8d176e87d1b8a42361e69257b7e9eebe` returned a conditional
+source pass: no concrete equation/layout/cleanup defect found; no tests were
+run by the reviewer. Expanded combined CPU suite initially failed one live
+identity check because serial-shim teardown unlinked a still-dlopen'd `.so`.
+The strict guard correctly rejected that deleted mapped binary and was not
+changed. Test teardown now closes its library before deleting the file.
+Previously failing test order now passes all102tests (1.399s); diff check passes.
+Task33 complete. This remains source/CPU evidence only.
+
 ## CURRENT native gate — cuEST/cuBLAS/CUDA fixtures pass; physical SAPT pending
 
 Private dependencies now build/install/import coherently: exact Einsums064

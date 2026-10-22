@@ -109,6 +109,44 @@ class NativeOwners(unittest.TestCase):
         self.assertEqual(events,["native close"])
         self.assertEqual(session.live_bytes,16)
 
+    def test_failed_session_synchronize_retains_every_resource_until_cleanup_retry(self):
+        session,events = self.fixture()
+        session.runtime.cudaDeviceSynchronize = lambda:(1,)
+        with self.assertRaisesRegex(RuntimeError,"CUDA API failed"):
+            session.close()
+        self.assertEqual(events,[])
+        self.assertEqual(session.live_bytes,16)
+        self.assertEqual(len(session.allocations),1)
+        self.assertFalse(session.allocations[0].freed)
+        self.assertIsNotNone(session.handle)
+        self.assertEqual((session.module,session.stream),(789,7))
+        self.assertFalse(session.cleanup_complete)
+        self.assertTrue(session.closed)
+        session.runtime.cudaDeviceSynchronize = lambda:(0,)
+        session.close()
+        self.assertEqual(events,["free","BLAS destroy","module destroy","stream destroy"])
+        self.assertEqual(session.live_bytes,0)
+
+    def test_failed_scope_synchronize_preserves_borrowed_buffers_and_primary_error(self):
+        session,events = self.fixture()
+        session.runtime.cudaDeviceSynchronize = lambda:(1,)
+        with self.assertRaisesRegex(ValueError,"compute error") as caught:
+            with session.scope():
+                allocation = runtime._Allocation(session,321,8)
+                session.allocations.append(allocation)
+                session.live_bytes += 8
+                raise ValueError("compute error")
+        self.assertEqual(events,[])
+        self.assertFalse(allocation.freed)
+        self.assertIn(allocation,session.allocations)
+        self.assertEqual(session.live_bytes,24)
+        self.assertEqual(session.scope_depth,0)
+        self.assertIn("CUDA API failed",caught.exception.__notes__[0])
+        session.runtime.cudaDeviceSynchronize = lambda:(0,)
+        session.close()
+        self.assertEqual(events.count("free"),2)
+        self.assertEqual(session.live_bytes,0)
+
     def test_multiple_owners_reverse_order_partial_failure_and_no_reclose_of_successes(self):
         session,events = self.fixture()
         owners = [Owner(session,events,name="A"),

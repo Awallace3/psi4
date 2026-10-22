@@ -220,8 +220,12 @@ class CUDASession:
         finally:
             pending = self.allocations[start:]
             try:
-                cleanup(primary, [self.synchronize_device,
-                                  *(item.free for item in reversed(pending))])
+                def release():
+                    # Native compute may still borrow these buffers. Failed
+                    # synchronization must retain them for cleanup-only retry.
+                    self.synchronize_device()
+                    cleanup(None, [item.free for item in reversed(pending)])
+                cleanup(primary, [release])
             finally:
                 # Retain failed frees for explicit final cleanup; never lose
                 # their ownership or pretend their bytes were released.
@@ -309,7 +313,8 @@ class CUDASession:
             self.rt(nv.nvrtcGetPTX(program, ptx))
             self.ptx_sha256 = hashlib.sha256(ptx).hexdigest()
             self.module = self.rt(dr.cuModuleLoadData(bytes(ptx)))
-            for name in ("pack_factors", "reduce_dispersion"):
+            for name in ("pack_factors", "reduce_dispersion", "matrix_window",
+                         "linear_combination", "reduce_components"):
                 self.functions[name] = self.rt(dr.cuModuleGetFunction(self.module, name.encode()))
         except BaseException as error:
             primary = error
@@ -352,6 +357,24 @@ class CUDASession:
                    ct.byref(beta), out.pointer, n)
         return out
 
+    def gemm(self, left, right):
+        """C-order[M,K] @ C-order[K,N], native FP64 and no host intermediates."""
+        self.check()
+        if (len(left.shape) != 2 or len(right.shape) != 2
+                or left.dtype != np.float64 or right.dtype != np.float64
+                or left.allocation.session is not self or right.allocation.session is not self):
+            raise ValueError("GEMM needs FP64 arrays owned by this CUDA session")
+        m, k = left.shape
+        kr, n = right.shape
+        if k != kr or max(k,m,n) > 2**31-1 or left.order != "C" or right.order != "C":
+            raise ValueError("Unsupported GEMM extent/layout")
+        out = self.empty((m,n))
+        alpha, beta = ct.c_double(1.0), ct.c_double(0.0)
+        self._blas("cublasDgemm_v2", self.handle, 0, 0, n, m, k,
+                   ct.byref(alpha), right.pointer, n, left.pointer, k,
+                   ct.byref(beta), out.pointer, n)
+        return out
+
     def close(self):
         if self.cleanup_complete:
             return
@@ -370,8 +393,10 @@ class CUDASession:
                 # strongly retained for an explicit cleanup-only retry.
                 self.failed = True
                 raise
-        actions = [self.synchronize_device,
-                   *(allocation.free for allocation in reversed(self.allocations))]
+        # Do not continue to resource destruction after failed synchronization.
+        # Execution stays disabled and all resources remain owned for retry.
+        self.synchronize_device()
+        actions = [allocation.free for allocation in reversed(self.allocations)]
         if self.handle is not None:
             def destroy_handle():
                 self._blas("cublasDestroy_v2",self.handle)
