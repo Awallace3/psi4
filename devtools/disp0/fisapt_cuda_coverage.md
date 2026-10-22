@@ -170,3 +170,11 @@ orientation explicit.175CPU/mock/serial executions pass against an independent
 fourteen-term expanded AO expression and wrong-K_O-transpose discriminator.
 The targets are not yet wired to native generalized-density DFMO in the source
 loop; actual GPU target primitives and physical Exch-Ind20u remain pending.
+
+UPDATE: actual projected-JP/target primitives pass52checks/216DGEMMs in3.705s,
+maxabs1.137e-13, zero live bytes (`gpu-fisapt-induction-primitives-03`,
+sourceaad7376e2). The new explicit `find20u_device` wires generalized-density
+coefficient products and six same-gauge native DFMO pairs into both signed
+directional components and GPU-combined matrices/totals.175CPU/mock/serial
+executions pass, including independent full synthetic component/combined
+matrices. Whole installation and physical native Exch-Ind20u remain pending.

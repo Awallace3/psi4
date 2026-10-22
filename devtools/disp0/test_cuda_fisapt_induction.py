@@ -38,6 +38,23 @@ def evaluate(session,data,*,exchange=True):
     return out
 
 
+def expanded_target(matrices,localized,virtual,jp,side):
+    # Expanded independent transcription of all fourteen AO product terms.
+    other="B" if side=="A" else "A"
+    S=matrices["S"];da,db=matrices["D_"+side],matrices["D_"+other]
+    va,vb=matrices["V_"+side],matrices["V_"+other]
+    ja,jb=matrices["J_"+side],matrices["J_"+other]
+    ka,kb=matrices["K_"+side],matrices["K_"+other]
+    ko=matrices["K_O"] if side=="A" else matrices["K_O"].T
+    operator=(-kb-2*matrices["J_O"]+ko
+        -S@db@va-2*S@db@ja+S@db@ka
+        +S@db@S@da@vb+2*S@db@S@da@jb
+        +S@db@va@db@S+2*S@db@ja@db@S-S@db@ko.T
+        -vb@db@S-2*jb@db@S+kb@db@S
+        +vb@da@S@db@S+2*jb@da@S@db@S-ko@db@S)
+    return localized.T@operator@virtual+2*jp
+
+
 def target_fixture(seed,K=9,A=3,V=5,Q=17,O=4):
     rng=np.random.default_rng(seed)
     matrices={n:rng.normal(size=(K,K))*.1 for n in
@@ -45,21 +62,7 @@ def target_fixture(seed,K=9,A=3,V=5,Q=17,O=4):
     localized,virtual=rng.normal(size=(K,A)),rng.normal(size=(K,V))
     density,factors=rng.normal(size=(Q,O,O)),rng.normal(size=(Q,A,V))
     jp=np.einsum("Qkk,Qar->ar",density,factors)
-    expected={}
-    for side,other in (("A","B"),("B","A")):
-        # Expanded independent transcription of all fourteen AO product terms.
-        S=matrices["S"];da,db=matrices["D_"+side],matrices["D_"+other]
-        va,vb=matrices["V_"+side],matrices["V_"+other]
-        ja,jb=matrices["J_"+side],matrices["J_"+other]
-        ka,kb=matrices["K_"+side],matrices["K_"+other]
-        ko=matrices["K_O"] if side=="A" else matrices["K_O"].T
-        operator=(-kb-2*matrices["J_O"]+ko
-            -S@db@va-2*S@db@ja+S@db@ka
-            +S@db@S@da@vb+2*S@db@S@da@jb
-            +S@db@va@db@S+2*S@db@ja@db@S-S@db@ko.T
-            -vb@db@S-2*jb@db@S+kb@db@S
-            +vb@da@S@db@S+2*jb@da@S@db@S-ko@db@S)
-        expected[side]=localized.T@operator@virtual+2*jp
+    expected={side:expanded_target(matrices,localized,virtual,jp,side) for side in ("A","B")}
     return (matrices,localized,virtual,density,factors),jp,expected
 
 
@@ -149,13 +152,14 @@ class Induction(unittest.TestCase):
             fields.update({f"J_{s}":np.einsum("Q,Qmn->mn",q[s].sum(axis=1),ao) for s in ("A","B")})
             energies={"a":np.array([-.9,-.6]),"b":np.array([-.8,-.5,-.3]),
                 "r":np.linspace(.1,.7,K-A),"s":np.linspace(.2,.8,K-B)}
-            expected={}
+            expected={};source_data={}
             for side,other,charge,o,v in (("A","B",zb,"a","r"),("B","A",za,"b","s")):
                 nuc=-np.einsum("mi,Amn,nr,A->Air",occ[side],nuclear,vir[side],charge)
                 electronic=2*np.einsum("Qk,Qir->kir",q[other],factor(occ[side],vir[side]))
                 sources=np.concatenate((nuc,electronic),axis=0)
                 target=local[side].T@(fields["V_"+other]+2*fields["J_"+other])@vir[side]
                 amplitudes=sources/(energies[o][None,:,None]-energies[v][None,None,:])
+                source_data[side]=amplitudes
                 pair=2*np.einsum("il,cir,lr->lc",rotations[side],amplitudes,target)
                 canonical_target=occ[side].T@(fields["V_"+other]+2*fields["J_"+other])@vir[side]
                 np.testing.assert_allclose(sources.sum(axis=0),canonical_target,rtol=1e-12,atol=1e-12)
@@ -192,6 +196,26 @@ class Induction(unittest.TestCase):
                 self.assertFalse(state.qa.allocation.freed or state.qb.allocation.freed)
                 self.assertEqual(calls.count("DFMO"),1)
                 self.assertEqual(calls.count("potential"),2*N)
+                da,db=occ["A"]@occ["A"].T,occ["B"]@occ["B"].T
+                full_fields=dict(fields,D_A=da,D_B=db,
+                    **{n:rng.normal(size=(K,K))*.1 for n in ("K_A","K_B","J_O","K_O")})
+                full=induction.find20u_device(state,potential,upload(occ),upload(vir),upload(energies),
+                    upload(full_fields),session.upload(xyz),session.upload(za),session.upload(zb))
+                for side,value,combined in (("A",full.exch_ind20u.ab,full.combined_ab),
+                                            ("B",full.exch_ind20u.ba,full.combined_ba)):
+                    rho=db@da@db if side=="A" else da@db@da
+                    density=np.einsum("Qmn,mn->Q",ao,rho)
+                    jpao=np.einsum("Q,Qmn->mn",density,ao)
+                    jp=local[side].T@jpao@vir[side]
+                    target=expanded_target(full_fields,local[side],vir[side],jp,side)
+                    pair=2*np.einsum("il,cir,lr->lc",rotations[side],source_data[side],target)
+                    truth=np.zeros((N+A+1,N+B+1))
+                    if side=="A":truth[N:N+A,:-1]=pair
+                    else:truth[:-1,N:N+B]=pair.T
+                    np.testing.assert_allclose(host(value),truth,rtol=1e-11,atol=1e-12)
+                    np.testing.assert_allclose(host(combined),truth+expected[side],rtol=1e-11,atol=1e-12)
+                self.assertEqual(calls.count("DFMO"),2)
+                self.assertEqual(calls.count("potential"),4*N)
             self.assertEqual(session.live_bytes,0)
 
     def test_projected_coulomb_and_expanded_exchange_targets_both_ko_orientations(self):

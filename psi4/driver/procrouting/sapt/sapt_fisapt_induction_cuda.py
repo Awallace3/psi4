@@ -135,21 +135,45 @@ def occupied_rotation(session,canonical,localized,overlap,occupied_energy,virtua
 
 @dataclass(frozen=True)
 class Ind20uDevice:
-    """Separate directional Ind20u only, NOT the combined native IndAB_AB terms."""
+    """Two directional component matrices and device scalar sums."""
     ab: object
     ba: object
     total_ab: object
     total_ba: object
 
 
+@dataclass(frozen=True)
+class Find20uDevice:
+    ind20u: object
+    exch_ind20u: object
+    combined_ab: object
+    combined_ba: object
+    total_ab: object
+    total_ba: object
+
+
 def ind20u_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,za,zb):
     """Native nuclear/electronic sources and device uncoupled Ind20u directions.
-
     Explicit two-fragment C/no-external numerical seam. The parent elst state
     retains localized occupied inputs and diagonal JKFIT factors, preventing
     substitution of a different localized density or metric gauge. All occupied
     targets participate; no frozen-core trimming or coupled response occurs.
     """
+    return _directional_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,za,zb,exchange=False)
+
+
+def find20u_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,za,zb):
+    """Unscaled uncoupled Ind20u AND Exch-Ind20u, same native JKFIT gauge.
+
+    Generalized density coefficients, native DFMO trace factors, projected J_P
+    targets, denominators, full occupied rotations, signed pair/source matrices
+    and their combined totals all stay on device. This is not coupled response,
+    link/external/scaled or automatic FISAPT driver dispatch.
+    """
+    return _directional_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,za,zb,exchange=True)
+
+
+def _directional_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,za,zb,*,exchange):
     provider=elst_state.provider;elst_state.require_provider(provider)
     session=provider.session;m=DeviceMath(session);owner=potential.owner
     if (potential.session is not session or potential.num_charges!=1
@@ -157,8 +181,10 @@ def ind20u_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,z
             or potential.primary_basis is not provider.primary_basis
             or not any(value is owner for value in provider.keepalive)):
         raise ValueError("Induction requires the original owned primary/JKFIT potential context")
+    fields={"S","V_A","J_A","V_B","J_B"}
+    if exchange:fields|={"D_A","D_B","K_A","K_B","J_O","K_O"}
     if (set(occupied)!={"A","B"} or set(virtuals)!={"A","B"}
-            or set(energies)!=set("arbs") or set(matrices)!={"S","V_A","J_A","V_B","J_B"}):
+            or set(energies)!=set("arbs") or set(matrices)!=fields):
         raise ValueError("Raw shared HF induction inputs required")
     for value in (*occupied.values(),*virtuals.values(),*energies.values(),*matrices.values(),xyz,za,zb):
         m.require(value)
@@ -178,11 +204,19 @@ def ind20u_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,z
             or any(value.shape!=(provider.nao,provider.nao) for value in matrices.values())):
         raise ValueError("Wrong atom/source/shared-JKFIT layout")
     ab,ba=session.empty(shape,zero=True),session.empty(shape,zero=True)
+    xab,xba=(session.empty(shape,zero=True),session.empty(shape,zero=True)) if exchange else (None,None)
     with session.scope():
         rotations={side:occupied_rotation(session,occupied[side],local[side],matrices["S"],
             energies[o],energies[v]) for side,o,v in (("A","a","r"),("B","b","s"))}
         validate_rotations(session,rotations["A"],rotations["B"])
-        factors=provider.compute_device({side:(occupied[side],virtuals[side]) for side in ("A","B")})
+        pairs={side:(occupied[side],virtuals[side]) for side in ("A","B")}
+        if exchange:
+            for side,other in (("A","B"),("B","A")):
+                prime=m.product(matrices["D_"+side],matrices["S"],
+                                matrices["D_"+other],matrices["S"],occupied[side])
+                pairs["rho_"+side]=(prime,occupied[side])
+                pairs["target_"+side]=(local[side],virtuals[side])
+        factors=provider.compute_device(pairs)
         for side,other,diagonal,charges,target_output in (
                 ("A","B",elst_state.qb,zb,ab),("B","A",elst_state.qa,za,ba)):
             O,V=occupied[side].shape[1],virtuals[side].shape[1]
@@ -197,6 +231,12 @@ def ind20u_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,z
                 omega=m.combine(matrices["V_"+other],matrices["J_"+other],1,2)
                 target=session.gemm_at_b(local[side],session.gemm(omega,virtuals[side]))
                 directional=session.empty((O,C),zero=True)
+                targets,outputs={"ind":target},{"ind":directional}
+                if exchange:
+                    jp=projected_coulomb(session,factors["rho_"+other],factors["target_"+side])
+                    targets["exch"]=exchange_induction_target(
+                        session,matrices,local[side],virtuals[side],jp,side=side)
+                    outputs["exch"]=session.empty((O,C),zero=True)
                 negative=m.combine(charges,charges,-1,0)
                 for atom in range(N):
                     with session.scope():
@@ -204,13 +244,21 @@ def ind20u_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,z
                                                               negative.view((1,),offset=8*atom))
                         source=session.gemm_at_b(occupied[side],session.gemm(potential_ao,virtuals[side]))
                         uncoupled_source(session,source,{"o":energies[o],"v":energies[v]},rotations[side],
-                            {"ind":target},{"ind":directional},column=atom)
+                            targets,outputs,column=atom)
                 for k in range(local[other].shape[1]):
                     source=sources.view((O,V),offset=8*k*O*V)
                     uncoupled_source(session,source,{"o":energies[o],"v":energies[v]},rotations[side],
-                        {"ind":target},{"ind":directional},column=N+k)
+                        targets,outputs,column=N+k)
                 if side=="A":
                     scatter_matrix(session,directional,target_output,N,0)
                 else:
                     scatter_matrix(session,m.window(directional,transpose=True),target_output,0,N)
-    return Ind20uDevice(ab,ba,sum_values(session,ab),sum_values(session,ba))
+                if exchange:
+                    if side=="A":scatter_matrix(session,outputs["exch"],xab,N,0)
+                    else:scatter_matrix(session,m.window(outputs["exch"],transpose=True),xba,0,N)
+    ind=Ind20uDevice(ab,ba,sum_values(session,ab),sum_values(session,ba))
+    if not exchange:return ind
+    ex=Ind20uDevice(xab,xba,sum_values(session,xab),sum_values(session,xba))
+    combined_ab,combined_ba=m.combine(ab,xab),m.combine(ba,xba)
+    return Find20uDevice(ind,ex,combined_ab,combined_ba,
+                        sum_values(session,combined_ab),sum_values(session,combined_ba))
