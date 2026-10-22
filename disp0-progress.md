@@ -1,5 +1,34 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## CURRENT — integrated GPU FISAPT passes three physical systems
+
+Whole native07/source140b400302949a6165e9f988947904fc339acb8a passes
+public automatic USE_CUEST HF fragment execution AND independent fresh CPU05
+all-term oracles for water-Ne/block500, shifted/frozen water-Ne/block5 and
+frozen water-water/block500. All retain ONE original GPU IBO gauge across
+JKFIT/RIFIT on ONE session. CPU factor/localizer/native-FISAPT alternatives
+are poisoned in production. Signed components, full matrix slots and cleanup
+are checked. Receipts automatic-cuest-fisapt-02…04 and
+automatic-fisapt-cpu-oracle-02…04.
+
+For water-Ne, independent matrix errors: elst8.716e-14Eh, S² exchange5.449e-17,
+all signed uncoupled/coupled induction≤3.749e-13; Disp/ExchDisp pair errors
+2.572e-18/1.546e-19, global4.364e-18/3.804e-19. Zero live bytes/native owners
+after teardown, explicitpeak16,194,464B. Whole diagnostic243.306s is NOT a
+speedup claim; repeated audit hashing remains a measured overhead.
+
+Next source slice adds optional native canonical-exchange normalization and
+coupled-induction delta-HF scaling on GPU. Raw signed component matrices remain
+unscaled outputs; Exch_AB/IndAB_AB/IndBA_AB receive the requested normalization.
+Canonical scalar inputs are uploaded, ratio/matrix arithmetic runs in FP64
+CUDA; zero denominators/nonfinite ratios fail closed, with no clamp/fallback.
+Public-entry scaling red/green passes. Actual scaled GPU edge checks plus a
+nonzero-delta-HF physical CPU oracle are required before qualification.
+
+Still unsupported: links/third subsystem, external fields, SSAPT0, default
+file-output route and larger admitted dimensions. Raw upstream HF arrays are
+host transport inputs, not a zero-roundtrip resident SCF handoff.
+
 ## CURRENT — shared-session FISAPT orchestration (GPU qualification pending)
 
 Native06/sourceaccdb765e coherent whole build/import passed. First integrated

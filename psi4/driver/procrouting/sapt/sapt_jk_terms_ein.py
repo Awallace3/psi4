@@ -2635,7 +2635,7 @@ def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen
     return output
 
 
-def fisapt_cuda(cache,dimer_wfn,wfn_A,wfn_B,*,provider_factory,block_size=24):
+def fisapt_cuda(cache,dimer_wfn,wfn_A,wfn_B,*,provider_factory,block_size=24,scalars=None):
     """Bounded automatic GPU fragment continuation; never CPU localization/factors."""
     from .sapt_cuest_basis import require_spherical_basis
     from .sapt_fisapt_workflow_cuda import fragment_terms, HF_FIELDS
@@ -2662,12 +2662,22 @@ def fisapt_cuda(cache,dimer_wfn,wfn_A,wfn_B,*,provider_factory,block_size=24):
     charges=[np.zeros(mol.natom(),dtype=np.float64) for _ in fragments]
     for values,fragment in zip(charges,fragments):
         for i in fragment:values[i]=mol.Z(i)
+    scaling={}
+    if core.get_option("FISAPT","FISAPT_FSAPT_EXCH_SCALE"):
+        if scalars is None or "Exch10" not in scalars:
+            raise ValueError("GPU fragment exchange scaling requires canonical Exch10")
+        scaling["exchange"]=np.array([scalars["Exch10"]],dtype=np.float64)
+    if core.get_option("FISAPT","FISAPT_FSAPT_IND_SCALE"):
+        if scalars is None or any(n not in scalars for n in ("Ind20,r","Exch-Ind20,r")):
+            raise ValueError("GPU fragment induction scaling requires canonical coupled HF scalars")
+        scaling["induction"]=np.array([scalars["Ind20,r"],scalars["Exch-Ind20,r"],
+                                       scalars.get("Delta HF Correction",0.)],dtype=np.float64)
     started=time.perf_counter()
     with provider_factory(primary,jkfit) as provider:
         with provider:
             provider.validate_basis(primary,jkfit)
             arrays,data=fragment_terms(provider,rifit,minimal,matrices,energies,xyz,*charges,
-                                       frozen=frozen,block_size=block_size)
+                                       frozen=frozen,block_size=block_size,scaling=scaling)
     work=dict(cache)
     work.update({name:core.Matrix.from_array(value) for name,value in arrays.items()})
     data["FISAPT execution"]["entrypoint_seconds_including_factory_cleanup"]=time.perf_counter()-started

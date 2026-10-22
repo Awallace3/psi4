@@ -82,11 +82,19 @@ class AutomaticCudaDriver(unittest.TestCase):
         mp2.df_mp2_sapt_dispersion.assert_not_called()
 
     def test_use_cuest_fragment_driver_selects_shared_gpu_terms_without_cpu_localization(self):
+        self.run_fragment_driver()
+
+    def test_use_cuest_fragment_driver_passes_canonical_scalars_for_gpu_scaling(self):
+        self.run_fragment_driver(scaled=True)
+
+    def run_fragment_driver(self,scaled=False):
         ns,_,options,_,terms,mp2,wave=self.fixture()
         options.update({("SAPT","SAPT_DFT_DO_FSAPT"):"FISAPT",
                         ("SAPT","SAPT_DFT_INDUCTION_TYPE"):"CPHF",
                         ("FISAPT","FISAPT_LINK_ASSIGNMENT"):"C",
-                        ("FISAPT","FISAPT_FSAPT_IND_RESPONSE"):True})
+                        ("FISAPT","FISAPT_FSAPT_IND_RESPONSE"):True,
+                        ("FISAPT","FISAPT_FSAPT_EXCH_SCALE"):scaled,
+                        ("FISAPT","FISAPT_FSAPT_IND_SCALE"):scaled})
         terms.induction=Mock(return_value={"Ind20,r":-.003,"Exch-Ind20,r":.0001})
         terms.localization=Mock(side_effect=AssertionError("CPU localization is forbidden"))
         matrix=types.SimpleNamespace(np=np.zeros((3,3)))
@@ -102,6 +110,9 @@ class AutomaticCudaDriver(unittest.TestCase):
         self.assertNotIn("FISAPT execution",actual)
         self.assertEqual(wave._sapt_cuda_fisapt_execution,{"backend":"fixture-shared-session-CUDA"})
         terms.fisapt_cuda.assert_called_once()
+        if scaled:
+            self.assertEqual(terms.fisapt_cuda.call_args.kwargs["scalars"]["Exch10"],.1)
+            self.assertEqual(terms.fisapt_cuda.call_args.kwargs["scalars"]["Ind20,r"],-.003)
         terms.localization.assert_not_called()
         terms.dispersion0_cuda.assert_not_called()
         mp2.df_mp2_sapt_dispersion.assert_not_called()

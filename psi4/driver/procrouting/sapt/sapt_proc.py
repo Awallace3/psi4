@@ -115,10 +115,9 @@ def _automatic_cuda_dispersion(do_dft, do_disp, fsapt_type, use_einsums,
                     or str(core.get_option("FISAPT","FISAPT_LINK_ASSIGNMENT")).upper()!="C"
                     or not core.get_option("FISAPT","FISAPT_FSAPT_IND_RESPONSE")
                     or any(core.get_option("FISAPT",key) for key in (
-                        "FISAPT_FSAPT_EXCH_SCALE","FISAPT_FSAPT_IND_SCALE",
                         "SSAPT0_SCALE","FISAPT_EXCH_PARPERP"))
                     or str(core.get_option("FISAPT","FISAPT_FSAPT_FILEPATH")).upper()!="NONE"):
-                raise ValidationError("Automatic cuEST FISAPT currently requires unscaled C-assignment, "
+                raise ValidationError("Automatic cuEST FISAPT currently requires C-assignment, "
                                       "coupled HF induction and FISAPT_FSAPT_FILEPATH=NONE.")
         if not use_einsums:
             raise ValidationError("Automatic cuEST HF dispersion currently requires Einsums2 SAPT cache support.")
@@ -1646,7 +1645,7 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): GPU F-SAPT")
         cache, fragment_data = jk_terms.fisapt_cuda(
             cache, dimer_wfn, wfn_A, wfn_B, provider_factory=cuda_provider_factory,
-            block_size=cuda_dispersion_block_size)
+            block_size=cuda_dispersion_block_size, scalars=data)
         dimer_wfn._sapt_cuda_fisapt_execution = fragment_data.pop("FISAPT execution")
         data.update(fragment_data)
         core.timer_off("SAPT(DFT): GPU F-SAPT")

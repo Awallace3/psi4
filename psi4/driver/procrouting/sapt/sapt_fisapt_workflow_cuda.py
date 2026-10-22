@@ -3,7 +3,8 @@
 Raw upstream HF arrays are transport inputs, not prepared factors or localized
 orbitals. All localization, integral, response and term numerics are native
 FP64 GPU work. Only scalar controls and final output formatting use the host.
-This is unscaled, two-fragment C-assignment, not general/link FISAPT.
+Optional canonical exchange/delta-HF scaling is also device arithmetic.
+This is two-fragment C-assignment, not general/link/SSAPT0 FISAPT.
 """
 import time
 import numpy as np
@@ -27,7 +28,7 @@ IND_FIELDS = ("S","D_A","D_B","V_A","V_B","J_A","J_B","K_A","K_B","J_O","K_O")
 
 
 def fragment_terms(provider, rifit, minimal, matrices, energies, xyz, za, zb, *,
-                   frozen=(0,0), block_size=24):
+                   frozen=(0,0), block_size=24, scaling=None):
     """Consume an unprepared owned JKFIT provider; retain one gauge through RI.
 
     Returns final host arrays/scalars only. Downloaded U/L is output for
@@ -38,6 +39,9 @@ def fragment_terms(provider, rifit, minimal, matrices, energies, xyz, za, zb, *,
         raise TypeError("Strict owned cuEST0.2.50 provider required for GPU FISAPT")
     owner = provider.owned_plan()
     session = provider.session
+    scaling={} if scaling is None else scaling
+    if not isinstance(scaling,dict) or set(scaling)-{"exchange","induction"}:
+        raise ValueError("Only native exchange and coupled delta-HF fragment scaling are supported")
     if type(block_size) is not int or block_size<1 or len(frozen)!=2:
         raise ValueError("Positive block size and two frozen occupied counts required")
     if (set(matrices)!=set(HF_FIELDS)|{"J_O"} or set(energies)!=set("abrs")
@@ -103,7 +107,17 @@ def fragment_terms(provider, rifit, minimal, matrices, energies, xyz, za, zb, *,
             dispersion=blocked_device_dispersion(ri,spaces,corrections,eps,
                 block_size=block_size,rotations=tuple(rotations))
             device_outputs={"Elst_AB":state.matrix,"Exch_AB":exch.matrix,
+                "ExchS2_AB":exch.matrix,
                 "IndAB_AB":induction.coupled.combined_ab,"IndBA_AB":induction.coupled.combined_ba}
+            from .sapt_fisapt_scaling_cuda import scale_factor,apply_scale
+            scale_reports={}
+            for kind,values in scaling.items():
+                factor=scale_factor(session,values,total=exch.total if kind=="exchange" else None)
+                for name in (("Exch_AB",) if kind=="exchange" else ("IndAB_AB","IndBA_AB")):
+                    device_outputs[name]=apply_scale(session,device_outputs[name],factor)
+                scale_reports[kind]={"factor":float(session.download(factor)[0]),
+                    "raw_final_scalar_inputs":values.tolist(),
+                    "numerics":"FP64 GPU ratio and matrix application"}
             for prefix,value in (("Ind20u",induction.uncoupled.ind20u),
                                  ("ExchInd20u",induction.uncoupled.exch_ind20u),
                                  ("Ind20r",induction.coupled.induction),
@@ -132,13 +146,15 @@ def fragment_terms(provider, rifit, minimal, matrices, energies, xyz, za, zb, *,
         "Exch-Disp20,u":dispersion["Exch-Disp20,u"],
         "FISAPT execution":{"backend":"CUDA_CUEST_SHARED_IBO_EXPERIMENTAL",
             "same_session":True,"gpu_localization":localization,"response":response,
+            "scaling":scale_reports,
             "jkfit_producer":provider.report(),"rifit_producer":ri_report,
             "dispersion":dispersion["Disp0 execution"],
             "workflow_seconds_excluding_outer_factory_cleanup":time.perf_counter()-started,
             "raw_hf_upload_bytes":sum(v.nbytes for v in matrices.values())+
                 sum(v.nbytes for v in energies.values())+
                 sum(matrices[n].nbytes for n in HF_FIELDS)+sum(v.nbytes for v in energies.values()),
-            "scope":"Two unlinked spherical HF fragments, C-assignment, unscaled S^2 exchange, "
+            "scope":"Two unlinked spherical HF fragments, C-assignment, S^2 exchange with optional "
+                    "canonical normalization and coupled induction with optional delta-HF scaling; "
                     "signed coupled/uncoupled induction and dispersion; one resident IBO gauge. "
                     "Raw upstream HF arrays are host inputs; final output layout is host formatting. "
-                    "Not a zero-roundtrip SCF handoff, general/link/scaled FISAPT or speedup proof."}}
+                    "Not a zero-roundtrip SCF handoff, general/link/SSAPT0 FISAPT or speedup proof."}}

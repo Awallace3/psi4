@@ -5,6 +5,31 @@ No CUDA work occurs at import. No fast-math, denominator clamp or atomics.
 
 CUDA_SOURCE = r'''
 extern "C" {
+// Native FISAPT exchange normalization or coupled-response delta-HF scaling.
+// Only final scalar inputs cross the host boundary; the ratio is computed here.
+__global__
+void fragment_scale_factor(long long kind, const double* inputs, const double* total,
+                           double* factor, double* error) {
+    if (blockIdx.x || threadIdx.x) return;
+    const double base=kind==0 ? total[0] : inputs[0]+inputs[1];
+    const double target=kind==0 ? inputs[0] : base+inputs[2];
+    double ratio=1.0;
+    const double largest=1.7976931348623157e308;
+    bool valid=base==base && target==target && fabs(base)<=largest &&
+               fabs(target)<=largest && base!=0.0;
+    if (valid) ratio=target/base;
+    valid=valid && ratio==ratio && fabs(ratio)<=largest;
+    factor[0]=ratio;
+    error[0]=valid ? 0.0 : 1.0;
+}
+
+__global__
+void apply_fragment_scale(long long count, const double* input, const double* factor,
+                          double* output) {
+    for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         i<count; i+=(long long)blockDim.x*gridDim.x) output[i]=input[i]*factor[0];
+}
+
 __global__
 void set_identity(long long N, double* output) {
     for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
