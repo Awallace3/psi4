@@ -10,14 +10,14 @@
 #SBATCH --time=06:00:00
 #SBATCH --nodelist=atl1-1-02-007-23-1
 #SBATCH --signal=TERM@120
-#SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-lw-integrated-20261022/capture-001/logs/%x-%j.out
-#SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-lw-integrated-20261022/capture-001/logs/%x-%j.err
+#SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-lw-integrated-20261022/capture-002/logs/%x-%j.out
+#SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-lw-integrated-20261022/capture-002/logs/%x-%j.err
 # Prepared only. Coordinator owns publication, manifest pins, test-only and ONE submission.
 set -euo pipefail
 umask 077
-ROOT=/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-benzene-lw-integrated-20261022
-RUN=/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-lw-integrated-20261022/capture-001
-SCRATCH=/storage/scratch1/3/awallace43/ccasp-benzene-lw-integrated-20261022-capture001
+ROOT=/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-benzene-lw-retry1-20261022
+RUN=/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-lw-integrated-20261022/capture-002
+SCRATCH=/storage/scratch1/3/awallace43/ccasp-benzene-lw-integrated-20261022-capture002
 DEPS=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-003/deps
 ENV=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt
 term_received=0

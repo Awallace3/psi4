@@ -1,9 +1,9 @@
 {
   "schema": "ccasp-integrated-capture-plan/1",
-  "source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-benzene-lw-integrated-20261022",
-  "runtime": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-lw-integrated-20261022/runtime-001",
-  "run": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-lw-integrated-20261022/capture-001",
-  "scratch": "/storage/scratch1/3/awallace43/ccasp-benzene-lw-integrated-20261022-capture001",
+  "source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-benzene-lw-retry1-20261022",
+  "runtime": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-lw-integrated-20261022/runtime-002",
+  "run": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-lw-integrated-20261022/capture-002",
+  "scratch": "/storage/scratch1/3/awallace43/ccasp-benzene-lw-integrated-20261022-capture002",
   "fixture": "/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-002/inputs/benzene_s66x8_24_monA.json",
   "prior_probe": "/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/basis-probe-001/basis-admission.json",
   "prior_probe_sha256": "6ddbac4a5292d5ab6d671ee6e7cb2acef828c0664f3b3ce7c53c4e8eefa9159c",
