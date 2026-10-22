@@ -58,7 +58,7 @@ class AutomaticCudaDriver(unittest.TestCase):
         functional=types.SimpleNamespace(is_x_lrc=lambda:False,is_x_hybrid=lambda:False)
         basis=types.SimpleNamespace(n_frozen_core=lambda *args:0)
         wave=types.SimpleNamespace(functional=lambda:functional,basisset=lambda:basis,
-                                   molecule=lambda:object())
+                                   molecule=lambda:object(),set_variable=Mock())
         return ns,core,options,global_options,terms,mp2,wave
 
     def test_use_cuest_hf_without_factory_fails_before_cache_setup(self):
@@ -79,6 +79,31 @@ class AutomaticCudaDriver(unittest.TestCase):
         self.assertEqual(wave._sapt_cuda_dispersion_execution,{"backend":"fixture-CUDA"})
         self.assertIs(terms.dispersion0_cuda.call_args.kwargs["provider_factory"],factory)
         self.assertEqual(terms.dispersion0_cuda.call_args.kwargs["block_size"],5)
+        mp2.df_mp2_sapt_dispersion.assert_not_called()
+
+    def test_use_cuest_fragment_driver_selects_shared_gpu_terms_without_cpu_localization(self):
+        ns,_,options,_,terms,mp2,wave=self.fixture()
+        options.update({("SAPT","SAPT_DFT_DO_FSAPT"):"SAPTDFT",
+                        ("SAPT","SAPT_DFT_INDUCTION_TYPE"):"CPHF",
+                        ("FISAPT","FISAPT_LINK_ASSIGNMENT"):"C",
+                        ("FISAPT","FISAPT_FSAPT_IND_RESPONSE"):True})
+        terms.induction=Mock(return_value={"Ind20,r":-.003,"Exch-Ind20,r":.0001})
+        terms.localization=Mock(side_effect=AssertionError("CPU localization is forbidden"))
+        matrix=types.SimpleNamespace(np=np.zeros((3,3)))
+        cache={key:matrix for key in
+               ("Qocc0A","Qocc0B","Elst_AB","Exch_AB","IndAB_AB","IndBA_AB","Disp_AB")}
+        terms.fisapt_cuda=Mock(return_value=(cache,{
+            "Disp20,u":-.01,"Exch-Disp20,u":.001,
+            "FISAPT execution":{"backend":"fixture-shared-session-CUDA"}}))
+        actual=ns["sapt_dft"](wave,wave,wave,do_dft=False,sapt_jk=Mock(),print_header=False,
+                              cuda_provider_factory=Mock(),cuda_dispersion_block_size=5)
+        self.assertEqual(actual["Disp20,u"],-.01)
+        self.assertEqual(actual["Exch-Disp20,u"],.001)
+        self.assertNotIn("FISAPT execution",actual)
+        self.assertEqual(wave._sapt_cuda_fisapt_execution,{"backend":"fixture-shared-session-CUDA"})
+        terms.fisapt_cuda.assert_called_once()
+        terms.localization.assert_not_called()
+        terms.dispersion0_cuda.assert_not_called()
         mp2.df_mp2_sapt_dispersion.assert_not_called()
 
     def test_unsupported_cuda_requests_fail_before_cache_setup(self):

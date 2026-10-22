@@ -108,7 +108,16 @@ def _automatic_cuda_dispersion(do_dft, do_disp, fsapt_type, use_einsums,
         if core.get_global_option("CUEST_MIXED_PRECISION"):
             raise ValidationError("Automatic cuEST HF dispersion requires native FP64: set CUEST_MIXED_PRECISION=false.")
         if fsapt_type != "NONE":
-            raise ValidationError("Automatic cuEST HF fragment dispersion driver integration is not yet supported.")
+            if (fsapt_type not in ("SAPTDFT","FISAPT")
+                    or core.get_option("SAPT","SAPT_DFT_INDUCTION_TYPE") not in ("CPHF","CPKS")
+                    or str(core.get_option("FISAPT","FISAPT_LINK_ASSIGNMENT")).upper()!="C"
+                    or not core.get_option("FISAPT","FISAPT_FSAPT_IND_RESPONSE")
+                    or any(core.get_option("FISAPT",key) for key in (
+                        "FISAPT_FSAPT_EXCH_SCALE","FISAPT_FSAPT_IND_SCALE",
+                        "SSAPT0_SCALE","FISAPT_EXCH_PARPERP"))
+                    or str(core.get_option("FISAPT","FISAPT_FSAPT_FILEPATH")).upper()!="NONE"):
+                raise ValidationError("Automatic cuEST FISAPT currently requires unscaled C-assignment, "
+                                      "coupled HF induction and FISAPT_FSAPT_FILEPATH=NONE.")
         if not use_einsums:
             raise ValidationError("Automatic cuEST HF dispersion currently requires Einsums2 SAPT cache support.")
         if core.get_option("SAPT", "SAPT_DFT_EINSUMS_GPU"):
@@ -1631,7 +1640,15 @@ def sapt_dft(
     core.timer_off("SAPT(DFT):ind")
 
     # Use DFHelper before deleting the JK object for dispersion
-    if do_fsapt and fsapt_type == "SAPTDFT" and use_einsums:
+    if do_fsapt and use_cuda_dispersion:
+        core.timer_on("SAPT(DFT): GPU F-SAPT")
+        cache, fragment_data = jk_terms.fisapt_cuda(
+            cache, dimer_wfn, wfn_A, wfn_B, provider_factory=cuda_provider_factory,
+            block_size=cuda_dispersion_block_size)
+        dimer_wfn._sapt_cuda_fisapt_execution = fragment_data.pop("FISAPT execution")
+        data.update(fragment_data)
+        core.timer_off("SAPT(DFT): GPU F-SAPT")
+    elif do_fsapt and fsapt_type == "SAPTDFT" and use_einsums:
         core.timer_on("SAPT(DFT):Localize Orbitals")
         jk_terms.localization(cache, dimer_wfn)
         core.timer_off("SAPT(DFT):Localize Orbitals")
@@ -1875,7 +1892,9 @@ def sapt_dft(
         core.timer_off("SAPT(DFT):disp")
 
     # Now do F-SAPT on dispersion if requested
-    if do_fsapt and fsapt_type == "SAPTDFT" and use_einsums:
+    if do_fsapt and use_cuda_dispersion:
+        pass  # All fragment terms, including dispersion, consumed the same device IBO gauge above.
+    elif do_fsapt and fsapt_type == "SAPTDFT" and use_einsums:
         # Because dispersion is defined differently between SAPT0 (E_disp20 =
         # -4\sigma_{abrs} |(ar|bs)|^2 / (epsilon_a + epsilon_b)) and SAPT(DFT)
         # with FDDS dispersion, we will only implement F-SAPT for the SAPT0

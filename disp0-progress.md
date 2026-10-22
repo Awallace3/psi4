@@ -1,5 +1,35 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## CURRENT — shared-session FISAPT orchestration (GPU qualification pending)
+
+All six real public automatic HF dispersion runs now pass: water-Ne,
+shifted/frozen water-Ne and frozen water-water, each at blocks500/5.
+Independent fresh-process CPU raw-integral oracles pass in the exact GPU HF
+gauge: signed pair maxima5.208e-18/1.171e-18Eh; signed global maxima
+8.484e-18/1.722e-18Eh. Receipts automatic-cuest-driver-02…07 and
+automatic-cuest-pair-oracle-01…06. No CPU reference factors feed production.
+
+New orchestration wires the public fragment driver to owned native overlap,
+IAO/IBO, elst, unscaled S² exchange, signed uncoupled/coupled induction and
+localized dispersion. An owned-provider sibling capability creates distinct
+JKFIT/RIFIT plans on ONE original CUDA session/stream. One resident IBO U/L
+per monomer is retained unchanged across all terms; LIFO native leases close
+the sibling before its parent. Borrowed providers cannot guess ownership.
+
+Initial explicit scope: two unlinked C1 spherical HF fragments, C assignment,
+coupled response, no scaling/external fields, output filepath NONE. Existing
+unsupported defaults fail closed; CPU/non-HF routes remain unchanged.
+Raw upstream HF arrays still cross the host boundary; final dispersion-matrix
+slot placement is host output formatting, not a resident SCF handoff.
+241 CPU/mock/serial executions pass, including the public fragment dispatch
+red/green contract. A coherent whole install and actual integrated GPU gate
+are required before claiming this new orchestration numerically qualified.
+
+Measured diagnostic profile (automatic-cuest-profile-01):93 map audits consumed
+80.039s of111.363s; repeated hash.update alone60.456s and buffered reads14.624s.
+This identifies a concrete validation-overhead culprit, not Pi latency or
+matched application speedup. No identity-check relaxation/cache is implemented.
+
 ## CURRENT — automatic USE_CUEST HF dispersion driver wiring
 
 User selected automatic public dispatch, not a separate CUDA algorithm option.

@@ -4,9 +4,11 @@ An audited caller factory supplies native handles, exact Psi4 basis identities,
 configured plan policy and persistent owners. No basis/plan is guessed here.
 """
 import ctypes as ct
+from contextlib import contextmanager
 import hashlib
 import json
 import os
+from pathlib import Path
 import time
 
 import numpy as np
@@ -53,6 +55,9 @@ class CuESTDFMOProvider:
         self.session = session
         self.pid = os.getpid()
         self.proof = identity.verify_files(sdk_root,archive)
+        # verify_files already admitted the archive; preserve its locator for
+        # fresh admission when a real sibling plan is requested.
+        self.archive = Path(archive).resolve()
         self.proof["cuda_manifest_sha256"] = cuda_manifest_sha256
         self.native, _ = library(self.proof["native_path"],identity.NATIVE_SHA256)
         identity.configure_abi(self.native)
@@ -72,6 +77,58 @@ class CuESTDFMOProvider:
         self._device_owner = self._device_ambiguous = self.cleanup_complete = False
         self.device_input_bytes = 0
         self.assert_identity()
+
+    def owned_plan(self):
+        """Require the exact live typed parent, not guessed handle ownership.
+
+        Borrowed providers remain usable for ordinary DFMO; shared native
+        potentials/localization and sibling plans require this capability.
+        """
+        from .sapt_cuest_plan_owner import DiagnosticPlanOwner
+        self.validate_basis(self.primary_basis,self.auxiliary_basis)
+        owners = [owner for owner in self.keepalive
+                  if isinstance(owner,DiagnosticPlanOwner)
+                  and owner.session is self.session
+                  and owner.primary_snapshot.owner is self.primary_basis
+                  and owner.auxiliary_snapshot.owner is self.auxiliary_basis]
+        if len(owners)!=1:
+            raise ValueError("A single exact owned cuEST plan parent is required")
+        owner = owners[0]
+        if owner.handle!=self.handle or owner.plan!=self.plan or owner.pid!=self.pid:
+            raise ValueError("DFMO provider handles differ from its owned parent")
+        return owner
+
+    @contextmanager
+    def sibling_provider(self, auxiliary_basis):
+        """Own another auxiliary plan on this SAME stream/session, then unwind.
+
+        Prepare this provider first. The sibling's owner and parameters are
+        registered later and closed first; device U/L can be shared unchanged.
+        This creates a real needed DF plan, never a version-probing context.
+        """
+        from .sapt_cuest_factory_abi import admit_factory_api
+        from .sapt_cuest_plan_owner import DiagnosticPlanOwner
+        owner = self.owned_plan()
+        if (not self._device_owner or self._device_ambiguous
+                or self.session.scope_depth or not self.session.native_owners
+                or self.session.native_owners[-1] is not self):
+            raise RuntimeError("Prepare the original provider before sibling construction outside CUDA scopes")
+        require_spherical_basis(auxiliary_basis,role="auxiliary")
+        api = admit_factory_api(session=self.session,sdk_root=self.proof["sdk_root"],
+            archive=self.archive,cuda_manifest=self.cuda_manifest,
+            cuda_manifest_sha256=self.proof["cuda_manifest_sha256"])
+        with DiagnosticPlanOwner(api,self.primary_basis,auxiliary_basis,
+                coefficient_candidate=owner.COEFFICIENT_CANDIDATE,
+                host_workspace_limit=owner.host_limit) as sibling_owner:
+            with CuESTDFMOProvider(session=self.session,sdk_root=self.proof["sdk_root"],
+                    archive=self.archive,cuda_manifest=self.cuda_manifest,
+                    cuda_manifest_sha256=self.proof["cuda_manifest_sha256"],
+                    handle=sibling_owner.handle,plan=sibling_owner.plan,handle_pid=self.pid,
+                    primary_basis=self.primary_basis,auxiliary_basis=auxiliary_basis,
+                    keepalive=(sibling_owner,),plan_policy=dict(POLICY),
+                    output_order=self.order,variable_bytes=self.variable_bytes) as sibling:
+                sibling.prepare_device_compute()
+                yield sibling
 
     def assert_identity(self):
         self.session.check()

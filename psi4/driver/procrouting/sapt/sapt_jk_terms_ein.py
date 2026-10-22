@@ -2635,6 +2635,44 @@ def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen
     return output
 
 
+def fisapt_cuda(cache,dimer_wfn,wfn_A,wfn_B,*,provider_factory,block_size=24):
+    """Bounded automatic GPU fragment continuation; never CPU localization/factors."""
+    from .sapt_cuest_basis import require_spherical_basis
+    from .sapt_fisapt_workflow_cuda import fragment_terms, HF_FIELDS
+    mol=dimer_wfn.molecule()
+    fragments=mol.get_fragments()
+    if (dimer_wfn.nirrep()!=1 or len(fragments)!=2
+            or sorted(i for f in fragments for i in f)!=list(range(mol.natom()))):
+        raise NotImplementedError("GPU FISAPT requires exactly two unlinked C1 fragments")
+    primary=dimer_wfn.basisset()
+    require_spherical_basis(primary,role="primary")
+    jkfit=core.BasisSet.build(mol,"DF_BASIS_SCF",core.get_option("SCF","DF_BASIS_SCF"),
+                            "JKFIT",core.get_global_option("BASIS"),puream=1)
+    rifit=core.BasisSet.build(mol,"DF_BASIS_MP2",core.get_option("DFMP2","DF_BASIS_MP2"),
+                            "RIFIT",core.get_global_option("BASIS"),puream=1)
+    minimal=core.BasisSet.build(mol,"BASIS",core.get_global_option("MINAO_BASIS"),puream=1)
+    for value in (jkfit,rifit,minimal):require_spherical_basis(value,role="auxiliary")
+    matrices={n:np.asarray(cache[n].np) for n in (*HF_FIELDS,"J_O")}
+    energies={n:np.asarray(cache[key].np) for n,key in zip("abrs",
+              ("eps_occ_A","eps_occ_B","eps_vir_A","eps_vir_B"))}
+    frozen=tuple(w.basisset().n_frozen_core(core.get_global_option("FREEZE_CORE"),w.molecule())
+                 for w in (wfn_A,wfn_B))
+    xyz=np.array([[mol.x(i),mol.y(i),mol.z(i)] for i in range(mol.natom())],dtype=np.float64)
+    charges=[np.zeros(mol.natom(),dtype=np.float64) for _ in fragments]
+    for values,fragment in zip(charges,fragments):
+        for i in fragment:values[i]=mol.Z(i)
+    started=time.perf_counter()
+    with provider_factory(primary,jkfit) as provider:
+        with provider:
+            provider.validate_basis(primary,jkfit)
+            arrays,data=fragment_terms(provider,rifit,minimal,matrices,energies,xyz,*charges,
+                                       frozen=frozen,block_size=block_size)
+    work=dict(cache)
+    work.update({name:core.Matrix.from_array(value) for name,value in arrays.items()})
+    data["FISAPT execution"]["entrypoint_seconds_including_factory_cleanup"]=time.perf_counter()-started
+    return work,data
+
+
 def fdisp0_cuda(cache,dimer_wfn,*,provider_factory,block_size=24,do_print=True):
     """Explicit unscaled two-fragment HF LO dispersion; return a new cache.
 
