@@ -1,6 +1,7 @@
 list(APPEND sources
   CDJK.cc
   CompositeJK.cc
+  cuESTJK.cc
   COSK.cc
   DirectDFJ.cc
   DirectJK.cc
@@ -25,6 +26,10 @@ list(APPEND sources
   v.cc
   wrapper.cc
   )
+
+if(Libxc_ENABLE_CUDA AND TARGET cuEST::cuEST)
+  list(APPEND sources cuest_xc_gpu.cu)
+endif()
 
 psi4_add_module(lib fock sources)
 if (psi4_ENABLE_PRECOMPILE_HEADERS)

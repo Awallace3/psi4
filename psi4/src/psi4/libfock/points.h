@@ -135,6 +135,7 @@ class PointFunctions : public BasisFunctions {
     // => Setters <= //
     void set_cache_map(std::unordered_map<size_t, std::map<std::string, SharedMatrix>>* cache_map) {
         cache_map_ = cache_map;
+        current_basis_map_ = &basis_values_;
     }
 
     // => Computers <= //
@@ -162,6 +163,9 @@ class PointFunctions : public BasisFunctions {
         ansatz_ = ansatz;
         deriv_ = ansatz;
         allocate();
+        // Reallocation changes the owned collocation buffers. Do not retain a
+        // pointer into a cache that the caller may invalidate for the new ansatz.
+        current_basis_map_ = &basis_values_;
     }
     virtual void set_pointers(SharedMatrix Da_occ_AO) = 0;
     virtual void set_pointers(SharedMatrix Da_occ_AO, SharedMatrix Db_occ_AO) = 0;
@@ -297,7 +301,7 @@ class UKSFunctions : public PointFunctions {
     void set_pointers(SharedMatrix Da_occ_AO) override;
     void set_pointers(SharedMatrix Da_occ_AO, SharedMatrix Db_occ_AO) override;
     void set_cache_map(std::unordered_map<size_t, std::map<std::string, SharedMatrix>>* cache_map) {
-        cache_map_ = cache_map;
+        PointFunctions::set_cache_map(cache_map);
     }
 
     /// Compute the needed DFT intermediates at the points in the block.

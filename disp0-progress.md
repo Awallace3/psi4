@@ -36,6 +36,14 @@ The existing native `USE_CUEST` SCF implementation is on
 worktree. Reuse that implementation; do not introduce a new SCF solver.
 Its host Matrix accessors must not be mislabeled a resident device handoff.
 
+Owned native-SCF integration now incorporates that exact existing branch.
+The only conflict, `chain_gemm_einsums`, preserves both native cuEST dispatch
+and the v2 input-conversion hoist; native outputs honor out="tensor", and E2
+tensor inputs are not passed into a SharedMatrix-only binding.231CPU/mock/
+serial executions pass, including5new bridge regressions. A fresh native-cuEST
+whole build/import and actual USE_CUEST SCF test are next; the prior numerical
+proof remains pinned to whole14/source1c9214f16, not this new native core.
+
 Older milestone sections below are retained history, not current blockers.
 
 ## LATEST — physical coupled fragment response GPU gate passes
