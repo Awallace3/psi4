@@ -1,5 +1,23 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## LATEST — native directional Ind20u physical GPU gate passes
+
+Whole stage09/source99bbbcb9f passes water-Ne, shifted/frozenwater-Ne and frozen
+water-water, two calls each, for both full directional Ind20u matrices, nuclear
+and electronic source cells and reserved zero slots. Independent native find
+(response/scaling off) and explicit CPU source equations agree. Max fullmatrix
+error1.0836431307403166e-16Eh/global8.271920474978156e-16Eh.
+Twelve native DFMO/112point-potential calls aggregate, coefficientH2D0,
+cleanup0bytes/nativeowners. Shared JKFIT diagonal factors survive every stage.
+Receipts: sibling `runs/fragment-ind20u-gpu-01` through `-03`.
+
+Current runtime1d87a0643 additionally wires both signed Ind20u/Exch-Ind20u and
+GPU-combined directional matrices via native projected-JP factors.175CPU/mock/
+serial executions and actual target primitives52checks/216DGEMMs pass. Whole
+stage10 and independent signed CPU/native matrix references pass; the physical
+signed GPU gate is running. Coupled response, GPU IBO localization, link/
+external/scaled/default integration and complete workflow remain open.
+
 ## LATEST — shared native fragment electrostatics/exchange physical gate passes
 
 Whole stage08/source8aebb7b16 passes water-Ne, shifted/frozen water-Ne and frozen

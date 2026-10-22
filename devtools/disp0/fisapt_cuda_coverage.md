@@ -178,3 +178,11 @@ coefficient products and six same-gauge native DFMO pairs into both signed
 directional components and GPU-combined matrices/totals.175CPU/mock/serial
 executions pass, including independent full synthetic component/combined
 matrices. Whole installation and physical native Exch-Ind20u remain pending.
+
+UPDATE: native directional Ind20u gate passes all three systems twice on whole
+stage09/source99bbbcb9f: matrix1.084e-16/global8.272e-16Eh,12DFMO/112potential
+calls, coefficientH2D0, cleanup0bytes/owners (`fragment-ind20u-gpu-01`–`03`).
+Both nuclear/electronic sources, all occupied targets and reserved zero slots
+are checked. Whole stage10/source1d87a0643 and independent signed CPU/native
+references now pass; the shared-source signed GPU gate (response disabled)
+is running. This is not CPSCF response, localization or full-workflow coverage.
