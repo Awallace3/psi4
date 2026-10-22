@@ -1187,8 +1187,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     near-degenerate orbitals (amide n/pi, ethane e_g, carboxylate O lone
     pairs), DIIS can stall or converge 0.2-2 mEh above the cation ground
     state. Slower: 5-7x the cation SCF time on larger monomers. For VV10
-    functionals the SOSCF Hessian omits the VV10 kernel unless
-    SOSCF_VV10_KERNEL is set (see there; a warning is printed). -*/
+    functionals the SOSCF Hessian includes the exact VV10 kernel; the faster
+    approximate Hessian is the SOSCF_NEGLECT_VV10_KERNEL fallback (warned). -*/
     options.add_bool("SAPT_DFT_GRAC_CATION_SOSCF", false);
     /*- Compute or echo monomer GRAC shifts and stop before SAPT energies.
     Requires SINGLE or ITERATIVE and a non-HF functional. The returned dimer
@@ -1680,12 +1680,13 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("SOSCF_CONV", 5.0E-3);
         /*- Do we print the SOSCF microiterations?. -*/
         options.add_bool("SOSCF_PRINT", false);
-        /*- Include the VV10 nonlocal kernel in the SOSCF orbital Hessian of a VV10 functional
-            (wB97X-V, wB97M-V, ...). Off by default: the step then uses an approximate Hessian,
-            which changes the path but not the converged orbitals, and a warning is printed. The
-            exact kernel costs about two VV10 potential builds per microiteration and slowed GRAC
-            cation SCFs 1.4-4x with no fewer iterations. -*/
-        options.add_bool("SOSCF_VV10_KERNEL", false);
+        /*- Fallback: leave the VV10 nonlocal kernel out of the SOSCF orbital Hessian of a VV10
+            functional (wB97X-V, wB97M-V, ...). Off by default, so SOSCF uses the exact Hessian.
+            When on, a warning is printed and the steps use an approximate Hessian (Vx ~0.5%
+            off), which changes the path but not the converged orbitals; it is faster, as the
+            exact kernel costs about two VV10 potential builds per microiteration (GRAC cation
+            SCFs ran 1.4-4x slower with it, in about as many iterations). -*/
+        options.add_bool("SOSCF_NEGLECT_VV10_KERNEL", false);
         /*- Whether to perform stability analysis after convergence.  NONE prevents analysis being
             performed. CHECK will print out the analysis of the wavefunction stability at the end of
             the computation.  FOLLOW will perform the analysis and, if a totally symmetric instability

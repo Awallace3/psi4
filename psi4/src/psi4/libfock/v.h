@@ -98,9 +98,10 @@ class PSI_API VBase {
     // GRAC data
     bool grac_initialized_;
 
-    /// Leave the VV10 kernel (vv10_nlc_vx) out of compute_Vx. Off by default; HF::soscf_cphf_solve sets
-    /// it around the SOSCF step unless SOSCF_VV10_KERNEL (the kernel costs one O(N_grid^2) VV10 pass
-    /// per perturbation; an approximate Hessian changes the step, not the stationary point).
+    /// Leave the VV10 kernel (vv10_nlc_vx) out of compute_Vx. Off by default. HF::soscf_cphf_solve sets
+    /// it around the SOSCF step only under the opt-in SOSCF_NEGLECT_VV10_KERNEL fallback (the kernel
+    /// costs one O(N_grid^2) VV10 pass per perturbation; an approximate Hessian changes the step, not
+    /// the stationary point).
     /// WRONG for response properties (CPKS, TDDFT, polarizabilities): never leave it set.
     bool vx_neglect_vv10_ = false;
 

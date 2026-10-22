@@ -91,14 +91,23 @@ def test_uks_vv10_vx_matches_finite_difference(func):
         assert _rel_err(vx.np, (p - m) / (2 * h)) < 1e-5
 
 
-@pytest.mark.parametrize("reference,mol,kernel", [("rks", _H2O, False), ("rks", _H2O, True), ("uks", _CH3, False)],
-                         ids=["rks-neglect", "rks-kernel", "uks-neglect"])
-def test_soscf_vv10_reaches_diis_energy(reference, mol, kernel):
-    """SOSCF reaches the DIIS energy with the VV10 kernel left out of the Hessian (default, warned) or in it."""
+_BANNER = "the SOSCF orbital Hessian OMITS the VV10 nonlocal kernel"
+
+
+@pytest.mark.parametrize("reference,mol,neglect", [("rks", _H2O, False), ("rks", _H2O, True), ("uks", _CH3, False),
+                                                   ("uks", _CH3, True)],
+                         ids=["rks-exact", "rks-neglect", "uks-exact", "uks-neglect"])
+def test_soscf_vv10_reaches_diis_energy(reference, mol, neglect, tmp_path):
+    """SOSCF reaches the DIIS energy with the exact VV10 Hessian (default, silent) and with the
+    SOSCF_NEGLECT_VV10_KERNEL fallback (warning banner in the output)."""
+    out = tmp_path / "soscf.out"
+    psi4.core.set_output_file(str(out), False)
     psi4.geometry(mol)
     psi4.set_options({"basis": "cc-pvdz", "reference": reference, "scf_type": "df", "e_convergence": 1e-9,
                       "d_convergence": 1e-8})
     e_diis = psi4.energy("wb97m-v")
-    psi4.set_options({"soscf": True, "soscf_vv10_kernel": kernel})
+    psi4.set_options({"soscf": True, "soscf_neglect_vv10_kernel": neglect})
     e_soscf = psi4.energy("wb97m-v")
+    psi4.core.close_outfile()
     assert psi4.compare_values(e_diis, e_soscf, 7, f"wB97M-V {reference} SOSCF vs DIIS energy")
+    assert (_BANNER in out.read_text()) == neglect
