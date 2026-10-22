@@ -114,7 +114,9 @@ The original live electrostatic state identifies the shared provider/gauge.
 Frozen occupied orbitals participate; atom/external output slots remain zero.
 
 163 CPU/mock/serial executions pass, including nonsymmetric test inputs to
-discriminate transpose conventions and unequal/changed spaces. Actual GPU
-primitive feedback, whole installation and physical native-factor exchange
-comparison remain pending. This is not scaled Exch10, Exch-Disp20, or complete
-FISAPT coverage.
+discriminate transpose conventions and unequal/changed spaces. Actual RTX3090
+primitive feedback passes48checks/112DGEMMs in3.620s, maxabs3.469e-17 and zero
+live bytes (`runs/gpu-fisapt-exch-primitives-01`, sourcebc1b3aeb7). Synthetic
+factors were explicitly uploaded test inputs, not native-provider coverage.
+Whole installation and physical native-factor exchange comparison remain
+pending. This is not scaled Exch10, Exch-Disp20, or complete FISAPT coverage.
