@@ -1,6 +1,7 @@
 # Psi4 Developers; SPDX-License-Identifier: LGPL-3.0-only
 """Synthetic, engine-free tests. No actual molecular/native calculation."""
 import importlib.util
+from contextlib import contextmanager, ExitStack
 import hashlib
 import json
 from pathlib import Path
@@ -10,6 +11,7 @@ import sys
 import tempfile
 import os
 import subprocess
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location("synthetic_lw_capture", Path(__file__).with_name("lw_capture.py"))
@@ -53,6 +55,38 @@ def asymmetric_inputs():
     return kw
 
 
+def dense_three_site_inputs():
+    """Dense literal-rule toy, not molecular data; all arithmetic is binary-exact."""
+    rows = []
+    for r in range(75):
+        a, t = divmod(r, 25)
+        for col in range(75):
+            b, u = divmod(col, 25)
+            if t == u == 0:
+                value = (a+1)*(b+1)/16
+            elif u == 0:
+                value = (a+1)*(b+1)*t/8
+                if (a, t) == (1, 8):
+                    value = 6*(b+1)  # potential-axis tie at +36
+            elif t == 0:
+                value = -(a+1)*(b+1)*u/4
+                if (b, u) in ((1, 8), (2, 7)):
+                    value = -6*(a+1)  # response-axis ties at -36
+            else:
+                value = (r*128+col+1)/8 * (-1 if (r+2*col) % 3 == 0 else 1)
+            if (r, col) in ((17, 68), (42, 10)):
+                value = -0.  # rank4/rank4 and rank4/rank3, respectively
+            rows.append(value)
+    raw = f64((75,75), rows)
+    return dict(raw_site_major=raw, tensors=LW.site_major_to_pairs(raw),
+        origins=f64((3,3), [11.,-2.,.5, 12.,3.,-.25, 9.,1.,2.]),
+        frames=f64((3,3,3), [0.,-1.,0., 1.,0.,0., 0.,0.,1.,
+                              1.,0.,0., 0.,0.,-1., 0.,1.,0.,
+                              0.,0.,1., 1.,0.,0., 0.,1.,0.]),
+        labels=["S0","S1","S2"], bonds=[(2,0),(1,2)], frequency=.375,
+        identities=identities(), kind="synthetic")
+
+
 def refusal(value="6", off_site="0"):
     return RuntimeError(
         "localize_lw: postcondition exceeds residual tolerance "
@@ -91,6 +125,76 @@ class LosslessCaptureTests(unittest.TestCase):
             self.assertEqual(capture.declaration["bonds"], [[1, 0]])
             self.assertEqual(capture.declaration["labels"], ["Left", "Right"])
             self.assertEqual(capture.array("tensors").data[-8:], struct.pack("<d", -0.))
+
+    def test_dense_three_site_mapping_checks_every_full25_element_byte_for_byte(self):
+        kw = dense_three_site_inputs()
+        raw, pair = kw["raw_site_major"], kw["tensors"]
+        before = raw.data
+        checked = 0
+        # Invert source matrix coordinates, unlike the converter's pair-row copying.
+        for row in range(75):
+            response_site, response_component = divmod(row, 25)
+            for col in range(75):
+                potential_site, potential_component = divmod(col, 25)
+                source = (row*75+col)*8
+                target = (response_site*1875 + potential_site*625
+                          + response_component*25 + potential_component)*8
+                self.assertEqual(pair.data[target:target+8], raw.data[source:source+8],
+                                 (row, col))
+                checked += 1
+        self.assertEqual(checked, 5625)
+        self.assertEqual(raw.data, before)
+        self.assertEqual(pair.shape, (1,3,3,25,25))
+        for row, col in ((17,68), (42,10)):
+            self.assertEqual(raw.data[(row*75+col)*8:(row*75+col+1)*8],
+                             struct.pack("<d", -0.))
+        self.assertEqual(struct.unpack_from("<d", pair.data,
+            (0*1875+2*625+24*25+24)*8)[0], 393.375)  # independent rank4 marker
+
+    def test_dense_signed_axes_discarded_rank_maximum_and_ties(self):
+        kw = dense_three_site_inputs()
+        arrays, meta = LW.charge_diagnostics(kw["tensors"], kw["labels"])
+        # Closed-form sums of weights 1+2+3=6, not the implementation's site loop.
+        potential, response = [], []
+        for site in range(3):
+            for t in range(25):
+                potential.append(3*(site+1)/8 if t == 0 else 3*(site+1)*t/4)
+                response.append(3*(site+1)/8 if t == 0 else -3*(site+1)*t/2)
+        potential[25+8] = 36.
+        response[25+8] = response[50+7] = -36.
+        for name in ("sum_potential_site", "fsum_potential_site"):
+            self.assertEqual(arrays[name], f64((3,25), potential))
+        for name in ("sum_response_site", "fsum_response_site"):
+            self.assertEqual(arrays[name], f64((3,25), response))
+        ordered = meta["native_ordered"]
+        for key, axis, signed in (
+            ("potential_site_maximum", "sum_potential_site", 36.),
+            ("response_site_maximum", "sum_response_site", -36.),
+            ("working_maximum", "sum_potential_site", 36.)):
+            maximum = ordered[key]
+            self.assertEqual((maximum["axis"], maximum["site"], maximum["component"]),
+                             (axis, 1, 8))
+            self.assertEqual((maximum["label"], maximum["component_name"]), ("S1","22s"))
+            self.assertEqual(maximum["signed_value_hex"], signed.hex())
+        full = ordered["full_rank4_maximum"]
+        self.assertEqual((full["axis"], full["site"], full["component"]),
+                         ("sum_response_site", 2, 24))
+        self.assertEqual(full["signed_value_hex"], (-108.).hex())
+        self.assertEqual(full["component_name"], "44s")
+        self.assertGreater(float.fromhex(full["magnitude_hex"]),
+                           float.fromhex(ordered["working_maximum"]["magnitude_hex"]))
+
+    def test_dense_roundtrip_retains_nonzero_frequency_and_nonidentity_frames(self):
+        kw = dense_three_site_inputs()
+        with tempfile.TemporaryDirectory() as tmp:
+            receipt = LW.snapshot(Path(tmp)/"dense-toy", **kw)
+            capture = LW.load_capture(receipt.path, receipt.manifest_sha256)
+            for name in ("raw_site_major", "tensors", "origins", "frames"):
+                self.assertEqual(capture.array(name), kw[name])
+            self.assertEqual(capture.declaration["kind"], "synthetic")
+            self.assertEqual(capture.declaration["frequency_au_hex"], "0x1.8000000000000p-2")
+            self.assertEqual(capture.declaration["labels"], ["S0","S1","S2"])
+            self.assertEqual(capture.declaration["bonds"], [[2,0],[1,2]])
 
     def test_finite_binary_tampering_is_rejected_by_checksum(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -425,6 +529,299 @@ m.main(['example',sys.argv[2]])
             with mock.patch("sys.stdout"):
                 self.assertEqual(LW.main(["inspect", receipt["path"], "--manifest-sha256",
                                           receipt["manifest_sha256"]]), 0)
+
+
+class FakeReadOnlyArray:
+    """Test-only NumPy boundary stand-in; NOT native NumPy/ABI evidence."""
+    def __init__(self, data, dtype):
+        if type(data) is not bytes or dtype != "<f8":
+            raise AssertionError("adapter must provide owned binary64 bytes")
+        self.buffer = memoryview(data)
+        self.dtype = dtype
+        self.flags = SimpleNamespace(writeable=False)
+
+    def reshape(self, shape):
+        count = 1
+        for n in shape:
+            count *= n
+        if count*8 != len(self.buffer):
+            raise AssertionError("adapter reshape changed size")
+        self.shape = shape
+        return self
+
+
+class MockedNativeAdapterTests(unittest.TestCase):
+    """Fake allocation/modules/Git only. No native admission or scientific import."""
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        package = self.root/"toy-stage/psi4"
+        boundary_file = package/"driver/procrouting/isapol_lw.py"
+        boundary_file.parent.mkdir(parents=True)
+        self.core_file = package/"core.so"
+        self.core_file.write_bytes(b"TEST ONLY, NOT ELF")
+        boundary_file.write_bytes(b"# TEST ONLY, NOT scientific package source\n")
+        self.ids = identities()
+        for index, role in enumerate(("native_core", "python_boundary", "driver"), 1):
+            self.ids[role].update(source_root=str(self.root/("toy-source-"+role)),
+                source_commit=str(index)*40, source_tree=str(index+4)*40)
+        self.ids["native_core"].update(path=str(self.core_file),
+            sha256=hashlib.sha256(self.core_file.read_bytes()).hexdigest(), build_node="mock-compute")
+        self.ids["python_boundary"].update(path=str(boundary_file), package_root=str(package),
+            sha256=hashlib.sha256(boundary_file.read_bytes()).hexdigest())
+        self.boundary_file = boundary_file
+        self.psi4 = ModuleType("psi4")
+        self.psi4.__file__ = str(package/"__init__.py")
+        self.psi4.core = SimpleNamespace(__file__=str(self.core_file))
+        self.numpy = ModuleType("numpy")
+        self.numpy.frombuffer = mock.Mock(side_effect=FakeReadOnlyArray)
+        self.public = ModuleType("psi4.driver.procrouting.isapol_lw")
+        self.public.__file__ = str(boundary_file)
+        self.public.PRODUCTION_TOLERANCE = 1e-6
+        self.public.TRUNCATE_RANK4 = "discard_rank4_rows_and_columns"
+        self.public.Provenance = mock.Mock(side_effect=lambda *args: SimpleNamespace(args=args))
+        self.boundary = mock.Mock(side_effect=refusal())
+        self.public.supplied_nonlocal_properties = self.boundary
+        self.environment = dict(SLURM_JOB_ID="mock-allocation", USER="awallace43",
+            HOME="/storage/home/TEST-ONLY", SLURMD_NODENAME="mock-compute")
+        self.hostname = "mock-compute.cluster.invalid"
+        self.git_overrides = {}
+        self.git = mock.Mock(side_effect=self.git_reply)
+        self.lookup = mock.Mock(side_effect=self.import_reply)
+        self.capture_index = 0
+
+    def git_reply(self, argv, *, text):
+        self.assertTrue(text)
+        self.assertEqual(argv[:2], ["git", "-C"])
+        item = next(i for role, i in self.ids.items()
+                    if role in ("native_core","python_boundary","driver") and i["source_root"] == argv[2])
+        query = tuple(argv[3:])
+        replies = {("rev-parse","HEAD"): item["source_commit"],
+                   ("rev-parse","HEAD^{tree}"): item["source_tree"],
+                   ("status","--porcelain"): ""}
+        return self.git_overrides.get((argv[2], query), replies[query]) + "\n"
+
+    def import_reply(self, name):
+        self.assertEqual(name, "psi4.driver.procrouting.isapol_lw")
+        return self.public  # never import a real scientific module
+
+    def capture(self, *, kind="native_owned", build_node="mock-compute", dense=False):
+        # native_owned here exercises the guard ONLY; all underlying bytes are toy data.
+        kw = dense_three_site_inputs() if dense else asymmetric_inputs()
+        kw["kind"] = kind
+        kw["identities"] = json.loads(json.dumps(self.ids))
+        kw["identities"]["native_core"]["build_node"] = build_node
+        self.capture_index += 1
+        receipt = LW.snapshot(self.root/f"toy-capture-{self.capture_index}", **kw)
+        return LW.load_capture(receipt.path, receipt.manifest_sha256), kw
+
+    @contextmanager
+    def runtime(self, *, missing=()):
+        for collaborator in (self.git, self.lookup, self.boundary, self.numpy.frombuffer):
+            collaborator.reset_mock()
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(os.environ, self.environment, clear=True))
+            stack.enter_context(mock.patch.object(LW.socket, "gethostname", return_value=self.hostname))
+            stack.enter_context(mock.patch.dict(sys.modules, {"psi4": self.psi4, "numpy": self.numpy}))
+            for name in missing:
+                sys.modules.pop(name, None)
+            stack.enter_context(mock.patch.object(LW.subprocess, "check_output", self.git))
+            stack.enter_context(mock.patch.object(LW.importlib, "import_module", self.lookup))
+            yield
+
+    def refused(self, capture, message):
+        with self.assertRaisesRegex(ValueError, message):
+            LW.native_replay(capture)
+        self.boundary.assert_not_called()
+        self.numpy.frombuffer.assert_not_called()
+
+    def assert_sources_checked(self):
+        calls = [mock.call(["git","-C",self.ids[role]["source_root"],*query], text=True)
+                 for role in ("native_core","python_boundary","driver")
+                 for query in (("rev-parse","HEAD"),("rev-parse","HEAD^{tree}"),("status","--porcelain"))]
+        self.assertEqual(self.git.call_args_list, calls)
+
+    def test_login_host_is_rejected_even_when_scheduler_and_build_host_match(self):
+        self.hostname = self.environment["SLURMD_NODENAME"] = "login-toy"
+        capture, _ = self.capture(build_node="login-toy")
+        with self.runtime():
+            self.refused(capture, "Phoenix compute allocation")
+            self.git.assert_not_called()
+            self.lookup.assert_not_called()
+
+    def test_scheduler_host_mismatch_is_rejected(self):
+        capture, _ = self.capture()
+        self.environment["SLURMD_NODENAME"] = "different-compute"
+        with self.runtime():
+            self.refused(capture, "Phoenix compute allocation")
+            self.git.assert_not_called()
+            self.lookup.assert_not_called()
+
+    def test_captured_build_node_mismatch_is_rejected(self):
+        capture, _ = self.capture(build_node="different-build")
+        with self.runtime():
+            self.refused(capture, "Phoenix compute allocation")
+            self.git.assert_not_called()
+            self.lookup.assert_not_called()
+
+    def test_wrong_user_or_home_is_rejected_with_other_allocation_checks_valid(self):
+        capture, _ = self.capture()
+        for key, value in (("USER","different-user"), ("HOME","/tmp/not-phoenix")):
+            previous = self.environment[key]
+            self.environment[key] = value
+            with self.subTest(key=key), self.runtime():
+                self.refused(capture, "Phoenix compute allocation")
+                self.git.assert_not_called()
+                self.lookup.assert_not_called()
+            self.environment[key] = previous
+
+    def test_synthetic_kind_rejection_is_reached_after_valid_allocation_guards(self):
+        capture, _ = self.capture(kind="synthetic")
+        with self.runtime():
+            self.refused(capture, "actual native_owned capture")
+            self.git.assert_not_called()
+            self.lookup.assert_not_called()
+
+    def test_missing_initialized_modules_is_reached_after_native_kind_guard(self):
+        capture, _ = self.capture()
+        for missing in (("psi4",), ("numpy",), ("psi4","numpy")):
+            with self.subTest(missing=missing), self.runtime(missing=missing):
+                self.refused(capture, "preinitialized reviewed runtime")
+                self.git.assert_not_called()
+                self.lookup.assert_not_called()
+
+    def source_guard_cases(self, query, answer):
+        capture, _ = self.capture()
+        roles = ("native_core","python_boundary","driver")
+        query_order = (("rev-parse","HEAD"),("rev-parse","HEAD^{tree}"),("status","--porcelain"))
+        for index, role in enumerate(roles):
+            root = self.ids[role]["source_root"]
+            self.git_overrides = {(root, query): answer}
+            with self.subTest(role=role), self.runtime():
+                self.refused(capture, "source identity/clean state differs")
+                # Exact query prefix proves the intended role/guard was reached.
+                expected = [mock.call(["git","-C",self.ids[previous]["source_root"],*q], text=True)
+                            for previous in roles[:index] for q in query_order]
+                expected.extend(mock.call(["git","-C",root,*q], text=True)
+                                for q in query_order[:query_order.index(query)+1])
+                self.assertEqual(self.git.call_args_list, expected)
+                self.lookup.assert_not_called()
+
+    def test_each_source_commit_mismatch_is_rejected(self):
+        self.source_guard_cases(("rev-parse","HEAD"), "f"*40)
+
+    def test_each_source_tree_mismatch_is_rejected(self):
+        self.source_guard_cases(("rev-parse","HEAD^{tree}"), "e"*40)
+
+    def test_each_dirty_source_is_rejected(self):
+        self.source_guard_cases(("status","--porcelain"), " M TEST-ONLY")
+
+    def test_wrong_core_path_is_rejected_after_all_sources_match(self):
+        capture, _ = self.capture()
+        self.psi4.core.__file__ = str(self.root/"wrong-core.so")
+        with self.runtime():
+            self.refused(capture, "native core/Python package identity differs")
+            self.assert_sources_checked()
+            self.lookup.assert_not_called()
+
+    def test_wrong_core_hash_is_rejected_after_matching_core_path(self):
+        capture, _ = self.capture()
+        self.core_file.write_bytes(b"CHANGED TEST ONLY, NOT ELF")
+        with self.runtime():
+            self.refused(capture, "native core/Python package identity differs")
+            self.assert_sources_checked()
+            self.lookup.assert_not_called()
+
+    def test_wrong_package_path_is_rejected_after_matching_core_hash(self):
+        capture, _ = self.capture()
+        self.psi4.__file__ = str(self.root/"wrong-package/__init__.py")
+        with self.runtime():
+            self.refused(capture, "native core/Python package identity differs")
+            self.assert_sources_checked()
+            self.lookup.assert_not_called()
+
+    def test_boundary_file_hash_mismatch_is_rejected_before_module_lookup(self):
+        capture, _ = self.capture()
+        self.boundary_file.write_bytes(b"# changed TEST ONLY boundary\n")
+        with self.runtime():
+            self.refused(capture, "native core/Python package identity differs")
+            self.assert_sources_checked()
+            self.lookup.assert_not_called()
+
+    def test_wrong_loaded_boundary_path_is_rejected_after_module_lookup(self):
+        capture, _ = self.capture()
+        self.public.__file__ = str(self.root/"wrong-boundary.py")
+        with self.runtime():
+            self.refused(capture, "strict public LW seam identity/default differs")
+            self.assert_sources_checked()
+            self.lookup.assert_called_once_with("psi4.driver.procrouting.isapol_lw")
+
+    def test_changed_boundary_hash_during_lookup_is_rechecked(self):
+        capture, _ = self.capture()
+        def lookup_then_change(name):
+            module = self.import_reply(name)
+            self.boundary_file.write_bytes(b"# changed during TEST ONLY lookup\n")
+            return module
+        self.lookup.side_effect = lookup_then_change
+        with self.runtime():
+            self.refused(capture, "strict public LW seam identity/default differs")
+            self.assert_sources_checked()
+            self.lookup.assert_called_once_with("psi4.driver.procrouting.isapol_lw")
+
+    def test_changed_strict_tolerance_is_rejected_after_boundary_hash_checks(self):
+        capture, _ = self.capture()
+        self.public.PRODUCTION_TOLERANCE = 2e-6
+        with self.runtime():
+            self.refused(capture, "strict public LW seam identity/default differs")
+            self.assert_sources_checked()
+            self.lookup.assert_called_once_with("psi4.driver.procrouting.isapol_lw")
+
+    def test_changed_truncation_is_rejected_after_strict_tolerance_check(self):
+        capture, _ = self.capture()
+        self.public.TRUNCATE_RANK4 = "TEST-ONLY wrong truncation"
+        with self.runtime():
+            self.refused(capture, "strict public LW seam identity/default differs")
+            self.assert_sources_checked()
+            self.lookup.assert_called_once_with("psi4.driver.procrouting.isapol_lw")
+
+    def test_mocked_happy_orchestration_calls_public_strict_boundary_once(self):
+        capture, original = self.capture(dense=True)
+        before = tuple((name, a.data) for name, a in capture.arrays)
+        self.boundary.side_effect = refusal(value="36")  # fake public seam, not native LW
+        with self.runtime():
+            outcome = LW.native_replay(capture)
+            self.assert_sources_checked()
+            self.lookup.assert_called_once_with("psi4.driver.procrouting.isapol_lw")
+            self.boundary.assert_called_once()
+            self.assertEqual(self.boundary.call_args.args, ())
+            kw = self.boundary.call_args.kwargs
+            self.assertEqual(set(kw), {"labels","origins","frames","bonds","frequencies",
+                "tensors","input_rank","truncation","residual_policy","localization_rank_limit","provenance"})
+            for name in ("tensors","origins","frames"):
+                view = kw[name]
+                self.assertEqual(view.shape, original[name].shape)
+                self.assertEqual(view.buffer.tobytes(), original[name].data)
+                self.assertTrue(view.buffer.readonly)
+                self.assertFalse(view.flags.writeable)
+                with self.assertRaises(TypeError):
+                    view.buffer[0] = 0
+            self.assertEqual(self.numpy.frombuffer.call_args_list,
+                [mock.call(original[name].data, dtype="<f8") for name in ("tensors","origins","frames")])
+            self.assertEqual(kw["tensors"].shape, (1,3,3,25,25))
+            self.assertEqual(kw["labels"], ("S0","S1","S2"))
+            self.assertEqual(kw["bonds"], ((2,0),(1,2)))
+            self.assertEqual(kw["frequencies"], (.375,))
+            self.assertEqual((kw["input_rank"],kw["localization_rank_limit"]), (4,2))
+            self.assertEqual(kw["truncation"], "discard_rank4_rows_and_columns")
+            self.assertEqual(kw["residual_policy"], "production")
+            self.public.Provenance.assert_called_once()
+            self.assertEqual(kw["provenance"].args[1], capture.manifest_sha256)
+            self.assertEqual(outcome["status"], "EXPECTED_INPUT_SUM_RULE_REFUSAL")
+            self.assertTrue(outcome["diagnostic_replay_passed"])
+            self.assertFalse(outcome["scientific_properties_accepted"])
+            self.assertFalse(outcome["binary_source_attestation"])
+        self.assertEqual(before, tuple((name, a.data) for name, a in capture.arrays))
 
 
 if __name__ == "__main__":
