@@ -6,6 +6,15 @@ No CUDA work occurs at import. No fast-math, denominator clamp or atomics.
 CUDA_SOURCE = r'''
 extern "C" {
 __global__
+void gather_indexed_matrix(long long R, long long C, long long stride,
+                            const long long* rows, const long long* columns,
+                            const double* input, double* output) {
+    for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         i<R*C; i+=(long long)blockDim.x*gridDim.x)
+        output[i]=input[rows[i/C]*stride+columns[i%C]];
+}
+
+__global__
 void inverse_sqrt_weights(long long N, const double* eigenvalues, const double* policy,
                           double* weights, double* stats) {
     __shared__ double maximum[128];

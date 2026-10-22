@@ -1,5 +1,27 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## LATEST — physical coupled fragment response GPU gate passes
+
+Whole stage11/sourcef7fd2d7ca passes three systems twice, checking both coupled
+signed directional components/combined matrices, preserved uncoupled matrices,
+and native GPU Hessian changed trials against explicit CPU JK. Independent
+dense source solves avoid the native coupled-find source-load bug.
+Max coupled Ind matrix5.965e-15Eh, Exch-Ind6.171e-15, combined4.746e-15;
+native Hx6.409e-13. PCG0–16iterations, true relative residual≤9.819e-11 at the
+declared1e-10/1e-12 policy.30DFMO/112potentials, coefficientH2D0, clean teardown.
+Receipts: sibling `runs/fragment-coupled-gpu-01` through `-03`.
+
+All core unscaled two-fragment/C/no-external term numerics now pass these
+bounded GPU gates, including coupled response. CPU HF/IBO reference inputs
+remain explicitly upstream; this is not GPU localization/resident handoff,
+complete default/link/external/scaled FISAPT or a performance claim.
+
+Localization foundations: native union overlap PP/MM/PM maps pass water-Ne and
+custom spherical SPDF. Owned FP64 cuSOLVER powers pass194CPU/mock/serial tests
+and header ABI; whole stage12 passes, actual native powers are running.
+New overlap adapter/device-only gathers and int64 metadata transport pass
+206CPU/mock/serial executions; GPU gather/native adapter gates are next.
+
 ## LATEST — signed uncoupled fragment induction physical GPU gate passes
 
 Whole stage10/source1d87a0643 passes water-Ne, shifted/frozenwater-Ne and frozen

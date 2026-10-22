@@ -174,7 +174,18 @@ class CUDASession:
         array = np.ascontiguousarray(array)
         if array.dtype != np.float64:
             raise ValueError("Only native FP64 host uploads are accepted")
-        result = self.empty(array.shape)
+        return self._upload_array(array)
+
+    def upload_indices(self, array):
+        """Explicit int64 METADATA transport, not a numerical upload fallback."""
+        array = np.ascontiguousarray(array)
+        if (array.dtype != np.int64 or array.ndim != 1 or not array.size
+                or np.any(array < 0)):
+            raise ValueError("Nonempty nonnegative native int64 metadata indices required")
+        return self._upload_array(array)
+
+    def _upload_array(self, array):
+        result = self.empty(array.shape,dtype=array.dtype)
         self.rt(self.runtime.cudaMemcpyAsync(
             result.pointer, array.ctypes.data, array.nbytes,
             self.runtime.cudaMemcpyKind.cudaMemcpyHostToDevice, self.stream))
@@ -321,7 +332,7 @@ class CUDASession:
                          "matrix_error", "single_gap_error", "trace_factors",
                          "rhf_response_product", "response_dot", "response_precondition",
                          "response_step", "response_direction", "response_metrics",
-                         "inverse_sqrt_weights", "scale_eigenvector_rows"):
+                         "inverse_sqrt_weights", "scale_eigenvector_rows", "gather_indexed_matrix"):
                 self.functions[name] = self.rt(dr.cuModuleGetFunction(self.module, name.encode()))
         except BaseException as error:
             primary = error

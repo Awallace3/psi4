@@ -242,3 +242,18 @@ SDK one-electron plans accept only one basis. A separate metadata diagnostic
 is testing a per-center union of actual primary/MINAO spherical shells and exact
 PP/MM/PM index maps. This is not a production mixed-overlap adapter or IBO
 localization implementation; no localization/resident-upstream claim follows.
+
+UPDATE: native coupled-response gate passes three systems twice on whole11/
+sourcef7fd2d7ca (`fragment-coupled-gpu-01`–`03`), separate coupled/uncoupled/
+combined full matrices plus changed native Hx trials against CPU JK. Coupled
+matrixmax6.171e-15Eh, nativeHx6.409e-13, PCG0–16 trueRel≤9.819e-11;
+30DFMO/112potentials, coefficientH2D0, cleanup0bytes/owners. Core unscaled
+two-fragment/C/no-external coupled term-family scope passes; not full workflow.
+
+`CuESTOverlapBlocks` now builds the owned spherical union and returns device
+S11/S12/S22, including explicit retained MINAO centers, using exact int64
+metadata maps and GPU gathers. Numerical uploads remain FP64-only; a separate
+validated metadata transport accepts int64 indices.206CPU/mock/serial
+executions pass union maps, changed/scattered/filtered block extraction,
+metadata policy, aliases and lifetime guards. Actual GPU gather/native-adapter
+validation is pending; GPU IBO assembly/Jacobi remains unimplemented.
