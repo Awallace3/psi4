@@ -302,6 +302,11 @@ def build_sapt_dft_xdm_functor(functional_name: str, xdm_model: str) -> empirica
             "twice. Set SAPT_DFT_FUNCTIONAL to the bare functional (e.g. b3lyp for b3lyp-xdm); "
             "dft-xdm(sapt) adds XDM itself.")
 
+    superfunc = dft.build_superfunctional(name, True)[0]
+    if superfunc.is_x_lrc():
+        raise ValidationError(
+            f"DFT-XDM(SAPT): range-separated SAPT_DFT_FUNCTIONAL ({functional_name}) is not supported.")
+
     reference = _reference_xdm_superfunctional(name, True)
     if core.has_option_changed("SCF", "XDM_DISPERSION_PARAMETERS"):
         params = core.get_option("SCF", "XDM_DISPERSION_PARAMETERS")
@@ -310,21 +315,16 @@ def build_sapt_dft_xdm_functor(functional_name: str, xdm_model: str) -> empirica
         a1, a2_ang = (float(p) for p in params)
     else:
         a1 = a2_ang = None
-        superfunc = dft.build_superfunctional(name, True)[0]
         if reference is None or abs(superfunc.x_alpha() - reference.x_alpha()) >= 1.0e-10:
             raise ValidationError(
                 f"DFT-XDM(SAPT): automatic XDM damping parameters require {functional_name} with its fitted "
                 "exact-exchange fraction. Provide [a1, a2] through XDM_DISPERSION_PARAMETERS for modified exchange.")
-    # Fitted range-separated functionals pass the range check against their reference.
-    return empirical_dispersion.XDMDispersionFunctor(
-        functional_name=name,
-        basis_name=core.get_global_option("BASIS"),
-        a1=a1,
-        a2_ang=a2_ang,
-        model=xdm_model,
-        counterpoise=True,
-        expected_x_omega=reference.x_omega() if reference is not None else None,
-        expected_x_beta=reference.x_beta() if reference is not None else None)
+    return empirical_dispersion.XDMDispersionFunctor(functional_name=name,
+                                                     basis_name=core.get_global_option("BASIS"),
+                                                     a1=a1,
+                                                     a2_ang=a2_ang,
+                                                     model=xdm_model,
+                                                     counterpoise=True)
 
 
 def sapt_dft_xdm_interaction_energy(

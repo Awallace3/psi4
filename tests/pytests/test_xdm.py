@@ -1346,30 +1346,33 @@ def test_sapt_dft_xdm_validates_before_scf():
     psi4.set_options({"sapt_dft_functional": "b3lyp"})
     with pytest.raises(psi4.ValidationError, match=re.escape("b3lyp/cc-pvdz with model los-ii (counterpoise)")):
         psi4.energy("dft-xdm(sapt)(los-ii)", molecule=mol)
-    psi4.set_options({"sapt_dft_functional": "wb97x"})
-    with pytest.raises(psi4.ValidationError, match=re.escape("No fitted BJ parameters for wb97x/cc-pvdz")):
+    psi4.set_options({"sapt_dft_functional": "b97-2"})
+    with pytest.raises(psi4.ValidationError, match=re.escape("No fitted BJ parameters for b97-2/cc-pvdz")):
+        psi4.energy("dft-xdm(sapt)", molecule=mol)
+    # Range-separated functionals are not supported in SAPT(DFT) XDM, even with an XDM fit.
+    psi4.set_options({"sapt_dft_functional": "cam-b3lyp", "basis": "aug-cc-pvtz"})
+    with pytest.raises(psi4.ValidationError, match="range-separated SAPT_DFT_FUNCTIONAL"):
         psi4.energy("dft-xdm(sapt)", molecule=mol)
     assert not psi4.core.has_variable("SCF TOTAL ENERGY"), "an SCF ran before the XDM setup was validated"
 
-    # Without explicit parameters the counterpoise table is used, including range-separated functionals.
-    psi4.set_options({"basis": "aug-cc-pvtz"})
-    functor = build_sapt_dft_xdm_functor("cam-b3lyp", "kb49")
+    # Without explicit parameters the counterpoise table is used.
+    functor = build_sapt_dft_xdm_functor("b3lyp", "kb49")
     a1, a2_bohr = functor._damping
-    assert compare_values(0.2880, a1, 10, "cam-b3lyp/aug-cc-pvtz CP a1")
-    assert compare_values(2.9175, a2_bohr * psi4.constants.bohr2angstroms, 10, "cam-b3lyp/aug-cc-pvtz CP a2")
+    assert compare_values(0.6568, a1, 10, "b3lyp/aug-cc-pvtz CP a1")
+    assert compare_values(1.3771, a2_bohr * psi4.constants.bohr2angstroms, 10, "b3lyp/aug-cc-pvtz CP a2")
 
 
 @pytest.mark.xdm
 @pytest.mark.sapt
 @pytest.mark.fsapt
-def test_sapt_dft_xdm_lrc_fsapt(tmp_path):
-    """Range-separated dft-xdm(sapt) runs; dispersion is XDM IE + dDFT - dHF and F-SAPT writes Empirical_Disp."""
+def test_sapt_dft_xdm_fsapt(tmp_path):
+    """dft-xdm(sapt) dispersion is XDM IE + dDFT - dHF, and F-SAPT writes Empirical_Disp."""
     mol = psi4.geometry(_WATER_DIMER_SAPT)
     fsapt_dir = tmp_path / "fsapt"
     psi4.set_options({
         "basis": "sto-3g",
         "scf_type": "df",
-        "sapt_dft_functional": "cam-b3lyp",
+        "sapt_dft_functional": "b3lyp",
         "sapt_dft_grac_shift_a": 0.1307,
         "sapt_dft_grac_shift_b": 0.1307,
         "sapt_dft_do_fsapt": "FISAPT",

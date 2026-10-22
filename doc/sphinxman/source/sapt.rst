@@ -706,7 +706,7 @@ dimer-basis monomer densities, and each monomer carries its partner's
 ghost-centre moments (see :ref:`sec:xdm`, **Ghost Atoms**), so the damping
 parameters come from the model's counterpoise fit.
 |sapt__sapt_dft_functional| must be the bare functional (``b3lyp``, not
-``b3lyp-xdm``) and an XDM-fitted one; a missing fit stops the computation
+``b3lyp-xdm``), an XDM-fitted one, and not range-separated; a missing fit stops the computation
 before the SCFs unless |scf__xdm_dispersion_parameters| is set. With
 |sapt__sapt_dft_do_fsapt|, the intermolecular XDM atom-pair energies of the
 dimer are written to ``Empirical_Disp.dat``.
