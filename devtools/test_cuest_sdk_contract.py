@@ -71,6 +71,17 @@ class Contract(unittest.TestCase):
         self.assertEqual(sdk["library"], str(self.library))
         self.assertIn("libcudart.so.13", sdk["cuda_closure"])
 
+    def test_header_digest_sorts_relative_posix_strings_not_path_components(self):
+        import hashlib
+        nested = self.include / "cuest/context.h"
+        nested.parent.mkdir()
+        nested.write_bytes(b"nested canonical fixture")
+        records = {p.relative_to(self.include).as_posix(): C.sha256(p)
+                   for p in self.include.rglob("*") if p.is_file()}
+        serialized = "".join(f"{name}\0{records[name]}\n" for name in sorted(records))
+        self.assertEqual(C.header_digest(self.include),
+                         hashlib.sha256(serialized.encode()).hexdigest())
+
     def test_old_native_bytes_rejected(self):
         self.library.write_bytes(b"old 0.2.2")
         with self.assertRaisesRegex(ValueError, "canonical 0.2.50"):

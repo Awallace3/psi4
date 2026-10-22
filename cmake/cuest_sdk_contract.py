@@ -48,7 +48,8 @@ def sha256(path):
 
 def header_digest(include):
     digest = hashlib.sha256()
-    paths = sorted(p for p in Path(include).rglob("*") if p.is_file())
+    paths = sorted((p for p in Path(include).rglob("*") if p.is_file()),
+                   key=lambda p: p.relative_to(include).as_posix())
     require(paths, "cuEST headers absent")
     for path in paths:
         # Do not accept a symlink escape into another SDK/header tree.

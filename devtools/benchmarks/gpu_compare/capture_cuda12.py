@@ -88,6 +88,7 @@ def collect(prefix, extra_dirs):
     packages = []
     site = Path(sysconfig.get_paths()["purelib"]).resolve(strict=True)
     loader_sources = {}
+    loader_configs = {}
     extensions = []
     for dist in importlib.metadata.distributions(path=[str(site)]):
         name = dist.metadata["Name"]
@@ -104,6 +105,9 @@ def collect(prefix, extra_dirs):
                                             record=record_proof(file, row["sha256"])))
             # Preserve loader implementation bytes for independent precedence review.
             rel = str(file)
+            if rel.startswith("cupy/.data/") and rel.endswith(".json"):
+                loader_configs[rel] = dict(path=str(resolved), sha256=sha256(resolved),
+                                           content=json.loads(resolved.read_text()))
             if rel.endswith(".py") and any(rel.startswith(p) for p in ("cupy/", "gpu4pyscf/lib/")):
                 source = resolved.read_text()
                 if any(term in source for term in ("CDLL", "load_library", "_preload",
@@ -146,6 +150,12 @@ def collect(prefix, extra_dirs):
             if path.is_file():
                 startup.append(dict(path=str(path.resolve()), sha256=sha256(path),
                                     source=path.read_text()))
+    toolkit_metadata = {}
+    cuda_root = Path(os.environ.get("CUDA_HOME", "/nonexistent")).resolve()
+    for relative in ("version.json", "version.txt", ".spack/spec.json"):
+        path = cuda_root / relative
+        if path.is_file():
+            toolkit_metadata[str(path)] = dict(sha256=sha256(path), source=path.read_text())
     return dict(schema=1, approved=False, cuda_major=12, python_prefix=str(prefix),
                 python_version=sys.version, job_id=os.environ.get("SLURM_JOB_ID"),
                 host=socket.gethostname(), captured_at=datetime.now(timezone.utc).isoformat(),
@@ -161,7 +171,8 @@ def collect(prefix, extra_dirs):
                 search_roots=[str(p) for p in roots], libraries=list(evidence.values()),
                 providers_by_soname=groups, packages=sorted(packages, key=lambda p: p["name"]),
                 conda_packages=conda_packages, loader_sources=loader_sources,
-                extension_linkage=linkage,
+                extension_linkage=linkage, loader_configs=loader_configs,
+                toolkit_metadata=toolkit_metadata,
                 note="Static candidate evidence only. Independent selection/review and receipt hash required.")
 
 
@@ -177,7 +188,13 @@ def main():
         parser.error("Static hashing/capture belongs on a compute node")
     if os.environ.get("LD_PRELOAD") or os.environ.get("PYTHONPATH"):
         parser.error("Capture requires no LD_PRELOAD and empty PYTHONPATH")
-    result = collect(args.prefix, args.extra_library_dir)
+    extras = list(args.extra_library_dir)
+    # CuPy may preload optional libraries from its managed cache before wheel
+    # providers. Capture those competitors rather than assuming wheel priority.
+    cache = Path.home() / ".cupy/cuda_lib"
+    if cache.is_dir():
+        extras.append(cache)
+    result = collect(args.prefix, extras)
     with args.output.open("x") as stream:
         json.dump(result, stream, indent=2, sort_keys=True)
         stream.write("\n")

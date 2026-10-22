@@ -50,7 +50,9 @@ def header_tree_identity(include):
     """FDDS/Disp0-reconciled whole-tree serialization, not the archive JSON hash."""
     include = Path(include).resolve(strict=True)
     rows = []
-    for path in sorted(include.rglob("*.h")):
+    # pathlib orders components ("cuest/..." before "cuest.h"), not relative
+    # POSIX path strings as required by the independently reconciled contract.
+    for path in sorted(include.rglob("*.h"), key=lambda p: p.relative_to(include).as_posix()):
         if not path.is_file():
             continue
         resolved = path.resolve(strict=True)

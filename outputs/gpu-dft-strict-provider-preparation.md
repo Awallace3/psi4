@@ -157,3 +157,25 @@ two hours, free `embers`, with fresh hardware/driver/QoS receipts.
 If old job14254253 is still active, serialize with `afterany:14254253` and
 `--kill-on-invalid-dep=yes`; do not cancel or modify it. Check immutable
 artifacts, not a successful scheduler exit alone.
+
+## Setup attempt 14291377: preserved admission failure
+
+The first authorized CPU setup ran on `cpu-small/embers` for41s. Static CUDA12
+capture completed successfully (26 candidate library files,15 SONAME groups);
+compilation was withheld because both SDK helpers sorted `Path` components
+rather than the contract's **include-relative POSIX strings**.
+With identical59 staged headers, the erroneous ordering produces
+`46270d7788c36bdddfd1edd05ec30655e475fc0c46f3e14fdd49b8b7f8630bd8`,
+while correct lexical string sorting yields the unchanged canonical
+`3d26a7ef607d02ee294f66f11f1374f3badbd83430f5be28ed0a05e6c8d73d18`.
+All individually pinned headers also matched. This is a serialization bug,
+not permission to change pinned hashes or reinstall the SDK.
+
+Both helpers now sort by the relative POSIX string; nested `cuest.h` versus
+`cuest/context.h` regressions failed before the fix. The first run, candidate
+and scheduler/log receipts remain immutable. Retry uses a new commit/checkout
+and run directory. The historical archive path in `progress.md` was absent on
+the queried login host; no archive extraction is needed to repair this bug.
+The complete post-fix gate passed **294 tests** (213 comparison,80 provider,
+one direct harness), with shell syntax/diff checks. Evidence:
+`.pi/tasks/01a162c2-c287-766d-a381-64f22ecfda3a-2808822/b3c5679c8.output`.

@@ -131,6 +131,20 @@ class SDKTests(unittest.TestCase):
         self.assertEqual(tree["sha256"], hashlib.sha256(entries.encode("utf-8")).hexdigest())
         self.assertEqual(tree["files"], 2)
 
+    def test_header_tree_sorts_relative_posix_strings_not_path_components(self):
+        include = self.root / "include"
+        nested = include / "cuest/context.h"
+        nested.parent.mkdir()
+        nested.write_text("nested canonical fixture")
+        records = {p.relative_to(include).as_posix(): sdk.sha256(p)
+                   for p in include.rglob("*.h")}
+        # "cuest.h" precedes "cuest/context.h" lexically. Path sorting reverses
+        # them because it compares directory components rather than POSIX bytes.
+        self.assertLess(sorted(records).index("cuest.h"), sorted(records).index("cuest/context.h"))
+        serialized = "".join(f"{name}\0{records[name]}\n" for name in sorted(records))
+        self.assertEqual(sdk.header_tree_identity(include)["sha256"],
+                         hashlib.sha256(serialized.encode()).hexdigest())
+
     def test_whole_tree_rejects_added_and_missing_headers(self):
         extra = self.root / "include/extra.h"
         extra.write_text("unapproved header")
