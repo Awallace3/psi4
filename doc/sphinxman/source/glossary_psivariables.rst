@@ -1630,6 +1630,14 @@ PSI Variables by Alpha
 
    SAPT charge-transfer energy.
 
+.. psivar:: SAPT(DFT) XDM IE
+
+   The counterpoise XDM interaction energy [E_h] of a ``dft-xdm(sapt)``
+   computation: the XDM energy of the delta-DFT dimer minus those of the two
+   dimer-basis monomers, each monomer carrying its partner's superposed
+   ghost-centre moments. :psivar:`SAPT DISP ENERGY` is this value plus the
+   delta-DFT minus delta-HF residual.
+
 .. psivar:: SAPT HF TOTAL ENERGY
 
    An induction-classified correction from HF implemented for SAPT0.

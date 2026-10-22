@@ -33,6 +33,7 @@ from qcelemental.util import which
 
 from . import interface_cfour, proc, proc_data, sapt
 from .dft import build_superfunctional_from_dictionary, functional_available, functionals
+from .xdm_params import is_xdm_dispersion
 
 # never import wrappers or aliases into this file
 
@@ -95,6 +96,9 @@ procedures = {
         'sapt(dft)-d3(s)': sapt.run_sapt_dft,
         'dft-d3(sapt)'  : sapt.run_sapt_dft,
         'dft-d4(sapt)'  : sapt.run_sapt_dft,
+        'dft-xdm(sapt)' : sapt.run_sapt_dft,
+        'dft-xdm(sapt)(kb49)': sapt.run_sapt_dft,
+        'dft-xdm(sapt)(los-ii)': sapt.run_sapt_dft,
         'sapt0'         : proc.run_sapt,
         'ssapt0'        : proc.run_sapt,
         'sapt2'         : proc.run_sapt,
@@ -299,10 +303,16 @@ for key in functionals:
     if not functional_available(functionals[key]):
         continue
 
-    ssuper = build_superfunctional_from_dictionary(functionals[key], 1, 1, True)[0]
-
     # Energy
     procedures['energy'][key] = proc.run_scf
+
+    # XDM registers for energy only. Every XDM ingredient is a functional of the
+    # converged density, so there is no analytic derivative; leaving gradient/hessian
+    # unregistered makes the driver negotiate a finite difference of XDM energies.
+    if is_xdm_dispersion(functionals[key].get("dispersion")):
+        continue
+
+    ssuper = build_superfunctional_from_dictionary(functionals[key], 1, 1, True)[0]
 
     if not (ssuper.is_c_hybrid() or ssuper.is_c_lrc() or ssuper.needs_vv10()):
         procedures['energy']['td-' + key] = proc.run_tdscf_energy

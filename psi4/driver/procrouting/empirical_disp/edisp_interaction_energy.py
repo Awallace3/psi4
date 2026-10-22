@@ -30,7 +30,9 @@ import numpy as np
 
 from psi4 import core
 
+from ...p4util.exceptions import ValidationError
 from . import empirical_dispersion
+from ..xdm_counterpoise import ghost_superposition_correction
 
 
 def _sapt_dft_dispersion_interaction_energy(
@@ -268,3 +270,143 @@ def sapt_dft_d3_interaction_energy(
         two_body_level_hint='d3mbj2b',
         atm_level_hint='d3mbjatm',
     )
+
+
+def build_sapt_dft_xdm_functor(functional_name: str, xdm_model: str) -> empirical_dispersion.XDMDispersionFunctor:
+    """Validate a dft-xdm(sapt) request and build its XDM functor, before any SCF runs.
+
+    Parameters
+    ----------
+    functional_name : str
+        ``SAPT_DFT_FUNCTIONAL``; the bare XC functional of the delta-DFT segment.
+    xdm_model : str
+        XDM damping-parameter model (``kb49`` or ``los-ii``), used when
+        ``XDM_DISPERSION_PARAMETERS`` is not set.
+
+    Returns
+    -------
+    empirical_dispersion.XDMDispersionFunctor
+        Functor with counterpoise damping parameters, since the delta-DFT
+        monomers are counterpoise subsystems.
+    """
+    from .. import dft
+    from ..dft import dft_builder
+    from ..proc import _reference_xdm_superfunctional
+
+    name = functional_name.lower()
+    definition = dft_builder.functionals.get(name)
+    if definition is not None and "dispersion" in definition:
+        raise ValidationError(
+            f"DFT-XDM(SAPT): SAPT_DFT_FUNCTIONAL ({functional_name}) already carries a "
+            f"{definition['dispersion'].get('type', '')} dispersion correction, which would be counted "
+            "twice. Set SAPT_DFT_FUNCTIONAL to the bare functional (e.g. b3lyp for b3lyp-xdm); "
+            "dft-xdm(sapt) adds XDM itself.")
+
+    superfunc = dft.build_superfunctional(name, True)[0]
+    if superfunc.is_x_lrc():
+        raise ValidationError(
+            f"DFT-XDM(SAPT): range-separated SAPT_DFT_FUNCTIONAL ({functional_name}) is not supported.")
+
+    reference = _reference_xdm_superfunctional(name, True)
+    if core.has_option_changed("SCF", "XDM_DISPERSION_PARAMETERS"):
+        params = core.get_option("SCF", "XDM_DISPERSION_PARAMETERS")
+        if len(params) != 2 or not all(np.isfinite(float(p)) for p in params):
+            raise ValidationError("XDM_DISPERSION_PARAMETERS must contain exactly two finite values: [a1, a2_angstrom].")
+        a1, a2_ang = (float(p) for p in params)
+    else:
+        a1 = a2_ang = None
+        if reference is None or abs(superfunc.x_alpha() - reference.x_alpha()) >= 1.0e-10:
+            raise ValidationError(
+                f"DFT-XDM(SAPT): automatic XDM damping parameters require {functional_name} with its fitted "
+                "exact-exchange fraction. Provide [a1, a2] through XDM_DISPERSION_PARAMETERS for modified exchange.")
+    return empirical_dispersion.XDMDispersionFunctor(functional_name=name,
+                                                     basis_name=core.get_global_option("BASIS"),
+                                                     a1=a1,
+                                                     a2_ang=a2_ang,
+                                                     model=xdm_model,
+                                                     counterpoise=True)
+
+
+def sapt_dft_xdm_interaction_energy(
+    sapt_dimer: core.Molecule,
+    monomerA: core.Molecule,
+    monomerB: core.Molecule,
+    dimer_wfn: core.Wavefunction,
+    monomerA_wfn: core.Wavefunction,
+    monomerB_wfn: core.Wavefunction,
+    xdm_functor: empirical_dispersion.XDMDispersionFunctor,
+    data: dict[str, object],
+) -> dict[str, object]:
+    """Compute the SAPT(DFT) counterpoise XDM interaction energy.
+
+    The delta-DFT dimer and monomer wavefunctions are all in the dimer basis, so
+    the monomer XDM energies are counterpoise subsystems. Each monomer's XDM
+    energy is evaluated with its partner's ghost-centre moments superposed onto
+    its atoms (see :mod:`xdm_counterpoise`), so the supermolecular difference
+    keeps only intermolecular pairs and the true density deformation.
+
+    Parameters
+    ----------
+    sapt_dimer : core.Molecule
+        Dimer molecule.
+    monomerA : core.Molecule
+        Monomer A with monomer B as ghosts (dimer basis).
+    monomerB : core.Molecule
+        Monomer B with monomer A as ghosts (dimer basis).
+    dimer_wfn : core.Wavefunction
+        Converged delta-DFT dimer wavefunction.
+    monomerA_wfn : core.Wavefunction
+        Converged delta-DFT monomer A wavefunction in the dimer basis.
+    monomerB_wfn : core.Wavefunction
+        Converged delta-DFT monomer B wavefunction in the dimer basis.
+    xdm_functor : empirical_dispersion.XDMDispersionFunctor
+        Functor from :func:`build_sapt_dft_xdm_functor`, built before the SCFs.
+    data : dict[str, object]
+        Result dictionary updated in place.
+
+    Returns
+    -------
+    dict[str, object]
+        Updated ``data`` dictionary containing XDM terms.
+    """
+
+    core.print_out("         " + "Supermolecular XDM Interaction Energy E_IE = E_IJ - E_I - E_J".center(58) + "\n")
+    core.print_out("         " + "(counterpoise monomers carry superposed ghost-centre moments)".center(58) + "\n\n")
+
+    dimer_disp = xdm_functor.compute_energy(sapt_dimer, dimer_wfn)
+    monA_disp = xdm_functor.compute_energy(monomerA, monomerA_wfn)
+    monB_disp = xdm_functor.compute_energy(monomerB, monomerB_wfn)
+
+    coords = sapt_dimer.geometry().np
+    props_A = monomerA_wfn.array_variable("XDM ATOMIC PROPERTIES").np
+    props_B = monomerB_wfn.array_variable("XDM ATOMIC PROPERTIES").np
+    for mol in (monomerA, monomerB):
+        if mol.natom() != sapt_dimer.natom() or not np.allclose(mol.geometry().np, coords, atol=1.0e-8):
+            raise ValidationError("SAPT(DFT) XDM: monomers must keep every dimer centre (as ghosts) in dimer order.")
+    corr_A = ghost_superposition_correction(xdm_functor.xdm, coords, props_A, [props_B])
+    corr_B = ghost_superposition_correction(xdm_functor.xdm, coords, props_B, [props_A])
+
+    data["XDM DIMER"] = dimer_disp
+    data["XDM MONOMER A"] = monA_disp + corr_A
+    data["XDM MONOMER B"] = monB_disp + corr_B
+    data["XDM IE"] = data["XDM DIMER"] - data["XDM MONOMER A"] - data["XDM MONOMER B"]
+    core.set_variable("SAPT(DFT) XDM IE", data["XDM IE"])
+
+    core.print_out(f"    {'XDM dimer':<34} {dimer_disp:18.12f} [Eh]\n")
+    core.print_out(f"    {'XDM monomer A (bare CP)':<34} {monA_disp:18.12f} [Eh]\n")
+    core.print_out(f"    {'XDM monomer A ghost superposition':<34} {corr_A:18.12f} [Eh]\n")
+    core.print_out(f"    {'XDM monomer B (bare CP)':<34} {monB_disp:18.12f} [Eh]\n")
+    core.print_out(f"    {'XDM monomer B ghost superposition':<34} {corr_B:18.12f} [Eh]\n")
+    core.print_out(f"    {'XDM IE':<34} {data['XDM IE']:18.12f} [Eh]\n\n")
+
+    # F-SAPT breakdown: intermolecular atom pairs of the dimer evaluation.
+    pairwise_energies = dimer_wfn.array_variable("XDM PAIRWISE ENERGY").np
+    fsapt_empirical_disp = np.zeros((sapt_dimer.natom(), sapt_dimer.natom()))
+    real_A = [i for i in range(monomerA.natom()) if monomerA.Z(i) > 0]
+    real_B = [i for i in range(monomerB.natom()) if monomerB.Z(i) > 0]
+    for a in real_A:
+        for b in real_B:
+            fsapt_empirical_disp[a, b] = fsapt_empirical_disp[b, a] = pairwise_energies[a, b]
+    data["FSAPT_EMPIRICAL_DISP"] = fsapt_empirical_disp
+    xdm_functor.print_out()
+    return data

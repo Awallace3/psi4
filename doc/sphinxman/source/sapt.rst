@@ -693,6 +693,24 @@ Psi4 keeps the SAPT-like electrostatics, exchange, and induction terms, then
 assigns the remaining supermolecular DFT-D correction to dispersion so that the
 summed components reproduce the supermolecular DFT-D interaction energy. 
 
+``dft-xdm(sapt)`` applies the same decomposition to a supermolecular DFT-XDM
+interaction energy::
+
+    set sapt_dft_functional b3lyp
+    energy('dft-xdm(sapt)')         # KB49 damping parameters
+    energy('dft-xdm(sapt)(los-ii)') # LoS-II damping parameters
+
+Here :math:`E_{int}^{D}` is replaced by the XDM interaction energy, stored as
+``SAPT(DFT) XDM IE``. XDM is evaluated on the :math:`\Delta`-DFT dimer and
+dimer-basis monomer densities, and each monomer carries its partner's
+ghost-centre moments (see :ref:`sec:xdm`, **Ghost Atoms**), so the damping
+parameters come from the model's counterpoise fit.
+|sapt__sapt_dft_functional| must be the bare functional (``b3lyp``, not
+``b3lyp-xdm``), an XDM-fitted one, and not range-separated; a missing fit stops the computation
+before the SCFs unless |scf__xdm_dispersion_parameters| is set. With
+|sapt__sapt_dft_do_fsapt|, the intermolecular XDM atom-pair energies of the
+dimer are written to ``Empirical_Disp.dat``.
+
 
 Basic Keywords for SAPT(DFT) 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

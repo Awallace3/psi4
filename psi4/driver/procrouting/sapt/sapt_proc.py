@@ -26,6 +26,8 @@
 # @END LICENSE
 #
 
+import re
+
 import numpy as np
 
 from psi4 import core
@@ -34,6 +36,7 @@ from ... import p4util
 from ...constants import constants
 from ...p4util.exceptions import ValidationError
 from ..empirical_disp import edisp_interaction_energy
+from ..xdm_params import normalize_xdm_model
 from .. import proc_util
 from ..proc import (
     _set_external_potentials_to_wavefunction,
@@ -189,6 +192,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     e_disp_param_name = None
+    do_xdm = False
+    xdm_functor = None
     supported_functionals_edisp = ["hf", "pbe0", "b3lyp"]
 
     # SAPT_DFT_D4_IE and SAPT_DFT_D3_IE control whether to run -D3/-D4.
@@ -299,6 +304,23 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                 "'SAPT(DFT)-D3(I)' through setting SAPT_DFT_D_TYPE to "
                 "'supermolecular' or 'intermolecular'."
             )
+    elif "-XDM" in name.upper():
+        core.print_out(r"DFT-XDM(SAPT): $\Delta$-DFT+XDM for dispersion")
+        if sapt_dft_functional.upper() == "HF":
+            raise ValidationError("DFT-XDM(SAPT) needs a DFT SAPT_DFT_FUNCTIONAL; XDM is evaluated on the delta-DFT densities.")
+        model_tags = re.findall(r"\(([^)]*)\)", name.lower().split("-xdm", 1)[1])
+        model_tags = [tag for tag in model_tags if tag != "sapt"]
+        if len(model_tags) > 1:
+            raise ValidationError(f"DFT-XDM(SAPT): at most one XDM damping model may be given, got {model_tags}.")
+        xdm_model = normalize_xdm_model(model_tags[0] if model_tags else "kb49")
+        # Fails here, before the SCFs, on a missing fit or an unsupported functional.
+        xdm_functor = edisp_interaction_energy.build_sapt_dft_xdm_functor(sapt_dft_functional, xdm_model)
+        core.set_global_option("SAPT_DFT_DO_DISP", 0)
+        core.set_global_option("SAPT_DFT_D3_IE", 0)
+        core.set_global_option("SAPT_DFT_D4_IE", 0)
+        core.set_global_option("SAPT_DFT_DO_DDFT", 1)
+        core.set_global_option("SAPT_DFT_D_TYPE", "supermolecular")
+        do_xdm = True
         # # Re-prepare options after local option changes
         # core.prepare_options_for_module("SAPT")
 
@@ -314,13 +336,13 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     if not do_dft:
         do_mon_grac_shift_A = do_mon_grac_shift_B = False
 
-    if do_fsapt and (sapt_dft_D4_IE or sapt_dft_D3_IE):
+    if do_fsapt and (sapt_dft_D4_IE or sapt_dft_D3_IE or do_xdm):
         dispersion_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
         if do_delta_dft or dispersion_type != "intermolecular":
             core.print_out(
                 "\n    Warning: the empirical F-SAPT dispersion breakdown uses the "
                 "intermolecular atom-pair contributions from the dimer calculation. "
-                "For supermolecular and delta-DFT D3/D4 methods, this qualitative "
+                "For supermolecular and delta-DFT D3/D4/XDM methods, this qualitative "
                 "breakdown does not in general sum to the scalar dispersion or total "
                 "interaction energy; the reported scalar energies remain authoritative.\n\n"
             )
@@ -815,6 +837,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     sapt_jk = wfn_B.jk()
     wfn_A.set_jk(sapt_jk)
 
+    dft_wfn_dimer = dft_wfn_monomer_a = dft_wfn_monomer_b = None
     if do_delta_dft and do_dft:
         optstash2 = p4util.OptionsState(
             ["SCF_TYPE"],
@@ -853,7 +876,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                 "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_B_not_in_C])
             }
 
-        run_scf(
+        dft_wfn_dimer = run_scf(
             sapt_dft_functional.lower(),
             molecule=sapt_dimer,
             jk=sapt_jk,
@@ -863,7 +886,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         core.timer_off("SAPT(DFT):Dimer DFT")
 
         core.timer_on("SAPT(DFT):Monomer A DFT")
-        run_scf(
+        dft_wfn_monomer_a = run_scf(
             sapt_dft_functional.lower(),
             molecule=monomer_A_molecule,
             jk=sapt_jk,
@@ -873,7 +896,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         core.timer_off("SAPT(DFT):Monomer A DFT")
 
         core.timer_on("SAPT(DFT):Monomer B DFT")
-        run_scf(
+        dft_wfn_monomer_b = run_scf(
             sapt_dft_functional.lower(),
             molecule=monomer_B_molecule,
             jk=sapt_jk,
@@ -940,6 +963,27 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             data=data,
         )
         core.timer_off("SAPT(DFT):D3 Interaction Energy")
+    elif do_xdm:
+        core.print_out("\n")
+        core.print_out(
+            "         ---------------------------------------------------------\n"
+        )
+        core.print_out(
+            "         " + "SAPT(DFT): XDM Interaction Energy".center(58) + "\n"
+        )
+        core.print_out("\n")
+        core.timer_on("SAPT(DFT):XDM Interaction Energy")
+        edisp_interaction_energy.sapt_dft_xdm_interaction_energy(
+            sapt_dimer=sapt_dimer,
+            monomerA=monomerA,
+            monomerB=monomerB,
+            dimer_wfn=dft_wfn_dimer,
+            monomerA_wfn=dft_wfn_monomer_a,
+            monomerB_wfn=dft_wfn_monomer_b,
+            xdm_functor=xdm_functor,
+            data=data,
+        )
+        core.timer_off("SAPT(DFT):XDM Interaction Energy")
 
     core.set_global_option("SAVE_JK", False)
     core.set_global_option("DFT_GRAC_SHIFT", 0.0)
@@ -1800,9 +1844,8 @@ def sapt_dft(
 
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     sapt_dft_D3_IE = core.get_option("SAPT", "SAPT_DFT_D3_IE")
-    if do_fsapt and (
-        sapt_dft_D4_IE or sapt_dft_D3_IE
-    ):
+    empirical_disp = sapt_dft_D4_IE or sapt_dft_D3_IE or "XDM IE" in data
+    if do_fsapt and empirical_disp:
         cache["FSAPT_EMPIRICAL_DISP"] = core.Matrix.from_array(
             data["FSAPT_EMPIRICAL_DISP"]
         )
@@ -1840,7 +1883,7 @@ def sapt_dft(
         _set_fsapt_var("FSAPT_EXCH_AB", cache["Exch_AB"])
         _set_fsapt_var("FSAPT_INDAB_AB", cache["IndAB_AB"])
         _set_fsapt_var("FSAPT_INDBA_AB", cache["IndBA_AB"])
-        if sapt_dft_D4_IE or sapt_dft_D3_IE:
+        if empirical_disp:
             disp_ab = cache["Elst_AB"].clone()
             disp_ab.zero()
             _set_fsapt_var("FSAPT_DISP_AB", disp_ab)
