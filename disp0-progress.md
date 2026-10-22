@@ -1,6 +1,6 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
-## CURRENT native gate — direct DFMO fixtures pass; CUDA/SAPT numerics pending
+## CURRENT native gate — cuEST/cuBLAS/CUDA fixtures pass; physical SAPT pending
 
 Private dependencies now build/install/import coherently: exact Einsums064
 CUDA86 with whole matching Waggle, private HDF51.14.6, CPU LibXC7.0 for the
@@ -96,7 +96,23 @@ Full native/session cleanup,0live tracked bytes/native owners; explicit peaks
 tests pass. No runtime/whole-stage overlay or scientific pin relaxation.
 This qualifies only these full-rank S/P/D DFMO fixtures, not retained native
 rank/cutoff boundaries/higherL/arbitrary bases/production factory.
-Custom CUDA numerical and signed physical SAPT gates remain unpassed.
+Signed physical SAPT gate remains unpassed.
+
+**FIRST actual cuEST→cuBLAS/custom CUDA numerical pipeline PASS**134.859s
+plus NVML postflight. Synthetic orbital/correction inputs on Cartesian20/
+pure18 primary/pure18RI; seeds19/20, blocks1/3/5/500.16native DFMO calls retain
+original device output buffers; only device-to-device factor slabs feed the
+unchanged backend. Actual280pack+104reduce kernel launches and312DGEMMs,
+all64signed pair/global checks pass at unchanged rtol1e-11/atol1e-12.
+Worstabs pair errors Disp3.608e-16/ExchDisp3.054e-16; summed errors
+6.662e-16/4.997e-16. Independent raw-Coulomb scalar oracle is comparison-only;
+no CPU factor uploads or DFHelper fallback. NaN poison and stale/changed-input
+controls, exact call counts, persistent/temporary scope lifetimes and complete
+native/session cleanup pass.0live bytes/native owners, explicit peaks
+1377232/1271056bytes, opaque native peak unmeasured.65offline tests also pass.
+Synthetic algebra is NOT physical HF/SCF SAPT or general production admission.
+Source blanket readiness metadata stays conservative/false; receipt is bounded
+evidence. No speedup or F-SAPT expansion claim.
 
 Receipts: `../runs/native-plan-device-01/`, `native-plan-device-02/`,
 `cuda-runtime-version-probe-02/`, `binding-pin-apply-01/`,
@@ -110,9 +126,11 @@ Semantic receipts: `../runs/basis-semantic-cpu-01/`, `basis-semantic-abi-01/`,
 `native-plan-basis-semantic-01/`; plan: `../metadata/BASIS_SEMANTIC_GATE.md`.
 DFMO receipts: `../runs/dfmo-cpu-oracle-02/`, `dfmo-abi-02/`,
 `native-plan-dfmo-semantic-01/`; plan: `../metadata/DFMO_DIAGNOSTIC_GATE.md`.
+Actual kernel pipeline: `../runs/native-plan-cuest-kernel-01/`;
+plan: `../metadata/CUDA_KERNEL_GATE.md`.
 Current full chronology: `../metadata/SETUP_STATUS.md`.
 Production still BLOCKED: no general basis/layout/rank/production-factory admission,
-custom-kernel numerical execution or signed GPU gate. No DFHelper fallback,
+or signed physical GPU gate. No DFHelper fallback,
 F-SAPT expansion or speedup claim. Following entries preserve earlier states.
 
 ## PRIOR dependency rebuild — private HDF5 discovery proved
