@@ -25,6 +25,13 @@ CUDA; zero denominators/nonfinite ratios fail closed, with no clamp/fallback.
 Public-entry scaling red/green passes. Actual scaled GPU edge checks plus a
 nonzero-delta-HF physical CPU oracle are required before qualification.
 
+Native08/source56374efdb whole build/import11 passed;243CPU/mock/serial tests
+pass. The first scaled GPU attempt caught missing runtime registration for
+the two new compiled kernels (KeyError before term execution). Both are now
+registered. GPU diagnostic negatives use independent fresh sessions, respecting
+permanent invalidation after an expected numerical rejection; no execution
+retry or session-policy weakening.
+
 Still unsupported: links/third subsystem, external fields, SSAPT0, default
 file-output route and larger admitted dimensions. Raw upstream HF arrays are
 host transport inputs, not a zero-roundtrip resident SCF handoff.
