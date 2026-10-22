@@ -5,6 +5,91 @@ No CUDA work occurs at import. No fast-math, denominator clamp or atomics.
 
 CUDA_SOURCE = r'''
 extern "C" {
+// Positive singlet RHF H+ = gap + 4J - K - K^T in canonical MO coordinates.
+// This bounded reference kernel fuses both distinct exchange contractions.
+__global__
+void rhf_response_product(long long Q, long long O, long long V,
+                          const double* ov, const double* oo, const double* vv,
+                          const double* trial, const double* eo, const double* ev,
+                          const double* coulomb, double* output) {
+    __shared__ double sums[128];
+    for (long long ia=blockIdx.x; ia<O*V; ia+=gridDim.x) {
+        const long long i=ia/V, a=ia%V;
+        double value=0.0;
+        for (long long qjb=threadIdx.x; qjb<Q*O*V; qjb+=blockDim.x) {
+            const long long b=qjb%V, j=(qjb/V)%O, q=qjb/(V*O);
+            value+=(oo[(q*O+i)*O+j]*vv[(q*V+a)*V+b]
+                    +ov[(q*O+i)*V+b]*ov[(q*O+j)*V+a])*trial[j*V+b];
+        }
+        sums[threadIdx.x]=value;
+        __syncthreads();
+        for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+            if (threadIdx.x<stride) sums[threadIdx.x]+=sums[threadIdx.x+stride];
+            __syncthreads();
+        }
+        if (threadIdx.x==0)
+            output[ia]=(ev[a]-eo[i])*trial[ia]+4.0*coulomb[ia]-sums[0];
+        __syncthreads();
+    }
+}
+
+__global__
+void response_dot(long long count, const double* left, const double* right, double* output) {
+    __shared__ double sums[128];
+    double value=0.0;
+    for (long long i=threadIdx.x; i<count; i+=blockDim.x) value+=left[i]*right[i];
+    sums[threadIdx.x]=value;
+    __syncthreads();
+    for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+        if (threadIdx.x<stride) sums[threadIdx.x]+=sums[threadIdx.x+stride];
+        __syncthreads();
+    }
+    if (threadIdx.x==0) output[0]=sums[0];
+}
+
+__global__
+void response_precondition(long long O, long long V, const double* eo,
+                           const double* ev, const double* residual, double* output) {
+    for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         i<O*V; i+=(long long)blockDim.x*gridDim.x)
+        output[i]=residual[i]/(ev[i%V]-eo[i/V]);
+}
+
+__global__
+void response_step(long long count, const double* rho, const double* curvature,
+                    const double* direction, const double* product,
+                    double* solution, double* residual) {
+    const double alpha=rho[0]/curvature[0];
+    for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         i<count; i+=(long long)blockDim.x*gridDim.x) {
+        solution[i]+=alpha*direction[i];
+        residual[i]-=alpha*product[i];
+    }
+}
+
+__global__
+void response_direction(long long count, const double* rho_new, const double* rho_old,
+                         const double* z, double* direction) {
+    const double beta=rho_new[0]/rho_old[0];
+    for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         i<count; i+=(long long)blockDim.x*gridDim.x)
+        direction[i]=z[i]+beta*direction[i];
+}
+
+// Convergence numerics stay on GPU. Host reads only these three scalar controls.
+__global__
+void response_metrics(const double* residual2, const double* rhs2,
+                       const double* tolerance, double* metrics) {
+    if (blockIdx.x==0 && threadIdx.x==0) {
+        const double r=sqrt(residual2[0]), b=sqrt(rhs2[0]);
+        double threshold=tolerance[1]*b;
+        if (threshold<tolerance[0]) threshold=tolerance[0];
+        metrics[0]=r;
+        metrics[1]=b>0.0 ? r/b : r;
+        metrics[2]=r<=threshold ? 1.0 : 0.0;
+    }
+}
+
 // The generalized density is Cprime*Cocc.T; no spin factor or re-whitening.
 __global__
 void trace_factors(long long Q, long long O, const double* factors, double* output) {

@@ -186,3 +186,20 @@ Both nuclear/electronic sources, all occupied targets and reserved zero slots
 are checked. Whole stage10/source1d87a0643 and independent signed CPU/native
 references now pass; the shared-source signed GPU gate (response disabled)
 is running. This is not CPSCF response, localization or full-workflow coverage.
+
+## Resident HF response groundwork
+
+`sapt_fisapt_response_cuda.HFResponseOperator` uses same-gauge native
+occupied-virtual, occupied-occupied and virtual-virtual factors for the positive
+singlet operator gap+4J-K-K^T. Both exchange contractions are distinct.
+Resident PCG uses orbital-gap preconditioning and returns physical x=-H+^-1 W.
+Only scalar convergence/curvature values reach host control; a true-residual
+check follows recurrence convergence. Zero/tiny RHS, negative curvature,
+nonfinite values, nonconvergence and a bounded fused-exchange work cap are
+explicit. No AO JK/CPU solver fallback exists.
+
+184CPU/mock/serial executions pass against independent four-index Hessians and
+dense CPU solutions, changed RHS, zero RHS, sign and lifetime/failure guards.
+Actual GPU primitive feedback is next. Native-factor response Hx/solutions,
+fragment source integration and physical coupled-response qualification remain
+pending. The known native find coupled-source bug is not used as an oracle.
