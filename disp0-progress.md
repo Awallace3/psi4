@@ -1,6 +1,6 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
-## CURRENT native gate — cuEST construction/cleanup passes; numerics pending
+## CURRENT native gate — cuEST S/P/D device integrals pass; DFMO/SAPT pending
 
 Private dependencies now build/install/import coherently: exact Einsums064
 CUDA86 with whole matching Waggle, private HDF51.14.6, CPU LibXC7.0 for the
@@ -66,6 +66,22 @@ cleanup. NVRTC compile/module load succeeds; no custom kernel launch.
 Coefficient candidate remains UNVALIDATED_PSI4_COEF. Construction success does
 not admit normalization/components/units/metric rank/layout or DFMO numerics.
 
+New independent semantic gate **PASS**: complete real cuEST device overlap and
+kinetic matrices for two-center Cartesian20AO/pure18AO S/P/D fixtures. Off-center
+allXYZ displacement, single primitives and unequal-exponent mixed-sign
+contractions; known-input analytic Gaussian/Racah oracle and exactPsi4 reference
+agree. Device maxabs vs analytic4.441e-15, vs Psi43.553e-15, unchanged
+rtol1e-11/atol1e-12, no fitted rescaling/permutation. Seven added API signatures/
+enums/workspace layout compiler-witnessed, intended wrong-count negative fails;
+actual mapped-symbol ownership checked.50offline guard/oracle tests pass.
+Actual native compute and full cleanup pass82.695s plus NVML postflight,
+0live tracked allocations/native owners. Explicit allocation peaks613632bytes
+Cartesian/611648bytes pure; opaque native peak remains unmeasured.
+No CPU reference integral/factor uploaded. This supports coef()/normalization/
+pure ordering/Bohr conventions for these S/P/D fixtures only. Higher-L/arbitrary
+bases, RI metric/rank, storage orientation, DFMO output and signed SAPT remain
+unqualified. Symmetric S/T do not establish row/column-major layout.
+
 Receipts: `../runs/native-plan-device-01/`, `native-plan-device-02/`,
 `cuda-runtime-version-probe-02/`, `binding-pin-apply-01/`,
 `btrfs-identity-red-01/`, `btrfs-identity-green-01/`,
@@ -74,8 +90,10 @@ Receipts: `../runs/native-plan-device-01/`, `native-plan-device-02/`,
 New deployment receipts: `../runs/native-tmpfs-stage-01/`,
 `native-loader-inputs-01/`, `native-loader-device-01/`.
 Native construction receipt: `../runs/native-plan-device-03/`.
+Semantic receipts: `../runs/basis-semantic-cpu-01/`, `basis-semantic-abi-01/`,
+`native-plan-basis-semantic-01/`; plan: `../metadata/BASIS_SEMANTIC_GATE.md`.
 Current full chronology: `../metadata/SETUP_STATUS.md`.
-Production still BLOCKED: no admitted normalization/layout/rank, DFMO compute,
+Production still BLOCKED: no general basis/layout/rank admission, DFMO compute,
 custom-kernel numerical execution or signed GPU gate. No DFHelper fallback,
 F-SAPT expansion or speedup claim. Following entries preserve earlier states.
 
