@@ -226,3 +226,19 @@ are returned.184CPU/mock/serial executions pass, including complete synthetic
 coupled matrices versus dense source solves and unchanged uncoupled results.
 Whole/native-factor/physical coupled gates remain pending; the independent
 CPU oracle uses JK-checked dense Hessians, not buggy native coupled find.
+
+## GPU localization foundations
+
+`sapt_cuda_symmetric_power.CuSolverSymmetricPower` owns a dedicated FP64
+cuSOLVER handle in the existing admitted native resource graph, on the explicit
+session stream. It uses native symmetric eigenvectors/values, a strict relative
+cutoff and CUDA/cuBLAS reconstruction, preserving the native column-major
+eigenvector layout explicitly. No CPU eigensolver/power fallback exists.
+194CPU/mock/serial executions pass spectral algebra, negative/zero/strict-boundary
+classification, scratch/output lifetimes, native-info/workspace failure guards.
+Compiler ABI and actual native GPU power gates remain pending.
+
+SDK one-electron plans accept only one basis. A separate metadata diagnostic
+is testing a per-center union of actual primary/MINAO spherical shells and exact
+PP/MM/PM index maps. This is not a production mixed-overlap adapter or IBO
+localization implementation; no localization/resident-upstream claim follows.

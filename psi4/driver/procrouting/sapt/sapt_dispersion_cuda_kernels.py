@@ -5,6 +5,61 @@ No CUDA work occurs at import. No fast-math, denominator clamp or atomics.
 
 CUDA_SOURCE = r'''
 extern "C" {
+__global__
+void inverse_sqrt_weights(long long N, const double* eigenvalues, const double* policy,
+                          double* weights, double* stats) {
+    __shared__ double maximum[128];
+    __shared__ double bad[128];
+    double largest=0.0, invalid=0.0;
+    for (long long i=threadIdx.x; i<N; i+=blockDim.x) {
+        double value=eigenvalues[i];if (value<0.0) value=-value;
+        if (!(value<1.e300)) invalid=1.0;
+        else if (value>largest) largest=value;
+    }
+    maximum[threadIdx.x]=largest;bad[threadIdx.x]=invalid;
+    __syncthreads();
+    for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+        if (threadIdx.x<stride) {
+            if (maximum[threadIdx.x+stride]>maximum[threadIdx.x])
+                maximum[threadIdx.x]=maximum[threadIdx.x+stride];
+            if (bad[threadIdx.x+stride]>bad[threadIdx.x]) bad[threadIdx.x]=bad[threadIdx.x+stride];
+        }
+        __syncthreads();
+    }
+    // CPU Matrix::power uses STRICT |lambda| < condition*max|lambda|,
+    // then replaces nonfinite negative/zero inverse powers by zero.
+    double rank=0.0;
+    for (long long i=threadIdx.x; i<N; i+=blockDim.x) {
+        const double value=eigenvalues[i];
+        double weight=0.0;
+        if (value>0.0 && !(value<policy[0]*maximum[0]) && value<1.e300)
+            weight=1.0/sqrt(value);
+        weights[i]=weight;
+        if (weight>0.0) rank+=1.0;
+    }
+    // maximum[0] is still read by all threads in the loop above.
+    __syncthreads();
+    maximum[threadIdx.x]=rank;
+    __syncthreads();
+    for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+        if (threadIdx.x<stride) maximum[threadIdx.x]+=maximum[threadIdx.x+stride];
+        __syncthreads();
+    }
+    if (threadIdx.x==0) {
+        stats[0]=maximum[0];stats[1]=bad[0];
+    }
+}
+
+// cuSOLVER writes column-major eigenvectors. Viewed as C-order this is V.T;
+// scale its rows, then V diag(weights) V.T = gemm_at_b(V.T,scaled_V.T).
+__global__
+void scale_eigenvector_rows(long long N, const double* transpose_vectors,
+                            const double* weights, double* output) {
+    for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         i<N*N; i+=(long long)blockDim.x*gridDim.x)
+        output[i]=weights[i/N]*transpose_vectors[i];
+}
+
 // Positive singlet RHF H+ = gap + 4J - K - K^T in canonical MO coordinates.
 // This bounded reference kernel fuses both distinct exchange contractions.
 __global__
