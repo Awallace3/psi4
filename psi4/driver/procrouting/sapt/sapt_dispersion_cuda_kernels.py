@@ -5,6 +5,82 @@ No CUDA work occurs at import. No fast-math, denominator clamp or atomics.
 
 CUDA_SOURCE = r'''
 extern "C" {
+// C-order [r,a,s,b] <-> [r,s,b,a], for occupied-only LO rotations.
+__global__
+void permute_occupied_a(long long R, long long A, long long S, long long B,
+                       int reverse, const double* input, double* output) {
+    for (long long i = (long long)blockIdx.x*blockDim.x+threadIdx.x;
+         i < R*A*S*B; i += (long long)blockDim.x*gridDim.x) {
+        const long long b=i%B, s=(i/B)%S, a=(i/(B*S))%A, r=i/(B*S*A);
+        const long long j=((r*S+s)*B+b)*A+a;
+        if (reverse) output[i]=input[j];
+        else output[j]=input[i];
+    }
+}
+
+// Denominators are diagonal in canonical orbitals, NOT localized orbitals.
+__global__
+void make_amplitudes(long long A, long long B, long long R, long long S,
+                     long long r0, long long s0,
+                     const double* ea, const double* eb, const double* er,
+                     const double* es, const double* V, double* T) {
+    for (long long i = (long long)blockIdx.x*blockDim.x+threadIdx.x;
+         i < R*A*S*B; i += (long long)blockDim.x*gridDim.x) {
+        const long long b=i%B, s=(i/B)%S, a=(i/(B*S))%A, r=i/(B*S*A);
+        T[i]=V[i]/(ea[a]+eb[b]-er[r0+r]-es[s0+s]);
+    }
+}
+
+__global__
+void rotation_error(long long N, const double* gram, double* error) {
+    __shared__ double worst[128];
+    double value=0.0;
+    for (long long i=threadIdx.x; i<N*N; i+=blockDim.x) {
+        double v=gram[i]-(i/N==i%N ? 1.0 : 0.0);
+        if (v<0.0) v=-v;
+        if (!(v<1.e300)) v=1.e300; // NaN/Inf also fail validation.
+        if (v>value) value=v;
+    }
+    worst[threadIdx.x]=value;
+    __syncthreads();
+    for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+        if (threadIdx.x<stride && worst[threadIdx.x+stride]>worst[threadIdx.x])
+            worst[threadIdx.x]=worst[threadIdx.x+stride];
+        __syncthreads();
+    }
+    if (threadIdx.x==0) error[0]=worst[0];
+}
+
+__global__
+void reduce_localized_dispersion(long long A, long long B, long long R, long long S,
+                                const double* T, const double* V, const double* X,
+                                const double* W, double* disp, double* exch) {
+    __shared__ double ds[128];
+    __shared__ double xs[128];
+    for (long long pair=blockIdx.x; pair<A*B; pair+=gridDim.x) {
+        const long long a=pair/B, b=pair%B;
+        double d=0.0, x=0.0;
+        for (long long rs=threadIdx.x; rs<R*S; rs+=blockDim.x) {
+            const long long r=rs/S, s=rs%S;
+            const long long i=(r*A+a)*(S*B)+s*B+b;
+            const long long j=(s*A+a)*(R*B)+r*B+b;
+            d+=4.0*T[i]*V[i];
+            x-=2.0*T[i]*(X[i]+W[j]);
+        }
+        ds[threadIdx.x]=d; xs[threadIdx.x]=x;
+        __syncthreads();
+        for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+            if (threadIdx.x<stride) {
+                ds[threadIdx.x]+=ds[threadIdx.x+stride];
+                xs[threadIdx.x]+=xs[threadIdx.x+stride];
+            }
+            __syncthreads();
+        }
+        if (threadIdx.x==0) { disp[pair]+=ds[0]; exch[pair]+=xs[0]; }
+        __syncthreads();
+    }
+}
+
 // Copy a column window, optionally transposed, without staging on the host.
 __global__
 void matrix_window(long long rows, long long stride, long long start,

@@ -314,7 +314,8 @@ class CUDASession:
             self.ptx_sha256 = hashlib.sha256(ptx).hexdigest()
             self.module = self.rt(dr.cuModuleLoadData(bytes(ptx)))
             for name in ("pack_factors", "reduce_dispersion", "matrix_window",
-                         "linear_combination", "reduce_components"):
+                         "linear_combination", "reduce_components", "permute_occupied_a",
+                         "make_amplitudes", "rotation_error", "reduce_localized_dispersion"):
                 self.functions[name] = self.rt(dr.cuModuleGetFunction(self.module, name.encode()))
         except BaseException as error:
             primary = error

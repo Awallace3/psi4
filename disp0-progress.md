@@ -1,5 +1,30 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## LATEST — supported HF gate complete; FISAPT expansion started
+
+All five larger spherical cc-pVDZ physical configurations pass GPU
+Disp20/Exch-Disp20 and occupied pairs at blocks500/5: water-He5x1, frozen
+water-He4x1, water-Ne5x5, reversed Ne-water5x5, shifted/frozen water-Ne4x4.
+Their248native DFMO calls have zero coefficient H2D staging and complete
+zero-live-byte/owner cleanup. Max scalar-or-pair error1.1344735779050472e-17Eh.
+First H2 cases below additionally pass blocks1/5/500.
+
+Spherical F overlap/kinetic and changed-input complete DFMO Grams pass.
+Six tiny PSD duplicate/near-duplicate native probes also match high-precision
+relative1e-12 retained/discarded-mode predictions, including cases that reject
+an absolute cutoff interpretation. This is observable support classification,
+not ill-conditioned FP64 energy accuracy, arbitrary negative-metric support or
+a native effective-rank query.
+
+The supported C1/HF/spherical-SPDF/full-Coulomb dispersion correctness gate is
+complete. No general factory/default-driver/speedup claim. Expansion now targets
+all FISAPT terms while reusing existing canonical GPU upstream paths.
+See `devtools/disp0/fisapt_cuda_coverage.md`.
+
+First source increment adds owned CUDA localized-pair dispersion primitives;
+136CPU/mock/serial test executions pass. Actual CUDA feedback and physical
+localized-pair integration are still pending. No full-FISAPT GPU claim.
+
 ## LATEST — raw-input physical HF GPU dispersion passes both first dimers
 
 Runtime source `af31e4a7fe4f43d94478a5a6595fd8f8d11a7286` is coherently
