@@ -1,5 +1,47 @@
 # FDDS cuEST implementation handoff
 
+## Native supplier candidate — separate from queued GPU source
+
+Candidate `62f79dbea3` introduces an internal checked tensor supplier; its
+default adapter still owns DFHelper. It is not a GPU integral producer or a
+DFHelper-free claim. Logical raw/fitted/derived kinds, contiguous FP64 shapes,
+capacity/overflow and half-open slice checks precede transfers. Native
+registration order, metric powers, fitting threshold, release flags and
+public three-dimensional NumPy metadata are retained.
+
+Fresh isolated CPU build:
+`build_fdds_provider_native_20261022`, coreSHA256
+`82d7aef688643fe3961b16659588c2cc34ae8b5804d434b0a0265ec2dc28cf77`.
+Broad gate `native-gate-v1/native.xml`: **184 executed,168 passed,16 failed,
+zero errors/skips,148.799s**. All64 FDDS,4 supplier-oracle,8 projection,
+6 lifecycle and35 SCF-option cases passed;51/67 CPHF cases passed.
+All16 failures are the CPHF switched-SCF final-grid count assertion at
+`test_cuest_cphf.py:1073` (66186vs66187). This is unresolved, not waived or
+established as pre-existing. One unchanged historical-core isolated case
+passed; an isolated candidate control is pending.
+
+All four new physical tensor oracles report max abs error
+**8.881784197001252e-15 a.u.** The same Mints/NumPy oracle also passed four
+historical supplier cases (max9.152401059253634e-15), using an explicit adapter
+that removes only disabled `CUEST_FDDS_PINV` fixture settings absent from the
+historical binary. Historical coreSHA256
+`c08b6341ce7b29099225fc83fde6dec336c6bc3e38caba0ca5840b7c6722d23f`;
+receipt/XML in `build_fdds_cpu/provider-oracle-20261022-v3/`.
+Earlier setup failures are preserved: v1 unsetPYTHONPATH, v2 four unsupported
+option errors; neither performed numerical comparisons.
+
+Future harness fix `e87e4b0010` initializes PYTHONPATH before staged psiapi
+activation under Bash nounset. Controller+host gate: **26 passed, zero
+failures/errors/skips,2.425s**, `harness-gate-v3/offline.xml`.
+The first harness launch lacked its helper import path and stopped at
+collection; that failed evidence remains in `harness-gate-v2/`.
+**Job14302772 and its3a/94 checkouts remain unchanged**: this future fix does
+not cure or establish any failure there. Its original activation relies on
+inherited PYTHONPATH, a conditional setup hazard pending actual run evidence.
+
+See `devtools/benchmarks/fdds_tensor_provider.md` for native scope, oracle
+limits, fitted-versus-raw semantic blocker and separate contact operator.
+
 ## Canonical0.2.50 validation submitted — 14302772
 
 Direct user authorization led to exactly one new **free embers** job:
