@@ -126,6 +126,16 @@ class AutomaticCudaDriver(unittest.TestCase):
                            cuda_provider_factory=Mock())
         terms.build_sapt_jk_cache.assert_not_called()
 
+    def test_normalized_absent_external_fields_still_select_cuda(self):
+        for external in ({},{"A":None,"B":None,"C":None}):
+            with self.subTest(external=external):
+                ns,_,_,_,terms,mp2,wave=self.fixture()
+                actual=ns["sapt_dft"](wave,wave,wave,do_dft=False,sapt_jk=Mock(),print_header=False,
+                    cuda_provider_factory=Mock(),external_potentials=external)
+                self.assertEqual(actual["Disp20,u"],-.01)
+                terms.dispersion0_cuda.assert_called_once()
+                mp2.df_mp2_sapt_dispersion.assert_not_called()
+
     def test_use_cuest_false_preserves_existing_cpu_and_e2_choices(self):
         for algorithm,method in (("SAPT","df_mp2_sapt_dispersion"),("EINSUMS","df_mp2_einsums_dispersion"),
                                  ("FISAPT","df_mp2_fisapt_dispersion")):

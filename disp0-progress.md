@@ -16,6 +16,13 @@ Whole coherent install and real combined GPU-driver qualification are next;
 prior separate GPU HF/dispersion/FISAPT numeric receipts remain independently
 valid. No full FISAPT driver, upstream-residency or performance claim.
 
+Native04/source4132ae764 whole install and239CPU/mock/serial tests passed.
+The first real public-driver run then exposed an absence-normalization guard:
+the outer driver passes an empty mapping instead of None for no external field.
+The guard now admits empty/all-None mappings while still rejecting actual
+external values (without NumPy array truth tests). A public regression
+reproduced the failure; coherent rerun and same-GPU-gauge CPU pair oracle follow.
+
 ## CURRENT — native GPU IBO localization passes
 
 Whole stage14/source1c9214f16 passes native overlap -> cuSOLVER metric powers ->

@@ -113,7 +113,12 @@ def _automatic_cuda_dispersion(do_dft, do_disp, fsapt_type, use_einsums,
             raise ValidationError("Automatic cuEST HF dispersion currently requires Einsums2 SAPT cache support.")
         if core.get_option("SAPT", "SAPT_DFT_EINSUMS_GPU"):
             raise ValidationError("Automatic cuEST CUDA dispersion conflicts with E2 GPU dispersion selection.")
-        if external_potentials is not None:
+        # The outer driver normalizes absence to an empty/all-None mapping.
+        # Do not use array truthiness to classify actual external fields.
+        has_external = external_potentials is not None and (
+            not isinstance(external_potentials, dict)
+            or any(value is not None for value in external_potentials.values()))
+        if has_external:
             raise ValidationError("Automatic cuEST HF dispersion does not yet support external potentials.")
         if type(block_size) is not int or block_size < 1:
             raise ValidationError("CUDA dispersion block size must be a positive integer.")
