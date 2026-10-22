@@ -128,6 +128,8 @@ class MolecularGrid {
         int debug;
         int bench;
         double weights_cutoff;
+        /// Orient atomic grids in the input frame instead of the molecule's standard frame
+        bool input_orientation = false;
         std::string prunescheme;
         std::string prunetype;
         std::string blockscheme;

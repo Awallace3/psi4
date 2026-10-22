@@ -1884,6 +1884,11 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("DFT_WEIGHTS_TOLERANCE", 1.0E-15);
         /*- density cutoff for LibXC. A negative value turns the feature off and LibXC defaults are used. !expert -*/
         options.add_double("DFT_DENSITY_TOLERANCE", -1.0);
+        /*- Frame of the atomic angular grids. ``STANDARD`` rotates them into the molecule's standard
+        orientation, so energies are invariant to rigid rotation of the input. ``INPUT`` keeps them on the input
+        axes, so atoms at the same position get the same grid in every subsystem of a many-body calculation;
+        set automatically for ``bsse_type='nocp'``. -*/
+        options.add_str("DFT_GRID_ORIENTATION", "STANDARD", "STANDARD INPUT");
         /*- The DFT grid specification, such as SG1.!expert -*/
         options.add_str("DFT_GRID_NAME", "", "SG0 SG1");
         /*- Select approach for pruning. Options ``ROBUST`` and ``TREUTLER`` prune based on regions (proximity to nucleus) while
@@ -1909,6 +1914,14 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         parameters are to be specified in this array option.
         Unused for functionals constructed by user. -*/
         options.add("DFT_DISPERSION_PARAMETERS", new ArrayType());
+        /*- Two finite parameters ``[a1, a2]`` for XDM Becke--Johnson damping; ``a2`` is in angstrom. -*/
+        options.add("XDM_DISPERSION_PARAMETERS", new ArrayType());
+        /*- Look up the XDM damping parameters fitted to counterpoise-corrected
+        interaction energies. The many-body driver sets this for every task of a
+        ``bsse_type='cp'`` or ``'vmfc'`` computation; set it by hand only for
+        counterpoise subsystem jobs run outside that driver. Ignored when
+        |scf__xdm_dispersion_parameters| is set. -*/
+        options.add_bool("XDM_COUNTERPOISE", false);
         /*- Parameters defining the -NL/-V dispersion correction. First b, then C -*/
         options.add("NL_DISPERSION_PARAMETERS", new ArrayType());
         /*- Number of spherical points (A :ref:`Lebedev Points <table:lebedevorder>` number) for VV10 NL integration.

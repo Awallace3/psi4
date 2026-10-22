@@ -93,6 +93,20 @@ def negotiate_convergence_criterion(dermode: Union[Tuple[str, str], Tuple[int, i
         return cc
 
 
+def apply_convergence_criterion_defaults(convcrit: Dict[str, Any], keywords: Dict[str, Any]) -> Dict[str, Any]:
+    """Return *keywords* backed by *convcrit* defaults, letting user keywords win.
+
+    A negotiated criterion (e.g., ``SCF__E_CONVERGENCE``) is withheld when
+    *keywords* already carries that exact key under any casing, so a CBS
+    stage's own options win over the finite-difference defaults.
+
+    """
+    present = {str(kw).upper() for kw in keywords}
+    defaults = {key: value for key, value in convcrit.items() if key.upper() not in present}
+
+    return {**defaults, **keywords}
+
+
 def upgrade_interventions(method):
     try:
         lowermethod = method.lower()

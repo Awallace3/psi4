@@ -3125,6 +3125,8 @@ class OrientationMgr {
     // Use the constructor to determine the standard orientation, and use `MoveIntoPosition' to apply it to a
     // mass-point.
     OrientationMgr(std::shared_ptr<Molecule> mol);
+    // Discard the standard orientation and keep atomic grids aligned with the input axes.
+    void UseInputFrame() { rotation_ = lIdentityMatrix; }
     inline MassPoint MoveIntoPosition(MassPoint mp, int A) {
         LVector oldpos = {mp.x, mp.y, mp.z};
         LVector rotated = mvtimes(rotation_, oldpos);
@@ -3727,6 +3729,7 @@ void MolecularGrid::buildGridFromOptions(MolecularGridOptions const &opt) {
     atomic_grids_.resize(molecule_->natom());
 
     OrientationMgr std_orientation(molecule_);
+    if (opt.input_orientation) std_orientation.UseInputFrame();
     RadialPruneMgr prune(opt);
     NuclearWeightMgr nuc(molecule_, opt.nucscheme);
     double weightcut = opt.weights_cutoff;
@@ -4207,7 +4210,7 @@ void DFTGrid::buildGridFromOptions(std::map<std::string, int> int_opts_map,
                                    std::map<std::string, double> float_opts_map) {
     std::map<std::string, std::string> full_str_options;
     std::vector<std::string> str_keys = {"DFT_RADIAL_SCHEME", "DFT_PRUNING_SCHEME", "DFT_NUCLEAR_SCHEME",
-                                         "DFT_GRID_NAME", "DFT_BLOCK_SCHEME"};
+                                         "DFT_GRID_NAME", "DFT_BLOCK_SCHEME", "DFT_GRID_ORIENTATION"};
     for (auto key : str_keys) {
         if (str_opts_map.find(key) != str_opts_map.end()) {
             full_str_options[key] = str_opts_map[key];
@@ -4261,6 +4264,7 @@ void DFTGrid::buildGridFromOptions(std::map<std::string, int> int_opts_map,
     opt.nangpts = full_int_options["DFT_SPHERICAL_POINTS"];
     opt.weights_cutoff = full_float_options["DFT_WEIGHTS_TOLERANCE"];
     opt.blockscheme = full_str_options["DFT_BLOCK_SCHEME"];
+    opt.input_orientation = (full_str_options["DFT_GRID_ORIENTATION"] == "INPUT");
     opt.remove_distant_points = options_.get_bool("DFT_REMOVE_DISTANT_POINTS");
 
     // printing and debug options
@@ -4459,6 +4463,7 @@ void MolecularGrid::print(std::string out, int /*print*/) const {
         printer->Printf("    Pruning Type           = %14s\n", options_.prunetype.c_str());
     }
     printer->Printf("    Nuclear Scheme         = %14s\n", NuclearWeightMgr::SchemeName(options_.nucscheme));
+    printer->Printf("    Grid Orientation       = %14s\n", options_.input_orientation ? "INPUT" : "STANDARD");
     printer->Printf("\n");
     printer->Printf("    Blocking Scheme        = %14s\n", options_.blockscheme.c_str());
     printer->Printf("    BS radius alpha        = %14g\n", options_.bs_radius_alpha);
