@@ -1,25 +1,36 @@
 #!/bin/bash
 # Run only inside the separately authorized, serialized GPU allocation.
-# Args: REPO COMMIT BUILD NEW_RUN DATA BUILD_JOB GPU QOS
+# Args: REPO COMMIT BUILD NEW_RUN DATA BUILD_JOB GPU QOS [gates|panel]
 set -euo pipefail
 umask 027
 repo=${1:?}; commit=${2:?}; build=${3:?}; run=${4:?}; data=${5:?}
 build_job=${6:?}; gpu=${7:-H200}; qos=${8:-embers}
+mode=${9:-panel}
+[[ "$mode" == gates || "$mode" == panel ]]
+mode_args=()
+[[ "$mode" != gates ]] || mode_args+=(--gates-only)
 : "${GPU_COMPARE_CUDA12_RECEIPT:?absolute independently reviewed CUDA12 receipt}"
 : "${GPU_COMPARE_CUDA12_RECEIPT_SHA256:?independent reviewed CUDA12 receipt SHA256}"
 [[ "$repo" == /* && "$build" == /* && "$run" == /* && "$data" == /* ]]
 [[ "$(git -C "$repo" rev-parse HEAD)" == "$commit" ]]
 [[ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]]
 [[ "${SLURM_CPUS_PER_TASK:?}" == 8 ]]
+slurm_bin=${GPU_COMPARE_SLURM_BIN:-/opt/slurm/current/bin}
+[[ "$slurm_bin" == /* ]]
+actual_qos=$("$slurm_bin/squeue" -h -j "${SLURM_JOB_ID:?}" -o '%q')
+[[ "$actual_qos" == "$qos" ]]
+printf 'QOS: %s\nJOB: %s\nCOMMIT: %s\n' "$actual_qos" "$SLURM_JOB_ID" "$commit"
 base=/storage/project/r-cs207-0/awallace43
 gpu_env="$base/miniconda/envs/gpu4pyscf_compare"
 psi_env="$base/miniconda/envs/p4cuest_sapt"
 source /etc/profile.d/z00_lmod_pace.sh
 module load cuda/12.6.1
 cuda12="${CUDA_HOME:-${CUDA_PATH:?}}/lib64"
-export PYTHONNOUSERSITE=1 PYTHONPATH=""
-unset LD_PRELOAD
+export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=""
+unset LD_PRELOAD PYTHONHOME PSIDATADIR PYSCF_CONFIG_FILE PYSCF_EXT_PATH CUPY_CUDA_LIB_PATH
 export LD_LIBRARY_PATH="$gpu_env/lib:$cuda12"
+export CUDA_HOME="${cuda12%/lib64}" CUDA_PATH="${cuda12%/lib64}"
+export PATH="$gpu_env/bin:$CUDA_HOME/bin:/usr/bin:/bin"
 export OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8
 export SLURM_JOB_QOS="$qos"
 # Small direct-SCF temporary files: job-owned project storage, not failed FDDS
@@ -34,4 +45,4 @@ exec "$gpu_env/bin/python" "$repo/devtools/benchmarks/cuest_direct/recovery.py" 
     --build-job "$build_job" --gpu "$gpu" --qos "$qos" \
     --gpu-env "$gpu_env" --psi-env "$psi_env" --cuda12-lib "$cuda12" \
     --psi-cuda-lib "$base/software/toolchains/cuda13/lib64" \
-    --psi-xc-lib "$base/software/libxc-7.1.2-cuda/lib64"
+    --psi-xc-lib "$base/software/libxc-7.1.2-cuda/lib64" "${mode_args[@]}"

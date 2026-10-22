@@ -6,6 +6,8 @@ umask 027
 repo=${1:?}; commit=${2:?}; build=${3:?}; run=${4:?}; data=${5:?}; build_job=${6:?}
 gpu=${7:-H100}; panel=${8:-preflight}; expected_qos=${9:-embers}
 eigensolver=${10:-native}
+slurm_bin=${GPU_COMPARE_SLURM_BIN:-/opt/slurm/current/bin}
+[[ "$slurm_bin" == /* ]]
 [[ "$gpu" == H100 || "$gpu" == H200 ]]
 [[ "$panel" == preflight || "$panel" == protein83 ]]
 [[ "$expected_qos" == embers || "$expected_qos" == inferno ]]
@@ -14,7 +16,7 @@ eigensolver=${10:-native}
 [[ "$(git -C "$repo" rev-parse HEAD)" == "$commit" ]]
 [[ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]]
 export SLURM_JOB_QOS
-SLURM_JOB_QOS=$(squeue -h -j "${SLURM_JOB_ID:?}" -o '%q')
+SLURM_JOB_QOS=$("$slurm_bin/squeue" -h -j "${SLURM_JOB_ID:?}" -o '%q')
 [[ "$SLURM_JOB_QOS" == "$expected_qos" ]]
 mkdir "$run"
 root="$repo/devtools/benchmarks/gpu_compare"
@@ -28,7 +30,7 @@ source /etc/profile.d/z00_lmod_pace.sh
 module load cuda/12.6.1
 cuda12="${CUDA_HOME:-${CUDA_PATH:?}}/lib64"
 export PYTHONNOUSERSITE=1 PYTHONPATH=""
-unset LD_PRELOAD
+unset LD_PRELOAD PYTHONHOME PSIDATADIR PYSCF_CONFIG_FILE PYSCF_EXT_PATH CUPY_CUDA_LIB_PATH
 export LD_LIBRARY_PATH="$gpu_env/lib:$cuda12"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:?}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS" OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"

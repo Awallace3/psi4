@@ -28,6 +28,18 @@ def probe_passed(path, mode):
         return False
 
 
+def record_gate_completion(output, selected):
+    """Gate-only acceptance is deliberately distinct from panel completion."""
+    output = Path(output)
+    preflight = json.loads((output / "preflight/COMPLETED.json").read_text())
+    if preflight.get("complete") is not True or selected not in ("native", "cupy-canonical"):
+        raise RuntimeError("Cannot accept incomplete GPU gates")
+    atomic_json(output / "GATES_COMPLETE.json", dict(
+        complete=True, eigensolver=selected, unmodified_gpu4pyscf=(selected == "native"),
+        rks_grid_direct_preflight=True, benchmarks_run=False,
+        bases=["cc-pvtz", "aug-cc-pvtz"]))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     for key in ("repo", "build", "output", "data", "gpu-env", "psi-env",
@@ -37,6 +49,8 @@ def main():
         p.add_argument("--" + key, required=True)
     p.add_argument("--gpu", choices=("H100", "H200"), default="H200")
     p.add_argument("--qos", choices=("embers", "inferno"), default="embers")
+    p.add_argument("--gates-only", action="store_true",
+                   help="Stop after eigensolver, RKS/grid and peptide direct/direct gates; no timing panel")
     a = p.parse_args()
     if not os.getenv("SLURM_JOB_ID"):
         p.error("Requires one allocated GPU job")
@@ -98,7 +112,8 @@ def main():
         commit=a.commit, compiled_commit=manifest["commit"], job_id=os.environ["SLURM_JOB_ID"],
         config_sha256=digest(config_path), peptide_sha256=digest(xyz),
         diagnostic_solver_selection=True, timings_include_imports=True, gpu_device=device,
-        planned_systems=["peptide", "protein83"], rks_only=True,
+        planned_systems=["peptide"] if a.gates_only else ["peptide", "protein83"],
+        gates_only=a.gates_only, rks_only=True,
         account=os.getenv("SLURM_JOB_ACCOUNT"), qos=a.qos, gpu=a.gpu))
 
     def run(label, command, seconds):
@@ -145,6 +160,9 @@ def main():
         raise RuntimeError("RKS/grid/direct/direct preflight failed; production withheld")
     if not json.loads((preflight / "COMPLETED.json").read_text()).get("complete"):
         raise RuntimeError("Preflight completion artifact missing")
+    if a.gates_only:
+        record_gate_completion(a.output, selected)
+        return 0
     config["pyscf_eigensolver"] = selected
     config_path = a.output / "config-production.json"
     atomic_json(config_path, config)

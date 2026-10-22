@@ -34,6 +34,25 @@ runtime admission into unrelated FDDS/grid drivers.
 
 ## Fresh CPU build preparation — not submitted
 
+The user subsequently authorized executing setup and then submitting GPU
+testing. The implementation now includes `gpu_compare/strict_setup_job.sh`:
+one free `embers` CPU job captures static CUDA12 candidate evidence and builds
+the strict CUDA13 core in a separate run directory. Resource preflight accepted
+`cpu-small`, 8 CPUs, 64G, four hours. This is a requested limit, not an ETA.
+Submission/job receipts will be recorded in the actual run directory.
+
+Capture uses `python -S -B` to avoid executable site hooks and shared bytecode
+writes. Its candidate records resolved files/ELF SONAMEs, hashes, competing
+providers, local wheel/conda ownership and installed loader sources; it is
+explicitly **not an approved receipt**. Independent review remains mandatory.
+Setup TERM tests cover prelaunch, inter-step, launch-assignment and late-receipt
+cancellation; interrupted evidence is preserved without a success marker.
+Phoenix SLURM executables use the explicit `/opt/slurm/current/bin` directory,
+since the isolated worker PATH excludes it.
+The hardened setup/gate workflow passed **292 offline tests** (212 comparison,
+79 provider, one direct harness), shell syntax and diff checks; evidence is
+`.pi/tasks/01a162c2-c287-766d-a381-64f22ecfda3a-2808822/b87ceed64.output`.
+
 1. Finish local offline checks and review; commit a new comparison source pin.
    Push/fetch by git into a **new** Phoenix checkout pinned at that commit.
    Do not advance the checkout used by job14254253.
@@ -126,3 +145,15 @@ supports transient host contention rather than a deterministic code regression;
 the earlier failures are not erased or accepted as passing runs.
 
 No native build or GPU execution has occurred.
+
+## First GPU allocation
+
+After the real build and inventory review, use `recovery_job.sh`'s optional
+ninth argument `gates` (default remains `panel` for existing callers).
+Gate-only mode performs the real peptide eigenprobe and RKS/grid/direct
+preflight, then writes `GATES_COMPLETE.json` with `benchmarks_run: false` and
+returns before the timing panel. Planned shape: one H200, eight CPUs, 128G,
+two hours, free `embers`, with fresh hardware/driver/QoS receipts.
+If old job14254253 is still active, serialize with `afterany:14254253` and
+`--kill-on-invalid-dep=yes`; do not cancel or modify it. Check immutable
+artifacts, not a successful scheduler exit alone.

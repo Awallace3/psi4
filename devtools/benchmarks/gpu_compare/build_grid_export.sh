@@ -8,10 +8,12 @@ repo=${1:?absolute comparison worktree}
 commit=${2:?pinned commit}
 run=${3:?absolute unique build run}
 expected_qos=${4:-embers}
+slurm_bin=${GPU_COMPARE_SLURM_BIN:-/opt/slurm/current/bin}
+[[ "$slurm_bin" == /* ]]
 [[ "$expected_qos" == embers || "$expected_qos" == inferno ]]
 [[ "$repo" == /* && "$run" == /* && "$run" != "$repo" ]]
 export SLURM_JOB_QOS
-SLURM_JOB_QOS=$(squeue -h -j "${SLURM_JOB_ID:?}" -o '%q')
+SLURM_JOB_QOS=$("$slurm_bin/squeue" -h -j "${SLURM_JOB_ID:?}" -o '%q')
 [[ "$SLURM_JOB_QOS" == "$expected_qos" ]] || { echo "Unexpected allocation QoS" >&2; exit 2; }
 [[ "$(git -C "$repo" rev-parse HEAD)" == "$commit" ]]
 [[ -z "$(git -C "$repo" status --porcelain --untracked-files=no)" ]]
@@ -34,7 +36,7 @@ source /etc/profile.d/z00_lmod_pace.sh
 module load cmake
 unset GCC_ROOT CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH LIBRARY_PATH
 unset LD_PRELOAD
-export PATH="$env_root/bin:$cuda/bin:$PATH" PYTHONNOUSERSITE=1
+export PATH="$env_root/bin:$cuda/bin:$PATH" PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
 export CUDA_HOME="$cuda" CUDA_PATH="$cuda"
 export LD_LIBRARY_PATH="$sdk_lib:$xc/lib64:$cuda/lib64:$env_root/lib"
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1

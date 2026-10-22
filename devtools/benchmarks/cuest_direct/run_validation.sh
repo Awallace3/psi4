@@ -12,13 +12,15 @@ expected_qos=${5:-embers}
 compiled_commit=${6:-$commit}
 expected_gpu=${7:-H200}
 suite=${8:-full}
+slurm_bin=${GPU_COMPARE_SLURM_BIN:-/opt/slurm/current/bin}
+[[ "$slurm_bin" == /* ]]
 [[ "$expected_qos" == embers || "$expected_qos" == inferno ]]
 [[ "$expected_gpu" == H200 || "$expected_gpu" == H100 ]]
 [[ "$suite" == full || "$suite" == rks ]]
 [[ "$repo" == /* && "$build" == /* && "$out" == /* ]]
 [[ -r "$build/build-manifest.json" && ! -e "$out" ]]
 export SLURM_JOB_QOS
-SLURM_JOB_QOS=$(squeue -h -j "${SLURM_JOB_ID:?}" -o '%q')
+SLURM_JOB_QOS=$("$slurm_bin/squeue" -h -j "${SLURM_JOB_ID:?}" -o '%q')
 [[ "$SLURM_JOB_QOS" == "$expected_qos" ]] || { echo "Unexpected allocation QoS" >&2; exit 2; }
 env_root=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt
 cuda=/storage/project/r-cs207-0/awallace43/software/toolchains/cuda13
