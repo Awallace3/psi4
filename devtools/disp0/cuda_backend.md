@@ -9,14 +9,20 @@ reimplementation. All FISAPT terms follow only after the HF dispersion gate.
 No Cartesian calculation case is a supported target; historical diagnostics
 and negative Cartesian-input rejection tests are not production support.
 
-The current prototype is not yet whole-GPU dispersion: the late callback
-materializes canonical setup on the host, the adapter packs coefficient slabs
-with host NumPy, and final global energy sums are host reductions. E2 setup
-graph placement depends on runtime controls and needs actual auditing/proof;
-CPU-reference runs intentionally disabled E2 GPU placement. Successful native
-DFMO/cuBLAS/packing/occupied-pair kernels are bounded evidence, not a claim that
-these remaining stages execute on GPU. CPU control and separate CPU oracles
-remain allowed; numerical CPU fallback does not.
+The explicit raw-HF route uploads upstream matrices and performs dispersion
+setup, coefficient packing, native DFMO, contractions and signed pair/global
+reductions on GPU. Both Disp20 and Exch-Disp20 pass bounded physical gates,
+including unequal/frozen spaces and block-size changes. It no longer uses the
+legacy host-setup callback or host coefficient packing/reduction route.
+
+Native GPU overlap, metric powers, IAO assembly and full ordered IBO localization
+also pass bounded physical gates. All core unscaled two-fragment term families
+have separate physical GPU evidence; downstream tests using the original GPU
+IBO buffers are in progress. Current raw HF/upstream inputs remain explicitly
+CPU fixtures, not a resident SCF/full-workflow claim. Automatic driver dispatch,
+scaled/link/external cases, resident upstream handoff and matched performance
+remain open. CPU scalar control and separate oracles are allowed; numerical
+CPU fallback is not. See `disp0-progress.md` for current receipts.
 
 User explicitly superseded the earlier no-custom-CUDA restriction for this
 backend, selecting small CUDA kernels patterned after NVIDIA's MP2 example.
@@ -31,13 +37,13 @@ No DFHelper integral generation, transforms, packing or storage may feed this
 route, including indirectly through cached factors or disk tensors. No NumPy
 factor producer or implicit CPU/DFHelper fallback is permitted.
 
-The actual explicit call chain is `dispersion0_cuda` → canonical setup callback
-in `fdisp0` (returns BEFORE the DFHelper branch) → strict `CuESTDFMOProvider`
-→ `cuestDFMOIntegralsCompute` into session-owned device output → device packing,
-three cuBLAS products and signed CUDA reduction. Host arrays at this boundary
-are orbital coefficients, energies and rank-one corrections, not DF factors.
-Final occupied-pair components are downloaded for common placement/sum rules.
-The factor consumer rejects host arrays or buffers from a different session.
+The explicit chain is `dispersion0_cuda` → `prepare_hf` (cuBLAS/CUDA setup) →
+`blocked_device_dispersion` → strict `CuESTDFMOProvider.compute_device` →
+`cuestDFMOIntegralsCompute` into session-owned device output → device packing,
+three cuBLAS products and signed CUDA pair/global reductions. Host inputs are
+raw upstream HF matrices and energies, not prepared dispersion corrections or
+DF factors. Final outputs are downloaded after GPU reductions. The factor
+consumer rejects host arrays or buffers from a different session.
 
 Factory/native failure must propagate; the missing live native factory means
 **BLOCKED**, never permission to substitute a host producer. Existing default
@@ -72,8 +78,8 @@ or production numerical certification.
 We do not replace this with nvmath or another implicit package dependency.
 
 `dispersion0_cuda(...,provider_factory=...)` is an explicit experimental Python
-entrypoint, not a new automatic SAPT option. It shares the existing E2 orbital/
-correction setup and original component placement, but bypasses host DFHelper.
+entrypoint, not a new automatic SAPT option. It implements the canonical
+orbital/correction equations with owned GPU operations and bypasses DFHelper.
 Default/non-HF/CPU/E2 dispatch is unchanged. HF, ordinary dispersion, C1,
 frozen-space, fragment/S-inf and conflicting-backend guards remain explicit.
 
@@ -143,9 +149,10 @@ never an automatic computation/allocation/resource-job retry.
 
 ## Plan and resource prerequisites
 
-An admitted production AO/RI basis/plan factory is still missing. It must preserve exact
-Psi4 AO and independent RI spherical/Cartesian conventions, normalization,
-auxiliary ordering and common factor gauge, and explicitly configure:
+The explicit owned factory remains diagnostic-scoped, not general production
+admission. Its spherical normalization/order/unit and bounded signed-factor/
+physical gates now pass. It preserves exact primary/RI identities and a common
+auxiliary gauge, and explicitly configures:
 
 * full Coulomb exchange fraction1, range-separated fraction/omega0;
 * fitting algorithm **MATRIXPOWER1**, not defaultQR0;
@@ -164,8 +171,9 @@ dependency-ordered cleanup, but requires an explicitly unvalidated coefficient
 candidate and cannot yield a production factor provider. It retains queried
 persistent/creation workspaces, rejects dimension disagreement and ambiguous
 native outcomes, and separates accounted workspace bytes from unmeasured opaque
-internals. Native construction and numerical conversion still require device
-validation; CPU fake-handle/lifecycle tests are not that evidence.
+internals. Native construction and bounded numerical conversion now have
+separate device receipts; CPU fake-handle/lifecycle tests alone are not that
+evidence.
 
 Negative eigenvalue treatment, relative rank truncation and contracted-factor/
 signed-energy parity require actual comparisons against native Psi4.
@@ -197,8 +205,9 @@ exercise parallel synchronization or execute CUDA/cuEST/cuBLAS**.
 Identity negatives use explicit synthetic files/callbacks/maps, not loaded SDK
 evidence. Actual local archive inspection is streaming read-only, no extraction.
 
-Runtime prerequisites still include the corrected complete Psi4 installation,
-exact optional dependency lock, audited native basis/plan factory and loaded
-closure/valid-handle provider. Actual GPU numerical and placement gates remain
-unpassed. Allocation14250361 is terminal; no new window, remote probe, resource
-job, build/install, retry or speedup claim follows from this source checkpoint.
+Runtime prerequisites include the coherent whole Psi4 installation, exact
+dependency lock, owned native basis/plan factory and loaded-closure/live-handle
+provider. These and bounded physical GPU gates pass on Cachy's local3090;
+see the CURRENT progress section and sibling receipts. This does not certify
+another machine, general/default/full-FISAPT coverage or a speedup. Historical
+Phoenix allocation14250361 is terminal and outside this local workflow.

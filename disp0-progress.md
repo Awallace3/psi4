@@ -1,5 +1,32 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## CURRENT — native GPU IBO localization passes
+
+Whole stage14/source1c9214f16 passes native overlap -> cuSOLVER metric powers ->
+IAOs -> ordered CUDA Jacobi -> resident L/U/F/Q for water-Ne, shifted/frozen
+water-Ne and frozen water-water, both monomers twice. All12localizations
+converged in3–6sweeps at1e-12; CPU objective maxdelta4.663e-15. Atomic population
+operator gauge error≤3.332e-12; orthonormality, Fock/weights and frozen blocks
+pass. Zero live allocations/native owners after teardown, explicitpeak3,651,052B.
+Receipt: sibling `runs/ibo-device-01`.97actual GPU ordered-Jacobi primitive
+checks and226CPU/mock/serial test executions separately pass.
+
+Both signed dispersion and all core unscaled two-fragment/C/no-external term
+families, including coupled response, already pass bounded physical GPU gates.
+Those previous term tests supplied CPU IBO rotations. New downstream tests
+are now running with native GPU IBO outputs retained directly on device:
+`gpu-ibo-shared-terms-*` and `gpu-ibo-dispersion-*`. Their separate CPU oracles
+use downloaded GPU rotations only to choose an identical comparison gauge;
+CPU localized orbitals, rotations, factors and response solutions never feed
+the new GPU chain. Do not infer a downstream pass before its receipts finish.
+
+Raw HF/upstream matrices remain CPU correctness fixtures. Reusing existing GPU
+SCF and providing an explicit resident-buffer/stream/lifetime handoff, automatic
+driver integration, scaled/link/external cases and full-workflow/matched timing
+remain unfinished. No general full-FISAPT/default or speedup claim.
+
+Older milestone sections below are retained history, not current blockers.
+
 ## LATEST — physical coupled fragment response GPU gate passes
 
 Whole stage11/sourcef7fd2d7ca passes three systems twice, checking both coupled
