@@ -1,0 +1,19 @@
+{
+  "status": "submitted",
+  "job_id": 14302772,
+  "source_pin": "3a7820d7a4e1731dfc58fda707a2dfb397336f45",
+  "harness_pin": "94dad7c9ba36cd4af62de0bfe34a92cbbf850d85",
+  "qos": "embers",
+  "account": "gts-cs207-chemx",
+  "gpu": "h200:1",
+  "cpus": 8,
+  "memory_gib": 128,
+  "wall_limit": "04:00:00",
+  "run_directory": "/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261022-canonical-3a7820-r1",
+  "source_directory": "/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-canonical-0250-20261022-r1/source",
+  "harness_directory": "/storage/project/r-cs207-0/awallace43/gits/psi4.fdds-canonical-0250-20261022-r1/harness-reviewed",
+  "watcher_id": "bd8238dca",
+  "expected_gpu_executions": 176,
+  "expected_gpu_unique_tests": 112,
+  "notes": "Accepted durable job ID and effective embers/resources/Requeue0 checks passed. No new GPU numerical result or speedup established. Partial earlier Git staging remains preserved; only one actual sbatch was invoked."
+}

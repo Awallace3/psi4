@@ -1,5 +1,37 @@
 # FDDS cuEST implementation handoff
 
+## Canonical0.2.50 validation submitted — 14302772
+
+Direct user authorization led to exactly one new **free embers** job:
+**14302772**, gts-cs207-chemx/H200/8CPU/128GiB/four hours, Requeue0.
+Science `3a7820d7a4e1731dfc58fda707a2dfb397336f45` and controller
+`94dad7c9ba36cd4af62de0bfe34a92cbbf850d85` are separately frozen.
+The controller changes no scientific source or tests. New private run:
+`/storage/project/r-cs207-0/awallace43/runs/psi4-fdds/20261022-canonical-3a7820-r1`.
+Its durable `submission/` records include dry-run, invocation, raw sbatch,
+accepted ID and effective resource checks. Local marker:
+`fdds-canonical-submission-14302772.json`; watcher **bd8238dca**,300s.
+
+Fresh CPU-only and canonical CUDA builds precede native tests and63 focused,
+one SAPT GPU and112 full tests (176 GPU-suite executions, zero skips required).
+No new vendor/device result or benchmark claim yet. Controller tests:
+**18 passed in0.99s**, including real Linux timeout and orphan/setsid cleanup;
+final reviewd529443ac108171524dbeea15cfb8e359 found no launch blocker.
+
+The first Git push reset and its idempotent retry succeeded. Remote staging
+first lacked Git objects, then exceeded its SSH bound after the science
+checkout completed. Read-only reconciliation found a clean science checkout
+and an incomplete controller checkout; the latter is preserved. The final
+controller uses a new sparse `harness-reviewed` Git checkout. No submission
+preceded the final one-shot command bddb93f98, which returned0 and accepted ID.
+Shared environments, old stages and other agents' jobs remain untouched.
+
+Separate local follow-up: introduce the checked Coulomb tensor-provider seam.
+The canonical DFMO documentation supplies **fitted** factors; FDDS also needs
+raw Coulomb factors and three-center contact overlap. Neither a reverse
+truncated-metric transform nor a change to fitting/pinv policies is approved.
+Native raw/contact production stays explicit until exact GPU parity exists.
+
 ## Test-ready source — native/device gate still pending
 
 Readiness source **`d35ff353fc3c734257185f29e1e1972ca65aaeb5`** builds on
