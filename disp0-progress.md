@@ -1,5 +1,24 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## CURRENT — GPU exchange/delta-HF scaling qualified; output writer next
+
+Native09/source18c256a00820f600648793f9d1c6cc7bd80ea997 passes whole
+import12, seven actual CUDA scaling edge checks and public water-Ne with
+exchange normalization plus nonzero delta-HF induction scaling. Independent
+CPU05 all-term oracle passes (automatic-cuest-fisapt-scaled-02 and
+automatic-fisapt-cpu-oracle-06). GPU factors: exchange1.000114919793474,
+induction1.6188612344572146; independent factors agree within1.275e-13/0.
+All signed raw components remain independently checked. No zero-denominator
+clamp, retry, CPU factor/localization or response fallback is introduced.
+
+Next slice enables the standard F-SAPT file-output option by passing final
+matrices/charge metadata to the existing stateless fisapt_fdrop writer through
+a data-only adapter. It does NOT construct core.FISAPT or DFHelper for output.
+GPU numerical output remains unchanged; geometry/plain-text serialization is
+explicit host I/O. Public dispatch red/green covers the non-NONE filepath.
+Whole installation and real frozen/scaled GPU/file/CPU-oracle gate remain
+required before claiming that new output route qualified.
+
 ## CURRENT — integrated GPU FISAPT passes three physical systems
 
 Whole native07/source140b400302949a6165e9f988947904fc339acb8a passes

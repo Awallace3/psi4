@@ -2680,8 +2680,32 @@ def fisapt_cuda(cache,dimer_wfn,wfn_A,wfn_B,*,provider_factory,block_size=24,sca
                                        frozen=frozen,block_size=block_size,scaling=scaling)
     work=dict(cache)
     work.update({name:core.Matrix.from_array(value) for name,value in arrays.items()})
+    for side,values in zip(("A","B"),charges):
+        work["Z"+side]=core.Vector.from_array(values)
+        work["Z"+side].name="Z"+side
     data["FISAPT execution"]["entrypoint_seconds_including_factory_cleanup"]=time.perf_counter()-started
     return work,data
+
+
+def fisapt_cuda_drop(cache,dimer_wfn):
+    """Serialize final GPU results with the existing writer, no native FISAPT.
+
+    The writer only needs molecule/vectors/matrices accessors. A data-only
+    adapter avoids constructing a CPU FISAPT/DFHelper object just for output.
+    Scalar/wavefunction variables are already set by the public SAPT driver.
+    """
+    from types import SimpleNamespace
+    from ... import p4util
+    from . import fisapt_proc
+    adapter=SimpleNamespace(molecule=dimer_wfn.molecule,
+        vectors=lambda:{name:cache[name] for name in ("ZA","ZB")},
+        matrices=lambda:cache)
+    stash=p4util.OptionsState(["FISAPT","FISAPT_DO_FSAPT_DISP"])
+    try:
+        core.set_local_option("FISAPT","FISAPT_DO_FSAPT_DISP",core.get_option("SAPT","SAPT_DFT_DO_DISP"))
+        fisapt_proc.fisapt_fdrop(adapter)
+    finally:
+        stash.restore()
 
 
 def fdisp0_cuda(cache,dimer_wfn,*,provider_factory,block_size=24,do_print=True):

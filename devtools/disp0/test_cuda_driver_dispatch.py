@@ -87,7 +87,10 @@ class AutomaticCudaDriver(unittest.TestCase):
     def test_use_cuest_fragment_driver_passes_canonical_scalars_for_gpu_scaling(self):
         self.run_fragment_driver(scaled=True)
 
-    def run_fragment_driver(self,scaled=False):
+    def test_use_cuest_fragment_driver_writes_final_outputs_without_native_cpu_fisapt(self):
+        self.run_fragment_driver(file_output=True)
+
+    def run_fragment_driver(self,scaled=False,file_output=False):
         ns,_,options,_,terms,mp2,wave=self.fixture()
         options.update({("SAPT","SAPT_DFT_DO_FSAPT"):"FISAPT",
                         ("SAPT","SAPT_DFT_INDUCTION_TYPE"):"CPHF",
@@ -95,8 +98,10 @@ class AutomaticCudaDriver(unittest.TestCase):
                         ("FISAPT","FISAPT_FSAPT_IND_RESPONSE"):True,
                         ("FISAPT","FISAPT_FSAPT_EXCH_SCALE"):scaled,
                         ("FISAPT","FISAPT_FSAPT_IND_SCALE"):scaled})
+        if file_output:options[("FISAPT","FISAPT_FSAPT_FILEPATH")]="fixture-fsapt"
         terms.induction=Mock(return_value={"Ind20,r":-.003,"Exch-Ind20,r":.0001})
         terms.localization=Mock(side_effect=AssertionError("CPU localization is forbidden"))
+        terms.fisapt_cuda_drop=Mock()
         matrix=types.SimpleNamespace(np=np.zeros((3,3)))
         cache={key:matrix for key in
                ("Qocc0A","Qocc0B","Elst_AB","Exch_AB","IndAB_AB","IndBA_AB","Disp_AB")}
@@ -116,6 +121,8 @@ class AutomaticCudaDriver(unittest.TestCase):
         terms.localization.assert_not_called()
         terms.dispersion0_cuda.assert_not_called()
         mp2.df_mp2_sapt_dispersion.assert_not_called()
+        if file_output:terms.fisapt_cuda_drop.assert_called_once_with(cache,wave)
+        else:terms.fisapt_cuda_drop.assert_not_called()
 
     def test_unsupported_cuda_requests_fail_before_cache_setup(self):
         cases=(

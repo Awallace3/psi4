@@ -115,10 +115,9 @@ def _automatic_cuda_dispersion(do_dft, do_disp, fsapt_type, use_einsums,
                     or str(core.get_option("FISAPT","FISAPT_LINK_ASSIGNMENT")).upper()!="C"
                     or not core.get_option("FISAPT","FISAPT_FSAPT_IND_RESPONSE")
                     or any(core.get_option("FISAPT",key) for key in (
-                        "SSAPT0_SCALE","FISAPT_EXCH_PARPERP"))
-                    or str(core.get_option("FISAPT","FISAPT_FSAPT_FILEPATH")).upper()!="NONE"):
+                        "SSAPT0_SCALE","FISAPT_EXCH_PARPERP"))):
                 raise ValidationError("Automatic cuEST FISAPT currently requires C-assignment, "
-                                      "coupled HF induction and FISAPT_FSAPT_FILEPATH=NONE.")
+                                      "coupled HF induction, no SSAPT0 or parallel/perpendicular exchange.")
         if not use_einsums:
             raise ValidationError("Automatic cuEST HF dispersion currently requires Einsums2 SAPT cache support.")
         if core.get_option("SAPT", "SAPT_DFT_EINSUMS_GPU"):
@@ -1955,7 +1954,8 @@ def sapt_dft(
     )
 
     # because FISAPT_obj drop sets core variables, avoid setting them twice
-    if core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH").upper() != "NONE" and do_fsapt:
+    if (core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH").upper() != "NONE"
+            and do_fsapt and not use_cuda_dispersion):
         FISAPT_obj = saptdft_fisapt.drop_saptdft_variables(
             dimer_wfn, wfn_A, wfn_B, cache, data
         )
@@ -1980,6 +1980,8 @@ def sapt_dft(
             _set_fsapt_var("FSAPT_EMPIRICAL_DISP", cache["FSAPT_EMPIRICAL_DISP"])
         else:
             _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
+        if use_cuda_dispersion and core.get_option("FISAPT","FISAPT_FSAPT_FILEPATH").upper()!="NONE":
+            jk_terms.fisapt_cuda_drop(cache,dimer_wfn)
     return data
 
 
