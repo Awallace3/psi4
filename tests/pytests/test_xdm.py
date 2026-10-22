@@ -946,14 +946,17 @@ def test_xdm_rejects_empirical_double_dispersion():
     from psi4.driver.procrouting import dft, proc
     from psi4.driver.procrouting.dft import dft_builder
 
-    assert dft_builder.functionals["b3lyp-d3bj"]["dispersion"]["type"] == "d3bj"
+    # qcengine >= 0.50 resolves the "d3bj" alias to "d3bj2b"
+    disp_type = dft_builder.functionals["b3lyp-d3bj"]["dispersion"]["type"]
+    assert disp_type in ("d3bj", "d3bj2b")
     assert "b3lyp-d3bj-xdm" not in dft_builder.functionals
+    message = re.escape(f"XDM cannot be combined with the '{disp_type}' dispersion")
 
-    with pytest.raises(ValidationError, match="XDM cannot be combined with the 'd3bj' dispersion"):
+    with pytest.raises(ValidationError, match=message):
         dft.build_superfunctional("b3lyp-d3bj-xdm", True)
 
     psi4.set_options({"basis": "aug-cc-pvdz", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
-    with pytest.raises(ValidationError, match="XDM cannot be combined with the 'd3bj' dispersion"):
+    with pytest.raises(ValidationError, match=message):
         proc.build_functional_and_disp("b3lyp-d3bj-xdm", True)
 
 
