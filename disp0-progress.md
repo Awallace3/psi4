@@ -1,5 +1,39 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## CURRENT — frozen scaled GPU FISAPT and standard files pass
+
+Whole native10/source9cc6784336e5c0ab6d1e99180b66e031e1d95a75 passes
+import13 and the real public frozen water-dimer/block5 route with both standard
+exchange/induction scaling flags, nonzero delta-HF and normal F-SAPT output.
+All11files are present, geometry/charge assignments match and every serialized
+matrix roundtrips EXACTLY to the final GPU result. CPU FISAPT construction,
+DFHelper and CPU localization alternatives remain poisoned throughout.
+Receipts: automatic-cuest-fisapt-scaled-03 and independent fresh CPU05
+automatic-fisapt-cpu-oracle-07.244CPU/mock/serial executions also pass.
+
+Independent frozen-case errors: elst1.389e-13Eh, scaled exchange9.867e-18,
+scaled directional induction≤2.245e-13, Disp/ExchDisp pairs4.178e-18/1.018e-18,
+signed globals7.156e-18/8.132e-19. GPU scaling factors1.000454362826734
+(exchange) and1.1965654041091784 (induction); independent factors agree.
+All seven actual CUDA ratio/application/invalid-denominator/overflow checks
+pass in fresh sessions with complete cleanup.
+
+Current route: USE_CUEST=true, CUEST_MIXED_PRECISION=false, PUREAM=true,
+SAPT_DFT_FUNCTIONAL=HF, SAPT_DFT_USE_EINSUMS=true,
+SAPT_DFT_DO_FSAPT=FISAPT, FISAPT_LINK_ASSIGNMENT=C,
+FISAPT_FSAPT_IND_RESPONSE=true, SSAPT0_SCALE=false,
+FISAPT_EXCH_PARPERP=false, a C1 two-fragment molecule and an explicitly
+audited cuda_provider_factory passed to public energy('sapt(dft)').
+Exchange/induction scaling and the standard output filepath are supported.
+Leave the ordinary MP2 algorithm default; no separate CUDA enum is needed.
+
+Scope remains bounded: spherical SPDF, unlinked two-fragment HF, admitted
+small localization/response dimensions. Links/third subsystem, external
+fields, SSAPT0, zero-roundtrip resident SCF/cache handoff and matched large
+performance remain unfinished. CPU scalar control/raw-input transport and
+final file formatting are explicit; all new term/localization/response
+numerics execute on GPU. No default/general/protein-scale/speedup claim.
+
 ## CURRENT — GPU exchange/delta-HF scaling qualified; output writer next
 
 Native09/source18c256a00820f600648793f9d1c6cc7bd80ea997 passes whole
