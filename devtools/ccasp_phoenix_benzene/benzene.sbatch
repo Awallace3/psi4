@@ -9,15 +9,15 @@
 #SBATCH --mem=48G
 #SBATCH --time=06:00:00
 #SBATCH --nodelist=atl1-1-02-007-23-1
-#SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-001/logs/%x-%j.out
-#SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-001/logs/%x-%j.err
+#SBATCH --output=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-002/logs/%x-%j.out
+#SBATCH --error=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-002/logs/%x-%j.err
 set -euo pipefail
 umask 027
-ROOT=/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-science-launch-v1
+ROOT=/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-science-launch-v2
 BUILD=/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-build-smoke-v3
-RUN=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-001
+RUN=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-002
 DEPS=/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/build-smoke-003/deps
-SCRATCH=/storage/scratch1/3/awallace43/ccasp-phoenix-benzene-pilot-20261021-science
+SCRATCH=/storage/scratch1/3/awallace43/ccasp-phoenix-benzene-pilot-20261021-science002
 ENV=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt
 STAGE="$BUILD/build_ccasp_phoenix_benzene/stage"
 test "$#" = 2

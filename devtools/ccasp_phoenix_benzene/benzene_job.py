@@ -23,9 +23,9 @@ OLD = Path(PLAN["dependency_source"]).resolve()
 BUILD_RUN = Path(PLAN["run"])
 DEPS = BUILD_RUN / "deps"
 RUN = Path("/storage/project/r-cs207-0/awallace43/runs/"
-           "ccasp-phoenix-benzene-pilot-20261021/P-001")
+           "ccasp-phoenix-benzene-pilot-20261021/P-002")
 SCRATCH = Path("/storage/scratch1/3/awallace43/"
-               "ccasp-phoenix-benzene-pilot-20261021-science")
+               "ccasp-phoenix-benzene-pilot-20261021-science002")
 BUILD_COMMIT = "15cc9a7a9a2bd60e43ebc2533ec99686bca58374"
 BUILD_TREE = "8f0aa8fabd476aafc6bc49b824c60ac935a86753"
 CORE_SHA = "b283901ddac01e6bf7210a7461fb71cd5b2333cf9e42b99d60271959b40ac7eb"
@@ -107,13 +107,21 @@ def snapshot(name, full=True):
     with (RUN / "metadata" / (name + ".maps")).open("x") as stream:
         stream.write(text)
     paths = set()
+    protected = {
+        (STAGE / "lib/psi4/core.cpython-313-x86_64-linux-gnu.so").resolve(),
+        (OLD / "lib/einsums/core.cpython-313-x86_64-linux-gnu.so").resolve(),
+    }
     for line in text.splitlines():
         fields = line.split(None, 5)
         if len(fields) == 6 and fields[5].startswith("/"):
-            if fields[5].endswith(" (deleted)"):
-                raise ValueError("deleted mapped file")
-            path = Path(fields[5]).resolve()
-            if KEY.match(path.name):
+            deleted = fields[5].endswith(" (deleted)")
+            original = Path(fields[5].removesuffix(" (deleted)"))
+            path = original.resolve()
+            numeric = bool(KEY.match(original.name) or KEY.match(path.name))
+            shared_object = bool(re.search(r"\.so(?:\.\d+)*$", original.name))
+            if deleted and (numeric or shared_object or path in protected):
+                raise ValueError("deleted tracked runtime mapping: " + str(original))
+            if numeric:
                 paths.add(path)
     loaded = {str(path): sha(path) for path in sorted(paths)}
     validate_libraries(loaded, full)
@@ -133,6 +141,18 @@ def pilot_arguments(job):
         "--fixture", str(FIXTURE), "--out", str(RUN / "results"),
         "--scratch", str(SCRATCH / ("P-" + job)),
     ]
+
+
+def invoke_pilot(pilot):
+    try:
+        return int(pilot.main())
+    except SystemExit as error:
+        raise ValueError("pilot preflight exit: " + repr(error.code)) from error
+
+
+def check_driver_result(code, result):
+    if code == 0 and not result.get("science_pass"):
+        raise ValueError("driver exit0 without scientific completion")
 
 
 def run(commit, tree):
@@ -199,11 +219,10 @@ def run(commit, tree):
     pilot = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(pilot)
     sys.argv = argv
-    code = int(pilot.main())
+    code = invoke_pilot(pilot)
     snapshot("after-pilot")
     result = json.loads((RUN / "results/result.json").read_text())
-    if code == 0 and not result.get("science_pass"):
-        raise ValueError("driver exit0 without scientific completion")
+    check_driver_result(code, result)
     write(RUN / "metadata/payload-terminal.json", dict(
         returncode=code, science_pass=bool(result.get("science_pass")),
         original_driver_error=result.get("error"), core_sha256=CORE_SHA))

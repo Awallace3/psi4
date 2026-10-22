@@ -1,8 +1,15 @@
 # Psi4 Developers; SPDX-License-Identifier: LGPL-3.0-only
 """Stdlib-only checks; no scientific imports or calculations."""
 import importlib.util
+import contextlib
+import io
+import json
 from pathlib import Path
+import sys
+import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location(
     "benzene_job", Path(__file__).with_name("benzene_job.py"))
@@ -49,6 +56,31 @@ class BenzeneJobTests(unittest.TestCase):
         self.assertEqual(options["--stage"], str(JOB.STAGE))
         self.assertEqual(options["--out"], str(JOB.RUN / "results"))
         self.assertEqual(options["--scratch"], str(JOB.SCRATCH / "P-12345"))
+
+    def test_driver_preflight_exits_produce_nonzero_diagnostic_receipts(self):
+        for message in ("preflight refusal", 1, 0):
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "metadata").mkdir()
+                pilot = SimpleNamespace(main=mock.Mock(side_effect=SystemExit(message)))
+                stderr = io.StringIO()
+                with mock.patch.object(JOB, "RUN", root), \
+                        mock.patch.object(JOB, "run",
+                                          side_effect=lambda *_: JOB.invoke_pilot(pilot)), \
+                        mock.patch.object(sys, "argv",
+                                          ["job", "run", "--commit", "test", "--tree", "test"]), \
+                        contextlib.redirect_stderr(stderr):
+                    self.assertEqual(JOB.main(), 1)
+                record = json.loads((root / "metadata/bootstrap-failure.json").read_text())
+                self.assertIn("pilot preflight exit", record["traceback"])
+                self.assertIn(str(message), stderr.getvalue())
+                self.assertFalse((root / "results").exists())
+
+    def test_zero_without_scientific_completion_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "without scientific completion"):
+            JOB.check_driver_result(0, {})
+        JOB.check_driver_result(0, {"science_pass": True})
+        JOB.check_driver_result(1, {"science_pass": False})
 
 
 if __name__ == "__main__":

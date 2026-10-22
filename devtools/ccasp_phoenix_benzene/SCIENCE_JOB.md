@@ -1,5 +1,13 @@
 # One Phoenix native benzene pilot
 
+P-001/job14256310 stopped BEFORE the original driver/SCF when the harness
+mistook unlinked temporary-file mappings for deleted numerical libraries.
+P-002 preserves that run and uses new science-launch-v2, P-002 and science002
+scratch paths. The corrected parser retains raw maps and rejects deleted
+tracked libraries/core extensions/other `.so` files, while ignoring unrelated
+unlinked temporary aliases. Driver preflight `SystemExit` now reaches a
+nonzero diagnostic receipt. No science/gate/resource/core change is made.
+
 Build14254599 passed five native smoke tests with the v3 stage/core SHA
 `b283901ddac01e6bf7210a7461fb71cd5b2333cf9e42b99d60271959b40ac7eb`.
 The new launcher uses that immutable source15cc9a7a and its original pilot.py,
