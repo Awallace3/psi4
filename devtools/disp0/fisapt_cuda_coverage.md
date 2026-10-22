@@ -265,3 +265,16 @@ powers.215CPU/mock/serial executions pass changed inputs, overlap-root reuse,
 IAO metric/population invariants and occupied-rotation invariance.
 Actual native overlap/IAO assembly validation is pending. Ordered Jacobi,
 orbital reordering/weights and complete GPU IBO remain unimplemented.
+
+UPDATE: native overlap/IAO assembly gate passes (`overlap-iao-device-01`,
+whole13/source963173c58): repeated all/filtered overlap blocks on water-Ne and
+custom SPDF, max2.665e-15; both water-Ne monomer IAOs match CPU references,
+Amax1.491e-14/Bmax2.665e-15. No CPU overlap/IAO values feed the GPU assembly;
+clean zero-byte/owner teardown.
+
+New ordered IBO Jacobi kernels now implement p2/p4 pair updates, GPU objective/
+gradient, frozen/active ranges, literal native reordering, orbital weights and
+AO output construction.226CPU/mock/serial executions pass exact independent
+ordered trajectories, three-cycle permutation/tie convention, AO invariants,
+nonconvergence/metadata guards. Actual GPU primitive and native full-IBO gates
+are pending; no whole-localization/workflow claim yet.

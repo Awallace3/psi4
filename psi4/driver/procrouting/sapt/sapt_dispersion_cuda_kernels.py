@@ -6,6 +6,142 @@ No CUDA work occurs at import. No fast-math, denominator clamp or atomics.
 CUDA_SOURCE = r'''
 extern "C" {
 __global__
+void set_identity(long long N, double* output) {
+    for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         i<N*N; i+=(long long)blockDim.x*gridDim.x) output[i]=i/N==i%N ? 1.0 : 0.0;
+}
+
+__global__
+void ibo_objective(long long O, long long M, long long K, long long power,
+                    const long long* atoms, const double* coordinates, double* stats) {
+    __shared__ double values[128];
+    double metric=0.0;
+    for (long long index=threadIdx.x; index<O*K; index+=blockDim.x) {
+        const long long o=index/K, atom=index%K;
+        double q=0.0;
+        for (long long m=0; m<M; ++m)
+            if (atoms[m]==atom) q+=coordinates[o*M+m]*coordinates[o*M+m];
+        metric+=pow(q,(double)power);
+    }
+    values[threadIdx.x]=metric;__syncthreads();
+    for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+        if (threadIdx.x<stride) values[threadIdx.x]+=values[threadIdx.x+stride];
+        __syncthreads();
+    }
+    if (threadIdx.x==0) stats[0]=pow(values[0],1.0/(double)power);
+}
+
+// EXACT ordered pair/DROT signs from local2.cc. One stream, one block per pair.
+__global__
+void ibo_pair(long long O, long long M, long long K, long long power,
+               long long i, long long j, const long long* atoms,
+               double* coordinates, double* rotation_rows, double* gradient2) {
+    __shared__ double aa[128], bb[128];
+    __shared__ double cosine, sine;
+    double a=0.0,b=0.0;
+    for (long long atom=threadIdx.x; atom<K; atom+=blockDim.x) {
+        double x=0.0,y=0.0,z=0.0;
+        for (long long m=0; m<M; ++m) {
+            if (atoms[m]!=atom) continue;
+            const double xi=coordinates[i*M+m], xj=coordinates[j*M+m];
+            x+=xi*xi;z+=xi*xj;y+=xj*xj;
+        }
+        if (power==2) {
+            a+=4.0*z*z-(x-y)*(x-y);
+            b+=4.0*z*(x-y);
+        } else {
+            a+=-x*x*x*x-y*y*y*y+6.0*(x*x+y*y)*z*z+x*x*x*y+x*y*y*y;
+            b+=4.0*z*(x*x*x-y*y*y);
+        }
+    }
+    aa[threadIdx.x]=a;bb[threadIdx.x]=b;__syncthreads();
+    for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+        if (threadIdx.x<stride) { aa[threadIdx.x]+=aa[threadIdx.x+stride];bb[threadIdx.x]+=bb[threadIdx.x+stride]; }
+        __syncthreads();
+    }
+    if (threadIdx.x==0) {
+        const double phi=0.25*atan2(bb[0],-aa[0]);
+        cosine=cos(phi);sine=sin(phi);gradient2[0]+=bb[0]*bb[0];
+    }
+    __syncthreads();
+    for (long long m=threadIdx.x; m<M; m+=blockDim.x) {
+        const double xi=coordinates[i*M+m],xj=coordinates[j*M+m];
+        coordinates[i*M+m]=cosine*xi+sine*xj;
+        coordinates[j*M+m]=cosine*xj-sine*xi;
+    }
+    for (long long k=threadIdx.x; k<O; k+=blockDim.x) {
+        const double xi=rotation_rows[i*O+k],xj=rotation_rows[j*O+k];
+        rotation_rows[i*O+k]=cosine*xi+sine*xj;
+        rotation_rows[j*O+k]=cosine*xj-sine*xi;
+    }
+}
+
+__global__
+void ibo_sweep_finish(const double* convergence, double* gradient2, double* stats) {
+    if (blockIdx.x==0 && threadIdx.x==0) {
+        stats[1]=sqrt(gradient2[0]);stats[2]=stats[1]<convergence[0] ? 1.0 : 0.0;
+        gradient2[0]=0.0;
+    }
+}
+
+__global__
+void ibo_fock_diagonal(long long O, const double* energies,
+                        const double* rotation_rows, double* diagonal) {
+    for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         i<O; i+=(long long)blockDim.x*gridDim.x) {
+        double value=0.0;
+        for (long long k=0; k<O; ++k) value+=energies[k]*rotation_rows[i*O+k]*rotation_rows[i*O+k];
+        diagonal[i]=value;
+    }
+}
+
+// Preserve the literal native orientation P[new,sorted-old]=1, not its inverse.
+__global__
+void ibo_permutation(long long O, long long frozen, const double* diagonal, double* permutation) {
+    for (long long old=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         old<O; old+=(long long)blockDim.x*gridDim.x) {
+        const long long start=old<frozen ? 0 : frozen, stop=old<frozen ? frozen : O;
+        long long rank=0;
+        for (long long k=start; k<stop; ++k)
+            if (diagonal[k]<diagonal[old] || (diagonal[k]==diagonal[old] && k<old)) ++rank;
+        permutation[(start+rank)*O+old]=1.0;
+    }
+}
+
+__global__
+void ibo_charges(long long O, long long M, long long K, const long long* atoms,
+                  const double* coordinates, double* charges) {
+    for (long long index=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         index<K*O; index+=(long long)blockDim.x*gridDim.x) {
+        const long long atom=index/O,o=index%O;
+        double value=0.0;
+        for (long long m=0; m<M; ++m)
+            if (atoms[m]==atom) value+=coordinates[o*M+m]*coordinates[o*M+m];
+        charges[index]=value;
+    }
+}
+
+__global__
+void ibo_population_error(long long O, long long K, const double* charges, double* error) {
+    __shared__ double values[128];
+    double worst=0.0;
+    for (long long o=threadIdx.x; o<O; o+=blockDim.x) {
+        double value=-1.0;
+        for (long long k=0; k<K; ++k) value+=charges[k*O+o];
+        if (value<0.0) value=-value;
+        if (!(value<1.e300)) value=1.e300;
+        if (value>worst) worst=value;
+    }
+    values[threadIdx.x]=worst;__syncthreads();
+    for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+        if (threadIdx.x<stride && values[threadIdx.x+stride]>values[threadIdx.x])
+            values[threadIdx.x]=values[threadIdx.x+stride];
+        __syncthreads();
+    }
+    if (threadIdx.x==0) error[0]=values[0];
+}
+
+__global__
 void gather_indexed_matrix(long long R, long long C, long long stride,
                             const long long* rows, const long long* columns,
                             const double* input, double* output) {

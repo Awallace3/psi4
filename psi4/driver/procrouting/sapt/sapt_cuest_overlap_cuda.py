@@ -117,6 +117,7 @@ class CuESTOverlapBlocks:
         minimal_centers=tuple(s.center for s in m.shells for _ in range(s.nfunction))
         self.retained_centers=centers
         self.minimal_atom_centers=tuple(c for c in minimal_centers if c in centers)
+        self.local_atom_indices=tuple(centers.index(c) for c in self.minimal_atom_centers)
         self.primary_indices=self.snapshot.primary_indices
         self.minimal_indices=tuple(i for i,c in zip(self.snapshot.minimal_indices,minimal_centers) if c in centers)
         self.owner,self.session=owner,owner.session

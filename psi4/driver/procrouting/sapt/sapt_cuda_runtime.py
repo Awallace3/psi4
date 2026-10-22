@@ -332,7 +332,9 @@ class CUDASession:
                          "matrix_error", "single_gap_error", "trace_factors",
                          "rhf_response_product", "response_dot", "response_precondition",
                          "response_step", "response_direction", "response_metrics",
-                         "inverse_sqrt_weights", "scale_eigenvector_rows", "gather_indexed_matrix"):
+                         "inverse_sqrt_weights", "scale_eigenvector_rows", "gather_indexed_matrix",
+                         "set_identity", "ibo_objective", "ibo_pair", "ibo_sweep_finish",
+                         "ibo_fock_diagonal", "ibo_permutation", "ibo_charges", "ibo_population_error"):
                 self.functions[name] = self.rt(dr.cuModuleGetFunction(self.module, name.encode()))
         except BaseException as error:
             primary = error
