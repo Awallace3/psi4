@@ -151,3 +151,14 @@ Actual GPU primitive feedback passes24checks/68DGEMMs in3.560s,
 maxabs4.974e-14, zero live bytes (`runs/gpu-fisapt-induction-primitives-01`,
 source0cc4e1ba8). Synthetic source/target inputs only, not native assembly.
 No physical fragment-induction, coupled-response or full FISAPT claim.
+
+Next source increment adds explicit `ind20u_device`: resident shared-JKFIT
+canonical occupied/virtual factors plus existing localized diagonal factors,
+native atomwise attractive potentials, GPU full-occupied rotation extraction/
+span/orthogonality/gap validation, and separate directional Ind20u matrices
+with native atom/orbital/external slots. The elst state now retains the exact
+localized occupied inputs used by its diagonal factors.
+
+174 CPU/mock/serial executions pass, including complete synthetic source-sum
+closure and both directional matrices. Native-factor physical Ind20u, source
+assembly CUDA qualification, and all Exch-Ind20u targets remain pending.

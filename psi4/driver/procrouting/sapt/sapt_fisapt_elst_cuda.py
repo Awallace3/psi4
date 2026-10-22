@@ -110,12 +110,14 @@ class FragmentElstDevice:
     qb: object
     matrix: object
     total: object
+    locc_a: object
+    locc_b: object
 
     def require_provider(self,provider):
         if provider is not self.provider:
             raise ValueError("Fragment factors require the original JKFIT provider/gauge")
         provider.validate_basis(provider.primary_basis,provider.auxiliary_basis)
-        for value in (self.qa,self.qb,self.matrix,self.total):
+        for value in (self.qa,self.qb,self.matrix,self.total,self.locc_a,self.locc_b):
             DeviceMath(provider.session).require(value)
         return self
 
@@ -161,4 +163,4 @@ def felst_device(provider,potential,locc_a,locc_b,xyz,za,zb,*,jkfit_basis):
                 for side,charge,occupied in (("A",negative_a,locc_b),("B",negative_b,locc_a)):
                     v=potential.compute_device(point,charge.view((1,),offset=8*atom))
                     nuclear_electronic(session,v,occupied,output,atom,side=side,natoms=N)
-    return FragmentElstDevice(provider,qa,qb,output,sum_values(session,output))
+    return FragmentElstDevice(provider,qa,qb,output,sum_values(session,output),locc_a,locc_b)

@@ -317,7 +317,8 @@ class CUDASession:
                          "linear_combination", "reduce_components", "permute_occupied_a",
                          "make_amplitudes", "rotation_error", "reduce_localized_dispersion",
                          "diagonal_factors", "scatter_matrix", "fragment_nuclear", "reduce_values",
-                         "reduce_fragment_exchange", "make_single_amplitudes", "reduce_induction_source"):
+                         "reduce_fragment_exchange", "make_single_amplitudes", "reduce_induction_source",
+                         "matrix_error", "single_gap_error"):
                 self.functions[name] = self.rt(dr.cuModuleGetFunction(self.module, name.encode()))
         except BaseException as error:
             primary = error

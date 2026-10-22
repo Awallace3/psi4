@@ -6,6 +6,45 @@ No CUDA work occurs at import. No fast-math, denominator clamp or atomics.
 CUDA_SOURCE = r'''
 extern "C" {
 __global__
+void matrix_error(long long count, const double* input, double* output) {
+    __shared__ double worst[128];
+    double value=0.0;
+    for (long long i=threadIdx.x; i<count; i+=blockDim.x) {
+        double v=input[i];
+        if (v<0.0) v=-v;
+        if (!(v<1.e300)) v=1.e300;
+        if (v>value) value=v;
+    }
+    worst[threadIdx.x]=value;
+    __syncthreads();
+    for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+        if (threadIdx.x<stride && worst[threadIdx.x+stride]>worst[threadIdx.x])
+            worst[threadIdx.x]=worst[threadIdx.x+stride];
+        __syncthreads();
+    }
+    if (threadIdx.x==0) output[0]=worst[0];
+}
+
+__global__
+void single_gap_error(long long O, long long V, const double* occupied,
+                      const double* virtuals, double* output) {
+    __shared__ double bad[128];
+    double value=0.0;
+    for (long long i=threadIdx.x; i<O*V; i+=blockDim.x) {
+        const double o=occupied[i/V], v=virtuals[i%V];
+        if (!(o>-1.e300 && o<1.e300 && v>-1.e300 && v<1.e300 && o<v)) value=1.0;
+    }
+    bad[threadIdx.x]=value;
+    __syncthreads();
+    for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+        if (threadIdx.x<stride && bad[threadIdx.x+stride]>bad[threadIdx.x])
+            bad[threadIdx.x]=bad[threadIdx.x+stride];
+        __syncthreads();
+    }
+    if (threadIdx.x==0) output[0]=bad[0];
+}
+
+__global__
 void make_single_amplitudes(long long O, long long V, const double* source,
                             const double* occupied, const double* virtuals, double* output) {
     for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
