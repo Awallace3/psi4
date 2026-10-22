@@ -30,6 +30,11 @@ class Identity(unittest.TestCase):
                 out[0]=value
                 return 0 if handle else 1
             functions[f"cuestGet{name}Version"]=version_type(callback)
+        math_type=ct.CFUNCTYPE(ct.c_int,ct.c_void_p,ct.POINTER(ct.c_int))
+        def math_mode(handle,out):
+            out[0]=1
+            return 0 if handle else 1
+        functions["cuestGetMathMode"]=math_type(math_mode)
         noop_type=ct.CFUNCTYPE(ct.c_int)
         for name in ("cuestParametersCreate","cuestParametersDestroy",
                      "cuestDFMOIntegralsCompute","cuestDFMOIntegralsComputeWorkspaceQuery"):
@@ -70,11 +75,30 @@ class Identity(unittest.TestCase):
         self.assertEqual(native.cuestGetPatchVersion.argtypes,
                          [ct.c_void_p,ct.POINTER(ct.c_uint32)])
         self.assertEqual(native.cuestDFMOIntegralsCompute.argtypes[5],ct.c_uint64)
+        self.assertEqual(native.cuestGetMathMode.argtypes,
+                         [ct.c_void_p,ct.POINTER(ct.c_int)])
+        self.assertEqual(identity.native_math_mode(native,123),1)
+        for handle in (0,True):
+            with self.assertRaises(RuntimeError):
+                identity.native_math_mode(native,handle)
 
     def test_self_consistent_old_native_version_is_rejected(self):
         _,native,_,_,_=self.fixture((0,2,2))
         with self.assertRaisesRegex(RuntimeError,"must be0.2.50"):
             identity.native_version(native,123)
+
+    def test_math_getter_must_exist_and_belong_to_canonical_native(self):
+        _,native,_,_,_=self.fixture()
+        del native.cuestGetMathMode
+        with self.assertRaisesRegex(RuntimeError,"capability missing"):
+            identity.configure_abi(native)
+        _,native,proof,manifest,text=self.fixture()
+        address=ct.cast(native.cuestGetMathMode,ct.c_void_p).value
+        lines=[line.replace(proof["native_path"],"/foreign/math_getter.so")
+               if line.startswith(f"{address:x}-") else line
+               for line in text.splitlines()]
+        with self.assertRaisesRegex(RuntimeError,"outside canonical0.2.50: cuestGetMathMode"):
+            self.audit(native,proof,manifest,"\n".join(lines))
 
     def test_wrong_archive_rejected_before_sdk_or_library_use(self):
         with tempfile.TemporaryDirectory() as temp:

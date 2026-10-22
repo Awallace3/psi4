@@ -1,5 +1,86 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## CURRENT directive — no DFHelper in production dispersion
+
+Read mandatory `../metadata/NO_DFHELPER.md`. Production is strictly cuEST0.2.50
+DFMO → device metric-transformed factors → cuBLAS/custom CUDA kernels.
+No direct/indirect DFHelper, host-factor cache/disk transforms, NumPy producer
+or silent fallback. Keep existing default/non-HF CPU paths and explicitly
+separate correctness oracles unchanged. An unfinished factory means BLOCKED.
+
+Actual source call-chain audit: `dispersion0_cuda` passes a canonical callback;
+`fdisp0` invokes it and returns before constructing DFHelper. Only12 orbital
+spaces/8 rank-one corrections/energies/basis objects cross into the callback,
+not cached DF factors. The strict provider uploads coefficients, calls native
+DFMO into owned device output, and the consumer rejects host/foreign-session
+factor buffers before device packing/cuBLAS/reduction. No fallback was found.
+Native basis/plan factory and real DFMO provenance remain unimplemented/unproven.
+
+Added public-entrypoint CPU regressions with poisoned cached DFHelper and all
+ten host-factor names, stale CPU provenance, factory/native failures and wrong
+provider rejection. **22 CPU CUDA fixtures PASS,0.990s;12 identity fixtures
+PASS,0.020s**, diff check PASS. Logs `../runs/no-dfhelper-audit-01/`.
+These tests are explicitly CPU orchestration spies, NOT GPU execution proof.
+
+Dependency progress: exact Catch2 and mimalloc private builds resolved two
+Einsums fallback configure/export failures without modifying064. Fresh config03
+PASS,25.12s. Whole Einsums/Waggle build04 is running with native Python prefix
+installation, one job. Separate GPU LibXC7.1.2 build/install PASS
+(691.93s build, sm86/GNU14.3/CUDA13.3); its tiny standalone device diagnostic
+is pending, not a SAPT gate. CPU LibXC remains distinct. Exact commands/failure
+logs and updated receipts are under `../metadata/SETUP_STATUS.md` and `../runs/`.
+
+## CURRENT Cachy continuation — private native build started
+
+Clean starting HEAD/source receipt `af13b713b14282d3b9e55301eff842002c78962b`.
+Fresh source-version guard PASS, exact annotated v1.11 and complete history:
+`../metadata/source-version-cachy-01/validated.json`. Existing `environment-v2`
+and build-only `clang23` verified; GNU14.3, nvcc13.3.73, cp313,
+cuda-bindings13.4.4. The two dependency source pins match and are clean.
+
+Actual local device inventory matches setup: RTX3090, capability8.6,
+driver615.78.08, UUID `GPU-d36fd194-bdd6-3d53-96c9-6a67e3225eac`.
+Approximately1005MiB occupied at initial probe; no desktop contexts changed.
+GPU LibXC7.1.2 source `f1eb21e8d6743ed5ba519b8950c1ae02c3f5acd9`
+is building privately with two jobs and explicit CUDA architecture86.
+New build/install attempt `libxc-gpu-01`; exact commands, package-record hashes,
+phase logs and eventual outcome live at `../runs/libxc-gpu-01/receipt.json`.
+Reproducible setup command is in `../metadata/SETUP_STATUS.md`.
+
+Fresh private cp313 fixture rerun: **16 CPU serial-body/transport/setup PASS,
+0.835s; 11 synthetic identity PASS,0.016s**. Logs:
+`../runs/cpu-fixtures-01/`. These remain CPU fixtures, NOT CUDA/native proof.
+The existing environment LibXC7.0.0 is CPU-only, not the required GPU artifact.
+Einsums064 and whole Psi4 builds/import, native factory/admission, real
+CUDA/cuEST/cuBLAS execution and signed physical gate remain unpassed.
+No F-SAPT expansion or performance claim. Phoenix remains out of scope.
+
+Read-only native-factory audit confirmed missing context/basis/pair-list/plan
+construction and cleanup, native policy readback, basis normalization/ordering,
+actual output layout and allocation accounting. Canonical headers require a
+pure RI basis and disallow mixed AO representations; unsupported cases must
+reject. cuEST default math mode may use mixed precision, independently of
+the default QR fitting policy.
+
+Added fail-closed **native FP64 mode1 readback** after symbol-ownership admission
+and before each DFMO batch; changed mode/getter failure invalidates computation,
+with no silent policy mutation. Canonical enum-pointer ABI joins mapped-symbol
+checks. New CPU negatives went RED (5 failures), then **18 CPU CUDA fixtures
+PASS,0.768s;11 identity fixtures PASS,0.016s**, diff check PASS.
+Raw RED/GREEN logs remain in `../runs/cpu-fixtures-01/`.
+Scoped read-only review found no blocker; its identified coverage gaps were
+added (missing/foreign-owner getter, compute-time getter status/exception,
+report mode/readback drift). Final rerun: **20 CPU CUDA fixtures PASS,0.849s;
+12 identity fixtures PASS,0.019s;58 optimized-build guards PASS,0.534s**,
+diff check PASS. Logs: `../runs/cpu-fixtures-02/`.
+This fixes one admission gap, not the missing factory or physical GPU gate.
+Exact shared references `a323afa...`/`9d6d3d4...` were initially absent locally;
+an exact-object fetch succeeded without merging/changing any checkout.
+Both commits were inspected; they provide shared SDK/version admission, not a
+Python Disp0 plan factory. Detailed restrictions/ownership/proof gaps:
+`../metadata/factory-audit.md`. Einsums064 CUDA configure-only attempt
+`einsums-064-config-01` started (sm86/GNU14.3/LLVM23); no concurrent E2 build.
+
 ## Cachy migration — private setup in progress
 
 User requested a dedicated worktree and local agent on `cachy:gits/psi4`

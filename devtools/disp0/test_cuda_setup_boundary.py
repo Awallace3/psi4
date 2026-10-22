@@ -2,12 +2,21 @@
 import ast
 import contextlib
 from functools import reduce
+import importlib
 from pathlib import Path
+import sys
 import time
 import types
 import unittest
+from unittest.mock import Mock, patch
 
 import numpy as np
+
+SAPT = Path(__file__).resolve().parents[2]/"psi4/driver/procrouting/sapt"
+PACKAGE = "_disp0_setup_provenance_fixture"
+package = types.ModuleType(PACKAGE)
+package.__path__ = [str(SAPT)]
+sys.modules[PACKAGE] = package
 
 
 class Matrix:
@@ -83,6 +92,7 @@ class SetupBoundary(unittest.TestCase):
         functions = [n for n in ast.parse(source.read_text()).body
                      if isinstance(n,ast.FunctionDef) and n.name in names]
         namespace = {"core":core,"np":np,"time":time,"FDISP_BLOCK":24,
+                     "__name__":PACKAGE+".setup", "__package__":PACKAGE,
                      "_ein":lambda x,*a,**k: x.np if hasattr(x,"np") else np.asarray(x),
                      "_mat":lambda x:Matrix.from_array(x.np if hasattr(x,"np") else x),
                      "_ein_zeros":lambda *shape,**kw:np.zeros(shape),
@@ -163,6 +173,75 @@ class SetupBoundary(unittest.TestCase):
             options[("SAPT",option)]=value
             with self.subTest(option=option),self.assertRaises((ValueError,NotImplementedError)):
                 ns["dispersion0_cuda"](cache,None,provider_factory=lambda *a:None)
+
+    def test_public_cuda_ignores_poisoned_host_factors_and_cached_dfhelper(self):
+        # Execute the public route and its actual callback/type boundary. This
+        # is a CPU orchestration spy, NOT native admission or factor execution.
+        ns,cache,wave,primary,auxiliary,*_=self.fixture()
+        class ForbiddenHostFactor:
+            def __getattr__(self,name):
+                raise AssertionError("Production must not read cached host factors/DFHelper")
+            def __array__(self,*args,**kwargs):
+                raise AssertionError("Production must not convert cached host factors")
+        poison=ForbiddenHostFactor()
+        for key in ("dfh","df_factors","Aar","Abs","Bas","Bbr","Cas","Cbr",
+                    "Dar","Dbs","Ear","Ebs"):
+            cache[key]=poison
+        cache["Disp0 execution"]={"backend":"STALE CPU DFHelper provenance"}
+        dfmo=importlib.import_module(PACKAGE+".sapt_cuest_dfmo_cuda")
+        backend=importlib.import_module(PACKAGE+".sapt_dispersion_cuda")
+        # Deliberately uninitialized adapter; only the orchestration/type
+        # boundary is under test, and no native/CUDA API is invoked.
+        provider=object.__new__(dfmo.CuESTDFMOProvider)
+        provider.validate_basis=Mock()
+        events=[]
+        @contextlib.contextmanager
+        def factory(p,a):
+            self.assertIs(p,primary);self.assertIs(a,auxiliary)
+            events.append("factory enter")
+            try:yield provider
+            finally:events.append("factory exit")
+        def kernel(p,**kwargs):
+            self.assertIs(p,provider)
+            self.assertEqual(events,["factory enter"])
+            self.assertEqual(set(kwargs),{"spaces","corrections","energies","block_size"})
+            self.assertEqual(len(kwargs["spaces"]),12)
+            self.assertEqual(len(kwargs["corrections"]),8)
+            return {"Disp20 occupied pairs":np.full((2,2),-.25),
+                    "Exch-Disp20 occupied pairs":np.full((2,2),.125),
+                    "Disp0 execution":{"scope":"CPU orchestration spy ONLY"}}
+        with patch.object(backend,"blocked_dispersion",side_effect=kernel) as compute:
+            result=ns["dispersion0_cuda"](cache,wave,provider_factory=factory,
+                                           nfrozen_A=1,nfrozen_B=2,do_print=False)
+        provider.validate_basis.assert_called_once_with(primary,auxiliary)
+        compute.assert_called_once()
+        self.assertEqual(events,["factory enter","factory exit"])
+        self.assertEqual(result["Disp20,u"],-1.)
+        self.assertEqual(result["Exch-Disp20,u"],.5)
+        self.assertEqual(result["Disp0 execution"]["scope"],"CPU orchestration spy ONLY")
+        self.assertNotIn("backend",result["Disp0 execution"])
+        self.assertIs(cache["dfh"],poison)
+
+    def test_public_cuda_factory_or_native_failure_never_falls_back_to_dfhelper(self):
+        dfmo=importlib.import_module(PACKAGE+".sapt_cuest_dfmo_cuda")
+        backend=importlib.import_module(PACKAGE+".sapt_dispersion_cuda")
+        for phase in ("factory","native","wrong provider"):
+            ns,cache,wave,*_=self.fixture()
+            provider=object.__new__(dfmo.CuESTDFMOProvider)
+            provider.validate_basis=Mock()
+            @contextlib.contextmanager
+            def factory(*args):
+                if phase=="factory":
+                    raise RuntimeError("missing live cuEST factory")
+                yield object() if phase=="wrong provider" else provider
+            with self.subTest(phase=phase),patch.object(
+                    backend,"blocked_dispersion",side_effect=RuntimeError("native DFMO failure")) as compute:
+                expected=TypeError if phase=="wrong provider" else RuntimeError
+                message=("strict cuEST" if phase=="wrong provider" else
+                         "missing live cuEST" if phase=="factory" else "native DFMO")
+                with self.assertRaisesRegex(expected,message):
+                    ns["dispersion0_cuda"](cache,wave,provider_factory=factory,do_print=False)
+                self.assertEqual(compute.call_count,1 if phase=="native" else 0)
 
 
 if __name__=="__main__":

@@ -69,6 +69,7 @@ class CuESTDFMOProvider:
         self.session.check()
         self.maps = identity.audit_maps(self.native,self.proof,self.cuda_manifest)
         self.version = identity.native_version(self.native,self.handle)
+        self.math_mode = identity.native_math_mode(self.native,self.handle)
         expected = self.maps["cuda_mapped_sha256"].get(self.session.blas_path)
         if expected != self.session.blas_sha256:
             raise RuntimeError("DFMO and cuBLAS session do not share the admitted CUDA closure")
@@ -89,6 +90,13 @@ class CuESTDFMOProvider:
         if self.closed or self.failed:
             raise RuntimeError("Closed/invalidated DFMO provider; no retry")
         self.session.check()
+        try:
+            # Borrowed handles can be reconfigured by their owner between calls.
+            # Rejection permanently disables computation, never restores the mode.
+            self.math_mode = identity.native_math_mode(self.native,self.handle)
+        except BaseException:
+            self.failed = True
+            raise
         if not pairs or len(pairs) > 10:
             raise ValueError("DFMO needs1..10 independent coefficient pairs")
         names, nl, nr, left, right = [], [], [], [], []
@@ -158,6 +166,7 @@ class CuESTDFMOProvider:
                 "coefficient_h2d_bytes":self.input_bytes,"device_factor_bytes":self.output_bytes,
                 "producer_seconds":self.elapsed,"sdk_file_proof":self.proof,
                 "native_version":self.version,"loaded_maps":self.maps,"declared_plan_policy":POLICY,
+                "native_math_mode":self.math_mode,
                 "basis_metric_rank_eigenvalue_semantics_verified":False,
                 "note":"Policy declarations and capabilities are not DFMO numerical/rank proof"}
 
