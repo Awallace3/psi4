@@ -1,6 +1,49 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
-## CURRENT dependency rebuild — private HDF5 discovery proved
+## CURRENT native gate — retain strict mapping proof; Btrfs fallback rejected
+
+Private dependencies now build/install/import coherently: exact Einsums064
+CUDA86 with whole matching Waggle, private HDF51.14.6, CPU LibXC7.0 for the
+oracle and separate GPU LibXC7.1.2. Whole reviewed factory-stage03 at58bd62caf
+passes core/metadata/all896Python-file identity and native CPU smoke; no overlays.
+E2's7used host-API fixtures pass. The separate CPU/native FISAPT suite passes
+22tests/1expected mock-only skip with64signed comparisons, max1.003e-17Eh.
+This CPU oracle's DFHelper factors never feed a production GPU calculation.
+
+Real native attempt01 stopped at binding-version admission. The user approved
+a scoped-prefix-lock correction of only cuda-bindings13.4.4→exact13.3.0.
+All13855protected files/483other package records remained unchanged; old payload,
+exact archives and corrected explicit lock are retained. Bound/direct canonical
+CUDA versions now both13030; fresh whole-stage/E2/API checks pass.
+
+Native attempt02 reached actual NVRTC13.3 compilation/module load on canonical
+3090 UUID/PCI/cap8.6 (PTX SHA404cb7d2...287f0e2), but launched no kernel and
+made no cuEST constructor call. It rejected a Btrfs identity discrepancy:
+same inode, maps/mountinfo superblock device0:34 versus fstat subvolume0:51.
+Session cleanup completed, no live allocations/native owners remained.
+
+Live non-executable RED reproducer isolated that filesystem behavior. Review
+rejected the proposed fdinfo/mountinfo/path-link fallback: two overmounted
+Btrfs subvolumes can present the same path/inode/raw-device while the mapped
+and opened files differ. A stable descriptor mount record identifies only the
+opened file, not the VMA's backing mount. The adversarial negative went RED
+against the proposal, which was withdrawn completely. **56cuEST+31CUDA guards
+now PASS with the original strict runtime code**, byte-identical to installed03.
+No Btrfs exception was installed. Prior positive probe evidence did not prove
+safe alias admission. Investigating an explicitly pinned, byte-identical native
+closure on compatible non-Btrfs storage; no deployment or new native attempt yet.
+
+Receipts: `../runs/native-plan-device-01/`, `native-plan-device-02/`,
+`cuda-runtime-version-probe-02/`, `binding-pin-apply-01/`,
+`btrfs-identity-red-01/`, `btrfs-identity-green-01/`,
+`mapped-identity-live-{red,green}-01/`, `btrfs-overmount-red-01/`,
+`btrfs-overmount-strict-green-01/`, `cpu-signed-01/`.
+Current full chronology: `../metadata/SETUP_STATUS.md`.
+Production still BLOCKED: no admitted normalization/layout/rank, DFMO compute,
+custom-kernel numerical execution or signed GPU gate. No DFHelper fallback,
+F-SAPT expansion or speedup claim. Following entries preserve earlier states.
+
+## PRIOR dependency rebuild — private HDF5 discovery proved
 
 Whole Einsums build04 FAILED at executable link346/347 after3303.60s; no
 installation or runtime import proof. `calibrate_hardware` linked system

@@ -100,7 +100,12 @@ are capabilities/provenance, **not** DFMO numerical/rank proof.
 
 Map hashing compares each mapping's inode/device against an opened file's
 `fstat`, hashes that same descriptor, and verifies before/after fd/path
-fingerprints. Mapped ownership is admitted before version getter calls.
+fingerprints. Btrfs maps/mountinfo superblock devices may differ from subvolume
+`st_dev`; these mappings remain fail-closed. A proposed fdinfo/mountinfo/path-link
+exception was rejected because stable cross-subvolume overmounts can make
+different mapped/opened files present identical observations. No such fallback
+is installed: descriptor pathname evidence must not replace backing-file proof.
+Mapped ownership is admitted before version getter calls.
 Known CUDA13 toolkit families reject a self-consistent CUDA12 BLAS entry even
 when CUDART reports13. Failed final cleanup retains failed resources and
 permanently disables execution; an explicit cleanup-only retry is possible,
