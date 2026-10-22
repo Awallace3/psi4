@@ -1,5 +1,27 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## LATEST — localized FISAPT dispersion physical matrices pass
+
+Explicit `fdisp0_cuda` at `d8710cf97` is coherently installed in whole stage06
+(`1.12a1.dev689+d8710cf`,898Python/154driver files; native core unchanged).
+It passes water-Ne5x5, shifted/frozen water-Ne4x4, and frozen water-water4x4,
+each at blocks500/5 with actual nontrivial IBO input rotations.
+
+Independent native C++ PAIR/BLOCKED and Python fragment references agree.
+Actual GPU native-factor/localized signed pairs and globals pass; full native
+`Disp_AB` matrices—including atom/frozen/external zero slots and active
+offsets—have maxerror6.799980500557523e-18Eh. Six physical block probes,
+208nativeFP64DFMO calls, no coefficient H2D staging, zero live bytes/native
+owners after all cleanups. Max scalar-or-pair error3.1929753979698106e-17Eh.
+Receipts: sibling `runs/localized-fisapt-gpu-01` through `-03`.
+
+This is unscaled two-fragment HF/C-assignment/no-external dispersion coverage,
+NOT all FISAPT terms or GPU localization: IBO construction/upstream cache are
+explicit separate CPU reference inputs in these tests. Link/SIAO/PAR-PERP,
+external and scaled cases fail closed. No automatic CUDA dispatch or speedup.
+Fragment electrostatics is next; native FP64 potential qualification is running.
+Exchange, induction/response, localization and complete workflow remain open.
+
 ## LATEST — supported HF gate complete; FISAPT expansion started
 
 All five larger spherical cc-pVDZ physical configurations pass GPU

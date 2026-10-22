@@ -51,6 +51,13 @@ external/S-inf cases fail closed. Its141CPU/mock/serial executions pass;
 whole-stage/native-factor/physical LO tests are pending.
 This is not automatic FISAPT dispatch, GPU localization or other-term coverage.
 
+UPDATE: whole stage06 atd8710cf97 and actual localized physical gate now pass:
+water-Ne5x5, shifted/frozenwater-Ne4x4, frozenwater-water4x4, blocks500/5.
+NativeCppPAIR/BLOCKED/Python reference matrices agree. GPU fullmatrix maxerror
+6.800e-18Eh, signedcomponent/pair max3.193e-17Eh,208nativeDFMOcalls,
+coefficientH2D0 and cleanup0bytes/owners. Upstream IBO localization remains CPU
+reference input; it is not full-FISAPT GPU coverage.
+
 ## Next gates
 
 1. Wire localized dispersion to real device DFMO and compare full localized
