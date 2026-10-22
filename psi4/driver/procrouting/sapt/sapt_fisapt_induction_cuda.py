@@ -11,6 +11,60 @@ from .sapt_fisapt_cuda import validate_rotations
 from .sapt_fisapt_elst_cuda import scatter_matrix,sum_values
 
 
+def projected_coulomb(session,density_factors,target_factors):
+    """J[generalized density] in a target MO block, using ONE shared DFMO gauge.
+
+    Inputs are already metric-transformed native factors (Q,k,k) and (Q,o,v).
+    Trace over occupied density columns, then contract Q; no AO J matrix, CPU
+    factor, spin factor, or second whitening operation is introduced.
+    """
+    m=DeviceMath(session)
+    for value in (density_factors,target_factors):m.require(value)
+    if (len(density_factors.shape)!=3 or len(target_factors.shape)!=3
+            or density_factors.shape[1]!=density_factors.shape[2]
+            or density_factors.shape[0]!=target_factors.shape[0]):
+        raise ValueError("Shared-Q square density and occupied-virtual factors required")
+    Q,O,_=density_factors.shape
+    rho=session.empty((Q,1))
+    session.launch("trace_factors",min(65535,Q),128,[Q,O,density_factors,rho])
+    _,A,V=target_factors.shape
+    result=session.gemm_at_b(rho,target_factors.view((Q,A*V)))
+    return result.view((A,V))
+
+
+def exchange_induction_target(session,matrices,localized,virtual,jp,*,side):
+    """Localized S^2 exchange-induction target; JP is already projected to MO.
+
+    Raw upstream AO matrices remain resident; generalized J_P is obtained by
+    projected_coulomb() from the same original JKFIT plan. Mixed K_O is not
+    symmetric: swap A/B AND transpose it for the B-response direction.
+    """
+    fields={"S","D_A","D_B","V_A","V_B","J_A","J_B","K_A","K_B","J_O","K_O"}
+    if side not in ("A","B") or set(matrices)!=fields:
+        raise ValueError("Complete raw shared exchange-induction AO inputs required")
+    m=DeviceMath(session)
+    for value in (*matrices.values(),localized,virtual,jp):m.require(value)
+    if (len(localized.shape)!=2 or len(virtual.shape)!=2
+            or localized.shape[0]!=virtual.shape[0]
+            or jp.shape!=(localized.shape[1],virtual.shape[1])
+            or any(value.shape!=(localized.shape[0],localized.shape[0]) for value in matrices.values())):
+        raise ValueError("Common AO and projected-JP target layouts required")
+    other="B" if side=="A" else "A"
+    S=matrices["S"];da,db=matrices["D_"+side],matrices["D_"+other]
+    ka,kb=matrices["K_"+side],matrices["K_"+other]
+    wa=m.combine(matrices["V_"+side],matrices["J_"+side],1,2)
+    wb=m.combine(matrices["V_"+other],matrices["J_"+other],1,2)
+    ko=matrices["K_O"] if side=="A" else m.window(matrices["K_O"],transpose=True)
+    ha,hb=m.combine(wa,ka,1,-1),m.combine(wb,kb,1,-1)
+    left=m.terms((-1,ha),(1,m.product(S,da,wb)),(1,m.product(wa,db,S)),
+                 (-1,m.window(ko,transpose=True)))
+    right=m.terms((-1,hb),(1,m.product(wb,da,S)),(-1,ko))
+    operator=m.terms((-1,kb),(-2,matrices["J_O"]),(1,ko),
+                     (1,m.product(S,db,left)),(1,m.product(right,db,S)))
+    base=session.gemm_at_b(localized,session.gemm(operator,virtual))
+    return m.combine(base,jp,1,2)
+
+
 def uncoupled_source(session,source,energies,rotation,targets,outputs,*,column):
     """Divide a canonical source, localize amplitudes, reduce one source column.
 

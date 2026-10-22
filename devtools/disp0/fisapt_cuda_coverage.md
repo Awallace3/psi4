@@ -162,3 +162,11 @@ localized occupied inputs used by its diagonal factors.
 174 CPU/mock/serial executions pass, including complete synthetic source-sum
 closure and both directional matrices. Native-factor physical Ind20u, source
 assembly CUDA qualification, and all Exch-Ind20u targets remain pending.
+
+Exchange-induction groundwork now includes a GPU Q-wise density-factor trace,
+projected J_P contraction (same DFMO metric gauge, no AO J_P/CPU factors), and
+the localized S^2 target operator for both directions, with nonsymmetric K_O
+orientation explicit.175CPU/mock/serial executions pass against an independent
+fourteen-term expanded AO expression and wrong-K_O-transpose discriminator.
+The targets are not yet wired to native generalized-density DFMO in the source
+loop; actual GPU target primitives and physical Exch-Ind20u remain pending.

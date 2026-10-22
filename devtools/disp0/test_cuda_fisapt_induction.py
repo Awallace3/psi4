@@ -38,6 +38,31 @@ def evaluate(session,data,*,exchange=True):
     return out
 
 
+def target_fixture(seed,K=9,A=3,V=5,Q=17,O=4):
+    rng=np.random.default_rng(seed)
+    matrices={n:rng.normal(size=(K,K))*.1 for n in
+              ("S","D_A","D_B","V_A","V_B","J_A","J_B","K_A","K_B","J_O","K_O")}
+    localized,virtual=rng.normal(size=(K,A)),rng.normal(size=(K,V))
+    density,factors=rng.normal(size=(Q,O,O)),rng.normal(size=(Q,A,V))
+    jp=np.einsum("Qkk,Qar->ar",density,factors)
+    expected={}
+    for side,other in (("A","B"),("B","A")):
+        # Expanded independent transcription of all fourteen AO product terms.
+        S=matrices["S"];da,db=matrices["D_"+side],matrices["D_"+other]
+        va,vb=matrices["V_"+side],matrices["V_"+other]
+        ja,jb=matrices["J_"+side],matrices["J_"+other]
+        ka,kb=matrices["K_"+side],matrices["K_"+other]
+        ko=matrices["K_O"] if side=="A" else matrices["K_O"].T
+        operator=(-kb-2*matrices["J_O"]+ko
+            -S@db@va-2*S@db@ja+S@db@ka
+            +S@db@S@da@vb+2*S@db@S@da@jb
+            +S@db@va@db@S+2*S@db@ja@db@S-S@db@ko.T
+            -vb@db@S-2*jb@db@S+kb@db@S
+            +vb@da@S@db@S+2*jb@da@S@db@S-ko@db@S)
+        expected[side]=localized.T@operator@virtual+2*jp
+    return (matrices,localized,virtual,density,factors),jp,expected
+
+
 class Induction(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -51,7 +76,8 @@ class Induction(unittest.TestCase):
             "matrix_window":[ct.c_longlong]*4+[ct.c_int]+[ct.c_void_p]*2,
             "rotation_error":[ct.c_longlong]+[ct.c_void_p]*2,
             "scatter_matrix":[ct.c_longlong]*6+[ct.c_void_p]*2,
-            "reduce_values":[ct.c_longlong]+[ct.c_void_p]*2}.items():
+            "reduce_values":[ct.c_longlong]+[ct.c_void_p]*2,
+            "trace_factors":[ct.c_longlong]*2+[ct.c_void_p]*2}.items():
             fn=getattr(cls.lib,name);fn.argtypes=args;fn.restype=None
 
     @classmethod
@@ -166,6 +192,27 @@ class Induction(unittest.TestCase):
                 self.assertFalse(state.qa.allocation.freed or state.qb.allocation.freed)
                 self.assertEqual(calls.count("DFMO"),1)
                 self.assertEqual(calls.count("potential"),2*N)
+            self.assertEqual(session.live_bytes,0)
+
+    def test_projected_coulomb_and_expanded_exchange_targets_both_ko_orientations(self):
+        for seed in (111,112):
+            data,expected_jp,expected=target_fixture(seed)
+            matrices,localized,virtual,density,factors=data
+            session=Session(self.lib)
+            session.download=lambda *_:self.fail("Projected JP/target intermediate host staging")
+            with session.scope():
+                jp=induction.projected_coulomb(session,session.upload(density),session.upload(factors))
+                np.testing.assert_allclose(host(jp),expected_jp,rtol=1e-11,atol=1e-12)
+                raw={n:session.upload(v) for n,v in matrices.items()}
+                dl,dv=session.upload(localized),session.upload(virtual)
+                for side in ("A","B"):
+                    target=induction.exchange_induction_target(session,raw,dl,dv,jp,side=side)
+                    np.testing.assert_allclose(host(target),expected[side],rtol=1e-11,atol=1e-12)
+                wrong=dict(raw,K_O=session.upload(matrices["K_O"].T))
+                bad=induction.exchange_induction_target(session,wrong,dl,dv,jp,side="B")
+                self.assertGreater(np.max(np.abs(host(bad)-expected["B"])),1e-3)
+                with self.assertRaises(ValueError):
+                    induction.projected_coulomb(session,session.empty((4,2,3)),session.empty((4,2,3)))
             self.assertEqual(session.live_bytes,0)
 
 

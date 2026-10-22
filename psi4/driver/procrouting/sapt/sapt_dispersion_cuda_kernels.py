@@ -5,6 +5,25 @@ No CUDA work occurs at import. No fast-math, denominator clamp or atomics.
 
 CUDA_SOURCE = r'''
 extern "C" {
+// The generalized density is Cprime*Cocc.T; no spin factor or re-whitening.
+__global__
+void trace_factors(long long Q, long long O, const double* factors, double* output) {
+    __shared__ double sums[128];
+    for (long long q=blockIdx.x; q<Q; q+=gridDim.x) {
+        double value=0.0;
+        for (long long o=threadIdx.x; o<O; o+=blockDim.x)
+            value+=factors[(q*O+o)*O+o];
+        sums[threadIdx.x]=value;
+        __syncthreads();
+        for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+            if (threadIdx.x<stride) sums[threadIdx.x]+=sums[threadIdx.x+stride];
+            __syncthreads();
+        }
+        if (threadIdx.x==0) output[q]=sums[0];
+        __syncthreads();
+    }
+}
+
 __global__
 void matrix_error(long long count, const double* input, double* output) {
     __shared__ double worst[128];

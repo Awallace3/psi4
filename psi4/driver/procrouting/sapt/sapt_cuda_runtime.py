@@ -318,7 +318,7 @@ class CUDASession:
                          "make_amplitudes", "rotation_error", "reduce_localized_dispersion",
                          "diagonal_factors", "scatter_matrix", "fragment_nuclear", "reduce_values",
                          "reduce_fragment_exchange", "make_single_amplitudes", "reduce_induction_source",
-                         "matrix_error", "single_gap_error"):
+                         "matrix_error", "single_gap_error", "trace_factors"):
                 self.functions[name] = self.rt(dr.cuModuleGetFunction(self.module, name.encode()))
         except BaseException as error:
             primary = error
