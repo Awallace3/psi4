@@ -1,5 +1,40 @@
 # Experimental Python/cuEST CUDA dispersion — CuPy-free
 
+## Automatic public HF selection with USE_CUEST
+
+As requested, ordinary HF dispersion now selects the custom CUDA/cuEST route
+automatically when `USE_CUEST=true`, independently of the old MP2 algorithm
+default. The caller must inject `cuda_provider_factory(primary, auxiliary)`,
+a context manager yielding the strictly audited `CuESTDFMOProvider`.
+There are no hardcoded SDK paths or implicit native-handle/factor fallbacks.
+
+```python
+psi4.set_options({
+    "USE_CUEST": True,
+    "CUEST_MIXED_PRECISION": False,
+    "SAPT_DFT_FUNCTIONAL": "HF",
+    "SAPT_DFT_USE_EINSUMS": True,
+})
+energy, wave = psi4.energy(
+    "sapt(dft)", molecule=dimer, return_wfn=True,
+    cuda_provider_factory=audited_factory,
+    cuda_dispersion_block_size=24,
+)
+execution = wave._sapt_cuda_dispersion_execution
+```
+
+Missing factory configuration is rejected before SCF. Automatic HF selection
+requires native FP64, ordinary dispersion, spherical/C1 inputs and the current
+Einsums2 SAPT cache. Fragment-driver wiring, external potentials and conflicting
+E2 GPU-dispersion selections fail closed; no CPU dispersion retry follows native
+failure. Structured diagnostics are not inserted into scalar QCVariables.
+`USE_CUEST=false` and existing non-HF/empirical routes remain unchanged.
+
+Public dispatch guards have CPU-only regression coverage. The coherent install
+and combined real GPU SCF -> automatic dispersion gate remain pending here;
+separate native GPU HF and numerical dispersion gates already pass. This is not
+yet complete/default FISAPT, certified upstream cache placement or speedup proof.
+
 ## Current target and uncompleted GPU scope
 
 User requires spherical primary and spherical RI bases only, functional=HF,
@@ -77,8 +112,8 @@ lock are recorded in the sibling setup receipt; this is not portable-machine
 or production numerical certification.
 We do not replace this with nvmath or another implicit package dependency.
 
-`dispersion0_cuda(...,provider_factory=...)` is an explicit experimental Python
-entrypoint, not a new automatic SAPT option. It implements the canonical
+`dispersion0_cuda(...,provider_factory=...)` remains the explicit low-level
+entrypoint used by automatic `USE_CUEST` HF dispatch. It implements the canonical
 orbital/correction equations with owned GPU operations and bypasses DFHelper.
 Default/non-HF/CPU/E2 dispatch is unchanged. HF, ordinary dispersion, C1,
 frozen-space, fragment/S-inf and conflicting-backend guards remain explicit.

@@ -1,5 +1,21 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## CURRENT — automatic USE_CUEST HF dispersion driver wiring
+
+User selected automatic public dispatch, not a separate CUDA algorithm option.
+Ordinary HF + USE_CUEST now selects the strict custom CUDA/cuEST continuation,
+requiring an injected audited cuda_provider_factory and native FP64 before SCF.
+The old default MP2 algorithm does not override that selection. Factory/block
+kwargs are consumed before SCF and forwarded to the dispersion continuation.
+Execution diagnostics stay on the wavefunction, not scalar QCVariables.
+
+Public-seam CPU tests cover selection, missing configuration before SCF,
+unsupported fragment/external/backend/block requests, native failure without
+CPU retry, native FP64 policy, and unchanged CPU/E2/non-HF/empirical routes.
+Whole coherent install and real combined GPU-driver qualification are next;
+prior separate GPU HF/dispersion/FISAPT numeric receipts remain independently
+valid. No full FISAPT driver, upstream-residency or performance claim.
+
 ## CURRENT — native GPU IBO localization passes
 
 Whole stage14/source1c9214f16 passes native overlap -> cuSOLVER metric powers ->
