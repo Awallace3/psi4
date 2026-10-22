@@ -30,10 +30,12 @@ E2 GPU-dispersion selections fail closed; no CPU dispersion retry follows native
 failure. Structured diagnostics are not inserted into scalar QCVariables.
 `USE_CUEST=false` and existing non-HF/empirical routes remain unchanged.
 
-Public dispatch guards have CPU-only regression coverage. The coherent install
-and combined real GPU SCF -> automatic dispersion gate remain pending here;
-separate native GPU HF and numerical dispersion gates already pass. This is not
-yet complete/default FISAPT, certified upstream cache placement or speedup proof.
+Public dispatch guards and whole native05/source2bded81c9 pass240CPU/mock/serial
+tests. The first real public water-Ne/block500 GPU HF -> automatic dispersion
+run passes; a separate CPU raw-Coulomb oracle in its exact GPU HF gauge agrees
+to2.054e-18Eh on signed occupied pairs. Block/frozen extensions are running.
+This is not complete/default FISAPT, certified upstream cache placement or
+matched speedup proof. See the CURRENT progress section for retained receipts.
 
 ## Current target and uncompleted GPU scope
 

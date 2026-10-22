@@ -20,8 +20,19 @@ Native04/source4132ae764 whole install and239CPU/mock/serial tests passed.
 The first real public-driver run then exposed an absence-normalization guard:
 the outer driver passes an empty mapping instead of None for no external field.
 The guard now admits empty/all-None mappings while still rejecting actual
-external values (without NumPy array truth tests). A public regression
-reproduced the failure; coherent rerun and same-GPU-gauge CPU pair oracle follow.
+external values (without NumPy array truth tests).240CPU/mock/serial tests and
+whole native05/source2bded81c9 pass. The real public USE_CUEST run for water-Ne,
+block500, now passes with the old algorithm default SAPT and CPU alternatives
+poisoned (`runs/automatic-cuest-driver-02`): Disp20=-8.735392964583837e-5Eh,
+ExchDisp20=+6.6461083657762646e-6Eh. Missing factory rejects before SCF;
+actual native SDK0.2.50/mathmode1,2DFMOcalls, coefficientH2D0 and clean teardown.
+
+A separate CPU05 process recomputed raw Coulomb integrals/pairs from the exact
+downloaded GPU HF gauge (`runs/automatic-cuest-pair-oracle-01`): Disp pair
+maxerror2.054e-18Eh, ExchDisp pair1.792e-19, global4.229e-18/4.803e-19.
+No CPU factors feed production. Five additional block/frozen driver/oracle
+probes are running. This certifies the bounded GPU HF -> automatic dispersion
+continuation, not upstream-cache/other-term placement, full FISAPT or speedup.
 
 ## CURRENT — native GPU IBO localization passes
 
