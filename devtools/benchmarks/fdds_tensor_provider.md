@@ -110,9 +110,22 @@ oracles reported maximum absolute error8.881784197001252e-15 a.u.
 
 All16 failures are the existing switched-SCF CPHF assertion comparing final
 grid point counts (66186 versus66187, `test_cuest_cphf.py:1073`).
-This is unresolved, not waived or established as pre-existing; the full gate
-must not be reported as a pass. Historical and isolated controls are being
-used to distinguish baseline/runtime/test-order behavior from a regression.
+The full gate must not be reported as a pass. The isolated case also fails
+on a fresh exact pre-refactor2032c5d11e24ab76e581d1c4af3dbdcd7bf21501 build,
+using the same compiler/dependencies/configuration (including XHOST off).
+Baseline coreSHA256
+`176386d20fd0387ef0643fdaa16c7e23cf53336d2b337c6d1d92847ace0c1525`,
+evidence `build_fdds_provider_baseline_20261022/grid-count-control-v1/`.
+The complete baseline control executed184 cases in149.111s:168 passed,
+the same16 failed, zero errors/skips. Comparing XML test identities gives
+zero candidate-only and zero baseline-only failures. All four baseline
+tensor oracles have the same8.881784197001252e-15 maximum error as the
+candidate. Evidence:
+`build_fdds_provider_baseline_20261022/native-control-v1/native.xml`.
+This establishes matched regression parity, not a clean full-suite pass.
+The underlying grid issue is unresolved, not waived. The older historical
+core passes this isolated case but differs in source and XHOST configuration;
+it was not a matched build.
 
 Two historical-oracle setup attempts are also retained, not numerical
 failures: the first encountered unset `PYTHONPATH` under Bash nounset; the
@@ -130,3 +143,15 @@ and historical core SHA256
 Evidence: `build_fdds_cpu/provider-oracle-20261022-v3/`. This establishes that
 the same independent tensor oracle accepts the old supplier and the candidate;
 it does not resolve the separate CPHF gate or establish a GPU producer.
+
+The unchanged-science grid diagnostic captured identical post-SCF geometry
+and basis-molecule geometry (hexadecimal doubles), identical orientation
+matrices and identical effective grid options. The fixed live grid remained
+66187 points before/after polarizability; the switched live grid had66186.
+Three fresh reconstructions on either final basis all had66186. This narrows
+the issue to a construction-time difference or retained live-grid state;
+it does not prove which input changed at construction, or justify changing
+the point-count assertion. Receipt:
+`build_fdds_provider_native_20261022/grid-state-v1/snapshots.json`.
+The driver `fdds_grid_count_diagnostic.py` changes no grid settings and is
+not an FDDS benchmark or admission pass.

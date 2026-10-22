@@ -1,0 +1,42 @@
+{
+  "status": "matched_native_regression_parity_with_baseline_failures",
+  "scope": "CPU native supplier refactor only; not a GPU producer or clean full-suite pass",
+  "candidate": {
+    "source_pin": "62f79dbea3ce3dc81552a386d9313ba15dcc1d54",
+    "core_sha256": "82d7aef688643fe3961b16659588c2cc34ae8b5804d434b0a0265ec2dc28cf77",
+    "junit_path": "build_fdds_provider_native_20261022/native-gate-v1/native.xml",
+    "junit_sha256": "7802d907ceeb753322821ad796b7eed282db2bfda252696eee55a5aacc721f65",
+    "tests": 184,
+    "passed": 168,
+    "failures": 16,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 148.799
+  },
+  "baseline": {
+    "source_pin": "2032c5d11e24ab76e581d1c4af3dbdcd7bf21501",
+    "core_sha256": "176386d20fd0387ef0643fdaa16c7e23cf53336d2b337c6d1d92847ace0c1525",
+    "junit_path": "build_fdds_provider_baseline_20261022/native-control-v1/native.xml",
+    "junit_sha256": "f575be0c9bd0e0b3ea59d48b09c8379b4cbc28a9331b0af0a68503259d8512ee",
+    "tests": 184,
+    "passed": 168,
+    "failures": 16,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 149.111
+  },
+  "comparison": {
+    "candidate_only_failure_ids": [],
+    "baseline_only_failure_ids": [],
+    "identical_failure_ids": 16,
+    "failure_family": "test_cuest_cphf.py::test_vx_grid_switched_scf_cpks final-grid point count 66186 vs 66187",
+    "tensor_oracle_cases": 4,
+    "maximum_absolute_tensor_error_au": 8.881784197001252e-15
+  },
+  "gpu_job": {
+    "job_id": 14302772,
+    "source_pin": "3a7820d7a4e1731dfc58fda707a2dfb397336f45",
+    "harness_pin": "94dad7c9ba36cd4af62de0bfe34a92cbbf850d85",
+    "note": "Separate frozen validation; no new device result and no queued-source modification"
+  }
+}

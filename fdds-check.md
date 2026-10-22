@@ -16,9 +16,20 @@ Broad gate `native-gate-v1/native.xml`: **184 executed,168 passed,16 failed,
 zero errors/skips,148.799s**. All64 FDDS,4 supplier-oracle,8 projection,
 6 lifecycle and35 SCF-option cases passed;51/67 CPHF cases passed.
 All16 failures are the CPHF switched-SCF final-grid count assertion at
-`test_cuest_cphf.py:1073` (66186vs66187). This is unresolved, not waived or
-established as pre-existing. One unchanged historical-core isolated case
-passed; an isolated candidate control is pending.
+`test_cuest_cphf.py:1073` (66186vs66187). This is unresolved, not waived.
+The isolated candidate case failed, while the older historical core
+passed (different source/XHOST configuration). A fresh exact pre-refactor
+`2032c5d11e24ab76e581d1c4af3dbdcd7bf21501` build with the candidate's same
+compiler/dependencies/settings also reproduces the identical assertion:
+coreSHA256`176386d20fd0387ef0643fdaa16c7e23cf53336d2b337c6d1d92847ace0c1525`,
+`build_fdds_provider_baseline_20261022/grid-count-control-v1/`.
+The full matched baseline also executed184 cases in149.111s:168 passed,
+the identical16 failed, zero errors/skips. XML comparison finds zero
+candidate-only or baseline-only failures; tensor-oracle errors match exactly.
+Evidence: `build_fdds_provider_baseline_20261022/native-control-v1/native.xml`.
+This establishes regression parity independent of the supplier seam.
+The underlying grid issue remains unresolved; no full-gate pass or assertion
+relaxation is claimed.
 
 All four new physical tensor oracles report max abs error
 **8.881784197001252e-15 a.u.** The same Mints/NumPy oracle also passed four
