@@ -102,3 +102,19 @@ download factors, close their enclosing scope, or overwrite canonical Elst.
 154 CPU/mock/serial executions pass. Whole-stage installation and independent
 physical/native-C++ matrix comparison are pending. No default driver dispatch,
 GPU IBO localization, external/link/scaled or remaining-term claim.
+
+## Fragment exchange groundwork
+
+`fexch_device` implements the three unscaled localized first-order S^2 terms
+from existing raw device S/V/J, localized occupied and virtual inputs. It does
+not reimplement upstream SCF/JK. Linearity projects virtual spaces on GPU before
+native JKFIT DFMO, avoiding host Bab/Bba disk tensors. Crossed factors keep
+their distinct `(Q,b,a)` layout; a custom CUDA kernel reduces the signed pairs.
+The original live electrostatic state identifies the shared provider/gauge.
+Frozen occupied orbitals participate; atom/external output slots remain zero.
+
+163 CPU/mock/serial executions pass, including nonsymmetric test inputs to
+discriminate transpose conventions and unequal/changed spaces. Actual GPU
+primitive feedback, whole installation and physical native-factor exchange
+comparison remain pending. This is not scaled Exch10, Exch-Disp20, or complete
+FISAPT coverage.

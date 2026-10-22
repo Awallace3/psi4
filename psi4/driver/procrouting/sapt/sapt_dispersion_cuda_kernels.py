@@ -5,6 +5,30 @@ No CUDA work occurs at import. No fast-math, denominator clamp or atomics.
 
 CUDA_SOURCE = r'''
 extern "C" {
+// Native JKFIT factors Bab[Q,a,b], Bba[Q,b,a]; all occupied, frozen included.
+__global__
+void reduce_fragment_exchange(long long Q, long long A, long long B,
+                              const double* Sab, const double* Sba,
+                              const double* WBab, const double* WAba,
+                              const double* Bab, const double* Bba, double* output) {
+    __shared__ double products[128];
+    for (long long pair=blockIdx.x; pair<A*B; pair+=gridDim.x) {
+        const long long a=pair/B, b=pair%B;
+        double value=0.0;
+        for (long long q=threadIdx.x; q<Q; q+=blockDim.x)
+            value+=Bab[(q*A+a)*B+b]*Bba[(q*B+b)*A+a];
+        products[threadIdx.x]=value;
+        __syncthreads();
+        for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+            if (threadIdx.x<stride) products[threadIdx.x]+=products[threadIdx.x+stride];
+            __syncthreads();
+        }
+        if (threadIdx.x==0)
+            output[pair]=-2.0*(Sab[pair]*WBab[pair]+Sba[b*A+a]*WAba[b*A+a]+products[0]);
+        __syncthreads();
+    }
+}
+
 // C-order [Q,O,O] -> [Q,O]. Retain the native DFMO metric gauge.
 __global__
 void diagonal_factors(long long Q, long long O, const double* input, double* output) {
