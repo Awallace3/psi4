@@ -127,3 +127,25 @@ live bytes (`runs/gpu-fisapt-exch-primitives-01`, sourcebc1b3aeb7). Synthetic
 factors were explicitly uploaded test inputs, not native-provider coverage.
 Whole installation and physical native-factor exchange comparison remain
 pending. This is not scaled Exch10, Exch-Disp20, or complete FISAPT coverage.
+
+UPDATE: whole stage08/source8aebb7b16 and physical shared-provider elst/exchange
+gate pass all three systems twice. Unscaled S^2 exchange fullmatrix maxerror
+2.641e-16Eh/global3.619e-16Eh. Simultaneous elst matrix1.296e-13/global1.421e-12.
+Twelve native DFMO/56point-potential calls, coefficientH2D0, cleanup0bytes/owners.
+Receipts: `runs/fragment-exchange-gpu-01` through `-03`. Frozen occupied orbitals
+remain included; no scaled/coupled/link/external/default workflow claim.
+
+## Uncoupled induction primitives
+
+`sapt_fisapt_induction_cuda.uncoupled_source` divides a canonical occupied/
+virtual source by single-excitation denominators BEFORE full occupied
+localization, then reduces signed Ind20u and optional Exch-Ind20u target
+contractions into caller-owned directional source columns. It includes frozen
+occupied targets and performs no intermediate download. This does not yet
+construct native nuclear/electronic sources or exchange-induction targets.
+
+172 CPU/mock/serial executions pass, including nontrivial rotation,
+denominator-order discrimination, optional signed exchange, source columns,
+reserved zero slots, changed inputs and lifetime/layout/alias guards.
+Actual GPU primitive feedback is next. No physical fragment-induction,
+coupled-response or full FISAPT claim.

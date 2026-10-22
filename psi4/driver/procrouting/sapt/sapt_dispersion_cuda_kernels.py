@@ -5,6 +5,45 @@ No CUDA work occurs at import. No fast-math, denominator clamp or atomics.
 
 CUDA_SOURCE = r'''
 extern "C" {
+__global__
+void make_single_amplitudes(long long O, long long V, const double* source,
+                            const double* occupied, const double* virtuals, double* output) {
+    for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         i<O*V; i+=(long long)blockDim.x*gridDim.x)
+        output[i]=source[i]/(occupied[i/V]-virtuals[i%V]);
+}
+
+// One block owns an occupied target; one ordered call owns a source column.
+__global__
+void reduce_induction_source(long long O, long long V, long long C, long long column,
+                             const double* amplitudes, const double* w, const double* u,
+                             double* induction, double* exchange) {
+    __shared__ double ind[128];
+    __shared__ double exch[128];
+    for (long long o=blockIdx.x; o<O; o+=gridDim.x) {
+        double d=0.0, x=0.0;
+        for (long long v=threadIdx.x; v<V; v+=blockDim.x) {
+            const long long i=o*V+v;
+            d+=amplitudes[i]*w[i];
+            if (u) x+=amplitudes[i]*u[i];
+        }
+        ind[threadIdx.x]=d;exch[threadIdx.x]=x;
+        __syncthreads();
+        for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+            if (threadIdx.x<stride) {
+                ind[threadIdx.x]+=ind[threadIdx.x+stride];
+                exch[threadIdx.x]+=exch[threadIdx.x+stride];
+            }
+            __syncthreads();
+        }
+        if (threadIdx.x==0) {
+            induction[o*C+column]=2.0*ind[0];
+            if (exchange) exchange[o*C+column]=2.0*exch[0];
+        }
+        __syncthreads();
+    }
+}
+
 // Native JKFIT factors Bab[Q,a,b], Bba[Q,b,a]; all occupied, frozen included.
 __global__
 void reduce_fragment_exchange(long long Q, long long A, long long B,

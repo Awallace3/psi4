@@ -1,5 +1,22 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## LATEST — shared native fragment electrostatics/exchange physical gate passes
+
+Whole stage08/source8aebb7b16 passes water-Ne, shifted/frozen water-Ne and frozen
+water-water, each twice, with the same live spherical JKFIT provider/gauge.
+Unscaled first-order S^2 exchange fullmatrix maxerror2.640777678995787e-16Eh,
+global3.6185925133061514e-16Eh. Simultaneous fragment elst remains correct:
+matrix1.296e-13/global1.421e-12Eh. Twelve native DFMO and56point-potential calls;
+zero coefficient H2D, zero live device bytes/native owners after teardown.
+Receipts: sibling `runs/fragment-exchange-gpu-01` through `-03`.
+
+This is not scaled Exch10, coupled induction, GPU IBO localization, link/external
+coverage or automatic default dispatch. Both signed Disp20/Exch-Disp20 and
+localized dispersion remain separately qualified by earlier gates.
+Next: uncoupled directional Ind20u/Exch-Ind20u using resident shared JKFIT
+diagonal factors, canonical denominators before localization, all occupied
+targets (including frozen) and full nuclear/electronic source slots.
+
 ## LATEST — native physical fragment electrostatics passes
 
 Whole stage07/source551c06038 connects spherical JKFIT DFMO, native FP64 point
