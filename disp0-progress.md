@@ -58,6 +58,16 @@ initialization, policy mutation, raw handle exposure or reset. Actual-header
 C++ syntax/ABI compile passes. Runtime laziness and post-HF FP64 readback remain
 pending the new coherent whole incremental native installation.
 
+Whole native03/source9861a9043 and actual existing native GPU HF now pass
+(`runs/native-gpu-hf-01`): spherical H2/water/water-Ne, independent CPU runs
+first, then USE_CUEST GPU runs. Maximum HF energy difference1.713e-10Eh,
+density6.370e-10, occupied-energy4.047e-11. Runtime-info observation is inactive
+before/after CPU references, then confirms all four existing runtime resources,
+native0.2.50 and actual FP64 math mode1 after GPU HF. No CPU DFJK fallback
+banners; process-global runtime is retained until normal module finalization.
+This proves the reused GPU HF engine, not yet a combined default driver run
+through the new dispersion/fragment-term modules.
+
 Older milestone sections below are retained history, not current blockers.
 
 ## LATEST — physical coupled fragment response GPU gate passes
