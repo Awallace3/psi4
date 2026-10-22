@@ -18,6 +18,7 @@ list(APPEND sources
   exch11.cc
   exch12.cc
   fdds_disp.cc
+  fdds_tensor_provider.cc
   ind-disp30.cc
   ind20.cc
   ind22.cc

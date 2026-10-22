@@ -38,7 +38,7 @@
 #include "psi4/libpsi4util/PsiOutStream.h"
 #include "psi4/liboptions/liboptions.h"
 #include "psi4/libpsi4util/process.h"
-#include "psi4/lib3index/dfhelper.h"
+#include "psi4/libsapt_solver/fdds_tensor_provider.h"
 #include "psi4/libpsi4util/memory_ledger.h"
 
 #include <algorithm>
@@ -308,99 +308,16 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
 
     // ==> Form 3-index object <==
 
-    // Build C Stack
-    std::vector<SharedMatrix> Cstack_vec;
-    Cstack_vec.push_back(matrix_cache_["Cocc_A"]);
-    Cstack_vec.push_back(matrix_cache_["Cvir_A"]);
-    Cstack_vec.push_back(matrix_cache_["Cocc_B"]);
-    Cstack_vec.push_back(matrix_cache_["Cvir_B"]);
-
-    size_t doubles = available_doubles();
-    size_t max_MO = 0;
-    for (auto& mat : Cstack_vec) max_MO = std::max(max_MO, (size_t)mat->ncol());
-
-    // Build DFHelper
-    dfh_ = std::make_shared<DFHelper>(primary_, auxiliary_);
-    dfh_->set_memory(doubles);
+    FDDSTensorPreparation preparation{
+        primary_, auxiliary_,
+        {matrix_cache_.at("Cocc_A"), matrix_cache_.at("Cvir_A"),
+         matrix_cache_.at("Cocc_B"), matrix_cache_.at("Cvir_B")},
+        {empty_A, empty_B}, is_hybrid_, available_doubles(), nthread};
 #ifdef USING_cuEST
-    dfh_->set_metric_gpu(gpu_layout_supported_ && Process::environment.options.get_bool("USE_CUEST"),
-                         Process::environment.options.get_int("CUEST_GEMM_MIN_DIM"));
+    preparation.metric_gpu = gpu_layout_supported_ && Process::environment.options.get_bool("USE_CUEST");
+    preparation.metric_gpu_min_dim = Process::environment.options.get_int("CUEST_GEMM_MIN_DIM");
 #endif
-    if (is_hybrid_) {
-        dfh_->set_method("DIRECT");
-    } else {
-        dfh_->set_method("DIRECT_iaQ");
-    }
-    dfh_->set_nthreads(nthread);
-    dfh_->set_metric_pow(0.0);
-    dfh_->initialize();
-    dfh_->print_header();
-
-    // Define spaces
-    if (!empty_A) {
-        dfh_->add_space("a", Cstack_vec[0]);
-        dfh_->add_space("r", Cstack_vec[1]);
-    }
-    if (!empty_B) {
-        dfh_->add_space("b", Cstack_vec[2]);
-        dfh_->add_space("s", Cstack_vec[3]);
-    }
-
-    // add transformations
-    if (!empty_A) dfh_->add_transformation("arQ", "a", "r", "pqQ");
-    if (!empty_B) dfh_->add_transformation("bsQ", "b", "s", "pqQ");
-    if (is_hybrid_) {
-        if (!empty_A) {
-            dfh_->add_transformation("raQ", "r", "a", "pqQ");
-            dfh_->add_transformation("Qar", "a", "r", "Qpq");
-        }
-        if (!empty_B) {
-            dfh_->add_transformation("sbQ", "s", "b", "pqQ");
-            dfh_->add_transformation("Qbs", "b", "s", "Qpq");
-        }
-    }
-
-    // transform
-    dfh_->set_release_core_AO_before_metric(true);
-    // Every name here is transformed exactly once -- the hybrid second round
-    // below starts from clear_transformations() -- so the pre-metric scratch
-    // copies can go as soon as the metric is folded into them.  That halves the
-    // scratch this transform needs, which is what a protein-sized dimer runs
-    // out of.  The flag is sticky, so it covers the second round too.
-    dfh_->set_release_pre_metric_tensors(true);
-    dfh_->transform();
-
-    // transformations specific for hybrid functional
-
-    if (is_hybrid_) {
-        // Contracted 3-index integrals to reproduce 4-index ERI
-        // Clear spaces to re-order spaces and transformations in DFHelper
-        // Clear transformations to avoid overwriting pqQ tensors 
-        dfh_->clear_spaces();
-        dfh_->clear_transformations();
-        dfh_->set_method("DIRECT_iaQ");
-        dfh_->set_metric_pow(-0.5);
-        dfh_->initialize();
-
-        if (!empty_A) {
-            dfh_->add_space("a", Cstack_vec[0]);
-            dfh_->add_space("r", Cstack_vec[1]);
-            dfh_->add_transformation("aaR", "a", "a", "pqQ");
-            dfh_->add_transformation("arR", "a", "r", "pqQ");
-            dfh_->add_transformation("rrR", "r", "r", "pqQ");
-        }
-        if (!empty_B) {
-            dfh_->add_space("b", Cstack_vec[2]);
-            dfh_->add_space("s", Cstack_vec[3]);
-            dfh_->add_transformation("bbR", "b", "b", "pqQ");
-            dfh_->add_transformation("bsR", "b", "s", "pqQ");
-            dfh_->add_transformation("ssR", "s", "s", "pqQ");
-        }
-        dfh_->set_release_core_AO_before_metric(true);
-        dfh_->transform();
-    }
-
-    dfh_->clear_spaces();
+    tensors_ = make_native_fdds_tensors(preparation);
 
     if (is_hybrid_) {
         // QR Factorization of (ar|Q)
@@ -727,7 +644,7 @@ SharedMatrix FDDS_Dispersion::form_unc_amplitude(std::string monomer, double ome
             osize = bsize;
         }
 
-        dfh_->fill_tensor(ovQ_tensor_name, tmp, {bcount, bcount + osize});
+        tensors_->read(ovQ_tensor_name, tmp, {bcount, bcount + osize});
         size_t shift_i = block * bsize;
 
 #pragma omp parallel for collapse(2)
@@ -889,11 +806,11 @@ std::map<std::string, SharedMatrix> FDDS_Dispersion::form_aux_matrices(std::stri
 
         size_t navir = nablock * nvir;
 
-        dfh_->fill_tensor(arQ_name, arQ, {astart, astart + nablock});
-        dfh_->fill_tensor(XarQ_name, XarQ, {astart, astart + nablock});
-        dfh_->fill_tensor(QXarQ_name, QXarQ, {astart, astart + nablock});
-        dfh_->fill_tensor(YarQ_name, YarQ, {astart, astart + nablock});
-        dfh_->fill_tensor(QYarQ_name, QYarQ, {astart, astart + nablock});
+        tensors_->read(arQ_name, arQ, {astart, astart + nablock});
+        tensors_->read(XarQ_name, XarQ, {astart, astart + nablock});
+        tensors_->read(QXarQ_name, QXarQ, {astart, astart + nablock});
+        tensors_->read(YarQ_name, YarQ, {astart, astart + nablock});
+        tensors_->read(QYarQ_name, QYarQ, {astart, astart + nablock});
         
         // X <- X + Y, Y <- Y - X
         XarQ->axpy(1.0, YarQ);
@@ -1014,10 +931,10 @@ void FDDS_Dispersion::form_X(std::string monomer) {
 
     // => Target <= //
 
-    dfh_->add_disk_tensor(XarQ_name, std::make_tuple(nocc, nvir, naux)); // (ar|X|Q) to disk
+    tensors_->create(XarQ_name, {nocc, nvir, naux}); // (ar|X|Q) to disk
     auto XarQ = std::make_shared<Matrix>("XarQ", maxo * nvir, naux); // ([a]r|X|Q)
 
-    dfh_->add_disk_tensor(QXarQ_name, std::make_tuple(nocc, nvir, naux)); // (ar|QX|Q) to disk
+    tensors_->create(QXarQ_name, {nocc, nvir, naux}); // (ar|QX|Q) to disk
     auto QXarQ = std::make_shared<Matrix>("QXarQ", maxo * nvir, naux); // ([a]r|QX|Q)
 
     // => Pointers <= //
@@ -1036,7 +953,7 @@ void FDDS_Dispersion::form_X(std::string monomer) {
         size_t nablock = (astart + maxo >= nocc ? nocc - astart : maxo);
 
         arR->zero();
-        dfh_->fill_tensor(arR_name, arR, {astart, astart + nablock});
+        tensors_->read(arR_name, arR, {astart, astart + nablock});
         XarQ->zero();
         QXarQ->zero();
 #ifdef USING_cuEST
@@ -1050,9 +967,9 @@ void FDDS_Dispersion::form_X(std::string monomer) {
             arQ->zero();
             QarQ->zero();
 
-            dfh_->fill_tensor(arR_name, aprR, {apstart, apstart + napblock});
-            dfh_->fill_tensor(arQ_name, arQ, {apstart, apstart + napblock});
-            dfh_->fill_tensor(QarQ_name, QarQ, {apstart, apstart + napblock});
+            tensors_->read(arR_name, aprR, {apstart, apstart + napblock});
+            tensors_->read(arQ_name, arQ, {apstart, apstart + napblock});
+            tensors_->read(QarQ_name, QarQ, {apstart, apstart + napblock});
 
 #ifdef USING_cuEST
             if (gpu) {
@@ -1079,8 +996,8 @@ void FDDS_Dispersion::form_X(std::string monomer) {
 #ifdef USING_cuEST
         if (gpu) gpu->finish(XarQp[0], QXarQp[0]);
 #endif
-        dfh_->write_disk_tensor(XarQ_name, XarQ, {astart, astart + nablock});
-        dfh_->write_disk_tensor(QXarQ_name, QXarQ, {astart, astart + nablock});
+        tensors_->write(XarQ_name, XarQ, {astart, astart + nablock});
+        tensors_->write(QXarQ_name, QXarQ, {astart, astart + nablock});
     }
 }
 
@@ -1169,10 +1086,10 @@ void FDDS_Dispersion::form_Y(std::string monomer) {
 
     // => Target <= //
 
-    dfh_->add_disk_tensor(YarQ_name, std::make_tuple(nocc, nvir, naux)); // (ar|Y|Q) to disk
+    tensors_->create(YarQ_name, {nocc, nvir, naux}); // (ar|Y|Q) to disk
     auto YarQ = std::make_shared<Matrix>("YarQ", maxo * nvir, naux); // ([a]r|Y|Q)
 
-    dfh_->add_disk_tensor(QYarQ_name, std::make_tuple(nocc, nvir, naux)); // (ar|QY|Q) to disk
+    tensors_->create(QYarQ_name, {nocc, nvir, naux}); // (ar|QY|Q) to disk
     auto QYarQ = std::make_shared<Matrix>("QYarQ", maxo * nvir, naux); // ([a]r|QY|Q)
 
     // => Pointers <= //
@@ -1191,7 +1108,7 @@ void FDDS_Dispersion::form_Y(std::string monomer) {
         size_t nablock = (astart + maxo >= nocc ? nocc - astart : maxo);
         
         aaR->zero();
-        dfh_->fill_tensor(aaR_name, aaR, {astart, astart + nablock});
+        tensors_->read(aaR_name, aaR, {astart, astart + nablock});
         YarQ->zero();
         QYarQ->zero();
 #ifdef USING_cuEST
@@ -1205,9 +1122,9 @@ void FDDS_Dispersion::form_Y(std::string monomer) {
             raQ->zero();
             QraQ->zero();
 
-            dfh_->fill_tensor(rrR_name, rrR, {rstart, rstart + nrblock});
-            dfh_->fill_tensor(raQ_name, raQ, {rstart, rstart + nrblock});
-            dfh_->fill_tensor(QraQ_name, QraQ, {rstart, rstart + nrblock});
+            tensors_->read(rrR_name, rrR, {rstart, rstart + nrblock});
+            tensors_->read(raQ_name, raQ, {rstart, rstart + nrblock});
+            tensors_->read(QraQ_name, QraQ, {rstart, rstart + nrblock});
 
 #ifdef USING_cuEST
             if (gpu) {
@@ -1233,8 +1150,8 @@ void FDDS_Dispersion::form_Y(std::string monomer) {
 #ifdef USING_cuEST
         if (gpu) gpu->finish(YarQp[0], QYarQp[0]);
 #endif
-        dfh_->write_disk_tensor(YarQ_name, YarQ, {astart, astart + nablock});
-        dfh_->write_disk_tensor(QYarQ_name, QYarQ, {astart, astart + nablock});
+        tensors_->write(YarQ_name, YarQ, {astart, astart + nablock});
+        tensors_->write(QYarQ_name, QYarQ, {astart, astart + nablock});
     }
 }
 
@@ -1280,7 +1197,7 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
     // => Tensor Slices <= //
 
     auto Qar = std::make_shared<Matrix>("Qar", naux, nov); 
-    dfh_->fill_tensor(Qar_name, Qar, {0, naux});
+    tensors_->read(Qar_name, Qar, {0, naux});
 
     // => Target <= //
     auto Q = std::make_shared<Matrix>("Q", nov, naux);
@@ -1327,8 +1244,8 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
                 Qp[nar][nQ] = Qarp[nQ][nar]; 
             }
 
-    dfh_->add_disk_tensor(QarQ_name, std::make_tuple(nocc, nvir, naux)); 
-    dfh_->write_disk_tensor(QarQ_name, Q, {0, nocc});
+    tensors_->create(QarQ_name, {nocc, nvir, naux});
+    tensors_->write(QarQ_name, Q, {0, nocc});
 
     // Save transposed Q (ra|Q|Q)
     
@@ -1340,8 +1257,8 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
                 Qp[nra][nQ] = Qarp[nQ][nar]; 
             }
 
-    dfh_->add_disk_tensor(QraQ_name, std::make_tuple(nvir, nocc, naux)); 
-    dfh_->write_disk_tensor(QraQ_name, Q, {0, nvir});
+    tensors_->create(QraQ_name, {nvir, nocc, naux});
+    tensors_->write(QraQ_name, Q, {0, nvir});
 
     return R;
 
@@ -1351,10 +1268,10 @@ SharedMatrix FDDS_Dispersion::get_tensor_pqQ(std::string name, std::tuple<size_t
 
     // Debug helper
     // Returns as (pq|Q)
-    if (!dfh_)
+    if (!tensors_)
         throw PSIEXCEPTION("FDDS_Dispersion::get_tensor_pqQ: no DFHelper tensors on an all-empty object.");
     // Check existence before allocating anything, including hybrid disk tensors.
-    const auto stored = dfh_->get_tensor_shape(name);
+    const auto stored = tensors_->shape(name);
     size_t np = std::get<0>(dimensions);
     size_t nq = std::get<1>(dimensions);
     size_t nQ = std::get<2>(dimensions);
@@ -1374,7 +1291,7 @@ SharedMatrix FDDS_Dispersion::get_tensor_pqQ(std::string name, std::tuple<size_t
 
     auto M = std::make_shared<Matrix>(name, rows, nQ);
 
-    dfh_->fill_tensor(name, M, {0, np});
+    tensors_->read(name, M, {0, np});
 
     return M;
 }

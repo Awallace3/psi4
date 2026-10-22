@@ -34,9 +34,9 @@
 namespace psi {
 
 class BasisSet;
-class DFHelper;
 
 namespace sapt {
+class FDDSTensorProvider;
 
 class FDDS_Dispersion {
    protected:
@@ -56,8 +56,8 @@ class FDDS_Dispersion {
     // Auxiliary overlap matrix
     SharedMatrix aux_overlap_;
 
-    // DFHelper object
-    std::shared_ptr<DFHelper> dfh_;
+    // Integral-production/derived-storage seam. Native adapter remains default.
+    std::unique_ptr<FDDSTensorProvider> tensors_;
 
     // Cache map
     std::map<std::string, SharedMatrix> matrix_cache_;
