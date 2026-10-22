@@ -1,5 +1,23 @@
 # Experimental Python/cuEST CUDA dispersion — CuPy-free
 
+## Current target and uncompleted GPU scope
+
+User requires spherical primary and spherical RI bases only, functional=HF,
+both signed Disp20 and Exch-Disp20, with all production dispersion numerical
+work on GPU. Existing GPU SCF/elst/exch/induction paths are outside current
+reimplementation. All FISAPT terms follow only after the HF dispersion gate.
+No Cartesian calculation case is a supported target; historical diagnostics
+and negative Cartesian-input rejection tests are not production support.
+
+The current prototype is not yet whole-GPU dispersion: the late callback
+materializes canonical setup on the host, the adapter packs coefficient slabs
+with host NumPy, and final global energy sums are host reductions. E2 setup
+graph placement depends on runtime controls and needs actual auditing/proof;
+CPU-reference runs intentionally disabled E2 GPU placement. Successful native
+DFMO/cuBLAS/packing/occupied-pair kernels are bounded evidence, not a claim that
+these remaining stages execute on GPU. CPU control and separate CPU oracles
+remain allowed; numerical CPU fallback does not.
+
 User explicitly superseded the earlier no-custom-CUDA restriction for this
 backend, selecting small CUDA kernels patterned after NVIDIA's MP2 example.
 The CuPy prototype is preserved in Git history at5b161a5736, not retained as

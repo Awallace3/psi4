@@ -1,5 +1,32 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## CURRENT user scope — spherical-only HF dispersion, fully GPU numerics
+
+Use spherical primary AND spherical RI bases only. No Cartesian calculation
+case is part of the target workflow; earlier Cartesian diagnostics below are
+historical evidence, not a supported target. Prior proposed Cartesian-AO/pureRI
+case was superseded/cancelled by the user. Negative Cartesian-rejection tests
+remain distinct from supported calculations.
+
+Focus now is `SAPT_DFT_FUNCTIONAL=HF` Disp20 AND Exch-Disp20, with the complete
+dispersion numerical path on GPU from HF/upstream SAPT inputs. Reuse the user's
+existing GPU SCF/elst/exch/induction paths; do not broaden into reimplementing
+them. CPU orchestration/validation and explicitly separate correctness oracles
+are not production numerical fallback. After this dispersion gate, advance to
+all FISAPT terms.
+
+Actual native factor/contraction/occupied-pair kernel fixtures passed below,
+but this is NOT proof of whole-GPU dispersion setup: reference/diagnostic setup
+explicitly ran on CPU, the late callback materializes setup via `np.asarray`,
+DFMO coefficient packing uses host transpose/concatenation, and final global
+sums currently use host NumPy. Production E2 graph placement must be audited
+rather than inferred from the CPU-reference mode. Remaining CPU numerics and
+avoidable host staging must be replaced by verified fail-closed GPU operations.
+First pure H2 physical CPU references pass; physical GPU diagnostics/public
+factory/end-to-end GPU readiness remain unpassed. See sibling
+`../metadata/GPU_SCOPE_REQUIREMENTS.json`. Strict spherical-only admission at
+the public/factory boundary is also a remaining implementation gate.
+
 ## CURRENT native gate — cuEST/cuBLAS/CUDA fixtures pass; physical SAPT pending
 
 Private dependencies now build/install/import coherently: exact Einsums064
