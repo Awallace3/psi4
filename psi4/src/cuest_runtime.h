@@ -56,7 +56,7 @@ namespace cuest_runtime {
  *  Compile-time only.  A build with cuEST says nothing about whether the
  *  machine actually has a usable GPU -- that is not known until the first
  *  cuEST-requiring computation triggers initialization, which is why this is
- *  the only query offered here.
+ *  the import-safe capability query offered here.
  */
 constexpr bool built_with_cuest() {
 #ifdef USING_cuEST
@@ -81,6 +81,18 @@ void shutdown();
  * Does not initialize CUDA or expose the handle. Throws if not initialized.
  */
 std::array<std::uint32_t, 3> native_version();
+
+/*! Read-only policy receipt from existing live handles, with no raw addresses.
+ * cuEST math modes and cuBLAS math modes are different enum domains.
+ * This observes policy without changing the user's mixed-precision option.
+ */
+struct RuntimePolicy {
+    int native_math_mode;
+    int cublas_pointer_mode;
+    int cublas_math_mode;
+    bool shared_stream;
+};
+RuntimePolicy current_policy();
 
 #else
 

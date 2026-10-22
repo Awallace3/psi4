@@ -864,6 +864,16 @@ def test_saptdft_fdds_native_xc_gpu(tmp_path):
         # Forced FDDS checks the shared handle's actual HOST pointer mode after
         # the real cuEST J/K builds; an incompatible mode raises, not CPU retry.
         assert _timer_calls() == (20 if enabled and threshold == 0 else 0)
+        if enabled:
+            policy = psi4.core._cuest_runtime_policy()
+            # Native FP64 mode1 is not cuBLAS DEFAULT_MATH mode0. Observe the
+            # real policy after JK, rather than infer it from the option/header.
+            assert policy["native_math_mode"] == 1, policy
+            assert policy["cublas_pointer_mode"] == 0, policy
+            assert policy["shared_stream"] is True, policy
+            assert type(policy["cublas_math_mode"]) is int, policy
+            assert psi4.core._cuest_runtime_version() == (0, 2, 50)
+            print(f"SAPT(DFT) live_gpu_policy={policy}")
         results.append(result)
         assert "Disp20" in path.read_text()
         print(f"SAPT(DFT) abs_errors={ {k: abs(result[k] - results[0][k]) for k in result} }")

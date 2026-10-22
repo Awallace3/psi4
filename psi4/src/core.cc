@@ -1274,6 +1274,15 @@ PYBIND11_MODULE(core, core) {
         const auto version = psi::cuest_runtime::native_version();
         return py::make_tuple(version[0], version[1], version[2]);
     }, "Checked cuEST native tuple from an already live Psi4 handle. Does not initialize CUDA.");
+    core.def("_cuest_runtime_policy", []() {
+        const auto policy = psi::cuest_runtime::current_policy();
+        py::dict receipt;
+        receipt["native_math_mode"] = policy.native_math_mode;
+        receipt["cublas_pointer_mode"] = policy.cublas_pointer_mode;
+        receipt["cublas_math_mode"] = policy.cublas_math_mode;
+        receipt["shared_stream"] = policy.shared_stream;
+        return receipt;
+    }, "Read-only native/BLAS policy from live Psi4 handles; no initialization or raw handles.");
 #endif
 
     // CubeProperties

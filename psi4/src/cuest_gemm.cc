@@ -619,6 +619,11 @@ struct CuestFDDSContractions::Impl {
     Impl(size_t naux, size_t rows, bool hybrid) : q(naux), max_rows(rows), is_hybrid(hybrid) {
         if (!q || !rows || q > std::numeric_limits<int>::max() || rows > std::numeric_limits<int>::max())
             throw PSIEXCEPTION("cuEST FDDS: nonempty BLAS-int dimensions required");
+        // Reject unrepresentable aggregate storage before initializing CUDA,
+        // querying the shared handle or allocating the first input/accumulator.
+        const size_t ni = hybrid ? 5 : 1;
+        fdds_product(fdds_product(ni, fdds_sum(fdds_product(rows, q), fdds_product(q, q))),
+                     sizeof(double));
         cuest_common::ensure_cuest_initialized();
         // cuEST also receives this shared handle. Our alpha/beta addresses are
         // host pointers: check the actual mode after any prior J/K use, without
@@ -628,7 +633,6 @@ struct CuestFDDSContractions::Impl {
         if (pointer_mode != CUBLAS_POINTER_MODE_HOST)
             throw PSIEXCEPTION("cuEST FDDS: shared cuBLAS handle requires HOST pointer mode.");
         check_cublas(cublasGetStream(cublas_handle, &stream), "FDDS cublasGetStream");
-        const size_t ni = hybrid ? 5 : 1;
         inputs.reserve(ni);
         sums.reserve(ni);
         for (size_t i = 0; i < ni; ++i) {

@@ -367,6 +367,28 @@ void ensure_cuest_initialized() {
 
 namespace cuest_runtime {
 
+RuntimePolicy current_policy() {
+    if (!cuest_handle || !cublas_handle || !cusolver_handle || !stream_handle) {
+        throw PSIEXCEPTION("cuEST policy requires already initialized Psi4 handles");
+    }
+    cuestMathMode_t native_mode;
+    CHECK_CUEST(cuestGetMathMode(cuest_handle, &native_mode));
+    cublasPointerMode_t pointer_mode;
+    if (cublasGetPointerMode(cublas_handle, &pointer_mode) != CUBLAS_STATUS_SUCCESS)
+        throw PSIEXCEPTION("cuEST policy: cublasGetPointerMode failed");
+    cublasMath_t blas_mode;
+    if (cublasGetMathMode(cublas_handle, &blas_mode) != CUBLAS_STATUS_SUCCESS)
+        throw PSIEXCEPTION("cuEST policy: cublasGetMathMode failed");
+    cudaStream_t blas_stream = nullptr, solver_stream = nullptr;
+    if (cublasGetStream(cublas_handle, &blas_stream) != CUBLAS_STATUS_SUCCESS)
+        throw PSIEXCEPTION("cuEST policy: cublasGetStream failed");
+    if (cusolverDnGetStream(cusolver_handle, &solver_stream) != CUSOLVER_STATUS_SUCCESS)
+        throw PSIEXCEPTION("cuEST policy: cusolverDnGetStream failed");
+    return {static_cast<int>(native_mode), static_cast<int>(pointer_mode),
+            static_cast<int>(blas_mode),
+            blas_stream == stream_handle && solver_stream == stream_handle};
+}
+
 std::array<std::uint32_t, 3> native_version() {
     if (cuest_handle == 0) {
         throw PSIEXCEPTION("cuEST native version requires an already initialized Psi4 handle");

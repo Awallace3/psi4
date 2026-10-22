@@ -140,6 +140,7 @@ assert p == Path(os.environ["EXPECTED_PSI4_PACKAGE"]).resolve(), p
 assert hasattr(psi4.core, "cuest_chain_gemm")
 assert hasattr(psi4.core.FDDS_Dispersion, "gpu_contraction_blocks")
 assert hasattr(psi4.core, "_cuest_fdds_pinv")
+assert hasattr(psi4.core, "_cuest_runtime_policy")
 core = Path(psi4.core.__file__)
 core_hash = hashlib.sha256(core.read_bytes()).hexdigest()
 expected_hash = os.environ.get("CUEST_FDDS_EXPECTED_CORE_SHA256")

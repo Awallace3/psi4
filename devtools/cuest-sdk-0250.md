@@ -73,6 +73,13 @@ Parameter header `cuest/types/cuest_parameter_types.h`:
   Psi4-owned handle; it does not initialize CUDA or expose a raw handle.
   The worker checks provider presence before GPU work and queries only after
   its real route. An old core without the provider fails closed.
+- `_cuest_runtime_policy()` observes the existing live cuEST math mode, cuBLAS
+  pointer/math modes and cuBLAS/cuSOLVER shared-stream equality. All getter
+  statuses are checked; it neither initializes nor changes policy and exposes
+  no raw handles/addresses. Native FP64 mode1 and cuBLAS default math mode0 are
+  different enum domains. The SAPT GPU gate checks actual post-JK native FP64
+  under `CUEST_MIXED_PRECISION=false`; the existing JK setter already applies
+  that option. Dense FP64 FDDS products alone do not certify a native JK route.
 - Static DFMO symbol admission is **not** a device numerical test. Actual
   0.2.50 FDDS compilation/device/scientific validation is still required.
 
@@ -84,3 +91,7 @@ AO/MO factors or the **contact/delta** three-center auxiliary projection.
 Native fitting metric conditioning (1e-12 where used) is distinct from FDDS
 response pseudoinverse's strict relative **1e-13** cutoff. No policy, formula,
 quadrature, default CPU route, or historical evidence changes here.
+
+For local host-model coverage and the bounded fresh-build/device sequence, see
+`benchmarks/fdds_gpu_readiness.md`. Device gates still require new authorized
+resources and immutable source/build/output roots.
