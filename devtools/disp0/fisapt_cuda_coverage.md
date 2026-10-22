@@ -83,5 +83,8 @@ a public caller must reject nonfinite reported values.
 
 151 CPU/mock/serial executions pass, including changed inputs, unequal spaces,
 all matrix slots, retained factors and layout/session/alias guards. Actual GPU
-primitive feedback and native point-charge qualification are pending. There is
-not yet a native-provider-coupled `felst_cuda` or fragment-elst coverage claim.
+primitives pass32checks/392DGEMMs in3.550s, maxabs6.821e-13 and zero live bytes.
+Receipt: sibling `runs/gpu-fisapt-elst-primitives-01`, source9de9a88e2.
+Synthetic factors/potentials were test inputs, not native-provider coverage.
+Native point-charge qualification is pending. There is not yet a coupled
+`felst_cuda` or physical fragment-elst coverage claim.

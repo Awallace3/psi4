@@ -1,5 +1,17 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
+## LATEST — fragment electrostatic algebra passes actual GPU feedback
+
+Source9de9a88e2 adds GPU diagonal JKFIT-factor extraction, nuclear repulsion,
+atom/orbital matrix placement, electronic pairs, AO-potential contractions and
+global reduction. 151CPU/mock/serial executions pass. Actual RTX3090 feedback
+passes32checks/392DGEMMs in3.550s, maxabs6.821e-13, zero live device bytes;
+sibling receipt `runs/gpu-fisapt-elst-primitives-01`.
+
+This uses synthetic factor/AO-potential inputs, not native cuEST factor or
+physical fragment-elst coverage. Native point-charge qualification and coupled
+JKFIT/full-matrix testing remain next. No automatic full-FISAPT GPU claim.
+
 ## LATEST — localized FISAPT dispersion physical matrices pass
 
 Explicit `fdisp0_cuda` at `d8710cf97` is coherently installed in whole stage06
