@@ -1,5 +1,53 @@
 # FDDS cuEST implementation handoff
 
+## Test-ready source — native/device gate still pending
+
+Readiness source **`d35ff353fc3c734257185f29e1e1972ca65aaeb5`** builds on
+strict0.2.50 source `a323afa886b6753370d798aa9ae5410b83f4aa06`.
+Final static review `d632da125dffa34ce1f173630e61c674a` found no blocking defect.
+Combined local gate: **207 passed, zero failures/errors/skips,14.645s**:
+`build_fdds_cpu/sdk-contract-0250/readiness-final-v1.xml`,
+SHA256`f923b843dcc7c16aaaf81f54c87f88ee6303e5b9bb5d601d995fc35d6e055ad8`.
+Same local CPU Python/compiler/CMake provenance as the200-test gate below.
+
+Disp0 guidance was inspected read-only, not merged: explicit ownership,
+queued host testing and observed handle policies. FDDS retains its native
+FP64 cuBLAS/cuSOLVER implementation, with no new CuPy/NVRTC dependency or DFMO
+factor substitution. Host tests compile actual adapter bodies against queued
+CPU stubs; they check capacities, all four metric layouts, unequal exchange
+tails, one/five frequency outputs, changing inputs, borrowed-storage drains
+and injected query/upload/GEMM/download/completion errors. Actual Python
+response-product control flow also rejects a runtime-error CPU retry.
+
+The new private `_cuest_runtime_policy()` reports checked live native/BLAS
+policies and shared-stream equality without initializing, changing defaults
+or exposing handles. The existing real SAPT GPU test now verifies that receipt
+after actual J/K and FDDS work. `cuESTJK` already reapplies the requested math
+mode; no global override was added. Native FP64 mode1 and cuBLAS default mode0
+are separate enums, not contradictory observations.
+
+A host regression found unsupported aggregate allocation sizes initialized
+the runtime before rejection. Checked total byte-size preflight now precedes
+initialization/handle queries/allocation, with valid arithmetic unchanged.
+Red evidence `host-control-v3-red.xml`: five executed, one failure/2.512s.
+Earlier `host-control-v2.xml` failed host-shim compilation (a test variable
+declaration); `policy-v1.log` executed zero tests because its new test file was
+absent at launch. Both preparation failures are retained, not passes.
+Their corrected coverage is included in the207-pass final gate.
+
+**No real0.2.50 CUDA/vendor compilation or device execution is established.**
+The local host has no nvcc/CUDA headers. CPU stubs do not establish vendor ABI,
+parallel stream/error behavior, OOM recovery or successful cleanup after failed
+cudaFree; ignored destructor cleanup statuses remain a documented limitation.
+Existing old SDK stages, output cohorts and shared environments are unchanged.
+The actual GPU suite remains112 unique tests /176 focused-plus-full executions,
+zero skips required; none were newly executed by these offline changes.
+
+Bounded fresh source/build/device recipe:
+`devtools/benchmarks/fdds_gpu_readiness.md`. Resource approval and actual owner
+holder/remaining-budget/duplicate checks precede any new allocation or shared
+window. No new submission, participant window or performance claim was made.
+
 ## Current resource and SDK directive (supersedes old running snapshots)
 
 **14250361 is terminal TIMEOUT, not an available shared GPU window.**
