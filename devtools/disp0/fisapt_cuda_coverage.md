@@ -39,9 +39,17 @@ on GPU and downloads scalar errors only. CPU serial-shim tests cover unequal
 spaces, edge blocks, crossed layout, changed inputs, repeated accumulation and
 the deliberately wrong "divide after localization" alternative.
 
-This increment is **not** public FISAPT dispatch or atom/fragment/link
-assignment. It is not proof of GPU localization or other FISAPT terms.
-Real standalone GPU feedback must precede native-factor/physical LO testing.
+Actual standalone CUDA feedback passes32checks/145DGEMMs in3.440s, including
+parallel reductions and nonorthogonal-rotation rejection. Maxabs7.958e-13.
+This is primitive evidence, not native-factor/full-FISAPT execution.
+
+The next source increment wires these rotations into the device-input DFMO
+block loop and adds explicit `fdisp0_cuda` for unscaled two-fragment HF/C-link
+assignment without external potentials. It returns a fresh cache and places
+the GPU-combined active pair block at native frozen offsets. Link/scaling/
+external/S-inf cases fail closed. Its141CPU/mock/serial executions pass;
+whole-stage/native-factor/physical LO tests are pending.
+This is not automatic FISAPT dispatch, GPU localization or other-term coverage.
 
 ## Next gates
 

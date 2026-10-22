@@ -9,6 +9,7 @@ import numpy as np
 
 from test_cuda_backend import PACKAGE, Kernels, host, runtime, inputs, oracle, backend
 import test_cuda_dfmo_transport as transport
+from test_cuda_hf_setup import Session as SetupSession
 
 setup = importlib.import_module(PACKAGE+".sapt_dispersion_cuda_setup")
 dfmo = transport.dfmo
@@ -19,6 +20,7 @@ class DeviceSession(transport.Session):
     scope = runtime.CUDASession.scope
     retain_native_owner = runtime.CUDASession.retain_native_owner
     release_native_owner = runtime.CUDASession.release_native_owner
+    gemm = SetupSession.gemm
 
     def __init__(self):
         super().__init__()
@@ -238,6 +240,33 @@ class DeviceTransport(unittest.TestCase):
                 self.assertEqual(s.live_bytes,0)
         self.assertEqual(p.input_bytes,0)
         self.assertGreater(n.computed,0)
+        p.close()
+
+    def test_localized_factor_block_loop_matches_independent_pair_tensors(self):
+        from test_cuda_fisapt import factor_reference
+        p,s,n,_,_=self.fixture();p.prepare_device_compute()
+        for seed in (19,20):
+            ao,sp,c,e=inputs(seed);n.ao=ao
+            rng=np.random.default_rng(seed+51)
+            ua=np.linalg.qr(rng.normal(size=(e["a"].size,e["a"].size)))[0]
+            ub=np.linalg.qr(rng.normal(size=(e["b"].size,e["b"].size)))[0]
+            expected=factor_reference(ao,sp,c,e,ua,ub)
+            for block in (1,3,500):
+                with s.scope():
+                    dsp={name:s.upload(value) for name,value in sp.items()}
+                    dc={name:s.upload(value) for name,value in c.items()}
+                    de={name:s.upload(value) for name,value in e.items()}
+                    rotations=(s.upload(ua),s.upload(ub))
+                    with patch.object(s,"upload",side_effect=AssertionError("host numerical staging")):
+                        result=backend.blocked_device_dispersion(p,dsp,dc,de,block_size=block,
+                                                                 rotations=rotations)
+                    for field,target in (("Disp20 occupied pairs",expected[0]),
+                                         ("Exch-Disp20 occupied pairs",expected[1])):
+                        np.testing.assert_allclose(result[field],target,rtol=1e-11,atol=1e-12)
+                    np.testing.assert_allclose([result["Disp20,u"],result["Exch-Disp20,u"]],
+                                              [expected[0].sum(),expected[1].sum()],rtol=1e-11,atol=1e-12)
+                    self.assertEqual(result["Disp0 execution"]["occupied_representation"],"localized")
+                self.assertEqual(s.live_bytes,0)
         p.close()
 
 

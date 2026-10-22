@@ -2542,7 +2542,7 @@ def dispersion0(cache, dimer_wfn, nfrozen_A=0, nfrozen_B=0, *, block_size=None, 
 
 
 def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen_B=0,
-                     block_size=24, do_print=True):
+                     block_size=24, do_print=True, _localized=None, _return_pairs=False):
     """Experimental explicit Python entrypoint; not an automatic driver option.
 
     provider_factory(primary_basis, auxiliary_basis) must be a context manager
@@ -2555,7 +2555,8 @@ def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen
             or core.get_option("SAPT", "SAPT_DFT_D3_IE")
             or core.get_option("SAPT", "SAPT_DFT_D4_IE")):
         raise ValueError("Experimental CUDA dispersion requires ordinary HF SAPT0, not DFT/D3/D4")
-    if (str(core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")).upper() != "NONE"
+    fragment_mode=str(core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")).upper()
+    if ((fragment_mode!="NONE" if _localized is None else fragment_mode not in ("SAPTDFT","FISAPT"))
             or core.get_option("SAPT", "DO_DISP_EXCH_SINF")):
         raise NotImplementedError("CUDA fragment/F-SAPT and S-inf dispersion are unsupported")
     if core.get_option("SAPT", "SAPT_DFT_EINSUMS_GPU"):
@@ -2579,6 +2580,13 @@ def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen
     if (nfrozen_A == counts["a"] or nfrozen_B == counts["b"]
             or counts["r"] == 0 or counts["s"] == 0):
         return {"Disp20,u":0.0,"Exch-Disp20,u":0.0}
+    if _localized is not None:
+        if not isinstance(_localized,(tuple,list)) or len(_localized)!=2:
+            raise ValueError("Two active occupied localization rotations required")
+        for value,size in zip(_localized,(counts["a"]-nfrozen_A,counts["b"]-nfrozen_B)):
+            if (not isinstance(value,np.ndarray) or value.dtype!=np.float64
+                    or value.shape!=(size,size) or not np.isfinite(value).all()):
+                raise ValueError("Invalid raw active occupied localization rotation")
 
     from .sapt_dispersion_cuda import blocked_device_dispersion
     from .sapt_dispersion_cuda_setup import prepare_hf
@@ -2605,8 +2613,11 @@ def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen
             with provider.session.scope():
                 spaces,corrections,e = prepare_hf(
                     provider.session,matrices,energies,frozen_a=nfrozen_A,frozen_b=nfrozen_B)
+                extra={}
+                if _localized is not None:
+                    extra["rotations"]=tuple(provider.session.upload(value) for value in _localized)
                 result = blocked_device_dispersion(
-                    provider,spaces=spaces,corrections=corrections,energies=e,block_size=block_size)
+                    provider,spaces=spaces,corrections=corrections,energies=e,block_size=block_size,**extra)
     execution = dict(result["Disp0 execution"])
     execution["entrypoint_seconds_including_factory_setup_cleanup"] = time.perf_counter()-started
     execution["raw_hf_numerical_setup"] = "owned cuBLAS/custom CUDA"
@@ -2616,8 +2627,52 @@ def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen
     if do_print:
         core.print_out(f'    CUDA Disp20,u = {result["Disp20,u"]:.12e} Eh\n'
                        f'    CUDA Exch-Disp20,u = {result["Exch-Disp20,u"]:.12e} Eh\n')
-    return {"Disp20,u":result["Disp20,u"],"Exch-Disp20,u":result["Exch-Disp20,u"],
+    output={"Disp20,u":result["Disp20,u"],"Exch-Disp20,u":result["Exch-Disp20,u"],
             "Disp0 execution":execution}
+    if _return_pairs:
+        output.update({name:result[name] for name in (
+            "Disp20 occupied pairs","Exch-Disp20 occupied pairs","Disp0 occupied pairs","Disp0,u")})
+    return output
+
+
+def fdisp0_cuda(cache,dimer_wfn,*,provider_factory,block_size=24,do_print=True):
+    """Explicit unscaled two-fragment HF LO dispersion; return a new cache.
+
+    Localization is an upstream input, NOT certified GPU work by this call.
+    C-link assignment with exactly two fragments/no external potentials only.
+    Atom/frozen/external slots are zero; the active pair sum is formed on GPU.
+    """
+    if (str(core.get_option("FISAPT","FISAPT_LINK_ASSIGNMENT")).upper()!="C"
+            or core.get_option("FISAPT","SSAPT0_SCALE")
+            or core.get_option("FISAPT","FISAPT_EXCH_PARPERP")
+            or cache.get("external_potentials")):
+        raise NotImplementedError("CUDA fragment dispersion link/scaling/external cases are not implemented")
+    mol=dimer_wfn.molecule()
+    if len(mol.get_fragments())!=2:
+        raise NotImplementedError("CUDA fragment dispersion currently requires two fragments")
+    needed=("Lfocc0A","Lfocc0B","Caocc0A","Caocc0B","Uaocc0A","Uaocc0B")
+    if any(name not in cache for name in needed):
+        raise ValueError("Complete active/frozen/localized occupied cache required")
+    nf=tuple(cache["Lfocc0"+side].np.shape[1] for side in ("A","B"))
+    for side,frozen in zip(("A","B"),nf):
+        full=np.asarray(cache["Cocc_"+side].np)
+        if (frozen>full.shape[1] or cache["Lfocc0"+side].np.shape[0]!=full.shape[0]
+                or not np.array_equal(cache["Caocc0"+side].np,full[:,frozen:])):
+            raise ValueError("Fragment canonical active/frozen cache differs from raw HF orbitals")
+    work=dict(cache);work.pop("Disp0 execution",None)
+    occupied=tuple(cache["Cocc_"+side].np.shape[1] for side in ("A","B"))
+    matrix=core.Matrix("Disp_AB",mol.natom()+occupied[0]+1,mol.natom()+occupied[1]+1)
+    result=dispersion0_cuda(cache,dimer_wfn,provider_factory=provider_factory,
+        nfrozen_A=nf[0],nfrozen_B=nf[1],block_size=block_size,do_print=do_print,
+        _localized=tuple(np.asarray(cache["Uaocc0"+side].np) for side in ("A","B")),_return_pairs=True)
+    if "Disp0 occupied pairs" in result:
+        pairs=result["Disp0 occupied pairs"]
+        matrix.np[mol.natom()+nf[0]:mol.natom()+nf[0]+pairs.shape[0],
+                  mol.natom()+nf[1]:mol.natom()+nf[1]+pairs.shape[1]]=pairs
+    work.update({"Disp_AB":matrix,"Disp20,u":result["Disp20,u"],"Exch-Disp20,u":result["Exch-Disp20,u"],
+                 "sDisp_AB":core.Matrix("sDisp_AB",1,1)})
+    if "Disp0 execution" in result:work["Disp0 execution"]=result["Disp0 execution"]
+    return work
 
 
 def fdisp0(

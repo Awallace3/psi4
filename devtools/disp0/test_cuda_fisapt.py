@@ -36,6 +36,23 @@ def reference(v,x,w,e,ua,ub,r0=1,s0=2):
     return d,ex,wrong,(t,vl)
 
 
+def factor_reference(ao,spaces,c,e,ua,ub):
+    """Independent test-only full Coulomb/rank-tail tensors, never GPU input."""
+    def f(left,right):
+        return np.einsum("Qmn,mi,nj->Qij",ao,spaces[left],spaces[right])
+    ar,bs=f("r","a"),f("s","b")
+    far,fbs=f("r3","a")+f("r","a4"),f("s3","b")+f("s","b4")
+    v=np.einsum("Qra,Qsb->rasb",ar,bs)
+    x=(np.einsum("Qra,Qsb->rasb",ar,fbs)+np.einsum("Qra,Qsb->rasb",far,bs)
+       +np.einsum("ar,bs->rasb",c["Qar"],c["SAbs"])
+       +np.einsum("ar,bs->rasb",c["SBar"],c["Qbs"]))
+    w=(np.einsum("Qsa,Qrb->sarb",f("s1","a"),f("r1","b"))
+       +np.einsum("Qsa,Qrb->sarb",f("s","a2"),f("r","b2"))
+       +np.einsum("as,br->sarb",c["Sas"],c["Qbr"])
+       +np.einsum("as,br->sarb",c["Qas"],c["Sbr"]))
+    return reference(v,x,w,e,ua,ub,0,0)[:2]
+
+
 class Localized(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -103,7 +103,7 @@ def blocked_dispersion(provider, spaces, corrections, energies, *, block_size=24
     }
 
 
-def blocked_device_dispersion(provider, spaces, corrections, energies, *, block_size=24):
+def blocked_device_dispersion(provider, spaces, corrections, energies, *, block_size=24, rotations=None):
     """GPU-only numerical continuation of prepare_hf, including global sums.
 
     All inputs must be device outputs of validated raw-HF preparation on this
@@ -138,6 +138,14 @@ def blocked_device_dispersion(provider, spaces, corrections, energies, *, block_
         m.require(value)
         if value.shape != tuple(sizes[index] for index in shapes[name]):
             raise ValueError("Incompatible prepared device correction")
+    if rotations is not None:
+        from .sapt_fisapt_cuda import validate_rotations,localized_dispersion_block
+        if not isinstance(rotations,(tuple,list)) or len(rotations)!=2:
+            raise ValueError("Two active occupied rotations required")
+        for rotation in rotations:m.require(rotation)
+        if rotations[0].shape!=(a,a) or rotations[1].shape!=(b,b):
+            raise ValueError("Occupied rotation dimensions differ from active spaces")
+        validate_rotations(session,*rotations)
     started = time.perf_counter()
     q,count = provider.naux,0
     with session.scope():
@@ -160,9 +168,13 @@ def blocked_device_dispersion(provider, spaces, corrections, energies, *, block_
                         bc = _pack(session,q,sf,"Bas","Cas",None,None,st["Sas"],st["Qas"])
                         v = session.gemm_at_b(af.view((q,R*a)),fa.view((q,S*b),offset=q*S*b*8))
                         direct,crossed = session.gemm_at_b(af,fa),session.gemm_at_b(bc,cb)
-                        session.launch("reduce_dispersion",min(65535,a*b),128,
-                                       [a,b,R,S,r0,s0,energies["a"],energies["b"],
-                                        energies["r"],energies["s"],v,direct,crossed,d,x])
+                        if rotations is None:
+                            session.launch("reduce_dispersion",min(65535,a*b),128,
+                                           [a,b,R,S,r0,s0,energies["a"],energies["b"],
+                                            energies["r"],energies["s"],v,direct,crossed,d,x])
+                        else:
+                            localized_dispersion_block(session,v,direct,crossed,energies,
+                                *rotations,d,x,R=R,S=S,r0=r0,s0=s0)
                         count += 1
         combined,components = finish_components(session,d,x)
         d_host,x_host = session.download(d),session.download(x)
@@ -175,7 +187,9 @@ def blocked_device_dispersion(provider, spaces, corrections, energies, *, block_
         "Disp20 occupied pairs":d_host, "Exch-Disp20 occupied pairs":x_host,
         "Disp0 occupied pairs":combined_host,
         "Disp0 execution":{
-            "backend":"CUDA_CUEST_DEVICE_INPUT_EXPERIMENTAL",
+            "backend":("CUDA_CUEST_LOCALIZED_DEVICE_EXPERIMENTAL" if rotations is not None
+                       else "CUDA_CUEST_DEVICE_INPUT_EXPERIMENTAL"),
+            "occupied_representation":"localized" if rotations is not None else "canonical",
             "compute_blocks":count,"block_size":block_size,
             "blocked_execution_seconds":time.perf_counter()-started,
             "owned_peak_device_bytes_session_lifetime":session.peak_live_bytes,

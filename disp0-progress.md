@@ -21,9 +21,13 @@ complete. No general factory/default-driver/speedup claim. Expansion now targets
 all FISAPT terms while reusing existing canonical GPU upstream paths.
 See `devtools/disp0/fisapt_cuda_coverage.md`.
 
-First source increment adds owned CUDA localized-pair dispersion primitives;
-136CPU/mock/serial test executions pass. Actual CUDA feedback and physical
-localized-pair integration are still pending. No full-FISAPT GPU claim.
+First localized-pair primitive increment `f1a138901` passes actual CUDA:
+32checks/145DGEMMs in3.440s, maxabs7.958e-13, including nonorthogonal rejection
+and zero-live-byte cleanup. The next source increment wires real device DFMO
+blocks to occupied rotations and adds explicit `fdisp0_cuda` for unscaled
+two-fragment HF/C assignment/no external potentials, with native frozen offsets.
+141CPU/mock/serial executions pass. Coherent whole installation and real
+localized physical validation are pending; no full-FISAPT GPU claim.
 
 ## LATEST — raw-input physical HF GPU dispersion passes both first dimers
 

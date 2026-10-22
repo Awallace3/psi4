@@ -59,13 +59,16 @@ class SetupBoundary(unittest.TestCase):
                    ("SAPT","DO_DISP_EXCH_SINF"):False,
                    ("SAPT","SAPT_DFT_EINSUMS_GPU"):False,
                    ("FISAPT","FISAPT_LINK_ASSIGNMENT"):"SAO0",
+                   ("FISAPT","SSAPT0_SCALE"):False,
+                   ("FISAPT","FISAPT_EXCH_PARPERP"):False,
                    ("DFMP2","DF_BASIS_MP2"):"fixture-ri"}
         def basis(size):
             shell = types.SimpleNamespace(is_pure=lambda:True,is_cartesian=lambda:False)
             return types.SimpleNamespace(nbf=lambda:size,nshell=lambda:1,shell=lambda i:shell)
         primary,auxiliary = basis(nao),basis(qa)
         wave = types.SimpleNamespace(nirrep=lambda:1, basisset=lambda:primary,
-                                     molecule=lambda:types.SimpleNamespace(natom=lambda:2))
+                                     molecule=lambda:types.SimpleNamespace(
+                                         natom=lambda:2,get_fragments=lambda:[[0,1],[1,2]]))
         timers = []
 
         def forbidden(*a,**kw):
@@ -90,7 +93,7 @@ class SetupBoundary(unittest.TestCase):
             out[...] = sum(coef*chain(factors,transposes) for coef,factors,transposes in terms)
 
         source = Path(__file__).resolve().parents[2]/"psi4/driver/procrouting/sapt/sapt_jk_terms_ein.py"
-        names = {"_store_dispersion0_components","dispersion0","dispersion0_cuda","fdisp0"}
+        names = {"_store_dispersion0_components","dispersion0","dispersion0_cuda","fdisp0_cuda","fdisp0"}
         functions = [n for n in ast.parse(source.read_text()).body
                      if isinstance(n,ast.FunctionDef) and n.name in names]
         namespace = {"core":core,"np":np,"time":time,"FDISP_BLOCK":24,
@@ -355,6 +358,92 @@ class SetupBoundary(unittest.TestCase):
             if phase!="prepare":
                 self.assertEqual(events[-3],"scope exit")
             self.assertIn("secondary cleanup failure",caught.exception.__notes__[0])
+
+    def localized(self):
+        ns,cache,wave,primary,auxiliary,options,timers=self.fixture()
+        options[("SAPT","SAPT_DFT_DO_FSAPT")]="SAPTDFT"
+        options[("FISAPT","FISAPT_LINK_ASSIGNMENT")]="C"
+        for side,frozen in (("A",1),("B",2)):
+            full=cache["Cocc_"+side].np
+            cache["Lfocc0"+side]=Matrix.from_array(full[:,:frozen])
+            cache["Caocc0"+side]=Matrix.from_array(full[:,frozen:])
+            cache["Uaocc0"+side]=Matrix.from_array(np.eye(full.shape[1]-frozen))
+        return ns,cache,wave,primary,auxiliary,options,timers
+
+    def test_fragment_placement_preserves_zero_slots_frozen_offsets_and_cache(self):
+        ns,cache,wave,*_=self.localized()
+        before={key:value.np.copy() for key,value in cache.items()}
+        captured={}
+        def compute(_cache,_wave,**kw):
+            self.assertIs(_cache,cache);self.assertIs(_wave,wave);captured.update(kw)
+            return {"Disp20,u":-1.,"Exch-Disp20,u":.5,"Disp0,u":-.5,
+                "Disp20 occupied pairs":np.full((2,2),-.25),
+                "Exch-Disp20 occupied pairs":np.full((2,2),.125),
+                "Disp0 occupied pairs":np.full((2,2),-.125),
+                "Disp0 execution":{"scope":"CPU orchestration spy ONLY"}}
+        ns["dispersion0_cuda"]=compute
+        result=ns["fdisp0_cuda"](cache,wave,provider_factory=lambda *a:None,do_print=False)
+        self.assertEqual((captured["nfrozen_A"],captured["nfrozen_B"]),(1,2))
+        self.assertTrue(captured["_return_pairs"])
+        self.assertEqual(result["Disp_AB"].np.shape,(6,7))
+        expected=np.zeros((6,7));expected[3:5,4:6]=-.125
+        np.testing.assert_array_equal(result["Disp_AB"].np,expected)
+        self.assertEqual(result["sDisp_AB"].np.shape,(1,1))
+        self.assertNotIn("Disp_AB",cache)
+        for key,value in before.items():np.testing.assert_array_equal(cache[key].np,value)
+
+    def test_fragment_guards_reject_link_scale_external_and_mismatched_active_orbitals(self):
+        for failure in ("link","scale","parperp","external","active"):
+            ns,cache,wave,_,_,options,_=self.localized()
+            if failure=="link":options[("FISAPT","FISAPT_LINK_ASSIGNMENT")]="SIAO0"
+            elif failure=="scale":options[("FISAPT","SSAPT0_SCALE")]=True
+            elif failure=="parperp":options[("FISAPT","FISAPT_EXCH_PARPERP")]=True
+            elif failure=="external":cache["external_potentials"]={"A":object()}
+            else:cache["Caocc0A"].np[0,0]+=.2
+            ns["dispersion0_cuda"]=Mock(side_effect=AssertionError("Invalid fragment entered GPU route"))
+            with self.assertRaises((ValueError,NotImplementedError)):
+                ns["fdisp0_cuda"](cache,wave,provider_factory=lambda *a:None,do_print=False)
+
+    def test_public_localized_route_uploads_only_raw_rotations_after_gpu_setup(self):
+        ns,cache,wave,*_=self.localized()
+        dfmo=importlib.import_module(PACKAGE+".sapt_cuest_dfmo_cuda")
+        backend=importlib.import_module(PACKAGE+".sapt_dispersion_cuda")
+        setup=importlib.import_module(PACKAGE+".sapt_dispersion_cuda_setup")
+        provider=object.__new__(dfmo.CuESTDFMOProvider)
+        provider.closed=provider.failed=False
+        provider.assert_identity=Mock();provider.validate_basis=Mock()
+        provider.prepare_device_compute=Mock();provider.close=Mock()
+        provider.session=types.SimpleNamespace(scope=contextlib.nullcontext,
+            upload=Mock(side_effect=lambda value:("device rotation",id(value))))
+        @contextlib.contextmanager
+        def factory(*args):yield provider
+        def kernel(_provider,**kw):
+            self.assertIs(_provider,provider)
+            self.assertEqual(len(kw["rotations"]),2)
+            self.assertEqual(provider.session.upload.call_count,2)
+            return {"Disp20,u":-1.,"Exch-Disp20,u":.5,"Disp0,u":-.5,
+                "Disp20 occupied pairs":np.full((2,2),-.25),
+                "Exch-Disp20 occupied pairs":np.full((2,2),.125),
+                "Disp0 occupied pairs":np.full((2,2),-.125),
+                "Disp0 execution":{"occupied_representation":"localized"}}
+        with patch.object(setup,"prepare_hf",return_value=(object(),object(),object())),patch.object(
+                backend,"blocked_device_dispersion",side_effect=kernel):
+            result=ns["fdisp0_cuda"](cache,wave,provider_factory=factory,do_print=False)
+        self.assertEqual(result["Disp0 execution"]["occupied_representation"],"localized")
+
+    def test_fragment_zero_active_has_no_factory_or_inherited_provenance(self):
+        ns,cache,wave,*_=self.localized()
+        full=cache["Cocc_A"].np
+        cache["Lfocc0A"]=Matrix.from_array(full)
+        cache["Caocc0A"]=Matrix.from_array(full[:,:0])
+        cache["Uaocc0A"]=Matrix.from_array(np.empty((0,0)))
+        cache["Disp0 execution"]={"backend":"STALE PREVIOUS GPU"}
+        factory=Mock(side_effect=AssertionError("Empty active space entered factory"))
+        result=ns["fdisp0_cuda"](cache,wave,provider_factory=factory,do_print=False)
+        self.assertEqual((result["Disp20,u"],result["Exch-Disp20,u"]),(0.,0.))
+        self.assertNotIn("Disp0 execution",result)
+        self.assertFalse(np.any(result["Disp_AB"].np))
+        factory.assert_not_called()
 
 
 if __name__=="__main__":
