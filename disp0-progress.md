@@ -1,6 +1,6 @@
 # Python/Einsums GPU SAPT0 dispersion progress
 
-## CURRENT native gate — strict tmpfs loader passes; construction still pending
+## CURRENT native gate — cuEST construction/cleanup passes; numerics pending
 
 Private dependencies now build/install/import coherently: exact Einsums064
 CUDA86 with whole matching Waggle, private HDF51.14.6, CPU LibXC7.0 for the
@@ -54,7 +54,17 @@ Loader review conditionally cleared the controlled probe;27offline synthetic
 guards pass. Tiny construction harness now accepts explicit paired staging/
 loader proofs, binds completed prior result/report to the same whole stage,
 and re-admits all live loader inputs in the fresh child. Combined38offline
-tests pass. Construction handoff review pending; no new construction attempt.
+tests pass. Construction handoff review conditionally cleared the controlled
+attempt, then **native-plan-device-03 PASSED**52.940s plus NVML postflight.
+Actual owned context reports0/2/50 and passes native FP64 checks. H2 STO-3G
+2AO/cc-pVDZ-RI28aux bases, primary pair list and DF integral plan constructed.
+Stream and full-Coulomb/MATRIXPOWER/relative-cutoff policy readback pass.
+Reverse native and session cleanup complete,0live bytes/retained native
+owners/ambiguous outcomes. Peak explicit allocations746752bytes; opaque native
+memory and total peak remain unmeasured.9deployment DSO owners retained through
+cleanup. NVRTC compile/module load succeeds; no custom kernel launch.
+Coefficient candidate remains UNVALIDATED_PSI4_COEF. Construction success does
+not admit normalization/components/units/metric rank/layout or DFMO numerics.
 
 Receipts: `../runs/native-plan-device-01/`, `native-plan-device-02/`,
 `cuda-runtime-version-probe-02/`, `binding-pin-apply-01/`,
@@ -63,6 +73,7 @@ Receipts: `../runs/native-plan-device-01/`, `native-plan-device-02/`,
 `btrfs-overmount-strict-green-01/`, `cpu-signed-01/`.
 New deployment receipts: `../runs/native-tmpfs-stage-01/`,
 `native-loader-inputs-01/`, `native-loader-device-01/`.
+Native construction receipt: `../runs/native-plan-device-03/`.
 Current full chronology: `../metadata/SETUP_STATUS.md`.
 Production still BLOCKED: no admitted normalization/layout/rank, DFMO compute,
 custom-kernel numerical execution or signed GPU gate. No DFHelper fallback,
