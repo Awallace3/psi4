@@ -13,17 +13,25 @@ checks and226CPU/mock/serial test executions separately pass.
 
 Both signed dispersion and all core unscaled two-fragment/C/no-external term
 families, including coupled response, already pass bounded physical GPU gates.
-Those previous term tests supplied CPU IBO rotations. New downstream tests
-are now running with native GPU IBO outputs retained directly on device:
-`gpu-ibo-shared-terms-*` and `gpu-ibo-dispersion-*`. Their separate CPU oracles
-use downloaded GPU rotations only to choose an identical comparison gauge;
-CPU localized orbitals, rotations, factors and response solutions never feed
-the new GPU chain. Do not infer a downstream pass before its receipts finish.
+Those previous term tests supplied CPU IBO rotations. New native GPU IBO ->
+signed localized dispersion passes all three systems at blocks500/5, retaining
+the original GPU rotations into contractions; max signed pair/global error
+2.146e-15Eh,208DFMOcalls, coefficientH2D0 and clean teardown. Receipts:
+`gpu-ibo-dispersion-01` through`-03`. The shared-term native GPU IBO chain
+`gpu-ibo-shared-terms-*` is still running; no pass inferred before completion.
+Separate CPU oracles use downloaded GPU rotations only to choose an identical
+comparison gauge; CPU localized orbitals, rotations, factors and response
+solutions never feed the new GPU chains.
 
 Raw HF/upstream matrices remain CPU correctness fixtures. Reusing existing GPU
 SCF and providing an explicit resident-buffer/stream/lifetime handoff, automatic
 driver integration, scaled/link/external cases and full-workflow/matched timing
 remain unfinished. No general full-FISAPT/default or speedup claim.
+
+The existing native `USE_CUEST` SCF implementation is on
+`origin/saptdft_cuest` at9317f406b, absent from this staged CPU-native-core
+worktree. Reuse that implementation; do not introduce a new SCF solver.
+Its host Matrix accessors must not be mislabeled a resident device handoff.
 
 Older milestone sections below are retained history, not current blockers.
 
