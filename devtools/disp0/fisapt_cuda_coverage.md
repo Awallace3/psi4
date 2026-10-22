@@ -88,3 +88,17 @@ Receipt: sibling `runs/gpu-fisapt-elst-primitives-01`, source9de9a88e2.
 Synthetic factors/potentials were test inputs, not native-provider coverage.
 Native point-charge qualification is pending. There is not yet a coupled
 `felst_cuda` or physical fragment-elst coverage claim.
+
+UPDATE: native FP64 point potentials pass attraction/repulsion/mixed/zero
+SPDF matrices, maxabs8.382e-15, complete cleanup
+(`runs/potential-device-02`). The new explicit `CuESTPointPotential` retains
+OE plan/FP64 parameter/fixed-count workspace objects in the existing owner
+graph and rejects borrowed precision drift without silently restoring it.
+
+`felst_device` now connects native JKFIT DFMO and point potentials to the
+device algebra. It returns borrowed device diagonal factors tied to the
+original provider/metric gauge, plus full matrix and GPU sum; it does not
+download factors, close their enclosing scope, or overwrite canonical Elst.
+154 CPU/mock/serial executions pass. Whole-stage installation and independent
+physical/native-C++ matrix comparison are pending. No default driver dispatch,
+GPU IBO localization, external/link/scaled or remaining-term claim.

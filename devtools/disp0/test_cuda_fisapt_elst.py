@@ -2,12 +2,15 @@
 import ctypes as ct
 import importlib
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock,patch
 import numpy as np
 
 from test_cuda_backend import PACKAGE,Kernels,host
 from test_cuda_hf_setup import Session
 
 elst=importlib.import_module(PACKAGE+".sapt_fisapt_elst_cuda")
+point=importlib.import_module(PACKAGE+".sapt_cuest_potential_cuda")
 
 
 def fixture(seed,N=7,A=3,B=2,Q=9,K=11):
@@ -111,6 +114,88 @@ class Electrostatic(unittest.TestCase):
             out=elst.nuclear_matrix(session,xyz,za,zb)
             self.assertTrue(np.isinf(host(out)[0,1]))
             np.testing.assert_array_equal(host(out)[1,:],0.)
+
+    def test_native_orchestration_preserves_factors_and_original_provider_gauge(self):
+        data,expected=fixture(41)
+        xyz,za,zb,la,lb,faa,fbb,va,vb=data
+        session=Session(self.lib)
+        primary,auxiliary=object(),object()
+        owner=SimpleNamespace(handle=7,plan=8,primary_snapshot=SimpleNamespace(ncenter=len(za)),
+                              auxiliary_snapshot=SimpleNamespace(owner=auxiliary))
+        provider=SimpleNamespace(session=session,handle=7,plan=8,keepalive=(owner,),
+            nao=la.shape[0],naux=faa.shape[0],primary_basis=primary,auxiliary_basis=auxiliary,
+            validate_basis=Mock())
+        potentials=SimpleNamespace(session=session,owner=owner,num_charges=1,primary_basis=primary)
+        issued=[]
+        def factors(pairs):
+            self.assertEqual(set(pairs),{"aa","bb"})
+            issued.append("DFMO")
+            return {"aa":session.upload(faa),"bb":session.upload(fbb)}
+        provider.compute_device=factors
+        def potential(x,q):
+            index=len([i for i in issued if i=="potential"])
+            atom=index//2
+            # Sign and device subviews are checked separately from reference data.
+            np.testing.assert_array_equal(host(x),xyz[atom:atom+1])
+            np.testing.assert_array_equal(host(q),-(za if index%2==0 else zb)[atom:atom+1])
+            issued.append("potential")
+            return session.upload((va if index%2==0 else vb)[atom])
+        potentials.compute_device=potential
+        with session.scope():
+            inputs=[session.upload(value) for value in (la,lb,xyz,za,zb)]
+            state=elst.felst_device(provider,potentials,*inputs,jkfit_basis=auxiliary)
+            self.assertIs(state.require_provider(provider),state)
+            np.testing.assert_allclose(host(state.matrix),expected,rtol=1e-11,atol=1e-12)
+            np.testing.assert_allclose(host(state.total),[expected.sum()],rtol=1e-11,atol=1e-12)
+            self.assertFalse(state.qa.allocation.freed or state.qb.allocation.freed)
+            with self.assertRaises(ValueError):state.require_provider(object())
+            with self.assertRaises(ValueError):
+                elst.felst_device(provider,potentials,*inputs,jkfit_basis=object())
+        with self.assertRaises(RuntimeError):state.require_provider(provider)
+        self.assertEqual(issued.count("DFMO"),1)
+        self.assertEqual(issued.count("potential"),2*len(za))
+        self.assertEqual(session.live_bytes,0)
+
+    def test_point_potential_failure_retains_pending_inputs_and_invalidates_parent(self):
+        for fail_sync in (False,True):
+            session=Session(self.lib)
+            owner=SimpleNamespace(_context=ct.c_void_p(1),_raw=lambda v:v,
+                assert_live=Mock(),_invalidate=Mock())
+            def status(label,code):
+                if code:raise RuntimeError("native compute failed")
+            native=SimpleNamespace(cuestPotentialCompute=Mock(return_value=0 if fail_sync else 7))
+            owner.api=SimpleNamespace(native=native,status=status)
+            potential=point.CuESTPointPotential.__new__(point.CuESTPointPotential)
+            potential.owner,potential.session=owner,session
+            potential.num_charges,potential.nao=1,3
+            potential.failed,potential.pending=False,[]
+            potential.plan,potential.parameters=ct.c_void_p(2),ct.c_void_p(3)
+            potential.workspace=point.abi._Workspace();potential.calls=0
+            potential._bind=Mock();potential._precision=Mock()
+            session.synchronize_device=Mock(side_effect=RuntimeError("sync failed")) if fail_sync else Mock()
+            with session.scope():
+                xyz,q=session.upload(np.ones((1,3))),session.upload(np.ones(1))
+                with self.assertRaises(RuntimeError):potential.compute_device(xyz,q)
+                self.assertEqual(len(potential.pending),1)
+                self.assertTrue(potential.failed);owner._invalidate.assert_called_once()
+                with self.assertRaises(RuntimeError):potential.compute_device(xyz,q)
+                self.assertEqual(native.cuestPotentialCompute.call_count,1)
+
+    def test_point_potential_precision_drift_is_read_only_and_rejected(self):
+        potential=point.CuESTPointPotential.__new__(point.CuESTPointPotential)
+        for ffloat,jit in ((2,0),(0,0),(2,1)):
+            def query(kind,parameters,attribute,value,size):
+                ct.cast(value,ct.POINTER(ct.c_int))[0]=(ffloat,jit)[attribute]
+                return 0
+            native=SimpleNamespace(cuestParametersQuery=Mock(side_effect=query))
+            owner=SimpleNamespace(_raw=lambda x:x,handle=1,
+                api=SimpleNamespace(native=native,status=lambda *args:None))
+            potential.owner,potential.parameters=owner,ct.c_void_p(2)
+            with patch.object(point.identity,"native_math_mode",return_value=1):
+                if (ffloat,jit)==(2,0):potential._precision()
+                else:
+                    with self.assertRaisesRegex(RuntimeError,"parameter drift"):potential._precision()
+            self.assertFalse(hasattr(native,"cuestParametersConfigure"))
 
 
 if __name__=="__main__":unittest.main()
