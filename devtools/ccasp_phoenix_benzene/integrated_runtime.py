@@ -1,12 +1,13 @@
 # Psi4 Developers; SPDX-License-Identifier: LGPL-3.0-only
 """Reviewed composition/admission inputs, not a build/install or an activation grant."""
 import ctypes
+from contextlib import ExitStack
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
-import shutil
+import re
 import socket
 import stat
 import subprocess
@@ -89,7 +90,9 @@ def source_binding(commit, tree):
 
 def regular_files(root, limit=5000, *, ignore_bytecode=True):
     files = []
-    for parent, dirs, names in os.walk(root,followlinks=False):
+    def failed(error):
+        raise error
+    for parent, dirs, names in os.walk(root,followlinks=False,onerror=failed):
         if any((Path(parent)/d).is_symlink() for d in dirs):
             raise ValueError("unexpected runtime directory symlink")
         if ignore_bytecode and "__pycache__" in dirs:
@@ -104,12 +107,82 @@ def regular_files(root, limit=5000, *, ignore_bytecode=True):
     return sorted(files)
 
 
+def committed_driver_inventory(source, commit):
+    """Independent Git object inventory, never inferred from walk or manifest."""
+    data = subprocess.check_output(["git","-C",str(source),"ls-tree","-rz",commit,"--","psi4/driver"])
+    if len(data) > 1024**2 or not data.endswith(b"\0"):
+        raise ValueError("committed driver inventory metadata bound/format")
+    records = {}
+    for record in data.split(b"\0")[:-1]:
+        header, path = record.split(b"\t",1)
+        mode, kind, oid = header.decode("ascii").split()
+        path = path.decode("utf-8")
+        if not path.endswith(".py"):
+            continue  # deliberately only Python source; bytecode is not source
+        if (mode not in ("100644","100755") or kind != "blob"
+                or not re.fullmatch("[0-9a-f]{40}",oid)
+                or not path.startswith("psi4/driver/") or ".." in Path(path).parts):
+            raise ValueError("committed driver inventory object/path mismatch")
+        relative = Path(path.removeprefix("psi4/"))
+        if relative in records or len(records) >= 5000:
+            raise ValueError("committed driver inventory duplicate/count bound")
+        records[relative] = oid
+    if not records:
+        raise ValueError("empty committed driver Python inventory")
+    return records
+
+
+def driver_sources(source, inventory):
+    root = Path(source)/"psi4/driver"
+    actual = {Path("driver")/file.relative_to(root):file
+              for file in regular_files(root) if file.suffix==".py"}
+    if set(actual) != set(inventory):
+        raise ValueError("committed driver Python inventory differs from source files")
+    return actual
+
+
+def small_regular(path, remaining, *, destination=None):
+    """Bounded no-follow/nonblocking regular read/copy, including configured launcher.
+
+    No destination is opened until descriptor type/size is admitted. A changing
+    input fails closed and leaves any partial exclusive output unreused.
+    """
+    with ExitStack() as stack:
+        fd = os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        inp = stack.enter_context(os.fdopen(fd,"rb"))
+        info = os.fstat(inp.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("small runtime input must be a regular file")
+        if info.st_size > remaining or remaining < 0:
+            raise ValueError("small Python runtime composition byte bound")
+        out = None if destination is None else stack.enter_context(Path(destination).open("xb"))
+        digest = hashlib.sha256()
+        blob = hashlib.sha1(b"blob "+str(info.st_size).encode()+b"\0")
+        count = 0
+        while chunk := inp.read(65536):
+            count += len(chunk)
+            if count > info.st_size:
+                raise ValueError("small runtime input grew during read/copy")
+            digest.update(chunk); blob.update(chunk)
+            if out is not None:
+                out.write(chunk)
+        after = os.fstat(inp.fileno())
+        if (count != info.st_size or after.st_size != info.st_size
+                or after.st_mtime_ns != info.st_mtime_ns):
+            raise ValueError("small runtime input changed during read/copy")
+        if out is not None:
+            out.flush(); os.fsync(out.fileno())
+        return dict(nbytes=count,sha256=digest.hexdigest(),git_blob_sha1=blob.hexdigest())
+
+
 def compose(source, accepted, stage, binding):
     """Small Python/configured-file composition only. No core copy/hash/import."""
     source,accepted,stage = map(Path,(source,accepted,stage))
     stage.mkdir(mode=0o700,parents=True,exist_ok=False)
     package = stage/"lib/psi4"
     inherited = accepted/"lib/psi4"
+    inventory = committed_driver_inventory(source,binding["commit"])
+    current_sources = driver_sources(source,inventory)
     core_name = "core.cpython-313-x86_64-linux-gnu.so"
     records, total = {}, 0
     candidates = {}
@@ -118,9 +191,8 @@ def compose(source, accepted, stage, binding):
         if str(relative).startswith("driver/") and old.suffix == ".py":
             continue
         candidates[relative] = (old,"inherited configured package")
-    for current in regular_files(source/"psi4/driver"):
-        if current.suffix == ".py":
-            candidates[Path("driver")/current.relative_to(source/"psi4/driver")] = (current,"new committed Python tree")
+    for relative,current in current_sources.items():
+        candidates[relative] = (current,"new committed Python tree")
     for relative,(origin,role) in sorted(candidates.items()):
         destination = package/relative
         destination.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
@@ -129,29 +201,29 @@ def compose(source, accepted, stage, binding):
             records[str(destination.relative_to(stage))] = dict(role="accepted native15cc core link",
                 link=str(origin),sha256=binding["native"]["core_sha256"])
             continue
-        if origin.is_symlink() or not origin.is_file() or ".so" in origin.name:
+        if ".so" in origin.name:
             raise ValueError("unexpected inherited runtime object: "+str(origin))
-        total += origin.stat().st_size
-        if total > 32*1024**2:
-            raise ValueError("small Python runtime composition byte bound")
-        with origin.open("rb") as inp, destination.open("xb") as out:
-            shutil.copyfileobj(inp,out)
+        copied = small_regular(origin,32*1024**2-total,destination=destination)
+        total += copied["nbytes"]
+        if relative in inventory and copied["git_blob_sha1"] != inventory[relative]:
+            raise ValueError("committed driver Python blob identity differs")
         destination.chmod(0o400)
-        records[str(destination.relative_to(stage))] = dict(role=role,source=str(origin),sha256=sha(destination))
-        if records[str(destination.relative_to(stage))]["sha256"] != sha(origin):
+        records[str(destination.relative_to(stage))] = dict(role=role,source=str(origin),
+            sha256=copied["sha256"],nbytes=copied["nbytes"])
+        if sha(destination) != copied["sha256"]:
             raise ValueError("runtime copy differs")
     if not (package/core_name).is_symlink():
         raise ValueError("accepted core missing")
     (stage/"bin").mkdir()
-    with (accepted/"bin/psi4").open("rb") as inp, (stage/"bin/psi4").open("xb") as out:
-        shutil.copyfileobj(inp,out)
+    copied = small_regular(accepted/"bin/psi4",32*1024**2-total,destination=stage/"bin/psi4")
+    total += copied["nbytes"]
     (stage/"bin/psi4").chmod(0o700)
     records["bin/psi4"] = dict(role="inherited configured relocatable launcher",
-        source=str(accepted/"bin/psi4"),sha256=sha(stage/"bin/psi4"))
+        source=str(accepted/"bin/psi4"),sha256=copied["sha256"],nbytes=copied["nbytes"])
     (stage/"share").mkdir()
     (stage/"share/psi4").symlink_to(accepted/"share/psi4",target_is_directory=True)
     return dict(schema="ccasp-composed-python-runtime/1",stage=str(stage),binding=binding,
-        records=records,data_link=str(accepted/"share/psi4"),
+        records=records,data_link=str(accepted/"share/psi4"),copied_bytes=total,
         native_compiled_from_new_commit=False,
         core_hash_verified_during_composition=False,
         scope="configured root inherited; complete new driver Python; accepted native core/data separate")
@@ -165,6 +237,8 @@ def verify_runtime(path, pin, binding, *, hash_core=False):
     if stage != Path(PLAN["runtime"])/"stage":
         raise ValueError("wrong composed stage")
     expected = manifest["records"]
+    inventory = committed_driver_inventory(Path(binding["source"]),binding["commit"])
+    driver_sources(binding["source"],inventory)  # independent of the composed manifest
     if (set(p.name for p in stage.iterdir()) != {"lib","bin","share"}
             or set(p.name for p in (stage/"lib").iterdir()) != {"psi4"}
             or set(p.name for p in (stage/"bin").iterdir()) != {"psi4"}
@@ -172,8 +246,14 @@ def verify_runtime(path, pin, binding, *, hash_core=False):
         raise ValueError("unexpected composed prefix content")
     actual = {str(p.relative_to(stage)) for p in regular_files(stage/"lib/psi4",ignore_bytecode=False)}
     actual.add("bin/psi4")
+    expected_python = {"lib/psi4/"+str(rel) for rel in inventory}
+    actual_python = {rel for rel in actual if rel.startswith("lib/psi4/driver/") and rel.endswith(".py")}
+    manifest_python = {rel for rel in expected if rel.startswith("lib/psi4/driver/") and rel.endswith(".py")}
+    if actual_python != expected_python or manifest_python != expected_python:
+        raise ValueError("committed driver Python inventory differs from runtime/manifest")
     if actual != set(expected):
         raise ValueError("unexpected/missing runtime package file")
+    total = 0
     for rel,record in expected.items():
         file = stage/rel
         if "link" in record:
@@ -185,13 +265,23 @@ def verify_runtime(path, pin, binding, *, hash_core=False):
                 raise ValueError("wrong resolved native core")
             if hash_core and sha(file) != OLD.CORE_SHA:
                 raise ValueError("accepted core hash differs")
-        elif file.is_symlink() or sha(file) != record["sha256"] or sha(record["source"]) != record["sha256"]:
-            raise ValueError("runtime Python/configured file hash differs")
-        elif (Path(record["source"]) != (
-                Path(binding["source"])/rel.removeprefix("lib/")
-                if rel.startswith("lib/psi4/driver/") and rel.endswith(".py")
-                else OLD.STAGE/rel)):
-            raise ValueError("unexpected runtime source role")
+        else:
+            staged = small_regular(file,32*1024**2-total)
+            original = small_regular(record["source"],32*1024**2-total)
+            total += staged["nbytes"]
+            if (staged["sha256"] != record["sha256"] or original["sha256"] != record["sha256"]
+                    or staged["nbytes"] != record["nbytes"] or original["nbytes"] != record["nbytes"]):
+                raise ValueError("runtime Python/configured file hash differs")
+            if (Path(record["source"]) != (
+                    Path(binding["source"])/rel.removeprefix("lib/")
+                    if rel.startswith("lib/psi4/driver/") and rel.endswith(".py")
+                    else OLD.STAGE/rel)):
+                raise ValueError("unexpected runtime source role")
+            relative = Path(rel.removeprefix("lib/psi4/"))
+            if relative in inventory and staged["git_blob_sha1"] != inventory[relative]:
+                raise ValueError("committed driver Python blob identity differs")
+    if total != manifest["copied_bytes"]:
+        raise ValueError("runtime copied byte declaration differs")
     data = stage/"share/psi4"
     if (not data.is_symlink() or os.readlink(data) != manifest["data_link"]
             or data.resolve() != (OLD.STAGE/"share/psi4").resolve()):

@@ -50,12 +50,29 @@ class IntegratedRuntimeTests(unittest.TestCase):
         self.runtime = self.root/"runtime"
         self.binding = dict(source=str(self.source),commit="1"*40,tree="2"*40,
             native=dict(core_sha256=R.sha(self.accepted/"lib/psi4/core.cpython-313-x86_64-linux-gnu.so")))
+        # Independent, frozen toy Git-tree response. It does NOT track later
+        # filesystem omissions/additions/mutations or the composed manifest.
+        records = []
+        for relative in ("psi4/driver/__init__.py","psi4/driver/new_hook.py"):
+            data = (self.source/relative).read_bytes()
+            oid = hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data).hexdigest()
+            records.append(f"100644 blob {oid}\t{relative}".encode()+b"\0")
+        self.git_tree = b"".join(records)
+        self.inventory_git = mock.Mock(side_effect=self.committed_inventory_reply)
+        patch = mock.patch.object(R.subprocess,"check_output",self.inventory_git)
+        patch.start(); self.addCleanup(patch.stop)
         self.stack = mock.patch.multiple(R.OLD,STAGE=self.accepted,
             CORE_SHA=self.binding["native"]["core_sha256"])
         self.stack.start()
         self.addCleanup(self.stack.stop)
         patch = mock.patch.dict(R.PLAN,{"runtime":str(self.runtime)})
         patch.start(); self.addCleanup(patch.stop)
+
+    def committed_inventory_reply(self, argv, **kwargs):
+        self.assertEqual(argv,["git","-C",str(self.source),"ls-tree","-rz",
+                               self.binding["commit"],"--","psi4/driver"])
+        self.assertFalse(kwargs)
+        return self.git_tree
 
     def composed(self):
         manifest = R.compose(self.source,self.accepted,self.runtime/"stage",self.binding)
@@ -70,6 +87,8 @@ class IntegratedRuntimeTests(unittest.TestCase):
         self.assertEqual((stage/"lib/psi4/driver/__init__.py").read_bytes(),b"# NEW toy driver\n")
         self.assertTrue((stage/"lib/psi4/driver/new_hook.py").is_file())
         self.assertTrue((stage/"lib/psi4/core.cpython-313-x86_64-linux-gnu.so").is_symlink())
+        self.assertEqual((stage/"bin/psi4").read_bytes(),b"# TOY configured launcher\n")
+        self.assertEqual(manifest["copied_bytes"],sum(r.get("nbytes",0) for r in manifest["records"].values()))
         self.assertFalse(manifest["native_compiled_from_new_commit"])
         self.assertFalse(manifest["core_hash_verified_during_composition"])
         self.assertEqual(R.verify_runtime(path,pin,self.binding,hash_core=True),manifest)
@@ -134,6 +153,114 @@ class IntegratedRuntimeTests(unittest.TestCase):
         with mock.patch.object(R,"sha",side_effect=AssertionError("must reject FIFO before hashing")):
             with self.assertRaisesRegex(ValueError,"type"):
                 R.pinned_json(fifo,"0"*64)
+
+    def test_launcher_fifo_is_rejected_without_blocking_open_or_hash(self):
+        launcher = self.accepted/"bin/psi4"
+        launcher.unlink()
+        os.mkfifo(launcher)
+        original_open, original_path_open = os.open, Path.open
+        def nonblocking_only(path, flags, *args, **kwargs):
+            if Path(path) == launcher:
+                self.assertTrue(flags & os.O_NONBLOCK)
+                self.assertTrue(flags & os.O_NOFOLLOW)
+            return original_open(path,flags,*args,**kwargs)
+        def reject_blocking_path_open(path, *args, **kwargs):
+            if path == launcher:
+                self.fail("launcher copy reached blocking Path.open before type validation")
+            return original_path_open(path,*args,**kwargs)
+        with mock.patch.object(R.os,"open",side_effect=nonblocking_only), \
+             mock.patch.object(Path,"open",reject_blocking_path_open):
+            with self.assertRaisesRegex(ValueError,"regular"):
+                self.composed()
+
+    def test_launcher_symlink_is_rejected_instead_of_followed(self):
+        launcher = self.accepted/"bin/psi4"
+        launcher.unlink()
+        launcher.symlink_to(self.accepted/"lib/psi4/extras.py")
+        with self.assertRaises((ValueError,OSError)):
+            self.composed()
+
+    def test_oversized_launcher_refuses_before_destination_creation(self):
+        launcher = self.accepted/"bin/psi4"
+        with launcher.open("wb") as stream:
+            stream.truncate(32*1024**2+1)  # sparse engine-free size fixture
+        with self.assertRaisesRegex(ValueError,"byte bound"):
+            self.composed()
+        self.assertFalse((self.runtime/"stage/bin/psi4").exists())
+
+    def test_launcher_bytes_share_unchanged_32MiB_package_allowance(self):
+        launcher = self.accepted/"bin/psi4"
+        with launcher.open("wb") as stream:
+            stream.truncate(32*1024**2)  # individually fits, package+launcher does not
+        with self.assertRaisesRegex(ValueError,"byte bound"):
+            self.composed()
+        self.assertFalse((self.runtime/"stage/bin/psi4").exists())
+
+    def test_unreadable_traversal_error_is_raised_not_silently_omitted(self):
+        error = PermissionError("TOY unreadable driver subtree")
+        def unreadable_walk(root, **kwargs):
+            if kwargs.get("onerror") is not None:
+                kwargs["onerror"](error)
+            return iter(())  # os.walk's old silent-default behavior
+        with mock.patch.object(R.os,"walk",side_effect=unreadable_walk):
+            with self.assertRaises(PermissionError) as caught:
+                R.regular_files(self.source/"psi4/driver")
+        self.assertIs(caught.exception,error)
+
+    def test_omitted_committed_driver_source_file_is_refused(self):
+        (self.source/"psi4/driver/new_hook.py").unlink()
+        with self.assertRaisesRegex(ValueError,"committed driver.*inventory"):
+            self.composed()
+
+    def test_extra_uncommitted_driver_source_file_is_refused(self):
+        (self.source/"psi4/driver/extra.py").write_bytes(b"# uncommitted TOY\n")
+        with self.assertRaisesRegex(ValueError,"committed driver.*inventory"):
+            self.composed()
+
+    def test_altered_committed_driver_bytes_are_refused_against_git_blob(self):
+        (self.source/"psi4/driver/new_hook.py").write_bytes(b"# changed TOY under same name\n")
+        with self.assertRaisesRegex(ValueError,"committed driver Python blob identity"):
+            self.composed()
+
+    def test_incomplete_stage_and_rewritten_manifest_cannot_hide_committed_file(self):
+        path,pin,manifest = self.composed()
+        rel = "lib/psi4/driver/new_hook.py"
+        (self.runtime/"stage"/rel).unlink()
+        del manifest["records"][rel]
+        path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError,"committed driver.*inventory"):
+            R.verify_runtime(path,R.sha(path),self.binding)
+
+    def test_extra_driver_in_stage_manifest_and_source_cannot_override_committed_inventory(self):
+        path,pin,manifest = self.composed()
+        source = self.source/"psi4/driver/extra.py"
+        source.write_bytes(b"# uncommitted TOY\n")
+        staged = self.runtime/"stage/lib/psi4/driver/extra.py"
+        staged.write_bytes(source.read_bytes())
+        manifest["records"]["lib/psi4/driver/extra.py"] = dict(role="new committed Python tree",
+            source=str(source),sha256=R.sha(source),nbytes=source.stat().st_size)
+        manifest["copied_bytes"] += source.stat().st_size
+        path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError,"committed driver.*inventory"):
+            R.verify_runtime(path,R.sha(path),self.binding)
+
+    def test_malformed_or_symlink_git_inventory_cannot_be_trusted(self):
+        original = self.git_tree
+        for data in (original[:-1], original+original, original.replace(b"100644",b"120000",1),
+                     original.replace(b"psi4/driver/new_hook.py",b"../untrusted.py",1)):
+            with self.subTest(data=data):
+                self.git_tree = data
+                with self.assertRaises(ValueError):
+                    R.committed_driver_inventory(self.source,self.binding["commit"])
+
+    def test_explicit_source_bytecode_exclusions_remain_allowed(self):
+        (self.source/"psi4/driver/new_hook.pyc").write_bytes(b"TOY ignored bytecode")
+        cache = self.source/"psi4/driver/__pycache__"
+        cache.mkdir()
+        (cache/"ignored.pyc").write_bytes(b"TOY ignored cache")
+        path,pin,manifest = self.composed()
+        self.assertFalse(any("__pycache__" in name or name.endswith(".pyc") for name in manifest["records"]))
+        R.verify_runtime(path,pin,self.binding)
 
     def test_successful_entry_does_not_publish_a_failure_receipt(self):
         tree = ast.parse((HERE/"integrated_job.py").read_text())
@@ -265,6 +392,16 @@ class IntegratedRuntimeTests(unittest.TestCase):
                 self.assertFalse(result["science_pass"])
                 self.assertEqual(result["after_runtime_closure"],"failed" if closure_fails else "passed")
                 fake.module.return_value.capture_science.assert_called_once()
+
+
+class CommittedDriverInventoryTests(unittest.TestCase):
+    def test_actual_local_git_inventory_reads_objects_without_scientific_import(self):
+        inventory = R.committed_driver_inventory(ROOT,"ffc6f86948cd0da6bd876073ab28e856386ac810")
+        self.assertEqual(len(inventory),166)
+        self.assertIn(Path("driver/procrouting/isapol_bounded.py"),inventory)
+        path = ROOT/"psi4/driver/procrouting/isapol_bounded.py"
+        self.assertEqual(R.small_regular(path,32*1024**2)["git_blob_sha1"],
+                         inventory[Path("driver/procrouting/isapol_bounded.py")])
 
 
 class DerivedAdmissionTests(unittest.TestCase):

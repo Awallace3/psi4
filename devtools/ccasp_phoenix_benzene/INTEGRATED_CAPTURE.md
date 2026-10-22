@@ -152,6 +152,32 @@ Remote installed file layout and private probe bytes have not been inspected
 under this author task; preparation must fail closed if they disagree.
 Partial new preparation paths are never overwritten/reused automatically.
 
+### Metadata preparation hardening
+
+All copied small runtime files, including accepted `bin/psi4`, use
+`O_NOFOLLOW|O_NONBLOCK` descriptor opens and regular-file/size validation before
+exclusive destination creation. The launcher shares the **unchanged32MiB**
+aggregate copy allowance with package Python/configured data; the accepted
+core remains a separate link, not part of that copy budget. Bounded streaming
+records byte counts/hashes and rejects input growth/change. Verification uses
+the same bounded regular-file reader rather than following launcher symlinks
+or blocking on a FIFO.
+
+`os.walk` traversal errors propagate. Composition and verification obtain an
+independent recursive **committed Git driver-Python inventory**, reject missing
+or extra `.py` source files, and compare copied/verified Python bytes against
+their committed Git blob identities. The runtime's own manifest cannot hide
+an omitted file, even if that manifest is rehashed. Explicit source/inherited
+bytecode exclusions remain allowed; unexpected bytecode in the composed
+package remains refused. No installed content is removed to fit a bound.
+
+Parent independently relayed stat-only Phoenix inventory `b2672e0e3`: estimated
+composition25,898,999bytes including17,900-byte configured regular launcher,
+below32MiB and roughly1700files below5000. The accepted core44,301,144bytes is
+separate. This is parent-provided metadata, **not author remote/native evidence
+or a completed composition**. No bound increase or installed-content exclusion
+was required.
+
 Inside the one allocated process, `initialize` admits the exact isolated
 p4cuest_sapt Python, explicit admitted Einsums1.1.3 CDLL/hash/retained handle,
 new absolute staged `bin/psi4 --psiapi`, new package/core/data/file roles,
