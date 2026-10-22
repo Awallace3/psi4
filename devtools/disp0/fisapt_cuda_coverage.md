@@ -212,3 +212,17 @@ cleanup0bytes/owners. Together with earlier localized dispersion/elst/exchange
 gates, this covers the stated bounded UNCOUPLED/unscaled term-family scope
 only. Coupled response, GPU localization, upstream resident handoff and complete
 default/link/external/scaled FISAPT remain unqualified.
+
+UPDATE: actual resident response primitive gate passes40checks in3.864s,
+maxabs1.421e-12,2–11PCG iterations, max true relative residual9.707e-13,
+zero live bytes (`gpu-fisapt-response-primitives-01`, sourcecac961ead).
+These use synthetic uploaded factors, not native response qualification.
+
+The next source increment wires explicit `coupled_find_device`: reuse each
+nuclear/electronic source and its signed targets, solve canonical H+Y=W on
+device, localize physical x=-Y once, and preserve separate old uncoupled and
+new coupled component/combined matrices. Per-source scalar solver diagnostics
+are returned.184CPU/mock/serial executions pass, including complete synthetic
+coupled matrices versus dense source solves and unchanged uncoupled results.
+Whole/native-factor/physical coupled gates remain pending; the independent
+CPU oracle uses JK-checked dense Hessians, not buggy native coupled find.

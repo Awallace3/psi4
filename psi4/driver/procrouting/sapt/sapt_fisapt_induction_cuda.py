@@ -152,6 +152,23 @@ class Find20uDevice:
     total_ba: object
 
 
+@dataclass(frozen=True)
+class CoupledComponentsDevice:
+    induction: object
+    exchange_induction: object
+    combined_ab: object
+    combined_ba: object
+    total_ab: object
+    total_ba: object
+
+
+@dataclass(frozen=True)
+class CoupledFindDevice:
+    uncoupled: object
+    coupled: object
+    response_diagnostics: tuple
+
+
 def ind20u_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,za,zb):
     """Native nuclear/electronic sources and device uncoupled Ind20u directions.
     Explicit two-fragment C/no-external numerical seam. The parent elst state
@@ -173,7 +190,22 @@ def find20u_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,
     return _directional_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,za,zb,exchange=True)
 
 
-def _directional_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,za,zb,*,exchange):
+def coupled_find_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,za,zb,*,
+                        response_rtol=1e-10,response_atol=1e-12,response_max_iterations=128):
+    """Resident HF intramonomer response, preserving uncoupled matrices too.
+
+    Each nuclear/electronic source is constructed once, then used by both the
+    existing uncoupled denominator path and the positive-Hessian PCG solve.
+    Only solved physical amplitudes are localized; no second gap division.
+    No native coupled-find/host JK/CPU solver fallback is used.
+    """
+    return _directional_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,za,zb,
+        exchange=True,response_options={"rtol":response_rtol,"atol":response_atol,
+                                        "max_iterations":response_max_iterations})
+
+
+def _directional_device(elst_state,potential,occupied,virtuals,energies,matrices,xyz,za,zb,*,
+                        exchange,response_options=None):
     provider=elst_state.provider;elst_state.require_provider(provider)
     session=provider.session;m=DeviceMath(session);owner=potential.owner
     if (potential.session is not session or potential.num_charges!=1
@@ -205,6 +237,10 @@ def _directional_device(elst_state,potential,occupied,virtuals,energies,matrices
         raise ValueError("Wrong atom/source/shared-JKFIT layout")
     ab,ba=session.empty(shape,zero=True),session.empty(shape,zero=True)
     xab,xba=(session.empty(shape,zero=True),session.empty(shape,zero=True)) if exchange else (None,None)
+    coupled=response_options is not None
+    if coupled:
+        cab,cba,cxab,cxba=(session.empty(shape,zero=True) for _ in range(4))
+    diagnostics=[]
     with session.scope():
         rotations={side:occupied_rotation(session,occupied[side],local[side],matrices["S"],
             energies[o],energies[v]) for side,o,v in (("A","a","r"),("B","b","s"))}
@@ -237,6 +273,20 @@ def _directional_device(elst_state,potential,occupied,virtuals,energies,matrices
                     targets["exch"]=exchange_induction_target(
                         session,matrices,local[side],virtuals[side],jp,side=side)
                     outputs["exch"]=session.empty((O,C),zero=True)
+                if coupled:
+                    from .sapt_fisapt_response_cuda import HFResponseOperator
+                    response=HFResponseOperator(provider,occupied[side],virtuals[side],
+                                                {"o":energies[o],"v":energies[v]})
+                    response_outputs={name:session.empty((O,C),zero=True) for name in targets}
+                    def solve_source(source,column):
+                        solved=response.solve(source,**response_options)
+                        amplitudes=session.gemm_at_b(rotations[side],solved.amplitudes)
+                        session.launch("reduce_induction_source",min(65535,O),128,
+                            [O,V,C,column,amplitudes,targets["ind"],targets.get("exch"),
+                             response_outputs["ind"],response_outputs.get("exch")])
+                        diagnostics.append({"direction":side,"source_column":column,
+                            "iterations":solved.iterations,"absolute_residual":solved.absolute_residual,
+                            "relative_residual":solved.relative_residual})
                 negative=m.combine(charges,charges,-1,0)
                 for atom in range(N):
                     with session.scope():
@@ -245,10 +295,13 @@ def _directional_device(elst_state,potential,occupied,virtuals,energies,matrices
                         source=session.gemm_at_b(occupied[side],session.gemm(potential_ao,virtuals[side]))
                         uncoupled_source(session,source,{"o":energies[o],"v":energies[v]},rotations[side],
                             targets,outputs,column=atom)
+                        if coupled:solve_source(source,atom)
                 for k in range(local[other].shape[1]):
-                    source=sources.view((O,V),offset=8*k*O*V)
-                    uncoupled_source(session,source,{"o":energies[o],"v":energies[v]},rotations[side],
-                        targets,outputs,column=N+k)
+                    with session.scope():
+                        source=sources.view((O,V),offset=8*k*O*V)
+                        uncoupled_source(session,source,{"o":energies[o],"v":energies[v]},rotations[side],
+                            targets,outputs,column=N+k)
+                        if coupled:solve_source(source,N+k)
                 if side=="A":
                     scatter_matrix(session,directional,target_output,N,0)
                 else:
@@ -256,9 +309,23 @@ def _directional_device(elst_state,potential,occupied,virtuals,energies,matrices
                 if exchange:
                     if side=="A":scatter_matrix(session,outputs["exch"],xab,N,0)
                     else:scatter_matrix(session,m.window(outputs["exch"],transpose=True),xba,0,N)
+                if coupled:
+                    if side=="A":
+                        scatter_matrix(session,response_outputs["ind"],cab,N,0)
+                        scatter_matrix(session,response_outputs["exch"],cxab,N,0)
+                    else:
+                        scatter_matrix(session,m.window(response_outputs["ind"],transpose=True),cba,0,N)
+                        scatter_matrix(session,m.window(response_outputs["exch"],transpose=True),cxba,0,N)
     ind=Ind20uDevice(ab,ba,sum_values(session,ab),sum_values(session,ba))
     if not exchange:return ind
     ex=Ind20uDevice(xab,xba,sum_values(session,xab),sum_values(session,xba))
     combined_ab,combined_ba=m.combine(ab,xab),m.combine(ba,xba)
-    return Find20uDevice(ind,ex,combined_ab,combined_ba,
-                        sum_values(session,combined_ab),sum_values(session,combined_ba))
+    uncoupled=Find20uDevice(ind,ex,combined_ab,combined_ba,
+                           sum_values(session,combined_ab),sum_values(session,combined_ba))
+    if not coupled:return uncoupled
+    ci=Ind20uDevice(cab,cba,sum_values(session,cab),sum_values(session,cba))
+    cx=Ind20uDevice(cxab,cxba,sum_values(session,cxab),sum_values(session,cxba))
+    combined_cab,combined_cba=m.combine(cab,cxab),m.combine(cba,cxba)
+    response_value=CoupledComponentsDevice(ci,cx,combined_cab,combined_cba,
+                                          sum_values(session,combined_cab),sum_values(session,combined_cba))
+    return CoupledFindDevice(uncoupled,response_value,tuple(diagnostics))

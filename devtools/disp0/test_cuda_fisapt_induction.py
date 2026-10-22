@@ -80,7 +80,13 @@ class Induction(unittest.TestCase):
             "rotation_error":[ct.c_longlong]+[ct.c_void_p]*2,
             "scatter_matrix":[ct.c_longlong]*6+[ct.c_void_p]*2,
             "reduce_values":[ct.c_longlong]+[ct.c_void_p]*2,
-            "trace_factors":[ct.c_longlong]*2+[ct.c_void_p]*2}.items():
+            "trace_factors":[ct.c_longlong]*2+[ct.c_void_p]*2,
+            "rhf_response_product":[ct.c_longlong]*3+[ct.c_void_p]*8,
+            "response_dot":[ct.c_longlong]+[ct.c_void_p]*3,
+            "response_precondition":[ct.c_longlong]*2+[ct.c_void_p]*4,
+            "response_step":[ct.c_longlong]+[ct.c_void_p]*6,
+            "response_direction":[ct.c_longlong]+[ct.c_void_p]*4,
+            "response_metrics":[ct.c_void_p]*4}.items():
             fn=getattr(cls.lib,name);fn.argtypes=args;fn.restype=None
 
     @classmethod
@@ -171,7 +177,8 @@ class Induction(unittest.TestCase):
                 primary=object()
                 owner=SimpleNamespace(handle=7,plan=8,primary_snapshot=SimpleNamespace(ncenter=N))
                 provider=SimpleNamespace(session=session,handle=7,plan=8,keepalive=(owner,),
-                    primary_basis=primary,nao=K,naux=Q)
+                    primary_basis=primary,auxiliary_basis=object(),nao=K,naux=Q,
+                    closed=False,failed=False,validate_basis=Mock())
                 calls=[]
                 def compute(pairs):
                     calls.append("DFMO")
@@ -201,6 +208,7 @@ class Induction(unittest.TestCase):
                     **{n:rng.normal(size=(K,K))*.1 for n in ("K_A","K_B","J_O","K_O")})
                 full=induction.find20u_device(state,potential,upload(occ),upload(vir),upload(energies),
                     upload(full_fields),session.upload(xyz),session.upload(za),session.upload(zb))
+                target_x={}
                 for side,value,combined in (("A",full.exch_ind20u.ab,full.combined_ab),
                                             ("B",full.exch_ind20u.ba,full.combined_ba)):
                     rho=db@da@db if side=="A" else da@db@da
@@ -208,6 +216,7 @@ class Induction(unittest.TestCase):
                     jpao=np.einsum("Q,Qmn->mn",density,ao)
                     jp=local[side].T@jpao@vir[side]
                     target=expanded_target(full_fields,local[side],vir[side],jp,side)
+                    target_x[side]=target
                     pair=2*np.einsum("il,cir,lr->lc",rotations[side],source_data[side],target)
                     truth=np.zeros((N+A+1,N+B+1))
                     if side=="A":truth[N:N+A,:-1]=pair
@@ -216,6 +225,40 @@ class Induction(unittest.TestCase):
                     np.testing.assert_allclose(host(combined),truth+expected[side],rtol=1e-11,atol=1e-12)
                 self.assertEqual(calls.count("DFMO"),2)
                 self.assertEqual(calls.count("potential"),4*N)
+                coupled=induction.coupled_find_device(state,potential,upload(occ),upload(vir),upload(energies),
+                    upload(full_fields),session.upload(xyz),session.upload(za),session.upload(zb),
+                    response_rtol=1e-12,response_atol=1e-14)
+                for side,o,v,direction in (("A","a","r","ab"),("B","b","s","ba")):
+                    other="B" if side=="A" else "A"
+                    O,V=occ[side].shape[1],vir[side].shape[1];P=O*V
+                    ov,oo,vv=factor(occ[side],vir[side]),factor(occ[side],occ[side]),factor(vir[side],vir[side])
+                    H=(4*np.einsum("Qia,Qjb->iajb",ov,ov)-np.einsum("Qij,Qab->iajb",oo,vv)
+                       -np.einsum("Qib,Qja->iajb",ov,ov)).reshape(P,P)
+                    gaps=energies[v][None,:]-energies[o][:,None]
+                    H.flat[::P+1]+=gaps.ravel()
+                    self.assertGreater(np.linalg.eigvalsh(H).min(),0.)
+                    sources=-source_data[side]*gaps
+                    solved=-np.linalg.solve(H,sources.reshape(len(sources),P).T).T.reshape(sources.shape)
+                    ind_target=local[side].T@(fields["V_"+other]+2*fields["J_"+other])@vir[side]
+                    truths={}
+                    for label,target in (("ind20u",ind_target),("exch_ind20u",target_x[side])):
+                        pair=2*np.einsum("il,cir,lr->lc",rotations[side],solved,target)
+                        truth=np.zeros((N+A+1,N+B+1))
+                        if side=="A":truth[N:N+A,:-1]=pair
+                        else:truth[:-1,N:N+B]=pair.T
+                        truths[label]=truth
+                        response_label="induction" if label=="ind20u" else "exchange_induction"
+                        actual=getattr(getattr(coupled.coupled,response_label),direction)
+                        np.testing.assert_allclose(host(actual),truth,rtol=1e-10,atol=1e-12)
+                        old=getattr(getattr(full,label),direction)
+                        preserved=getattr(getattr(coupled.uncoupled,label),direction)
+                        np.testing.assert_allclose(host(preserved),host(old),rtol=1e-11,atol=1e-12)
+                    np.testing.assert_allclose(host(getattr(coupled.coupled,"combined_"+direction)),
+                                               truths["ind20u"]+truths["exch_ind20u"],rtol=1e-10,atol=1e-12)
+                self.assertEqual(len(coupled.response_diagnostics),2*N+A+B)
+                self.assertGreaterEqual(sum(d["iterations"]==0 for d in coupled.response_diagnostics),N)
+                self.assertEqual(calls.count("DFMO"),5)
+                self.assertEqual(calls.count("potential"),6*N)
             self.assertEqual(session.live_bytes,0)
 
     def test_projected_coulomb_and_expanded_exchange_targets_both_ko_orientations(self):
