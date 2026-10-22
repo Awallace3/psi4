@@ -147,5 +147,7 @@ construct native nuclear/electronic sources or exchange-induction targets.
 172 CPU/mock/serial executions pass, including nontrivial rotation,
 denominator-order discrimination, optional signed exchange, source columns,
 reserved zero slots, changed inputs and lifetime/layout/alias guards.
-Actual GPU primitive feedback is next. No physical fragment-induction,
-coupled-response or full FISAPT claim.
+Actual GPU primitive feedback passes24checks/68DGEMMs in3.560s,
+maxabs4.974e-14, zero live bytes (`runs/gpu-fisapt-induction-primitives-01`,
+source0cc4e1ba8). Synthetic source/target inputs only, not native assembly.
+No physical fragment-induction, coupled-response or full FISAPT claim.
