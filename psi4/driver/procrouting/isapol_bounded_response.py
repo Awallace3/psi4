@@ -313,6 +313,35 @@ def _stability(store, n):
     return result
 
 
+def _diagnostic_bytes(sink):
+    if sink is None:
+        return 0
+    for name in ('memory_bytes', 'io_bytes'):
+        value = getattr(sink, name, None)
+        if type(value) is not int or not 0 < value <= 256*1024**2:
+            raise ValueError('explicit bounded diagnostic ' + name + ' required')
+    for name in ('plan', 'auxiliary_charges', 'anchor', 'solved', 'before_lw'):
+        if not callable(getattr(sink, name, None)):
+            raise TypeError('diagnostic sink missing ' + name)
+    return sink.memory_bytes
+
+
+def _admit_diagnostics(sink, ledger, p, n, q, nf):
+    if sink is not None:
+        plan = sink.plan(p, n, q, nf)
+        if (plan['memory_bytes'] != sink.memory_bytes or plan['io_bytes'] != sink.io_bytes
+                or type(plan['work']) is not int or plan['work'] < 0):
+            raise ValueError('diagnostic resource declaration changed')
+        ledger.admit('opt-in diagnostic work and retained memory', 0, plan['work'])
+        ledger.charge_io(plan['io_bytes'])
+
+
+def _diagnose_solved(sink, omega, legs, solved, p):
+    if sink is not None:
+        # Exact existing anchor columns, NOT target_response or another solve.
+        sink.solved(omega, legs[:, p:], solved[:, p:])
+
+
 class _H2H1Response:
     """The original (unsymmetrized) H2 H1 product and H2-applied legs, formed once.
 
@@ -328,10 +357,11 @@ class _H2H1Response:
         return (8*(n*n+2*n*(p+q)), 8*(2*n*n+n*(p+q))+8*1024**2,
                 8*(n*n+2*n*(p+q)+3*n*cls.BLOCK+p*p+q*q+16*n)+8*1024**2)
 
-    def __init__(self, store, dimensions, q):
+    def __init__(self, store, dimensions, q, *, diagnostic_sink=None):
         p, no, nv = dimensions
         n = no*nv
         self.ledger, self.p, self.q, self.n = store.ledger, p, q, n
+        self.diagnostic_sink = diagnostic_sink
         self.retained, construction, self.node_bytes = self.plan_bytes(n, p, q)
         self.ledger.admit('H2H1 response operator', self.retained+construction,
                           int(2*n**3+2*n*n*(p+q)))
@@ -370,6 +400,7 @@ class _H2H1Response:
         if not np.isfinite(solved).all() or worst > 1e-10:
             raise ValueError('original H2H1 response residual gate')
         legs = self.legs
+        _diagnose_solved(self.diagnostic_sink, omega, legs, solved, p)
         return legs[:, :p].T @ solved[:, :p], -legs[:, p:].T @ solved[:, p:], worst
 
 
@@ -500,8 +531,13 @@ class BoundedResponse:
     def __init__(self, wfn, auxiliary_recipe, sites, *, caller_converged, quadrature, response_grid,
                  smoothing, shell_cutoff, charge_penalty, anchor_metric_damping, resources,
                  scf_correction, expected_grac_shift=None, scratch_directory=None, log=None,
-                 label='df_centre_analytic', input_bytes=0, response='reference_h2h1', fdds=None):
+                 label='df_centre_analytic', input_bytes=0, response='reference_h2h1', fdds=None,
+                 diagnostic_sink=None):
         from psi4 import core
+        if diagnostic_sink is not None and response != 'reference_h2h1':
+            raise ValueError('diagnostics require reference_h2h1')
+        self.diagnostic_sink = diagnostic_sink
+        self._diagnostic_memory = _diagnostic_bytes(diagnostic_sink)
         if response not in RESPONSE_MODELS:
             raise ValueError(f'response must be one of {RESPONSE_MODELS}')
         if response == 'reference_h2h1' and fdds is not None:
@@ -578,7 +614,8 @@ class BoundedResponse:
                                                           max_bytes=resources.max_bytes)
         grid = np.array(self.response_grid, copy=True)
         # Reserve caller input/copy overlap, state and MAIN transformations together.
-        self.ledger = _Ledger(resources, 2*grid.nbytes+state.planned_bytes+32*state.nbf**2+self.input_bytes)
+        self.ledger = _Ledger(resources, 2*grid.nbytes+state.planned_bytes+32*state.nbf**2
+                              +self.input_bytes+self._diagnostic_memory)
         self.ledger.admit('state and grid', 0)
         main = adapt_main(wfn, caller_converged=True)
         coefficients = main.transform @ np.asarray(state.orbitals())
@@ -586,13 +623,15 @@ class BoundedResponse:
         self.auxiliary = self.auxiliary_recipe.build('MolecularAux')
         p, no, nv = self.auxiliary.nfunction, state.nocc, state.nvir
         n, q, nf = no*nv, 25*len(self.sites), len(self.quadrature.frequencies)
+        _admit_diagnostics(self.diagnostic_sink, self.ledger, p, n, q, nf)
         self.dimensions = (p, no, nv)
         log.items((('AUX / occupied / virtual / OV', (p, no, nv, n)),
                    ('sites / frequencies / grid points', (len(self.sites), nf, len(grid))),
                    ('distribution', self.label), ('correction', repr(self.correction)),
                    ('resource ceilings', repr(resources))))
         # Frequency outputs (local tensors, PFIT models) are retained across the sweep.
-        self._retained = self.response_grid.nbytes+self.input_bytes+nf*(len(self.sites)*25*25*8*4+4*64*64*8)
+        self._retained = (self.response_grid.nbytes+self.input_bytes+self._diagnostic_memory
+                          +nf*(len(self.sites)*25*25*8*4+4*64*64*8))
         if self.response == 'native_fdds':
             self._fdds_preflight(state, grid, main)
         else:
@@ -602,7 +641,7 @@ class BoundedResponse:
             if frequency_plan+self._retained > resources.max_bytes:
                 raise ValueError('complete frequency plan exceeds shared numeric byte resource limit')
             frequency_work = nf*int(2*n**3+2*n**3/3+8*n*n*(p+q))
-            if frequency_work > resources.max_work:
+            if frequency_work+self.ledger.work > resources.max_work:
                 raise ValueError('complete quadrature exceeds cumulative work resource limit')
         self.state_sha256 = _context(wfn)
         self.auxiliary_sha256 = hashlib.sha256(repr(self.auxiliary_recipe).encode()).hexdigest()
@@ -668,9 +707,11 @@ class BoundedResponse:
         for name, eta in (('anchor', self.anchor_metric_damping), ('target', 0.)):
             log.stage(name + ' constrained OV fit', (('metric damping', eta), ('charge penalty', self.charge_penalty)))
             ledger.admit(name+' fit work reservation', 0, 2*p**3+4*p*p*n)
+            diagnostic_kwargs = (dict(diagnostic_sink=self.diagnostic_sink)
+                                 if name == 'anchor' and self.diagnostic_sink is not None else {})
             fit = native_constrained_ov(ops, charge_penalty=self.charge_penalty,
                 offsite_metric_damping=eta, tile_columns=32,
-                max_bytes=resources.max_bytes-ledger.reserved-32*p*q-16*n*q)
+                max_bytes=resources.max_bytes-ledger.reserved-32*p*q-16*n*q, **diagnostic_kwargs)
             ledger.admit(name+' fit', fit.planned_bytes+32*p*q+16*n*q)
             if name == 'anchor':
                 ledger.admit('distributed moment contraction', fit.planned_bytes+32*p*q+16*n*q,
@@ -679,7 +720,14 @@ class BoundedResponse:
                     moments = analytic_df_moments(recipe, sites, 4)
                 moments.validate_for(recipe, sites, 4, self.state_sha256)
                 self.partition = _partition_record(moments)
-                store.save(name, moments.anchor_legs(fit.coefficients))
+                if self.diagnostic_sink is None:
+                    store.save(name, moments.anchor_legs(fit.coefficients))
+                else:
+                    anchor = moments.anchor_legs(fit.coefficients)
+                    self.diagnostic_sink.anchor(fit.coefficients, moments.values, anchor,
+                        charge_penalty=fit.charge_penalty, offsite_metric_damping=fit.offsite_metric_damping)
+                    store.save(name, anchor)
+                    del anchor
                 if supplied:
                     ledger.reserved -= moments.values.nbytes
                 del moments
@@ -689,7 +737,7 @@ class BoundedResponse:
         del ops
         self._state = self._main = self._coefficients = self._energies = None
         grid, self._grid = self._grid, None
-        ledger.reserved = 2*grid.nbytes+self.input_bytes
+        ledger.reserved = 2*grid.nbytes+self.input_bytes+self._diagnostic_memory
         log.stage('Full-grid ALDA kernel', (('smoothing', repr(self.smoothing)), ('shell cutoff', self.shell_cutoff)))
         kernel = _kernel(auxiliary, store.load('density'), grid, self.smoothing, self.shell_cutoff, ledger)
         store.save('kernel', kernel)
@@ -718,7 +766,9 @@ class BoundedResponse:
         if self.response == 'native_fdds':
             return self._solve_fdds(omega, tag)
         if self._operator is None:
-            self._operator = _H2H1Response(self.store, self.dimensions, q)
+            diagnostic_kwargs = ({} if self.diagnostic_sink is None
+                                 else dict(diagnostic_sink=self.diagnostic_sink))
+            self._operator = _H2H1Response(self.store, self.dimensions, q, **diagnostic_kwargs)
         self.log.stage('Original H2H1 response: ' + tag, (('RHS', p+q),))
         target, nonlocal_response, residual = self._operator.solve(omega)
         self.log.items((('relative response residual', residual),))

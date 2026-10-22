@@ -186,6 +186,13 @@ def _refined_dispersions(results, quadrature, max_order, ledger, *, recoupled=Fa
     return isotropic, angular
 
 
+def _localize_node(*, raw, source, diagnostic_sink=None, **kwargs):
+    """Opt-in owned capture must finish before the ONE unchanged strict LW call."""
+    if diagnostic_sink is not None:
+        diagnostic_sink.before_lw(raw=raw, source=source, **kwargs)
+    return lw.supplied_nonlocal_properties(**kwargs)
+
+
 def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution='df_centre_analytic',
                        sites, bonds, quadrature, response_grid, smoothing,
                        shell_cutoff, charge_penalty, anchor_metric_damping,
@@ -196,7 +203,7 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                        scratch_directory=None, log=None,
                        distributed_moments=None, response='reference_h2h1', fdds=None,
                        publish_qcvariables=False, partition_recipe=None, partition_grid=None,
-                       recoupled_dispersion=False):
+                       recoupled_dispersion=False, diagnostic_sink=None):
     """Run the complete native chain under one explicit resource contract.
 
     Scientific scope: canonical restricted C1 PBE0, NONE or FIXED_GRAC, plain
@@ -244,6 +251,9 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
     ``recoupled_dispersion=True`` additionally contracts full refined local
     tensors into local-axis Cn(t,u,J) under the SAME cumulative ledger. It is
     opt-in, not an orientation-resolved energy or replacement isotropic model.
+    ``diagnostic_sink`` is an explicit reference-H2H1 diagnostic observer,
+    default None. It must declare bounded memory/work/I/O, preserve live inputs,
+    retain no whole F/Q/B/X, and fail closed. It never changes a gate or retries.
     """
     if log is None:
         log = _lg.StageLog(1)
@@ -253,6 +263,8 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
         log.stage('Bounded input validation')
         if not isinstance(resources, BoundedResources):
             raise TypeError('explicit BoundedResources required')
+        if diagnostic_sink is not None and (response != 'reference_h2h1' or localization_rank_limit != 2):
+            raise ValueError('diagnostic capture requires strict reference_h2h1 at localization rank2')
         check_max_parameters(max_parameters)
         if distribution not in DISTRIBUTIONS:
             raise ValueError(f'distribution must be one of {DISTRIBUTIONS}')
@@ -326,12 +338,13 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                        partition_grid.nbytes if distribution in ('isa', 'mbis') else 0)
         # The runner validates the shared declarations (AUX/site/geometry centres,
         # grid finiteness, correction, smoothing, fit scalars, response selection).
+        diagnostic_kwargs = {} if diagnostic_sink is None else dict(diagnostic_sink=diagnostic_sink)
         runner = BoundedResponse(wfn, auxiliary_recipe, multipole_sites, caller_converged=caller_converged,
             quadrature=quadrature, response_grid=response_grid, smoothing=smoothing, shell_cutoff=shell_cutoff,
             charge_penalty=charge_penalty, anchor_metric_damping=anchor_metric_damping, resources=resources,
             scf_correction=scf_correction, expected_grac_shift=expected_grac_shift,
             scratch_directory=scratch_directory, log=log, label=distribution, input_bytes=input_bytes,
-            response=response, fdds=fdds)
+            response=response, fdds=fdds, **diagnostic_kwargs)
         with runner as solver:
             ledger, auxiliary = solver.ledger, solver.auxiliary
             if angular_plan is not None:
@@ -414,7 +427,8 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                 tensors = raw.reshape(ns, 25, ns, 25).transpose(0, 2, 1, 3)[None]
                 provenance = lw.Provenance('bounded native response', hashlib.sha256(raw.tobytes()).hexdigest(),
                                            solve_record, source['model'])
-                local = lw.supplied_nonlocal_properties(labels=[s.label for s in sites], origins=origins,
+                local = _localize_node(raw=raw, source=source, diagnostic_sink=diagnostic_sink,
+                    labels=[s.label for s in sites], origins=origins,
                     bonds=bonds, frames=frames, frequencies=[omega], tensors=tensors, input_rank=4,
                     provenance=provenance, truncation=lw.TRUNCATE_RANK4,
                     residual_policy=solver.lw_residual_policy, localization_rank_limit=localization_rank_limit)

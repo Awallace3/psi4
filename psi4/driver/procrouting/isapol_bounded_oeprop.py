@@ -76,7 +76,7 @@ def settings(preset, overrides):
         max_refinement_parameters=MAX_PARAMETERS,  # explicit finite opt-in up to 72
         response='reference_h2h1', fdds=None,  # explicit native FDDS only on request
         recoupled_dispersion=False,  # explicit angular local-axis coefficients only
-        scratch_directory=None,
+        scratch_directory=None, diagnostic_sink=None,  # explicit opt-in; no ambient option
         resources=None, log=None)  # None: numeric budget = psi4.set_memory
     unknown = set(overrides)-set(values)
     if unknown:
@@ -241,6 +241,8 @@ def run(wfn, tasks, *, preset, **kwargs):
                 'resources', 'scf_correction', 'expected_grac_shift', 'max_order', 'scratch_directory',
                 'distribution', 'distributed_moments', 'response', 'fdds',
                 'partition_recipe', 'partition_grid', 'recoupled_dispersion')
+        if v['diagnostic_sink'] is not None:
+            keys += ('diagnostic_sink',)
         result = bounded_properties(wfn, recipe, caller_converged=True,
             sites=sites, bonds=bonds, quadrature=quadrature, response_grid=grid,
             lattice_options=lattice, declared_variables=v['declared_variables'],

@@ -167,7 +167,7 @@ class NativeConstrainedOV:
 
 
 def native_constrained_ov(operators, *, charge_penalty, offsite_metric_damping,
-                          tile_columns=64, max_bytes=512*1024**2):
+                          tile_columns=64, max_bytes=512*1024**2, diagnostic_sink=None):
     """Fit retained raw native OV integrals against the declared damped metric.
 
     A[P,Q] = (1-eta*(1-same_centre))*J[P,Q] + lambda*q[P]*q[Q].
@@ -179,6 +179,9 @@ def native_constrained_ov(operators, *, charge_penalty, offsite_metric_damping,
     fixed backward-residual gate, with no regularization or fallback. Admission
     covers live operators, output/freezing overlap, metric/LU copies and tile
     work; consumers subtract previously returned fits from the shared budget.
+    Optional diagnostic_sink observes the actual analytic AUX charge vector
+    already obtained here. It must not mutate/retain the live input; failure
+    propagates. Default None performs no observation or extra numerical work.
     """
     from psi4 import core
     from scipy.linalg import LinAlgWarning, lu_factor, lu_solve
@@ -207,6 +210,8 @@ def native_constrained_ov(operators, *, charge_penalty, offsite_metric_damping,
     for offset, count, centre, angular in operators._native_auxiliary.shell_layout():
         centres[offset:offset+count] = centre
     charges = np.asarray(provider.charges())
+    if diagnostic_sink is not None:
+        diagnostic_sink.auxiliary_charges(charges)
     metric = np.asarray(provider.metric())
     with np.errstate(over="raise", invalid="raise"):
         for p in range(naux):
