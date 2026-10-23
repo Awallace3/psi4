@@ -20,6 +20,42 @@ def load(name):
 
 
 class Contract(unittest.TestCase):
+    def test_geometry_extraction_never_executes_module_or_selects_expensive_systems(self):
+        prepare=load("prepare_inputs")
+        values={name:"literal "+name for name in prepare.SYSTEMS}
+        values["pla15_3pe2"]="off limits"
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/"systems.py"
+            source.write_text('raise RuntimeError("must never execute")\nSYSTEMS = '+repr(values))
+            actual,checksum=prepare.literals(source)
+            self.assertEqual(set(actual),set(prepare.SYSTEMS))
+            self.assertNotIn("pla15_3pe2",actual)
+            self.assertEqual(checksum,hashlib.sha256(source.read_bytes()).hexdigest())
+            source.write_text("SYSTEMS = dict()")
+            with self.assertRaises(ValueError):prepare.literals(source)
+
+    def test_input_basis_counts_are_actual_spherical_SPDF_files(self):
+        prepare=load("prepare_inputs")
+        basis=HERE.parents[2]/"psi4/share/psi4/basis"
+        for role,expected in (
+            ("primary",{"H":9,"C":23,"N":23,"O":23}),
+            ("jkfit",{"H":32,"C":86,"N":86,"O":86}),
+            ("rifit",{"H":23,"C":72,"N":72,"O":72})):
+            actual=prepare.spherical_counts(basis/(prepare.BASIS[role]+".gbs"))
+            self.assertEqual(actual["spherical_functions"],expected)
+        with self.assertRaisesRegex(ValueError,"SPDF"):
+            prepare.spherical_counts(basis/"def2-universal-jkfit.gbs")
+
+    def test_geometry_admission_rejects_ghosts_charges_nonfinite_and_changed_axes(self):
+        prepare=load("prepare_inputs")
+        text="0 1\nH 0 0 0\nH 0 0 1\n--\n0 1\nH 0 0 3\nH 0 0 4\nunits angstrom\nsymmetry c1\nno_reorient\nno_com\n"
+        actual=prepare.geometry_metadata(text)
+        self.assertEqual([v["occupied"] for v in actual],[1,1])
+        self.assertEqual([v["frozen_occupied"] for v in actual],[0,0])
+        for bad in (text.replace("no_com",""),text.replace("0 1","1 1",1),
+                    text.replace("H 0 0 0","@H 0 0 0"),text.replace("H 0 0 1","H 0 0 nan")):
+            with self.assertRaises(ValueError):prepare.geometry_metadata(bad)
+
     def test_matched_public_fragment_science_differs_only_in_native_GPU_selection(self):
         gate=load("fragment_gate")
         for scaled in (False,True):

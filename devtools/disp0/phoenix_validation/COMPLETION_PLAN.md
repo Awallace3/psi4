@@ -95,3 +95,44 @@ No job-control operations or overwrites of old artifacts without approval.
 
 The persistent goal's short label is “Complete these tasks”; this file records
 the concrete scope and evidence required before claiming it complete.
+
+## Native Phoenix checkpoint (2026-10-23)
+
+- **14321813 completed0:0** in9m49s on cpu-small/embers,8CPUs48GiB.
+  Source pin `1aed320cdb8b031c281b4642001a750aa51c549f`.
+  Root `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-fragments-1aed320cdb/job-14321813`.
+- Its whole-stage CPU build result is PASS,266 CPU regressions; private runtime
+  preparation is `PREPARED_NOT_GPU_VALIDATED`, with cuda-bindings13.3.0 and
+  cuda-pathfinder1.8.4. Runtime-config SHA256:
+  `4d255b795caae75a9df879b81b26fd84b10a79d0400f2831b5dbcdebad4afa6c`.
+- Both actual native public CPU fragment checks completed, including the new
+  exact coupled source solves and canonical directional sum checks:
+  water dimer/spherical aug-cc-pVDZ, unscaled and delta-HF/exchange scaled.
+  Energies are -0.007157905730603229 and -0.008584114664572127Eh respectively.
+  These diagnostic calls are NOT accepted timings or GPU comparisons.
+- Helper pin `127fc33590` is staged separately at
+  `/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-gate-127fc33590`.
+  Its17 offline launch/oracle guards pass. No scientific driver/core overlay.
+- The user explicitly approved **one** inferno H200 correctness gate,4CPUs,
+  32GiB,maximum1hour,$1.41 worst case on gts-cs207-chemx. This is NOT blanket
+  approval for the subsequent large-system or three-repeat timing campaign.
+  **14322613 submitted** after fresh account selection and exact gpu-h200
+  route preflight, under fresh output root
+  `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-h200-gate-127fc33590`.
+  Scientific pin remains1aed320cdb; helper pin127fc33590. The state-change
+  watcher is active. Inspect `gate-result.json` and every child result/cleanup,
+  not merely the scheduler exit code, before accepting this gate.
+- First effective-route check found14322613 **PENDING(Priority)**,
+  QoS inferno; actual GPU/prolog proof remains pending until it runs.
+- The three requested literal inputs are frozen locally in
+  `.pi/inputs-augccpvdz-v1/inputs.json` (no execution/import of the data module,
+  no off-limits systems selected). Input-manifest SHA256:
+  `f8c96058e9387ab14179ce263a2d4896dbe9cc2e3bf1286654784825ff178e38`.
+  Original systems.py SHA256:
+  `72668390d24f134316c8e779931a2f65efcd9289ecea8f1cf20a72733262e3bb`.
+  Actual source basis-file SPDF/spherical counts reproduce the table above.
+  Frozen occupied counts are5/5,2/24,20/19 respectively.
+  Resident response factors alone are1.170/1.170,11.152/10.212 and
+  55.954/56.361GiB per direction. These are **not total peak-memory estimates**;
+  native HF/JKFIT/RIFIT plans and all other live buffers must still be measured.
+- Current offline helper/input contracts:20 passed. No accepted timing repeats.
