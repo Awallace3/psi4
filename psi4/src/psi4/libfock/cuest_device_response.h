@@ -21,6 +21,9 @@ struct CuestDeviceJKView {
     double* coulomb = nullptr;
     double* exchange = nullptr;
     bool compute_exchange = false;
+    /// Consumer requires only K+K^T, not general K. Allows a representative
+    /// K((D+D^T)/2) with the same Hermitian sum for symmetric Grid-K.
+    bool exchange_sum_only = false;
 };
 
 /// Query/allocate once, then compute entirely between device buffers.
@@ -29,10 +32,15 @@ class CuestJKDeviceResponse {
     CuestJKDeviceResponse(cuESTJK& jk, CuestDeviceJKView view);
     void compute();
     std::size_t device_workspace_bytes() const { return scratch_.deviceBufferSizeInBytes; }
+    std::size_t density_batch_size() const { return batch_size_; }
+    bool symmetric_gridk() const { return symmetric_gridk_; }
    private:
     cuESTJK& jk_;
     CuestDeviceJKView view_;
+    std::size_t batch_size_ = 0;
+    bool symmetric_gridk_ = false;
     std::string plan_key_;
+    CuestDeviceArray symmetric_density_;
     CuestXCResponseWorkspace workspace_;
     cuestWorkspace_t* work_ = nullptr;
     cuestWorkspaceDescriptor_t scratch_{}, variable_{};

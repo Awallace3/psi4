@@ -110,6 +110,47 @@ def test_cuest_response_profile_preserves_solution(unrestricted):
         np.testing.assert_allclose(out.np, ref, atol=1.e-8, rtol=0)
 
 
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("unrestricted", [False, True])
+@pytest.mark.parametrize("directj,gridk", [(False, False), (True, True)])
+def test_cuest_response_density_batch_size(batch_size, unrestricted, directj, gridk):
+    """Chunking and partial batches change dispatch, never the response operator."""
+    wfn = _wavefunction("pbe0", unrestricted, directj, gridk)
+    rhs = _rhs(wfn, unrestricted, count=3, mixed=False)
+    expected = [m.np.copy() for m in wfn.cphf_solve(rhs, 1.e-10, 150, 0)]
+    assert wfn.cphf_converged()
+    psi4.set_options({"cuest_response_batch_size": batch_size})
+    result = _device_solve(wfn, rhs)
+    _check(wfn, rhs, result)
+    assert wfn.cphf_device_stats()["jk_density_batch_size"] == batch_size
+    for ref, out in zip(expected, result):
+        np.testing.assert_allclose(out.np, ref, atol=1.e-8, rtol=0)
+
+
+def test_cuest_response_negative_batch_size():
+    wfn = _wavefunction("hf")
+    psi4.set_options({"cuest_response_batch_size": -1})
+    with pytest.raises(RuntimeError, match="CUEST_RESPONSE_BATCH_SIZE must be nonnegative"):
+        _device_solve(wfn, _rhs(wfn, False))
+    assert not wfn.cphf_converged()
+
+
+@pytest.mark.parametrize("unrestricted", [False, True])
+@pytest.mark.parametrize("method", ["hf", "pbe0", "cam-b3lyp", "lrc-wpbe"])
+def test_cuest_response_symmetric_gridk_sum(method, unrestricted):
+    """Signed symmetric density may replace general D only for K(D)+K(D)^T."""
+    wfn = _wavefunction(method, unrestricted)
+    rhs = _rhs(wfn, unrestricted, count=3, mixed=False)
+    expected = [m.np.copy() for m in wfn.cphf_solve(rhs, 1.e-10, 150, 0)]
+    assert wfn.cphf_converged()
+    psi4.set_options({"cuest_response_symmetric_k": True})
+    result = _device_solve(wfn, rhs)
+    _check(wfn, rhs, result)
+    assert wfn.cphf_device_stats()["symmetric_gridk"] == 1
+    for ref, out in zip(expected, result):
+        np.testing.assert_allclose(out.np, ref, atol=1.e-8, rtol=0)
+
+
 @pytest.mark.parametrize("unrestricted", [False, True])
 @pytest.mark.parametrize("method", ["hf", "svwn", "pbe0", "cam-b3lyp"])
 @pytest.mark.parametrize("directj,gridk", [(False, False), (True, False), (False, True), (True, True)])

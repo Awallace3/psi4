@@ -3,6 +3,7 @@
 #ifdef USING_cuEST
 #include "cuESTCommon.h"
 #include "cuest_response_profile.h"
+#include "cuest_device_kernels.h"
 #include "psi4/liboptions/liboptions.h"
 #include <algorithm>
 #include <utility>
@@ -21,7 +22,22 @@ CuestJKDeviceResponse::CuestJKDeviceResponse(cuESTJK& jk, CuestDeviceJKView view
     plan_key_ = jk_.plan_key_;
     variable_.deviceBufferSizeInBytes = 8000000000ULL;
     const auto ndensity = view_.nrhs * view_.nocc.size();
+    const int requested_batch = jk_.options_.get_int("CUEST_RESPONSE_BATCH_SIZE");
+    if (requested_batch < 0)
+        throw PSIEXCEPTION("CUEST_RESPONSE_BATCH_SIZE must be nonnegative.");
+    batch_size_ = requested_batch ? std::min<std::size_t>(requested_batch, ndensity) : ndensity;
+    const auto nbf = static_cast<std::size_t>(jk_.primary_->nbf());
     const auto n2 = static_cast<std::size_t>(jk_.primary_->nbf()) * jk_.primary_->nbf();
+    symmetric_gridk_ = view_.compute_exchange && view_.exchange_sum_only && jk_.gridk_ &&
+                      jk_.options_.get_bool("CUEST_RESPONSE_SYMMETRIC_K");
+    const double* grid_density = view_.density;
+    if (symmetric_gridk_) {
+#ifndef PSI4_CUEST_DEVICE_CG
+        throw PSIEXCEPTION("Symmetric CPKS Grid-K requires the device CG NVRTC kernels.");
+#else
+        grid_density = symmetric_density_.ensure(ndensity * n2, "symmetric CPKS density");
+#endif
+    }
     const auto grow = [&](const cuestWorkspaceDescriptor_t& d) {
         scratch_.hostBufferSizeInBytes = std::max(scratch_.hostBufferSizeInBytes, d.hostBufferSizeInBytes);
         scratch_.deviceBufferSizeInBytes = std::max(scratch_.deviceBufferSizeInBytes, d.deviceBufferSizeInBytes);
@@ -29,30 +45,46 @@ CuestJKDeviceResponse::CuestJKDeviceResponse(cuESTJK& jk, CuestDeviceJKView view
     cuestWorkspaceDescriptor_t d{};
     if (jk_.directj_) {
 #ifdef PSI_CUEST_HAS_DIRECTJ
-        CHECK_CUEST(cuestDirectCoulombComputeWorkspaceQuery(
-            cuest_handle, jk_.cuest_directj_plan_, jk_.cuest_directj_params_, &d,
-            ndensity, view_.density, view_.coulomb));
+        for (std::size_t n = 0; n < ndensity; n += batch_size_) {
+            CHECK_CUEST(cuestDirectCoulombComputeWorkspaceQuery(
+                cuest_handle, jk_.cuest_directj_plan_, jk_.cuest_directj_params_, &d,
+                std::min(batch_size_, ndensity-n), view_.density + n*n2, view_.coulomb + n*n2));
+            grow(d);
+        }
 #endif
     } else {
         jk_.query_coulomb_workspace(&d, view_.density, view_.coulomb);
+        grow(d);
     }
-    grow(d);
     if (view_.compute_exchange) {
         if (jk_.gridk_) {
 #ifdef PSI_CUEST_HAS_GRIDK
-            CHECK_CUEST(cuestGridKNonsymmetricExchangeComputeWorkspaceQuery(
-                cuest_handle, jk_.cuest_gridk_plan_, jk_.cuest_gridk_nonsym_exchange_params_,
-                &variable_, &d, ndensity, view_.density, view_.exchange));
-            grow(d);
+            for (std::size_t n = 0; n < ndensity; n += batch_size_) {
+                if (symmetric_gridk_) {
+                    CHECK_CUEST(cuestGridKSymmetricExchangeComputeWorkspaceQuery(
+                        cuest_handle, jk_.cuest_gridk_plan_, jk_.cuest_gridk_exchange_params_,
+                        &variable_, &d, std::min(batch_size_, ndensity-n),
+                        grid_density + n*n2, view_.exchange + n*n2));
+                } else {
+                    CHECK_CUEST(cuestGridKNonsymmetricExchangeComputeWorkspaceQuery(
+                        cuest_handle, jk_.cuest_gridk_plan_, jk_.cuest_gridk_nonsym_exchange_params_,
+                        &variable_, &d, std::min(batch_size_, ndensity-n),
+                        grid_density + n*n2, view_.exchange + n*n2));
+                }
+                grow(d);
+            }
 #endif
         } else {
             for (std::size_t s = 0; s < view_.nocc.size(); ++s) {
                 if (!view_.nocc[s]) continue;
-                CHECK_CUEST(cuestDFNonsymmetricExchangeComputeWorkspaceQuery(
-                    cuest_handle, jk_.cuest_df_plan_, jk_.cuest_nonsym_exchange_compute_params_,
-                    &variable_, &d, view_.nrhs, view_.nocc[s], view_.left[s], view_.right[s],
-                    view_.exchange + s * view_.nrhs * n2));
-                grow(d);
+                for (std::size_t r = 0; r < view_.nrhs; r += batch_size_) {
+                    CHECK_CUEST(cuestDFNonsymmetricExchangeComputeWorkspaceQuery(
+                        cuest_handle, jk_.cuest_df_plan_, jk_.cuest_nonsym_exchange_compute_params_,
+                        &variable_, &d, std::min(batch_size_, view_.nrhs-r), view_.nocc[s], view_.left[s],
+                        view_.right[s] + r*view_.nocc[s]*nbf,
+                        view_.exchange + (s * view_.nrhs + r) * n2));
+                    grow(d);
+                }
             }
         }
     }
@@ -63,13 +95,15 @@ void CuestJKDeviceResponse::compute() {
         throw PSIEXCEPTION("cuEST device CG: JK plan changed during a resident response session.");
     jk_.configure_math_mode();
     const auto n2 = static_cast<std::size_t>(jk_.primary_->nbf()) * jk_.primary_->nbf();
+    const auto nbf = static_cast<std::size_t>(jk_.primary_->nbf());
     const auto ndensity = view_.nrhs * view_.nocc.size();
     if (jk_.directj_) {
 #ifdef PSI_CUEST_HAS_DIRECTJ
         CuestResponseProfile profile(jk_.options_.get_bool("CUEST_RESPONSE_PROFILE"), "cuEST response: J");
-        CHECK_CUEST(cuestDirectCoulombCompute(
-            cuest_handle, jk_.cuest_directj_plan_, jk_.cuest_directj_params_, work_,
-            ndensity, view_.density, view_.coulomb));
+        for (std::size_t n = 0; n < ndensity; n += batch_size_)
+            CHECK_CUEST(cuestDirectCoulombCompute(
+                cuest_handle, jk_.cuest_directj_plan_, jk_.cuest_directj_params_, work_,
+                std::min(batch_size_, ndensity-n), view_.density + n*n2, view_.coulomb + n*n2));
 #endif
     } else {
         for (std::size_t n = 0; n < ndensity; ++n)
@@ -79,9 +113,31 @@ void CuestJKDeviceResponse::compute() {
     CuestResponseProfile profile(jk_.options_.get_bool("CUEST_RESPONSE_PROFILE"), "cuEST response: K");
     if (jk_.gridk_) {
 #ifdef PSI_CUEST_HAS_GRIDK
-        CHECK_CUEST(cuestGridKNonsymmetricExchangeCompute(
-            cuest_handle, jk_.cuest_gridk_plan_, jk_.cuest_gridk_nonsym_exchange_params_,
-            &variable_, work_, ndensity, view_.density, view_.exchange));
+        const double* grid_density = view_.density;
+        if (symmetric_gridk_) {
+#ifdef PSI4_CUEST_DEVICE_CG
+            double* symmetric = symmetric_density_.ensure(ndensity * n2, "symmetric CPKS density");
+            CuestDeviceKernels::instance().launch("cg_symmetric_density", ndensity * n2,
+                                                 ndensity * n2, nbf, view_.density, symmetric);
+            grid_density = symmetric;
+#endif
+        }
+        // cuEST's nonsymmetric kernel restores operator symmetry with two
+        // Grid-K builds. CPKS consumes only the Hermitian sum, for which
+        // K(D)+K(D)^T = 2*K_sym((D+D^T)/2). Keep general K unchanged elsewhere.
+        for (std::size_t n = 0; n < ndensity; n += batch_size_) {
+            if (symmetric_gridk_) {
+                CHECK_CUEST(cuestGridKSymmetricExchangeCompute(
+                    cuest_handle, jk_.cuest_gridk_plan_, jk_.cuest_gridk_exchange_params_,
+                    &variable_, work_, std::min(batch_size_, ndensity-n),
+                    grid_density + n*n2, view_.exchange + n*n2));
+            } else {
+                CHECK_CUEST(cuestGridKNonsymmetricExchangeCompute(
+                    cuest_handle, jk_.cuest_gridk_plan_, jk_.cuest_gridk_nonsym_exchange_params_,
+                    &variable_, work_, std::min(batch_size_, ndensity-n),
+                    grid_density + n*n2, view_.exchange + n*n2));
+            }
+        }
 #endif
     } else {
         for (std::size_t s = 0; s < view_.nocc.size(); ++s) {
@@ -91,9 +147,11 @@ void CuestJKDeviceResponse::compute() {
                 if (status != cudaSuccess) throw PSIEXCEPTION("cuEST device CG: cannot zero empty-spin exchange.");
                 continue;
             }
-            CHECK_CUEST(cuestDFNonsymmetricExchangeCompute(
-                cuest_handle, jk_.cuest_df_plan_, jk_.cuest_nonsym_exchange_compute_params_, &variable_, work_,
-                view_.nrhs, view_.nocc[s], view_.left[s], view_.right[s], out));
+            for (std::size_t r = 0; r < view_.nrhs; r += batch_size_)
+                CHECK_CUEST(cuestDFNonsymmetricExchangeCompute(
+                    cuest_handle, jk_.cuest_df_plan_, jk_.cuest_nonsym_exchange_compute_params_, &variable_, work_,
+                    std::min(batch_size_, view_.nrhs-r), view_.nocc[s], view_.left[s],
+                    view_.right[s] + r*view_.nocc[s]*nbf, out + r*n2));
         }
     }
 }

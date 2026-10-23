@@ -254,6 +254,15 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         Reports J, K, XC, transforms and CG-update wall timers in timer.dat.
         These diagnostic fences perturb execution; disable for speedup measurements. !expert -*/
     options.add_bool("CUEST_RESPONSE_PROFILE", false);
+    /*- Maximum simultaneous resident CPHF/CPKS densities per cuEST J/K call.
+        Zero uses the full AO tile; one retains device residency but uses serial
+        SDK calls, for benchmarking batching against the same operator. !expert -*/
+    options.add_int("CUEST_RESPONSE_BATCH_SIZE", 0);
+    /*- For device CPHF/CPKS only, evaluate the required Hermitian exchange sum
+        using symmetric Grid-K on (D + D.T)/2. This retains K(D) + K(D).T
+        without computing the discarded antisymmetric part. Generic JK builds
+        continue to return general nonsymmetric K. !expert -*/
+    options.add_bool("CUEST_RESPONSE_SYMMETRIC_K", false);
     /*- Tune # of Ozaki Slices in emulated DF K computations (requires CUDA and cuEST libraries) -*/
     options.add_int("CUEST_DFK_SLICES", 5);
     /*- Tune # of Ozaki Moduli in emulated DF K computations (requires CUDA and cuEST libraries) -*/

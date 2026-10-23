@@ -821,6 +821,20 @@ For bottleneck diagnosis, |globals__cuest_response_profile| adds shared-stream
 fences and separates J, K, XC, orbital transforms, and CG updates in
 ``timer.dat`` for both solvers. These synchronized timings deliberately
 perturb execution; disable this option for unperturbed speedup measurements.
+|globals__cuest_response_batch_size| limits simultaneous resident densities
+per SDK call. Zero uses the full AO tile; one uses serial SDK calls without
+moving response matrices to the host. This isolates batching efficiency from
+device residency while retaining the same J/K operator.
+
+The response-only |globals__cuest_response_symmetric_k| optimization uses
+the fact that CPKS consumes :math:`K(D)+K(D)^T`, rather than general
+:math:`K(D)`. With :math:`D_s=(D+D^T)/2`, the cuEST operator-symmetry
+restoration gives
+:math:`K(D)+K(D)^T=2K_{\mathrm{sym}}(D_s)`. The signed symmetric density
+is formed on device for exchange only; J and XC keep their original
+inputs. This avoids the second Grid-K build otherwise required for a
+nonsymmetric density. It does **not** change general JK results or
+substitute a positive-semidefinite DF exchange kernel for a signed response.
 
 
 cuEST SAD routing and SCF lifecycle timings

@@ -113,7 +113,7 @@ class DeviceHessian {
         : blas_(blas), kernels_(CuestDeviceKernels::instance()), nbf_(nbf), n2_(product(nbf, nbf)),
           nrhs_(nrhs), nspin_(co.size()), stride_(stride), exchange_(use_k),
           xc_(potential != nullptr), profile_(profile), kscale_(kscale), stats_(stats) {
-        const auto per_rhs = product(product(n2_, nspin_), 5 * sizeof(double));
+        const auto per_rhs = product(product(n2_, nspin_), 6 * sizeof(double));
         tile_ = std::min(nrhs_, std::max<std::size_t>(1, std::min<std::size_t>(8, (std::size_t(256) << 20) /
                                                                       std::max<std::size_t>(1, per_rhs))));
         std::vector<std::size_t> nocc;
@@ -131,6 +131,7 @@ class DeviceHessian {
         CuestDeviceJKView view;
         view.nrhs = tile_;
         view.compute_exchange = exchange_;
+        view.exchange_sum_only = true;
         for (std::size_t s = 0; s < nspin_; ++s) {
             auto& t = spins_[s];
             t.no = co[s]->coldim(); t.nv = cv[s]->coldim(); t.offset = offset;
@@ -150,6 +151,8 @@ class DeviceHessian {
         view.nocc = nocc; view.density = dD_; view.coulomb = dJ_; view.exchange = dK_;
         jk_ = std::make_unique<CuestJKDeviceResponse>(jk, view);
         stats_["jk_workspace_device_bytes"] = jk_->device_workspace_bytes();
+        stats_["jk_density_batch_size"] = jk_->density_batch_size();
+        stats_["symmetric_gridk"] = jk_->symmetric_gridk();
         stats_["ao_rhs_tile"] = tile_;
         if (xc_) {
             vx_ = potential->prepare_device_response(nocc);

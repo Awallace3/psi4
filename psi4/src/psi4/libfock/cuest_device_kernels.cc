@@ -88,6 +88,13 @@ extern "C" __global__ void cg_true_residual(U n, U stride, const double* b, cons
     U i = (U)blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) { r[i] = b[i] - ax[i]; z[i] = r[i] / gap[i % stride]; }
 }
+extern "C" __global__ void cg_symmetric_density(U n, U nbf, const double* d, double* s) {
+    U i = (U)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    U pq = i % (nbf * nbf);
+    U transpose = i - pq + (pq % nbf) * nbf + pq / nbf;
+    s[i] = .5 * d[i] + .5 * d[transpose];
+}
 extern "C" __global__ void cg_assemble(U nbf, U nrhs, U nspin, int use_k, int use_xc,
     double scale_k, const double* j, const double* k, const double* v, double* g) {
     U i = (U)blockIdx.x * blockDim.x + threadIdx.x, n2 = nbf * nbf;
@@ -159,7 +166,7 @@ CuestDeviceKernels::CuestDeviceKernels() : impl_(std::make_unique<Impl>()) {
         throw PSIEXCEPTION("cuEST device CG: cannot retrieve PTX.");
     driver_check(cuModuleLoadData(&impl_->module, ptx.data()), "load device kernels");
     for (const char* name : {"cg_init", "cg_step", "cg_precondition", "cg_metrics", "cg_direction",
-                              "cg_true_residual", "cg_assemble", "cg_pack_rks", "cg_pack_uks"})
+                              "cg_true_residual", "cg_symmetric_density", "cg_assemble", "cg_pack_rks", "cg_pack_uks"})
         driver_check(cuModuleGetFunction(&impl_->functions[name], impl_->module, name), name);
 }
 CuestDeviceKernels::~CuestDeviceKernels() = default;
