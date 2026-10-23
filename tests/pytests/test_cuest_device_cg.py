@@ -244,6 +244,11 @@ def test_sapt_device_bridge(route, monkeypatch):
     a = _wavefunction("hf")
     b = _wavefunction("svwn")
     ra, rb = _rhs(a, False, count=1, mixed=False)[0], _rhs(b, False, count=1, mixed=False)[0]
+    expected = []
+    for wfn, r in ((a, ra), (b, rb)):
+        solution = wfn.cphf_solve([r], 1.e-10, 150, 0)[0]
+        assert wfn.cphf_converged()
+        expected.append(2. * solution.vector_dot(r))
     psi4.set_options({"cuest_device_cg": True})
     def forbidden(*args, **kwargs):
         raise AssertionError("SAPT fell back to Python host CG")
@@ -266,3 +271,6 @@ def test_sapt_device_bridge(route, monkeypatch):
     matrices = result if route == "native" else [psi4.core.Matrix.from_array(m) for m in result]
     for wfn, r, solution in zip((a, b), (ra, rb), matrices):
         _check(wfn, [r], [solution])
+    # The same 2*x.w contraction used for SAPT's relaxed induction terms.
+    np.testing.assert_allclose([2. * x.vector_dot(r) for x, r in zip(matrices, (ra, rb))],
+                               expected, atol=1.e-10, rtol=0)
