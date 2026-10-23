@@ -50,6 +50,7 @@
 #include "psi4/libfock/cuest_xc_response.h"
 #include "psi4/libfock/cuest_device_response.h"
 #include "psi4/libfock/cuest_device_kernels.h"
+#include "psi4/libfock/cuest_response_profile.h"
 #include "psi4/libfock/cuest_xc_response_math.h"
 #include "psi4/libfunctional/LibXCfunctional.h"
 #include "psi4/libfunctional/functional.h"
@@ -695,6 +696,7 @@ std::string kernel_fingerprint(SuperFunctional& functional) {
 }  // namespace
 
 void VBase::compute_Vx_cuest(const std::vector<VxDensity>& inputs, std::vector<SharedMatrix>& ret, VxSpin spin) {
+    CuestResponseProfile profile(options_.get_bool("CUEST_RESPONSE_PROFILE"), "cuEST response: XC");
 #ifndef PSI4_CUEST_NONSYMMETRIC_XC
     throw_if_cuest_unsupported(
         "The XC response kernel (this cuEST SDK has no cuestXCNonsymmetricDensityCompute)");
@@ -980,6 +982,7 @@ struct CuestXCDeviceResponse::Impl {
     double cutoff = 0.0;
     bool gga = false;
     bool prepared = false;
+    bool profile = false;
     std::function<void()> validate;
     CuestParameters<cuestXCNonsymmetricDensityComputeParameters_t> density_params{
         CUEST_XCNONSYMMETRICDENSITYCOMPUTE_PARAMETERS};
@@ -1008,6 +1011,7 @@ std::unique_ptr<CuestXCDeviceResponse> VBase::prepare_device_response(const std:
     require_response_derivatives(functional_->c_functionals());
     cuest_common::ensure_cuest_initialized();
     auto p = std::make_unique<CuestXCDeviceResponse::Impl>();
+    p->profile = options_.get_bool("CUEST_RESPONSE_PROFILE");
     p->nocc = nocc;
     p->gga = functional_->ansatz() == 1;
     p->cutoff = v2_rho_cutoff_;
@@ -1143,6 +1147,7 @@ void CuestXCDeviceResponse::apply(const std::array<const double*, 2>& left,
                                   const std::array<double*, 2>& potential) {
 #if defined(PSI4_CUEST_NONSYMMETRIC_XC) && defined(PSI4_CUEST_DEVICE_CG)
     auto& p = *impl_;
+    CuestResponseProfile profile(p.profile, "cuEST response: XC");
     if (!p.prepared) throw PSIEXCEPTION("cuEST device XC response was not prepared.");
     p.validate();
     auto& g = *p.grid;

@@ -2,6 +2,8 @@
 #include "cuest_device_response.h"
 #ifdef USING_cuEST
 #include "cuESTCommon.h"
+#include "cuest_response_profile.h"
+#include "psi4/liboptions/liboptions.h"
 #include <algorithm>
 #include <utility>
 extern cudaStream_t stream_handle;
@@ -64,6 +66,7 @@ void CuestJKDeviceResponse::compute() {
     const auto ndensity = view_.nrhs * view_.nocc.size();
     if (jk_.directj_) {
 #ifdef PSI_CUEST_HAS_DIRECTJ
+        CuestResponseProfile profile(jk_.options_.get_bool("CUEST_RESPONSE_PROFILE"), "cuEST response: J");
         CHECK_CUEST(cuestDirectCoulombCompute(
             cuest_handle, jk_.cuest_directj_plan_, jk_.cuest_directj_params_, work_,
             ndensity, view_.density, view_.coulomb));
@@ -73,6 +76,7 @@ void CuestJKDeviceResponse::compute() {
             jk_.compute_coulomb(work_, view_.density + n * n2, view_.coulomb + n * n2);
     }
     if (!view_.compute_exchange) return;
+    CuestResponseProfile profile(jk_.options_.get_bool("CUEST_RESPONSE_PROFILE"), "cuEST response: K");
     if (jk_.gridk_) {
 #ifdef PSI_CUEST_HAS_GRIDK
         CHECK_CUEST(cuestGridKNonsymmetricExchangeCompute(

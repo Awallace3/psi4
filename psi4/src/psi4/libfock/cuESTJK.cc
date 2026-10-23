@@ -34,6 +34,7 @@
 #ifdef USING_cuEST
 
 #include "cuESTCommon.h"
+#include "cuest_response_profile.h"
 #include "cubature.h"
 
 #include "psi4/libmints/molecule.h"
@@ -598,6 +599,7 @@ void cuESTJK::query_coulomb_workspace(cuestWorkspaceDescriptor_t* desc,
 }
 
 void cuESTJK::compute_coulomb(cuestWorkspace_t* scratch, const double* density, double* coulomb) {
+    CuestResponseProfile profile(options_.get_bool("CUEST_RESPONSE_PROFILE"), "cuEST response: J");
     if (directj_) {
 #ifdef PSI_CUEST_HAS_DIRECTJ
         // J depends only on the symmetric part of D; the cuEST J API accepts
@@ -725,6 +727,7 @@ void cuESTJK::compute_gridk_JK() {
         if (do_K_) {
             // A response density is signed and generally nonsymmetric. Never
             // symmetrize D (or the returned K) to use the cheaper SCF kernel.
+            CuestResponseProfile profile(options_.get_bool("CUEST_RESPONSE_PROFILE"), "cuEST response: K");
             if (lr_symmetric_) {
                 CHECK_CUEST(cuestGridKSymmetricExchangeCompute(
                     cuest_handle, cuest_gridk_plan_, cuest_gridk_exchange_params_, &variable,
@@ -734,6 +737,7 @@ void cuESTJK::compute_gridk_JK() {
                     cuest_handle, cuest_gridk_plan_, cuest_gridk_nonsym_exchange_params_, &variable,
                     scratch.get(), 1, d_D, d_K));
             }
+            profile.stop();
             check_cuda(cudaDeviceSynchronize());
             check_cuda(cudaMemcpy(K_ao_[n]->get_pointer(), d_K, bytes, cudaMemcpyDeviceToHost));
         }
@@ -1097,6 +1101,7 @@ void cuESTJK::compute_JK() {
                 }
                 auto tk1 = clock::now();
  
+                CuestResponseProfile profile(options_.get_bool("CUEST_RESPONSE_PROFILE"), "cuEST response: K");
                 if (lr_symmetric_) {
                     CHECK_CUEST(cuestDFSymmetricExchangeCompute(
                         cuest_handle,
@@ -1120,6 +1125,7 @@ void cuESTJK::compute_JK() {
                         d_C_right,
                         d_K));
                 }
+                profile.stop();
                 cudaDeviceSynchronize();
                 auto tk2 = clock::now();
  

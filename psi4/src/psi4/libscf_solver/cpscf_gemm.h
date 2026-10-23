@@ -8,6 +8,7 @@
 #include "psi4/libqt/qt.h"
 #ifdef USING_cuEST
 #include "cuest_gemm.h"
+#include "psi4/libfock/cuest_response_profile.h"
 #endif
 
 namespace psi {
@@ -57,6 +58,8 @@ inline SharedMatrix gpu_chain(const std::vector<SharedMatrix>& operands, const s
 
 inline SharedMatrix doublet(Options& options, SharedMatrix a, SharedMatrix b, bool ta, bool tb) {
 #ifdef USING_cuEST
+    CuestResponseProfile profile(options.get_bool("USE_CUEST") && options.get_bool("CUEST_RESPONSE_PROFILE"),
+                                 "cuEST response: transforms");
     if (use_gpu(options, {a, b}, {ta, tb})) return gpu_chain({a, b}, {ta, tb});
 #endif
     return linalg::doublet(a, b, ta, tb);
@@ -65,6 +68,8 @@ inline SharedMatrix doublet(Options& options, SharedMatrix a, SharedMatrix b, bo
 inline SharedMatrix triplet(Options& options, SharedMatrix a, SharedMatrix b, SharedMatrix c,
                             bool ta, bool tb, bool tc) {
 #ifdef USING_cuEST
+    CuestResponseProfile profile(options.get_bool("USE_CUEST") && options.get_bool("CUEST_RESPONSE_PROFILE"),
+                                 "cuEST response: transforms");
     if (use_gpu(options, {a, b, c}, {ta, tb, tc})) return gpu_chain({a, b, c}, {ta, tb, tc});
 #endif
     return linalg::triplet(a, b, c, ta, tb, tc);
@@ -73,6 +78,8 @@ inline SharedMatrix triplet(Options& options, SharedMatrix a, SharedMatrix b, Sh
 /// Co^T F Co X - X Cv^T F Cv. Retain each four-factor intermediate on device.
 inline SharedMatrix onel(Options& options, SharedMatrix co, SharedMatrix cv, SharedMatrix f, SharedMatrix x) {
 #ifdef USING_cuEST
+    CuestResponseProfile profile(options.get_bool("USE_CUEST") && options.get_bool("CUEST_RESPONSE_PROFILE"),
+                                 "cuEST response: transforms");
     if (use_gpu(options, {co, f, co, x}, {true, false, false, false}) &&
         use_gpu(options, {x, cv, f, cv}, {false, true, false, false})) {
         auto result = gpu_chain({co, f, co, x}, {true, false, false, false});

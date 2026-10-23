@@ -661,6 +661,10 @@ std::vector<SharedMatrix> RHF::twoel_Hx_full(std::vector<SharedMatrix> x_vec, bo
     return ret;
 }
 std::vector<SharedMatrix> RHF::cphf_Hx(std::vector<SharedMatrix> x_vec) {
+#ifdef USING_cuEST
+    CuestResponseProfile profile(options_.get_bool("USE_CUEST") && options_.get_bool("CUEST_RESPONSE_PROFILE"),
+                                 "cuEST response: Hx");
+#endif
     // Compute quantities
     std::vector<SharedMatrix> onel = onel_Hx(x_vec);
     std::vector<SharedMatrix> twoel = twoel_Hx(x_vec, true, "MO");
@@ -820,6 +824,10 @@ std::vector<SharedMatrix> RHF::cphf_solve(std::vector<SharedMatrix> x_vec, doubl
 
         // Calc hessian vector product
         std::vector<SharedMatrix> Ap_vec = cphf_Hx(active_p_vec);
+#ifdef USING_cuEST
+        CuestResponseProfile updates(options_.get_bool("USE_CUEST") && options_.get_bool("CUEST_RESPONSE_PROFILE"),
+                                     "cuEST response: CG updates");
+#endif
 
         max_rms = 0.0;
         mean_rms = 0.0;

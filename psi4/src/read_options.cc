@@ -250,6 +250,10 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     symmetry, fractional occupations and external response callbacks raise rather
     than falling back. Applies to SAPT coupled induction as well. -*/
     options.add_bool("CUEST_DEVICE_CG", false);
+    /*- Synchronizing cuEST CPHF/CPKS phase profiling, for both host and device CG.
+        Reports J, K, XC, transforms and CG-update wall timers in timer.dat.
+        These diagnostic fences perturb execution; disable for speedup measurements. !expert -*/
+    options.add_bool("CUEST_RESPONSE_PROFILE", false);
     /*- Tune # of Ozaki Slices in emulated DF K computations (requires CUDA and cuEST libraries) -*/
     options.add_int("CUEST_DFK_SLICES", 5);
     /*- Tune # of Ozaki Moduli in emulated DF K computations (requires CUDA and cuEST libraries) -*/

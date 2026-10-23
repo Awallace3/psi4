@@ -817,6 +817,11 @@ orbital/Fock panels, not XC reference preparation or SDK-internal transfers.
 Measure total solve time as well as iteration time: preparation and kernel
 compilation can dominate small problems, so no fixed speedup is guaranteed.
 
+For bottleneck diagnosis, |globals__cuest_response_profile| adds shared-stream
+fences and separates J, K, XC, orbital transforms, and CG updates in
+``timer.dat`` for both solvers. These synchronized timings deliberately
+perturb execution; disable this option for unperturbed speedup measurements.
+
 
 cuEST SAD routing and SCF lifecycle timings
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

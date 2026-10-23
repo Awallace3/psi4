@@ -98,6 +98,19 @@ def test_cuest_device_cg_initial_status():
 
 
 @pytest.mark.parametrize("unrestricted", [False, True])
+def test_cuest_response_profile_preserves_solution(unrestricted):
+    wfn = _wavefunction("pbe0", unrestricted)
+    rhs = _rhs(wfn, unrestricted, count=1, mixed=False)
+    psi4.set_options({"cuest_response_profile": True})
+    expected = [m.np.copy() for m in wfn.cphf_solve(rhs, 1.e-10, 150, 0)]
+    assert wfn.cphf_converged()
+    result = _device_solve(wfn, rhs)
+    _check(wfn, rhs, result)
+    for ref, out in zip(expected, result):
+        np.testing.assert_allclose(out.np, ref, atol=1.e-8, rtol=0)
+
+
+@pytest.mark.parametrize("unrestricted", [False, True])
 @pytest.mark.parametrize("method", ["hf", "svwn", "pbe0", "cam-b3lyp"])
 @pytest.mark.parametrize("directj,gridk", [(False, False), (True, False), (False, True), (True, True)])
 def test_cuest_device_cg_matches_host(method, unrestricted, directj, gridk):

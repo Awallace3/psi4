@@ -20,6 +20,7 @@
 #include "psi4/libfock/cuESTCommon.h"
 #include "psi4/libfock/cuest_device_response.h"
 #include "psi4/libfock/cuest_device_kernels.h"
+#include "psi4/libfock/cuest_response_profile.h"
 #include "psi4/libfock/v.h"
 #include "psi4/libfunctional/superfunctional.h"
 #include "psi4/libmints/basisset.h"
@@ -96,7 +97,7 @@ class DeviceHessian {
     CuestDeviceKernels& kernels_;
     std::array<Spin, 2> spins_;
     std::size_t nbf_, n2_, nrhs_, nspin_, stride_, tile_;
-    bool exchange_, xc_;
+    bool exchange_, xc_, profile_;
     double kscale_;
     CuestDeviceArray density_, coulomb_, exchange_data_, potential_, fock_;
     double *dD_, *dJ_, *dK_, *dV_, *dG_;
@@ -108,10 +109,10 @@ class DeviceHessian {
                   const std::vector<SharedMatrix>& co, const std::vector<SharedMatrix>& cv,
                   const std::vector<SharedMatrix>& foo, const std::vector<SharedMatrix>& fvv,
                   std::size_t nrhs, std::size_t stride, bool use_k, double kscale,
-                  std::map<std::string, double>& stats)
+                  std::map<std::string, double>& stats, bool profile)
         : blas_(blas), kernels_(CuestDeviceKernels::instance()), nbf_(nbf), n2_(product(nbf, nbf)),
           nrhs_(nrhs), nspin_(co.size()), stride_(stride), exchange_(use_k),
-          xc_(potential != nullptr), kscale_(kscale), stats_(stats) {
+          xc_(potential != nullptr), profile_(profile), kscale_(kscale), stats_(stats) {
         const auto per_rhs = product(product(n2_, nspin_), 5 * sizeof(double));
         tile_ = std::min(nrhs_, std::max<std::size_t>(1, std::min<std::size_t>(8, (std::size_t(256) << 20) /
                                                                       std::max<std::size_t>(1, per_rhs))));
@@ -157,8 +158,10 @@ class DeviceHessian {
         }
     }
     void apply(const double* x, double* ax) {
+        CuestResponseProfile total(profile_, "cuEST response: Hx");
         for (std::size_t start = 0; start < nrhs_; start += tile_) {
             const auto count = std::min(tile_, nrhs_ - start);
+            CuestResponseProfile factors(profile_, "cuEST response: factors");
             for (std::size_t s = 0; s < nspin_; ++s) {
                 auto& t = spins_[s];
                 double* d = dD_ + s * tile_ * n2_;
@@ -179,6 +182,7 @@ class DeviceHessian {
                         (tile_ - count) * right_stride * sizeof(double), stream_handle));
                 }
             }
+            factors.stop();
             jk_->compute();
             if (xc_) {
                 for (std::size_t r = 0; r < count; ++r) {
@@ -196,6 +200,7 @@ class DeviceHessian {
                         cg_cuda(cudaMemsetAsync(dV_ + (s * tile_ + count) * n2_, 0,
                             (tile_ - count) * n2_ * sizeof(double), stream_handle));
             }
+            CuestResponseProfile projection(profile_, "cuEST response: projection");
             kernels_.launch("cg_assemble", nspin_ * tile_ * n2_,
                 nbf_, tile_, nspin_, int(exchange_), int(xc_), kscale_, dJ_, dK_, dV_, dG_);
             for (std::size_t s = 0; s < nspin_; ++s) {
@@ -349,8 +354,9 @@ std::vector<SharedMatrix> HF::cphf_solve_device(const std::vector<SharedMatrix>&
         stats["total_seconds"] = seconds(total_start);
         return ret;
     }
+    const bool profile = options_.get_bool("CUEST_RESPONSE_PROFILE");
     DeviceHessian hessian(blas, *jk, potential.get(), basisset()->nbf(), co, cv, foo, fvv,
-                           nrhs, stride, use_k, kscale, stats);
+                           nrhs, stride, use_k, kscale, stats, profile);
     cg_cuda(cudaStreamSynchronize(stream_handle));
     stats["setup_seconds"] = seconds(total_start);
     if (print_lvl) outfile->Printf("\n    ==> cuEST device-resident CG (%zu equations) <==\n", nrhs);
@@ -368,6 +374,7 @@ std::vector<SharedMatrix> HF::cphf_solve_device(const std::vector<SharedMatrix>&
     };
     for (int iter = 0; iter < max_iter; ++iter) {
         hessian.apply(p, ap);
+        CuestResponseProfile updates(profile, "cuEST response: CG updates");
         blas.dots(nrhs, stride, p, ap, sigma);
         kernels.launch("cg_step", n, n, stride, x, r, p, ap, oldrho, sigma, active, error);
         kernels.launch("cg_precondition", n, n, stride, gap, r, z);
@@ -377,6 +384,7 @@ std::vector<SharedMatrix> HF::cphf_solve_device(const std::vector<SharedMatrix>&
         stats["cg_updates"] = iter + 1;
         kernels.launch("cg_direction", n, n, stride, 0, z, p, oldrho, newrho, active, error);
         std::swap(oldrho, newrho);
+        updates.stop();
         if (print_lvl) outfile->Printf("      %4d  max relative residual %12.4e\n", iter + 1, max_residual);
         if (max_residual <= tolerance && (certified = certify())) break;
     }
