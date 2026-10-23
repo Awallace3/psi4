@@ -229,6 +229,17 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     Analytic exchange gradients are not implemented for this mode.
     No effect unless a cuEST J/K builder is selected. -*/
     options.add_bool("CUEST_GRIDK", false);
+    /*- Use cuEST integral-direct four-center Coulomb (J) instead of DF-J.
+    Combine with |globals__cuest_gridk| for Direct-J + Grid-K, including
+    nonsymmetric CPHF/CPKS response densities. Without Grid-K, exchange
+    remains density-fitted. Direct-J + Grid-K does not construct a DF
+    integral plan or GPU auxiliary basis. The existing JK factory still
+    accepts an auxiliary basis, but it is unused by that combination.
+    Requires cuEST's direct Coulomb API (included in 0.2.50).
+    Uses non-JIT kernels and |globals__ints_tolerance| screening.
+    Analytic Coulomb gradients are not implemented for this mode.
+    No effect unless a cuEST J/K builder is selected. -*/
+    options.add_bool("CUEST_DIRECTJ", false);
     /*- Tune # of Ozaki Slices in emulated DF K computations (requires CUDA and cuEST libraries) -*/
     options.add_int("CUEST_DFK_SLICES", 5);
     /*- Tune # of Ozaki Moduli in emulated DF K computations (requires CUDA and cuEST libraries) -*/

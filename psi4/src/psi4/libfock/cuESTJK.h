@@ -41,6 +41,9 @@
 #ifdef GRID_K_EXCHANGE_COMPUTE_API_H
 #define PSI_CUEST_HAS_GRIDK
 #endif
+#if defined(DIRECT_COULOMB_COMPUTE_API_H) && defined(DIRECT_INTEGRAL_PLAN_API_H)
+#define PSI_CUEST_HAS_DIRECTJ
+#endif
 #endif
 
 namespace psi {
@@ -95,6 +98,14 @@ class PSI_API cuESTJK : public JK {
     cuestDFNonsymmetricExchangeComputeParameters_t cuest_nonsym_exchange_compute_params_;
 
     bool gridk_ = false;
+    bool directj_ = false;
+#ifdef PSI_CUEST_HAS_DIRECTJ
+    cuestDirectIntPlan_t cuest_directj_plan_ = nullptr;
+    cuestDirectCoulombComputeParameters_t cuest_directj_params_ = nullptr;
+    cuestWorkspace_t* cuest_directj_plan_ws_ = nullptr;
+    size_t directj_plan_device_bytes_ = 0;
+    void build_directj_plan();
+#endif
 #ifdef PSI_CUEST_HAS_GRIDK
     // The grid must outlive the Grid-K plan, including during a rebuild.
     std::unique_ptr<DFTGrid> gridk_grid_;
@@ -132,6 +143,9 @@ class PSI_API cuESTJK : public JK {
     bool destroy_cuest_objects() noexcept;
     std::string current_plan_key() const;
     void build_cuest_plan(const std::string& key);
+    bool needs_df_plan() const { return (do_J_ && !directj_) || ((do_K_ || do_wK_) && !gridk_); }
+    void query_coulomb_workspace(cuestWorkspaceDescriptor_t* desc, const double* density, double* coulomb);
+    void compute_coulomb(cuestWorkspace_t* scratch, const double* density, double* coulomb);
     /// Restore this computation's requested mode on the shared cuEST handle.
     void configure_math_mode();
     /// Tear down and re-create the DF integral plan; a no-op before initialize().
@@ -161,6 +175,7 @@ class PSI_API cuESTJK : public JK {
     void set_omega(double omega) override;
     bool returns_combined_exchange() const override { return true; }
     bool uses_gridk() const { return gridk_; }
+    bool uses_directj() const { return directj_; }
     void print_header() const override;
 
     cuestDFIntPlan_t cuest_df_plan() { return cuest_df_plan_; }

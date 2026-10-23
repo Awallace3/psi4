@@ -744,6 +744,23 @@ It works with either setting of ``CUEST_XC``. The plan is reused until the
 geometry, exchange operator, or grid settings change. Exchange is already
 weighted by the same full- and long-range fractions as DF-K.
 
+Set |globals__cuest_directj| to true as well for **Direct-J + Grid-K**.
+Coulomb then uses cuEST's integral-direct four-center builder, including
+general signed CPKS densities. No DF integral plan or GPU auxiliary basis
+is constructed for this combination; the existing JK factory still accepts
+an auxiliary basis, which is unused by these kernels. With Grid-K disabled,
+``CUEST_DIRECTJ true`` instead selects Direct-J + DF-K and retains the DF
+plan for exchange. Both options default to false and do not change native
+CPU ``SCF_TYPE DIRECT`` routing. Select the cuEST builder with
+``SCF_TYPE DF`` and ``USE_CUEST true``.
+
+Direct-J uses the non-JIT kernels, with pair and density-weighted Schwarz
+screening controlled by ``INTS_TOLERANCE`` (or the JK cutoff setter).
+Unlike K, J depends only on the symmetric part of the density; this does
+not permit symmetrizing the density supplied to nonsymmetric Grid-K.
+Analytic Coulomb gradients for Direct-J are not implemented and raise an
+error rather than silently using DF-J derivatives.
+
 Grid-K is a numerical quadrature approximation, not another density-fitting
 algorithm: converge the grid against the desired energy and CPKS residual
 accuracy. The nonsymmetric kernel preserves general signed response densities;
@@ -757,12 +774,15 @@ SAPT tensor chains (default 256; zero forces eligible nonempty products).
 Small, empty, and symmetry-blocked products retain native BLAS. The timer
 ``cuEST CPSCF: cuBLAS`` identifies executed GPU transforms.
 
-For LDA/GGA CPKS, set ``CUEST_XC false`` **before SCF** to retain the native
-CPU XC response grid and kernel. GPU XC response is not implemented.
+For LDA/GGA CPKS, ``CUEST_XC true`` uses response density and potential
+contractions on the cuEST grid when the linked cuEST provides nonsymmetric
+XC densities. Functional derivatives are evaluated on the device with a
+CUDA-enabled LibXC, and otherwise on the host. Set ``CUEST_XC false``
+**before SCF** to retain the native CPU XC response grid and kernel.
 Native MGGA and VV10 response kernels remain unsupported and raise errors;
 this acceleration does not add CPKS support for M06, r²SCAN, or wB97M-V.
-The iterative solver, XC integration, and inter-build matrices remain on
-the host: this is not a wholly device-resident CPSCF solver, and enabling
+The iterative solver and inter-build matrices remain on the host:
+this is not a wholly device-resident CPSCF solver, and enabling
 the backend does not guarantee a speedup for small systems.
 
 
@@ -771,9 +791,10 @@ cuEST SAD routing and SCF lifecycle timings
 
 In builds with cuEST support, ``USE_CUEST true`` and ``SCF_TYPE DF`` route
 molecular J/K through cuEST. With |globals__cuest_sad| (default true), the
-density-fitted atomic J/K builds used by SAD, SADNO, HUCKEL, and MODHUCKEL
+atomic J/K builds used by SAD, SADNO, HUCKEL, and MODHUCKEL
 guesses also use cuEST, including the internal and OpenOrbitalOptimizer SAD
-solvers. The atomic calculations retain bare HF exchange and their original
+solvers. |globals__cuest_gridk| also selects Grid-K for these cuEST atomic
+builds. The atomic calculations retain bare HF exchange and their original
 occupations and convergence criteria. The SAD fitting basis must be spherical;
 the driver constructs it that way even for Cartesian orbital functions.
 Explicit non-DF |scf__sad_scf_type| settings retain the CPU direct builder.

@@ -3171,6 +3171,9 @@ void cuESTJKGrad::print_header() const {
 }
 void cuESTJKGrad::compute_gradient() {
     if (!do_J_ && !do_K_ && !do_wK_) return;
+    if (do_J_ && std::dynamic_pointer_cast<cuESTJK>(jk_)->uses_directj())
+        throw PSIEXCEPTION("Analytic Coulomb gradients with CUEST_DIRECTJ are not implemented; "
+                           "set CUEST_DIRECTJ false before SCF or use numerical derivatives.");
     if ((do_K_ || do_wK_) && std::dynamic_pointer_cast<cuESTJK>(jk_)->uses_gridk())
         throw PSIEXCEPTION("Analytic exchange gradients with CUEST_GRIDK are not implemented; "
                            "set CUEST_GRIDK false before SCF or use numerical derivatives.");
