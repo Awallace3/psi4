@@ -221,8 +221,8 @@ def test_cuest_gridk_cpks(gridk_system, unrestricted):
     for _ in range(2):
         for spin in (("a", "b") if unrestricted else ("a",)):
             subset = getattr(wfn, f"C{spin}_subset")
-            nocc = subset("SO", "OCC").ncol()
-            nvir = subset("SO", "VIR").ncol()
+            nocc = sum(subset("SO", "OCC").coldim())
+            nvir = sum(subset("SO", "VIR").coldim())
             rhs.append(psi4.core.Matrix.from_array(rng.normal(size=(nocc, nvir)) * 0.01))
     original = wfn.jk()
     expected = [m.np.copy() for m in wfn.cphf_Hx(rhs)]
