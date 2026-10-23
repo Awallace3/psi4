@@ -83,6 +83,7 @@ def _check(wfn, rhs, result, atol=1.e-9):
     assert stats["iteration_bulk_host_to_device_bytes"] == 0
     assert stats["iteration_bulk_device_to_host_bytes"] == 0
     assert stats["operator_calls"] > 0
+    assert wfn.cphf_nfock_builds() == stats["operator_calls"] * stats["rhs_count"]
     assert stats["iteration_scalar_device_to_host_bytes"] <= (
         stats["operator_calls"] * (stats["rhs_count"] * 8 + 4) + 4
     )
@@ -98,6 +99,7 @@ def test_cuest_device_cg_matches_host(method, unrestricted, directj, gridk):
     expected = [m.np.copy() for m in wfn.cphf_solve(rhs, 1.e-10, 150, 0)]
     assert wfn.cphf_converged()
     assert wfn.cphf_device_stats() == {}
+    assert wfn.cphf_nfock_builds() > 0
     got = _device_solve(wfn, rhs)
     _check(wfn, rhs, got)
     for ref, out in zip(expected, got):
