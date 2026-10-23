@@ -64,7 +64,7 @@ radial-major, angular-major order, unfiltered Becke weights and translations
 without spherical rotation (`isa_grid.h:49–113`).
 Public grid bindings are at `export_isapol.cc:962–985`.
 The exact native-core/geometry/options path matches captured
-`integrated_driver.py:76–81`; all four knobs are now explicit.
+`integrated_driver.py:60–63`; all four knobs are now explicit.
 
 Canonical grid: C-order little-endian binary64 `(x,y,z,w)` rows,
 1,408,920×4 (45,085,440bytes). Recorded **partition Q integration** hash:

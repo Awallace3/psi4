@@ -255,6 +255,17 @@ class EvidenceAndLaunchTests(unittest.TestCase):
         self.assertIn("science_pass=False", text)
         self.assertIn("finally:", text)
 
+    def test_hash_match_precedes_any_grid_integral_or_comparison(self):
+        tree = ast.parse((HERE/"qgrid_job.py").read_text())
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "science")
+        calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)]
+        where = lambda name: [n.lineno for n in calls if ast.unparse(n.func) == name]
+        self.assertEqual(len(where("P.validate_grid")), 1)
+        self.assertEqual(len(where("P.stream")), 1)
+        self.assertLess(where("P.validate_grid")[0], where("P.stream")[0])
+        self.assertTrue(all(where("P.validate_grid")[0] < line for line in where("P.compare")))
+        self.assertEqual(len(where("psi4.core.IsaGrid")), 1)
+
     def test_plan_namespace_is_separate_and_default_capture_unchanged(self):
         self.assertNotEqual(J.R.PLAN["run"], J.GENERIC.PLAN["run"])
         self.assertEqual(J.GENERIC.PLAN["allocation"]["cpus"], 8)
@@ -352,6 +363,16 @@ class CaptureChainTests(unittest.TestCase):
         self.marker["anchor_manifest_sha256"] = self.pins["results/diagnostic/anchor/manifest.json"]
         self.put_json("results/diagnostic/node-01/pre-lw-complete.json", self.marker)
         with self.assertRaisesRegex(ValueError, "descriptor"):
+            J.verify_capture(self.root)
+
+    def test_repinning_changed_effective_coefficient_still_refuses_fingerprint(self):
+        path = "results/basis-identities-before-scf.json"
+        basis = json.loads((self.root/path).read_text())
+        basis["auxiliary"]["ordered_shells"][0]["native_normalized_coefficients_hex"] = ["0x1p+1"]
+        self.put_json(path, basis)
+        self.context["context"]["basis_receipt_sha256"] = self.pins[path]
+        self.put_json("results/diagnostic/context.json", self.context)
+        with self.assertRaisesRegex(ValueError, "fingerprint"):
             J.verify_capture(self.root)
 
     def test_capture_nonregular_symlink_and_oversize_are_rejected(self):
