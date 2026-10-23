@@ -1,0 +1,72 @@
+{
+  "schema": "ccasp-benzene-exact-qgrid-probe/1",
+  "base": "c31ad7fbe6ca2f91e6654e25807536009c58bb29",
+  "source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-benzene-qgrid-probe-20261022",
+  "runtime": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-qgrid-probe-20261022/runtime-001",
+  "run": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-qgrid-probe-20261022/probe-001",
+  "scratch": "/storage/scratch1/3/awallace43/ccasp-benzene-qgrid-probe-20261022-probe001",
+  "fixture": "/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-002/inputs/benzene_s66x8_24_monA.json",
+  "prior_probe": "/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/basis-probe-001/basis-admission.json",
+  "prior_probe_sha256": "6ddbac4a5292d5ab6d671ee6e7cb2acef828c0664f3b3ce7c53c4e8eefa9159c",
+  "prior_driver_source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-science-launch-v3",
+  "prior_driver_commit": "2e7d5ff2e1650e3152a7414818581945873f42f8",
+  "prior_driver_tree": "ba905cd9fabd0084099cf5020507c9f3e8f33e0c",
+  "prior_driver_files": {
+    "pilot.py": "dd1f3adc83f4f2eca4579f4732e72b35011ba827d0a564fc9f7aca169f1cce00",
+    "basis_admission.py": "4df9c5d9714839f053e122b9eda59f6a701d0defa117edb640b249fc3fee70dc",
+    "basis_contract.json": "42ad138fec115b594ec7fa31ac787d8f4b303e81ea2fad7c6e2485461aa88167",
+    "pilot.json": "19170c907137c7883dfbceaa4a23e4b919ec2d97dac38343dc4559b8bffb0f0b"
+  },
+  "routing": [
+    "psi4/driver/procrouting/isapol_bounded.py",
+    "psi4/driver/procrouting/isapol_bounded_oeprop.py",
+    "psi4/driver/procrouting/isapol_bounded_response.py",
+    "psi4/driver/procrouting/isapol_native_factors.py"
+  ],
+  "fingerprints": {
+    "main": "a88c2a074b28b8da608684b56bdff01aa965179aa91fe8bf6a8bdefd7a8c1c0e",
+    "auxiliary": "2bd06dbb3a6ea10b4cbfcda85677f199ddebb315fd317848dfea6aec19d600ac"
+  },
+  "allocation": {
+    "account": "gts-cs207-chemx",
+    "partition": "cpu-small",
+    "qos": "embers",
+    "nodes": 1,
+    "tasks": 1,
+    "cpus": 2,
+    "memory": "8G",
+    "time": "00:30:00",
+    "node": "atl1-1-02-007-23-1",
+    "numerical_threads": 1,
+    "psi4_memory_bytes": 4294967296
+  },
+  "grid": {
+    "recipe": {"radial_points": 200, "spherical_points": 590, "becke_smoothing": 3, "radius_scaling": 1.0},
+    "points": 1408920,
+    "sha256": "a01a17a4ab55dab608883cf5a184bfc13a42a15fae15efecf0256a9df383ab29",
+    "canonical": "C-order binary64 little-endian rows (x,y,z,w), no sorting or weight filtering"
+  },
+  "bounds": {
+    "tile_points": 1024,
+    "max_values": 1614622320,
+    "max_output_bytes": 8388608,
+    "max_scratch_bytes": 67108864,
+    "max_file_bytes": 16777216,
+    "required_free_scratch_bytes": 268435456,
+    "deadline_seconds": 1500,
+    "selected_checks": 4096
+  },
+  "capture": {
+    "job": "14291484",
+    "root": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-lw-integrated-20261022/capture-002",
+    "files": {
+      "results/diagnostic/node-01/pre-lw-complete.json": "8e14c234d725008be6431cfdfa2d02cd6c87c33ad5fd4ff1f58c6809b7a6fe9c",
+      "results/diagnostic/context.json": "3b9dcbe9dbc3802cf32971ac6a5cc7403b3e8d2247ee64db2a5476ba5c507e9d",
+      "results/diagnostic/anchor/manifest.json": "4298b7667df2efa29b487eb0859e0bbdd92fd3c0d7f4c28fcf00fdc1f92f2415",
+      "results/basis-identities-before-scf.json": "033de1680733bfe89efffaf8c80af16ccf22e89528e20ead7eb681729d5ce77c",
+      "results/diagnostic/anchor/q.f64": "1ed38a3488788baba91b6c30ce044442a15d485b58bafc65f0fad99b955cea82",
+      "results/diagnostic/anchor/QT_c.f64": "f999e897727090869400590e2032d5cf563ffd3fd4c993e0ed4cf875696288e7",
+      "results/diagnostic/anchor/deltaq.f64": "de9e9054ec06d2e7f88192665eb78f3025775af23b19d3854a51ffe49e84d71b"
+    }
+  }
+}

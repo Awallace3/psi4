@@ -15,7 +15,24 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
-PLAN = json.loads((HERE/"integrated_plan.json").read_text())
+PLAN = json.loads(Path(globals().get("PLAN_PATH", HERE/"integrated_plan.json")).read_text())
+
+
+def for_plan(path):
+    """Explicit operational plan-path bootstrap; default capture users unchanged.
+
+    A separate module namespace prevents changing any existing launcher's plan.
+    No scientific import, package composition or numerical operation occurs here.
+    """
+    path = Path(path).resolve()
+    if path.parent != HERE or path.suffix != ".json":
+        raise ValueError("operational plan must be a tools-directory JSON file")
+    spec = importlib.util.spec_from_file_location("_ccasp_runtime_"+path.stem, __file__)
+    item = importlib.util.module_from_spec(spec)
+    item.PLAN_PATH = path
+    sys.modules[spec.name] = item
+    spec.loader.exec_module(item)
+    return item
 
 
 def module(name, file):
