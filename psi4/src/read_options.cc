@@ -2095,6 +2095,40 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         counterpoise subsystem jobs run outside that driver. Ignored when
         |scf__xdm_dispersion_parameters| is set. -*/
         options.add_bool("XDM_COUNTERPOISE", false);
+        /*- Evaluate the XDM moment integrals on the GPU: basis functions and their
+        derivatives, the spin densities and Laplacians, the Becke--Roussel hole, the
+        Hirshfeld partition and the moments. On the same grid the GPU and host agree to
+        rounding; with |globals__use_cuest| on, |scf__xdm_grid| ``AUTO`` also switches to
+        cuEST's grid, which changes the XDM energy by up to about 2e-4 relative (a different
+        quadrature, not rounding). Set |scf__xdm_grid| explicitly to compare the two paths.
+        Requires a Psi4 built with cuEST; raises otherwise. -*/
+        options.add_bool("XDM_GPU", false);
+        /*- Device workspace [MiB] for |scf__xdm_gpu|: the basis-function values and
+        density products of one batch of grid blocks. Larger batches run faster;
+        raised automatically to the minimum that holds one grid block. Device-blocked
+        points (|scf__xdm_grid_blocking| ``DEVICE``) are held outside this budget. !expert -*/
+        options.add_int("XDM_GPU_MEMORY", 256);
+        /*- Keep the full AO density matrices on the device for |scf__xdm_gpu| and gather each
+        batch's columns there, instead of gathering them on the host for every batch. They are
+        kept only when they fit in half of |scf__xdm_gpu_memory|, and come out of it. !expert -*/
+        options.add_bool("XDM_GPU_RESIDENT_DENSITY", true);
+        /*- Grid for the XDM moment integrals. ``PSI4`` builds the host DFT grid from the
+        |scf__dft_radial_points| family of options. ``CUEST`` takes the points and Becke-partitioned
+        weights of the cuEST grid built from the same options (the grid a cuEST SCF integrates on),
+        which skips the host grid build; it needs a Psi4 built with cuEST. ``AUTO`` is ``CUEST`` when
+        |scf__xdm_gpu| and |globals__use_cuest| are on and |scf__dft_grid_orientation| has not been
+        set (a no-CP many-body run sets it), and ``PSI4`` otherwise. -*/
+        options.add_str("XDM_GRID", "AUTO", "AUTO PSI4 CUEST");
+        /*- Where the points of an |scf__xdm_grid| ``CUEST`` grid are blocked. ``HOST`` copies them to
+        the host and blocks them with ``OCTREE``. ``DEVICE`` sorts them along a Morton curve on the
+        GPU and cuts them at octant boundaries into blocks of at most |scf__dft_block_max_points|,
+        screening each block's shells there; with |scf__xdm_gpu| the points then never leave the
+        device. Both apply the same weight and distance sieves. ``DEVICE`` ignores
+        |scf__dft_block_min_points| and |scf__dft_block_max_radius|, which only affects speed. Its
+        memory is outside |scf__xdm_gpu_memory|: about 70 bytes per cuEST point while blocking,
+        then 32 bytes per kept point for the integration. ``AUTO`` is ``DEVICE`` for a ``CUEST``
+        grid with |scf__xdm_gpu| and ``HOST`` otherwise. !expert -*/
+        options.add_str("XDM_GRID_BLOCKING", "AUTO", "AUTO HOST DEVICE");
         /*- Parameters defining the -NL/-V dispersion correction. First b, then C -*/
         options.add("NL_DISPERSION_PARAMETERS", new ArrayType());
         /*- Number of spherical points (A :ref:`Lebedev Points <table:lebedevorder>` number) for VV10 NL integration.

@@ -43,7 +43,10 @@
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/matrix.h"
 
+#include <algorithm>
+#include <cmath>
 #include <vector>
+#include <functional>
 #include <string>
 #include <sstream>
 #include <cstdio>
@@ -4497,11 +4500,252 @@ void DFTGrid::buildGridFromOptions(std::map<std::string, int> int_opts_map,
 #endif
     MolecularGrid::buildGridFromOptions(opt, is_cuest);
     timer_off("build grid");
-    if (is_cuest) return;
+    if (is_cuest) {
+#ifdef USING_cuEST
+        cuest_extents_ = extents;
+        cuest_max_points_ = max_points;
+        cuest_min_points_ = min_points;
+        cuest_max_radius_ = max_radius;
+#endif
+        return;
+    }
     timer_on("post-process grid");
     postProcess(extents, max_points, min_points, max_radius);
     timer_off("post-process grid");
 }
+
+#ifdef USING_cuEST
+namespace {
+// Runs a cleanup when the scope exits, unless released: frees cuEST and CUDA resources on throw paths.
+class OnExit {
+   public:
+    explicit OnExit(std::function<void()> f) : f_(std::move(f)) {}
+    ~OnExit() {
+        if (f_) f_();
+    }
+    void release() { f_ = nullptr; }
+    OnExit(const OnExit &) = delete;
+    OnExit &operator=(const OnExit &) = delete;
+
+   private:
+    std::function<void()> f_;
+};
+
+// timer_on/timer_off around a scope; never throws from the destructor.
+class ScopeTimer {
+   public:
+    explicit ScopeTimer(const char *name) : name_(name) { timer_on(name_); }
+    ~ScopeTimer() {
+        try {
+            timer_off(name_);
+        } catch (...) {
+        }
+    }
+    ScopeTimer(const ScopeTimer &) = delete;
+    ScopeTimer &operator=(const ScopeTimer &) = delete;
+
+   private:
+    const char *name_;
+};
+}  // namespace
+
+size_t DFTGrid::cuest_device_points(double **d_xyz_out, double **d_w_out) {
+    if (!cuest_molecular_grid_ || !cuest_extents_) {
+        throw PSIEXCEPTION("DFTGrid::cuest_device_points: this grid was not built with use_cuest.");
+    }
+    uint64_t ncuest = 0;
+    CHECK_CUEST(cuestQuery(cuest_handle, CUEST_MOLECULARGRID, cuest_molecular_grid_, CUEST_MOLECULARGRID_NUM_POINT,
+                           &ncuest, sizeof(uint64_t)));
+    // Points and weights are only exposed through an XC plan; HF is a placeholder functional.
+    cuestXCIntPlanParameters_t plan_params = nullptr;
+    CHECK_CUEST(cuestParametersCreate(CUEST_XCINTPLAN_PARAMETERS, reinterpret_cast<void **>(&plan_params)));
+    OnExit free_plan_params([&] { cuestParametersDestroy(CUEST_XCINTPLAN_PARAMETERS, plan_params); });
+    cuestWorkspaceDescriptor_t persistent_desc{}, temporary_desc{};
+    CHECK_CUEST(cuestXCIntPlanCreateWorkspaceQuery(cuest_handle, primary_->cuest_basis(), cuest_molecular_grid_,
+                                                   CUEST_XCINTPLAN_PARAMETERS_FUNCTIONAL_HF, plan_params,
+                                                   &persistent_desc, &temporary_desc, nullptr));
+    cuestWorkspace_t *plan_ws = cuest_common::allocateWorkspace(&persistent_desc);
+    OnExit free_plan_ws([&] { cuest_common::freeWorkspace(plan_ws); });
+    cuestWorkspace_t *tmp_ws = cuest_common::allocateWorkspace(&temporary_desc);
+    OnExit free_tmp_ws([&] {
+        if (tmp_ws) cuest_common::freeWorkspace(tmp_ws);
+    });
+    cuestXCIntPlan_t plan = nullptr;
+    CHECK_CUEST(cuestXCIntPlanCreate(cuest_handle, primary_->cuest_basis(), cuest_molecular_grid_,
+                                     CUEST_XCINTPLAN_PARAMETERS_FUNCTIONAL_HF, plan_params, plan_ws, tmp_ws, &plan));
+    // On a throw the computes below may still be running on cuEST's stream: finish them first.
+    OnExit free_plan([&] {
+        cudaDeviceSynchronize();
+        cuestXCIntPlanDestroy(plan);
+    });
+    cuest_common::freeWorkspace(tmp_ws);
+    tmp_ws = nullptr;
+
+    double *d_xyz = nullptr, *d_w = nullptr;
+    OnExit free_points([&] {
+        cudaDeviceSynchronize();
+        cudaFree(d_xyz);
+        cudaFree(d_w);
+    });
+    if (cudaMalloc(reinterpret_cast<void **>(&d_xyz), 3 * ncuest * sizeof(double)) != cudaSuccess ||
+        cudaMalloc(reinterpret_cast<void **>(&d_w), ncuest * sizeof(double)) != cudaSuccess) {
+        throw PSIEXCEPTION("DFTGrid::cuest_device_points: cudaMalloc failed for the grid points.");
+    }
+    {
+        cuestXCIntegrationGridComputeParameters_t grid_params = nullptr;
+        CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONGRIDCOMPUTE_PARAMETERS, &grid_params));
+        OnExit free_grid_params([&] { cuestParametersDestroy(CUEST_XCINTEGRATIONGRIDCOMPUTE_PARAMETERS, grid_params); });
+        CHECK_CUEST(
+            cuestXCIntegrationGridComputeWorkspaceQuery(cuest_handle, plan, grid_params, &temporary_desc, d_xyz));
+        tmp_ws = cuest_common::allocateWorkspace(&temporary_desc);
+        CHECK_CUEST(cuestXCIntegrationGridCompute(cuest_handle, plan, grid_params, tmp_ws, d_xyz));
+        cudaDeviceSynchronize();
+        cuest_common::freeWorkspace(tmp_ws);
+        tmp_ws = nullptr;
+    }
+    {
+        cuestXCIntegrationWeightComputeParameters_t weight_params = nullptr;
+        CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, &weight_params));
+        OnExit free_weight_params(
+            [&] { cuestParametersDestroy(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, weight_params); });
+        CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(
+            cuest_handle, plan, CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL, weight_params, &temporary_desc,
+            d_w));
+        tmp_ws = cuest_common::allocateWorkspace(&temporary_desc);
+        CHECK_CUEST(cuestXCIntegrationWeightCompute(cuest_handle, plan,
+                                                    CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
+                                                    weight_params, tmp_ws, d_w));
+    }
+    // The computes may still be running on cuEST's stream; finish them before the plan goes.
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+        throw PSIEXCEPTION("DFTGrid::cuest_device_points: computing the grid points failed.");
+    }
+    // Success: the caller owns the points; the guards free the plan and its workspaces.
+    free_points.release();
+    *d_xyz_out = d_xyz;
+    *d_w_out = d_w;
+    return static_cast<size_t>(ncuest);
+}
+
+void DFTGrid::host_blocks_from_cuest() {
+    if (!cuest_molecular_grid_ || !cuest_extents_) {
+        throw PSIEXCEPTION("DFTGrid::host_blocks_from_cuest: this grid was not built with use_cuest.");
+    }
+    if (npoints_) {
+        throw PSIEXCEPTION("DFTGrid::host_blocks_from_cuest: the host points already exist.");
+    }
+    uint64_t ncuest = 0;
+    std::vector<double> xyz, w;
+    {
+        ScopeTimer t("cuEST points");
+        double *d_xyz = nullptr, *d_w = nullptr;
+        ncuest = cuest_device_points(&d_xyz, &d_w);
+        xyz.resize(3 * ncuest);
+        w.resize(ncuest);
+        const bool copied =
+            cudaMemcpy(xyz.data(), d_xyz, xyz.size() * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess &&
+            cudaMemcpy(w.data(), d_w, w.size() * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess;
+        cudaFree(d_xyz);
+        cudaFree(d_w);
+        if (!copied) throw PSIEXCEPTION("DFTGrid::host_blocks_from_cuest: copying the grid points to the host failed.");
+    }
+
+    ScopeTimer t("post-process grid");
+    // The host build's sieves: tiny weights, then points no basis function reaches.
+    const double weightcut = MolecularGrid::options_.weights_cutoff;
+    const double Rmax = MolecularGrid::options_.remove_distant_points ? cuest_extents_->maxR()
+                                                                      : std::numeric_limits<double>::max();
+    const int natom = molecule_->natom();
+    std::vector<char> keep(ncuest);
+#pragma omp parallel for schedule(static)
+    for (int64_t P = 0; P < static_cast<int64_t>(ncuest); P++) {
+        bool k = std::fabs(w[P]) >= weightcut;
+        if (k && Rmax != std::numeric_limits<double>::max()) {
+            double R2 = std::numeric_limits<double>::max();
+            for (int A = 0; A < natom; A++) {
+                const double dx = xyz[3 * P] - molecule_->x(A), dy = xyz[3 * P + 1] - molecule_->y(A),
+                             dz = xyz[3 * P + 2] - molecule_->z(A);
+                R2 = std::min(R2, dx * dx + dy * dy + dz * dz);
+            }
+            k = R2 <= Rmax * Rmax;
+        }
+        keep[P] = k;
+    }
+    std::vector<double> x, y, z, wk;
+    for (uint64_t P = 0; P < ncuest; P++) {
+        if (!keep[P]) continue;
+        x.push_back(xyz[3 * P]);
+        y.push_back(xyz[3 * P + 1]);
+        z.push_back(xyz[3 * P + 2]);
+        wk.push_back(w[P]);
+    }
+    OctreeGridBlocker blocker(static_cast<int>(x.size()), x.data(), y.data(), z.data(), wk.data(), cuest_max_points_,
+                              cuest_min_points_, cuest_max_radius_, cuest_extents_);
+    blocker.set_print(MolecularGrid::options_.print);
+    blocker.set_debug(MolecularGrid::options_.debug);
+    blocker.set_bench(MolecularGrid::options_.bench);
+    blocker.block();
+    extents_ = cuest_extents_;
+    MolecularGrid::primary_ = cuest_extents_->basis();
+    x_ = blocker.x();
+    y_ = blocker.y();
+    z_ = blocker.z();
+    w_ = blocker.w();
+    npoints_ = blocker.npoints();
+    max_points_ = blocker.max_points();
+    max_functions_ = blocker.max_functions();
+    collocation_size_ = blocker.collocation_size();
+    blocks_ = blocker.blocks();
+}
+
+void DFTGrid::adopt_host_blocks(std::vector<double> x, std::vector<double> y, std::vector<double> z,
+                                std::vector<double> w, const std::vector<size_t> &block_start,
+                                const std::vector<size_t> &block_npoints) {
+    if (!cuest_extents_) {
+        throw PSIEXCEPTION("DFTGrid::adopt_host_blocks: this grid was not built with use_cuest.");
+    }
+    if (npoints_) {
+        throw PSIEXCEPTION("DFTGrid::adopt_host_blocks: the host points already exist.");
+    }
+    const size_t n = x.size();
+    if (y.size() != n || z.size() != n || w.size() != n || block_start.size() != block_npoints.size()) {
+        throw PSIEXCEPTION("DFTGrid::adopt_host_blocks: inconsistent point or block arrays.");
+    }
+    // Owned like the blockers' arrays: MolecularGrid's destructor delete[]s them.
+    x_ = new double[n];
+    y_ = new double[n];
+    z_ = new double[n];
+    w_ = new double[n];
+    std::copy(x.begin(), x.end(), x_);
+    std::copy(y.begin(), y.end(), y_);
+    std::copy(z.begin(), z.end(), z_);
+    std::copy(w.begin(), w.end(), w_);
+    npoints_ = static_cast<int>(n);
+    extents_ = cuest_extents_;
+    MolecularGrid::primary_ = cuest_extents_->basis();
+
+    blocks_.clear();
+    max_points_ = 0;
+    for (size_t A = 0; A < block_start.size(); A++) {
+        if (block_npoints[A] == 0) continue;
+        if (block_start[A] + block_npoints[A] > n) {
+            throw PSIEXCEPTION("DFTGrid::adopt_host_blocks: a block runs past the last point.");
+        }
+        const size_t s0 = block_start[A];
+        auto bop = std::make_shared<BlockOPoints>(A, block_npoints[A], &x_[s0], &y_[s0], &z_[s0], &w_[s0], extents_);
+        if (bop->local_nbf()) {
+            blocks_.push_back(bop);
+            max_points_ = std::max(max_points_, static_cast<int>(block_npoints[A]));
+        }
+    }
+    max_functions_ = 0;
+    collocation_size_ = 0;
+    for (const auto &block : blocks_) {
+        collocation_size_ += block->local_nbf() * block->npoints();
+        max_functions_ = std::max(max_functions_, static_cast<int>(block->local_nbf()));
+    }
+}
+#endif
 
 // REFACTOR NOTE: PS grids are not used. Not all possible MolecularGridOptions are being set.
 PseudospectralGrid::PseudospectralGrid(std::shared_ptr<Molecule> molecule, std::shared_ptr<BasisSet> primary,

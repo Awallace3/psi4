@@ -47,6 +47,10 @@ class ProatomDensity {
     /// subsequent ``evaluate`` calls for those elements only read the cache.
     void prepare(int natom, const int* atomic_nums) const;
 
+    /// Append element Z's spline as (ndata + 1) knots of {f, a, b, c}, the four values
+    /// ``evaluate`` reads for one interval, so a device copy evaluates the same polynomial.
+    void pack_spline(int Z, std::vector<double>& out) const;
+
    private:
     /// Initialize spline coefficients for element Z. Mutates the cache; not thread-safe.
     void initialize_spline(int Z) const;
