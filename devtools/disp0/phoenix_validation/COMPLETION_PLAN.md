@@ -46,6 +46,40 @@ CPU/GPU thread/resource policy must be qualified before any GPU speedup ratio.
 The earlier exact-response qualification contract below remains diagnostic;
 it is not the primary production CPU benchmark.
 
+### CPU submission checkpoint
+
+- Helper pin: `005f3b4c71c521fa5156585c2eea461b74c4c9c3`, staged clean at
+  `/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-cpu-production-005f3b4c71`.
+  All28 offline helper/input/CPU-comparison guards passed. Scientific source/
+  whole stage remains1aed320cdb/job14321813.
+- Frozen input JSON is staged and SHA-verified at
+  `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/benchmark-inputs-f8c96058e938/inputs.json`.
+- **14324190 submitted and RUNNING**, effective cpu-small/inferno on
+  gts-cs207-chemx confirmed by queue/accounting and job prolog. It is the
+  peptide paired pilot,24CPU64GiB1h; worst-case charge$0.20.
+  Campaign root:
+  `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/production-cpu-005f3b4c71`.
+  Watcher `b05716a78` is active and durable.
+- **Nanotube/protein83 not yet submitted.** Once the pilot's
+  `peptide/job-14324190/comparison-result.json` is PASS with6 accepted CPU
+  samples and its job/batch/step accounting is COMPLETED0:0, use the same
+  clean helper checkout and `submit_cpu.py`, with the same proof/input paths/
+  SHAs, `--pilot-job-run <campaign>/peptide/job-14324190`, respective
+  `--system nanotube|protein83` and fresh `--run-root <campaign>/<system>`.
+  Recheck `inferno_account.sh` immediately before each submission with24CPUs
+  and02:00:00/08:00:00 respectively. Current selector spills to chemx.
+  This is the remaining two allocations in the user-requested three-job
+  CPU batch, not permission for automatic paid retries or larger jobs.
+- Inspect actual `allocation.json`, finalized child results and full matrix/
+  canonical-scalar checks before interpreting any timings. No qualified full
+  CPU timing summary exists yet. Existing H200 gate14322613 is unchanged.
+- First allocation-native inspection passed: effective resources/CPU/features
+  admitted, scratch is node-local XFS
+  `/dev/mapper/sysvg-scratch[/14324190/.14324190/_tmp]`, free1.451TB.
+  Both real native water preflights completed; first peptide v2/C++ pair also
+  completed and the next repeat had started. These are finalized child
+  artifacts, **not yet a three-repeat summary or terminal pilot approval**.
+
 User request: complete the missing GPU qualification, scalability, matched
 CPU/GPU timings and analysis. Inputs are **peptide, nanotube, protein83** from
 `~/data/timing_test_suite/geometries/systems.py` (the user confirmed protein83,
