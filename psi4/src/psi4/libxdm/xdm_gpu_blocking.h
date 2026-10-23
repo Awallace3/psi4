@@ -17,8 +17,8 @@
 #ifndef PSI4_SRC_PSI4_LIBXDM_XDM_GPU_BLOCKING_H
 #define PSI4_SRC_PSI4_LIBXDM_XDM_GPU_BLOCKING_H
 
-// The pure parts of XDM_GRID_BLOCKING DEVICE, shared by the device code and the host
-// unit test: Morton keys on a 21-bit lattice and the split of a sorted key array into
+// The pure parts of XDM_GRID_BLOCKING DEVICE, host- and device-callable so they can be
+// tested on the host: Morton keys on a 21-bit lattice and the split of a sorted key array into
 // blocks along octant boundaries.
 
 #include <algorithm>

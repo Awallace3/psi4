@@ -46,6 +46,7 @@
 #include <algorithm>
 #include <cmath>
 #include <vector>
+#include <functional>
 #include <string>
 #include <sstream>
 #include <cstdio>
@@ -4514,6 +4515,40 @@ void DFTGrid::buildGridFromOptions(std::map<std::string, int> int_opts_map,
 }
 
 #ifdef USING_cuEST
+namespace {
+// Runs a cleanup when the scope exits, unless released: frees cuEST and CUDA resources on throw paths.
+class OnExit {
+   public:
+    explicit OnExit(std::function<void()> f) : f_(std::move(f)) {}
+    ~OnExit() {
+        if (f_) f_();
+    }
+    void release() { f_ = nullptr; }
+    OnExit(const OnExit &) = delete;
+    OnExit &operator=(const OnExit &) = delete;
+
+   private:
+    std::function<void()> f_;
+};
+
+// timer_on/timer_off around a scope; never throws from the destructor.
+class ScopeTimer {
+   public:
+    explicit ScopeTimer(const char *name) : name_(name) { timer_on(name_); }
+    ~ScopeTimer() {
+        try {
+            timer_off(name_);
+        } catch (...) {
+        }
+    }
+    ScopeTimer(const ScopeTimer &) = delete;
+    ScopeTimer &operator=(const ScopeTimer &) = delete;
+
+   private:
+    const char *name_;
+};
+}  // namespace
+
 size_t DFTGrid::cuest_device_points(double **d_xyz_out, double **d_w_out) {
     if (!cuest_molecular_grid_ || !cuest_extents_) {
         throw PSIEXCEPTION("DFTGrid::cuest_device_points: this grid was not built with use_cuest.");
@@ -4522,52 +4557,71 @@ size_t DFTGrid::cuest_device_points(double **d_xyz_out, double **d_w_out) {
     CHECK_CUEST(cuestQuery(cuest_handle, CUEST_MOLECULARGRID, cuest_molecular_grid_, CUEST_MOLECULARGRID_NUM_POINT,
                            &ncuest, sizeof(uint64_t)));
     // Points and weights are only exposed through an XC plan; HF is a placeholder functional.
-    cuestXCIntPlanParameters_t plan_params;
+    cuestXCIntPlanParameters_t plan_params = nullptr;
     CHECK_CUEST(cuestParametersCreate(CUEST_XCINTPLAN_PARAMETERS, reinterpret_cast<void **>(&plan_params)));
+    OnExit free_plan_params([&] { cuestParametersDestroy(CUEST_XCINTPLAN_PARAMETERS, plan_params); });
     cuestWorkspaceDescriptor_t persistent_desc{}, temporary_desc{};
     CHECK_CUEST(cuestXCIntPlanCreateWorkspaceQuery(cuest_handle, primary_->cuest_basis(), cuest_molecular_grid_,
                                                    CUEST_XCINTPLAN_PARAMETERS_FUNCTIONAL_HF, plan_params,
                                                    &persistent_desc, &temporary_desc, nullptr));
     cuestWorkspace_t *plan_ws = cuest_common::allocateWorkspace(&persistent_desc);
+    OnExit free_plan_ws([&] { cuest_common::freeWorkspace(plan_ws); });
     cuestWorkspace_t *tmp_ws = cuest_common::allocateWorkspace(&temporary_desc);
+    OnExit free_tmp_ws([&] {
+        if (tmp_ws) cuest_common::freeWorkspace(tmp_ws);
+    });
     cuestXCIntPlan_t plan = nullptr;
     CHECK_CUEST(cuestXCIntPlanCreate(cuest_handle, primary_->cuest_basis(), cuest_molecular_grid_,
                                      CUEST_XCINTPLAN_PARAMETERS_FUNCTIONAL_HF, plan_params, plan_ws, tmp_ws, &plan));
+    // On a throw the computes below may still be running on cuEST's stream: finish them first.
+    OnExit free_plan([&] {
+        cudaDeviceSynchronize();
+        cuestXCIntPlanDestroy(plan);
+    });
     cuest_common::freeWorkspace(tmp_ws);
-    CHECK_CUEST(cuestParametersDestroy(CUEST_XCINTPLAN_PARAMETERS, plan_params));
+    tmp_ws = nullptr;
 
     double *d_xyz = nullptr, *d_w = nullptr;
-    if (cudaMalloc(reinterpret_cast<void **>(&d_xyz), 3 * ncuest * sizeof(double)) != cudaSuccess ||
-        cudaMalloc(reinterpret_cast<void **>(&d_w), ncuest * sizeof(double)) != cudaSuccess) {
-        cudaFree(d_xyz);
-        CHECK_CUEST(cuestXCIntPlanDestroy(plan));
-        cuest_common::freeWorkspace(plan_ws);
-        throw PSIEXCEPTION("DFTGrid::cuest_device_points: cudaMalloc failed for the grid points.");
-    }
-    cuestXCIntegrationGridComputeParameters_t grid_params;
-    CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONGRIDCOMPUTE_PARAMETERS, &grid_params));
-    CHECK_CUEST(cuestXCIntegrationGridComputeWorkspaceQuery(cuest_handle, plan, grid_params, &temporary_desc, d_xyz));
-    tmp_ws = cuest_common::allocateWorkspace(&temporary_desc);
-    CHECK_CUEST(cuestXCIntegrationGridCompute(cuest_handle, plan, grid_params, tmp_ws, d_xyz));
-    cuest_common::freeWorkspace(tmp_ws);
-    CHECK_CUEST(cuestParametersDestroy(CUEST_XCINTEGRATIONGRIDCOMPUTE_PARAMETERS, grid_params));
-    cuestXCIntegrationWeightComputeParameters_t weight_params;
-    CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, &weight_params));
-    CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(
-        cuest_handle, plan, CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL, weight_params, &temporary_desc, d_w));
-    tmp_ws = cuest_common::allocateWorkspace(&temporary_desc);
-    CHECK_CUEST(cuestXCIntegrationWeightCompute(cuest_handle, plan, CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
-                                                weight_params, tmp_ws, d_w));
-    cuest_common::freeWorkspace(tmp_ws);
-    CHECK_CUEST(cuestParametersDestroy(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, weight_params));
-    // The computes may still be running on cuEST's stream; finish them before the plan goes.
-    if (cudaDeviceSynchronize() != cudaSuccess) {
+    OnExit free_points([&] {
+        cudaDeviceSynchronize();
         cudaFree(d_xyz);
         cudaFree(d_w);
+    });
+    if (cudaMalloc(reinterpret_cast<void **>(&d_xyz), 3 * ncuest * sizeof(double)) != cudaSuccess ||
+        cudaMalloc(reinterpret_cast<void **>(&d_w), ncuest * sizeof(double)) != cudaSuccess) {
+        throw PSIEXCEPTION("DFTGrid::cuest_device_points: cudaMalloc failed for the grid points.");
+    }
+    {
+        cuestXCIntegrationGridComputeParameters_t grid_params = nullptr;
+        CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONGRIDCOMPUTE_PARAMETERS, &grid_params));
+        OnExit free_grid_params([&] { cuestParametersDestroy(CUEST_XCINTEGRATIONGRIDCOMPUTE_PARAMETERS, grid_params); });
+        CHECK_CUEST(
+            cuestXCIntegrationGridComputeWorkspaceQuery(cuest_handle, plan, grid_params, &temporary_desc, d_xyz));
+        tmp_ws = cuest_common::allocateWorkspace(&temporary_desc);
+        CHECK_CUEST(cuestXCIntegrationGridCompute(cuest_handle, plan, grid_params, tmp_ws, d_xyz));
+        cudaDeviceSynchronize();
+        cuest_common::freeWorkspace(tmp_ws);
+        tmp_ws = nullptr;
+    }
+    {
+        cuestXCIntegrationWeightComputeParameters_t weight_params = nullptr;
+        CHECK_CUEST(cuestParametersCreate(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, &weight_params));
+        OnExit free_weight_params(
+            [&] { cuestParametersDestroy(CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS, weight_params); });
+        CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(
+            cuest_handle, plan, CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL, weight_params, &temporary_desc,
+            d_w));
+        tmp_ws = cuest_common::allocateWorkspace(&temporary_desc);
+        CHECK_CUEST(cuestXCIntegrationWeightCompute(cuest_handle, plan,
+                                                    CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
+                                                    weight_params, tmp_ws, d_w));
+    }
+    // The computes may still be running on cuEST's stream; finish them before the plan goes.
+    if (cudaDeviceSynchronize() != cudaSuccess) {
         throw PSIEXCEPTION("DFTGrid::cuest_device_points: computing the grid points failed.");
     }
-    CHECK_CUEST(cuestXCIntPlanDestroy(plan));
-    cuest_common::freeWorkspace(plan_ws);
+    // Success: the caller owns the points; the guards free the plan and its workspaces.
+    free_points.release();
     *d_xyz_out = d_xyz;
     *d_w_out = d_w;
     return static_cast<size_t>(ncuest);
@@ -4580,19 +4634,23 @@ void DFTGrid::host_blocks_from_cuest() {
     if (npoints_) {
         throw PSIEXCEPTION("DFTGrid::host_blocks_from_cuest: the host points already exist.");
     }
-    timer_on("cuEST points");
-    double *d_xyz = nullptr, *d_w = nullptr;
-    const uint64_t ncuest = cuest_device_points(&d_xyz, &d_w);
-    std::vector<double> xyz(3 * ncuest), w(ncuest);
-    const bool copied = cudaMemcpy(xyz.data(), d_xyz, xyz.size() * sizeof(double), cudaMemcpyDeviceToHost) ==
-                            cudaSuccess &&
-                        cudaMemcpy(w.data(), d_w, w.size() * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess;
-    cudaFree(d_xyz);
-    cudaFree(d_w);
-    if (!copied) throw PSIEXCEPTION("DFTGrid::host_blocks_from_cuest: copying the grid points to the host failed.");
-    timer_off("cuEST points");
+    uint64_t ncuest = 0;
+    std::vector<double> xyz, w;
+    {
+        ScopeTimer t("cuEST points");
+        double *d_xyz = nullptr, *d_w = nullptr;
+        ncuest = cuest_device_points(&d_xyz, &d_w);
+        xyz.resize(3 * ncuest);
+        w.resize(ncuest);
+        const bool copied =
+            cudaMemcpy(xyz.data(), d_xyz, xyz.size() * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess &&
+            cudaMemcpy(w.data(), d_w, w.size() * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess;
+        cudaFree(d_xyz);
+        cudaFree(d_w);
+        if (!copied) throw PSIEXCEPTION("DFTGrid::host_blocks_from_cuest: copying the grid points to the host failed.");
+    }
 
-    timer_on("post-process grid");
+    ScopeTimer t("post-process grid");
     // The host build's sieves: tiny weights, then points no basis function reaches.
     const double weightcut = MolecularGrid::options_.weights_cutoff;
     const double Rmax = MolecularGrid::options_.remove_distant_points ? cuest_extents_->maxR()
@@ -4638,7 +4696,6 @@ void DFTGrid::host_blocks_from_cuest() {
     max_functions_ = blocker.max_functions();
     collocation_size_ = blocker.collocation_size();
     blocks_ = blocker.blocks();
-    timer_off("post-process grid");
 }
 
 void DFTGrid::adopt_host_blocks(std::vector<double> x, std::vector<double> y, std::vector<double> z,

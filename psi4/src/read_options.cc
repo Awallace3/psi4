@@ -2097,13 +2097,16 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("XDM_COUNTERPOISE", false);
         /*- Evaluate the XDM moment integrals on the GPU: basis functions and their
         derivatives, the spin densities and Laplacians, the Becke--Roussel hole, the
-        Hirshfeld partition and the moments. The grid is built on the host exactly as
-        for the host path, so the two agree to rounding. Requires a Psi4 built with
-        cuEST; raises otherwise. Independent of |globals__use_cuest|. -*/
+        Hirshfeld partition and the moments. On the same grid the GPU and host agree to
+        rounding; with |globals__use_cuest| on, |scf__xdm_grid| ``AUTO`` also switches to
+        cuEST's grid, which changes the XDM energy by up to about 2e-4 relative (a different
+        quadrature, not rounding). Set |scf__xdm_grid| explicitly to compare the two paths.
+        Requires a Psi4 built with cuEST; raises otherwise. -*/
         options.add_bool("XDM_GPU", false);
         /*- Device workspace [MiB] for |scf__xdm_gpu|: the basis-function values and
         density products of one batch of grid blocks. Larger batches run faster;
-        raised automatically to the minimum that holds one grid block. !expert -*/
+        raised automatically to the minimum that holds one grid block. Device-blocked
+        points (|scf__xdm_grid_blocking| ``DEVICE``) are held outside this budget. !expert -*/
         options.add_int("XDM_GPU_MEMORY", 256);
         /*- Keep the full AO density matrices on the device for |scf__xdm_gpu| and gather each
         batch's columns there, instead of gathering them on the host for every batch. They are
@@ -2120,8 +2123,11 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         the host and blocks them with ``OCTREE``. ``DEVICE`` sorts them along a Morton curve on the
         GPU and cuts them at octant boundaries into blocks of at most |scf__dft_block_max_points|,
         screening each block's shells there; with |scf__xdm_gpu| the points then never leave the
-        device. Both apply the same weight and distance sieves. ``AUTO`` is ``DEVICE`` for a
-        ``CUEST`` grid with |scf__xdm_gpu| and ``HOST`` otherwise. !expert -*/
+        device. Both apply the same weight and distance sieves. ``DEVICE`` ignores
+        |scf__dft_block_min_points| and |scf__dft_block_max_radius|, which only affects speed. Its
+        memory is outside |scf__xdm_gpu_memory|: about 70 bytes per cuEST point while blocking,
+        then 32 bytes per kept point for the integration. ``AUTO`` is ``DEVICE`` for a ``CUEST``
+        grid with |scf__xdm_gpu| and ``HOST`` otherwise. !expert -*/
         options.add_str("XDM_GRID_BLOCKING", "AUTO", "AUTO HOST DEVICE");
         /*- Parameters defining the -NL/-V dispersion correction. First b, then C -*/
         options.add("NL_DISPERSION_PARAMETERS", new ArrayType());
