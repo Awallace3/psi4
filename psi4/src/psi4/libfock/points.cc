@@ -144,6 +144,12 @@ void RKSFunctions::allocate() {
         point_values_["RHO_ZZ"] = std::make_shared<Vector>("RHO_ZZ", max_points_);
         point_values_["TAU_A"] = std::make_shared<Vector>("TAU_A", max_points_);
     }
+
+    if (density_hessian_ && ansatz_ >= 1 && deriv_ >= 2) {
+        for (const char* key : {"RHO_AXX", "RHO_AXY", "RHO_AXZ", "RHO_AYY", "RHO_AYZ", "RHO_AZZ"}) {
+            point_values_[key] = std::make_shared<Vector>(key, max_points_);
+        }
+    }
     build_temps();
 }
 void RKSFunctions::set_pointers(SharedMatrix D_AO) { D_AO_ = D_AO; }
@@ -155,9 +161,17 @@ void RKSFunctions::compute_points(std::shared_ptr<BlockOPoints> block, bool forc
 
     // => Build basis function values <= //
     block_index_ = block->index();
-    if (!force_compute && cache_map_ && (cache_map_->find(block->index()) != cache_map_->end())) {
-        current_basis_map_ = &(*cache_map_)[block->index()];
-    } else {
+    const bool want_hessian = density_hessian_ && ansatz_ >= 1 && deriv_ >= 2;
+    bool use_cache = false;
+    if (!force_compute && cache_map_) {
+        auto cached = cache_map_->find(block->index());
+        // A collocation cache built at a lower derivative level has no PHI_XX; recompute instead.
+        if (cached != cache_map_->end() && (!want_hessian || cached->second.count("PHI_XX"))) {
+            current_basis_map_ = &cached->second;
+            use_cache = true;
+        }
+    }
+    if (!use_cache) {
         current_basis_map_ = &basis_values_;
         BasisFunctions::compute_functions(block);
     }
@@ -217,6 +231,44 @@ void RKSFunctions::compute_points(std::shared_ptr<BlockOPoints> block, bool forc
             rhoayp[P] = rho_y;
             rhoazp[P] = rho_z;
             gammaaap[P] = rho_x * rho_x + rho_y * rho_y + rho_z * rho_z;
+        }
+    }
+
+    // => Build the density Hessian <= //
+    // rho_ij = 4 (phi_ij D phi + phi_i D phi_j); Tp still holds 2 phi D here.
+    if (want_hessian) {
+        double** phid[3] = {basis_value("PHI_X")->pointer(), basis_value("PHI_Y")->pointer(),
+                            basis_value("PHI_Z")->pointer()};
+        double** phidd[3][3];
+        phidd[0][0] = basis_value("PHI_XX")->pointer();
+        phidd[0][1] = phidd[1][0] = basis_value("PHI_XY")->pointer();
+        phidd[0][2] = phidd[2][0] = basis_value("PHI_XZ")->pointer();
+        phidd[1][1] = basis_value("PHI_YY")->pointer();
+        phidd[1][2] = phidd[2][1] = basis_value("PHI_YZ")->pointer();
+        phidd[2][2] = basis_value("PHI_ZZ")->pointer();
+        double* hess[3][3];
+        hess[0][0] = point_value("RHO_AXX")->pointer();
+        hess[0][1] = hess[1][0] = point_value("RHO_AXY")->pointer();
+        hess[0][2] = hess[2][0] = point_value("RHO_AXZ")->pointer();
+        hess[1][1] = point_value("RHO_AYY")->pointer();
+        hess[1][2] = hess[2][1] = point_value("RHO_AYZ")->pointer();
+        hess[2][2] = point_value("RHO_AZZ")->pointer();
+
+        for (int i = 0; i < 3; i++) {
+            for (int j = i; j < 3; j++) {
+                for (int P = 0; P < npoints; P++) {
+                    hess[i][j][P] = 2.0 * C_DDOT(nlocal, phidd[i][j][P], 1, Tp[P], 1);
+                }
+            }
+        }
+        for (int j = 0; j < 3; j++) {
+            C_DGEMM('N', 'N', npoints, nlocal, nlocal, 2.0, phid[j][0], coll_funcs, D2p[0], nglobal, 0.0, Tp[0],
+                    nglobal);
+            for (int i = 0; i <= j; i++) {
+                for (int P = 0; P < npoints; P++) {
+                    hess[i][j][P] += 2.0 * C_DDOT(nlocal, phid[i][P], 1, Tp[P], 1);
+                }
+            }
         }
     }
 

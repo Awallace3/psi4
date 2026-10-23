@@ -281,15 +281,29 @@ class DIIS:
     def adiis_coefficients(self):
         from scipy.optimize import minimize
         self.adiis_populate()
-        result = minimize(self.adiis_energy, np.ones(len(self.stored_vectors)), method="SLSQP",
-                          bounds = tuple((0, 1) for i in self.stored_vectors),
-                          constraints = [{"type": "eq", "fun": lambda x: sum(x) - 1, "jac": lambda x: np.ones_like(x)}],
-                          jac=self.adiis_gradient, tol=5e-6, options={"maxiter": 200})
+        n = len(self.stored_vectors)
 
-        if not result.success:
-            raise Exception("ADIIS minimization failed. File a bug, and include your entire input and output files.")
+        def slsqp(x0):
+            return minimize(self.adiis_energy, x0, method="SLSQP",
+                            bounds = tuple((0, 1) for i in self.stored_vectors),
+                            constraints = [{"type": "eq", "fun": lambda x: sum(x) - 1, "jac": lambda x: np.ones_like(x)}],
+                            jac=self.adiis_gradient, tol=5e-6, options={"maxiter": 200})
 
-        return result.x
+        result = slsqp(np.ones(n))
+        if result.success:
+            return result.x
+
+        # A diverging SCF (an anion among ghost diffuse functions can reach +700 Eh by iteration 3) leaves
+        # SLSQP an ill-scaled model it cannot solve from the infeasible all-ones start. Retry from the
+        # simplex centre, else take the best vertex: either is a valid ADIIS step, unlike giving up.
+        retry = slsqp(np.full(n, 1.0 / n))
+        if retry.success:
+            core.print_out("    ADIIS: SLSQP failed from the default start; converged from the simplex centre.\n")
+            return retry.x
+        vertex = np.zeros(n)
+        vertex[int(np.argmin([self.adiis_energy(np.eye(n)[i]) for i in range(n)]))] = 1.0
+        core.print_out(f"    ADIIS: SLSQP failed ({result.message}); using the lowest-model-energy stored vector.\n")
+        return vertex
 
     def adiis_populate(self):
         """ Fills linear and quadratic coefficients in ADIIS energy estimate. """

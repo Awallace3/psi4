@@ -1079,7 +1079,7 @@ int UHF::soscf_update(double soscf_conv, int soscf_min_iter, int soscf_max_iter,
         return 0;
     }
     auto ret_x =
-        cphf_solve({Gradient_a, Gradient_b}, soscf_conv, soscf_max_iter, soscf_print ? 2 : 0);
+        soscf_cphf_solve({Gradient_a, Gradient_b}, soscf_conv, soscf_max_iter, soscf_print ? 2 : 0);
 
     // => Rotate orbitals <= //
     rotate_orbitals(Ca_, ret_x[0]);

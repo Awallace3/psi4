@@ -73,6 +73,16 @@ _CHECKPOINT_SCENARIOS = {
         "sapt_dft_grac_shift_a": None,
         "sapt_dft_grac_shift_b": None,
     },
+    "grac_soscf": {
+        "freeze_core": True,
+        "sapt_dft_functional": "pbe0",
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_induction_type": "NONE",
+        "sapt_dft_grac_compute": "ITERATIVE",
+        "sapt_dft_grac_cation_soscf": True,
+        "sapt_dft_grac_shift_a": None,
+        "sapt_dft_grac_shift_b": None,
+    },
     "sapt0_d4i": {
         "sapt_dft_functional": "hf",
         "sapt_dft_do_ddft": False,
@@ -1633,7 +1643,8 @@ def test_saptdft_checkpoint_env_var_stop_and_restart(tmp_path, monkeypatch, stop
 
 def _production_stop_cases():
     cases = []
-    for scenario, name in [("prod_d4i", "sapt(dft)-d4(i)"), ("sapt0_d4i", "sapt(dft)-d4(i)")]:
+    for scenario, name in [("prod_d4i", "sapt(dft)-d4(i)"), ("grac_soscf", "sapt(dft)-d4(i)"),
+                           ("sapt0_d4i", "sapt(dft)-d4(i)")]:
         for stage in _selected_stages(scenario=scenario, name=name):
             if stage != "final":
                 cases.append(pytest.param(scenario, name, stage, id=f"{scenario}-{stage}"))

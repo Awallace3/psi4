@@ -292,6 +292,39 @@ void HF::damping_update(double damping_percentage) {
         "type of SCF wavefunction yet.");
 }
 
+std::vector<SharedMatrix> HF::soscf_cphf_solve(std::vector<SharedMatrix> x_vec, double conv_tol, int max_iter,
+                                               int print_lvl) {
+    // By default the SOSCF orbital Hessian of a VV10 functional is exact: compute_Vx includes the
+    // VV10 kernel (VBase::vv10_nlc_vx, verified against finite differences).
+    // WARNING: SOSCF_NEGLECT_VV10_KERNEL is an opt-in FALLBACK that leaves the kernel out. The kernel
+    // is an O(N_grid^2) VV10 pass per microiteration (GRAC cation SCFs, wB97M-V, ran 1.4-4x faster
+    // without it, to the same states, 1e-11 Eh, in about as many iterations). Without it the Hessian
+    // is ~0.5% off: that changes the Newton step, not the stationary point the gradient defines, so
+    // converged energies and orbitals are unaffected. The neglect is scoped to this SOSCF solve and
+    // announced in the output; never set it elsewhere, since response properties need the kernel.
+    auto potential = V_potential();
+    const bool neglect_vv10 = potential && functional_->needs_vv10() &&
+                              options_.get_bool("SOSCF_NEGLECT_VV10_KERNEL") && !potential->vx_neglect_vv10();
+    if (!neglect_vv10) return cphf_solve(x_vec, conv_tol, max_iter, print_lvl);
+    if (!soscf_vv10_warned_) {
+        outfile->Printf("\n  !!! WARNING: the SOSCF orbital Hessian OMITS the VV10 nonlocal kernel.\n");
+        outfile->Printf("  !!! %s SOSCF steps use an approximate Hessian (Vx ~0.5%% off).\n",
+                        functional_->name().c_str());
+        outfile->Printf("  !!! Converged energies and orbitals are unaffected; the iteration path may differ.\n");
+        outfile->Printf("  !!! SOSCF_NEGLECT_VV10_KERNEL is set; unset it for the exact (default, slower) Hessian.\n\n");
+        soscf_vv10_warned_ = true;
+    }
+    potential->set_vx_neglect_vv10(true);
+    try {
+        auto ret = cphf_solve(x_vec, conv_tol, max_iter, print_lvl);
+        potential->set_vx_neglect_vv10(false);
+        return ret;
+    } catch (...) {
+        potential->set_vx_neglect_vv10(false);
+        throw;
+    }
+}
+
 int HF::soscf_update(double soscf_conv, int soscf_min_iter, int soscf_max_iter, bool soscf_print) {
     throw PSIEXCEPTION(
         "Sorry, second-order convergence has not been implemented for this "

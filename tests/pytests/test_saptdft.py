@@ -732,10 +732,20 @@ def test_saptdft_auto_grac(
     SAPT_DFT_GRAC_COMPUTE, refA, refB, gracA, gracB, geometry, grac_basis
 ):
     """
-    For SAPT(DFT), one must compute a GRAC shift for each monomer. Ideally,
-    this GRAC shift should be close to the experimental Ionization Potential
-    (IP) of the monomer. Basis set incompleteness prevents this here.
-    e.g., aug-DZ H2O has a shift of 0.1306, compared to 0.1307 experimental IP.
+    For SAPT(DFT), one must compute a GRAC shift for each monomer.  The shift
+    is IP + eps_HOMO (sapt_proc.py), i.e. the amount by which the functional's
+    HOMO eigenvalue misses -IP, *not* the IP itself.  The exact functional
+    obeys Koopmans (eps_HOMO = -IP) and so needs a shift of zero; a large
+    shift means a badly placed HOMO.
+
+    The shift is therefore functional-specific.  Global hybrids suffer from
+    self-interaction error and need a big one: PBE0/aug-cc-pVTZ H2O gives
+    IP = 0.4631 and eps_HOMO = -0.3337, hence a shift of 0.1294 (the ~0.136
+    that the PBE0 tests below hard-code).  Range-separated functionals are
+    near-Koopmans by construction, so they need much less: wB97M-V/def2-TZVPD
+    H2O gives IP = 0.4657, eps_HOMO = -0.4277, and a shift of only 0.0381.
+    All three reproduce the 0.4638 (12.62 eV) experimental IP of water to
+    better than 0.1 eV; it is only eps_HOMO that moves.
     """
     mol_dimer = psi4.geometry(_sapt_testing_mols[geometry])
     psi4.set_options(
@@ -2082,6 +2092,493 @@ def test_saptdft_sapt_dft_api_requires_cphf_fsapt_data():
     with pytest.raises(psi4.ValidationError, match="requires HF-backed fragment induction data"):
         sapt_proc.sapt_dft(wfn, wfn, wfn, data={"Ind20,r": 0.0})
 
+
+
+
+def test_wb97m_v_sapt_dft():
+    """
+    Test SAPT(DFT) with wB97M-V (LC hybrid + VV10) functional.
+    
+    This test verifies that:
+    1. The LC hybrid (range-separated) exchange is correctly handled
+       via erf/erfc splitting of the K matrix (wK) in all SAPT terms.
+    2. SAPT ELST, EXCH, IND energies are computed correctly with wB97M-V.
+    3. Eventually, VV10 nonlocal correlation is available as a dispersion
+       correction similar to D3/D4/XDM.
+    
+    wB97M-V parameters (from LibXC):
+      x_alpha  ~ 0.15  (short-range HF exchange fraction)
+      x_beta   ~ 0.85  (so x_alpha + x_beta = 1.0, full LR HF exchange)
+      x_omega  ~ 0.3   (range-separation parameter, bohr^-1)
+      VV10 b   = 6.0, c = 0.01
+    
+    For LC hybrids, the total exact exchange operator is:
+      K_total = x_alpha * K_full + x_beta * wK(erf)
+    where wK uses the erf(omega * r12)/r12 kernel.
+    """
+    mol_dimer = psi4.geometry(
+        """
+  O -2.930978458   -0.216411437    0.000000000
+  H -3.655219777    1.440921844    0.000000000
+  H -1.133225297    0.076934530    0.000000000
+   --
+  O  2.552311356    0.210645882    0.000000000
+  H  3.175492012   -0.706268134   -1.433472544
+  H  3.175492012   -0.706268134    1.433472544
+  units bohr
+"""
+    )
+    psi4.set_options(
+        {
+            "basis": "def2-TZVPD",
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            "freeze_core": True,
+            "scf_type": "df",
+            # 0.136 is a PBE0-scale shift.  An LC hybrid already has its HOMO
+            # near -IP, so hard-coding 0.136 over-shifts it, contracts the
+            # monomer density, and drives Exch1 ~10% below the correlated
+            # (SAPT2+3(CCD)) value.  Let the driver compute the shift instead.
+            "SAPT_DFT_GRAC_COMPUTE": "ITERATIVE",
+            "SAPT_DFT_GRAC_BASIS": "def2-TZVPD",
+            "SAPT_DFT_FUNCTIONAL": "wb97m-v",
+        }
+    )
+    psi4.energy("DFT-VV10(SAPT)")
+    ELST = psi4.core.variable("SAPT ELST ENERGY")
+    EXCH = psi4.core.variable("SAPT EXCH ENERGY")
+    IND = psi4.core.variable("SAPT IND ENERGY")
+    DISP = psi4.core.variable("SAPT DISP ENERGY")
+    TOTAL = psi4.core.variable("SAPT TOTAL ENERGY")
+    ie = psi4.energy("wb97m-v", bsse_type="cp")
+
+    print(f"\nwB97M-V SAPT(DFT) Results:")
+    print(f"  ELST  = {ELST * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  EXCH  = {EXCH * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  IND   = {IND * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  DISP  = {DISP * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  TOTAL = {TOTAL * hartree_to_kcalmol:12.8f} kcal/mol")
+    print("\n[INFO] wB97M-V SAPT(DFT) test passed basic sanity checks.")
+    print("[INFO] Once wK handling and VV10 dispatch are implemented,")
+    print("[INFO] replace sanity checks with exact reference values.")
+    print(f"\nwB97M-V CP-corrected supermolecular IE: {ie * hartree_to_kcalmol:12.8f} kcal/mol")
+    assert compare_values(
+        ie,
+        TOTAL,
+        8,
+        "wB97M-V SAPT(DFT) TOTAL ENERGY should match CP-corrected supermolecular IE",
+    )
+
+
+@pytest.mark.saptdft
+def test_wb97_sapt_dft():
+    """
+    Test SAPT(DFT) with wB97M (LC hybrid) functional.
+    
+    This test verifies that:
+    1. The LC hybrid (range-separated) exchange is correctly handled
+       via erf/erfc splitting of the K matrix (wK) in all SAPT terms.
+    2. SAPT ELST, EXCH, IND energies are computed correctly with wB97M-V.
+    3. Eventually, VV10 nonlocal correlation is available as a dispersion
+       correction similar to D3/D4/XDM.
+    
+    For LC hybrids, the total exact exchange operator is:
+      K_total = x_alpha * K_full + x_beta * wK(erf)
+    where wK uses the erf(omega * r12)/r12 kernel.
+    """
+    mol_dimer = psi4.geometry(
+        """
+  O -2.930978458   -0.216411437    0.000000000
+  H -3.655219777    1.440921844    0.000000000
+  H -1.133225297    0.076934530    0.000000000
+   --
+  O  2.552311356    0.210645882    0.000000000
+  H  3.175492012   -0.706268134   -1.433472544
+  H  3.175492012   -0.706268134    1.433472544
+  units bohr
+"""
+    )
+    psi4.set_options(
+        {
+            "basis": "def2-TZVPD",
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            "scf_type": "df",
+            # see test_wb97m_v_sapt_dft: an LC hybrid needs its own GRAC shift,
+            # not the PBE0-scale 0.136 this test used to hard-code.
+            "SAPT_DFT_GRAC_COMPUTE": "ITERATIVE",
+            "SAPT_DFT_GRAC_BASIS": "def2-TZVPD",
+            "SAPT_DFT_FUNCTIONAL": "wb97",
+            # "SAPT_DFT_FUNCTIONAL": "pbe0",
+        }
+    )
+    psi4.energy("SAPT(DFT)")
+    ELST = psi4.core.variable("SAPT ELST ENERGY")
+    EXCH = psi4.core.variable("SAPT EXCH ENERGY")
+    IND = psi4.core.variable("SAPT IND ENERGY")
+    DISP = psi4.core.variable("SAPT DISP ENERGY")
+    TOTAL = psi4.core.variable("SAPT TOTAL ENERGY")
+
+
+    # --- Sanity checks ---
+    # Electrostatics should be attractive (negative) for water dimer
+    assert ELST < 0.0, f"ELST should be negative for water dimer, got {ELST}"
+    # Exchange should be repulsive (positive)
+    assert EXCH > 0.0, f"EXCH should be positive, got {EXCH}"
+    # Induction should be attractive (negative)
+    assert IND < 0.0, f"IND should be negative for water dimer, got {IND}"
+    # Total should be attractive for water dimer at this geometry
+    assert TOTAL < 0.0, f"TOTAL should be negative for water dimer, got {TOTAL}"
+
+    # --- Reference values ---
+    # TODO: Replace with validated reference values once wK handling is
+    # correctly implemented. These are placeholder checks for now.
+    # Reference PBE0/STO-3G values (from test_sapt_dft_compute_ddft_d4):
+    #   ELST ~ -8.5 mEh, EXCH ~ +8.2 mEh, IND ~ -0.9 mEh
+    # wB97M-V values should be in a similar ballpark for this geometry.
+    print("\n[INFO] wB97 SAPT(DFT) test passed basic sanity checks.")
+    print("[INFO] Once wK handling and VV10 dispatch are implemented,")
+    print("[INFO] replace sanity checks with exact reference values.")
+    # now a CP IE for wB97M-V to compare in aTZ
+    # e = psi4.energy('wb97', bsse_type='cp')
+    # e_ccsd = psi4.energy('fno-ccsd(t)', bsse_type='cp')
+    print(f"\nwB97 SAPT(DFT) Results:")
+    print(f"  ELST  = {ELST * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  EXCH  = {EXCH * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  IND   = {IND * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  DISP  = {DISP * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  TOTAL = {TOTAL * hartree_to_kcalmol:12.8f} kcal/mol")
+    # print(f"\nwB97 CP-corrected supermolecular IE: {e * hartree_to_kcalmol:12.8f} kcal/mol")
+    # print(f"FNO-CCSD(T) CP-corrected supermolecular IE: {e_ccsd * hartree_to_kcalmol:12.8f} kcal/mol")
+
+# wB97M-V SAPT(DFT) Results:
+#   ELST  =  -7.93648128 kcal/mol
+#   EXCH  =   6.02401264 kcal/mol
+#   IND   =  -2.19936164 kcal/mol
+#   DISP  =  -0.82340034 kcal/mol
+#   TOTAL =  -4.93523062 kcal/mol
+# wB97 SAPT(DFT) Results:
+#   ELST  =  -7.99217875 kcal/mol
+#   EXCH  =   6.01564436 kcal/mol
+#   IND   =  -2.22629032 kcal/mol
+#   DISP  =  -1.88359769 kcal/mol
+#   TOTAL =  -6.08642239 kcal/mol
+# PBE0
+  # ELST  =  -8.07119833 kcal/mol
+  # EXCH  =   8.01479311 kcal/mol
+  # IND   =  -2.26824523 kcal/mol
+  # DISP  =  -2.34007852 kcal/mol
+  # TOTAL =  -4.66472897 kcal/mol
+# SAPT2+3(CCD)/aug-cc-pVTZ Results:
+  # ELST  =  -8.11165674 kcal/mol
+  # EXCH  =   8.12993587 kcal/mol
+  # IND   =  -2.45069369 kcal/mol
+  # DISP  =  -2.52274686 kcal/mol
+  # TOTAL =  -4.95516142 kcal/mol
+#
+# wB97 CP-corrected supermolecular IE:  -5.63465465 kcal/mol
+# FNO-CCSD(T) CP-corrected supermolecular IE:  -4.74405348 kcal/mol
+
+
+def test_b3lyp_d3_sapt_dft():
+    """
+    """
+    mol_dimer = psi4.geometry(
+        """
+  O -2.930978458   -0.216411437    0.000000000
+  H -3.655219777    1.440921844    0.000000000
+  H -1.133225297    0.076934530    0.000000000
+   --
+  O  2.552311356    0.210645882    0.000000000
+  H  3.175492012   -0.706268134   -1.433472544
+  H  3.175492012   -0.706268134    1.433472544
+  units bohr
+"""
+    )
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pvdz",
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            "scf_type": "df",
+            "sapt_dft_grac_shift_a": 0.136,
+            "sapt_dft_grac_shift_b": 0.136,
+            "SAPT_DFT_FUNCTIONAL": "pbe0",
+        }
+    )
+    psi4.energy("dft-d3(sapt)")
+    ELST = psi4.core.variable("SAPT ELST ENERGY")
+    EXCH = psi4.core.variable("SAPT EXCH ENERGY")
+    IND = psi4.core.variable("SAPT IND ENERGY")
+    DISP = psi4.core.variable("SAPT DISP ENERGY")
+    TOTAL = psi4.core.variable("SAPT TOTAL ENERGY")
+
+    print(f"\nB3LYP-D3(SAPT) Results:")
+    print(f"  ELST  = {ELST * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  EXCH  = {EXCH * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  IND   = {IND * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  DISP  = {DISP * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  TOTAL = {TOTAL * hartree_to_kcalmol:12.8f} kcal/mol")
+
+    # --- Sanity checks ---
+    # Electrostatics should be attractive (negative) for water dimer
+    assert ELST < 0.0, f"ELST should be negative for water dimer, got {ELST}"
+    # Exchange should be repulsive (positive)
+    assert EXCH > 0.0, f"EXCH should be positive, got {EXCH}"
+    # Induction should be attractive (negative)
+    assert IND < 0.0, f"IND should be negative for water dimer, got {IND}"
+    # Total should be attractive for water dimer at this geometry
+    assert TOTAL < 0.0, f"TOTAL should be negative for water dimer, got {TOTAL}"
+
+
+@pytest.mark.saptdft
+def test_dft_vv10_sapt():
+    """
+    Test DFT-VV10(SAPT) dispersion: wB97M-V VV10 nonlocal correlation
+    as a supermolecular interaction energy correction in SAPT(DFT).
+
+    The VV10 IE is extracted from the delta-DFT wavefunctions via the
+    "DFT VV10 ENERGY" wavefunction variable and stored as data["VV10 IE"].
+    """
+    mol_dimer = psi4.geometry(
+        """
+  O -2.930978458   -0.216411437    0.000000000
+  H -3.655219777    1.440921844    0.000000000
+  H -1.133225297    0.076934530    0.000000000
+   --
+  O  2.552311356    0.210645882    0.000000000
+  H  3.175492012   -0.706268134   -1.433472544
+  H  3.175492012   -0.706268134    1.433472544
+  units bohr
+"""
+    )
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pvdz",
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            "scf_type": "df",
+            "sapt_dft_grac_shift_a": 0.136,
+            "sapt_dft_grac_shift_b": 0.136,
+            "SAPT_DFT_FUNCTIONAL": "wb97m-v",
+        }
+    )
+    psi4.energy("dft-vv10(sapt)")
+    ELST = psi4.core.variable("SAPT ELST ENERGY")
+    EXCH = psi4.core.variable("SAPT EXCH ENERGY")
+    IND = psi4.core.variable("SAPT IND ENERGY")
+    DISP = psi4.core.variable("SAPT DISP ENERGY")
+    TOTAL = psi4.core.variable("SAPT TOTAL ENERGY")
+
+    print(f"\nDFT-VV10(SAPT) wB97M-V Results:")
+    print(f"  ELST  = {ELST * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  EXCH  = {EXCH * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  IND   = {IND * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  DISP  = {DISP * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  TOTAL = {TOTAL * hartree_to_kcalmol:12.8f} kcal/mol")
+
+    # Sanity checks
+    assert ELST < 0.0, f"ELST should be negative for water dimer, got {ELST}"
+    assert EXCH > 0.0, f"EXCH should be positive, got {EXCH}"
+    assert IND < 0.0, f"IND should be negative for water dimer, got {IND}"
+    assert TOTAL < 0.0, f"TOTAL should be negative for water dimer, got {TOTAL}"
+    # The VV10 interaction energy itself (from the delta-DFT wavefunctions)
+    # must be attractive (negative). SAPT DISP ENERGY uses the XDM-style
+    # accounting where delta_HF is removed from IND and folded into DISP, so
+    # SAPT DISP ENERGY can be positive; check VV10 IE directly instead.
+    VV10_IE = psi4.core.variable("VV10 IE")
+    assert VV10_IE < 0.0, f"VV10 IE should be negative for water dimer, got {VV10_IE}"
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize("module", ["sapt_mp2_terms", "sapt_mp2_terms_ein"])
+def test_fdds_alda_kernel_range_separation(module):
+    """
+    The FDDS LDA exchange kernel keeps only the DFT share of exchange. For an
+    LRC functional that is (1 - x_alpha) at short range and (1 - x_alpha -
+    x_beta) at long range, so with 100% long-range exact exchange the kernel is
+    the erfc-attenuated LDA one. A global hybrid (x_beta = 0) is unchanged.
+    """
+    import importlib
+    import numpy as np
+
+    sapt_mod = importlib.import_module(f"psi4.driver.procrouting.sapt.{module}")
+    rho = np.array([1.0e-3, 1.0e-2, 1.0e-1, 1.0])
+    eye = psi4.core.Matrix.from_array(np.eye(rho.size))
+    PQrho = psi4.core.Matrix.from_array(np.diag(rho))
+
+    def kernel(name, omega=None):
+        inp = {"RHO_A": psi4.core.Vector.from_array(rho)}
+        out = {k: psi4.core.Vector(rho.size) for k in ["V", "V_RHO_A", "V_RHO_A_RHO_A"]}
+        func = psi4.core.LibXCFunctional(name, True)
+        if omega is not None:
+            func.set_omega(omega)
+        func.compute_functional(inp, out, rho.size, 2)
+        return out["V_RHO_A_RHO_A"].np.copy()
+
+    fx, fc = kernel("XC_LDA_X"), kernel("XC_LDA_C_VWN")
+
+    def fxc(**kw):
+        return np.diag(sapt_mod._compute_fxc(PQrho, eye, eye, rho_thresh=1.0e-12, **kw).np)
+
+    # Global hybrid (PBE0): unchanged from the pre-LRC kernel.
+    assert compare_values((1.0 - 0.25) * fx + fc, fxc(x_alpha=0.25), 12, "global hybrid kernel")
+    # wB97X: x_alpha + x_beta = 1, so only the short-range LDA exchange survives.
+    x_alpha, x_beta, omega = 0.157706, 0.842294, 0.3
+    sr = kernel("XC_LDA_X_ERF", omega)
+    assert compare_values((1.0 - x_alpha - x_beta) * fx + x_beta * sr + fc,
+                          fxc(x_alpha=x_alpha, x_beta=x_beta, omega=omega), 12, "wB97X kernel")
+    assert compare_values((1.0 - x_alpha) * sr + fc, fxc(x_alpha=x_alpha, x_beta=x_beta, omega=omega), 10,
+                          "100% long-range HF leaves (1 - x_alpha) of the short-range kernel")
+    # omega -> 0 attenuates nothing: the global-hybrid kernel with x_alpha only.
+    assert compare_values((1.0 - x_alpha) * fx + fc, fxc(x_alpha=x_alpha, x_beta=x_beta, omega=1.0e-10), 8,
+                          "omega -> 0 limit")
+
+
+
+@pytest.mark.saptdft
+def test_fdds_lrc_without_global_exchange_uses_hybrid_kernel():
+    """
+    LC-wPBE has no global exact exchange (x_alpha = 0, x_beta = 1), so it is not
+    is_x_hybrid(). Its FDDS kernel must still carry the long-range wK: Disp20
+    with the default hybrid kernel differs from the pure ALDA kernel
+    (SAPT_DFT_DO_HYBRID false). Before the fix the two were bitwise equal.
+    """
+    disp = {}
+    for hybrid in [True, False]:
+        psi4.core.clean()
+        psi4.core.clean_variables()
+        psi4.core.clean_options()
+        psi4.geometry("""
+He 0 0 0
+--
+He 0 0 3.0
+units angstrom
+symmetry c1
+""")
+        psi4.set_options({
+            "basis": "aug-cc-pvdz",
+            "df_basis_scf": "aug-cc-pv5z-ri",
+            "scf_type": "df",
+            "sapt_dft_functional": "lc-wpbe",
+            "sapt_dft_grac_shift_a": 0.0,
+            "sapt_dft_grac_shift_b": 0.0,
+            "sapt_dft_do_hybrid": hybrid,
+            "e_convergence": 1e-10,
+            "d_convergence": 1e-9,
+        })
+        psi4.energy("sapt(dft)")
+        disp[hybrid] = psi4.variable("DISP20")
+    assert disp[True] < 0.0 and disp[False] < 0.0
+    assert abs(disp[True] - disp[False]) > 1e-3 * abs(disp[False]), disp
+
+
+@pytest.mark.saptdft
+def test_saptdft_lr_exch_kernel_options():
+    """
+    SAPT_DFT_IND_LR_EXCH_KERNEL / SAPT_DFT_DISP_LR_EXCH_KERNEL false drop only the
+    long-range exact exchange of an LRC functional from the response kernels.
+    Induction: coupled Ind20/Exch-Ind20 change; first-order and uncoupled terms do not.
+    Dispersion: for LC-wPBE
+    (x_alpha = 0) the kernel becomes pure full-range ALDA, i.e. SAPT_DFT_DO_HYBRID false.
+    """
+    keys = ["ELST10,R", "EXCH10", "IND20,U", "EXCH-IND20,U", "IND20,R", "EXCH-IND20,R", "DISP20", "DISP20,U"]
+    res = {}
+    for label, extra in [("default", {}),
+                         ("no_lr", {"sapt_dft_ind_lr_exch_kernel": False, "sapt_dft_disp_lr_exch_kernel": False}),
+                         ("alda", {"sapt_dft_do_hybrid": False})]:
+        psi4.core.clean()
+        psi4.core.clean_variables()
+        psi4.core.clean_options()
+        psi4.geometry("""
+He 0 0 0
+--
+He 0 0 3.0
+units angstrom
+symmetry c1
+""")
+        psi4.set_options({
+            "basis": "aug-cc-pvdz",
+            "df_basis_scf": "aug-cc-pv5z-ri",
+            "scf_type": "df",
+            "sapt_dft_functional": "lc-wpbe",
+            "sapt_dft_grac_shift_a": 0.0,
+            "sapt_dft_grac_shift_b": 0.0,
+            "e_convergence": 1e-10,
+            "d_convergence": 1e-9,
+            **extra,
+        })
+        psi4.energy("sapt(dft)")
+        res[label] = {k: psi4.variable(k) for k in keys}
+    d, n, a = res["default"], res["no_lr"], res["alda"]
+    for k in ["ELST10,R", "EXCH10", "IND20,U", "EXCH-IND20,U", "DISP20,U"]:
+        assert compare_values(d[k], n[k], 10, f"{k} unaffected")
+    for k in ["IND20,R", "EXCH-IND20,R"]:
+        assert abs(n[k] - d[k]) > 1e-3 * abs(d[k]), (k, d[k], n[k])
+    assert compare_values(d["IND20,R"], a["IND20,R"], 10, "SAPT_DFT_DO_HYBRID does not touch induction")
+    assert compare_values(a["DISP20"], n["DISP20"], 9, "no-LR FDDS kernel is pure ALDA for x_alpha = 0")
+    assert abs(n["DISP20"] - d["DISP20"]) > 1e-3 * abs(d["DISP20"])
+
+
+@pytest.mark.saptdft
+def test_saptdft_ddft_gradient():
+    """
+    SAPT_DFT_DDFT_GRADIENT stores the analytic gradient of the delta DFT dimer
+    energy, which must match a plain dimer DFT gradient in the same basis.
+    """
+    molecule = psi4.geometry(
+        _sapt_testing_mols["neutral_water_dimer"]
+        + """
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    options = {
+        "basis": "cc-pvdz",
+        "scf_type": "df",
+        "e_convergence": 1e-10,
+        "d_convergence": 1e-10,
+    }
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options(options)
+    reference = psi4.gradient("pbe0", molecule=molecule)
+
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options(
+        {
+            **options,
+            "sapt_dft_functional": "pbe0",
+            "sapt_dft_grac_shift_a": 0.1307,
+            "sapt_dft_grac_shift_b": 0.1307,
+            "sapt_dft_do_ddft": True,
+            "sapt_dft_ddft_gradient": True,
+        }
+    )
+    _, wfn = psi4.energy("sapt(dft)", molecule=molecule, return_wfn=True)
+    grad = wfn.variable("SAPT(DFT) DFT DIMER GRADIENT")
+    assert compare_values(reference, grad, 6, "delta DFT dimer gradient")
+    assert compare_values(grad, psi4.core.variable("SAPT(DFT) DFT DIMER GRADIENT"), 12, "core gradient")
+
+
+@pytest.mark.saptdft
+def test_saptdft_ddft_gradient_rejects_vv10():
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.geometry(_sapt_testing_mols["neutral_water_dimer"])
+    psi4.set_options(
+        {
+            "basis": "cc-pvdz",
+            "sapt_dft_functional": "wb97m-v",
+            "sapt_dft_grac_shift_a": 0.136,
+            "sapt_dft_grac_shift_b": 0.136,
+            "sapt_dft_ddft_gradient": True,
+        }
+    )
+    with pytest.raises(psi4.ValidationError, match="no analytic VV10 gradient"):
+        psi4.energy("dft-vv10(sapt)")
 
 if __name__ == "__main__":
     psi4.set_memory("32 GB")

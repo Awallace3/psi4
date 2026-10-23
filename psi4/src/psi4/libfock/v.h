@@ -98,11 +98,22 @@ class PSI_API VBase {
     // GRAC data
     bool grac_initialized_;
 
+    /// Leave the VV10 kernel (vv10_nlc_vx) out of compute_Vx. Off by default. HF::soscf_cphf_solve sets
+    /// it around the SOSCF step only under the opt-in SOSCF_NEGLECT_VV10_KERNEL fallback (the kernel
+    /// costs one O(N_grid^2) VV10 pass per perturbation; an approximate Hessian changes the step, not
+    /// the stationary point).
+    /// WRONG for response properties (CPKS, TDDFT, polarizabilities): never leave it set.
+    bool vx_neglect_vv10_ = false;
+
     // VV10 dispersion, return vv10_nlc energy
     void prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
                             std::vector<std::map<std::string, SharedVector>>& vv10_cache,
                             std::vector<std::shared_ptr<PointFunctions>>& nl_point_workers, int ansatz = 1);
     double vv10_nlc(SharedMatrix D, SharedMatrix ret);
+    /// ret[k] += alpha * d/dl V_vv10(D + l Dx[k]) at l = 0, D and Dx[k] in vv10_nlc's convention
+    /// (C1 AO, rho = 2 phi D phi); Dx[k] need not be symmetric.
+    void vv10_nlc_vx(SharedMatrix D, const std::vector<SharedMatrix>& Dx, const std::vector<SharedMatrix>& ret,
+                     double alpha);
     SharedMatrix vv10_nlc_gradient(SharedMatrix D);
 
     /// Set things up
@@ -141,6 +152,10 @@ class PSI_API VBase {
 
     // Set the site of the grac shift
     void set_grac_shift(double value);
+
+    /// See vx_neglect_vv10_
+    void set_vx_neglect_vv10(bool neglect) { vx_neglect_vv10_ = neglect; }
+    bool vx_neglect_vv10() const { return vx_neglect_vv10_; }
 
     /// Throws by default
     virtual void compute_V(std::vector<SharedMatrix> ret);

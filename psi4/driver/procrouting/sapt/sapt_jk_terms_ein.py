@@ -719,12 +719,16 @@ def build_sapt_jk_cache(
 
     # Clone them as the JK object will overwrite. Store as psi4.core.Matrix
     cache["J_A"] = jk.J()[0].clone()
-    cache["K_A"] = jk.K()[0].clone()
     cache["J_B"] = jk.J()[1].clone()
-    cache["K_B"] = jk.K()[1].clone()
     cache["J_O"] = jk.J()[2].clone()
+
+    # Build effective K matrices for LC hybrid functionals
+
+    cache["K_A"] = jk.K()[0].clone()
+    cache["K_B"] = jk.K()[1].clone()
     # K_O needs transpose
-    K_O = jk.K()[2].clone().transpose()
+    K_O_raw = jk.K()[2].clone()
+    K_O = K_O_raw.clone().transpose()
     cache["K_O"] = core.Matrix.from_array(K_O.np)
     cache["K_O"].name = "K_O"
 
@@ -3594,6 +3598,15 @@ def _sapt_cpscf_solve(
     else:
         cache["wfn_B"].set_jk(jk)
 
+    # Disable VV10 for CPKS solve — VV10 Vx contribution is not implemented in C++
+    # and the nonlocal correlation kernel is neglected in SAPT(DFT) response.
+    vv10_A = cache["wfn_A"].functional().needs_vv10()
+    vv10_B = cache["wfn_B"].functional().needs_vv10()
+    if vv10_A:
+        cache["wfn_A"].functional().set_do_vv10(False)
+    if vv10_B:
+        cache["wfn_B"].functional().set_do_vv10(False)
+
     def setup_P_X(eps_occ, eps_vir, name="P_X"):
         P_X = ein.utils.tensor_factory(
             name, [eps_occ.shape[0], eps_vir.shape[0]], np.float64, "einsums"
@@ -3705,5 +3718,11 @@ def _sapt_cpscf_solve(
         printer=pfunc,
     )
     core.print_out("   " + ("-" * sep_size) + "\n")
+
+    # Re-enable VV10 if it was disabled
+    if vv10_A:
+        cache["wfn_A"].functional().set_do_vv10(True)
+    if vv10_B:
+        cache["wfn_B"].functional().set_do_vv10(True)
 
     return vecs

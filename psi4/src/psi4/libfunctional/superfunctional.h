@@ -88,6 +88,11 @@ class SuperFunctional {
     double grac_shift_;
     double grac_alpha_;
     double grac_beta_;
+    // Include the switching-function gradient term of the indirect matrix elements
+    // (Cencek & Szalewicz, JCP 139, 024104 (2013), Eq. 17); needs the density Hessian
+    bool grac_density_hessian_;
+    // Stretch the bulk potential by the shift instead of splicing in LB94 (ibid. Sec. IV)
+    bool grac_stretch_;
 
     // => VV10 parameters corrections <= //
     bool needs_vv10_;
@@ -189,6 +194,23 @@ class SuperFunctional {
                                const std::vector<std::map<std::string, SharedVector>>& vv10_cache,
                                std::shared_ptr<BlockOPoints> block, int npoints = -1, bool do_grad = false);
 
+    // Sieved first-order changes (DRHO, DW0, DKAPPA) of the VV10 cache under a density perturbation
+    // (drho, dgamma) on the block points; the sieve is the one compute_vv10_cache applies at rho_thresh.
+    std::map<std::string, SharedVector> compute_vv10_cache_response(const std::map<std::string, SharedVector>& vals,
+                                                                    const double* drho, const double* dgamma,
+                                                                    double rho_thresh, int npoints);
+
+    // Linear response of the VV10 potential on the block points. For each perturbation k, given at the
+    // block points (drho[k], dgamma[k]) and on the cache grid (vv10_dcache[k], from
+    // compute_vv10_cache_response), fills dv_rho[k] and dv_gamma[k], the first-order changes of V_RHO_A
+    // and V_GAMMA_AA from compute_vv10_kernel. v_gamma receives the unperturbed V_GAMMA_AA.
+    void compute_vv10_kernel_response(const std::map<std::string, SharedVector>& vals,
+                                      const std::vector<std::map<std::string, SharedVector>>& vv10_cache,
+                                      const std::vector<std::map<std::string, SharedVector>>& vv10_dcache,
+                                      std::shared_ptr<BlockOPoints> block, const std::vector<const double*>& drho,
+                                      const std::vector<const double*>& dgamma, double* v_gamma,
+                                      const std::vector<double*>& dv_rho, const std::vector<double*>& dv_gamma);
+
     // => Input/Output <= //
 
     std::map<std::string, SharedVector>& values() { return values_; }
@@ -235,6 +257,8 @@ class SuperFunctional {
     void set_grac_shift(double grac_shift);
     void set_grac_alpha(double grac_alpha);
     void set_grac_beta(double grac_beta);
+    void set_grac_density_hessian(bool val);
+    void set_grac_stretch(bool val);
     void set_density_tolerance(double cut);
     void print_density_threshold(std::string out_fname = "outfile", int print = 1) const;
     void py_print_density_threshold() const { print_density_threshold("outfile", 1); }
@@ -261,6 +285,8 @@ class SuperFunctional {
     double grac_shift() const { return grac_shift_; }
     double grac_alpha() const { return grac_alpha_; }
     double grac_beta() const { return grac_beta_; }
+    bool grac_density_hessian() const { return grac_density_hessian_; }
+    bool grac_stretch() const { return grac_stretch_; }
     double density_tolerance() const { return density_tolerance_; }
 
     bool needs_xc() const { return ((c_functionals_.size() + x_functionals_.size()) > 0); }

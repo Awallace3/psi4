@@ -133,6 +133,18 @@ _SCENARIO_OPTIONS = {
         "sapt_dft_grac_shift_a": None,
         "sapt_dft_grac_shift_b": None,
     },
+    # prod_d4i with second-order GRAC cations: the restarted cation's GUESS READ
+    # must start from the neutral's stored orbitals, not from SAD.
+    "grac_soscf": {
+        "freeze_core": True,
+        "sapt_dft_functional": "pbe0",
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_induction_type": "NONE",
+        "sapt_dft_grac_compute": "ITERATIVE",
+        "sapt_dft_grac_cation_soscf": True,
+        "sapt_dft_grac_shift_a": None,
+        "sapt_dft_grac_shift_b": None,
+    },
     # sapt0-d4(i): the same route with an HF "functional", so no GRAC and the
     # HF monomers double as the SAPT monomers.
     "sapt0_d4i": {
@@ -633,7 +645,7 @@ def main():
         "--scenario",
         default="default",
         choices=["default", "disp", "localization", "fsapt_einsums", "fsapt_fisapt", "lrc", "raw_identity",
-                 "prod_d4i", "sapt0_d4i", "grac_shift_only", "grac_pinned_b"],
+                 "prod_d4i", "grac_soscf", "sapt0_d4i", "grac_shift_only", "grac_pinned_b"],
     )
     parser.add_argument("--guard-jk", action="store_true")
     parser.add_argument("--count-jk-builds", action="store_true")

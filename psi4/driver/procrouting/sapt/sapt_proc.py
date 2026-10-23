@@ -26,6 +26,9 @@
 # @END LICENSE
 #
 
+import contextlib
+import os
+
 import numpy as np
 
 from psi4 import core
@@ -35,6 +38,7 @@ from ...constants import constants
 from ...p4util.exceptions import ValidationError
 from ..empirical_disp import edisp_interaction_energy
 from .. import proc_util
+from ..dft import build_superfunctional
 from ..proc import (
     _set_external_potentials_to_wavefunction,
     run_scf,
@@ -316,7 +320,10 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         do_mon_grac_shift_B = True
 
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
+    sapt_sup = build_superfunctional(sapt_dft_functional.lower(), True, npoints=1, deriv=1)[0]
+    functional_needs_vv10 = sapt_sup.needs_vv10()
     e_disp_param_name = None
+    do_vv10 = False
     supported_functionals_edisp = ["hf", "pbe0", "b3lyp"]
 
     # SAPT_DFT_D4_IE and SAPT_DFT_D3_IE control whether to run -D3/-D4.
@@ -429,6 +436,19 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             )
         # # Re-prepare options after local option changes
         # core.prepare_options_for_module("SAPT")
+    elif "-VV10" in name.upper():
+        core.print_out(r"DFT-VV10(SAPT): $\Delta$-DFT+VV10 for dispersion")
+        core.set_global_option("SAPT_DFT_DO_DISP", 0)
+        core.set_global_option("SAPT_DFT_DO_DDFT", 1)
+        do_vv10 = True
+
+
+    if functional_needs_vv10 and "-VV10" not in name.upper():
+        raise ValidationError(
+            "SAPT(DFT): functionals with an intrinsic VV10 term (for example, wb97m-v) "
+            "are not supported through plain SAPT(DFT) because VV10 conflicts with the "
+            "natural FDDS dispersion model. Use DFT-VV10(SAPT) instead."
+        )
 
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
     do_disp = core.get_option("SAPT", "SAPT_DFT_DO_DISP")
@@ -439,6 +459,18 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         raise ValidationError("SAPT_DFT_GRAC_SHIFT_ONLY=true contradicts SAPT_DFT_GRAC_COMPUTE=NONE.")
     if shift_only and not do_dft:
         raise ValidationError("SAPT_DFT_GRAC_SHIFT_ONLY requires a non-HF SAPT_DFT_FUNCTIONAL.")
+    do_ddft_gradient = core.get_option("SAPT", "SAPT_DFT_DDFT_GRADIENT")
+    if do_ddft_gradient and not (do_delta_dft and do_dft):
+        raise ValidationError(
+            "SAPT_DFT_DDFT_GRADIENT requires the delta DFT dimer SCF: set SAPT_DFT_DO_DDFT "
+            "and a non-HF SAPT_DFT_FUNCTIONAL."
+        )
+    if do_ddft_gradient and functional_needs_vv10:
+        # Fail before any SCF: RV::compute_gradient throws for VV10 functionals.
+        raise ValidationError(
+            f"SAPT_DFT_DDFT_GRADIENT: Psi4 has no analytic VV10 gradient, so the "
+            f"{sapt_dft_functional} dimer gradient is unavailable."
+        )
     if not do_dft:
         do_mon_grac_shift_A = do_mon_grac_shift_B = False
 
@@ -566,6 +598,13 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             raise ValidationError(
                 "SAPT(DFT) checkpointing is not supported with external_potentials; "
                 "run embedded SAPT(DFT) jobs without a checkpoint directory."
+            )
+        if do_vv10 or do_ddft_gradient:
+            # Both read the delta-DFT dimer wavefunction, which the delta_dft_*
+            # stages deliberately do not snapshot (they store energies only).
+            raise ValidationError(
+                "SAPT(DFT) checkpointing is not supported with DFT-VV10(SAPT) or "
+                "SAPT_DFT_DDFT_GRADIENT; run these jobs without a checkpoint directory."
             )
         if induction_type == "CPHF" and do_dft and fsapt_type == "FISAPT":
             raise ValidationError(
@@ -1057,6 +1096,9 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         if sapt_jk is not None:
             wfn_A.set_jk(sapt_jk)
 
+        # Bound unconditionally: the VV10 branch below checks it even when the
+        # delta-DFT segment is skipped.
+        dft_wfn_dimer = None
         if do_delta_dft and do_dft:
             optstash2 = p4util.OptionsState(
                 ["SCF_TYPE"],
@@ -1095,19 +1137,41 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                 """Supermolecular SCF for one term of the delta-DFT correction.
 
                 Only its energy is used downstream, so only the energy is stored.
+                Returns the wavefunction when the SCF ran in this process, else None.
                 """
+                ran = []
                 core.timer_on(timer)
                 try:
                     ckpt.energy_stage(
                         stage,
-                        lambda: run_scf(sapt_dft_functional.lower(), molecule=molecule, jk=sapt_jk, **scf_kwargs),
+                        lambda: ran.append(
+                            run_scf(sapt_dft_functional.lower(), molecule=molecule, jk=sapt_jk, **scf_kwargs)
+                        ),
                         energy_key=energy_key,
                     )
                 finally:
                     core.timer_off(timer)
+                return ran[0] if ran else None
 
             if ckpt.pending("delta_dft"):
-                delta_dft_scf("delta_dft_dimer_scf", sapt_dimer, "SAPT(DFT):Dimer DFT", "DFT DIMER ENERGY", dimer_dft_kwargs)
+                dft_wfn_dimer = delta_dft_scf(
+                    "delta_dft_dimer_scf", sapt_dimer, "SAPT(DFT):Dimer DFT", "DFT DIMER ENERGY", dimer_dft_kwargs
+                )
+
+                if do_ddft_gradient:
+                    # Analytic gradient of the delta DFT dimer energy, at the same
+                    # GRAC-free options as its SCF.
+                    core.timer_on("SAPT(DFT):Dimer DFT Gradient")
+                    if hasattr(dft_wfn_dimer, "_disp_functor"):
+                        disp_grad = dft_wfn_dimer._disp_functor.compute_gradient(dft_wfn_dimer.molecule(), dft_wfn_dimer)
+                        dft_wfn_dimer.set_variable("-D Gradient", disp_grad)
+                    dft_dimer_grad = core.scfgrad(dft_wfn_dimer)
+                    dft_wfn_dimer.set_gradient(dft_dimer_grad)
+                    for wfn in [dft_wfn_dimer, dimer_wfn]:
+                        wfn.set_variable("SAPT(DFT) DFT DIMER GRADIENT", dft_dimer_grad)  # P::e SAPT
+                    core.set_variable("SAPT(DFT) DFT DIMER GRADIENT", dft_dimer_grad)
+                    core.timer_off("SAPT(DFT):Dimer DFT Gradient")
+
                 delta_dft_scf("delta_dft_monomer_a_scf", monomerA, "SAPT(DFT):Monomer A DFT", "DFT MONOMER A ENERGY", monomer_a_dft_kwargs)
                 delta_dft_scf("delta_dft_monomer_b_scf", monomerB, "SAPT(DFT):Monomer B DFT", "DFT MONOMER B ENERGY", monomer_b_dft_kwargs)
 
@@ -1179,6 +1243,55 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             else:
                 ckpt.restore_data_arrays("d3")
             core.timer_off("SAPT(DFT):D3 Interaction Energy")
+        elif do_vv10:
+            core.print_out("\n")
+            core.print_out(
+                "         ---------------------------------------------------------\n"
+            )
+            core.print_out(
+                "         " + "SAPT(DFT): VV10 Interaction Energy".center(58) + "\n"
+            )
+            core.print_out("\n")
+            core.timer_on("SAPT(DFT):VV10 Interaction Energy")
+            if dft_wfn_dimer is None:
+                raise ValidationError(
+                    "SAPT(DFT): DFT-VV10(SAPT) requires delta-DFT wavefunctions "
+                    "(set SAPT_DFT_DO_DDFT=True or use DFT-VV10(SAPT) method name)."
+                )
+
+            # VV10 is a nonlocal density functional; its energy changes when the
+            # basis is extended with ghost atoms.  Using bare monomer wavefunctions
+            # (monomer basis) against a dimer wavefunction (full dimer basis) would
+            # produce large BSSE artefacts.  Instead, run CP-corrected monomer SCFs
+            # in the full dimer basis so the supermolecular subtraction is
+            # internally consistent.
+            core.print_out(
+                "         VV10: running CP-corrected monomer SCFs in dimer basis\n\n"
+            )
+            # The monomer B GRAC shift is still set globally here, and the dimer
+            # SCF ran unshifted; the CP monomers must match the dimer.
+            core.set_global_option("DFT_GRAC_SHIFT", 0.0)
+            core.timer_on("SAPT(DFT):VV10 Monomer A CP")
+            monomerA_cp = sapt_dimer.extract_subsets(1, 2)
+            dft_wfn_monomerA_cp = run_scf(
+                sapt_dft_functional.lower(), molecule=monomerA_cp, jk=sapt_jk
+            )
+            core.timer_off("SAPT(DFT):VV10 Monomer A CP")
+
+            core.timer_on("SAPT(DFT):VV10 Monomer B CP")
+            monomerB_cp = sapt_dimer.extract_subsets(2, 1)
+            dft_wfn_monomerB_cp = run_scf(
+                sapt_dft_functional.lower(), molecule=monomerB_cp, jk=sapt_jk
+            )
+            core.timer_off("SAPT(DFT):VV10 Monomer B CP")
+
+            edisp_interaction_energy.sapt_dft_vv10_interaction_energy(
+                dimer_wfn=dft_wfn_dimer,
+                monomerA_wfn=dft_wfn_monomerA_cp,
+                monomerB_wfn=dft_wfn_monomerB_cp,
+                data=data,
+            )
+            core.timer_off("SAPT(DFT):VV10 Interaction Energy")
 
         core.set_global_option("SAVE_JK", False)
         core.set_global_option("DFT_GRAC_SHIFT", 0.0)
@@ -1304,6 +1417,91 @@ sapt_dft_grac_convergence_tier_options = {
 }
 
 
+@contextlib.contextmanager
+def _without_lr_exchange_kernel(wfns, active):
+    """Zero x_beta on the LRC monomer functionals for the duration of the block.
+
+    RHF::twoel_Hx_full adds -x_beta wK to the CPKS Hessian product; x_beta enters nothing
+    else there (the xc kernel comes from the functional's own components and the GRAC
+    potential is fixed at initialization), so this removes exactly the long-range
+    exact-exchange term from the coupled induction kernel. Restored on exit, also on error.
+    """
+    saved = [(wfn.functional(), wfn.functional().x_beta()) for wfn in wfns if wfn.functional().is_x_lrc()]
+    if not active or not saved:
+        yield
+        return
+    core.print_out("\n   Coupled induction kernel: long-range exact exchange (x_beta wK) omitted"
+                   " (SAPT_DFT_IND_LR_EXCH_KERNEL false)\n")
+    try:
+        for func, _ in saved:
+            func.set_lock(False)
+            func.set_x_beta(0.0)
+            func.set_lock(True)
+        yield
+    finally:
+        for func, beta in saved:
+            func.set_lock(False)
+            func.set_x_beta(beta)
+            func.set_lock(True)
+
+
+def _grac_cation_ground_state(dft_functional, mol_cation, jk_obj, wfn_given, scf_kwargs):
+    """Converge the GRAC cation from the neutral orbitals (GUESS READ) and from SAD, and keep the
+    lower energy. Either guess alone can land on an excited cation state: from SAD, wB97X ethene
+    converges to its second ionization (13.0 eV, against 10.4 eV from the neutral orbitals) and
+    n-pentane sits 0.2-0.35 eV high; from the neutral orbitals, wB97X pyridine lands 0.05 eV above
+    the SAD state, its n/pi cation states being nearly degenerate.
+
+    ``wfn_given`` is the converged neutral, or its rehydrated checkpoint snapshot on a restart;
+    only its electron count and orbitals (through ``to_file``) are read.
+    """
+    nelec_cation = wfn_given.nalpha() + wfn_given.nbeta() - 1
+    # SAPT_DFT_GRAC_CATION_SOSCF: second-order steps on every cation SCF, whatever the tier. When the hole
+    # mixes two near-degenerate neutral orbitals (amide n/pi, ethane e_g, carboxylate O lone pairs) DIIS
+    # either stalls or "converges" 0.2-2 mEh above the ground state, under every tier. The neutral, and so
+    # the HOMO, is left alone. For a VV10 functional (wB97M-V) the SOSCF Hessian includes the exact VV10
+    # kernel; the SCF option SOSCF_NEGLECT_VV10_KERNEL is a faster, warned fallback that omits it. The
+    # converged cation does not depend on it (checked to 1e-11 Eh on ethane, acetate, NMA), only the step does.
+    if core.get_option("SAPT", "SAPT_DFT_GRAC_CATION_SOSCF"):
+        core.set_local_option("SCF", "SOSCF", True)
+    best = None
+    read_file = core.Wavefunction.build(mol_cation, core.get_global_option("BASIS")).get_scratch_filename(180)
+    for guess in ("READ", "SAD"):
+        core.set_local_option("SCF", "GUESS", guess)
+        if guess == "READ":
+            wfn_given.to_file(read_file)
+        try:
+            wfn = run_scf(dft_functional.lower(), molecule=mol_cation, jk=jk_obj, **scf_kwargs)
+        except ConvergenceError:
+            core.print_out(f"  GRAC cation from the {guess} guess did not converge.\n")
+            continue
+        except ValidationError as err:
+            # e.g. BASIS_GUESS cannot be combined with GUESS READ
+            core.print_out(f"  GRAC cation: {guess} guess unavailable ({err}).\n")
+            continue
+        finally:
+            if guess == "READ" and os.path.isfile(read_file + ".npy"):
+                os.remove(read_file + ".npy")
+        energy = wfn.energy()
+        # A same-reference READ (open-shell neutral, UKS -> UKS) keeps the guess's electron count, and would
+        # converge back to the neutral; refuse anything that is not one electron short. No energy test: an
+        # anion unbound in a small basis (OH-/STO-3G) legitimately sits above its detached neutral.
+        if wfn.nalpha() + wfn.nbeta() != nelec_cation:
+            core.print_out(f"  GRAC cation from the {guess} guess rejected: {wfn.nalpha()}a/{wfn.nbeta()}b electrons, "
+                           f"E = {energy:.10f} [Eh].\n")
+            wfn = None
+            continue
+        core.print_out(f"  GRAC cation energy from the {guess} guess: {energy:.10f} [Eh]\n")
+        if best is None or energy < best[0]:
+            best = (energy, guess, wfn)  # drop the losing wavefunction before the next SCF
+        wfn = None
+    if best is None:
+        raise ConvergenceError("GRAC cation SCF", core.get_option("SCF", "MAXITER"))
+    energy, guess, wfn_cation = best
+    core.print_out(f"  GRAC cation: using the {guess} guess state ({energy:.10f} [Eh]).\n")
+    return wfn_cation
+
+
 def compute_GRAC_shift(
     molecule: core.Molecule,
     sapt_dft_grac_convergence_tier: str,
@@ -1385,9 +1583,13 @@ def compute_GRAC_shift(
         ["SCF", "LEVEL_SHIFT"],
         ["SCF", "LEVEL_SHIFT_CUTOFF"],
         ["SCF", "SCF_INITIAL_ACCELERATOR"],
+        ["SCF", "SOSCF"],
         ["SCF", "ORBITAL_OPTIMIZER_PACKAGE"],
+        ["SCF", "GUESS"],
         ["BASIS"],
     )
+    neutral_guess = core.get_option("SCF", "GUESS")
+    neutral_soscf = core.get_option("SCF", "SOSCF")
 
     scf_kwargs = {}
     if external_potentials is not None:
@@ -1426,10 +1628,18 @@ def compute_GRAC_shift(
             core.print_out(
                 f"\n\n  ==> GRAC {label} Given Molecule: charge={mol_given.molecular_charge()} mult={mol_given.multiplicity()} <==\n\n"
             )
+            # Snapshots cover RHF/RKS only, so an open-shell neutral is re-run on a restart.
+            neutral_snapshot = mol_given.multiplicity() == 1
             try:
-                if tier == resume_tier:
+                if tier == resume_tier and neutral_snapshot:
                     E_given = neutral["E_given"]
                     HOMO = neutral["HOMO"]
+                    # The cation's GUESS READ starts from the neutral orbitals, so they
+                    # come back from the neutral's snapshot rather than from SAD: a
+                    # restarted cation must land on the state an uninterrupted run finds.
+                    wfn_given = ckpt.restore_scf(
+                        neutral_stage, method=dft_functional.lower(), reference="RKS", molecule=mol_given
+                    )
                     core.print_out(f"   Neutral SCF restored from checkpoint: E = {E_given:.12f}\n")
                 else:
                     if mol_given.multiplicity() != 1:
@@ -1452,15 +1662,22 @@ def compute_GRAC_shift(
                     )
                     HOMO = np.amax(occ_given)
                     E_given = wfn_given.energy()
-                    wfn_given = None
-                    ckpt.commit(
-                        neutral_stage,
-                        scalars={
-                            private_prefix + "tier": tier,
-                            private_prefix + "E_given": E_given,
-                            private_prefix + "HOMO": HOMO,
-                        },
-                    )
+                    neutral_scalars = {
+                        private_prefix + "tier": tier,
+                        private_prefix + "E_given": E_given,
+                        private_prefix + "HOMO": HOMO,
+                    }
+                    if ckpt.enabled and neutral_snapshot:
+                        # Kept for the cation's GUESS READ on a restart (see above).
+                        ckpt.commit_scf(
+                            neutral_stage,
+                            wfn_given,
+                            method=dft_functional.lower(),
+                            reference="RKS",
+                            scalars=neutral_scalars,
+                        )
+                    else:
+                        ckpt.commit(neutral_stage, scalars=neutral_scalars)
                 if mol_cation.multiplicity() != 1:
                     core.set_local_option("SCF", "REFERENCE", "UHF")
                 else:
@@ -1468,13 +1685,15 @@ def compute_GRAC_shift(
                 core.print_out(
                     f"\n\n  ==> GRAC {label} Electron Removed Molecule: charge={mol_cation.molecular_charge()} mult={mol_cation.multiplicity()} <==\n\n"
                 )
-                wfn_cation = run_scf(
-                    dft_functional.lower(),
-                    molecule=mol_cation,
-                    jk=jk_obj,
-                    **scf_kwargs,
+                wfn_cation = _grac_cation_ground_state(
+                    dft_functional, mol_cation, jk_obj, wfn_given, scf_kwargs
                 )
+                wfn_given = None
+                core.set_local_option("SCF", "GUESS", neutral_guess)
+                core.set_local_option("SCF", "SOSCF", neutral_soscf)
             except ConvergenceError:
+                core.set_local_option("SCF", "GUESS", neutral_guess)
+                core.set_local_option("SCF", "SOSCF", neutral_soscf)
                 # A failed attempt's wavefunctions are still bound in this
                 # function's scope, so without dropping them here they stay
                 # resident -- grid data, collocation cache and all -- while the
@@ -1732,39 +1951,66 @@ def sapt_dft(
     cache = {}
     if pending_stage is not None and pending_stage != "fsapt_final":
         core.timer_on("SAPT(DFT):Build JK")
+        # SAPT exchange terms are expectation values of the exact 1/r12 operator, so
+        # they always use the full K. wK is needed only for the CPKS kernel of an
+        # LRC monomer (RHF::twoel_Hx_full applies -x_alpha*K - x_beta*wK).
+        lrc_A = functional_value(wfn_A, "is_x_lrc", False)
+        omega_A = functional_value(wfn_A, "x_omega", 0.0) if lrc_A else 0.0
+        lrc_B = functional_value(wfn_B, "is_x_lrc", False)
+        omega_B = functional_value(wfn_B, "x_omega", 0.0) if lrc_B else 0.0
+
+        def _build_sapt_jk(omega):
+            jk_new = core.JK.build(dimer_wfn.basisset())
+            jk_new.set_do_J(True)
+            jk_new.set_do_K(True)
+            if omega:
+                jk_new.set_do_wK(True)
+                jk_new.set_omega(omega)
+            # SAPT reads J(), K() and wK() separately; wcombine folds x_alpha*K +
+            # x_beta*wK into wK() and zeroes K(), which would silently destroy the
+            # exchange terms.
+            jk_new.set_wcombine(False)
+            jk_new.initialize()
+            jk_new.print_header()
+            return jk_new
+
         if sapt_jk is None:
             core.print_out("\n   => Building SAPT JK object <= \n\n")
-            sapt_jk = core.JK.build(dimer_wfn.basisset())
-            sapt_jk.set_do_J(True)
-            sapt_jk.set_do_K(True)
-            wfn_A_is_lrc = functional_value(wfn_A, "is_x_lrc", False)
-            wfn_A_omega = functional_value(wfn_A, "x_omega", 0.0)
-            wfn_B_is_lrc = functional_value(wfn_B, "is_x_lrc", False)
-            wfn_B_omega = functional_value(wfn_B, "x_omega", 0.0)
-            if wfn_A_is_lrc:
-                sapt_jk.set_do_wK(True)
-                sapt_jk.set_omega(wfn_A_omega)
-            sapt_jk.initialize()
-            sapt_jk.print_header()
-            if wfn_B_is_lrc and (wfn_A_omega != wfn_B_omega):
-                core.print_out("   => Monomer B: Building SAPT JK object <= \n\n")
-                core.print_out("      Reason: MonomerA Omega != MonomerB Omega\n\n")
-                sapt_jk_B = core.JK.build(dimer_wfn.basisset())
-                sapt_jk_B.set_do_J(True)
-                sapt_jk_B.set_do_K(True)
-                sapt_jk_B.set_do_wK(True)
-                sapt_jk_B.set_omega(wfn_B_omega)
-                sapt_jk_B.initialize()
-                sapt_jk_B.print_header()
+            sapt_jk = _build_sapt_jk(omega_A)
         else:
-            sapt_jk.set_do_K(True)
+            # A JK handed down from the monomer SCF. Per jk.h, set_do_X() only takes
+            # effect before initialize() -- calling set_do_wK() on a live object
+            # leaves the erf-attenuated 3-index tensors unbuilt. So validate the
+            # reused object and rebuild it if it cannot supply what we need.
+            # A functional with x_alpha = 0 (wB97, wB97X-D3, ...) carries no full K
+            # at all: its SCF JK was built with do_K = False. SAPT exchange needs
+            # the full 1/r12 K regardless of the functional, so that object cannot
+            # be reused either.
+            has_K = sapt_jk.get_do_K()
+            has_wK = (not lrc_A) or (
+                sapt_jk.get_do_wK() and abs(sapt_jk.get_omega() - omega_A) < 1.0e-12
+            )
+            reusable = has_K and has_wK
+            if not reusable:
+                reason = "lacks K" if not has_K else "lacks wK at omega = %.4f" % omega_A
+                core.print_out("\n   => Rebuilding SAPT JK object <= \n\n")
+                core.print_out("      Reason: reused JK %s\n\n" % reason)
+                sapt_jk = _build_sapt_jk(omega_A)
+                wfn_A.set_jk(sapt_jk)
+                wfn_B.set_jk(sapt_jk)
+            elif sapt_jk.get_wcombine():
+                raise ValidationError(
+                    "SAPT(DFT) cannot use a JK object with WCOMBINE enabled: it folds "
+                    "x_alpha*K + x_beta*wK into wK() and zeroes K(), but SAPT needs the "
+                    "full 1/r12 exchange matrix. Set WCOMBINE to false."
+                )
 
-        sapt_jk.set_do_J(True)
-        sapt_jk.set_do_K(True)
-
-        if functional_value(wfn_A, "is_x_lrc", False):
-            sapt_jk.set_do_wK(True)
-            sapt_jk.set_omega(functional_value(wfn_A, "x_omega", 0.0))
+        # Monomer B needs its own JK whenever its omega differs from the one sapt_jk
+        # was built with -- including the case where A is not range separated at all.
+        if lrc_B and omega_B != omega_A and sapt_jk_B is None:
+            core.print_out("   => Monomer B: Building SAPT JK object <= \n\n")
+            core.print_out("      Reason: MonomerA Omega != MonomerB Omega\n\n")
+            sapt_jk_B = _build_sapt_jk(omega_B)
 
         cache = jk_terms.build_sapt_jk_cache(
             dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials
@@ -1798,15 +2044,17 @@ def sapt_dft(
     # Induction
     core.timer_on("SAPT(DFT):ind")
     if do_ind and ckpt.pending("ind"):
-        ind = jk_terms.induction(
-            cache,
-            sapt_jk,
-            True,
-            sapt_jk_B=sapt_jk_B,
-            maxiter=core.get_option("SAPT", "MAXITER"),
-            conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
-            Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
-        )
+        keep_lr = core.get_option("SAPT", "SAPT_DFT_IND_LR_EXCH_KERNEL")
+        with _without_lr_exchange_kernel([wfn_A, wfn_B], active=do_dft and not keep_lr):
+            ind = jk_terms.induction(
+                cache,
+                sapt_jk,
+                True,
+                sapt_jk_B=sapt_jk_B,
+                maxiter=core.get_option("SAPT", "MAXITER"),
+                conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
+                Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
+            )
         data.update(ind)
         ckpt.commit("ind")
     elif not do_ind:
@@ -2002,24 +2250,19 @@ def sapt_dft(
         # Hybrid xc kernel check
         do_hybrid = core.get_option("SAPT", "SAPT_DFT_DO_HYBRID")
         is_x_hybrid = functional_value(wfn_B, "is_x_hybrid", False)
-        is_x_lrc = functional_value(wfn_B, "is_x_lrc", False)
+        # SAPT_DFT_DISP_LR_EXCH_KERNEL false treats an LRC functional as its global part only:
+        # (1 - x_alpha) full-range ALDA + x_alpha K, no erfc-LDA and no wK.
+        wfn_B_is_lrc = functional_value(wfn_B, "is_x_lrc", False)
+        is_x_lrc = wfn_B_is_lrc and core.get_option("SAPT", "SAPT_DFT_DISP_LR_EXCH_KERNEL")
+        if wfn_B_is_lrc and not is_x_lrc:
+            core.print_out("   FDDS kernel: long-range exact exchange omitted (SAPT_DFT_DISP_LR_EXCH_KERNEL false)\n")
         hybrid_specified = core.has_option_changed("SAPT", "SAPT_DFT_DO_HYBRID")
-        if is_x_lrc:
-            if do_hybrid:
-                if hybrid_specified:
-                    raise ValidationError(
-                        "SAPT(DFT): Hybrid xc kernel not yet implemented for range-separated funtionals."
-                    )
-                else:
-                    core.print_out(
-                        "Warning: Hybrid xc kernel not yet implemented for range-separated funtionals; hybrid kernel capability is turned off.\n"
-                    )
-            is_hybrid = False
+        if do_hybrid:
+            # An LRC functional with no global exact exchange (LC-wPBE, wB97: x_alpha = 0,
+            # x_beta = 1) is not is_x_hybrid(), but its kernel still needs the long-range wK.
+            is_hybrid = is_x_hybrid or is_x_lrc
         else:
-            if do_hybrid:
-                is_hybrid = is_x_hybrid
-            else:
-                is_hybrid = False
+            is_hybrid = False
 
         # Dispersion
         core.timer_on("SAPT(DFT):disp")
@@ -2037,10 +2280,13 @@ def sapt_dft(
             core.timer_on("FDDS disp")
             core.print_out("\n")
             x_alpha = functional_value(wfn_B, "x_alpha", 0.0)
+            x_beta = functional_value(wfn_B, "x_beta", 0.0) if is_x_lrc else 0.0
+            omega = functional_value(wfn_B, "x_omega", 0.0) if is_x_lrc else 0.0
             if not is_hybrid:
                 x_alpha = 0.0
+                x_beta = 0.0
             fdds_disp = sapt_mp2.df_fdds_dispersion(
-                primary_basis, aux_basis, cache, is_hybrid, x_alpha
+                primary_basis, aux_basis, cache, is_hybrid, x_alpha, x_beta, is_x_lrc, omega
             )
             data.update(fdds_disp)
             nfrozen_A = 0

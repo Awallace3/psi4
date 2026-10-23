@@ -38,6 +38,7 @@
 #include "functional.h"
 #include "LibXCfunctional.h"
 
+#include <array>
 #include <cmath>
 #include <cstdlib>
 
@@ -66,6 +67,8 @@ void SuperFunctional::common_init() {
     grac_shift_ = 0.0;
     grac_alpha_ = 0.5;
     grac_beta_ = 40.0;
+    grac_density_hessian_ = false;
+    grac_stretch_ = false;
 
     needs_vv10_ = false;
     vv10_b_ = 0.0;
@@ -137,6 +140,8 @@ std::shared_ptr<SuperFunctional> SuperFunctional::build_polarized() {
         sup->grac_shift_ = grac_shift_;
         sup->grac_alpha_ = grac_alpha_;
         sup->grac_beta_ = grac_beta_;
+        sup->grac_density_hessian_ = grac_density_hessian_;
+        sup->grac_stretch_ = grac_stretch_;
         sup->set_grac_x_functional(grac_x_functional_->build_polarized());
         sup->set_grac_c_functional(grac_c_functional_->build_polarized());
     }
@@ -182,6 +187,8 @@ std::shared_ptr<SuperFunctional> SuperFunctional::build_worker() {
         sup->grac_shift_ = grac_shift_;
         sup->grac_alpha_ = grac_alpha_;
         sup->grac_beta_ = grac_beta_;
+        sup->grac_density_hessian_ = grac_density_hessian_;
+        sup->grac_stretch_ = grac_stretch_;
         sup->set_grac_x_functional(grac_x_functional_->build_worker());
         sup->set_grac_c_functional(grac_c_functional_->build_worker());
     }
@@ -409,6 +416,14 @@ void SuperFunctional::set_grac_alpha(double grac_alpha) {
 void SuperFunctional::set_grac_beta(double grac_beta) {
     can_edit();
     grac_beta_ = grac_beta;
+}
+void SuperFunctional::set_grac_density_hessian(bool val) {
+    can_edit();
+    grac_density_hessian_ = val;
+}
+void SuperFunctional::set_grac_stretch(bool val) {
+    can_edit();
+    grac_stretch_ = val;
 }
 void SuperFunctional::set_grac_shift(double grac_shift) {
     can_edit();
@@ -738,10 +753,11 @@ std::map<std::string, SharedVector>& SuperFunctional::compute_functional(
              ++it) {
             ::memset((void*)((*it).second->pointer()), '\0', sizeof(double) * npoints);
         }
-        if (grac_x_functional_) {
+        // The stretch-only splice keeps the bulk potential and needs no asymptotic functional.
+        if (grac_x_functional_ && !grac_stretch_) {
             grac_x_functional_->compute_functional(vals, ac_values_, npoints, 1);
         }
-        if (grac_c_functional_) {
+        if (grac_c_functional_ && !grac_stretch_) {
             grac_c_functional_->compute_functional(vals, ac_values_, npoints, 1);
         }
 
@@ -753,30 +769,87 @@ std::map<std::string, SharedVector>& SuperFunctional::compute_functional(
             double* v_gamma = values_["V_GAMMA_AA"]->pointer();
 
             double* grac_v_rho = ac_values_["V_RHO_A"]->pointer();
-            double* grac_v_gamma = ac_values_["V_GAMMA_AA"]->pointer();
 
             const double galpha = -1.0 * grac_alpha_;
             const double gbeta = grac_beta_;
             const double gshift = grac_shift_;
             const double pow43 = 4.0 / 3.0;
-            double denx;
 
-#pragma omp simd
-            for (size_t i = 0; i < npoints; i++) {
-                if (rho[i] < 1.e-16) {
-                    denx = 1.e2;  // Will force grac_fx to 1
-                } else {
-                    denx = std::pow(sigma[i], 0.5) / std::pow(rho[i], pow43);
+            // Cencek & Szalewicz, JCP 139, 024104 (2013).  Psi4 shifts the bulk down by the
+            // shift instead of the asymptotic part up (their Eq. 8); the two differ by a
+            // constant and give the same orbitals and orbital-energy differences.
+            if (grac_stretch_) {
+                // Sec. IV: a range-separated hybrid with full long-range exact exchange already
+                // decays as -1/r, so only stretch it: v = v_b - (1 - f) shift.  The bulk
+                // gradient and tau terms are untouched, so Eq. 17 has nothing to act on.
+                for (size_t i = 0; i < npoints; i++) {
+                    double denx = (rho[i] < 1.e-16) ? 1.e2 : std::pow(sigma[i], 0.5) / std::pow(rho[i], pow43);
+                    double grac_fx = 1.0 / (1.0 + std::exp(galpha * (denx - gbeta)));
+                    v_rho[i] -= (1.0 - grac_fx) * gshift;
                 }
+            } else if (grac_density_hessian_) {
+                // Indirect (integration-by-parts) matrix elements of (1 - f) v_b need the extra
+                // term of Eq. 17 when f depends on the density gradient:
+                //   <i| (1-f) v_b |j> = int (1-f) [v_rho phi_i phi_j + 2 v_gamma grad(rho).grad(phi_i phi_j)]
+                //                       - int 2 v_gamma (grad(rho).grad(f)) phi_i phi_j,
+                // with grad(f) = alpha f (1-f) grad(g) and g = |grad rho| / rho^(4/3).
+                auto need = [&vals](const char* key) {
+                    auto it = vals.find(key);
+                    if (it == vals.end() || !it->second) {
+                        throw PSIEXCEPTION("GRAC: DFT_GRAC_DENSITY_HESSIAN needs the density Hessian, which was not computed.");
+                    }
+                    return it->second->pointer();
+                };
+                double* rho_x = need("RHO_AX");
+                double* rho_y = need("RHO_AY");
+                double* rho_z = need("RHO_AZ");
+                double* rho_xx = need("RHO_AXX");
+                double* rho_xy = need("RHO_AXY");
+                double* rho_xz = need("RHO_AXZ");
+                double* rho_yy = need("RHO_AYY");
+                double* rho_yz = need("RHO_AYZ");
+                double* rho_zz = need("RHO_AZZ");
+                for (size_t i = 0; i < npoints; i++) {
+                    double denx = (rho[i] < 1.e-16) ? 1.e2 : std::pow(sigma[i], 0.5) / std::pow(rho[i], pow43);
+                    double grac_fx = 1.0 / (1.0 + std::exp(galpha * (denx - gbeta)));
+                    double sr_grac_fx = (1.0 - grac_fx);
 
-                double grac_fx = 1.0 / (1.0 + std::exp(galpha * (denx - gbeta)));
+                    double grad_rho_grad_f = 0.0;
+                    if (rho[i] >= 1.e-16 && sigma[i] > 0.0) {
+                        const double gx = rho_x[i], gy = rho_y[i], gz = rho_z[i];
+                        const double gHg = gx * (rho_xx[i] * gx + rho_xy[i] * gy + rho_xz[i] * gz) +
+                                           gy * (rho_xy[i] * gx + rho_yy[i] * gy + rho_yz[i] * gz) +
+                                           gz * (rho_xz[i] * gx + rho_yz[i] * gy + rho_zz[i] * gz);
+                        const double s = std::sqrt(sigma[i]);
+                        const double r43 = std::pow(rho[i], pow43);
+                        // grad(rho).grad(g) = (grad rho . H . grad rho) / (|grad rho| rho^4/3) - 4/3 |grad rho|^3 / rho^7/3
+                        const double grad_rho_grad_g = gHg / (s * r43) - pow43 * s * sigma[i] / (rho[i] * r43);
+                        grad_rho_grad_f = grac_alpha_ * grac_fx * sr_grac_fx * grad_rho_grad_g;
+                    }
 
-                double sr_grac_fx = (1.0 - grac_fx);
-                v_rho[i] = sr_grac_fx * (v_rho[i] - gshift) + (grac_fx * grac_v_rho[i]);
-                v_gamma[i] = sr_grac_fx * v_gamma[i];
+                    v_rho[i] = sr_grac_fx * (v_rho[i] - gshift) + (grac_fx * grac_v_rho[i]) -
+                               2.0 * v_gamma[i] * grad_rho_grad_f;
+                    v_gamma[i] = sr_grac_fx * v_gamma[i];
+                }
+            } else {
+                double denx;
+#pragma omp simd
+                for (size_t i = 0; i < npoints; i++) {
+                    if (rho[i] < 1.e-16) {
+                        denx = 1.e2;  // Will force grac_fx to 1
+                    } else {
+                        denx = std::pow(sigma[i], 0.5) / std::pow(rho[i], pow43);
+                    }
 
-                // We neglect the gradient of denx with v_gamma, as it requires the laplacian and
-                // there is virtually no difference. See DOI: 10.1002/cphc.200700504
+                    double grac_fx = 1.0 / (1.0 + std::exp(galpha * (denx - gbeta)));
+
+                    double sr_grac_fx = (1.0 - grac_fx);
+                    v_rho[i] = sr_grac_fx * (v_rho[i] - gshift) + (grac_fx * grac_v_rho[i]);
+                    v_gamma[i] = sr_grac_fx * v_gamma[i];
+
+                    // This omits the switching-gradient term of Eq. 17 of Cencek & Szalewicz
+                    // (2013); set DFT_GRAC_DENSITY_HESSIAN to include it.
+                }
             }
         }
 
@@ -1053,6 +1126,239 @@ double SuperFunctional::compute_vv10_kernel(const std::map<std::string, SharedVe
 
     // printf("Nact/Ntot Ext %zu / %zu\n", nact, l_npoints);
     return vv10_e;
+}
+namespace {
+// VV10 local quantities and their (rho, gamma) derivatives:
+//   W0 = sqrt(A), A = 4 pi rho / 3 + C gamma^2 / rho^4;  kappa = kpref rho^(1/6).
+struct VV10Local {
+    double w0, w0_r, w0_g, w0_rr, w0_rg, w0_gg;
+    double k_r, k_rr;
+};
+VV10Local vv10_local(double rho, double gamma, double vv10_c, double kappa) {
+    VV10Local l;
+    const double r4 = rho * rho * rho * rho;
+    const double A = (4.0 / 3.0) * M_PI * rho + vv10_c * gamma * gamma / r4;
+    const double A_r = (4.0 / 3.0) * M_PI - 4.0 * vv10_c * gamma * gamma / (r4 * rho);
+    const double A_g = 2.0 * vv10_c * gamma / r4;
+    const double A_rr = 20.0 * vv10_c * gamma * gamma / (r4 * rho * rho);
+    const double A_rg = -8.0 * vv10_c * gamma / (r4 * rho);
+    const double A_gg = 2.0 * vv10_c / r4;
+    l.w0 = std::sqrt(A);
+    const double i2w = 0.5 / l.w0;
+    const double i4w3 = 0.25 / (l.w0 * l.w0 * l.w0);
+    l.w0_r = A_r * i2w;
+    l.w0_g = A_g * i2w;
+    l.w0_rr = A_rr * i2w - A_r * A_r * i4w3;
+    l.w0_rg = A_rg * i2w - A_r * A_g * i4w3;
+    l.w0_gg = A_gg * i2w - A_g * A_g * i4w3;
+    l.k_r = kappa / (6.0 * rho);
+    l.k_rr = -5.0 * kappa / (36.0 * rho * rho);
+    return l;
+}
+}  // namespace
+std::map<std::string, SharedVector> SuperFunctional::compute_vv10_cache_response(
+    const std::map<std::string, SharedVector>& vals, const double* drho, const double* dgamma, double rho_thresh,
+    int npoints) {
+    const double kappa_pref = (1.5 * vv10_b_ * M_PI) / std::pow(9.0 * M_PI, 1.0 / 6.0);
+    const double* rhop = vals.find("RHO_A")->second->pointer();
+    const double* gammap = vals.find("GAMMA_AA")->second->pointer();
+
+    size_t nact = 0;
+    for (int i = 0; i < npoints; i++) {
+        if (rhop[i] >= rho_thresh) nact++;
+    }
+    auto drho_vec = std::make_shared<Vector>("DRHO points", nact);
+    auto dw0_vec = std::make_shared<Vector>("DW0 points", nact);
+    auto dkappa_vec = std::make_shared<Vector>("DKAPPA points", nact);
+    double* drp = drho_vec->pointer();
+    double* dwp = dw0_vec->pointer();
+    double* dkp = dkappa_vec->pointer();
+
+    size_t pos = 0;
+    for (int i = 0; i < npoints; i++) {
+        if (rhop[i] < rho_thresh) continue;
+        const double kappa = kappa_pref * std::pow(rhop[i], 1.0 / 6.0);
+        const VV10Local l = vv10_local(rhop[i], gammap[i], vv10_c_, kappa);
+        drp[pos] = drho[i];
+        dwp[pos] = l.w0_r * drho[i] + l.w0_g * dgamma[i];
+        dkp[pos] = l.k_r * drho[i];
+        pos++;
+    }
+
+    std::map<std::string, SharedVector> ret;
+    ret["DRHO"] = drho_vec;
+    ret["DW0"] = dw0_vec;
+    ret["DKAPPA"] = dkappa_vec;
+    return ret;
+}
+void SuperFunctional::compute_vv10_kernel_response(const std::map<std::string, SharedVector>& vals,
+                                                   const std::vector<std::map<std::string, SharedVector>>& vv10_cache,
+                                                   const std::vector<std::map<std::string, SharedVector>>& vv10_dcache,
+                                                   std::shared_ptr<BlockOPoints> block,
+                                                   const std::vector<const double*>& drho,
+                                                   const std::vector<const double*>& dgamma, double* v_gamma,
+                                                   const std::vector<double*>& dv_rho,
+                                                   const std::vector<double*>& dv_gamma) {
+    // compute_vv10_kernel, with E_nl = 1/2 sum_ij w_i rho_i w_j rho_j Phi(g_ij, g'_ij),
+    // g = W0_i R^2 + kappa_i, g' = W0_j R^2 + kappa_j, Phi = -3 / (2 g g' (g + g')), gives
+    //   v_rho_i = beta + phi_i + rho_i (kappa_r U_i + W0_r W_i),  v_gamma_i = rho_i W0_g W_i,
+    //   phi_i = sum_j w_j rho_j Phi,  U_i = sum_j w_j rho_j dPhi/dg,  W_i = sum_j w_j rho_j R^2 dPhi/dg.
+    // Here each is differentiated along a density perturbation: locally through (rho_i, gamma_i), and
+    // nonlocally through rho_j, W0_j and kappa_j at every cache point, which needs d2Phi/dg2 and d2Phi/dgdg'.
+    const double l_thresh = 1.e-12;  // compute_vv10_kernel's left-point screen
+    const size_t l_npoints = block->npoints();
+    const size_t nvec = drho.size();
+    compute_vv10_cache(vals, block, l_thresh, l_npoints, true);
+
+    const auto l_x = block->x();
+    const auto l_y = block->y();
+    const auto l_z = block->z();
+    const auto l_rho = vals.find("RHO_A")->second->pointer();
+    const auto l_gamma = vals.find("GAMMA_AA")->second->pointer();
+    const auto l_W0 = vv_values_["W0"]->pointer();
+    const auto l_kappa = vv_values_["KAPPA"]->pointer();
+
+    std::vector<std::array<double, 3>> dnl(std::max<size_t>(nvec, 1));
+    for (size_t i = 0; i < l_npoints; i++) {
+        v_gamma[i] = 0.0;
+        for (size_t k = 0; k < nvec; k++) {
+            dv_rho[k][i] = 0.0;
+            dv_gamma[k][i] = 0.0;
+        }
+        if (l_rho[i] < l_thresh) continue;
+
+        const double xi = l_x[i], yi = l_y[i], zi = l_z[i];
+        const double W0i = l_W0[i], ki = l_kappa[i];
+
+        // Per perturbation k, the nonlocal part (rho_j, W0_j, kappa_j perturbed at a fixed left point):
+        // dphi, dU, dW. The perturbation-independent sums U, W and the d2Phi/dg2 moments S0-S2 (R^0, R^2,
+        // R^4) ride along in the first perturbation's sweep: each sweep costs about one energy kernel pass.
+        double U = 0.0, W = 0.0, S0 = 0.0, S1 = 0.0, S2 = 0.0;
+        for (size_t k = 0; k < std::max<size_t>(nvec, 1); k++) {
+            const bool first = (k == 0);
+            const bool pert = (k < nvec);
+            double dphi = 0.0, dU = 0.0, dW = 0.0;
+            for (size_t b = 0; b < vv10_cache.size(); b++) {
+                const auto& r_block = vv10_cache[b];
+                const auto r_x = r_block.at("X")->pointer();
+                const auto r_y = r_block.at("Y")->pointer();
+                const auto r_z = r_block.at("Z")->pointer();
+                const auto r_w = r_block.at("W")->pointer();
+                const auto r_rho = r_block.at("RHO")->pointer();
+                const auto r_W0 = r_block.at("W0")->pointer();
+                const auto r_kappa = r_block.at("KAPPA")->pointer();
+                const size_t r_npoints = r_block.at("KAPPA")->dimpi()[0];
+                const double* r_drho = nullptr;
+                const double* r_dW0 = nullptr;
+                const double* r_dkappa = nullptr;
+                if (pert) {
+                    const auto& d = vv10_dcache[k * vv10_cache.size() + b];
+                    r_drho = d.at("DRHO")->pointer();
+                    r_dW0 = d.at("DW0")->pointer();
+                    r_dkappa = d.at("DKAPPA")->pointer();
+                }
+                if (first && pert) {
+#pragma omp simd reduction(+ : U, W, S0, S1, S2, dphi, dU, dW)
+                    for (size_t j = 0; j < r_npoints; j++) {
+                        const double d_x = xi - r_x[j];
+                        const double d_y = yi - r_y[j];
+                        const double d_z = zi - r_z[j];
+                        const double R2 = d_x * d_x + d_y * d_y + d_z * d_z;
+                        const double g = W0i * R2 + ki;
+                        const double gp = r_W0[j] * R2 + r_kappa[j];
+                        const double gs = g + gp;
+                        const double ig = 1.0 / g, igp = 1.0 / gp, igs = 1.0 / gs;
+                        const double Phi = -1.5 * ig * igp * igs;
+                        const double ag = ig + igs, agp = igp + igs;
+                        const double Phi_g = -Phi * ag;
+                        const double Phi_gp = -Phi * agp;
+                        const double Phi_gg = Phi * (ag * ag + ig * ig + igs * igs);
+                        const double Phi_ggp = Phi * (ag * agp + igs * igs);
+                        const double wr = r_w[j] * r_rho[j];
+                        const double t_g = wr * Phi_g;
+                        const double t_gg = wr * Phi_gg;
+                        U += t_g;
+                        W += t_g * R2;
+                        S0 += t_gg;
+                        S1 += t_gg * R2;
+                        S2 += t_gg * R2 * R2;
+                        const double a = r_w[j] * r_drho[j];
+                        const double c = wr * (R2 * r_dW0[j] + r_dkappa[j]);
+                        dphi += a * Phi + c * Phi_gp;
+                        const double t = a * Phi_g + c * Phi_ggp;
+                        dU += t;
+                        dW += t * R2;
+                    }
+                } else if (first) {
+#pragma omp simd reduction(+ : U, W, S0, S1, S2)
+                    for (size_t j = 0; j < r_npoints; j++) {
+                        const double d_x = xi - r_x[j];
+                        const double d_y = yi - r_y[j];
+                        const double d_z = zi - r_z[j];
+                        const double R2 = d_x * d_x + d_y * d_y + d_z * d_z;
+                        const double g = W0i * R2 + ki;
+                        const double gp = r_W0[j] * R2 + r_kappa[j];
+                        const double gs = g + gp;
+                        const double ig = 1.0 / g, igs = 1.0 / gs;
+                        const double wPhi = (-1.5 * r_w[j] * r_rho[j]) * ig * igs / gp;
+                        const double ag = ig + igs;
+                        const double t_g = -wPhi * ag;
+                        const double t_gg = wPhi * (ag * ag + ig * ig + igs * igs);
+                        U += t_g;
+                        W += t_g * R2;
+                        S0 += t_gg;
+                        S1 += t_gg * R2;
+                        S2 += t_gg * R2 * R2;
+                    }
+                } else {
+#pragma omp simd reduction(+ : dphi, dU, dW)
+                    for (size_t j = 0; j < r_npoints; j++) {
+                        const double d_x = xi - r_x[j];
+                        const double d_y = yi - r_y[j];
+                        const double d_z = zi - r_z[j];
+                        const double R2 = d_x * d_x + d_y * d_y + d_z * d_z;
+                        const double g = W0i * R2 + ki;
+                        const double gp = r_W0[j] * R2 + r_kappa[j];
+                        const double gs = g + gp;
+                        const double ig = 1.0 / g, igp = 1.0 / gp, igs = 1.0 / gs;
+                        const double Phi = -1.5 * ig * igp * igs;
+                        const double ag = ig + igs, agp = igp + igs;
+                        const double Phi_g = -Phi * ag;
+                        const double Phi_gp = -Phi * agp;
+                        const double Phi_ggp = Phi * (ag * agp + igs * igs);
+                        const double a = r_w[j] * r_drho[j];
+                        const double c = r_w[j] * r_rho[j] * (R2 * r_dW0[j] + r_dkappa[j]);
+                        dphi += a * Phi + c * Phi_gp;
+                        const double t = a * Phi_g + c * Phi_ggp;
+                        dU += t;
+                        dW += t * R2;
+                    }
+                }
+            }
+            dnl[k] = {dphi, dU, dW};
+        }
+
+        const VV10Local l = vv10_local(l_rho[i], l_gamma[i], vv10_c_, ki);
+        const double rho = l_rho[i];
+        v_gamma[i] = rho * l.w0_g * W;
+
+        for (size_t k = 0; k < nvec; k++) {
+            double dphi = dnl[k][0], dU = dnl[k][1], dW = dnl[k][2];
+
+            // Local part: W0_i and kappa_i move with (rho_i, gamma_i)
+            const double dr = drho[k][i];
+            const double dgm = dgamma[k][i];
+            const double dk = l.k_r * dr;
+            const double dw = l.w0_r * dr + l.w0_g * dgm;
+            dphi += U * dk + W * dw;
+            dU += S0 * dk + S1 * dw;
+            dW += S1 * dk + S2 * dw;
+
+            dv_rho[k][i] = dphi + dr * (l.k_r * U + l.w0_r * W) +
+                           rho * (l.k_rr * dr * U + l.k_r * dU + (l.w0_rr * dr + l.w0_rg * dgm) * W + l.w0_r * dW);
+            dv_gamma[k][i] = dr * l.w0_g * W + rho * ((l.w0_rg * dr + l.w0_gg * dgm) * W + l.w0_g * dW);
+        }
+    }
 }
 void SuperFunctional::test_functional(SharedVector rho_a, SharedVector rho_b, SharedVector gamma_aa,
                                       SharedVector gamma_ab, SharedVector gamma_bb, SharedVector tau_a,

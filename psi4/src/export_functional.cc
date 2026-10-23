@@ -155,6 +155,8 @@ void export_functional(py::module &m) {
         .def("grac_shift", &SuperFunctional::grac_shift, "Shift of the bulk potenital.")
         .def("grac_alpha", &SuperFunctional::grac_alpha, "GRAC Alpha.")
         .def("grac_beta", &SuperFunctional::grac_beta, "GRAC Beta.")
+        .def("grac_density_hessian", &SuperFunctional::grac_density_hessian, "Does GRAC include the Eq. 17 switching-gradient term.")
+        .def("grac_stretch", &SuperFunctional::grac_stretch, "Does GRAC stretch the bulk potential instead of splicing LB94.")
         .def("density_tolerance", &SuperFunctional::density_tolerance, "Density threshold for LibXC.")
         .def("is_gga", &SuperFunctional::is_gga, "Is this a GGA?")
         .def("is_meta", &SuperFunctional::is_meta, "Is this a MGGA?")
@@ -275,6 +277,8 @@ void export_functional(py::module &m) {
         .def("Dao", &VBase::set_D, "Returns internal AO density.")
         .def("compute_V", &VBase::compute_V, "doctsring")
         .def("compute_Vx", &VBase::compute_Vx, "doctsring")
+        .def("set_vx_neglect_vv10", &VBase::set_vx_neglect_vv10,
+             "Leave the VV10 kernel out of compute_Vx (approximate orbital Hessian; off by default).")
         .def("compute_gradient", &VBase::compute_gradient, "Compute the DFT nuclear gradient contribution.")
         .def("compute_hessain", &VBase::compute_hessian, "Compute the DFT nuclear Hessian contribution.")
 
@@ -318,7 +322,9 @@ void export_functional(py::module &m) {
 
     py::class_<sapt::FDDS_Dispersion, std::shared_ptr<sapt::FDDS_Dispersion>>(m, "FDDS_Dispersion", "docstring")
         .def(py::init<std::shared_ptr<BasisSet>, std::shared_ptr<BasisSet>, std::map<std::string, SharedMatrix>,
-                      std::map<std::string, SharedVector>, bool>())
+                      std::map<std::string, SharedVector>, bool, bool, double>(), py::arg("primary"),
+             py::arg("auxiliary"), py::arg("matrix_cache"), py::arg("vector_cache"), py::arg("is_hybrid"),
+             py::arg("is_lrc") = false, py::arg("omega") = 0.0)
         .def("metric", &sapt::FDDS_Dispersion::metric, "Obtains the FDDS metric.")
         .def("metric_inv", &sapt::FDDS_Dispersion::metric_inv, "Obtains the FDDS metric_inv.")
         .def("aux_overlap", &sapt::FDDS_Dispersion::aux_overlap, "Obtains the FDDS aux_overlap.")

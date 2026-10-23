@@ -1175,12 +1175,21 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         /*- SAPT_DFT_GRAC_COMPUTE will enable automatically computing GRAC
          shifts prior to running SAPT(DFT). Note that the user must not specify
          a value for SAPT_DFT_GRAC_SHIFT_A or SAPT_DFT_GRAC_SHIFT_B to trigger
-         this GRAC computation. "SINGLE" will try only once to converge the
-         cation for computing a GRAC shift. "ITERATIVE" will adjust local Psi4
-         options ("LEVEL_SHIFT", "LEVEL_SHIFT_CUTOFF") to attempt to converge
-         the neutral/cation calculations. "ITERATIVE" will try 3 times to
-         converge the cation before failing the SAPT(DFT) computation. -*/
+         this GRAC computation. Each attempt converges the neutral, then the
+         cation from both the neutral orbitals (GUESS READ) and SAD, keeping
+         the lower cation energy. "SINGLE" makes one attempt with ADIIS.
+         "ITERATIVE" makes up to 4 attempts, the last three adding
+         "LEVEL_SHIFT"/"LEVEL_SHIFT_CUTOFF" and "MAXITER" 200, before failing
+         the SAPT(DFT) computation. -*/
     options.add_str("SAPT_DFT_GRAC_COMPUTE", "NONE", "NONE SINGLE ITERATIVE");
+    /*- Converge every GRAC cation SCF (both guesses, every attempt) with
+    second-order "SOSCF" steps; the neutral is unaffected. When the hole mixes
+    near-degenerate orbitals (amide n/pi, ethane e_g, carboxylate O lone
+    pairs), DIIS can stall or converge 0.2-2 mEh above the cation ground
+    state. Slower: 5-7x the cation SCF time on larger monomers. For VV10
+    functionals the SOSCF Hessian includes the exact VV10 kernel; the faster
+    approximate Hessian is the SOSCF_NEGLECT_VV10_KERNEL fallback (warned). -*/
+    options.add_bool("SAPT_DFT_GRAC_CATION_SOSCF", false);
     /*- Compute or echo monomer GRAC shifts and stop before SAPT energies.
     Requires SINGLE or ITERATIVE and a non-HF functional. The returned dimer
     wavefunction has CURRENT ENERGY zero, not an interaction energy. -*/
@@ -1209,8 +1218,25 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("SAPT_DFT_USE_EINSUMS", true);
         /*- Enables the hybrid xc kernel in dispersion? !expert -*/
         options.add_bool("SAPT_DFT_DO_HYBRID", true);
+        /*- Include the long-range exact exchange (x_beta wK) of a range-separated
+        functional in the coupled induction (CPKS) response kernel? False drops only
+        that term and keeps the functional's own short-range xc kernel and any global
+        x_alpha K. Intended for reproducing response codes without a range-separated
+        kernel. !expert -*/
+        options.add_bool("SAPT_DFT_IND_LR_EXCH_KERNEL", true);
+        /*- Include the long-range exact exchange of a range-separated functional in
+        the FDDS dispersion kernel? False uses (1 - x_alpha) full-range ALDA exchange
+        plus x_alpha K, with no erfc-attenuated LDA and no wK; for LC-wPBE (x_alpha = 0)
+        this is the pure ALDA kernel of Cencek & Szalewicz, JCP 139, 024104 (2013).
+        !expert -*/
+        options.add_bool("SAPT_DFT_DISP_LR_EXCH_KERNEL", true);
         /*- Compute the Delta-DFT correction? -*/
         options.add_bool("SAPT_DFT_DO_DDFT", false);
+        /*- Compute the analytic nuclear gradient of the delta DFT dimer energy right after the
+        dimer DFT SCF, and store it as the matrix variable SAPT(DFT) DFT DIMER GRADIENT on the
+        globals and the dimer wavefunction. Requires SAPT_DFT_DO_DDFT; functionals with VV10 are
+        rejected because Psi4 has no analytic VV10 gradient. !expert -*/
+        options.add_bool("SAPT_DFT_DDFT_GRADIENT", false);
         /*- Do SAPT(DFT) Dispersion? Might turn off if using Delte-DFT correction and SAPT_DFT_D4_IE -*/
         options.add_bool("SAPT_DFT_DO_DISP", true);
         /*- Compute -D3 dispersion in SAPT(DFT) for SAPT(DFT)-D3? !expert -*/
@@ -1679,6 +1705,13 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("SOSCF_CONV", 5.0E-3);
         /*- Do we print the SOSCF microiterations?. -*/
         options.add_bool("SOSCF_PRINT", false);
+        /*- Fallback: leave the VV10 nonlocal kernel out of the SOSCF orbital Hessian of a VV10
+            functional (wB97X-V, wB97M-V, ...). Off by default, so SOSCF uses the exact Hessian.
+            When on, a warning is printed and the steps use an approximate Hessian (Vx ~0.5%
+            off), which changes the path but not the converged orbitals; it is faster, as the
+            exact kernel costs about two VV10 potential builds per microiteration (GRAC cation
+            SCFs ran 1.4-4x slower with it, in about as many iterations). -*/
+        options.add_bool("SOSCF_NEGLECT_VV10_KERNEL", false);
         /*- Whether to perform stability analysis after convergence.  NONE prevents analysis being
             performed. CHECK will print out the analysis of the wavefunction stability at the end of
             the computation.  FOLLOW will perform the analysis and, if a totally symmetric instability
@@ -1931,6 +1964,17 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_str("DFT_GRAC_X_FUNC", "XC_GGA_X_LB");
         /*- The gradient regularized asymptotic correction functional corr form. !expert -*/
         options.add_str("DFT_GRAC_C_FUNC", "XC_LDA_C_VWN");
+        /*- Include the switching-function gradient term of the GRAC potential matrix elements (Eq. 17 of
+        Cencek and Szalewicz, J. Chem. Phys. 139, 024104 (2013)). The gradient-dependent switch makes
+        the damped GGA term carry an extra
+        :math:`-2\,\partial F/\partial\gamma\,\nabla\rho\cdot\nabla f` that needs the density Hessian.
+        Off by default, which reproduces the historical Psi4 (and pre-2.9.0 ORCA) potential. !expert -*/
+        options.add_bool("DFT_GRAC_DENSITY_HESSIAN", false);
+        /*- How the GRAC asymptotic potential is spliced in. ``ASYMPTOTIC`` switches to LB94 exchange
+        (scaled by the missing long-range exact exchange) plus VWN correlation. ``STRETCH`` keeps the
+        bulk potential everywhere and only removes the shift where the switch is on, the Sec. IV splice
+        of Cencek and Szalewicz for range-separated hybrids with 100% long-range exact exchange. !expert -*/
+        options.add_str("DFT_GRAC_SPLICE", "ASYMPTOTIC", "ASYMPTOTIC STRETCH");
         /*- Number of spherical points (A :ref:`Lebedev Points <table:lebedevorder>` number). -*/
         options.add_int("DFT_SPHERICAL_POINTS", 302);
         /*- Number of radial points. -*/
