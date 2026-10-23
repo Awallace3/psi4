@@ -168,7 +168,7 @@ def verify_preparation(binding, runtime_sha, derivative_sha):
     verify_inputs()
 
 
-def storage_bounds(*, reserve=0):
+def storage_bounds(*, reserve=0, reserve_files=0):
     """Aggregate, regular-only study/scratch/log budgets, not reset per case."""
     bounds = PLAN["bounds"]
     output = logs = scratch = files = 0
@@ -194,9 +194,10 @@ def storage_bounds(*, reserve=0):
                     logs += info.st_size
                 else:
                     output += info.st_size
-    if (output+reserve > bounds["max_output_bytes"] or scratch > bounds["max_scratch_bytes"]
+    if (files+reserve_files > bounds["max_files"]
+            or output+reserve > bounds["max_output_bytes"] or scratch > bounds["max_scratch_bytes"]
             or logs > 2*bounds["max_log_bytes"]
-            or output+reserve+logs > bounds["max_total_bytes"]):
+            or output+reserve+logs+scratch > bounds["max_total_bytes"]):
         raise ValueError("whole study output/scratch/log aggregate bound")
     return dict(output_bytes=output, log_bytes=logs, scratch_bytes=scratch, files=files)
 
@@ -296,7 +297,7 @@ def one_case(psi4, molecule, explicit, case, data, xyz, binding, check, previous
         remeasurement_exact=None if reproducibility is None else reproducibility["all_exact"],
         collocation_admission="sampled measured differences only; no new acceptance tolerance",
         science_pass=False, properties_accepted=False, no_scf_isa_response=True)
-    storage_bounds(reserve=4*1024**2)
+    storage_bounds(reserve=4*1024**2, reserve_files=1)
     report_sha = R.write(out/"diagnostic.json", report)
     check()
     if reproducibility is not None and not reproducibility["all_exact"]:
@@ -412,12 +413,22 @@ def run(commit, tree, runtime_sha, derivative_sha):
                 R.verify_runtime(Path(PLAN["runtime"])/"runtime-manifest.json", runtime_sha,
                                  binding, hash_core=True)
                 record["after_runtime_closure"] = "passed"
-                check()  # cumulative budget includes final closure, not only each case
             except BaseException as error:
                 record.update(status="failed", study_complete=False, after_runtime_closure="failed",
                     closure_error=f"{type(error).__name__}: {error}", closure_traceback=traceback.format_exc())
         else:
             record.update(study_complete=False, after_runtime_closure="not initialized")
+    # Never throttle the final scan: include closure artifacts and fresh logs/
+    # scratch, and reserve room for both final receipts before admitting success.
+    try:
+        deadline()
+        record["final_storage"] = storage_bounds(reserve=65536, reserve_files=2)
+        deadline()
+        record["final_budgets"] = "passed"
+    except BaseException as error:
+        record.update(status="failed", study_complete=False, final_budgets="failed",
+            budget_error=f"{type(error).__name__}: {error}",
+            budget_traceback=traceback.format_exc())
     record["elapsed_seconds"] = time.monotonic()-started
     R.write(out/"result.json", record)
     code = 0 if record["study_complete"] else 1

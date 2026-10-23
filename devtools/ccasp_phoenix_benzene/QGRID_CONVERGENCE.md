@@ -78,7 +78,7 @@ Lossless vectors: five per case (`U`, `U_compensated`, `absolute_sum`,
 metadata/comparisons/basis/vectors:20MiB planned payload output, hard bound32MiB.
 Metadata writer independently caps each JSON at4MiB. Payload file hard limit
 16MiB; scratch64MiB with256MiB free admission; run free admission128MiB;
-96artifacts maximum. Stdout/stderr32MiB each; run including logs96MiB total.
+96artifacts maximum. Stdout/stderr32MiB each; output+logs+scratch96MiB total.
 Periodic aggregate checks (at most1s apart between bounded operations), each
 case's reserved write check, final checks and inherited OS file limits fail
 closed. Native calls/hash/filesystem operations can overrun until returning;
@@ -86,7 +86,8 @@ the30min scheduler limit is the hard outer bound, not a timing guarantee.
 
 One cumulative1500s payload deadline starts before admission/loader and includes
 all four cases, comparisons and final runtime closure. It is never reset at
-case boundaries. The86.24s measured baseline suggests ~9.5min proportional
+case boundaries. A forced unthrottled final scan includes closure artifacts
+and reserves64KiB/two files for final receipts. The86.24s measured baseline suggests ~9.5min proportional
 collocation work, **not** a guarantee. No resource widening, adaptation or retry.
 
 Run leaves all exclusive partial case files on any failure. Completion requires
@@ -121,6 +122,9 @@ creates exclusive paths, composes configured Python/new source with accepted
 native15cc/coreb283901d/Einsums1.1.3, creates separate runtime and derivative
 manifests and prints exact future scheduler argv. No raw-template overlay,
 build, install, download, old-stage mutation or native import in preparation.
+Configured runtime composition is separately bounded to32MiB copied Python
+plus two <=4MiB manifests (accepted core/data are links), outside the96MiB
+payload/run/scratch bound. Coordinator storage review must cover both.
 
 Generated manifest hashes remain **unknown** until that future preparation.
 Coordinator reviews actual hashes/argv, fresh capacity/storage/log conditions

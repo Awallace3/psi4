@@ -249,11 +249,13 @@ class JobTests(unittest.TestCase):
                 self.assertEqual((actual["output_bytes"], actual["log_bytes"],
                                   actual["scratch_bytes"]), (5, 7, 3))
                 for key, limit in (("max_output_bytes", 4), ("max_scratch_bytes", 2),
-                        ("max_total_bytes", 11), ("max_log_bytes", 6), ("max_files", 2)):
+                        ("max_total_bytes", 14), ("max_log_bytes", 6), ("max_files", 2)):
                     with mock.patch.dict(J.PLAN["bounds"], {key: limit}), self.assertRaises(ValueError):
                         J.storage_bounds()
                 with self.assertRaises(ValueError):
                     J.storage_bounds(reserve=J.PLAN["bounds"]["max_output_bytes"])
+                with self.assertRaises(ValueError):
+                    J.storage_bounds(reserve_files=J.PLAN["bounds"]["max_files"])
                 (run/"link").symlink_to(scratch)
                 with self.assertRaises(ValueError):
                     J.storage_bounds()
@@ -387,6 +389,70 @@ class JobTests(unittest.TestCase):
         self.assertEqual(J.PLAN["base"], "e24f97e9b7fbafcc25231be50feb1c39a38b5862")
         self.assertEqual(J.Q.PLAN["base"], "c31ad7fbe6ca2f91e6654e25807536009c58bb29")
         self.assertEqual(J.PLAN["cases"], C.CASES)
+
+    def test_actual_science_orchestrates_four_cases_same_deadline_and_effects(self):
+        rows = [dict(column=i, site="C1", shell=0, centre=0, l=0) for i in range(1146)]
+        runtime = dict(python="TOY", numpy="TOY", adcc="TOY", node="TOY")
+        data = dict(capture=dict(rows=rows), baseline_runtime=runtime)
+        clock_check = mock.Mock()
+        called = []
+        def one_case(psi4, molecule, explicit, case, actual_data, xyz, binding, check, previous):
+            self.assertIs(check, clock_check)
+            self.assertEqual(len(previous), len(called))
+            self.assertEqual(actual_data["runtime_identity"]["runtime_manifest_sha256"], "c"*64)
+            called.append(case["name"])
+            index = len(called)
+            return dict(name=case["name"], grid_sha256=str(index)*64,
+                diagnostic_sha256="f"*64, U=[float(index)]*1146,
+                U_compensated=[float(index)]*1146)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root/"metadata").mkdir()
+            (root/"results").mkdir()
+            (root/"scratch").mkdir()
+            J.R.write(root/"metadata/runtime.json", runtime)
+            J.R.write(root/"results/basis-identities-grid-only.json", {"synthetic": True})
+            with mock.patch.dict(J.PLAN, run=str(root), scratch=str(root/"scratch")), \
+                 mock.patch.dict(J.os.environ, SLURM_JOB_ID="TOY"), \
+                 mock.patch.object(J.R, "compute_guard"), \
+                 mock.patch.object(J, "verify_inputs", return_value=data), \
+                 mock.patch.object(J, "basis_only", return_value=(object(), object(), [])), \
+                 mock.patch.object(J, "one_case", side_effect=one_case), \
+                 mock.patch.object(J.os, "statvfs", return_value=SimpleNamespace(f_bavail=2**30, f_frsize=1)):
+                result = J.science(object(), {"toy": True}, "c"*64, "d"*64, clock_check)
+            self.assertEqual(called, [c["name"] for c in C.CASES])
+            self.assertTrue(result["study_complete"])
+            saved = json.loads((root/"results/comparisons.json").read_text())
+            self.assertEqual(saved["effects"]["U"]["radial_at_590"]["summary"]["signed_sum"], 1146.)
+            self.assertEqual(saved["effects"]["U"]["interaction"]["summary"]["maxabs"], 0.)
+
+    def test_final_storage_scan_is_unthrottled_and_failure_withholds_completion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root/"metadata").mkdir()
+            def initialize(*args):
+                args[-1].append(object())
+                return object(), args[-1][0]
+            with mock.patch.dict(J.PLAN, run=str(root)), \
+                 mock.patch.dict(J.os.environ, SLURM_JOB_ID="TOY"), \
+                 mock.patch.object(J.R, "compute_guard"), \
+                 mock.patch.object(J, "binding_for", return_value={}), \
+                 mock.patch.object(J, "verify_preparation"), \
+                 mock.patch.object(J.R, "initialize", side_effect=initialize), \
+                 mock.patch.object(J.R, "verify_runtime"), \
+                 mock.patch.object(J.R.OLD, "snapshot"), \
+                 mock.patch.object(J, "science", return_value=dict(study_complete=True,
+                     completed_cases=[c["name"] for c in C.CASES])), \
+                 mock.patch.object(J.signal, "signal"), \
+                 mock.patch.object(J.resource, "setrlimit"), \
+                 mock.patch.object(J.time, "monotonic", return_value=0.), \
+                 mock.patch.object(J, "storage_bounds", side_effect=[{}, ValueError("final mixed storage")]) as scan:
+                self.assertEqual(J.run("a"*40, "b"*40, "c"*64, "d"*64), 1)
+                self.assertEqual(scan.call_count, 2)
+            result = json.loads((root/"results/result.json").read_text())
+            self.assertEqual(result["after_runtime_closure"], "passed")
+            self.assertEqual(result["final_budgets"], "failed")
+            self.assertFalse(result["study_complete"])
 
     def test_guard_before_any_native_or_output(self):
         with mock.patch.object(J.R, "compute_guard", side_effect=ValueError("local")), \
