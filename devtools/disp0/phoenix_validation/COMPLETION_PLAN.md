@@ -91,6 +91,22 @@ it is not the primary production CPU benchmark.
   and incurred no new SLURM allocation. The original pilot is untouched.
   Failed nanotube14324682 cannot be requalified this way: its original
   helper did not save the full matrices before the guard failed.
+- The user subsequently selected **Inferno retry** for exactly one corrected
+  nanotube allocation:24CPUs64GiB2h, maximum$0.39. Fresh selector `b11f87311`
+  reported gts-cs207 available-$0.07, selected gts-cs207-chemx for this one
+  job. Submission `bc857a3ee` uses immutable helper `abd4c1bc46` and a fresh
+  root `production-cpu-ledger-abd4c1bc46/nanotube`, without modifying the
+  original nanotube failure or protein83 job14324700. No further retry or
+  new GPU allocation is authorized by this approval.
+- **14326813 submitted**, after exact CPU-small test-only and successful
+  old-pilot requalification plus terminal accounting. The test-only probe
+  printed14326812, which is not the submitted compute job.
+  Fresh output:
+  `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/production-cpu-ledger-abd4c1bc46/nanotube`.
+  Durable watcher `b2ac040c0`; effective-route/prolog inspection `bebb0482a`.
+  Controller readback confirmed gts-cs207-chemx/cpu-small/**inferno**,
+  24CPUs64G2h and exact core24/gold6226/localNVMe features; PENDING(Priority).
+  No prolog existed yet. Allocation-local admission still must pass at start.
 - Nanotube's printed virtual extents are732/662 with742AOs and8/78 occupied:
   the retained orbital rank is740, not742. Future GPU qualification must not
   equate retained MO rank with the AO count in an augmented basis.
