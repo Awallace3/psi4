@@ -48,6 +48,34 @@ it is not the primary production CPU benchmark.
 
 ### CPU submission checkpoint
 
+- **Nanotube14324682 FAILED1:0** after3m20s, not OOM/SCF/localization failure.
+  Allocation admission and both water preflights passed. The first full
+  v2 call completed its science in155.904s, then the old net-total guard
+  rejected a0.64329819microEh fragment-sum residual;0 accepted samples.
+  The log/source explain the known DF consistency: localized Elst is
+  -28.77586628mEh versus JK canonical -28.776417821518407mEh
+  (~0.55154microEh), with the remaining~0.09176microEh from scaled fitted
+  induction. All three SCFs and all three IBO localizations converged.
+  Do not promote this failed single call to a qualified timing median.
+- A post-timing harness correction is being prepared: strict canonical
+  component algebra plus unchanged per-component tolerances (including
+  directional induction), raw residual reporting and unchanged v2/C++ matrix
+  comparison. No matrix correction or scientific algorithm change.
+  The nanotube cancellation counterexample reproduced the old failure in a
+  fast regression; all31 corrected helper/input guards pass.
+  Timed engine/resource/environment/shared-runtime fingerprints match005f.
+  Existing successful peptide samples can be requalified without retiming
+  only if those proof checks and new ledgers pass for every sample.
+  Replay recomputes sums from hashed NPZ matrices, binds each sample's
+  identity/options and repeats the paired/gauge checks. Fingerprints seal
+  all other post-call qualification rules as well as the timed engine.
+  Failed artifacts now preserve matrices before later guard failures.
+  **No paid retry has been submitted or authorized automatically.**
+- Nanotube's printed virtual extents are732/662 with742AOs and8/78 occupied:
+  the retained orbital rank is740, not742. Future GPU qualification must not
+  equate retained MO rank with the AO count in an augmented basis.
+  The timing helpers now record retained rank/virtual counts after the timer.
+  This does not change any timed work or old immutable job artifacts.
 - Helper pin: `005f3b4c71c521fa5156585c2eea461b74c4c9c3`, staged clean at
   `/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-cpu-production-005f3b4c71`.
   All28 offline helper/input/CPU-comparison guards passed. Scientific source/

@@ -8,10 +8,91 @@ import compare_cpu
 import cpu_benchmark
 import submit_cpu
 import validate_cpu_allocation
+import cpu_pilot_proof
 from gpu_runtime import digest
 
 
 class CPUComparison(unittest.TestCase):
+    def test_pilot_reuse_fingerprints_exclude_only_post_timing_validation(self):
+        text=Path(cpu_benchmark.__file__).read_text()
+        original=cpu_pilot_proof.timed_parts(text)
+        self.assertEqual(original,cpu_pilot_proof.timed_parts(
+            text.replace('err_msg="Canonical component algebra vs interaction energy"',
+                         'err_msg="post-timing diagnostic changed"')))
+        self.assertNotEqual(original,cpu_pilot_proof.timed_parts(
+            text.replace('expected="einsums.fdisp0"','expected="post-timing change"')))
+        self.assertNotEqual(original,cpu_pilot_proof.timed_parts(
+            text.replace('energy,wfn=psi4.energy("sapt(dft)"','energy,wfn=psi4.energy("other"')))
+        self.assertNotEqual(original,cpu_pilot_proof.timed_parts(
+            text.replace('fisapt_fsapt_ind_response=False','fisapt_fsapt_ind_response=True')))
+        with self.assertRaises(RuntimeError):
+            cpu_pilot_proof.timed_parts(text.replace('        expected=','        renamed='))
+        with self.assertRaises(RuntimeError):
+            cpu_pilot_proof.timed_parts(text.replace("def validate_component_ledger",
+                "@change_environment()\ndef validate_component_ledger"))
+
+    def test_pilot_requalification_binds_actual_matrix_sums_and_each_sample_identity(self):
+        expected={"source_pin":"science","input_manifest_sha256":"inputs",
+            "dependency_proof_sha256":"config","threads":24,"psi4_memory":"40 GiB",
+            "stage":"/stage","node":"node","geometry_sha256":"geometry","frozen_occupied":[0,0]}
+        with tempfile.TemporaryDirectory() as directory:
+            pilot=Path(directory)
+            for repeat in range(3):
+                for arm in ("cpp","einsums"):
+                    root=pilot/f"r{repeat}-{arm}";root.mkdir()
+                    matrices={name:np.ones((2,2))*.1 for name in ("Elst","Exch","IndAB","IndBA","Disp")}
+                    np.savez(root/"matrices.npz",**matrices)
+                    value={**expected,"status":"COMPLETED_CPU_REQUIRES_PAIRED_VALIDATION",
+                        "system":"peptide","arm":arm,"repeat":repeat,
+                        "options":{**cpu_benchmark.production_options(arm),"fisapt_fsapt_filepath":"none"},
+                        "matrices_sha256":digest(root/"matrices.npz"),
+                        "signed_matrix_sums":{name:.4 for name in matrices},"canonical":{},"energy_Eh":-.01}
+                    (root/"result.json").write_text(json.dumps(value))
+            callback=lambda sums,canonical,energy:{"checked_actual_sums":sums}
+            proof=cpu_pilot_proof.revalidate_samples(pilot,expected,callback)
+            self.assertEqual(len(proof),6)
+            self.assertEqual(proof["r0-cpp"]["revalidated_component_ledger"]["checked_actual_sums"]["Elst"],.4)
+            path=pilot/"r0-cpp/result.json";original=json.loads(path.read_text())
+            for key,value in (("arm","einsums"),("repeat",1),("system","nanotube"),
+                              ("input_manifest_sha256","foreign"),("geometry_sha256","foreign")):
+                path.write_text(json.dumps({**original,key:value}))
+                with self.subTest(key=key),self.assertRaises(RuntimeError):
+                    cpu_pilot_proof.revalidate_samples(pilot,expected,callback)
+            stale={**original,"signed_matrix_sums":{**original["signed_matrix_sums"],"Elst":.5}}
+            path.write_text(json.dumps(stale))
+            with self.assertRaises(AssertionError):
+                cpu_pilot_proof.revalidate_samples(pilot,expected,callback)
+
+    def test_cancelled_total_does_not_impose_stricter_DF_accuracy_than_components(self):
+        # Counterexample reconstructed from nanotube14324682: observed net
+        # residual0.64329819 microEh and localized electrostatic residual0.55154.
+        canonical={"Elst10,r":-.028776417821518407,"Exch10":.06380549626997682,
+            "Ind20,r":-.03837080179904888,"Exch-Ind20,r":.035556549843709,
+            "Delta HF Correction":-.003955312576267869,
+            "Ind20,r (A<-B)":-.027772966836654943,"Exch-Ind20,r (A<-B)":.02582080324813478,
+            "Ind20,r (A->B)":-.010597834962393938,"Exch-Ind20,r (A->B)":.009735746595574222,
+            "Disp20,u":-.03984732454923503,"Exch-Disp20,u":.00832731373642325}
+        scale=(canonical["Ind20,r"]+canonical["Exch-Ind20,r"]+canonical["Delta HF Correction"])/(
+            canonical["Ind20,r"]+canonical["Exch-Ind20,r"])
+        sums={"Elst":canonical["Elst10,r"],"Exch":canonical["Exch10"],
+              "Disp":canonical["Disp20,u"]+canonical["Exch-Disp20,u"]}
+        for side,direction in (("AB","A<-B"),("BA","A->B")):
+            sums["Ind"+side]=scale*(canonical[f"Ind20,r ({direction})"]+
+                                    canonical[f"Exch-Ind20,r ({direction})"])
+        energy=sum(sums.values())
+        sums["Elst"]+=5.51541518409e-7
+        sums["IndAB"]+=6.4329819e-7-5.51541518409e-7
+        actual=cpu_benchmark.validate_component_ledger(sums,canonical,energy)
+        self.assertAlmostEqual(actual["raw_fragment_sum_residual_Eh"],6.4329819e-7,places=14)
+        # Opposing induction errors must NOT be hidden by a matching total.
+        with self.assertRaises(AssertionError):
+            cpu_benchmark.validate_component_ledger(
+                {**sums,"IndAB":sums["IndAB"]+5e-6,"IndBA":sums["IndBA"]-5e-6},canonical,energy)
+        with self.assertRaises(AssertionError):
+            cpu_benchmark.validate_component_ledger({**sums,"Elst":sums["Elst"]+2e-6},canonical,energy)
+        with self.assertRaises(AssertionError):
+            cpu_benchmark.validate_component_ledger(sums,canonical,energy+1e-5)
+
     def test_effective_allocation_must_match_explicit_paid_shape(self):
         check=validate_cpu_allocation
         manifest={"account":"gts-cs207-chemx","qos":"inferno","memory_GiB":64,"wall_time":"01:00:00"}

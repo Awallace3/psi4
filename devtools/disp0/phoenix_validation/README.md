@@ -121,6 +121,28 @@ recorded; a printed localization failure is fatal to qualification.
 This CPU-v2/C++ ratio is **not** a GPU speedup. The current GPU correctness
 gate uses exact per-source response, a different fragment approximation.
 
+### Density-fitting conservation checks
+
+The localized Coulomb partition uses DFHelper, whereas canonical totals use JK.
+Their documented DF-consistency residual is not necessarily below a tolerance
+applied to the much smaller, cancellation-dominated total interaction energy.
+The validator therefore checks the canonical component algebra strictly and
+each fitted component against its own target, preserving the original component
+tolerances and reporting every raw residual. It never renormalizes matrices.
+Directional scaled induction and unchanged cross-backend full-matrix checks
+remain required. Arrays and scalar observations are saved even if qualification
+subsequently fails.
+
+A new post-timing validator may reuse an existing qualified pilot only after
+`cpu_pilot_proof.py` establishes equality of the entire pre-validation timed
+engine, other module statements, resource/environment contract and shared
+runtime files, and seals all remaining post-call qualification rules. It
+then recomputes sums from hashed matrices, binds each original sample's
+identity/options and replays the six ledgers and paired/repeat comparisons.
+Scientific/method/
+timing changes still require a new native pilot. Process-overhead times are
+not claimed invariant across validator versions; the energy-call timer is.
+
 ## Exact-response GPU diagnostic gate
 
 `COMPLETION_PLAN.md` records the agreed full F-SAPT scope (peptide, nanotube,

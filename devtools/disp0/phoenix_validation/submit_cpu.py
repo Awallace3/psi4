@@ -73,15 +73,21 @@ def main():
         pilot=args.pilot_job_run.resolve(strict=True)
         outcome=json.loads((pilot/"comparison-result.json").read_text())
         status=(pilot/"job-status.env").read_text()
-        validate_pilot(outcome,status,helper_pin=pin,source_pin=value["source_pin"],
+        requalification=None
+        pilot_pin=outcome["helper_pin"]
+        validate_pilot(outcome,status,helper_pin=pilot_pin,source_pin=value["source_pin"],
                        inputs_sha256=args.inputs_sha256,config_sha256=args.config_sha256)
+        if pilot_pin!=pin:
+            from cpu_pilot_proof import revalidate_pilot
+            from cpu_benchmark import validate_component_ledger
+            requalification=revalidate_pilot(source,pilot,pilot_pin,validate_component_ledger)
         job=pilot.name.removeprefix("job-")
         if not job.isdecimal():raise RuntimeError("Invalid pilot job identity")
         accounting=subprocess.check_output(["sacct","-n","-P","-j",job,
             "--format=JobIDRaw,State,ExitCode"],text=True,timeout=30)
         validate_accounting(accounting,job)
         pilot_proof={"run":str(pilot),"comparison_sha256":digest(pilot/"comparison-result.json"),
-                     "accounting":accounting}
+                     "accounting":accounting,"post_timing_requalification":requalification}
     for name in ("cpu_job.sbatch","cpu_payload.sh","cpu_benchmark.py","compare_cpu.py",
                  "validate_cpu_allocation.py"):
         if not (source/"devtools/disp0/phoenix_validation"/name).is_file():
