@@ -826,7 +826,8 @@ per SDK call. Zero uses the full AO tile; one uses serial SDK calls without
 moving response matrices to the host. This isolates batching efficiency from
 device residency while retaining the same J/K operator.
 
-The response-only |globals__cuest_response_symmetric_k| optimization uses
+The response-only |globals__cuest_response_symmetric_k| optimization (default
+true, active only for device-CG Grid-K) uses
 the fact that CPKS consumes :math:`K(D)+K(D)^T`, rather than general
 :math:`K(D)`. With :math:`D_s=(D+D^T)/2`, the cuEST operator-symmetry
 restoration gives

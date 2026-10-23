@@ -110,7 +110,10 @@ void CuestJKDeviceResponse::compute() {
             jk_.compute_coulomb(work_, view_.density + n * n2, view_.coulomb + n * n2);
     }
     if (!view_.compute_exchange) return;
-    CuestResponseProfile profile(jk_.options_.get_bool("CUEST_RESPONSE_PROFILE"), "cuEST response: K");
+    const char* k_profile_label = !jk_.gridk_ ? "cuEST response: K" :
+        symmetric_gridk_ ? (batch_size_ == 1 ? "cuEST response: K sym batch1" : "cuEST response: K sym batched") :
+                          (batch_size_ == 1 ? "cuEST response: K gen batch1" : "cuEST response: K gen batched");
+    CuestResponseProfile profile(jk_.options_.get_bool("CUEST_RESPONSE_PROFILE"), k_profile_label);
     if (jk_.gridk_) {
 #ifdef PSI_CUEST_HAS_GRIDK
         const double* grid_density = view_.density;

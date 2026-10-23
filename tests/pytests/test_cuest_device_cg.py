@@ -9,7 +9,8 @@ pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick, pytest.mark.c
 
 
 def _wavefunction(method="pbe0", unrestricted=False, directj=True, gridk=True,
-                  gpu_xc=True, symmetry="c1", grac=False, atom=False, neutral_uhf=False, guess=None):
+                  gpu_xc=True, symmetry="c1", grac=False, atom=False, neutral_uhf=False, guess=None,
+                  mixed_precision=False, ints_tolerance=0.0):
     psi4.core.clean()
     psi4.core.clean_options()
     psi4.set_num_threads(2)
@@ -32,11 +33,11 @@ def _wavefunction(method="pbe0", unrestricted=False, directj=True, gridk=True,
         "scf_type": "df", "use_cuest": True, "save_jk": True,
         "guess": guess or ("sad" if unrestricted and not atom and not neutral_uhf else "core"),
         "cuest_directj": directj, "cuest_gridk": gridk, "cuest_xc": gpu_xc,
-        "cuest_device_cg": False, "cuest_mixed_precision": False, "cuest_gemm_min_dim": 0,
+        "cuest_device_cg": False, "cuest_mixed_precision": mixed_precision, "cuest_gemm_min_dim": 0,
         "dft_radial_points": 35, "dft_spherical_points": 110,
         # Test the linear solver independently of density-dependent quartet
         # truncation. Benchmarks may separately use converged finite screening.
-        "dft_pruning_scheme": "none", "ints_tolerance": 0.0,
+        "dft_pruning_scheme": "none", "ints_tolerance": ints_tolerance,
         "e_convergence": 1.e-11, "d_convergence": 1.e-10,
     })
     if grac:
@@ -75,7 +76,7 @@ def _device_solve(wfn, rhs, tol=1.e-9, maxiter=100):
         raise
 
 
-def _check(wfn, rhs, result, atol=1.e-9):
+def _check(wfn, rhs, result, atol=1.e-9, relative_tol=1.e-9):
     assert wfn.cphf_converged()
     for b, ax in zip(rhs, wfn.cphf_Hx(result)):
         np.testing.assert_allclose(ax.np, b.np, atol=atol, rtol=0)
@@ -87,7 +88,7 @@ def _check(wfn, rhs, result, atol=1.e-9):
     assert stats["iteration_scalar_device_to_host_bytes"] <= (
         stats["operator_calls"] * (stats["rhs_count"] * 8 + 4) + 4
     )
-    assert stats["final_max_relative_residual"] <= 1.e-9
+    assert stats["final_max_relative_residual"] <= relative_tol
 
 
 def test_cuest_device_cg_initial_status():
@@ -151,6 +152,60 @@ def test_cuest_response_symmetric_gridk_sum(method, unrestricted):
         np.testing.assert_allclose(out.np, ref, atol=1.e-8, rtol=0)
 
 
+def test_cuest_response_symmetric_gridk_preserves_general_jk():
+    """A response-only shortcut cannot change a borrowed builder's general K."""
+    wfn = _wavefunction("hf")
+    rhs = _rhs(wfn, False, count=1, mixed=False)
+    rng = np.random.default_rng(12)
+    nbf = wfn.basisset().nbf()
+    left = psi4.core.Matrix.from_array(rng.normal(size=(nbf, 3)) * .1)
+    right = psi4.core.Matrix.from_array(-rng.normal(size=(nbf, 3)) * .1)
+    jk = wfn.jk()
+    def general_exchange():
+        jk.C_clear()
+        jk.C_left_add(left)
+        jk.C_right_add(right)
+        jk.compute()
+        return jk.K()[0].np.copy()
+    expected = general_exchange()
+    assert np.max(np.abs(expected-expected.T)) > 1.e-4
+    psi4.set_options({"cuest_response_symmetric_k": True})
+    result = _device_solve(wfn, rhs)
+    np.testing.assert_allclose(general_exchange(), expected, atol=1.e-11, rtol=0)
+    _check(wfn, rhs, result)
+
+
+@pytest.mark.parametrize("unrestricted", [False, True])
+@pytest.mark.parametrize("batch_size", [2, 3])
+def test_cuest_response_symmetric_gridk_chunked_edges(unrestricted, batch_size):
+    """Exercise signed symmetric K with tiled, partial, cross-spin and inactive slots."""
+    wfn = _wavefunction("pbe0", unrestricted)
+    rhs = _rhs(wfn, unrestricted, count=11)
+    psi4.set_options({"cuest_response_symmetric_k": True, "cuest_response_batch_size": batch_size})
+    result = _device_solve(wfn, rhs)
+    _check(wfn, rhs, result)
+    stats = wfn.cphf_device_stats()
+    assert stats["symmetric_gridk"] == 1 and stats["ao_rhs_tile"] < 11
+    assert stats["jk_density_batch_size"] == batch_size
+    start = 2 if unrestricted else 1
+    for out in result[start:2*start]:
+        np.testing.assert_array_equal(out.np, 0)
+
+
+@pytest.mark.parametrize("unrestricted", [False, True])
+def test_cuest_response_symmetric_gridk_default_math(unrestricted):
+    """Validate the default SDK math mode with finite production screening."""
+    wfn = _wavefunction("pbe0", unrestricted, mixed_precision=True, ints_tolerance=1.e-14)
+    rhs = _rhs(wfn, unrestricted, count=3, mixed=False)
+    expected = [m.np.copy() for m in wfn.cphf_solve(rhs, 1.e-8, 150, 0)]
+    assert wfn.cphf_converged()
+    psi4.set_options({"cuest_response_symmetric_k": True})
+    result = _device_solve(wfn, rhs, tol=1.e-8)
+    _check(wfn, rhs, result, relative_tol=1.e-8)
+    for ref, out in zip(expected, result):
+        np.testing.assert_allclose(out.np, ref, atol=1.e-8, rtol=0)
+
+
 @pytest.mark.parametrize("unrestricted", [False, True])
 @pytest.mark.parametrize("method", ["hf", "svwn", "pbe0", "cam-b3lyp"])
 @pytest.mark.parametrize("directj,gridk", [(False, False), (True, False), (False, True), (True, True)])
@@ -203,24 +258,30 @@ def test_cuest_device_cg_noncanonical_panels():
     _check(wfn, rhs, _device_solve(wfn, rhs))
 
 
-def test_cuest_device_cg_tiled_rhs():
+@pytest.mark.parametrize("symmetric_k", [False, True])
+def test_cuest_device_cg_tiled_rhs(symmetric_k):
     wfn = _wavefunction("pbe0")
     rhs = _rhs(wfn, False, count=11)
+    psi4.set_options({"cuest_response_symmetric_k": symmetric_k})
     _check(wfn, rhs, _device_solve(wfn, rhs))
     assert wfn.cphf_device_stats()["ao_rhs_tile"] < 11
 
 
-def test_cuest_device_cg_empty_beta():
+@pytest.mark.parametrize("symmetric_k", [False, True])
+def test_cuest_device_cg_empty_beta(symmetric_k):
     wfn = _wavefunction("hf", unrestricted=True, atom=True)
     rhs = _rhs(wfn, True, mixed=False)
+    psi4.set_options({"cuest_response_symmetric_k": symmetric_k})
     result = _device_solve(wfn, rhs)
     _check(wfn, rhs, result)
     for b in result[1::2]:
         assert b.np.shape[0] == 0
 
 
-def test_cuest_device_cg_borrowed_bare_k():
+@pytest.mark.parametrize("symmetric_k", [False, True])
+def test_cuest_device_cg_borrowed_bare_k(symmetric_k):
     wfn = _wavefunction()
+    psi4.set_options({"cuest_response_symmetric_k": symmetric_k})
     wfn.jk().set_omega_alpha(1.)
     rhs = _rhs(wfn, False, mixed=False)
     _check(wfn, rhs, _device_solve(wfn, rhs))

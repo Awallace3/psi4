@@ -261,8 +261,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- For device CPHF/CPKS only, evaluate the required Hermitian exchange sum
         using symmetric Grid-K on (D + D.T)/2. This retains K(D) + K(D).T
         without computing the discarded antisymmetric part. Generic JK builds
-        continue to return general nonsymmetric K. !expert -*/
-    options.add_bool("CUEST_RESPONSE_SYMMETRIC_K", false);
+        continue to return general nonsymmetric K. Enabled by default for the
+        device solver's Grid-K response contractions. !expert -*/
+    options.add_bool("CUEST_RESPONSE_SYMMETRIC_K", true);
     /*- Tune # of Ozaki Slices in emulated DF K computations (requires CUDA and cuEST libraries) -*/
     options.add_int("CUEST_DFK_SLICES", 5);
     /*- Tune # of Ozaki Moduli in emulated DF K computations (requires CUDA and cuEST libraries) -*/

@@ -23,6 +23,16 @@ def test_cuest_gridk_option_default(option):
         psi4.set_options({option: False})
 
 
+def test_cuest_response_symmetric_k_default():
+    psi4.core.clean_options()
+    assert psi4.core.get_global_option("CUEST_RESPONSE_SYMMETRIC_K")
+    try:
+        psi4.set_options({"cuest_response_symmetric_k": False})
+        assert not psi4.core.get_global_option("CUEST_RESPONSE_SYMMETRIC_K")
+    finally:
+        psi4.set_options({"cuest_response_symmetric_k": True})
+
+
 @pytest.mark.parametrize("optimizer", ["INTERNAL", "OOO", "OPENORBITALOPTIMIZER"])
 @pytest.mark.parametrize("use_cuest", [False, True])
 @pytest.mark.parametrize("cuest_xc", [False, True])
