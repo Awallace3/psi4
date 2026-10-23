@@ -217,10 +217,12 @@ def test_cuest_device_cg_mismatched_jk_rejected():
     wrong_basis = psi4.core.BasisSet.build(wfn.molecule(), "ORBITAL", "sto-3g")
     wrong_jk = psi4.core.JK.build_JK(wrong_basis, wfn.get_basisset("DF_BASIS_SCF"))
     wrong_jk.initialize()
-    wfn.set_jk(wrong_jk)
-    with pytest.raises(RuntimeError, match="AO dimensions do not match"):
-        _device_solve(wfn, _rhs(wfn, False))
-    assert not wfn.cphf_converged()
+    # HF owns this invariant and rejects the builder before attachment. The
+    # resident adapter must keep using the original valid plan after rejection.
+    with pytest.raises(RuntimeError, match="basis functions does not match"):
+        wfn.set_jk(wrong_jk)
+    rhs = _rhs(wfn, False, count=1, mixed=False)
+    _check(wfn, rhs, _device_solve(wfn, rhs))
 
 
 def test_cuest_device_cg_symmetry_rejected():
