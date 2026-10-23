@@ -71,6 +71,12 @@ it is not the primary production CPU benchmark.
   all other post-call qualification rules as well as the timed engine.
   Failed artifacts now preserve matrices before later guard failures.
   **No paid retry has been submitted or authorized automatically.**
+- Corrected helper `c58a490670` was staged separately. Its first offline
+  peptide replay stopped before numerical replay because Slurm's short
+  node name differed from the worker's `.pace.gatech.edu` FQDN. All six
+  saved worker records name the same allocated host. The follow-up accepts
+  only this explicit Phoenix alias, not arbitrary domains or other hosts;
+  no job/science execution is needed for this provenance-only replay.
 - Nanotube's printed virtual extents are732/662 with742AOs and8/78 occupied:
   the retained orbital rank is740, not742. Future GPU qualification must not
   equate retained MO rank with the AO count in an augmented basis.

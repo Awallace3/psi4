@@ -53,8 +53,11 @@ class CPUComparison(unittest.TestCase):
             self.assertEqual(len(proof),6)
             self.assertEqual(proof["r0-cpp"]["revalidated_component_ledger"]["checked_actual_sums"]["Elst"],.4)
             path=pilot/"r0-cpp/result.json";original=json.loads(path.read_text())
+            path.write_text(json.dumps({**original,"node":"node.pace.gatech.edu"}))
+            self.assertEqual(len(cpu_pilot_proof.revalidate_samples(pilot,expected,callback)),6)
             for key,value in (("arm","einsums"),("repeat",1),("system","nanotube"),
-                              ("input_manifest_sha256","foreign"),("geometry_sha256","foreign")):
+                              ("input_manifest_sha256","foreign"),("geometry_sha256","foreign"),
+                              ("node","node.foreign.edu"),("node","other.pace.gatech.edu")):
                 path.write_text(json.dumps({**original,key:value}))
                 with self.subTest(key=key),self.assertRaises(RuntimeError):
                     cpu_pilot_proof.revalidate_samples(pilot,expected,callback)

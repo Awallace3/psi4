@@ -111,6 +111,12 @@ def revalidate_samples(pilot,expected,validate_ledger):
             if document["status"]!="COMPLETED_CPU_REQUIRES_PAIRED_VALIDATION":
                 raise RuntimeError("Original pilot child was not qualified")
             for key,value in {**expected,"system":"peptide","arm":arm,"repeat":repeat}.items():
+                # Slurm records the short Phoenix hostname; os.uname()
+                # records its FQDN. Accept only this explicit site suffix,
+                # never arbitrary domains sharing a first DNS label.
+                if key=="node" and "." not in value:
+                    if document.get(key) in (value,value+".pace.gatech.edu"):
+                        continue
                 if document.get(key)!=value:
                     raise RuntimeError("Original pilot sample identity changed: "+key)
             options={**production_options(arm),"fisapt_fsapt_filepath":"none"}
