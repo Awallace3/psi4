@@ -91,6 +91,9 @@ false. This successful CPU build is not an H200 gate or a timing measurement.
 
 ## Production CPU v2 / C++ comparisons
 
+Qualified measurements, phase/resource summaries and remaining failures:
+[`CPU_RESULTS.md`](CPU_RESULTS.md).
+
 The user-requested CPU batch uses default production scalar-rescaled fragment
 induction (`IND_RESPONSE=false`, exchange/induction scaling true). It does not
 invoke the new exact per-source solver. `submit_cpu.py` selects one of three

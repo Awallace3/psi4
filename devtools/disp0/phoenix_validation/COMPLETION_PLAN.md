@@ -107,6 +107,17 @@ it is not the primary production CPU benchmark.
   Controller readback confirmed gts-cs207-chemx/cpu-small/**inferno**,
   24CPUs64G2h and exact core24/gold6226/localNVMe features; PENDING(Priority).
   No prolog existed yet. Allocation-local admission still must pass at start.
+- **14326813 COMPLETED0:0** (job/batch/step),16m27s; no TERM.
+  `PASS_PRODUCTION_CPU_COMPARISON`,6 accepted CPU samples,0GPU speedups.
+  Actual Gold6226 allocation, local XFS scratch and24CPU affinity admitted;
+  both water controls and all three paired/repeat matrix checks passed.
+  Nanotube whole-call medians/ranges (n3): C++148.126126s
+  [146.540743,148.748254], v2 156.061176s [153.973121,156.988453].
+  Thus v2 is5.36% slower. Maximum aligned matrix error6.83e-11Eh.
+  All samples confirm retained rank740/virtual732,662; fitted raw net
+  residuals0.6413–0.6425microEh with strict canonical algebra intact.
+  Raw collection `b7b791acf`; phase/resource analysis in `CPU_RESULTS.md`.
+  No further nanotube retry is needed or authorized.
 - Nanotube's printed virtual extents are732/662 with742AOs and8/78 occupied:
   the retained orbital rank is740, not742. Future GPU qualification must not
   equate retained MO rank with the AO count in an augmented basis.
@@ -139,8 +150,9 @@ it is not the primary production CPU benchmark.
   **All three planned CPU allocations have now been submitted; no automatic
   paid retries or extra comparison jobs are authorized by this batch.**
 - Inspect actual `allocation.json`, finalized child results and full matrix/
-  canonical-scalar checks before interpreting any timings. Peptide is qualified;
-  the larger two summaries remain pending. Existing H200 gate14322613 failed
+  canonical-scalar checks before interpreting any timings. Peptide and corrected
+  nanotube14326813 are qualified; protein83 remains uncollected.
+  Existing H200 gate14322613 failed
   separately, as recorded below.
 - First allocation-native inspection passed: effective resources/CPU/features
   admitted, scratch is node-local XFS
