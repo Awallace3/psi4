@@ -35,3 +35,17 @@ job ID with the user-level Phoenix skill's `watch_jobs.sh`.
 
 The two existing uncommitted fixture edits in the development checkout are
 not part of this pinned build and are neither committed nor discarded.
+
+## First attempt: preserved failure 14308890
+
+Source `f20fb2b1d7` stopped before SDK preparation/configuration because this
+launcher's header serialization sorted `Path` components instead of POSIX
+filename strings. Read-only inspection confirmed all 59 real Phoenix headers
+match BOTH canonical aggregate digests and all mandatory individual hashes.
+This was a launcher defect, not evidence of a changed SDK.
+
+The corrected serializer retains the same canonical expected hash and header
+count. Its regression distinguishes root `cuest.h` from nested `cuest/...`
+ordering and rejects a changed byte. No original artifact, dependency or guard
+threshold is modified. A replacement submission requires a new pin/run root;
+the submission helper never retries it automatically.

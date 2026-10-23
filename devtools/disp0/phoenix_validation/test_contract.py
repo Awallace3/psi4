@@ -1,5 +1,6 @@
 """Offline checks; these are not native build, import or GPU evidence."""
 import importlib.util
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -15,6 +16,25 @@ def load(name):
 
 
 class Contract(unittest.TestCase):
+    def test_header_stream_uses_POSIX_text_order_not_path_component_order(self):
+        validate = load("validate")
+        with tempfile.TemporaryDirectory() as directory:
+            include = Path(directory)
+            (include / "cuest").mkdir()
+            (include / "cuest.h").write_bytes(b"root header")
+            (include / "cuest/context.h").write_bytes(b"context header")
+            files = list(include.rglob("*.h"))
+            self.assertNotEqual([p.relative_to(include).as_posix() for p in sorted(files)],
+                                sorted(p.relative_to(include).as_posix() for p in files))
+            stream = b"".join(name.encode() + b"\0" + hashlib.sha256(data).hexdigest().encode() + b"\n"
+                              for name, data in (("cuest.h", b"root header"),
+                                                 ("cuest/context.h", b"context header")))
+            self.assertEqual(validate.header_identity(include),
+                             (2, hashlib.sha256(stream).hexdigest()))
+            (include / "cuest/context.h").write_bytes(b"changed")
+            self.assertNotEqual(validate.header_identity(include)[1],
+                                hashlib.sha256(stream).hexdigest())
+
     def test_job_payload_is_present(self):
         self.assertTrue((HERE / "payload.sh").is_file())
         self.assertIn("phoenix_validation/payload.sh", (HERE / "job.sbatch").read_text())

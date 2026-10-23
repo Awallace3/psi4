@@ -32,6 +32,16 @@ def save(path, value):
         json.dump(value, stream, indent=2, sort_keys=True)
 
 
+def header_identity(include):
+    # Canonical ordering is POSIX filename text, NOT pathlib's component-wise
+    # ordering: "cuest.h" precedes "cuest/context.h" in the canonical stream.
+    records = sorted((p.relative_to(include).as_posix(), digest(p))
+                     for p in include.rglob("*") if p.is_file())
+    aggregate = b"".join(name.encode() + b"\0" + sha.encode() + b"\n"
+                         for name, sha in records)
+    return len(records), hashlib.sha256(aggregate).hexdigest()
+
+
 def prepare(source, run, dependencies, e2, cuda, cuest):
     sys.path.insert(0, str(source / "devtools/disp0"))
     from runtime_contract import inspect_sdk, prepare_sdk
@@ -40,13 +50,9 @@ def prepare(source, run, dependencies, e2, cuda, cuest):
     require((e2 / "lib/einsums").is_dir(), "Missing read-only Python E2 stage")
     native = cuest / "lib/13/libcuest.so.0.2.50"
     require(digest(native) == CUEST_SHA, "Wrong canonical cuEST native input")
-    headers = sorted(p for p in (cuest / "include").rglob("*") if p.is_file())
-    aggregate = b"".join(
-        p.relative_to(cuest / "include").as_posix().encode() + b"\0"
-        + digest(p).encode() + b"\n" for p in headers
-    )
-    require(len(headers) == 59 and hashlib.sha256(aggregate).hexdigest() == HEADERS_SHA,
-            "cuEST canonical whole-header identity mismatch")
+    count, headers_sha = header_identity(cuest / "include")
+    require(count == 59 and headers_sha == HEADERS_SHA,
+            f"cuEST canonical whole-header identity mismatch: count={count}, sha256={headers_sha}")
     manifest = inspect_sdk(cuda)
     save(run / "cuda-inputs.json", manifest)
     prepare_sdk(cuda, run / "cuda13", manifest)
