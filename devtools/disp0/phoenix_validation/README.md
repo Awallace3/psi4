@@ -4,8 +4,9 @@ This is a new build of the current scientific source, not recovery or
 relabeling of any previous failed Psi4 installation. It does not submit
 protein-size F-SAPT or certify GPU correctness.
 
-The dependency environment and installed Einsums2/Waggle pair from allocation
-14254131 are read-only build/runtime inputs. That allocation's original Psi4
+The dependency environment, complete prepared CUDA13 development SDK and
+installed Einsums2/Waggle pair from allocation14254131 are read-only
+build/runtime inputs. That allocation's original Psi4
 installation and failed status remain unchanged. The validator requires the
 special Einsums commit `06404fa69ce9346443d7d4f19a250f6db9f0f62c`, one native
 world, and a newly built, versioned, cuEST-enabled Psi4 stage. It never imports
@@ -29,7 +30,10 @@ Missing dependencies or incompatible ELF maps fail closed.
 
 `submit.py` supplies every resource option explicitly, tests the route first,
 records submission provenance, and permits only one submission per fresh run
-root. The job uses 8 CPUs, 48 GiB, 3 hours, and free embers. Build parallelism
+root. The job uses 8 CPUs, 48 GiB, 3 hours, and defaults to free embers.
+User-approved inferno is selected explicitly with `--qos inferno --account ...`
+after running the Phoenix account selector; no post-start QoS move is needed.
+Build parallelism
 is six; the extra CPUs accommodate orchestration/linking. Watch the captured
 job ID with the user-level Phoenix skill's `watch_jobs.sh`.
 
@@ -49,3 +53,18 @@ count. Its regression distinguishes root `cuest.h` from nested `cuest/...`
 ordering and rejects a changed byte. No original artifact, dependency or guard
 threshold is modified. A replacement submission requires a new pin/run root;
 the submission helper never retries it automatically.
+
+## Second attempt: preserved failure 14309318
+
+Source `28036fc61f` passed the canonical header check, then stopped before
+configuration because the shared toolkit locator lacks `cusparse.h`,
+`nvJitLink.h` and their unversioned development links. The subsequent requested
+inferno update was rejected because the job was no longer pending; no paid
+replacement was silently submitted.
+
+The already prepared read-only `opt064-...-14254131-0/cuda13` dependency has
+all required headers, compiler support, static archives and development links.
+New submissions explicitly inventory that complete SDK, not the incomplete
+shared locator, and construct another fresh private locator in the new run.
+The cheap submit-time filesystem check now rejects missing SDK inputs before
+any allocation; full byte/ELF validation remains inside the CPU job.

@@ -53,6 +53,25 @@ class Contract(unittest.TestCase):
             {"SBATCH_QOS": "inferno", "SBATCH_GRES": "gpu:1", "PATH": "/bin"}),
             {"PATH": "/bin"})
 
+    def test_inferno_is_an_explicit_same_resource_shape(self):
+        submit = load("submit")
+        argv = submit.command(Path("/source"), Path("/fresh-run"),
+                              qos="inferno", account="gts-cs207")
+        self.assertIn("--qos=inferno", argv)
+        self.assertNotIn("--qos=embers", argv)
+        self.assertIn("--account=gts-cs207", argv)
+        self.assertIn("--time=03:00:00", argv)
+        self.assertIn("--cpus-per-task=8", argv)
+        self.assertFalse(any(x.startswith(("--gres", "--gpus")) for x in argv))
+
+    def test_missing_sdk_headers_reject_before_submission(self):
+        submit = load("submit")
+        source = HERE.parents[2]
+        with tempfile.TemporaryDirectory() as directory:
+            sdk = Path(directory)
+            with self.assertRaisesRegex(RuntimeError, "cusparse.h"):
+                submit.validate_sdk_shape(source, sdk)
+
     def test_dependency_world_must_match_exact_pin_and_prefix(self):
         validate = load("validate")
         world = {"git_commit": validate.E2_PIN, "version_major": 2,
