@@ -118,6 +118,20 @@ it is not the primary production CPU benchmark.
   residuals0.6413–0.6425microEh with strict canonical algebra intact.
   Raw collection `b7b791acf`; phase/resource analysis in `CPU_RESULTS.md`.
   No further nanotube retry is needed or authorized.
+- **Protein83 14324700 COMPLETED0:0** (job/batch/step),1h44m21s, no TERM.
+  `PASS_PRODUCTION_CPU_COMPARISON`,6 accepted CPU samples,0GPU speedups.
+  Gold6226/local XFS/24CPU admission, both water controls and all paired/
+  repeat full-matrix comparisons passed. Whole-call medians/ranges(n3):
+  C++946.774244s [897.387882,1208.774810], v2 1061.431831s
+  [963.630973,1091.005552]. Observed v2 median12.1% slower, but substantial
+  overlap/variation: paired v2/C++ ratios0.878,1.152,1.074. No stable penalty
+  or statistical significance is claimed. Maximum paired matrix error6.20e-11Eh.
+  All three requested production CPU comparisons now have qualified results;
+  the original helper/source/processes were not changed. Detailed summaries:
+  `CPU_RESULTS.md`, raw collection `b8c50fd00`.
+  Additional read-only audit `b28bd46ec` passed all six hashed matrix sums
+  against the corrected component ledgers, without modifying old artifacts.
+  Phase medians/resource summaries are recorded in `CPU_RESULTS.md`.
 - Nanotube's printed virtual extents are732/662 with742AOs and8/78 occupied:
   the retained orbital rank is740, not742. Future GPU qualification must not
   equate retained MO rank with the AO count in an augmented basis.
@@ -150,8 +164,8 @@ it is not the primary production CPU benchmark.
   **All three planned CPU allocations have now been submitted; no automatic
   paid retries or extra comparison jobs are authorized by this batch.**
 - Inspect actual `allocation.json`, finalized child results and full matrix/
-  canonical-scalar checks before interpreting any timings. Peptide and corrected
-  nanotube14326813 are qualified; protein83 remains uncollected.
+  canonical-scalar checks before interpreting any timings. Peptide, corrected
+  nanotube14326813 and protein83 14324700 are qualified.
   Existing H200 gate14322613 failed
   separately, as recorded below.
 - First allocation-native inspection passed: effective resources/CPU/features

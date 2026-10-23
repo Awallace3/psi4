@@ -22,12 +22,18 @@ Seconds; median [minimum, maximum], n=3 per backend:
 |---|---|---|---|---|
 | peptide | 14324190 | 21.293 [21.135, 21.540] | 22.032 [22.009, 22.899] | 1.035 |
 | nanotube | 14326813 | 148.126 [146.541, 148.748] | 156.061 [153.973, 156.988] | 1.054 |
-| protein83 | 14324700 | Not yet collected | Not yet collected | — |
+| protein83 | 14324700 | 946.774 [897.388, 1208.775] | 1061.432 [963.631, 1091.006] | 1.121 |
 
 Thus v2 is about **3.5% slower on peptide and 5.4% slower on nanotube** in
 these full-call measurements. This is not a historical pre/post-v2 benchmark:
 both measured implementations already contain their respective optimizations.
 No confidence intervals or protein extrapolations are inferred from three runs.
+
+Protein83's observed median is12.1% slower for v2, but its wide ranges overlap.
+The three paired v2/C++ ratios are0.878,1.152,1.074: even the direction flips
+in the first pair. Report this variation rather than treating the median ratio
+as a precise or stable implementation penalty. Shared canonical induction and
+SCF phase times also varied substantially despite using identical common code.
 
 Peptide's six samples were also requalified offline under the new component
 ledger. Timed-engine/resource/shared-runtime fingerprints match the original
@@ -73,6 +79,45 @@ Maximum child RSS across repeats: C++26.045GiB, v2 25.993GiB. This is process
 Actual node: `atl1-1-03-003-30-1.pace.gatech.edu`;24CPU affinity admitted;
 local scratch XFS had1.451TB free before calls.
 
+## Protein83
+
+Job14324700 completed0:0 (job/batch/step),1h44m21s, no TERM,
+`PASS_PRODUCTION_CPU_COMPARISON`, six accepted samples. Both water controls,
+full-matrix paired comparisons and same-arm repeats passed; occupied mappings
+were identity. Maximum aligned paired matrix discrepancy6.198868241630295e-11Eh.
+This job retained its original `005f3b4c71` helper throughout.
+An additional read-only audit under the corrected ledger passed for all six
+hashed matrix artifacts and their bound geometry/method/resource identities.
+Raw net residuals are -0.1619 to -0.1648microEh, dominated by fitted
+electrostatics; canonical algebra residuals were zero at recorded precision.
+No matrices, times or original results were changed.
+
+Actual node `atl1-1-02-005-9-2.pace.gatech.edu`;24CPU affinity/local XFS
+admission passed. Maximum child RSS: C++125.391GiB, v2 125.333GiB.
+Sampled logical scratch peak41.456GiB in both arms, not an exact peak.
+These RSS figures are not total cgroup/page-cache usage; the allocation cap
+was160GiB with96GiB requested inside Psi4.
+
+Exclusive phase medians in seconds (same aggregation policy as nanotube):
+
+| Phase | C++ arm | Einsums-v2 arm |
+|---|---:|---:|
+| Common SCFs | 355.211 | 359.186 |
+| Common JK cache | 14.901 | 13.970 |
+| Common electrostatics | 0.048 | 0.047 |
+| Common exchange | 14.753 | 13.107 |
+| Common canonical induction | 207.166 | 254.406 |
+| Fragment electrostatics | 49.937 | 63.659 |
+| Fragment exchange | 23.924 | 25.331 |
+| Fragment induction | 47.301 | 50.406 |
+| Fragment dispersion | 228.340 | 265.979 |
+| All instrumented fragment phases, including localization/setup | 351.292 | 406.377 |
+| Whole-call time outside instrumented phases | 6.536 | 6.786 |
+
+The common induction spread demonstrates that whole-call variation is not
+isolated to fragment implementation changes. No unmeasured cause (thermal,
+page-cache, CPU frequency or scheduler interference) is assigned here.
+
 ## Failures and missing results
 
 - Original nanotube14324682 remains FAILED: first v2 calculation completed
@@ -80,8 +125,8 @@ local scratch XFS had1.451TB free before calls.
   No full matrices were saved before that guard, so its155.904s observation
   is **not** an accepted timing sample. The corrected retry above used fresh
   processes and a fresh output root, not retrospective promotion.
-- Protein83 job14324700 retains the original helper and existing watcher.
-  Its results have not yet been collected here; no automatic retry authorized.
+- All three requested production CPU comparisons now have qualified six-sample
+  results. No additional CPU jobs or retries are needed for this declared batch.
 - H200 correctness gate14322613 failed on a600s GPU-child timeout.
   No accepted GPU timings or speedups exist. Its exact-response fragment mode
   differs from this production-scaled CPU mode: these CPU times must not be
@@ -99,6 +144,9 @@ Remote prefix: `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/`
 - Corrected helper: `abd4c1bc468ce7f759988e3af2f8c985ff6c48bf`.
 - Nanotube raw collection: background task `b7b791acf`; offline peptide
   requalification: `b34e990d7`.
+- Protein83 raw collection: background task `b8c50fd00`.
+- Protein83 read-only matrix-sum/ledger audit and phase aggregation:
+  `b28bd46ec`; status `PASS_PROTEIN83_OFFLINE_COMPONENT_LEDGER_AUDIT`.
 
 Each run retains `comparison-result.json`, `allocation.json`,
 `job-status.env`, per-child `result.json`/`matrices.npz`, stdout/stderr and
