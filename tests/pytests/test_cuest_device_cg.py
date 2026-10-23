@@ -90,6 +90,13 @@ def _check(wfn, rhs, result, atol=1.e-9):
     assert stats["final_max_relative_residual"] <= 1.e-9
 
 
+def test_cuest_device_cg_initial_status():
+    wfn = _wavefunction("hf")
+    assert wfn.cphf_nfock_builds() == 0
+    assert not wfn.cphf_converged()
+    assert wfn.cphf_device_stats() == {}
+
+
 @pytest.mark.parametrize("unrestricted", [False, True])
 @pytest.mark.parametrize("method", ["hf", "svwn", "pbe0", "cam-b3lyp"])
 @pytest.mark.parametrize("directj,gridk", [(False, False), (True, False), (False, True), (True, True)])

@@ -108,6 +108,8 @@ HF::HF(SharedWavefunction ref_wfn, std::shared_ptr<SuperFunctional> func, Option
 HF::~HF() {}
 
 void HF::common_init() {
+    cphf_nfock_builds_ = 0;
+    cphf_converged_ = false;
     attempt_number_ = 1;
     reset_occ_ = false;
     sad_ = false;
