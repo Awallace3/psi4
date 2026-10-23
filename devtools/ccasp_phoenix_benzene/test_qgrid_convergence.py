@@ -221,6 +221,172 @@ class EvidenceTests(unittest.TestCase):
             self.verify(capture, docs, vectors)
 
 
+class StorageAdmissionTests(unittest.TestCase):
+    def finalize_batch(self, run, code):
+        """Execute the actual shell terminal trap, without scheduler commands."""
+        import subprocess
+        text = (HERE/"convergence.sbatch").read_text()
+        traps = text.split("term_received=0\n", 1)[1].split('test "$#" = 4', 1)[0]
+        script = ("set -euo pipefail\nRUN="+str(run)+"\nterm_received=0\n"+traps+
+                  f"child_ok={int(code == 0)}; exit {code}\n")
+        result = subprocess.run(["bash"], input=script, text=True, capture_output=True)
+        self.assertEqual(result.returncode, code, result.stderr)
+        return json.loads((run/"metadata/batch-terminal.json").read_text())
+
+    def run_synthetic(self, run, scratch, *, snapshot=None, science=None):
+        """Real orchestration/storage/receipts, synthetic native/runtime seams."""
+        def initialize(*args):
+            args[-1].append(object())
+            return object(), args[-1][0]
+        with mock.patch.dict(J.PLAN, run=str(run), scratch=str(scratch)), \
+             mock.patch.dict(J.os.environ, SLURM_JOB_ID="TOY"), \
+             mock.patch.object(J.R, "compute_guard"), \
+             mock.patch.object(J, "binding_for", return_value={}), \
+             mock.patch.object(J, "verify_preparation"), \
+             mock.patch.object(J.R, "initialize", side_effect=initialize), \
+             mock.patch.object(J.R, "verify_runtime"), \
+             mock.patch.object(J.R.OLD, "snapshot", side_effect=snapshot), \
+             mock.patch.object(J, "science", side_effect=science, return_value=dict(
+                 study_complete=True, completed_cases=[c["name"] for c in C.CASES])), \
+             mock.patch.object(J.signal, "signal"), \
+             mock.patch.object(J.resource, "setrlimit"), \
+             mock.patch.object(J.time, "monotonic", return_value=0.):
+            return J.run("a"*40, "b"*40, "c"*64, "d"*64)
+
+    def test_storage_traversal_permission_errors_are_not_omitted(self):
+        for role in ("run", "scratch"):
+            for subtree in (False, True):
+                with self.subTest(role=role, subtree=subtree), tempfile.TemporaryDirectory() as tmp:
+                    roots = {name: Path(tmp)/name for name in ("run", "scratch")}
+                    for root in roots.values():
+                        root.mkdir()
+                    blocked = roots[role]/"private" if subtree else roots[role]
+                    blocked.mkdir(exist_ok=True)
+                    real_scandir = J.os.scandir
+                    error = PermissionError(13, "synthetic inaccessible storage", str(blocked))
+                    def scandir(path):
+                        if Path(path) == blocked:
+                            raise error
+                        return real_scandir(path)
+                    with mock.patch.dict(J.PLAN, {k: str(v) for k, v in roots.items()}), \
+                         mock.patch.object(J.os, "scandir", side_effect=scandir), \
+                         self.assertRaises(PermissionError) as caught:
+                        J.storage_bounds()
+                    self.assertIs(caught.exception, error)
+
+    def test_both_storage_roots_must_be_real_directories(self):
+        for role in ("run", "scratch"):
+            for kind in ("missing", "file", "symlink"):
+                with self.subTest(role=role, kind=kind), tempfile.TemporaryDirectory() as tmp:
+                    roots = {name: Path(tmp)/name for name in ("run", "scratch")}
+                    for name, root in roots.items():
+                        if name != role:
+                            root.mkdir()
+                    if kind == "file":
+                        roots[role].write_bytes(b"x")
+                    elif kind == "symlink":
+                        roots[role].symlink_to(roots["scratch" if role == "run" else "run"])
+                    with mock.patch.dict(J.PLAN, {k: str(v) for k, v in roots.items()}), \
+                         self.assertRaises((OSError, ValueError)):
+                        J.storage_bounds()
+
+    def test_storage_root_disappearance_during_scan_is_not_omitted(self):
+        for role in ("run", "scratch"):
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as tmp:
+                roots = {name: Path(tmp)/name for name in ("run", "scratch")}
+                for root in roots.values():
+                    root.mkdir()
+                real_walk = J.os.walk
+                def walk(root, **kw):
+                    yield from real_walk(root, **kw)
+                    if Path(root) == roots[role]:
+                        roots[role].rmdir()
+                with mock.patch.dict(J.PLAN, {k: str(v) for k, v in roots.items()}), \
+                     mock.patch.object(J.os, "walk", side_effect=walk), \
+                     self.assertRaises(OSError):
+                    J.storage_bounds()
+
+    def test_inaccessible_closure_subtree_withholds_actual_run_completion(self):
+        for role in ("run", "scratch"):
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as tmp:
+                run, scratch = Path(tmp)/"run", Path(tmp)/"scratch"
+                (run/"metadata").mkdir(parents=True)
+                scratch.mkdir()
+                blocked = (run if role == "run" else scratch)/"private"
+                def snapshot(*args, **kw):
+                    blocked.mkdir()
+                real_scandir = J.os.scandir
+                def scandir(path):
+                    if Path(path) == blocked:
+                        raise PermissionError(13, "synthetic closure storage", str(blocked))
+                    return real_scandir(path)
+                with mock.patch.object(J.os, "scandir", side_effect=scandir):
+                    self.assertEqual(self.run_synthetic(run, scratch, snapshot=snapshot), 1)
+                result = json.loads((run/"results/result.json").read_text())
+                terminal = json.loads((run/"metadata/payload-terminal.json").read_text())
+                self.assertEqual(result["after_runtime_closure"], "passed")
+                self.assertEqual(result["final_budgets"], "failed")
+                self.assertIn("PermissionError", result["budget_error"])
+                self.assertFalse(result["study_complete"])
+                self.assertFalse(terminal["complete"])
+
+    def test_all_three_final_receipts_fit_artifact_boundary_including_batch(self):
+        for existing, expected in ((93, 0), (94, 1)):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as tmp:
+                run, scratch = Path(tmp)/"run", Path(tmp)/"scratch"
+                (run/"metadata").mkdir(parents=True)
+                scratch.mkdir()
+                def snapshot(*args, **kw):
+                    for index in range(existing):
+                        (run/"results"/f"partial-{index}").write_bytes(b"x")
+                code = self.run_synthetic(run, scratch, snapshot=snapshot)
+                batch = self.finalize_batch(run, code)
+                files = [p for p in run.rglob("*") if p.is_file()]
+                self.assertEqual(code, expected, f"{len(files)} artifacts after actual batch finalization")
+                result = json.loads((run/"results/result.json").read_text())
+                payload = json.loads((run/"metadata/payload-terminal.json").read_text())
+                self.assertEqual(batch["complete"], expected == 0)
+                self.assertEqual(payload["complete"], expected == 0)
+                self.assertEqual(result["study_complete"], expected == 0)
+                if expected == 0:
+                    self.assertEqual(len(files), 96)
+                    self.assertEqual(result["final_storage"]["files"], 93)
+                else:
+                    self.assertEqual(result["final_budgets"], "failed")
+
+    def test_final_receipt_bytes_reserved_at_output_and_total_boundaries(self):
+        # Two <=4MiB JSON writes and <=64KiB for the fixed shell receipt.
+        reservation = 8454144
+        for bound in ("max_output_bytes", "max_total_bytes"):
+            for delta, expected in ((0, 0), (1, 1)):
+                with self.subTest(bound=bound, delta=delta), tempfile.TemporaryDirectory() as tmp:
+                    run, scratch = Path(tmp)/"run", Path(tmp)/"scratch"
+                    (run/"metadata").mkdir(parents=True)
+                    scratch.mkdir()
+                    retained_bytes = 2*1024**2+delta
+                    def snapshot(*args, **kw):
+                        (run/"results/retained").write_bytes(b"x"*retained_bytes)
+                    def science(*args):
+                        return dict(study_complete=True, completed_cases=[c["name"] for c in C.CASES],
+                                    retained_diagnostic="x"*65536)
+                    limit = 2*1024**2+reservation
+                    with mock.patch.dict(J.PLAN["bounds"], {bound: limit}):
+                        code = self.run_synthetic(run, scratch, snapshot=snapshot, science=science)
+                    batch = self.finalize_batch(run, code)
+                    self.assertEqual(code, expected)
+                    self.assertEqual(batch["complete"], expected == 0)
+                    result = json.loads((run/"results/result.json").read_text())
+                    self.assertEqual(result["final_budgets"], "passed" if expected == 0 else "failed")
+                    self.assertEqual(result["study_complete"], expected == 0)
+                    if expected == 0:
+                        receipts = [run/"results/result.json", run/"metadata/payload-terminal.json",
+                                    run/"metadata/batch-terminal.json"]
+                        receipt_bytes = sum(p.stat().st_size for p in receipts)
+                        self.assertGreater(receipt_bytes, 65536)
+                        self.assertLessEqual(receipt_bytes, reservation)
+                        self.assertLessEqual(retained_bytes+receipt_bytes, limit)
+
+
 class JobTests(unittest.TestCase):
     def test_sequential_stops_first_failure_without_retry_or_extension(self):
         for stop in range(4):
@@ -474,6 +640,7 @@ class JobTests(unittest.TestCase):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 (root/"metadata").mkdir()
+                (root/"scratch").mkdir()
                 binding = {"toy": True}
                 retained = []
                 token = object()
@@ -494,7 +661,8 @@ class JobTests(unittest.TestCase):
                         raise J.Terminated("TERM")
                     return dict(study_complete=failure != "incomplete",
                         completed_cases=[c["name"] for c in C.CASES] if failure != "incomplete" else ["baseline"])
-                with mock.patch.dict(J.PLAN, dict(run=str(root), runtime=str(root/"runtime"))), \
+                with mock.patch.dict(J.PLAN, dict(run=str(root), runtime=str(root/"runtime"),
+                                                scratch=str(root/"scratch"))), \
                      mock.patch.object(J.R, "compute_guard"), \
                      mock.patch.object(J, "binding_for", return_value=binding), \
                      mock.patch.object(J, "verify_preparation"), \

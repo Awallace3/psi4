@@ -38,6 +38,8 @@ def validate_plan():
             or PLAN["bounds"]["max_values"] != work["values"]
             or PLAN["bounds"]["tile_points"] != 1024
             or PLAN["bounds"]["deadline_seconds"] != 1500
+            or PLAN["bounds"]["final_receipt_reservation_files"] != 3
+            or PLAN["bounds"]["final_receipt_reservation_bytes"] != 2*4*1024**2+65536
             or PLAN["bounds"]["max_output_bytes"] < work["estimated_output_bytes"]
             or PLAN["allocation"] != Q.PLAN["allocation"]):
         raise ValueError("exact study plan/cumulative bounds/admitted allocation differ")
@@ -171,10 +173,17 @@ def verify_preparation(binding, runtime_sha, derivative_sha):
 def storage_bounds(*, reserve=0, reserve_files=0):
     """Aggregate, regular-only study/scratch/log budgets, not reset per case."""
     bounds = PLAN["bounds"]
+    roots = {role: Path(PLAN[role]) for role in ("run", "scratch")}
+    def validate_roots():
+        for root in roots.values():
+            if not stat.S_ISDIR(root.lstat().st_mode):
+                raise ValueError("study/scratch root must remain a real directory")
+    def traversal_error(error):
+        raise error
+    validate_roots()
     output = logs = scratch = files = 0
-    for role in ("run", "scratch"):
-        root = Path(PLAN[role])
-        for directory, dirs, names in os.walk(root, followlinks=False):
+    for role, root in roots.items():
+        for directory, dirs, names in os.walk(root, followlinks=False, onerror=traversal_error):
             for name in dirs+names:
                 path = Path(directory)/name
                 info = path.lstat()
@@ -194,6 +203,7 @@ def storage_bounds(*, reserve=0, reserve_files=0):
                     logs += info.st_size
                 else:
                     output += info.st_size
+    validate_roots()
     if (files+reserve_files > bounds["max_files"]
             or output+reserve > bounds["max_output_bytes"] or scratch > bounds["max_scratch_bytes"]
             or logs > 2*bounds["max_log_bytes"]
@@ -419,10 +429,13 @@ def run(commit, tree, runtime_sha, derivative_sha):
         else:
             record.update(study_complete=False, after_runtime_closure="not initialized")
     # Never throttle the final scan: include closure artifacts and fresh logs/
-    # scratch, and reserve room for both final receipts before admitting success.
+    # scratch. Reserve two JSON writer caps (4MiB each), plus 64KiB for the
+    # shell's fixed batch-terminal.json: reserve all THREE before admitting success.
     try:
         deadline()
-        record["final_storage"] = storage_bounds(reserve=65536, reserve_files=2)
+        record["final_storage"] = storage_bounds(
+            reserve=PLAN["bounds"]["final_receipt_reservation_bytes"],
+            reserve_files=PLAN["bounds"]["final_receipt_reservation_files"])
         deadline()
         record["final_budgets"] = "passed"
     except BaseException as error:

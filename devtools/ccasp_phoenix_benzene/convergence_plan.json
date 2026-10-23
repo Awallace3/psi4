@@ -44,7 +44,8 @@
     "max_scratch_bytes": 67108864, "max_file_bytes": 16777216,
     "max_log_bytes": 33554432, "max_total_bytes": 100663296,
     "required_free_scratch_bytes": 268435456, "required_free_run_bytes": 134217728,
-    "deadline_seconds": 1500, "selected_checks": 4096, "max_files": 96
+    "deadline_seconds": 1500, "selected_checks": 4096, "max_files": 96,
+    "final_receipt_reservation_files": 3, "final_receipt_reservation_bytes": 8454144
   },
   "original_capture_plan_sha256": "65ac92c9609f2674c93c057a90f4a0f75104d811cbeae66bf89ed75e98203a76",
   "baseline_probe": {

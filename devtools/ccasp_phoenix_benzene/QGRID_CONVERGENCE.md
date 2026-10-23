@@ -81,13 +81,20 @@ Metadata writer independently caps each JSON at4MiB. Payload file hard limit
 96artifacts maximum. Stdout/stderr32MiB each; output+logs+scratch96MiB total.
 Periodic aggregate checks (at most1s apart between bounded operations), each
 case's reserved write check, final checks and inherited OS file limits fail
-closed. Native calls/hash/filesystem operations can overrun until returning;
+closed. Both run/scratch roots must be real directories before and after each
+scan; traversal/permission errors propagate rather than silently omitting a
+root or subtree. Native calls/hash/filesystem operations can overrun until returning;
 the30min scheduler limit is the hard outer bound, not a timing guarantee.
 
 One cumulative1500s payload deadline starts before admission/loader and includes
 all four cases, comparisons and final runtime closure. It is never reset at
 case boundaries. A forced unthrottled final scan includes closure artifacts
-and reserves64KiB/two files for final receipts. The86.24s measured baseline suggests ~9.5min proportional
+and reserves **three files /8,454,144bytes** for `results/result.json`,
+`metadata/payload-terminal.json` and the shell's `metadata/batch-terminal.json`.
+The byte allowance covers both Python receipts at the existing4MiB JSON writer
+cap each, plus64KiB for the fixed shell receipt. Source validation and plan
+declare the same reservation; no storage limit is widened.
+The86.24s measured baseline suggests ~9.5min proportional
 collocation work, **not** a guarantee. No resource widening, adaptation or retry.
 
 Run leaves all exclusive partial case files on any failure. Completion requires
