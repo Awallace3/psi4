@@ -1,0 +1,53 @@
+"""Offline checks; these are not native build, import or GPU evidence."""
+import importlib.util
+from pathlib import Path
+import tempfile
+import unittest
+
+HERE = Path(__file__).resolve().parent
+
+
+def load(name):
+    spec = importlib.util.spec_from_file_location("phoenix_" + name, HERE / (name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class Contract(unittest.TestCase):
+    def test_explicit_free_cpu_shape_and_absolute_logs(self):
+        submit = load("submit")
+        argv = submit.command(Path("/source"), Path("/fresh-run"))
+        for value in ("--qos=embers", "--account=gts-cs207-chemx", "--mem=48G",
+                      "--cpus-per-task=8", "--no-requeue", "--time=03:00:00"):
+            self.assertIn(value, argv)
+        self.assertFalse(any(x.startswith(("--gres", "--gpus")) for x in argv))
+        self.assertIn("--output=/fresh-run/logs/%x-%j.out", argv)
+
+    def test_inherited_scheduler_overrides_are_removed(self):
+        self.assertEqual(load("submit").clean_environment(
+            {"SBATCH_QOS": "inferno", "SBATCH_GRES": "gpu:1", "PATH": "/bin"}),
+            {"PATH": "/bin"})
+
+    def test_dependency_world_must_match_exact_pin_and_prefix(self):
+        validate = load("validate")
+        world = {"git_commit": validate.E2_PIN, "version_major": 2,
+                 "compiler_major": 14, "library_path": "/e2/lib/libEinsums.so"}
+        self.assertEqual(validate.validate_world(world, Path("/e2")),
+                         Path("/e2/lib/libEinsums.so"))
+        for key, value in (("git_commit", "old"), ("version_major", 1),
+                           ("compiler_major", 12), ("library_path", "/foreign/libEinsums.so")):
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                validate.validate_world({**world, key: value}, Path("/e2"))
+
+    def test_proof_files_cannot_overwrite_previous_attempts(self):
+        validate = load("validate")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "proof.json"
+            validate.save(path, {"status": "PASS"})
+            with self.assertRaises(FileExistsError):
+                validate.save(path, {"status": "different"})
+
+
+if __name__ == "__main__":
+    unittest.main()
