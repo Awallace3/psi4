@@ -1445,17 +1445,19 @@ def _without_lr_exchange_kernel(wfns, active):
             func.set_lock(True)
 
 
-def _grac_cation_ground_state(dft_functional, mol_cation, jk_obj, wfn_given, scf_kwargs):
-    """Converge the GRAC cation from the neutral orbitals (GUESS READ) and from SAD, and keep the
+def _grac_cation_ground_state(dft_functional, mol_cation, jk_obj, neutral_orbitals, nelec_cation, scf_kwargs,
+                              guess_record=None):
+    """Converge the GRAC cation from the neutral orbitals (GUESS READ) and from SAD, and return the
     lower energy. Either guess alone can land on an excited cation state: from SAD, wB97X ethene
     converges to its second ionization (13.0 eV, against 10.4 eV from the neutral orbitals) and
     n-pentane sits 0.2-0.35 eV high; from the neutral orbitals, wB97X pyridine lands 0.05 eV above
     the SAD state, its n/pi cation states being nearly degenerate.
 
-    ``wfn_given`` is the converged neutral, or its rehydrated checkpoint snapshot on a restart;
-    only its electron count and orbitals (through ``to_file``) are read.
+    ``neutral_orbitals()`` returns the converged neutral (or its rehydrated checkpoint snapshot); it
+    is called only when the READ guess actually runs. ``guess_record``, when checkpointing, stores
+    each guess's outcome as its own stage and hands back the ones a previous run finished, so a
+    restart replays the same keep-the-lower decision.
     """
-    nelec_cation = wfn_given.nalpha() + wfn_given.nbeta() - 1
     # SAPT_DFT_GRAC_CATION_SOSCF: second-order steps on every cation SCF, whatever the tier. When the hole
     # mixes two near-degenerate neutral orbitals (amide n/pi, ethane e_g, carboxylate O lone pairs) DIIS
     # either stalls or "converges" 0.2-2 mEh above the ground state, under every tier. The neutral, and so
@@ -1467,39 +1469,86 @@ def _grac_cation_ground_state(dft_functional, mol_cation, jk_obj, wfn_given, scf
     best = None
     read_file = core.Wavefunction.build(mol_cation, core.get_global_option("BASIS")).get_scratch_filename(180)
     for guess in ("READ", "SAD"):
-        core.set_local_option("SCF", "GUESS", guess)
-        if guess == "READ":
-            wfn_given.to_file(read_file)
-        try:
-            wfn = run_scf(dft_functional.lower(), molecule=mol_cation, jk=jk_obj, **scf_kwargs)
-        except ConvergenceError:
-            core.print_out(f"  GRAC cation from the {guess} guess did not converge.\n")
-            continue
-        except ValidationError as err:
-            # e.g. BASIS_GUESS cannot be combined with GUESS READ
-            core.print_out(f"  GRAC cation: {guess} guess unavailable ({err}).\n")
-            continue
-        finally:
-            if guess == "READ" and os.path.isfile(read_file + ".npy"):
-                os.remove(read_file + ".npy")
-        energy = wfn.energy()
-        # A same-reference READ (open-shell neutral, UKS -> UKS) keeps the guess's electron count, and would
-        # converge back to the neutral; refuse anything that is not one electron short. No energy test: an
-        # anion unbound in a small basis (OH-/STO-3G) legitimately sits above its detached neutral.
-        if wfn.nalpha() + wfn.nbeta() != nelec_cation:
-            core.print_out(f"  GRAC cation from the {guess} guess rejected: {wfn.nalpha()}a/{wfn.nbeta()}b electrons, "
-                           f"E = {energy:.10f} [Eh].\n")
-            wfn = None
-            continue
-        core.print_out(f"  GRAC cation energy from the {guess} guess: {energy:.10f} [Eh]\n")
-        if best is None or energy < best[0]:
-            best = (energy, guess, wfn)  # drop the losing wavefunction before the next SCF
-        wfn = None
+        stored = guess_record.restore(guess) if guess_record is not None else None
+        if stored is not None:
+            outcome, energy = stored
+            core.print_out(f"  GRAC cation from the {guess} guess restored from checkpoint: {outcome}"
+                           + (f", E = {energy:.10f} [Eh]" if energy is not None else "") + ".\n")
+        else:
+            outcome, energy = None, None
+            core.set_local_option("SCF", "GUESS", guess)
+            if guess == "READ":
+                neutral_orbitals().to_file(read_file)
+            try:
+                wfn = run_scf(dft_functional.lower(), molecule=mol_cation, jk=jk_obj, **scf_kwargs)
+            except ConvergenceError:
+                core.print_out(f"  GRAC cation from the {guess} guess did not converge.\n")
+                outcome = "not_converged"
+            except ValidationError as err:
+                # e.g. BASIS_GUESS cannot be combined with GUESS READ
+                core.print_out(f"  GRAC cation: {guess} guess unavailable ({err}).\n")
+                outcome = "unavailable"
+            finally:
+                if guess == "READ" and os.path.isfile(read_file + ".npy"):
+                    os.remove(read_file + ".npy")
+            if outcome is None:
+                energy = wfn.energy()
+                # A same-reference READ (open-shell neutral, UKS -> UKS) keeps the guess's electron count, and
+                # would converge back to the neutral; refuse anything that is not one electron short. No energy
+                # test: an anion unbound in a small basis (OH-/STO-3G) legitimately sits above its detached neutral.
+                if wfn.nalpha() + wfn.nbeta() != nelec_cation:
+                    core.print_out(f"  GRAC cation from the {guess} guess rejected: {wfn.nalpha()}a/{wfn.nbeta()}b "
+                                   f"electrons, E = {energy:.10f} [Eh].\n")
+                    outcome = "rejected_electron_count"
+                else:
+                    core.print_out(f"  GRAC cation energy from the {guess} guess: {energy:.10f} [Eh]\n")
+                    outcome = "converged"
+                wfn = None  # only the energy is used; drop the wavefunction before the next SCF
+            if guess_record is not None:
+                guess_record.commit(guess, outcome, energy)
+        if outcome == "converged" and (best is None or energy < best[0]):
+            best = (energy, guess)
     if best is None:
         raise ConvergenceError("GRAC cation SCF", core.get_option("SCF", "MAXITER"))
-    energy, guess, wfn_cation = best
+    energy, guess = best
     core.print_out(f"  GRAC cation: using the {guess} guess state ({energy:.10f} [Eh]).\n")
-    return wfn_cation
+    return energy
+
+
+class _GracGuessRecord:
+    """Each GRAC cation guess of one monomer as its own checkpoint stage.
+
+    The records carry the convergence tier they ran at: a tier that failed leaves
+    its records behind, and a restart in the next tier must not reuse them.
+    """
+
+    def __init__(self, ckpt, stage, private_prefix, tier):
+        self.ckpt = ckpt
+        self.stages = {"READ": f"{stage}_cation_read", "SAD": f"{stage}_cation_sad"}
+        self.private_prefix = private_prefix
+        self.tier = tier
+
+    def _key(self, guess, field):
+        return f"{self.private_prefix}cation_{guess.lower()}::{field}"
+
+    def restore(self, guess):
+        if not self.ckpt.done(self.stages[guess]):
+            return None
+        stored = self.ckpt.private_scalars(self.private_prefix)
+        prefix = f"cation_{guess.lower()}::"
+        if stored.get(prefix + "tier") != self.tier:
+            return None
+        return stored[prefix + "outcome"], stored.get(prefix + "energy")
+
+    def commit(self, guess, outcome, energy):
+        self.ckpt.commit(
+            self.stages[guess],
+            scalars={
+                self._key(guess, "tier"): self.tier,
+                self._key(guess, "outcome"): outcome,
+                self._key(guess, "energy"): energy,
+            },
+        )
 
 
 def compute_GRAC_shift(
@@ -1630,16 +1679,12 @@ def compute_GRAC_shift(
             )
             # Snapshots cover RHF/RKS only, so an open-shell neutral is re-run on a restart.
             neutral_snapshot = mol_given.multiplicity() == 1
+            wfn_given = None
             try:
                 if tier == resume_tier and neutral_snapshot:
                     E_given = neutral["E_given"]
                     HOMO = neutral["HOMO"]
-                    # The cation's GUESS READ starts from the neutral orbitals, so they
-                    # come back from the neutral's snapshot rather than from SAD: a
-                    # restarted cation must land on the state an uninterrupted run finds.
-                    wfn_given = ckpt.restore_scf(
-                        neutral_stage, method=dft_functional.lower(), reference="RKS", molecule=mol_given
-                    )
+                    nelec_given = neutral["nelec"]
                     core.print_out(f"   Neutral SCF restored from checkpoint: E = {E_given:.12f}\n")
                 else:
                     if mol_given.multiplicity() != 1:
@@ -1662,10 +1707,12 @@ def compute_GRAC_shift(
                     )
                     HOMO = np.amax(occ_given)
                     E_given = wfn_given.energy()
+                    nelec_given = wfn_given.nalpha() + wfn_given.nbeta()
                     neutral_scalars = {
                         private_prefix + "tier": tier,
                         private_prefix + "E_given": E_given,
                         private_prefix + "HOMO": HOMO,
+                        private_prefix + "nelec": nelec_given,
                     }
                     if ckpt.enabled and neutral_snapshot:
                         # Kept for the cation's GUESS READ on a restart (see above).
@@ -1685,8 +1732,26 @@ def compute_GRAC_shift(
                 core.print_out(
                     f"\n\n  ==> GRAC {label} Electron Removed Molecule: charge={mol_cation.molecular_charge()} mult={mol_cation.multiplicity()} <==\n\n"
                 )
-                wfn_cation = _grac_cation_ground_state(
-                    dft_functional, mol_cation, jk_obj, wfn_given, scf_kwargs
+
+                def neutral_orbitals():
+                    # The cation's GUESS READ starts from the neutral orbitals, so on a
+                    # restart they come back from the neutral's snapshot rather than
+                    # from SAD: a restarted cation must land on the state an
+                    # uninterrupted run finds.
+                    if wfn_given is not None:
+                        return wfn_given
+                    return ckpt.restore_scf(
+                        neutral_stage, method=dft_functional.lower(), reference="RKS", molecule=mol_given
+                    )
+
+                E_cation = _grac_cation_ground_state(
+                    dft_functional,
+                    mol_cation,
+                    jk_obj,
+                    neutral_orbitals,
+                    nelec_given - 1,
+                    scf_kwargs,
+                    guess_record=_GracGuessRecord(ckpt, stage, private_prefix, tier) if ckpt.enabled else None,
                 )
                 wfn_given = None
                 core.set_local_option("SCF", "GUESS", neutral_guess)
@@ -1699,7 +1764,6 @@ def compute_GRAC_shift(
                 # resident -- grid data, collocation cache and all -- while the
                 # next convergence tier allocates its own from the full budget.
                 wfn_given = None
-                wfn_cation = None
                 if len(grac_options) == 1:
                     raise Exception(
                         "Convergence error in GRAC shift calculation, please try a different convergence tier."
@@ -1708,8 +1772,6 @@ def compute_GRAC_shift(
                     core.print_out("Convergence error, trying next GRAC iteration...")
                 continue
 
-            E_cation = wfn_cation.energy()
-            wfn_cation = None
             grac = E_cation - E_given + HOMO
             if grac >= 1 or grac <= -1:
                 raise ValueError(

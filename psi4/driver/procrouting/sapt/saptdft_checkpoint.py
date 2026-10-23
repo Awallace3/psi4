@@ -65,7 +65,7 @@ __all__ = [
 ]
 
 SAPTDFT_CHECKPOINT_SCHEMA_VERSION = 1
-SAPTDFT_STAGE_DEFINITION_VERSION = 4
+SAPTDFT_STAGE_DEFINITION_VERSION = 5
 SAPTDFT_SCF_SNAPSHOT_VERSION = 1
 SAPTDFT_MANIFEST_FILENAME = "saptdft_state.json"
 SAPTDFT_LOCK_FILENAME = "saptdft_state.lock"
@@ -176,10 +176,16 @@ class StageDefinition:
 
 
 SAPTDFT_STAGE_DEFINITIONS: dict[str, StageDefinition] = {
+    # Each GRAC cation guess is its own stage, so a block boundary costs at most
+    # one electron-removed SCF.
     "grac_monomer_a_neutral": StageDefinition(),
-    "grac_monomer_a": StageDefinition(dependencies=("grac_monomer_a_neutral",)),
+    "grac_monomer_a_cation_read": StageDefinition(dependencies=("grac_monomer_a_neutral",)),
+    "grac_monomer_a_cation_sad": StageDefinition(dependencies=("grac_monomer_a_cation_read",)),
+    "grac_monomer_a": StageDefinition(dependencies=("grac_monomer_a_cation_sad",)),
     "grac_monomer_b_neutral": StageDefinition(),
-    "grac_monomer_b": StageDefinition(dependencies=("grac_monomer_b_neutral",)),
+    "grac_monomer_b_cation_read": StageDefinition(dependencies=("grac_monomer_b_neutral",)),
+    "grac_monomer_b_cation_sad": StageDefinition(dependencies=("grac_monomer_b_cation_read",)),
+    "grac_monomer_b": StageDefinition(dependencies=("grac_monomer_b_cation_sad",)),
     "hf_dimer_scf": StageDefinition(),
     "hf_monomer_a_scf": StageDefinition(dependencies=("hf_dimer_scf",)),
     "hf_monomer_b_scf": StageDefinition(dependencies=("hf_monomer_a_scf",)),
@@ -429,7 +435,14 @@ def _grac_stages(options: Mapping[str, Any]) -> list[str]:
     stages = []
     for monomer in ("a", "b"):
         if options[f"do_grac_{monomer}"]:
-            stages.extend([f"grac_monomer_{monomer}_neutral", f"grac_monomer_{monomer}"])
+            stages.extend(
+                [
+                    f"grac_monomer_{monomer}_neutral",
+                    f"grac_monomer_{monomer}_cation_read",
+                    f"grac_monomer_{monomer}_cation_sad",
+                    f"grac_monomer_{monomer}",
+                ]
+            )
     return stages
 
 
@@ -493,7 +506,11 @@ def selected_stage_dependencies(identity: Mapping[str, Any], stage: str) -> tupl
     last_jk_term = "ind" if options["do_ind"] else "exch"
 
     if stage in ("grac_monomer_a", "grac_monomer_b"):
-        return (f"{stage}_neutral",)
+        return (f"{stage}_cation_sad",)
+    if stage in ("grac_monomer_a_cation_sad", "grac_monomer_b_cation_sad"):
+        return (stage.replace("_cation_sad", "_cation_read"),)
+    if stage in ("grac_monomer_a_cation_read", "grac_monomer_b_cation_read"):
+        return (stage.replace("_cation_read", "_neutral"),)
     if stage in ("grac_monomer_a_neutral", "grac_monomer_b_neutral"):
         return ()
     if stage == "hf_dimer_scf":

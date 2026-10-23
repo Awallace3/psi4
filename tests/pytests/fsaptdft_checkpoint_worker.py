@@ -11,6 +11,7 @@ import numpy as np
 import psi4
 import qcelemental as qcel
 from psi4 import core
+from psi4.driver.p4util.exceptions import ConvergenceError
 from psi4.driver.procrouting import proc, proc_util
 from psi4.driver.procrouting.sapt import sapt_proc, saptdft_checkpoint
 
@@ -136,6 +137,18 @@ _SCENARIO_OPTIONS = {
     # prod_d4i with second-order GRAC cations: the restarted cation's GUESS READ
     # must start from the neutral's stored orbitals, not from SAD.
     "grac_soscf": {
+        "freeze_core": True,
+        "sapt_dft_functional": "pbe0",
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_induction_type": "NONE",
+        "sapt_dft_grac_compute": "ITERATIVE",
+        "sapt_dft_grac_cation_soscf": True,
+        "sapt_dft_grac_shift_a": None,
+        "sapt_dft_grac_shift_b": None,
+    },
+    # grac_soscf whose READ cation guess is forced to fail (see main()), so every
+    # monomer must fall back on, and a restart must replay, the SAD guess.
+    "grac_read_fails": {
         "freeze_core": True,
         "sapt_dft_functional": "pbe0",
         "sapt_dft_do_ddft": False,
@@ -362,10 +375,14 @@ def _install_restart_guards(
         if molecule is None:
             boom("run_scf called without molecule during checkpoint restart")
         if current_context["name"] in ("grac_monomer_a", "grac_monomer_b"):
-            # GRAC rebuilds its molecules, so tell neutral from electron-removed by charge.
+            # GRAC rebuilds its molecules, so tell neutral from electron-removed by
+            # charge, and the two cation guesses apart by the guess in force.
             grac_stage = current_context["name"]
             neutral_charge = molecule_signatures[f"monomer_{grac_stage[-1]}_charge"]
-            stage = f"{grac_stage}_neutral" if molecule.molecular_charge() == neutral_charge else grac_stage
+            if molecule.molecular_charge() == neutral_charge:
+                stage = f"{grac_stage}_neutral"
+            else:
+                stage = f"{grac_stage}_cation_{core.get_option('SCF', 'GUESS').lower()}"
             summary.setdefault("grac_scf_calls", []).append(stage)
         else:
             stage = _classify_run_scf_stage(molecule)
@@ -645,7 +662,7 @@ def main():
         "--scenario",
         default="default",
         choices=["default", "disp", "localization", "fsapt_einsums", "fsapt_fisapt", "lrc", "raw_identity",
-                 "prod_d4i", "grac_soscf", "sapt0_d4i", "grac_shift_only", "grac_pinned_b"],
+                 "prod_d4i", "grac_soscf", "grac_read_fails", "sapt0_d4i", "grac_shift_only", "grac_pinned_b"],
     )
     parser.add_argument("--guard-jk", action="store_true")
     parser.add_argument("--count-jk-builds", action="store_true")
@@ -679,6 +696,17 @@ def main():
         )
     if args.forbid_fsapt_stage:
         _install_fsapt_guards(args.forbid_fsapt_stage)
+    if args.scenario == "grac_read_fails":
+        # Only the GRAC cation runs under GUESS READ here (the base options use SAD).
+        guarded_or_plain_run_scf = sapt_proc.run_scf
+
+        def read_guess_fails(*scf_args, **scf_kwargs):
+            if core.get_option("SCF", "GUESS") == "READ":
+                summary["forced_read_failures"] = summary.get("forced_read_failures", 0) + 1
+                raise ConvergenceError("GRAC cation SCF (forced READ failure)", 0)
+            return guarded_or_plain_run_scf(*scf_args, **scf_kwargs)
+
+        sapt_proc.run_scf = read_guess_fails
     if args.kill_after:
         # A walltime or OOM kill: no exception handler, no lock release, no
         # status update. The manifest commit is the last thing that happens.

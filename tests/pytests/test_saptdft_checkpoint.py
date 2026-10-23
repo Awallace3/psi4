@@ -83,6 +83,17 @@ _CHECKPOINT_SCENARIOS = {
         "sapt_dft_grac_shift_a": None,
         "sapt_dft_grac_shift_b": None,
     },
+    # grac_soscf with the READ cation guess forced to fail inside the worker.
+    "grac_read_fails": {
+        "freeze_core": True,
+        "sapt_dft_functional": "pbe0",
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_induction_type": "NONE",
+        "sapt_dft_grac_compute": "ITERATIVE",
+        "sapt_dft_grac_cation_soscf": True,
+        "sapt_dft_grac_shift_a": None,
+        "sapt_dft_grac_shift_b": None,
+    },
     "sapt0_d4i": {
         "sapt_dft_functional": "hf",
         "sapt_dft_do_ddft": False,
@@ -246,7 +257,8 @@ def _seed_checkpoint(mod, path, identity, **commit):
 # driver computes -D3/-D4 before the scalar SAPT terms and finishes the F-SAPT
 # partition before dispersion.
 _EXECUTION_ORDER = (
-    "grac_monomer_a_neutral", "grac_monomer_a", "grac_monomer_b_neutral", "grac_monomer_b",
+    "grac_monomer_a_neutral", "grac_monomer_a_cation_read", "grac_monomer_a_cation_sad", "grac_monomer_a",
+    "grac_monomer_b_neutral", "grac_monomer_b_cation_read", "grac_monomer_b_cation_sad", "grac_monomer_b",
     "hf_dimer_scf", "hf_monomer_a_scf", "hf_monomer_b_scf",
     "hf_sapt_elst", "hf_sapt_exch", "hf_sapt_ind",
     "dimer_localization_scf",
@@ -263,7 +275,10 @@ _EXECUTION_ORDER = (
 # Shorthand for the stage groups that travel together, so a selection can be
 # written as one readable string instead of a fifteen-element list.
 _STAGE_GROUPS = {
-    "grac*": ["grac_monomer_a_neutral", "grac_monomer_a", "grac_monomer_b_neutral", "grac_monomer_b"],
+    "grac_a*": ["grac_monomer_a_neutral", "grac_monomer_a_cation_read", "grac_monomer_a_cation_sad",
+                "grac_monomer_a"],
+    "grac*": ["grac_monomer_a_neutral", "grac_monomer_a_cation_read", "grac_monomer_a_cation_sad", "grac_monomer_a",
+              "grac_monomer_b_neutral", "grac_monomer_b_cation_read", "grac_monomer_b_cation_sad", "grac_monomer_b"],
     "hf*": ["hf_dimer_scf", "hf_monomer_a_scf", "hf_monomer_b_scf"],
     "hfsapt*": ["hf_sapt_elst", "hf_sapt_exch", "hf_sapt_ind"],
     "loc": ["dimer_localization_scf"],
@@ -1027,7 +1042,7 @@ def test_saptdft_checkpoint_stage_dependencies():
         pytest.param("sapt(dft)", _CHECKPOINT_SCENARIOS["grac_shift_only"],
                      "grac* final", id="grac-shift-only"),
         pytest.param("sapt(dft)", _CHECKPOINT_SCENARIOS["grac_pinned_b"],
-                     "grac_monomer_a_neutral grac_monomer_a hf* hfsapt* dft* scalar final",
+                     "grac_a* hf* hfsapt* dft* scalar final",
                      id="grac-one-shift-pinned"),
         # Explicit shifts pin GRAC off even when they equal the 0.0 default.
         pytest.param("sapt(dft)", {"sapt_dft_grac_compute": "ITERATIVE"},
@@ -1644,7 +1659,7 @@ def test_saptdft_checkpoint_env_var_stop_and_restart(tmp_path, monkeypatch, stop
 def _production_stop_cases():
     cases = []
     for scenario, name in [("prod_d4i", "sapt(dft)-d4(i)"), ("grac_soscf", "sapt(dft)-d4(i)"),
-                           ("sapt0_d4i", "sapt(dft)-d4(i)")]:
+                           ("grac_read_fails", "sapt(dft)-d4(i)"), ("sapt0_d4i", "sapt(dft)-d4(i)")]:
         for stage in _selected_stages(scenario=scenario, name=name):
             if stage != "final":
                 cases.append(pytest.param(scenario, name, stage, id=f"{scenario}-{stage}"))
@@ -1689,8 +1704,41 @@ def test_saptdft_checkpoint_production_spec_restart_after_each_stage(
                         name=name, forbid_banners=_banners_through(stop_stage, scenario=scenario, name=name))
     _assert_production_restart_matches(reference, restarted, f"{scenario} restart after {stop_stage}")
     if stop_stage == "grac_monomer_a_neutral":
-        # Only the electron-removed SCF of monomer A is left to run for it.
-        assert restarted["grac_scf_calls"][0] == "grac_monomer_a"
+        # Only the electron-removed SCFs of monomer A are left to run for it. A
+        # forced READ failure is raised before the guard sees the call.
+        first = "grac_monomer_a_cation_sad" if scenario == "grac_read_fails" else "grac_monomer_a_cation_read"
+        assert restarted["grac_scf_calls"][0] == first
+    if stop_stage == "grac_monomer_a_cation_read":
+        # The READ guess is stored; only the SAD guess runs for monomer A.
+        assert restarted["grac_scf_calls"][0] == "grac_monomer_a_cation_sad"
+
+
+@pytest.mark.saptdft
+@uusing("dftd4")
+@pytest.mark.parametrize("stop_stage", ["grac_monomer_a_cation_read", "grac_monomer_a_cation_sad"])
+def test_saptdft_checkpoint_grac_failed_read_guess_resumes_on_sad(tmp_path, production_reference, stop_stage):
+    """A READ guess that failed is stored as such: the restart neither reruns it nor keeps it."""
+    scenario, name = "grac_read_fails", "sapt(dft)-d4(i)"
+    reference = production_reference(scenario, name)
+    # Both monomers fall back on SAD in the uninterrupted run.
+    assert reference["forced_read_failures"] == 2
+
+    checkpoint_dir = tmp_path / stop_stage
+    _worker(expect="stopped", checkpoint_dir=checkpoint_dir, mode="stop", stop_after=stop_stage,
+            scenario=scenario, name=name)
+    manifest = json.loads((checkpoint_dir / _saptdft_checkpoint_module().SAPTDFT_MANIFEST_FILENAME).read_text())
+    stored = {key.rsplit("::", 2)[-2] + "::" + key.rsplit("::", 1)[-1]: value
+              for key, value in manifest["scalars"].items() if "::cation_" in key}
+    assert stored["cation_read::outcome"] == "not_converged"
+    assert stored["cation_read::energy"] is None
+    assert stored["cation_read::tier"] == 0
+    if stop_stage == "grac_monomer_a_cation_sad":
+        assert stored["cation_sad::outcome"] == "converged"
+
+    restarted = _worker(checkpoint_dir=checkpoint_dir, mode="restart_with_guards", scenario=scenario, name=name)
+    # Monomer A's READ guess is replayed from the checkpoint; only monomer B's runs (and fails).
+    assert restarted["forced_read_failures"] == 1
+    _assert_production_restart_matches(reference, restarted, f"{scenario} restart after {stop_stage}")
 
 
 @pytest.mark.saptdft
@@ -1703,8 +1751,7 @@ def test_saptdft_checkpoint_grac_workflow_restart(tmp_path, scenario):
             stop_after="grac_monomer_a", scenario=scenario)
     restarted = _worker(checkpoint_dir=checkpoint_dir, mode="restart_with_guards", scenario=scenario)
     grac_scf_calls = restarted.get("grac_scf_calls", [])
-    assert "grac_monomer_a" not in grac_scf_calls
-    assert "grac_monomer_a_neutral" not in grac_scf_calls
+    assert not [call for call in grac_scf_calls if call.startswith("grac_monomer_a")]
     _assert_scalar_qcvars_match(reference, restarted, f"{scenario} restart")
     for label in ("A",) if scenario == "grac_pinned_b" else ("A", "B"):
         for quantity in ("SHIFT", "MONOMER ENERGY", "IONIZED MONOMER ENERGY", "HOMO", "IP"):
