@@ -121,11 +121,18 @@ void CuestDeviceArray::release() {
     capacity_ = 0;
 }
 
-CuestXCResponseWorkspace::~CuestXCResponseWorkspace() { std::free(sdk_host); }
+CuestXCResponseWorkspace::~CuestXCResponseWorkspace() {
+    // SDK host scratch may participate in queued work. cudaFree of the device
+    // member occurs later, and is too late to protect the host allocation.
+    if (sdk_host || sdk_device.capacity_bytes()) cudaStreamSynchronize(::stream_handle);
+    std::free(sdk_host);
+}
 
 cuestWorkspace_t* CuestXCResponseWorkspace::sdk_workspace(const cuestWorkspaceDescriptor_t& descriptor) {
     void* device = sdk_device.ensure_bytes(descriptor.deviceBufferSizeInBytes, "the cuEST temporary workspace");
     if (descriptor.hostBufferSizeInBytes > sdk_host_capacity) {
+        if (sdk_host && cudaStreamSynchronize(::stream_handle) != cudaSuccess)
+            throw PSIEXCEPTION("cuEST XC response: stream failed before host workspace growth.");
         std::free(sdk_host);
         sdk_host = nullptr;
         sdk_host_capacity = 0;
@@ -962,6 +969,11 @@ void VBase::compute_Vx_cuest(const std::vector<VxDensity>& inputs, std::vector<S
 // iterative application below never downloads grid fields or AO matrices.
 struct CuestXCDeviceResponse::Impl {
 #if defined(PSI4_CUEST_NONSYMMETRIC_XC) && defined(PSI4_CUEST_DEVICE_CG)
+    ~Impl() {
+        // Complete queued operations before parameters (declared last below)
+        // and their workspace are destroyed, including exception unwinding.
+        cudaStreamSynchronize(::stream_handle);
+    }
     CuestXCResponseWorkspace ws;
     std::unique_ptr<GridContext> grid;
     std::vector<std::size_t> nocc;

@@ -49,7 +49,10 @@ extern "C" __global__ void cg_step(U n, U stride, double* x, double* r, const do
     if (i >= n || !active[i / stride]) return;
     U v = i / stride;
     double a = rho[v] / sigma[v];
-    if (!(rho[v] > 0.) || !(sigma[v] > 0.) || !finite_value(a)) { atomicOr(error, 2); return; }
+    if (!(rho[v] > 0.) || !finite_value(rho[v]) ||
+        !(sigma[v] > 0.) || !finite_value(sigma[v]) || !finite_value(a)) {
+        atomicOr(error, 2); return;
+    }
     x[i] += a * p[i]; r[i] -= a * ap[i];
 }
 extern "C" __global__ void cg_precondition(U n, U stride, const double* gap, const double* r, double* z) {
@@ -74,7 +77,8 @@ extern "C" __global__ void cg_direction(U n, U stride, int restart, const double
     U v = i / stride;
     if (!active[v]) { p[i] = 0.; return; }
     double beta = restart ? 0. : newrho[v] / oldrho[v];
-    if (!(newrho[v] > 0.) || (!restart && !(oldrho[v] > 0.)) || !finite_value(beta)) {
+    if (!(newrho[v] > 0.) || !finite_value(newrho[v]) ||
+        (!restart && (!(oldrho[v] > 0.) || !finite_value(oldrho[v]))) || !finite_value(beta)) {
         atomicOr(error, 8); p[i] = 0.; return;
     }
     p[i] = z[i] + beta * p[i];
