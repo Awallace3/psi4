@@ -243,6 +243,8 @@ std::vector<SharedMatrix> HF::cphf_solve_device(const std::vector<SharedMatrix>&
         throw PSIEXCEPTION("CUEST_DEVICE_CG does not support external/PCM/DDX/PE response contributions.");
     auto jk = std::dynamic_pointer_cast<cuESTJK>(jk_);
     if (!jk) throw PSIEXCEPTION("CUEST_DEVICE_CG requires an attached cuESTJK builder (USE_CUEST, SAVE_JK).");
+    if (jk->basisset()->nbf() != basisset()->nbf())
+        throw PSIEXCEPTION("CUEST_DEVICE_CG: attached JK and wavefunction AO dimensions do not match.");
     if (!jk->has_initialized_plan())
         throw PSIEXCEPTION("CUEST_DEVICE_CG requires an initialized JK plan; initialize after finalize/failure.");
     const std::size_t nspin = unrestricted ? 2 : 1;

@@ -209,6 +209,17 @@ def test_cuest_device_cg_finalized_jk_rejected():
         _device_solve(wfn, _rhs(wfn, False))
 
 
+def test_cuest_device_cg_mismatched_jk_rejected():
+    """The resident adapter must not pass undersized AO buffers to an attached JK."""
+    wfn = _wavefunction("hf")
+    wrong_basis = psi4.core.BasisSet.build(wfn.molecule(), "ORBITAL", "sto-3g")
+    wrong_jk = psi4.core.JK.build_JK(wrong_basis, wfn.get_basisset("DF_BASIS_SCF"))
+    wfn.set_jk(wrong_jk)
+    with pytest.raises(RuntimeError, match="AO dimensions do not match"):
+        _device_solve(wfn, _rhs(wfn, False))
+    assert not wfn.cphf_converged()
+
+
 def test_cuest_device_cg_symmetry_rejected():
     wfn = _wavefunction("hf", symmetry="c2v")
     with pytest.raises(RuntimeError, match="C1 molecular symmetry"):
