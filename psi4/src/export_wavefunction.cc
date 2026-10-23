@@ -64,6 +64,7 @@
 #include "psi4/dfep2/dfep2.h"
 
 #include "psi4/fisapt/fisapt.h"
+#include "psi4/fisapt/local2.h"
 
 #include "psi4/libpsio/psio.h"
 #include "psi4/libpsio/psio.hpp"
@@ -228,6 +229,15 @@ void export_wavefunction(py::module& m) {
              "Sets name of the last/highest level of theory module (internal or external) touching the wavefunction.")
         .def("module", &Wavefunction::module, py::return_value_policy::copy,
              "Name of the last/highest level of theory module (internal or external) touching the wavefunction.")
+        .def("set_module_role", &Wavefunction::set_module_role, "role"_a, "module"_a,
+             "Records which module (internal or external) filled a named role.")
+        .def("module_role", &Wavefunction::module_role, "role"_a, py::return_value_policy::copy,
+             "Module that filled a named role, or an empty string if that role was never filled.")
+        .def("module_roles", &Wavefunction::module_roles, py::return_value_policy::copy,
+             "Modules that filled named roles, keyed by role. The ``qc_module`` role is the "
+             "level-of-theory module for the current energy, the same string :py:meth:`module` "
+             "returns; the others record which package did a particular job along the way, "
+             "e.g. ``orbital_optimizer``.")
         .def("alpha_orbital_space", &Wavefunction::alpha_orbital_space, "id"_a, "basis"_a, "subset"_a, R"pbdoc(
             Creates OrbitalSpace with information about the requested alpha orbital space.
 
@@ -322,6 +332,11 @@ void export_wavefunction(py::module& m) {
     py::class_<scf::HF, std::shared_ptr<scf::HF>, Wavefunction>(m, "HF", "docstring")
         .def("compute_fvpi", &scf::HF::compute_fvpi, "Update number of frozen virtuals")
         .def("form_C", &scf::HF::form_C, "Forms the Orbital Matrices from the current Fock Matrices.", "shift"_a = 0.0)
+        .def("diagonalize_orbitals", &scf::HF::diagonalize_orbitals,
+             "Forms the orbital matrices from the current Fock Matrices, as :py:meth:`form_C` does, "
+             "but leaves the occupation to the caller rather than reassigning it by the aufbau rule. "
+             "Prefer form_C, which is this followed by find_occupation.",
+             "shift"_a = 0.0)
         .def("form_initial_C", &scf::HF::form_initial_C,
              "Forms the initial Orbital Matrices from the current Fock Matrices.")
         .def("form_D", &scf::HF::form_D, "Forms the Density Matrices from the current Orbitals Matrices")
@@ -482,7 +497,19 @@ void export_wavefunction(py::module& m) {
         .def("find", &fisapt::FISAPT::find, "F-SAPT0 induction.")
         .def("fdisp", &fisapt::FISAPT::fdisp, "F-SAPT0 dispersion.")
         .def("raw_plot", &fisapt::FISAPT::raw_plot, "Plot some analysis files.")
-        .def("print_trailer", &fisapt::FISAPT::print_trailer, "Print SAPT results.");
+        .def("print_trailer", &fisapt::FISAPT::print_trailer, "Print SAPT results.")
+        .def("set_vector", &fisapt::FISAPT::set_vector, "Set internal vectors by dictionary")
+        .def("set_scalar", &fisapt::FISAPT::set_scalar, "Set internal scalars by dictionary")
+        .def("set_matrix", &fisapt::FISAPT::set_matrix, "Set internal matrices by dictionary");
+
+    /// IBOLocalizer2 for FISAPT
+    py::class_<fisapt::IBOLocalizer2, std::shared_ptr<fisapt::IBOLocalizer2>>(m, "IBOLocalizer2", "An IBO2 Localizer")
+        .def(py::init<std::shared_ptr<BasisSet>, std::shared_ptr<BasisSet>, std::shared_ptr<Matrix>>())
+        .def("build", &fisapt::IBOLocalizer2::build, "Build the IBO2 localized orbitals.")
+        .def("localize", &fisapt::IBOLocalizer2::localize, "Localize the orbitals.")
+        .def("print_header", &fisapt::IBOLocalizer2::print_header, "print header information for IBO2 localizer.")
+        .def("print_charges", &fisapt::IBOLocalizer2::print_charges, "print charges information for IBO2 localizer.")
+    ;
 
     /// CIWavefunction functions
     void (detci::CIvect::*py_civ_copy)(std::shared_ptr<psi::detci::CIvect>, int, int) = &detci::CIvect::copy;

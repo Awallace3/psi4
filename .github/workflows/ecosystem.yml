@@ -60,7 +60,7 @@ jobs:
 
           - label: "Conda Clang (M-Silicon)"
             runs-on: macos-latest
-            python-version: "3.14"
+            python-version: "3.15"
             mkl-version: ""
             platform: osx-64
             pytest-marker-expr: "addon and not (medlong or long)"
@@ -75,7 +75,7 @@ jobs:
 
           - label: "Conda Clang (M-Silicon)"
             runs-on: macos-latest
-            python-version: "3.10"
+            python-version: "3.11"
             mkl-version: ""
             platform: osx-64
             pytest-marker-expr: "addon and not (medlong or long)"
@@ -127,6 +127,10 @@ jobs:
       uses: actions/checkout@v6
       with:
         fetch-depth: 0
+
+    # Forks do not automatically inherit upstream tags, which versioner.py requires.
+    - name: Fetch canonical Psi4 tags
+      run: git fetch --force https://github.com/psi4/psi4.git "refs/tags/*:refs/tags/*"
 
       # see CMAKE_OSX_SYSROOT and CMAKE_Fortran_FLAGS for use
       # mac_ver line returns, e.g., "10.15" for Catalina & "11.6" for Big Sur. but phracker doesn't support all minor, so some logic to hardcode.
@@ -205,6 +209,7 @@ jobs:
           sed -E -i.bak "s;accelerate;openblas;g" env_p4build.yaml
           sed -E -i.bak "s;- memory_profiler;#- memory_profiler;g" env_p4build.yaml
           # memory leaks. accelerate is fine but openblas matches the scf-cholesky stored values
+          sed -E -i.bak "s;- ambit;- mctc-lib=0.5.2;g" env_p4build.yaml
         fi
         if [[ "${{ runner.os }}" == "Windows" ]]; then
           :
@@ -311,6 +316,7 @@ jobs:
         conda remove qcfractal --force
         python -m pip install -e 'git+https://github.com/MolSSI/QCFractal.git@main#egg=qcfractal&subdirectory=qcfractal'
 
+      # Mac tests latest-release and Linux tests upstream main for QCFractal
     - name: Special Config - Download MolSSI/QCFractal Repo
       if: runner.os != 'Windows'
       uses: actions/checkout@v6
@@ -409,11 +415,38 @@ jobs:
       # Win runs out of memory on the geometric mp2(conv) tests, so run them with less parallelism
     - name: Test Addons with Pytest (geomeTRIC)
       working-directory: ./objdir
-      run: PYTHONPATH=stage/lib pytest --cache-clear -v -rws --durations=50 --durations-min=40 --strict-markers --color yes -n 2 -m "geometric" stage/lib/psi4/tests/
+      run: PYTHONPATH=stage/lib pytest --addon-report=addon-report.json --addon-report-label="${{ runner.os }} / ${{ matrix.cfg.label }} / Python ${{ matrix.cfg.python-version }}" --cache-clear -v -rws --durations=50 --durations-min=40 --strict-markers --color yes -n 2 -m "geometric" stage/lib/psi4/tests/
 
     - name: Test Addons with Pytest
       working-directory: ./objdir
-      run: PYTHONPATH=stage/lib pytest --cache-clear -v -rws --durations=50 --durations-min=40 --strict-markers --color yes -n auto -m "${{ matrix.cfg.pytest-marker-expr }} and not geometric" -k "${{ matrix.cfg.pytest-name-expr }}" stage/lib/psi4/tests/
+      run: PYTHONPATH=stage/lib pytest --addon-report=addon-report.json --addon-report-label="${{ runner.os }} / ${{ matrix.cfg.label }} / Python ${{ matrix.cfg.python-version }}" --cache-clear -v -rws --durations=50 --durations-min=40 --strict-markers --color yes -n auto -m "${{ matrix.cfg.pytest-marker-expr }} and not geometric" -k "${{ matrix.cfg.pytest-name-expr }}" stage/lib/psi4/tests/
+
+    - name: Publish addon test report
+      if: always()
+      working-directory: ./objdir
+      run: |
+        if [[ -f addon-report.md ]]; then
+          echo "::group::Addon test report (Markdown source)"
+          cat addon-report.md
+          echo "::endgroup::"
+          cat addon-report.md >> "$GITHUB_STEP_SUMMARY"
+          # Require ECPInt to be green (some passed and none failed):
+          python -c 'import json; r=json.load(open("addon-report.json"))["addons"]["ecpint"]; assert r["passed"] > 0 and r["failed"] == 0, r'
+        else
+          echo "::warning::addon-report.md was not produced"
+          echo "## Psi4 addon test report" >> "$GITHUB_STEP_SUMMARY"
+          echo "The addon report was not produced; pytest may have exited before session cleanup." >> "$GITHUB_STEP_SUMMARY"
+          ADDON_REPORT_LABEL="${{ runner.os }} / ${{ matrix.cfg.label }} / Python ${{ matrix.cfg.python-version }}" python -c 'import json, os; json.dump({"label": os.environ["ADDON_REPORT_LABEL"], "error": "report unavailable"}, open("addon-report.json", "w", encoding="utf-8"))'
+        fi
+
+    - name: Upload addon test report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: addon-report-${{ runner.os }}-py${{ matrix.cfg.python-version }}-${{ strategy.job-index }}
+        path: |
+          objdir/addon-report.json
+          objdir/addon-report.md
 
     - name: Write user Conda environment files
       run: |
@@ -424,7 +457,7 @@ jobs:
         git diff --color-words
 
     - name: Analyze Conda dependencies
-      if: runner.os != 'Windows'
+      if: runner.os != 'Windows' && matrix.cfg.python-version != '3.15'
       run: |
         conda install conda-tree -c conda-forge
         conda-tree deptree
@@ -448,6 +481,33 @@ jobs:
         export PYTHONPATH=stage/lib
         pytest --cache-clear -v -rws --color yes -n auto -m qcmanybody stage/lib/psi4/tests/
         pytest --cache-clear -v -rws --color yes -n auto -k missing stage/lib/psi4/tests/
+
+  addon-summary:
+    name: "Eco • Combined addon report"
+    if: always()
+    needs: ecosystem
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Psi4
+      uses: actions/checkout@v6
+
+    - name: Download addon reports
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        pattern: addon-report-*
+        path: addon-reports
+
+    - name: Combine addon reports
+      run: python tests/pytests/addon_report.py --combine addon-reports --output addon-report-combined.md
+
+    - name: Publish combined addon report
+      run: |
+        echo "::group::Combined addon test report (Markdown source)"
+        cat addon-report-combined.md
+        echo "::endgroup::"
+        cat addon-report-combined.md >> "$GITHUB_STEP_SUMMARY"
 
 # Notes
 # -----

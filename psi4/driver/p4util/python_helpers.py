@@ -407,7 +407,10 @@ def _core_wavefunction_to_file(wfn: core.Wavefunction, filename: str = None) -> 
         'string': {
             'name': wfn.name(),
             'module': wfn.module(),
-            'basisname': wfn.basisset().name()
+            'basisname': wfn.basisset().name(),
+            # roles other than qc_module, which travels as 'module' above
+            **{f'module_role:{role}': mod for role, mod in wfn.module_roles().items()
+               if role != 'qc_module'},
         },
         'boolean': {
             'PCM_enabled':    wfn.PCM_enabled(),
@@ -872,6 +875,9 @@ def validate_external_potential(external_potential) -> Dict:
             else:
                 raise ValidationError(f"external_potential: primary or sec keys should be among {mode_keys_list}, not {frag_ep.keys()}. Full input: {external_potential}")
         elif isinstance(frag_ep, list):
+            # list might be new-fangled structure holding one or many among points, diffuse, matrix (the `else` branch),
+            #   or it might be the outer list of an longstanding list-o-points (the `if` branch), in which case it'll pass
+            #   the `validate_charge_list` check and needs wrapping in an outer list to match the new-fangled structure.
             if (w := validate_charge_list(frag_ep)):
                 ep_building[frag] = dict(zip(mode_keys_list, [w]))
             else:
