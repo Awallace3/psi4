@@ -68,6 +68,9 @@ def read_config(path, expected_sha256):
     for filename, checksum in build["dependency_python_sha256"].items():
         if digest(filename) != checksum:
             raise RuntimeError("CPU-qualified dependency Python changed: " + filename)
+    for filename, checksum in build["binary_sha256"].items():
+        if digest(filename) != checksum:
+            raise RuntimeError("CPU-qualified binary changed: " + filename)
     return value, build
 
 

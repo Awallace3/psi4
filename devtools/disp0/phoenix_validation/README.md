@@ -106,3 +106,23 @@ audited provider, actual batched FP64 BLAS controls, high-index IBO reductions,
 no CPU fragment integral/localizer fallback and final cleanup. It captures
 raw HF and final matrices for independent comparison. Its output status
 explicitly does **not** claim independent correctness or accepted timings.
+
+The separate `submit_gate.py` route is one H200, 4 CPUs, 32 GiB, at most
+one hour. It requires both completed native CPU preflights and a prepared
+configuration SHA. QoS/account are explicit; inferno still requires fresh
+scoped approval and live account selection.
+
+`run_gate.py` invokes ten fresh sequential diagnostic processes: matched
+CPU/GPU and independent same-GPU-gauge CPU replay for unscaled, scaled and
+changed inputs, then a fresh GPU repeat. The oracle rebuilds native CPU AO
+JK, verifies HF projectors and one-electron inputs, reconstructs IAO charges
+and checks final-gauge stationarity independently, then computes the signed
+fragment components using CPU DFHelper/native JK. Both signed dispersion
+pair matrices are required separately, not merely their sum. Output-file
+roundtrips and nonunit scaling are also checked. These are **small-case**
+diagnostics, not protein admission or any of the accepted timing repeats.
+
+Helpers may have a newer separately recorded Git pin than the scientific
+stage, but they must use its SHA-verified launcher and untouched whole
+scientific Python/core inventory. They never overlay driver code or modify
+the source/build being used by job14321813.

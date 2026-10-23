@@ -7,6 +7,7 @@ import unittest
 import json
 from unittest.mock import patch
 from types import SimpleNamespace
+import numpy as np
 
 HERE = Path(__file__).resolve().parent
 
@@ -29,6 +30,85 @@ class Contract(unittest.TestCase):
             self.assertEqual(cpu["sapt_dft_do_dhf"],scaled)
             self.assertEqual(cpu["df_basis_scf"],"aug-cc-pvdz-jkfit")
             self.assertEqual(cpu["df_basis_mp2"],"aug-cc-pvdz-ri")
+            self.assertEqual(cpu["sapt_dft_induction_type"],"CPKS")
+
+    def test_h200_gate_explicit_bounded_route_and_no_hidden_CPU_resource_change(self):
+        submit=load("submit_gate")
+        for qos in ("embers","inferno"):
+            argv=submit.command(Path("/source"),Path("/run"),qos=qos,account="gts-cs207-chemx")
+            for flag in ("--partition=gpu-h200","--gres=gpu:h200:1","--cpus-per-task=4",
+                         "--mem=32G","--time=01:00:00","--qos="+qos,"--no-requeue"):
+                self.assertIn(flag,argv)
+            self.assertIn("--output=/run/logs/%x-%j.out",argv)
+
+    def test_signed_gate_comparison_rejects_sign_changes_not_just_absolute_energies(self):
+        gate=load("run_gate")
+        sums={name:-.02 for name in (
+            "Elst_AB","Exch_AB","IndAB_AB","IndBA_AB","Disp_AB",
+            "Ind20u_AB","Ind20u_BA","ExchInd20u_AB","ExchInd20u_BA",
+            "Ind20r_AB","Ind20r_BA","ExchInd20r_AB","ExchInd20r_BA")}
+        document={"geometry_sha256":"fixed","scaled":True,"signed_matrix_sums":sums,
+                  "output_file_sha256":{name:"fixed" for name in
+                     ("geom.xyz","geom.psi4mol","ZA.dat","ZB.dat")},
+                  "Disp20,u":-.003,"Exch-Disp20,u":.0004}
+        self.assertEqual(len(gate.compare(document,document)),15)
+        changed={**document,"signed_matrix_sums":{**sums,"Ind20r_BA":.02}}
+        with self.assertRaises(AssertionError):gate.compare(document,changed)
+        with self.assertRaises(RuntimeError):gate.compare(document,{**document,"scaled":False})
+
+    def test_native_IAO_oracle_reconstructs_GPU_gauge_without_copying_populations(self):
+        gate=load("fragment_gate")
+        class Matrix:
+            def __init__(self,array):self.np=np.array(array,copy=True);self.shape=self.np.shape
+            @staticmethod
+            def from_array(array):return Matrix(array)
+        core=SimpleNamespace(Matrix=Matrix)
+        minimal=SimpleNamespace(nbf=lambda:3,function_to_center=lambda i:i)
+        wfn=SimpleNamespace(get_basisset=lambda name:minimal)
+        cache={"S":Matrix(np.eye(3))}
+        gpu={}
+        for side in ("A","B"):
+            co=np.eye(3)[:,:2];locc=co@np.diag([1.,-1.])
+            cache["Cocc_"+side]=Matrix(co)
+            cache["Lfocc0"+side]=Matrix(co[:,:1])
+            gpu["Locc_"+side]=locc;gpu["Qocc0"+side]=locc**2
+        gate.replay_localization(core,cache,wfn,gpu,[np.eye(3)]*3)
+        np.testing.assert_allclose(cache["Qocc0A"].np,gpu["Qocc0A"])
+        np.testing.assert_allclose(cache["Uocc_A"].np,np.diag([1.,-1.]))
+        np.testing.assert_allclose(cache["Uaocc0A"].np,[[-1.]])
+        bad={**gpu,"Qocc0B":gpu["Qocc0B"]+.01}
+        with self.assertRaises(AssertionError):
+            gate.replay_localization(core,cache,wfn,bad,[np.eye(3)]*3)
+        with self.assertRaises(RuntimeError):
+            gate.replay_localization(core,cache,wfn,gpu,[np.eye(3)])
+        theta=.27
+        mixed=np.eye(3)
+        mixed[:2,:2]=[[np.cos(theta),np.sin(theta)],[-np.sin(theta),np.cos(theta)]]
+        for side in ("A","B"):
+            cache["Cocc_"+side]=Matrix(np.eye(3))
+            cache["Lfocc0"+side]=Matrix(np.zeros((3,0)))
+            gpu["Locc_"+side]=mixed
+            gpu["Qocc0"+side]=mixed**2
+        with self.assertRaisesRegex(RuntimeError,"stationarity"):
+            gate.replay_localization(core,cache,wfn,gpu,[np.eye(3)]*3)
+
+    def test_oracle_rejects_inconsistent_raw_projectors_before_native_JK(self):
+        gate=load("fragment_gate")
+        class Raw(dict):
+            @property
+            def files(self):return list(self)
+        raw=Raw(S=np.eye(3),V_A=np.zeros((3,3)),V_B=np.zeros((3,3)))
+        for side in ("A","B"):
+            co=np.eye(3)[:,:1];cv=np.eye(3)[:,1:]
+            raw.update({"Cocc_"+side:co,"Cvir_"+side:cv,
+                "eps_occ_"+side:np.array([-1.]),"eps_vir_"+side:np.array([1.,2.]),
+                "D_"+side:co@co.T,"P_"+side:cv@cv.T})
+        cache={name:SimpleNamespace(np=raw[name]) for name in ("S","V_A","V_B")}
+        core=SimpleNamespace(get_global_option=lambda name:False)
+        for field in ("D_A","P_B"):
+            changed=Raw(raw);changed[field]=changed[field]+.01
+            with self.assertRaises(AssertionError):
+                gate.replay_hf(core,cache,object(),changed)
 
     def test_header_stream_uses_POSIX_text_order_not_path_component_order(self):
         validate = load("validate")
@@ -147,6 +227,7 @@ class Contract(unittest.TestCase):
             proof.write_text(json.dumps({"status": "PASS", "pin": "pin", "stage": str(stage),
                 "python_package": str(package),
                 "dependency_python_sha256": {},
+                "binary_sha256": {},
                 "launcher_sha256": runtime.digest(stage / "bin/psi4"),
                 "scientific_python_sha256": {"science.py": runtime.digest(package / "science.py")}}))
             config = root / "config.json"
