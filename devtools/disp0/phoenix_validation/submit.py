@@ -37,6 +37,10 @@ def main():
     dirty = subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip()
     if actual != args.pin or dirty:
         raise RuntimeError("Submission source must be clean and exactly pinned")
+    for name in ("job.sbatch", "payload.sh", "validate.py", "test_contract.py"):
+        path = source / "devtools/disp0/phoenix_validation" / name
+        if not path.is_file():
+            raise RuntimeError("Missing pinned job helper: " + str(path))
     for path in (OLD / "environment/bin/python", OLD / "einsums-stage/lib/einsums",
                  P / "software/toolchains/cuda13/bin/nvcc",
                  P / "software/cuest-0.2.50-a06e8148/include/cuest.h"):

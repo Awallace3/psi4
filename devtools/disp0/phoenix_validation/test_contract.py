@@ -15,6 +15,10 @@ def load(name):
 
 
 class Contract(unittest.TestCase):
+    def test_job_payload_is_present(self):
+        self.assertTrue((HERE / "payload.sh").is_file())
+        self.assertIn("phoenix_validation/payload.sh", (HERE / "job.sbatch").read_text())
+
     def test_explicit_free_cpu_shape_and_absolute_logs(self):
         submit = load("submit")
         argv = submit.command(Path("/source"), Path("/fresh-run"))
