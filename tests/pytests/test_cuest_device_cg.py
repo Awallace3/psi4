@@ -9,7 +9,7 @@ pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick, pytest.mark.c
 
 
 def _wavefunction(method="pbe0", unrestricted=False, directj=True, gridk=True,
-                  gpu_xc=True, symmetry="c1", grac=False, atom=False, neutral_uhf=False):
+                  gpu_xc=True, symmetry="c1", grac=False, atom=False, neutral_uhf=False, guess=None):
     psi4.core.clean()
     psi4.core.clean_options()
     psi4.set_num_threads(2)
@@ -27,7 +27,10 @@ def _wavefunction(method="pbe0", unrestricted=False, directj=True, gridk=True,
         "basis": "cc-pvdz", "df_basis_scf": "cc-pvdz-jkfit",
         "reference": ("uhf" if unrestricted else "rhf") if method == "hf" else
                      ("uks" if unrestricted else "rks"),
-        "scf_type": "df", "use_cuest": True, "save_jk": True, "guess": "core",
+        # Core converges the water cation to an unstable excited determinant.
+        # The independent host -H spectrum is positive with SAD preparation.
+        "scf_type": "df", "use_cuest": True, "save_jk": True,
+        "guess": guess or ("sad" if unrestricted and not atom and not neutral_uhf else "core"),
         "cuest_directj": directj, "cuest_gridk": gridk, "cuest_xc": gpu_xc,
         "cuest_device_cg": False, "cuest_mixed_precision": False, "cuest_gemm_min_dim": 0,
         "dft_radial_points": 35, "dft_spherical_points": 110,
@@ -231,6 +234,15 @@ def test_cuest_device_cg_negative_curvature():
     with pytest.raises(RuntimeError, match="nonpositive curvature"):
         _device_solve(wfn, rhs)
     assert not wfn.cphf_converged()
+
+
+def test_cuest_device_cg_unstable_scf_rejected():
+    """A converged SCF flag and positive gaps do not establish Hessian stability."""
+    wfn = _wavefunction("hf", unrestricted=True, directj=False, gridk=False, guess="core")
+    with pytest.raises(RuntimeError, match="nonpositive curvature"):
+        _device_solve(wfn, _rhs(wfn, True, count=1, mixed=False))
+    assert not wfn.cphf_converged()
+    assert wfn.cphf_device_stats()["operator_calls"] > 0
 
 
 @pytest.mark.parametrize("route", ["native", "einsums"])

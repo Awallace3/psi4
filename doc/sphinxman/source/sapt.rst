@@ -799,7 +799,10 @@ than trusting only the recursively updated residual.
 
 This opt-in requires a cuEST build with CUDA NVRTC and driver support,
 ``SAVE_JK true``, an initialized cuEST JK object, C1 symmetry, positive
-orbital-gap preconditioning, and RHF/RKS or UHF/UKS. DFT additionally requires
+orbital-gap preconditioning, a positive-definite response Hessian (a stable
+SCF reference), and RHF/RKS or UHF/UKS. A positive orbital gap alone does not
+establish SCF stability; detected nonpositive curvature raises an error.
+DFT additionally requires
 ``CUEST_XC true`` selected before SCF and a compatible final LDA/GGA GPU grid.
 Reference XC derivatives are prepared once per solve (on the host when CUDA
 LibXC is unavailable), then retained on the device. MGGA, VV10, fractional
@@ -808,7 +811,9 @@ are rejected explicitly. Unsupported cases do not silently fall back to the
 host solver. The default remains false.
 
 ``Wavefunction.cphf_device_stats()`` reports setup/iteration/total timings,
-operator calls, the final relative residual, and transfer byte counters.
+operator calls, the final relative residual, and explicit solver transfer
+byte counters. The setup upload counter covers solver vectors and
+orbital/Fock panels, not XC reference preparation or SDK-internal transfers.
 Measure total solve time as well as iteration time: preparation and kernel
 compilation can dominate small problems, so no fixed speedup is guaranteed.
 
