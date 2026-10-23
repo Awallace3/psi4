@@ -233,8 +233,18 @@ def test_cuest_gridk_cpks(gridk_system, unrestricted, directj):
             nvir = sum(subset("SO", "VIR").coldim())
             rhs.append(psi4.core.Matrix.from_array(rng.normal(size=(nocc, nvir)) * 0.01))
     original = wfn.jk()
+    # Direct-J must be compared with four-center J, not a DF-J Hessian.
+    # Keep the same orbitals and native XC grid to isolate only J/K.
+    reference_jk = None
+    if directj:
+        psi4.set_options({"scf_type": "direct"})
+        reference_jk = psi4.core.JK.build_JK(wfn.basisset(), wfn.get_basisset("DF_BASIS_SCF"))
+        reference_jk.set_do_J(True)
+        reference_jk.set_do_K(True)
+        reference_jk.initialize()
+        wfn.set_jk(reference_jk)
     expected = [m.np.copy() for m in wfn.cphf_Hx(rhs)]
-    psi4.set_options({"use_cuest": True, "cuest_gridk": True, "cuest_directj": directj})
+    psi4.set_options({"scf_type": "df", "use_cuest": True, "cuest_gridk": True, "cuest_directj": directj})
     jk = _builder(wfn.basisset(), wfn.get_basisset("DF_BASIS_SCF"), (0.25, 0.0, 0.0))
     try:
         wfn.set_jk(jk)
@@ -252,6 +262,8 @@ def test_cuest_gridk_cpks(gridk_system, unrestricted, directj):
     finally:
         wfn.set_jk(original)
         jk.finalize()
+        if reference_jk is not None:
+            reference_jk.finalize()
 
 
 def test_cuest_directj_switch_and_no_df_plan(gridk_system, tmp_path):
