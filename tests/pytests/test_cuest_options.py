@@ -11,7 +11,7 @@ scf_iterator = importlib.import_module("psi4.driver.procrouting.scf_proc.scf_ite
 pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick]
 
 
-@pytest.mark.parametrize("option", ["CUEST_GRIDK", "CUEST_DIRECTJ"])
+@pytest.mark.parametrize("option", ["CUEST_GRIDK", "CUEST_DIRECTJ", "CUEST_DEVICE_CG"])
 def test_cuest_gridk_option_default(option):
     """Register the opt-in even in CPU-only builds; DF-K remains the default."""
     psi4.core.clean_options()

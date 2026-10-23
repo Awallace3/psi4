@@ -53,6 +53,7 @@ class PointFunctions;
 class SuperFunctional;
 class BlockOPoints;
 struct CuestXCResponseWorkspace;
+class CuestXCDeviceResponse;
 
 /// One XC response density: Dx = left * right^T when both factors are set, else dense.
 struct VxDensity {
@@ -254,6 +255,9 @@ class PSI_API VBase {
 #endif
         return use_cuest_xc();
     }
+#ifdef USING_cuEST
+    std::unique_ptr<CuestXCDeviceResponse> prepare_device_response(const std::vector<std::size_t>& nocc);
+#endif
 
     virtual void initialize();
     virtual void finalize();

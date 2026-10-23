@@ -240,6 +240,16 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     Analytic Coulomb gradients are not implemented for this mode.
     No effect unless a cuEST J/K builder is selected. -*/
     options.add_bool("CUEST_DIRECTJ", false);
+    /*- Select the separate device-resident conjugate-gradient CPHF/CPKS solver.
+    Iterates, preconditioning, reductions, AO/MO Hessian products and XC response
+    contractions remain on device. Only setup, final solutions and small convergence
+    summaries cross the bus. Fixed XC reference derivatives are prepared once during
+    setup (host LibXC is supported) and retained on device throughout the iteration.
+    Requires cuEST J/K, CUDA NVRTC, C1 RHF/RKS or UHF/UKS, and for DFT a final cuEST
+    LDA/GGA XC grid built with |globals__cuest_xc| true before SCF. Unsupported
+    symmetry, fractional occupations and external response callbacks raise rather
+    than falling back. Applies to SAPT coupled induction as well. -*/
+    options.add_bool("CUEST_DEVICE_CG", false);
     /*- Tune # of Ozaki Slices in emulated DF K computations (requires CUDA and cuEST libraries) -*/
     options.add_int("CUEST_DFK_SLICES", 5);
     /*- Tune # of Ozaki Moduli in emulated DF K computations (requires CUDA and cuEST libraries) -*/

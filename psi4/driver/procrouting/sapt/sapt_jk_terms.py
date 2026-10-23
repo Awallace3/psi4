@@ -34,7 +34,7 @@ from psi4 import core
 
 from ...p4util import solvers
 from ...p4util.exceptions import *
-from .sapt_util import print_sapt_var
+from .sapt_util import print_sapt_var, solve_device_sapt_response
 from pprint import pprint as pp
 
 
@@ -833,6 +833,11 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
         cache["wfn_B"].set_jk(sapt_jk_B)
     else:
         cache["wfn_B"].set_jk(jk)
+
+    if core.get_global_option("CUEST_DEVICE_CG"):
+        return solve_device_sapt_response(
+            [cache["wfn_A"], cache["wfn_B"]], [rhsA, rhsB], maxiter, conv
+        )
 
     # Make a preconditioner function
     P_A = core.Matrix(cache["eps_occ_A"].shape[0], cache["eps_vir_A"].shape[0])

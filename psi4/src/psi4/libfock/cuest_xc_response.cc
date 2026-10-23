@@ -48,6 +48,8 @@
 #include "psi4/libfock/cubature.h"
 #include "psi4/libfock/cuESTCommon.h"
 #include "psi4/libfock/cuest_xc_response.h"
+#include "psi4/libfock/cuest_device_response.h"
+#include "psi4/libfock/cuest_device_kernels.h"
 #include "psi4/libfock/cuest_xc_response_math.h"
 #include "psi4/libfunctional/LibXCfunctional.h"
 #include "psi4/libfunctional/functional.h"
@@ -65,6 +67,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <functional>
 #include <map>
 #include <sstream>
 #include <string>
@@ -82,6 +85,7 @@
 #endif
 
 extern cuestHandle_t cuest_handle;
+extern cudaStream_t stream_handle;
 
 namespace psi {
 
@@ -950,6 +954,221 @@ void VBase::compute_Vx_cuest(const std::vector<VxDensity>& inputs, std::vector<S
         }
     }
     stages.finish();
+#endif
+}
+
+// A solve-local reference snapshot. Host LibXC is permitted only here during
+// setup: f_xc is fixed for a linear response solve, so upload it once. The
+// iterative application below never downloads grid fields or AO matrices.
+struct CuestXCDeviceResponse::Impl {
+#if defined(PSI4_CUEST_NONSYMMETRIC_XC) && defined(PSI4_CUEST_DEVICE_CG)
+    CuestXCResponseWorkspace ws;
+    std::unique_ptr<GridContext> grid;
+    std::vector<std::size_t> nocc;
+    double cutoff = 0.0;
+    bool gga = false;
+    bool prepared = false;
+    std::function<void()> validate;
+    CuestParameters<cuestXCNonsymmetricDensityComputeParameters_t> density_params{
+        CUEST_XCNONSYMMETRICDENSITYCOMPUTE_PARAMETERS};
+    CuestParameters<cuestXCPotentialComputeParameters_t> potential_params{
+        CUEST_XCPOTENTIALCOMPUTE_PARAMETERS};
+#endif
+};
+CuestXCDeviceResponse::CuestXCDeviceResponse(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+CuestXCDeviceResponse::~CuestXCDeviceResponse() = default;
+
+std::unique_ptr<CuestXCDeviceResponse> VBase::prepare_device_response(const std::vector<std::size_t>& nocc) {
+#if !defined(PSI4_CUEST_NONSYMMETRIC_XC) || !defined(PSI4_CUEST_DEVICE_CG)
+    throw PSIEXCEPTION("CUEST_DEVICE_CG requires CUDA NVRTC and nonsymmetric cuEST XC response APIs for DFT.");
+#else
+    if (nocc.empty() || nocc.size() > 2 || D_AO_.size() != nocc.size())
+        throw PSIEXCEPTION("cuEST device CG: inconsistent XC reference spin dimensions.");
+    if (!grid_ || !cuest_xcint_plan_ || !uses_cuest_xc())
+        throw PSIEXCEPTION("CUEST_DEVICE_CG requires CUEST_XC true before SCF for DFT response.");
+    if (initial_grid_) throw PSIEXCEPTION("CUEST_DEVICE_CG requires the final XC grid.");
+    if (functional_->needs_vv10() || functional_->ansatz() >= 2)
+        throw PSIEXCEPTION("CUEST_DEVICE_CG does not support MGGA or VV10 response kernels.");
+    const bool uks = nocc.size() == 2;
+    if (uks && functional_->needs_grac())
+        throw PSIEXCEPTION("CUEST_DEVICE_CG: UKS GRAC response is not implemented.");
+    require_response_derivatives(functional_->x_functionals());
+    require_response_derivatives(functional_->c_functionals());
+    cuest_common::ensure_cuest_initialized();
+    auto p = std::make_unique<CuestXCDeviceResponse::Impl>();
+    p->nocc = nocc;
+    p->gga = functional_->ansatz() == 1;
+    p->cutoff = v2_rho_cutoff_;
+    uint64_t npoints = 0;
+    CHECK_CUEST(cuestQuery(cuest_handle, CUEST_MOLECULARGRID, grid_->cuest_grid(),
+                          CUEST_MOLECULARGRID_NUM_POINT, &npoints, sizeof(npoints)));
+    const int budget = options_.get_int("CUEST_XC_RESPONSE_BUDGET_MB");
+    if (!npoints || budget <= 0) throw PSIEXCEPTION("cuEST device CG: invalid XC grid or workspace budget.");
+    p->grid = std::make_unique<GridContext>(GridContext{
+        cuest_xcint_plan_,
+        p->gga ? CUEST_XCADVANCED_PARAMETERS_APPROXIMATION_GGA : CUEST_XCADVANCED_PARAMETERS_APPROXIMATION_LDA,
+        npoints, p->gga ? 4u : 1u, static_cast<std::size_t>(nbf_), p->ws,
+        cuestWorkspaceDescriptor_t{0, static_cast<std::size_t>(budget) * 1000000}, false});
+    auto& g = *p->grid;
+    auto& ws = p->ws;
+    const std::size_t field = g.npoints * g.ncomponents;
+    double* weights = ws.weights.ensure(npoints, "resident integration weights");
+    {
+        CuestParameters<cuestXCIntegrationWeightComputeParameters_t> parameters(
+            CUEST_XCINTEGRATIONWEIGHTCOMPUTE_PARAMETERS);
+        cuestWorkspaceDescriptor_t d{};
+        CHECK_CUEST(cuestXCIntegrationWeightComputeWorkspaceQuery(
+            cuest_handle, g.plan, CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
+            parameters.get(), &d, weights));
+        CHECK_CUEST(cuestXCIntegrationWeightCompute(
+            cuest_handle, g.plan, CUEST_XCINTEGRATIONWEIGHT_PARAMETERS_WEIGHTTYPE_TOTAL,
+            parameters.get(), ws.sdk_workspace(d), weights));
+    }
+#ifdef USING_Libxc_CUDA
+    const bool device_functional = !options_.get_bool("CUEST_XC_RESPONSE_HOST_LIBXC");
+#else
+    const bool device_functional = false;
+#endif
+    std::array<double*, 2> reference{
+        ws.reference_a.ensure(field, "resident reference density"),
+        uks ? ws.reference_b.ensure(field, "resident reference density") : nullptr};
+    std::vector<double> host_reference[2];
+    const bool occupied = cuest_Cocc_reproduces_D();
+    std::size_t offset = 0;
+    for (std::size_t s = 0; s < nocc.size(); ++s) {
+        if (occupied) {
+            occupied_density(g, d_Cocc_noccs_[s], d_Coccs_AO_ + offset, reference[s]);
+            offset += d_Cocc_noccs_[s] * g.nbf;
+            if (!device_functional) {
+                host_reference[s].resize(field);
+                download(reference[s], field, host_reference[s].data());
+            }
+        } else {
+            // A host-tiled reference also supports CPU LibXC without requiring
+            // any GPU tile-accumulation helper. This is setup, never iteration.
+            DensityTarget target{nullptr, &host_reference[s]};
+            dense_density(g, *D_AO_[s], target);
+            check_cuda(cudaMemcpy(reference[s], host_reference[s].data(), field * sizeof(double),
+                                  cudaMemcpyHostToDevice), "resident reference upload");
+        }
+    }
+    if (device_functional) {
+#ifdef USING_Libxc_CUDA
+        evaluate_device_kernel(functional_, uks ? VxSpin::UKS : VxSpin::RKSSinglet,
+                               p->gga, g, reference[0], reference[1]);
+#endif
+    } else {
+        HostKernel h;
+        evaluate_host_kernel(functional_, uks ? VxSpin::UKS : VxSpin::RKSSinglet, p->gga,
+                             npoints, g.ncomponents, host_reference[0],
+                             uks ? host_reference[1] : host_reference[0], num_threads_, h);
+        const auto upload = [&](const std::vector<double>& values, CuestDeviceArray& device) {
+            if (values.empty()) return;
+            check_cuda(cudaMemcpy(device.ensure(values.size(), "resident f_xc"), values.data(),
+                                  values.size() * sizeof(double), cudaMemcpyHostToDevice), "resident f_xc upload");
+        };
+        upload(h.A, ws.kernel_A); upload(h.B, ws.kernel_B); upload(h.C, ws.kernel_C); upload(h.S, ws.kernel_S);
+        upload(h.v2rho2, ws.v2rho2); upload(h.v2rhosigma, ws.v2rhosigma);
+        upload(h.v2sigma2, ws.v2sigma2); upload(h.vsigma, ws.vsigma);
+    }
+    ws.response_a.ensure(field, "resident response density");
+    ws.potential_a.ensure(field, "resident grid potential");
+    if (uks) {
+        ws.response_b.ensure(field, "resident response density");
+        ws.potential_b.ensure(field, "resident grid potential");
+    }
+    const auto epoch = cuest_reference_epoch_;
+    const auto plan = cuest_xcint_plan_;
+    p->validate = [this, epoch, plan]() {
+        if (epoch != cuest_reference_epoch_ || plan != cuest_xcint_plan_ || initial_grid_)
+            throw PSIEXCEPTION("cuEST device CG: XC reference or grid changed during a resident solve.");
+    };
+    // Existing CUDA LibXC setup helpers use the default stream. Complete all
+    // one-time reference preparation before exclusively using the cuEST stream.
+    check_cuda(cudaDeviceSynchronize(), "resident XC reference preparation");
+    return std::unique_ptr<CuestXCDeviceResponse>(new CuestXCDeviceResponse(std::move(p)));
+#endif
+}
+
+void CuestXCDeviceResponse::prepare(const std::array<const double*, 2>& left,
+                                    const std::array<const double*, 2>& right,
+                                    const std::array<double*, 2>& potential) {
+#if defined(PSI4_CUEST_NONSYMMETRIC_XC) && defined(PSI4_CUEST_DEVICE_CG)
+    auto& p = *impl_;
+    p.validate();
+    auto& g = *p.grid;
+    auto& ws = p.ws;
+    const std::size_t field = g.npoints * g.ncomponents;
+    double* d[] = {ws.response_a.ensure(field, "resident response"), ws.response_b.ensure(
+        p.nocc.size() == 2 ? field : 0, "resident response")};
+    double* v = ws.potential_a.ensure(field, "resident grid potential");
+    cuestWorkspaceDescriptor_t total{}, next{};
+    const auto grow = [&]() {
+        total.deviceBufferSizeInBytes = std::max(total.deviceBufferSizeInBytes, next.deviceBufferSizeInBytes);
+        total.hostBufferSizeInBytes = std::max(total.hostBufferSizeInBytes, next.hostBufferSizeInBytes);
+    };
+    for (std::size_t s = 0; s < p.nocc.size(); ++s) {
+        if (p.nocc[s]) {
+            CHECK_CUEST(cuestXCNonsymmetricDensityComputeWorkspaceQuery(
+                cuest_handle, g.plan, g.approximation, p.density_params.get(), &g.budget, &next,
+                p.nocc[s], left[s], right[s], d[s]));
+            grow();
+        }
+        CHECK_CUEST(cuestXCPotentialComputeWorkspaceQuery(
+            cuest_handle, g.plan, g.approximation, p.potential_params.get(), &g.budget,
+            &next, v, potential[s]));
+        grow();
+    }
+    ws.sdk_workspace(total);
+    p.prepared = true;
+#else
+    throw PSIEXCEPTION("cuEST device XC response is unavailable in this build.");
+#endif
+}
+
+void CuestXCDeviceResponse::apply(const std::array<const double*, 2>& left,
+                                  const std::array<const double*, 2>& right,
+                                  const std::array<double*, 2>& potential) {
+#if defined(PSI4_CUEST_NONSYMMETRIC_XC) && defined(PSI4_CUEST_DEVICE_CG)
+    auto& p = *impl_;
+    if (!p.prepared) throw PSIEXCEPTION("cuEST device XC response was not prepared.");
+    p.validate();
+    auto& g = *p.grid;
+    auto& ws = p.ws;
+    const std::size_t n = g.npoints, field = n * g.ncomponents;
+    double* d[] = {ws.response_a.ensure(field, "resident response"),
+                   p.nocc.size() == 2 ? ws.response_b.ensure(field, "resident response") : nullptr};
+    double* v[] = {ws.potential_a.ensure(field, "resident potential"),
+                   p.nocc.size() == 2 ? ws.potential_b.ensure(field, "resident potential") : nullptr};
+    for (std::size_t s = 0; s < p.nocc.size(); ++s) {
+        if (p.nocc[s]) {
+            CHECK_CUEST(cuestXCNonsymmetricDensityCompute(
+                cuest_handle, g.plan, g.approximation, p.density_params.get(), &g.budget,
+                &ws.sdk_view, p.nocc[s], left[s], right[s], d[s]));
+        } else {
+            check_cuda(cudaMemsetAsync(d[s], 0, field * sizeof(double), ::stream_handle), "empty-spin response");
+        }
+    }
+    auto& kernels = CuestDeviceKernels::instance();
+    if (p.nocc.size() == 2) {
+        kernels.launch("cg_pack_uks", n, n, int(p.gga), p.cutoff, ws.weights.ensure(n, "weights"),
+            ws.reference_a.ensure(field, "reference"), ws.reference_b.ensure(field, "reference"),
+            ws.v2rho2.ensure(3*n, "f_xc"), p.gga ? ws.v2rhosigma.ensure(6*n, "f_xc") : nullptr,
+            p.gga ? ws.v2sigma2.ensure(6*n, "f_xc") : nullptr,
+            p.gga ? ws.vsigma.ensure(3*n, "f_xc") : nullptr, d[0], d[1], v[0], v[1]);
+    } else {
+        kernels.launch("cg_pack_rks", n, n, int(p.gga), p.cutoff, ws.weights.ensure(n, "weights"),
+            ws.reference_a.ensure(field, "reference"), ws.kernel_A.ensure(n, "f_xc"),
+            p.gga ? ws.kernel_B.ensure(n, "f_xc") : nullptr,
+            p.gga ? ws.kernel_C.ensure(n, "f_xc") : nullptr,
+            p.gga ? ws.kernel_S.ensure(n, "f_xc") : nullptr, d[0], v[0]);
+    }
+    for (std::size_t s = 0; s < p.nocc.size(); ++s)
+        CHECK_CUEST(cuestXCPotentialCompute(
+            cuest_handle, g.plan, g.approximation, p.potential_params.get(), &g.budget,
+            &ws.sdk_view, v[s], potential[s]));
+#else
+    throw PSIEXCEPTION("cuEST device XC response is unavailable in this build.");
 #endif
 }
 

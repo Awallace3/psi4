@@ -673,6 +673,9 @@ std::vector<SharedMatrix> RHF::cphf_Hx(std::vector<SharedMatrix> x_vec) {
 }
 std::vector<SharedMatrix> RHF::cphf_solve(std::vector<SharedMatrix> x_vec, double conv_tol, int max_iter,
                                           int print_lvl) {
+    cphf_device_stats_.clear();
+    if (options_.get_bool("CUEST_DEVICE_CG"))
+        return cphf_solve_device(x_vec, conv_tol, max_iter, print_lvl, false);
     std::time_t start, stop;
     start = std::time(nullptr);
     cphf_converged_ = false;

@@ -756,6 +756,9 @@ CPU ``SCF_TYPE DIRECT`` routing. Select the cuEST builder with
 
 Direct-J uses the non-JIT kernels, with pair and density-weighted Schwarz
 screening controlled by ``INTS_TOLERANCE`` (or the JK cutoff setter).
+Density-dependent screening can set a floor on the true CPKS residual:
+use a tighter integral cutoff than the requested response accuracy, and
+check convergence against a tighter cutoff (zero disables screening).
 Unlike K, J depends only on the symmetric part of the density; this does
 not permit symmetrizing the density supplied to nonsymmetric Grid-K.
 Analytic Coulomb gradients for Direct-J are not implemented and raise an
@@ -781,9 +784,33 @@ CUDA-enabled LibXC, and otherwise on the host. Set ``CUEST_XC false``
 **before SCF** to retain the native CPU XC response grid and kernel.
 Native MGGA and VV10 response kernels remain unsupported and raise errors;
 this acceleration does not add CPKS support for M06, r²SCAN, or wB97M-V.
-The iterative solver and inter-build matrices remain on the host:
-this is not a wholly device-resident CPSCF solver, and enabling
-the backend does not guarantee a speedup for small systems.
+By default the iterative solver and inter-build matrices remain on the host;
+enabling the backend alone does not guarantee a speedup for small systems.
+
+Set |globals__cuest_device_cg| to true to select the separate
+**device-resident preconditioned conjugate-gradient solver** for
+``Wavefunction.cphf_solve`` and SAPT monomer response. MO vectors, full Fock
+panels, AO pseudodensities, J/K/XC contractions, vector updates, and dot-product
+results remain on the GPU during iteration. The host schedules kernels and
+reads only residual/status scalars; RHS upload and solution download occur
+outside the iterative loop. UKS alpha/beta response is solved as a coupled
+equation, and a fresh Hessian action certifies the true final residual rather
+than trusting only the recursively updated residual.
+
+This opt-in requires a cuEST build with CUDA NVRTC and driver support,
+``SAVE_JK true``, an initialized cuEST JK object, C1 symmetry, positive
+orbital-gap preconditioning, and RHF/RKS or UHF/UKS. DFT additionally requires
+``CUEST_XC true`` selected before SCF and a compatible final LDA/GGA GPU grid.
+Reference XC derivatives are prepared once per solve (on the host when CUDA
+LibXC is unavailable), then retained on the device. MGGA, VV10, fractional
+occupations, UKS GRAC kernels, and external/PCM/DDX/PE response contributions
+are rejected explicitly. Unsupported cases do not silently fall back to the
+host solver. The default remains false.
+
+``Wavefunction.cphf_device_stats()`` reports setup/iteration/total timings,
+operator calls, the final relative residual, and transfer byte counters.
+Measure total solve time as well as iteration time: preparation and kernel
+compilation can dominate small problems, so no fixed speedup is guaranteed.
 
 
 cuEST SAD routing and SCF lifecycle timings

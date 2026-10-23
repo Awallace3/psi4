@@ -51,10 +51,12 @@ namespace psi {
 class BasisSet;
 class Options;
 class DFTGrid;
+class CuestJKDeviceResponse;
 
 #ifdef USING_cuEST
 
 class PSI_API cuESTJK : public JK {
+    friend class CuestJKDeviceResponse;
    protected:
     Options& options_;
 
@@ -176,6 +178,7 @@ class PSI_API cuESTJK : public JK {
     bool returns_combined_exchange() const override { return true; }
     bool uses_gridk() const { return gridk_; }
     bool uses_directj() const { return directj_; }
+    bool has_initialized_plan() const { return initialized_; }
     void print_header() const override;
 
     cuestDFIntPlan_t cuest_df_plan() { return cuest_df_plan_; }

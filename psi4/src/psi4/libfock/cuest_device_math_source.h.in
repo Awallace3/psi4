@@ -1,0 +1,4 @@
+// Generated at configure time: the CPU and device response use identical algebra.
+static const char* cuest_response_math_source = R"PSI4_XC_MATH(
+@CUEST_RESPONSE_MATH_SOURCE@
+)PSI4_XC_MATH";
