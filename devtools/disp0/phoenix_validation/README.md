@@ -89,6 +89,40 @@ hashes. GPU correctness is explicitly false and protein F-SAPT admission is
 false. This successful CPU build is not an H200 gate or a timing measurement.
 # Full-fragment qualification follow-up
 
+## Production CPU v2 / C++ comparisons
+
+The user-requested CPU batch uses default production scalar-rescaled fragment
+induction (`IND_RESPONSE=false`, exchange/induction scaling true). It does not
+invoke the new exact per-source solver. `submit_cpu.py` selects one of three
+bounded paired CPU allocations; `compare_cpu.py` runs a small native water
+preflight followed by three independent fresh-process calls per backend,
+alternating their order on the same exclusive24-thread CPU node.
+Only peptide can launch initially; the larger two submitters require the
+successful exact-pinned peptide result and terminal0:0 job/batch/step accounting.
+Actual scheduler allocations, CPU model and scratch filesystem/free space are
+admitted inside the allocation before any scientific calls.
+
+Both arms share HF/DF/CPKS canonical SAPT terms, frozen core, spherical
+aug-cc-pVDZ, augmented JKFIT/RI, delta-HF, MINAO and convergence settings.
+The native blocked dispersion default48 and optimized v2 default24 are
+recorded, rather than forcing either backend onto the other's block size.
+Whole energy time includes SCFs and all fragment work; exclusive phase timers
+are nonoverlapping. Diagnostic arrays and checks are processed afterward,
+without retaining a FISAPT object or DFHelper. F-SAPT disk output is disabled.
+
+Successful results require correct dispatch, finite full matrices, canonical
+signed scalars including both dispersion components, full fragment sums,
+zero external/frozen slots, converged localizers and frozen/active-preserving
+occupied-gauge permutations. Raw results and failures are preserved. Scratch
+peaks are explicitly sampled logical sizes, not exact filesystem/cgroup peaks.
+The native localizer's1000-sweep default and Python's50-sweep default are
+recorded; a printed localization failure is fatal to qualification.
+
+This CPU-v2/C++ ratio is **not** a GPU speedup. The current GPU correctness
+gate uses exact per-source response, a different fragment approximation.
+
+## Exact-response GPU diagnostic gate
+
 `COMPLETION_PLAN.md` records the agreed full F-SAPT scope (peptide, nanotube,
 protein83; spherical aug-cc-pVDZ), not a dispersion-only benchmark.
 

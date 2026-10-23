@@ -1,5 +1,51 @@
 # Phoenix full F-SAPT completion contract
 
+## Latest CPU production comparison request
+
+The user explicitly requested **inferno CPU comparisons** of the optimized
+Einsums-v2 and C++ F-SAPT implementations, and clarified that production uses
+scalar-rescaled induction for speed. The source defaults confirm:
+`FISAPT_FSAPT_IND_RESPONSE=false`, `FISAPT_FSAPT_IND_SCALE=true`,
+`FISAPT_FSAPT_EXCH_SCALE=true`; exact per-source response is documented
+“not recommended”. Canonical coupled induction is still calculated once.
+
+The new CPU batch therefore uses **production scalar rescaling**, not the new
+exact per-source solver. Both arms use the common HF SAPT(DFT)/E2 canonical
+driver, then `SAPTDFT` (v2) versus `FISAPT` (C++) fragment dispatch. Three fresh
+repeats per arm per requested augmented-basis system; one paired CPU allocation
+per system, counterbalanced arm order. Each allocation first checks a water
+pair before the larger calls. No GPU requests or changes to14322613.
+Peptide is submitted first. `submit_cpu.py` refuses nanotube/protein83 without
+the exact helper/science/input-pinned successful peptide comparison, clean
+job-status marker and COMPLETED0:0 job, batch and step accounting.
+
+Planned resource caps are24 threads on exclusive Gold6226/core24/localNVMe
+CPU-small nodes,64GiB/64GiB/160GiB SLURM memory,40GiB/40GiB/96GiB Psi4 memory,
+and1h/2h/8h for peptide/nanotube/protein83 respectively. Exact-route test-only
+accepted all three shapes. CPU-small billing304 yields a total worst-case
+charge about$2.17 (11 node-hours); live account selection is rechecked before
+submission. These are controlled18 fresh full-system timing calls, not an
+automatically extending campaign.
+Allocation-local admission verifies effective QoS/account/CPU count,
+exclusivity, memory/wall limit, actual Gold6226/features and a real node-local
+disk scratch mount/free space before either native arm starts.
+
+`cpu_benchmark.py`, `compare_cpu.py`, `submit_cpu.py` and CPU job/payload
+helpers implement this separate batch. No scientific driver/core overlay:
+reuse the qualified whole stage1aed320cdb. Phase records are exclusive/additive,
+SCF/canonical work is included in whole energy time, and arrays/checks are
+processed after that timer. Disk F-SAPT output is disabled consistently.
+Raw failures remain visible; only three validated repeats produce a final
+median/range. Gauge permutations must preserve frozen/active subspaces.
+Native localizer maxiter1000 versus Python50 is recorded; either one's
+nonconvergence makes a timing unqualified.
+
+These **production CPU times are not a valid denominator for the current
+exact-fragment GPU mode**. A matching production GPU continuation and declared
+CPU/GPU thread/resource policy must be qualified before any GPU speedup ratio.
+The earlier exact-response qualification contract below remains diagnostic;
+it is not the primary production CPU benchmark.
+
 User request: complete the missing GPU qualification, scalability, matched
 CPU/GPU timings and analysis. Inputs are **peptide, nanotube, protein83** from
 `~/data/timing_test_suite/geometries/systems.py` (the user confirmed protein83,
