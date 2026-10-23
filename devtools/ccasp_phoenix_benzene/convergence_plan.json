@@ -1,0 +1,71 @@
+{
+  "schema": "ccasp-benzene-qgrid-convergence/1",
+  "base": "e24f97e9b7fbafcc25231be50feb1c39a38b5862",
+  "source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-benzene-qgrid-convergence-20261023",
+  "runtime": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-qgrid-convergence-20261023/runtime-001",
+  "run": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-qgrid-convergence-20261023/study-001",
+  "scratch": "/storage/scratch1/3/awallace43/ccasp-benzene-qgrid-convergence-20261023-study001",
+  "fixture": "/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-002/inputs/benzene_s66x8_24_monA.json",
+  "prior_probe": "/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/basis-probe-001/basis-admission.json",
+  "prior_probe_sha256": "6ddbac4a5292d5ab6d671ee6e7cb2acef828c0664f3b3ce7c53c4e8eefa9159c",
+  "prior_driver_source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-science-launch-v3",
+  "prior_driver_commit": "2e7d5ff2e1650e3152a7414818581945873f42f8",
+  "prior_driver_tree": "ba905cd9fabd0084099cf5020507c9f3e8f33e0c",
+  "prior_driver_files": {
+    "pilot.py": "dd1f3adc83f4f2eca4579f4732e72b35011ba827d0a564fc9f7aca169f1cce00",
+    "basis_admission.py": "4df9c5d9714839f053e122b9eda59f6a701d0defa117edb640b249fc3fee70dc",
+    "basis_contract.json": "42ad138fec115b594ec7fa31ac787d8f4b303e81ea2fad7c6e2485461aa88167",
+    "pilot.json": "19170c907137c7883dfbceaa4a23e4b919ec2d97dac38343dc4559b8bffb0f0b"
+  },
+  "routing": [
+    "psi4/driver/procrouting/isapol_bounded.py",
+    "psi4/driver/procrouting/isapol_bounded_oeprop.py",
+    "psi4/driver/procrouting/isapol_bounded_response.py",
+    "psi4/driver/procrouting/isapol_native_factors.py"
+  ],
+  "fingerprints": {
+    "main": "a88c2a074b28b8da608684b56bdff01aa965179aa91fe8bf6a8bdefd7a8c1c0e",
+    "auxiliary": "2bd06dbb3a6ea10b4cbfcda85677f199ddebb315fd317848dfea6aec19d600ac"
+  },
+  "allocation": {
+    "account": "gts-cs207-chemx", "partition": "cpu-small", "qos": "embers",
+    "nodes": 1, "tasks": 1, "cpus": 2, "memory": "8G", "time": "00:30:00",
+    "node": "atl1-1-02-007-23-1", "numerical_threads": 1,
+    "psi4_memory_bytes": 4294967296
+  },
+  "cases": [
+    {"name": "baseline", "recipe": {"radial_points": 200, "spherical_points": 590, "becke_smoothing": 3, "radius_scaling": 1.0}, "points": 1408920, "expected_sha256": "a01a17a4ab55dab608883cf5a184bfc13a42a15fae15efecf0256a9df383ab29", "output": "results/baseline"},
+    {"name": "radial", "recipe": {"radial_points": 300, "spherical_points": 590, "becke_smoothing": 3, "radius_scaling": 1.0}, "points": 2116920, "expected_sha256": null, "output": "results/radial"},
+    {"name": "angular", "recipe": {"radial_points": 200, "spherical_points": 974, "becke_smoothing": 3, "radius_scaling": 1.0}, "points": 2325912, "expected_sha256": null, "output": "results/angular"},
+    {"name": "joint", "recipe": {"radial_points": 300, "spherical_points": 974, "becke_smoothing": 3, "radius_scaling": 1.0}, "points": 3494712, "expected_sha256": null, "output": "results/joint"}
+  ],
+  "bounds": {
+    "tile_points": 1024, "max_values": 10711047744, "max_output_bytes": 33554432,
+    "max_scratch_bytes": 67108864, "max_file_bytes": 16777216,
+    "max_log_bytes": 33554432, "max_total_bytes": 100663296,
+    "required_free_scratch_bytes": 268435456, "required_free_run_bytes": 134217728,
+    "deadline_seconds": 1500, "selected_checks": 4096, "max_files": 96
+  },
+  "original_capture_plan_sha256": "65ac92c9609f2674c93c057a90f4a0f75104d811cbeae66bf89ed75e98203a76",
+  "baseline_probe": {
+    "job": "14308581",
+    "root": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-qgrid-probe-20261022/probe-001",
+    "files": {
+      "metadata/batch-terminal.json": "5c62cea0d459d00a2490bfdd3c76a524b773f874d22c78324964141795c9b7d9",
+      "metadata/payload-terminal.json": "bc9645b935342a28da2d5cfe895ab3205bb7654ef1852a675a29fcf23ff48d2f",
+      "metadata/before-capture.json": "f577c45ce392fe7f6236330c5109492e5a20683f5bf2bbbe7bda600776693835",
+      "metadata/after-capture.json": "f577c45ce392fe7f6236330c5109492e5a20683f5bf2bbbe7bda600776693835",
+      "metadata/runtime.json": "4b89a376cbbaa2da0ba237789c4d7d1264d190bfddbff9eba85baa8349cf56e7",
+      "metadata/preparation.json": "0851055628eba0af5cfed13f314dbc4fb920ca2ff4fed3574f158c4b1f2afd2d",
+      "results/result.json": "2955448b278012c73535fa782508ada8f0b37aa16e4816ddb90417dcf90f1eaf",
+      "results/grid-identity.json": "88c99570ac180dfb592d5b84e2164328c334790a682dcb10ba390e02df35f216",
+      "results/grid-diagnostic.json": "b535de6017d74b28a21ed6a716aca7d06967bab88a6de28180f70a54a33ef569",
+      "results/basis-identities-grid-only.json": "e0c0012e6c80b28586e0ec763950f3c0999a3166371bd1942e27b1ed6953902d",
+      "results/U.f64": "59caa092a2ce12e764af30d8932d75ce7b26a6e8255f1acb558192318552a508",
+      "results/U_compensated.f64": "61c35e988e683332137322357ea45028a7141ab2d96a662397829f9bc8988b85",
+      "results/absolute_sum.f64": "d740cface5d9ad510d3e2e049c2601a2ae3c6e0e1214b34e016e0141d1eef4eb",
+      "results/roundoff_bound.f64": "402f8fc56cd6fcb8822c81050725ec78bf93de274aabed981b484e9f75899eee"
+    },
+    "remeasurement_condition": "all four vectors byte-exact; differences retained before refusal; no tolerance or fallback"
+  }
+}
