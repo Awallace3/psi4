@@ -77,6 +77,20 @@ it is not the primary production CPU benchmark.
   saved worker records name the same allocated host. The follow-up accepts
   only this explicit Phoenix alias, not arbitrary domains or other hosts;
   no job/science execution is needed for this provenance-only replay.
+- **Offline peptide requalification PASS** with helper
+  `abd4c1bc468ce7f759988e3af2f8c985ff6c48bf`, staged clean at
+  `/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-cpu-ledger-abd4c1bc46`.
+  All six original sample identities, hashed matrices, component ledgers,
+  paired comparisons and same-arm repeat comparisons passed. Canonical
+  algebra residuals are at most1.74e-18Eh; maximum paired full-matrix error
+  remains3.959922667551297e-12Eh. Timed work, other qualification rules,
+  resources/environment and all eight shared helper files matched005f.
+  Durable replay output: background task `b34e990d7`
+  (`.pi/tasks/01a165d6-ab03-768d-83bd-c6172c2c1b1b-4065461/b34e990d7.output`).
+  This reuses the original measured times; it is not six new calculations
+  and incurred no new SLURM allocation. The original pilot is untouched.
+  Failed nanotube14324682 cannot be requalified this way: its original
+  helper did not save the full matrices before the guard failed.
 - Nanotube's printed virtual extents are732/662 with742AOs and8/78 occupied:
   the retained orbital rank is740, not742. Future GPU qualification must not
   equate retained MO rank with the AO count in an augmented basis.
