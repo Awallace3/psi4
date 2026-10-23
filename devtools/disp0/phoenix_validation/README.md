@@ -68,3 +68,22 @@ New submissions explicitly inventory that complete SDK, not the incomplete
 shared locator, and construct another fresh private locator in the new run.
 The cheap submit-time filesystem check now rejects missing SDK inputs before
 any allocation; full byte/ELF validation remains inside the CPU job.
+
+## Verified CPU build: 14309728
+
+Source `3343e673c2f52cb825fb714756289cff0cc59c38` completed on
+`gts-cs207-chemx / cpu-small / inferno` in 9m34s. Job, batch and step accounting
+all report COMPLETED0:0; runtime status records exit0 and no TERM.
+
+Saved result is PASS / CPU_BUILD_VALIDATION_ONLY: Psi4 `1.12a1.dev843`,
+244 CPU/mock/serial regressions, 8 launch guards, 5 independent E2 API checks,
+one matching E2 `06404fa...` world, and native CPU RHF
+`-1.1167143250625702 Eh`. No stderr was recorded.
+
+Artifacts:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-current-3343e673c2/job-14309728/`
+
+The new executable is `build/stage/bin/psi4` beneath that artifact root.
+`result.json` retains the source pin, binary hashes, mapped paths and proof
+hashes. GPU correctness is explicitly false and protein F-SAPT admission is
+false. This successful CPU build is not an H200 gate or a timing measurement.
