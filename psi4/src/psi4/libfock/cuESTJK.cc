@@ -264,7 +264,9 @@ cuESTJK::cuESTJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> au
     primary_natom_ = primary_->molecule()->natom();
     auxiliary_natom_ = auxiliary_->molecule()->natom();
     primary_symmetry_ = primary_->molecule()->schoenflies_symbol();
-    auxiliary_symmetry_ = auxiliary_->molecule()->schoenflies_symbol();
+    // The zero-AO placeholder has no molecular point group. It is valid when
+    // Direct-J + Grid-K never constructs a DF plan or GPU auxiliary basis.
+    auxiliary_symmetry_ = auxiliary_->nbf() ? auxiliary_->molecule()->schoenflies_symbol() : "";
     molecular_frame_ = molecular_frame_key(primary_, auxiliary_);
 }
 
@@ -277,7 +279,7 @@ std::string cuESTJK::current_plan_key() const {
     if (primary_->molecule()->natom() != primary_natom_ ||
         auxiliary_->molecule()->natom() != auxiliary_natom_ ||
         primary_->molecule()->schoenflies_symbol() != primary_symmetry_ ||
-        auxiliary_->molecule()->schoenflies_symbol() != auxiliary_symmetry_)
+        (auxiliary_->nbf() ? auxiliary_->molecule()->schoenflies_symbol() : "") != auxiliary_symmetry_)
         throw PSIEXCEPTION("cuESTJK molecular topology/symmetry changed; construct new basis sets and JK.");
     // JK's base class constructs AO2USO once. Rebuilding only the backend plan
     // cannot refresh that symmetry transform for a displaced non-C1 frame.
