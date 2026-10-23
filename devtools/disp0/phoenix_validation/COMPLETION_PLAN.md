@@ -178,6 +178,18 @@ the concrete scope and evidence required before claiming it complete.
 
 ## Native Phoenix checkpoint (2026-10-23)
 
+- **H200 gate14322613 FAILED1:0** after10m32s. `gate-result.json` records
+  `TimeoutExpired` for the first `gpu-unscaled` child at its600s limit.
+  Its CPU-unscaled control completed, and GPU stdout shows native cuEST HF/
+  canonical coupled induction completed followed by fragment basis loading.
+  No completed GPU child result, fragment matrices or final cleanup proof
+  exists; no GPU qualification or speedup is accepted. No GPU retry submitted.
+  This failure does not block the separate production-scaled CPU batch.
+  A read-only source hypothesis is excessive repeated full-DSO hashing in
+  `identity.audit_maps()`/`provider.assert_identity()` inside the tiny-block
+  continuation (block5); this is **not a measured diagnosis**. A follow-up
+  should persist phase/stack checkpoints and test a still-ragged production
+  block24, without weakening provenance or claiming the timeout fixed.
 - **14321813 completed0:0** in9m49s on cpu-small/embers,8CPUs48GiB.
   Source pin `1aed320cdb8b031c281b4642001a750aa51c549f`.
   Root `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-fragments-1aed320cdb/job-14321813`.
@@ -200,8 +212,8 @@ the concrete scope and evidence required before claiming it complete.
   route preflight, under fresh output root
   `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-h200-gate-127fc33590`.
   Scientific pin remains1aed320cdb; helper pin127fc33590. The state-change
-  watcher is active. Inspect `gate-result.json` and every child result/cleanup,
-  not merely the scheduler exit code, before accepting this gate.
+  watcher returned terminal failure (see above). Preserve `gate-result.json`
+  and every child result/cleanup; do not infer qualification from GPU progress.
 - First effective-route check found14322613 **PENDING(Priority)**,
   QoS inferno; actual GPU/prolog proof remains pending until it runs.
 - The three requested literal inputs are frozen locally in
