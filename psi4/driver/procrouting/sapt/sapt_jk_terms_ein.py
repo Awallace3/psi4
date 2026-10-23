@@ -2437,6 +2437,67 @@ def find(
             f"    Exch-Ind20,u            = {ExchInd20u_AB + ExchInd20u_BA * 1000:18.8f} [mEh]\n\n"
         )
 
+    # The opt-in HF coupled fragment flag must solve each physical source.
+    # Scaling an uncoupled partition by a canonical scalar ratio is not the
+    # same calculation. Default (flag false) and non-HF paths are unchanged.
+    exact_hf_response = (
+        core.get_option("FISAPT", "FISAPT_FSAPT_IND_RESPONSE")
+        and str(core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")).upper() == "HF"
+    )
+    if exact_hf_response:
+        from .sapt_fisapt_cpu_response import partition_response
+        if core.get_global_option("USE_CUEST"):
+            raise ValueError("CPU coupled fragment continuation cannot substitute for CUDA")
+        if (link_assignment != "C" or len(mol.get_fragments()) != 2 or dimer_wfn.nirrep() != 1
+                or any(dimer_wfn.has_potential_variable(s) for s in ("A","B","C"))
+                or core.get_option("FISAPT","SSAPT0_SCALE")
+                or core.get_option("FISAPT","FISAPT_EXCH_PARPERP")):
+            raise NotImplementedError("Exact CPU HF fragment reference requires two unlinked C1 C-assignment fragments, no external potentials/SSAPT0/parallel-perpendicular scaling")
+        core.timer_on("FIND:coupled")
+        try:
+            coupled = {}
+            for side,co,cv,eo,ev,sources,rotation,target,target_x in (
+                    ("AB", Cocc_A, Cvir_A, eps_occ_A, eps_vir_A,
+                     np.asarray(WBar_all.np).reshape(nBt,na,nr), Uocc_A, wBT, uBT),
+                    ("BA", Cocc_B, Cvir_B, eps_occ_B, eps_vir_B,
+                     np.asarray(WAbs_all.np).reshape(nAt,nb,ns), Uocc_B, wAT, uAT)):
+                ind,exind,diagnostics = partition_response(
+                    core,dimer_wfn.basisset(),aux_basis,_arr(co),_arr(cv),_arr(eo),_arr(ev),
+                    sources,_arr(rotation),_arr(target),_arr(target_x),
+                    memory_doubles=max(1,int(core.get_memory())//16))
+                coupled[side] = ind,exind
+                direction = "A<-B" if side=="AB" else "A->B"
+                for prefix,values in (("Ind20,r",ind),("Exch-Ind20,r",exind)):
+                    expected=float(scalars[f"{prefix} ({direction})"])
+                    observed=float(np.sum(values))
+                    if (not np.isfinite(expected) or not np.isfinite(observed)
+                            or abs(observed-expected)>max(2e-7,1e-5*abs(expected))):
+                        raise RuntimeError(
+                            f"CPU coupled fragment {prefix} {direction} sum disagrees: "
+                            f"{observed:.15g} vs canonical {expected:.15g} Eh")
+                if do_print:
+                    core.print_out(
+                        f"    CPU coupled fragment {side}: {len(diagnostics)} sources, "
+                        f"max iterations {max((d['iterations'] for d in diagnostics),default=0)}, "
+                        f"max true residual {max((d['absolute_residual'] for d in diagnostics),default=0.):.3E}\n")
+            def placed(values,side):
+                output=core.Matrix("CPU fragment "+side,nA+na1+1,nB+nb1+1)
+                output.zero()
+                if side=="AB":output.np[nA:nA+na,:nB+nb1+1]=values
+                else:output.np[:nA+na1+1,nB:nB+nb]=values.T
+                return output
+            for side,ind,exind in (("AB",Ind20u_AB_terms,ExchInd20u_AB_terms),
+                                   ("BA",Ind20u_BA_terms,ExchInd20u_BA_terms)):
+                cache["Ind20u_"+side]=placed(_arr(ind) if side=="AB" else _arr(ind).T,side)
+                cache["ExchInd20u_"+side]=placed(_arr(exind) if side=="AB" else _arr(exind).T,side)
+                cache["Ind20r_"+side]=placed(coupled[side][0],side)
+                cache["ExchInd20r_"+side]=placed(coupled[side][1],side)
+            Indu_AB_terms=core.Matrix.from_array(coupled["AB"][0]+coupled["AB"][1])
+            # Existing BA local storage is [source A, occupied B].
+            Indu_BA_terms=core.Matrix.from_array((coupled["BA"][0]+coupled["BA"][1]).T)
+        finally:
+            core.timer_off("FIND:coupled")
+
     # Induction scaling
     if ind_scale:
         dHF = scalars.get("Delta HF Correction", 0.0)
@@ -2444,12 +2505,14 @@ def find(
         IndSAPT0 = scalars["Ind20,r"] + scalars["Exch-Ind20,r"]
 
         Sdelta = IndHF / IndSAPT0
+        if exact_hf_response and not np.isfinite(Sdelta):
+            raise FloatingPointError("Nonfinite exact CPU fragment delta-HF scaling")
 
         # NOTE: if doing ind_resp, logic below needs adjusted
-        SrAB = (scalars["Ind20,r (A<-B)"] + scalars["Exch-Ind20,r (A<-B)"]) / (
+        SrAB = 1.0 if exact_hf_response else (scalars["Ind20,r (A<-B)"] + scalars["Exch-Ind20,r (A<-B)"]) / (
             scalars["Ind20,u (A<-B)"] + scalars["Exch-Ind20,u (A<-B)"]
         )
-        SrBA = (scalars["Ind20,r (A->B)"] + scalars["Exch-Ind20,r (A->B)"]) / (
+        SrBA = 1.0 if exact_hf_response else (scalars["Ind20,r (A->B)"] + scalars["Exch-Ind20,r (A->B)"]) / (
             scalars["Ind20,u (A->B)"] + scalars["Exch-Ind20,u (A->B)"]
         )
 
@@ -2464,10 +2527,11 @@ def find(
         # Apply scaling to all terms
         Indu_AB_terms.scale(Sdelta * SrAB)
         Indu_BA_terms.scale(Sdelta * SrBA)
-        Ind20u_AB_terms.scale(Sdelta * SrAB)
-        ExchInd20u_AB_terms.scale(Sdelta * SrAB)
-        Ind20u_BA_terms.scale(Sdelta * SrBA)
-        ExchInd20u_BA_terms.scale(Sdelta * SrBA)
+        if not exact_hf_response:
+            Ind20u_AB_terms.scale(Sdelta * SrAB)
+            ExchInd20u_AB_terms.scale(Sdelta * SrAB)
+            Ind20u_BA_terms.scale(Sdelta * SrBA)
+            ExchInd20u_BA_terms.scale(Sdelta * SrBA)
 
         # Apply SSAPT0 scaling if enabled
         # if "sExch-Ind20,r" in scalars:

@@ -21,6 +21,7 @@ class JacobiDevice:
     iterations: int
     history: tuple
     nfrozen: int
+    work_plan: object = None
 
 
 @dataclass(frozen=True)
@@ -38,7 +39,8 @@ class IBODevice:
 
 
 def jacobi_localize_device(session,coordinates,energies,atom_indices,*,nfrozen=0,power=4,
-                           convergence=1e-12,max_iterations=50,require_converged=True):
+                           convergence=1e-12,max_iterations=50,require_converged=True,
+                           max_pair_updates=2_000_000):
     m=DeviceMath(session);m.require(coordinates);m.require(energies)
     atoms=np.asarray(atom_indices)
     if (len(coordinates.shape)!=2 or energies.shape!=(coordinates.shape[0],)
@@ -52,9 +54,15 @@ def jacobi_localize_device(session,coordinates,energies,atom_indices,*,nfrozen=0
             or type(require_converged) is not bool):
         raise ValueError("Full occupied IAO coordinates, contiguous int64 atom rows and explicit IBO policy required")
     O,M=coordinates.shape;K=int(atoms.max())+1
-    pairs=tuple((i,j) for start,stop in ((0,nfrozen),(nfrozen,O)) for i in range(start,stop) for j in range(start,i))
-    if O>64 or M>512 or len(pairs)*max_iterations>65536:
+    pair_count=nfrozen*(nfrozen-1)//2+(O-nfrozen)*(O-nfrozen-1)//2
+    if (type(max_pair_updates) is not int or max_pair_updates<1
+            or pair_count*max_iterations>max_pair_updates
+            or max(O,M,K)>2**31-1):
         raise ValueError("Ordered IBO pair-update work exceeds bounded admission")
+    peak_bytes=8*(9*O*O+3*O*M+K*O+O+M+6)
+    session.check_memory(peak_bytes)
+    plan={"peak_increment_bytes":peak_bytes,"pair_updates_per_sweep":pair_count,
+          "maximum_pair_updates":pair_count*max_iterations,"pair_update_budget":max_pair_updates}
     output_u,output_f=session.empty((O,O)),session.empty((O,O))
     output_b,output_q=session.empty((O,M)),session.empty((K,O))
     output_p=session.empty((O,O))
@@ -73,8 +81,12 @@ def jacobi_localize_device(session,coordinates,energies,atom_indices,*,nfrozen=0
         gradient=session.empty((1,),zero=True);stats=session.empty((3,))
         for iteration in range(1,max_iterations+1):
             session.launch("ibo_objective",1,128,[O,M,K,power,labels,rows,stats])
-            for i,j in pairs:
-                session.launch("ibo_pair",1,128,[O,M,K,power,i,j,labels,rows,rotation,gradient])
+            # Native ordered trajectory: frozen block first, active block next,
+            # ascending i then j. Stream metadata rather than storing O² pairs.
+            for start,stop in ((0,nfrozen),(nfrozen,O)):
+                for i in range(start,stop):
+                    for j in range(start,i):
+                        session.launch("ibo_pair",1,128,[O,M,K,power,i,j,labels,rows,rotation,gradient])
             session.launch("ibo_sweep_finish",1,1,[policy,gradient,stats])
             values=session.download(stats)
             if not np.isfinite(values).all():raise RuntimeError("Nonfinite IBO objective/gradient")
@@ -96,7 +108,8 @@ def jacobi_localize_device(session,coordinates,energies,atom_indices,*,nfrozen=0
         for value,output in ((u,output_u),(f,output_f),(b,output_b),(permutation,output_p)):
             session.launch("linear_combination",min(65535,(value.size+255)//256),256,
                            [value.size,1,0,value,value,output])
-    return JacobiDevice(output_u,output_f,output_q,output_b,output_p,converged,len(history),tuple(history),nfrozen)
+    return JacobiDevice(output_u,output_f,output_q,output_b,output_p,converged,len(history),
+                        tuple(history),nfrozen,plan)
 
 
 def localize_iao_device(iao,energies,atom_indices,**policy):

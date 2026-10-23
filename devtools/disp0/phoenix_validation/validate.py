@@ -90,6 +90,13 @@ def validate_installed(source, run, dependencies, e2):
     from psi4 import metadata
     require(metadata.__version_long.endswith("+" + os.environ["DISP0_PIN"][:7]),
             "Installed Psi4 metadata does not bind the pinned source")
+    package = Path(psi4.__file__).resolve().parent
+    scientific_python = {p.relative_to(package).as_posix(): digest(p)
+                         for p in package.rglob("*.py")}
+    for relative, checksum in scientific_python.items():
+        if relative.startswith("driver/"):
+            require(digest(source / "psi4" / relative) == checksum,
+                    "Installed scientific driver differs from the pinned source: " + relative)
     import einsums as ein
     import einsums.sealed as sealed
     import waggle
@@ -143,13 +150,22 @@ def validate_installed(source, run, dependencies, e2):
         "source": str(source), "pin": os.environ["DISP0_PIN"],
         "job_id": os.environ["SLURM_JOB_ID"], "stage": str(stage),
         "psi4_version": psi4.__version__, "einsums_world": world,
+        "scientific_python_sha256": scientific_python,
+        "python_package": str(package),
         "native_cpu_rhf_Eh": energy, "dependency_environment": str(dependencies),
         "cpu_guard_count": int(count[1]), "api_probe_sha256": digest(run / "api-probe.json"),
         "read_only_einsums_dependency": str(e2),
+        "dependency_python_sha256": {
+            str(p.resolve()): digest(p)
+            for module in (ein, waggle)
+            for p in Path(module.__file__).resolve().parent.rglob("*.py")},
+        "module_files": {module.__name__: str(Path(module.__file__).resolve())
+                         for module in (psi4, core, ein, ein._core, sealed, waggle, waggle._core)},
         "binary_sha256": {str(p): digest(p) for p in binaries},
         "mapped_paths": mapped,
         "cpu_guard_log_sha256": digest(run / "cpu-guards.stderr"),
         "source_version_proof_sha256": digest(run / "source-version/validated.json"),
+        "launcher_sha256": digest(stage / "bin/psi4"),
     })
     print("CPU_BUILD_VALIDATION_ONLY: PASS; no GPU correctness claim")
 

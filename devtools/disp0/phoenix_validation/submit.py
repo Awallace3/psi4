@@ -47,6 +47,7 @@ def main():
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--qos", choices=("embers", "inferno"), default="embers")
     parser.add_argument("--account", choices=("gts-cs207", "gts-cs207-chemx"))
+    parser.add_argument("--prepare-gpu-runtime", action="store_true")
     args = parser.parse_args()
     if args.qos == "inferno" and args.account is None:
         raise RuntimeError("Inferno needs an explicitly selected account and user approval")
@@ -76,11 +77,13 @@ def main():
                DISP0_E2_PREFIX=str(OLD / "einsums-stage"),
                DISP0_CUDA_SOURCE=str(OLD / "cuda13"),
                DISP0_CUEST_ROOT=str(P / "software/cuest-0.2.50-a06e8148"))
+    env["DISP0_PREPARE_GPU_RUNTIME"] = "1" if args.prepare_gpu_runtime else "0"
     argv = command(source, run, qos=args.qos, account=account)
     manifest = {"scope": "Fresh native cuEST-enabled Psi4 build and CPU validation only",
                 "source_pin": args.pin, "source": str(source), "command": argv,
                 "read_only_inputs": {k: v for k, v in env.items() if k.startswith("DISP0_")},
                 "qos": args.qos, "account": account, "gpu_count": 0,
+                "prepare_gpu_runtime": args.prepare_gpu_runtime,
                 "cpu_count": 8, "memory_GiB": 48, "time_limit": "03:00:00"}
     with (run / "manifest.json").open("x") as stream:
         json.dump(manifest, stream, indent=2, sort_keys=True)

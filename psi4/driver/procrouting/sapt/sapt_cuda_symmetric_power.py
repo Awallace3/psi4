@@ -48,12 +48,13 @@ def reconstruct_inverse_sqrt(session,transpose_vectors,eigenvalues,*,condition=1
 
 class CuSolverSymmetricPower:
     """Native handle lives in the parent's reverse-order owned resource graph."""
-    def __init__(self,owner,*,workspace_limit_bytes=128*1024**2,max_dimension=512):
+    def __init__(self,owner,*,workspace_limit_bytes=128*1024**2,max_dimension=None):
         if not isinstance(owner,DiagnosticPlanOwner):
             raise TypeError("An explicit admitted native plan owner is required")
         owner._check_construction();owner.assert_live()
+        if max_dimension is None:max_dimension=2**31-1
         if (type(workspace_limit_bytes) is not int or workspace_limit_bytes<8
-                or type(max_dimension) is not int or not 1<=max_dimension<=512):
+                or type(max_dimension) is not int or not 1<=max_dimension<=2**31-1):
             raise ValueError("Bounded positive cuSOLVER workspace/dimension required")
         self.owner,self.session=owner,owner.session
         self.workspace_limit_bytes,self.max_dimension=workspace_limit_bytes,max_dimension
@@ -91,6 +92,11 @@ class CuSolverSymmetricPower:
                 or type(condition) not in (float,int) or not np.isfinite(condition) or not 0<=condition<=1):
             raise ValueError("Bounded square symmetric input required")
         N=value.shape[0]
+        start_live=session.live_bytes
+        # Full simultaneous ledger, not just the largest matrix: outputs,
+        # transpose/residual, eigenvectors, reconstruction and scalar controls.
+        fixed_peak=8*(7*N*N+2*N+6)+4
+        session.check_memory(fixed_peak+8)
         eigenvalues=session.empty((N,))
         result_matrix,result_rank=session.empty((N,N)),session.empty((1,))
         try:
@@ -113,6 +119,7 @@ class CuSolverSymmetricPower:
                     owner._raw(self.handle),1,0,N,raw,N,values,ct.byref(lwork)))
                 if not 1<=lwork.value<=self.workspace_limit_bytes//8:
                     raise MemoryError("cuSOLVER workspace exceeds explicit bound")
+                session.check_memory(fixed_peak+8*lwork.value-(session.live_bytes-start_live))
                 work=session.empty((lwork.value,));info=session.empty((1,),dtype=np.int32)
                 session.rt(session.runtime.cudaMemsetAsync(info.pointer,255,info.nbytes,session.stream))
                 owner.api.status("FP64 syevd",self.native.cusolverDnDsyevd(

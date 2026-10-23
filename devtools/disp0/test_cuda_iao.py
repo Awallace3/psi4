@@ -36,7 +36,9 @@ def fixture(seed,N=9,M=6,O=3):
 
 class PowerDouble:
     """Explicit CPU reference double, never imported by production modules."""
-    def __init__(self,session):self.session,self.calls=session,0
+    def __init__(self,session):
+        self.session,self.calls=session,0
+        self.workspace_limit_bytes=0  # This CPU double has no native workspace.
     def inverse_sqrt(self,value,*,condition):
         self.calls+=1
         return SimpleNamespace(matrix=self.session.upload(root(host(value),condition)))
@@ -62,7 +64,10 @@ class IAO(unittest.TestCase):
                 blocks=overlap.OverlapBlocksDevice(*(session.upload(x) for x in (s11,s12,s22)))
                 power=PowerDouble(session)
                 metrics=iao.prepare_iao_metrics(blocks,power)
+                baseline=session.live_bytes
                 actual=iao.build_iao_device(session.upload(c),metrics)
+                self.assertLessEqual(session.peak_live_bytes-baseline,
+                    actual.work_plan["peak_increment_bytes"]+c.nbytes)
                 np.testing.assert_allclose(host(actual.a),expected_a,rtol=1e-10,atol=1e-12)
                 np.testing.assert_allclose(host(actual.occupied_iao),expected_b,rtol=1e-10,atol=1e-12)
                 np.testing.assert_allclose(host(actual.a).T@s11@host(actual.a),np.eye(s22.shape[0]),rtol=1e-10,atol=1e-12)

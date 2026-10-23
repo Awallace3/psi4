@@ -2,6 +2,7 @@
 import ctypes as ct
 import importlib
 import unittest
+from unittest.mock import Mock,patch
 import numpy as np
 from test_cuda_backend import PACKAGE,Kernels,host,runtime
 from test_cuda_hf_setup import Session
@@ -89,6 +90,42 @@ class Overlap(unittest.TestCase):
             alias=overlap.OverlapBlocksDevice(full.view((2,2)),session.empty((2,1)),session.empty((1,1)))
             with self.assertRaises(ValueError):
                 overlap.gather_overlap_blocks(session,full,p,q,outputs=alias)
+
+
+    def test_large_union_admission_is_memory_based_before_native_construction(self):
+        class ReachedNative(RuntimeError):pass
+        for N in (356,742,1293):
+            primary=Basis([Shell(0,0) for _ in range(N-1)]+[Shell(1,0)])
+            minimal=Basis([Shell(0,0) for _ in range(199)]+[Shell(1,0)])
+            p,_=overlap.snapshot_pair(primary,minimal)
+            session=MetadataSession(self.lib)
+            owner=overlap.DiagnosticPlanOwner.__new__(overlap.DiagnosticPlanOwner)
+            owner.primary_snapshot,owner.session=p,session
+            owner._check_construction=Mock();owner.assert_live=Mock()
+            with patch.object(overlap.CuESTOverlapBlocks,"_bind",side_effect=ReachedNative) as native:
+                with self.assertRaises(ReachedNative):
+                    overlap.CuESTOverlapBlocks(owner,minimal)
+                native.assert_called_once()
+                native.reset_mock()
+                session.limit=1
+                with self.assertRaises(MemoryError):overlap.CuESTOverlapBlocks(owner,minimal)
+                native.assert_not_called()
+                session.limit=2**40
+                with self.assertRaises(NotImplementedError):
+                    overlap.CuESTOverlapBlocks(owner,minimal,max_union_nbf=512)
+                native.assert_not_called()
+
+    def test_large_native_overlap_output_gather_has_no_512_limit(self):
+        N,M=742,137;U=N+M
+        full=np.arange(U*U,dtype=np.float64).reshape(U,U)
+        p=np.arange(N,dtype=np.int64);q=np.arange(N,U,dtype=np.int64)
+        session=MetadataSession(self.lib)
+        with session.scope():
+            outputs=overlap.gather_overlap_blocks(session,session.upload(full),p,q)
+            np.testing.assert_array_equal(host(outputs.s11),full[:N,:N])
+            np.testing.assert_array_equal(host(outputs.s12),full[:N,N:])
+            np.testing.assert_array_equal(host(outputs.s22),full[N:,N:])
+        self.assertEqual(session.live_bytes,0)
 
 
 if __name__=="__main__":unittest.main()

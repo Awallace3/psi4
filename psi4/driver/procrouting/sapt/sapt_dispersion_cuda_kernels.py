@@ -258,6 +258,30 @@ void rhf_response_product(long long Q, long long O, long long V,
     }
 }
 
+// Each batched GEMM produced [Qblock,O,V]. Retain both exchange terms and
+// accumulate Q in deterministic order; no atomics or intermediate download.
+__global__
+void response_accumulate_exchange(long long Q, long long P,
+                                  const double* first, const double* second,
+                                  double* accumulated) {
+    for (long long ia=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         ia<P; ia+=(long long)blockDim.x*gridDim.x) {
+        double value=0.0;
+        for (long long q=0; q<Q; ++q)
+            value+=first[q*P+ia]+second[q*P+ia];
+        accumulated[ia]+=value;
+    }
+}
+
+__global__
+void response_finish(long long O, long long V,
+                     const double* eo, const double* ev, const double* trial,
+                     const double* coulomb, const double* exchange, double* output) {
+    for (long long ia=(long long)blockIdx.x*blockDim.x+threadIdx.x;
+         ia<O*V; ia+=(long long)blockDim.x*gridDim.x)
+        output[ia]=(ev[ia%V]-eo[ia/V])*trial[ia]+4.0*coulomb[ia]-exchange[ia];
+}
+
 __global__
 void response_dot(long long count, const double* left, const double* right, double* output) {
     __shared__ double sums[128];

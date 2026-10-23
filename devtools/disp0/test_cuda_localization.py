@@ -152,4 +152,53 @@ class Localization(unittest.TestCase):
                 localization.jacobi_localize_device(session,db,de,atoms,nfrozen=True)
 
 
+    def test_large_occupied_and_metadata_spaces_preserve_order_and_memory_ledger(self):
+        for O,M,K,nf in ((78,78,78,12),(2,513,513,0)):
+            session=MetadataSession(self.lib)
+            with session.scope():
+                b=np.eye(O,M);energies=np.linspace(-1.5,-.2,O)
+                db,de=session.upload(b),session.upload(energies)
+                atoms=np.arange(M,dtype=np.int64)%K
+                baseline=session.live_bytes
+                actual=localization.jacobi_localize_device(session,db,de,atoms,nfrozen=nf)
+                self.assertTrue(actual.converged)
+                self.assertEqual(actual.iterations,1)
+                np.testing.assert_allclose(host(actual.u),np.eye(O),rtol=1e-13,atol=1e-14)
+                np.testing.assert_allclose(host(actual.occupied_iao),b,rtol=1e-13,atol=1e-14)
+                self.assertLessEqual(session.peak_live_bytes-baseline,
+                                     actual.work_plan["peak_increment_bytes"])
+                if O==78:self.assertGreater(actual.work_plan["maximum_pair_updates"],65536)
+                with self.assertRaisesRegex(ValueError,"work"):
+                    localization.jacobi_localize_device(session,db,de,atoms,nfrozen=nf,
+                        max_pair_updates=actual.work_plan["maximum_pair_updates"]-1)
+                session.limit=session.live_bytes+actual.work_plan["peak_increment_bytes"]-1
+                with self.assertRaises(MemoryError):
+                    localization.jacobi_localize_device(session,db,de,atoms,nfrozen=nf)
+            self.assertEqual(session.live_bytes,0)
+
+    def test_nonzero_high_atom_populations_match_ordered_trajectory(self):
+        # Most population is deliberately beyond the 128-thread reduction tile.
+        rng=np.random.default_rng(819)
+        b=np.zeros((3,513))
+        b[:,384:]=np.linalg.qr(rng.normal(size=(129,3)))[0].T
+        b[:,:384]=1e-3*rng.normal(size=(3,384))
+        b=np.linalg.qr(b.T)[0].T
+        energies=np.array([-1.4,-.8,-.2]);atoms=np.arange(513,dtype=np.int64)
+        for power in (2,4):
+            expected=reference(b,energies,atoms,power=power,max_iterations=4)
+            session=MetadataSession(self.lib)
+            with session.scope():
+                actual=localization.jacobi_localize_device(session,session.upload(b),
+                    session.upload(energies),atoms,power=power,max_iterations=4,
+                    require_converged=False)
+                for device,truth in ((actual.u,expected.u),(actual.q,expected.q),
+                                     (actual.occupied_iao,expected.b)):
+                    np.testing.assert_allclose(host(device),truth,rtol=1e-10,atol=1e-12)
+                np.testing.assert_allclose([[h["objective"],h["gradient"]] for h in actual.history],
+                    [[h["objective"],h["gradient"]] for h in expected.history],
+                    rtol=1e-10,atol=1e-12)
+                self.assertGreater(np.sum(host(actual.q)[128:]),2.9)
+            self.assertEqual(session.live_bytes,0)
+
+
 if __name__=="__main__":unittest.main()

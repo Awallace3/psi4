@@ -113,6 +113,8 @@ class CUDASession:
         self.cleanup_complete = False
         self.stream = self.handle = self.module = None
         self.functions = {}
+        self.blas_calls = {}
+        self.kernel_launches = {}
         self.blas, self.blas_path = library(cublas_library, cublas_sha256)
         self.blas_sha256 = cublas_sha256
         self.device = self.rt(runtime.cudaGetDevice())
@@ -281,6 +283,11 @@ class CUDASession:
             "cublasDgemm_v2": [ct.c_void_p, ct.c_int, ct.c_int, ct.c_int, ct.c_int, ct.c_int,
                                ct.POINTER(ct.c_double), ct.c_void_p, ct.c_int,
                                ct.c_void_p, ct.c_int, ct.POINTER(ct.c_double), ct.c_void_p, ct.c_int],
+            "cublasDgemmStridedBatched": [
+                ct.c_void_p, ct.c_int, ct.c_int, ct.c_int, ct.c_int, ct.c_int,
+                ct.POINTER(ct.c_double), ct.c_void_p, ct.c_int, ct.c_longlong,
+                ct.c_void_p, ct.c_int, ct.c_longlong, ct.POINTER(ct.c_double),
+                ct.c_void_p, ct.c_int, ct.c_longlong, ct.c_int],
         }
         for name, args in specs.items():
             function = getattr(self.blas, name)
@@ -298,6 +305,7 @@ class CUDASession:
         if status != 0:
             self.failed = True
             raise RuntimeError(f"{name} failed: {status}")
+        self.blas_calls[name] = self.blas_calls.get(name,0)+1
 
     def _compile(self):
         nv, dr = self.nvrtc, self.driver
@@ -332,6 +340,7 @@ class CUDASession:
                          "reduce_fragment_exchange", "make_single_amplitudes", "reduce_induction_source",
                          "matrix_error", "single_gap_error", "trace_factors",
                          "rhf_response_product", "response_dot", "response_precondition",
+                         "response_accumulate_exchange", "response_finish",
                          "response_step", "response_direction", "response_metrics",
                          "inverse_sqrt_weights", "scale_eigenvector_rows", "gather_indexed_matrix",
                          "set_identity", "ibo_objective", "ibo_pair", "ibo_sweep_finish",
@@ -356,6 +365,7 @@ class CUDASession:
             self.rt(self.driver.cuLaunchKernel(
                 self.functions[name], grid, 1, 1, threads, 1, 1, 0,
                 int(self.stream), ct.addressof(parameters), 0))
+            self.kernel_launches[name] = self.kernel_launches.get(name,0)+1
         except BaseException:
             self.failed = True
             raise
@@ -394,6 +404,44 @@ class CUDASession:
         self._blas("cublasDgemm_v2", self.handle, 0, 0, n, m, k,
                    ct.byref(alpha), right.pointer, n, left.pointer, k,
                    ct.byref(beta), out.pointer, n)
+        return out
+
+    def gemm_batched(self, left, right, *, transpose_left=False, transpose_right=False):
+        """FP64 C-order batched GEMM, with an optional rank-two broadcast.
+
+        Three-dimensional operands have one contiguous matrix per batch.
+        Rank-two operands broadcast with native cuBLAS stride zero. Transposes
+        are descriptors, never host/device matrix copies. Output is [B,M,N].
+        """
+        self.check()
+        if type(transpose_left) is not bool or type(transpose_right) is not bool:
+            raise ValueError("Batched GEMM transpose descriptors must be booleans")
+        for value in (left, right):
+            if (len(value.shape) not in (2, 3) or value.dtype != np.float64
+                    or value.order != "C" or value.allocation.session is not self):
+                raise ValueError("Batched GEMM needs owned C-order FP64 matrices")
+            value.pointer  # Reject ended lifetimes before allocating output.
+        lb = left.shape[0] if len(left.shape) == 3 else None
+        rb = right.shape[0] if len(right.shape) == 3 else None
+        if lb is not None and rb is not None and lb != rb:
+            raise ValueError("Batched GEMM batch extents differ")
+        batches = lb if lb is not None else rb if rb is not None else 1
+        lr, lc = left.shape[-2:]
+        rr, rc = right.shape[-2:]
+        m, k = (lc, lr) if transpose_left else (lr, lc)
+        kr, n = (rc, rr) if transpose_right else (rr, rc)
+        if k != kr or min(batches, m, n, k) < 1 or max(batches, m, n, k, lc, rc) > 2**31-1:
+            raise ValueError("Unsupported batched GEMM extents")
+        ls, rs, cs = (lr*lc if lb is not None else 0), (rr*rc if rb is not None else 0), m*n
+        if max(ls, rs, cs)*batches > 2**63-1:
+            raise ValueError("Batched GEMM stride exceeds the native ABI")
+        out = self.empty((batches, m, n))
+        alpha, beta = ct.c_double(1.0), ct.c_double(0.0)
+        # C-order C.T = op(right).T @ op(left).T: reverse operands/dimensions.
+        self._blas("cublasDgemmStridedBatched", self.handle,
+                   int(transpose_right), int(transpose_left), n, m, k,
+                   ct.byref(alpha), right.pointer, rc, rs, left.pointer, lc, ls,
+                   ct.byref(beta), out.pointer, n, cs, batches)
         return out
 
     def close(self):

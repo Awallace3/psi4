@@ -99,17 +99,18 @@ def gather_overlap_blocks(session,full,primary_indices,minimal_indices,*,outputs
 
 class CuESTOverlapBlocks:
     """Persistent native resources belong to the explicit parent's owner graph."""
-    def __init__(self,owner,minimal_basis,*,retained_centers=None,max_union_nbf=512):
+    def __init__(self,owner,minimal_basis,*,retained_centers=None,max_union_nbf=None):
         if not isinstance(owner,DiagnosticPlanOwner):
             raise TypeError("An explicit admitted native plan owner is required")
         owner._check_construction();owner.assert_live()
         p,m=snapshot_pair(owner.primary_snapshot.owner,minimal_basis)
         if p.fingerprint!=owner.primary_snapshot.fingerprint:raise ValueError("Primary overlap basis changed")
         self.snapshot=union_snapshot(p,m)
-        if (type(max_union_nbf) is not int or not 1<=max_union_nbf<=512
+        if max_union_nbf is None:max_union_nbf=2**31-1
+        if (type(max_union_nbf) is not int or not 1<=max_union_nbf<=2**31-1
                 or self.snapshot.nbf>max_union_nbf
                 or max(s.am for s in self.snapshot.shells)>3):
-            raise NotImplementedError("Bounded spherical SPDF overlap union only")
+            raise NotImplementedError("Spherical SPDF overlap union within the native ABI required")
         centers=tuple(range(p.ncenter)) if retained_centers is None else tuple(retained_centers)
         if (not centers or any(type(c) is not int or not 0<=c<p.ncenter for c in centers)
                 or centers!=tuple(sorted(set(centers)))):
@@ -121,6 +122,12 @@ class CuESTOverlapBlocks:
         self.primary_indices=self.snapshot.primary_indices
         self.minimal_indices=tuple(i for i,c in zip(self.snapshot.minimal_indices,minimal_centers) if c in centers)
         self.owner,self.session=owner,owner.session
+        P,M,U=len(self.primary_indices),len(self.minimal_indices),self.snapshot.nbf
+        self.work_plan={"union_dimension":U,"primary_dimension":P,"minimal_dimension":M,
+            "matrix_and_index_bytes":8*(U*U+P*P+P*M+M*M+P+M)}
+        # Native queried workspaces are checked separately by owner._workspace;
+        # matrix admission happens before creating the additional native plan.
+        self.session.check_memory(self.work_plan["matrix_and_index_bytes"])
         self.calls=0;self.pending=[]
         self._bind()
         native,raw=owner.api.native,owner._raw;context=raw(owner._context)
@@ -163,6 +170,7 @@ class CuESTOverlapBlocks:
     def compute(self):
         owner,session=self.owner,self.session
         P,M=len(self.primary_indices),len(self.minimal_indices)
+        session.check_memory(self.work_plan["matrix_and_index_bytes"])
         outputs=OverlapBlocksDevice(session.empty((P,P)),session.empty((P,M)),session.empty((M,M)))
         try:
             self._bind();identity.native_math_mode(owner.api.native,owner.handle)

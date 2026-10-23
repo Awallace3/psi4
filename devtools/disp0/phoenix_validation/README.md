@@ -87,3 +87,22 @@ The new executable is `build/stage/bin/psi4` beneath that artifact root.
 `result.json` retains the source pin, binary hashes, mapped paths and proof
 hashes. GPU correctness is explicitly false and protein F-SAPT admission is
 false. This successful CPU build is not an H200 gate or a timing measurement.
+# Full-fragment qualification follow-up
+
+`COMPLETION_PLAN.md` records the agreed full F-SAPT scope (peptide, nanotube,
+protein83; spherical aug-cc-pVDZ), not a dispersion-only benchmark.
+
+The optional `submit.py --prepare-gpu-runtime` step prepares frozen private
+cuda-bindings wheels and a CUDA loader manifest **inside the CPU allocation**.
+It then exercises the public exact-coupled CPU fragment path, unscaled and
+delta-HF/exchange scaled. No CUDA context is created in this preparation job.
+`result.json` remains CPU-build evidence only; also inspect
+`gpu-runtime/preparation-result.json`, both `cpu-fragment-*/result.json` and
+the enclosing job status.
+
+`fragment_gate.py` is a diagnostic fresh-process CPU/GPU entrypoint. Its GPU
+arm requires the exact prepared configuration SHA, native cuEST HF, an owned
+audited provider, actual batched FP64 BLAS controls, high-index IBO reductions,
+no CPU fragment integral/localizer fallback and final cleanup. It captures
+raw HF and final matrices for independent comparison. Its output status
+explicitly does **not** claim independent correctness or accepted timings.

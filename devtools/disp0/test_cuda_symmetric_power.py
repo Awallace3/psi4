@@ -40,7 +40,7 @@ def mock_solver(session,*,info=0,workspace_limit=1024**2):
     session.rt=lambda result:result
     solver=power.CuSolverSymmetricPower.__new__(power.CuSolverSymmetricPower)
     solver.owner,solver.session=owner,session
-    solver.workspace_limit_bytes,solver.max_dimension=workspace_limit,512
+    solver.workspace_limit_bytes,solver.max_dimension=workspace_limit,2**31-1
     solver.native=SimpleNamespace(cusolverDnDsyevd_bufferSize=Mock(side_effect=query),
                                   cusolverDnDsyevd=Mock(side_effect=compute))
     solver.handle=ct.c_void_p(123);solver._bind=Mock()
@@ -105,6 +105,25 @@ class SymmetricPower(unittest.TestCase):
                 solver=mock_solver(session,info=info,workspace_limit=limit)
                 with self.assertRaises(exception):solver.inverse_sqrt(session.upload(value))
                 solver.owner._invalidate.assert_called_once()
+            self.assertEqual(session.live_bytes,0)
+
+
+    def test_large_dimensions_admit_by_peak_memory_before_native_query(self):
+        class ReachedQuery(RuntimeError):pass
+        for N in (513,742,1293):
+            session=Session(self.lib)
+            with session.scope():
+                value=session.upload(np.eye(N))
+                solver=mock_solver(session)
+                solver.native.cusolverDnDsyevd_bufferSize.side_effect=ReachedQuery
+                peak=8*(7*N*N+2*N+6)+4+8
+                session.limit=session.live_bytes+peak-1
+                with self.assertRaises(MemoryError):solver.inverse_sqrt(value)
+                solver.native.cusolverDnDsyevd_bufferSize.assert_not_called()
+                session.limit=2**40
+                with self.assertRaises(ReachedQuery):solver.inverse_sqrt(value)
+                solver.native.cusolverDnDsyevd_bufferSize.assert_called_once()
+                solver.native.cusolverDnDsyevd.assert_not_called()
             self.assertEqual(session.live_bytes,0)
 
 

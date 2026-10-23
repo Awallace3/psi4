@@ -48,16 +48,23 @@ class CPUSession:
     def __init__(self,kernels):
         self.kernels=kernels;self.allocations=[]
         self.live_bytes=self.peak_live_bytes=self.native_bytes=0
+        self.limit=2**40  # Explicit virtual CPU-fixture budget, not reserved VRAM.
         self.failed=self.closed=False;self.gemms=0
+        self.kernel_launches={}
     def check(self):
         if self.closed or self.failed:raise RuntimeError("CPU fixture closed")
     def empty(self,shape,dtype=np.float64,zero=False):
+        self.check_memory(int(np.prod(shape))*np.dtype(dtype).itemsize)
         allocation=Allocation(self,int(np.prod(shape))*np.dtype(dtype).itemsize)
         self.allocations.append(allocation);self.live_bytes+=allocation.nbytes
         self.peak_live_bytes=max(self.peak_live_bytes,self.live_bytes)
         array=runtime.DeviceArray(allocation,shape,dtype=dtype)
         if zero:host(array)[...]=0
         return array
+    def check_memory(self,requested):
+        self.check()
+        if requested<0 or self.live_bytes+self.native_bytes+requested>self.limit:
+            raise MemoryError("CPU fixture declared allocation budget exceeded")
     def upload(self,array):
         result=self.empty(array.shape,dtype=array.dtype);host(result)[...]=array;return result
     def download(self,array):return np.array(host(array))
@@ -210,6 +217,51 @@ class Kernels(unittest.TestCase):
                          (right.pointer,8,left.pointer,6,out.pointer,8))
         self.assertEqual(ct.cast(args[7],ct.POINTER(ct.c_double))[0],1.)
         self.assertEqual(ct.cast(args[12],ct.POINTER(ct.c_double))[0],0.)
+
+    def test_strided_batched_blas_descriptors_transposes_broadcast_and_views(self):
+        rng=np.random.default_rng(817)
+        for lt in (False,True):
+            for rt in (False,True):
+                for left_batch,right_batch in ((True,True),(False,True),(True,False),(False,False)):
+                    session=CPUSession(self.lib);session.handle=ct.c_void_p(123)
+                    lshape=((3,) if left_batch else ())+((3,2) if lt else (2,3))
+                    rshape=((3,) if right_batch else ())+((4,3) if rt else (3,4))
+                    with session.scope():
+                        lp=session.empty((int(np.prod(lshape))+2,))
+                        rp=session.empty((int(np.prod(rshape))+3,))
+                        left=lp.view(lshape,offset=16);right=rp.view(rshape,offset=24)
+                        host(left)[...]=rng.normal(size=lshape);host(right)[...]=rng.normal(size=rshape)
+                        def spy(name,handle,ta,tb,n,m,k,alpha,a,lda,sa,b,ldb,sb,beta,c,ldc,sc,batches):
+                            self.assertEqual(name,"cublasDgemmStridedBatched")
+                            self.assertEqual((ta,tb,n,m,k),(int(rt),int(lt),4,2,3))
+                            self.assertEqual((sa==0,sb==0),(not right_batch,not left_batch))
+                            self.assertEqual(ct.cast(alpha,ct.POINTER(ct.c_double))[0],1.)
+                            self.assertEqual(ct.cast(beta,ct.POINTER(ct.c_double))[0],0.)
+                            def matrix(pointer,offset,rows,columns):
+                                raw=np.ctypeslib.as_array(ct.cast(pointer+8*offset,ct.POINTER(ct.c_double)),
+                                                          shape=(rows*columns,))
+                                return raw.reshape((rows,columns),order="F")
+                            for batch in range(batches):
+                                av=matrix(a,batch*sa,lda,n if ta else k)
+                                bv=matrix(b,batch*sb,ldb,k if tb else m)
+                                if ta:av=av.T
+                                if tb:bv=bv.T
+                                matrix(c,batch*sc,ldc,m)[...]=av@bv
+                        session._blas=spy
+                        actual=runtime.CUDASession.gemm_batched(session,left,right,
+                            transpose_left=lt,transpose_right=rt)
+                        l=np.swapaxes(host(left),-1,-2) if lt else host(left)
+                        r=np.swapaxes(host(right),-1,-2) if rt else host(right)
+                        expected=l@r
+                        if expected.ndim==2:expected=expected[None,:,:]
+                        np.testing.assert_allclose(host(actual),expected,rtol=1e-13,atol=1e-14)
+                        with self.assertRaises(ValueError):
+                            runtime.CUDASession.gemm_batched(session,left,right,transpose_left=1)
+                        with self.assertRaises(ValueError):
+                            runtime.CUDASession.gemm_batched(session,session.empty((2,2,3)),
+                                                            session.empty((3,3,4)))
+                    with self.assertRaises(RuntimeError):
+                        runtime.CUDASession.gemm_batched(session,left,right)
 
     def test_cleanup_inside_unrelated_except_preserves_local_failures(self):
         def fail():raise RuntimeError("local cleanup")

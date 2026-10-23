@@ -25,6 +25,25 @@ class IAODevice:
     occupied_iao: object
     coefficients: object
     metrics: object
+    work_plan: object = None
+
+
+def allocation_plan(N,M,O,workspace_bytes):
+    """Conservative simultaneous allocation ledger for the unchanged IAO recipe.
+
+    DeviceMath products retain intermediates until their scope ends. Include
+    all such matrices and the larger of the two native power scratch regions.
+    Already-live overlaps/inverse roots and opaque native reservations belong
+    to the session, not this incremental estimate.
+    """
+    if (any(type(x) is not int or x<1 for x in (N,M,O))
+            or type(workspace_bytes) is not int or workspace_bytes<0):
+        raise ValueError("Positive IAO dimensions and nonnegative solver workspace required")
+    retained=8*(8*N*N+7*N*M+6*N*O+3*O*M+2*O*O+2*M*M+O+M+2)
+    D=max(O,M)
+    solver_scratch=8*(6*D*D+D+5)+4+workspace_bytes
+    return {"retained_intermediate_bytes":retained,"native_spectral_scratch_bytes":solver_scratch,
+            "peak_increment_bytes":retained+solver_scratch}
 
 
 def prepare_iao_metrics(overlaps,power,*,condition=1e-7):
@@ -57,6 +76,8 @@ def build_iao_device(coefficients,metrics):
     if (len(coefficients.shape)!=2 or coefficients.shape[0]!=N or coefficients.shape[1]>M
             or s11.shape!=(N,N) or s22.shape!=(M,M) or h1.shape!=(N,N) or h2.shape!=(M,M)):
         raise ValueError("Full occupied space/common overlap support required for IAO construction")
+    plan=allocation_plan(N,M,coefficients.shape[1],metrics.power.workspace_limit_bytes)
+    session.check_memory(plan["peak_increment_bytes"])
     output=session.empty((N,M));occupied_iao=session.empty((coefficients.shape[1],M))
     with session.scope():
         t1=session.gemm(h2,m.window(s12,transpose=True))
@@ -76,4 +97,4 @@ def build_iao_device(coefficients,metrics):
         for value,target in ((a,output),(b,occupied_iao)):
             session.launch("linear_combination",min(65535,(value.size+255)//256),256,
                            [value.size,1,0,value,value,target])
-    return IAODevice(output,occupied_iao,coefficients,metrics)
+    return IAODevice(output,occupied_iao,coefficients,metrics,plan)

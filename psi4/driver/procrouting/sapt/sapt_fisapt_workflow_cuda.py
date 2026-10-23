@@ -130,7 +130,9 @@ def fragment_terms(provider, rifit, minimal, matrices, energies, xyz, za, zb, *,
                 device_outputs["Locc_"+side]=ibos[side].l
             outputs={name:session.download(value) for name,value in device_outputs.items()}
             localization={s:{"iterations":ibos[s].jacobi.iterations,
-                             "converged":ibos[s].jacobi.converged} for s in ("A","B")}
+                             "converged":ibos[s].jacobi.converged,
+                             "jacobi_work_plan":ibos[s].jacobi.work_plan,
+                             "iao_work_plan":ibos[s].iao.work_plan} for s in ("A","B")}
             response=induction.response_diagnostics
         ri_report=ri.report()
     # Final output layout only; pair combination and all sums already ran on GPU.

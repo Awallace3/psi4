@@ -1,4 +1,4 @@
-"""Bounded resident singlet HF response, not automatic/coupled FISAPT dispatch.
+"""Memory-budgeted resident singlet HF response with exact batched exchange.
 
 H+ X = gap*X + 4 J[X] - K[X] - K[X]^T. Native same-gauge (ov,oo,vv)
 DFMO factors replace AO JK calls. PCG solves H+Y=W and returns physical x=-Y.
@@ -21,10 +21,13 @@ class ResponseSolution:
 class HFResponseOperator:
     """Full occupied response; frozen-core removal is deliberately unsupported.
 
-    Fused exchange is intended for bounded local correctness cases, not a
-    protein-scale performance claim. Oversized work fails before native DFMO.
+    Retains the same-gauge native factors and uses Q-blocked FP64 GEMMs for
+    both exchange terms. Admission is by explicit resident/workspace budgets,
+    not a small-system P² work cap. Oversized memory fails before native DFMO.
     """
-    def __init__(self,provider,occupied,virtual,energies,*,max_exchange_products=64*1024**2):
+    def __init__(self,provider,occupied,virtual,energies,*,
+                 max_workspace_bytes=256*1024**2,max_factor_bytes=None,
+                 max_exchange_products=None):
         self.provider,self.session=provider,provider.session
         m=DeviceMath(self.session)
         if set(energies)!={"o","v"}:
@@ -36,9 +39,35 @@ class HFResponseOperator:
             raise ValueError("Canonical full-occupied/virtual response layouts required")
         self.O,self.V=occupied.shape[1],virtual.shape[1];self.Q=provider.naux
         self.P=self.O*self.V
-        if (type(max_exchange_products) is not int or not 1<=max_exchange_products<=64*1024**2
-                or self.P>4096 or self.Q*self.P*self.P>max_exchange_products):
-            raise ValueError("Response exceeds bounded fused-exchange work admission")
+        if min(self.Q,self.O,self.V)<1 or max(self.Q,self.O,self.V,self.P)>2**31-1:
+            raise ValueError("Response dimensions exceed the native GEMM ABI")
+        # An explicit legacy work ceiling remains a caller opt-in, never a
+        # hidden admission policy for the scalable implementation.
+        if max_exchange_products is not None:
+            if (type(max_exchange_products) is not int or max_exchange_products<1
+                    or self.Q*self.P*self.P>max_exchange_products):
+                raise ValueError("Response exceeds explicit exchange work admission")
+        if type(max_workspace_bytes) is not int or max_workspace_bytes<1:
+            raise ValueError("Response workspace admission needs a positive byte budget")
+        fixed=8*(2*self.P+self.Q)  # Coulomb, exchange accumulator and density.
+        per_q=8*(3*self.P+self.O*self.O)  # T1, K1, T2 and K2 batched outputs.
+        if max_workspace_bytes<fixed+per_q:
+            raise ValueError("Response workspace admission cannot fit one Q block")
+        self.q_batch=min(self.Q,(max_workspace_bytes-fixed)//per_q)
+        self.factor_bytes=8*self.Q*(self.P+self.O*self.O+self.V*self.V)
+        workspace=fixed+self.q_batch*per_q
+        # Reserve PCG vectors, raw coefficient packing and one apply output in
+        # addition to the bounded exchange workspace. Native DFMO allocations
+        # remain independently checked by the owning session at every malloc.
+        reserve=workspace+8*(32*self.P+3*provider.nao*(self.O+self.V))
+        if max_factor_bytes is not None and (
+                type(max_factor_bytes) is not int or max_factor_bytes<1
+                or self.factor_bytes>max_factor_bytes):
+            raise ValueError("Response resident-factor admission exceeds byte budget")
+        self.session.check_memory(self.factor_bytes+reserve)
+        self.work_plan={"algorithm":"native-fp64-Q-blocked-strided-batched",
+            "resident_factor_bytes":self.factor_bytes,"workspace_bytes":workspace,
+            "q_batch":self.q_batch,"reserved_total_bytes":self.factor_bytes+reserve}
         self.energies=dict(energies)
         provider.validate_basis(provider.primary_basis,provider.auxiliary_basis)
         with self.session.scope():
@@ -70,9 +99,28 @@ class HFResponseOperator:
             flat=self.factors["ov"].view((self.Q,self.P))
             density=session.gemm(flat,trial.view((self.P,1)))
             coulomb=session.gemm_at_b(flat,density).view(trial.shape)
-            session.launch("rhf_response_product",min(65535,self.P),128,
-                [self.Q,self.O,self.V,self.factors["ov"],self.factors["oo"],self.factors["vv"],
-                 trial,self.energies["o"],self.energies["v"],coulomb,output])
+            exchange=session.empty(trial.shape,zero=True)
+            for start in range(0,self.Q,self.q_batch):
+                count=min(self.q_batch,self.Q-start)
+                with session.scope():
+                    def slab(name,left,right):
+                        return self.factors[name].view((count,left,right),
+                            offset=8*start*left*right)
+                    ov=slab("ov",self.O,self.V)
+                    oo=slab("oo",self.O,self.O)
+                    vv=slab("vv",self.V,self.V)
+                    # K1_ia = sum_Qjb OO_Qij X_jb VV_Qab.
+                    first=session.gemm_batched(
+                        session.gemm_batched(oo,trial),vv,transpose_right=True)
+                    # K2_ia = sum_Qjb OV_Qib X_jb OV_Qja, NOT K1.T.
+                    second=session.gemm_batched(
+                        session.gemm_batched(ov,trial,transpose_right=True),ov)
+                    session.launch("response_accumulate_exchange",
+                        min(65535,(self.P+255)//256),256,
+                        [count,self.P,first,second,exchange])
+            session.launch("response_finish",min(65535,(self.P+255)//256),256,
+                [self.O,self.V,self.energies["o"],self.energies["v"],
+                 trial,coulomb,exchange,output])
         return output
 
     def solve(self,rhs,*,rtol=1e-10,atol=1e-12,max_iterations=128):

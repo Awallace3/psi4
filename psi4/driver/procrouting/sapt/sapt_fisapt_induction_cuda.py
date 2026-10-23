@@ -286,7 +286,8 @@ def _directional_device(elst_state,potential,occupied,virtuals,energies,matrices
                              response_outputs["ind"],response_outputs.get("exch")])
                         diagnostics.append({"direction":side,"source_column":column,
                             "iterations":solved.iterations,"absolute_residual":solved.absolute_residual,
-                            "relative_residual":solved.relative_residual})
+                            "relative_residual":solved.relative_residual,
+                            "operator_work_plan":response.work_plan})
                 negative=m.combine(charges,charges,-1,0)
                 for atom in range(N):
                     with session.scope():

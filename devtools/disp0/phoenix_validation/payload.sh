@@ -79,5 +79,18 @@ eval "$("$run/build/stage/bin/psi4" --psiapi)"
     > "$run/job-guards.stdout" 2> "$run/job-guards.stderr"
 "$python" -B "$source_root/devtools/disp0_einsums_api_probe.py" > "$run/api-probe.json"
 "$python" -B "$helper/validate.py"
+if [[ "${DISP0_PREPARE_GPU_RUNTIME:-0}" == 1 ]]; then
+    "$python" -B "$helper/prepare_gpu_runtime.py"
+    config="$run/gpu-runtime/runtime-config.json"
+    config_sha="$("$python" -B -c \
+        'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$config")"
+    for mode in unscaled scaled; do
+        flags=()
+        if [[ "$mode" == scaled ]]; then flags+=(--scaled); fi
+        "$python" -B "$helper/fragment_gate.py" --config "$config" \
+            --config-sha256 "$config_sha" --arm cpu "${flags[@]}" \
+            --output "$run/cpu-fragment-$mode"
+    done
+fi
 [[ "$(git -C "$source_root" rev-parse HEAD)" == "$DISP0_PIN" ]]
 git -C "$source_root" diff HEAD --exit-code
