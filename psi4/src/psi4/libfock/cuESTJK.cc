@@ -34,6 +34,7 @@
 #ifdef USING_cuEST
 
 #include "cuESTCommon.h"
+#include "cubature.h"
 
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/matrix.h"
@@ -45,8 +46,12 @@
 #include "psi4/psi4-dec.h"
 
 #include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <memory>
 #include <vector>
 
 #include <cublas_v2.h>
@@ -56,12 +61,161 @@ extern cublasHandle_t cublas_handle;
 
 namespace psi {
 
+namespace {
+
+// Initial construction only: building a second basis can symmetrize the shared
+// molecule again, moving a coordinate by one representable double while the
+// first basis owns its original snapshot. This also admits an indistinguishable
+// one-ULP preconstruction edit, not a general geometry tolerance. Later shell
+// and non-C1 frame dependency keys remain exact.
+bool initial_shell_coordinate_matches(double actual, double expected) {
+    return std::isfinite(actual) && std::isfinite(expected) &&
+           (actual == expected || std::nextafter(actual, expected) == expected);
+}
+
+// Plan construction must unwind on allocation/SDK failure. The older shared
+// workspace helper exits on OOM and cannot provide that recovery contract.
+bool release_plan_workspace(cuestWorkspace_t* ws) noexcept {
+    if (!ws) return true;
+    bool ok = true;
+    if (ws->deviceBuffer) ok = cudaFree(reinterpret_cast<void*>(ws->deviceBuffer)) == cudaSuccess;
+    if (ws->hostBuffer) std::free(reinterpret_cast<void*>(ws->hostBuffer));
+    std::free(ws);
+    return ok;
+}
+
+struct PlanWorkspaceDeleter {
+    void operator()(cuestWorkspace_t* ws) const noexcept { release_plan_workspace(ws); }
+};
+using PlanWorkspace = std::unique_ptr<cuestWorkspace_t, PlanWorkspaceDeleter>;
+
+void release_plan_scratch(PlanWorkspace& ws) {
+    if (!release_plan_workspace(ws.release()))
+        throw PSIEXCEPTION("cuESTJK temporary workspace cleanup failed.");
+}
+
+PlanWorkspace plan_workspace(const cuestWorkspaceDescriptor_t& desc) {
+    PlanWorkspace ws(static_cast<cuestWorkspace_t*>(std::calloc(1, sizeof(cuestWorkspace_t))));
+    if (!ws) throw std::bad_alloc();
+    ws->hostBufferSizeInBytes = desc.hostBufferSizeInBytes;
+    ws->deviceBufferSizeInBytes = desc.deviceBufferSizeInBytes;
+    if (desc.hostBufferSizeInBytes) {
+        ws->hostBuffer = reinterpret_cast<uintptr_t>(std::malloc(desc.hostBufferSizeInBytes));
+        if (!ws->hostBuffer) throw std::bad_alloc();
+    }
+    if (desc.deviceBufferSizeInBytes) {
+        void* device = nullptr;
+        const auto status = cudaMalloc(&device, desc.deviceBufferSizeInBytes);
+        if (status != cudaSuccess) {
+            throw PSIEXCEPTION(std::string("cuESTJK plan workspace allocation failed: ") + cudaGetErrorString(status));
+        }
+        ws->deviceBuffer = reinterpret_cast<uintptr_t>(device);
+    }
+    return ws;
+}
+
+template <typename T>
+class PlanParameters {
+    decltype(CUEST_AOPAIRLIST_PARAMETERS) kind_;
+    T value_ = nullptr;
+   public:
+    explicit PlanParameters(decltype(CUEST_AOPAIRLIST_PARAMETERS) kind) : kind_(kind) {
+        const auto status = cuestParametersCreate(kind_, reinterpret_cast<void**>(&value_));
+        if (status != CUEST_STATUS_SUCCESS) {
+            if (value_) cuestParametersDestroy(kind_, value_);
+            CHECK_CUEST(status);
+        }
+    }
+    ~PlanParameters() noexcept { if (value_) cuestParametersDestroy(kind_, value_); }
+    PlanParameters(const PlanParameters&) = delete;
+    PlanParameters& operator=(const PlanParameters&) = delete;
+    T get() const { return value_; }
+    void close() {
+        if (value_) CHECK_CUEST(cuestParametersDestroy(kind_, value_));
+        value_ = nullptr;
+    }
+};
+
+struct PlanShells {
+    std::vector<cuestAOShell_t> values;
+    ~PlanShells() noexcept { for (auto shell : values) if (shell) cuestAOShellDestroy(shell); }
+    void close() {
+        for (auto& shell : values) {
+            if (shell) CHECK_CUEST(cuestAOShellDestroy(shell));
+            shell = nullptr;
+        }
+    }
+};
+
+template <typename T>
+void key_value(std::string& key, const T& value) {
+    key.append(reinterpret_cast<const char*>(&value), sizeof(value));
+}
+
+void key_double(std::string& key, double value) {
+    if (!std::isfinite(value)) throw PSIEXCEPTION("cuESTJK plan dependencies must be finite.");
+    key_value(key, value);
+}
+
+std::string shell_centers_key(const std::shared_ptr<BasisSet>& primary,
+                              const std::shared_ptr<BasisSet>& auxiliary) {
+    std::string key;
+    for (const auto& basis : {primary, auxiliary}) {
+        key_value(key, basis->nshell());
+        for (int s = 0; s < basis->nshell(); ++s)
+            for (int k = 0; k < 3; ++k) key_double(key, basis->shell(s).coord(k));
+    }
+    return key;
+}
+
+std::string molecular_frame_key(const std::shared_ptr<BasisSet>& primary,
+                                const std::shared_ptr<BasisSet>& auxiliary) {
+    std::string key;
+    for (const auto& basis : {primary, auxiliary}) {
+        const auto mol = basis->molecule();
+        const auto xyz = mol->geometry();
+        key_value(key, mol->natom());
+        for (int a = 0; a < mol->natom(); ++a)
+            for (int k = 0; k < 3; ++k) key_double(key, xyz.get(a, k));
+    }
+    return key;
+}
+
+void basis_key(std::string& key, const std::shared_ptr<BasisSet>& basis) {
+    const auto mol = basis->molecule();
+    key_value(key, mol->natom());
+    key_value(key, basis->nbf());
+    key_value(key, basis->nshell());
+    key_value(key, basis->has_puream());
+    const auto xyz = mol->geometry();
+    for (int a = 0; a < mol->natom(); ++a) {
+        key_double(key, mol->Z(a));  // includes the current ghost mask
+        key_value(key, mol->true_atomic_number(a));
+        for (int k = 0; k < 3; ++k) key_double(key, xyz.get(a, k));
+        key_value(key, basis->nshell_on_center(a));
+        for (int q = 0; q < basis->nshell_on_center(a); ++q) {
+            const int s = basis->shell_on_center(a, q);
+            const auto& shell = basis->shell(s);
+            key_value(key, s);
+            key_value(key, shell.am());
+            key_value(key, shell.is_pure());
+            key_value(key, shell.nprimitive());
+            for (int p = 0; p < shell.nprimitive(); ++p) {
+                key_double(key, shell.exps()[p]);
+                key_double(key, shell.coefs()[p]);
+            }
+        }
+    }
+}
+}  // namespace
+
 cuESTJK::cuESTJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary, Options& options)
     : JK(primary),
       options_(options),
       auxiliary_(auxiliary),
       condition_(1.0E-12),
       pq_threshold_(1.0E-14),
+      initialized_(false),
       cuest_primary_basis_(nullptr),
       cuest_auxiliary_basis_(nullptr),
       cuest_pair_list_(nullptr),
@@ -75,8 +229,7 @@ cuESTJK::cuESTJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> au
       cuest_dfint_plan_ws_ptr_(nullptr),
       pair_list_device_bytes_(0),
       dfint_plan_device_bytes_(0),
-      jk_temp_device_bytes_(0),
-      initialized_(false) 
+      jk_temp_device_bytes_(0)
 {
     cuest_common::ensure_cuest_initialized();
 
@@ -92,53 +245,187 @@ cuESTJK::cuESTJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> au
                            "the orbital (primary) basis may remain Cartesian.");
     }
 
-    cuest_primary_basis_ = primary->cuest_basis();
-    cuest_auxiliary_basis_ = auxiliary->cuest_basis();
-
     condition_ = options.get_double("DF_FITTING_CONDITION");
     pq_threshold_ = options.get_double("INTS_TOLERANCE");
     dfk_slices_ = options.get_int("CUEST_DFK_SLICES");
     dfk_moduli_ = options.get_int("CUEST_DFK_MODULI");
+    // A JK is tied to these BasisSet lifetimes. Geometry may subsequently
+    // change on their molecules, but independent shell displacements may not.
+    for (const auto& basis : {primary_, auxiliary_}) {
+        const auto xyz = basis->molecule()->geometry();
+        for (int s = 0; s < basis->nshell(); ++s)
+            for (int k = 0; k < 3; ++k)
+                if (!initial_shell_coordinate_matches(basis->shell(s).coord(k),
+                                                      xyz.get(basis->shell_to_center(s), k)))
+                    throw PSIEXCEPTION("cuESTJK requires basis shell centers consistent with molecule geometry.");
+    }
+    shell_centers_ = shell_centers_key(primary_, auxiliary_);
+    primary_natom_ = primary_->molecule()->natom();
+    auxiliary_natom_ = auxiliary_->molecule()->natom();
+    primary_symmetry_ = primary_->molecule()->schoenflies_symbol();
+    auxiliary_symmetry_ = auxiliary_->molecule()->schoenflies_symbol();
+    molecular_frame_ = molecular_frame_key(primary_, auxiliary_);
 }
 
-cuESTJK::~cuESTJK() {
-    destroy_cuest_objects();
+cuESTJK::~cuESTJK() noexcept {
+    if (!destroy_cuest_objects())
+        std::fprintf(stderr, "cuESTJK cleanup failed; GPU resources may remain until context teardown.\n");
+}
+
+std::string cuESTJK::current_plan_key() const {
+    if (primary_->molecule()->natom() != primary_natom_ ||
+        auxiliary_->molecule()->natom() != auxiliary_natom_ ||
+        primary_->molecule()->schoenflies_symbol() != primary_symmetry_ ||
+        auxiliary_->molecule()->schoenflies_symbol() != auxiliary_symmetry_)
+        throw PSIEXCEPTION("cuESTJK molecular topology/symmetry changed; construct new basis sets and JK.");
+    // JK's base class constructs AO2USO once. Rebuilding only the backend plan
+    // cannot refresh that symmetry transform for a displaced non-C1 frame.
+    if (AO2USO_->nirrep() != 1 && molecular_frame_key(primary_, auxiliary_) != molecular_frame_)
+        throw PSIEXCEPTION("cuESTJK non-C1 geometry changed; construct new basis sets and JK.");
+    if (shell_centers_key(primary_, auxiliary_) != shell_centers_)
+        throw PSIEXCEPTION("cuESTJK does not support independent BasisSet::move_atom displacements; "
+                           "construct new basis sets and JK.");
+    std::string key;
+    basis_key(key, primary_);
+    basis_key(key, auxiliary_);
+    key_double(key, omega_alpha_);
+    key_double(key, omega_beta_);
+    key_double(key, omega_);
+    key_double(key, condition_);
+    key_double(key, options_.get_double("DF_FITTING_CONDITION"));
+    key_double(key, cutoff_overridden_ ? pq_threshold_ :
+               (options_.get_str("SCREENING") == "NONE" ? 0.0 : options_.get_double("INTS_TOLERANCE")));
+    key_value(key, do_J_);
+    key_value(key, do_K_);
+    key_value(key, do_wK_);
+    key_value(key, options_.get_bool("CUEST_MIXED_PRECISION"));
+    key_value(key, options_.get_int("CUEST_DFK_SLICES"));
+    key_value(key, options_.get_int("CUEST_DFK_MODULI"));
+    key_value(key, options_.get_bool("CUEST_GRIDK"));
+    if (options_.get_bool("CUEST_GRIDK") && (do_K_ || do_wK_)) {
+        // Keep the exchange quadrature tied to the live DFT grid options, not
+        // to CUEST_XC or the lifetime of a separate VBase/XC grid.
+        for (const auto* name : {"DFT_RADIAL_SCHEME", "DFT_PRUNING_SCHEME", "DFT_GRID_NAME",
+                                 "DFT_NUCLEAR_SCHEME", "DFT_BLOCK_SCHEME"}) {
+            const auto value = options_.get_str(name);
+            key_value(key, value.size());
+            key.append(value);
+        }
+        for (const auto* name : {"DFT_RADIAL_POINTS", "DFT_SPHERICAL_POINTS",
+                                 "DFT_BLOCK_MAX_POINTS", "DFT_BLOCK_MIN_POINTS"})
+            key_value(key, options_.get_int(name));
+        for (const auto* name : {"DFT_BS_RADIUS_ALPHA", "DFT_PRUNING_ALPHA", "DFT_WEIGHTS_TOLERANCE",
+                                 "DFT_BASIS_TOLERANCE", "DFT_BLOCK_MAX_RADIUS"})
+            key_double(key, options_.get_double(name));
+        key_value(key, options_.get_bool("DFT_REMOVE_DISTANT_POINTS"));
+    }
+    return key;
+}
+
+void cuESTJK::build_cuest_basis(const std::shared_ptr<BasisSet>& basis, cuestAOBasis_t& result,
+                               cuestWorkspace_t*& workspace) {
+    PlanParameters<cuestAOShellParameters_t> shell_params(CUEST_AOSHELL_PARAMETERS);
+    PlanShells shells;
+    // Reserve before creating SDK objects so vector growth cannot leak a shell.
+    shells.values.reserve(basis->nshell());
+    const int natom = basis->molecule()->natom();
+    std::vector<uint64_t> shells_per_atom(natom);
+    for (int a = 0; a < natom; ++a) {
+        shells_per_atom[a] = basis->nshell_on_center(a);
+        for (int q = 0; q < basis->nshell_on_center(a); ++q) {
+            const auto& shell = basis->shell(basis->shell_on_center(a, q));
+            shells.values.push_back(nullptr);
+            CHECK_CUEST(cuestAOShellCreate(cuest_handle, shell.is_pure() ? 1 : 0, shell.am(),
+                                          shell.nprimitive(), shell.exps(), shell.coefs(), shell_params.get(),
+                                          &shells.values.back()));
+        }
+    }
+    PlanParameters<cuestAOBasisParameters_t> params(CUEST_AOBASIS_PARAMETERS);
+    cuestWorkspaceDescriptor_t persistent{}, temporary{};
+    CHECK_CUEST(cuestAOBasisCreateWorkspaceQuery(cuest_handle, natom, shells_per_atom.data(),
+                shells.values.data(), params.get(), &persistent, &temporary, nullptr));
+    workspace = plan_workspace(persistent).release();
+    auto scratch = plan_workspace(temporary);
+    CHECK_CUEST(cuestAOBasisCreate(cuest_handle, natom, shells_per_atom.data(), shells.values.data(),
+                                 params.get(), workspace, scratch.get(), &result));
+    release_plan_scratch(scratch);
+    params.close();
+    shells.close();
+    shell_params.close();
 }
 
 void cuESTJK::preiterations()
 {
-    // Also permits explicit initialize() recovery after a partial/failed
-    // rebuild, without leaking whichever objects were created before failure.
-    destroy_cuest_objects();
-    configure_math_mode();
+    try {
+        if (cleanup_failed_) throw PSIEXCEPTION("cuESTJK cleanup failed; construct a new JK object.");
+        const auto key = current_plan_key();
+        // The handle is shared by interleaved objects: restore its mode even on hits.
+        configure_math_mode();
+        if (initialized_ && key == plan_key_) {
+            if (print_ >= 3) outfile->Printf("    cuESTJK plan reused #%llu\n",
+                                           static_cast<unsigned long long>(plan_creations_));
+            return;
+        }
+        // Fail closed; never overlap two potentially huge plans during a rebuild.
+        if (!destroy_cuest_objects()) throw PSIEXCEPTION("cuESTJK cleanup failed; construct a new JK object.");
+        build_cuest_plan(key);
+    } catch (...) {
+        destroy_cuest_objects();
+        throw;
+    }
+}
+
+void cuESTJK::build_cuest_plan(const std::string& key) {
+    gridk_ = options_.get_bool("CUEST_GRIDK");
+#ifndef PSI_CUEST_HAS_GRIDK
+    if (gridk_)
+        throw PSIEXCEPTION("CUEST_GRIDK requires cuEST symmetric and nonsymmetric Grid-K APIs; "
+                           "rebuild Psi4 with a supporting cuEST SDK (e.g. 0.2.50).");
+#endif
+    if (!auxiliary_->has_puream()) throw PSIEXCEPTION("cuESTJK requires a spherical-harmonic auxiliary basis.");
+    if (options_.get_int("CUEST_DFK_SLICES") <= 0 || options_.get_int("CUEST_DFK_MODULI") <= 0)
+        throw PSIEXCEPTION("cuESTJK precision slice/modulus counts must be positive.");
+    dfk_slices_ = options_.get_int("CUEST_DFK_SLICES");
+    dfk_moduli_ = options_.get_int("CUEST_DFK_MODULI");
+    if (!cutoff_overridden_)
+        pq_threshold_ = options_.get_str("SCREENING") == "NONE" ? 0.0 : options_.get_double("INTS_TOLERANCE");
+    if (pq_threshold_ < 0.0) throw PSIEXCEPTION("cuESTJK pair threshold must be nonnegative.");
 
     auto mol = primary_->molecule();
     size_t natom = mol->natom();
+    const auto xyz = mol->geometry();
+    const auto aux_xyz = auxiliary_->molecule()->geometry();
+    if (auxiliary_->molecule()->natom() != natom)
+        throw PSIEXCEPTION("cuESTJK primary and auxiliary must have the same molecular centers.");
+    for (size_t a = 0; a < natom; ++a)
+        for (int k = 0; k < 3; ++k)
+            if (xyz.get(a, k) != aux_xyz.get(a, k))
+                throw PSIEXCEPTION("cuESTJK primary and auxiliary must have the same molecular centers.");
+    build_cuest_basis(primary_, cuest_primary_basis_, cuest_primary_basis_ws_);
+    build_cuest_basis(auxiliary_, cuest_auxiliary_basis_, cuest_auxiliary_basis_ws_);
 
-    cuestWorkspaceDescriptor_t* persistentWorkspaceDescriptor = (cuestWorkspaceDescriptor_t*) malloc(sizeof(cuestWorkspaceDescriptor_t));
-    cuestWorkspaceDescriptor_t* temporaryWorkspaceDescriptor = (cuestWorkspaceDescriptor_t*) malloc(sizeof(cuestWorkspaceDescriptor_t));
+    cuestWorkspaceDescriptor_t persistentWorkspaceDescriptor{}, temporaryWorkspaceDescriptor{};
 
     // AO Pair List
-    cuestAOPairListParameters_t pair_params;
-    CHECK_CUEST(cuestParametersCreate(CUEST_AOPAIRLIST_PARAMETERS, reinterpret_cast<void**>(&pair_params)));
+    PlanParameters<cuestAOPairListParameters_t> pair_params(CUEST_AOPAIRLIST_PARAMETERS);
 
     CHECK_CUEST(cuestAOPairListCreateWorkspaceQuery(cuest_handle, cuest_primary_basis_,
-        static_cast<uint64_t>(natom), mol->geometry().pointer()[0], pq_threshold_, pair_params, persistentWorkspaceDescriptor, temporaryWorkspaceDescriptor, nullptr));
+        static_cast<uint64_t>(natom), xyz.pointer()[0], pq_threshold_, pair_params.get(),
+        &persistentWorkspaceDescriptor, &temporaryWorkspaceDescriptor, nullptr));
 
-    pair_list_device_bytes_ = persistentWorkspaceDescriptor->deviceBufferSizeInBytes;
+    pair_list_device_bytes_ = persistentWorkspaceDescriptor.deviceBufferSizeInBytes;
 
-    cuest_pair_list_ws_ptr_ = cuest_common::allocateWorkspace(persistentWorkspaceDescriptor);
-    cuestWorkspace_t* temporaryPairListWorkspace = cuest_common::allocateWorkspace(temporaryWorkspaceDescriptor);
+    cuest_pair_list_ws_ptr_ = plan_workspace(persistentWorkspaceDescriptor).release();
+    auto temporaryPairListWorkspace = plan_workspace(temporaryWorkspaceDescriptor);
 
     CHECK_CUEST(cuestAOPairListCreate(cuest_handle, cuest_primary_basis_,
-        static_cast<uint64_t>(natom), mol->geometry().pointer()[0], pq_threshold_, pair_params, cuest_pair_list_ws_ptr_, temporaryPairListWorkspace, &cuest_pair_list_));
-
-    cuest_common::freeWorkspace(temporaryPairListWorkspace);
-    CHECK_CUEST(cuestParametersDestroy(CUEST_AOPAIRLIST_PARAMETERS, pair_params));
+        static_cast<uint64_t>(natom), xyz.pointer()[0], pq_threshold_, pair_params.get(),
+        cuest_pair_list_ws_ptr_, temporaryPairListWorkspace.get(), &cuest_pair_list_));
+    release_plan_scratch(temporaryPairListWorkspace);
+    pair_params.close();
 
     // DF Int Plan List
-    cuestDFIntPlanParameters_t dfint_params;
-    CHECK_CUEST(cuestParametersCreate(CUEST_DFINTPLAN_PARAMETERS, reinterpret_cast<void**>(&dfint_params)));
+    PlanParameters<cuestDFIntPlanParameters_t> dfint_params(CUEST_DFINTPLAN_PARAMETERS);
     
     // Psi4 and cuEST both represent exact exchange as alpha / r + beta erf(omega r) / r.
     double exchange_fraction = omega_alpha_;
@@ -148,43 +435,44 @@ void cuESTJK::preiterations()
     //Set omega params if applicable 
     CHECK_CUEST(cuestParametersConfigure(
         CUEST_DFINTPLAN_PARAMETERS, 
-        dfint_params,
+        dfint_params.get(),
         CUEST_DFINTPLAN_PARAMETERS_EXCHANGE_FRACTION,
         &exchange_fraction,
         sizeof(double)));
 
     CHECK_CUEST(cuestParametersConfigure(
         CUEST_DFINTPLAN_PARAMETERS, 
-        dfint_params,
+        dfint_params.get(),
         CUEST_DFINTPLAN_PARAMETERS_LRC_EXCHANGE_FRACTION,
         &lrc_exchange_fraction,
         sizeof(double)));
 
     CHECK_CUEST(cuestParametersConfigure(
         CUEST_DFINTPLAN_PARAMETERS, 
-        dfint_params,
+        dfint_params.get(),
         CUEST_DFINTPLAN_PARAMETERS_LRC_EXCHANGE_OMEGA,
         &lr_exchange_omega,
         sizeof(double)));
 
     CHECK_CUEST(cuestDFIntPlanCreateWorkspaceQuery(cuest_handle,
         cuest_primary_basis_, cuest_auxiliary_basis_, cuest_pair_list_,
-        dfint_params, persistentWorkspaceDescriptor, temporaryWorkspaceDescriptor, nullptr));
+        dfint_params.get(), &persistentWorkspaceDescriptor, &temporaryWorkspaceDescriptor, nullptr));
 
-    dfint_plan_device_bytes_ = persistentWorkspaceDescriptor->deviceBufferSizeInBytes;
+    dfint_plan_device_bytes_ = persistentWorkspaceDescriptor.deviceBufferSizeInBytes;
 
-    cuest_dfint_plan_ws_ptr_ = cuest_common::allocateWorkspace(persistentWorkspaceDescriptor);;
-    cuestWorkspace_t* temporaryDFIntPlanWorkspace = cuest_common::allocateWorkspace(temporaryWorkspaceDescriptor);;
+    cuest_dfint_plan_ws_ptr_ = plan_workspace(persistentWorkspaceDescriptor).release();
+    auto temporaryDFIntPlanWorkspace = plan_workspace(temporaryWorkspaceDescriptor);
 
     CHECK_CUEST(cuestDFIntPlanCreate(cuest_handle,
         cuest_primary_basis_, cuest_auxiliary_basis_, cuest_pair_list_,
-        dfint_params, cuest_dfint_plan_ws_ptr_, temporaryDFIntPlanWorkspace, &cuest_df_plan_));
-
-    cuest_common::freeWorkspace(temporaryDFIntPlanWorkspace);
-    CHECK_CUEST(cuestParametersDestroy(CUEST_DFINTPLAN_PARAMETERS, dfint_params));
-
-    free(persistentWorkspaceDescriptor);
-    free(temporaryWorkspaceDescriptor);
+        dfint_params.get(), cuest_dfint_plan_ws_ptr_, temporaryDFIntPlanWorkspace.get(), &cuest_df_plan_));
+    // Count SDK creations, including a creation followed by a later configure
+    // failure, rather than counting initialize() calls or comparing matrices.
+    if (plan_creations_ != std::numeric_limits<uint64_t>::max()) ++plan_creations_;
+    if (print_ >= 3) outfile->Printf("    cuESTJK plan created #%llu\n",
+                                   static_cast<unsigned long long>(plan_creations_));
+    release_plan_scratch(temporaryDFIntPlanWorkspace);
+    dfint_params.close();
 
     // Create J/K parameters
     CHECK_CUEST(cuestParametersCreate(CUEST_DFCOULOMBCOMPUTE_PARAMETERS, reinterpret_cast<void**>(&cuest_coulomb_compute_params_)));
@@ -224,6 +512,12 @@ void cuESTJK::preiterations()
         &dfk_moduli_,
         sizeof(uint64_t)));
 
+#ifdef PSI_CUEST_HAS_GRIDK
+    if (gridk_ && (do_K_ || do_wK_)) build_gridk_plan();
+#endif
+
+    // Publish validity only after every create/configure succeeded.
+    plan_key_ = key;
     initialized_ = true;
 
     if (print_) {
@@ -239,6 +533,11 @@ void cuESTJK::preiterations()
                         pair_list_device_bytes_ * cuest_common::to_gib);
         outfile->Printf("    Device memory, DF int plan:   %8.3f [GiB]\n",
                         dfint_plan_device_bytes_ * cuest_common::to_gib);
+#ifdef PSI_CUEST_HAS_GRIDK
+        if (cuest_gridk_plan_)
+            outfile->Printf("    Device memory, Grid-K plan:   %8.3f [GiB]\n",
+                            gridk_plan_device_bytes_ * cuest_common::to_gib);
+#endif
         if (have_dev) {
             outfile->Printf("    Device memory, free/total:    %8.3f / %.3f [GiB]\n",
                             dev_free * cuest_common::to_gib, dev_total * cuest_common::to_gib);
@@ -246,6 +545,113 @@ void cuESTJK::preiterations()
         outfile->Printf("\n");
     }
 }
+
+#ifdef PSI_CUEST_HAS_GRIDK
+void cuESTJK::build_gridk_plan() {
+    gridk_grid_ = std::make_unique<DFTGrid>(primary_->molecule(), primary_, options_, true);
+    PlanParameters<cuestGridKIntPlanParameters_t> params(CUEST_GRIDKINTPLAN_PARAMETERS);
+    CHECK_CUEST(cuestParametersConfigure(CUEST_GRIDKINTPLAN_PARAMETERS, params.get(),
+                CUEST_GRIDKINTPLAN_PARAMETERS_EXCHANGE_FRACTION, &omega_alpha_, sizeof(double)));
+    CHECK_CUEST(cuestParametersConfigure(CUEST_GRIDKINTPLAN_PARAMETERS, params.get(),
+                CUEST_GRIDKINTPLAN_PARAMETERS_LRC_EXCHANGE_FRACTION, &omega_beta_, sizeof(double)));
+    CHECK_CUEST(cuestParametersConfigure(CUEST_GRIDKINTPLAN_PARAMETERS, params.get(),
+                CUEST_GRIDKINTPLAN_PARAMETERS_LRC_EXCHANGE_OMEGA, &omega_, sizeof(double)));
+
+    cuestWorkspaceDescriptor_t persistent{}, temporary{};
+    CHECK_CUEST(cuestGridKIntPlanCreateWorkspaceQuery(
+        cuest_handle, cuest_primary_basis_, cuest_pair_list_, gridk_grid_->cuest_grid(),
+        params.get(), &persistent, &temporary, nullptr));
+    gridk_plan_device_bytes_ = persistent.deviceBufferSizeInBytes;
+    cuest_gridk_plan_ws_ = plan_workspace(persistent).release();
+    auto scratch = plan_workspace(temporary);
+    CHECK_CUEST(cuestGridKIntPlanCreate(
+        cuest_handle, cuest_primary_basis_, cuest_pair_list_, gridk_grid_->cuest_grid(),
+        params.get(), cuest_gridk_plan_ws_, scratch.get(), &cuest_gridk_plan_));
+    release_plan_scratch(scratch);
+    params.close();
+    CHECK_CUEST(cuestParametersCreate(CUEST_GRIDKSYMMETRICEXCHANGECOMPUTE_PARAMETERS,
+                                     reinterpret_cast<void**>(&cuest_gridk_exchange_params_)));
+    CHECK_CUEST(cuestParametersCreate(CUEST_GRIDKNONSYMMETRICEXCHANGECOMPUTE_PARAMETERS,
+                                     reinterpret_cast<void**>(&cuest_gridk_nonsym_exchange_params_)));
+}
+
+void cuESTJK::compute_gridk_JK() {
+    if (D_ao_.empty() || (!do_J_ && !do_K_)) return;
+    using clock = std::chrono::high_resolution_clock;
+    const auto start = clock::now();
+    const size_t nbf = primary_->nbf();
+    const size_t bytes = nbf * nbf * sizeof(double);
+    const auto check_cuda = [](cudaError_t status) {
+        if (status != cudaSuccess)
+            throw PSIEXCEPTION(std::string("cuESTJK Grid-K CUDA error: ") + cudaGetErrorString(status));
+    };
+    // Bound staging to one density regardless of the number of CPKS right-hand
+    // sides. The queried scratch is shared by J, K, and all densities.
+    cuestWorkspaceDescriptor_t matrix_desc{};
+    matrix_desc.deviceBufferSizeInBytes = bytes;
+    auto density = plan_workspace(matrix_desc);
+    auto coulomb = do_J_ ? plan_workspace(matrix_desc) : PlanWorkspace{};
+    auto exchange = do_K_ ? plan_workspace(matrix_desc) : PlanWorkspace{};
+    auto d_D = reinterpret_cast<double*>(density->deviceBuffer);
+    auto d_J = do_J_ ? reinterpret_cast<double*>(coulomb->deviceBuffer) : nullptr;
+    auto d_K = do_K_ ? reinterpret_cast<double*>(exchange->deviceBuffer) : nullptr;
+
+    cuestWorkspaceDescriptor_t j_desc{}, k_desc{}, variable{};
+    variable.deviceBufferSizeInBytes = 8000000000;
+    if (do_J_)
+        CHECK_CUEST(cuestDFCoulombComputeWorkspaceQuery(
+            cuest_handle, cuest_df_plan_, cuest_coulomb_compute_params_, &j_desc, d_D, d_J));
+    if (do_K_) {
+        if (lr_symmetric_) {
+            CHECK_CUEST(cuestGridKSymmetricExchangeComputeWorkspaceQuery(
+                cuest_handle, cuest_gridk_plan_, cuest_gridk_exchange_params_, &variable, &k_desc,
+                1, d_D, d_K));
+        } else {
+            CHECK_CUEST(cuestGridKNonsymmetricExchangeComputeWorkspaceQuery(
+                cuest_handle, cuest_gridk_plan_, cuest_gridk_nonsym_exchange_params_, &variable, &k_desc,
+                1, d_D, d_K));
+        }
+    }
+    cuestWorkspaceDescriptor_t total{};
+    total.hostBufferSizeInBytes = std::max(j_desc.hostBufferSizeInBytes, k_desc.hostBufferSizeInBytes);
+    total.deviceBufferSizeInBytes = std::max(j_desc.deviceBufferSizeInBytes, k_desc.deviceBufferSizeInBytes);
+    const bool first_report = jk_temp_device_bytes_ == 0;
+    jk_temp_device_bytes_ = total.deviceBufferSizeInBytes;
+    if (print_ && first_report)
+        outfile->Printf("    Device memory, J/Grid-K scratch: %8.3f [GiB]\n\n",
+                        jk_temp_device_bytes_ * cuest_common::to_gib);
+    auto scratch = plan_workspace(total);
+    for (size_t n = 0; n < D_ao_.size(); ++n) {
+        check_cuda(cudaMemcpy(d_D, D_ao_[n]->get_pointer(), bytes, cudaMemcpyHostToDevice));
+        if (do_J_) {
+            CHECK_CUEST(cuestDFCoulombCompute(cuest_handle, cuest_df_plan_, cuest_coulomb_compute_params_,
+                                             scratch.get(), d_D, d_J));
+            check_cuda(cudaDeviceSynchronize());
+            check_cuda(cudaMemcpy(J_ao_[n]->get_pointer(), d_J, bytes, cudaMemcpyDeviceToHost));
+        }
+        if (do_K_) {
+            // A response density is signed and generally nonsymmetric. Never
+            // symmetrize D (or the returned K) to use the cheaper SCF kernel.
+            if (lr_symmetric_) {
+                CHECK_CUEST(cuestGridKSymmetricExchangeCompute(
+                    cuest_handle, cuest_gridk_plan_, cuest_gridk_exchange_params_, &variable,
+                    scratch.get(), 1, d_D, d_K));
+            } else {
+                CHECK_CUEST(cuestGridKNonsymmetricExchangeCompute(
+                    cuest_handle, cuest_gridk_plan_, cuest_gridk_nonsym_exchange_params_, &variable,
+                    scratch.get(), 1, d_D, d_K));
+            }
+            check_cuda(cudaDeviceSynchronize());
+            check_cuda(cudaMemcpy(K_ao_[n]->get_pointer(), d_K, bytes, cudaMemcpyDeviceToHost));
+        }
+    }
+    // Check asynchronous kernel errors before releasing any of their buffers.
+    check_cuda(cudaDeviceSynchronize());
+    if (bench_)
+        outfile->Printf("    cuESTJK compute_JK (DF-J + Grid-K): total=%7.2fms\n",
+                        std::chrono::duration<double, std::milli>(clock::now() - start).count());
+}
+#endif
 
 void cuESTJK::configure_math_mode() {
     // The handle outlives individual JK objects. Always set both directions:
@@ -256,45 +662,95 @@ void cuESTJK::configure_math_mode() {
         options_.get_bool("CUEST_MIXED_PRECISION") ? CUEST_DEFAULT_MATH_MODE : CUEST_NATIVE_FP64_MATH_MODE));
 }
 
-void cuESTJK::destroy_cuest_objects() {
-    // Invalidate first: cleanup or a subsequent rebuild can itself throw.
+bool cuESTJK::destroy_cuest_objects() noexcept {
+    // Invalidate first. Destruction must not throw (including during unwind).
+    // On an SDK destruction failure retain dependent objects/storage instead
+    // of freeing memory still potentially referenced by the failed object.
     initialized_ = false;
+    plan_key_.clear();
+    jk_temp_device_bytes_ = 0;
+#ifdef PSI_CUEST_HAS_GRIDK
+    if (cuest_gridk_plan_) {
+        if (cuestGridKIntPlanDestroy(cuest_gridk_plan_) != CUEST_STATUS_SUCCESS) {
+            // A failed SDK destruction may leave a live plan referencing its
+            // grid. Preserve that grid even when this JK is destructed.
+            gridk_grid_.release();
+            return !(cleanup_failed_ = true);
+        }
+        cuest_gridk_plan_ = nullptr;
+    }
+    gridk_grid_.reset();
+    if (cuest_gridk_exchange_params_) {
+        if (cuestParametersDestroy(CUEST_GRIDKSYMMETRICEXCHANGECOMPUTE_PARAMETERS,
+                                  cuest_gridk_exchange_params_) != CUEST_STATUS_SUCCESS)
+            return !(cleanup_failed_ = true);
+        cuest_gridk_exchange_params_ = nullptr;
+    }
+    if (cuest_gridk_nonsym_exchange_params_) {
+        if (cuestParametersDestroy(CUEST_GRIDKNONSYMMETRICEXCHANGECOMPUTE_PARAMETERS,
+                                  cuest_gridk_nonsym_exchange_params_) != CUEST_STATUS_SUCCESS)
+            return !(cleanup_failed_ = true);
+        cuest_gridk_nonsym_exchange_params_ = nullptr;
+    }
+    if (!release_plan_workspace(cuest_gridk_plan_ws_)) cleanup_failed_ = true;
+    cuest_gridk_plan_ws_ = nullptr;
+    gridk_plan_device_bytes_ = 0;
+#endif
     if (cuest_df_plan_) {
-        CHECK_CUEST(cuestDFIntPlanDestroy(cuest_df_plan_));
+        if (cuestDFIntPlanDestroy(cuest_df_plan_) != CUEST_STATUS_SUCCESS)
+            return !(cleanup_failed_ = true);
         cuest_df_plan_ = nullptr;
     }
     if (cuest_pair_list_) {
-        CHECK_CUEST(cuestAOPairListDestroy(cuest_pair_list_));
+        if (cuestAOPairListDestroy(cuest_pair_list_) != CUEST_STATUS_SUCCESS)
+            return !(cleanup_failed_ = true);
         cuest_pair_list_ = nullptr;
     }
-    if (cuest_pair_list_ws_ptr_) {
-        cuest_common::freeWorkspace(cuest_pair_list_ws_ptr_);
-        cuest_pair_list_ws_ptr_ = nullptr;
-    }
-    if (cuest_dfint_plan_ws_ptr_) {
-        cuest_common::freeWorkspace(cuest_dfint_plan_ws_ptr_);
-        cuest_dfint_plan_ws_ptr_ = nullptr;
-    }
     if (cuest_coulomb_compute_params_) {
-        CHECK_CUEST(cuestParametersDestroy(CUEST_DFCOULOMBCOMPUTE_PARAMETERS, cuest_coulomb_compute_params_));
+        if (cuestParametersDestroy(CUEST_DFCOULOMBCOMPUTE_PARAMETERS, cuest_coulomb_compute_params_) != CUEST_STATUS_SUCCESS)
+            return !(cleanup_failed_ = true);
         cuest_coulomb_compute_params_ = nullptr;
     }
     if (cuest_exchange_compute_params_) {
-        CHECK_CUEST(cuestParametersDestroy(CUEST_DFSYMMETRICEXCHANGECOMPUTE_PARAMETERS, cuest_exchange_compute_params_));
+        if (cuestParametersDestroy(CUEST_DFSYMMETRICEXCHANGECOMPUTE_PARAMETERS, cuest_exchange_compute_params_) != CUEST_STATUS_SUCCESS)
+            return !(cleanup_failed_ = true);
         cuest_exchange_compute_params_ = nullptr;
     }
     if (cuest_nonsym_exchange_compute_params_) {
-        CHECK_CUEST(cuestParametersDestroy(CUEST_DFNONSYMMETRICEXCHANGECOMPUTE_PARAMETERS, cuest_nonsym_exchange_compute_params_));
+        if (cuestParametersDestroy(CUEST_DFNONSYMMETRICEXCHANGECOMPUTE_PARAMETERS, cuest_nonsym_exchange_compute_params_) != CUEST_STATUS_SUCCESS)
+            return !(cleanup_failed_ = true);
         cuest_nonsym_exchange_compute_params_ = nullptr;
     }
+    if (cuest_primary_basis_) {
+        if (cuestAOBasisDestroy(cuest_primary_basis_) != CUEST_STATUS_SUCCESS)
+            return !(cleanup_failed_ = true);
+        cuest_primary_basis_ = nullptr;
+    }
+    if (cuest_auxiliary_basis_) {
+        if (cuestAOBasisDestroy(cuest_auxiliary_basis_) != CUEST_STATUS_SUCCESS)
+            return !(cleanup_failed_ = true);
+        cuest_auxiliary_basis_ = nullptr;
+    }
+    for (auto ws : {&cuest_pair_list_ws_ptr_, &cuest_dfint_plan_ws_ptr_,
+                    &cuest_primary_basis_ws_, &cuest_auxiliary_basis_ws_}) {
+        if (!release_plan_workspace(*ws)) cleanup_failed_ = true;
+        *ws = nullptr;
+    }
+    return !cleanup_failed_;
 }
 
 void cuESTJK::rebuild_cuest_plan() {
     // Before initialize() the plan does not exist yet and preiterations() will
     // pick the new fractions up on its own.
     if (!initialized_) return;
-    destroy_cuest_objects();
     preiterations();
+}
+
+void cuESTJK::set_cutoff(double cutoff) {
+    cutoff_overridden_ = true;
+    cutoff_ = cutoff;
+    pq_threshold_ = cutoff;
+    rebuild_cuest_plan();
 }
 
 void cuESTJK::set_omega_alpha(double alpha) {
@@ -323,7 +779,8 @@ void cuESTJK::print_header() const {
     if (print_) {
         cuestMathMode_t math_mode;
         CHECK_CUEST(cuestGetMathMode(cuest_handle, &math_mode));
-        outfile->Printf("  ==> cuESTJK: GPU-Accelerated Density-Fitted J/K Matrices <==\n\n");
+        outfile->Printf("  ==> cuESTJK: GPU-Accelerated %s Matrices <==\n\n",
+                        options_.get_bool("CUEST_GRIDK") ? "DF-J + Grid-K" : "Density-Fitted J/K");
         outfile->Printf("    J tasked:              %11s\n", (do_J_ ? "Yes" : "No"));
         outfile->Printf("    K tasked:              %11s\n", (do_K_ ? "Yes" : "No"));
         outfile->Printf("    wK tasked:             %11s\n", (do_wK_ ? "Yes" : "No"));
@@ -343,7 +800,22 @@ void cuESTJK::compute_JK() {
         throw PSIEXCEPTION("cuESTJK plan is not initialized. Call initialize() after "
                            "finalize() or a failed plan rebuild.");
     }
-    configure_math_mode();
+    // Detect live geometry/shell/options mutations even if a consumer forgot a
+    // fresh initialize(). Never resurrect an explicitly finalized/failed plan.
+    try {
+        if (current_plan_key() != plan_key_) preiterations();
+        configure_math_mode();
+    } catch (...) {
+        destroy_cuest_objects();
+        throw;
+    }
+
+#ifdef PSI_CUEST_HAS_GRIDK
+    if (gridk_) {
+        compute_gridk_JK();
+        return;
+    }
+#endif
 
     using clock = std::chrono::high_resolution_clock;
     auto t_total_start = clock::now();

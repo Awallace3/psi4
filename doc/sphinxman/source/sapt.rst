@@ -734,6 +734,22 @@ For a compatible bare-K plan borrowed from SAPT, response scales the result
 to the functional's weight without changing the shared plan. An incompatible
 range-separated mixture raises an error rather than using incorrect weights.
 
+Set |globals__cuest_gridk| to true to select **DF-J + Grid-K** instead of
+DF-JK for cuEST builds. This includes the nonsymmetric exchange contractions
+used by SAPT and CPKS. The option defaults to false and requires cuEST's
+Grid-K APIs (included in the 0.2.50 SDK). Grid-K integrates exchange on its
+own GPU grid using the ``DFT_RADIAL_POINTS``, ``DFT_SPHERICAL_POINTS``,
+``DFT_RADIAL_SCHEME``, ``DFT_PRUNING_SCHEME``, and other DFT grid settings.
+It works with either setting of ``CUEST_XC``. The plan is reused until the
+geometry, exchange operator, or grid settings change. Exchange is already
+weighted by the same full- and long-range fractions as DF-K.
+
+Grid-K is a numerical quadrature approximation, not another density-fitting
+algorithm: converge the grid against the desired energy and CPKS residual
+accuracy. The nonsymmetric kernel preserves general signed response densities;
+it does not replace them by symmetric SCF densities. Analytic exchange
+gradients for this mode are not implemented and raise an error.
+
 Eligible dense one-irrep orbital transforms use FP64 cuBLAS on the shared
 cuEST stream. Multi-factor products retain intermediate matrices on the GPU.
 ``CUEST_GEMM_MIN_DIM`` applies the same largest-link work threshold as the

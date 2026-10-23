@@ -4,10 +4,22 @@ import importlib
 from types import SimpleNamespace
 
 import pytest
+import psi4
 
 scf_iterator = importlib.import_module("psi4.driver.procrouting.scf_proc.scf_iterator")
 
 pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick]
+
+
+def test_cuest_gridk_option_default():
+    """Register the opt-in even in CPU-only builds; DF-K remains the default."""
+    psi4.core.clean_options()
+    assert psi4.core.get_global_option("CUEST_GRIDK") is False
+    try:
+        psi4.set_options({"cuest_gridk": True})
+        assert psi4.core.get_global_option("CUEST_GRIDK") is True
+    finally:
+        psi4.set_options({"cuest_gridk": False})
 
 
 @pytest.mark.parametrize("optimizer", ["INTERNAL", "OOO", "OPENORBITALOPTIMIZER"])

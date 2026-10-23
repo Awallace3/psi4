@@ -2851,6 +2851,10 @@ def chain_gemm_einsums(
     return returned_tensors
 
 
+# Retain the parent worktree's spelling without breaking existing CPKS callers.
+chain_gemm = chain_gemm_einsums
+
+
 def exchange(cache: dict, jk: core.JK, do_print: bool = True) -> dict:
     r"""Compute the first-order exchange energy :math:`E^{(1)}_{\text{exch}}`.
 
