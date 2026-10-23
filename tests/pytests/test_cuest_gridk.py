@@ -245,6 +245,11 @@ def test_cuest_gridk_cpks(gridk_system, unrestricted, directj):
         wfn.set_jk(reference_jk)
     expected = [m.np.copy() for m in wfn.cphf_Hx(rhs)]
     psi4.set_options({"scf_type": "df", "use_cuest": True, "cuest_gridk": True, "cuest_directj": directj})
+    if directj:
+        # Density-dependent direct screening must be tighter than the requested
+        # residual. At 1e-12 the old solver's recursive residual can hide a
+        # ~1e-9 true residual; 1e-14 resolves this without loosening the test.
+        psi4.set_options({"ints_tolerance": 1.e-14})
     jk = _builder(wfn.basisset(), wfn.get_basisset("DF_BASIS_SCF"), (0.25, 0.0, 0.0))
     try:
         wfn.set_jk(jk)
