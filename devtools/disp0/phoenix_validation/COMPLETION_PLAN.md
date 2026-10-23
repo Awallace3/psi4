@@ -54,31 +54,34 @@ it is not the primary production CPU benchmark.
   whole stage remains1aed320cdb/job14321813.
 - Frozen input JSON is staged and SHA-verified at
   `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/benchmark-inputs-f8c96058e938/inputs.json`.
-- **14324190 submitted and RUNNING**, effective cpu-small/inferno on
-  gts-cs207-chemx confirmed by queue/accounting and job prolog. It is the
-  peptide paired pilot,24CPU64GiB1h; worst-case charge$0.20.
+- **14324190 COMPLETED0:0** (job/batch/step) in3m34s, effective cpu-small/
+  inferno on gts-cs207-chemx confirmed by queue/accounting and job prolog.
+  Peptide paired pilot,24CPU64GiB1h; worst-case charge$0.20.
   Campaign root:
   `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/production-cpu-005f3b4c71`.
-  Watcher `b05716a78` is active and durable.
-- **Nanotube/protein83 not yet submitted.** Once the pilot's
-  `peptide/job-14324190/comparison-result.json` is PASS with6 accepted CPU
-  samples and its job/batch/step accounting is COMPLETED0:0, use the same
-  clean helper checkout and `submit_cpu.py`, with the same proof/input paths/
-  SHAs, `--pilot-job-run <campaign>/peptide/job-14324190`, respective
-  `--system nanotube|protein83` and fresh `--run-root <campaign>/<system>`.
-  Recheck `inferno_account.sh` immediately before each submission with24CPUs
-  and02:00:00/08:00:00 respectively. Current selector spills to chemx.
-  This is the remaining two allocations in the user-requested three-job
-  CPU batch, not permission for automatic paid retries or larger jobs.
+  Its watcher returned terminal success.
+- The pilot artifact is `PASS_PRODUCTION_CPU_COMPARISON`,6 accepted CPU
+  samples,0 accepted GPU speedups. Whole-energy medians/ranges (n3 each):
+  C++21.292634s [21.135252,21.539984]; v2 22.031666s
+  [22.009369,22.899400]. Thus v2 is about3.5% slower on this point, not faster.
+  The maximum aligned full-fragment matrix discrepancy is3.96e-12Eh.
+- **Nanotube14324682 and protein83 14324700 submitted** on inferno,
+  gts-cs207-chemx/cpu-small, after the exact-pinned pilot result and terminal
+  accounting were enforced. Both use24CPUs, with64GiB/2h and160GiB/8h caps.
+  The account selector was refreshed independently immediately before each;
+  worst-case charges$0.39 and$1.58. Their roots are `<campaign>/nanotube`
+  and `<campaign>/protein83`, with child artifacts under each `job-<id>`.
+  Durable state-change watchers: `bf1357bc4` and `be8df994b`.
+  **All three planned CPU allocations have now been submitted; no automatic
+  paid retries or extra comparison jobs are authorized by this batch.**
 - Inspect actual `allocation.json`, finalized child results and full matrix/
-  canonical-scalar checks before interpreting any timings. No qualified full
-  CPU timing summary exists yet. Existing H200 gate14322613 is unchanged.
+  canonical-scalar checks before interpreting any timings. Peptide is qualified;
+  the larger two summaries remain pending. Existing H200 gate14322613 failed
+  separately, as recorded below.
 - First allocation-native inspection passed: effective resources/CPU/features
   admitted, scratch is node-local XFS
   `/dev/mapper/sysvg-scratch[/14324190/.14324190/_tmp]`, free1.451TB.
-  Both real native water preflights completed; first peptide v2/C++ pair also
-  completed and the next repeat had started. These are finalized child
-  artifacts, **not yet a three-repeat summary or terminal pilot approval**.
+  Both real native water preflights and all three peptide pairs completed.
 
 User request: complete the missing GPU qualification, scalability, matched
 CPU/GPU timings and analysis. Inputs are **peptide, nanotube, protein83** from
