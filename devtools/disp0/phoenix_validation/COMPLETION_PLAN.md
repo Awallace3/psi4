@@ -1,5 +1,49 @@
 # Phoenix full F-SAPT completion contract
 
+## Latest GPU release checkpoint
+
+The user requested: **“if Cachy good, inferno Phoenix.”**
+The full fresh Cachy gate is now `PASS_SMALL_CACHY_ONLY`, not merely an audit
+microbenchmark or CPU/mock pass. All10 fresh children, three independent
+same-gauge native CPU oracles/all23 fields, scaled/displaced inputs, a fresh GPU
+repeat and cleanup passed under the common serialized4CPU/12GiB lease.
+Native dimension metadata binds six atoms,82AOs, five occupied/one frozen/four
+active orbitals per monomer. Repeat comparison permits only proven orbital
+labels/signs; energy entries are never densely rotated or sign scaled.
+
+Artifacts:
+`/home/amwalla3/gits/psi4-disp0-cachy/runs/guard-fixed-aug-water-gate-11-04`.
+Scientific whole stage isdda47ee73d, helperd471cd93fa; gate-result SHA256
+`b728eda34fac3dcbe07d787d6244110f5b0eb60dd2c3b7c88a2db2941b9fc39e`.
+The new source retains fresh strict mapped-byte audits, using bounded parallel
+CUDA-file hashing. The small diagnostic also explicitly tightens integral
+screening to1e-16 in BOTH arms; its numerical oracle thresholds are unchanged.
+Production CPU benchmark inputs retain their original native screening default.
+Details and all preserved failures: `../cachy/TIMEOUT_DIAGNOSIS.md`.
+
+The conditional continuation is one fresh coherent Phoenix build/CPU preparation
+(8CPUs48GiB3h cap), then one H200 correctness allocation (4CPUs32GiB1h cap),
+explicit inferno, live account selection before each actual submission, no
+automatic retries. The separately staged d471cd93fa scientific trees match the
+qualified whole Cachy science. Old Phoenix builds/jobs remain untouched.
+Record actual job IDs/effective routes and final artifacts before claiming H200
+success. **No large-system admission, accepted GPU timing or speedup exists yet.**
+
+**14377089 submitted and RUNNING**, effective
+`gts-cs207-chemx / cpu-small / inferno`,8CPUs48GiB3h verified by controller and
+job/batch/step accounting (`bb5e36f6b`). Fresh selector reported monthly
+gts-cs207 available$0.93 below its$1.00 floor and selected chemx; maximum build
+charge$0.20. The test-only scheduler number14377086 is not the compute job.
+Run root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-guard-fixed-d471cd93fa`.
+Source worktree:
+`/storage/project/r-cs207-0/awallace43/gits/psi4.phoenix-disp0-guard-fixed-d471cd93fa`.
+Its manifest retains the qualifying Cachy gate path/hash and source/helper
+identities. Durable watcher `b31886b44` monitors14377089. The new H200 allocation
+is not yet submitted: require completed whole-build/CPU evidence, both public
+CPU fragment preflights, frozen runtime configuration and a refreshed account
+selector before that separate one-hour gate.
+
 ## Latest CPU production comparison request
 
 The user explicitly requested **inferno CPU comparisons** of the optimized

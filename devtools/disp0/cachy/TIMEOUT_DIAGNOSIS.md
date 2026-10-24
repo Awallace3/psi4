@@ -278,3 +278,38 @@ redefine the frozen space. Wrapper tests now cover these boundaries and artifact
 tampering, in addition to unequal A/B dimensions, a non-self-inverse cycle,
 nonidentity AO metric/rectangular coefficients and unchanged numerical checks.
 Inspection/tests alone do not release Phoenix.
+
+## Complete fresh Cachy gate PASS
+
+`runs/guard-fixed-aug-water-gate-11-04` completed the entire fresh sequence
+with `PASS_SMALL_CACHY_ONLY` (task `bac851452`). All10 child processes returned0:
+matched CPU/GPU plus independent CPU replay for unscaled, scaled and shifted
+geometry, then a separately launched fresh scaled GPU repeat. Native
+wavefunction dimensions match the fixed frozen water case. All23 fields,
+signed terms, nonunit scaling, changed energy, standard output files,
+actual native/device work and cleanup passed. The repeat retained the1e-9
+threshold; its largest energy-matrix difference was8.810e-12Eh.
+
+Independent same-gauge maximum energy-matrix errors:
+unscaled5.561e-13Eh, scaled3.648e-12Eh, shifted2.744e-12Eh.
+Source science remains the whole installeddda47ee73d stage11; helper pin is
+`d471cd93fa1c7d81f58209771c33280c2fe2e9c0`. All61 helper contracts passed locally
+and on Cachy. Original failed attempts01–03 remain unchanged.
+
+- Gate-result SHA256:
+  `b728eda34fac3dcbe07d787d6244110f5b0eb60dd2c3b7c88a2db2941b9fc39e`
+- Runtime-config SHA256:
+  `2c5493f88968b9644fb37c6a3e951103238d49af93c3100f9f82dc487724b13d`
+- Accepted timing samples: **0**; large systems admitted: **false**.
+
+This satisfies the user's condition for one bounded follow-up Phoenix/H200
+inferno correctness gate, with a coherent guard-fixed whole build and its CPU
+preflights first. It does not authorize a large timing campaign or paid retries.
+The exact d471cd93fa source was separately staged on Phoenix and its scientific
+`psi4`/CMake/external trees were checked equal to the qualified Cachy science.
+
+Fresh Phoenix CPU build/preparation **14377089** is submitted/running on the
+verified `gts-cs207-chemx / cpu-small / inferno` route,8CPUs48GiB3h cap,
+maximum$0.20. Its manifest records this Cachy release proof. The separate H200
+gate remains gated on its completed CPU build/preflights and fresh account
+selection; no H200 result or speedup is implied by the Cachy pass.
