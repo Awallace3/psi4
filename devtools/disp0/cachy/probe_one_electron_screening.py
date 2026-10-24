@@ -37,7 +37,10 @@ def main():
         from run_gate import environment
         control=args.output.resolve();control.mkdir()
         env=environment(config,gpu=True)
-        command=[config["dependency_environment"]+"/bin/python","-B",str(Path(__file__).resolve()),
+        command=["/bin/bash","-c",
+                 'set -euo pipefail; eval "$("$1" --psiapi)"; exec "$2" -B "$3" "${@:4}"',
+                 "one-electron-probe",str(Path(config["stage"])/"bin/psi4"),
+                 config["dependency_environment"]+"/bin/python",str(Path(__file__).resolve()),
                  "--attempt",str(attempt),"--helper-source",str(source),"--output",str(control/"probe")]
         code=None;error=None
         try:
