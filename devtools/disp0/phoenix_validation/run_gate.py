@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import time
 import numpy as np
-from gpu_runtime import read_config
+from gpu_runtime import read_config,require_local_lease
 
 
 def compare(cpu,gpu):
@@ -36,6 +36,15 @@ def environment(config,*,gpu):
                  "CUDA_HOME","CUDA_PATH","CUDA_ROOT","CUDAToolkit_ROOT",
                  "CPATH","C_INCLUDE_PATH","CPLUS_INCLUDE_PATH","LIBRARY_PATH"):
         env.pop(name,None)
+    if config.get("schema")==2:
+        env.update(LD_LIBRARY_PATH=config["startup_library_path"],
+            PYTHONPATH=config["optional_python_path"]+":"+config["einsums_prefix"]+"/lib",
+            PYTHONNOUSERSITE="1",PYTHONDONTWRITEBYTECODE="1",
+            OMP_NUM_THREADS=str(config["threads"]),MKL_NUM_THREADS=str(config["threads"]),
+            OPENBLAS_NUM_THREADS=str(config["threads"]),OMP_DYNAMIC="FALSE",
+            EINSUMS_PACKED_GEMM_BATCH_PROMOTION="1")
+        env["CUDA_VISIBLE_DEVICES"]=config["local_lease"]["expected_uuid"] if gpu else ""
+        return env
     cuda_root=str(Path(config["cuda_manifest"]).parent/"cuda13")
     env.update(CUDA_HOME=cuda_root,CUDA_PATH=cuda_root,CUDA_ROOT=cuda_root)
     env["LD_LIBRARY_PATH"]=":".join((
@@ -53,17 +62,21 @@ def main():
     parser.add_argument("--config-sha256",required=True)
     parser.add_argument("--output",type=Path,required=True)
     args=parser.parse_args()
+    args.config=args.config.resolve(strict=True)
     config,build=read_config(args.config,args.config_sha256)
+    local=config.get("schema")==2
     root=args.output.resolve(strict=True)
     helper=Path(__file__).resolve().parent
-    result={"status":"STARTED","scope":"SMALL_H200_GATE_NOT_LARGE_SPACE_OR_TIMING_PROOF",
+    result={"status":"STARTED","scope":("SMALL_CACHY_GATE_NOT_PHOENIX_OR_TIMING_PROOF" if local
+                                     else "SMALL_H200_GATE_NOT_LARGE_SPACE_OR_TIMING_PROOF"),
         "source_pin":config["source_pin"],"helper_pin":os.environ["DISP0_PIN"],
         "runtime_config_sha256":args.config_sha256,"cases":[]}
     deadline=time.monotonic()+3300
     def child(label,arm,*,scaled=False,change=0.,oracle=None):
         output=root/label
         argv=[str(Path(config["stage"])/"bin/psi4"),
-              config["dependency_environment"]+"/bin/python",str(helper/"fragment_gate.py"),
+              config["dependency_environment"]+"/bin/python",
+              str(helper.parent/"cachy/bootstrap_gate.py" if local else helper/"fragment_gate.py"),
               "--config",str(args.config),"--config-sha256",args.config_sha256,
               "--arm",arm,"--distance-change",str(change),"--output",str(output)]
         if scaled:argv.append("--scaled")
@@ -77,10 +90,18 @@ def main():
         remaining=deadline-time.monotonic()
         if remaining<=0:raise TimeoutError("Bounded whole-gate deadline exhausted")
         with (root/(label+".stdout")).open("x") as out,(root/(label+".stderr")).open("x") as err:
-            completed=subprocess.run(command,env=environment(config,gpu=arm=="gpu"),
-                stdout=out,stderr=err,timeout=min(600,remaining))
-        record["returncode"]=completed.returncode
-        if completed.returncode:raise RuntimeError("Fresh diagnostic process failed: "+label)
+            env=environment(config,gpu=arm=="gpu")
+            scratch=root/(label+"-scratch");scratch.mkdir()
+            env["PSI_SCRATCH"]=str(scratch)
+            if local:
+                from owned_process import execute
+                fd=require_local_lease(config["local_lease"])
+                code=execute(command,env,out,err,min(600,remaining),fd,config["local_lease"])
+            else:
+                code=subprocess.run(command,env=env,stdout=out,stderr=err,
+                                    timeout=min(600,remaining)).returncode
+        record["returncode"]=code
+        if code:raise RuntimeError("Fresh diagnostic process failed: "+label)
         document=json.loads((output/"result.json").read_text())
         if document["status"]!="EXECUTED_REQUIRES_INDEPENDENT_COMPARISON":
             raise RuntimeError("Incomplete diagnostic artifact: "+label)
@@ -104,7 +125,8 @@ def main():
         changed=json.loads((root/"gpu-changed/result.json").read_text())
         if abs(changed["energy_Eh"]-baseline["energy_Eh"])<1e-8:
             raise RuntimeError("Changed geometry did not change the energy")
-        result["status"]="PASS_SMALL_H200_ONLY"
+        if local:require_local_lease(config["local_lease"])
+        result["status"]="PASS_SMALL_CACHY_ONLY" if local else "PASS_SMALL_H200_ONLY"
         result["gpu_small_case_correctness_verified"]=True
         result["large_system_admitted"]=False
         result["accepted_timing_count"]=0

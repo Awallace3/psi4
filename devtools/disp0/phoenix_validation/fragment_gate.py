@@ -163,6 +163,7 @@ def batched_probe(runtime):
     """Real cuBLAS transpose/broadcast controls and high-K CUDA reductions."""
     rng = np.random.default_rng(581)
     config = runtime.config
+    runtime.require_device_admission()
     session = runtime.cuda.CUDASession(
         cublas_library=runtime.blas["path"], cublas_sha256=runtime.blas["sha256"],
         memory_limit_bytes=config["device_memory_limit_bytes"],
@@ -224,6 +225,7 @@ def main():
                         help="Completed GPU diagnostic directory; CPU comparison only")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    args.config=args.config.resolve(strict=True)
     args.output = args.output.resolve()
     if args.oracle_from:
         args.oracle_from=args.oracle_from.resolve(strict=True)
@@ -414,6 +416,7 @@ def main():
         result["artifact_sha256"]={p.name:hashlib.sha256(p.read_bytes()).hexdigest()
                                   for p in args.output.glob("*.npz")}
         if runtime:
+            runtime.verify_optional_modules()
             text = (args.output / "psi4.out").read_text()
             if "cuESTJK: GPU-Accelerated Density-Fitted" not in text:
                 raise RuntimeError("Native cuEST SCF banner missing")

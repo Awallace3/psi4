@@ -323,7 +323,7 @@ class Contract(unittest.TestCase):
             def report(self):return {"closed":self.closed}
         for failure in (False,True):
             obj=object.__new__(runtime.AuditedRuntime)
-            obj.config={"device_memory_limit_bytes":1024,"native_persistent_bytes":0,
+            obj.config={"device_family":"H200","device_memory_limit_bytes":1024,"native_persistent_bytes":0,
                 "cuest_root":"/sdk","cuest_archive":"/archive","cuda_manifest_sha256":"frozen"}
             obj.blas={"path":"/blas","sha256":"frozen"};obj.manifest={}
             obj.cuda=SimpleNamespace(CUDASession=Session)

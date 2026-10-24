@@ -8,6 +8,9 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import stat
+import re
+import uuid as uuid_module
 
 
 def digest(path):
@@ -18,7 +21,7 @@ def digest(path):
     return h.hexdigest()
 
 
-def verify_modules(prefixes, root, inventory):
+def verify_modules(prefixes, root, inventory, namespace_roots=None):
     """Bind actual imports, including preloaded extensions and namespace paths."""
     root = Path(root).resolve()
     for name, module in list(sys.modules.items()):
@@ -31,8 +34,66 @@ def verify_modules(prefixes, root, inventory):
             if relative not in inventory or digest(path) != inventory[relative]:
                 raise RuntimeError("Foreign/changed loaded runtime module: " + name)
         for directory in getattr(module, "__path__", ()):
-            if not Path(directory).resolve().is_relative_to(root):
+            resolved = Path(directory).resolve()
+            if (not resolved.is_relative_to(root) or namespace_roots is not None
+                    and not any(resolved.is_relative_to(root / p) for p in namespace_roots)):
                 raise RuntimeError("Foreign runtime namespace path: " + name)
+
+
+def require_local_lease(policy):
+    """Verify an inherited, already-held cooperative lease; never acquire one.
+
+    This inspects only our own descriptor. It neither queries other agents'
+    processes nor treats a desktop GPU as an exclusive SLURM allocation.
+    """
+    lock, hold = Path(policy["lock_path"]), Path(policy["hold_path"])
+    if (not lock.is_absolute() or not hold.is_absolute() or lock.name!="gpu0.lock"
+            or hold.name!="gpu0.HOLD" or lock.parent!=hold.parent or lock.is_symlink()):
+        raise RuntimeError("Explicit common local GPU lock/HOLD paths required")
+    if hold.exists():
+        raise RuntimeError("Local GPU HOLD is active")
+    try:
+        fd=int(os.environ["DISP0_LOCAL_LEASE_FD"])
+        if fd<3:raise ValueError("Not an owned inherited descriptor")
+        opened,current=os.fstat(fd),lock.stat()
+        info=Path(f"/proc/self/fdinfo/{fd}").read_text()
+    except (KeyError,ValueError,OSError) as error:
+        raise RuntimeError("An inherited held local GPU lease is required") from error
+    after=lock.stat()
+    if (not stat.S_ISREG(opened.st_mode) or opened.st_uid!=os.getuid()
+            or current.st_uid!=os.getuid()
+            or (opened.st_dev,opened.st_ino)!=(current.st_dev,current.st_ino)
+            or re.search(r"lock:\s+\d+:\s+FLOCK\s+ADVISORY\s+WRITE\s+",info) is None
+            or (after.st_dev,after.st_ino)!=(opened.st_dev,opened.st_ino)):
+        raise RuntimeError("Inherited descriptor is not the held common GPU flock")
+    if re.fullmatch(r"GPU-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}",policy["expected_uuid"]) is None:
+        raise RuntimeError("An exact local CUDA UUID is required")
+    return fd
+
+
+def optional_inventory(config):
+    root=Path(config["optional_python_path"]).resolve()
+    names=config.get("optional_inventory_roots")
+    if names is None:  # Original private H200 wheel installation, unchanged.
+        roots=[root]
+    else:
+        if (config.get("schema")!=2 or config.get("device_family")!="RTX3090"
+                or not isinstance(names,list) or len(set(names))!=len(names)
+                or "cuda" not in names or any(
+                    n!="cuda" and re.fullmatch(r"[A-Za-z0-9_.-]+\.dist-info",n) is None
+                    for n in names)):
+            raise RuntimeError("Explicit complete local CUDA namespace/distribution roots required")
+        roots=[root/name for name in names]
+        if any(not p.is_dir() or not p.resolve().is_relative_to(root) for p in roots):
+            raise RuntimeError("Optional namespace inventory escaped its selected installation")
+    result={}
+    for selected in roots:
+        for p in selected.rglob("*"):
+            if p.is_file() and "__pycache__" not in p.parts:
+                if not p.resolve().is_relative_to(selected.resolve()):
+                    raise RuntimeError("Optional dependency file escaped its inventory root")
+                result[p.relative_to(root).as_posix()]=digest(p)
+    return result
 
 
 def read_config(path, expected_sha256):
@@ -40,8 +101,12 @@ def read_config(path, expected_sha256):
     if digest(path) != expected_sha256:
         raise RuntimeError("Frozen runtime configuration changed")
     value = json.loads(path.read_text())
-    if value.get("schema") != 1 or value.get("device_family") != "H200":
-        raise RuntimeError("Explicit H200 runtime schema required")
+    if (value.get("schema"),value.get("device_family"))==(1,"H200"):
+        pass
+    elif (value.get("schema"),value.get("device_family"))==(2,"RTX3090"):
+        require_local_lease(value["local_lease"])
+    else:
+        raise RuntimeError("Explicit H200 or leased RTX3090 runtime schema required")
     proof = Path(value["build_proof"])
     if digest(proof) != value["build_proof_sha256"]:
         raise RuntimeError("Selected whole-build proof changed")
@@ -49,13 +114,25 @@ def read_config(path, expected_sha256):
     if (build["status"] != "PASS" or build["pin"] != value["source_pin"]
             or build["stage"] != value["stage"]):
         raise RuntimeError("Runtime differs from the completed exact whole stage")
+    if value["schema"]==2:
+        if build.get("scope")!="WHOLE_BUILD_CPU_SMOKE_ONLY_NOT_GPU_QUALIFICATION":
+            raise RuntimeError("Explicit completed whole local CPU build proof required")
+        for filename,checksum in build["provenance_sha256"].items():
+            if digest(filename)!=checksum:
+                raise RuntimeError("Local whole-build/helper proof changed: "+filename)
+        require_cuda_manifest(value)
+        required={"psi4","psi4.core","einsums","einsums._core","waggle","qcelemental","qcengine","optking"}
+        if not required.issubset(build["module_files"]):
+            raise RuntimeError("Incomplete qualified module identity closure")
+        bootstrap=Path(__file__).resolve().parents[1]/"cachy/bootstrap_gate.py"
+        for code in (bootstrap,Path(__file__).resolve(),Path(value["metadata_path"])/"import_order.py"):
+            if str(code) not in build["provenance_sha256"]:
+                raise RuntimeError("Missing authenticated local bootstrap/admission helper")
     if digest(Path(build["stage"]) / "bin/psi4") != build["launcher_sha256"]:
         raise RuntimeError("Whole-stage launcher changed")
     if digest(value["wheel_lock"]) != value["wheel_lock_sha256"]:
         raise RuntimeError("Optional dependency artifact lock changed")
-    optional = Path(value["optional_python_path"]).resolve()
-    actual_optional = {p.relative_to(optional).as_posix(): digest(p)
-                       for p in optional.rglob("*") if p.is_file() and "__pycache__" not in p.parts}
+    actual_optional = optional_inventory(value)
     if actual_optional != value["optional_files"]:
         raise RuntimeError("Installed optional dependency files changed")
     package = Path(build["python_package"]).resolve()
@@ -72,6 +149,27 @@ def read_config(path, expected_sha256):
         if digest(filename) != checksum:
             raise RuntimeError("CPU-qualified binary changed: " + filename)
     return value, build
+
+
+def require_cuda_manifest(config):
+    manifest=json.loads(Path(config["cuda_manifest"]).read_text())
+    canonical=json.dumps(manifest,sort_keys=True,separators=(",",":"),allow_nan=False).encode()
+    if hashlib.sha256(canonical).hexdigest()!=config["cuda_manifest_sha256"]:
+        raise RuntimeError("Frozen CUDA closure changed before native loading")
+    return manifest
+
+
+def verify_qualified_imports(config,build):
+    """Check actual loaded dependencies in both local scientific arms."""
+    for name,filename in build["module_files"].items():
+        module=importlib.import_module(name)
+        if Path(module.__file__).resolve()!=Path(filename).resolve():
+            raise RuntimeError("Actual qualified module path changed: "+name)
+    root=Path(config["dependency_environment"]).resolve()
+    inventory={str(Path(p).relative_to(root)):checksum for p,checksum in
+               {**build["dependency_python_sha256"],**build["binary_sha256"]}.items()
+               if Path(p).is_relative_to(root)}
+    verify_modules(("einsums","waggle","qcelemental","qcengine","optking"),root,inventory)
 
 
 class AuditedRuntime:
@@ -122,9 +220,15 @@ class AuditedRuntime:
                     Path(distribution.locate_file("")).resolve().is_relative_to(
                         Path(config["optional_python_path"]).resolve())):
                 raise RuntimeError("Optional runtime package version changed: " + name)
+            if config.get("optional_inventory_roots") is not None:
+                metadata_roots={Path(str(f)).parts[0] for f in (distribution.files or ())
+                                if Path(str(f)).parts and Path(str(f)).parts[0].endswith(".dist-info")}
+                if (not metadata_roots or not metadata_roots.issubset(config["optional_inventory_roots"])):
+                    raise RuntimeError("Optional distribution metadata is outside the frozen inventory")
         for name in ("cuda.bindings.runtime", "cuda.bindings.driver", "cuda.bindings.nvrtc"):
             importlib.import_module(name)
-        verify_modules(("cuda",), config["optional_python_path"], config["optional_files"])
+        verify_modules(("cuda",), config["optional_python_path"], config["optional_files"],
+                       ("cuda",) if config.get("schema")==2 else None)
         matches = [v for v in self.manifest["components"]
                    if Path(v["path"]).name.startswith("libcublas.so.")]
         if len(matches) != 1:
@@ -133,31 +237,56 @@ class AuditedRuntime:
         self.report = {"source_pin": config["source_pin"],
                        "runtime_config_sha256": config_sha256, "plans": []}
 
+    def require_device_admission(self):
+        if self.config["device_family"]=="RTX3090":
+            require_local_lease(self.config["local_lease"])
+
+    def verify_optional_modules(self):
+        config=self.config
+        if optional_inventory(config)!=config["optional_files"]:
+            raise RuntimeError("Optional runtime inventory changed during scientific execution")
+        verify_modules(("cuda",),config["optional_python_path"],config["optional_files"],
+                       ("cuda",) if config.get("schema")==2 else None)
+
     def device_identity(self, session):
         """Correlate the actual owning PID/context UUID with allocation hardware."""
-        processes = subprocess.check_output(
-            ["nvidia-smi", "--query-compute-apps=pid,gpu_uuid,used_gpu_memory",
-             "--format=csv,noheader,nounits"], text=True, timeout=20)
-        rows = [[v.strip() for v in line.split(",")] for line in processes.splitlines()]
-        own = [row for row in rows if len(row) == 3 and row[0] == str(os.getpid())]
-        uuids = {row[1] for row in own}
-        if len(uuids) != 1:
-            raise RuntimeError("Expected one actual CUDA UUID for the current PID")
-        uuid = next(iter(uuids))
-        foreign = [row for row in rows if len(row) == 3 and row[1] == uuid
-                   and row[0] != str(os.getpid())]
-        if foreign:
-            raise RuntimeError("Foreign compute contexts on the allocated GPU UUID")
+        local=self.config["device_family"]=="RTX3090"
+        if local:
+            require_local_lease(self.config["local_lease"])
+            device=session.rt(session.driver.cuCtxGetDevice())
+            raw=session.rt(session.driver.cuDeviceGetUuid(device))
+            value=bytes(raw.bytes)
+            if len(value)!=16:raise RuntimeError("Actual local CUDA UUID has the wrong width")
+            uuid="GPU-"+str(uuid_module.UUID(bytes=value))
+            if uuid!=self.config["local_lease"]["expected_uuid"]:
+                raise RuntimeError("Actual CUDA context is not the leased local UUID")
+        else:
+            processes = subprocess.check_output(
+                ["nvidia-smi", "--query-compute-apps=pid,gpu_uuid,used_gpu_memory",
+                 "--format=csv,noheader,nounits"], text=True, timeout=20)
+            rows = [[v.strip() for v in line.split(",")] for line in processes.splitlines()]
+            own = [row for row in rows if len(row) == 3 and row[0] == str(os.getpid())]
+            uuids = {row[1] for row in own}
+            if len(uuids) != 1:
+                raise RuntimeError("Expected one actual CUDA UUID for the current PID")
+            uuid = next(iter(uuids))
+            foreign = [row for row in rows if len(row) == 3 and row[1] == uuid
+                       and row[0] != str(os.getpid())]
+            if foreign:
+                raise RuntimeError("Foreign compute contexts on the allocated GPU UUID")
         hardware = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=uuid,name,driver_version,memory.total",
              "--format=csv,noheader,nounits"], text=True, timeout=20)
         devices = [[v.strip() for v in line.split(",")] for line in hardware.splitlines()]
         device = next((row for row in devices if row[0] == uuid), None)
-        if device is None or "H200" not in device[1] or session.arch != "compute_90":
-            raise RuntimeError("Actual CUDA/NVML device is not the requested H200")
+        expected_name,expected_arch=("RTX 3090","compute_86") if local else ("H200","compute_90")
+        if device is None or expected_name not in device[1] or session.arch != expected_arch:
+            raise RuntimeError("Actual CUDA/NVML device is not the requested "+self.config["device_family"])
         return {"uuid": uuid, "name": device[1], "driver": device[2],
                 "memory_MiB": int(device[3]), "pid": os.getpid(),
-                "nvrtc_architecture": session.arch, "ptx_sha256": session.ptx_sha256}
+                "nvrtc_architecture": session.arch, "ptx_sha256": session.ptx_sha256,
+                "isolation_policy":"cooperative local lease; desktop co-tenancy allowed" if local
+                                   else "exclusive allocation; foreign compute contexts rejected"}
 
     @contextmanager
     def provider(self, primary, auxiliary):
@@ -167,6 +296,7 @@ class AuditedRuntime:
         session = owner = None
         primary_error = None
         try:
+            self.require_device_admission()
             with self.cuda.CUDASession(
                 cublas_library=self.blas["path"], cublas_sha256=self.blas["sha256"],
                 memory_limit_bytes=config["device_memory_limit_bytes"],
