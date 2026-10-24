@@ -26,6 +26,8 @@ from protocol import (overlap_cutoff, configure_pyscf_overlap, capture_overlap, 
 from direct import is_direct, jk_mode, make_rks, pyscf_direct_policy
 from eigensolver import eigensolver_policy
 from cuest_sdk import manifest_for_package, read_cuda12_receipt, runtime_identity
+from pyscf_runtime import (bootstrap_pyscf_runtime, audit_cupy_runtime,
+                           require_pyscf_cutensor)
 
 HERE = Path(__file__).resolve().parent
 ENGINES = ("psi4", "pyscf")
@@ -349,20 +351,23 @@ def pyscf_timing_policy(policy, mf, timers, profile, direct):
 
 def run_pyscf(a, c, atom, r):
     import_start = time.perf_counter()
+    r["runtime_bootstrap"] = bootstrap_pyscf_runtime()
     import warnings
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
         import cupy as cp
+        r["cupy_runtime_identity"] = audit_cupy_runtime(cp)
         import pyscf
         from pyscf import gto, lib
         import gpu4pyscf
         from gpu4pyscf.dft import rks
         # Prefer failure to a CPU or CuPy contraction fallback.
         from gpu4pyscf.lib import cutensor
+    r["contraction_route"] = require_pyscf_cutensor(cutensor)
     r["sdk_import_identity"] = runtime_identity("pyscf")
     r["imports_wall_s"] = time.perf_counter() - import_start
     r["import_warnings"] = [str(w.message) for w in captured]
-    assert not any("using cupy as the tensor contraction engine" in w.lower()
+    assert not any("tensor contraction engine" in w.lower()
                    for w in r["import_warnings"]), "cuTENSOR fallback"
     assert Path(gpu4pyscf.__file__).resolve().is_relative_to(a.gpu_env.resolve())
     r["versions"] = versions()
@@ -777,7 +782,7 @@ def summarize(records, c, systems):
 def engine_env(engine, a):
     env = dict(os.environ, PYTHONNOUSERSITE="1")
     for key in ("LD_PRELOAD", "PYTHONHOME", "PSIDATADIR", "PYSCF_CONFIG_FILE",
-                "PYSCF_EXT_PATH", "CUPY_CUDA_LIB_PATH"):
+                "PYSCF_EXT_PATH", "CUPY_CUDA_LIB_PATH", "CONTRACT_ENGINE"):
         env.pop(key, None)
     # Never allow Psi4's CUDA13 libraries into the CUDA12 PySCF process.
     root = a.psi_env if engine == "psi4" else a.gpu_env
@@ -1045,10 +1050,13 @@ def main():
         parser.add_argument("--output", type=Path, required=True)
     a = p.parse_args()
     if a.action == "device":
+        bootstrap = bootstrap_pyscf_runtime()
         import cupy
-        runtime_identity("pyscf")
+        cupy_runtime = audit_cupy_runtime(cupy)
         cupy.cuda.Device(0).use()
         device = cuda_identity(cupy.cuda.runtime)
+        device["runtime_bootstrap"] = bootstrap
+        device["cupy_runtime_identity"] = cupy_runtime
         device["cuda_identity_receipt"] = runtime_identity("pyscf")
         print(json.dumps(device))
         return 0

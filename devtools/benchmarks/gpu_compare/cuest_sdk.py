@@ -303,6 +303,8 @@ def runtime_identity(engine, core=None, package=None, *, require_version=True):
     """
     maps = Path("/proc/self/maps").read_text()
     if engine == "pyscf":
+        if re.search(r"(?:^|/)libcudnn(?:_[^/\s]+)?\.so(?:\.\d+)*(?:\s|$)", maps, re.M):
+            raise RuntimeError("cuDNN mappings are excluded from the approved single-GPU RKS scope")
         if mapped_sdk(maps) or re.search(r"libcudart\.so\.13(?:\D|$)", maps):
             raise RuntimeError("cuEST/CUDA13 leaked into CUDA12 GPU4PySCF process")
         receipt = read_cuda12_receipt()

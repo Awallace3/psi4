@@ -565,7 +565,7 @@ coordinate/total-weight multiset and overlap spectrum/rank proofs.
 The separately compiled cuEST0.2.50 **four-center direct** adapter and its H100
 debug tests are not mixed into these H200 DF timings.
 
-### Strict cuEST 0.2.50 source admission (real build/device gates still pending)
+### Strict cuEST 0.2.50 admission (real core built; GPU gates pending)
 
 `cuest-sdk-0.2.50.json` independently pins canonical SDK header and CUDA13
 library bytes, plus exported four-center direct, DFMO and version capabilities.
@@ -606,9 +606,12 @@ and `sha256`. It must include `libcudart.so.12` and every CUDA user-library that
 the actual run maps, including cuBLAS/cuSOLVER/cuTENSOR where used. Both
 environment identity and ABI families are checked; CUDA12 cudart alone cannot
 hide a CUDA13 cuBLAS mapping. Unknown/unpinned mappings or a missing inventory
-fail closed. No inventory has been captured/reviewed for this new contract yet;
-the guard does not silently generate a self-consistent inventory from whatever
-happens to be loaded. Such capture/review is a separate future setup task.
+fail closed. CPU setup14291993 captured static ELF/package/loader evidence;
+independent review approved the exact15-provider receipt SHA256
+`a04e5e18a9e9b49ccceec7a085da0e8b9d877199f98a8d1c9ac219d80f8fb7fd`.
+All11 toolkit stubs are excluded. This is an intentionally broad CUDA12
+allowlist, not an exercised RKS closure. cuDNN/NCCL features remain excluded.
+The guard never regenerates approval from whatever happens to be mapped.
 Preliminary device discovery and eigensolver subprocesses get the same explicit
 sanitized CUDA12 environment as the workers, and check mapped isolation before
 device initialization and again afterward. These changes do not rewrite the
@@ -632,17 +635,47 @@ separate from the comparison SDK JSON; the build manifest also retains native
 core/closure identity and actual consumed-header hashes. A missing compiled
 direct-JK capability is a build failure.
 
-These are **local source changes**, not a retroactive certification. No real
-strict core or device execution receipt exists yet; missing/old providers
+Strict core job14291993 completed and its actual extension bytes were verified:
+source `59ace5a0d64881015855ef1086722316746e2a98`, core SHA256
+`8f841c809f041eb36051c261678b1117d2b984442c0df6b9ecfa98d0bff8cbbc`.
+The build verified canonical0.2.50 headers/library, all59 consumed headers,
+compiled direct JK, native builtin presence and CUDA13 linkage. It did **not**
+execute a live-handle native version query or GPU science.
+
+This is not a retroactive certification. Missing/old providers
 fail closed. Offline mock tests do not establish native
 version execution, DFMO numerical correctness or a completed direct/direct
 comparison. The frozen `86feda59ec84e82eb8c90685c2d9d2c8fbc09237` checkout,
-existing `2e542f9` build, environments, and queued job14254253 are unchanged.
+existing `2e542f9` build and environments are unchanged. Job14254253 is now
+terminal FAILED: native eigenprobe timed out, the disclosed GPU-only canonical
+alternative passed, then PBE/aug-cc-pVTZ did not converge and production was
+withheld. Its failure is not an accepted strict comparison.
 That old payload pins library bytes but does not implement this independent
 exact-version/header/provider admission. Any future run needs its own reviewed
-build and authorization; this guard work submits nothing. Scientific settings,
+build and authorization. Scientific settings,
 including the RKS absolute `1e-7` overlap cutoff, are unchanged.
 
 See `outputs/gpu-dft-strict-provider-preparation.md` for the fresh-build and
-independent CUDA12 inventory preparation checklist. Keep queued job14254253 and
-all historical stages immutable; do not submit a duplicate GPU comparison.
+independent CUDA12 inventory preparation record. Keep job14254253's frozen
+checkout/results and all historical stages immutable.
+
+### Explicit GPU runtime bootstrap
+
+CuPy13.4.1's `runtimeGetVersion()` reports its statically linked runtime; merely
+importing CuPy need not map shared libcudart. `pyscf_runtime.py` verifies the
+independent inventory, explicitly maps only its approved absolute
+`libcudart.so.12` with `RTLD_NOW|RTLD_LOCAL`, retains that handle, and performs
+the existing passive mapped-file audit **before** importing CuPy or selecting
+a device. No guessed native getter ABI, cuEST library load, device/handle API
+or CPU eigensolver fallback is introduced. Compiled and shared CuPy runtime
+versions are recorded separately and both must be CUDA12.
+
+All `CONTRACT_ENGINE` overrides are removed from isolated launch environments
+and rejected by direct entrypoints. Actual GPU4PySCF module state must select
+native cuTENSOR and its approved DSO must be mapped. The separate eigensolver
+diagnostic also performs a nonempty2×2 FP64 contraction, requires invocation
+of the native backend, synchronizes, checks its result and re-audits mappings.
+This canary is not inserted into headline fresh-process SCF workers.
+cuDNN mappings are rejected explicitly; unapproved NCCL mappings already fail
+the CUDA closure check. Provenance/bootstrap overhead remains included in
+full-process timing; no science threshold or SCF setting is changed.

@@ -299,6 +299,13 @@ class SDKTests(unittest.TestCase):
                 patch.dict(os.environ, GPU_COMPARE_CUDA12_RECEIPT_SHA256="0" * 64):
             self.assertTrue(sdk.runtime_identity("pyscf")["cuest_absent"])
 
+    def test_cudnn_mappings_are_explicitly_outside_rks_scope(self):
+        for name in ("libcudnn.so.8.8.1", "libcudnn_ops_infer.so.8.8.1",
+                     "libcudnn_graph.so.9"):
+            with patch.object(Path, "read_text", return_value=f"1000-2000 r-xp 0 0:0 1 /fake/{name}\n"):
+                with self.assertRaisesRegex(RuntimeError, "cuDNN mappings"):
+                    sdk.runtime_identity("pyscf")
+
     def test_cuda12_cudart_does_not_hide_unpinned_cuda13_blas(self):
         receipt = self.cuda_receipt(12)
         extra = self.root / "libcublas.so.13"
@@ -352,10 +359,10 @@ class SDKTests(unittest.TestCase):
         inherited = dict(LD_PRELOAD="/cuda13/libdanger.so",
                          LD_LIBRARY_PATH="/cuda13/lib64", PYTHONPATH="/psi4/source",
                          PYTHONHOME="/wrong", CUPY_CUDA_LIB_PATH="/cuda13/lib64",
-                         PATH="/cuda13/bin:/usr/bin")
+                         PATH="/cuda13/bin:/usr/bin", CONTRACT_ENGINE="opt_einsum")
         with patch.dict(os.environ, inherited), patch("compare.read_cuda12_receipt") as pin:
             env = engine_env("pyscf", args)
-        for key in ("LD_PRELOAD", "PYTHONHOME", "CUPY_CUDA_LIB_PATH"):
+        for key in ("LD_PRELOAD", "PYTHONHOME", "CUPY_CUDA_LIB_PATH", "CONTRACT_ENGINE"):
             self.assertNotIn(key, env)
         self.assertEqual(env["PYTHONPATH"], "")
         self.assertEqual(env["LD_LIBRARY_PATH"], f"{self.root}/lib:{self.root}/cuda12/lib64")
@@ -367,7 +374,7 @@ class SDKTests(unittest.TestCase):
         import compare
         fake = SimpleNamespace(cuda=SimpleNamespace(Device=Mock()))
         with patch.dict(sys.modules, cupy=fake), patch.object(sys, "argv", ["compare", "device"]), \
-                patch.object(compare, "runtime_identity", side_effect=RuntimeError("bad closure")):
+                patch.object(compare, "bootstrap_pyscf_runtime", side_effect=RuntimeError("bad closure")):
             with self.assertRaisesRegex(RuntimeError, "bad closure"):
                 compare.main()
         fake.cuda.Device.assert_not_called()
@@ -376,11 +383,13 @@ class SDKTests(unittest.TestCase):
         import compare
         fake = SimpleNamespace(cuda=SimpleNamespace(Device=Mock(), runtime=object()))
         with patch.dict(sys.modules, cupy=fake), patch.object(sys, "argv", ["compare", "device"]), \
+                patch.object(compare, "bootstrap_pyscf_runtime", return_value={}), \
+                patch.object(compare, "audit_cupy_runtime", return_value={}), \
                 patch.object(compare, "runtime_identity", return_value={"verified": True}) as audit, \
                 patch.object(compare, "cuda_identity", return_value={"uuid": "mock"}), \
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(compare.main(), 0)
-        self.assertEqual(audit.call_count, 2)
+        self.assertEqual(audit.call_count, 1)
         fake.cuda.Device.return_value.use.assert_called_once_with()
 
 

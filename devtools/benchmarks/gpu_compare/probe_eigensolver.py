@@ -11,6 +11,8 @@ from compare import (atomic_json, capture_geometry, cuda_identity, digest,
 from eigensolver import eigensolver_policy
 from protocol import configure_pyscf_overlap
 from cuest_sdk import runtime_identity
+from pyscf_runtime import (bootstrap_pyscf_runtime, audit_cupy_runtime,
+                           require_pyscf_cutensor, contraction_canary)
 
 
 def main():
@@ -23,18 +25,25 @@ def main():
     if not os.getenv("SLURM_JOB_ID"):
         p.error("Use an allocated compute node")
     a.output.mkdir(parents=True, exist_ok=False)
+    bootstrap = bootstrap_pyscf_runtime()
     import cupy as cp
+    cupy_runtime = audit_cupy_runtime(cp)
     import numpy as np
     from scipy.linalg import eigh
     from pyscf import gto, lib
     from gpu4pyscf.dft.rks import RKS
     import gpu4pyscf
+    from gpu4pyscf.lib import cutensor
+    contraction_route = require_pyscf_cutensor(cutensor)
     sdk_import_identity = runtime_identity("pyscf")
     c = json.loads(a.config.read_text())
     c["pyscf_eigensolver"] = a.mode
     lib.num_threads(c["threads"])
     cp.cuda.Device(0).use()
+    contraction_gate = contraction_canary(cp, cutensor)
     r = dict(config=c, diagnostic_only=True, headline_timing_eligible=False,
+             runtime_bootstrap=bootstrap, cupy_runtime_identity=cupy_runtime,
+             contraction_route=contraction_route, contraction_canary=contraction_gate,
              sdk_import_identity=sdk_import_identity,
              config_sha256=digest(a.config), geometry_sha256=digest(a.xyz),
              gpu=cuda_identity(cp.cuda.runtime), versions=versions(), basis_cases=[])
