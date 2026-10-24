@@ -118,3 +118,9 @@ compares old/new byte-audit receipts against the same loaded native world
 without replacing any installed Psi4 module. It does not request an energy,
 integral or kernel workload. Whole-stage installation and full numerical
 requalification are still required before using the changed guard in production.
+
+First real-byte paired audit `timeout-audit-paired-01` passed with six identical
+receipts, no installed overlay (tasks `bd705dcd3`, `b6179328b`). Recorded medians
+were serial0.879755s and concurrent0.499718s. Because cProfile was attached only
+to the main thread, a follow-up explicitly disables profiling for BOTH timed
+implementations before interpreting the latency improvement.

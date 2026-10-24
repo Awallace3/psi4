@@ -146,19 +146,26 @@ def main():
                           if str(Path(owner._name).resolve(strict=True)) == native_path)
             proof = {"native_path": native_path}
             records = []
-            for repeat in range(3):
-                for label, implementation in (
-                    (("serial", old), ("concurrent", candidate)) if repeat % 2 == 0 else
-                    (("concurrent", candidate), ("serial", old))
-                ):
-                    t = time.monotonic()
-                    receipt = implementation.audit_maps(native, proof, env.manifest)
-                    records.append({"repeat": repeat, "mode": label,
-                                    "seconds": time.monotonic()-t, "receipt": receipt})
+            # Main-thread-only cProfile would treat serial hashing and worker
+            # hashing differently. Disable it for BOTH timed implementations.
+            profile.disable()
+            try:
+                for repeat in range(3):
+                    for label, implementation in (
+                        (("serial", old), ("concurrent", candidate)) if repeat % 2 == 0 else
+                        (("concurrent", candidate), ("serial", old))
+                    ):
+                        t = time.monotonic()
+                        receipt = implementation.audit_maps(native, proof, env.manifest)
+                        records.append({"repeat": repeat, "mode": label,
+                                        "seconds": time.monotonic()-t, "receipt": receipt})
+            finally:
+                profile.enable()
             if any(record["receipt"] != records[0]["receipt"] for record in records):
                 raise RuntimeError("Paired fresh byte-audit receipts differ")
             result.update(status="PASS_STANDALONE_FRESH_BYTE_AUDIT_COMPARISON_ONLY",
                           audit_samples=records, candidate_source=str(source),
+                          audit_profile_policy="cProfile disabled for BOTH timed byte-audit implementations",
                           candidate_module_sha256=hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
                           audit_scope="Separate pure-Python byte audit; no Psi4 module overlay. "
                                       "No integral/energy/kernel workload requested; ELF/runtime "
