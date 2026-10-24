@@ -27,6 +27,9 @@ SCALARS=("Elst10,r","Exch10","Ind20,r","Exch-Ind20,r","Delta HF Correction",
 def production_options(arm):
     if arm not in ("einsums","cpp"):raise ValueError("Explicit CPU backend required")
     value=options(False,True)
+    # The numerical GPU gate's tightened screening is diagnostic-only. Keep
+    # the established production CPU benchmark at its original native default.
+    value.pop("ints_tolerance")
     value.update(sapt_dft_do_fsapt="SAPTDFT" if arm=="einsums" else "FISAPT",
         fisapt_fsapt_ind_response=False,fisapt_fdisp_algorithm="BLOCKED",fisapt_fdisp_block=48,
         fisapt_do_fsapt_disp=True,sapt_dft_do_ddft=False,sapt_dft_d3_ie=False,

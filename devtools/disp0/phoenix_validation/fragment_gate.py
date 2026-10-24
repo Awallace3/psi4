@@ -38,6 +38,7 @@ FIELDS = ("Qocc0A", "Qocc0B", "Uocc0A", "Uocc0B", "Locc_A", "Locc_B",
           "Ind20u_AB", "Ind20u_BA", "ExchInd20u_AB", "ExchInd20u_BA",
           "Ind20r_AB", "Ind20r_BA", "ExchInd20r_AB", "ExchInd20r_BA",
           "Disp20 occupied pairs", "Exch-Disp20 occupied pairs")
+WATER_DIMENSIONS={"atoms":6,"ao":82,"occupied":[5,5],"frozen":[1,1],"active":[4,4]}
 
 
 def options(gpu, scaled):
@@ -283,6 +284,16 @@ def main():
             geometry_sha256=hashlib.sha256(text.encode()).hexdigest())
 
         def capture(cache):
+            wfns=[cache["wfn_"+side] for side in "AB"]
+            occupied=[int(w.nalpha()) for w in wfns]
+            frozen=[int(w.basisset().n_frozen_core(
+                core.get_global_option("FREEZE_CORE"),w.molecule())) for w in wfns]
+            dimensions={"atoms":int(molecule.natom()),"ao":int(wfns[0].basisset().nbf()),
+                        "occupied":occupied,"frozen":frozen,
+                        "active":[n-nf for n,nf in zip(occupied,frozen)]}
+            if dimensions!=WATER_DIMENSIONS:
+                raise RuntimeError("Native wavefunctions differ from the fixed frozen water case")
+            result["orbital_dimensions"]=dimensions
             for name in FIELDS:
                 key = {"Uocc0A":"Uocc_A","Uocc0B":"Uocc_B"}.get(name,name)
                 if name in cache or key in cache:

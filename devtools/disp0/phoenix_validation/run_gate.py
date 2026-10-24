@@ -7,6 +7,7 @@ import subprocess
 import time
 import numpy as np
 from gpu_runtime import read_config,require_local_lease
+from repeat_gauge import compare_repeat
 
 
 def compare(cpu,gpu):
@@ -116,12 +117,7 @@ def main():
             result.setdefault("same_gauge_fields",{})[mode]=oracle["same_gauge_compared_fields"]
         repeat=child("gpu-repeat","gpu",scaled=True)
         baseline=json.loads((root/"gpu-scaled/result.json").read_text())
-        with np.load(root/"gpu-scaled/fragment-matrices.npz",allow_pickle=False) as left:
-            with np.load(root/"gpu-repeat/fragment-matrices.npz",allow_pickle=False) as right:
-                if set(left.files)!=set(right.files):raise RuntimeError("Repeated GPU fields differ")
-                for name in left.files:
-                    np.testing.assert_allclose(right[name],left[name],atol=1e-9,rtol=1e-9,
-                                               err_msg="Fresh-process repeat "+name)
+        result["repeat_gauge_check"]=compare_repeat(root/"gpu-scaled",root/"gpu-repeat")
         changed=json.loads((root/"gpu-changed/result.json").read_text())
         if abs(changed["energy_Eh"]-baseline["energy_Eh"])<1e-8:
             raise RuntimeError("Changed geometry did not change the energy")

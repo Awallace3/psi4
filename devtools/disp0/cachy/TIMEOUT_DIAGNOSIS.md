@@ -229,3 +229,52 @@ diagnostic input change, not permission to reuse prior timings/inputs or relabel
 attempt02. The whole installed scientific package/core remains unchanged.
 Full unscaled/scaled/displaced/repeat and independent matrix qualification must
 be rerun in a fresh attempt before Phoenix release.
+
+### Attempt03: every physical child/oracle passed; raw-label repeat rejected
+
+`runs/guard-fixed-aug-water-gate-11-03`, helper02fa343786, completed all10 fresh
+processes with return0. All three independent native CPU same-gauge oracles
+passed all23 required fields, unchanged thresholds and standard file checks:
+
+| Input | Diagnostic GPU energy-call seconds | Largest oracle energy-matrix absolute error (Eh) |
+|---|---:|---:|
+| Unscaled | 351.004129 | 5.35571587e-13 |
+| Scaled | 354.038818 | 6.91276203e-12 |
+| B shifted0.08Å, scaled | 354.585258 | 5.60063801e-12 |
+| Fresh scaled GPU repeat | 356.121806 | Not a fourth CPU-oracle case |
+
+The parent still records **FAILED**: its final naive elementwise repeat check
+compared orbital labels directly. Actual occupied-overlap analysis shows
+monomer A's labels unchanged and monomer B's equivalent localized orbitals1/2
+swapped (`[0,2,1,3,4]`), with positive signs. Off-permutation overlaps are at
+most1.823e-12. Applying only those orbital permutations gives maximum energy
+matrix difference1.695e-11Eh, localized-coefficient difference1.146e-12,
+population difference4.436e-14 and same-canonical-frame U difference1.823e-12.
+The raw failed artifact remains unchanged.
+
+The corrected repeat comparator requires a unique unit-overlap permutation
+and orbital signs, forbids continuous localized rotations and frozen/active
+mixing, verifies Cocc×U=Locc and canonical-frame/energy consistency, and compares
+all23 original fields at the unchanged1e-9 repeat threshold. Energy arrays
+receive **only row/column permutations**, never orbital signs or dense U
+rotations; atomic/external positions remain fixed. Both signed active dispersion
+pair arrays are checked separately. Tests reject real field errors, improper
+energy rotations/signs, nondegenerate canonical mixing and frozen/active swaps.
+
+A fresh complete gate, rather than relabeling attempt03, must establish final
+PASS under this label-invariant comparator. The production CPU benchmark also
+explicitly excludes the diagnostic gate's tightened screening setting, retaining
+its original native default; published CPU production timings are not replaced
+or presented as matching this exact-response GPU diagnostic.
+
+Independent mathematical inspection (`d703197b0fce38aae1a17853dc180e563`)
+confirmed the mapping direction and absence of energy-rotation/sign scaling.
+Its concrete safeguards are incorporated before another physical gate:
+normalize only each child's verified own F-SAPT output-directory option;
+require distinct resolved repeat directories/PIDs; capture dimensions from
+native wavefunctions and require the fixed six-atom/82-AO/five-occupied,
+one-frozen/four-active-per-monomer water contract. Pair-array dimensions cannot
+redefine the frozen space. Wrapper tests now cover these boundaries and artifact
+tampering, in addition to unequal A/B dimensions, a non-self-inverse cycle,
+nonidentity AO metric/rectangular coefficients and unchanged numerical checks.
+Inspection/tests alone do not release Phoenix.

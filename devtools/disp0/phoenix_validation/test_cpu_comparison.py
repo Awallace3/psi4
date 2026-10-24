@@ -13,6 +13,13 @@ from gpu_runtime import digest
 
 
 class CPUComparison(unittest.TestCase):
+    def test_gate_screening_change_does_not_change_production_CPU_default(self):
+        from cpu_benchmark import production_options
+        from fragment_gate import options
+        self.assertEqual(options(False,True)["ints_tolerance"],1e-16)
+        for arm in ("cpp","einsums"):
+            self.assertNotIn("ints_tolerance",production_options(arm))
+
     def test_pilot_reuse_fingerprints_exclude_only_post_timing_validation(self):
         text=Path(cpu_benchmark.__file__).read_text()
         original=cpu_pilot_proof.timed_parts(text)
