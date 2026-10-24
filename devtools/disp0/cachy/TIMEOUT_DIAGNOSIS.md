@@ -183,3 +183,27 @@ are changed. Preserve attempt01 and use a fresh helper pin/output directory.
 The new complete augmented-water GPU/CPU matrix gate must still pass before
 the condition authorizing a new bounded H200/inferno correctness gate is met.
 Neither the audit-only ratio nor CPU build completion meets that condition.
+
+### Attempt02: full unscaled GPU execution, oracle still blocked
+
+Helper `9746fe1b72` passed45 admission/launch regressions locally and on Cachy.
+The fresh attempt `runs/guard-fixed-aug-water-gate-11-02` completed its CPU
+unscaled energy call in3.287490s and its GPU unscaled call in354.701242s. Both
+children returned0 and saved `EXECUTED_REQUIRES_INDEPENDENT_COMPARISON`; these
+are diagnostic elapsed times, not accepted benchmark samples or a speedup.
+The GPU child passed its required native/device-work/output/cleanup checks.
+No timeout or segfault occurred in that child.
+
+The independent same-gauge CPU oracle then failed the existing
+`rtol=1e-10, atol=1e-10` one-electron `V_A` comparison:8 of6724 entries differed,
+including an absolute difference2.360213447676e-10. The complete gate remains
+FAILED; scaled/displaced/repeat cases were not run and Phoenix is not released.
+Do not discard the failure or enlarge the oracle tolerance to obtain a pass.
+
+Source inspection shows native `MintsHelper` creates its cuEST AO pair list
+with the current global `INTS_TOLERANCE` (default1e-12), including for nuclear
+attraction. A tiny separately bounded parameter probe compares unchanged saved
+GPU inputs and independent CPU Mints matrices at1e-12/1e-14/1e-16. It preserves
+the oracle threshold and records every difference/violation. Screening is a
+hypothesis until that physical probe runs; no production accuracy change or
+full qualification follows from the probe alone.
