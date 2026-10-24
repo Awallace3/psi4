@@ -322,3 +322,11 @@ selector's gts-cs207-chemx route,1H2004CPUs32GiB1h maximum$1.41. Its new root is
 with `cachy-release.json` recording this proof chain. Submission is not a GPU
 result. Further paid retries or large-system timings are not automatically
 authorized.
+
+The bounded follow-up subsequently completed: **14377643,
+PASS_SMALL_H200_ONLY**, all10 fresh processes and three independent native CPU
+matrix oracles passed, maximum energy-matrix error1.380e-11Eh, complete native/
+session cleanup. Actual H200 identity/prolog and final artifact hashes were
+verified (`b16f563b8`). Diagnostic GPU energy calls took427–429s; these do not
+demonstrate acceleration or qualify a large-system timing campaign. Details:
+`../phoenix_validation/H200_RESULTS.md`. No further paid allocation was launched.

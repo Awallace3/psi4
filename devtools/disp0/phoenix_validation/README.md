@@ -1,5 +1,11 @@
 # Fresh Phoenix native build and CPU validation
 
+**Latest:** the complete Cachy-qualified follow-up H200 gate14377643 passed
+all small-case physical/oracle/repeat/cleanup checks after whole build14377089.
+See [`H200_RESULTS.md`](H200_RESULTS.md) for exact scope, diagnostics and hashes.
+This is not protein admission or an accepted performance/speedup campaign.
+Historical failures and earlier CPU build evidence below remain unchanged.
+
 This is a new build of the current scientific source, not recovery or
 relabeling of any previous failed Psi4 installation. It does not submit
 protein-size F-SAPT or certify GPU correctness.

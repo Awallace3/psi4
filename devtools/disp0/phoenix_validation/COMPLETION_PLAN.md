@@ -67,6 +67,20 @@ Effective controller/accounting readback (`ba3dddea0`) confirms
 `gres/gpu:h200:1`. No actual H200 UUID or prolog exists before allocation;
 verify those and the final numerical/cleanup artifacts after execution.
 
+**14377643 COMPLETED0:0** (job/batch/step),29m42s, exit0/TERM0.
+Final `PASS_SMALL_H200_ONLY` was verified from hashed artifacts (`b16f563b8`),
+not scheduler state alone. All10 fresh children, three independent native
+CPU oracles/all23 fields, nonunit scaling, changed geometry, the repeat and
+native/device cleanup passed. Actual NVIDIA H200 UUID
+`GPU-75553820-c98c-532e-b792-5c9e20048a1d`, driver615.71.09, compute_90;
+prolog confirms gts-cs207-chemx/inferno. Maximum oracle energy-matrix error is
+1.37964293e-11Eh. Gate-result SHA256:
+`094b91f8347818fce849b24591c82368b07243fec1e98554693cdfd15a3f4d4e`.
+Full small-case results, diagnostic times and resource caveats: `H200_RESULTS.md`.
+**Still0 accepted timing samples, no large-system admission or GPU speedup.**
+This completes the conditional one-gate follow-up; do not automatically submit
+further inferno jobs or declare the complete scaling/timing goal finished.
+
 ## Latest CPU production comparison request
 
 The user explicitly requested **inferno CPU comparisons** of the optimized
