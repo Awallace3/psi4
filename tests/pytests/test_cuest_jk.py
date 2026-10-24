@@ -131,6 +131,35 @@ def test_cuest_df_fitting_condition_matches_cpu(condition, asymmetric):
 @uusing("cuest")
 @uusing("cuda_cc8")
 @pytest.mark.cuest
+def test_cuest_df_fitting_condition_update_matches_cpu():
+    """An options-driven plan rebuild must use the new cutoff, not a stale member."""
+    primary, aux = _basis_sets()
+    left = _random_coeffs(primary.nbf(), 5, 317)
+    psi4.set_options({"df_fitting_condition": 1.e-2})
+    _, cpu_j, cpu_k = _run_jk(False, primary, aux, [(left, None)])
+    psi4.set_options({"use_cuest": True, "cuest_mixed_precision": False,
+                      "df_fitting_condition": 1.e-10})
+    jk = psi4.core.JK.build_JK(primary, aux)
+    jk.set_do_J(True)
+    jk.set_do_K(True)
+    try:
+        jk.initialize()
+        jk.C_left_add(psi4.core.Matrix.from_array(left))
+        jk.compute()
+        before = [jk.J()[0].np.copy(), jk.K()[0].np.copy()]
+        psi4.set_options({"df_fitting_condition": 1.e-2})
+        jk.compute()
+        after = [jk.J()[0].np.copy(), jk.K()[0].np.copy()]
+        assert max(np.max(np.abs(a-b)) for a, b in zip(before, after)) > 1.e-5
+        for ref, got in zip(cpu_j + cpu_k, after):
+            np.testing.assert_allclose(got, ref, atol=1.e-8, rtol=0)
+    finally:
+        jk.finalize()
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
 def test_cuest_jk_varying_occupied_buffers():
     """Shared per-build scratch handles growing, empty, and shrinking pairs."""
     primary, aux = _basis_sets()

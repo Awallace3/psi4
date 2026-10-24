@@ -366,6 +366,7 @@ void cuESTJK::preiterations()
 {
     try {
         if (cleanup_failed_) throw PSIEXCEPTION("cuESTJK cleanup failed; construct a new JK object.");
+        condition_ = options_.get_double("DF_FITTING_CONDITION");
         const auto key = current_plan_key();
         // The handle is shared by interleaved objects: restore its mode even on hits.
         configure_math_mode();
@@ -447,6 +448,23 @@ void cuESTJK::build_cuest_plan(const std::string& key) {
     if (needs_df_plan()) {
         // DF Int Plan List
         PlanParameters<cuestDFIntPlanParameters_t> dfint_params(CUEST_DFINTPLAN_PARAMETERS);
+
+        // Match DFHelper's conditioned metric power, including its relative
+        // eigenvalue cutoff. SDK defaults (QR and 1e-12) do not implement
+        // DF_FITTING_CONDITION and can retain different auxiliary modes.
+        const int32_t relative_conditioning = 1;
+        const auto fitting_algorithm = CUEST_DFINTPLAN_PARAMETERS_FITTING_ALGORITHM_MATRIXPOWER;
+        CHECK_CUEST(cuestParametersConfigure(
+            CUEST_DFINTPLAN_PARAMETERS, dfint_params.get(),
+            CUEST_DFINTPLAN_PARAMETERS_FITTING_CUTOFF, &condition_, sizeof(condition_)));
+        CHECK_CUEST(cuestParametersConfigure(
+            CUEST_DFINTPLAN_PARAMETERS, dfint_params.get(),
+            CUEST_DFINTPLAN_PARAMETERS_FITTING_RELATIVE_CONDITIONING,
+            &relative_conditioning, sizeof(relative_conditioning)));
+        CHECK_CUEST(cuestParametersConfigure(
+            CUEST_DFINTPLAN_PARAMETERS, dfint_params.get(),
+            CUEST_DFINTPLAN_PARAMETERS_FITTING_ALGORITHM,
+            &fitting_algorithm, sizeof(fitting_algorithm)));
 
         // Psi4 and cuEST both represent exact exchange as alpha / r + beta erf(omega r) / r.
         double exchange_fraction = omega_alpha_;
