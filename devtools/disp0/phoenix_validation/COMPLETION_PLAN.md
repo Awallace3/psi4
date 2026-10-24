@@ -271,6 +271,19 @@ the concrete scope and evidence required before claiming it complete.
 
 ## Native Phoenix checkpoint (2026-10-23)
 
+- **Cachy follow-up (2026-10-24):** bounded real augmented-basis water trace
+  on the untouched whole Cachy9cc6784336 stage reproduced audit-bound latency,
+  not SIGSEGV:166map audits/1494file hashes,146.029s inside `audit_maps`
+  during181.067s elapsed; fragment workflow entry only at178.202s.
+  Stack samples locate hashing in per-shell native-plan construction.
+  Identity/provider/blocked-dispersion code is identical to Phoenix1aed.
+  Candidate16cd0d5f18 retains all fresh same-FD/map/inode/byte/race checks,
+  with up to4CUDA-file hash workers and serial native admission.63cuEST+
+  205CUDA CPU guards pass. Actual unprofiled Cachy byte-audit medians(n3)
+  improve0.824477s→0.457401s, with all six receipts identical.
+  **Audit-only optimization, not a completed fragment fix or GPU speedup.**
+  No installed overlay or new Phoenix job. Coherent new-stage/full
+  qualification remains required; see `../cachy/TIMEOUT_DIAGNOSIS.md`.
 - **H200 gate14322613 FAILED1:0** after10m32s. `gate-result.json` records
   `TimeoutExpired` for the first `gpu-unscaled` child at its600s limit.
   Its CPU-unscaled control completed, and GPU stdout shows native cuEST HF/

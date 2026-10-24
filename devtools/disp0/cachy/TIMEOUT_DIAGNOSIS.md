@@ -124,3 +124,25 @@ receipts, no installed overlay (tasks `bd705dcd3`, `b6179328b`). Recorded median
 were serial0.879755s and concurrent0.499718s. Because cProfile was attached only
 to the main thread, a follow-up explicitly disables profiling for BOTH timed
 implementations before interpreting the latency improvement.
+
+The **unprofiled follow-up passed**: `timeout-audit-paired-02`, helper4e3ce70c1d,
+tasks `b39fe0ee4` / `b11c22f0f`. Same common nonblocking lease and4CPU/12GiB
+scope; no installed module was changed. Six byte-admission receipts are identical.
+
+| Fresh byte audit | n | Median seconds | Minimum | Maximum |
+|---|---:|---:|---:|---:|
+| Original serial | 3 | 0.824477 | 0.818215 | 0.828119 |
+| Bounded concurrent | 3 | 0.457401 | 0.438444 | 0.458649 |
+
+The median **audit-only latency ratio is1.803**, not a GPU energy speedup.
+Timed sections exclude cProfile on both arms; initialization remains outside
+the individual audit timers. Original/patched mapped-byte checks returned the
+same proofs with no cache. Candidate identity-module SHA256:
+`7c1be48c8329fc80580531335da97a0033ff82a6f8bdc32b247133ca8ac8df28`.
+
+The candidate scientific guard change is commit16cd0d5f18. It still requires
+a new coherent whole-stage install and complete fragment/numerical/cleanup
+rerun before claiming this fixes the full timeout or requesting another H200
+gate. Do not overlay it onto Cachy10 or the qualified Phoenix stage.
+The bounded diagnostic processes/leases have ended; no Phoenix allocation,
+FDDS source/environment/process change or desktop/game modification occurred.
