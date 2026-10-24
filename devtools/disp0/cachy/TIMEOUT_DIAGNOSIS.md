@@ -146,3 +146,40 @@ rerun before claiming this fixes the full timeout or requesting another H200
 gate. Do not overlay it onto Cachy10 or the qualified Phoenix stage.
 The bounded diagnostic processes/leases have ended; no Phoenix allocation,
 FDDS source/environment/process change or desktop/game modification occurred.
+
+## Coherent guard-fixed build and first gate attempt
+
+At the user's conditional request (“if Cachy good, inferno Phoenix”), the normal
+whole build/install of source `dda47ee73d0d21cef62e137a22b4e5ae84979e65`
+passed its CPU native smoke (task `b5f05efd4`). The previous whole build was
+verified and preserved read-only before advancing only the owned
+`factory-source`; `source`, old installs and the dependency environment remain
+unchanged. External limits read back 4 CPU/12 GiB/no swap/128 tasks; build
+parallelism was one. New artifacts:
+
+- `install/psi4-cuest-11`
+- `runs/psi4-cuest-10-snapshot-01`
+- `runs/psi4-cuest-11-config`
+- `runs/psi4-cuest-build-11`
+- `runs/psi4-cuest-import-14`
+
+This is **CPU-build validation only**, not GPU qualification.
+
+The first shared-gate attempt, `runs/guard-fixed-aug-water-gate-11-01`
+(task `bc616d830`), stopped in the CPU arm's bootstrap before its energy call or
+any GPU child. The new helper assumed all qualified dependency modules lived
+under the conda prefix. The actual whole CMake installation contains QCElemental
+under the new Psi4 prefix, which the CPU proof correctly inventories. Bootstrap
+therefore rejected `qcelemental.datum` despite its authenticated provenance.
+
+The correction binds **each package's actual CPU-qualified root**, restricted
+to the selected whole stage/private dependency installations, and continues to
+check every loaded module against the exact stored byte inventory. A regression
+first reproduces the erroneous rejection with stage-installed QCElemental, then
+also checks that changing its bytes is still rejected. This is a helper-only
+fix: no numerical options/tolerances, installed science/core or dependencies
+are changed. Preserve attempt01 and use a fresh helper pin/output directory.
+
+The new complete augmented-water GPU/CPU matrix gate must still pass before
+the condition authorizing a new bounded H200/inferno correctness gate is met.
+Neither the audit-only ratio nor CPU build completion meets that condition.

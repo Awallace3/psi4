@@ -218,5 +218,26 @@ class LocalRuntime(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,"escaped"):
                 runtime.optional_inventory(config)
 
+    def test_qualified_dependencies_can_belong_to_whole_stage_or_private_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);env=root/"environment";stage=root/"whole-stage"
+            files={};inventory={};modules={}
+            for name in ("einsums","waggle","qcelemental","qcengine","optking"):
+                package=(env if name in ("einsums","waggle") else stage)/name
+                package.mkdir(parents=True);path=package/"__init__.py";path.write_text("pass")
+                files[name]=str(path);inventory[str(path)]=runtime.digest(path)
+                modules[name]=SimpleNamespace(__file__=str(path),__path__=[str(package)])
+            datum=stage/"qcelemental/datum.py";datum.write_text("datum=True")
+            inventory[str(datum)]=runtime.digest(datum)
+            modules["qcelemental.datum"]=SimpleNamespace(__file__=str(datum))
+            config={"dependency_environment":str(env),"einsums_prefix":str(env),"stage":str(stage)}
+            build={"module_files":files,"dependency_python_sha256":inventory,"binary_sha256":{}}
+            with patch.dict(sys.modules,modules),patch.object(
+                    runtime.importlib,"import_module",side_effect=modules.__getitem__):
+                runtime.verify_qualified_imports(config,build)
+                datum.write_text("changed=True")
+                with self.assertRaisesRegex(RuntimeError,"Foreign/changed"):
+                    runtime.verify_qualified_imports(config,build)
+
 
 if __name__=="__main__":unittest.main()

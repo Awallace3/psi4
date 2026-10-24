@@ -165,11 +165,18 @@ def verify_qualified_imports(config,build):
         module=importlib.import_module(name)
         if Path(module.__file__).resolve()!=Path(filename).resolve():
             raise RuntimeError("Actual qualified module path changed: "+name)
-    root=Path(config["dependency_environment"]).resolve()
-    inventory={str(Path(p).relative_to(root)):checksum for p,checksum in
-               {**build["dependency_python_sha256"],**build["binary_sha256"]}.items()
-               if Path(p).is_relative_to(root)}
-    verify_modules(("einsums","waggle","qcelemental","qcengine","optking"),root,inventory)
+    permitted=[Path(config[key]).resolve() for key in
+               ("stage","dependency_environment","einsums_prefix")]
+    files={**build["dependency_python_sha256"],**build["binary_sha256"]}
+    for name in ("einsums","waggle","qcelemental","qcengine","optking"):
+        # CMake may install a dependency into the whole Psi4 prefix. Bind its
+        # actual CPU-qualified package, not an assumed conda/site-packages root.
+        root=Path(build["module_files"][name]).resolve().parent
+        if not any(root.is_relative_to(prefix) for prefix in permitted):
+            raise RuntimeError("Qualified dependency is outside selected installations: "+name)
+        inventory={str(Path(p).relative_to(root)):checksum for p,checksum in files.items()
+                   if Path(p).is_relative_to(root)}
+        verify_modules((name,),root,inventory)
 
 
 class AuditedRuntime:
