@@ -5,6 +5,7 @@ CUDA/Einsums build proof. Native version APIs below are bound from the actual
 0.2.50 context_api.h, not inferred from a directory or SONAME.
 """
 import ctypes as ct
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -238,10 +239,21 @@ def audit_maps(native, proof, cuda_manifest, *, text=None):
     require(all(any(Path(path).name.startswith(prefix) for path in cuda_paths)
                 for prefix in ("libcudart.so","libcublas.so","libcublasLt.so")),
             "Actual CUDA runtime/cuBLAS closure is not mapped")
-    for path in cuda_paths:
+    ordered_cuda_paths = sorted(cuda_paths)
+    for path in ordered_cuda_paths:
         check_cuda13_name(path)
-        require(path in allowed and mapped_file_digest(path,rows) == allowed[path],
+        require(path in allowed,
                 f"Foreign/changed loaded CUDA component: {path}")
+    # Every audit still hashes every mapped file afresh through the original
+    # same-FD/inode/device/before-and-after checks. Only independent file reads
+    # run concurrently; native admission/symbol binding above stays serial.
+    # Scoped shutdown joins workers even on BaseException, before any caller
+    # can enter native teardown. No cache or detached work survives this call.
+    with ThreadPoolExecutor(max_workers=min(4,len(ordered_cuda_paths))) as workers:
+        hashes = workers.map(lambda path: mapped_file_digest(path,rows),ordered_cuda_paths)
+        for path, observed in zip(ordered_cuda_paths,hashes):
+            require(observed == allowed[path],
+                    f"Foreign/changed loaded CUDA component: {path}")
     return {"pid":os.getpid(), "native_mapped_path":expected,
             "cuda_root":str(root), "cuda_mapped_sha256":{p:allowed[p] for p in sorted(cuda_paths)},
             "scope":"Actual loaded bytes/ABI ownership; NOT DFMO numerical/device correctness"}

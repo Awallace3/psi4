@@ -9,7 +9,9 @@ import cProfile
 from contextlib import ExitStack, contextmanager
 import faulthandler
 import functools
+import hashlib
 import importlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -44,6 +46,9 @@ def main():
     parser.add_argument("--attempt", required=True)
     parser.add_argument("--block", type=int, choices=(5, 24), default=5)
     parser.add_argument("--seconds", type=int, default=180)
+    parser.add_argument("--audit-only", action="store_true",
+                        help="Compare old/new mapped-byte audits, without an energy call")
+    parser.add_argument("--candidate-source", type=Path)
     args = parser.parse_args()
     if (not args.attempt.replace("-", "").isalnum() or not 30 <= args.seconds <= 180
             or os.environ.get("DISP0_SERIALIZED_GPU_LEASE") != "bounded-trace-v1"
@@ -61,6 +66,7 @@ def main():
     profile = cProfile.Profile()
     started = time.monotonic()
     stop = threading.Event()
+    log_lock = threading.RLock()
 
     def expired(signum, frame):
         signal.alarm(0)  # Never interrupt teardown with a second alarm.
@@ -82,8 +88,10 @@ def main():
     faulthandler.dump_traceback_later(15, repeat=True, file=stacks)
 
     def event(kind, name, **values):
-        row = {"event": kind, "phase": name, "seconds": time.monotonic() - started, **values}
-        events.write(json.dumps(row, sort_keys=True) + "\n")
+        row = {"event": kind, "phase": name, "seconds": time.monotonic() - started,
+               "thread": threading.current_thread().name, **values}
+        with log_lock:
+            events.write(json.dumps(row, sort_keys=True) + "\n")
         if kind in ("enter", "error") and name not in ("mapped_file_digest",):
             print("[DISP0-DIAG]", json.dumps(row), flush=True)
 
@@ -108,9 +116,10 @@ def main():
                 raise
             finally:
                 elapsed = time.monotonic() - t
-                row = result["phase_statistics"].setdefault(label, {"calls": 0, "inclusive_seconds": 0.})
-                row["calls"] += 1
-                row["inclusive_seconds"] += elapsed
+                with log_lock:
+                    row = result["phase_statistics"].setdefault(label, {"calls": 0, "inclusive_seconds": 0.})
+                    row["calls"] += 1
+                    row["inclusive_seconds"] += elapsed
                 event("exit", label, elapsed_seconds=elapsed, **details)
         return patch.object(target, name, wrapped)
 
@@ -123,6 +132,38 @@ def main():
         env = NativeDiagnostic(root, run, stage_number="cuest-10", source_pin=PIN)
         event("exit", "whole_stage_admission")
         psi4 = env.psi4
+        if args.audit_only:
+            if args.candidate_source is None:
+                raise ValueError("Explicit Git-staged candidate source required for audit-only comparison")
+            source = args.candidate_source.resolve(strict=True)
+            candidate_path = source / "psi4/driver/procrouting/sapt/sapt_cuest250_identity.py"
+            spec = importlib.util.spec_from_file_location("_disp0_standalone_audit_candidate", candidate_path)
+            candidate = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(candidate)
+            old = importlib.import_module("psi4.driver.procrouting.sapt.sapt_cuest250_identity")
+            native_path = str((Path(env.plan["sdk_root"]) / "lib/13/libcuest.so.0.2.50").resolve(strict=True))
+            native = next(owner for owner in env.owners
+                          if str(Path(owner._name).resolve(strict=True)) == native_path)
+            proof = {"native_path": native_path}
+            records = []
+            for repeat in range(3):
+                for label, implementation in (
+                    (("serial", old), ("concurrent", candidate)) if repeat % 2 == 0 else
+                    (("concurrent", candidate), ("serial", old))
+                ):
+                    t = time.monotonic()
+                    receipt = implementation.audit_maps(native, proof, env.manifest)
+                    records.append({"repeat": repeat, "mode": label,
+                                    "seconds": time.monotonic()-t, "receipt": receipt})
+            if any(record["receipt"] != records[0]["receipt"] for record in records):
+                raise RuntimeError("Paired fresh byte-audit receipts differ")
+            result.update(status="PASS_STANDALONE_FRESH_BYTE_AUDIT_COMPARISON_ONLY",
+                          audit_samples=records, candidate_source=str(source),
+                          candidate_module_sha256=hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
+                          audit_scope="Separate pure-Python byte audit; no Psi4 module overlay. "
+                                      "No integral/energy/kernel workload requested; ELF/runtime "
+                                      "initialization remains startup, not numerical execution proof.")
+            return
         import einsums
         einsums.rc.gpu_disable = True
         einsums.rc.threads = 4
@@ -211,6 +252,7 @@ def main():
                    for (f, line, fun), (_, nc, tt, ct, _) in stats.stats.items()]
         result.update(elapsed_seconds=time.monotonic()-started,
                       native_environment=None if env is None else env.report,
+                      profile_scope="cProfile main thread only; JSONL hash timings include worker threads",
                       top_exclusive=sorted(records, key=lambda r:r["exclusive_seconds"], reverse=True)[:20],
                       top_cumulative=sorted(records, key=lambda r:r["inclusive_seconds"], reverse=True)[:25])
         (run / "diagnostic-result.json").write_text(json.dumps(result, indent=2) + "\n")

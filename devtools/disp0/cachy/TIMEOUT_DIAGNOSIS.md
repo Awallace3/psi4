@@ -27,7 +27,7 @@ Read-only Cachy inspection (2026-10-24) found:
   of which provider calls reported72.175s. These include audit overhead, not
   integral kernel-only time.
 - Earlier scalar-driver cProfile `runs/automatic-cuest-profile-01` recorded
- 111.363s total:60.456s exclusive HASH.update and14.624s exclusive file reads.
+  111.363s total:60.456s exclusive HASH.update and14.624s exclusive file reads.
   This is measured historical Cachy overhead, not a measured explanation
   of the later H200 failure.
 
@@ -60,3 +60,61 @@ GPU or alter another owner's HOLD.
 Phase totals are inclusive/nested: do not add `audit_maps` to its child
 `mapped_file_digest`, or either to enclosing DFMO time. This is diagnostic
 timing with instrumentation, not an accepted CPU/GPU speedup measurement.
+
+## Reproduced result: audit-bound, not a recorded segfault
+
+First launch `b135e88da` stopped in shell preflight on an unset PYTHONPATH
+expansion, before the traced Python process or its attempt directory existed.
+The corrected fresh run was `timeout-trace-aug-b5-02`, task `bcbd1eeae`.
+Its user scope read back CPUQuota4s/second, MemoryMax12884901888, no swap,
+TasksMax128. Common nonblocking whole-process flock and absent HOLD were checked.
+
+The actual traced process PID2285739 stopped on its180s Python diagnostic
+deadline, with final elapsed181.067s including recorded unwind:
+
+| Observed region | Calls | Inclusive seconds |
+|---|---:|---:|
+| `audit_maps` | 166 | 146.029 |
+| `mapped_file_digest` | 1494 | 128.910 |
+| `fisapt_cuda` | 1 | 165.762 |
+
+These rows are nested, not additive. cProfile separately attributes104.081s
+exclusive to HASH.update and32.979s to buffered file reads.
+`fragment_terms` was not entered until178.202s; the deadline fired inside
+`CuESTPointPotential._bind → api.assert_identity → audit_maps → mapped_file_digest`.
+Repeated15s stacks show the same hashing path during per-shell native plan
+construction. No numerical fragment kernel stall or SIGSEGV was observed.
+The native plan's cleanup report is complete with no retained/ambiguous
+resources; no completed full-fragment/session-qualification result is claimed.
+
+Library identity/provider/blocked-dispersion source files are byte-identical
+between Cachy9cc6784336 and Phoenix1aed320cdb (Git comparison). This establishes
+a shared, measured overhead problem, not a complete causal trace of H20014322613.
+Block size alone cannot remove the already-large factory-construction cost.
+
+Raw evidence: Cachy run `runs/timeout-trace-aug-b5-02/`
+(`diagnostic-result.json`, `phases.jsonl`, `stacks.txt`, `profile.pstats`).
+Selected evidence was collected by task `b0cb38ca4`.
+
+Candidate narrow optimization: bounded concurrent fresh CUDA file hashes,
+retaining serial canonical cuEST admission before symbol binding and retaining
+all same-FD/inode/device/byte/race checks. No hash cache, verification-frequency
+reduction, scientific change, installed overlay or solved-H200 claim.
+
+## Candidate CPU evidence
+
+The serial implementation failed the new concurrency regression in2.015s:
+`Fresh CUDA byte proofs must run concurrently` (task `b318a3b83`).
+After the bounded-worker change,63cuEST and205CUDA CPU/mock/serial guards
+passed (`bdad5a2b7`), including fresh hashes on both repeated audits, maximum
+four overlapping workers, native-first admission, unlisted-path rejection,
+CUDA inode/device/replacement/open errors, deterministic error ordering,
+executor submission failure and worker `KeyboardInterrupt`/shutdown.
+Independent inspect-only review `d7799c3c05ac12596261fff9226d6eb5c` supported
+this constrained design; it is not a device or H200 validation result.
+
+The helper's separate `--audit-only --candidate-source <Git worktree>` mode
+compares old/new byte-audit receipts against the same loaded native world
+without replacing any installed Psi4 module. It does not request an energy,
+integral or kernel workload. Whole-stage installation and full numerical
+requalification are still required before using the changed guard in production.

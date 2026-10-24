@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from unittest.mock import patch
@@ -64,6 +65,129 @@ class Identity(unittest.TestCase):
         # Fake bytes are admitted ONLY through this test-local expected-hash patch.
         with patch.object(identity,"NATIVE_SHA256",identity.file_digest(proof["native_path"])):
             return identity.audit_maps(native,proof,manifest,text=text)
+
+    def test_cuda_byte_proofs_are_fresh_bounded_concurrent_and_follow_native_admission(self):
+        _,native,proof,manifest,text=self.fixture()
+        root=Path(manifest["cuda_root"])
+        for index,name in enumerate(("libcusolver.so.12","libcusparse.so.12","libnvrtc.so.13")):
+            path=root/name;path.write_bytes(("CPU CONCURRENCY FIXTURE"+name).encode())
+            manifest["components"].append({"path":str(path),"sha256":identity.file_digest(path)})
+            stat=path.stat();address=9000+index*256
+            text+=(f"\n{address:x}-{address+1:x} r-xp 0 "
+                   f"{os.major(stat.st_dev):x}:{os.minor(stat.st_dev):x} {stat.st_ino} {path}")
+        original=identity.mapped_file_digest
+        counts={};active=peak=0
+        lock=threading.Lock();four_active=threading.Event();native_admitted=threading.Event()
+        def checked(path,rows):
+            nonlocal active,peak
+            with lock:counts[path]=counts.get(path,0)+1
+            if path==proof["native_path"]:
+                value=original(path,rows);native_admitted.set();return value
+            self.assertTrue(native_admitted.is_set(),"Native bytes must precede CUDA workers")
+            with lock:
+                active+=1;peak=max(peak,active)
+                if active==4:four_active.set()
+            try:
+                self.assertTrue(four_active.wait(2),"Fresh CUDA byte proofs must run concurrently")
+                return original(path,rows)
+            finally:
+                with lock:active-=1
+        with patch.object(identity,"mapped_file_digest",side_effect=checked):
+            for _ in range(2):
+                four_active.clear();native_admitted.clear()
+                self.audit(native,proof,manifest,text)
+        self.assertEqual(peak,4)
+        self.assertEqual(active,0)
+        self.assertEqual(counts,{proof["native_path"]:2,
+            **{record["path"]:2 for record in manifest["components"]}})
+
+    def test_cuda_worker_failure_does_not_leave_hash_workers_borrowing_inputs(self):
+        for error_type in (RuntimeError,KeyboardInterrupt):
+            _,native,proof,manifest,text=self.fixture()
+            original=identity.mapped_file_digest
+            barrier=threading.Barrier(3,timeout=2)
+            completed=set();lock=threading.Lock()
+            def checked(path,rows):
+                if path==proof["native_path"]:return original(path,rows)
+                try:
+                    barrier.wait()
+                    if path==manifest["components"][0]["path"]:
+                        raise error_type("intentional CUDA worker hash failure")
+                    return original(path,rows)
+                finally:
+                    with lock:completed.add(path)
+            with self.subTest(error=error_type),patch.object(identity,"mapped_file_digest",side_effect=checked):
+                with self.assertRaisesRegex(error_type,"intentional CUDA worker hash failure"):
+                    self.audit(native,proof,manifest,text)
+            self.assertEqual(completed,{record["path"] for record in manifest["components"]})
+
+    def test_parallel_hashes_never_open_unadmitted_cuda_or_run_after_bad_native(self):
+        _,native,proof,manifest,text=self.fixture()
+        original=identity.mapped_file_digest
+        with patch.object(identity,"mapped_file_digest",wraps=original) as calls:
+            with self.assertRaisesRegex(RuntimeError,"Foreign/changed"):
+                self.audit(native,proof,manifest,
+                           text+"\n9000-9001 r-xp 0 00:00 1 /foreign/libcusolver.so.12")
+        self.assertEqual([call.args[0] for call in calls.call_args_list],[proof["native_path"]])
+        with patch.object(identity,"NATIVE_SHA256","0"*64),patch.object(
+                identity,"mapped_file_digest",wraps=original) as calls:
+            with self.assertRaisesRegex(RuntimeError,"native world"):
+                identity.audit_maps(native,proof,manifest,text=text)
+        self.assertEqual([call.args[0] for call in calls.call_args_list],[proof["native_path"]])
+
+    def test_cuda_worker_retains_inode_race_checks_and_open_error_propagation(self):
+        for mode in ("replace","overwrite","inode","device","open"):
+            _,native,proof,manifest,text=self.fixture()
+            path=Path(manifest["components"][0]["path"])
+            if mode=="open":
+                original_open=Path.open
+                def denied(self,*args,**kwargs):
+                    if self==path:raise PermissionError("intentional CUDA open failure")
+                    return original_open(self,*args,**kwargs)
+                with self.subTest(mode=mode),patch.object(Path,"open",denied):
+                    with self.assertRaisesRegex(PermissionError,"open failure"):
+                        self.audit(native,proof,manifest,text)
+                continue
+            if mode in ("inode","device"):
+                lines=text.splitlines();parts=lines[-3].split(maxsplit=5)
+                parts[4 if mode=="inode" else 3]="999999999999" if mode=="inode" else "ff:ff"
+                lines[-3]=" ".join(parts)
+                with self.subTest(mode=mode),self.assertRaisesRegex(RuntimeError,"inode/device"):
+                    self.audit(native,proof,manifest,"\n".join(lines))
+                continue
+            original=identity.digest
+            def changed(stream):
+                value=original(stream)
+                if Path(stream.name)==path:
+                    if mode=="replace":
+                        replacement=path.with_name("replacement")
+                        replacement.write_bytes(path.read_bytes());replacement.replace(path)
+                    else:
+                        with path.open("ab") as output:output.write(b"changed")
+                return value
+            with self.subTest(mode=mode),patch.object(identity,"digest",side_effect=changed):
+                with self.assertRaisesRegex(RuntimeError,"changed/replaced"):
+                    self.audit(native,proof,manifest,text)
+
+    def test_parallel_hash_failure_order_and_executor_submission_failure(self):
+        _,native,proof,manifest,text=self.fixture()
+        original=identity.mapped_file_digest
+        def failed(path,rows):
+            if path==proof["native_path"]:return original(path,rows)
+            raise RuntimeError("bad "+Path(path).name)
+        with patch.object(identity,"mapped_file_digest",side_effect=failed):
+            with self.assertRaisesRegex(RuntimeError,"bad libcublas.so.13"):
+                self.audit(native,proof,manifest,text)
+        closed=[]
+        class FailedExecutor:
+            def __init__(self,**kwargs):pass
+            def __enter__(self):return self
+            def map(self,*args):raise RuntimeError("intentional submission failure")
+            def __exit__(self,*args):closed.append(True)
+        with patch.object(identity,"ThreadPoolExecutor",FailedExecutor):
+            with self.assertRaisesRegex(RuntimeError,"submission failure"):
+                self.audit(native,proof,manifest,text)
+        self.assertEqual(closed,[True])
 
     def test_actual_version_abi_uses_handle_and_uint32_output(self):
         _,native,_,_,_=self.fixture()

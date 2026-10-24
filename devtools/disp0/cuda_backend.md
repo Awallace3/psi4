@@ -169,6 +169,12 @@ exception was rejected because stable cross-subvolume overmounts can make
 different mapped/opened files present identical observations. No such fallback
 is installed: descriptor pathname evidence must not replace backing-file proof.
 Mapped ownership is admitted before version getter calls.
+The candidate audit-overhead optimization retains fresh full-file hashes on
+every audit, with at most four independent CUDA-file hash workers. Canonical
+cuEST byte admission and symbol binding stay serial; scoped workers join before
+success, failure or native teardown. No cache or verification-frequency
+reduction is introduced. CPU concurrency/race/cleanup regressions pass; this
+change is not yet installed into a newly qualified whole GPU stage.
 An explicit byte-identical private tmpfs locator deployment now passes real
 fresh-process toolkit/cuEST loading, original strict mapped-file proof and
 actual resolver-pointer checks on Cachy. Dependency loading occurs after the
