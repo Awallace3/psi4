@@ -308,8 +308,17 @@ preflights first. It does not authorize a large timing campaign or paid retries.
 The exact d471cd93fa source was separately staged on Phoenix and its scientific
 `psi4`/CMake/external trees were checked equal to the qualified Cachy science.
 
-Fresh Phoenix CPU build/preparation **14377089** is submitted/running on the
+Fresh Phoenix CPU build/preparation **14377089 completed0:0** in8m42s on the
 verified `gts-cs207-chemx / cpu-small / inferno` route,8CPUs48GiB3h cap,
-maximum$0.20. Its manifest records this Cachy release proof. The separate H200
-gate remains gated on its completed CPU build/preflights and fresh account
-selection; no H200 result or speedup is implied by the Cachy pass.
+maximum$0.20. Its manifest records this Cachy release proof. Whole-stage PASS,
+271 CPU guards,61 helper tests, native RHF and both exact fragment CPU preflights
+were verified from final artifacts, not accounting alone. The separate H200
+gate still requires fresh account selection; no H200 result or speedup is
+implied by the Cachy or CPU build passes.
+
+That one bounded H200 follow-up is now **14377643**, inferno on the fresh
+selector's gts-cs207-chemx route,1H2004CPUs32GiB1h maximum$1.41. Its new root is
+`phoenix-h200-guard-fixed-d471cd93fa` beneath the Phoenix Disp0 run directory,
+with `cachy-release.json` recording this proof chain. Submission is not a GPU
+result. Further paid retries or large-system timings are not automatically
+authorized.

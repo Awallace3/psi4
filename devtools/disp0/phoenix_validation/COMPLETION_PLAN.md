@@ -29,7 +29,7 @@ qualified whole Cachy science. Old Phoenix builds/jobs remain untouched.
 Record actual job IDs/effective routes and final artifacts before claiming H200
 success. **No large-system admission, accepted GPU timing or speedup exists yet.**
 
-**14377089 submitted and RUNNING**, effective
+**14377089 COMPLETED0:0** (job/batch/step),8m42s, no TERM; effective
 `gts-cs207-chemx / cpu-small / inferno`,8CPUs48GiB3h verified by controller and
 job/batch/step accounting (`bb5e36f6b`). Fresh selector reported monthly
 gts-cs207 available$0.93 below its$1.00 floor and selected chemx; maximum build
@@ -39,10 +39,33 @@ Run root:
 Source worktree:
 `/storage/project/r-cs207-0/awallace43/gits/psi4.phoenix-disp0-guard-fixed-d471cd93fa`.
 Its manifest retains the qualifying Cachy gate path/hash and source/helper
-identities. Durable watcher `b31886b44` monitors14377089. The new H200 allocation
-is not yet submitted: require completed whole-build/CPU evidence, both public
-CPU fragment preflights, frozen runtime configuration and a refreshed account
-selector before that separate one-hour gate.
+identities. Durable watcher `b31886b44` returned terminal success, and
+`b83cb7ace` verified actual whole-stage PASS,271 CPU regressions,61 helper
+guards, independent E2 API proof and native RHF−1.1167143250625702Eh.
+Psi4 is1.12a1.dev867; source remains exactlyd471cd93fa. Private preparation is
+`PREPARED_NOT_GPU_VALIDATED`, cuda-bindings13.3.0/cuda-pathfinder1.8.4.
+Both native exact CPU fragment modes passed with tighter1e-16 screening and
+the expected fixed water dimensions. Runtime-config SHA256:
+`ddf6c333a6f9c3a5ed638379a615cf96129142125b6b78da6a62a4d74cb8971a`.
+The separate one-hour H200 gate requires this completed evidence and a refreshed
+account selector; its allocation/result is not inferred from the CPU build.
+
+**H200 gate14377643 submitted** after that evidence and a fresh live selector:
+`gts-cs207-chemx / gpu-h200 / inferno`,1H2004CPUs32GiB1h cap,
+maximum$1.41. Monthly gts-cs207 remained$0.93, below the selector floor and unable
+to cover the full gate. The test-only number14377642 is not the submitted job.
+Fresh root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-h200-guard-fixed-d471cd93fa`.
+`cachy-release.json` binds the qualifying full Cachy result and completed CPU
+build proof. Source/helper pin isd471cd93fa and runtime configuration remains
+`ddf6c333a6f9c3a5ed638379a615cf96129142125b6b78da6a62a4d74cb8971a`.
+Watcher `b18fd28d9` monitors the actual job; controller/prolog/hardware and final
+native numerical/cleanup artifacts must still be inspected. This consumes the
+conditional one-gate approval, not an automatic retry or timing-campaign budget.
+Effective controller/accounting readback (`ba3dddea0`) confirms
+**PENDING(Resources)**, gts-cs207-chemx/gpu-h200/inferno,4CPUs32G1h and
+`gres/gpu:h200:1`. No actual H200 UUID or prolog exists before allocation;
+verify those and the final numerical/cleanup artifacts after execution.
 
 ## Latest CPU production comparison request
 
