@@ -207,3 +207,25 @@ GPU inputs and independent CPU Mints matrices at1e-12/1e-14/1e-16. It preserves
 the oracle threshold and records every difference/violation. Screening is a
 hypothesis until that physical probe runs; no production accuracy change or
 full qualification follows from the probe alone.
+
+The physical probe completed in9.542s with complete session cleanup,
+zero live explicit bytes/native owners, and the actual leased RTX3090 UUID
+(`runs/one-electron-screening-11-01/probe/probe-result.json`,
+tasks `bd3e7dac2` / `b5e0b3f2e`). At the original cutoff it reproduces the saved
+GPU potentials to9.24e-14 and7.76e-14, respectively, including the original
+oracle failures. Only the input screening cutoff changes:
+
+| AO pair cutoff | Max \|GPU−CPU\|, V_A | Max \|GPU−CPU\|, V_B | Oracle violations A/B |
+|---|---:|---:|---:|
+| 1e-12 | 2.36021345e-10 | 1.92093415e-10 | 8 / 2 |
+| 1e-14 | 7.78703400e-12 | 6.33767434e-12 | 0 / 0 |
+| 1e-16 | 1.42108547e-13 | 8.93729535e-14 | 0 / 0 |
+
+The diagnostic gate now requests `INTS_TOLERANCE=1e-16` in **both** CPU and GPU
+arms, with unchanged `1e-10` one-electron comparison and unchanged downstream
+matrix thresholds. A regression asserts that both arms use this tighter input
+accuracy and the original2.36e-10 error is still rejected. This is an explicit
+diagnostic input change, not permission to reuse prior timings/inputs or relabel
+attempt02. The whole installed scientific package/core remains unchanged.
+Full unscaled/scaled/displaced/repeat and independent matrix qualification must
+be rerun in a fresh attempt before Phoenix release.

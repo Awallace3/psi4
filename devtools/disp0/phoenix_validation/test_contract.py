@@ -146,6 +146,21 @@ class Contract(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 gate.replay_hf(core,cache,object(),changed)
 
+    def test_exact_gate_tightens_integral_inputs_without_relaxing_one_electron_oracle(self):
+        gate=load("fragment_gate")
+        for gpu in (False,True):
+            for scaled in (False,True):
+                self.assertEqual(gate.options(gpu,scaled)["ints_tolerance"],1e-16)
+        class Raw(dict):
+            @property
+            def files(self):return list(self)
+        raw=Raw(S=np.eye(2),V_A=np.zeros((2,2)),V_B=np.zeros((2,2)))
+        cache={name:SimpleNamespace(np=value.copy()) for name,value in raw.items()}
+        raw["V_A"][0,1]=2.360213447686937e-10
+        core=SimpleNamespace(get_global_option=lambda name:False)
+        with self.assertRaisesRegex(AssertionError,"one-electron V_A"):
+            gate.replay_hf(core,cache,object(),raw)
+
     def test_header_stream_uses_POSIX_text_order_not_path_component_order(self):
         validate = load("validate")
         with tempfile.TemporaryDirectory() as directory:

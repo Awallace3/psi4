@@ -47,6 +47,10 @@ def options(gpu, scaled):
         "df_basis_scf": "aug-cc-pvdz-jkfit", "df_basis_sapt": "aug-cc-pvdz-jkfit",
         "df_basis_mp2": "aug-cc-pvdz-ri", "reference": "rhf", "scf_type": "df",
         "use_cuest": gpu, "cuest_mixed_precision": False, "cuest_gemm_min_dim": 0,
+        # cuEST's default AO-pair screening can accumulate >1e-10 nuclear
+        # attraction errors for diffuse shells. Tighten the *input accuracy*
+        # for BOTH diagnostic arms; do not weaken the independent oracle.
+        "ints_tolerance": 1e-16,
         "e_convergence": 10, "d_convergence": 10, "freeze_core": True,
         "sapt_dft_functional": "HF", "sapt_dft_do_fsapt": "SAPTDFT",
         "sapt_dft_use_einsums": True, "sapt_dft_mp2_disp_alg": "SAPT",
