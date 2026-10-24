@@ -107,6 +107,30 @@ def _random_coeffs(nbf, ncol, seed):
 @uusing("cuest")
 @uusing("cuda_cc8")
 @pytest.mark.cuest
+@pytest.mark.parametrize("condition", [1.e-2, 1.e-4])
+@pytest.mark.parametrize("asymmetric", [False, True])
+def test_cuest_df_fitting_condition_matches_cpu(condition, asymmetric):
+    """The requested relative metric truncation must affect GPU J and K too."""
+    primary, aux = _basis_sets()
+    left = _random_coeffs(primary.nbf(), 5, 317)
+    right = _random_coeffs(primary.nbf(), 5, 913) if asymmetric else None
+    pairs = [(left, right)]
+    psi4.set_options({"df_fitting_condition": 1.e-10})
+    _, default_j, default_k = _run_jk(False, primary, aux, pairs)
+    psi4.set_options({"df_fitting_condition": condition})
+    _, cpu_j, cpu_k = _run_jk(False, primary, aux, pairs)
+    name, gpu_j, gpu_k = _run_jk(True, primary, aux, pairs)
+    assert name == "cuESTJK"
+    # A comparison that never truncates a metric mode would miss the bug.
+    assert max(np.max(np.abs(a-b)) for a, b in
+               zip(default_j + default_k, cpu_j + cpu_k)) > 1.e-5
+    for ref, got in zip(cpu_j + cpu_k, gpu_j + gpu_k):
+        np.testing.assert_allclose(got, ref, atol=1.e-8, rtol=0)
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
 def test_cuest_jk_varying_occupied_buffers():
     """Shared per-build scratch handles growing, empty, and shrinking pairs."""
     primary, aux = _basis_sets()
