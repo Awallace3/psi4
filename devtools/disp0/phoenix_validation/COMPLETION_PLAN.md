@@ -1,5 +1,22 @@
 # Phoenix full F-SAPT completion contract
 
+## Latest grouped result: failures, no automatic retry
+
+GPU14400888 FAILED1:0 after2h11m33s; CPU14400901/14400904 FAILED1:0 after4s
+each because the launcher's assumed `/scratch/JOBID` parent is not writable.
+The launcher now uses the scheduler's writable temporary base; a real-payload
+red/green regression and all89 helper tests pass locally. No new paid job or
+successful native CPU allocation is implied by that correction.
+
+Nanotube completed two GPU calls (~2474/2476s), but repeat qualification failed.
+An offline all-field audit shows a substantial non-label-equivalent B-orbital
+gauge/partition difference, not just the first4.7e−9 A-coefficient difference.
+Protein83 hit the explicit CUDA memory guard constructing the RIFIT plan's
+creation-temporary workspace; native/session cleanup completed. Neither point
+has a completed independent native CPU comparison. No new large-system timing
+or speedup is accepted; earlier peptide/small-water/production-CPU results remain.
+Full artifact paths, measured errors and limits: `GROUPED_FAILURES.md`.
+
 ## Scheduling correction
 
 The subsequent user decision explicitly requests **one GPU job**, grouped

@@ -1,5 +1,12 @@
 # Qualified small H200 correctness gate
 
+The later grouped large-system follow-up14400888 failed qualification:
+nanotube has two executed GPU calls but non-equivalent repeated localized
+partitions; protein83 failed memory admission during RIFIT plan creation.
+Both following CPU blocks stopped before science on a scratch-permission
+launcher bug. No large timing/speedup is accepted. See`GROUPED_FAILURES.md`.
+The successful small-case evidence below is unchanged.
+
 ## Final result
 
 **14377643: PASS_SMALL_H200_ONLY**, completed2026-10-24 in29m42s.

@@ -12,7 +12,12 @@ if [[ "$DISP0_SPLIT_KIND" == gpu ]]; then
 elif [[ "$DISP0_SPLIT_KIND" == cpu ]]; then
     [[ "$DISP0_SPLIT_THREADS" == 24 && -z "${SLURM_JOB_GPUS:-}" ]]
     export CUDA_VISIBLE_DEVICES=""
-    export TMPDIR="/scratch/$SLURM_JOB_ID/disp0-split-owned"
+    # /scratch/$JOB_ID itself is site-owned, not a user-writable parent.
+    # Use the scheduler's actual writable temporary directory; the Python
+    # admission still requires a real node-local filesystem and free space.
+    base="${TMPDIR:-${SLURM_TMPDIR:-}}"
+    [[ -n "$base" && -d "$base" && -w "$base" ]]
+    export TMPDIR="$base/disp0-split-$SLURM_JOB_ID"
 else
     exit 1
 fi
