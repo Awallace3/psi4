@@ -110,3 +110,35 @@ proof of a new successful Phoenix CPU allocation; no retry was submitted.
 Old results/configurations/source checkouts remain intact. Fixing this launcher
 alone would still not qualify the failed GPU cases, so rerunning the same paid
 batch unchanged is not appropriate.
+
+## Bounded source investigations — not implemented fixes
+
+Read-only investigations`d8de680b17e3b55522d186ccb80ec7271` (memory) and
+`d7046aa471086e52815eb362403929a23` (localization) found these seams:
+
+- `sapt_proc.py` currently finalizes upstream JK after GPU fragments; cached
+  raw JK matrices are cloned earlier. Any earlier finalize must preserve
+  `cleanup_jk=False`, external ownership/aliases and exactly-once cleanup.
+  This improves actual free VRAM but does not reduce Python tracked bytes.
+- `sapt_fisapt_workflow_cuda.py` creates RIFIT before localization/JKFIT terms.
+  Phase serialization can preserve one device IBO gauge while avoiding
+  unnecessary plan overlap, but native construction cannot simply be moved
+  inside an allocation scope. Carry buffers need explicit device ownership;
+  no downloaded localization may be reused as production input.
+- Plan creation temporaries are deliberately retained and existing mocks
+  enforce that lifetime. Early retirement requires the exact admitted SDK
+  borrowing/completion contract and synchronized-success/failure tests.
+  Do not free everything labeled`temporary`: reusable compute scratch shares
+  that accounting flag. Peak live/native/request/limit/free values should be
+  captured at rejection, because the current exception combines two predicates.
+- Ordered IBO sweeps initialize directly from each SCF's canonical gauge.
+  SCF phase fixing does not orient degenerate occupied subspaces. Equal final
+  Q4 objectives and reported convergence do not establish a unique optimum or
+  independent final-state stationarity. Initial-gauge covariance, final CPU
+  stationarity/curvature and IAO spectral-cutoff invariants are the discriminating
+  tests. A projected-IAO deterministic initial basis is a candidate scientific
+  policy change, not an accepted fix.
+
+These inspections executed no native jobs and changed no numerical algorithm.
+They do not justify increasing memory budgets, relaxing comparisons, rotating
+energy matrices, mixing source pins in repeats or launching another paid batch.

@@ -1,5 +1,11 @@
 # Separate GPU execution from CPU reference/oracle work
 
+**Latest outcome:**14400888/14400901/14400904 all FAILED, with all outputs
+preserved and no automatic retry. The CPU scratch launcher is corrected and
+89 local tests pass; nanotube orbital-gauge repeat and protein native-plan
+memory admission remain unresolved. Details:`GROUPED_FAILURES.md`.
+Queued/pending readbacks below are historical submission checkpoints.
+
 ## User-requested regrouping (supersedes the unused eight-job plan)
 
 The user then requested **one GPU job**, shared CPU allocation for small cases,
