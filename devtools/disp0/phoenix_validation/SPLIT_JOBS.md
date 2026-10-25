@@ -1,5 +1,20 @@
 # Separate GPU execution from CPU reference/oracle work
 
+## Prepared checkpoint
+
+**PREPARED_NOT_SUBMITTED**, helper
+`23f55d5d361fee22cb5d51915417627561dbe1a6`; all81 offline tests and shell
+syntax checks passed, including timeout/TERM scratch cleanup, early peer
+configuration failure and explicit completed-producer CPU submission.
+Scientific/CMake/external trees remain unchanged fromd471cd93fa.
+Clean remote helper:
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-split-23f55d5d36`.
+Plan:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-split-23f55d5d36/plan.json`,
+SHA256`d5a73d535b5b500e042cc3d9636791ecf6d9659126402b61c4ac8c47fffe484e`.
+Preparation task`bffa2edf3` completed0 and made no scheduler submissions.
+The two GPU/six CPU jobs await an explicit QoS/resource decision.
+
 The user rejected holding an H200 while independent CPU references ran and
 explicitly approved **“Cancel and split”**. Mixed job14396956 was cancelled:
 job accounting reports CANCELLED after4h50m05s, batch143:0, step1:0.
