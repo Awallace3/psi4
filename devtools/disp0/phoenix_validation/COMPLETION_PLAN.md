@@ -9,6 +9,12 @@ H200 hours16 /CPU-node hours48 and maximum ~$32.07 are unchanged from the unused
 eight-job proposal. Protein83 is the previously confirmed suite protein entry.
 All three jobs preserve the same scientific/runtime/input seals; no CPU
 reference/oracle is scheduled in the H200 allocation. See`SPLIT_JOBS.md`.
+**Submitted:** GPU-only14400888 (16h), shared small CPU14400901 (24h), separate
+protein83 CPU14400904 (24h), all gts-cs207-chemx/inferno. Both CPU jobs depend
+afterany on14400888 and request no GPU. Whole science/stage remainsd471cd93fa/
+build14377089; frozen helper8321063109. All88 offline contracts passed.
+Durable watchers are recorded in`SPLIT_JOBS.md`; no completed large-system
+result or accepted timing is implied by accepted submission.
 
 The user explicitly approved cancellation/splitting after rejecting CPU
 references on H200 nodes. **14396956 CANCELLED** after4h50m05s; batch143:0,

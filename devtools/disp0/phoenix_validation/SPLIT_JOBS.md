@@ -19,6 +19,39 @@ proposal: **the same ~$32.07 additional maximum**, not a new larger budget.
 Each individual scientific case/repeat remains bounded to8h. CPU jobs queue
 after the one GPU job and reserve no GPU resources.
 
+Grouped helper pin`8321063109dce76c9896d9ee73e10abc85c1e13a` is staged clean at
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-grouped-8321063109`.
+Its prepared plan is
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-grouped-8321063109/plan.json`,
+SHA256`c4ad252d66485da3e65a4cf21be9fb50b7039d7d7667dbc013147ae081f694e8`.
+All88 offline tests and shell syntax checks passed; independent static review
+found no concrete execution/cleanup/provenance/resource blocker.
+The exact16h H200 and24h CPU-small inferno shapes passed test-only. Fresh
+selectors chose gts-cs207-chemx, with$22.62 GPU and$4.73 per CPU allocation
+worst cases. Actual job IDs and effective routing must be recorded separately.
+
+**All three grouped jobs submitted on inferno**, each after its own refreshed
+account selector and exact-route test-only, using gts-cs207-chemx:
+
+- **14400888**,`gpu`:1H2008CPUs160GiB16h; all remaining GPU calculations.
+- **14400901**,`cpu-small`:24CPUs160GiB24h, shared nanotube reference/oracle block.
+- **14400904**,`cpu-protein83`:24CPUs160GiB24h, separate protein reference/oracle block.
+
+Both CPU jobs have`afterany:14400888` plus kill-invalid-dependency and no GPU
+GRES. Submission task`b206d04bc` returned0 for each actual call. Test-only
+numbers14400887/14400900/14400903 are not compute jobs.
+Per-job outputs are under the corresponding label in
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-grouped-8321063109`.
+Watchers:`bfd80a9e0` GPU,`bcf7ed7f9` small CPU,`b61e639f6` protein CPU.
+Effective-route inspection:`bdfba71b8`. Submission is not scientific success;
+inspect actual prologs/hardware, case seals, full independent comparisons and
+cleanup before promoting results. No retries or additional allocations are
+automatically authorized.
+Controller readback confirms GPU14400888 PENDING(Priority),gpu-h200/inferno,
+8CPU160G16h and typed H200GRES; both CPU jobs are PENDING(Dependency),
+cpu-small/inferno,24CPU160G24h,`afterany:14400888`, and their ReqTRES contains
+**no GPU**. Prolog/actual device evidence remains pending until allocation.
+
 `grouped_jobs.py` calls the existing separated case runner in the **same
 orchestration process**, so it does not nest independently detached supervisor
 groups. Scientific workers remain fresh processes with complete reaping.
