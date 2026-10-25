@@ -1,0 +1,46 @@
+{
+  "schema": "ccasp-benzene-angular-full-plan/1",
+  "source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-benzene-angular-full-20261023",
+  "runtime": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-angular-full-20261023/runtime-001",
+  "run": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-angular-full-20261023/full-001",
+  "scratch": "/storage/scratch1/3/awallace43/ccasp-benzene-angular-full-20261023-full001",
+  "effective_profile_module": "angular_profile.py",
+  "parent_profile_sha256": "19170c907137c7883dfbceaa4a23e4b919ec2d97dac38343dc4559b8bffb0f0b",
+  "overrides": {"isa.q_grid": [200, 974], "resources.psi4_memory_bytes": 26843545600},
+  "native": {
+    "source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-build-smoke-v3",
+    "commit": "15cc9a7a9a2bd60e43ebc2533ec99686bca58374",
+    "tree": "8f0aa8fabd476aafc6bc49b824c60ac935a86753",
+    "stage": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-build-smoke-v3/build_ccasp_phoenix_benzene/stage",
+    "core_sha256": "b283901ddac01e6bf7210a7461fb71cd5b2333cf9e42b99d60271959b40ac7eb",
+    "python": "/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt/bin/python3.13"
+  },
+  "fixture": "/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-002/inputs/benzene_s66x8_24_monA.json",
+  "prior_probe": "/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/basis-probe-001/basis-admission.json",
+  "prior_probe_sha256": "6ddbac4a5292d5ab6d671ee6e7cb2acef828c0664f3b3ce7c53c4e8eefa9159c",
+  "prior_driver_source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-science-launch-v3",
+  "prior_driver_commit": "2e7d5ff2e1650e3152a7414818581945873f42f8",
+  "prior_driver_tree": "ba905cd9fabd0084099cf5020507c9f3e8f33e0c",
+  "prior_driver_files": {
+    "pilot.py": "dd1f3adc83f4f2eca4579f4732e72b35011ba827d0a564fc9f7aca169f1cce00",
+    "basis_admission.py": "4df9c5d9714839f053e122b9eda59f6a701d0defa117edb640b249fc3fee70dc",
+    "basis_contract.json": "42ad138fec115b594ec7fa31ac787d8f4b303e81ea2fad7c6e2485461aa88167",
+    "pilot.json": "19170c907137c7883dfbceaa4a23e4b919ec2d97dac38343dc4559b8bffb0f0b"
+  },
+  "routing": [
+    "psi4/driver/procrouting/isapol_bounded.py",
+    "psi4/driver/procrouting/isapol_bounded_oeprop.py",
+    "psi4/driver/procrouting/isapol_bounded_response.py",
+    "psi4/driver/procrouting/isapol_native_factors.py"
+  ],
+  "fingerprints": {
+    "main": "a88c2a074b28b8da608684b56bdff01aa965179aa91fe8bf6a8bdefd7a8c1c0e",
+    "auxiliary": "2bd06dbb3a6ea10b4cbfcda85677f199ddebb315fd317848dfea6aec19d600ac"
+  },
+  "allocation": {
+    "account": "gts-cs207-chemx", "partition": "cpu-small", "qos": "embers",
+    "nodes": 1, "tasks": 1, "cpus": 8, "memory": "48G", "time": "06:00:00",
+    "node": "atl1-1-02-007-23-1", "numerical_threads": 1,
+    "psi4_memory_bytes": 26843545600
+  }
+}

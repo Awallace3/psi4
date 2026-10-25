@@ -85,6 +85,14 @@ def compute_guard():
         raise ValueError("exact Phoenix compute node and isolated admitted Python required")
 
 
+def effective_profile():
+    """Optional explicit derivative profile; never replace the original probe profile."""
+    file = PLAN.get("effective_profile_module")
+    if file is None:
+        return None
+    return module("_ccasp_profile_"+Path(file).stem,file).configuration(sys.modules[__name__])[1]
+
+
 def source_binding(commit, tree):
     OLD.identity(commit,tree)  # NEW driver root + unchanged native15cc/build receipts
     if ROOT != Path(PLAN["source"]):
@@ -98,11 +106,15 @@ def source_binding(commit, tree):
     for name,pin in PLAN["prior_driver_files"].items():
         if sha(HERE/name) != pin:
             raise ValueError("frozen scientific recipe/basis helper changed: "+name)
-    return dict(source=str(ROOT),commit=commit,tree=tree,
+    binding = dict(source=str(ROOT),commit=commit,tree=tree,
         tools_sha256={p.name:sha(p) for p in HERE.iterdir() if p.is_file()},
         routing_sha256={name:sha(ROOT/name) for name in PLAN["routing"]},
         native=dict(source=str(OLD.SOURCE),commit=OLD.BUILD_COMMIT,tree=OLD.BUILD_TREE,
                     stage=str(OLD.STAGE),core_sha256=OLD.CORE_SHA))
+    profile = effective_profile()
+    if profile is not None:
+        binding["effective_profile"] = profile
+    return binding
 
 
 def regular_files(root, limit=5000, *, ignore_bytecode=True):
@@ -328,12 +340,20 @@ def prior_probe():
 
 def derived_document(binding, runtime_sha):
     old = prior_probe()
-    return dict(schema="ccasp-benzene-derived-basis-admission/1",
+    document = dict(schema="ccasp-benzene-derived-basis-admission/1",
         original_probe=dict(path=PLAN["prior_probe"],sha256=PLAN["prior_probe_sha256"],
                             binding=old["binding"],fingerprints=PLAN["fingerprints"]),
         new_binding=binding,runtime_manifest_sha256=runtime_sha,
         status="derivation_from_accepted_measurement_NOT_a_new_probe",
         semantics="same native/core/GBS/fixture/config/basis helper; new Python diagnostics and driver explicit")
+    profile = effective_profile()
+    if profile is not None:
+        if binding.get("effective_profile") != profile:
+            raise ValueError("effective profile source binding differs")
+        document.update(effective_profile=profile,
+            semantics="same native/core/GBS/fixture/bases/frame/helper; original measurement identity retained; "
+                      "explicit Q-grid and numerical-memory overrides are NOT a new basis measurement")
+    return document
 
 
 def admit_basis(core, options, molecule, receipt, binding, runtime_sha, derivative_path,
