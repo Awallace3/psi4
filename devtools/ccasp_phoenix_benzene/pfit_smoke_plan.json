@@ -1,0 +1,37 @@
+{
+  "schema": "ccasp-synthetic-pfit-smoke-plan/1",
+  "source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-pdef-native-smoke-20261025",
+  "runtime": "/storage/project/r-cs207-0/awallace43/runs/ccasp-pdef-native-smoke-20261025/runtime-001",
+  "run": "/storage/project/r-cs207-0/awallace43/runs/ccasp-pdef-native-smoke-20261025/smoke-001",
+  "scratch": "/storage/scratch1/3/awallace43/ccasp-pdef-native-smoke-20261025-smoke001",
+  "effective_profile_module": "pfit_smoke_profile.py",
+  "allocation": {
+    "account": "gts-cs207-chemx", "partition": "cpu-small", "qos": "embers",
+    "nodes": 1, "tasks": 1, "cpus": 2, "memory": "8G", "time": "00:30:00",
+    "node": "atl1-1-02-007-23-1", "numerical_threads": 1,
+    "psi4_memory_bytes": 4294967296
+  },
+  "procedure": {
+    "identity": "synthetic-complete72-static-mask-default-pfit/1",
+    "points": 32, "channels": 108, "nodes": 11, "max_parameters": 72,
+    "block_rows": 37, "seed": 20261025,
+    "max_bytes": 4294967296, "max_work": 48000000000,
+    "max_io_bytes": 33554432, "max_output_files": 48,
+    "max_output_bytes": 16777216, "max_snapshot_bytes": 262144,
+    "max_design_condition": 100.0, "max_normal_condition": 10000.0,
+    "parameter_atol": 1e-10, "parameter_rtol": 1e-9,
+    "objective_atol": 1e-12, "objective_rtol": 1e-8
+  },
+  "prior_driver_files": {
+    "pilot.py": "dd1f3adc83f4f2eca4579f4732e72b35011ba827d0a564fc9f7aca169f1cce00",
+    "basis_admission.py": "4df9c5d9714839f053e122b9eda59f6a701d0defa117edb640b249fc3fee70dc",
+    "basis_contract.json": "42ad138fec115b594ec7fa31ac787d8f4b303e81ea2fad7c6e2485461aa88167",
+    "pilot.json": "19170c907137c7883dfbceaa4a23e4b919ec2d97dac38343dc4559b8bffb0f0b"
+  },
+  "routing": [
+    "psi4/driver/procrouting/isapol_bounded.py",
+    "psi4/driver/procrouting/isapol_bounded_oeprop.py",
+    "psi4/driver/procrouting/isapol_bounded_response.py",
+    "psi4/driver/procrouting/isapol_native_factors.py"
+  ]
+}
