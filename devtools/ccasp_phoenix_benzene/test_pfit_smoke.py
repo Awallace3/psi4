@@ -290,6 +290,16 @@ class IdentityTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "aggregate"):
                     J.output_inventory(root, reserve=1)
 
+    def test_output_traversal_errors_are_not_silent(self):
+        def failed_walk(root, *, followlinks=False, onerror=None):
+            yield str(root), ["nested"], []
+            if onerror is not None:
+                onerror(PermissionError("nested output traversal denied"))
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(J.os, "walk", side_effect=failed_walk):
+            with self.assertRaisesRegex(PermissionError, "nested output traversal denied"):
+                J.output_inventory(Path(tmp))
+
     def test_partial_preparation_is_retained_not_overwritten(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)/"partial"
@@ -308,8 +318,10 @@ class IdentityTests(unittest.TestCase):
 
 class TerminalTests(unittest.TestCase):
     def test_closure_failure_no_false_success_primary_preserved_handles_live(self):
-        for fail_science, fail_closure in ((False, False), (True, False), (False, True), (True, True)):
-            with self.subTest(science=fail_science, closure=fail_closure), tempfile.TemporaryDirectory() as tmp:
+        for fail_science, fail_closure, fail_output in (
+                (False, False, False), (True, False, False), (False, True, False),
+                (True, True, False), (False, False, True)):
+            with self.subTest(science=fail_science, closure=fail_closure, output=fail_output), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 (root/"metadata").mkdir()
                 profile = J.R.effective_profile()
@@ -333,6 +345,14 @@ class TerminalTests(unittest.TestCase):
                         raise ValueError("loader closure refusal")
                 def pinned(path, pin):
                     return preparation if Path(path).name == "preparation.json" else J.procedure_document(binding, "c"*64)
+                original_walk = J.os.walk
+                def audit_walk(path, *, followlinks=False, onerror=None):
+                    if fail_output:
+                        yield str(path), ["nested"], []
+                        if onerror is not None:
+                            onerror(PermissionError("nested output traversal denied"))
+                        return
+                    yield from original_walk(path, followlinks=followlinks, onerror=onerror)
                 # test_only argv contains the original run path; substitute
                 # after patching PLAN, just as actual preparation would.
                 with mock.patch.dict(J.R.PLAN, run=str(root)), \
@@ -344,13 +364,14 @@ class TerminalTests(unittest.TestCase):
                      mock.patch.object(J.R, "module", return_value=NS(run_native=science)), \
                      mock.patch.object(J.R.OLD, "snapshot", side_effect=snapshot), \
                      mock.patch.object(J.R, "verify_runtime") as verify, \
+                     mock.patch.object(J.os, "walk", side_effect=audit_walk), \
                      mock.patch.object(J.resource, "setrlimit"):
                     preparation["test_only_argv"] = J.argv("a"*40, "b"*40, "c"*64, "d"*64)
                     # Real pinned read is mocked, so no preparation file needed
                     # but its sha must have an actual regular input.
                     J.R.write(root/"metadata/preparation.json", preparation)
                     code = J.run("a"*40, "b"*40, "c"*64, "d"*64)
-                self.assertEqual(code, int(fail_science or fail_closure))
+                self.assertEqual(code, int(fail_science or fail_closure or fail_output))
                 result = json.loads((root/"results/result.json").read_text())
                 self.assertEqual(result["smoke_pass"], code == 0)
                 self.assertFalse(result["scientific_acceptance"])
@@ -358,6 +379,9 @@ class TerminalTests(unittest.TestCase):
                     self.assertIn("primary synthetic refusal", result["error"])
                 if fail_closure:
                     self.assertIn("loader closure refusal", result["closure_errors"][0]["error"])
+                if fail_output:
+                    self.assertIn("nested output traversal denied", result["output_bound_error"])
+                    self.assertFalse(json.loads((root/"metadata/payload-terminal.json").read_text())["complete"])
                 verify.assert_called_once()  # loader failure does not skip runtime
                 self.assertEqual(source.call_count, 2)
 

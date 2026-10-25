@@ -61,7 +61,9 @@ def small_write(path, value):
 def output_inventory(root, *, reserve=0):
     p = R.PLAN["procedure"]
     count = total = 0
-    for parent, dirs, names in os.walk(root, followlinks=False):
+    def traversal_failed(error):
+        raise error
+    for parent, dirs, names in os.walk(root, followlinks=False, onerror=traversal_failed):
         if any((Path(parent)/name).is_symlink() for name in dirs):
             raise ValueError("output directory symlink")
         for name in names:
