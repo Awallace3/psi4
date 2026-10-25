@@ -67,6 +67,14 @@ def save(path, value):
         json.dump(value, stream, indent=2, sort_keys=True, allow_nan=False)
 
 
+def require_oracle_config(cpu,peer):
+    """Different scheduler roles may change threads, never the sealed runtime."""
+    if {k:v for k,v in cpu.items() if k!="threads"}!={k:v for k,v in peer.items() if k!="threads"}:
+        raise RuntimeError("CPU oracle and GPU runtime closures/resource policies differ")
+    if (cpu["threads"],peer["threads"])!=(24,8):
+        raise RuntimeError("Explicit24-core CPU /8-core GPU-host oracle policy required")
+
+
 def replay_hf(core, cache, wfn, raw):
     """CPU-only diagnostic: rebuild AO JK independently in the completed GPU gauge."""
     if core.get_global_option("USE_CUEST"):
@@ -237,6 +245,8 @@ def main():
     parser.add_argument("--scaled", action="store_true")
     parser.add_argument("--oracle-from", type=Path,
                         help="Completed GPU diagnostic directory; CPU comparison only")
+    parser.add_argument("--oracle-config",type=Path)
+    parser.add_argument("--oracle-config-sha256")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--inputs",type=Path)
     parser.add_argument("--inputs-sha256")
@@ -257,6 +267,15 @@ def main():
     phases, captured = [], {}
     try:
         config, build = read_config(args.config, args.config_sha256)
+        oracle_config_sha=args.config_sha256
+        if args.oracle_config is not None or args.oracle_config_sha256 is not None:
+            if (args.arm!="cpu" or args.oracle_from is None
+                    or args.oracle_config is None or args.oracle_config_sha256 is None):
+                raise ValueError("Explicit GPU peer configuration is only for a CPU oracle")
+            peer,_=read_config(args.oracle_config,args.oracle_config_sha256)
+            require_oracle_config(config,peer)
+            oracle_config_sha=args.oracle_config_sha256
+            result["oracle_gpu_config_sha256"]=oracle_config_sha
         expected_dimensions=WATER_DIMENSIONS
         text=WATER
         if any(v is not None for v in (args.inputs,args.inputs_sha256,args.system)):
@@ -350,7 +369,7 @@ def main():
                 if (previous["status"]!="EXECUTED_REQUIRES_INDEPENDENT_COMPARISON"
                         or previous["arm"]!="gpu" or previous["geometry_sha256"]!=result["geometry_sha256"]
                         or previous["scaled"]!=args.scaled
-                        or previous["runtime_config_sha256"]!=args.config_sha256):
+                        or previous["runtime_config_sha256"]!=oracle_config_sha):
                     raise RuntimeError("Oracle inputs differ from requested completed GPU diagnostic")
                 for filename in ("raw-hf.npz","fragment-matrices.npz"):
                     if hashlib.sha256((args.oracle_from/filename).read_bytes()).hexdigest()!=previous["artifact_sha256"][filename]:

@@ -54,7 +54,7 @@ def validate_allocation(job,manifest):
         raise RuntimeError("Effective allocation differs from declared H200 resource/charge limits")
 
 
-def execute_owned(command,env,out,err,timeout,started):
+def execute_owned(command,env,out,err,timeout,started,*,reaped=None):
     """Supervise/reap only this fresh process group; no local GPU lease logic."""
     with termination_signals():
         subreaper()
@@ -64,11 +64,14 @@ def execute_owned(command,env,out,err,timeout,started):
             code=child.wait(timeout=timeout)
             if group_alive(child.pid):
                 raise RuntimeError("Full diagnostic left surviving owned descendants")
+            if reaped is not None:reaped(child.pid)
             return code
         except BaseException:
             selected=(signal.SIGTERM,signal.SIGHUP,signal.SIGINT)
             old={sig:signal.signal(sig,signal.SIG_IGN) for sig in selected}
-            try:unwind(child)
+            try:
+                unwind(child)
+                if reaped is not None:reaped(child.pid)
             finally:
                 for sig,handler in old.items():signal.signal(sig,handler)
             raise

@@ -1,5 +1,14 @@
 # Phoenix full F-SAPT completion contract
 
+## Scheduling correction
+
+The user explicitly approved cancellation/splitting after rejecting CPU
+references on H200 nodes. **14396956 CANCELLED** after4h50m05s; batch143:0,
+step1:0, durable exit143/TERM1. Its first nanotube CPU reference was interrupted;
+peptide's three checked pairs remain complete and preserved.
+`SPLIT_JOBS.md` records separate GPU-only and CPU-only preparation.
+No further inferno submission is implied by the cancellation/preparation approval.
+
 ## Newly requested full-system submission
 
 After small H200 gate14377643 passed, the user asked to submit the full job.
