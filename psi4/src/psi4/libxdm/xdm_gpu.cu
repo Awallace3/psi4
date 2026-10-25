@@ -738,6 +738,8 @@ struct DeviceXDMIntegrator::Impl {
     std::vector<int> event_stage;  // -1 opens a chunk
     std::size_t nevent = 0;
     double stage_ms[NSTAGE] = {};
+    // GEMM multiply-adds: done over each chunk's union columns, and needed by each block's own.
+    double gemm_done = 0.0, gemm_needed = 0.0;
     void mark(int stage) {
         if (nevent == events.size()) {
             cudaEvent_t e = nullptr;
@@ -886,6 +888,9 @@ struct DeviceXDMIntegrator::Impl {
             std::copy(w, w + npoints, h + 3 * cap + p0);
         }
 
+        std::size_t own_cols = 0;
+        for (std::size_t i = 0; i < nshells; i++) own_cols += basis.nfunc[shells[i]];
+        gemm_needed += static_cast<double>(npoints) * own_cols * own_cols;
         blk_point_offset.push_back(p0);
         blk_npoints.push_back(static_cast<int>(npoints));
         for (std::size_t i = 0; i < nshells; i++) {
@@ -1064,6 +1069,7 @@ struct DeviceXDMIntegrator::Impl {
 
         sent += P;
         chunks += 1;
+        gemm_done += static_cast<double>(P) * ncols * ncols;
         sample_device_memory();
         slot = (slot + 1) % nslot;
         fill_points = 0;
@@ -1289,6 +1295,10 @@ std::vector<std::pair<std::string, double>> DeviceXDMIntegrator::stage_seconds()
     std::vector<std::pair<std::string, double>> out;
     for (int k = 0; k < Impl::NSTAGE; k++) out.emplace_back(names[k], impl_->stage_ms[k] * 1.0e-3);
     return out;
+}
+std::array<double, 2> DeviceXDMIntegrator::gemm_work() const {
+    const double spin_planes = static_cast<double>(impl_->nspin) * ngemm;
+    return {spin_planes * impl_->gemm_done, spin_planes * impl_->gemm_needed};
 }
 
 // ==> DeviceGridBlocks <== //

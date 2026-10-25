@@ -165,6 +165,9 @@ class DeviceXDMIntegrator {
     /// (valid after finish()): copies, density gather, collocation, GEMM, density,
     /// Becke-Roussel + promolecule, moments.
     std::vector<std::pair<std::string, double>> stage_seconds() const;
+    /// GEMM multiply-adds {done, needed}: done over each chunk's union columns, needed over
+    /// each grid block's own columns.
+    std::array<double, 2> gemm_work() const;
 
    private:
     struct Impl;

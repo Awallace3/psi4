@@ -167,6 +167,8 @@ void integrate_on_device(std::shared_ptr<Wavefunction> wfn, const DFTGrid& grid,
         stages += (stages.empty() ? "" : ", ") + name + buf;
     }
     outfile->Printf("    Device stage time %.3f s: %s.\n", gpu_total, stages.c_str());
+    const auto work = device->gemm_work();
+    outfile->Printf("    GEMM multiply-adds %.3e over chunk columns, %.3e over block columns.\n", work[0], work[1]);
 }
 #endif
 
