@@ -2,6 +2,14 @@
 
 ## Scheduling correction
 
+The subsequent user decision explicitly requests **one GPU job**, grouped
+small-case CPU work, separate protein-sized CPU work, and inferno. The revised
+three-allocation plan is GPU16h, shared small CPU24h, protein83 CPU24h; total
+H200 hours16 /CPU-node hours48 and maximum ~$32.07 are unchanged from the unused
+eight-job proposal. Protein83 is the previously confirmed suite protein entry.
+All three jobs preserve the same scientific/runtime/input seals; no CPU
+reference/oracle is scheduled in the H200 allocation. See`SPLIT_JOBS.md`.
+
 The user explicitly approved cancellation/splitting after rejecting CPU
 references on H200 nodes. **14396956 CANCELLED** after4h50m05s; batch143:0,
 step1:0, durable exit143/TERM1. Its first nanotube CPU reference was interrupted;

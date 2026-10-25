@@ -27,7 +27,8 @@ def validate_allocation(job,manifest):
     if (job.get("Account")!=manifest["account"] or job.get("QOS")!=manifest["qos"]
             or job.get("Partition")!=partition or job.get("NumNodes")!="1"
             or job.get("NumCPUs")!=str(threads) or job.get("CPUs/Task")!=str(threads)
-            or job.get("NumTasks")!="1" or seconds(job["TimeLimit"])!=28800
+            or job.get("NumTasks")!="1"
+            or seconds(job["TimeLimit"])!=manifest.get("allocation_wall_seconds",28800)
             or memory_bytes(job["MinMemoryNode"])!=160*1024**3):
         raise RuntimeError("Split allocation differs from its declared CPU/GPU route")
     if gpu:
@@ -95,12 +96,8 @@ def admit_cpu_producer(manifest,config):
     return sealed_gpu(producer,manifest,manifest["gpu_config_sha256"],manifest["repeat"])
 
 
-def main():
-    parser=argparse.ArgumentParser()
-    parser.add_argument("--output",type=Path,required=True)
-    args=parser.parse_args()
-    root=args.output.resolve(strict=True)
-    manifest=json.loads((root.parent/"manifest.json").read_text())
+def run(manifest,root):
+    root=Path(root).resolve(strict=True)
     result={"status":"STARTED","scope":"SEPARATED_EXACT_FSAPT_DIAGNOSTIC_NOT_SPEEDUP",
         "kind":manifest["kind"],"system":manifest["system"],"repeat":manifest.get("repeat"),
         "helper_pin":os.environ["DISP0_PIN"],"processes":[],
@@ -110,7 +107,9 @@ def main():
     checkpoint=lambda:save(root/"split-result.json",result)
     checkpoint()
     helper=Path(__file__).resolve().parent
-    deadline=time.monotonic()+28800-180
+    case_cap=manifest.get("case_wall_seconds",28800)
+    if not 180<case_cap<=28800:raise ValueError("Bounded per-case execution cap required")
+    deadline=time.monotonic()+case_cap-180
     scratch_owner=None
     live_groups=set()
     try:
@@ -227,6 +226,14 @@ def main():
                           "error":f"{type(error).__name__}: {error}"})
             raise
         finally:checkpoint()
+
+
+def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument("--output",type=Path,required=True)
+    args=parser.parse_args()
+    root=args.output.resolve(strict=True)
+    run(json.loads((root.parent/"manifest.json").read_text()),root)
 
 
 if __name__=="__main__":

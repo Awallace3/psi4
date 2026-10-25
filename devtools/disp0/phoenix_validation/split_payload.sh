@@ -30,5 +30,7 @@ export CONDA_PREFIX="$DISP0_GATE_ENV" MKL_INTERFACE_LAYER=LP64
 while IFS= read -r name; do unset "$name"; done < <(compgen -v EINSUMS_ || true)
 export EINSUMS_PACKED_GEMM_BATCH_PROMOTION=1
 cd "$DISP0_JOB_RUN"
+driver="${DISP0_SPLIT_DRIVER:-split_jobs.py}"
+[[ "$driver" == split_jobs.py || "$driver" == grouped_jobs.py ]]
 exec "$DISP0_GATE_ENV/bin/python" -B \
-    "$DISP0_SOURCE/devtools/disp0/phoenix_validation/split_jobs.py" --output "$DISP0_JOB_RUN"
+    "$DISP0_SOURCE/devtools/disp0/phoenix_validation/$driver" --output "$DISP0_JOB_RUN"

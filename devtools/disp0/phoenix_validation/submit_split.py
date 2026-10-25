@@ -12,14 +12,17 @@ from split_jobs import SYSTEMS,admit_cpu_producer
 from submit_full import LIMITS
 
 
-def command(source,run,kind,account,qos,parent=None,*,completed_producer=False):
+def command(source,run,kind,account,qos,parent=None,*,completed_producer=False,wall_seconds=28800):
     if kind not in ("cpu","gpu") or qos not in ("embers","inferno"):
         raise ValueError("Explicit separated resource class and QoS required")
     gpu=kind=="gpu"
+    if wall_seconds not in ((28800,57600) if gpu else (28800,86400)):
+        raise ValueError("Explicit bounded single/grouped wall limit required")
+    wall_time=f"{wall_seconds//3600:02d}:00:00"
     args=["sbatch","--parsable","--job-name=disp0-split-"+kind,
         "--account="+account,"--partition="+("gpu-h200" if gpu else "cpu-small"),
         "--qos="+qos,"--nodes=1","--ntasks=1",
-        "--cpus-per-task="+("8" if gpu else "24"),"--mem=160G","--time=08:00:00",
+        "--cpus-per-task="+("8" if gpu else "24"),"--mem=160G","--time="+wall_time,
         "--no-requeue","--signal=TERM@120","--chdir="+str(run),
         "--output="+str(run/"logs/%x-%j.out"),"--error="+str(run/"logs/%x-%j.err"),
         "--export=ALL"]

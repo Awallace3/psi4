@@ -1,5 +1,37 @@
 # Separate GPU execution from CPU reference/oracle work
 
+## User-requested regrouping (supersedes the unused eight-job plan)
+
+The user then requested **one GPU job**, shared CPU allocation for small cases,
+separate CPU allocation for protein-sized cases, and explicitly approved
+inferno. The already-confirmed input here is protein83, not a new protein87
+geometry. The grouped layout isolates protein83 as the protein-sized case:
+
+| Allocation | Work | Cap |
+|---|---|---|
+| One H200 /8CPU /160GiB | nanotube then protein83, three GPU calls each |16h |
+| Shared small CPU /24CPU /160GiB | remaining nanotube's three CPU references/oracles |24h |
+| Separate protein83 CPU /24CPU /160GiB | protein83's three references/oracles |24h |
+
+Peptide's completed results are preserved; no rerun. Total upper-bound H200
+hours16 and CPU-node hours48 are identical to the unused2GPU×8h+6CPU×8h
+proposal: **the same ~$32.07 additional maximum**, not a new larger budget.
+Each individual scientific case/repeat remains bounded to8h. CPU jobs queue
+after the one GPU job and reserve no GPU resources.
+
+`grouped_jobs.py` calls the existing separated case runner in the **same
+orchestration process**, so it does not nest independently detached supervisor
+groups. Scientific workers remain fresh processes with complete reaping.
+Completed system-level GPU results have their own clean case marker and seals;
+an unrelated system failure does not erase or invalidate those complete
+prefix results. No failed system is automatically retried. CPU validation
+accepts only its system's complete sealed three-repeat output. Cancellation
+or unproved child cleanup stops further launches and prevents scratch deletion.
+The CPU blocks also perform their three-reference gauge-repeat comparisons.
+
+The old eight-job plan below was prepared only and is not to be submitted.
+Its source and generated metadata remain intact for audit.
+
 ## Prepared checkpoint
 
 **PREPARED_NOT_SUBMITTED**, helper
