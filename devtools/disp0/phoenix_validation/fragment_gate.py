@@ -79,7 +79,8 @@ def replay_hf(core, cache, wfn, raw):
         co,cv=raw["Cocc_"+side],raw["Cvir_"+side]
         eo,ev=raw["eps_occ_"+side],raw["eps_vir_"+side]
         if (co.ndim!=2 or cv.ndim!=2 or co.shape[0]!=s.shape[0]
-                or cv.shape[0]!=s.shape[0] or co.shape[1]+cv.shape[1]!=s.shape[0]
+                or cv.shape[0]!=s.shape[0]
+                or co.shape[1]+cv.shape[1]!=cache["Cocc_"+side].shape[1]+cache["Cvir_"+side].shape[1]
                 or eo.shape!=(co.shape[1],) or ev.shape!=(cv.shape[1],)
                 or any(not np.isfinite(value).all() for value in (co,cv,eo,ev))
                 or np.min(ev)-np.max(eo)<=0):
@@ -88,6 +89,14 @@ def replay_hf(core, cache, wfn, raw):
             np.testing.assert_allclose(coefficients.T@s@coefficients,
                 np.eye(coefficients.shape[1]),rtol=1e-8,atol=1e-8)
         np.testing.assert_allclose(co.T@s@cv,0.,atol=1e-8,rtol=0)
+        # Equal ranks alone do not prove that the discarded diffuse subspace
+        # is the same. Bind the entire retained space to the independent CPU
+        # calculation before replacing any cache arrays for the oracle.
+        native=np.column_stack((cache["Cocc_"+side].np,cache["Cvir_"+side].np))
+        supplied=np.column_stack((co,cv))
+        overlap=native.T@s@supplied
+        np.testing.assert_allclose(overlap.T@overlap,np.eye(supplied.shape[1]),
+            rtol=1e-8,atol=1e-8,err_msg="Independent complete retained orbital subspace "+side)
         for name,coefficients in (("D_",co),("P_",cv)):
             np.testing.assert_allclose(raw[name+side],coefficients@coefficients.T,
                 rtol=1e-8,atol=1e-8,err_msg="Independent HF projector consistency "+name+side)
@@ -229,6 +238,10 @@ def main():
     parser.add_argument("--oracle-from", type=Path,
                         help="Completed GPU diagnostic directory; CPU comparison only")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--inputs",type=Path)
+    parser.add_argument("--inputs-sha256")
+    parser.add_argument("--system",choices=("peptide","nanotube","protein83"))
+    parser.add_argument("--block-size",type=int,default=5)
     args = parser.parse_args()
     args.config=args.config.resolve(strict=True)
     args.output = args.output.resolve()
@@ -244,6 +257,20 @@ def main():
     phases, captured = [], {}
     try:
         config, build = read_config(args.config, args.config_sha256)
+        expected_dimensions=WATER_DIMENSIONS
+        text=WATER
+        if any(v is not None for v in (args.inputs,args.inputs_sha256,args.system)):
+            if not all(v is not None for v in (args.inputs,args.inputs_sha256,args.system)):
+                raise ValueError("Full-system diagnostics require frozen inputs, hash and system")
+            from full_inputs import load_point
+            point,expected_dimensions=load_point(args.inputs,args.inputs_sha256,args.system)
+            if args.distance_change!=0:
+                raise ValueError("Full-system geometry must remain exactly frozen")
+            text=point["geometry"]
+            result.update(system=args.system,input_manifest_sha256=args.inputs_sha256)
+        if type(args.block_size) is not int or not 1<=args.block_size<=48:
+            raise ValueError("Explicit bounded dispersion block required")
+        result["dispersion_block_size"]=args.block_size
         # RuntimeTensor lookup during Psi4's SAPT imports initializes Einsums;
         # rc must be configured BEFORE that first lookup, not merely read back.
         import einsums
@@ -264,7 +291,6 @@ def main():
         selected = options(args.arm == "gpu", args.scaled)
         selected["fisapt_fsapt_filepath"] = str(args.output / "fsapt")
         psi4.set_options(selected)
-        text = WATER
         if not np.isfinite(args.distance_change) or abs(args.distance_change) > .2:
             raise ValueError("Bounded finite small-case displacement required")
         # Shift every B atom, not only its oxygen.
@@ -276,7 +302,8 @@ def main():
                 fields[1] = str(float(fields[1]) + args.distance_change)
                 line = " ".join(fields)
             lines.append(line)
-        text = "\n".join(lines) + "\n"
+        if not args.inputs:
+            text = "\n".join(lines) + "\n"
         molecule = psi4.geometry(text)
         result.update(source_pin=config["source_pin"],
             runtime_config_sha256=args.config_sha256, options=selected, geometry=text,
@@ -291,9 +318,14 @@ def main():
             dimensions={"atoms":int(molecule.natom()),"ao":int(wfns[0].basisset().nbf()),
                         "occupied":occupied,"frozen":frozen,
                         "active":[n-nf for n,nf in zip(occupied,frozen)]}
-            if dimensions!=WATER_DIMENSIONS:
-                raise RuntimeError("Native wavefunctions differ from the fixed frozen water case")
+            if dimensions!=expected_dimensions:
+                raise RuntimeError("Native wavefunctions differ from independently frozen case dimensions")
             result["orbital_dimensions"]=dimensions
+            result["retained_orbital_rank"]=[int(w.nmo()) for w in wfns]
+            virtual=[int(cache["Cvir_"+side].shape[1]) for side in "AB"]
+            if result["retained_orbital_rank"]!=[o+v for o,v in zip(occupied,virtual)]:
+                raise RuntimeError("Native retained ranks and complete cached virtual spaces differ")
+            result["virtual_orbitals"]=virtual
             for name in FIELDS:
                 key = {"Uocc0A":"Uocc_A","Uocc0B":"Uocc_B"}.get(name,name)
                 if name in cache or key in cache:
@@ -308,6 +340,11 @@ def main():
         with ExitStack() as stack:
             raw=gpu=None
             iao_results=[]
+            if args.inputs:
+                for role,item in json.loads(args.inputs.read_text())["basis_files"].items():
+                    path=Path(core.get_datadir())/"basis"/item["filename"]
+                    if hashlib.sha256(path.read_bytes()).hexdigest()!=item["sha256"]:
+                        raise RuntimeError("Installed basis differs from frozen input: "+role)
             if args.oracle_from:
                 previous=json.loads((args.oracle_from/"result.json").read_text())
                 if (previous["status"]!="EXECUTED_REQUIRES_INDEPENDENT_COMPARISON"
@@ -334,6 +371,10 @@ def main():
             if args.arm == "gpu":
                 runtime = AuditedRuntime(args.config, args.config_sha256)
                 batched_probe(runtime)
+                factory=runtime.provider
+                if args.inputs:
+                    from full_observe import observed_factory
+                    factory=observed_factory(runtime)
                 original = terms.fisapt_cuda
                 def fragment(cache, *positional, **kwargs):
                     from psi4.driver.procrouting.sapt.sapt_fisapt_workflow_cuda import HF_FIELDS
@@ -367,6 +408,11 @@ def main():
                     original = getattr(terms,name)
                     def timed(*positional,_name=name,_original=original,**kwargs):
                         start=time.perf_counter()
+                        if _name=="localization":
+                            from psi4.driver.procrouting.sapt.sapt_fisapt_workflow_cuda import HF_FIELDS
+                            np.savez(args.output/"raw-hf.npz",**{
+                                name:np.array(positional[0][name].np,copy=True) for name in (
+                                    *HF_FIELDS,"J_O","eps_occ_A","eps_occ_B","eps_vir_A","eps_vir_B")})
                         if raw is not None and _name=="localization":
                             replay_hf(core,positional[0],positional[1],raw)
                         out=_original(*positional,**kwargs)
@@ -379,7 +425,7 @@ def main():
                     stack.enter_context(patch.object(terms,name,timed))
             start = time.perf_counter()
             energy, wfn = psi4.energy("sapt(dft)", molecule=molecule, return_wfn=True,
-                **({"cuda_provider_factory":runtime.provider,"cuda_dispersion_block_size":5}
+                **({"cuda_provider_factory":factory,"cuda_dispersion_block_size":args.block_size}
                    if runtime else {}))
             result["diagnostic_whole_energy_seconds"] = time.perf_counter()-start
         for name in ("Elst_AB","Exch_AB","IndAB_AB","IndBA_AB","Disp_AB"):

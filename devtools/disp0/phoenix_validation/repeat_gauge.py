@@ -106,19 +106,23 @@ def compare_arrays(left,right,raw_left,raw_right,dimensions):
         "rtol":RTOL,"atol":ATOL}
 
 
-def compare_repeat(left_path,right_path):
+def compare_repeat(left_path,right_path,*,dimensions=None,arm="gpu"):
+    expected=WATER_DIMENSIONS if dimensions is None else dimensions
+    if arm not in ("cpu","gpu"):raise ValueError("Explicit repeated arm required")
     paths=[Path(left_path).resolve(strict=True),Path(right_path).resolve(strict=True)]
     if paths[0]==paths[1]:raise RuntimeError("Distinct fresh-process outputs required")
     docs=[json.loads((p/"result.json").read_text()) for p in paths]
     for document in docs:
         if (document["status"]!="EXECUTED_REQUIRES_INDEPENDENT_COMPARISON"
-                or document["arm"]!="gpu"):
-            raise RuntimeError("Completed fresh GPU repeat inputs required")
+                or document["arm"]!=arm):
+            raise RuntimeError("Completed fresh same-arm repeat inputs required")
     if docs[0]["pid"]==docs[1]["pid"]:raise RuntimeError("Distinct fresh process identities required")
     for key in ("source_pin","runtime_config_sha256","geometry_sha256","scaled","orbital_dimensions"):
         if docs[0][key]!=docs[1][key]:raise RuntimeError("Unmatched GPU repeats: "+key)
-    if docs[0]["orbital_dimensions"]!=WATER_DIMENSIONS:
-        raise RuntimeError("Repeat dimensions differ from the fixed frozen water input")
+    if docs[0]["orbital_dimensions"]!=expected:
+        raise RuntimeError("Repeat dimensions differ from the fixed frozen water input"
+                           if dimensions is None else
+                           "Repeat dimensions differ from the independent fixed input")
     options=[]
     for path,document in zip(paths,docs):
         selected=dict(document["options"])

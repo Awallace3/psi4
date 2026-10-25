@@ -1,5 +1,17 @@
 # Phoenix full F-SAPT completion contract
 
+## Newly requested full-system submission
+
+After small H200 gate14377643 passed, the user asked to submit the full job.
+`FULL_H200.md` declares one bounded inferno H200 allocation:8CPUs160GiB8h,
+peptide/nanotube/protein83, three exact CPU/GPU pairs plus three independent
+native CPU oracles per system, no automatic retry, first-failure stop.
+Existing immutable science/stage d471cd93fa/build14377089 is reused; new
+helpers carry frozen inputs, retained-MO-subspace checks, actual scheduler
+admission, native-plan memory observations and owned-child TERM cleanup.
+These instrumented full calls are diagnostics, not yet production speedups.
+Record the actual submission ID and effective routing after acceptance.
+
 ## Latest GPU release checkpoint
 
 The user requested: **“if Cachy good, inferno Phoenix.”**

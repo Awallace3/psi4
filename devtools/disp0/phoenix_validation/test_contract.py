@@ -140,6 +140,8 @@ class Contract(unittest.TestCase):
                 "eps_occ_"+side:np.array([-1.]),"eps_vir_"+side:np.array([1.,2.]),
                 "D_"+side:co@co.T,"P_"+side:cv@cv.T})
         cache={name:SimpleNamespace(np=raw[name]) for name in ("S","V_A","V_B")}
+        cache.update({name:SimpleNamespace(np=raw[name],shape=raw[name].shape)
+                      for name in ("Cocc_A","Cocc_B","Cvir_A","Cvir_B")})
         core=SimpleNamespace(get_global_option=lambda name:False)
         for field in ("D_A","P_B"):
             changed=Raw(raw);changed[field]=changed[field]+.01
