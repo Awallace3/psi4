@@ -34,6 +34,8 @@
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace psi {
@@ -159,6 +161,10 @@ class DeviceXDMIntegrator {
     std::size_t npoints() const;
     /// Chunks sent to the device so far.
     std::size_t nchunks() const;
+    /// Device time per stage of the chunk pipeline, in seconds, from events on the stream
+    /// (valid after finish()): copies, density gather, collocation, GEMM, density,
+    /// Becke-Roussel + promolecule, moments.
+    std::vector<std::pair<std::string, double>> stage_seconds() const;
 
    private:
     struct Impl;

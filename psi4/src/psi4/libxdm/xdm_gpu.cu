@@ -731,6 +731,35 @@ struct DeviceXDMIntegrator::Impl {
     bool resident_D = false;
     double* d_Dfull = nullptr;
 
+    // Stage timing: an event on the stream at the start of each chunk and after each stage;
+    // the time between two consecutive events of a chunk belongs to the later one's stage.
+    enum Stage { COPY, GATHER, COLLOC, GEMM, DENSITY, POINT, MOMENT, NSTAGE };
+    std::vector<cudaEvent_t> events;
+    std::vector<int> event_stage;  // -1 opens a chunk
+    std::size_t nevent = 0;
+    double stage_ms[NSTAGE] = {};
+    void mark(int stage) {
+        if (nevent == events.size()) {
+            cudaEvent_t e = nullptr;
+            check_cuda(cudaEventCreate(&e), "cudaEventCreate");
+            events.push_back(e);
+            event_stage.push_back(stage);
+        }
+        event_stage[nevent] = stage;
+        check_cuda(cudaEventRecord(events[nevent], stream_handle), "cudaEventRecord");
+        nevent++;
+    }
+    // Called with the stream idle: fold the recorded intervals into stage_ms and reuse the events.
+    void collect_stages() {
+        for (std::size_t i = 1; i < nevent; i++) {
+            if (event_stage[i] < 0) continue;
+            float ms = 0.0f;
+            check_cuda(cudaEventElapsedTime(&ms, events[i - 1], events[i]), "cudaEventElapsedTime");
+            stage_ms[event_stage[i]] += ms;
+        }
+        nevent = 0;
+    }
+
     // Device-blocked grid (add_device_blocks): the points are read in place, and a chunk is
     // the contiguous point range [fill_start, fill_start + fill_points).
     const double* dev_points[4] = {nullptr, nullptr, nullptr, nullptr};
@@ -777,6 +806,10 @@ struct DeviceXDMIntegrator::Impl {
         }
         if (h_dens) cudaFreeHost(h_dens);
         h_dens = nullptr;
+        for (cudaEvent_t e : events) cudaEventDestroy(e);
+        events.clear();
+        event_stage.clear();
+        nevent = 0;
         if (dens_copied) cudaEventDestroy(dens_copied);
         dens_copied = nullptr;
     }
@@ -918,6 +951,12 @@ struct DeviceXDMIntegrator::Impl {
         if (resident_D) std::copy(col_func.begin(), col_func.end(), h + col_func_at);
 
         cudaStream_t st = stream_handle;
+        // Bound the event list: fold in what has run once it grows (the sync costs one chunk's overlap).
+        if (nevent > 4096) {
+            check_cuda(cudaStreamSynchronize(st), "cudaStreamSynchronize");
+            collect_stages();
+        }
+        mark(-1);
         const std::size_t cap = max_chunk_points;
         const double* d_x = device ? dev_points[0] + fill_start : d_points;
         const double* d_y = device ? dev_points[1] + fill_start : d_points + cap;
@@ -938,6 +977,7 @@ struct DeviceXDMIntegrator::Impl {
         check_cuda(cudaMemcpyAsync(d_layout, h, nlayout * sizeof(int), cudaMemcpyHostToDevice, st), "cudaMemcpyAsync");
         check_cuda(cudaEventRecord(copied[k], st), "cudaEventRecord");
         copy_pending[k] = true;
+        mark(COPY);
 
         const std::size_t plane = static_cast<std::size_t>(P) * ncols;
         double* d_phi = d_work;
@@ -954,6 +994,7 @@ struct DeviceXDMIntegrator::Impl {
                     check_cuda(cudaGetLastError(), "XDM density gather kernel launch");
                 }
             }
+            mark(GATHER);
         } else {
             // Gather the union-column density matrices on the host.
             wait_density_staging();
@@ -971,6 +1012,7 @@ struct DeviceXDMIntegrator::Impl {
                        "cudaMemcpyAsync");
             check_cuda(cudaEventRecord(dens_copied, st), "cudaEventRecord");
             dens_pending = true;
+            mark(COPY);
         }
 
         ChunkLayout C;
@@ -986,6 +1028,7 @@ struct DeviceXDMIntegrator::Impl {
         check_cuda(cudaMemsetAsync(d_phi, 0, ncolloc * plane * sizeof(double), st), "cudaMemsetAsync");
         collocation_kernel<<<nblk, 128, 0, st>>>(dbasis, C, d_x, d_y, d_z, d_phi);
         check_cuda(cudaGetLastError(), "XDM collocation kernel launch");
+        mark(COLLOC);
 
         const double one = 1.0, zero = 0.0;
         const unsigned int density_blocks = static_cast<unsigned int>((static_cast<std::size_t>(P) * 32 + 255) / 256);
@@ -1000,19 +1043,23 @@ struct DeviceXDMIntegrator::Impl {
                                      d_Du + static_cast<std::size_t>(s) * ncols * ncols, ncols, d_phi, ncols, &zero,
                                      d_T, ncols),
                          "cublasDgemm");
+            mark(GEMM);
             density_kernel<<<density_blocks, 256, 0, st>>>(P, ncols, d_phi, d_T, d_rho[s], d_q[s]);
             check_cuda(cudaGetLastError(), "XDM density kernel launch");
+            mark(DENSITY);
         }
 
         const unsigned int point_blocks = static_cast<unsigned int>((P + block_size - 1) / block_size);
         point_kernel<<<point_blocks, block_size, 0, st>>>(P, restricted, atoms, d_x, d_y, d_z, d_rho[0], d_rho[1],
                                                           d_q[0], d_q[1], d_b[0], d_b[1], d_pinv, d_counts);
         check_cuda(cudaGetLastError(), "XDM point kernel launch");
+        mark(POINT);
         if (nactive > 0) {
             dim3 grid(moment_slots, nactive);
             moment_kernel<<<grid, block_size, 0, st>>>(P, restricted, atoms, d_active, d_x, d_y, d_z, d_w, d_rho[0],
                                                        d_rho[1], d_b[0], d_b[1], d_pinv, d_partials);
             check_cuda(cudaGetLastError(), "XDM moment kernel launch");
+            mark(MOMENT);
         }
 
         sent += P;
@@ -1204,6 +1251,7 @@ std::vector<std::array<double, DeviceXDMIntegrator::NMOMENT>> DeviceXDMIntegrato
     Impl& m = *impl_;
     m.flush();
     check_cuda(cudaStreamSynchronize(stream_handle), "cudaStreamSynchronize");
+    m.collect_stages();
     for (int k = 0; k < Impl::nslot; k++) m.copy_pending[k] = false;
     m.dens_pending = false;
 
@@ -1235,6 +1283,13 @@ std::size_t DeviceXDMIntegrator::device_in_use_at_start() const {
 }
 std::size_t DeviceXDMIntegrator::npoints() const { return impl_->sent + impl_->fill_points; }
 std::size_t DeviceXDMIntegrator::nchunks() const { return impl_->chunks; }
+std::vector<std::pair<std::string, double>> DeviceXDMIntegrator::stage_seconds() const {
+    static const char* names[Impl::NSTAGE] = {"copies", "density gather", "collocation", "GEMM",
+                                              "density",  "Becke-Roussel + promolecule", "moments"};
+    std::vector<std::pair<std::string, double>> out;
+    for (int k = 0; k < Impl::NSTAGE; k++) out.emplace_back(names[k], impl_->stage_ms[k] * 1.0e-3);
+    return out;
+}
 
 // ==> DeviceGridBlocks <== //
 

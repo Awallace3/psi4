@@ -60,6 +60,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -157,6 +158,15 @@ void integrate_on_device(std::shared_ptr<Wavefunction> wfn, const DFTGrid& grid,
                     device->device_in_use_at_start() * mib);
     outfile->Printf("    Density matrices %s.\n", device->density_resident() ? "resident on the device"
                                                                           : "gathered on the host per chunk");
+    double gpu_total = 0.0;
+    std::string stages;
+    for (const auto& [name, sec] : device->stage_seconds()) {
+        gpu_total += sec;
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), " %.3f", sec);
+        stages += (stages.empty() ? "" : ", ") + name + buf;
+    }
+    outfile->Printf("    Device stage time %.3f s: %s.\n", gpu_total, stages.c_str());
 }
 #endif
 
