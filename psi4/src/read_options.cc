@@ -2112,6 +2112,11 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         batch's columns there, instead of gathering them on the host for every batch. They are
         kept only when they fit in half of |scf__xdm_gpu_memory|, and come out of it. !expert -*/
         options.add_bool("XDM_GPU_RESIDENT_DENSITY", true);
+        /*- Limit on wasted GEMM work in a |scf__xdm_gpu| batch. A batch multiplies over the union of
+        its grid blocks' basis functions; it is closed before a block that would make that GEMM
+        more than this multiple of the blocks' GEMMs over their own functions. 0 bounds batches by
+        |scf__xdm_gpu_memory| only. Changes speed, not results beyond rounding. !expert -*/
+        options.add_double("XDM_GPU_CHUNK_GEMM_RATIO", 0.0);
         /*- Grid for the XDM moment integrals. ``PSI4`` builds the host DFT grid from the
         |scf__dft_radial_points| family of options. ``CUEST`` takes the points and Becke-partitioned
         weights of the cuEST grid built from the same options (the grid a cuEST SCF integrates on),

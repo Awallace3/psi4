@@ -125,7 +125,8 @@ void integrate_on_device(std::shared_ptr<Wavefunction> wfn, const DFTGrid& grid,
         device = std::make_unique<DeviceXDMIntegrator>(natom, atomic_nums.data(), atom_coords.data(), proatom,
                                                        describe_basis(*wfn->basisset()), Da->pointer()[0],
                                                        Db ? Db->pointer()[0] : nullptr, budget,
-                                                       wfn->options().get_bool("XDM_GPU_RESIDENT_DENSITY"));
+                                                       wfn->options().get_bool("XDM_GPU_RESIDENT_DENSITY"),
+                                                       wfn->options().get_double("XDM_GPU_CHUNK_GEMM_RATIO"));
     }
     {
         ScopedTimer t("XDM: device queue");
