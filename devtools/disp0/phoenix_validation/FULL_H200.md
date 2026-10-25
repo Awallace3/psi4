@@ -1,5 +1,18 @@
 # Full-system H200 continuation
 
+## Submission
+
+**14396956** accepted on explicit inferno after fresh live account selection,
+gts-cs207-chemx/gpu-h200,1H2008CPUs160GiB8h. Maximum charge$11.31;
+monthly gts-cs207$0.93 is below its$1 floor. Test-only14396955 is not a job
+running this calculation. Immutable helper pin
+`38f3fcd01ceb316ab569dec5fcd4d505733a2067`,71 offline tests passed.
+
+Output root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-h200-full-38f3fcd01c`.
+Durable watcher`bf0097748`. Inspect controller/prolog and final numerical/
+cleanup artifacts; accepted submission is not evidence of scientific success.
+
 The user requested the full job after the successful small H200 gate14377643.
 This is a new bounded submission, not an automatic extension/retry of that gate.
 

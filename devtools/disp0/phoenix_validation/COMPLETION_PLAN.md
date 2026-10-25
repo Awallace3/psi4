@@ -10,7 +10,19 @@ Existing immutable science/stage d471cd93fa/build14377089 is reused; new
 helpers carry frozen inputs, retained-MO-subspace checks, actual scheduler
 admission, native-plan memory observations and owned-child TERM cleanup.
 These instrumented full calls are diagnostics, not yet production speedups.
-Record the actual submission ID and effective routing after acceptance.
+**14396956 submitted**, one scheduler call after fresh account selection:
+gts-cs207-chemx/gpu-h200/inferno,1H2008CPUs160GiB8h, maximum$11.31.
+The selector reported gts-cs207$0.93 available, below its$1 floor.
+Exact-route test-only number14396955 is not the submitted compute job.
+Helper pin`38f3fcd01ceb316ab569dec5fcd4d505733a2067`, clean staged source
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-full-h200-38f3fcd01c`.
+Fresh root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-h200-full-38f3fcd01c`.
+All71 offline helper tests and shell syntax checks passed. Independent launch
+review's whole-energy and TERM-finalization gaps were corrected before freezing
+the helper. Stage science/CMake/external trees are unchanged fromd471cd93fa.
+Durable watcher`bf0097748`; effective-route inspection`bf0190bb3`.
+No completed full-system result or accepted GPU timing is implied by submission.
 
 ## Latest GPU release checkpoint
 
