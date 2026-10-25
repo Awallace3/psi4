@@ -72,6 +72,7 @@ constexpr int max_am = 6;
 constexpr int max_ncart = (max_am + 1) * (max_am + 2) / 2;
 // Points per chunk; bounds the per-point arrays independently of the workspace.
 constexpr std::size_t max_chunk_points = std::size_t{1} << 16;
+constexpr int colloc_threads = 128;
 
 void check_cuda(cudaError_t err, const char* what) {
     if (err != cudaSuccess) {
@@ -133,9 +134,13 @@ struct ChunkLayout {
 
 // ==> Collocation (gau2grid with deriv 2, as BasisFunctions::compute_functions) <== //
 
-// Writes the shell's functions at phi[v * plane + f], v over the ncolloc values.
-__host__ __device__ void eval_shell(const DeviceBasis& B, int shell, double px, double py, double pz, double* phi,
-                           std::size_t plane) {
+// Writes the shell's functions at phi[f * fstride + v * vstride], v over the ncolloc values.
+// L is a template parameter so the Cartesian and spherical accumulators stay in registers.
+template <int L>
+__device__ void eval_shell(const DeviceBasis& B, int shell, double px, double py, double pz, double* phi,
+                           std::size_t fstride, std::size_t vstride) {
+    constexpr int ncart = (L + 1) * (L + 2) / 2;
+    constexpr int nsph = 2 * L + 1;
     const double dx = px - B.center[3 * shell + 0];
     const double dy = py - B.center[3 * shell + 1];
     const double dz = pz - B.center[3 * shell + 2];
@@ -152,28 +157,37 @@ __host__ __device__ void eval_shell(const DeviceBasis& B, int shell, double px, 
         S2 += a * a * ce;
     }
 
-    const int L = B.am[shell];
-    double xp[max_am + 1], yp[max_am + 1], zp[max_am + 1];
+    double xp[L + 1], yp[L + 1], zp[L + 1];
     xp[0] = yp[0] = zp[0] = 1.0;
+#pragma unroll
     for (int i = 1; i <= L; i++) {
         xp[i] = xp[i - 1] * dx;
         yp[i] = yp[i - 1] * dy;
         zp[i] = zp[i - 1] * dz;
     }
 
-    double cart[ncolloc][max_ncart];
+    // Spherical functions accumulate as each Cartesian one is formed; Cartesian ones are written out.
+    const double* M = B.transform + B.transform_offset[L];
+    double sph[ncolloc][nsph];
+#pragma unroll
+    for (int v = 0; v < ncolloc; v++) {
+#pragma unroll
+        for (int s = 0; s < nsph; s++) sph[v][s] = 0.0;
+    }
     int c = 0;
     // CCA Cartesian order: x power from L down, then y power from L - i down.
+#pragma unroll
     for (int i = L; i >= 0; i--) {
+#pragma unroll
         for (int j = L - i; j >= 0; j--, c++) {
             const int k = L - i - j;
             const double fx = xp[i], fy = yp[j], fz = zp[k];
-            const double fx1 = i > 0 ? i * xp[i - 1] : 0.0;
-            const double fy1 = j > 0 ? j * yp[j - 1] : 0.0;
-            const double fz1 = k > 0 ? k * zp[k - 1] : 0.0;
-            const double fx2 = i > 1 ? i * (i - 1) * xp[i - 2] : 0.0;
-            const double fy2 = j > 1 ? j * (j - 1) * yp[j - 2] : 0.0;
-            const double fz2 = k > 1 ? k * (k - 1) * zp[k - 2] : 0.0;
+            const double fx1 = i > 0 ? i * xp[i > 0 ? i - 1 : 0] : 0.0;
+            const double fy1 = j > 0 ? j * yp[j > 0 ? j - 1 : 0] : 0.0;
+            const double fz1 = k > 0 ? k * zp[k > 0 ? k - 1 : 0] : 0.0;
+            const double fx2 = i > 1 ? i * (i - 1) * xp[i > 1 ? i - 2 : 0] : 0.0;
+            const double fy2 = j > 1 ? j * (j - 1) * yp[j > 1 ? j - 2 : 0] : 0.0;
+            const double fz2 = k > 1 ? k * (k - 1) * zp[k > 1 ? k - 2 : 0] : 0.0;
 
             const double gx = fx1 * S0 - 2.0 * dx * fx * S1;
             const double gy = fy1 * S0 - 2.0 * dy * fy * S1;
@@ -182,35 +196,34 @@ __host__ __device__ void eval_shell(const DeviceBasis& B, int shell, double px, 
             const double hy = fy2 * S0 - 4.0 * dy * fy1 * S1 + fy * (4.0 * dy * dy * S2 - 2.0 * S1);
             const double hz = fz2 * S0 - 4.0 * dz * fz1 * S1 + fz * (4.0 * dz * dz * S2 - 2.0 * S1);
 
-            cart[0][c] = fx * fy * fz * S0;
-            cart[1][c] = gx * fy * fz;
-            cart[2][c] = fx * gy * fz;
-            cart[3][c] = fx * fy * gz;
-            cart[4][c] = hx * fy * fz + fx * hy * fz + fx * fy * hz;
+            const double cart[ncolloc] = {fx * fy * fz * S0, gx * fy * fz, fx * gy * fz, fx * fy * gz,
+                                          hx * fy * fz + fx * hy * fz + fx * fy * hz};
+            if (!B.puream) {
+#pragma unroll
+                for (int v = 0; v < ncolloc; v++) phi[c * fstride + v * vstride] = cart[v];
+            } else {
+#pragma unroll
+                for (int s = 0; s < nsph; s++) {
+                    const double m = M[s * ncart + c];
+#pragma unroll
+                    for (int v = 0; v < ncolloc; v++) sph[v][s] += m * cart[v];
+                }
+            }
         }
     }
-    const int ncart = c;
-
-    if (!B.puream) {
-        for (int v = 0; v < ncolloc; v++) {
-            for (int q = 0; q < ncart; q++) phi[v * plane + q] = cart[v][q];
-        }
-        return;
-    }
-    const double* M = B.transform + B.transform_offset[L];
-    for (int s = 0; s < 2 * L + 1; s++) {
-        const double* row = M + s * ncart;
-        for (int v = 0; v < ncolloc; v++) {
-            double acc = 0.0;
-            for (int q = 0; q < ncart; q++) acc += row[q] * cart[v][q];
-            phi[v * plane + s] = acc;
-        }
+    if (!B.puream) return;
+#pragma unroll
+    for (int s = 0; s < nsph; s++) {
+#pragma unroll
+        for (int v = 0; v < ncolloc; v++) phi[s * fstride + v * vstride] = sph[v][s];
     }
 }
 
-// One thread block per grid block; threads cover its (point, shell) pairs. Columns of
-// shells the host screening dropped for this block stay zero, so the chunk GEMM over
-// the shell union reproduces each block's local density exactly.
+// Grid blocks of a chunk run on gridDim.x; gridDim.y thread blocks share each one's
+// (point, shell) pairs, consecutive threads taking consecutive points of one shell.
+// phi is column-major with the points fastest: phi[col * ncolloc * P + v * P + p], so those
+// threads write contiguously. Columns of shells the host screening dropped for this block
+// stay zero, so the chunk GEMM over the shell union reproduces each block's local density exactly.
 __global__ void collocation_kernel(DeviceBasis B, ChunkLayout C, const double* __restrict__ px,
                                    const double* __restrict__ py, const double* __restrict__ pz, double* phi) {
     const int blk = blockIdx.x;
@@ -218,69 +231,73 @@ __global__ void collocation_kernel(DeviceBasis B, ChunkLayout C, const double* _
     const int np = C.blk_npoints[blk];
     const int s0 = C.blk_shell_offset[blk];
     const int ns = C.blk_shell_offset[blk + 1] - s0;
-    const std::size_t plane = static_cast<std::size_t>(C.npoints) * C.ncols;
-    for (int item = threadIdx.x; item < np * ns; item += blockDim.x) {
+    const std::size_t vstride = C.npoints;
+    const std::size_t fstride = ncolloc * vstride;
+    for (int item = blockIdx.y * blockDim.x + threadIdx.x; item < np * ns; item += gridDim.y * blockDim.x) {
         const int ip = item % np;
         const int us = C.blk_shells[s0 + item / np];
+        const int shell = C.ushell_global[us];
         const int p = p0 + ip;
-        double* out = phi + static_cast<std::size_t>(p) * C.ncols + C.ushell_col[us];
-        eval_shell(B, C.ushell_global[us], px[p], py[p], pz[p], out, plane);
+        double* out = phi + C.ushell_col[us] * fstride + p;
+        switch (B.am[shell]) {
+            case 0: eval_shell<0>(B, shell, px[p], py[p], pz[p], out, fstride, vstride); break;
+            case 1: eval_shell<1>(B, shell, px[p], py[p], pz[p], out, fstride, vstride); break;
+            case 2: eval_shell<2>(B, shell, px[p], py[p], pz[p], out, fstride, vstride); break;
+            case 3: eval_shell<3>(B, shell, px[p], py[p], pz[p], out, fstride, vstride); break;
+            case 4: eval_shell<4>(B, shell, px[p], py[p], pz[p], out, fstride, vstride); break;
+            case 5: eval_shell<5>(B, shell, px[p], py[p], pz[p], out, fstride, vstride); break;
+            default: eval_shell<max_am>(B, shell, px[p], py[p], pz[p], out, fstride, vstride); break;
+        }
     }
 }
 
 // ==> Spin density stage (RKSFunctions/UKSFunctions + the Laplacian in xdm.cc) <== //
 
-// One warp per point. phi: ncolloc planes [npoints][ncols]; T: ngemm planes, T_v = phi_v D.
+// Thread blocks of density_tx points by density_ty column slices, the slices summed in shared
+// memory. phi: [ncols][ncolloc][npoints]; T: [ncols][ngemm][npoints], T_v = phi_v D.
 // Writes the spin density and exchange-hole curvature in the postg convention.
+constexpr int density_tx = 32;
+constexpr int density_ty = 8;
 __global__ void density_kernel(int npoints, int ncols, const double* __restrict__ phi, const double* __restrict__ T,
                                double* __restrict__ rho_out, double* __restrict__ q_out) {
-    const int warp = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
-    const int lane = threadIdx.x % 32;
-    if (warp >= npoints) return;
-    const std::size_t plane = static_cast<std::size_t>(npoints) * ncols;
-    const std::size_t row = static_cast<std::size_t>(warp) * ncols;
-    const double* f0 = phi + row;
-    const double* fx = phi + plane + row;
-    const double* fy = phi + 2 * plane + row;
-    const double* fz = phi + 3 * plane + row;
-    const double* fl = phi + 4 * plane + row;
-    const double* t0 = T + row;
-    const double* tx = T + plane + row;
-    const double* ty = T + 2 * plane + row;
-    const double* tz = T + 3 * plane + row;
-
-    double rho = 0.0, gx = 0.0, gy = 0.0, gz = 0.0, lap = 0.0, tau = 0.0;
-    for (int u = lane; u < ncols; u += 32) {
-        const double d = t0[u];
-        rho += f0[u] * d;
-        gx += fx[u] * d;
-        gy += fy[u] * d;
-        gz += fz[u] * d;
-        lap += fl[u] * d;
-        tau += fx[u] * tx[u] + fy[u] * ty[u] + fz[u] * tz[u];
+    __shared__ double red[6][density_ty][density_tx];
+    const int p = blockIdx.x * density_tx + threadIdx.x;
+    const std::size_t P = npoints;
+    double acc[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};  // rho, gx, gy, gz, lap, tau
+    if (p < npoints) {
+        for (int u = threadIdx.y; u < ncols; u += density_ty) {
+            const double* f = phi + u * ncolloc * P + p;
+            const double* t = T + u * ngemm * P + p;
+            const double d = t[0];
+            acc[0] += f[0] * d;
+            acc[1] += f[P] * d;
+            acc[2] += f[2 * P] * d;
+            acc[3] += f[3 * P] * d;
+            acc[4] += f[4 * P] * d;
+            acc[5] += f[P] * t[P] + f[2 * P] * t[2 * P] + f[3 * P] * t[3 * P];
+        }
     }
-    for (int off = 16; off > 0; off >>= 1) {
-        rho += __shfl_down_sync(0xffffffffu, rho, off);
-        gx += __shfl_down_sync(0xffffffffu, gx, off);
-        gy += __shfl_down_sync(0xffffffffu, gy, off);
-        gz += __shfl_down_sync(0xffffffffu, gz, off);
-        lap += __shfl_down_sync(0xffffffffu, lap, off);
-        tau += __shfl_down_sync(0xffffffffu, tau, off);
+    for (int k = 0; k < 6; k++) red[k][threadIdx.y][threadIdx.x] = acc[k];
+    __syncthreads();
+    if (threadIdx.y != 0 || p >= npoints) return;
+    for (int k = 0; k < 6; k++) {
+        acc[k] = 0.0;
+        for (int y = 0; y < density_ty; y++) acc[k] += red[k][y][threadIdx.x];
     }
-    if (lane != 0) return;
+    const double rho = acc[0], gx = acc[1], gy = acc[2], gz = acc[3], lap = acc[4], tau = acc[5];
 
     // rho_sigma = phi D phi, grad = 2 phi_c D phi, tau_nohalf = sum_c phi_c D phi_c,
     // lapl = 2 sum_c phi_cc D phi + 2 tau_nohalf
     const double rx = 2.0 * gx, ry = 2.0 * gy, rz = 2.0 * gz;
     const double grad_sq = rx * rx + ry * ry + rz * rz;
     const double lapl = 2.0 * lap + 2.0 * tau;
-    rho_out[warp] = rho;
+    rho_out[p] = rho;
     if (rho < 1.0e-15) {
-        q_out[warp] = 0.0;
+        q_out[p] = 0.0;
     } else {
         // exchange_hole_curvature in becke_roussel.h
         const double dsigs = tau - 0.25 * grad_sq / fmax(rho, 1.0e-30);
-        q_out[warp] = (lapl - 2.0 * dsigs) / 6.0;
+        q_out[p] = (lapl - 2.0 * dsigs) / 6.0;
     }
 }
 
@@ -774,6 +791,8 @@ struct DeviceXDMIntegrator::Impl {
     // Chunk under construction
     int fill_points = 0;
     int fill_cols = 0;
+    std::size_t max_block_items = 0;  // largest (point, shell) count of a block in the chunk
+    int nsm = 1;                      // multiprocessors on the device
     std::vector<int> blk_point_offset, blk_npoints, blk_shell_offset{0}, blk_shells;
     std::vector<int> ushell_global, ushell_col;
     std::vector<int> union_index;  // global shell -> union index, -1 if absent
@@ -900,6 +919,7 @@ struct DeviceXDMIntegrator::Impl {
         chunk_needed += own_work;
         blk_point_offset.push_back(p0);
         blk_npoints.push_back(static_cast<int>(npoints));
+        max_block_items = std::max(max_block_items, npoints * nshells);
         for (std::size_t i = 0; i < nshells; i++) {
             const int g = shells[i];
             int u = union_index[g];
@@ -1038,25 +1058,30 @@ struct DeviceXDMIntegrator::Impl {
         C.ushell_col = C.ushell_global + nus;
 
         check_cuda(cudaMemsetAsync(d_phi, 0, ncolloc * plane * sizeof(double), st), "cudaMemsetAsync");
-        collocation_kernel<<<nblk, 128, 0, st>>>(dbasis, C, d_x, d_y, d_z, d_phi);
+        // Enough thread blocks to fill the device several times over, but no more than the
+        // largest grid block has (point, shell) pairs for.
+        const unsigned int colloc_split = static_cast<unsigned int>(std::max<std::size_t>(
+            1, std::min<std::size_t>((max_block_items + colloc_threads - 1) / colloc_threads,
+                                     (8 * static_cast<std::size_t>(nsm) + nblk - 1) / nblk)));
+        collocation_kernel<<<dim3(nblk, colloc_split), colloc_threads, 0, st>>>(dbasis, C, d_x, d_y, d_z, d_phi);
         check_cuda(cudaGetLastError(), "XDM collocation kernel launch");
         mark(COLLOC);
 
         const double one = 1.0, zero = 0.0;
-        const unsigned int density_blocks = static_cast<unsigned int>((static_cast<std::size_t>(P) * 32 + 255) / 256);
+        const unsigned int density_blocks = static_cast<unsigned int>((P + density_tx - 1) / density_tx);
         for (int s = 0; s < nspin && ncols == 0; s++) {
             // No shell survives the screening anywhere in the chunk: zero density, as on the host.
             check_cuda(cudaMemsetAsync(d_rho[s], 0, P * sizeof(double), st), "cudaMemsetAsync");
             check_cuda(cudaMemsetAsync(d_q[s], 0, P * sizeof(double), st), "cudaMemsetAsync");
         }
         for (int s = 0; s < nspin && ncols > 0; s++) {
-            // Row-major T (4P x ncols) = Phi (4P x ncols) D; column-major that is T^T = D^T Phi^T, D symmetric.
-            check_cublas(cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, ncols, ngemm * P, ncols, &one,
-                                     d_Du + static_cast<std::size_t>(s) * ncols * ncols, ncols, d_phi, ncols, &zero,
-                                     d_T, ncols),
+            // Column-major T (4P x ncols) = Phi (4P x ncols, leading dimension 5P: the first four values) D.
+            check_cublas(cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, ngemm * P, ncols, ncols, &one, d_phi,
+                                     ncolloc * P, d_Du + static_cast<std::size_t>(s) * ncols * ncols, ncols, &zero,
+                                     d_T, ngemm * P),
                          "cublasDgemm");
             mark(GEMM);
-            density_kernel<<<density_blocks, 256, 0, st>>>(P, ncols, d_phi, d_T, d_rho[s], d_q[s]);
+            density_kernel<<<density_blocks, dim3(density_tx, density_ty), 0, st>>>(P, ncols, d_phi, d_T, d_rho[s], d_q[s]);
             check_cuda(cudaGetLastError(), "XDM density kernel launch");
             mark(DENSITY);
         }
@@ -1082,6 +1107,7 @@ struct DeviceXDMIntegrator::Impl {
         slot = (slot + 1) % nslot;
         fill_points = 0;
         fill_cols = 0;
+        max_block_items = 0;
         blk_point_offset.clear();
         blk_npoints.clear();
         blk_shell_offset.assign(1, 0);
@@ -1105,6 +1131,9 @@ DeviceXDMIntegrator::DeviceXDMIntegrator(int natom, const int* atomic_nums, cons
         check_cuda(cudaMemGetInfo(&f, &t), "cudaMemGetInfo");
         m.free_at_start = m.min_free = f;
         m.total_device = t;
+        int dev = 0;
+        check_cuda(cudaGetDevice(&dev), "cudaGetDevice");
+        check_cuda(cudaDeviceGetAttribute(&m.nsm, cudaDevAttrMultiProcessorCount, dev), "cudaDeviceGetAttribute");
     }
     m.restricted = (Db == nullptr);
     m.nspin = m.restricted ? 1 : 2;
