@@ -260,7 +260,8 @@ class SetupBoundary(unittest.TestCase):
         def kernel(p,**kwargs):
             self.assertIs(p,provider)
             self.assertEqual(events,["factory enter","prepare device","scope enter"])
-            self.assertEqual(set(kwargs),{"spaces","corrections","energies","block_size"})
+            self.assertEqual(set(kwargs),{"spaces","corrections","energies","block_size","factor_cache_bytes"})
+            self.assertEqual(kwargs["factor_cache_bytes"],0)
             self.assertEqual(len(kwargs["spaces"]),12)
             self.assertEqual(len(kwargs["corrections"]),8)
             return {"Disp20,u":-1.,"Exch-Disp20,u":.5,
@@ -288,6 +289,15 @@ class SetupBoundary(unittest.TestCase):
         self.assertIs(cache["dfh"],poison)
         for key,value in before.items():
             np.testing.assert_array_equal(cache[key].np,value)
+
+    def test_public_cache_budget_rejects_before_factory_or_raw_setup(self):
+        for budget in (-1,True,1.5):
+            ns,cache,wave,*_=self.fixture()
+            factory=Mock()
+            with self.assertRaisesRegex(ValueError,"cache"):
+                ns["dispersion0_cuda"](cache,wave,provider_factory=factory,
+                                       factor_cache_bytes=budget,do_print=False)
+            factory.assert_not_called()
 
     def test_public_cuda_factory_or_native_failure_never_falls_back_to_dfhelper(self):
         dfmo=importlib.import_module(PACKAGE+".sapt_cuest_dfmo_cuda")

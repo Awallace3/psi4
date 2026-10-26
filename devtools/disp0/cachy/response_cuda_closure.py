@@ -27,7 +27,7 @@ def relocate(original,target):
     return result
 
 
-def prepare(root,output,attempt):
+def prepare(root,output,attempt,*,with_cuest=False):
     # Import only the already audited file-copy/resource helpers, not any
     # installed scientific package. Preserve their original same-FD checks.
     sys.path.insert(0,str(root/"metadata"))
@@ -39,6 +39,10 @@ def prepare(root,output,attempt):
     from gpu_runtime import digest,require_local_lease
     from coherent_stage11 import policy
     require_local_lease(policy(root))
+    import importlib.util
+    source=Path(__file__).resolve().parents[3]/"psi4/driver/procrouting/sapt/sapt_cuest250_identity.py"
+    spec=importlib.util.spec_from_file_location("_disp0_copy_identity",source)
+    identity=importlib.util.module_from_spec(spec);spec.loader.exec_module(identity)
     target=Path("/tmp")/("psi4-disp0-"+attempt)
     if target.exists() or target.is_symlink():raise RuntimeError("Fresh private native root required")
     original=json.loads((root/"runs/cuda-closure-01/manifest.json").read_text())
@@ -50,13 +54,23 @@ def prepare(root,output,attempt):
         if not source.is_relative_to(root/"environment-v2"):
             raise RuntimeError("Frozen CUDA source escaped private environment")
         items.append((source,Path(after["path"]),before["sha256"],source.stat().st_size))
+    archive=root/"dependencies/cuest-artifact/cuest_v0.2.50.tar.gz"
+    if with_cuest:
+        sdk=root/"dependencies/cuest/cuest_PID"
+        proof=identity.verify_files(sdk,archive)
+        for archived,row in proof["header_files"].items():
+            relative=archived.removeprefix("cuest_PID/")
+            items.append((sdk/relative,target/"cuest_PID"/relative,row["sha256"],row["bytes"]))
+        native=Path(proof["native_path"])
+        items.append((native,target/"cuest_PID/lib/13/libcuest.so.0.2.50",
+                      proof["native_sha256"],native.stat().st_size))
     plan=json.loads((root/"metadata/native-tmpfs-plan.json").read_text())
     plan["deployment_root"]=str(target)
     total=sum(row[3] for row in items)
     fstype=subprocess.check_output(["stat","-f","-c","%T",str(target.parent)],text=True).strip()
     if fstype!="tmpfs" or total>min(plan["maximum_copied_bytes"],2*1024**3):
         raise RuntimeError("Existing executable tmpfs and <=2GiB closure required")
-    record={"status":"RUNNING","scope":"CUDA_FILE_BYTES_ONLY_NO_SDK_OR_INSTALL_CHANGES",
+    record={"status":"RUNNING","scope":"NATIVE_FILE_BYTES_ONLY_NO_INSTALL_CHANGES",
             "source_manifest_sha256":SOURCE_MANIFEST_SHA,"files":[],
             "target":str(target),"bytes":total,"copy_helper_sha256":COPY_HELPER_SHA,
             "resources_before":admit_resources(plan,total,"copy")}
@@ -66,11 +80,6 @@ def prepare(root,output,attempt):
     try:
         create_private_root(target)
         # Retain the original strict mapped-inode/device proof on this storage.
-        package="_disp0_response_copy_identity"
-        import importlib.util
-        source=Path(__file__).resolve().parents[3]/"psi4/driver/procrouting/sapt/sapt_cuest250_identity.py"
-        spec=importlib.util.spec_from_file_location(package,source)
-        identity=importlib.util.module_from_spec(spec);spec.loader.exec_module(identity)
         probe=target/"mapping-proof"
         probe.write_bytes(b"private executable mapping identity probe\n")
         with probe.open("rb") as stream,mmap.mmap(stream.fileno(),0,
@@ -82,15 +91,19 @@ def prepare(root,output,attempt):
         for source,destination,sha,size in items:
             require_local_lease(policy(root))
             record["files"].append(stable_copy(source,destination,sha,size));files.add(destination)
-            dynamic=subprocess.check_output(["readelf","-d",str(destination)],text=True)
-            sonames=re.findall(r"\(SONAME\).*?\[([^]]+)\]",dynamic)
-            if len(sonames)!=1 or Path(sonames[0]).name!=sonames[0]:
-                raise RuntimeError("Unique local native SONAME required")
-            alias=destination.parent/sonames[0]
-            if alias!=destination:
-                alias.symlink_to(destination.name);aliases[alias]=destination.name
+            if ".so." in destination.name:
+                dynamic=subprocess.check_output(["readelf","-d",str(destination)],text=True)
+                sonames=re.findall(r"\(SONAME\).*?\[([^]]+)\]",dynamic)
+                if len(sonames)!=1 or Path(sonames[0]).name!=sonames[0]:
+                    raise RuntimeError("Unique local native SONAME required")
+                alias=destination.parent/sonames[0]
+                if alias!=destination:
+                    alias.symlink_to(destination.name);aliases[alias]=destination.name
         validate_inventory(target,files,aliases)
         require_local_lease(policy(root))
+        if with_cuest:
+            record["copied_sdk_proof"]=identity.verify_files(target/"cuest_PID",archive)
+            record.update(sdk_root=str(target/"cuest_PID"),archive=str(archive))
         record["resources_after"]=admit_resources(plan,total,"load")
         path=output/"cuda-manifest.json"
         path.write_text(json.dumps(deployed,sort_keys=True,separators=(",",":"))+"\n")

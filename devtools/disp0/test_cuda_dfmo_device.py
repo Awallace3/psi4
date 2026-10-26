@@ -269,6 +269,117 @@ class DeviceTransport(unittest.TestCase):
                 self.assertEqual(s.live_bytes,0)
         p.close()
 
+    def test_bounded_S_factor_cache_reduces_native_batches_preserving_gauge_and_edges(self):
+        from test_cuda_fisapt import factor_reference
+        p,s,n,_,_=self.fixture();p.prepare_device_compute()
+        for seed in (19,20):
+            ao,sp,c,e=inputs(seed);n.ao=ao
+            rng=np.random.default_rng(seed+51)
+            ua=np.linalg.qr(rng.normal(size=(2,2)))[0]
+            ub=np.linalg.qr(rng.normal(size=(3,3)))[0]
+            # block3 gives two R slabs and S widths3/1. Exact packed cache
+            # bytes per virtual column: 8*(2Q+2)*(A+B) = 800.
+            for budget,allocated,slabs in ((0,0,0),(799,0,0),(800,800,1),
+                                            (2400,2400,1),(3200,3200,2),(9999,3200,2)):
+                for localized in (False,True):
+                    expected=(factor_reference(ao,sp,c,e,ua,ub) if localized
+                              else oracle(ao,sp,c,e))
+                    before=n.computed
+                    with s.scope():
+                        dsp={name:s.upload(value) for name,value in sp.items()}
+                        dc={name:s.upload(value) for name,value in c.items()}
+                        de={name:s.upload(value) for name,value in e.items()}
+                        rotations=(s.upload(ua),s.upload(ub)) if localized else None
+                        with patch.object(s,"upload",side_effect=AssertionError("host staging")):
+                            result=backend.blocked_device_dispersion(p,dsp,dc,de,
+                                block_size=3,rotations=rotations,factor_cache_bytes=budget)
+                        for field,target in (("Disp20 occupied pairs",expected[0]),
+                                             ("Exch-Disp20 occupied pairs",expected[1])):
+                            np.testing.assert_allclose(result[field],target,rtol=1e-11,atol=1e-12)
+                        info=result["Disp0 execution"]["factor_cache"]
+                        self.assertEqual(info["budget_bytes"],budget)
+                        self.assertEqual(info["allocated_bytes"],allocated)
+                        self.assertEqual(info["cached_slabs"],slabs)
+                        self.assertEqual(info["hits"],slabs)
+                        self.assertEqual(info["s_factor_batches"],4-slabs)
+                        self.assertEqual(info["r_factor_batches"],2)
+                        self.assertEqual(n.computed-before,6-slabs)
+                        self.assertLessEqual(info["allocated_bytes"],budget)
+                    self.assertEqual(s.live_bytes,0)
+        p.close()
+
+    def test_cache_budget_guards_precede_native_work_and_single_R_needs_no_cache(self):
+        p,s,n,_,_=self.fixture();p.prepare_device_compute()
+        _,sp,c,e=inputs()
+        with s.scope():
+            dsp={name:s.upload(value) for name,value in sp.items()}
+            dc={name:s.upload(value) for name,value in c.items()}
+            de={name:s.upload(value) for name,value in e.items()}
+            for budget in (-1,True,1.5):
+                with self.assertRaisesRegex(ValueError,"cache"):
+                    backend.blocked_device_dispersion(p,dsp,dc,de,factor_cache_bytes=budget)
+            self.assertEqual(n.computed,0)
+            saved_limit=s.limit
+            s.limit=s.live_bytes+3200-1
+            with self.assertRaises(MemoryError):
+                backend.blocked_device_dispersion(p,dsp,dc,de,block_size=3,
+                                                 factor_cache_bytes=3200)
+            self.assertEqual(n.computed,0)
+            # The real session scope is deliberately fail-closed after an
+            # exception. This fixture instance is used only for cleanup now.
+            s.limit=saved_limit
+        self.assertEqual(s.live_bytes,0);p.close()
+        p,s,n,_,_=self.fixture();p.prepare_device_compute()
+        with s.scope():
+            dsp={name:s.upload(value) for name,value in sp.items()}
+            dc={name:s.upload(value) for name,value in c.items()}
+            de={name:s.upload(value) for name,value in e.items()}
+            result=backend.blocked_device_dispersion(p,dsp,dc,de,block_size=500,
+                                                     factor_cache_bytes=3200)
+            info=result["Disp0 execution"]["factor_cache"]
+            self.assertEqual(info["allocated_bytes"],0)
+            self.assertEqual(info["hits"],0)
+            self.assertEqual(n.computed,2)
+        self.assertEqual(s.live_bytes,0);p.close()
+
+    def test_pack_cache_output_rejects_wrong_shape_owner_and_input_overlap(self):
+        p,s,n,_,_=self.fixture();p.prepare_device_compute()
+        with s.scope():
+            parent=s.empty((100,))
+            f=parent.view((3,2,2))
+            g=parent.view((3,2,2),offset=12*8)
+            tails=s.empty((2,2))
+            factors={"first":f,"second":g}
+            for bad in (s.empty((8,3)),DeviceSession().empty((8,4)),
+                        parent.view((8,4)),s.empty((8,4),dtype=np.int64)):
+                with self.assertRaises(ValueError):
+                    backend._pack(s,3,factors,"first","second",None,None,tails,tails,out=bad)
+        self.assertEqual(s.live_bytes,0);p.close()
+
+    def test_native_failure_after_cache_fill_has_no_recompute_retry_or_leaked_cache(self):
+        p,s,n,_,_=self.fixture();p.prepare_device_compute()
+        ao,sp,c,e=inputs()
+        original=n.cuestDFMOIntegralsCompute.side_effect
+        calls=[]
+        def fail_third(*args):
+            calls.append(True)
+            if len(calls)==3:return 9  # R0 and first S cache fill succeeded.
+            return original(*args)
+        n.cuestDFMOIntegralsCompute.side_effect=fail_third
+        with s.scope():
+            dsp={name:s.upload(value) for name,value in sp.items()}
+            dc={name:s.upload(value) for name,value in c.items()}
+            de={name:s.upload(value) for name,value in e.items()}
+            before=s.live_bytes
+            with self.assertRaisesRegex(RuntimeError,"device compute failed: 9"):
+                backend.blocked_device_dispersion(p,dsp,dc,de,block_size=3,
+                                                 factor_cache_bytes=3200)
+            self.assertEqual(len(calls),3)
+            self.assertEqual(s.live_bytes,before)
+        p.close()
+        self.assertEqual(s.live_bytes,0)
+        self.assertTrue(p.cleanup_complete)
+
 
 if __name__ == "__main__":
     unittest.main()

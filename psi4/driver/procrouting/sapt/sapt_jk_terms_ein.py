@@ -2606,7 +2606,8 @@ def dispersion0(cache, dimer_wfn, nfrozen_A=0, nfrozen_B=0, *, block_size=None, 
 
 
 def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen_B=0,
-                     block_size=24, do_print=True, _localized=None, _return_pairs=False):
+                     block_size=24, do_print=True, _localized=None, _return_pairs=False,
+                     factor_cache_bytes=0):
     """Experimental explicit Python entrypoint; not an automatic driver option.
 
     provider_factory(primary_basis, auxiliary_basis) must be a context manager
@@ -2629,6 +2630,8 @@ def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen
         raise TypeError("An explicit audited cuEST plan/provider factory is required")
     if isinstance(block_size, bool) or not isinstance(block_size, int) or block_size < 1:
         raise ValueError("CUDA compute block must be a positive integer")
+    if type(factor_cache_bytes) is not int or factor_cache_bytes<0:
+        raise ValueError("Dispersion factor cache needs a nonnegative integer byte budget")
     if dimer_wfn.nirrep() != 1:
         raise NotImplementedError("Experimental CUDA dispersion currently requires C1 symmetry")
     from .sapt_cuest_basis import require_spherical_basis
@@ -2681,7 +2684,8 @@ def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen
                 if _localized is not None:
                     extra["rotations"]=tuple(provider.session.upload(value) for value in _localized)
                 result = blocked_device_dispersion(
-                    provider,spaces=spaces,corrections=corrections,energies=e,block_size=block_size,**extra)
+                    provider,spaces=spaces,corrections=corrections,energies=e,block_size=block_size,
+                    factor_cache_bytes=factor_cache_bytes,**extra)
     execution = dict(result["Disp0 execution"])
     execution["entrypoint_seconds_including_factory_setup_cleanup"] = time.perf_counter()-started
     execution["raw_hf_numerical_setup"] = "owned cuBLAS/custom CUDA"
@@ -2699,8 +2703,11 @@ def dispersion0_cuda(cache, dimer_wfn, *, provider_factory, nfrozen_A=0, nfrozen
     return output
 
 
-def fisapt_cuda(cache,dimer_wfn,wfn_A,wfn_B,*,provider_factory,block_size=24,scalars=None):
+def fisapt_cuda(cache,dimer_wfn,wfn_A,wfn_B,*,provider_factory,block_size=24,scalars=None,
+                factor_cache_bytes=0):
     """Bounded automatic GPU fragment continuation; never CPU localization/factors."""
+    if type(factor_cache_bytes) is not int or factor_cache_bytes<0:
+        raise ValueError("Dispersion factor cache needs a nonnegative integer byte budget")
     from .sapt_cuest_basis import require_spherical_basis
     from .sapt_fisapt_workflow_cuda import fragment_terms, HF_FIELDS
     mol=dimer_wfn.molecule()
@@ -2741,7 +2748,8 @@ def fisapt_cuda(cache,dimer_wfn,wfn_A,wfn_B,*,provider_factory,block_size=24,sca
         with provider:
             provider.validate_basis(primary,jkfit)
             arrays,data=fragment_terms(provider,rifit,minimal,matrices,energies,xyz,*charges,
-                                       frozen=frozen,block_size=block_size,scaling=scaling)
+                                       frozen=frozen,block_size=block_size,scaling=scaling,
+                                       factor_cache_bytes=factor_cache_bytes)
     work=dict(cache)
     work.update({name:core.Matrix.from_array(value) for name,value in arrays.items()})
     for side,values in zip(("A","B"),charges):

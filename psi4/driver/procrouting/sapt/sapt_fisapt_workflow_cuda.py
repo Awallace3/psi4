@@ -28,7 +28,7 @@ IND_FIELDS = ("S","D_A","D_B","V_A","V_B","J_A","J_B","K_A","K_B","J_O","K_O")
 
 
 def fragment_terms(provider, rifit, minimal, matrices, energies, xyz, za, zb, *,
-                   frozen=(0,0), block_size=24, scaling=None):
+                   frozen=(0,0), block_size=24, scaling=None, factor_cache_bytes=0):
     """Consume an unprepared owned JKFIT provider; retain one gauge through RI.
 
     Returns final host arrays/scalars only. Downloaded U/L is output for
@@ -44,6 +44,8 @@ def fragment_terms(provider, rifit, minimal, matrices, energies, xyz, za, zb, *,
         raise ValueError("Only native exchange and coupled delta-HF fragment scaling are supported")
     if type(block_size) is not int or block_size<1 or len(frozen)!=2:
         raise ValueError("Positive block size and two frozen occupied counts required")
+    if type(factor_cache_bytes) is not int or factor_cache_bytes<0:
+        raise ValueError("Dispersion factor cache needs a nonnegative integer byte budget")
     if (set(matrices)!=set(HF_FIELDS)|{"J_O"} or set(energies)!=set("abrs")
             or any(type(n) is not int or n<0 for n in frozen)):
         raise ValueError("Complete raw HF cache and nonnegative frozen counts required")
@@ -105,7 +107,8 @@ def fragment_terms(provider, rifit, minimal, matrices, energies, xyz, za, zb, *,
             spaces,corrections,eps=prepare_hf(session,{n:matrices[n] for n in HF_FIELDS},
                 energies,frozen_a=frozen[0],frozen_b=frozen[1])
             dispersion=blocked_device_dispersion(ri,spaces,corrections,eps,
-                block_size=block_size,rotations=tuple(rotations))
+                block_size=block_size,rotations=tuple(rotations),
+                factor_cache_bytes=factor_cache_bytes)
             device_outputs={"Elst_AB":state.matrix,"Exch_AB":exch.matrix,
                 "ExchS2_AB":exch.matrix,
                 "IndAB_AB":induction.coupled.combined_ab,"IndBA_AB":induction.coupled.combined_ba}
