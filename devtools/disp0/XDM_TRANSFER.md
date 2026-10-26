@@ -117,6 +117,14 @@ failed results are untouched; no dependency install, SDK upgrade or scientific
 admission relaxation is used. The standalone fixed-factor probe deliberately
 does not import Psi4 or claim native DFMO/full F-SAPT qualification.
 
+**Actual CUDA follow-up passed** at helper `2eb23026dd`, run
+`response-reuse-2eb23026dd-01`: operator medians improved by 1.95×/2.95×/4.15×
+on the three small fixed-factor fixtures, with worst independent numerical
+error1.77636e-15 and complete zero-live-byte cleanup. These are response-step
+diagnostics, not full F-SAPT or H200 speedups.
+See [Cachy response results](cachy/RESPONSE_REUSE_RESULTS.md) for every sample,
+pins, scope and remaining gates.
+
 ## Next bottlenecks, deliberately not changed blindly
 
 - **Protein83 plan-creation peak:** two native DF plans retain large creation
