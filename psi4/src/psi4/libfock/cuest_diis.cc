@@ -44,7 +44,7 @@ struct CuestDIIS::Impl {
     int requested, memory_mb, cap = 0, count = 0, pivot = -1;
     int nbf = 0, nmo = 0, nspin = 0, ao_stride = 0, error_stride = 0;
     std::size_t iteration = 0;
-    bool keep_error, keep_density, oldest, fixed_ready = false;
+    bool keep_error, keep_density, oldest, fixed_ready = false, error_ready = false;
     cublasHandle_t blas = nullptr;
     CuestDeviceArray s, x, f, d, error, work1, work2, history_f, history_d, history_e, small, coeff;
     std::vector<double> e, q;
@@ -69,7 +69,7 @@ struct CuestDIIS::Impl {
         for (auto* a : {&s, &x, &f, &d, &error, &work1, &work2, &history_f,
                         &history_d, &history_e, &small, &coeff}) a->release();
         nbf = nmo = nspin = ao_stride = error_stride = cap = count = 0;
-        pivot = -1; iteration = 0; fixed_ready = false;
+        pivot = -1; iteration = 0; fixed_ready = error_ready = false;
         e.clear(); q.clear();
         counters["allocated_device_bytes"] = 0;
         counters["history_device_bytes"] = 0;
@@ -160,8 +160,10 @@ struct CuestDIIS::Impl {
         int index = 0;
         blas_check(cublasIdamax(blas, error_stride, ptr(error), 1, &index));
         double value = 0.;
+        PendingWork pending;
         cuda_check(cudaMemcpyAsync(&value, ptr(error) + index-1, sizeof(double), cudaMemcpyDeviceToHost, stream_handle));
         cuda_check(cudaStreamSynchronize(stream_handle));
+        pending.done = true;
         counters["scalar_device_to_host_bytes"] += sizeof(int) + sizeof(double);
         return std::abs(value);
     }
@@ -194,9 +196,11 @@ struct CuestDIIS::Impl {
             gram_row(history_f, ao_stride, ptr(d));  // Q[pivot,:]
         }
         std::vector<double> values(offset);
+        PendingWork pending;
         cuda_check(cudaMemcpyAsync(values.data(), ptr(small), values.size()*sizeof(double),
                                   cudaMemcpyDeviceToHost, stream_handle));
         cuda_check(cudaStreamSynchronize(stream_handle));
+        pending.done = true;
         counters["scalar_device_to_host_bytes"] += values.size()*sizeof(double);
         if (!std::all_of(values.begin(), values.end(), [](double v) { return std::isfinite(v); }))
             throw PSIEXCEPTION("cuEST DIIS: nonfinite Gram matrix.");
@@ -255,6 +259,7 @@ double CuestDIIS::scf_update(const std::vector<SharedMatrix>& focks, const std::
         p.gemm(true, false, r, r, n, p.ptr(p.x), p.ptr(p.work2),
                p.ptr(p.error)+std::size_t(spin)*r*r);
     }
+    p.error_ready = true;
     const double result = p.norm(rms);
     if (save) p.commit();
     p.counters["gradient_updates"] += 1.;
@@ -280,6 +285,7 @@ void CuestDIIS::add_entry(const std::vector<SharedMatrix>& errors, const std::ve
     if (p.keep_density) p.upload_spins(densities, p.d, n);
     if (p.keep_error) {
         p.upload_spins(errors, p.error, r);
+        p.error_ready = true;
         p.norm(true);  // Reject nonfinite errors before touching the history.
     }
     p.commit();
@@ -313,6 +319,23 @@ std::vector<double> CuestDIIS::error_gram() const {
     return impl_->gram(impl_->e);
 }
 std::vector<double> CuestDIIS::density_fock_gram() const { return impl_->gram(impl_->q); }
+std::vector<SharedMatrix> CuestDIIS::error_vectors() {
+    std::vector<SharedMatrix> result;
+    PendingWork pending;
+    auto& p = *impl_;
+    if (!p.error_ready) throw PSIEXCEPTION("cuEST DIIS has no computed error for diagnostic download.");
+    const auto bytes = std::size_t(p.nmo)*p.nmo*sizeof(double);
+    for (int spin = 0; spin < p.nspin; ++spin) {
+        result.push_back(std::make_shared<Matrix>("cuEST DIIS projected error", p.nmo, p.nmo));
+        cuda_check(cudaMemcpyAsync(result.back()->pointer()[0],
+            p.ptr(p.error)+std::size_t(spin)*p.nmo*p.nmo, bytes, cudaMemcpyDeviceToHost, stream_handle));
+    }
+    cuda_check(cudaStreamSynchronize(stream_handle));
+    pending.done = true;
+    p.counters["error_matrix_device_to_host_bytes"] += bytes*p.nspin;
+    p.counters["matrix_device_to_host_bytes"] += bytes*p.nspin;
+    return result;
+}
 std::map<std::string, double> CuestDIIS::stats() const { return impl_->counters; }
 int CuestDIIS::size() const { return impl_->count; }
 int CuestDIIS::capacity() const { return impl_->cap; }

@@ -22,6 +22,8 @@ class PSI_API CuestDIIS {
     void extrapolate(const std::vector<double>& coefficients, const std::vector<SharedMatrix>& targets);
     std::vector<double> error_gram() const;
     std::vector<double> density_fock_gram() const;
+    /// Explicit diagnostic download, never called by the SCF iteration.
+    std::vector<SharedMatrix> error_vectors();
     std::map<std::string, double> stats() const;
     int size() const;
     int capacity() const;

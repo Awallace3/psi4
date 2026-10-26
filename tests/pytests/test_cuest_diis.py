@@ -103,9 +103,12 @@ def test_cuest_diis_projected_error(nspin, reduced):
         expected = np.asarray(errors) @ np.asarray(errors).T
         np.testing.assert_allclose(np.asarray(gpu.error_gram()).reshape(len(errors), -1),
                                    expected, atol=1.e-9, rtol=1.e-12)
+        for ref, actual in zip(current, gpu._error_vectors()):
+            np.testing.assert_allclose(actual.np, ref, atol=1.e-10, rtol=1.e-12)
     stats = gpu.stats()
     assert stats["fixed_input_uploads"] == 1
-    assert stats.get("matrix_device_to_host_bytes", 0) == 0  # No downloaded error matrices.
+    # Only the explicitly requested diagnostics downloaded full errors.
+    assert stats["matrix_device_to_host_bytes"] == stats["error_matrix_device_to_host_bytes"] == 3*nspin*r*r*8
     gpu.reset_subspace()
     assert gpu.size() == 0 and gpu.stats()["allocated_device_bytes"] == 0
 
@@ -167,7 +170,7 @@ def test_cuest_diis_shape_and_nonfinite_guards():
     assert missing_energy.backend.size() == 0
 
 
-def scf_case(method, unrestricted, gridk, gpu_diis, initial="NONE", maxiter=100):
+def scf_case(method, unrestricted, gridk, gpu_diis, initial="NONE", maxiter=100, extra_options=None):
     psi4.core.clean()
     psi4.core.clean_options()
     mol = psi4.geometry(f"""
@@ -189,7 +192,18 @@ def scf_case(method, unrestricted, gridk, gpu_diis, initial="NONE", maxiter=100)
         "dft_radial_points": 35, "dft_spherical_points": 110, "dft_pruning_scheme": "none",
         "e_convergence": 1.e-10, "d_convergence": 1.e-9, "maxiter": maxiter,
     })
+    if extra_options:
+        psi4.set_options(extra_options)
     return psi4.energy(method, molecule=mol, return_wfn=True)
+
+
+def test_cuest_diis_actual_linear_dependence():
+    options = {"s_orthogonalization": "canonical", "s_tolerance": 0.1}
+    expected_energy, expected = scf_case("hf", False, False, False, extra_options=options)
+    energy, wfn = scf_case("hf", False, False, True, extra_options=options)
+    assert wfn.nmo() < wfn.basisset().nbf()
+    assert energy == pytest.approx(expected_energy, abs=1.e-8)
+    np.testing.assert_allclose(wfn.Da().np, expected.Da().np, atol=3.e-7, rtol=0)
 
 
 @pytest.mark.parametrize("unrestricted", [False, True])

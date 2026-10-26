@@ -97,6 +97,8 @@ void export_wavefunction(py::module& m) {
         .def("extrapolate", &CuestDIIS::extrapolate)
         .def("error_gram", &CuestDIIS::error_gram)
         .def("density_fock_gram", &CuestDIIS::density_fock_gram)
+        .def("_error_vectors", &CuestDIIS::error_vectors,
+             "Explicit diagnostic download; never used by the SCF DIIS loop.")
         .def("stats", &CuestDIIS::stats)
         .def("size", &CuestDIIS::size)
         .def("capacity", &CuestDIIS::capacity)

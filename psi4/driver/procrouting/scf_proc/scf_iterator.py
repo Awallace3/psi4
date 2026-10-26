@@ -287,6 +287,8 @@ def initialize_jk(self, memory, jk=None):
 @p4util.timer("SCF: Initialize")
 def scf_initialize(self):
     """Specialized initialization, compute integrals and does everything to prepare for iterations"""
+    from ..cuest_diis import validate_cuest_diis
+    validate_cuest_diis(self)
 
     # Figure out memory distributions
 
