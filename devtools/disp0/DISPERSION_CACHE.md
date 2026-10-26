@@ -107,3 +107,15 @@ reducing native factor batches from12 to6 when all S slabs fit. Any observed
 latency ratio applies only to this native blocked path and includes its
 mandatory identity/audit overhead, **not vendor DFMO kernel-only timing**.
 Whole F-SAPT and large-system speedups require separate qualified measurements.
+
+## Actual native result
+
+The Cachy experiment at source `643c2879a3` **passed**. Native factor batches
+fell12→6 while contraction blocks stayed9. Three-pair median blocked wall time
+fell5.462297→2.944363s (**1.86×**) with canonical/localized, changed-input,
+cap0 and tail-only-cache checks passing. Complete native/session cleanup and
+common-lease release were verified.
+
+See [native Cachy results](cachy/DISPERSION_CACHE_RESULTS.md) for raw samples,
+pair-matrix errors, independent artifact replay, pins and scope limits. This
+is not whole F-SAPT or H200 performance evidence.

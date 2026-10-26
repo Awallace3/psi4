@@ -136,14 +136,13 @@ pins, scope and remaining gates.
   different B localized partitions. Broadening ordered Jacobi pair launches
   would change dependencies; a different gauge must not be passed off as an
   optimization or accepted by loosening tolerances.
-- **Repeated S-side DFMO production:** `blocked_device_dispersion` computes
-  identical S-side factors inside every R-tile iteration. Its factor-batch
-  count is `nR + nR*nS`; a budgeted cache of packed S-side slabs could approach
-  `nR + nS` if they fit. This is the strongest remaining algorithmic reuse
-  candidate, not an implemented speedup. Preserve R/S accumulation order,
-  provider/session/gauge identity, crossed orientation and changed-input
-  invalidation. Packed-cache residency must fit together with native plans and
-  response factors; do not retain raw and packed duplicates indefinitely.
+- **Repeated S-side DFMO production — now implemented opt-in:** the subsequent
+  bounded packed-S cache preserves R/S order and per-call identity/lifetime,
+  reducing factor batches toward `nR+nS` when all S slabs fit. Its actual small
+  native Cachy test reduced12→6 batches and measured1.86× blocked-path latency
+  improvement. See [design](DISPERSION_CACHE.md) and
+  [native results](cachy/DISPERSION_CACHE_RESULTS.md). This does not admit a
+  whole F-SAPT/H200 speedup or an unbounded resident cache.
 - **Duplicate input staging:** `fragment_terms` already uploads raw HF inputs
   before passing their host copies to `prepare_hf`, which uploads them again.
   A validated device-input preparation seam can reuse the original buffers.
