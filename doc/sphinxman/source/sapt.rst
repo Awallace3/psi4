@@ -839,9 +839,10 @@ retains the fixed alpha/beta storage pitch, so padding is skipped separately
 for each spin, not mistaken for another physical RHS. All full/partial
 workspace shapes are queried before iteration. ``cphf_device_stats()``
 reports ``ao_rhs_tile``, ``jk_density_slots_submitted``,
-``jk_padding_slots_avoided``, ``jk_coulomb_calls``, and
-``jk_exchange_calls`` to audit the work actually dispatched. These counts
-do not imply a measured speedup.
+``jk_padding_slots_avoided``, ``jk_exchange_density_slots_submitted``,
+``jk_coulomb_calls``, and ``jk_exchange_calls`` to audit actual SDK call
+arguments. DF-K with an empty occupied spin submits no exchange density
+for that spin. These counts do not imply a measured speedup.
 
 The response-only |globals__cuest_response_symmetric_k| optimization (default
 true, active only for device-CG Grid-K) uses

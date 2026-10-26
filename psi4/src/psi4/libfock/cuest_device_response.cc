@@ -99,7 +99,7 @@ CuestJKDeviceResponse::CuestJKDeviceResponse(cuESTJK& jk, CuestDeviceJKView view
     work_ = workspace_.sdk_workspace(scratch_);
 }
 void CuestJKDeviceResponse::compute(std::size_t actual_rhs) {
-    if (!jk_.initialized_ || jk_.plan_key_ != plan_key_)
+    if (!jk_.initialized_ || jk_.plan_key_ != plan_key_ || jk_.current_plan_key() != plan_key_)
         throw PSIEXCEPTION("cuEST device CG: JK plan changed during a resident response session.");
     if (!actual_rhs) actual_rhs = view_.nrhs;
     if (actual_rhs != view_.nrhs && actual_rhs != view_.last_nrhs)
@@ -109,8 +109,7 @@ void CuestJKDeviceResponse::compute(std::size_t actual_rhs) {
     const auto n2 = static_cast<std::size_t>(jk_.primary_->nbf()) * jk_.primary_->nbf();
     const auto nbf = static_cast<std::size_t>(jk_.primary_->nbf());
     const auto ndensity = view_.nrhs * view_.nocc.size();
-    density_slots_submitted_ += actual_rhs * view_.nocc.size();
-    padding_slots_avoided_ += (view_.nrhs - actual_rhs) * view_.nocc.size();
+    const auto submitted_before = density_slots_submitted_;
     if (jk_.directj_) {
 #ifdef PSI_CUEST_HAS_DIRECTJ
         CuestResponseProfile profile(jk_.options_.get_bool("CUEST_RESPONSE_PROFILE"), "cuEST response: J");
@@ -119,6 +118,7 @@ void CuestJKDeviceResponse::compute(std::size_t actual_rhs) {
                 cuest_handle, jk_.cuest_directj_plan_, jk_.cuest_directj_params_, work_,
                 batch.count, view_.density + batch.first*n2, view_.coulomb + batch.first*n2));
             ++coulomb_calls_;
+            density_slots_submitted_ += batch.count;
         }
 #endif
     } else {
@@ -126,8 +126,13 @@ void CuestJKDeviceResponse::compute(std::size_t actual_rhs) {
             for (std::size_t n = batch.first; n < batch.first + batch.count; ++n) {
                 jk_.compute_coulomb(work_, view_.density + n * n2, view_.coulomb + n * n2);
                 ++coulomb_calls_;
+                ++density_slots_submitted_;
             }
     }
+    // Count actual SDK density arguments, not the requested shape. A regression
+    // dispatching padding must be visible even when its zero density hides it
+    // from numerical parity checks.
+    padding_slots_avoided_ += ndensity - (density_slots_submitted_ - submitted_before);
     if (!view_.compute_exchange) return;
     const char* k_profile_label = !jk_.gridk_ ? "cuEST response: K" :
         symmetric_gridk_ ? (batch_size_ == 1 ? "cuEST response: K sym batch1" : "cuEST response: K sym batched") :
@@ -166,6 +171,7 @@ void CuestJKDeviceResponse::compute(std::size_t actual_rhs) {
                     grid_density + batch.first*n2, view_.exchange + batch.first*n2));
             }
             ++exchange_calls_;
+            exchange_density_slots_submitted_ += batch.count;
         }
 #endif
     } else {
@@ -182,6 +188,7 @@ void CuestJKDeviceResponse::compute(std::size_t actual_rhs) {
                     std::min(batch_size_, actual_rhs-r), view_.nocc[s], view_.left[s],
                     view_.right[s] + r*view_.nocc[s]*nbf, out + r*n2));
                 ++exchange_calls_;
+                exchange_density_slots_submitted_ += std::min(batch_size_, actual_rhs-r);
             }
         }
     }

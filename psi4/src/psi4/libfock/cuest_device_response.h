@@ -39,6 +39,7 @@ class CuestJKDeviceResponse {
     std::size_t density_batch_size() const { return batch_size_; }
     bool symmetric_gridk() const { return symmetric_gridk_; }
     std::size_t density_slots_submitted() const { return density_slots_submitted_; }
+    std::size_t exchange_density_slots_submitted() const { return exchange_density_slots_submitted_; }
     std::size_t padding_slots_avoided() const { return padding_slots_avoided_; }
     std::size_t coulomb_calls() const { return coulomb_calls_; }
     std::size_t exchange_calls() const { return exchange_calls_; }
@@ -49,6 +50,7 @@ class CuestJKDeviceResponse {
     bool symmetric_gridk_ = false;
     std::vector<cuest_response::DensityBatch> full_batches_, last_batches_;
     std::size_t density_slots_submitted_ = 0, padding_slots_avoided_ = 0;
+    std::size_t exchange_density_slots_submitted_ = 0;
     std::size_t coulomb_calls_ = 0, exchange_calls_ = 0;
     std::string plan_key_;
     CuestDeviceArray symmetric_density_;

@@ -237,6 +237,7 @@ class DeviceHessian {
         }
         stats_["operator_calls"] += 1;
         stats_["jk_density_slots_submitted"] = jk_->density_slots_submitted();
+        stats_["jk_exchange_density_slots_submitted"] = jk_->exchange_density_slots_submitted();
         stats_["jk_padding_slots_avoided"] = jk_->padding_slots_avoided();
         stats_["jk_coulomb_calls"] = jk_->coulomb_calls();
         stats_["jk_exchange_calls"] = jk_->exchange_calls();

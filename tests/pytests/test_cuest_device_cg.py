@@ -158,7 +158,14 @@ def test_cuest_response_partial_tile(unrestricted, directj, gridk, symmetric_k):
     stats = wfn.cphf_device_stats()
     assert stats["ao_rhs_tile"] == 2
     assert stats["jk_padding_slots_avoided"] > 0
-    assert stats["jk_coulomb_calls"] > 0 and stats["jk_exchange_calls"] > 0
+    actions = stats["operator_calls"]
+    nspin = 2 if unrestricted else 1
+    # Full UKS tile is [a0,a1,b0,b1], split 3+1. The final tile is
+    # [a0,pad,b0,pad], requiring two single-density calls, not one 2-slot call.
+    batched_calls = 4 if unrestricted else 2
+    assert stats["jk_coulomb_calls"] == actions * (batched_calls if directj else 3*nspin)
+    assert stats["jk_exchange_calls"] == actions * (batched_calls if gridk else 2*nspin)
+    assert stats["jk_exchange_density_slots_submitted"] == actions * 3*nspin
     for ref, out in zip(expected, result):
         np.testing.assert_allclose(out.np, ref, atol=1.e-8, rtol=0)
 
@@ -304,12 +311,18 @@ def test_cuest_device_cg_tiled_rhs(symmetric_k):
 
 
 @pytest.mark.parametrize("symmetric_k", [False, True])
-def test_cuest_device_cg_empty_beta(symmetric_k):
-    wfn = _wavefunction("hf", unrestricted=True, atom=True)
+@pytest.mark.parametrize("gridk", [False, True])
+@pytest.mark.parametrize("directj", [False, True])
+def test_cuest_device_cg_empty_beta(symmetric_k, gridk, directj):
+    wfn = _wavefunction("hf", unrestricted=True, atom=True, gridk=gridk, directj=directj)
     rhs = _rhs(wfn, True, mixed=False)
-    psi4.set_options({"cuest_response_symmetric_k": symmetric_k})
+    psi4.set_options({"cuest_response_symmetric_k": symmetric_k,
+                     "cuest_response_tile_size": 2, "cuest_response_batch_size": 3})
     result = _device_solve(wfn, rhs)
     _check(wfn, rhs, result)
+    stats = wfn.cphf_device_stats()
+    assert stats["jk_exchange_calls"] == stats["operator_calls"] * (4 if gridk else 2)
+    assert stats["jk_exchange_density_slots_submitted"] == stats["operator_calls"] * (6 if gridk else 3)
     for b in result[1::2]:
         assert b.np.shape[0] == 0
 
