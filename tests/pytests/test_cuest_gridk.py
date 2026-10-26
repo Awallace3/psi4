@@ -77,6 +77,34 @@ def _pairs(nbf, symmetric=False):
             for rank in (1, 4, 0, 2)]
 
 
+@pytest.mark.parametrize("budget", [0, -1])
+def test_cuest_gridk_invalid_workspace(gridk_system, budget):
+    _, primary, aux = gridk_system
+    psi4.set_options({"cuest_gridk_workspace_mb": budget})
+    with pytest.raises(RuntimeError, match="CUEST_GRIDK_WORKSPACE_MB must be positive"):
+        _builder(primary, aux)
+
+
+def test_cuest_gridk_workspace_reuses_plan(gridk_system, tmp_path):
+    _, primary, aux = gridk_system
+    trace = tmp_path / "gridk-budget.out"
+    psi4.core.set_output_file(str(trace), False)
+    psi4.set_options({"cuest_gridk_workspace_mb": 64})
+    jk = _builder(primary, aux)
+    try:
+        expected = _compute(jk, _pairs(primary.nbf()))
+        psi4.set_options({"cuest_gridk_workspace_mb": 256})
+        got = _compute(jk, _pairs(primary.nbf()))
+        for ref, out in zip(expected[0] + expected[1], got[0] + got[1]):
+            np.testing.assert_allclose(out, ref, atol=1.e-10, rtol=0)
+        psi4.core.flush_outfile()
+        assert len(re.findall(r"cuESTJK plan created #\d+", trace.read_text())) == 1
+        assert "Grid-K variable budget" in trace.read_text()
+        assert "J scratch query" in trace.read_text() and "Grid-K scratch query" in trace.read_text()
+    finally:
+        jk.finalize()
+
+
 @pytest.mark.parametrize("symmetric", [False, True])
 def test_cuest_directj_jit_policy(gridk_system, tmp_path, symmetric):
     """Default/JIT/AOT produce four-center J; policy edits invalidate the plan."""

@@ -37,12 +37,15 @@ def test_cuest_response_tuning_defaults():
     psi4.core.clean_options()
     assert psi4.core.get_global_option("CUEST_DIRECTJ_JIT") == "DEFAULT"
     assert psi4.core.get_global_option("CUEST_RESPONSE_TILE_SIZE") == 0
+    assert psi4.core.get_global_option("CUEST_GRIDK_WORKSPACE_MB") == 256
     try:
         for policy in ("ON", "OFF", "DEFAULT"):
             psi4.set_options({"cuest_directj_jit": policy})
             assert psi4.core.get_global_option("CUEST_DIRECTJ_JIT") == policy
         psi4.set_options({"cuest_response_tile_size": 2})
         assert psi4.core.get_global_option("CUEST_RESPONSE_TILE_SIZE") == 2
+        psi4.set_options({"cuest_gridk_workspace_mb": 64})
+        assert psi4.core.get_global_option("CUEST_GRIDK_WORKSPACE_MB") == 64
         with pytest.raises((RuntimeError, psi4.ValidationError)):
             psi4.set_options({"cuest_directj_jit": "AUTO"})
     finally:

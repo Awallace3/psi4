@@ -124,14 +124,14 @@ class PSI_API cuESTJK : public JK {
     cuestWorkspace_t* cuest_dfint_plan_ws_ptr_;
 
     // Device bytes cuEST asked for, recorded as the workspace queries answer.
-    // cuEST sizes its workspaces from a query and Psi4 then cudaMallocs exactly
-    // that much -- there is no budget to negotiate against and no out-of-core
-    // path -- so the queried size is the whole story about whether a system fits
-    // on the card.  Keeping it lets preiterations() report it instead of leaving
-    // a bare "out of memory" as the only evidence.
+    // Fixed plan sizes are not negotiable. Grid-K compute has a configurable
+    // variable scratch component, but queries may also require fixed overhead.
+    // Neither that component nor these explicit allocations describe opaque
+    // SDK caches or the total process/device peak.
     size_t pair_list_device_bytes_;
     size_t dfint_plan_device_bytes_;
     size_t jk_temp_device_bytes_;
+    size_t last_gridk_budget_bytes_ = 0;
 
     std::string name() override { return "cuESTJK"; }
     size_t memory_estimate() override;
@@ -148,6 +148,10 @@ class PSI_API cuESTJK : public JK {
     bool needs_df_plan() const { return (do_J_ && !directj_) || ((do_K_ || do_wK_) && !gridk_); }
     void query_coulomb_workspace(cuestWorkspaceDescriptor_t* desc, const double* density, double* coulomb);
     void compute_coulomb(cuestWorkspace_t* scratch, const double* density, double* coulomb);
+    size_t gridk_workspace_bytes() const;
+    /// Explicit basis/pair/integral-plan workspaces only, not SDK-owned caches
+    /// or the molecular grid and external XC/solver buffers.
+    size_t explicit_plan_device_bytes() const;
     /// Restore this computation's requested mode on the shared cuEST handle.
     void configure_math_mode();
     /// Tear down and re-create the DF integral plan; a no-op before initialize().

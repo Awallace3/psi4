@@ -155,6 +155,19 @@ class DeviceHessian {
         view.nocc = nocc; view.density = dD_; view.coulomb = dJ_; view.exchange = dK_;
         jk_ = std::make_unique<CuestJKDeviceResponse>(jk, view);
         stats_["jk_workspace_device_bytes"] = jk_->device_workspace_bytes();
+        stats_["jk_variable_workspace_budget_bytes"] = jk_->variable_workspace_budget_bytes();
+        stats_["jk_coulomb_workspace_device_bytes"] = jk_->coulomb_workspace_bytes();
+        stats_["jk_exchange_workspace_device_bytes"] = jk_->exchange_workspace_bytes();
+        stats_["jk_explicit_plan_device_bytes"] = jk_->explicit_plan_device_bytes();
+        stats_["jk_symmetric_density_device_bytes"] = jk_->symmetric_density_bytes();
+        stats_["ao_staging_device_bytes"] = density_.capacity_bytes() + coulomb_.capacity_bytes() +
+            exchange_data_.capacity_bytes() + potential_.capacity_bytes() + fock_.capacity_bytes();
+        stats_["orbital_panel_device_bytes"] = 0;
+        for (std::size_t s = 0; s < nspin_; ++s) {
+            const auto& t = spins_[s];
+            stats_["orbital_panel_device_bytes"] += t.co.capacity_bytes() + t.cv.capacity_bytes() +
+                t.foo.capacity_bytes() + t.fvv.capacity_bytes() + t.right.capacity_bytes() + t.projected.capacity_bytes();
+        }
         stats_["jk_density_batch_size"] = jk_->density_batch_size();
         stats_["symmetric_gridk"] = jk_->symmetric_gridk();
         stats_["ao_rhs_tile"] = tile_;

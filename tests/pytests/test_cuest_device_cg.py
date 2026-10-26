@@ -10,7 +10,7 @@ pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick, pytest.mark.c
 
 def _wavefunction(method="pbe0", unrestricted=False, directj=True, gridk=True,
                   gpu_xc=True, symmetry="c1", grac=False, atom=False, neutral_uhf=False, guess=None,
-                  mixed_precision=False, ints_tolerance=0.0):
+                  mixed_precision=False, ints_tolerance=0.0, gridk_workspace_mb=256):
     psi4.core.clean()
     psi4.core.clean_options()
     psi4.set_num_threads(2)
@@ -33,6 +33,7 @@ def _wavefunction(method="pbe0", unrestricted=False, directj=True, gridk=True,
         "scf_type": "df", "use_cuest": True, "save_jk": True,
         "guess": guess or ("sad" if unrestricted and not atom and not neutral_uhf else "core"),
         "cuest_directj": directj, "cuest_gridk": gridk, "cuest_xc": gpu_xc,
+        "cuest_gridk_workspace_mb": gridk_workspace_mb,
         "cuest_device_cg": False, "cuest_mixed_precision": mixed_precision, "cuest_gemm_min_dim": 0,
         "dft_radial_points": 35, "dft_spherical_points": 110,
         # Test the linear solver independently of density-dependent quartet
@@ -177,6 +178,29 @@ def test_cuest_response_invalid_tile_size(tile_size):
     with pytest.raises(RuntimeError, match="CUEST_RESPONSE_TILE_SIZE must be between"):
         _device_solve(wfn, _rhs(wfn, False))
     assert not wfn.cphf_converged()
+
+
+@pytest.mark.parametrize("unrestricted", [False, True])
+@pytest.mark.parametrize("directj", [False, True])
+def test_cuest_response_gridk_workspace_budget(unrestricted, directj):
+    """SCF and both response solvers share the budget without changing the operator."""
+    wfn = _wavefunction("pbe0", unrestricted, directj, gridk=True, gridk_workspace_mb=64)
+    rhs = _rhs(wfn, unrestricted, count=3, mixed=False)
+    expected = [m.np.copy() for m in wfn.cphf_solve(rhs, 1.e-10, 150, 0)]
+    assert wfn.cphf_converged()
+    psi4.set_options({"cuest_response_tile_size": 2, "cuest_response_batch_size": 3})
+    for budget in (64, 256):
+        psi4.set_options({"cuest_gridk_workspace_mb": budget})
+        result = _device_solve(wfn, rhs)
+        _check(wfn, rhs, result)
+        stats = wfn.cphf_device_stats()
+        assert stats["jk_variable_workspace_budget_bytes"] == budget * 1000000
+        assert stats["jk_workspace_device_bytes"] == max(
+            stats["jk_coulomb_workspace_device_bytes"], stats["jk_exchange_workspace_device_bytes"])
+        assert stats["ao_staging_device_bytes"] > 0 and stats["orbital_panel_device_bytes"] > 0
+        assert stats["jk_explicit_plan_device_bytes"] >= 0
+        for ref, out in zip(expected, result):
+            np.testing.assert_allclose(out.np, ref, atol=1.e-8, rtol=0)
 
 
 @pytest.mark.parametrize("unrestricted", [False, True])

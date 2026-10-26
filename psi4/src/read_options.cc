@@ -248,6 +248,17 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         silently converted to another mode. Does not enable Direct-J or change
         its screening/precision. !expert -*/
     options.add_str("CUEST_DIRECTJ_JIT", "DEFAULT", "DEFAULT ON OFF");
+    /*- Variable Grid-K device scratch budget in decimal MB, shared by ordinary
+        JK builds and device CPHF/CPKS. Must be positive. Smaller values permit
+        more internal tiling and may increase compute cost; they do not change the
+        grid, screening, precision, or exchange operator. This is NOT a total
+        device-memory cap: fixed SDK overhead, Direct-J scratch, plans, AO
+        matrices, and XC/solver buffers are additional. Does not limit DF-K
+        or enable Grid-K. Use 8000 to reproduce the former 8 GB variable budget.
+        The SDK may reject budgets below its minimum required workspace.
+        The default favors bounded memory over a large scratch allocation.
+        !expert -*/
+    options.add_int("CUEST_GRIDK_WORKSPACE_MB", 256);
     /*- Select the separate device-resident conjugate-gradient CPHF/CPKS solver.
     Iterates, preconditioning, reductions, AO/MO Hessian products and XC response
     contractions remain on device. Only setup, final solutions and small convergence

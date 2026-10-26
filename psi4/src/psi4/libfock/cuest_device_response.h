@@ -36,6 +36,11 @@ class CuestJKDeviceResponse {
     CuestJKDeviceResponse(cuESTJK& jk, CuestDeviceJKView view);
     void compute(std::size_t actual_rhs = 0);
     std::size_t device_workspace_bytes() const { return scratch_.deviceBufferSizeInBytes; }
+    std::size_t variable_workspace_budget_bytes() const { return variable_.deviceBufferSizeInBytes; }
+    std::size_t coulomb_workspace_bytes() const { return coulomb_workspace_bytes_; }
+    std::size_t exchange_workspace_bytes() const { return exchange_workspace_bytes_; }
+    std::size_t explicit_plan_device_bytes() const { return jk_.explicit_plan_device_bytes(); }
+    std::size_t symmetric_density_bytes() const { return symmetric_density_.capacity_bytes(); }
     std::size_t density_batch_size() const { return batch_size_; }
     bool symmetric_gridk() const { return symmetric_gridk_; }
     std::size_t density_slots_submitted() const { return density_slots_submitted_; }
@@ -52,6 +57,7 @@ class CuestJKDeviceResponse {
     std::size_t density_slots_submitted_ = 0, padding_slots_avoided_ = 0;
     std::size_t exchange_density_slots_submitted_ = 0;
     std::size_t coulomb_calls_ = 0, exchange_calls_ = 0;
+    std::size_t coulomb_workspace_bytes_ = 0, exchange_workspace_bytes_ = 0;
     std::string plan_key_;
     CuestDeviceArray symmetric_density_;
     CuestXCResponseWorkspace workspace_;

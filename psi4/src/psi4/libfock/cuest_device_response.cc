@@ -20,7 +20,7 @@ CuestJKDeviceResponse::CuestJKDeviceResponse(cuESTJK& jk, CuestDeviceJKView view
     if (!jk_.do_J_ || (view_.compute_exchange && !jk_.do_K_))
         throw PSIEXCEPTION("cuEST device CG: attached JK task mask does not supply the required J/K operator.");
     plan_key_ = jk_.plan_key_;
-    variable_.deviceBufferSizeInBytes = 8000000000ULL;
+    variable_.deviceBufferSizeInBytes = jk_.gridk_ ? jk_.gridk_workspace_bytes() : 8000000000ULL;
     const auto ndensity = view_.nrhs * view_.nocc.size();
     const int requested_batch = jk_.options_.get_int("CUEST_RESPONSE_BATCH_SIZE");
     if (requested_batch < 0)
@@ -56,11 +56,13 @@ CuestJKDeviceResponse::CuestJKDeviceResponse(cuESTJK& jk, CuestDeviceJKView view
                     cuest_handle, jk_.cuest_directj_plan_, jk_.cuest_directj_params_, &d,
                     batch.count, view_.density + batch.first*n2, view_.coulomb + batch.first*n2));
                 grow(d);
+                coulomb_workspace_bytes_ = std::max(coulomb_workspace_bytes_, d.deviceBufferSizeInBytes);
             }
 #endif
     } else {
         jk_.query_coulomb_workspace(&d, view_.density, view_.coulomb);
         grow(d);
+        coulomb_workspace_bytes_ = d.deviceBufferSizeInBytes;
     }
     if (view_.compute_exchange) {
         if (jk_.gridk_) {
@@ -79,6 +81,7 @@ CuestJKDeviceResponse::CuestJKDeviceResponse(cuESTJK& jk, CuestDeviceJKView view
                         grid_density + batch.first*n2, view_.exchange + batch.first*n2));
                 }
                 grow(d);
+                exchange_workspace_bytes_ = std::max(exchange_workspace_bytes_, d.deviceBufferSizeInBytes);
             }
 #endif
         } else {
@@ -92,6 +95,7 @@ CuestJKDeviceResponse::CuestJKDeviceResponse(cuESTJK& jk, CuestDeviceJKView view
                         view_.right[s] + r*view_.nocc[s]*nbf,
                         view_.exchange + (s * view_.nrhs + r) * n2));
                     grow(d);
+                    exchange_workspace_bytes_ = std::max(exchange_workspace_bytes_, d.deviceBufferSizeInBytes);
                 }
             }
         }
@@ -101,6 +105,8 @@ CuestJKDeviceResponse::CuestJKDeviceResponse(cuESTJK& jk, CuestDeviceJKView view
 void CuestJKDeviceResponse::compute(std::size_t actual_rhs) {
     if (!jk_.initialized_ || jk_.plan_key_ != plan_key_ || jk_.current_plan_key() != plan_key_)
         throw PSIEXCEPTION("cuEST device CG: JK plan changed during a resident response session.");
+    if (jk_.gridk_ && variable_.deviceBufferSizeInBytes != jk_.gridk_workspace_bytes())
+        throw PSIEXCEPTION("cuEST device CG: Grid-K workspace budget changed during a resident response session.");
     if (!actual_rhs) actual_rhs = view_.nrhs;
     if (actual_rhs != view_.nrhs && actual_rhs != view_.last_nrhs)
         throw PSIEXCEPTION("cuEST device CG: RHS shape was not workspace-queried during setup.");

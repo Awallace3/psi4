@@ -54,6 +54,7 @@
 #include <limits>
 #include <memory>
 #include <vector>
+#include "cuest_workspace_policy.h"
 
 #include <cublas_v2.h>
 #include <cusolverDn.h>
@@ -108,7 +109,14 @@ PlanWorkspace plan_workspace(const cuestWorkspaceDescriptor_t& desc) {
         void* device = nullptr;
         const auto status = cudaMalloc(&device, desc.deviceBufferSizeInBytes);
         if (status != cudaSuccess) {
-            throw PSIEXCEPTION(std::string("cuESTJK plan workspace allocation failed: ") + cudaGetErrorString(status));
+            size_t free_bytes = 0, total_bytes = 0;
+            const bool known = cuest_common::device_memory(&free_bytes, &total_bytes);
+            std::string message = "cuESTJK workspace allocation of " +
+                                  std::to_string(desc.deviceBufferSizeInBytes) + " device bytes failed: " +
+                                  cudaGetErrorString(status);
+            if (known) message += " (" + std::to_string(free_bytes) + " of " +
+                                  std::to_string(total_bytes) + " device bytes free)";
+            throw PSIEXCEPTION(message);
         }
         ws->deviceBuffer = reinterpret_cast<uintptr_t>(device);
     }
@@ -392,6 +400,7 @@ void cuESTJK::preiterations()
 void cuESTJK::build_cuest_plan(const std::string& key) {
     gridk_ = options_.get_bool("CUEST_GRIDK");
     directj_ = options_.get_bool("CUEST_DIRECTJ");
+    if (gridk_) (void)gridk_workspace_bytes();  // Validate before allocating plans.
 #ifndef PSI_CUEST_HAS_GRIDK
     if (gridk_)
         throw PSIEXCEPTION("CUEST_GRIDK requires cuEST symmetric and nonsymmetric Grid-K APIs; "
@@ -576,15 +585,15 @@ void cuESTJK::build_cuest_plan(const std::string& key) {
 
     if (print_) {
         // Report what the card is actually being asked for.  Every other JK
-        // builder prints its memory (MemDFJK prints "AOs need X GiB; user
-        // supplied Y GiB") and falls back to disk when it does not fit; cuEST
-        // has neither a budget nor a fallback, so an over-large system simply
-        // dies in cudaMalloc.  Printing the queried sizes next to the free
-        // device memory turns that into a diagnosis rather than a guess.
+        // builder prints its memory. Fixed integral plans still have no
+        // out-of-core fallback; the Grid-K variable scratch budget is separate.
+        // Include queried sizes and free memory instead of a bare CUDA OOM.
         size_t dev_free = 0, dev_total = 0;
         const bool have_dev = cuest_common::device_memory(&dev_free, &dev_total);
         outfile->Printf("    Device memory, AO pair list:  %8.3f [GiB]\n",
                         pair_list_device_bytes_ * cuest_common::to_gib);
+        outfile->Printf("    Device memory, explicit JK plans: %8.3f [GiB]\n",
+                        explicit_plan_device_bytes() * cuest_common::to_gib);
         if (cuest_df_plan_)
             outfile->Printf("    Device memory, DF int plan:   %8.3f [GiB]\n",
                             dfint_plan_device_bytes_ * cuest_common::to_gib);
@@ -707,6 +716,7 @@ void cuESTJK::compute_gridk_JK() {
     const auto start = clock::now();
     const size_t nbf = primary_->nbf();
     const size_t bytes = nbf * nbf * sizeof(double);
+    const auto budget = gridk_workspace_bytes();
     const auto check_cuda = [](cudaError_t status) {
         if (status != cudaSuccess)
             throw PSIEXCEPTION(std::string("cuESTJK Grid-K CUDA error: ") + cudaGetErrorString(status));
@@ -723,7 +733,7 @@ void cuESTJK::compute_gridk_JK() {
     auto d_K = do_K_ ? reinterpret_cast<double*>(exchange->deviceBuffer) : nullptr;
 
     cuestWorkspaceDescriptor_t j_desc{}, k_desc{}, variable{};
-    variable.deviceBufferSizeInBytes = 8000000000;
+    variable.deviceBufferSizeInBytes = budget;
     if (do_J_) query_coulomb_workspace(&j_desc, d_D, d_J);
     if (do_K_) {
         if (lr_symmetric_) {
@@ -739,11 +749,22 @@ void cuESTJK::compute_gridk_JK() {
     cuestWorkspaceDescriptor_t total{};
     total.hostBufferSizeInBytes = std::max(j_desc.hostBufferSizeInBytes, k_desc.hostBufferSizeInBytes);
     total.deviceBufferSizeInBytes = std::max(j_desc.deviceBufferSizeInBytes, k_desc.deviceBufferSizeInBytes);
-    const bool first_report = jk_temp_device_bytes_ == 0;
+    const bool report = jk_temp_device_bytes_ != total.deviceBufferSizeInBytes ||
+                        last_gridk_budget_bytes_ != budget;
     jk_temp_device_bytes_ = total.deviceBufferSizeInBytes;
-    if (print_ && first_report)
-        outfile->Printf("    Device memory, J/Grid-K scratch: %8.3f [GiB]\n\n",
+    last_gridk_budget_bytes_ = budget;
+    if (print_ && report) {
+        outfile->Printf("    Device memory, Grid-K variable budget: %8.3f [GiB]\n",
+                        budget * cuest_common::to_gib);
+        outfile->Printf("    Device memory, J scratch query: %8.3f [GiB]\n",
+                        j_desc.deviceBufferSizeInBytes * cuest_common::to_gib);
+        outfile->Printf("    Device memory, Grid-K scratch query: %8.3f [GiB]\n",
+                        k_desc.deviceBufferSizeInBytes * cuest_common::to_gib);
+        outfile->Printf("    Device memory, JK AO staging: %8.3f [GiB]\n",
+                        bytes * (1 + int(do_J_) + int(do_K_)) * cuest_common::to_gib);
+        outfile->Printf("    Device memory, J/Grid-K shared scratch: %8.3f [GiB]\n\n",
                         jk_temp_device_bytes_ * cuest_common::to_gib);
+    }
     auto scratch = plan_workspace(total);
     for (size_t n = 0; n < D_ao_.size(); ++n) {
         check_cuda(cudaMemcpy(d_D, D_ao_[n]->get_pointer(), bytes, cudaMemcpyHostToDevice));
@@ -795,6 +816,7 @@ bool cuESTJK::destroy_cuest_objects() noexcept {
     initialized_ = false;
     plan_key_.clear();
     jk_temp_device_bytes_ = 0;
+    last_gridk_budget_bytes_ = 0;
 #ifdef PSI_CUEST_HAS_DIRECTJ
     if (cuest_directj_plan_) {
         if (cuestDirectIntPlanDestroy(cuest_directj_plan_) != CUEST_STATUS_SUCCESS)
@@ -912,6 +934,29 @@ void cuESTJK::set_omega_beta(double beta) {
     if (beta == omega_beta_) return;
     omega_beta_ = beta;
     rebuild_cuest_plan();
+}
+
+size_t cuESTJK::gridk_workspace_bytes() const {
+    try {
+        return cuest_workspace::gridk_variable_bytes(options_.get_int("CUEST_GRIDK_WORKSPACE_MB"));
+    } catch (const std::exception& error) {
+        throw PSIEXCEPTION(error.what());
+    }
+}
+
+size_t cuESTJK::explicit_plan_device_bytes() const {
+    const auto bytes = [](const cuestWorkspace_t* ws) -> size_t {
+        return ws ? ws->deviceBufferSizeInBytes : 0;
+    };
+    auto result = bytes(cuest_primary_basis_ws_) + bytes(cuest_auxiliary_basis_ws_) +
+                  bytes(cuest_pair_list_ws_ptr_) + bytes(cuest_dfint_plan_ws_ptr_);
+#ifdef PSI_CUEST_HAS_DIRECTJ
+    result += bytes(cuest_directj_plan_ws_);
+#endif
+#ifdef PSI_CUEST_HAS_GRIDK
+    result += bytes(cuest_gridk_plan_ws_);
+#endif
+    return result;
 }
 
 size_t cuESTJK::memory_estimate() {

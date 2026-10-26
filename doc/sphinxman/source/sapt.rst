@@ -744,6 +744,30 @@ It works with either setting of ``CUEST_XC``. The plan is reused until the
 geometry, exchange operator, or grid settings change. Exchange is already
 weighted by the same full- and long-range fractions as DF-K.
 
+|globals__cuest_gridk_workspace_mb| bounds Grid-K's **variable device
+scratch component** in decimal MB, for both ordinary JK and resident
+CPHF/CPKS. The memory-oriented default is 256 MB instead of the former
+hard-coded 8000 MB; set ``CUEST_GRIDK_WORKSPACE_MB 8000`` when reproducing
+older measurements. Smaller workspaces may require more internal tiling
+without changing the grid, precision, screening, or exchange operator.
+Values must be positive; an insufficient budget may be rejected by cuEST.
+The same budget is retained between each workspace query and computation.
+Changing it between solves does not rebuild the persistent integral plan.
+
+This is **not a total GPU-memory cap**: fixed SDK workspace overhead,
+Direct-J's independently queried scratch, plans, molecular grids, AO
+panels and solver/XC arrays remain additional. Ordinary JK reports separate
+J and K workspace queries, their shared maximum, and AO staging.
+Resident CG exposes the same split through ``cphf_device_stats()`` as
+``jk_coulomb_workspace_device_bytes``,
+``jk_exchange_workspace_device_bytes``, and ``jk_workspace_device_bytes``,
+alongside ``jk_variable_workspace_budget_bytes``.
+``jk_explicit_plan_device_bytes`` covers Psi4-owned basis/pair/integral-plan
+workspaces, not opaque SDK caches or the molecular grid.
+``ao_staging_device_bytes``, ``jk_symmetric_density_device_bytes``, and
+``orbital_panel_device_bytes`` report separate resident staging categories.
+These categories are not a measured device peak.
+
 Set |globals__cuest_directj| to true as well for **Direct-J + Grid-K**.
 Coulomb then uses cuEST's integral-direct four-center builder, including
 general signed CPKS densities. No DF integral plan or GPU auxiliary basis
@@ -767,6 +791,16 @@ Unlike K, J depends only on the symmetric part of the density; this does
 not permit symmetrizing the density supplied to nonsymmetric Grid-K.
 Analytic Coulomb gradients for Direct-J are not implemented and raise an
 error rather than silently using DF-J derivatives.
+
+Direct-J + Grid-K removes the resident DF integral tensor, not every size
+limit in a SAPT calculation. At 10,000 AOs one dense FP64 AO matrix alone
+occupies 800,000,000 bytes; even a single-RHS CG staging tile contains
+several such matrices. The automatic tile's 256 MiB heuristic has a
+minimum of one RHS, so it is not a hard staging cap for large AO bases.
+Occupied/virtual solver vectors, XC fields, SCF diagonalization and
+separate SAPT/dispersion intermediates also require memory. An end-to-end
+10,000-AO calculation therefore needs its own memory audit and measured
+validation; enabling these JK options alone does not establish that limit.
 
 Grid-K is a numerical quadrature approximation, not another density-fitting
 algorithm: converge the grid against the desired energy and CPKS residual

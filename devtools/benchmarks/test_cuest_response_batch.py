@@ -46,3 +46,34 @@ int main() {
                     "-x", "c++", "-", "-I", str(root), "-o", str(binary)],
                    input=source, text=True, check=True, capture_output=True)
     subprocess.run([str(binary)], check=True)
+
+
+def test_gridk_workspace_budget(tmp_path):
+    compiler = shutil.which("c++")
+    if not compiler:
+        pytest.skip("C++ compiler unavailable")
+    root = Path(__file__).resolve().parents[2]
+    source = r"""
+#include "psi4/src/psi4/libfock/cuest_workspace_policy.h"
+#include <cassert>
+#include <initializer_list>
+int main() {
+    using psi::cuest_workspace::gridk_variable_bytes;
+    assert(gridk_variable_bytes(1) == 1000000);
+    assert(gridk_variable_bytes(64) == 64000000);
+    assert(gridk_variable_bytes(256) == 256000000);
+    if (std::numeric_limits<std::size_t>::max() >= 8000000000ULL)
+        assert(gridk_variable_bytes(8000) == 8000000000ULL);
+    for (int invalid : {0, -1}) {
+        bool threw = false;
+        try { gridk_variable_bytes(invalid); }
+        catch (const std::invalid_argument&) { threw = true; }
+        assert(threw);
+    }
+}
+"""
+    binary = tmp_path / "gridk-workspace"
+    subprocess.run([compiler, "-std=c++14", "-Wall", "-Wextra", "-Werror",
+                    "-x", "c++", "-", "-I", str(root), "-o", str(binary)],
+                   input=source, text=True, check=True, capture_output=True)
+    subprocess.run([str(binary)], check=True)
