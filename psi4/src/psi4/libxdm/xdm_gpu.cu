@@ -69,7 +69,6 @@ constexpr int ncolloc = 5;
 // GEMM outputs: D phi, D phi_x, D phi_y, D phi_z.
 constexpr int ngemm = 4;
 constexpr int max_am = 6;
-constexpr int max_ncart = (max_am + 1) * (max_am + 2) / 2;
 // Points per chunk; bounds the per-point arrays independently of the workspace.
 constexpr std::size_t max_chunk_points = std::size_t{1} << 16;
 constexpr int colloc_threads = 128;
@@ -750,6 +749,8 @@ struct DeviceXDMIntegrator::Impl {
 
     // Stage timing: an event on the stream at the start of each chunk and after each stage;
     // the time between two consecutive events of a chunk belongs to the later one's stage.
+    // That is stream time, not GPU busy time: host work between two marks while the stream
+    // is idle (e.g. the host density gather) is charged to the later stage.
     enum Stage { COPY, GATHER, COLLOC, GEMM, DENSITY, POINT, MOMENT, NSTAGE };
     std::vector<cudaEvent_t> events;
     std::vector<int> event_stage;  // -1 opens a chunk

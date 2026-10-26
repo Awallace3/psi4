@@ -1471,6 +1471,33 @@ def test_xdm_device_blocking_matches_host(case, record_property):
 
 
 @pytest.mark.xdm
+def test_xdm_gpu_stage_report(tmp_path):
+    """The GPU integration reports its stream time per pipeline stage and its GEMM work, and the
+    GEMM over each chunk's union columns does at least the work its blocks need on their own."""
+    if not psi4.addons("cuest"):
+        pytest.skip("XDM_GPU needs a cuEST build")
+    wfn = _cuest_grid_wfn("rks")
+    out = tmp_path / "stage_report.dat"
+    psi4.set_output_file(str(out), False)
+    try:
+        _xdm_on_grid(wfn, True, "CUEST", "DEVICE")
+    finally:
+        psi4.set_output_file("pytest_output.dat", True)
+    text = out.read_text()
+    stages = re.search(r"Stream time per stage ([\d.]+) s: (.*)\.\n", text)
+    assert stages, text[-2000:]
+    names = [x.rsplit(" ", 1)[0] for x in stages.group(2).split(", ")]
+    assert names == ["copies", "density gather", "collocation", "GEMM", "density", "Becke-Roussel + promolecule",
+                     "moments"]
+    times = [float(x.rsplit(" ", 1)[1]) for x in stages.group(2).split(", ")]
+    assert min(times) >= 0.0 and abs(sum(times) - float(stages.group(1))) < 0.01
+    work = re.search(r"GEMM multiply-adds ([\d.e+-]+) over chunk columns, ([\d.e+-]+) over block columns", text)
+    assert work, text[-2000:]
+    done, needed = float(work.group(1)), float(work.group(2))
+    assert needed > 0.0 and done >= needed
+
+
+@pytest.mark.xdm
 @pytest.mark.parametrize("case", ["rks", "uks"])
 @pytest.mark.parametrize("blocking", ["HOST", "DEVICE"])
 def test_xdm_gpu_chunking_and_density_gather(case, blocking):

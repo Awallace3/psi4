@@ -161,9 +161,10 @@ class DeviceXDMIntegrator {
     std::size_t npoints() const;
     /// Chunks sent to the device so far.
     std::size_t nchunks() const;
-    /// Device time per stage of the chunk pipeline, in seconds, from events on the stream
+    /// Stream time per stage of the chunk pipeline, in seconds, between events on the stream
     /// (valid after finish()): copies, density gather, collocation, GEMM, density,
-    /// Becke-Roussel + promolecule, moments.
+    /// Becke-Roussel + promolecule, moments. Host work done between two events while the
+    /// stream is idle counts toward the later stage, so this bounds GPU busy time from above.
     std::vector<std::pair<std::string, double>> stage_seconds() const;
     /// GEMM multiply-adds {done, needed}: done over each chunk's union columns, needed over
     /// each grid block's own columns.
