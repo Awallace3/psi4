@@ -74,6 +74,9 @@ def scf_compute_energy(self):
     returns the SCF energy computed by finalize_energy().
 
     """
+    from ..cuest_diis import validate_cuest_diis
+    validate_cuest_diis(self)
+    self._cuest_diis_stats = {}
     if core.get_option('SCF', 'DF_SCF_GUESS') and (core.get_global_option('SCF_TYPE') == 'DIRECT'):
         # speed up DIRECT algorithm (recomputes full (non-DF) integrals
         #   each iter) by first converging via fast DF iterations, then
@@ -88,6 +91,9 @@ def scf_compute_energy(self):
                 self.finalize()
                 _release_collocation_cache(self)
                 raise SCFConvergenceError("""SCF DF preiterations""", self.iteration_, self, 0, 0)
+            except BaseException:
+                _release_cuest_diis(self)
+                raise
         core.print_out("\n  DF guess converged.\n\n")
 
         # reset the DIIS & JK objects in prep for DIRECT
@@ -108,15 +114,40 @@ def scf_compute_energy(self):
             # energy = 0.0
             # A P::e fn to either throw or protest upon nonconvergence
             # die_if_not_converged()
+            _release_cuest_diis(self)
             _release_collocation_cache(self)
             raise e
         else:
             core.print_out("  Energy and/or wave function did not converge, but proceeding anyway.\n\n")
+    except BaseException:
+        _release_cuest_diis(self)
+        raise
     else:
         core.print_out("  Energy and wave function converged.\n\n")
 
-    scf_energy = self.finalize_energy()
+    try:
+        scf_energy = self.finalize_energy()
+    except BaseException:
+        _release_cuest_diis(self)
+        raise
     return scf_energy
+
+
+def _release_cuest_diis(self):
+    """Failure cleanup must not leave GPU history pinned by an exception's wfn."""
+    if self.initialized_diis_manager_ and getattr(self.diis_manager_, "is_cuest_diis", False):
+        try:
+            self.diis_manager_.delete_diis_file()
+        except Exception as error:
+            # Preserve the original SCF failure, but never report failed cleanup
+            # as a successful resource release.
+            if not hasattr(self, "_cuest_diis_stats"):
+                self._cuest_diis_stats = {}
+            self._cuest_diis_stats["cleanup_failed"] = 1
+            core.print_out(f"\n  Warning: cuEST DIIS cleanup failed: {error}\n")
+        finally:
+            self.diis_manager_ = None
+            self.initialized_diis_manager_ = False
 
 
 @p4util.timer("SCF: JK factory")

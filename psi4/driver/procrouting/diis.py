@@ -8,6 +8,7 @@ from qcelemental.util import which_import
 from psi4 import core
 
 from .. import psifiles as psif
+from ..p4util.exceptions import ValidationError
 
 
 class RemovalPolicy(Enum):
@@ -368,8 +369,8 @@ class DIIS:
         if self.closed_shell:
             self.ediis_quadratic *= 2
 
-    def extrapolate(self, *args, Dnorm = None):
-        """ Perform extrapolation. Must be passed in an error metric to decide how to handle hybrid algorithms. """
+    def extrapolation_coefficients(self, Dnorm=None):
+        """Shared coefficient/blending policy for host and device histories."""
 
         if {"adiis", "ediis"}.intersection(self.engines) and Dnorm is None:
             raise ValidationError("An extrapolation engine insists you specify the error metric.")
@@ -382,7 +383,7 @@ class DIIS:
         elif len(self.engines) == 1:
             blend_stop = core.get_option("SCF", "SCF_INITIAL_FINISH_DIIS_TRANSITION")
             if Dnorm <= blend_stop:
-                return performed
+                return None, performed
             elif self.engines == {"ediis"}:
                 coeffs = self.ediis_coefficients()
                 performed.add("EDIIS")
@@ -415,6 +416,13 @@ class DIIS:
         else:
             raise Exception(f"DIIS engine combination not recognized: {self.engines}")
 
+        return coeffs, performed
+
+    def extrapolate(self, *args, Dnorm=None):
+        """Extrapolate targets using the common coefficient/blending policy."""
+        coeffs, performed = self.extrapolation_coefficients(Dnorm)
+        if coeffs is None:
+            return performed
         for j, Tj in enumerate(args):
             Tj.zero()
             for i, ci in enumerate(coeffs):
@@ -436,4 +444,3 @@ class DIIS:
                 os.remove(filename)
             except FileNotFoundError:
                 pass
-

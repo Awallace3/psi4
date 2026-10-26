@@ -11,7 +11,7 @@ scf_iterator = importlib.import_module("psi4.driver.procrouting.scf_proc.scf_ite
 pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick]
 
 
-@pytest.mark.parametrize("option", ["CUEST_GRIDK", "CUEST_DIRECTJ", "CUEST_DEVICE_CG", "CUEST_RESPONSE_PROFILE"])
+@pytest.mark.parametrize("option", ["CUEST_GRIDK", "CUEST_DIRECTJ", "CUEST_DEVICE_CG", "CUEST_RESPONSE_PROFILE", "CUEST_DIIS"])
 def test_cuest_gridk_option_default(option):
     """Register the opt-in even in CPU-only builds; DF-K remains the default."""
     psi4.core.clean_options()
@@ -38,6 +38,7 @@ def test_cuest_response_tuning_defaults():
     assert psi4.core.get_global_option("CUEST_DIRECTJ_JIT") == "DEFAULT"
     assert psi4.core.get_global_option("CUEST_RESPONSE_TILE_SIZE") == 0
     assert psi4.core.get_global_option("CUEST_GRIDK_WORKSPACE_MB") == 256
+    assert psi4.core.get_global_option("CUEST_DIIS_MAX_MEMORY_MB") == 32000
     try:
         for policy in ("ON", "OFF", "DEFAULT"):
             psi4.set_options({"cuest_directj_jit": policy})
@@ -85,3 +86,35 @@ def test_ooo_cuest_rejected_before_iterations(optimizer, monkeypatch):
     wfn = SimpleNamespace(functional=lambda: SimpleNamespace(needs_xc=lambda: True))
     with pytest.raises(scf_iterator.ValidationError, match="CUEST_XC false"):
         scf_iterator.scf_iterate(wfn)
+
+
+@pytest.mark.parametrize("change,match", [
+    ({"USE_CUEST": False}, "USE_CUEST true"),
+    ({"REFERENCE": "ROHF"}, "C1 RHF/RKS"),
+    ({"nirrep": 2}, "C1 RHF/RKS"),
+    ({"ORBITAL_OPTIMIZER_PACKAGE": "OOO"}, "INTERNAL"),
+    ({"DIIS_MAX_VECS": 0}, "between 1 and 128"),
+    ({"DIIS_MAX_VECS": 129}, "between 1 and 128"),
+    ({"CUEST_DIIS_MAX_MEMORY_MB": 0}, "must be positive"),
+    ({"DIIS": False, "SCF_INITIAL_ACCELERATOR": "NONE"}, "requires DIIS or"),
+])
+def test_cuest_diis_option_guards(change, match, monkeypatch):
+    from psi4.driver.procrouting.cuest_diis import validate_cuest_diis
+    options = {"CUEST_DIIS": True, "USE_CUEST": True, "REFERENCE": "RHF", "nirrep": 1,
+               "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL", "DIIS_MAX_VECS": 8,
+               "CUEST_DIIS_MAX_MEMORY_MB": 32, "DIIS": True, "SCF_INITIAL_ACCELERATOR": "NONE"}
+    options.update(change)
+    monkeypatch.setattr(psi4.core, "CuestDIIS", object, raising=False)
+    monkeypatch.setattr(psi4.core, "get_global_option", lambda name: options[name])
+    monkeypatch.setattr(psi4.core, "get_option", lambda module, name: options[name])
+    with pytest.raises(psi4.ValidationError, match=match):
+        validate_cuest_diis(SimpleNamespace(nirrep=lambda: options["nirrep"]))
+
+
+def test_cuest_diis_failure_cleanup():
+    calls = []
+    manager = SimpleNamespace(is_cuest_diis=True, delete_diis_file=lambda: calls.append("deleted"))
+    wfn = SimpleNamespace(initialized_diis_manager_=True, diis_manager_=manager)
+    scf_iterator._release_cuest_diis(wfn)
+    scf_iterator._release_cuest_diis(wfn)
+    assert calls == ["deleted"] and not wfn.initialized_diis_manager_ and wfn.diis_manager_ is None

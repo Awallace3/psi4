@@ -259,6 +259,23 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         The default favors bounded memory over a large scratch allocation.
         !expert -*/
     options.add_int("CUEST_GRIDK_WORKSPACE_MB", 256);
+    /*- Keep SCF DIIS history and projected error/Gram/extrapolation work on
+        the GPU. Requires USE_CUEST, C1 RHF/RKS or UHF/UKS and INTERNAL orbital
+        optimization, with DIIS_MAX_VECS between 1 and 128. Retains Psi4's conditioned small host coefficient solve
+        and A/EDIIS blending. This does not make the rest of SCF device-resident:
+        current host F/D are uploaded, and extrapolated F is downloaded once.
+        Unsupported requested modes fail rather than silently using host DIIS.
+        !expert -*/
+    options.add_bool("CUEST_DIIS", false);
+    /*- Maximum explicit device-array storage for cuEST DIIS history and workspaces,
+        in decimal MB. Actual allocation follows matrix dimensions and
+        DIIS_MAX_VECS, not this entire limit. Effective history is reduced to
+        fit this limit and 90 percent of currently free device memory; at least
+        two entries (or one if explicitly requested) must fit. This is not a
+        total SCF memory cap; CUDA/cuBLAS internal allocations, JK, XC and
+        diagonalization need extra memory.
+        Requested/effective capacity and allocation are reported. !expert -*/
+    options.add_int("CUEST_DIIS_MAX_MEMORY_MB", 32000);
     /*- Select the separate device-resident conjugate-gradient CPHF/CPKS solver.
     Iterates, preconditioning, reductions, AO/MO Hessian products and XC response
     contractions remain on device. Only setup, final solutions and small convergence

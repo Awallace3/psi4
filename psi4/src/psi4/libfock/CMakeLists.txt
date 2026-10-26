@@ -2,6 +2,7 @@ list(APPEND sources
   CDJK.cc
   CompositeJK.cc
   cuESTJK.cc
+  cuest_diis.cc
   cuest_device_response.cc
   cuest_xc_response.cc
   COSK.cc

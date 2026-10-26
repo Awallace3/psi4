@@ -307,6 +307,7 @@ class HF : public Wavefunction {
     void set_diis_manager(py::object& manager) { diis_manager_ = manager; }
     bool initialized_diis_manager() const { return initialized_diis_manager_; }
     void set_initialized_diis_manager(bool tf) { initialized_diis_manager_ = tf; }
+    SharedMatrix diis_orthogonalizer() const { return X_; }
 
     /// The JK object (or null if it has been deleted)
     std::shared_ptr<JK> jk() const { return jk_; }
