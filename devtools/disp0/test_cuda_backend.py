@@ -255,6 +255,17 @@ class Kernels(unittest.TestCase):
                         expected=l@r
                         if expected.ndim==2:expected=expected[None,:,:]
                         np.testing.assert_allclose(host(actual),expected,rtol=1e-13,atol=1e-14)
+                        # Reuse an offset output view without another malloc.
+                        parent=session.empty((actual.size+5,))
+                        target=parent.view(actual.shape,offset=16)
+                        allocations=len(session.allocations)
+                        reused=runtime.CUDASession.gemm_batched(session,left,right,
+                            transpose_left=lt,transpose_right=rt,out=target)
+                        self.assertIs(reused,target)
+                        self.assertEqual(len(session.allocations),allocations)
+                        np.testing.assert_allclose(host(target),expected,rtol=1e-13,atol=1e-14)
+                        np.testing.assert_array_equal(parent.allocation.host[:16],127)
+                        np.testing.assert_array_equal(parent.allocation.host[16+target.nbytes:],127)
                         with self.assertRaises(ValueError):
                             runtime.CUDASession.gemm_batched(session,left,right,transpose_left=1)
                         with self.assertRaises(ValueError):
@@ -262,6 +273,42 @@ class Kernels(unittest.TestCase):
                                                             session.empty((3,3,4)))
                     with self.assertRaises(RuntimeError):
                         runtime.CUDASession.gemm_batched(session,left,right)
+
+    def test_batched_output_rejects_bad_layout_owner_lifetime_and_alias_before_blas(self):
+        session=CPUSession(self.lib);session.handle=ct.c_void_p(123)
+        session._blas=Mock()
+        left,right=session.empty((2,3,3)),session.empty((2,3,3))
+        other=CPUSession(self.lib)
+        ended=session.empty((2,3,3));ended.allocation.free()
+        for bad in (session.empty((1,3,3)),session.empty((2,3,3),dtype=np.int64),
+                    other.empty((2,3,3)),left,right,left.view((2,3,3)),
+                    runtime.DeviceArray(left.allocation,(2,3,3),order="F")):
+            with self.assertRaises(ValueError):
+                runtime.CUDASession.gemm_batched(session,left,right,out=bad)
+        with self.assertRaises(RuntimeError):
+            runtime.CUDASession.gemm_batched(session,left,right,out=ended)
+        session._blas.assert_not_called()
+
+    def test_memory_rejection_records_requested_live_reserve_limit_free_and_predicates(self):
+        session=CPUSession(self.lib)
+        session.live_bytes=100;session.native_bytes=20;session.limit=200
+        session.rt=runtime.CUDASession.rt
+        for requested,free,reason in ((81,1000,"declared_budget"),(50,49,"cuda_free"),
+                                      (81,80,"declared_budget+cuda_free"),
+                                      (-1,1000,"negative_request")):
+            session.runtime=types.SimpleNamespace(cudaMemGetInfo=lambda:(0,free,2000))
+            with self.assertRaises(MemoryError) as failure:
+                runtime.CUDASession.check_memory(session,requested)
+            text=str(failure.exception)
+            for field,value in (("requested_bytes",requested),("explicit_live_bytes",100),
+                                ("native_reserved_bytes",20),("limit_bytes",200),
+                                ("cuda_free_bytes",free),("rejected_by",reason)):
+                self.assertIn(f"{field}={value}",text)
+            self.assertFalse(session.failed)
+            self.assertEqual(session.live_bytes,100)
+            self.assertEqual(session.allocations,[])
+        session.runtime=types.SimpleNamespace(cudaMemGetInfo=lambda:(0,80,2000))
+        runtime.CUDASession.check_memory(session,80)  # Both exact bounds fit.
 
     def test_cleanup_inside_unrelated_except_preserves_local_failures(self):
         def fail():raise RuntimeError("local cleanup")

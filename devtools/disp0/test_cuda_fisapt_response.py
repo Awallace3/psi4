@@ -1,5 +1,6 @@
 """CPU serial-shim HF Hessian/PCG tests; NOT actual GPU or native DFMO proof."""
 import ctypes as ct
+import contextlib
 import importlib
 from types import SimpleNamespace
 import unittest
@@ -171,6 +172,48 @@ class Response(unittest.TestCase):
                 with self.assertRaises(ReachedNative):
                     response.HFResponseOperator(provider,occupied,virtual,energies)
                 provider.compute_device.assert_called_once()
+            self.assertEqual(session.live_bytes,0)
+
+    def test_apply_reuses_bounded_workspace_without_per_Q_batch_scopes(self):
+        # Count the actual orchestration, not elapsed CPU-shim time. The old
+        # path allocated/freed four matrices and synchronized a scope per slab.
+        # Q=5 with batch=2 also exercises reuse for a short final slab.
+        for batch in (1,2,5):
+            data,H,trials=fixture(Q=5)
+            session=Session(self.lib)
+            with session.scope():
+                O,V=trials[0].shape;P=O*V
+                workspace=8*(2*P+5+batch*(3*P+O*O))
+                op,_=operator(session,data,max_workspace_bytes=workspace)
+                previous=None
+                for trial in trials:
+                    dt=session.upload(trial)
+                    baseline=session.live_bytes
+                    session.peak_live_bytes=baseline
+                    allocate,scope=session.empty,session.scope
+                    allocations=[];scopes=[]
+                    def counted_empty(*args,**kwargs):
+                        result=allocate(*args,**kwargs)
+                        allocations.append(result)
+                        return result
+                    @contextlib.contextmanager
+                    def counted_scope():
+                        scopes.append(True)
+                        with scope():yield
+                    session.empty=counted_empty;session.scope=counted_scope
+                    try:actual=op.apply(dt)
+                    finally:session.empty=allocate;session.scope=scope
+                    np.testing.assert_allclose(host(actual).ravel(),H@trial.ravel(),
+                                               rtol=1e-11,atol=1e-12)
+                    self.assertEqual(len(allocations),8,
+                        "Response workspace allocation count must not grow with Q slabs")
+                    self.assertEqual(len(scopes),1,
+                        "Only the apply cleanup scope may synchronize/free workspace")
+                    self.assertLessEqual(session.peak_live_bytes-baseline,workspace+8*P)
+                    self.assertEqual(session.live_bytes-baseline,8*P)
+                    if previous is not None:
+                        np.testing.assert_array_equal(host(previous[0]),previous[1])
+                    previous=actual,host(actual).copy()
             self.assertEqual(session.live_bytes,0)
 
 

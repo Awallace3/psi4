@@ -17,13 +17,14 @@ class Session(CPUSession):
         self.gemms += 1
         return result
 
-    def gemm_batched(self,left,right,*,transpose_left=False,transpose_right=False):
+    def gemm_batched(self,left,right,*,transpose_left=False,transpose_right=False,out=None):
         a,b=host(left),host(right)
         if transpose_left:a=np.swapaxes(a,-1,-2)
         if transpose_right:b=np.swapaxes(b,-1,-2)
         value=a@b
         if value.ndim==2:value=value[None,:,:]
-        result=self.empty(value.shape)
+        result=self.empty(value.shape) if out is None else out
+        if result.shape!=value.shape:raise AssertionError("Wrong fixture GEMM output extent")
         host(result)[...]=value
         self.gemms+=1
         return result

@@ -150,9 +150,22 @@ class CUDASession:
     def check_memory(self, requested):
         self.check()
         free, _ = self.rt(self.runtime.cudaMemGetInfo())
-        if (requested < 0 or self.live_bytes + self.native_bytes + requested > self.limit
-                or requested > free):
-            raise MemoryError("Explicit CUDA live-buffer estimate exceeded")
+        reasons = []
+        if requested < 0:
+            reasons.append("negative_request")
+        if self.live_bytes + self.native_bytes + requested > self.limit:
+            reasons.append("declared_budget")
+        if requested > free:
+            reasons.append("cuda_free")
+        if reasons:
+            # Capture the rejection snapshot, not the post-cleanup state.
+            # Tracked bytes are not total VRAM and the native reserve is not
+            # a measured peak. Preserve the admission policy and do not retry.
+            raise MemoryError(
+                "Explicit CUDA live-buffer estimate exceeded: "
+                f"requested_bytes={requested}, explicit_live_bytes={self.live_bytes}, "
+                f"native_reserved_bytes={self.native_bytes}, limit_bytes={self.limit}, "
+                f"cuda_free_bytes={free}, rejected_by={'+'.join(reasons)}")
 
     def empty(self, shape, *, dtype=np.float64, zero=False):
         size = math.prod(shape) * np.dtype(dtype).itemsize
@@ -406,12 +419,15 @@ class CUDASession:
                    ct.byref(beta), out.pointer, n)
         return out
 
-    def gemm_batched(self, left, right, *, transpose_left=False, transpose_right=False):
+    def gemm_batched(self, left, right, *, transpose_left=False, transpose_right=False,
+                     out=None):
         """FP64 C-order batched GEMM, with an optional rank-two broadcast.
 
         Three-dimensional operands have one contiguous matrix per batch.
         Rank-two operands broadcast with native cuBLAS stride zero. Transposes
         are descriptors, never host/device matrix copies. Output is [B,M,N].
+        An optional nonaliasing output view enables bounded stream-ordered
+        workspace reuse; beta=0 overwrites every output, including tail batches.
         """
         self.check()
         if type(transpose_left) is not bool or type(transpose_right) is not bool:
@@ -435,7 +451,20 @@ class CUDASession:
         ls, rs, cs = (lr*lc if lb is not None else 0), (rr*rc if rb is not None else 0), m*n
         if max(ls, rs, cs)*batches > 2**63-1:
             raise ValueError("Batched GEMM stride exceeds the native ABI")
-        out = self.empty((batches, m, n))
+        shape = (batches, m, n)
+        if out is None:
+            out = self.empty(shape)
+        else:
+            if (not isinstance(out, DeviceArray) or out.shape != shape
+                    or out.dtype != np.float64 or out.order != "C"
+                    or out.allocation.session is not self):
+                raise ValueError("Batched GEMM output needs an owned C-order FP64 extent")
+            out.pointer  # Reject ended lifetimes before passing native pointers.
+            for value in (left, right):
+                if (out.allocation is value.allocation
+                        and out.offset < value.offset + value.nbytes
+                        and value.offset < out.offset + out.nbytes):
+                    raise ValueError("Batched GEMM output cannot overlap an input")
         alpha, beta = ct.c_double(1.0), ct.c_double(0.0)
         # C-order C.T = op(right).T @ op(left).T: reverse operands/dimensions.
         self._blas("cublasDgemmStridedBatched", self.handle,

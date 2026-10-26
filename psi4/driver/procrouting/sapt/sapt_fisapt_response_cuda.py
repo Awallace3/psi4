@@ -67,7 +67,9 @@ class HFResponseOperator:
         self.session.check_memory(self.factor_bytes+reserve)
         self.work_plan={"algorithm":"native-fp64-Q-blocked-strided-batched",
             "resident_factor_bytes":self.factor_bytes,"workspace_bytes":workspace,
-            "q_batch":self.q_batch,"reserved_total_bytes":self.factor_bytes+reserve}
+            "q_batch":self.q_batch,"reserved_total_bytes":self.factor_bytes+reserve,
+            "workspace_policy":"one-apply-stream-ordered-reuse",
+            "per_q_batch_allocations":0,"per_q_batch_cleanup_scopes":0}
         self.energies=dict(energies)
         provider.validate_basis(provider.primary_basis,provider.auxiliary_basis)
         with self.session.scope():
@@ -100,24 +102,38 @@ class HFResponseOperator:
             density=session.gemm(flat,trial.view((self.P,1)))
             coulomb=session.gemm_at_b(flat,density).view(trial.shape)
             exchange=session.empty(trial.shape,zero=True)
+            # One bounded workspace per apply, not four allocations and a
+            # device-wide cleanup synchronization for every Q slab. All GEMMs
+            # and accumulation kernels use the same stream: the next slab can
+            # overwrite these buffers only after the preceding accumulation.
+            # Keep them inside this scope (not on the operator) so independent
+            # applies/sources cannot retain scratch or overwrite each other's
+            # returned vectors. No native provider work borrows this workspace.
+            t1=session.empty((self.q_batch,self.O,self.V))
+            k1=session.empty((self.q_batch,self.O,self.V))
+            t2=session.empty((self.q_batch,self.O,self.O))
+            k2=session.empty((self.q_batch,self.O,self.V))
             for start in range(0,self.Q,self.q_batch):
                 count=min(self.q_batch,self.Q-start)
-                with session.scope():
-                    def slab(name,left,right):
-                        return self.factors[name].view((count,left,right),
-                            offset=8*start*left*right)
-                    ov=slab("ov",self.O,self.V)
-                    oo=slab("oo",self.O,self.O)
-                    vv=slab("vv",self.V,self.V)
-                    # K1_ia = sum_Qjb OO_Qij X_jb VV_Qab.
-                    first=session.gemm_batched(
-                        session.gemm_batched(oo,trial),vv,transpose_right=True)
-                    # K2_ia = sum_Qjb OV_Qib X_jb OV_Qja, NOT K1.T.
-                    second=session.gemm_batched(
-                        session.gemm_batched(ov,trial,transpose_right=True),ov)
-                    session.launch("response_accumulate_exchange",
-                        min(65535,(self.P+255)//256),256,
-                        [count,self.P,first,second,exchange])
+                def slab(name,left,right):
+                    return self.factors[name].view((count,left,right),
+                        offset=8*start*left*right)
+                ov=slab("ov",self.O,self.V)
+                oo=slab("oo",self.O,self.O)
+                vv=slab("vv",self.V,self.V)
+                first=t1.view((count,self.O,self.V))
+                first_exchange=k1.view((count,self.O,self.V))
+                second=t2.view((count,self.O,self.O))
+                second_exchange=k2.view((count,self.O,self.V))
+                # K1_ia = sum_Qjb OO_Qij X_jb VV_Qab.
+                session.gemm_batched(oo,trial,out=first)
+                session.gemm_batched(first,vv,transpose_right=True,out=first_exchange)
+                # K2_ia = sum_Qjb OV_Qib X_jb OV_Qja, NOT K1.T.
+                session.gemm_batched(ov,trial,transpose_right=True,out=second)
+                session.gemm_batched(second,ov,out=second_exchange)
+                session.launch("response_accumulate_exchange",
+                    min(65535,(self.P+255)//256),256,
+                    [count,self.P,first_exchange,second_exchange,exchange])
             session.launch("response_finish",min(65535,(self.P+255)//256),256,
                 [self.O,self.V,self.energies["o"],self.energies["v"],
                  trial,coulomb,exchange,output])
