@@ -33,6 +33,22 @@ def test_cuest_response_symmetric_k_default():
         psi4.set_options({"cuest_response_symmetric_k": True})
 
 
+def test_cuest_response_tuning_defaults():
+    psi4.core.clean_options()
+    assert psi4.core.get_global_option("CUEST_DIRECTJ_JIT") == "DEFAULT"
+    assert psi4.core.get_global_option("CUEST_RESPONSE_TILE_SIZE") == 0
+    try:
+        for policy in ("ON", "OFF", "DEFAULT"):
+            psi4.set_options({"cuest_directj_jit": policy})
+            assert psi4.core.get_global_option("CUEST_DIRECTJ_JIT") == policy
+        psi4.set_options({"cuest_response_tile_size": 2})
+        assert psi4.core.get_global_option("CUEST_RESPONSE_TILE_SIZE") == 2
+        with pytest.raises((RuntimeError, psi4.ValidationError)):
+            psi4.set_options({"cuest_directj_jit": "AUTO"})
+    finally:
+        psi4.core.clean_options()
+
+
 @pytest.mark.parametrize("optimizer", ["INTERNAL", "OOO", "OPENORBITALOPTIMIZER"])
 @pytest.mark.parametrize("use_cuest", [False, True])
 @pytest.mark.parametrize("cuest_xc", [False, True])

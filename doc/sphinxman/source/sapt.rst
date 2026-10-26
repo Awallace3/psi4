@@ -754,8 +754,12 @@ plan for exchange. Both options default to false and do not change native
 CPU ``SCF_TYPE DIRECT`` routing. Select the cuEST builder with
 ``SCF_TYPE DF`` and ``USE_CUEST true``.
 
-Direct-J uses the non-JIT kernels, with pair and density-weighted Schwarz
-screening controlled by ``INTS_TOLERANCE`` (or the JK cutoff setter).
+Direct-J preserves the SDK's kernel-selection default (JIT on CUDA 13+
+in cuEST 0.2.50). |globals__cuest_directj_jit| can explicitly select ``ON``
+or ``OFF`` for matched-input comparisons; the default is ``DEFAULT``.
+Changing it invalidates the Direct-J plan. Unsupported JIT requests raise
+an error, not a silent fallback. Pair and density-weighted Schwarz screening
+are controlled by ``INTS_TOLERANCE`` (or the JK cutoff setter).
 Density-dependent screening can set a floor on the true CPKS residual:
 use a tighter integral cutoff than the requested response accuracy, and
 check convergence against a tighter cutoff (zero disables screening).
@@ -825,6 +829,19 @@ perturb execution; disable this option for unperturbed speedup measurements.
 per SDK call. Zero uses the full AO tile; one uses serial SDK calls without
 moving response matrices to the host. This isolates batching efficiency from
 device residency while retaining the same J/K operator.
+
+|globals__cuest_response_tile_size| separately controls the resident AO
+staging tile: zero retains the automatic 256 MiB staging budget and
+eight-RHS cap; values one through eight explicitly bound the tile. A larger
+forced tile may use more memory and is not guaranteed to be faster.
+Only real densities in a partial final tile are submitted to cuEST. UKS
+retains the fixed alpha/beta storage pitch, so padding is skipped separately
+for each spin, not mistaken for another physical RHS. All full/partial
+workspace shapes are queried before iteration. ``cphf_device_stats()``
+reports ``ao_rhs_tile``, ``jk_density_slots_submitted``,
+``jk_padding_slots_avoided``, ``jk_coulomb_calls``, and
+``jk_exchange_calls`` to audit the work actually dispatched. These counts
+do not imply a measured speedup.
 
 The response-only |globals__cuest_response_symmetric_k| optimization (default
 true, active only for device-CG Grid-K) uses

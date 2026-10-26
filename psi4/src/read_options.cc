@@ -236,10 +236,18 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     integral plan or GPU auxiliary basis. The existing JK factory still
     accepts an auxiliary basis, but it is unused by that combination.
     Requires cuEST's direct Coulomb API (included in 0.2.50).
-    Uses non-JIT kernels and |globals__ints_tolerance| screening.
+    Uses the SDK JIT default unless |globals__cuest_directj_jit| is set,
+    and |globals__ints_tolerance| screening.
     Analytic Coulomb gradients are not implemented for this mode.
     No effect unless a cuEST J/K builder is selected. -*/
     options.add_bool("CUEST_DIRECTJ", false);
+    /*- Direct-J kernel selection. DEFAULT preserves the linked SDK's choice
+        (JIT on CUDA 13+, ahead-of-time kernels otherwise in cuEST 0.2.50).
+        ON and OFF explicitly select JIT or ahead-of-time kernels for validation
+        and tuning. ON requires a supporting CUDA toolkit/SDK; errors are not
+        silently converted to another mode. Does not enable Direct-J or change
+        its screening/precision. !expert -*/
+    options.add_str("CUEST_DIRECTJ_JIT", "DEFAULT", "DEFAULT ON OFF");
     /*- Select the separate device-resident conjugate-gradient CPHF/CPKS solver.
     Iterates, preconditioning, reductions, AO/MO Hessian products and XC response
     contractions remain on device. Only setup, final solutions and small convergence
@@ -258,6 +266,14 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         Zero uses the full AO tile; one retains device residency but uses serial
         SDK calls, for benchmarking batching against the same operator. !expert -*/
     options.add_int("CUEST_RESPONSE_BATCH_SIZE", 0);
+    /*- Maximum RHS per resident CPHF/CPKS AO tile. Zero retains the automatic
+        256 MiB staging bound and maximum of eight RHS. Values 1 through 8
+        explicitly bound the tile for correctness tests and measured tuning;
+        raising it can increase GPU memory. The final partial tile submits
+        only its real density matrices to cuEST, not zero padding. Independent
+        of |globals__cuest_response_batch_size|, which limits SDK call batches
+        within a tile. !expert -*/
+    options.add_int("CUEST_RESPONSE_TILE_SIZE", 0);
     /*- For device CPHF/CPKS only, evaluate the required Hermitian exchange sum
         using symmetric Grid-K on (D + D.T)/2. This retains K(D) + K(D).T
         without computing the discarded antisymmetric part. Generic JK builds

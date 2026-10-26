@@ -310,6 +310,11 @@ std::string cuESTJK::current_plan_key() const {
     key_value(key, options_.get_int("CUEST_DFK_MODULI"));
     key_value(key, options_.get_bool("CUEST_GRIDK"));
     key_value(key, options_.get_bool("CUEST_DIRECTJ"));
+    if (options_.get_bool("CUEST_DIRECTJ") && do_J_) {
+        const auto jit = options_.get_str("CUEST_DIRECTJ_JIT");
+        key_value(key, jit.size());
+        key.append(jit);
+    }
     if (options_.get_bool("CUEST_GRIDK") && (do_K_ || do_wK_)) {
         // Keep the exchange quadrature tied to the live DFT grid options, not
         // to CUEST_XC or the lifetime of a separate VBase/XC grid.
@@ -650,12 +655,17 @@ void cuESTJK::build_directj_plan() {
     params.close();
     CHECK_CUEST(cuestParametersCreate(CUEST_DIRECTCOULOMBCOMPUTE_PARAMETERS,
                                      reinterpret_cast<void**>(&cuest_directj_params_)));
-    // Start with the AOT kernels on both CUDA 12 and 13. JIT tuning is separate
-    // from selecting the Coulomb algorithm and must not change correctness.
-    const cuestJITUsageMode_t jit = CUEST_JIT_USAGE_MODE_OFF;
-    CHECK_CUEST(cuestParametersConfigure(
-        CUEST_DIRECTCOULOMBCOMPUTE_PARAMETERS, cuest_directj_params_,
-        CUEST_DIRECTCOULOMBCOMPUTE_PARAMETERS_JIT_USAGE_MODE, &jit, sizeof(jit)));
+    // Preserve the SDK's architecture/toolkit-aware default rather than
+    // disabling its CUDA 13 JIT path. Explicit modes permit same-input
+    // validation and tuning without changing the Coulomb approximation.
+    const auto jit_policy = options_.get_str("CUEST_DIRECTJ_JIT");
+    if (jit_policy != "DEFAULT") {
+        const cuestJITUsageMode_t jit = jit_policy == "ON" ? CUEST_JIT_USAGE_MODE_ON
+                                                         : CUEST_JIT_USAGE_MODE_OFF;
+        CHECK_CUEST(cuestParametersConfigure(
+            CUEST_DIRECTCOULOMBCOMPUTE_PARAMETERS, cuest_directj_params_,
+            CUEST_DIRECTCOULOMBCOMPUTE_PARAMETERS_JIT_USAGE_MODE, &jit, sizeof(jit)));
+    }
     CHECK_CUEST(cuestParametersConfigure(
         CUEST_DIRECTCOULOMBCOMPUTE_PARAMETERS, cuest_directj_params_,
         CUEST_DIRECTCOULOMBCOMPUTE_PARAMETERS_SCHWARZ_THRESHOLD, &pq_threshold_, sizeof(double)));

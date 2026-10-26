@@ -78,6 +78,30 @@ def _pairs(nbf, symmetric=False):
 
 
 @pytest.mark.parametrize("symmetric", [False, True])
+def test_cuest_directj_jit_policy(gridk_system, tmp_path, symmetric):
+    """Default/JIT/AOT produce four-center J; policy edits invalidate the plan."""
+    _, primary, aux = gridk_system
+    psi4.set_options({"cuest_directj": True, "ints_tolerance": 0.0})
+    trace = tmp_path / "directj-jit.out"
+    psi4.core.set_output_file(str(trace), False)
+    pairs = _pairs(primary.nbf(), symmetric)
+    eri = np.asarray(psi4.core.MintsHelper(primary).ao_eri()).reshape((primary.nbf(),) * 4)
+    expected = [np.einsum("pqrs,rs->pq", eri, left @ (left if right is None else right).T)
+                for left, right in pairs]
+    jk = _builder(primary, aux, do_k=False)
+    try:
+        for number, policy in enumerate(("DEFAULT", "OFF", "ON", "DEFAULT"), start=1):
+            psi4.set_options({"cuest_directj_jit": policy})
+            got, _ = _compute(jk, pairs)
+            psi4.core.flush_outfile()
+            assert len(re.findall(r"cuESTJK plan created #\d+", trace.read_text())) == number
+            for ref, result in zip(expected, got):
+                np.testing.assert_allclose(result, ref, atol=1.e-8, rtol=0)
+    finally:
+        jk.finalize()
+
+
+@pytest.mark.parametrize("symmetric", [False, True])
 @pytest.mark.parametrize("directj", [False, True])
 @pytest.mark.parametrize("operator", [
     (1.0, 0.0, 0.0), (0.25, 0.0, 0.0), (0.0, 1.0, 0.3),

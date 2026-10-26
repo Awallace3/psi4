@@ -109,13 +109,16 @@ class DeviceHessian {
                   const std::vector<SharedMatrix>& co, const std::vector<SharedMatrix>& cv,
                   const std::vector<SharedMatrix>& foo, const std::vector<SharedMatrix>& fvv,
                   std::size_t nrhs, std::size_t stride, bool use_k, double kscale,
-                  std::map<std::string, double>& stats, bool profile)
+                  std::map<std::string, double>& stats, bool profile, int requested_tile)
         : blas_(blas), kernels_(CuestDeviceKernels::instance()), nbf_(nbf), n2_(product(nbf, nbf)),
           nrhs_(nrhs), nspin_(co.size()), stride_(stride), exchange_(use_k),
           xc_(potential != nullptr), profile_(profile), kscale_(kscale), stats_(stats) {
         const auto per_rhs = product(product(n2_, nspin_), 6 * sizeof(double));
         tile_ = std::min(nrhs_, std::max<std::size_t>(1, std::min<std::size_t>(8, (std::size_t(256) << 20) /
                                                                       std::max<std::size_t>(1, per_rhs))));
+        if (requested_tile < 0 || requested_tile > 8)
+            throw PSIEXCEPTION("CUEST_RESPONSE_TILE_SIZE must be between 0 (automatic) and 8.");
+        if (requested_tile) tile_ = std::min<std::size_t>(nrhs_, requested_tile);
         std::vector<std::size_t> nocc;
         std::size_t offset = 0;
         const auto upload = [&](CuestDeviceArray& b, const SharedMatrix& m) {
@@ -130,6 +133,7 @@ class DeviceHessian {
         };
         CuestDeviceJKView view;
         view.nrhs = tile_;
+        view.last_nrhs = nrhs_ % tile_ ? nrhs_ % tile_ : tile_;
         view.compute_exchange = exchange_;
         view.exchange_sum_only = true;
         for (std::size_t s = 0; s < nspin_; ++s) {
@@ -186,7 +190,16 @@ class DeviceHessian {
                 }
             }
             factors.stop();
-            jk_->compute();
+            jk_->compute(count);
+            // Assembly retains the fixed spin/tile stride. The SDK deliberately
+            // does not write padding, so initialize it before that kernel reads it.
+            if (count < tile_)
+                for (std::size_t s = 0; s < nspin_; ++s) {
+                    const auto offset = (s * tile_ + count) * n2_;
+                    const auto bytes = (tile_ - count) * n2_ * sizeof(double);
+                    cg_cuda(cudaMemsetAsync(dJ_ + offset, 0, bytes, stream_handle));
+                    if (exchange_) cg_cuda(cudaMemsetAsync(dK_ + offset, 0, bytes, stream_handle));
+                }
             if (xc_) {
                 for (std::size_t r = 0; r < count; ++r) {
                     std::array<const double*, 2> left{}, right{};
@@ -223,6 +236,10 @@ class DeviceHessian {
             }
         }
         stats_["operator_calls"] += 1;
+        stats_["jk_density_slots_submitted"] = jk_->density_slots_submitted();
+        stats_["jk_padding_slots_avoided"] = jk_->padding_slots_avoided();
+        stats_["jk_coulomb_calls"] = jk_->coulomb_calls();
+        stats_["jk_exchange_calls"] = jk_->exchange_calls();
     }
 };
 }  // namespace
@@ -359,7 +376,8 @@ std::vector<SharedMatrix> HF::cphf_solve_device(const std::vector<SharedMatrix>&
     }
     const bool profile = options_.get_bool("CUEST_RESPONSE_PROFILE");
     DeviceHessian hessian(blas, *jk, potential.get(), basisset()->nbf(), co, cv, foo, fvv,
-                           nrhs, stride, use_k, kscale, stats, profile);
+                          nrhs, stride, use_k, kscale, stats, profile,
+                          options_.get_int("CUEST_RESPONSE_TILE_SIZE"));
     cg_cuda(cudaStreamSynchronize(stream_handle));
     stats["setup_seconds"] = seconds(total_start);
     if (print_lvl) outfile->Printf("\n    ==> cuEST device-resident CG (%zu equations) <==\n", nrhs);

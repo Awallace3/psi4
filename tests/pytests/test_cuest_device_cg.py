@@ -84,6 +84,12 @@ def _check(wfn, rhs, result, atol=1.e-9, relative_tol=1.e-9):
     assert stats["iteration_bulk_host_to_device_bytes"] == 0
     assert stats["iteration_bulk_device_to_host_bytes"] == 0
     assert stats["operator_calls"] > 0
+    assert stats["jk_density_slots_submitted"] == (
+        stats["operator_calls"] * stats["rhs_count"] * stats["spin_count"])
+    tile = stats["ao_rhs_tile"]
+    padded = (np.ceil(stats["rhs_count"] / tile) * tile - stats["rhs_count"])
+    assert stats["jk_padding_slots_avoided"] == (
+        stats["operator_calls"] * padded * stats["spin_count"])
     assert wfn.cphf_nfock_builds() == stats["operator_calls"] * stats["rhs_count"]
     assert stats["iteration_scalar_device_to_host_bytes"] <= (
         stats["operator_calls"] * (stats["rhs_count"] * 8 + 4) + 4
@@ -132,6 +138,36 @@ def test_cuest_response_negative_batch_size():
     wfn = _wavefunction("hf")
     psi4.set_options({"cuest_response_batch_size": -1})
     with pytest.raises(RuntimeError, match="CUEST_RESPONSE_BATCH_SIZE must be nonnegative"):
+        _device_solve(wfn, _rhs(wfn, False))
+    assert not wfn.cphf_converged()
+
+
+@pytest.mark.parametrize("unrestricted", [False, True])
+@pytest.mark.parametrize("directj,gridk", [(False, False), (True, False), (False, True), (True, True)])
+@pytest.mark.parametrize("symmetric_k", [False, True])
+def test_cuest_response_partial_tile(unrestricted, directj, gridk, symmetric_k):
+    """The final tile has one real RHS; beta still starts at storage stride two."""
+    wfn = _wavefunction("pbe0", unrestricted, directj, gridk)
+    rhs = _rhs(wfn, unrestricted, count=3, mixed=False)
+    expected = [m.np.copy() for m in wfn.cphf_solve(rhs, 1.e-10, 150, 0)]
+    assert wfn.cphf_converged()
+    psi4.set_options({"cuest_response_tile_size": 2, "cuest_response_batch_size": 3,
+                     "cuest_response_symmetric_k": symmetric_k})
+    result = _device_solve(wfn, rhs)
+    _check(wfn, rhs, result)
+    stats = wfn.cphf_device_stats()
+    assert stats["ao_rhs_tile"] == 2
+    assert stats["jk_padding_slots_avoided"] > 0
+    assert stats["jk_coulomb_calls"] > 0 and stats["jk_exchange_calls"] > 0
+    for ref, out in zip(expected, result):
+        np.testing.assert_allclose(out.np, ref, atol=1.e-8, rtol=0)
+
+
+@pytest.mark.parametrize("tile_size", [-1, 9])
+def test_cuest_response_invalid_tile_size(tile_size):
+    wfn = _wavefunction("hf")
+    psi4.set_options({"cuest_response_tile_size": tile_size})
+    with pytest.raises(RuntimeError, match="CUEST_RESPONSE_TILE_SIZE must be between"):
         _device_solve(wfn, _rhs(wfn, False))
     assert not wfn.cphf_converged()
 
