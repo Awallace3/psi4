@@ -703,6 +703,10 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     )
             sapt_jk.finalize()
 
+            # Dropping wavefunction aliases alone leaves this dense HF cache
+            # live throughout the DFT stage. FISAPT's tuple above intentionally
+            # retains its own reference; all other routes can release it now.
+            del hf_cache_ein
             del hf_wfn_A, hf_wfn_B, sapt_jk
             # The DFT segment below allocates its own caches; without this the arenas these
             # wavefunctions leave behind are still resident when it does.
