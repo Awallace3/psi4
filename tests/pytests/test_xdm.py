@@ -1475,8 +1475,8 @@ def test_xdm_device_blocking_matches_host(case, record_property):
 @pytest.mark.parametrize("blocking", ["HOST", "DEVICE"])
 def test_xdm_gpu_chunking_and_density_gather(case, blocking):
     """Chunk size and where the density is gathered change only the summation grouping: the
-    default (density resident, large chunks), the host gather, a minimal budget (one-block
-    chunks through both staging slots) and chunks closed early by the GEMM ratio agree to rounding."""
+    default (density resident, large chunks), the host gather, and a minimal budget (one-block
+    chunks through both staging slots) agree to rounding."""
     if not psi4.addons("cuest"):
         pytest.skip("XDM_GPU needs a cuEST build")
     wfn = _cuest_grid_wfn(case)
@@ -1484,9 +1484,8 @@ def test_xdm_gpu_chunking_and_density_gather(case, blocking):
     variants = [
         _xdm_on_grid(wfn, True, "CUEST", blocking, XDM_GPU_RESIDENT_DENSITY=False),
         _xdm_on_grid(wfn, True, "CUEST", blocking, XDM_GPU_MEMORY=1),
-        _xdm_on_grid(wfn, True, "CUEST", blocking, XDM_GPU_MEMORY=256, XDM_GPU_CHUNK_GEMM_RATIO=1.5),
     ]
-    psi4.set_options({"XDM_GPU_RESIDENT_DENSITY": True, "XDM_GPU_MEMORY": 256, "XDM_GPU_CHUNK_GEMM_RATIO": 0.0})
+    psi4.set_options({"XDM_GPU_RESIDENT_DENSITY": True, "XDM_GPU_MEMORY": 256})
     for e, p in variants:
         assert abs(e - ref[0]) < 1.0e-12
         np.testing.assert_allclose(p[:, 2:], ref[1][:, 2:], rtol=1.0e-12, atol=1.0e-14)

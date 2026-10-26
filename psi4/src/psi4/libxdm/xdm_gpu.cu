@@ -757,10 +757,6 @@ struct DeviceXDMIntegrator::Impl {
     double stage_ms[NSTAGE] = {};
     // GEMM multiply-adds: done over each chunk's union columns, and needed by each block's own.
     double gemm_done = 0.0, gemm_needed = 0.0;
-    // A chunk is closed before a block that would push its GEMM above gemm_ratio times what its
-    // blocks need on their own columns (0: chunks are bounded by the workspace only).
-    double gemm_ratio = 0.0;
-    double chunk_needed = 0.0;
     void mark(int stage) {
         if (nevent == events.size()) {
             cudaEvent_t e = nullptr;
@@ -888,11 +884,7 @@ struct DeviceXDMIntegrator::Impl {
         }
         const std::size_t P = device && fill_points > 0 ? dev_start + npoints - fill_start : fill_points + npoints;
         const std::size_t ncols = fill_cols + new_cols;
-        std::size_t own_cols = 0;
-        for (std::size_t i = 0; i < nshells; i++) own_cols += basis.nfunc[shells[i]];
-        const double own_work = static_cast<double>(npoints) * own_cols * own_cols;
-        const bool wasteful = gemm_ratio > 0.0 && static_cast<double>(P) * ncols * ncols > gemm_ratio * (chunk_needed + own_work);
-        if (fill_points > 0 && (P > max_chunk_points || work_need(P, ncols) > workspace_doubles || wasteful)) {
+        if (fill_points > 0 && (P > max_chunk_points || work_need(P, ncols) > workspace_doubles)) {
             flush();
         }
         if (fill_points == 0) {
@@ -915,8 +907,9 @@ struct DeviceXDMIntegrator::Impl {
             std::copy(w, w + npoints, h + 3 * cap + p0);
         }
 
-        gemm_needed += own_work;
-        chunk_needed += own_work;
+        std::size_t own_cols = 0;
+        for (std::size_t i = 0; i < nshells; i++) own_cols += basis.nfunc[shells[i]];
+        gemm_needed += static_cast<double>(npoints) * own_cols * own_cols;
         blk_point_offset.push_back(p0);
         blk_npoints.push_back(static_cast<int>(npoints));
         max_block_items = std::max(max_block_items, npoints * nshells);
@@ -1102,7 +1095,6 @@ struct DeviceXDMIntegrator::Impl {
         sent += P;
         chunks += 1;
         gemm_done += static_cast<double>(P) * ncols * ncols;
-        chunk_needed = 0.0;
         sample_device_memory();
         slot = (slot + 1) % nslot;
         fill_points = 0;
@@ -1121,8 +1113,7 @@ struct DeviceXDMIntegrator::Impl {
 
 DeviceXDMIntegrator::DeviceXDMIntegrator(int natom, const int* atomic_nums, const std::array<double, 3>* atom_coords,
                                          const ProatomDensity& proatom, const XDMDeviceBasis& basis, const double* Da,
-                                         const double* Db, std::size_t workspace_bytes, bool resident_density,
-                                         double gemm_ratio)
+                                         const double* Db, std::size_t workspace_bytes, bool resident_density)
     : impl_(new Impl) {
     cuest_common::ensure_cuest_initialized();
     Impl& m = *impl_;
@@ -1141,7 +1132,6 @@ DeviceXDMIntegrator::DeviceXDMIntegrator(int natom, const int* atomic_nums, cons
     m.D[0] = Da;
     m.D[1] = m.restricted ? Da : Db;
     m.basis = basis;
-    m.gemm_ratio = gemm_ratio;
 
     try {
         // ==> Atoms and the promolecule splines <== //

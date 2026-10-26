@@ -121,11 +121,9 @@ class DeviceXDMIntegrator {
     ///                         buffers; raised to the minimum that holds one grid block if smaller
     /// @param resident_density allow the full density matrices to live on the device (taken out of
     ///                         the budget when they fit in half of it); false gathers them on the host
-    /// @param gemm_ratio       close a chunk before a block that would make its GEMM (over the union of
-    ///                         its blocks' columns) exceed this multiple of the blocks' own GEMMs; 0 = off
     DeviceXDMIntegrator(int natom, const int* atomic_nums, const std::array<double, 3>* atom_coords,
                         const ProatomDensity& proatom, const XDMDeviceBasis& basis, const double* Da, const double* Db,
-                        std::size_t workspace_bytes, bool resident_density = true, double gemm_ratio = 0.0);
+                        std::size_t workspace_bytes, bool resident_density = true);
     ~DeviceXDMIntegrator();
     DeviceXDMIntegrator(const DeviceXDMIntegrator&) = delete;
     DeviceXDMIntegrator& operator=(const DeviceXDMIntegrator&) = delete;
