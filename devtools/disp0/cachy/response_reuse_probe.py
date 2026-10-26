@@ -71,7 +71,10 @@ def child(args):
     session=None;primary=None
     try:
         report["resource_scope"]=resource_scope()
-        manifest_path=ROOT/"runs/native-tmpfs-stage-01/cuda-manifest.json"
+        manifest_path=output/"cuda-manifest.json"
+        launch=json.loads((output/"launch.json").read_text())
+        if digest(manifest_path)!=launch["cuda_manifest_sha256"]:
+            raise RuntimeError("Frozen private test closure changed")
         report["cuda_manifest_sha256"]=digest(manifest_path)
         manifest=json.loads(manifest_path.read_text())
         for component in manifest["components"]:
@@ -93,6 +96,16 @@ def child(args):
         sys.modules[package]=module
         runtime=importlib.import_module(package+".sapt_cuda_runtime")
         candidate=importlib.import_module(package+".sapt_fisapt_response_cuda")
+        identity=importlib.import_module(package+".sapt_cuest250_identity")
+        from response_cuda_closure import verify_mapped_cuda
+        # Match the previous explicit locator policy; no getters or contexts
+        # merely to inspect identity. Retain owners through session cleanup.
+        preloads=[]
+        for stem in ("libcudart.so.","libnvJitLink.so.","libcublasLt.so.",
+                     "libcublas.so.","libnvrtc-builtins.so.","libnvrtc.so."):
+            component=next(c for c in manifest["components"]
+                           if Path(c["path"]).name.startswith(stem))
+            preloads.append(runtime.library(component["path"],component["sha256"])[0])
         old_name=package+".baseline_response"
         old=types.ModuleType(old_name);old.__package__=package
         sys.modules[old_name]=old
@@ -112,11 +125,16 @@ def child(args):
             raise RuntimeError("CUDA context differs from leased RTX3090")
         if session.arch!="compute_86":raise RuntimeError("Expected RTX3090 compute86")
         report.update(uuid=actual,arch=session.arch,ptx_sha256=session.ptx_sha256)
+        report["mapped_cuda_sha256"]=verify_mapped_cuda(identity,manifest)
         report["hardware_before"]=hardware(actual)
         for O,V,Q,batch in ((2,3,5,2),(8,32,65,7),(16,96,129,7)):
             require_local_lease(policy(ROOT))
             factors,eo,ev,trial,truth=numerical_case(np,O,V,Q)
-            record={"shape":[O,V,Q],"q_batch":batch,"timings":[],"errors":[]}
+            fixture_sha=hashlib.sha256()
+            for value in (*factors.values(),eo,ev,trial):fixture_sha.update(value.tobytes())
+            record={"shape":[O,V,Q],"q_batch":batch,"timings":[],"errors":[],
+                    "fixed_input_sha256":fixture_sha.hexdigest()}
+            retained={}
             with session.scope():
                 # Fixed-factor producer deliberately does not claim native DFMO.
                 class Producer:
@@ -152,6 +170,7 @@ def child(args):
                             seconds=time.perf_counter()-started
                             actual_host=session.download(result)
                             np.testing.assert_allclose(actual_host,truth,rtol=1e-11,atol=1e-12)
+                            retained[name]=actual_host.copy()
                             record["timings"].append({"arm":name,"repeat":repeat,"seconds":seconds})
                             record["errors"].append(float(np.max(np.abs(actual_host-truth))))
                 # Exercise a changed RHS and PCG independently, not timed.
@@ -175,6 +194,10 @@ def child(args):
                                     "relative_residual":solved.relative_residual,
                                     "max_absolute_error":float(np.max(np.abs(actual_host-expected)))})
             if session.live_bytes!=0:raise RuntimeError("Case scratch/factors leaked")
+            artifact=output/f"case-{O}-{V}-{Q}.npz"
+            np.savez(artifact,truth=truth,baseline=retained["baseline"],
+                     candidate=retained["candidate"],trial=trial,eo=eo,ev=ev,**factors)
+            record["numerical_artifact"]={"path":str(artifact),"sha256":digest(artifact)}
             record["median_seconds"]={name:statistics.median(
                 row["seconds"] for row in record["timings"] if row["arm"]==name)
                 for name in operators}
@@ -183,6 +206,8 @@ def child(args):
             save(output/"result.json",report)
         report.update(kernel_launches=session.kernel_launches,blas_calls=session.blas_calls,
             peak_tracked_bytes=session.peak_live_bytes,hardware_after=hardware(actual))
+        if verify_mapped_cuda(identity,manifest)!=report["mapped_cuda_sha256"]:
+            raise RuntimeError("Actual CUDA closure changed during tests")
         if "psi4" in sys.modules:raise RuntimeError("Standalone probe imported installed Psi4")
     except BaseException as error:
         primary=error;report.update(status="FAILED",error=f"{type(error).__name__}: {error}")
@@ -224,7 +249,10 @@ def main():
         child(args);return
     with lease(ROOT) as fd:
         output=ROOT/"runs"/args.attempt;output.mkdir(mode=0o700)
-        manifest=json.loads((ROOT/"runs/native-tmpfs-stage-01/cuda-manifest.json").read_text())
+        resource_scope()
+        from response_cuda_closure import prepare
+        manifest_path,manifest_sha=prepare(ROOT,output,args.attempt)
+        manifest=json.loads(manifest_path.read_text())
         cuda=Path(manifest["cuda_root"])
         env={k:os.environ[k] for k in ("HOME","USER","DISP0_LOCAL_LEASE_FD") if k in os.environ}
         env.update(PATH=str(ROOT/"environment-v2/bin")+":/usr/bin:/bin",
@@ -235,7 +263,8 @@ def main():
         save(output/"launch.json",{"pin":args.pin,"baseline":BASELINE,
             "scope":"STANDALONE_FIXED_FACTOR_CUDA_RESPONSE_NOT_FULL_PSI4",
             "deadline_seconds":600,"explicit_memory_limit_bytes":512*1024**2,
-            "opaque_reserved_bytes":128*1024**2,"lease":policy(ROOT)})
+            "opaque_reserved_bytes":128*1024**2,"lease":policy(ROOT),
+            "cuda_manifest_sha256":manifest_sha})
         run_command([str(ROOT/"environment-v2/bin/python"),"-B",str(Path(__file__)),
             "--attempt",args.attempt,"--pin",args.pin,"--output",str(output),"--child"],
             ROOT,output,"cuda-response-probe",env,fd,600)

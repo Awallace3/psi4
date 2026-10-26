@@ -96,9 +96,26 @@ PYTHONPATH=devtools/disp0 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
 
 These are CPU equation/descriptor/ownership tests. They do not simulate CUDA
 parallel scheduling and do not establish actual GPU parity, throughput or a
-production speedup. No GPU/cluster allocation was launched for this change.
+production speedup. No GPU/cluster allocation was launched at that checkpoint.
 The expanded command above passed **230 tests in 9.440 seconds** on the local
 CPU, including the new workspace/descriptor and memory-rejection regressions.
+
+### Cachy follow-up
+
+The user subsequently authorized a bounded real-CUDA response probe. Its first
+attempt, source `39ddf576ea`, `runs/response-reuse-39ddf576ea-01`, stopped
+**before any CUDA session or numerical work**: the historical `/tmp` native
+closure no longer exists. The explicit 4CPU/12GiB/no-swap/128-task scope and
+shared lease admission passed. This is a runtime-locator failure, not numerical
+or speed evidence.
+
+The restoration helper reuses the original audited same-descriptor copy and
+resource checks to put the exact frozen 16 CUDA files into a **new private
+executable tmpfs root**, with new SONAME aliases and strict mapped-inode/device
+and byte checks. The environment, installed stages, original locators and old
+failed results are untouched; no dependency install, SDK upgrade or scientific
+admission relaxation is used. The standalone fixed-factor probe deliberately
+does not import Psi4 or claim native DFMO/full F-SAPT qualification.
 
 ## Next bottlenecks, deliberately not changed blindly
 
