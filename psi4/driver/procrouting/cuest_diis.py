@@ -58,6 +58,14 @@ class CuestDIIS(DIIS):
         if self._closed:
             raise ValidationError("cuEST DIIS history has been deleted; construct a new manager.")
 
+    def _discard_failed_history(self):
+        # Native insertion may have discarded a slot before detecting a bad
+        # Gram contraction. Keep Python metadata and native storage in step.
+        try:
+            self.reset_subspace()
+        except Exception:
+            self.stats_record["cleanup_failed"] = 1
+
     def _record_entry(self, nspin, energy=None):
         # Only scalar energy bookkeeping lives on host. Targets, errors and
         # densities stay in native device storage, including for A/EDIIS.
@@ -82,9 +90,13 @@ class CuestDIIS(DIIS):
         self._require_open()
         if save and "ediis" in self.engines and (energy is None or not np.isfinite(energy)):
             raise ValidationError("cuEST EDIIS requires a finite energy for each entry.")
-        metric = self.backend.scf_update(focks, densities, overlap, orthogonalizer, save, rms)
-        if save:
-            self._record_entry(len(focks), energy)
+        try:
+            metric = self.backend.scf_update(focks, densities, overlap, orthogonalizer, save, rms)
+            if save:
+                self._record_entry(len(focks), energy)
+        except BaseException:
+            self._discard_failed_history()
+            raise
         self._publish()
         return metric
 
@@ -94,8 +106,12 @@ class CuestDIIS(DIIS):
         if "ediis" in self.engines and (
                 len(entry.get("energy", [])) != 1 or not np.isfinite(entry["energy"][0])):
             raise ValidationError("cuEST EDIIS requires a finite energy for each entry.")
-        self.backend.add_entry(entry.get("error", []), entry["target"], entry.get("densities", []))
-        self._record_entry(len(entry["target"]), entry.get("energy", [None])[0])
+        try:
+            self.backend.add_entry(entry.get("error", []), entry["target"], entry.get("densities", []))
+            self._record_entry(len(entry["target"]), entry.get("energy", [None])[0])
+        except BaseException:
+            self._discard_failed_history()
+            raise
         return True
 
     def get_dot_product(self, i, j):

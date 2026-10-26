@@ -28,6 +28,7 @@ class PSI_API CuestDIIS {
     int size() const;
     int capacity() const;
     int last_pivot() const;
+    void test_fail_allocation_after(int successful_allocations);
     void reset_subspace();
     void clear();
    private:

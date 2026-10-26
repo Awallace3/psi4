@@ -43,6 +43,9 @@ def test_cuest_diis_history(nspin, engines):
             entry["energy"] = [-1.0 - step * 0.01]
         host.add_entry(entry)
         gpu.add_entry(entry)
+        if step == 0:
+            allocation_calls = gpu.backend.stats()["allocation_calls"]
+        assert gpu.backend.stats()["allocation_calls"] == allocation_calls
         # Original host objects may be reused immediately; GPU history is owned.
         for key in ("target", "error", "densities"):
             for value in entry.get(key, []):
@@ -168,6 +171,45 @@ def test_cuest_diis_shape_and_nonfinite_guards():
     with pytest.raises(psi4.ValidationError, match="finite energy"):
         missing_energy.add_entry({"target": target, "densities": target})
     assert missing_energy.backend.size() == 0
+
+
+@pytest.mark.parametrize("filled", [1, 2])
+@pytest.mark.parametrize("poison", ["target", "densities"])
+def test_cuest_diis_history_gram_rejection_recovery(filled, poison):
+    gpu = CuestDIIS(2, "reject bad Gram", engines={"adiis"})
+    for _ in range(filled):
+        gpu.add_entry({key: matrices([np.eye(8)]) for key in ("target", "densities")})
+    before = gpu.backend.stats()["allocated_device_bytes"]
+    bad = {key: matrices([np.eye(8)]) for key in ("target", "densities")}
+    bad[poison][0].np[:] = np.nan
+    with pytest.raises(RuntimeError, match="nonfinite Gram"):
+        gpu.add_entry(bad)
+    # Explicit invalidation is intentional: neither layer may retain a
+    # partially overwritten or poisoned subspace after rejecting an entry.
+    assert gpu.backend.size() == 0 and not gpu.stored_vectors
+    assert gpu.backend.stats()["allocated_device_bytes"] == 0
+    gpu.add_entry({key: matrices([np.eye(4)]) for key in ("target", "densities")})
+    assert gpu.backend.size() == len(gpu.stored_vectors) == 1
+    assert gpu.backend.stats()["allocated_device_bytes"] < before
+    np.testing.assert_allclose(gpu.backend.density_fock_gram(), [4.], atol=1.e-12)
+
+
+def test_cuest_diis_partial_allocation_failure_recovery():
+    gpu = psi4.core.CuestDIIS(4, 32, True, True, False)
+    gpu._test_fail_allocation_after(3)
+    large = matrices([np.eye(64), np.eye(64)])
+    with pytest.raises(RuntimeError, match="injected allocation failure"):
+        gpu.add_entry(large, large, large)
+    stats = gpu.stats()
+    assert stats["allocation_calls"] == 3 and stats["peak_allocated_device_bytes"] > 0
+    assert stats["allocated_device_bytes"] == 0 and gpu.size() == 0
+    gpu._test_fail_allocation_after(-1)
+    small = matrices([np.eye(4), np.eye(4)])
+    gpu.add_entry(small, small, small)
+    assert gpu.size() == 1
+    assert gpu.stats()["allocated_device_bytes"] < stats["peak_allocated_device_bytes"]
+    gpu.clear()
+    assert gpu.stats()["allocated_device_bytes"] == 0
 
 
 def scf_case(method, unrestricted, gridk, gpu_diis, initial="NONE", maxiter=100, extra_options=None):

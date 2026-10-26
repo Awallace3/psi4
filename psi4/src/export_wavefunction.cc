@@ -103,6 +103,7 @@ void export_wavefunction(py::module& m) {
         .def("size", &CuestDIIS::size)
         .def("capacity", &CuestDIIS::capacity)
         .def("last_pivot", &CuestDIIS::last_pivot)
+        .def("_test_fail_allocation_after", &CuestDIIS::test_fail_allocation_after)
         .def("reset_subspace", &CuestDIIS::reset_subspace)
         .def("clear", &CuestDIIS::clear);
 #endif

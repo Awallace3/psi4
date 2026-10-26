@@ -45,6 +45,7 @@ struct CuestDIIS::Impl {
     int nbf = 0, nmo = 0, nspin = 0, ao_stride = 0, error_stride = 0;
     std::size_t iteration = 0;
     bool keep_error, keep_density, oldest, fixed_ready = false, error_ready = false;
+    int fail_allocation_after = -1;  // Private fault-injection seam, never enabled by SCF.
     cublasHandle_t blas = nullptr;
     CuestDeviceArray s, x, f, d, error, work1, work2, history_f, history_d, history_e, small, coeff;
     std::vector<double> e, q;
@@ -54,6 +55,8 @@ struct CuestDIIS::Impl {
         : requested(vectors), memory_mb(mb), keep_error(errors), keep_density(densities), oldest(old) {
         if (requested <= 0 || requested > 128 || memory_mb <= 0 || (!errors && !densities))
             throw PSIEXCEPTION("cuEST DIIS requires 1 to 128 vectors, positive memory, and a DIIS or A/EDIIS engine.");
+        counters["cleanup_failed"] = counters["allocated_device_bytes"] = 0.;
+        counters["peak_allocated_device_bytes"] = counters["allocation_calls"] = 0.;
         cuest_common::ensure_cuest_initialized();
         blas_check(cublasCreate(&blas));
         try { blas_check(cublasSetStream(blas, stream_handle)); }
@@ -76,10 +79,33 @@ struct CuestDIIS::Impl {
         counters["fixed_workspace_device_bytes"] = 0;
     }
     double* ptr(CuestDeviceArray& a) { return a.ensure(0, "DIIS"); }
+    std::size_t live_bytes() const {
+        std::size_t bytes = 0;
+        for (const auto* buffer : {&s, &x, &f, &d, &error, &work1, &work2, &history_f,
+                                   &history_d, &history_e, &small, &coeff})
+            bytes += buffer->capacity_bytes();
+        return bytes;
+    }
+    void require_valid() const {
+        if (counters.at("cleanup_failed"))
+            throw PSIEXCEPTION("cuEST DIIS is invalid after failed CUDA cleanup; reconstruct after fixing the device error.");
+    }
     void allocate(CuestDeviceArray& a, std::size_t elements) {
+        if (fail_allocation_after == 0)
+            throw PSIEXCEPTION("cuEST DIIS: injected allocation failure.");
         a.ensure(elements, "DIIS history/workspace");
+        if (fail_allocation_after > 0) --fail_allocation_after;
+        const auto bytes = live_bytes();
+        counters["allocation_calls"] += 1.;
+        counters["allocated_device_bytes"] = bytes;
+        counters["peak_allocated_device_bytes"] = std::max(counters["peak_allocated_device_bytes"], double(bytes));
+    }
+    void rollback() noexcept {
+        try { release(); }
+        catch (...) { counters.find("cleanup_failed")->second = 1.; }
     }
     void initialize(int n, int r, int spins) {
+        require_valid();
         if (nbf) {
             if (n != nbf || r != nmo || spins != nspin)
                 throw PSIEXCEPTION("cuEST DIIS shape changed; reset the subspace before changing basis/spin dimensions.");
@@ -111,15 +137,24 @@ struct CuestDIIS::Impl {
         if (cap < std::min(2, requested))
             throw PSIEXCEPTION("cuEST DIIS memory limit/free device memory cannot hold two history entries. "
                                "Increase CUEST_DIIS_MAX_MEMORY_MB or retain host DIIS.");
-        allocate(s, n2); allocate(x, nx); allocate(f, ao); allocate(d, ao); allocate(error, er);
-        allocate(work1, n2); allocate(work2, n2);
-        allocate(history_f, multiply(ao, cap));
-        if (keep_error) allocate(history_e, multiply(er, cap));
-        if (keep_density) allocate(history_d, multiply(ao, cap));
-        allocate(small, 3*static_cast<std::size_t>(requested));
-        allocate(coeff, requested);
-        nbf = n; nmo = r; nspin = spins; ao_stride = ao; error_stride = er;
-        e.assign(multiply(cap, cap), 0.); q.assign(keep_density ? multiply(cap, cap) : 0, 0.);
+        try {
+            allocate(s, n2); allocate(x, nx); allocate(f, ao); allocate(d, ao); allocate(error, er);
+            allocate(work1, n2); allocate(work2, n2);
+            allocate(history_f, multiply(ao, cap));
+            if (keep_error) allocate(history_e, multiply(er, cap));
+            if (keep_density) allocate(history_d, multiply(ao, cap));
+            allocate(small, 3*static_cast<std::size_t>(requested));
+            allocate(coeff, requested);
+            nbf = n; nmo = r; nspin = spins; ao_stride = ao; error_stride = er;
+            e.assign(multiply(cap, cap), 0.); q.assign(keep_density ? multiply(cap, cap) : 0, 0.);
+            if (live_bytes() != fixed_bytes + entry_bytes*cap + metadata_bytes)
+                throw PSIEXCEPTION("cuEST DIIS retained unexpected buffer capacities; resetting the subspace.");
+        } catch (...) {
+            // A still-live backend must not retain grow-only buffers from a
+            // failed large shape, then underreport them after a smaller retry.
+            rollback();
+            throw;
+        }
         const auto bytes = fixed_bytes + entry_bytes*cap + metadata_bytes;
         counters["allocated_device_bytes"] = bytes;
         counters["peak_allocated_device_bytes"] = std::max(counters["peak_allocated_device_bytes"], double(bytes));
@@ -216,7 +251,17 @@ struct CuestDIIS::Impl {
             }
         counters["entries_added"] += 1.;
     }
+    void commit_checked() {
+        try { commit(); }
+        catch (...) {
+            // An overwritten history slot cannot be recovered without another
+            // full GPU copy. Fail closed by dropping the complete subspace.
+            rollback();
+            throw;
+        }
+    }
     std::vector<double> gram(const std::vector<double>& data) const {
+        require_valid();
         if (data.empty()) throw PSIEXCEPTION("cuEST DIIS: requested Gram matrix was not enabled.");
         std::vector<double> result(std::size_t(count)*count);
         for (int i = 0; i < count; ++i)
@@ -261,7 +306,7 @@ double CuestDIIS::scf_update(const std::vector<SharedMatrix>& focks, const std::
     }
     p.error_ready = true;
     const double result = p.norm(rms);
-    if (save) p.commit();
+    if (save) p.commit_checked();
     p.counters["gradient_updates"] += 1.;
     pending.done = true;
     return result;
@@ -288,12 +333,13 @@ void CuestDIIS::add_entry(const std::vector<SharedMatrix>& errors, const std::ve
         p.error_ready = true;
         p.norm(true);  // Reject nonfinite errors before touching the history.
     }
-    p.commit();
+    p.commit_checked();
     pending.done = true;
 }
 void CuestDIIS::extrapolate(const std::vector<double>& coefficients, const std::vector<SharedMatrix>& targets) {
     PendingWork pending;
     auto& p = *impl_;
+    p.require_valid();
     if (!p.count || coefficients.size() != static_cast<std::size_t>(p.count) ||
         targets.size() != static_cast<std::size_t>(p.nspin) ||
         !std::all_of(coefficients.begin(), coefficients.end(), [](double v) { return std::isfinite(v); }))
@@ -323,6 +369,7 @@ std::vector<SharedMatrix> CuestDIIS::error_vectors() {
     std::vector<SharedMatrix> result;
     PendingWork pending;
     auto& p = *impl_;
+    p.require_valid();
     if (!p.error_ready) throw PSIEXCEPTION("cuEST DIIS has no computed error for diagnostic download.");
     const auto bytes = std::size_t(p.nmo)*p.nmo*sizeof(double);
     for (int spin = 0; spin < p.nspin; ++spin) {
@@ -340,6 +387,9 @@ std::map<std::string, double> CuestDIIS::stats() const { return impl_->counters;
 int CuestDIIS::size() const { return impl_->count; }
 int CuestDIIS::capacity() const { return impl_->cap; }
 int CuestDIIS::last_pivot() const { return impl_->pivot; }
+void CuestDIIS::test_fail_allocation_after(int successful_allocations) {
+    impl_->fail_allocation_after = successful_allocations;
+}
 void CuestDIIS::reset_subspace() { impl_->release(); impl_->counters["subspace_resets"] += 1.; }
 void CuestDIIS::clear() { impl_->release(); }
 }  // namespace psi
