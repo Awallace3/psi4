@@ -252,6 +252,10 @@ def main():
     parser.add_argument("--inputs-sha256")
     parser.add_argument("--system",choices=("peptide","nanotube","protein83"))
     parser.add_argument("--block-size",type=int,default=5)
+    parser.add_argument("--benchmark",action="store_true",
+                        help="Defer diagnostic snapshots until after the energy-call timer")
+    parser.add_argument("--factor-cache-bytes",type=int,default=0,
+                        help="Explicit additional per-call GPU packed-S cache budget")
     args = parser.parse_args()
     args.config=args.config.resolve(strict=True)
     args.output = args.output.resolve()
@@ -265,6 +269,8 @@ def main():
               "pid": os.getpid(), "job_id": os.environ.get("SLURM_JOB_ID")}
     runtime = None
     phases, captured = [], {}
+    deferred_cache = []
+    deferred_raw = []
     try:
         config, build = read_config(args.config, args.config_sha256)
         oracle_config_sha=args.config_sha256
@@ -290,6 +296,12 @@ def main():
         if type(args.block_size) is not int or not 1<=args.block_size<=48:
             raise ValueError("Explicit bounded dispersion block required")
         result["dispersion_block_size"]=args.block_size
+        if not 0 <= args.factor_cache_bytes <= 1024**3:
+            raise ValueError("Explicit dispersion cache budget must be between zero and 1 GiB")
+        if args.arm != "gpu" and args.factor_cache_bytes:
+            raise ValueError("CPU references must not enable a GPU factor cache")
+        result["factor_cache_bytes"]=args.factor_cache_bytes
+        result["benchmark"]=args.benchmark
         # RuntimeTensor lookup during Psi4's SAPT imports initializes Einsums;
         # rc must be configured BEFORE that first lookup, not merely read back.
         import einsums
@@ -329,7 +341,14 @@ def main():
             upstream_einsums_gpu_disabled=bool(einsums.rc.gpu_disable),
             geometry_sha256=hashlib.sha256(text.encode()).hexdigest())
 
-        def capture(cache):
+        def capture(cache, *, immediate=False):
+            if args.benchmark and not immediate:
+                # Do not retain the entire scientific cache: it can own large
+                # DFHelper/JK objects scheduled for cleanup before the return.
+                names=set(FIELDS)|{"Uocc_A","Uocc_B","wfn_A","wfn_B",
+                                   "Cvir_A","Cvir_B","Disp20,u","Exch-Disp20,u"}
+                deferred_cache.append({name:cache[name] for name in names if name in cache})
+                return
             wfns=[cache["wfn_"+side] for side in "AB"]
             occupied=[int(w.nalpha()) for w in wfns]
             frozen=[int(w.basisset().n_frozen_core(
@@ -355,6 +374,17 @@ def main():
 
         def forbidden(*args, **kwargs):
             raise RuntimeError("Forbidden CPU fragment integral/localizer fallback")
+
+        def raw_snapshot(cache, names):
+            # Retain the existing immutable HF Matrix/Vector owners, not a new
+            # host copy, during a benchmark call. Materialize/save only after
+            # the timer. No supplied GPU snapshot is used as production input.
+            values={name:cache[name] for name in names}
+            if args.benchmark:
+                deferred_raw.append(values)
+            else:
+                np.savez(args.output/"raw-hf.npz",**{
+                    name:np.array(value.np,copy=True) for name,value in values.items()})
 
         with ExitStack() as stack:
             raw=gpu=None
@@ -397,15 +427,16 @@ def main():
                 original = terms.fisapt_cuda
                 def fragment(cache, *positional, **kwargs):
                     from psi4.driver.procrouting.sapt.sapt_fisapt_workflow_cuda import HF_FIELDS
-                    np.savez(args.output / "raw-hf.npz", **{
-                        name: np.array(cache[name].np,copy=True) for name in (
-                            *HF_FIELDS, "J_O", "eps_occ_A", "eps_occ_B", "eps_vir_A", "eps_vir_B")})
+                    raw_snapshot(cache,(
+                        *HF_FIELDS, "J_O", "eps_occ_A", "eps_occ_B", "eps_vir_A", "eps_vir_B"))
                     with ExitStack() as guard:
                         for name in ("DFHelper", "FISAPT", "MintsHelper", "IBOLocalizer2", "ExternalPotential"):
                             guard.enter_context(patch.object(core,name,forbidden))
                         for name in ("localization","flocalization","felst","fexch","find","fdisp0"):
                             guard.enter_context(patch.object(terms,name,forbidden))
                         start = time.perf_counter()
+                        if args.factor_cache_bytes:
+                            kwargs["factor_cache_bytes"]=args.factor_cache_bytes
                         out, data = original(cache,*positional,**kwargs)
                         phases.append({"name":"GPU full fragment continuation",
                                        "seconds":time.perf_counter()-start})
@@ -419,8 +450,11 @@ def main():
                 store_components=terms._store_dispersion0_components
                 def components(cache,disp,exch,*positional,**kwargs):
                     out=store_components(cache,disp,exch,*positional,**kwargs)
-                    cache["Disp20 occupied pairs"]=np.array(disp,copy=True)
-                    cache["Exch-Disp20 occupied pairs"]=np.array(exch,copy=True)
+                    # The store routine only reads these completed arrays;
+                    # fdisp0 does not subsequently modify them. Keep their
+                    # Python owners until capture() copies after the timer.
+                    cache["Disp20 occupied pairs"]=disp if args.benchmark else np.array(disp,copy=True)
+                    cache["Exch-Disp20 occupied pairs"]=exch if args.benchmark else np.array(exch,copy=True)
                     return out
                 stack.enter_context(patch.object(terms,"_store_dispersion0_components",components))
                 for name in ("localization","partition","flocalization","felst","fexch","find","fdisp0"):
@@ -429,9 +463,8 @@ def main():
                         start=time.perf_counter()
                         if _name=="localization":
                             from psi4.driver.procrouting.sapt.sapt_fisapt_workflow_cuda import HF_FIELDS
-                            np.savez(args.output/"raw-hf.npz",**{
-                                name:np.array(positional[0][name].np,copy=True) for name in (
-                                    *HF_FIELDS,"J_O","eps_occ_A","eps_occ_B","eps_vir_A","eps_vir_B")})
+                            raw_snapshot(positional[0],(
+                                *HF_FIELDS,"J_O","eps_occ_A","eps_occ_B","eps_vir_A","eps_vir_B"))
                         if raw is not None and _name=="localization":
                             replay_hf(core,positional[0],positional[1],raw)
                         out=_original(*positional,**kwargs)
@@ -447,6 +480,18 @@ def main():
                 **({"cuda_provider_factory":factory,"cuda_dispersion_block_size":args.block_size}
                    if runtime else {}))
             result["diagnostic_whole_energy_seconds"] = time.perf_counter()-start
+            if args.benchmark:
+                result["benchmark_whole_energy_seconds"]=result["diagnostic_whole_energy_seconds"]
+                result["timing_scope"]=(
+                    "Instrumented whole energy call, including normal F-SAPT file output and "
+                    "required native audits; excluding primitive/runtime admission, diagnostic "
+                    "HF/fragment snapshot copies, NPZ serialization and post-call validation")
+                if len(deferred_cache)!=1 or len(deferred_raw)!=1:
+                    raise RuntimeError("Exactly one deferred fragment/raw-HF snapshot required")
+                capture(deferred_cache[0],immediate=True)
+                np.savez(args.output/"raw-hf.npz",**{
+                    name:np.array(value.np,copy=True)
+                    for name,value in deferred_raw[0].items()})
         for name in ("Elst_AB","Exch_AB","IndAB_AB","IndBA_AB","Disp_AB"):
             if name not in captured or not np.isfinite(captured[name]).all():
                 raise RuntimeError("Incomplete/nonfinite full fragment output: " + name)
