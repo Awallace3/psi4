@@ -29,6 +29,44 @@ The 8-hour H200 inferno cap prices at $11.31; adding the unchanged CPU caps
 gives approximately **$21.16** for the full replacement batch. Fresh account
 selection still routes to gts-cs207-chemx ($0.89 monthly gts-cs207 available).
 
+### Replacement submitted (all inferno)
+
+Helper/source checkout:
+`491ee751f4fde1a72901d600811063657836bd16`,
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-benchmark-8h-inferno-491ee751f4`.
+The scientific/native trees are byte-identical in Git to the completed
+`d2a98abe35` build; no native rebuild or installed science overlay was made.
+
+| Job | Role | QoS | Wall cap |
+|---|---|---|---|
+| **14481883** | one H200 / 8 host CPUs / 160 GiB | inferno | 8 h |
+| **14481886** | peptide / 24 CPUs / 160 GiB | inferno | 2 h |
+| **14481888** | nanotube / 24 CPUs / 160 GiB | inferno | 24 h |
+| **14481890** | protein83 / 24 CPUs / 160 GiB | inferno | 24 h |
+
+All use gts-cs207-chemx after a fresh account query immediately before each
+submission. CPU jobs reserve no GPUs and depend `afterany:14481883`.
+The scheduler test-only numbers 14481882/14481885/14481887/14481889 are not
+compute jobs. Submission task `bed8c593e` recorded zero exit status for every
+role with durable per-role manifests/responses/job-ID files.
+
+Fresh output root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-benchmark-8h-inferno-491ee751f4`.
+The same three fresh repeats and independent CPU qualification requirements
+apply. The 8-hour cap can leave partial cases; no automatic retries or invented
+large-system speedup are allowed.
+
+State-change monitor for all four replacements: `baf5af493` (retained across
+same-process Pi reload). Routing readback: `beb1f5475`. No embers job exists
+for this replacement. Old canceled IDs below are historical only.
+
+Initial controller readback verified every role on inferno with the exact
+account, partition, CPU/memory/wall cap and GPU TRES policy. GPU14481883 is
+PENDING(Priority), not the former billing-limit reason at this snapshot.
+CPU14481886/14481888/14481890 are PENDING(Dependency), each attached to the
+new GPU14481883 and with no GPU TRES. This snapshot is not a guarantee against
+a later billing restriction, nor evidence of allocation or completed science.
+
 User authorization: one GPU job and multiple CPU inferno jobs. No CPU
 reference or same-gauge CPU oracle runs in the GPU allocation. No automatic
 retry, scheduler modification, guard removal, or tolerance relaxation.
