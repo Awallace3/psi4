@@ -1,0 +1,88 @@
+{
+  "schema": "ccasp-benzene-pdef-inferno-plan/1",
+  "activation_authority": "ONE paid nonpreemptible inferno allocation up to USD0.39; parent price/route recheck required; no automatic further retry",
+  "source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-benzene-pdef-inferno-20261026",
+  "root": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-pdef-inferno-20261026",
+  "runtime": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-pdef-inferno-20261026/runtime-001",
+  "run": "/storage/project/r-cs207-0/awallace43/runs/ccasp-benzene-pdef-inferno-20261026/full-001",
+  "scratch": "/storage/scratch1/3/awallace43/ccasp-benzene-pdef-inferno-20261026-full001",
+  "effective_profile_module": "pdef_inferno_profile.py",
+  "parent_pdef_identity_sha256": "f7f6d2400088352cec7fe7c8f8c7878e675d3eb25cf5a90dce07fa6d3869be54",
+  "historical_retry_identity_sha256": "f83618a3ba469f459747483da815a196e06e0fe3a682357f300ba1872c0459b1",
+  "effective_config_sha256": "088290e61602c39d4b51a805f24d30ccc6e1ef12f3d18c522fd3223e0cfce4fb",
+  "paid_grant": {
+    "schema": "ccasp-benzene-pdef-inferno-grant/1",
+    "identity": "ccasp-benzene-pdef-inferno-20261026-one-paid-001",
+    "prior_jobs": ["14439181", "14456809"],
+    "prior_outcome": "both preempted inside ISA/Q; no observed scientific failure; frozen",
+    "fresh_allocations": 1,
+    "automatic_further_retry": false,
+    "resumable_data": false,
+    "maximum_usd": "0.39",
+    "parent_price_route_approval_required": true,
+    "approval": "user selected Yes, one inferno run; unchanged full72 science/resources"
+  },
+  "parent_profile_sha256": "19170c907137c7883dfbceaa4a23e4b919ec2d97dac38343dc4559b8bffb0f0b",
+  "overrides": {
+    "isa.q_grid": [200, 974],
+    "resources.psi4_memory_bytes": 26843545600,
+    "refinement.declared_variables": [
+      "C1_10_10_A", "C1_10_11c_A", "C1_10_11s_A", "C1_10_20_A",
+      "C1_10_21c_A", "C1_10_21s_A", "C1_10_22c_A", "C1_10_22s_A",
+      "C1_11c_11c_A", "C1_11c_11s_A", "C1_11c_20_A", "C1_11c_21c_A",
+      "C1_11c_21s_A", "C1_11c_22c_A", "C1_11c_22s_A",
+      "C1_11s_11s_A", "C1_11s_20_A", "C1_11s_21c_A", "C1_11s_21s_A",
+      "C1_11s_22c_A", "C1_11s_22s_A",
+      "C1_20_20_A", "C1_20_21c_A", "C1_20_21s_A", "C1_20_22c_A", "C1_20_22s_A",
+      "C1_21c_21c_A", "C1_21c_21s_A", "C1_21c_22c_A", "C1_21c_22s_A",
+      "C1_21s_21s_A", "C1_21s_22c_A", "C1_21s_22s_A",
+      "C1_22c_22c_A", "C1_22c_22s_A", "C1_22s_22s_A",
+      "H1_10_10_A", "H1_10_11c_A", "H1_10_11s_A", "H1_10_20_A",
+      "H1_10_21c_A", "H1_10_21s_A", "H1_10_22c_A", "H1_10_22s_A",
+      "H1_11c_11c_A", "H1_11c_11s_A", "H1_11c_20_A", "H1_11c_21c_A",
+      "H1_11c_21s_A", "H1_11c_22c_A", "H1_11c_22s_A",
+      "H1_11s_11s_A", "H1_11s_20_A", "H1_11s_21c_A", "H1_11s_21s_A",
+      "H1_11s_22c_A", "H1_11s_22s_A",
+      "H1_20_20_A", "H1_20_21c_A", "H1_20_21s_A", "H1_20_22c_A", "H1_20_22s_A",
+      "H1_21c_21c_A", "H1_21c_21s_A", "H1_21c_22c_A", "H1_21c_22s_A",
+      "H1_21s_21s_A", "H1_21s_22c_A", "H1_21s_22s_A",
+      "H1_22c_22c_A", "H1_22c_22s_A", "H1_22s_22s_A"
+    ]
+  },
+  "native": {
+    "source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-build-smoke-v3",
+    "commit": "15cc9a7a9a2bd60e43ebc2533ec99686bca58374",
+    "tree": "8f0aa8fabd476aafc6bc49b824c60ac935a86753",
+    "stage": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-build-smoke-v3/build_ccasp_phoenix_benzene/stage",
+    "core_sha256": "b283901ddac01e6bf7210a7461fb71cd5b2333cf9e42b99d60271959b40ac7eb",
+    "python": "/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt/bin/python3.13"
+  },
+  "fixture": "/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/P-002/inputs/benzene_s66x8_24_monA.json",
+  "prior_probe": "/storage/project/r-cs207-0/awallace43/runs/ccasp-phoenix-benzene-pilot-20261021/basis-probe-001/basis-admission.json",
+  "prior_probe_sha256": "6ddbac4a5292d5ab6d671ee6e7cb2acef828c0664f3b3ce7c53c4e8eefa9159c",
+  "prior_driver_source": "/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-phoenix-benzene-pilot-20261021-science-launch-v3",
+  "prior_driver_commit": "2e7d5ff2e1650e3152a7414818581945873f42f8",
+  "prior_driver_tree": "ba905cd9fabd0084099cf5020507c9f3e8f33e0c",
+  "prior_driver_files": {
+    "pilot.py": "dd1f3adc83f4f2eca4579f4732e72b35011ba827d0a564fc9f7aca169f1cce00",
+    "basis_admission.py": "4df9c5d9714839f053e122b9eda59f6a701d0defa117edb640b249fc3fee70dc",
+    "basis_contract.json": "42ad138fec115b594ec7fa31ac787d8f4b303e81ea2fad7c6e2485461aa88167",
+    "pilot.json": "19170c907137c7883dfbceaa4a23e4b919ec2d97dac38343dc4559b8bffb0f0b"
+  },
+  "routing": [
+    "psi4/driver/procrouting/isapol_bounded.py",
+    "psi4/driver/procrouting/isapol_bounded_oeprop.py",
+    "psi4/driver/procrouting/isapol_bounded_response.py",
+    "psi4/driver/procrouting/isapol_native_factors.py"
+  ],
+  "fingerprints": {
+    "main": "a88c2a074b28b8da608684b56bdff01aa965179aa91fe8bf6a8bdefd7a8c1c0e",
+    "auxiliary": "2bd06dbb3a6ea10b4cbfcda85677f199ddebb315fd317848dfea6aec19d600ac"
+  },
+  "allocation": {
+    "account": "gts-cs207-chemx", "partition": "cpu-small", "qos": "inferno",
+    "nodes": 1, "tasks": 1, "cpus": 8, "memory": "48G", "time": "06:00:00",
+    "node": "atl1-1-02-007-23-1", "numerical_threads": 1,
+    "psi4_memory_bytes": 26843545600
+  }
+}
