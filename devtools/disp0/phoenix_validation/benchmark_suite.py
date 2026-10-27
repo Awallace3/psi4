@@ -26,7 +26,7 @@ from submit_split import save_new, source_pin
 from validate_cpu_allocation import fields
 
 SYSTEMS = ("peptide", "nanotube", "protein83")
-WALL = {"gpu": 57600, "peptide": 7200, "nanotube": 86400, "protein83": 86400}
+WALL = {"gpu": 28800, "peptide": 7200, "nanotube": 86400, "protein83": 86400}
 CACHE_BYTES = 64 * 1024**2
 
 

@@ -1,5 +1,34 @@
 # Current-stage split F-SAPT benchmark
 
+## Replacement authorization (latest)
+
+The original 16-hour inferno GPU job became blocked by
+`AssocGrpBillingMinutes`; its three CPU consumers were pending dependencies.
+The user approved replacing the queued four-job batch, then clarified
+**all inferno actually**. The replacement therefore retains inferno for every
+role, with an **8-hour GPU cap** and the same **2/24/24-hour CPU caps**.
+No embers allocation was submitted. The shorter GPU cap reduces its billing
+reservation; it does not guarantee that the account restriction is cleared.
+
+Cancellation task `b4a58b249` checked that all four old jobs were still PENDING,
+owned by the expected account and named for this benchmark, then received
+successful cancellation acknowledgement for 14465903/14466146/14466149/14466153.
+Old manifests, checkouts and outputs remain intact; no running work was stopped.
+New job IDs and effective routes must be recorded after fresh submission.
+The historical 16-hour plan and its IDs below are retained as provenance,
+not current jobs to revive or automatically resubmit.
+
+Only the allocation wall cap changes in the replacement helper. Scientific
+stage, runtime/input seals, cache budget, exact CPHF method, three repeats,
+numerical checks and device-memory guards remain unchanged.
+
+Accounting verification (`bb4dbc934`) confirms **all four old jobs CANCELLED**
+with zero elapsed time and no assigned nodes. No old benchmark call executed.
+The replacement's 103 offline helper tests and shell/whitespace checks passed.
+The 8-hour H200 inferno cap prices at $11.31; adding the unchanged CPU caps
+gives approximately **$21.16** for the full replacement batch. Fresh account
+selection still routes to gts-cs207-chemx ($0.89 monthly gts-cs207 available).
+
 User authorization: one GPU job and multiple CPU inferno jobs. No CPU
 reference or same-gauge CPU oracle runs in the GPU allocation. No automatic
 retry, scheduler modification, guard removal, or tolerance relaxation.

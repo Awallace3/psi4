@@ -57,6 +57,8 @@ class BenchmarkContracts(unittest.TestCase):
             argv = suite.command(Path("/source"), Path("/run"), label,
                                  "gts-cs207-chemx", None if gpu else "123")
             self.assertIn("--qos=inferno", argv)
+            if gpu:
+                self.assertIn("--time=08:00:00", argv)
             self.assertEqual(any(x.startswith("--gres=") for x in argv), gpu)
             self.assertEqual(any(x.startswith("--dependency=") for x in argv), not gpu)
             if not gpu:
@@ -99,7 +101,7 @@ class BenchmarkContracts(unittest.TestCase):
             manifest = {"kind": "gpu", "config": "/config", "config_sha256": "cfg",
                         "science_pin": "science", "helper_pin": "helper",
                         "systems": list(suite.SYSTEMS), "inputs": "/input",
-                        "inputs_sha256": "input", "allocation_wall_seconds": 57600,
+                        "inputs_sha256": "input", "allocation_wall_seconds": suite.WALL["gpu"],
                         "cpu_water_result": str(control), "cpu_water_sha256": suite.digest(control)}
             (base/"manifest.json").write_text(json.dumps(manifest))
             calls = []
