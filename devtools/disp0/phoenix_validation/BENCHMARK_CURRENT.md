@@ -1,5 +1,35 @@
 # Current-stage split F-SAPT benchmark
 
+## CPU scheduling independence (latest)
+
+The user explicitly requested **CPU should not wait on GPU job**.
+CPU14481886/14481888/14481890 must run independently of GPU14481883,
+with their existing inferno account/resource/wall caps unchanged. Release only
+the GPU scheduler dependency; do not cancel, resubmit or edit queued scientific
+source/configuration. The GPU job is unchanged. The dependency declarations in
+the historical submission records below document the original plan only.
+
+The frozen worker already computes all three CPU reference calls and checks
+their repeats before considering GPU artifacts. If GPU outputs are unavailable
+or unqualified it preserves CPU timings and exits without idle waiting, without
+running GPU work and without claiming a speedup. Same-gauge validation happens
+only when eligible GPU outputs are available; otherwise it remains deferred.
+No extra paid validation job is automatically authorized or submitted.
+Future benchmark submissions omit the GPU scheduler dependency as well.
+
+Dependency-change task: `b7b109778`; its per-job before/after controller
+records and invariant resource checks are saved separately from original
+immutable manifests in `cpu-independent-dependency-change.json` under the
+current replacement run root.
+
+**Verified:** all three updates returned 0 and controller readback reports
+`Dependency=(null)` for CPU14481886/14481888/14481890. Account, inferno QoS,
+CPU partition/features, 24 threads, 160 GiB and 2/24/24-hour caps are unchanged;
+none reserves GPU TRES. They are independently eligible for scheduling, not
+waiting for GPU14481883. No job was resubmitted and the GPU was not modified.
+CPU-only completion monitor `b113822d4` returns when the CPU batch ends even if
+the GPU is still queued, so CPU results can be collected without waiting for it.
+
 ## Replacement authorization (latest)
 
 The original 16-hour inferno GPU job became blocked by

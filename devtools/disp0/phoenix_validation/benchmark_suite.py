@@ -3,7 +3,8 @@
 This is a new experimental batch, not promotion of an old failed allocation or
 a fabricated small-H200 release. Whole-stage CPU proof, installed-code hashes,
 native GPU admission, raw component and same-gauge oracle checks stay mandatory.
-No CPU reference or oracle runs while holding the H200 allocation.
+No CPU reference or oracle runs while holding the H200 allocation. CPU jobs
+have no scheduler dependency on GPU execution and never wait for its outputs.
 """
 import argparse
 import json
@@ -34,8 +35,6 @@ def command(source, root, label, account, parent=None):
     gpu = label == "gpu"
     if gpu and parent is not None:
         raise ValueError("GPU allocation cannot wait for CPU references")
-    if not gpu and (not parent or not parent.isdecimal()):
-        raise ValueError("CPU job requires the exact accepted GPU producer ID")
     wall = WALL[label]
     argv = ["sbatch", "--parsable", "--job-name=disp0-bench-" + label,
             "--account=" + account, "--qos=inferno",
@@ -48,8 +47,7 @@ def command(source, root, label, account, parent=None):
     if gpu:
         argv.append("--gres=gpu:h200:1")
     else:
-        argv.extend(("--exclusive", "--constraint=core24&gold6226&localNVMe",
-                     "--dependency=afterany:" + parent, "--kill-on-invalid-dep=yes"))
+        argv.extend(("--exclusive", "--constraint=core24&gold6226&localNVMe"))
     return argv + [str(source/"devtools/disp0/phoenix_validation/split_job.sbatch")]
 
 
@@ -367,6 +365,8 @@ def submit(args):
     if args.submit_one != "gpu":
         producer_root = Path(plan.get("gpu_root", str(args.root/"gpu")))
         parent = (producer_root/"job-id.txt").read_text().strip()
+        if not parent.isdecimal():
+            raise RuntimeError("Exact GPU artifact locator required, not a scheduling dependency")
         draft.update(gpu_job_root=str(producer_root/("job-"+parent)),
                      gpu_config=str(producer_root/"runtime-config.json"),
                      gpu_config_sha256=digest(producer_root/"runtime-config.json"))

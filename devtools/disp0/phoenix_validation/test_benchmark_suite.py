@@ -60,12 +60,12 @@ class BenchmarkContracts(unittest.TestCase):
             if gpu:
                 self.assertIn("--time=08:00:00", argv)
             self.assertEqual(any(x.startswith("--gres=") for x in argv), gpu)
-            self.assertEqual(any(x.startswith("--dependency=") for x in argv), not gpu)
-            if not gpu:
-                self.assertIn("--dependency=afterany:123", argv)
-                self.assertIn("--kill-on-invalid-dep=yes", argv)
+            self.assertFalse(any(x.startswith("--dependency=") for x in argv))
+            self.assertNotIn("--kill-on-invalid-dep=yes", argv)
         with self.assertRaises(ValueError):
             suite.command(Path("/s"), Path("/r"), "gpu", "gts-cs207", "123")
+        cpu = suite.command(Path("/s"), Path("/r"), "peptide", "gts-cs207")
+        self.assertFalse(any(x.startswith("--dependency=") for x in cpu))
 
     def test_gpu_worker_cannot_execute_cpu_oracle_and_cache_is_explicit(self):
         config = {"stage": "/stage", "dependency_environment": "/env"}
@@ -166,7 +166,8 @@ class BenchmarkContracts(unittest.TestCase):
         calls, _ = self.exercise_gpu(failure="peptide", interrupt=True)
         self.assertEqual(calls, ["water-control", "peptide-r0"])
 
-    def exercise_unqualified_CPU(self, *, gpu_status="FAILED", cleanup=True, invalidated=False):
+    def exercise_unqualified_CPU(self, *, gpu_status="FAILED", cleanup=True, invalidated=False,
+                                 missing_producer=False):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
             root, scratch, producer = (base/name for name in ("job", "scratch", "gpu"))
@@ -178,11 +179,12 @@ class BenchmarkContracts(unittest.TestCase):
                         "allocation_wall_seconds": 86400, "gpu_job_root": str(producer),
                         "gpu_config": "/peer", "gpu_config_sha256": "peer"}
             (base/"manifest.json").write_text(json.dumps(manifest))
-            (producer/"benchmark-result.json").write_text(json.dumps({
-                "source_pin": "science", "helper_pin": "helper",
-                "scratch_cleanup": {"complete": cleanup},
-                "cases": {"nanotube": {"status": gpu_status,
-                                      "qualification_invalidated_by_cleanup": invalidated}}}))
+            if not missing_producer:
+                (producer/"benchmark-result.json").write_text(json.dumps({
+                    "source_pin": "science", "helper_pin": "helper",
+                    "scratch_cleanup": {"complete": cleanup},
+                    "cases": {"nanotube": {"status": gpu_status,
+                                          "qualification_invalidated_by_cleanup": invalidated}}}))
             calls = []
 
             def execute(argv, env, out, err, timeout, started, *, reaped):
@@ -220,7 +222,8 @@ class BenchmarkContracts(unittest.TestCase):
             result = json.loads((root/"benchmark-result.json").read_text())
             self.assertEqual(calls, [f"nanotube-r{i}" for i in range(3)])
             case = result["cases"]["nanotube"]
-            self.assertEqual(case["status"], "PASS_CPU_REFERENCES_GPU_CASE_UNQUALIFIED")
+            self.assertEqual(case["status"], "PASS_CPU_REFERENCES_GPU_PRODUCER_UNAVAILABLE"
+                             if missing_producer else "PASS_CPU_REFERENCES_GPU_CASE_UNQUALIFIED")
             self.assertEqual(case["timing"]["n"], 3)
             self.assertFalse(case["accepted_speedup"])
             self.assertEqual(result["accepted_speedup_count"], 0)
@@ -228,6 +231,9 @@ class BenchmarkContracts(unittest.TestCase):
 
     def test_CPU_references_still_run_when_GPU_case_failed_no_false_speedup(self):
         self.exercise_unqualified_CPU()
+
+    def test_CPU_finishes_three_references_before_any_GPU_output_exists(self):
+        self.exercise_unqualified_CPU(missing_producer=True)
 
     def test_failed_GPU_cleanup_or_revoked_case_cannot_qualify_CPU_speedup(self):
         status = "PASS_REPEATS_AWAITING_OTHER_RESOURCE_CLASS"
