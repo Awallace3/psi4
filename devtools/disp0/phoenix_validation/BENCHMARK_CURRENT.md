@@ -106,3 +106,43 @@ It prepares no second GPU job, and submission of a GPU role through that plan
 is forbidden. CPU consumers independently require completed GPU scratch cleanup
 and no revoked case qualification before computing any accepted ratio; failed
 GPU cleanup cannot be hidden by a previously recorded repeat-pass status.
+
+## Submitted CPU consumers
+
+CPU-only helper `0fea20b2c41854a238b0919dd855ffadb0f23f2e` preserves the
+GPU checkout and seals its original manifest and byte-identical shared timed
+engine. All 103 offline scheduling/snapshot/qualification tests passed.
+Native scientific/runtime source remains the completed `d2a98abe35` stage.
+
+| Job | System | Route | Cap |
+|---|---|---|---|
+| 14466146 | peptide | gts-cs207-chemx / cpu-small / inferno | 2 h |
+| 14466149 | nanotube | same CPU route | 24 h |
+| 14466153 | protein83 | same CPU route | 24 h |
+
+Each requests 24 CPUs, 160 GiB, exclusive Gold6226/core24/localNVMe and **no
+GPU**. Each depends `afterany:14465903` with invalid-dependency cleanup.
+The three fresh account selections kept monthly gts-cs207 at $0.89, below
+the $1 floor; upper bounds were $0.39/$4.73/$4.73. Together with the one
+H200 cap, benchmark allocation upper bounds total about **$32.47**, excluding
+the already completed build. No follow-on or automatic retry is authorized.
+
+CPU output root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-benchmark-cpu-0fea20b2c4`.
+Per-system manifests, scheduler attempts/responses and job IDs are retained.
+The test-only IDs 14466145/14466148/14466152 are not compute jobs.
+
+Durable state-change monitors:
+- GPU14465903: background task `b9b9c7853`.
+- CPU14466146/14466149/14466153: background task `b3e80c2fd`.
+
+Submission is not execution or scientific qualification. Accepted new
+benchmark results/speedups remain zero pending actual numerical outputs,
+same-arm repeats, independent CPU oracles and final cleanup verification.
+
+Controller readback (`b949359b7`) verified all four effective accounts,
+inferno QoS, partition, CPU count, wall/memory caps and TRES. GPU14465903 is
+PENDING(Priority), no dependency, exactly one H200 requested. All three CPU
+jobs are PENDING(Dependency), `afterany:14465903(unfulfilled)`, with no GPU
+TRES and the exact requested CPU features. Actual allocation hardware and
+prolog QoS remain to be checked after scheduling.
