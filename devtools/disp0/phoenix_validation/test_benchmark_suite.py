@@ -164,7 +164,7 @@ class BenchmarkContracts(unittest.TestCase):
         calls, _ = self.exercise_gpu(failure="peptide", interrupt=True)
         self.assertEqual(calls, ["water-control", "peptide-r0"])
 
-    def test_CPU_references_still_run_when_GPU_case_failed_no_false_speedup(self):
+    def exercise_unqualified_CPU(self, *, gpu_status="FAILED", cleanup=True, invalidated=False):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
             root, scratch, producer = (base/name for name in ("job", "scratch", "gpu"))
@@ -178,7 +178,9 @@ class BenchmarkContracts(unittest.TestCase):
             (base/"manifest.json").write_text(json.dumps(manifest))
             (producer/"benchmark-result.json").write_text(json.dumps({
                 "source_pin": "science", "helper_pin": "helper",
-                "cases": {"nanotube": {"status": "FAILED"}}}))
+                "scratch_cleanup": {"complete": cleanup},
+                "cases": {"nanotube": {"status": gpu_status,
+                                      "qualification_invalidated_by_cleanup": invalidated}}}))
             calls = []
 
             def execute(argv, env, out, err, timeout, started, *, reaped):
@@ -221,6 +223,60 @@ class BenchmarkContracts(unittest.TestCase):
             self.assertFalse(case["accepted_speedup"])
             self.assertEqual(result["accepted_speedup_count"], 0)
             self.assertFalse(scratch.exists())
+
+    def test_CPU_references_still_run_when_GPU_case_failed_no_false_speedup(self):
+        self.exercise_unqualified_CPU()
+
+    def test_failed_GPU_cleanup_or_revoked_case_cannot_qualify_CPU_speedup(self):
+        status = "PASS_REPEATS_AWAITING_OTHER_RESOURCE_CLASS"
+        self.exercise_unqualified_CPU(gpu_status=status, cleanup=False)
+        self.exercise_unqualified_CPU(gpu_status=status, invalidated=True)
+
+    def test_CPU_consumer_plan_seals_existing_GPU_without_preparing_a_second_GPU(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            source, old_source, producer = (base/name for name in ("new", "old", "producer"))
+            for root in (source, old_source):
+                shared = root/"devtools/disp0/phoenix_validation"
+                shared.mkdir(parents=True)
+                for name in ("fragment_gate.py", "gpu_runtime.py", "full_inputs.py",
+                             "repeat_gauge.py", "owned_process.py", "run_full.py", "run_gate.py"):
+                    (shared/name).write_text("unchanged engine")
+            producer.mkdir()
+            (producer/"job-id.txt").write_text("123\n")
+            (producer/"manifest.json").write_text(json.dumps({
+                "kind": "gpu", "source": str(old_source), "helper_pin": "gpu-helper",
+                "science_pin": "science", "inputs_sha256": "input", "systems": list(suite.SYSTEMS)}))
+            config = base/"build/gpu-runtime/runtime-config.json"
+            config.parent.mkdir(parents=True)
+            config.write_text("{}")
+            water = config.parents[1]/"cpu-fragment-scaled/result.json"
+            water.parent.mkdir()
+            water.write_text(json.dumps({"status": "EXECUTED_REQUIRES_INDEPENDENT_COMPARISON",
+                                        "arm": "cpu", "source_pin": "science"}))
+            inputs = base/"inputs"
+            inputs.write_text("{}")
+            args = SimpleNamespace(source=source, config=config, config_sha256="config",
+                                   inputs=inputs, inputs_sha256="input", root=base/"plan",
+                                   gpu_producer_root=producer)
+            with patch.object(suite, "source_pin", return_value="cpu-helper"), \
+                    patch.object(suite, "read_config", return_value=({"source_pin": "science"}, {})), \
+                    patch.object(suite, "load_point"):
+                suite.prepare(args)
+                with self.assertRaisesRegex(RuntimeError, "GPU duplication"):
+                    suite.submit(SimpleNamespace(root=args.root, submit_one="gpu", account="gts-cs207"))
+                plan = json.loads((args.root/"plan.json").read_text())
+                self.assertEqual(plan["labels"], list(suite.SYSTEMS))
+                self.assertFalse((args.root/"gpu").exists())
+                draft = json.loads((args.root/"peptide/draft-manifest.json").read_text())
+                self.assertEqual(draft["gpu_helper_pin"], "gpu-helper")
+                self.assertEqual(draft["gpu_manifest_sha256"], suite.digest(producer/"manifest.json"))
+                (old_source/"devtools/disp0/phoenix_validation/fragment_gate.py").write_text("different")
+                args.root = base/"bad-plan"
+                with self.assertRaisesRegex(RuntimeError, "engine"):
+                    suite.prepare(args)
+                self.assertFalse(args.root.exists())
 
 
 if __name__ == "__main__":

@@ -83,3 +83,26 @@ Build root:
 The account selector reported monthly `gts-cs207` $0.89 below its $1 floor;
 the full build cap is about $0.20. Build submission is not build completion,
 GPU submission, or benchmark success.
+
+**14465563 COMPLETED 0:0**, job/batch/step, 9m59s, exit0/TERM0.
+Whole-stage proof is PASS at the exact scientific pin above; 301 CPU tests,
+89 build-helper tests (one explicit skip), native RHF/API proof and both exact
+native CPU fragment preflights passed. Base runtime-config SHA256:
+`251f4dbf0ee4c0019e2609ffe8c4a96c8727e29aaeb17d1e36ab4b6ceb58ec73`.
+
+**GPU job 14465903 submitted** on gts-cs207-chemx/gpu-h200/inferno,
+1 H200, 8 CPUs, 160 GiB, 16h cap, maximum $22.62. GPU helper
+`b5aba145976d5b2a574eadcb9bc3dd7e34ef1bf8` and its source checkout
+remain frozen. Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-benchmark-b5aba14597/gpu`.
+The scheduler's test-only number 14465901 is not the compute job. No GPU
+hardware/prolog, science completion or speedup is inferred before allocation.
+
+The CPU-only consumer plan may use a later **qualification-only** helper
+revision without changing the queued GPU checkout. It seals the existing GPU
+submission manifest/helper pin and requires byte-identical timed worker,
+runtime admission, process ownership and numerical/gauge comparison helpers.
+It prepares no second GPU job, and submission of a GPU role through that plan
+is forbidden. CPU consumers independently require completed GPU scratch cleanup
+and no revoked case qualification before computing any accepted ratio; failed
+GPU cleanup cannot be hidden by a previously recorded repeat-pass status.

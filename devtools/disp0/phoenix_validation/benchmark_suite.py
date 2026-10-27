@@ -109,7 +109,7 @@ def execute(root):
                                              "error": f"{type(error).__name__}: {error}"})
             for case in document.get("cases", {}).values():
                 case.update(accepted_speedup=False, qualification_invalidated_by_cleanup=True)
-                if case.get("status") == "PASS_MATCHED_INSTRUMENTED_BENCHMARK":
+                if case.get("status", "").startswith("PASS_"):
                     case["status"] = "UNQUALIFIED_CLEANUP_FAILED"
             raise
         finally:
@@ -219,13 +219,23 @@ def _execute(root, groups):
                 checkpoint()
                 if kind == "cpu":
                     producer = Path(manifest["gpu_job_root"])
+                    if not (producer/"benchmark-result.json").is_file():
+                        case["status"] = "PASS_CPU_REFERENCES_GPU_PRODUCER_UNAVAILABLE"
+                        checkpoint()
+                        continue
                     proof = json.loads((producer/"benchmark-result.json").read_text())
+                    if manifest.get("gpu_manifest_sha256"):
+                        if digest(producer.parent/"manifest.json") != manifest["gpu_manifest_sha256"]:
+                            raise RuntimeError("Pinned GPU submission manifest changed")
                     peer, _ = read_config(Path(manifest["gpu_config"]), manifest["gpu_config_sha256"])
                     require_oracle_config(config, peer)
-                    if proof["source_pin"] != manifest["science_pin"] or proof["helper_pin"] != manifest["helper_pin"]:
+                    if (proof["source_pin"] != manifest["science_pin"] or
+                            proof["helper_pin"] != manifest.get("gpu_helper_pin", manifest["helper_pin"])):
                         raise RuntimeError("GPU producer provenance mismatch")
                     gpu_case = proof["cases"].get(system, {})
-                    if gpu_case.get("status") != "PASS_REPEATS_AWAITING_OTHER_RESOURCE_CLASS":
+                    if (proof.get("scratch_cleanup", {}).get("complete") is not True or
+                            gpu_case.get("qualification_invalidated_by_cleanup") or
+                            gpu_case.get("status") != "PASS_REPEATS_AWAITING_OTHER_RESOURCE_CLASS"):
                         case["status"] = "PASS_CPU_REFERENCES_GPU_CASE_UNQUALIFIED"
                         checkpoint()
                         continue
@@ -297,8 +307,27 @@ def prepare(args):
         raise RuntimeError("Completed exact-source native CPU water preflight required")
     if water["source_pin"] != config["source_pin"]:
         raise RuntimeError("CPU control is from a different coherent build")
+    producer_root = getattr(args, "gpu_producer_root", None)
+    producer = None
+    if producer_root:
+        producer_root = producer_root.resolve(strict=True)
+        producer = json.loads((producer_root/"manifest.json").read_text())
+        parent = (producer_root/"job-id.txt").read_text().strip()
+        if (not parent.isdecimal() or producer["kind"] != "gpu"
+                or producer["science_pin"] != config["source_pin"]
+                or producer["inputs_sha256"] != args.inputs_sha256
+                or producer["systems"] != list(SYSTEMS)):
+            raise RuntimeError("Explicit existing one-GPU producer is not compatible")
+        # Consumer-only guard fixes may use a new helper pin, never a new timed
+        # worker, scientific implementation, or runtime closure.
+        for name in ("fragment_gate.py", "gpu_runtime.py", "full_inputs.py",
+                     "repeat_gauge.py", "owned_process.py", "run_full.py", "run_gate.py"):
+            if digest(source/"devtools/disp0/phoenix_validation"/name) != digest(
+                    Path(producer["source"])/"devtools/disp0/phoenix_validation"/name):
+                raise RuntimeError("CPU/GPU timed engine or shared qualification helper differs: "+name)
     args.root.mkdir(mode=0o700)
-    for label in ("gpu", *SYSTEMS):
+    labels = list(SYSTEMS) if producer else ["gpu", *SYSTEMS]
+    for label in labels:
         root = args.root/label
         root.mkdir()
         (root/"logs").mkdir()
@@ -314,9 +343,13 @@ def prepare(args):
                  "allocation_wall_seconds": WALL[label], "cpu_water_result": str(cpu_water),
                  "cpu_water_sha256": digest(cpu_water), "automatic_retry": False,
                  "new_experimental_benchmark_not_previous_H200_release": True}
+        if producer:
+            draft.update(gpu_helper_pin=producer["helper_pin"],
+                         gpu_manifest_sha256=digest(producer_root/"manifest.json"))
         save_new(root/"draft-manifest.json", draft)
     save_new(args.root/"plan.json", {"status": "PREPARED_NOT_SUBMITTED", "source": str(source),
-                                    "helper_pin": pin, "labels": ["gpu", *SYSTEMS]})
+                                    "helper_pin": pin, "labels": labels,
+                                    "gpu_root": str(producer_root or args.root/"gpu")})
     print("PREPARED="+str(args.root), flush=True)
 
 
@@ -325,15 +358,18 @@ def submit(args):
     source = Path(plan["source"])
     if source_pin(source) != plan["helper_pin"]:
         raise RuntimeError("Immutable benchmark helper checkout changed")
+    if args.submit_one not in plan["labels"]:
+        raise RuntimeError("Role not included in this prepared plan; no GPU duplication")
     root = args.root/args.submit_one
     draft = json.loads((root/"draft-manifest.json").read_text())
     config, _ = read_config(Path(draft["config"]), draft["config_sha256"])
     parent = None
     if args.submit_one != "gpu":
-        parent = (args.root/"gpu/job-id.txt").read_text().strip()
-        draft.update(gpu_job_root=str(args.root/"gpu"/("job-"+parent)),
-                     gpu_config=str(args.root/"gpu/runtime-config.json"),
-                     gpu_config_sha256=digest(args.root/"gpu/runtime-config.json"))
+        producer_root = Path(plan.get("gpu_root", str(args.root/"gpu")))
+        parent = (producer_root/"job-id.txt").read_text().strip()
+        draft.update(gpu_job_root=str(producer_root/("job-"+parent)),
+                     gpu_config=str(producer_root/"runtime-config.json"),
+                     gpu_config_sha256=digest(producer_root/"runtime-config.json"))
     manifest = {**draft, "account": args.account, "qos": "inferno"}
     save_new(root/"manifest.json", manifest)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("SBATCH_", "SLURM_"))}
@@ -369,6 +405,8 @@ def main():
     parser.add_argument("--root", type=Path)
     parser.add_argument("--submit-one", choices=("gpu", *SYSTEMS))
     parser.add_argument("--account", choices=("gts-cs207", "gts-cs207-chemx"))
+    parser.add_argument("--gpu-producer-root", type=Path,
+                        help="Prepare CPU-only consumers for an already-submitted immutable GPU producer")
     for name in ("source", "config", "inputs"):
         parser.add_argument("--"+name, type=Path)
     for name in ("config", "inputs"):
