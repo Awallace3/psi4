@@ -44,6 +44,18 @@ def _sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def _isotropic_export(dispersion):
+    labels = dispersion.labels
+    return [
+        dict(site_a=labels[p.site_a], site_b=labels[p.site_b],
+             order=c.order, value=c.value,
+             unrestricted_complete=c.unrestricted_complete,
+             included_rank_pairs=c.included_rank_pairs,
+             missing_rank_pairs=c.missing_rank_pairs)
+        for p in dispersion.pairs for c in p.coefficients
+    ]
+
+
 def _write_tensor_artifact(path, result):
     """Export numeric arrays, preserving the different LW/PFIT rank layouts."""
     local = np.concatenate([snapshot.array for snapshot in result.local_tensors], axis=0)
@@ -134,7 +146,9 @@ def run_water(output, manifest, *, profile='smoke', forbidden_prefixes=()):
     if profile not in ('smoke', 'rank2'):
         raise ValueError('profile must be smoke or rank2')
     _verify_build(manifest)
-    prefixes = tuple(str(Path(p).resolve()) for p in forbidden_prefixes)
+    # The launcher supplies canonical prefixes. Normalizing this declaration
+    # must not itself stat/read the forbidden research directories.
+    prefixes = tuple(os.path.abspath(p) for p in forbidden_prefixes)
     reads, processes = [], []
 
     def audit(event, args):
@@ -201,12 +215,7 @@ no_reorient
         raise RuntimeError('native response residual acceptance failed')
     if max(d['localization_residual'] for d in result.diagnostics) >= 1e-6:
         raise RuntimeError('native localization residual acceptance failed')
-    labels = result.dispersion.labels
-    pairs = [dict(site_a=labels[p.site_a], site_b=labels[p.site_b],
-                  order=c.order, value=c.value, complete=c.complete,
-                  included_rank_pairs=c.included_rank_pairs,
-                  missing_rank_pairs=c.missing_rank_pairs)
-             for p in result.dispersion.pairs for c in p.coefficients]
+    pairs = _isotropic_export(result.dispersion)
     if any(not np.isfinite(p['value']) or p['value'] <= 0 for p in pairs):
         raise RuntimeError('invalid isotropic coefficient')
     forbidden_imports = [name for name in sys.modules if

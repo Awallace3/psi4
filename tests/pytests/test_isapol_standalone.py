@@ -134,3 +134,19 @@ def test_acceptance_angular_export_preserves_coverage_and_conventions():
     assert cov['missing_unrestricted_rank_quadruples'] == [[1, 1, 1, 5]]
     assert exported['cp_weights'][0] == 0.
     assert 'no dimer placement or energy' in exported['convention']
+
+
+def test_acceptance_isotropic_export_uses_actual_coefficient_contract():
+    from psi4.driver.procrouting.isapol_acceptance import _isotropic_export, _plain
+    from psi4.driver.procrouting.isapol_lw import Coefficient, DispersionPair
+    coefficients = (
+        Coefficient(6, 1., ((1, 1),), (), True),
+        Coefficient(10, 2., ((2, 2),), ((1, 3), (3, 1)), False),
+    )
+    pair = DispersionPair(0, 0, 'O', 'O', coefficients)
+    result = SimpleNamespace(labels=('O',), pairs=(pair,))
+    exported = json.loads(json.dumps(_plain(_isotropic_export(result))))
+    assert exported[0]['unrestricted_complete']
+    assert not exported[1]['unrestricted_complete']
+    assert exported[1]['missing_rank_pairs'] == [[1, 3], [3, 1]]
+    assert exported[1]['order'] == 10 and exported[1]['value'] == 2.
