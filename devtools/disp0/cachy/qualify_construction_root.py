@@ -9,8 +9,11 @@ import ctypes
 import importlib.util
 import json
 import math
+import mmap
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 
 HERE = Path(__file__).resolve().parent
@@ -18,7 +21,7 @@ sys.path.insert(0,str(HERE.parent/"phoenix_validation"))
 from gpu_runtime import digest, optional_inventory, read_config
 from coherent_stage11 import clean, lease, policy, run_command, save
 from response_reuse_probe import resource_scope
-from response_cuda_closure import canonical_sha
+from response_cuda_closure import canonical_sha, COPY_HELPER_SHA
 
 
 def relocate_manifest(original, directory):
@@ -89,6 +92,65 @@ def mapped_binary_inventory(text, prefixes, extra):
     return result
 
 
+def executable_copy(identity, manifest, sdk, archive, native, target, metadata, old_proof):
+    """Per-experiment executable copies; durable build/dependency paths stay put.
+
+    Btrfs mappings on Cachy fail the existing strict inode/device gate. Use the
+    already audited same-descriptor copier, never relax the gate or repoint a
+    shared alias. The returned SDK/manifest describe this fresh tmpfs copy only.
+    """
+    if target.exists() or target.is_symlink():
+        raise RuntimeError("Fresh private executable-copy directory required")
+    files = list(metadata.glob("*.py"))
+    proofs = old_proof["provenance_sha256"]
+    for path in files:
+        if proofs.get(str(path)) != digest(path):
+            raise RuntimeError("Read-only copy-helper dependency changed: "+str(path))
+    if digest(metadata/"prepare_tmpfs_native.py") != COPY_HELPER_SHA:
+        raise RuntimeError("Previously audited native copier changed")
+    sys.path.insert(0,str(metadata))
+    try:
+        from prepare_tmpfs_native import stable_copy, create_private_root, validate_inventory
+    finally:
+        sys.path.pop(0)
+    deployed = json.loads(json.dumps(manifest))
+    deployed["cuda_root"] = str(target/"cuda")
+    items = []
+    for before,after in zip(manifest["components"],deployed["components"],strict=True):
+        source = Path(before["path"])
+        destination = target/"cuda/lib"/source.name
+        after["path"] = str(destination)
+        items.append((source,destination,before["sha256"],source.stat().st_size))
+    for archived,row in native["header_files"].items():
+        relative = archived.removeprefix("cuest_PID/")
+        items.append((sdk/relative,target/"cuest_PID"/relative,row["sha256"],row["bytes"]))
+    source = Path(native["native_path"])
+    items.append((source,target/"cuest_PID/lib/13/libcuest.so.0.2.50",
+                  native["native_sha256"],source.stat().st_size))
+    total = sum(row[3] for row in items)
+    fs = subprocess.check_output(["stat","-f","-c","%T",str(target.parent)],text=True).strip()
+    if (fs != "tmpfs" or total > 2*1024**3
+            or shutil.disk_usage(target.parent).free < total+1024**3):
+        raise MemoryError("Executable copies need tmpfs, <=2GiB, and >=1GiB remaining free")
+    create_private_root(target)
+    probe = target/"strict-mapping-probe"
+    probe.write_bytes(b"private executable-copy strict mapping proof\n")
+    with probe.open("rb") as stream, mmap.mmap(
+            stream.fileno(),0,flags=mmap.MAP_PRIVATE,prot=mmap.PROT_READ|mmap.PROT_EXEC):
+        if identity.mapped_file_digest(str(probe),identity.mapped_rows(
+                Path("/proc/self/maps").read_text())) != digest(probe):
+            raise RuntimeError("Strict mapped identity failed on executable-copy storage")
+    copied = [stable_copy(*row) for row in items]
+    validate_inventory(target,{row[1] for row in items}|{probe},{})
+    proof = identity.verify_files(target/"cuest_PID",archive)
+    return deployed,target/"cuest_PID",proof,{
+        "scope":"Temporary executable copy only; builds use durable private dependencies",
+        "target":str(target),"copied_bytes":total,"files":copied,
+        "strict_mapping_probe_passed":True,
+        "copy_helper_provenance":{str(p):digest(p) for p in files},
+    }
+
+
 def prepare(root, pin, reference_path, reference_sha, output):
     if digest(reference_path) != reference_sha:
         raise RuntimeError("Frozen reference configuration changed")
@@ -119,7 +181,6 @@ def prepare(root, pin, reference_path, reference_sha, output):
     if canonical_sha(original) != reference["cuda_manifest_sha256"]:
         raise RuntimeError("Reference CUDA manifest changed")
     manifest = relocate_manifest(original,root/"runtime/lib")
-    save(output/"cuda-manifest.json",manifest)
     spec = importlib.util.spec_from_file_location(
         "_construction_identity",root/"source/psi4/driver/procrouting/sapt/sapt_cuest250_identity.py")
     identity = importlib.util.module_from_spec(spec)
@@ -127,16 +188,23 @@ def prepare(root, pin, reference_path, reference_sha, output):
     sdk = root/"runtime/cuest"
     archive = root/"dependencies/cuest-artifact/cuest_v0.2.50.tar.gz"
     native = identity.verify_files(sdk,archive)
+    manifest,sdk,native,copy_receipt = executable_copy(
+        identity,manifest,sdk,archive,native,
+        Path("/tmp")/("psi4-disp0-perf-"+output.name),metadata,old_proof)
+    save(output/"executable-copy.json",copy_receipt)
+    save(output/"cuda-manifest.json",manifest)
     aliases = output/"native-aliases"
     aliases.mkdir()
     alias_links = {}
     # Copies retain their already-versioned SONAME locators from the surviving
     # runtime. Do not modify/repoint any alias in the shared reference root.
-    for path in sorted((root/"runtime/lib").iterdir()):
-        if path.is_file():
-            link = aliases/path.name
-            link.symlink_to(path.resolve(strict=True))
-            alias_links[str(link)] = str(path.resolve(strict=True))
+    execution_paths = [Path(row["path"]) for row in manifest["components"]]
+    execution_paths.append(Path(native["native_path"]))
+    for path in execution_paths:
+        name = "libcuest.so.0" if path.name.startswith("libcuest.so.") else path.name
+        link = aliases/name
+        link.symlink_to(path.resolve(strict=True))
+        alias_links[str(link)] = str(path.resolve(strict=True))
     paths = []
     for old in reference["native_preload_paths"]:
         if Path(old).name.startswith("libcuest.so"):
@@ -166,6 +234,7 @@ def prepare(root, pin, reference_path, reference_sha, output):
         "package":str(package),"scientific_python_sha256":inventory,
         "sdk_native_path":native["native_path"],"sdk_native_sha256":native["native_sha256"],
         "reference_config":str(reference_path),"reference_config_sha256":reference_sha,
+        "copy_helper_provenance":copy_receipt["copy_helper_provenance"],
         "reference_build_proof":str(old_proof_path),
         "reference_build_proof_sha256":digest(old_proof_path)}
     save(output/"preparation.json",initial)
@@ -234,9 +303,11 @@ def child(args):
     if str(core) not in binary:
         raise RuntimeError("Native CPU smoke did not map its exact core")
     provenance = [args.preparation,Path(config["metadata_path"])/"import_order.py",
+        args.output/"executable-copy.json",
         Path(config["wheel_lock"]),args.root/"install/BUILT_FROM",
         args.root/"build/CMakeCache.txt",
         args.root/"build/psi4-core-prefix/src/psi4-core-build/install_manifest.txt"]
+    provenance.extend(Path(name) for name in initial["copy_helper_provenance"])
     # Bind both this helper checkout and the unchanged scientific checkout:
     # the actual probe runs the original science pin's launch/admission helpers.
     for source in {HERE.parents[2],args.root/"source"}:

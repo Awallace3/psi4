@@ -152,6 +152,58 @@ class Qualification(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,"Unauthenticated native preload"):
                     bootstrap_gate.bootstrap(config,proof)
 
+    def test_executable_copy_is_fresh_byte_bound_and_does_not_change_durable_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sdk = root/"durable/cuest"
+            header = sdk/"include/cuest.h"
+            native_path = sdk/"lib/13/libcuest.so.0.2.50"
+            cuda = root/"durable/lib/libcudart.so.13"
+            metadata = root/"metadata"
+            for path,contents in ((header,b"header"),(native_path,b"SDK"),(cuda,b"CUDA"),
+                                  (metadata/"prepare_tmpfs_native.py",b"# audited copier fixture")):
+                path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_bytes(contents)
+            manifest = {"cuda_root":str(cuda.parent.parent),"cuda_runtime_version":13030,
+                "nvrtc_version":[13,3],"components":[{"path":str(cuda),"sha256":qualify.digest(cuda)}]}
+            native = {"native_path":str(native_path),"native_sha256":qualify.digest(native_path),
+                "header_files":{"cuest_PID/include/cuest.h":{"bytes":header.stat().st_size,
+                                                           "sha256":qualify.digest(header)}}}
+            proof = {"provenance_sha256":{str(p):qualify.digest(p) for p in metadata.glob("*.py")}}
+            calls = []
+            def copy_file(source,target,checksum,size):
+                data = source.read_bytes()
+                self.assertEqual((qualify.digest(source),len(data)),(checksum,size))
+                target.parent.mkdir(parents=True,exist_ok=True)
+                target.write_bytes(data)
+                calls.append((source,target))
+                return {"source":str(source),"target":str(target),"sha256":checksum,"bytes":size}
+            copier = types.SimpleNamespace(stable_copy=copy_file,
+                create_private_root=lambda target:target.mkdir(mode=0o700),validate_inventory=Mock())
+            target = root/"temporary-execution"
+            identity = types.SimpleNamespace(
+                mapped_rows=lambda text:[],
+                mapped_file_digest=lambda name,rows:qualify.digest(name),
+                verify_files=Mock(return_value={"native_path":str(target/"cuest_PID/lib/13/libcuest.so.0.2.50")}))
+            with patch.dict(sys.modules,{"prepare_tmpfs_native":copier}), \
+                 patch.object(qualify,"COPY_HELPER_SHA",qualify.digest(metadata/"prepare_tmpfs_native.py")), \
+                 patch.object(qualify.subprocess,"check_output",return_value="tmpfs\n"), \
+                 patch.object(qualify.shutil,"disk_usage",return_value=types.SimpleNamespace(free=4*1024**3)):
+                deployed,new_sdk,_,receipt = qualify.executable_copy(
+                    identity,manifest,sdk,root/"archive",native,target,metadata,proof)
+                with self.assertRaisesRegex(RuntimeError,"Fresh private"):
+                    qualify.executable_copy(identity,manifest,sdk,root/"archive",native,target,metadata,proof)
+            self.assertEqual(new_sdk,target/"cuest_PID")
+            self.assertEqual(deployed["components"][0]["path"],str(target/"cuda/lib/libcudart.so.13"))
+            self.assertEqual(len(calls),3)
+            self.assertEqual(receipt["copied_bytes"],len(b"headerSDKCUDA"))
+            self.assertTrue(receipt["strict_mapping_probe_passed"])
+            self.assertEqual(header.read_bytes(),b"header")
+            self.assertEqual(native_path.read_bytes(),b"SDK")
+            self.assertEqual(cuda.read_bytes(),b"CUDA")
+            self.assertEqual(manifest["components"][0]["path"],str(cuda))
+            copier.validate_inventory.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

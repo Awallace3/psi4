@@ -147,3 +147,21 @@ preload-contract regression also requires the canonical, actually mapped cuEST
 SDK DSO in the binary proof even though it is outside the install/environment
 prefixes; otherwise the unchanged authenticated bootstrap rejects it.
 Keep the failed attempt unchanged and qualify with a fresh output directory.
+
+`private-cpu-qual-02` **passed the whole private CPU RHF smoke and proof freeze**.
+Before launching GPU construction, a separate file-only executable-mapping
+probe reproduced the existing strict guard's Btrfs limitation:
+`Mapped inode/device differs from the hashed file` for the private cuEST DSO.
+No native cuEST call or GPU calculation was made by that mapping probe.
+The durable install/build remains valid, but this persistent-file runtime is
+not suitable for the unchanged mapped-identity gate.
+
+The next qualification makes a fresh **per-experiment executable copy** on
+tmpfs, using the already audited same-descriptor/inode/race-checking copier.
+All authoritative dependencies and build paths remain on persistent storage.
+The staging operation requires matching frozen bytes, a new private directory,
+at most 2 GiB copied and at least 1 GiB remaining free, and a successful original
+strict executable-mapping probe. CUDA aliases are private to the run. The new
+runtime proof binds the copied SDK, mapped binaries and copy-helper provenance;
+no identity check is bypassed. Executable copies are temporary test artifacts,
+not new build dependencies.

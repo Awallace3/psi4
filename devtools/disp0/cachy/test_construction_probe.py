@@ -1,5 +1,6 @@
 """Construction schedule/comparison CPU spies, not GPU performance evidence."""
 import copy
+import ast
 from pathlib import Path
 import sys
 import types
@@ -28,6 +29,14 @@ class Session(fakes.Session):
 
 
 class ConstructionProbe(unittest.TestCase):
+    def test_water_fixture_is_the_existing_six_atom_gate_control(self):
+        tree = ast.parse((HERE.parent/"phoenix_validation/fragment_gate.py").read_text())
+        water = next(ast.literal_eval(node.value) for node in tree.body
+                     if isinstance(node,ast.Assign)
+                     and any(isinstance(target,ast.Name) and target.id == "WATER"
+                             for target in node.targets))
+        self.assertEqual((HERE/"construction_water.dat").read_text(),water)
+
     def fixture(self):
         session = Session()
         native = fakes.Native(session)
