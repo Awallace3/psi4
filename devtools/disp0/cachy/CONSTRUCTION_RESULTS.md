@@ -3,6 +3,10 @@
 **Status:** `PASS_PAIRED_CONSTRUCTION_ONLY`. This is an RTX 3090 debug
 diagnostic, not a numerical gate or an H200 speedup measurement.
 
+Follow-up: [owned-runtime matched construction](OWNED_RUNTIME_RESULTS.md)
+retains this baseline and compares explicit fresh-byte/owned admission on one
+new coherent install. Its numerical qualification is tracked separately.
+
 ## Matched experiment
 
 Six-atom water dimer; spherical aug-cc-pVDZ (82 AOs),

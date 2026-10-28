@@ -94,3 +94,12 @@ JIT 1 versus 4 did not establish an improvement; native context creation was
 milliseconds on that control. This is Cachy evidence, not a decomposition of
 the earlier H200 peptide run. The next fix needs an explicit identity-lifetime
 contract rather than deleting or blindly caching the existing checks.
+
+The [opt-in owned-runtime follow-up](../cachy/OWNED_RUNTIME_RESULTS.md) now
+implements that explicit lifetime contract and passes the small ten-process
+water numerical gate. Matched Cachy construction/cleanup changed from147.1 to
+33.4 seconds at JIT1, with unchanged tracked device memory. This is reduced
+host-audit overhead, not an H200 kernel speedup. Whole-energy diagnostics still
+take155.5–158.6 seconds; a CPU-only profile isolates repeated live checks and
+pathname resolution as the next targets. The original fresh-byte path remains
+the default, and no Phoenix run or broad production release is implied.

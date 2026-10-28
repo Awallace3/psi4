@@ -1,6 +1,8 @@
 # Opt-in owned-runtime construction candidate
 
-**Not GPU-qualified.** The measured baseline and its timing remain unchanged.
+**Construction and the small restricted-water numerical GPU gate passed.**
+See [matched construction results](OWNED_RUNTIME_RESULTS.md).
+The measured baseline and its timing remain unchanged.
 This candidate addresses repeated identity-admission work, not numerical kernels,
 JIT policy, cache budgets, context sharing or opaque memory reserves.
 
@@ -93,4 +95,11 @@ now includes a leased-but-unloaded second library: it failed with exit86 before
 the correction and passes afterward. `RTLD_NOLOAD` still rejects first loads and
 mmap-only residence. All pins retain live lease checks, and actual mappings
 retain their existing audits. A fresh coherent candidate qualification is
-required; no candidate GPU calculation has been launched.
+required after that failed attempt. The corrected `e5a16ad22c` whole build
+subsequently passed both fresh CPU qualifications, matched construction and the
+ten-process small-water numerical gate; see the results page. This does not
+establish large-system correctness or solve the remaining whole-call overhead.
+After those runs and CPU profiling, all four verified temporary executable-copy
+trees were retired under the common lease. Their runtime configurations are
+expired; fresh qualification is required for a new run. Durable installs,
+dependencies and all run evidence remain.

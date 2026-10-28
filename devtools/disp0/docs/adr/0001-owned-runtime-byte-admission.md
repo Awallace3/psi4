@@ -81,4 +81,7 @@ CPU-only probes confirmed read-lease acquisition, blocked write-open, SIGIO
 notification and pending-unlock reporting on Cachy's tmpfs; no CUDA library was
 loaded by those probes. The full CPU suites now pass 473 tests without skips;
 real forced-break, first-load/mmap-only and cleanup regressions are included.
-GPU gates remain pending; no performance gain is established.
+The corrected whole candidate also passed matched construction and the
+ten-process small restricted-water GPU/CPU/replay/repeat gate. This does not
+release large systems or Phoenix, and no H200 performance gain is established.
+The default remains the original fresh-byte contract.
