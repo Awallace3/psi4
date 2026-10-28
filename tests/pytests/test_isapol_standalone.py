@@ -1,5 +1,6 @@
 # Psi4 Developers; SPDX-License-Identifier: LGPL-3.0-only
 """Installed interface/compatibility checks; no oracle or saved molecular input."""
+import dataclasses
 import json
 import subprocess
 import sys
@@ -81,10 +82,14 @@ print(json.dumps({'recipe': native_water_recipe.__module__, 'standalone_import':
     assert record['recipe'] == 'psi4.driver.procrouting.isapol_recipes'
 
 
-def test_acceptance_tensor_artifact_is_numeric_and_pickle_free(tmp_path):
+@pytest.mark.parametrize('width,rank', [(15, 2), (24, 4)])
+def test_acceptance_tensor_artifact_is_numeric_and_pickle_free(tmp_path, width, rank):
     from psi4.driver.procrouting.isapol_acceptance import _write_tensor_artifact
     from psi4.driver.procrouting.isapol_lw import ArraySnapshot
-    local = np.arange(2*3*24*24, dtype=np.float64).reshape(2, 3, 24, 24)
+    local = np.arange(2*3*width*width, dtype=np.float64).reshape(2, 3, width, width)
+    keep = (rank+1)**2-1
+    local[..., keep:, :] = 0
+    local[..., :, keep:] = 0
     refined = np.arange(2*3*9*9, dtype=np.float64).reshape(2, 3, 9, 9)
     result = SimpleNamespace(
         frequencies=(0., .5),
@@ -93,20 +98,21 @@ def test_acceptance_tensor_artifact_is_numeric_and_pickle_free(tmp_path):
         refinements=(SimpleNamespace(model=SimpleNamespace(sites=(None,)*3)),)*2,
     )
     path = tmp_path / 'tensors.npz'
-    layout = _write_tensor_artifact(path, result)
+    layout = _write_tensor_artifact(path, result, localization_rank_limit=rank)
     with np.load(path, allow_pickle=False) as saved:
         np.testing.assert_array_equal(saved['local'], local)
         np.testing.assert_array_equal(saved['refined'], refined)
         assert saved['local'].dtype == saved['refined'].dtype == np.float64
-    assert layout['local_shape'] == (2, 3, 24, 24)
+    assert layout['local_shape'] == (2, 3, width, width)
+    assert layout['localization_rank_limit'] == rank
     assert 'no00' in layout['local_components']
     assert 'includes00' in layout['refined_components']
     result.refined_tensors = refined.astype(object)
     with pytest.raises(RuntimeError, match='float64'):
-        _write_tensor_artifact(tmp_path / 'object.npz', result)
+        _write_tensor_artifact(tmp_path / 'object.npz', result, localization_rank_limit=rank)
     result.refined_tensors = np.full_like(refined, np.nan)
     with pytest.raises(RuntimeError, match='finite'):
-        _write_tensor_artifact(tmp_path / 'nonfinite.npz', result)
+        _write_tensor_artifact(tmp_path / 'nonfinite.npz', result, localization_rank_limit=rank)
 
 
 def test_acceptance_angular_export_preserves_coverage_and_conventions():
@@ -141,12 +147,64 @@ def test_acceptance_isotropic_export_uses_actual_coefficient_contract():
     from psi4.driver.procrouting.isapol_lw import Coefficient, DispersionPair
     coefficients = (
         Coefficient(6, 1., ((1, 1),), (), True),
+        Coefficient(8, 1.5, ((1, 2), (2, 1)), (), True),
         Coefficient(10, 2., ((2, 2),), ((1, 3), (3, 1)), False),
     )
     pair = DispersionPair(0, 0, 'O', 'O', coefficients)
     result = SimpleNamespace(labels=('O',), pairs=(pair,))
-    exported = json.loads(json.dumps(_plain(_isotropic_export(result))))
+    exported = json.loads(json.dumps(_plain(_isotropic_export(result, max_order=10))))
     assert exported[0]['unrestricted_complete']
-    assert not exported[1]['unrestricted_complete']
-    assert exported[1]['missing_rank_pairs'] == [[1, 3], [3, 1]]
-    assert exported[1]['order'] == 10 and exported[1]['value'] == 2.
+    assert not exported[2]['unrestricted_complete']
+    assert exported[2]['missing_rank_pairs'] == [[1, 3], [3, 1]]
+    assert exported[2]['order'] == 10 and exported[2]['value'] == 2.
+    for pairs in ((), (pair, pair), (dataclasses.replace(pair, coefficients=coefficients[:1]),)):
+        with pytest.raises(RuntimeError, match='coverage'):
+            _isotropic_export(SimpleNamespace(labels=('O',), pairs=pairs), max_order=10)
+
+
+def test_acceptance_exports_actual_native_lw_rank2_packing(tmp_path):
+    from psi4.driver.procrouting import isapol_lw as lw
+    from psi4.driver.procrouting.isapol_acceptance import _write_tensor_artifact
+    raw = np.zeros((1, 1, 1, 25, 25))
+    np.fill_diagonal(raw[0, 0, 0, 1:, 1:], 1.)
+    native = lw.supplied_nonlocal_properties(
+        labels=('X',), origins=np.zeros((1, 3)), bonds=(), frequencies=(0.,),
+        tensors=raw, input_rank=4, truncation=lw.TRUNCATE_RANK4,
+        localization_rank_limit=2,
+        provenance=lw.Provenance('synthetic', '0'*64, 'native test', 'packing regression'),
+    )
+    assert native.raw_local.shape == (1, 1, 15, 15)
+    result = SimpleNamespace(
+        frequencies=(0.,), local_tensors=(native.raw_local,),
+        refined_tensors=np.zeros((1, 1, 9, 9)),
+        refinements=(SimpleNamespace(model=SimpleNamespace(sites=(None,))),),
+    )
+    layout = _write_tensor_artifact(tmp_path / 'native.npz', result,
+                                    localization_rank_limit=2)
+    assert layout['local_shape'] == (1, 1, 15, 15)
+    assert layout['packing_rank'] == 3
+    assert layout['localization_rank_limit'] == 2
+
+
+def test_rank2_acceptance_requires_angular_table_and_declared_coverage():
+    from psi4.driver.procrouting.isapol_acceptance import _require_angular_coverage
+    from psi4.driver.procrouting.isapol_native_recoupled import DeclaredPairCoverage
+    with pytest.raises(RuntimeError, match='requires native'):
+        _require_angular_coverage(None, nsite=1, max_order=10)
+    coverage = [SimpleNamespace(order=n, table_complete=True, unrestricted_complete=False,
+                                missing_table_rank_quadruples=())
+                for n in range(6, 11)]
+    declared = tuple(DeclaredPairCoverage(0, 0, n, True, ()) for n in range(6, 11))
+    pair = SimpleNamespace(site_a=0, site_b=0, coverage=coverage, coefficients=(object(),))
+    angular = SimpleNamespace(pairs=(pair,), declared_model_coverage=declared)
+    _require_angular_coverage(angular, nsite=1, max_order=10)
+    coverage[-1].table_complete = False
+    with pytest.raises(RuntimeError, match='coverage'):
+        _require_angular_coverage(angular, nsite=1, max_order=10)
+    coverage[-1].missing_table_rank_quadruples = ((1, 1, 2, 4),)
+    _require_angular_coverage(angular, nsite=1, max_order=10)
+    coverage[-1].table_complete = True
+    coverage[-1].missing_table_rank_quadruples = ()
+    angular.declared_model_coverage = declared[:-1]
+    with pytest.raises(RuntimeError, match='coverage'):
+        _require_angular_coverage(angular, nsite=1, max_order=10)

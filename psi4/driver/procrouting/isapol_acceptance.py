@@ -44,8 +44,16 @@ def _sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def _isotropic_export(dispersion):
+def _isotropic_export(dispersion, *, max_order):
     labels = dispersion.labels
+    if not labels or len(set(labels)) != len(labels):
+        raise RuntimeError('nonempty unique isotropic site labels required')
+    expected = {(a, b, n) for a in range(len(labels)) for b in range(len(labels))
+                for n in range(6, max_order+1, 2)}
+    actual = [(p.site_a, p.site_b, c.order)
+              for p in dispersion.pairs for c in p.coefficients]
+    if len(actual) != len(expected) or set(actual) != expected:
+        raise RuntimeError('incomplete or duplicate isotropic site-pair/order coverage')
     return [
         dict(site_a=labels[p.site_a], site_b=labels[p.site_b],
              order=c.order, value=c.value,
@@ -56,19 +64,26 @@ def _isotropic_export(dispersion):
     ]
 
 
-def _write_tensor_artifact(path, result):
+def _write_tensor_artifact(path, result, *, localization_rank_limit):
     """Export numeric arrays, preserving the different LW/PFIT rank layouts."""
     local = np.concatenate([snapshot.array for snapshot in result.local_tensors], axis=0)
     refined = np.asarray(result.refined_tensors)
     nf, ns = len(result.frequencies), len(result.refinements[0].model.sites)
+    if type(localization_rank_limit) is not int or localization_rank_limit not in (1, 2, 3, 4):
+        raise RuntimeError('explicit native localization rank required')
+    packing_rank = 4 if localization_rank_limit == 4 else 3
+    width = (packing_rank+1)**2-1
     if (local.ndim != 4 or local.shape[:2] != (nf, ns)
-            or local.shape[2:] != (24, 24)
+            or local.shape[2:] != (width, width)
             or refined.ndim != 4 or refined.shape[:2] != (nf, ns)
             or refined.shape[2] != refined.shape[3]):
-        raise RuntimeError('unexpected native tensor export dimensions')
+        raise RuntimeError(f'unexpected native tensor export dimensions: local={local.shape}, refined={refined.shape}, packed_width={width}')
     for name, array in (('local', local), ('refined', refined)):
         if array.dtype != np.float64 or not np.isfinite(array).all():
             raise RuntimeError(f'{name} tensor export requires finite float64 arrays')
+    keep = (localization_rank_limit+1)**2-1
+    if np.any(local[..., keep:, :]) or np.any(local[..., :, keep:]):
+        raise RuntimeError('native local tensors contain response above declared localization rank')
     np.savez(path, local=local, refined=refined)
     with np.load(path, allow_pickle=False) as saved:
         for name, original in (('local', local), ('refined', refined)):
@@ -76,7 +91,10 @@ def _write_tensor_artifact(path, result):
                 raise RuntimeError(f'{name} tensor export roundtrip differs')
     return dict(
         axes='frequency,site,response_component,potential_component',
-        local_components='positive ranks1..4; 10,11c,11s,...; no00',
+        local_components=f'packed positive ranks1..{packing_rank}; 10,11c,11s,...; no00',
+        localization_rank_limit=localization_rank_limit,
+        packing_rank=packing_rank,
+        uncomputed_packing_components='Above localization rank: structural zeros, not computed response',
         refined_components='includes00; declared per-site rank; 00,10,11c,11s,...',
         frame='local-axis real Racah/no-CS',
         units='atomic units', dtype='float64',
@@ -110,6 +128,25 @@ def _angular_export(angular):
                      for c in p.coverage])
             for p in angular.pairs],
     )
+
+
+def _require_angular_coverage(angular, *, nsite, max_order):
+    if angular is None:
+        raise RuntimeError('rank2 acceptance requires native recoupled dispersion')
+    expected = {(a, b, n) for a in range(nsite) for b in range(nsite)
+                for n in range(6, max_order+1)}
+    actual = [(p.site_a, p.site_b, c.order) for p in angular.pairs for c in p.coverage]
+    declared = [(c.site_a, c.site_b, c.order) for c in angular.declared_model_coverage]
+    if (len(actual) != len(expected) or set(actual) != expected
+            or len(declared) != len(expected) or set(declared) != expected
+            or any(c.table_complete != (not c.missing_table_rank_quadruples)
+                   for p in angular.pairs for c in p.coverage)
+            or any(not c.declared_model_complete or c.missing_declared_rank_quadruples
+                   for c in angular.declared_model_coverage)
+            or any(not p.coefficients for p in angular.pairs)):
+        raise RuntimeError('incomplete native angular table/declared-model coverage')
+    # Full-table and unrestricted completeness are NOT required: tables also
+    # contain ranks outside this explicitly truncated rank2 model.
 
 
 def _verify_build(manifest):
@@ -215,7 +252,8 @@ no_reorient
         raise RuntimeError('native response residual acceptance failed')
     if max(d['localization_residual'] for d in result.diagnostics) >= 1e-6:
         raise RuntimeError('native localization residual acceptance failed')
-    pairs = _isotropic_export(result.dispersion)
+    max_order = 6 if profile == 'smoke' else 10
+    pairs = _isotropic_export(result.dispersion, max_order=max_order)
     if any(not np.isfinite(p['value']) or p['value'] <= 0 for p in pairs):
         raise RuntimeError('invalid isotropic coefficient')
     forbidden_imports = [name for name in sys.modules if
@@ -223,6 +261,9 @@ no_reorient
                          or name == 'isapol_water_recipe']
     if forbidden_imports:
         raise RuntimeError(f'test/oracle/supplied imports: {forbidden_imports}')
+    if profile == 'rank2':
+        _require_angular_coverage(result.recoupled_dispersion,
+                                  nsite=len(result.dispersion.labels), max_order=max_order)
     installed = _verify_build(manifest)
     record = dict(
         schema='installed-native-isa-water/1', status='complete', source_commit=manifest['commit'],
@@ -237,7 +278,8 @@ no_reorient
         model_qualification='Declared regression ISA recipe with absolute1.5-bohr tails; property-grid convergence not established',
         max_order=6 if profile == 'smoke' else 10,
     )
-    record['tensor_layout'] = _write_tensor_artifact(output / 'tensors.npz', result)
+    record['tensor_layout'] = _write_tensor_artifact(output / 'tensors.npz', result,
+                                                    localization_rank_limit=2)
     if result.recoupled_dispersion is not None:
         with gzip.open(output / 'angular.json.gz', 'wt') as f:
             json.dump(_plain(_angular_export(result.recoupled_dispersion)), f, allow_nan=False)
