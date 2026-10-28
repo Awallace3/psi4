@@ -1226,6 +1226,7 @@ def compute_GRAC_shift(
         ["SCF", "LEVEL_SHIFT_CUTOFF"],
         ["SCF", "SCF_INITIAL_ACCELERATOR"],
         ["SCF", "ORBITAL_OPTIMIZER_PACKAGE"],
+        ["SCF", "GUESS"],
         ["BASIS"],
     )
 
@@ -1248,7 +1249,13 @@ def compute_GRAC_shift(
             sapt_dft_grac_convergence_tier
         ]
         grac = None
+        # A seeded cation SCF (guess_wfn) sets GUESS READ, and scf_helper restores
+        # its options only when the SCF converges. Without restoring GUESS here, a
+        # failed seeded cation leaves READ set for the next tier and for every SCF
+        # after this one, which then reads another molecule's orbitals.
+        guess_stash = p4util.OptionsState(["SCF", "GUESS"])
         for options in grac_options:
+            guess_stash.restore()
             for key, val in options.items():
                 core.set_local_option("SCF", key, val)
             core.set_local_option("SCF", "ORBITAL_OPTIMIZER_PACKAGE", "INTERNAL")
