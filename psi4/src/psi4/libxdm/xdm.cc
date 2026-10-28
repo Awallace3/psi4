@@ -48,17 +48,20 @@
 #include "psi4/physconst.h"
 #include "psi4/psi4-dec.h"
 
-#ifdef USING_cuEST
 #include "psi4/libmints/gshell.h"
 #include "psi4/libmints/vector3.h"
 
-#include "gau2grid/gau2grid.h"  // GG_SPHERICAL_* orders
+#include "gau2grid/gau2grid.h"
 #include <libint2/config.h>
+
+#ifdef _OPENMP
+#include <omp.h>
 #endif
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -76,6 +79,17 @@ struct ScopedTimer {
     explicit ScopedTimer(const char* n) : name(n) { timer_on(name); }
     ~ScopedTimer() { timer_off(name); }
 };
+
+// gau2grid function order; BasisFunctions::compute_functions picks the same one.
+int gg_order(bool puream) {
+#if psi4_SHGSHELL_ORDERING == LIBINT_SHGSHELL_ORDERING_STANDARD
+    return puream ? GG_SPHERICAL_CCA : GG_CARTESIAN_CCA;
+#elif psi4_SHGSHELL_ORDERING == LIBINT_SHGSHELL_ORDERING_GAUSSIAN
+    return puream ? GG_SPHERICAL_GAUSSIAN : GG_CARTESIAN_CCA;
+#else
+#error "unknown value of macro psi4_SHGSHELL_ORDERING"
+#endif
+}
 
 #ifdef USING_cuEST
 XDMDeviceBasis describe_basis(const BasisSet& basis) {
@@ -96,17 +110,7 @@ XDMDeviceBasis describe_basis(const BasisSet& basis) {
             d.coefs.push_back(shell.coefs()[K]);
         }
     }
-    if (d.puream) {
-        // BasisFunctions::compute_functions picks the same order.
-#if psi4_SHGSHELL_ORDERING == LIBINT_SHGSHELL_ORDERING_STANDARD
-        const int order = GG_SPHERICAL_CCA;
-#elif psi4_SHGSHELL_ORDERING == LIBINT_SHGSHELL_ORDERING_GAUSSIAN
-        const int order = GG_SPHERICAL_GAUSSIAN;
-#else
-#error "unknown value of macro psi4_SHGSHELL_ORDERING"
-#endif
-        d.pure_order = order;
-    }
+    if (d.puream) d.pure_order = gg_order(true);
     return d;
 }
 
@@ -171,6 +175,245 @@ void integrate_on_device(std::shared_ptr<Wavefunction> wfn, const DFTGrid& grid,
     outfile->Printf("    GEMM multiply-adds %.3e over chunk columns, %.3e over block columns.\n", work[0], work[1]);
 }
 #endif
+
+// One thread's scratch for integrate_on_host. Collocation is function-major
+// ([function][point], row stride = the block's point count), the layout gau2grid writes,
+// so D . phi is one GEMM with no transpose.
+struct HostScratch {
+    std::vector<double> xyz, phi[5], hess, D, T;  // phi: value, x, y, z, Laplacian
+    std::vector<double> rho, grad[3], lapl, tau;  // one spin at the block's points
+    std::vector<double> rho_s[2], b_s[2];         // per spin, kept for the moments
+    std::vector<double> arho, r;                  // promolecule atoms at one point
+    std::vector<std::array<double, 5>> sums;      // mm1, mm2, mm3, vol, charge per atom
+    double seconds[5] = {};                       // collocation, GEMM, points, Becke-Roussel, moments
+};
+
+// Host counterpart of integrate_on_device. Threads take whole blocks, as psi4's V builds do,
+// so BLAS runs single-threaded inside the region. Per spin sigma, with T = D_sigma . phi:
+//   rho = phi.T, grad rho = 2 phi_c.T, tau (no 1/2) = sum_c phi_c.(D_sigma phi_c),
+//   lapl rho = 2 (lapl phi).T + 2 tau,
+// four GEMMs per spin. Of the Hessian only lapl phi is kept. Hirshfeld weights are formed
+// per point inside the moment loop.
+void integrate_on_host(const DFTGrid& grid, const BasisSet& basis, const ProatomDensity& proatom,
+                       const std::vector<int>& atomic_nums, const std::vector<std::array<double, 3>>& atom_coords,
+                       SharedMatrix Da, SharedMatrix Db, std::vector<AtomicData>& atom_data, size_t& nbhole_failed,
+                       size_t& nbhole_total) {
+    using clock = std::chrono::steady_clock;
+    const int natom = static_cast<int>(atomic_nums.size());
+    const int nspin = Db ? 2 : 1;
+    const int nbf = basis.nbf();
+    const int order = gg_order(basis.has_puream());
+    const auto& blocks = grid.blocks();
+    const size_t mp = grid.max_points();
+    const size_t mf = grid.max_functions();
+    size_t max_nfunc = 1;  // widest gau2grid shell output; the Cartesian count bounds the spherical one
+    for (int Q = 0; Q < basis.nshell(); Q++) {
+        const size_t L = basis.shell(Q).am();
+        max_nfunc = std::max(max_nfunc, (L + 1) * (L + 2) / 2);
+    }
+    const size_t plane = (mf + max_nfunc) * mp;
+    const size_t per_thread =
+        sizeof(double) * (6 * plane + mf * mf + 6 * max_nfunc * mp + 13 * mp + 7 * static_cast<size_t>(natom));
+
+    // Each thread holds its own scratch; fewer threads when psi4's memory cannot hold them all.
+    int nthreads = std::max(1, std::min<int>(Process::environment.get_n_threads(), static_cast<int>(blocks.size())));
+    const size_t budget = static_cast<size_t>(Process::environment.get_memory());
+    while (nthreads > 1 && per_thread * nthreads > budget) nthreads--;
+
+    std::vector<HostScratch> scratch(nthreads);
+    for (auto& s : scratch) {
+        s.xyz.resize(3 * mp);
+        for (auto& v : s.phi) v.resize(plane);
+        s.hess.resize(6 * max_nfunc * mp);
+        s.D.resize(mf * mf);
+        s.T.resize(plane);
+        for (auto* v : {&s.rho, &s.lapl, &s.tau, &s.grad[0], &s.grad[1], &s.grad[2], &s.rho_s[0], &s.rho_s[1],
+                        &s.b_s[0], &s.b_s[1]})
+            v->resize(mp);
+        s.arho.resize(natom);
+        s.r.resize(natom);
+        s.sums.assign(natom, {0.0, 0.0, 0.0, 0.0, 0.0});
+    }
+    const double* Dg[2] = {Da->pointer()[0], Db ? Db->pointer()[0] : nullptr};
+
+    size_t failed = 0, total = 0;
+    auto wall0 = clock::now();
+#pragma omp parallel for schedule(dynamic) num_threads(nthreads) reduction(+ : failed, total)
+    for (size_t ib = 0; ib < blocks.size(); ib++) {
+        int rank = 0;
+#ifdef _OPENMP
+        rank = omp_get_thread_num();
+#endif
+        HostScratch& s = scratch[rank];
+        const auto& block = blocks[ib];
+        const size_t np = block->npoints();
+        const auto& fmap = block->functions_local_to_global();
+        const int nl = static_cast<int>(fmap.size());
+        if (np == 0 || nl == 0) continue;  // no basis function reaches these points: no density
+        auto t0 = clock::now();
+
+        // Collocation: value, gradient and Laplacian of every local function.
+        std::copy(block->x(), block->x() + np, s.xyz.begin());
+        std::copy(block->y(), block->y() + np, s.xyz.begin() + np);
+        std::copy(block->z(), block->z() + np, s.xyz.begin() + 2 * np);
+        const size_t hs = max_nfunc * np;
+        double* h = s.hess.data();
+        size_t row = 0;
+        for (int Q : block->shells_local_to_global()) {
+            const GaussianShell& shell = basis.shell(Q);
+            const Vector3 v = shell.center();
+            const double center[3] = {v[0], v[1], v[2]};
+            const size_t off = row * np;
+            gg_collocation_deriv2(shell.am(), np, s.xyz.data(), 1, shell.nprimitive(), shell.coefs(), shell.exps(),
+                                  center, order, s.phi[0].data() + off, s.phi[1].data() + off, s.phi[2].data() + off,
+                                  s.phi[3].data() + off, h, h + hs, h + 2 * hs, h + 3 * hs, h + 4 * hs, h + 5 * hs);
+            const size_t n = static_cast<size_t>(shell.nfunction()) * np;
+            double* lap = s.phi[4].data() + off;
+            for (size_t k = 0; k < n; k++) lap[k] = h[k] + h[3 * hs + k] + h[5 * hs + k];
+            row += shell.nfunction();
+        }
+        auto t1 = clock::now();
+        s.seconds[0] += std::chrono::duration<double>(t1 - t0).count();
+
+        for (int sp = 0; sp < nspin; sp++) {
+            auto ta = clock::now();
+            for (int m = 0; m < nl; m++) {
+                const double* Drow = Dg[sp] + static_cast<size_t>(fmap[m]) * nbf;
+                double* out = s.D.data() + static_cast<size_t>(m) * nl;
+                for (int n = 0; n < nl; n++) out[n] = Drow[fmap[n]];
+            }
+            C_DGEMM('N', 'N', nl, np, nl, 1.0, s.D.data(), nl, s.phi[0].data(), np, 0.0, s.T.data(), np);
+            auto tb = clock::now();
+            std::fill_n(s.rho.begin(), np, 0.0);
+            std::fill_n(s.lapl.begin(), np, 0.0);
+            std::fill_n(s.tau.begin(), np, 0.0);
+            for (auto& g : s.grad) std::fill_n(g.begin(), np, 0.0);
+            for (int m = 0; m < nl; m++) {
+                const size_t o = static_cast<size_t>(m) * np;
+                const double* t = s.T.data() + o;
+                const double* p0 = s.phi[0].data() + o;
+                const double* px = s.phi[1].data() + o;
+                const double* py = s.phi[2].data() + o;
+                const double* pz = s.phi[3].data() + o;
+                const double* pl = s.phi[4].data() + o;
+                for (size_t P = 0; P < np; P++) {
+                    s.rho[P] += p0[P] * t[P];
+                    s.grad[0][P] += px[P] * t[P];
+                    s.grad[1][P] += py[P] * t[P];
+                    s.grad[2][P] += pz[P] * t[P];
+                    s.lapl[P] += pl[P] * t[P];
+                }
+            }
+            auto tc = clock::now();
+            double gemm = std::chrono::duration<double>(tb - ta).count();
+            double points = std::chrono::duration<double>(tc - tb).count();
+            for (int c = 1; c <= 3; c++) {
+                auto td = clock::now();
+                C_DGEMM('N', 'N', nl, np, nl, 1.0, s.D.data(), nl, s.phi[c].data(), np, 0.0, s.T.data(), np);
+                auto te = clock::now();
+                for (int m = 0; m < nl; m++) {
+                    const size_t o = static_cast<size_t>(m) * np;
+                    const double* t = s.T.data() + o;
+                    const double* pc = s.phi[c].data() + o;
+                    for (size_t P = 0; P < np; P++) s.tau[P] += pc[P] * t[P];
+                }
+                gemm += std::chrono::duration<double>(te - td).count();
+                points += std::chrono::duration<double>(clock::now() - te).count();
+            }
+            s.seconds[1] += gemm;
+            s.seconds[2] += points;
+
+            // Becke-Roussel b; points where the solve fails count toward the warning and use b = 0.
+            auto tf = clock::now();
+            double* rho_out = s.rho_s[sp].data();
+            double* b_out = s.b_s[sp].data();
+            for (size_t P = 0; P < np; P++) {
+                const double rho = s.rho[P];
+                rho_out[P] = rho;
+                b_out[P] = 0.0;
+                if (rho < 1.0e-15) continue;
+                const double grad_sq =
+                    4.0 * (s.grad[0][P] * s.grad[0][P] + s.grad[1][P] * s.grad[1][P] + s.grad[2][P] * s.grad[2][P]);
+                const double q = exchange_hole_curvature(rho, grad_sq, s.tau[P], 2.0 * s.lapl[P] + 2.0 * s.tau[P]);
+                total += 1;
+                try {
+                    b_out[P] = bhole(rho, q, 1.0);
+                } catch (...) {
+                    failed += 1;
+                }
+            }
+            s.seconds[3] += std::chrono::duration<double>(clock::now() - tf).count();
+        }
+
+        // Hirshfeld-weighted moments; for a restricted density beta = alpha.
+        auto tg = clock::now();
+        const double* xp = block->x();
+        const double* yp = block->y();
+        const double* zp = block->z();
+        const double* wp = block->w();
+        const int sb = nspin - 1;
+        for (size_t P = 0; P < np; P++) {
+            double promol = 0.0;
+            for (int a = 0; a < natom; a++) {
+                s.arho[a] = 0.0;
+                if (atomic_nums[a] < 1) continue;
+                const double dx = xp[P] - atom_coords[a][0];
+                const double dy = yp[P] - atom_coords[a][1];
+                const double dz = zp[P] - atom_coords[a][2];
+                s.r[a] = std::sqrt(dx * dx + dy * dy + dz * dz);
+                s.arho[a] = proatom.evaluate(atomic_nums[a], s.r[a]);
+                promol += s.arho[a];
+            }
+            const double wpro = wp[P] / std::max(promol, 1.0e-40);
+            const double rho_a = s.rho_s[0][P];
+            const double rho_b = s.rho_s[sb][P];
+            const double b_a = s.b_s[0][P];
+            const double b_b = s.b_s[sb][P];
+            for (int a = 0; a < natom; a++) {
+                if (atomic_nums[a] < 1) continue;
+                const double wh = wpro * s.arho[a];
+                const double r = s.r[a];
+                const double r1_a = std::max(0.0, r - b_a);
+                const double r1_b = std::max(0.0, r - b_b);
+                const double r2 = r * r;
+                const double r3 = r2 * r;
+                const double d1a = r - r1_a, d1b = r - r1_b;
+                const double d2a = r2 - r1_a * r1_a, d2b = r2 - r1_b * r1_b;
+                const double d3a = r3 - r1_a * r1_a * r1_a, d3b = r3 - r1_b * r1_b * r1_b;
+                auto& acc = s.sums[a];
+                acc[0] += wh * (rho_a * d1a * d1a + rho_b * d1b * d1b);
+                acc[1] += wh * (rho_a * d2a * d2a + rho_b * d2b * d2b);
+                acc[2] += wh * (rho_a * d3a * d3a + rho_b * d3b * d3b);
+                acc[3] += wh * (rho_a + rho_b) * r3;
+                acc[4] += wh * (rho_a + rho_b);
+            }
+        }
+        s.seconds[4] += std::chrono::duration<double>(clock::now() - tg).count();
+    }
+    const double wall = std::chrono::duration<double>(clock::now() - wall0).count();
+    nbhole_failed += failed;
+    nbhole_total += total;
+
+    double seconds[5] = {};
+    for (const auto& s : scratch) {
+        for (int a = 0; a < natom; a++) {
+            atom_data[a].mm1 += s.sums[a][0];
+            atom_data[a].mm2 += s.sums[a][1];
+            atom_data[a].mm3 += s.sums[a][2];
+            atom_data[a].vol += s.sums[a][3];
+            atom_data[a].charge += s.sums[a][4];
+        }
+        for (int k = 0; k < 5; k++) seconds[k] += s.seconds[k];
+    }
+    outfile->Printf("\n  XDM integrated on the host: %d points in %zu blocks, %d threads over blocks.\n", grid.npoints(),
+                    blocks.size(), nthreads);
+    outfile->Printf("    Scratch %.1f MiB per thread; block loop %.3f s wall.\n", per_thread / (1024.0 * 1024.0), wall);
+    outfile->Printf(
+        "    Thread time per stage %.3f s: collocation %.3f, GEMM %.3f, density %.3f, Becke-Roussel %.3f, Hirshfeld + "
+        "moments %.3f.\n",
+        seconds[0] + seconds[1] + seconds[2] + seconds[3] + seconds[4], seconds[0], seconds[1], seconds[2], seconds[3],
+        seconds[4]);
+}
 
 }  // namespace
 
@@ -311,25 +554,6 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
                         grid->npoints(), grid->blocks().size(), blocking == "DEVICE" ? ", blocked on the device" : "");
     }
 
-    int max_points = grid->max_points();
-    int max_functions = grid->max_functions();
-
-    // --- Build PointFunctions for density evaluation ---
-    std::shared_ptr<PointFunctions> pf;
-    if (use_gpu) {
-        // The device evaluates the basis functions itself.
-    } else if (restricted) {
-        auto rks = std::make_shared<RKSFunctions>(primary, max_points, max_functions);
-        rks->set_ansatz(2);  // meta-GGA: gives rho, gamma, tau + second derivs of basis
-        rks->set_pointers(Da);
-        pf = rks;
-    } else {
-        auto uks = std::make_shared<UKSFunctions>(primary, max_points, max_functions);
-        uks->set_ansatz(2);
-        uks->set_pointers(Da, Db);
-        pf = uks;
-    }
-
     // Collect atom data
     std::vector<int> atomic_nums(natom);
     std::vector<std::array<double, 3>> atom_coords(natom);
@@ -358,7 +582,6 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
 
     ProatomDensity proatom;
     proatom.prepare(natom, atomic_nums.data());
-    std::vector<std::vector<double>> hirshfeld_weights;
 
     // --- Allocate per-atom accumulators ---
     std::vector<AtomicData> atom_data(natom);
@@ -373,236 +596,9 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     } else
 #endif
     {
-        // Temporary buffers for Laplacian computation (reused across blocks)
-        auto T_lapl = std::make_shared<Matrix>("T_lapl", max_points, max_functions);
-        auto D_local = std::make_shared<Matrix>("D_local", max_functions, max_functions);
-
-        // Per-point spin densities and exchange-hole curvatures of the current block
-        std::vector<double> rho_spin_buf[2], q_spin_buf[2];
-        for (int s = 0; s < 2; s++) {
-            rho_spin_buf[s].assign(max_points, 0.0);
-            q_spin_buf[s].assign(max_points, 0.0);
-        }
-
-
-        // --- Loop over grid blocks ---
-        const auto& blocks = grid->blocks();
-
-        int num_threads = Process::environment.get_n_threads();
-
-        for (size_t ib = 0; ib < blocks.size(); ib++) {
-            auto block = blocks[ib];
-            int npoints = block->npoints();
-            int nlocal = block->local_nbf();
-            const auto& function_map = block->functions_local_to_global();
-
-            // Compute density at grid points (rho, gamma, tau)
-            {
-                ScopedTimer t("XDM: density points");
-                pf->compute_points(block);
-            }
-
-            // Get grid coordinates and weights
-            double* xp = block->x();
-            double* yp = block->y();
-            double* zp = block->z();
-            double* wp = block->w();
-
-            // Get density quantities from PointFunctions
-            // RKS: RHO_A = rho_total, GAMMA_AA = |grad rho_total|^2, TAU_A = tau_nohalf_alpha
-            // UKS: RHO_A = rho_alpha, GAMMA_AA = |grad rho_alpha|^2, TAU_A = 0.5*tau_nohalf_alpha
-            double* rho_a_p;
-            double* rho_b_p;
-            double* gamma_aa_p;
-            double* gamma_bb_p;
-            double* tau_a_p;
-            double* tau_b_p;
-
-            if (restricted) {
-                rho_a_p = pf->point_value("RHO_A")->pointer();
-                rho_b_p = rho_a_p;
-                gamma_aa_p = pf->point_value("GAMMA_AA")->pointer();
-                gamma_bb_p = gamma_aa_p;
-                tau_a_p = pf->point_value("TAU_A")->pointer();
-                tau_b_p = tau_a_p;
-            } else {
-                rho_a_p = pf->point_value("RHO_A")->pointer();
-                rho_b_p = pf->point_value("RHO_B")->pointer();
-                gamma_aa_p = pf->point_value("GAMMA_AA")->pointer();
-                gamma_bb_p = pf->point_value("GAMMA_BB")->pointer();
-                tau_a_p = pf->point_value("TAU_A")->pointer();
-                tau_b_p = pf->point_value("TAU_B")->pointer();
-            }
-
-            // --- Compute Laplacian of spin density ---
-            // lapl_sigma = 2 * sum_{c=x,y,z} phi_cc . (D_sigma * phi) + 2 * tau_nohalf_sigma
-            // where tau_nohalf = sum D_sigma * phi_c * phi_c (without the 0.5 factor)
-
-            double** phip = pf->basis_value("PHI")->pointer();
-            double** phi_xx = pf->basis_value("PHI_XX")->pointer();
-            double** phi_yy = pf->basis_value("PHI_YY")->pointer();
-            double** phi_zz = pf->basis_value("PHI_ZZ")->pointer();
-            size_t coll_funcs = pf->basis_value("PHI")->ncol();
-            int nglobal = max_functions;
-
-            // Per-spin density (postg convention) and exchange-hole curvature Q; Q is left
-            // at zero where the spin density is below the 1e-15 cutoff and b is not solved.
-            for (int spin = 0; spin < (restricted ? 1 : 2); spin++) {
-                ScopedTimer t("XDM: laplacian");
-                SharedMatrix D_AO = (spin == 0) ? Da : Db;
-
-                // Build local density matrix (sieve to relevant functions in this block)
-                double** Dp = D_AO->pointer();
-                double** D2p = D_local->pointer();
-                for (int ml = 0; ml < nlocal; ml++) {
-                    int mg = function_map[ml];
-                    for (int nl = 0; nl <= ml; nl++) {
-                        int ng = function_map[nl];
-                        double Dval = Dp[mg][ng];
-                        D2p[ml][nl] = Dval;
-                        D2p[nl][ml] = Dval;
-                    }
-                }
-
-                // T0 = D * phi^T  (half-transform)
-                double** Tp = T_lapl->pointer();
-                C_DGEMM('N', 'N', npoints, nlocal, nlocal, 1.0, phip[0], coll_funcs, D2p[0], nglobal, 0.0, Tp[0], nglobal);
-
-                // Add cross terms: 2 * tau_nohalf
-                // For RKS alpha: TAU_A = tau_nohalf_alpha, so add 2*TAU_A
-                // For UKS: TAU = 0.5*tau_nohalf, so tau_nohalf = 2*TAU, add 2*(2*TAU) = 4*TAU
-                double* tau_p = (spin == 0) ? tau_a_p : tau_b_p;
-                double tau_factor = restricted ? 2.0 : 4.0;
-                double* rho_p = (spin == 0) ? rho_a_p : rho_b_p;
-                double* gamma_p = (spin == 0) ? gamma_aa_p : gamma_bb_p;
-                double* rho_out = rho_spin_buf[spin].data();
-                double* q_out = q_spin_buf[spin].data();
-
-    #pragma omp parallel for schedule(static) num_threads(num_threads)
-                for (int P = 0; P < npoints; P++) {
-                    // Diagonal Laplacian contribution: 2 * sum_c phi_cc . T0, plus the cross terms
-                    double lapl = 2.0 * (C_DDOT(nlocal, phi_xx[P], 1, Tp[P], 1) + C_DDOT(nlocal, phi_yy[P], 1, Tp[P], 1) +
-                                         C_DDOT(nlocal, phi_zz[P], 1, Tp[P], 1));
-                    lapl += tau_factor * tau_p[P];
-
-                    // Spin density, gradient squared, tau (in postg convention)
-                    double rho_spin, grad_sq, tau_nohalf;
-                    if (restricted) {
-                        // RKS: RHO_A = rho_total, GAMMA_AA = |grad rho_total|^2, TAU_A = tau_nohalf_alpha
-                        rho_spin = rho_p[P] * 0.5;
-                        grad_sq = 0.25 * gamma_p[P];
-                        tau_nohalf = tau_p[P];  // already tau_nohalf for alpha
-                    } else {
-                        // UKS: RHO_A = rho_alpha, GAMMA_AA = |grad rho_alpha|^2, TAU_A = 0.5*tau_nohalf
-                        rho_spin = rho_p[P];
-                        grad_sq = gamma_p[P];
-                        tau_nohalf = 2.0 * tau_p[P];  // convert from half to nohalf convention
-                    }
-                    rho_out[P] = rho_spin;
-                    // Exchange-hole curvature Q
-                    q_out[P] = rho_spin < 1.0e-15 ? 0.0 : exchange_hole_curvature(rho_spin, grad_sq, tau_nohalf, lapl);
-                }
-            }
-
-
-            {
-                ScopedTimer t("XDM: hirshfeld");
-                compute_hirshfeld_weights(proatom, natom, atomic_nums.data(),
-                                          reinterpret_cast<const double (*)[3]>(atom_coords.data()), npoints, xp, yp, zp,
-                                          hirshfeld_weights);
-            }
-
-            // Per-point b parameters and spin densities
-            std::vector<double> b_alpha(npoints, 0.0);
-            std::vector<double> b_beta(npoints, 0.0);
-            std::vector<double> rho_alpha(rho_spin_buf[0].begin(), rho_spin_buf[0].begin() + npoints);
-            std::vector<double> rho_beta;
-
-            {
-                ScopedTimer t("XDM: becke-roussel");
-                for (int spin = 0; spin < (restricted ? 1 : 2); spin++) {
-                    const double* rho_in = rho_spin_buf[spin].data();
-                    const double* q_in = q_spin_buf[spin].data();
-                    double* b_out = (spin == 0) ? b_alpha.data() : b_beta.data();
-    #pragma omp parallel for schedule(static) num_threads(num_threads) reduction(+ : nbhole_failed, nbhole_total)
-                    for (int P = 0; P < npoints; P++) {
-                        double rho_spin = rho_in[P];
-                        if (rho_spin < 1.0e-15) {
-                            b_out[P] = 0.0;
-                            continue;
-                        }
-
-                        // Becke-Roussel b parameter. Points where the solve fails fall back to
-                        // b = 0 and are tallied for the warning printed after the block loop.
-                        double b;
-                        nbhole_total += 1;
-                        try {
-                            b = bhole(rho_spin, q_in[P], 1.0);
-                        } catch (...) {
-                            b = 0.0;
-                            nbhole_failed += 1;
-                        }
-                        b_out[P] = b;
-                    }
-                }
-
-                // For restricted: beta = alpha
-                if (restricted) {
-                    rho_beta = rho_alpha;
-                    b_beta = b_alpha;
-                } else {
-                    rho_beta.assign(rho_spin_buf[1].begin(), rho_spin_buf[1].begin() + npoints);
-                }
-            }
-
-            // --- Integrate XDM moments using Hirshfeld weights ---
-            ScopedTimer t("XDM: moments");
-    #pragma omp parallel for schedule(dynamic) num_threads(num_threads)
-            for (int a = 0; a < natom; a++) {
-                if (atomic_nums[a] < 1) continue;
-
-                double ax = atom_coords[a][0];
-                double ay = atom_coords[a][1];
-                double az = atom_coords[a][2];
-
-                for (int P = 0; P < npoints; P++) {
-                    double h = hirshfeld_weights[a][P];
-                    double w = wp[P];
-
-                    double dx = xp[P] - ax;
-                    double dy = yp[P] - ay;
-                    double dz = zp[P] - az;
-                    double r = std::sqrt(dx * dx + dy * dy + dz * dz);
-
-                    double r1_a = std::max(0.0, r - b_alpha[P]);
-                    double r1_b = std::max(0.0, r - b_beta[P]);
-
-                    double rho_a = rho_alpha[P];
-                    double rho_b = rho_beta[P];
-                    double rho_tot = rho_a + rho_b;
-
-                    // M1^2: exchange-hole dipole moment squared
-                    atom_data[a].mm1 += w * h * (rho_a * (r - r1_a) * (r - r1_a) + rho_b * (r - r1_b) * (r - r1_b));
-
-                    // M2^2: exchange-hole quadrupole moment squared
-                    atom_data[a].mm2 += w * h *
-                                        (rho_a * (r * r - r1_a * r1_a) * (r * r - r1_a * r1_a) +
-                                         rho_b * (r * r - r1_b * r1_b) * (r * r - r1_b * r1_b));
-
-                    // M3^2: exchange-hole octupole moment squared
-                    double r3 = r * r * r;
-                    double r1a3 = r1_a * r1_a * r1_a;
-                    double r1b3 = r1_b * r1_b * r1_b;
-                    atom_data[a].mm3 += w * h * (rho_a * (r3 - r1a3) * (r3 - r1a3) + rho_b * (r3 - r1b3) * (r3 - r1b3));
-
-                    // Effective atomic volume
-                    atom_data[a].vol += w * h * rho_tot * r3;
-
-                    // Integrated charge
-                    atom_data[a].charge += w * h * rho_tot;
-                }
-            }
-        }
+        ScopedTimer t("XDM: host blocks");
+        integrate_on_host(*grid, *primary, proatom, atomic_nums, atom_coords, Da, restricted ? nullptr : Db, atom_data,
+                          nbhole_failed, nbhole_total);
     }
 
     if (nbhole_failed > 0) {
