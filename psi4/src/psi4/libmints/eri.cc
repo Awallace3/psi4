@@ -41,9 +41,10 @@ using namespace psi;
 
 //// Libint2 implementation
 Libint2ERI::Libint2ERI(const IntegralFactory *integral, double screening_threshold, int deriv, bool use_shell_pairs,
-                       bool needs_exchange)
+                       bool needs_exchange, bool build_sieve)
     : Libint2TwoElectronInt(integral, deriv, screening_threshold, use_shell_pairs, needs_exchange) {
     timer_on("Libint2ERI::Libint2ERI");
+    if (!build_sieve) screening_type_ = ScreeningType::None;
     int max_am =
         std::max(std::max(basis1()->max_am(), basis2()->max_am()), std::max(basis3()->max_am(), basis4()->max_am()));
     int max_nprim = std::max(std::max(basis1()->max_nprimitive(), basis2()->max_nprimitive()),
@@ -73,13 +74,21 @@ Libint2ERI::Libint2ERI(const IntegralFactory *integral, double screening_thresho
         engines_.emplace_back(libint2::Operator::coulomb, max_nprim, max_am, der, max_precision,
                               libint2::operator_traits<libint2::Operator::coulomb>::default_params(), braket_);
     }
-    // set max_am for primary basis to be sieved, not all basis1234
-    max_am = bra_same_ ? basis1()->max_am() : ket_same_ ? basis3()->max_am() : 0;
-    schwarz_engine_ =
-        libint2::Engine(libint2::Operator::coulomb, max_nprim, max_am, 0, max_precision,
-                        libint2::operator_traits<libint2::Operator::coulomb>::default_params(), libint2::BraKet::xx_xx);
+    if (build_sieve) {
+        // set max_am for primary basis to be sieved, not all basis1234
+        max_am = bra_same_ ? basis1()->max_am() : ket_same_ ? basis3()->max_am() : 0;
+        schwarz_engine_ = libint2::Engine(libint2::Operator::coulomb, max_nprim, max_am, 0, max_precision,
+                                          libint2::operator_traits<libint2::Operator::coulomb>::default_params(),
+                                          libint2::BraKet::xx_xx);
+        has_schwarz_engine_ = true;
+    }
     common_init();
     timer_off("Libint2ERI::Libint2ERI");
+}
+
+void Libint2ERI::initialize_sieve() {
+    if (!has_schwarz_engine_) throw PSIEXCEPTION("Libint2ERI: an unscreened (build_sieve=false) instance has no sieve engine.");
+    Libint2TwoElectronInt::initialize_sieve();
 }
 
 void Libint2ERI::libint2_wrapper0(const libint2::Shell &sh1, const libint2::Shell &sh2, const libint2::Shell &sh3,

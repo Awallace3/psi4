@@ -87,6 +87,9 @@ CasimirGrid::CasimirGrid(int n_freq, double omega0) : n_freq_(n_freq), omega0_(o
         throw PSIEXCEPTION("libisapol: CasimirGrid needs an even number of frequencies, got " +
                            std::to_string(n_freq) + "; CamCASP tabulates only even-order Gauss-Legendre rules");
     }
+    if (!(std::isfinite(omega0) && omega0 > 0.0)) {
+        throw PSIEXCEPTION("libisapol: CasimirGrid needs a finite positive omega0, got " + std::to_string(omega0));
+    }
 
     omega_.assign(n_freq + 1, 0.0);
     tm1sq_.assign(n_freq + 1, 0.0);

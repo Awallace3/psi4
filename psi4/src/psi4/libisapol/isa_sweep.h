@@ -51,6 +51,5 @@ class IsaASweep {
     std::vector<IsaShapeMap> maps_;
     std::vector<int> atomic_sizes_;
 };
-using IsaNoTailSweep = IsaASweep;  ///< Backward-compatible developer name; run() remains no-tail.
 } }
 #endif

@@ -1,6 +1,14 @@
-"""Analytic native Libint2 AUX checks; not native Drho-C/end-to-end acceptance."""
+"""Analytic native Libint2 AUX checks, the analytic Drho-C fit, and exact-residual Drho-C refinement against rational, Hilbert and frozen-water references; not end-to-end acceptance."""
+from fractions import Fraction
 from math import erf, exp, pi, sqrt
+import hashlib
 import itertools
+import json
+import os
+import platform
+import struct
+import subprocess
+import sys
 import numpy as np
 import pytest
 from psi4 import core
@@ -140,6 +148,24 @@ def test_mo_shell_budget_includes_native_spherical_accumulation():
                               0, max_bytes=10800)
 
 
+def _factors(ops):
+    """Owned factor record: gaps, OO/OV and the gathered (naux, columns) dual OV/VV tiles."""
+    return (ops._gaps, ops._oo, ops._ov, np.column_stack(ops._dual_ov), np.column_stack(ops._dual_vv))
+
+
+def _factor_h1_h2(ops, exchange):
+    """Dense H1/H2 contracted directly from the record factors; rows a*nocc+i."""
+    gaps, oo, ov, dual_ov, dual_vv = _factors(ops)
+    na, no, nv = ov.shape
+    dual_ov, dual_vv = dual_ov.reshape(na, no, nv), dual_vv.reshape(na, nv, nv)
+    v = np.einsum("pia,pjb->aibj", ov, dual_ov)
+    x = np.einsum("pij,pab->aibj", oo, dual_vv)
+    y = np.einsum("pib,pja->aibj", ov, dual_ov)
+    shape = (no*nv, no*nv)
+    h1 = np.diag(gaps)+(4*v-exchange*(x+y)).reshape(shape)
+    return h1, np.diag(gaps)-exchange*(x-y).reshape(shape)
+
+
 @pytest.mark.parametrize("representation", [
     core.IsaBasisRepresentation.Cartesian, core.IsaBasisRepresentation.Spherical])
 @pytest.mark.parametrize("exchange", [0., .25, 1.])
@@ -167,8 +193,7 @@ def test_streamed_plain_df_operators_match_full_native_contractions(representati
         h2[2*a+i, 2*b+j] -= exchange*(x-y)
     # Neither six OV nor nine VV columns is divisible by four.
     streamed = native_plain_df_operators(
-        aux, main, coefficients, energies, nocc=2, shell_count=2,
-        exact_exchange=exchange, tile_columns=4)
+        aux, main, coefficients, energies, nocc=2, shell_count=2, tile_columns=4)
     expected_density = 2*sum(dual[:, i, i] for i in range(2))
     np.testing.assert_allclose(streamed.plain_density_coefficients, expected_density,
                                atol=2e-12, rtol=2e-12)
@@ -176,8 +201,9 @@ def test_streamed_plain_df_operators_match_full_native_contractions(representati
         streamed.plain_density_coefficients.setflags(write=True)
     coefficients[:] = 0.
     energies[:] = 0.
-    np.testing.assert_allclose(streamed.apply_h1(np.eye(6)), h1, atol=2e-12, rtol=2e-12)
-    np.testing.assert_allclose(streamed.apply_h2(np.eye(6)), h2, atol=2e-12, rtol=2e-12)
+    got1, got2 = _factor_h1_h2(streamed, exchange)
+    np.testing.assert_allclose(got1, h1, atol=2e-12, rtol=2e-12)
+    np.testing.assert_allclose(got2, h2, atol=2e-12, rtol=2e-12)
 
 
 def test_streamed_plain_df_admission_and_shell_coverage():
@@ -188,18 +214,19 @@ def test_streamed_plain_df_admission_and_shell_coverage():
                  representation=core.IsaBasisRepresentation.Spherical)
     coeff = np.eye(4)
     energies = np.array([-1., -.8, .2, .6])
-    kwargs = dict(nocc=2, shell_count=2, exact_exchange=.25, tile_columns=1)
+    kwargs = dict(nocc=2, shell_count=2, tile_columns=1)
     ops = native_plain_df_operators(aux, main, coeff, energies, **kwargs)
     budget = ops.construction_planned_bytes
     exact = native_plain_df_operators(aux, main, coeff, energies, **kwargs, max_bytes=budget)
-    np.testing.assert_array_equal(exact.apply_h1(np.eye(4)), ops.apply_h1(np.eye(4)))
+    for got, want in zip(_factors(exact), _factors(ops)):
+        np.testing.assert_array_equal(got, want)
     with pytest.raises(ValueError, match="byte resource"):
         native_plain_df_operators(aux, main, coeff, energies, **kwargs, max_bytes=budget-1)
     for change, message in [
         (dict(shell_count=1), "coverage"), (dict(shell_count=3), "range"),
         (dict(nocc=True), "nocc"), (dict(nocc=4), "nocc"),
         (dict(tile_columns=0), "tile_columns"), (dict(tile_columns=709), "tile_columns"),
-        (dict(exact_exchange=np.nan), "exchange"), (dict(max_bytes=True), "max_bytes"),
+        (dict(max_bytes=True), "max_bytes"),
     ]:
         with pytest.raises(ValueError, match=message):
             native_plain_df_operators(aux, main, coeff, energies, **(kwargs | change))
@@ -227,9 +254,7 @@ def test_tiled_constrained_ov_matches_dense_fit(representation, penalty, damping
     coefficients = np.random.default_rng(38).normal(scale=.1, size=(6, 5))[:, ::-1]
     ops = native_plain_df_operators(
         aux, main, coefficients, np.array([-1., -.8, .2, .6, 1.]),
-        nocc=2, shell_count=3, exact_exchange=.25, tile_columns=4)
-    original_h1 = ops.apply_h1(np.eye(6))
-    original_h2 = ops.apply_h2(np.eye(6))
+        nocc=2, shell_count=3, tile_columns=4)
     # Dense reference: A = (1-eta offsite) J + lambda q q^T, occupied-fast RHS.
     integrals = core.IsaAuxCoulomb(aux)
     q = np.asarray(integrals.charges())
@@ -249,8 +274,6 @@ def test_tiled_constrained_ov_matches_dense_fit(representation, penalty, damping
     assert fitted.offsite_metric_damping == damping
     with pytest.raises(ValueError):
         fitted.coefficients.setflags(write=True)
-    np.testing.assert_array_equal(ops.apply_h1(np.eye(6)), original_h1)
-    np.testing.assert_array_equal(ops.apply_h2(np.eye(6)), original_h2)
     if penalty == 0.:
         exact = native_constrained_ov(
             ops, charge_penalty=penalty, offsite_metric_damping=damping,
@@ -277,8 +300,7 @@ def test_tiled_constrained_ov_matches_dense_fit(representation, penalty, damping
 def test_constrained_ov_rejects_arbitrary_non_native_factors():
     from psi4.driver.procrouting.isapol_factorized_response import FactorizedDFOperators
     from psi4.driver.procrouting.isapol_native_factors import native_constrained_ov
-    zero = np.zeros((1, 1, 1))
-    ops = FactorizedDFOperators(np.ones(1), zero, zero, zero, zero, exact_exchange=0.)
+    ops = FactorizedDFOperators()
     with pytest.raises(ValueError, match="native plain-DF"):
         native_constrained_ov(ops, charge_penalty=1000., offsite_metric_damping=0.)
 
@@ -505,3 +527,293 @@ def test_spherical_aux_metric_and_charges_contract_the_cartesian_ones(l):
     np.testing.assert_allclose(sph.three_center(main).np,M.T@bc,rtol=1e-11,atol=1e-12)
     if l:   # Only l=0 rows of a spherical AUX carry charge; l>0 cancels exactly.
         assert np.max(np.abs(np.asarray(sph.charges())))<1e-13
+
+
+def _operands(aux, main):
+    p=core.IsaAuxCoulomb(aux)
+    return [p.metric().np, p.three_center(main).np,
+            np.concatenate([p.three_center_shell_block(main,i,1).np for i in range(len(aux.shell_layout()))])]
+
+
+# Centres 0 and 2 coincide; centre 3 sits inside Molecule.add_atom's 0.05 bohr guard.
+IDENTITY_CENTRES=[[0.,0.,0.],[.31,-.42,.53],[0.,0.,0.],[.01,0.,0.]]
+IDENTITY_AUX=[(2,2,[.73,1.91],[.37,-.12]),(0,1,[.43,2.3],[1.7,-.21]),(3,3,[.84],[.62]),
+              (1,0,[.62,1.8],[-.8,.19]),(0,4,[.95],[.51]),(2,0,[1.1],[-.4])]
+IDENTITY_MAIN=[(3,1,[.91,1.81],[.42,-.17]),(0,2,[.75],[1.3]),(2,0,[1.03,1.9],[.31,-.12]),(1,1,[.69],[.55])]
+
+
+@pytest.mark.parametrize("representation", [
+    core.IsaBasisRepresentation.Cartesian, core.IsaBasisRepresentation.Spherical])
+def test_native_integrals_keep_explicit_shell_order_and_coincident_centres(representation):
+    """Native shells are grouped by centre: explicit order must survive through a map.
+
+    Interleaved shells are compared bitwise with the same shells declared in
+    grouped order (rows permuted back), and coincident distinct centres with
+    the merged single centre. Row order, not integral values, is under test;
+    only the metric, whose mirrored shell pairs swap bra and ket, may round.
+    """
+    main=basis(IDENTITY_MAIN,IDENTITY_CENTRES,core.IsaBasisRole.Orbital,core.IsaBasisRepresentation.Spherical)
+    aux=basis(IDENTITY_AUX,IDENTITY_CENTRES,representation=representation)
+    got=_operands(aux,main)
+    order=sorted(range(len(IDENTITY_AUX)),key=lambda s:IDENTITY_AUX[s][0])
+    assert order!=list(range(len(IDENTITY_AUX)))
+    grouped=basis([IDENTITY_AUX[s] for s in order],IDENTITY_CENTRES,representation=representation)
+    layout=aux.shell_layout()
+    rows=np.concatenate([np.arange(layout[s][0],layout[s][0]+layout[s][1]) for s in order])
+    ref=_operands(grouped,main)
+    np.testing.assert_allclose(got[0][np.ix_(rows,rows)],ref[0],rtol=1e-14,atol=1e-15)
+    for g,r in zip(got[1:],ref[1:]):
+        np.testing.assert_array_equal(g[rows],r)
+    merged=[(0 if c==2 else c,l,a,d) for c,l,a,d in IDENTITY_AUX]
+    for g,r in zip(got,_operands(basis(merged,IDENTITY_CENTRES,representation=representation),main)):
+        np.testing.assert_array_equal(g,r)
+
+
+def test_native_integrals_ignore_ambient_screening_options():
+    """INTS_TOLERANCE/SCREENING only shape a native sieve these operands never consult."""
+    import psi4
+    main=basis(IDENTITY_MAIN,IDENTITY_CENTRES,core.IsaBasisRole.Orbital,core.IsaBasisRepresentation.Spherical)
+    aux=basis(IDENTITY_AUX,IDENTITY_CENTRES)
+    ref=_operands(aux,main)
+    saved={k:(core.get_global_option(k),core.has_global_option_changed(k)) for k in ("INTS_TOLERANCE","SCREENING")}
+    try:
+        for tolerance,screening in [(1e-1,"SCHWARZ"),(1e-1,"CSAM"),(0.,"NONE")]:
+            psi4.set_options({"ints_tolerance":tolerance,"screening":screening})
+            for g,r in zip(_operands(aux,main),ref):
+                np.testing.assert_array_equal(g,r)
+    finally:
+        for k,(value,changed) in saved.items():
+            core.set_global_option(k,value)
+            if not changed: core.revoke_global_option_changed(k)
+
+
+# Drho-C exact residual and LU refinement. core._isa_exact_residual and
+# core._isa_refined_lu_solve are test hooks into the production routines, not API.
+_DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data_isapol')
+_U = 2.**-53
+_DBL_MAX = sys.float_info.max
+
+
+def _bits(values):
+    return [struct.unpack('<Q', struct.pack('<d', float(v)))[0] for v in values]
+
+
+def _oracle_residual(A, x, b):
+    """Correctly rounded b - A x from exact rationals (float(Fraction) rounds half-even)."""
+    return [float(Fraction(bi) - sum(Fraction(a)*Fraction(xj) for a, xj in zip(row, x)))
+            for row, bi in zip(A, b)]
+
+
+def _random_system(seed, n, spread):
+    rng = np.random.default_rng(seed)
+    def draw(*shape):
+        return rng.choice([-1., 1.], shape)*np.ldexp(rng.uniform(1., 2., shape), rng.integers(-spread, spread+1, shape))
+    return draw(n, n), draw(n), draw(n)
+
+
+def _residual_cases():
+    A, x, b = _random_system(20261006, 40, 300)
+    tiny = 2.**-1074
+    return {
+        'random 40x40, exponents +-300': (A, x, b),
+        'catastrophic cancellation': ([[1., 1.], [1., -1.]], [2.**60, 1+2.**-52], [2.**60, 2.**60]),
+        'subnormal inputs and results': ([[tiny, 0.], [2.**-1060, 0.]], [3., 3.], [2.**-1073, 2.**-1058]),
+        'products below 2^-1074': ([[tiny, 0.], [tiny, tiny]], [2.**-3, 1.5], [0., 0.]),
+        'half-way subnormal ties': ([[tiny, 0.], [0., tiny]], [.5, 1.5], [0., 0.]),
+        'signed zeros': ([[-0., 0.], [0., -0.]], [0., -0.], [-0., 0.]),
+        'half-way normal ties': ([[1., 0.], [0., 1.]], [-1., -1.], [2.**53, 2.**53+2]),
+        'products beyond binary64 range cancel': ([[_DBL_MAX, -_DBL_MAX], [_DBL_MAX, -_DBL_MAX]], [2., 2.], [1., -0.]),
+    }
+
+
+@pytest.mark.parametrize('case', list(_residual_cases()))
+def test_exact_residual_matches_rational_oracle_bitwise(case):
+    A, x, b = _residual_cases()[case]
+    got = core._isa_exact_residual(A, x, b)
+    assert _bits(got) == _bits(_oracle_residual(np.asarray(A).tolist(), list(x), list(b)))
+
+
+def test_exact_residual_known_values_and_term_order():
+    assert core._isa_exact_residual([[1., 1.], [1., -1.]], [2.**60, 1+2.**-52], [2.**60, 2.**60]) == \
+        [-(1+2.**-52), 1+2.**-52]  # naive binary64 evaluation gives [0, 0]
+    tiny = 2.**-1074
+    assert _bits(core._isa_exact_residual([[tiny, 0.], [0., tiny]], [.5, 1.5], [0., 0.])) == _bits([-0., -2*tiny])
+    assert _bits(core._isa_exact_residual([[-0., 0.], [0., -0.]], [0., -0.], [-0., 0.])) == _bits([0., 0.])
+    A, x, b = _random_system(20261007, 40, 300)
+    order = np.random.default_rng(1).permutation(40)
+    assert _bits(core._isa_exact_residual(A, x, b)) == _bits(core._isa_exact_residual(A[:, order], x[order], b))
+
+
+def test_exact_residual_refuses_overflow_and_invalid_input():
+    with pytest.raises(ValueError, match='overflow'):
+        core._isa_exact_residual([[_DBL_MAX, _DBL_MAX], [1., 0.]], [2., 2.], [0., 0.])
+    good = ([[1., 2.], [3., 4.]], [1., 1.], [0., 0.])
+    for position in range(3):
+        for bad in (float('nan'), float('inf'), -float('inf')):
+            args = [np.array(v, dtype=float) for v in good]
+            args[position].flat[0] = bad
+            with pytest.raises(ValueError, match='finite'):
+                core._isa_exact_residual(*args)
+    for args in (([[1., 2.]], [1., 1.], [0.]), ([[1.]], [1., 1.], [0.]), ([[1.]], [1.], [0., 0.]),
+                 (np.zeros((0, 0)), [], []), ([1.], [1.], [0.])):
+        with pytest.raises(ValueError):
+            core._isa_exact_residual(*args)
+
+
+def test_refined_solve_refuses_invalid_input():
+    for iterations in (-1, 33):
+        with pytest.raises(ValueError, match='iterations'):
+            core._isa_refined_lu_solve([[2.]], [1.], iterations)
+    with pytest.raises(TypeError):
+        core._isa_refined_lu_solve([[2.]], [1.], 1.5)
+    with pytest.raises(ValueError, match='constrained metric'):
+        core._isa_refined_lu_solve([[float('nan')]], [1.], 10)
+    with pytest.raises(ValueError, match='constrained RHS'):
+        core._isa_refined_lu_solve([[2.]], [float('inf')], 0)
+    for args in (([[1., 2.]], [1.]), ([[1.]], [1., 1.]), (np.zeros((0, 0)), [])):
+        with pytest.raises(ValueError):
+            core._isa_refined_lu_solve(*args, 10)
+    with pytest.raises(ValueError, match='LU solve failed'):
+        core._isa_refined_lu_solve([[0., 0.], [0., 0.]], [1., 1.], 10)
+
+
+def test_refined_solve_zero_solution_converges_in_one_step():
+    x, iterations, displacement = core._isa_refined_lu_solve([[2., 1.], [1., 3.]], [0., 0.], 10)
+    assert x == [0., 0.] and iterations == 1 and displacement == 0.
+
+
+def test_native_drho_c_refinement_on_the_analytic_fit():
+    a, b, penalty = .7, .9, 1000.
+    aux = basis([(0, 0, [a], [1.])], [[0., 0., 0.]])
+    main = basis([(0, 0, [b], [1.])], [[0., 0., 0.]], role=core.IsaBasisRole.Orbital,
+                 representation=core.IsaBasisRepresentation.Spherical)
+    occupied = core.Matrix.from_array(np.array([[(2*b/pi)**.75]]))
+    p = core.IsaAuxCoulomb(aux)
+    default, plain, refined = (p.fit_drho_c(main, occupied, penalty), p.fit_drho_c(main, occupied, penalty, 0),
+                               p.fit_drho_c(main, occupied, penalty, max_refinement_iterations=10))
+    for name in ('coefficients', 'raw_rhs', 'rhs', 'charges'):
+        assert _bits(getattr(plain, name)) == _bits(getattr(default, name))
+    assert (plain.relative_residual, plain.fitted_electrons) == (default.relative_residual, default.fitted_electrons)
+    assert default.refinement_iterations == 0 and default.refinement_displacement == 0.
+    q = (pi/a)**1.5
+    expected = (2*(2*b/pi)**1.5*ss(a, 2*b, [0.]*3, [0.]*3)+penalty*2*q)/(ss(a, a, [0.]*3, [0.]*3)+penalty*q*q)
+    np.testing.assert_allclose(refined.coefficients, [expected], rtol=5e-14)
+    assert 1 <= refined.refinement_iterations <= 3 and refined.refinement_displacement < 1e-14
+    assert _bits(refined.metric.np.ravel()) == _bits(default.metric.np.ravel())
+    for iterations in (-1, 33):
+        with pytest.raises(ValueError, match='iterations'):
+            p.fit_drho_c(main, occupied, penalty, max_refinement_iterations=iterations)
+
+
+def _exact_solution(A, b):
+    """Exact rational solution of the stored binary64 system (Gaussian elimination)."""
+    n = len(b)
+    rows = [[Fraction(v) for v in row] + [Fraction(bi)] for row, bi in zip(A, b)]
+    for k in range(n):
+        pivot = next(i for i in range(k, n) if rows[i][k] != 0)
+        rows[k], rows[pivot] = rows[pivot], rows[k]
+        for i in range(k+1, n):
+            factor = rows[i][k]/rows[k][k]
+            rows[i] = [v-factor*w for v, w in zip(rows[i], rows[k])]
+    x = [Fraction(0)]*n
+    for i in reversed(range(n)):
+        x[i] = (rows[i][n]-sum(rows[i][j]*x[j] for j in range(i+1, n)))/rows[i][i]
+    return np.array([float(v) for v in x])
+
+
+def _hilbert(n):
+    return [[1./(i+j+1) for j in range(n)] for i in range(n)]
+
+
+def test_refined_solve_hilbert10_reaches_the_exact_solution():
+    # Regression target (kappa ~ 1.6e13), not a forward-error guarantee.
+    A, b = _hilbert(10), [1.]*10
+    reference = _exact_solution(A, b)
+    x, iterations, _ = core._isa_refined_lu_solve(A, b, 10)
+    assert 1 <= iterations <= 10
+    assert np.max(np.abs(np.array(x)-reference)) <= 8*_U*np.max(np.abs(reference))
+
+
+def test_refined_solve_hilbert13_converges_accurately_or_refuses():
+    # kappa ~ 1e18 > 1/u: either documented refusal is acceptable; a converged
+    # result outside the bound is not.
+    A, b = _hilbert(13), [1.]*13
+    try:
+        x, _, _ = core._isa_refined_lu_solve(A, b, 32)
+    except ValueError as error:
+        assert 'stagnated' in str(error) or 'iteration cap' in str(error)
+        return
+    reference = _exact_solution(A, b)
+    assert np.max(np.abs(np.array(x)-reference)) <= 8*_U*np.max(np.abs(reference))
+
+
+def _water_operands():
+    record = json.load(open(os.path.join(_DATA, 'drhoc_water_reference.json')))
+    with np.load(os.path.join(_DATA, 'drhoc_water_operands.npz')) as data:
+        A, b = data['A'], data['b']
+    for name, array in (('A', A), ('b', b)):
+        assert hashlib.sha256(np.ascontiguousarray(array, dtype='<f8').tobytes()).hexdigest() == \
+            record['operand_sha256'][name]
+    return A, b, np.array([float(v) for v in record['solution_100_digits']])
+
+
+def test_refined_solve_frozen_water_reaches_the_100_digit_reference():
+    # Regression target on the frozen water Drho-C operands (kappa ~ 6e15), not a guarantee.
+    A, b, reference = _water_operands()
+    x, iterations, _ = core._isa_refined_lu_solve(A, b, 10)
+    assert 1 <= iterations <= 10
+    assert np.max(np.abs(np.array(x)-reference)) <= 8*_U*np.max(np.abs(reference))
+    rows = np.random.default_rng(246).choice(len(b), 16, replace=False)
+    assert _bits(np.array(core._isa_exact_residual(A, reference, b))[rows]) == \
+        _bits(_oracle_residual(A[rows].tolist(), reference.tolist(), b[rows].tolist()))
+
+
+def test_refined_solve_same_process_threads_agree():
+    hilbert = (np.array(_hilbert(10)), np.ones(10))
+    water = _water_operands()[:2]
+    saved = core.get_num_threads()
+    try:
+        for A, b in (hilbert, water):
+            core.set_num_threads(1)
+            x1 = np.array(core._isa_refined_lu_solve(A, b, 10)[0])
+            core.set_num_threads(8)
+            x8 = np.array(core._isa_refined_lu_solve(A, b, 10)[0])
+            assert np.max(np.abs(x1-x8)) <= 8*_U*np.max(np.abs(x1))
+    finally:
+        core.set_num_threads(saved)
+
+
+_GLIBC_FE_UPWARD = {'x86_64': 0x800, 'aarch64': 0x400000}
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux') or platform.machine() not in _GLIBC_FE_UPWARD
+                    or platform.libc_ver()[0] != 'glibc',
+                    reason='the fesetround(FE_UPWARD) refusal is exercised only on x86-64/aarch64 glibc')
+def test_refinement_refuses_directed_rounding_but_residual_is_unaffected(tmp_path):
+    A, x, b = _random_system(20261008, 12, 40)
+    expected = _bits(_oracle_residual(A.tolist(), x.tolist(), b.tolist()))
+    script = tmp_path / 'upward.py'
+    script.write_text(f'''
+import ctypes, struct
+from psi4 import core
+libm = ctypes.CDLL('libm.so.6')
+assert libm.fesetround({_GLIBC_FE_UPWARD[platform.machine()]}) == 0
+r = core._isa_exact_residual({A.tolist()!r}, {x.tolist()!r}, {b.tolist()!r})
+assert [struct.unpack('<Q', struct.pack('<d', v))[0] for v in r] == {expected!r}
+core._isa_refined_lu_solve([[2., 1.], [1., 3.]], [1., 2.], 0)
+try:
+    core._isa_refined_lu_solve([[2., 1.], [1., 3.]], [1., 2.], 1)
+except ValueError as error:
+    assert 'round-to-nearest' in str(error), error
+else:
+    raise SystemExit('directed rounding was not refused')
+assert libm.fesetround(0) == 0
+core._isa_refined_lu_solve([[2., 1.], [1., 3.]], [1., 2.], 1)
+print('UPWARD-OK')
+''')
+    env = dict(os.environ)
+    env['PYTHONPATH'] = os.pathsep.join([os.path.dirname(os.path.dirname(os.path.abspath(core.__file__)))] +
+                                        [p for p in env.get('PYTHONPATH', '').split(os.pathsep) if p])
+    done = subprocess.run([sys.executable, str(script)], cwd=tmp_path, env=env, capture_output=True, text=True,
+                          timeout=300)
+    assert done.returncode == 0 and 'UPWARD-OK' in done.stdout, done.stdout + done.stderr

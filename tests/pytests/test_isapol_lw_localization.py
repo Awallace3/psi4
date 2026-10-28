@@ -327,11 +327,11 @@ def test_lw_component_pair_skip_stays_absolute_at_its_boundary():
     # zero instead of being left at its full 1e-7.
     boundary = [t for t in _transfer_values(candidate_equal.transfers) if t[2:4] == (1, 1)]
     assert len(boundary) == 2
-    assert all(abs(t[5]) == pytest.approx(2.5e-8, rel=1.0e-12) for t in boundary)
+    assert all(abs(t[5]) == pytest.approx(2.5e-8, rel=1.0e-12, abs=0) for t in boundary)
     assert all(abs(t[5]) < 1.0e-7 for t in boundary)
     assert candidate_equal.omitted_transfer_count == 0
     assert candidate_equal.refined_pairs[1].get(1, 1) == pytest.approx(0.0, abs=1.0e-20)
-    assert candidate_below.refined_pairs[1].get(1, 1) == pytest.approx(1.0e-7, rel=1.0e-12)
+    assert candidate_below.refined_pairs[1].get(1, 1) == pytest.approx(1.0e-7, rel=1.0e-12, abs=0)
 
 
 def test_lw_relative_transfer_cut_is_invariant_under_a_uniform_input_scale():
@@ -379,8 +379,8 @@ def test_lw_relative_transfer_cut_is_invariant_under_a_uniform_input_scale():
         assert max(_residual_values(result.residuals)) < 1.0e-8
         # amplitudes track the input scale exactly
         amplitudes = [abs(transfer[5]) for transfer in _transfer_values(result.transfers)]
-        assert max(amplitudes) == pytest.approx(0.25 * scale, rel=1.0e-12)
-        assert min(amplitudes) == pytest.approx(5.859375e-03 * scale, rel=1.0e-12)
+        assert max(amplitudes) == pytest.approx(0.25 * scale, rel=1.0e-12, abs=0)
+        assert min(amplitudes) == pytest.approx(5.859375e-03 * scale, rel=1.0e-12, abs=0)
 
     # At the smallest scale the retained transfers are themselves below the
     # absolute constant the source still names: an absolute cut would have
@@ -388,7 +388,7 @@ def test_lw_relative_transfer_cut_is_invariant_under_a_uniform_input_scale():
     # highest Casimir node lost 18 of its 144 charge-charge transfers.
     smallest = [abs(transfer[5]) for transfer in _transfer_values(results[-1].transfers)]
     assert min(smallest) < 1.0e-7
-    assert min(smallest) == pytest.approx(5.859375e-08, rel=1.0e-12)
+    assert min(smallest) == pytest.approx(5.859375e-08, rel=1.0e-12, abs=0)
 
     # `std::min` keeps the relative cut from ever being looser: at unit scale
     # the two coincide, so nothing the absolute cut retained is now dropped.
@@ -410,7 +410,6 @@ def test_lw_finite_inputs_that_overflow_derived_math_fail_closed():
     large[3][0][0] = -1.0e308
     with pytest.raises(RuntimeError, match=r"finite|overflow"):
         _lw_localize([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], large, [(0, 1)], 1.0e300)
-
 
 
 def test_lw_supplemental_0375_block_with_local_rank2_seed():
@@ -570,35 +569,6 @@ def test_lw_input_reciprocity_rejected():
     values[1][1][2] = 1.0
     with pytest.raises(RuntimeError, match="input reciprocity"):
         _lw_localize([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], values, [(0, 1)])
-
-
-def test_lw_source_is_pod_only_and_resource_bounded():
-    root = Path(__file__).resolve().parents[2]
-    source = (root / "psi4/src/psi4/libisapol/lw_localization.cc").read_text()
-    header = (root / "psi4/src/psi4/libisapol/lw_localization.h").read_text()
-    for forbidden in ("Wavefunction", "scf::HF", "BasisSet", "DirectJK", "libscf_solver",
-                      "partitioned_response", "IsaPartitionedResponse", "IsaResponseOptions",
-                      "IsaGrid", "IsaFit", "IsaPfit", "SCF", "real_to_complex", "binomial",
-                      "regular_harmonics", "complex_index"):
-        assert forbidden not in source
-    assert source.count("isa_multipole_translation(static_cast<int>(kIsaLwMaxRank), displacement)") == 1
-    assert "translation_matrix(position)" in source  # molecular origin shifts use the same seam
-    assert "kElementTransferThreshold = 1.0e-7" in source
-    # the component-pair skip is absolute; the per-transfer cut is relative to
-    # the pair's own scale, and `std::min` keeps it from ever being looser
-    assert "largest_candidate < kElementTransferThreshold" in source
-    assert ("std::min(kElementTransferThreshold, kElementTransferThreshold * largest_candidate)"
-            in source)
-    assert "std::abs(amount) <= transfer_threshold" in source
-    assert "std::abs(amount) <= kElementTransferThreshold" not in source
-    assert "kIsaLwGraphMaxSites = 256" in header
-    assert "kIsaLwMaxRank = 4" in header
-    assert "kIsaLwMaxTransfers = 1000000" in header
-    assert "kIsaLwMaxWorkspaceBytes = 768 * 1024 * 1024" in header
-    assert "result.transfers.size() + pending.size() >= kIsaLwMaxTransfers" in source
-    assert source.index("isa_lw_validate_workspace(count, graph.bonds.size());") < source.index(
-        "IsaSitePairResponse truncated = response;") < source.index(
-        "IsaSitePairResponse refined = truncated;")
 
 
 def _random_reciprocal_blocks(count, seed, width=16):

@@ -1,44 +1,12 @@
 # Psi4 Developers; SPDX-License-Identifier: LGPL-3.0-only
-"""Narration and QCVariable reporting for the native atomic-property pipeline.
+"""Stage-record reporting; never reruns or mutates a scientific stage.
 
-Reporting only: this module computes no science.  Everything it prints or stores
-is read off the owned stage records the pipeline already returns, so enabling it
-cannot change a number, a convergence decision or a gate.  It never mutates a
-record, never reruns a stage, never fills in a value a stage declined to produce
-and never reformats a refusal into a softer one.
+StageLog verbosity: 0 silent, 1 banners/results, 2 diagnostics, 3 node detail.
+Long tables are elided and wide rows refused. Incomplete dispersion orders
+remain marked in both tables and optional QCVariables.
 
-Two deliberately separate surfaces:
-
-* :class:`StageLog` writes the human-readable narrative through
-  ``core.print_out``.  Verbosity is a declared integer, not a debug switch:
-
-  - 0  silent.  This is the default everywhere, so an expert caller that passes
-       no log behaves exactly as it did before this module existed.
-  - 1  stage banners carrying every tweakable parameter of that stage, the
-       stage-exit summary, and the final property tables.
-  - 2  adds the iteration tables and the per-stage numerical diagnostics.
-  - 3  adds per-frequency detail (all nodes, not just the static one).
-
-* The ``report_*`` functions set QCVariables on the wavefunction.  Arrays ALWAYS
-  go through ``core.Matrix.from_array``, because ``p4util.python_helpers``
-  reshapes a bare ``ndarray`` QCVariable by looking at the variable NAME (a key
-  ending in ``DIPOLE`` is forced to shape ``(1, 3)``); a labeled table must
-  never be re-interpreted by its own name.  Setting QCVariables is safe with
-  respect to every seal in this pipeline: neither ``isapol_native._context`` nor
-  ``scf_proc.scf_iterator._scf_state_signature`` hashes variables.
-
-Large intermediates are not printable from here.  :meth:`StageLog.table` elides
-long tables (and says so) and refuses a row wider than :data:`MAX_ROW_CELLS`, so
-raw response tensors, grids, transition-fit coefficients, orbital matrices and
-density samples cannot reach the output file by accident.  Those remain
-available in full through ``psi4.atomic_property_result(wfn)``, which
-is where this pipeline has always said large labeled tensors live.
-
-Every quantity printed here is either a field of a stage record or an explicitly
-labeled sum over the printed rows.  Where a record marks a number incomparable
--- an incomplete dispersion order, a failed production postcondition, a declared
-rank limit -- the label carries that mark too, both in the table and in the
-QCVariable name, rather than being dropped or silently promoted.
+QCVariable arrays use core.Matrix to avoid name-driven ndarray reshaping.
+QCVariables are not part of the wavefunction's SCF/state seals.
 """
 import dataclasses
 import time
@@ -50,9 +18,23 @@ from psi4 import core
 #: Longest table body printed in full; longer tables are elided in the middle
 #: (both ends are kept) with an explicit count of the omitted rows.
 MAX_TABLE_ROWS = 60
-#: A row wider than this is bulk data, not a property table. Refused outright:
-#: reaching it means a caller handed a raw intermediate to the formatter.
+#: A sequence longer than this is bulk data and is summarized, never printed.
 MAX_ROW_CELLS = 24
+
+# Preserve the cleanup expert producer's reporting names without importing its
+# optional reporting module during ordinary SCF or bounded atomic properties.
+_AC_REPORTERS = frozenset((
+    'ac_parameters', 'report_ac_splice', 'AcIterationLog',
+    'report_ac_spectrum', 'report_ac_convergence', 'ac_application_parameters',
+    'AC_ITERATION_HEADERS', 'AC_SPECTRUM_VIRTUALS',
+))
+
+
+def __getattr__(name):
+    if name in _AC_REPORTERS:
+        from . import isapol_ac_logging
+        return getattr(isapol_ac_logging, name)
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
 
 def _fmt(value):
@@ -80,7 +62,7 @@ def _fmt(value):
 
 
 class StageLog:
-    """Verbosity-gated writer with stage banners, wall clocks and small tables.
+    """Verbosity-gated writer with stage banners, wall clocks and aligned items.
 
     Holds no wavefunction and no scientific record. ``writer`` exists so tests
     can capture the text without touching the Psi4 output file; the production
@@ -163,7 +145,7 @@ class StageLog:
         for i, row in enumerate(body):
             if omitted and i == MAX_TABLE_ROWS // 2:
                 self._writer(pad + f'... {omitted} intermediate rows not printed; the full record is '
-                             'available through atomic_property_result(wfn)\n')
+                             'in the returned result\n')
             self._writer(pad + '  '.join(c.rjust(w) for c, w in zip(row, widths)) + '\n')
         self._writer(pad + rule + '\n')
         if note:
@@ -187,6 +169,15 @@ class StageLog:
         self._stages.append((name, float(seconds)))
         self._open, self._started = None, None
         self.line('Stage complete: %s (%.2f s)' % (name, seconds), level=level)
+
+    def stage_failed(self, error, level=1):
+        """Close the open stage as FAILED; it is printed, never added to :attr:`stages`."""
+        if self._open is None:
+            return
+        name, seconds = self._open, time.time() - self._started
+        self._open, self._started = None, None
+        self.line('Stage FAILED: %s (%.2f s): %s: %s' % (name, seconds, type(error).__name__, error),
+                  level=level)
 
 
 def silent():
@@ -223,18 +214,29 @@ def _set(wfn, key, value):
     wfn.set_variable(key, value)
 
 
+def check_publication_labels(labels):
+    """Refuse site labels that cannot name distinct QCVariables.
+
+    QCVariable keys are upper-cased and space-separated, so labels whose
+    upper-cased forms collide, that contain whitespace, or that spell the
+    reserved key words ``TOTAL`` or ``INCOMPLETE`` would alias other keys.
+    Only publication is restricted; the model keeps its labels.
+    """
+    for label in labels:
+        if any(ch.isspace() for ch in label):
+            raise ValueError(f'site label {label!r} contains whitespace and cannot name a QCVariable')
+        if label.upper() in ('TOTAL', 'INCOMPLETE'):
+            raise ValueError(f'site label {label!r} is a reserved QCVariable key word')
+    folded = [label.upper() for label in labels]
+    if len(set(folded)) != len(folded):
+        raise ValueError(f'site labels {tuple(labels)!r} collide when upper-cased as QCVariable names')
+
+
 # ---------------------------------------------------------------- request ----
 
 
 def report_quadrature(log, frequencies, cp_weights, provenance=None, level=2):
-    """Casimir-Polder nodes and weights: the complete authoritative node list.
-
-    The two sequences are taken directly rather than a ``Quadrature`` object so
-    that a stage narrates the grid its own record holds -- the nodes that were
-    actually contracted -- instead of a caller-side object that need not be the
-    one the record was built from.  A record may carry no provenance; that is
-    reported as the absence it is, not omitted.
-    """
+    """Report the contracted nodes/weights, including absent provenance."""
     if frequencies is None or cp_weights is None:
         return
     log.table('Casimir-Polder quadrature (CP weights already include 1/(2*pi)):',
@@ -245,80 +247,11 @@ def report_quadrature(log, frequencies, cp_weights, provenance=None, level=2):
               else 'no quadrature provenance is declared on this record')
 
 
-# -------------------------------------------------------------- partition ----
-
-
-# --------------------------------------------------------------- response ----
-
-
-# --------------------------------------------------------------------- LW ----
-
-
-# --------------------------------------------------- atomic polarizability ----
-
-
-# --------------------------------------------------------------- dispersion ----
-
-#: ``IsotropicDispersion``/``AnisotropicDispersion`` fields that ARE the result
-#: or one of its two source models rather than a knob of the stage.  They are
-#: narrated as counts, hashes and tables instead of being rendered into a
-#: parameter block, where a whole ``LocalProperties`` or the pair list would be
-#: a raw intermediate.  Every other declared field of either record is
-#: enumerated from the dataclass, so a field added to them later appears in the
-#: stage report without touching this module.
-DISPERSION_RECORD_FIELDS = ('model_a', 'model_b', 'pairs', 'frequencies', 'cp_weights',
-                            'quadrature_provenance', 'placement_a', 'placement_b',
-                            'placed_a', 'placed_b', 'truncated_energy')
-
-
 def provenance_parameters(provenance, *, prefix):
     """A declared ``Provenance``, or the explicit fact that none was declared."""
     if provenance is None:
         return ((prefix + 'provenance', 'none declared with this record'),)
     return dataclass_parameters(provenance, prefix=prefix)
-
-
-def dispersion_model_parameters(model, *, prefix):
-    """Declared identity of one localized model entering the contraction.
-
-    A C_n is only as declared as the two models it contracts, so each side's
-    rank limit, residual policy, postcondition verdict, refinement status and
-    input hashes belong in the banner.  The tensors themselves are not printed
-    here: the localization stage owns them.
-    """
-    m = model.metadata
-    return ((prefix + 'sites', len(model.labels)),
-            (prefix + 'labels', model.labels),
-            (prefix + 'frequency nodes', len(model.frequencies)),
-            (prefix + 'localization_rank_limit', m.localization_rank_limit),
-            (prefix + 'mode', m.mode),
-            (prefix + 'tensor_origin', m.tensor_origin),
-            (prefix + 'residual_policy', m.residual_policy),
-            (prefix + 'residual_tolerance', m.residual_tolerance),
-            (prefix + 'production_postcondition_passed', m.production_postcondition_passed),
-            (prefix + 'refinement_status', m.refinement_status),
-            (prefix + 'wavefunction_status', m.wavefunction_status),
-            (prefix + 'native_verified', m.native_verified),
-            (prefix + 'source_sha256', model.provenance.source_sha256),
-            (prefix + 'canonical_input_array_sha256', m.canonical_input_array_sha256))
-
-
-def declared_site_ranks(model, declared, *, prefix):
-    """The per-site rank declaration exactly as the producer resolves it.
-
-    ``None`` does not mean ``(1, 2, 3)``: it means every rank the model was
-    actually localized at, read off that model's own limit.  Which of the two
-    happened decides whether an order comes out complete, so the resolved
-    tuples are printed rather than the argument as it was passed.
-    """
-    limit = int(model.metadata.localization_rank_limit)
-    if declared is None:
-        return ((prefix + 'site_ranks', 'not declared: ranks 1..%d on every site, read off '
-                 "this model's own localization rank limit" % limit),
-                (prefix + 'resolved site ranks',
-                 (tuple(range(1, limit + 1)),) * len(model.labels)))
-    return ((prefix + 'site_ranks', 'declared explicitly, per site'),
-            (prefix + 'resolved site ranks', tuple(tuple(site) for site in declared)))
 
 
 def cp_weight_parameters(cp_weights):
@@ -330,38 +263,8 @@ def cp_weight_parameters(cp_weights):
             ('static node weight', 'zero by construction; a nonzero one is refused'))
 
 
-def dispersion_parameters(*, model_a, model_b, max_order, cp_weights, quadrature_provenance,
-                          site_ranks_a=None, site_ranks_b=None):
-    """Every tweakable input of the isotropic C_n contraction.
-
-    The knobs are ``max_order``, the CP weights and the two per-site rank
-    declarations; the rest of the block is the declared identity of the two
-    models and of the quadrature, without which a C_n is not interpretable.
-    """
-    return ((('max_order', max_order),
-             ('admitted max_order values', '6, 8, 10, 12; odd orders are refused here'),
-             ('model B', 'this same model (pair_self)' if model_b is model_a
-              else 'a separately declared partner model'))
-            + cp_weight_parameters(cp_weights)
-            + declared_site_ranks(model_a, site_ranks_a, prefix='A.')
-            + declared_site_ranks(model_b, site_ranks_b, prefix='B.')
-            + dispersion_model_parameters(model_a, prefix='A.')
-            + dispersion_model_parameters(model_b, prefix='B.')
-            + provenance_parameters(quadrature_provenance, prefix='quadrature.'))
-
-
 def _dispersion_tables(log, dispersion, *, labels_a, labels_b, frequencies, orders):
-    """The tables every isotropic C_n record shares, refined or not.
-
-    Both producers contract the same owned C++ kernel against the same
-    quadrature and differ only in where their per-site scalars came from, so the
-    node list, the two coefficient tables and the completeness evidence are
-    written once, here.  What must NOT be shared is the variable *name*: an
-    unrefined and a refined C_n are numbers about two different models, and one
-    name for both would let a later reader mistake one for the other.  Returns
-    the same-site pair list and the per-order totals, which the publishing half
-    needs and would otherwise recompute.
-    """
+    """Report isotropic C_n and completeness; return same-site pairs and totals."""
     report_quadrature(log, frequencies, dispersion.cp_weights,
                       dispersion.quadrature_provenance)
     same = [p for p in dispersion.pairs
@@ -394,60 +297,66 @@ def _dispersion_tables(log, dispersion, *, labels_a, labels_b, frequencies, orde
     return same, totals
 
 
-def _publish_dispersion(wfn, dispersion, *, labels_a, labels_b, frequencies, orders,
-                        same, totals, stem, atom_stem):
-    """Machine-readable C_n under the naming stem its producer owns.
+def _report_owned(key, stem, atom_stem):
+    """Whether ``key`` is a report-owned name.
 
-    ``stem`` is a property of the producing model, not a formatting choice.  The
-    refined and the unrefined coefficient of the same order on the same site
-    pair are different numbers about different models, so they are published
-    under different names and never overwrite one another.
+    That is ``<stem> ...`` or ``ATOM <label> C<n> <atom_stem>[ INCOMPLETE]``.
+    """
+    key = key.upper()
+    if key.startswith(stem.upper() + ' '):
+        return True
+    parts = key.split(' ')
+    tail = ' '.join(parts[3:])
+    return (len(parts) > 3 and parts[0] == 'ATOM' and parts[2][:1] == 'C' and parts[2][1:].isdigit()
+            and tail in (atom_stem.upper(), atom_stem.upper() + ' INCOMPLETE'))
+
+
+def _publish_dispersion(wfn, dispersion, *, labels_a, labels_b, frequencies, orders,
+                        same, totals, stem, atom_stem, extra=()):
+    """Optional QCVariables, with incomplete orders explicitly marked.
+
+    The report owns every ``<stem> ...`` and ``ATOM <label> C<n> <atom_stem>``
+    name: they describe the latest successful publication only.  The full set
+    is planned first; owned names outside it (omitted orders, former sites,
+    the opposite complete/INCOMPLETE variant) are deleted, then the plan is
+    written.  Every other variable is left alone.
     """
     if wfn is None:
         return
+    check_publication_labels(labels_a)
+    check_publication_labels(labels_b)
+
+    def marked(key, complete):
+        return key if complete else key + ' INCOMPLETE'
+
+    plan = []
     for p in dispersion.pairs:
         a, b = labels_a[p.site_a], labels_b[p.site_b]
         for c in p.coefficients:
-            key = f'{stem} C{c.order} {a} {b}'
-            _set(wfn, key if c.unrestricted_complete else key + ' INCOMPLETE', float(c.value))
+            plan.append((marked(f'{stem} C{c.order} {a} {b}', c.unrestricted_complete), float(c.value)))
     for p in same:
         label = labels_a[p.site_a]
         for c in p.coefficients:
-            key = f'ATOM {label} C{c.order} {atom_stem}'
-            _set(wfn, key if c.unrestricted_complete else key + ' INCOMPLETE', float(c.value))
+            plan.append((marked(f'ATOM {label} C{c.order} {atom_stem}', c.unrestricted_complete),
+                         float(c.value)))
     for n in orders:
         value, complete = totals[n]
-        key = f'{stem} C{n} TOTAL'
-        _set(wfn, key if complete else key + ' INCOMPLETE', float(value))
-    _set(wfn, f'{stem} SITE PAIRS', float(len(dispersion.pairs)))
-    _set(wfn, f'{stem} MAX ORDER', float(max(orders)) if orders else 0.)
-    _set(wfn, f'{stem} QUADRATURE NODES', float(len(dispersion.cp_weights)))
+        plan.append((marked(f'{stem} C{n} TOTAL', complete), float(value)))
+    plan.append((f'{stem} SITE PAIRS', float(len(dispersion.pairs))))
+    plan.append((f'{stem} MAX ORDER', float(max(orders)) if orders else 0.))
+    plan.append((f'{stem} QUADRATURE NODES', float(len(dispersion.cp_weights))))
     if dispersion.cp_weights:
-        _set(wfn, f'{stem} QUADRATURE FREQUENCIES',
-             _matrix(np.asarray(frequencies, dtype=float).reshape(1, -1)))
-        _set(wfn, f'{stem} CP WEIGHTS',
-             _matrix(np.asarray(dispersion.cp_weights, dtype=float).reshape(1, -1)))
-
-
-def report_dispersion(log, wfn, dispersion):
-    """Atomic (same-site) and pairwise isotropic C_n tables, completeness kept visible.
-
-    An order with a missing rank pair is NOT comparable with a complete one; the
-    ``complete`` column carries that, the total is withheld unless every
-    contributing coefficient is complete, and an incomplete coefficient's
-    QCVariable name says so.
-    """
-    labels_a, labels_b = dispersion.model_a.labels, dispersion.model_b.labels
-    frequencies = dispersion.model_a.frequencies
-    orders = tuple(c.order for c in dispersion.pairs[0].coefficients) if dispersion.pairs else ()
-    log.items(dataclass_parameters(dispersion, skip=DISPERSION_RECORD_FIELDS)
-              + (('site pairs', len(dispersion.pairs)), ('orders', orders),
-                 ('quadrature nodes', len(dispersion.cp_weights))))
-    same, totals = _dispersion_tables(log, dispersion, labels_a=labels_a, labels_b=labels_b,
-                                      frequencies=frequencies, orders=orders)
-    _publish_dispersion(wfn, dispersion, labels_a=labels_a, labels_b=labels_b,
-                        frequencies=frequencies, orders=orders, same=same, totals=totals,
-                        stem='ATOMIC DISPERSION', atom_stem='DISPERSION COEFFICIENT')
+        plan.append((f'{stem} QUADRATURE FREQUENCIES',
+                     _matrix(np.asarray(frequencies, dtype=float).reshape(1, -1))))
+        plan.append((f'{stem} CP WEIGHTS',
+                     _matrix(np.asarray(dispersion.cp_weights, dtype=float).reshape(1, -1))))
+    plan.extend(extra)
+    current = {key.upper() for key, _ in plan}
+    for key in list(wfn.scalar_variables()) + list(wfn.array_variables()):
+        if _report_owned(key, stem, atom_stem) and key.upper() not in current:
+            wfn.del_variable(key)
+    for key, value in plan:
+        wfn.set_variable(key, value)
 
 
 def report_rank_pair_inventory(log, dispersion, level=2):
@@ -501,17 +410,7 @@ REFINED_DISPERSION_RECORD_FIELDS = ('pairs', 'frequencies', 'cp_weights',
 def refined_dispersion_parameters(*, refinements, max_order, cp_weights,
                                   quadrature_provenance, site_ranks, resolved_site_ranks,
                                   anchor_sha256):
-    """Every tweakable input of the refined isotropic C_n contraction.
-
-    The knobs are ``max_order``, the CP weights and the per-site rank
-    declaration.  The rest of the block is the declared identity of the
-    refinement the scalars were read off -- its penalty scheme, its variable
-    count, its anchor hash and its solver verdict at every node -- because a
-    refined C_n is a number about that refinement and not about the
-    localization the unrefined one comes from.  A non-``Solved`` node still
-    returns numbers, so its status is named here rather than inferred from the
-    coefficients.
-    """
+    """Report contraction controls, refinement identity and each solver verdict."""
     first = refinements[0].model
     return ((('max_order', max_order),
              ('admitted max_order values', '6, 8, 10, 12; odd orders are refused here'),
@@ -541,13 +440,7 @@ def refined_dispersion_parameters(*, refinements, max_order, cp_weights,
 
 
 def report_refined_dispersion(log, wfn, dispersion):
-    """Refined isotropic C_n, under names that cannot collide with the unrefined ones.
-
-    Same kernel, same quadrature, different model: the per-site scalars here
-    come from the PFIT refinement rather than from the localization, so every
-    variable name carries ``REFINED``.  Comparing the two is comparing two
-    models, which is exactly why they are not permitted to share a name.
-    """
+    """Report PFIT-derived C_n, using REFINED names for optional QCVariables."""
     labels = tuple(dispersion.labels)
     orders = tuple(c.order for c in dispersion.pairs[0].coefficients) if dispersion.pairs else ()
     log.items(dataclass_parameters(dispersion, skip=REFINED_DISPERSION_RECORD_FIELDS)
@@ -560,349 +453,6 @@ def report_refined_dispersion(log, wfn, dispersion):
     _publish_dispersion(wfn, dispersion, labels_a=labels, labels_b=labels,
                         frequencies=dispersion.frequencies, orders=orders, same=same,
                         totals=totals, stem='ATOMIC REFINED DISPERSION',
-                        atom_stem='REFINED DISPERSION COEFFICIENT')
-    _set(wfn, 'ATOMIC REFINED DISPERSION ANCHOR SHIFT MAXABS',
-         float(dispersion.anchor_shift_maxabs))
-
-
-# --------------------------------------------- oriented (anisotropic) C_n ----
-
-def placement_parameters(placement, *, prefix):
-    """One whole-model placement, by its declared hashes rather than its matrix.
-
-    A placement is an explicit input even when it is the identity, so it is
-    enumerated either way; the rotation is identified by hash because printing
-    a 3x3 per model in the banner is noise, and the hash is what the core
-    provenance string carries.
-    """
-    rotation = placement.rotation.array
-    return ((prefix + 'translation [bohr]', tuple(map(float, placement.translation.array))),
-            (prefix + 'rotation', 'explicit identity' if np.array_equal(rotation, np.eye(3))
-             else 'explicit proper rotation'),
-            (prefix + 'rotation trace', float(np.trace(rotation))),
-            (prefix + 'rotation_sha256', placement.rotation.canonical_array_sha256),
-            (prefix + 'translation_sha256', placement.translation.canonical_array_sha256))
-
-
-def anisotropic_dispersion_parameters(*, model_a, model_b, placement_a, placement_b,
-                                      max_order, cp_weights, quadrature_provenance):
-    """Every tweakable input of the orientation-resolved C_n contraction.
-
-    Ranks are not declarable at this adapter -- it contracts ranks 1..3 of
-    ``raw_global`` on every site -- and odd orders are admitted here, unlike the
-    isotropic stage, so both facts are stated rather than left to be inferred
-    from an absent knob.  The reciprocity requirement is a parameter of the
-    stage in the sense that matters: it is exact, and there is no policy that
-    loosens it.
-    """
-    return ((('max_order', max_order),
-             ('admitted max_order range', '6..12 inclusive, odd orders included'),
-             ('site ranks', 'not declarable: ranks 1..3 of raw_global on every site'),
-             ('reciprocity policy', 'exact equality required; no repair, no tolerance, '
-                                    'no isotropic fallback'),
-             ('model B', 'this same model' if model_b is model_a
-              else 'a separately declared partner model'))
-            + cp_weight_parameters(cp_weights)
-            + placement_parameters(placement_a, prefix='A.placement.')
-            + placement_parameters(placement_b, prefix='B.placement.')
-            + dispersion_model_parameters(model_a, prefix='A.')
-            + dispersion_model_parameters(model_b, prefix='B.')
-            + provenance_parameters(quadrature_provenance, prefix='quadrature.'))
-
-
-def report_anisotropic_dispersion(log, wfn, dispersion):
-    """Stage exit for the oriented C_n adapter: geometry, C_n, energies, totals.
-
-    These are orientation-resolved *scalars*, not recoupled ``C_n(t, u, J)``
-    components; the record says so and the variable names carry the distinction,
-    so an oriented scalar can never be read back as an isotropic C_n.  Each
-    coefficient carries two completeness flags -- complete within the declared
-    rank-3 model, and complete against the unrestricted rank sum -- and both are
-    printed.  The ``INCOMPLETE`` name mark follows ``unrestricted_complete``,
-    the same convention the isotropic stage uses, so the two publications mean
-    the same thing by the same word.
-    """
-    orders = tuple(c.order for c in dispersion.pairs[0].coefficients) if dispersion.pairs else ()
-    log.items(dataclass_parameters(dispersion, skip=DISPERSION_RECORD_FIELDS)
-              + (('site pairs', len(dispersion.pairs)), ('orders', orders),
-                 ('quadrature nodes', len(dispersion.cp_weights)),
-                 ('truncated interaction energy [Eh]', float(dispersion.truncated_energy)),
-                 ('energy convention', 'sum of -C_n/R^n through max_order; no damping, no '
-                                       'retardation, and no positivity guarantee')))
-    report_quadrature(log, dispersion.frequencies, dispersion.cp_weights,
-                      dispersion.quadrature_provenance)
-    log.table('Placed site-pair geometry (R = B - A; direction is the unit vector along it):',
-              ('A', 'B', 'R [bohr]', 'ex', 'ey', 'ez', 'pair energy [Eh]'),
-              [(p.label_a, p.label_b, p.distance) + tuple(p.direction) + (p.truncated_energy,)
-               for p in dispersion.pairs])
-    if orders:
-        log.table('Orientation-resolved dispersion coefficients (ordered A x B pairs):',
-                  ('A', 'B') + tuple('C%d' % n for n in orders)
-                  + ('declared complete', 'unrestricted complete'),
-                  [(p.label_a, p.label_b) + tuple(c.value for c in p.coefficients)
-                   + (all(c.declared_model_complete for c in p.coefficients),
-                      all(c.unrestricted_complete for c in p.coefficients))
-                   for p in dispersion.pairs])
-        log.table('Orientation-resolved -C_n/R^n contributions [Eh]:',
-                  ('A', 'B') + tuple('E%d' % n for n in orders) + ('pair total',),
-                  [(p.label_a, p.label_b) + tuple(c.energy for c in p.coefficients)
-                   + (p.truncated_energy,) for p in dispersion.pairs], level=2)
-    report_rank_quadruple_inventory(log, dispersion)
-    totals = _anisotropic_totals(dispersion, orders)
-    log.table('Sum over all ordered site pairs:',
-              ('order', 'sum C_n', 'sum -C_n/R^n [Eh]', 'declared complete',
-               'unrestricted complete'),
-              [(n,) + totals[n] for n in orders],
-              note='an incomplete sum is not comparable with a complete reference and is '
-                   'published only under an INCOMPLETE-marked variable name')
-    if wfn is None:
-        return
-    for p in dispersion.pairs:
-        for c in p.coefficients:
-            mark = '' if c.unrestricted_complete else ' INCOMPLETE'
-            _set(wfn, f'ATOMIC ANISOTROPIC DISPERSION C{c.order} '
-                      f'{p.label_a} {p.label_b}' + mark, float(c.value))
-            _set(wfn, f'ATOMIC ANISOTROPIC DISPERSION C{c.order} ENERGY '
-                      f'{p.label_a} {p.label_b}' + mark, float(c.energy))
-        _set(wfn, f'ATOMIC ANISOTROPIC DISPERSION PAIR ENERGY '
-                  f'{p.label_a} {p.label_b}', float(p.truncated_energy))
-    for n in orders:
-        value, energy, _declared, unrestricted = totals[n]
-        mark = '' if unrestricted else ' INCOMPLETE'
-        _set(wfn, f'ATOMIC ANISOTROPIC DISPERSION C{n} TOTAL' + mark, float(value))
-        _set(wfn, f'ATOMIC ANISOTROPIC DISPERSION C{n} TOTAL ENERGY' + mark, float(energy))
-    _set(wfn, 'ATOMIC ANISOTROPIC DISPERSION TRUNCATED ENERGY',
-         float(dispersion.truncated_energy))
-    _set(wfn, 'ATOMIC ANISOTROPIC DISPERSION MAX ORDER', float(dispersion.max_order))
-    _set(wfn, 'ATOMIC ANISOTROPIC DISPERSION SITE PAIRS', float(len(dispersion.pairs)))
-    _set(wfn, 'ATOMIC ANISOTROPIC DISPERSION QUADRATURE NODES',
-         float(len(dispersion.cp_weights)))
-    if dispersion.cp_weights:
-        _set(wfn, 'ATOMIC ANISOTROPIC DISPERSION QUADRATURE FREQUENCIES',
-             _matrix(np.asarray(dispersion.frequencies, dtype=float).reshape(1, -1)))
-        _set(wfn, 'ATOMIC ANISOTROPIC DISPERSION CP WEIGHTS',
-             _matrix(np.asarray(dispersion.cp_weights, dtype=float).reshape(1, -1)))
-    if dispersion.pairs:
-        _set(wfn, 'ATOMIC ANISOTROPIC DISPERSION PAIR DISTANCES',
-             _matrix(np.asarray([p.distance for p in dispersion.pairs],
-                                dtype=float).reshape(1, -1)))
-
-
-def report_rank_quadruple_inventory(log, dispersion, level=2):
-    """How many ordered ``(la, la', lb, lb')`` quadruples each order contracted.
-
-    The quadruple lists are bulk rather than a property -- the unrestricted set
-    reaches theoretical ranks 5..7, so a single order can name hundreds -- and
-    they are reported as counts.  What matters for comparability is already in
-    the two completeness columns beside them.
-    """
-    included, missing = {}, {}
-    for p in dispersion.pairs:
-        for c in p.coefficients:
-            included.setdefault(c.order, set()).update(c.included_rank_quadruples)
-            missing.setdefault(c.order, set()).update(c.missing_rank_quadruples)
-    orders = sorted(set(included) | set(missing))
-    if not orders:
-        return
-    log.table('Rank quadruples entering each order (union over the ordered site pairs):',
-              ('order', 'included', 'missing'),
-              [(n, len(included.get(n, ())), len(missing.get(n, ()))) for n in orders],
-              level=level,
-              note='the missing set counts unrestricted ranks, including the theoretical '
-                   'ranks 5..7 no rank-3 model can carry; an explicit zero block is included, '
-                   'not missing')
-
-
-def _anisotropic_totals(dispersion, orders):
-    """Per-order sums of C_n and of -C_n/R^n, with both completeness flags kept."""
-    totals = {}
-    for n in orders:
-        value, energy, declared, unrestricted = 0., 0., True, True
-        for p in dispersion.pairs:
-            for c in p.coefficients:
-                if c.order == n:
-                    value += float(c.value)
-                    energy += float(c.energy)
-                    declared = declared and bool(c.declared_model_complete)
-                    unrestricted = unrestricted and bool(c.unrestricted_complete)
-        totals[n] = (value, energy, declared, unrestricted)
-    return totals
-
-
-# ------------------------------------------- refinement lattice and targets ----
-
-
-# ------------------------------------------------------------------- PFIT ----
-
-
-# --------------------------------------------------- declared AC iterations ----
-
-def ac_parameters(declaration, *, maxiter, energy_threshold, gradient_threshold,
-                  diis_subspace, shift_damping, max_energy_threshold=None,
-                  max_gradient_threshold=None):
-    """The declared AC model plus the iteration controls, against their limits.
-
-    Every field of the declaration is part of the model's identity, so the block
-    is enumerated from its dataclass rather than written out.  The thresholds
-    are printed beside the loosest values admission accepts, so that a reader
-    can see the declared ones were not relaxed to reach convergence.
-    """
-    return (dataclass_parameters(declaration)
-            + (('label', declaration.label()), ('maxiter', maxiter),
-               ('energy_threshold', energy_threshold),
-               ('gradient_threshold', gradient_threshold),
-               ('loosest admitted energy_threshold', max_energy_threshold),
-               ('loosest admitted gradient_threshold', max_gradient_threshold),
-               ('diis_subspace', diis_subspace), ('shift_damping', shift_damping)))
-
-
-def report_ac_splice(log, *, exact_exchange, fermi_amaldi_scale, electrons, occupied,
-                     basis_functions, origin_bohr, bragg_radii, grid_points, grid_blocks,
-                     active_blocks, active_points, level=1):
-    """Where the declared correction actually acts, in the stage's own numbers.
-
-    Each of these is read off the constructed driver.  The grid is the SCF's own
-    exchange-correlation grid, unchanged and not rebuilt, and the active counts
-    come from the exact ``f > 0`` screen rather than from a tolerance.
-    """
-    log.line('Splice geometry (the SCF exchange-correlation grid, unchanged):', level=level)
-    log.items((('exact exchange a_x', exact_exchange),
-               ('Fermi-Amaldi coefficient c_FA/N', fermi_amaldi_scale),
-               ('electrons N', electrons), ('occupied orbitals', occupied),
-               ('basis functions', basis_functions),
-               ('multipole origin [bohr]', tuple(origin_bohr)),
-               ('Bragg-Slater radii [bohr]', tuple(bragg_radii)),
-               ('grid points', grid_points), ('grid blocks', grid_blocks),
-               ('blocks with f > 0', active_blocks), ('points with f > 0', active_points),
-               ('fraction of grid corrected',
-                0. if not grid_points else active_points / float(grid_points))), level=level)
-    log.line(level=level)
-
-
-AC_ITERATION_HEADERS = ('iter', 'energy [Eh]', 'dE', 'max|[F,D]|', 'shift [Eh]',
-                        'HOMO', 'LUMO', 'clamps')
-
-
-class AcIterationLog:
-    """In-loop row writer for the one iteration that keeps no history record.
-
-    The declared-AC Kohn-Sham loop reports a final ``AcConvergence`` only; it
-    deliberately stores no per-iteration trajectory, and adding one would change
-    a record that the response policy hash covers. So the rows are written as
-    they happen instead. Buffering nothing and storing nothing, this cannot
-    influence the loop's own convergence test.
-    """
-
-    def __init__(self, log, level=2):
-        self._log, self._level = log, int(level)
-        self._open = False
-
-    def row(self, *, iteration, energy, delta, gradient, shift, homo, lumo, clamped):
-        if not self._log.enabled(self._level):
-            return
-        if not self._open:
-            self._log.line('Declared asymptotic-correction SCF iterations '
-                           '(Tozer-Handy shift; DIIS):', level=self._level)
-            self._open = True
-        cells = (int(iteration), float(energy),
-                 None if delta is None else float(delta), float(gradient),
-                 float(shift), float(homo), float(lumo), int(clamped))
-        if not hasattr(self, '_widths'):
-            self._widths = [max(len(h), 14) for h in AC_ITERATION_HEADERS]
-            self._log.line('  '.join(h.rjust(w) for h, w in
-                                     zip(AC_ITERATION_HEADERS, self._widths)),
-                           level=self._level, indent=4)
-        self._log.line('  '.join(_fmt(c).rjust(w) for c, w in zip(cells, self._widths)),
-                       level=self._level, indent=4)
-
-
-#: Virtual orbitals printed above the LUMO.  The rest of the virtual spectrum is
-#: bulk; the full vector is published as one array instead.
-AC_SPECTRUM_VIRTUALS = 10
-
-
-def report_ac_spectrum(log, wfn, energies, nocc, *, mark='', level=1):
-    """Orbital energies of the corrected potential: the occupied set and the gap.
-
-    The eigenvalues are what an asymptotic correction is for, so they are this
-    stage's property rather than an intermediate.  Only the low-lying virtuals
-    are printed; the full vector is published once as a machine-readable array.
-    """
-    energies = np.asarray(energies, dtype=float).ravel()
-    nocc = int(nocc)
-    if nocc < 1 or energies.size <= nocc:
-        raise ValueError('orbital energies must cover the occupied set and one virtual')
-    stop = min(energies.size, nocc + AC_SPECTRUM_VIRTUALS)
-    log.table('Corrected orbital energies (HOMO %s, LUMO %s, gap %s Eh):'
-              % (_fmt(float(energies[nocc - 1])), _fmt(float(energies[nocc])),
-                 _fmt(float(energies[nocc] - energies[nocc - 1]))),
-              ('orbital', 'occupation', 'energy [Eh]'),
-              [(i + 1, 2. if i < nocc else 0., float(energies[i])) for i in range(stop)],
-              level=level,
-              note=('%d higher virtual orbitals not printed' % (energies.size - stop))
-              if energies.size > stop else None)
-    _set(wfn, 'ATOMIC DECLARED AC ORBITAL ENERGIES' + mark, _matrix(energies.reshape(1, -1)))
-
-
-def report_ac_convergence(log, wfn, convergence, declaration, *, converged):
-    """Stage exit for the declared AC: what the iteration actually achieved.
-
-    A refused run is narrated too -- the producer reports before it refuses --
-    so an unconverged record's variables carry an ``UNCONVERGED`` mark rather
-    than the names a converged run publishes.  Nothing here softens a refusal:
-    this reports what the loop did and decides no admission.
-    """
-    log.items((('declaration', declaration.label()),
-               ('converged', bool(converged)),
-               ('iterations', int(convergence.iterations)),
-               ('delta energy', float(convergence.delta_energy)),
-               ('orbital gradient', float(convergence.orbital_gradient)),
-               ('energy threshold', float(convergence.energy_threshold)),
-               ('gradient threshold', float(convergence.gradient_threshold)),
-               ('Tozer-Handy shift', float(convergence.shift)),
-               ('shift clamp hits', int(convergence.shift_clamped)),
-               ('HOMO', float(convergence.homo)), ('LUMO', float(convergence.lumo)),
-               ('gap', float(convergence.lumo - convergence.homo)),
-               ('declared IP', float(declaration.ionization_potential)),
-               ('I + eps_HOMO', float(declaration.ionization_potential + convergence.homo)),
-               ('energy (not variational)', float(convergence.energy)),
-               ('plain SCF reference energy', float(convergence.reference_energy)),
-               ('energy above plain SCF',
-                float(convergence.energy - convergence.reference_energy)),
-               ('grid points', int(convergence.grid_points))))
-    if wfn is None:
-        return
-    mark = '' if converged else ' UNCONVERGED'
-    _set(wfn, 'ATOMIC DECLARED AC CONVERGED', 1. if converged else 0.)
-    for key, value in (('ITERATIONS', float(convergence.iterations)),
-                       ('SHIFT', float(convergence.shift)),
-                       ('SHIFT CLAMP HITS', float(convergence.shift_clamped)),
-                       ('HOMO', float(convergence.homo)),
-                       ('LUMO', float(convergence.lumo)),
-                       ('GAP', float(convergence.lumo - convergence.homo)),
-                       ('DELTA ENERGY', float(convergence.delta_energy)),
-                       ('ORBITAL GRADIENT', float(convergence.orbital_gradient)),
-                       ('DECLARED IP', float(declaration.ionization_potential)),
-                       ('ENERGY NOT VARIATIONAL', float(convergence.energy)),
-                       ('REFERENCE SCF ENERGY', float(convergence.reference_energy)),
-                       ('GRID POINTS', float(convergence.grid_points))):
-        _set(wfn, 'ATOMIC DECLARED AC ' + key + mark, value)
-
-
-def ac_application_parameters(record):
-    """What applying a declared-AC record replaces, and what that costs.
-
-    The application has no tweakable input of its own: its parameters are the
-    identity of the record being applied, and the two consequences the module
-    docstring is explicit about -- a non-variational energy and an invalidated
-    SCF seal -- are stated here rather than left for a reader to infer.
-    """
-    return (('declaration', record.declaration.label()),
-            ('basis functions', int(np.asarray(record.orbitals).shape[0])),
-            ('occupied orbitals', int(record.nocc)),
-            ('Tozer-Handy shift', float(record.convergence.shift)),
-            ('iterations', int(record.convergence.iterations)),
-            ('replaced state', 'Ca, Cb, Da, Db, Fa, Fb, epsilon_a, epsilon_b, energy'),
-            ('energy replaced by', 'the plain functional at the corrected density, '
-                                   'which is not a variational minimum'),
-            ('SCF seal', 'verified, then deliberately invalidated by this mutation'))
+                        atom_stem='REFINED DISPERSION COEFFICIENT',
+                        extra=(('ATOMIC REFINED DISPERSION ANCHOR SHIFT MAXABS',
+                                float(dispersion.anchor_shift_maxabs)),))

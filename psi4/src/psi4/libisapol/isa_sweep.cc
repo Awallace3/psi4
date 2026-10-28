@@ -42,13 +42,9 @@ IsaNoTailSweepResult IsaASweep::run_with_tails(const IsaSweepState& old, const s
     return run_prepared(old,grids,tails,apply_tail,options,{});
 }
 std::vector<IsaAFitData> IsaASweep::prepare(const std::vector<IsaNoTailGrid>& grids, size_t max_bytes) const {
-    // Checked numerical-payload admission: basis + twelve point vectors + two
-    // metrics and metadata per atom, plus the density block's 8 MiB scratch.
-    // Preparation temporarily owns copied xyz/weights/shape/shape_sum (6*np)
-    // together with assembled weights/shape/shape_sum/radii/density (5*np).
-    // Twelve vectors conservatively cover that eleven-vector construction peak.
-    // Container overhead, owned input grids and shape reuse are separate; this
-    // is not a process RSS cap. No partial persistent cache on failed admission.
+    // Admission: basis + twelve point vectors (covering the eleven-vector
+    // construction peak) + two metrics and metadata per atom, plus the density
+    // block's 8 MiB scratch. Not a process RSS cap; nothing is cached on failure.
     constexpr size_t budget = 192 * 1024 * 1024, scratch = 8 * 1024 * 1024;
     const size_t available = std::min(budget,max_bytes);
     if (available < scratch) return {};

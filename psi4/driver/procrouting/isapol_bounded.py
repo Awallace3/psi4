@@ -1,35 +1,44 @@
 # Copyright (c) 2007-2026 The Psi4 Developers.
 # SPDX-License-Identifier: LGPL-3.0-only
-"""Explicit bounded PBE0/DF-centre response → LW → PFIT → dispersion.
+"""Explicit bounded response -> distributed moments -> LW -> PFIT -> isotropic dispersion.
 
-The entry point takes a live converged wavefunction and scientific declarations,
-never reference output or a legacy NativeProperties record. It uses plain-DF
-two-electron operators and a screened fitted-density ALDA kernel with eta-zero
-kernel/target legs; separately fitted anchor legs enter production LW. This
-declared DF-centre model does NOT perform or infer an ISA-A partition.
+The entry point takes a live converged wavefunction and scientific
+declarations, never reference output or a legacy NativeProperties record.
+The response is the stage-04 ``BoundedResponse`` (reference H2H1 by default,
+explicit native FDDS on request), the targets and refinement are the stage-05
+``fitted_point_targets``/``refine_streamed`` and the contraction is the
+stage-06 ``refined_isotropic_dispersion``. This module owns only their order,
+the shared resource ledger and the result record.
 
-The route has its own cumulative resource admission.
+Distributions are the analytic DF-centre producer (default), supplied
+``DistributedMoments``, an explicitly declared, experimental ISA-A partition and
+the native all-shell MBIS partition. No partition is inferred from another.
 """
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 import hashlib
-from pathlib import Path
-import tempfile
 
 import numpy as np
 from psi4 import core
 
-from . import isapol_lw as lw, isapol_refine as refine
-from .isapol_bounded_response import (
-    BoundedResources, _H2H1Response, _Ledger, _Store, _assemble, _kernel, _stability,
+from . import isapol_logging as _lg, isapol_lw as lw, isapol_refine as refine
+from .isapol_bounded_response import BoundedResources, BoundedResponse
+from .isapol_distribution import (
+    DistributedMoments, isa_moments, mbis_moments, validate_isa_inputs, validate_mbis_inputs,
 )
-from .isapol_df_multipoles import df_centre_multipoles
-from .isapol_native import Quadrature, _context
-from .isapol_native_correction import validate_correction, require_scf_seal
-from .isapol_native_factors import native_plain_df_operators, native_constrained_ov
-from .isapol_native_partition import BasisRecipe, adapt_main
-from .isapol_native_propagator import KernelSmoothing
-from .isapol_native_response import native_restricted_state_from_wavefunction
-from .isapol_pfit_stream import PackedDesignRows
+from .isapol_pfit_stream import PackedDesignRows, fitted_point_targets, refine_streamed
+
+#: Distributions this orchestrator dispatches; every other name is refused.
+DISTRIBUTIONS = ('df_centre_analytic', 'isa', 'mbis', 'supplied')
+#: Bounded lattice and refinement sizes (complete cloud, every point pair).
+MAX_FIT_POINTS = 2000
+MAX_PARAMETERS = 64
+#: Finite opt-in refinement allowance (``max_parameters``): two rank-2 site
+#: types x 36. A policy bound, not a solver or resource limit; the default
+#: stays MAX_PARAMETERS.
+MAX_PARAMETER_ALLOWANCE = 72
+#: Rows per PFIT design block.
+BLOCK_ROWS = 4096
 
 
 @dataclass(frozen=True)
@@ -39,8 +48,6 @@ class BoundedProperties:
     The ledger reports explicit numeric plans, not measured resident memory.
     Arrays retained here are small local tensors; AUX and full OV intermediates
     are private ephemeral disk checkpoints, removed when the call exits.
-    ``dispersion`` remains isotropic; ``recoupled_dispersion`` is an owned
-    local-axis angular result only when explicitly requested, otherwise None.
     """
     frequencies: tuple
     local_tensors: tuple
@@ -56,385 +63,433 @@ class BoundedProperties:
         return tuple(r.refined_tensors for r in self.refinements)
 
 
-def _matrix(a):
-    a = np.asarray(a, dtype=float)
-    result = core.IsaPfitMatrix()
-    result.rows, result.cols, result.values = a.shape[0], a.shape[1], a.ravel().tolist()
-    return result
+@contextmanager
+def _closes_failed_stage(log):
+    """Close the open stage as FAILED on any error, so it is never reported complete."""
+    try:
+        yield
+    except Exception as error:
+        log.stage_failed(error)
+        raise
 
 
-def _refined_dispersions(results, quadrature, max_order, ledger, *, recoupled=False):
-    """Common final stage; ordinary requests never import/construct recoupling."""
-    isotropic = refine.refined_isotropic_dispersion(results, cp_weights=quadrature.cp_weights,
-        quadrature_provenance=quadrature.provenance, max_order=max_order)
+def _scalar(name, value, upper=float('inf')):
+    if (isinstance(value, (bool, np.bool_)) or not np.isscalar(value)
+            or not np.isfinite(value) or not 0 <= value < upper):
+        raise ValueError(f'invalid {name}')
+
+
+def _target_bytes(naux, npoint):
+    """``fitted_point_targets`` plan for one response, plus the live coefficient response."""
+    row_count, block = npoint*(npoint+1)//2, min(32, npoint)
+    return 8*(3*npoint+3*block+2*naux*npoint+npoint*npoint+naux*block+row_count) + 8*naux*naux
+
+
+def _pfit_plan(npoint, channels, count, nt):
+    """Planned bytes and work of the complete-cloud refinement.
+
+    Copied fields, row producer and C++ solver workspaces on top of the
+    retained packed targets; both design passes are charged up front.
+    """
+    row_count, chunk = npoint*(npoint+1)//2, PackedDesignRows.MAX_CHUNK
+    plan = (8*(5*npoint*channels+npoint*channels*count+2*chunk*npoint*count
+               +16*count*count*nt+BLOCK_ROWS*(8*count+32*nt)) + 8*1024**2)
+    work = (2*((row_count+chunk*npoint)*2*channels*count+row_count*(4*count+8))
+            +2*row_count*count*count+4*row_count*count*nt)
+    return plan, work
+
+
+def check_max_parameters(value, name='max_parameters'):
+    """Refuse anything but an exact Python int in 1..MAX_PARAMETER_ALLOWANCE.
+
+    bool, float, str and NumPy integers are refused, so a limit is never coerced.
+    """
+    if type(value) is not int or not 1 <= value <= MAX_PARAMETER_ALLOWANCE:
+        raise ValueError(f'{name} must be an int in 1..{MAX_PARAMETER_ALLOWANCE}')
+    return value
+
+
+def _refinement_node(sites, anchors, omega, *, cutoff, weight_type, weight_coefficient,
+                     declared, static_penalized, static_reference, provenance):
+    """Published static-mask construction, with a separate reference snapshot.
+
+    Keep the published current-node completeness check even for explicit masks:
+    undeclared new current components remain an error, not silently discarded.
+    """
+    if static_reference is None:
+        static_reference = (omega, refine._validated_anchor_tensors(sites, anchors))
+    model = refine.refinement_model(sites, anchors, frequency_au=omega, cutoff=cutoff,
+        weight_type=weight_type, weight_coefficient=weight_coefficient,
+        declared_variables=declared, penalized_variables=static_penalized, provenance=provenance)
+    if declared is None:
+        declared = model.parameter_labels
+        derived = model
+        model = refine.refinement_model(sites, anchors, frequency_au=omega, cutoff=cutoff,
+            weight_type=weight_type, weight_coefficient=weight_coefficient,
+            declared_variables=declared, provenance=provenance)
+        if (model.parameter_entries, model.anchors, model.strengths) != (
+                derived.parameter_entries, derived.anchors, derived.strengths):
+            raise RuntimeError('cutoff-derived variable list does not reproduce its own model')
+    if static_penalized is None:
+        unpenalized = set(model.unpenalized_variables)
+        static_penalized = tuple(n for n in model.parameter_labels if n not in unpenalized)
+    if static_reference[0] == 0.:
+        static_hash = refine._anchor_hash(static_reference[1])
+        model = replace(model, penalty_selection='static_reference',
+            static_reference_sha256=static_hash, selection_sha256='',
+            provenance=(model.provenance + '; penalty_selection=static_reference; '
+                        f'static_reference_sha256={static_hash}; anchor_sha256={model.anchor_sha256}'))
+    else:
+        # Published all-dynamic grids select from their first node as well.
+        # Preserve that admitted call form without mislabelling it "static".
+        subset_hash = hashlib.sha256(repr(tuple(sorted(static_penalized))).encode()).hexdigest()
+        model = replace(model, penalty_selection='explicit_subset', selection_sha256=subset_hash)
+    return model, declared, static_penalized, static_reference
+
+
+def refinement_models(sites, frequency_anchors, *, cutoff, weight_type, weight_coefficient,
+                      declared_variables=None, provenance=''):
+    """Engine-free builder with the same STATIC default as bounded_properties.
+
+    Not cleanup's per-current-node default. It retains the published subset
+    construction/completeness behavior and adds immutable reference identity.
+    """
+    nodes = tuple(frequency_anchors)
+    if not nodes:
+        raise ValueError('at least one frequency/anchor node required')
+    sites = refine._validated_sites(sites)
+    declared = None if declared_variables is None else tuple(declared_variables)
+    static_penalized = reference = None
+    models = []
+    for omega, anchors in nodes:
+        model, declared, static_penalized, reference = _refinement_node(sites, anchors, omega,
+            cutoff=cutoff, weight_type=weight_type, weight_coefficient=weight_coefficient,
+            declared=declared, static_penalized=static_penalized, static_reference=reference,
+            provenance=provenance)
+        models.append(model)
+    return tuple(models)
+
+
+def _refined_dispersions(results, quadrature, max_order, ledger, *, recoupled=False, log, wfn=None):
+    """Optional angular contraction precedes any isotropic publication.
+
+    An ordinary call never imports the angular consumer or queries its tables.
+    A failed optional contraction therefore cannot leave new QCVariables behind.
+    """
     angular = None
     if recoupled:
         from .isapol_native_recoupled import refined_recoupled_dispersion
         angular = refined_recoupled_dispersion(results, cp_weights=quadrature.cp_weights,
             quadrature_provenance=quadrature.provenance, max_order=max_order, ledger=ledger)
+    isotropic = refine.refined_isotropic_dispersion(results, cp_weights=quadrature.cp_weights,
+        quadrature_provenance=quadrature.provenance, max_order=max_order, log=log, wfn=wfn)
     return isotropic, angular
 
 
-def _pack_targets(packed, column, coefficient, potentials, ledger):
-    """Store one frequency's packed lower-triangle point-response targets."""
-    naux, npoint = potentials.shape
-    ledger.admit('point-response targets', 8*(2*npoint*npoint+naux*npoint)+8*1024**2,
-                 2*naux*naux*npoint+2*naux*npoint*npoint)
-    targets = -(potentials.T @ coefficient) @ potentials
-    start = 0
-    for i in range(npoint):
-        packed[start:start+i+1, column] = targets[i, :i+1]
-        start += i+1
-
-
-def _stream_fit(models, points, packed, ledger, source):
-    """One complete-cloud PFIT per frequency over a single shared design.
-
-    The design rows depend only on the sites, channels and points, so every
-    frequency is solved from the same two row traversals; column ``t`` of
-    ``packed`` holds the targets of ``models[t]``.
-    """
-    npoint, nt = len(points), len(models)
-    model = models[0]
-    channels, count = model.channel_count, model.parameter_count
-    if count > 64:
-        raise ValueError('bounded refinement supports at most 64 parameters')
-    row_count = npoint*(npoint+1)//2
-    # Copied fields, row producer and C++ solver workspaces on top of the
-    # retained packed targets. No per-block allowance reset.
-    chunk = PackedDesignRows.MAX_CHUNK
-    plan = (8*(5*npoint*channels+npoint*channels*count+2*chunk*npoint*count
-               +16*count*count*nt+4096*(8*count+32*nt)) + 8*1024**2)
-    work = (2*((row_count+chunk*npoint)*2*channels*count+row_count*(4*count+8))
-            +2*row_count*count*count+4*row_count*count*nt)
-    ledger.admit('complete-cloud refinement', plan, work)
-    fields = np.empty((npoint, channels))
-    for start in range(0, npoint, 256):
-        fields[start:start+256] = refine.channel_fields(points[start:start+256], model)
-    rows = PackedDesignRows(model, fields, block_rows=4096, max_passes=2,
-                            max_bytes=ledger.resources.max_bytes-ledger.reserved)
-    declaration = core.IsaPfitRowModel()
-    declaration.channel_labels = list(model.channel_labels)
-    declaration.parameter_labels = list(model.parameter_labels)
-    declaration.parameter_units = ['atomic_units']*count
-    declaration.fixed, declaration.fixed_values = [False]*count, [0.]*count
-    declaration.provenance = model.provenance
-    cloud = core.IsaPfitCloudRows()
-    cloud.label, cloud.points, cloud.full_row_count = 'complete native cloud', npoint, row_count
-    cloud.maximum_block_rows = 4096
-    provenance = core.IsaPfitTargetProvenance()
-    provenance.origin = core.IsaPfitTargetOrigin.NativeFittedPointResponse
-    provenance.convention = core.IsaPfitTargetConvention.NegativeInducedPotentialPerUnitSourceChargeAtomicUnits
-    provenance.source_id = source['state_sha256']
-    provenance.response_representation = 'fitted_density_coefficients'
-    provenance.auxiliary_basis_id = source['auxiliary_sha256']
-    provenance.generation_record = source['model']
-    problems = []
-    for m in models:
-        if m.parameter_labels != model.parameter_labels or m.channel_labels != model.channel_labels:
-            raise ValueError('frequency nodes must share one refinement model')
-        problem = core.IsaPfitRowProblem()
-        problem.frequency_au = m.frequency_au
-        problem.model, problem.cloud, problem.target_provenance = declaration, cloud, provenance
-        penalty = core.IsaPfitMatrixPenalty()
-        penalty.matrix, penalty.anchor = _matrix(np.diag(m.strengths)), list(m.anchors)
-        problem.penalty = penalty
-        problems.append(problem)
-    def blocks():
-        for start, design in rows.blocks():
-            yield start, design, packed[start:start+len(design)].copy()
-    options = core.IsaPfitOptions()
-    options.solver = core.IsaPfitSolver.NormalEquationsDSYSV
-    results = []
-    for m, result in zip(models, core.isa_pfit_solve_rows_multi(problems, blocks, options)):
-        if result.status != core.IsaPfitStatus.Solved:
-            raise ValueError(f'PFIT did not solve: {result.status}')
-        parameters = tuple(result.parameters)
-        tensors = [np.zeros((s.component_count, s.component_count)) for s in m.sites]
-        for value, entries in zip(parameters, m.parameter_entries):
-            for site, i, j in entries:
-                tensors[site][i, j] = tensors[site][j, i] = value
-        tensors = tuple(np.frombuffer(t.tobytes(), dtype=float).reshape(t.shape) for t in tensors)
-        results.append(refine.RefinementResult(
-            m, parameters, tensors, max(abs(a-b) for a, b in zip(parameters, m.anchors)),
-            result.status, result.diagnostics, result, 'PFIT_refined_against_point_to_point_response'))
-    return results
-
-
-def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution,
+def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution='df_centre_analytic',
                        sites, bonds, quadrature, response_grid, smoothing,
                        shell_cutoff, charge_penalty, anchor_metric_damping,
                        lattice_options, localization_rank_limit,
                        weight_type, weight_coefficient, cutoff, resources,
                        scf_correction, expected_grac_shift=None,
-                       declared_variables=None, max_order=10, scratch_directory=None, log=None,
+                       declared_variables=None, max_parameters=MAX_PARAMETERS, max_order=10,
+                       scratch_directory=None, log=None,
+                       distributed_moments=None, response='reference_h2h1', fdds=None,
+                       publish_qcvariables=False, partition_recipe=None, partition_grid=None,
                        recoupled_dispersion=False):
     """Run the complete native chain under one explicit resource contract.
 
     Scientific scope: canonical restricted C1 PBE0, NONE or FIXED_GRAC, plain
-    Coulomb-DF operators, Slater/PW92 ALDA of the plain fitted density,
-    df_centre_analytic rank-4 distribution, eta=0 target/kernel fit, and the
-    separately declared anchor damping. All sites/bonds/frames/ranks, full
+    Coulomb-DF operators, Slater/PW92 ALDA of the plain fitted density, and
+    rank-4 distributed moments. ``response='reference_h2h1'`` (default) solves
+    the eta=0 target/kernel and separately damped anchor legs and localizes
+    under the strict production LW gate. ``response='native_fdds'`` (with
+    ``fdds=NativeFDDSOptions``) uses the native declared-AUX FDDS response and
+    the ``reported_input_sum_rule`` LW policy that runner declares: local
+    charge is report-only and the rank-0 remainder is not carried into the
+    local tensors, PFIT or C_n. All sites/bonds/frames/ranks, the full
     response grid, quadrature, lattice and fit constraints are caller inputs.
     No ambient options, inferred carbon policy or external reference readers.
 
-    A successful live SCF seal is required even for NONE. This function neither
-    runs SCF nor manufactures convergence evidence for a serialized state.
+    ``distribution='df_centre_analytic'`` charges each AUX function to its own
+    centre; ``distribution='supplied'`` takes caller ``distributed_moments``
+    under the same identity checks. ``distribution='isa'`` (experimental)
+    requires an explicit ``partition_recipe`` (PartitionRecipe) and a full
+    molecular ``partition_grid`` (finite float64 rows x,y,z,weight); a fresh
+    native ISA-A iteration on the live wavefunction produces Q, and it is
+    refused before any response work if the iteration does not converge.
+    ``distribution='mbis'`` needs only ``partition_grid``: a fresh native
+    MBIS_CHARGES attempt (the MBIS_* options) on the live wavefunction gives
+    the all-shell proatoms whose stockholder weights produce Q; it takes no
+    PartitionRecipe, never runs ISA and is refused before any response work
+    if native MBIS fails. No choice changes a response or LW gate. The ISA and
+    MBIS numeric/work plans are conservative, not RSS or CPU caps.
+
+    A successful live SCF seal is required even for NONE; SCF is never run here.
     ``lattice_options`` is an explicit core.FitPointsOptions (at most 2000
-    points). All pairs and both PFIT passes are included; no truncated cloud.
-    ``scratch_directory`` is a parent for a fresh private temporary directory,
-    never a directory to overwrite or resume. Caller-owned wavefunction/basis
-    metadata and implementation-specific BLAS/Libint workspace are outside the
-    explicit numeric cap. Return values make no automatic CamCASP parity claim.
-    ``log`` optionally supplies an isapol_logging.StageLog for stage timings,
-    input dimensions and numerical diagnostics; no numerical policy is changed.
-    ``recoupled_dispersion=True`` additionally contracts this run's full
-    PFIT-refined local tensors through the native Cn(t,u,J) core under the
-    same ledger. No charge response/reciprocity repair or dimer energy is added.
+    points); all pairs and both PFIT passes are used, with at most
+    ``max_parameters`` fit variables (default 64; an explicit opt-in may raise
+    it to at most 72, which changes admission only, never the model, labels or
+    fit). The variable list and its penalized subset are both fixed at the
+    first (static) node, as CamCASP's sweep fixes them: every later node
+    penalizes exactly the variables the static cutoff selected, with its own
+    anchor and the same weight formula, and leaves declared variables the
+    static cutoff did not select free. ``scratch_directory`` is the parent of
+    a fresh private temporary directory, never overwritten or resumed.
+    Caller-owned wavefunction/basis metadata and BLAS/Libint workspace are
+    outside the numeric cap. ``log`` is an optional isapol_logging.StageLog
+    for timings, diagnostics and the dispersion tables. ``publish_qcvariables`` publishes the refined-dispersion
+    QCVariables on ``wfn`` after a successful contraction (the oeprop route);
+    by default nothing is written to the wavefunction.
+    ``recoupled_dispersion=True`` additionally contracts full refined local
+    tensors into local-axis Cn(t,u,J) under the SAME cumulative ledger. It is
+    opt-in, not an orientation-resolved energy or replacement isotropic model.
     """
-    from .isapol_logging import StageLog
     if log is None:
-        log = StageLog(1)
-    if not isinstance(log, StageLog):
+        log = _lg.StageLog(1)
+    if not isinstance(log, _lg.StageLog):
         raise TypeError('log must be a StageLog')
-    log.stage('Bounded input validation')
-    if not isinstance(resources, BoundedResources):
-        raise TypeError('explicit BoundedResources required')
-    if not isinstance(auxiliary_recipe, BasisRecipe) or distribution != 'df_centre_analytic':
-        raise ValueError('explicit AUX recipe and df_centre_analytic distribution required')
-    if not isinstance(quadrature, Quadrature) or not isinstance(smoothing, KernelSmoothing):
-        raise TypeError('explicit Quadrature and KernelSmoothing required')
-    if scf_correction not in ('NONE', 'FIXED_GRAC'):
-        raise ValueError('bounded route supports NONE or FIXED_GRAC only')
-    if not isinstance(lattice_options, core.FitPointsOptions):
-        raise TypeError('explicit FitPointsOptions required')
-    if not 1 <= lattice_options.npoints <= 2000:
-        raise ValueError('bounded lattice requires 1..2000 points')
-    for name, value, upper in (('shell_cutoff', shell_cutoff, float('inf')),
-                               ('charge_penalty', charge_penalty, float('inf')),
-                               ('anchor_metric_damping', anchor_metric_damping, 1.)):
-        if isinstance(value, (bool, np.bool_)) or not np.isscalar(value) or not np.isfinite(value) or not 0 <= value < upper:
-            raise ValueError(f'invalid {name}')
-    if type(localization_rank_limit) is not int or not 1 <= localization_rank_limit <= 3:
-        raise ValueError('localization_rank_limit must be 1..3')
-    sites, bonds = tuple(sites), tuple(tuple(b) for b in bonds)
-    if not 1 <= len(sites) <= 64 or any(not isinstance(s, refine.RefinementSite) for s in sites):
-        raise TypeError('explicit RefinementSite sequence required')
-    if len({s.label for s in sites}) != len(sites):
-        raise ValueError('site labels must be unique')
-    seen = set()
-    for edge in bonds:
-        if (len(edge) != 2 or any(type(i) is not int or not 0 <= i < len(sites) for i in edge)
-                or edge[0] == edge[1] or tuple(sorted(edge)) in seen):
-            raise ValueError('invalid self/duplicate/out-of-range bond')
-        seen.add(tuple(sorted(edge)))
-    if type(max_order) is not int or max_order not in refine.DISPERSION_ORDERS:
-        raise ValueError('max_order must be 6, 8, 10 or 12')
-    if type(recoupled_dispersion) is not bool:
-        raise TypeError('recoupled_dispersion must be an explicit bool')
-    if recoupled_dispersion:
-        from .isapol_native_recoupled import recoupled_plan
-        # Reject unsupported ranks/core-size requests before response/LW/PFIT.
-        recoupled_plan(sites, len(quadrature.frequencies), max_order)
-    if type(weight_type) is not int or weight_type not in refine.WEIGHT_TYPES:
-        raise ValueError('invalid weight_type')
-    for name, value in (('weight_coefficient', weight_coefficient), ('cutoff', cutoff)):
-        if isinstance(value, (bool, np.bool_)) or not np.isscalar(value) or not np.isfinite(value) or value < 0:
-            raise ValueError(f'invalid {name}')
-    declared_variables = None if declared_variables is None else tuple(declared_variables)
-    if declared_variables is not None and not 1 <= len(declared_variables) <= 64:
-        raise ValueError('bounded refinement requires 1..64 declared variables')
-    if any(s.rank_limit > localization_rank_limit for s in sites):
-        raise ValueError('refinement rank exceeds localization rank')
-    origins = np.asarray([s.origin_bohr for s in sites])
-    geometry = np.asarray(wfn.molecule().geometry())
-    if (origins.shape != geometry.shape or not np.array_equal(origins, geometry)
-            or not np.array_equal(auxiliary_recipe.centres, geometry)):
-        raise ValueError('site, AUX and wavefunction centres must agree in order and bohr coordinates')
-    if (not isinstance(response_grid, np.ndarray) or response_grid.dtype != np.float64
-            or response_grid.ndim != 2 or response_grid.shape[1] != 4
-            or not len(response_grid)):
-        raise ValueError('finite float64 full response grid (rows,4) required')
-    if 3*response_grid.nbytes > resources.max_bytes:
-        raise ValueError('full response grid numeric byte resource limit')
-    if not np.isfinite(response_grid).all():
-        raise ValueError('finite response grid required')
-    correction = validate_correction(wfn, scf_correction=scf_correction,
-                                     expected_grac_shift=expected_grac_shift, require_canonical=True)
-    require_scf_seal(wfn)
-    state = native_restricted_state_from_wavefunction(wfn, caller_converged=caller_converged,
-                                                      max_bytes=resources.max_bytes)
-    grid = np.array(response_grid, copy=True)
-    # Reserve caller input/copy overlap, state and MAIN transformations together.
-    reserved = 2*grid.nbytes+state.planned_bytes+32*state.nbf**2
-    ledger = _Ledger(resources, reserved)
-    ledger.admit('state and grid', 0)
-    if recoupled_dispersion:
-        numeric, _ = recoupled_plan(sites, len(quadrature.frequencies), max_order)
-        ledger.admit('native recoupled preflight', numeric)
-    main = adapt_main(wfn, caller_converged=True)
-    coefficients = main.transform @ np.asarray(state.orbitals())
-    energies = np.asarray(state.energies()).copy()
-    auxiliary = auxiliary_recipe.build('MolecularAux')
-    p, no, nv = auxiliary.nfunction, state.nocc, state.nvir
-    n, q, nf = no*nv, 25*len(sites), len(quadrature.frequencies)
-    log.items((('AUX / occupied / virtual / OV', (p, no, nv, n)),
-               ('sites / frequencies / grid points', (len(sites), nf, len(grid))),
-               ('distribution', distribution), ('correction', repr(correction)),
-               ('resource ceilings', repr(resources))))
-    retained = response_grid.nbytes+nf*(len(sites)*25*25*8*4+4*64*64*8)
-    frequency_plan = 8*(3*n*n+4*n*(p+q)+p*p+q*q+16*n)+8*1024**2
-    if frequency_plan+retained > resources.max_bytes:
-        raise ValueError('complete frequency plan exceeds shared numeric byte resource limit')
-    frequency_work = nf*int(2*n**3+2*n**3/3+8*n*n*(p+q))
-    if frequency_work > resources.max_work:
-        raise ValueError('complete quadrature exceeds cumulative work resource limit')
-    source = dict(state_sha256=_context(wfn), auxiliary_sha256=hashlib.sha256(repr(auxiliary_recipe).encode()).hexdigest(),
-                  correction=repr(correction), distribution=distribution,
-                  grid_sha256=hashlib.sha256(grid.tobytes()).hexdigest(),
-                  kernel_smoothing=repr(smoothing), shell_cutoff=float(shell_cutoff),
-                  sites=repr(sites), bonds=bonds, frequencies=quadrature.frequencies,
-                  cp_weights=quadrature.cp_weights, localization_rank_limit=localization_rank_limit,
-                  weight_type=weight_type, weight_coefficient=weight_coefficient, cutoff=cutoff,
-                  declared_variables=None if declared_variables is None else tuple(declared_variables),
-                  model=f'plain DF PBE0; fitted-density ALDA Slater/PW92; lambda={charge_penalty}; '
-                        f'target/kernel eta=0; anchor eta={anchor_metric_damping}; original H2H1; -B.T C0 B')
-    with tempfile.TemporaryDirectory(prefix='psi4-bounded-', dir=scratch_directory) as temporary:
-        store = _Store(Path(temporary), ledger)
-        log.stage('Native plain-DF factors', (('exact exchange', .25), ('tile columns', 512)))
-        ledger.admit('native factor work reservation', 0,
-                     8*p*(no+nv)**3+4*p*p*(no+nv)**2+2*p**3)
-        ops = native_plain_df_operators(auxiliary, main.basis, coefficients, energies,
-            nocc=no, shell_count=len(auxiliary_recipe.shells), exact_exchange=.25,
-            tile_columns=512,
-            max_bytes=resources.max_bytes-ledger.reserved)
-        ledger.admit('native factors', ops.construction_planned_bytes)
-        for name, value in (('gaps', ops._gaps), ('oo', ops._oo), ('ov', ops._ov),
-                            ('density', ops.plain_density_coefficients)):
-            store.save(name, value)
-        tiles = (len(ops._dual_ov.tiles), len(ops._dual_vv.tiles))
-        for kind in ('ov', 'vv'):
-            for i, tile in enumerate(getattr(ops, '_dual_'+kind).tiles):
-                store.save(f'dual{kind}{i}', tile)
-        del tile, value
+    with _closes_failed_stage(log):
+        log.stage('Bounded input validation')
+        if not isinstance(resources, BoundedResources):
+            raise TypeError('explicit BoundedResources required')
+        check_max_parameters(max_parameters)
+        if distribution not in DISTRIBUTIONS:
+            raise ValueError(f'distribution must be one of {DISTRIBUTIONS}')
+        if distribution != 'isa' and partition_recipe is not None:
+            raise ValueError('partition_recipe requires distribution=isa')
+        if distribution not in ('isa', 'mbis') and partition_grid is not None:
+            raise ValueError('partition_grid requires distribution=isa or mbis')
+        if distribution == 'supplied':
+            if not isinstance(distributed_moments, DistributedMoments):
+                raise TypeError('supplied distribution requires DistributedMoments')
+        elif distributed_moments is not None:
+            raise ValueError('distributed_moments requires distribution=supplied')
+        if not isinstance(lattice_options, core.FitPointsOptions):
+            raise TypeError('explicit FitPointsOptions required')
+        if not 1 <= lattice_options.npoints <= MAX_FIT_POINTS:
+            raise ValueError(f'bounded lattice requires 1..{MAX_FIT_POINTS} points')
+        if type(localization_rank_limit) is not int or not 1 <= localization_rank_limit <= 3:
+            raise ValueError('localization_rank_limit must be 1..3')
+        sites, bonds = tuple(sites), tuple(tuple(b) for b in bonds)
+        if not 1 <= len(sites) <= refine.MAX_SITES or any(not isinstance(s, refine.RefinementSite) for s in sites):
+            raise TypeError('explicit RefinementSite sequence required')
+        if len({s.label for s in sites}) != len(sites):
+            raise ValueError('site labels must be unique')
+        if publish_qcvariables:
+            # Refuse unpublishable labels now, not after the whole chain.
+            _lg.check_publication_labels(tuple(s.label for s in sites))
+        seen = set()
+        for edge in bonds:
+            if (len(edge) != 2 or any(type(i) is not int or not 0 <= i < len(sites) for i in edge)
+                    or edge[0] == edge[1] or tuple(sorted(edge)) in seen):
+                raise ValueError('invalid self/duplicate/out-of-range bond')
+            seen.add(tuple(sorted(edge)))
+        if type(max_order) is not int or max_order not in refine.DISPERSION_ORDERS:
+            raise ValueError('max_order must be 6, 8, 10 or 12')
+        if type(recoupled_dispersion) is not bool:
+            raise TypeError('recoupled_dispersion must be an explicit bool')
+        angular_plan = None
+        if recoupled_dispersion:
+            from .isapol_native_recoupled import recoupled_plan
+            angular_plan = recoupled_plan(sites, len(quadrature.frequencies), max_order)
+            if angular_plan[0] > resources.max_bytes:
+                raise ValueError('native recoupled preflight: shared numeric byte resource limit')
+        if type(weight_type) is not int or weight_type not in refine.WEIGHT_TYPES:
+            raise ValueError('invalid weight_type')
+        for name, value in (('weight_coefficient', weight_coefficient), ('cutoff', cutoff)):
+            _scalar(name, value)
+        declared_variables = None if declared_variables is None else tuple(declared_variables)
+        if declared_variables is not None and not 1 <= len(declared_variables) <= max_parameters:
+            raise ValueError(f'bounded refinement requires 1..{max_parameters} declared variables')
+        if any(s.rank_limit > localization_rank_limit for s in sites):
+            raise ValueError('refinement rank exceeds localization rank')
+        if (not isinstance(response_grid, np.ndarray) or response_grid.dtype != np.float64
+                or response_grid.ndim != 2 or response_grid.shape[1] != 4
+                or not len(response_grid)):
+            raise ValueError('finite float64 full response grid (rows,4) required')
+        # The runner holds the caller grid, its copy and a validation overlap.
+        if 3*response_grid.nbytes > resources.max_bytes:
+            raise ValueError('full response grid numeric byte resource limit')
         multipole_sites = []
         for site in sites:
             value = core.IsaMultipoleSite()
             value.label, value.origin, value.rank = site.label, list(site.origin_bohr), 4
             multipole_sites.append(value)
-        for name, eta in (('anchor', anchor_metric_damping), ('target', 0.)):
-            log.stage(name + ' constrained OV fit', (('metric damping', eta), ('charge penalty', charge_penalty)))
-            ledger.admit(name+' fit work reservation', 0, 2*p**3+4*p*p*n)
-            fit = native_constrained_ov(ops, charge_penalty=charge_penalty,
-                offsite_metric_damping=eta, tile_columns=32,
-                max_bytes=resources.max_bytes-ledger.reserved-16*p*q-16*n*q)
-            ledger.admit(name+' fit', fit.planned_bytes+16*p*q+16*n*q)
-            if name == 'anchor':
-                moments = np.asarray(df_centre_multipoles(distribution, auxiliary_recipe, multipole_sites, 4).values)
-                store.save(name, fit.coefficients @ moments.T)
-                del moments
+        origins = np.asarray([s.origin_bohr for s in sites])
+        if distribution == 'isa':
+            # Stale or mismatched recipes are refused before scratch or response work.
+            validate_isa_inputs(wfn, partition_recipe, auxiliary_recipe, multipole_sites, 4, partition_grid)
+        elif distribution == 'mbis':
+            validate_mbis_inputs(wfn, auxiliary_recipe, multipole_sites, 4, partition_grid)
+        input_bytes = (distributed_moments.values.nbytes if distribution == 'supplied' else
+                       partition_grid.nbytes if distribution in ('isa', 'mbis') else 0)
+        # The runner validates the shared declarations (AUX/site/geometry centres,
+        # grid finiteness, correction, smoothing, fit scalars, response selection).
+        runner = BoundedResponse(wfn, auxiliary_recipe, multipole_sites, caller_converged=caller_converged,
+            quadrature=quadrature, response_grid=response_grid, smoothing=smoothing, shell_cutoff=shell_cutoff,
+            charge_penalty=charge_penalty, anchor_metric_damping=anchor_metric_damping, resources=resources,
+            scf_correction=scf_correction, expected_grac_shift=expected_grac_shift,
+            scratch_directory=scratch_directory, log=log, label=distribution, input_bytes=input_bytes,
+            response=response, fdds=fdds)
+        with runner as solver:
+            ledger, auxiliary = solver.ledger, solver.auxiliary
+            if angular_plan is not None:
+                ledger.admit('native recoupled preflight', angular_plan[0])
+            p = auxiliary.nfunction
+            q, nf = 25*len(sites), len(quadrature.frequencies)
+            source = dict(state_sha256=solver.state_sha256, auxiliary_sha256=solver.auxiliary_sha256,
+                          correction=repr(solver.correction), distribution=distribution,
+                          grid_sha256=solver.grid_sha256,
+                          kernel_smoothing=repr(smoothing), shell_cutoff=float(shell_cutoff),
+                          sites=repr(sites), bonds=bonds, frequencies=quadrature.frequencies,
+                          cp_weights=quadrature.cp_weights, localization_rank_limit=localization_rank_limit,
+                          weight_type=weight_type, weight_coefficient=weight_coefficient, cutoff=cutoff,
+                          declared_variables=declared_variables, model=solver.model,
+                          response=response, lw_residual_policy=solver.lw_residual_policy,
+                          lw_disclosure=solver.lw_disclosure,
+                          penalty_selection=('static_reference' if quadrature.frequencies[0] == 0.
+                                             else 'first_node_subset'),
+                          selection_reference_frequency_au=quadrature.frequencies[0],
+                          recoupled_dispersion=recoupled_dispersion)
+            def produce_moments(ledger):
+                if distribution == 'supplied':
+                    return distributed_moments
+                if distribution == 'mbis':
+                    log.stage('Native MBIS partition and response-AUX moments')
+                    return mbis_moments(wfn, auxiliary_recipe, multipole_sites, 4,
+                                        caller_converged=caller_converged, integration_grid=partition_grid,
+                                        ledger=ledger)
+                log.stage('Native ISA partition and response-AUX moments')
+                return isa_moments(wfn, partition_recipe, auxiliary_recipe, multipole_sites, 4,
+                                   caller_converged=caller_converged, integration_grid=partition_grid,
+                                   ledger=ledger)
+            solver.prepare(None if distribution == 'df_centre_analytic' else produce_moments)
+            source['partition'] = solver.partition
+            if solver.provenance is not None:
+                source['response_provenance'] = solver.provenance
+            stability = solver.stability
+            npoint = lattice_options.npoints
+            log.stage('Native point cloud',
+                      (('points', npoint), ('seed', lattice_options.seed),
+                       ('inner / outer radii', (lattice_options.lolim, lattice_options.hilim))))
+            ledger.admit('native fit cloud', 8*12*npoint+8*1024**2)
+            cloud = core.FitPoints(wfn.molecule().clone(), lattice_options)
+            points = np.column_stack((cloud.x(), cloud.y(), cloud.z()))
+            del cloud
+            source['lattice_sha256'] = hashlib.sha256(points.tobytes()).hexdigest()
+            # The points and every node's packed targets are retained for one
+            # shared-design PFIT after the sweep.
+            row_count = npoint*(npoint+1)//2
+            retained = 8*(row_count*nf+3*npoint)
+            ledger.reserved += retained
+            ledger.admit('retained point-response targets', 0)
+            packed = np.empty((row_count, nf))
+            local_tensors, models, diagnostics = [], [], []
+            frames = [s.frame for s in sites]
+            if response == 'reference_h2h1':
+                solve_record, localization = 'native Psi4 original H2H1 solve', 'Production'
             else:
-                store.save(name, fit.coefficients)
-            del fit
-        del ops, main, coefficients, energies, state
-        ledger.reserved = 2*grid.nbytes
-        log.stage('Full-grid ALDA kernel', (('smoothing', repr(smoothing)), ('shell cutoff', shell_cutoff)))
-        kernel = _kernel(auxiliary, store.load('density'), grid, smoothing, shell_cutoff, ledger)
-        store.save('kernel', kernel)
-        del kernel, grid
-        # Input response_grid remains caller-owned; retained output allowance is
-        # charged across the entire frequency sweep rather than node by node.
-        ledger.reserved = retained
-        log.stage('H1/H2 assembly')
-        _assemble(store, (p, no, nv), tiles, .25, .75)
-        log.stage('Response stability checks')
-        stability = _stability(store, n)
-        log.items(stability.items())
-        log.stage('Native point cloud and Coulomb potentials',
-                  (('points', lattice_options.npoints), ('seed', lattice_options.seed),
-                   ('inner / outer radii', (lattice_options.lolim, lattice_options.hilim))))
-        ledger.admit('native fit cloud', 8*(3*p*lattice_options.npoints+12*lattice_options.npoints)+8*1024**2)
-        cloud = core.FitPoints(wfn.molecule().clone(), lattice_options)
-        points = np.column_stack((cloud.x(), cloud.y(), cloud.z()))
-        del cloud
-        b = np.empty((p, len(points)))
-        provider = core.IsaAuxCoulomb(auxiliary)
-        for begin in range(0, len(points), 32):
-            b[:, begin:begin+32] = np.asarray(provider.point_potentials(
-                core.Matrix.from_array(points[begin:begin+32]), max_bytes=resources.max_bytes-ledger.reserved))
-        store.save('potentials', b)
-        del b, provider
-        source['lattice_sha256'] = hashlib.sha256(points.tobytes()).hexdigest()
-        # Every node's packed targets are retained for one shared-design PFIT.
-        row_count = len(points)*(len(points)+1)//2
-        ledger.reserved += 8*row_count*nf
-        ledger.admit('retained point-response targets', 0)
-        packed = np.empty((row_count, nf))
-        local_tensors, models, diagnostics = [], [], []
-        frames = [s.frame for s in sites]
-        response = _H2H1Response(store, (p, no, nv), q)
-        for node, omega in enumerate(quadrature.frequencies, 1):
-            tag = f'node {node}/{nf}, omega={omega:.12g} au'
-            log.stage('Original H2H1 response: ' + tag, (('RHS', p+q),))
-            coefficient, raw, residual = response.solve(omega)
-            log.items((('relative response residual', residual),))
-            log.stage('Production LW localization: ' + tag,
-                      (('rank limit', localization_rank_limit), ('bonds', len(bonds))))
-            ns = len(sites)
-            # Mirror LW's conservative native workspace reservation, plus live
-            # coefficient/raw matrices and Python snapshot/copy overlap.
-            local_plan = (3*ns*ns*5000+(2*len(bonds)+ns)*5000+ns*(4608+24)
-                          +16*ns*ns*8+4*1000000*48+8*p*p+32*q*q)
-            ledger.admit('production localization', local_plan, 8*q**3)
-            tensors = raw.reshape(len(sites), 25, len(sites), 25).transpose(0, 2, 1, 3)[None]
-            provenance = lw.Provenance('bounded native response', hashlib.sha256(raw.tobytes()).hexdigest(),
-                                       'native Psi4 original H2H1 solve', source['model'])
-            local = lw.supplied_nonlocal_properties(labels=[s.label for s in sites], origins=origins,
-                bonds=bonds, frames=frames, frequencies=[omega], tensors=tensors, input_rank=4,
-                provenance=provenance, truncation=lw.TRUNCATE_RANK4, residual_policy='production',
-                localization_rank_limit=localization_rank_limit)
-            anchors = []
-            for i, site in enumerate(sites):
-                a = np.zeros((site.component_count, site.component_count))
-                a[1:, 1:] = local.raw_local.array[0, i, :site.component_count-1, :site.component_count-1]
-                anchors.append(a)
-            model = refine.refinement_model(sites, anchors, frequency_au=omega, cutoff=cutoff,
-                weight_type=weight_type, weight_coefficient=weight_coefficient,
-                declared_variables=declared_variables, provenance=source['model'])
-            if declared_variables is None:
-                # localize.py runs process on the first (static) node while no
-                # .pdef exists; process writes it (process_data.F90:2046-2058)
-                # and every later node reads that file, not its own cutoff scan.
-                declared_variables = model.parameter_labels
-                log.items((('cutoff-derived variables from this node', len(declared_variables)),))
-            local_tensors.append(local.raw_local)
-            diagnostics.append(dict(frequency=omega, response_residual=residual,
-                localization_residual=local.frequency_diagnostics[0].residuals.maximum))
-            log.items((('maximum localization residual', diagnostics[-1]['localization_residual']),))
-            # The fitting phase owns only the AUX coefficient response and its
-            # small model; do not carry full nonlocal/LW input snapshots into
-            # that phase's independently planned workspace.
-            del raw, tensors, local, anchors
-            _pack_targets(packed, node-1, coefficient, store.load('potentials'), ledger)
-            models.append(model)
-            del coefficient, model
-        response.close()
-        log.stage('Complete-cloud PFIT',
-                  (('parameters', models[0].parameter_count), ('rows per pass', row_count),
-                   ('frequencies', nf), ('passes', 2), ('weight type', weight_type),
-                   ('weight coefficient', weight_coefficient), ('cutoff', cutoff)))
-        results = _stream_fit(models, points, packed, ledger, source)
-        del packed
-        for node, result in enumerate(results, 1):
-            log.items(((f'node {node} solver status', str(result.status)),
-                       (f'node {node} maximum parameter change from anchor', result.anchor_shift_maxabs)))
-        log.stage('Casimir-Polder dispersion', (('maximum order', max_order), ('nodes', nf)))
-        dispersion, recoupled = _refined_dispersions(results, quadrature, max_order, ledger,
-                                                    recoupled=recoupled_dispersion)
-        log.items((('site pairs', len(dispersion.pairs)), ('peak planned numeric bytes', ledger.peak),
-                   ('charged work', ledger.work), ('checkpoint I/O bytes', ledger.io)))
-        log.stage_end()
-    return BoundedProperties(quadrature.frequencies, tuple(local_tensors), tuple(results), dispersion,
-        tuple(diagnostics), dict(maximum_numeric_plan=ledger.peak, charged_work=ledger.work,
-        charged_io_bytes=ledger.io, frequency_rhs=nf*(p+q), fit_rows=nf*len(points)*(len(points)+1),
-        stages=ledger.stages), dict(source, stability=stability), recoupled)
+                solve_record, localization = 'native Psi4 declared-AUX FDDS solve', 'Reported-input'
+            static_penalized = None
+            static_reference = None
+            reference_bytes = 8*sum(s.component_count**2 for s in sites)
+            ledger.reserved += reference_bytes
+            ledger.admit('retained static reference tensors', 0)
+            for node, omega in enumerate(quadrature.frequencies, 1):
+                tag = f'node {node}/{nf}, omega={omega:.12g} au'
+                solved = solver.solve(omega)
+                coefficient, raw, residual = solved.target_response, solved.nonlocal_response, solved.residual
+                response_diagnostics = solved.diagnostics
+                del solved
+                log.stage(f'{localization} LW localization: ' + tag,
+                          (('rank limit', localization_rank_limit), ('bonds', len(bonds)),
+                           ('residual policy', solver.lw_residual_policy)))
+                ns = len(sites)
+                # Mirror LW's conservative native workspace reservation, plus live
+                # coefficient/raw matrices and Python snapshot/copy overlap.
+                local_plan = (3*ns*ns*5000+(2*len(bonds)+ns)*5000+ns*(4608+24)
+                              +16*ns*ns*8+4*1000000*48+8*p*p+32*q*q)
+                ledger.admit(f'{localization.lower()} localization', local_plan, 8*q**3)
+                tensors = raw.reshape(ns, 25, ns, 25).transpose(0, 2, 1, 3)[None]
+                provenance = lw.Provenance('bounded native response', hashlib.sha256(raw.tobytes()).hexdigest(),
+                                           solve_record, source['model'])
+                local = lw.supplied_nonlocal_properties(labels=[s.label for s in sites], origins=origins,
+                    bonds=bonds, frames=frames, frequencies=[omega], tensors=tensors, input_rank=4,
+                    provenance=provenance, truncation=lw.TRUNCATE_RANK4,
+                    residual_policy=solver.lw_residual_policy, localization_rank_limit=localization_rank_limit)
+                anchors = []
+                for i, site in enumerate(sites):
+                    a = np.zeros((site.component_count, site.component_count))
+                    a[1:, 1:] = local.raw_local.array[0, i, :site.component_count-1, :site.component_count-1]
+                    anchors.append(a)
+                # The first (static) node's cutoff selects the penalized variables;
+                # every later node penalizes exactly that selection, each with its
+                # own anchor (process_data.F90:2112-2134, 2269-2275). Declared
+                # extras the static cutoff did not select stay free at every node.
+                model, declared_variables, static_penalized, static_reference = _refinement_node(
+                    sites, anchors, omega, cutoff=cutoff, weight_type=weight_type,
+                    weight_coefficient=weight_coefficient, declared=declared_variables,
+                    static_penalized=static_penalized, static_reference=static_reference,
+                    provenance=source['model'])
+                local_tensors.append(local.raw_local)
+                diagnostics.append(dict(frequency=omega, response_residual=residual,
+                    localization_residual=local.frequency_diagnostics[0].residuals.maximum,
+                    response_diagnostics=response_diagnostics,
+                    penalty_selection=model.penalty_selection,
+                    static_reference_sha256=model.static_reference_sha256,
+                    anchor_sha256=model.anchor_sha256, penalty_anchors=model.anchors,
+                    penalty_strengths=model.strengths, refinement_provenance=model.provenance))
+                log.items((('maximum localization residual', diagnostics[-1]['localization_residual']),))
+                # The fitting phase owns only the AUX coefficient response and its
+                # small model; do not carry full nonlocal/LW input snapshots into
+                # that phase's independently planned workspace.
+                del raw, tensors, local, anchors
+                if node == 1:
+                    # The variable set is fixed here for every node, so the
+                    # parameter cap is admitted before any targets or later solves.
+                    log.stage('Refinement model admission', (('parameters', model.parameter_count),
+                              ('limit', max_parameters), ('declared variables', len(model.declared_variables))))
+                    if model.parameter_count > max_parameters:
+                        raise ValueError(f'bounded refinement supports at most {max_parameters} parameters')
+                log.stage(f'Point-response targets: {tag}', (('points', npoint),))
+                ledger.admit('point-response targets', _target_bytes(p, npoint),
+                             2*p*p*npoint+2*p*npoint*npoint)
+                packed[:, node-1] = fitted_point_targets(auxiliary, points, [coefficient],
+                                                         max_bytes=resources.max_bytes-ledger.reserved)[:, 0]
+                models.append(model)
+                del coefficient, model
+            solver.release()
+            source['static_reference_sha256'] = models[0].static_reference_sha256
+            source['selection_reference_sha256'] = refine._anchor_hash(static_reference[1])
+            source['refinement_variables'] = models[0].parameter_labels
+            del static_reference
+            ledger.reserved -= reference_bytes
+            count, channels = models[0].parameter_count, models[0].channel_count
+            log.stage('Complete-cloud PFIT',
+                      (('parameters', count), ('rows per pass', row_count),
+                       ('frequencies', nf), ('passes', 2), ('weight type', weight_type),
+                       ('weight coefficient', weight_coefficient), ('cutoff', cutoff)))
+            ledger.admit('complete-cloud refinement', *_pfit_plan(npoint, channels, count, nf))
+            results = refine_streamed(models, points, packed, source_id=source['state_sha256'],
+                generation_record=source['model'], target_origin=core.IsaPfitTargetOrigin.NativeFittedPointResponse,
+                response_representation='fitted_density_coefficients',
+                auxiliary_basis_id=source['auxiliary_sha256'], block_rows=BLOCK_ROWS,
+                max_bytes=resources.max_bytes-ledger.reserved)
+            del packed
+            ledger.reserved -= retained
+            for node, result in enumerate(results, 1):
+                log.items(((f'node {node} solver status', str(result.status)),
+                           (f'node {node} maximum parameter change from anchor', result.anchor_shift_maxabs)))
+            dispersion, angular = _refined_dispersions(results, quadrature, max_order, ledger,
+                recoupled=recoupled_dispersion, log=log,
+                wfn=wfn if publish_qcvariables else None)
+            log.stage('Bounded resource totals')
+            log.items((('site pairs', len(dispersion.pairs)), ('peak planned numeric bytes', ledger.peak),
+                       ('charged work', ledger.work), ('checkpoint I/O bytes', ledger.io)))
+            log.stage_end()
+        rhs = nf*(p+q) if response == 'reference_h2h1' else None
+        return BoundedProperties(quadrature.frequencies, tuple(local_tensors), tuple(results), dispersion,
+            tuple(diagnostics), dict(maximum_numeric_plan=ledger.peak, charged_work=ledger.work,
+            charged_io_bytes=ledger.io, frequency_rhs=rhs, fit_rows=nf*npoint*(npoint+1),
+            stages=ledger.stages), dict(source, stability=stability), angular)

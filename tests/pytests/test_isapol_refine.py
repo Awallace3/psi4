@@ -20,10 +20,16 @@ The inputs are built from dyadic rationals and integer direction vectors, using
 only ``+ - * /`` and ``sqrt``, so they are bit-identical on any IEEE-754
 platform and do not depend on a random-number stream.
 """
+import hashlib
+import math
+
 import numpy as np
 import pytest
 
+import psi4
 from psi4 import core
+from psi4.driver.procrouting import isapol_logging as _lg
+from psi4.driver.procrouting import isapol_lw as _lw
 from psi4.driver.procrouting import isapol_refine as R
 
 pytestmark = [pytest.mark.smoke]
@@ -31,10 +37,10 @@ pytestmark = [pytest.mark.smoke]
 IDENTITY = ((1., 0., 0.), (0., 1., 0.), (0., 0., 1.))
 #: H1's local frame is the C2v image of H2's, the signed permutation
 #: diag(-1,-1,1).  This is what the reference case's own ``H2O.axes`` builds --
-#: ``H1  z global Z x from H2 to H1`` at this geometry, committed verbatim as the
-#: ``axes`` field of ``data_isapol/camcasp_cn_pot_h2o_l2h1.json`` -- and it is
-#: the frame that makes the two hydrogens share one set of variables with no
-#: sign changes.  Leaving both in global axes instead is what
+#: ``H1  z global Z x from H2 to H1`` at this geometry, tracked as
+#: ``data_isapol/orient_local/H2O.axes`` -- and it is the frame that makes the
+#: two hydrogens share one set of variables with no sign changes.  Leaving both
+#: in global axes instead is what
 #: ``test_a_copy_equivalence_reports_how_far_its_sites_disagree`` measures.
 H1_FRAME = ((-1., 0., 0.), (0., -1., 0.), (0., 0., 1.))
 #: ~/gits/CamCASP/tests/H2O_props/psi4/H2O-avtz.clt, bohr.
@@ -410,6 +416,447 @@ def test_isotropic_scalars_requires_a_refinement_result():
         R.isotropic_scalars(solve(case('l2h1')).refined_tensors)
 
 
+# ---------------------------------------------- dispersion from refined tensors
+
+QUADRATURE = _lw.Provenance('CasimirGrid(4, 0.5)', '0' * 64, 'test_isapol_refine',
+                            'Gauss-Legendre imaginary-frequency nodes, static point first')
+
+
+def refined_nodes(name='l2h1', n_freq=4, *, sites=None, declared=lambda k: None, **overrides):
+    """One refinement per ``CasimirGrid(n_freq, 0.5)`` node, static point first.
+
+    The anchors (hence the variable set) are the case's at every node; the data
+    are the forward map of the case's source model scaled by ``1/(1+omega^2)``,
+    so the refined scalars genuinely vary along the grid.  ``sites`` replaces
+    the case's sites (e.g. relabeled); ``declared(k)`` is node k's
+    ``declared_variables``.
+    """
+    built = case(name)
+    spec = dict(CASES[name], **overrides)
+    grid = core.CasimirGrid(n_freq, 0.5)
+    nodes = []
+    for k in range(n_freq + 1):
+        omega = grid.omega(k)
+        model = R.refinement_model(sites or built['model'].sites, built['anchors'],
+                                   frequency_au=omega, cutoff=1.0e-4,
+                                   weight_type=spec['weight_type'],
+                                   weight_coefficient=spec['weight_coefficient'],
+                                   provenance=f'test_isapol_refine case {name}',
+                                   declared_variables=declared(k))
+        source = [t / (1.0 + omega * omega) for t in built['source']]
+        targets = R.pack_lower_triangle(R.point_to_point_response(built['fields'], model, source))
+        nodes.append(R.refine(model, built['points'], targets, fields=built['fields'],
+                              target_origin=core.IsaPfitTargetOrigin.SyntheticAnalyticTest,
+                              source_id='test_isapol_refine',
+                              generation_record=f'scaled forward map, node {k}'))
+    return tuple(nodes), [grid.cp_weight(k) for k in range(n_freq + 1)]
+
+
+def oracle_coefficient(nodes, weights, a, b, order, ranks):
+    """``binomial(2la+2lb, 2la) sum_f w_f alpha_a,la(f) alpha_b,lb(f)`` from the tensors."""
+    def scalar(node, site, l):
+        block = np.asarray(node.refined_tensors[site])[l * l:(l + 1) ** 2, l * l:(l + 1) ** 2]
+        return np.trace(block) / (2 * l + 1)
+    value, missing = 0.0, []
+    for la in range(1, order // 2 - 1):
+        lb = order // 2 - 1 - la
+        if la not in ranks[a] or lb not in ranks[b]:
+            missing.append((la, lb))
+            continue
+        integral = 0.0
+        for node, w in zip(nodes, weights):
+            if w != 0.0:
+                integral += w * scalar(node, a, la) * scalar(node, b, lb)
+        value += math.comb(2 * la + 2 * lb, 2 * la) * integral
+    return value, tuple(missing)
+
+
+@pytest.fixture(scope='module')
+def l2h1_nodes():
+    return refined_nodes()
+
+
+def test_refined_dispersion_matches_an_independent_contraction(l2h1_nodes):
+    """Every ordered site pair and order, against the closed form on the tensors."""
+    nodes, weights = l2h1_nodes
+    record = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                            quadrature_provenance=QUADRATURE)
+    assert record.labels == ('O', 'H1', 'H2')
+    assert record.frequencies == tuple(n.model.frequency_au for n in nodes)
+    assert record.frequencies[0] == 0.0 and record.cp_weights[0] == 0.0
+    assert record.site_ranks == ((1, 2), (1,), (1,))
+    assert record.solver_status == ('Solved',) * len(nodes)
+    assert [(p.site_a, p.site_b) for p in record.pairs] == [(a, b) for a in range(3) for b in range(3)]
+    digest = hashlib.sha256(''.join(n.model.anchor_sha256 for n in nodes).encode()).hexdigest()
+    assert record.anchor_sha256 == digest
+    for pair in record.pairs:
+        assert [c.order for c in pair.coefficients] == [6, 8, 10, 12]
+        for c in pair.coefficients:
+            value, missing = oracle_coefficient(nodes, weights, pair.site_a, pair.site_b,
+                                                c.order, record.site_ranks)
+            assert c.value == pytest.approx(value, rel=1e-13, abs=0.0)
+            assert c.missing_rank_pairs == missing
+            assert c.unrestricted_complete == (not missing)
+    by_pair = {(p.label_a, p.label_b): p.coefficients for p in record.pairs}
+    # Only O carries rank 2: O-O C8 is complete, O-H C8 is not, C12 never is.
+    assert by_pair['O', 'O'][1].unrestricted_complete
+    assert not by_pair['O', 'H1'][1].unrestricted_complete
+    assert not any(p.coefficients[3].unrestricted_complete for p in record.pairs)
+    # COPY-equivalent hydrogens share one variable set, hence identical rows.
+    assert [c.value for c in by_pair['O', 'H1']] == [c.value for c in by_pair['O', 'H2']]
+
+
+def test_refined_dispersion_declared_ranks_truncate_rather_than_zero_fill(l2h1_nodes):
+    nodes, weights = l2h1_nodes
+    full = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                          quadrature_provenance=QUADRATURE, max_order=8)
+    dipole = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                            quadrature_provenance=QUADRATURE, max_order=8,
+                                            site_ranks=((1,), (1,), (1,)))
+    assert [c.order for c in full.pairs[0].coefficients] == [6, 8]
+    assert dipole.site_ranks == ((1,), (1,), (1,))
+    assert full.pairs[0].coefficients[0].value == dipole.pairs[0].coefficients[0].value
+    assert full.pairs[0].coefficients[1].unrestricted_complete
+    assert dipole.pairs[0].coefficients[1].missing_rank_pairs == ((1, 2), (2, 1))
+    assert dipole.pairs[0].coefficients[1].value == 0.0
+
+
+def test_refined_dispersion_report_and_optional_qcvariables(l2h1_nodes):
+    """Reporting changes no number; incomplete orders publish only as INCOMPLETE."""
+    nodes, weights = l2h1_nodes
+    lines = []
+    log = _lg.StageLog(2, writer=lines.append)
+    mol = psi4.geometry('units bohr\nsymmetry c1\nno_com\nno_reorient\n'
+                        'O 0 0 0\nH -1.45365196 0 -1.12168732\nH 1.45365196 0 -1.12168732\n')
+    wfn = core.Wavefunction.build(mol, 'sto-3g')
+    record = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                            quadrature_provenance=QUADRATURE, log=log, wfn=wfn)
+    quiet = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                           quadrature_provenance=QUADRATURE)
+    assert record.pairs == quiet.pairs
+    text = ''.join(lines)
+    for heading in ('Casimir-Polder quadrature', 'Atomic (same-site) isotropic dispersion',
+                    'Pairwise isotropic dispersion coefficients', 'Rank pairs absent',
+                    'Rank pairs entering each order', 'Sum over all ordered site pairs',
+                    'provenance: ' + QUADRATURE.description):
+        assert heading in text, heading
+    assert [name for name, _ in log.stages] == [
+        'isotropic dispersion from refined tensors (Casimir-Polder)']
+
+    def total(order):
+        value = 0.0  # in pair order; builtin sum() compensates and differs by an ulp
+        for p in record.pairs:
+            value += p.coefficients[(order - 6) // 2].value
+        return value
+
+    stem = 'ATOMIC REFINED DISPERSION'
+    assert wfn.variable(f'{stem} C6 TOTAL') == total(6)
+    assert wfn.variable(f'{stem} C12 TOTAL INCOMPLETE') == total(12)
+    assert not wfn.has_variable(f'{stem} C12 TOTAL')
+    assert wfn.variable(f'{stem} C8 O O') == record.pairs[0].coefficients[1].value
+    assert wfn.has_variable(f'{stem} C8 O H1 INCOMPLETE')
+    assert not wfn.has_variable(f'{stem} C8 O H1')
+    assert wfn.variable('ATOM O C6 REFINED DISPERSION COEFFICIENT') == \
+        record.pairs[0].coefficients[0].value
+    assert wfn.has_variable('ATOM H1 C8 REFINED DISPERSION COEFFICIENT INCOMPLETE')
+    assert wfn.variable(f'{stem} SITE PAIRS') == 9.0
+    assert wfn.variable(f'{stem} MAX ORDER') == 12.0
+    assert wfn.variable(f'{stem} QUADRATURE NODES') == len(weights)
+    np.testing.assert_array_equal(np.asarray(wfn.array_variable(f'{stem} CP WEIGHTS')),
+                                  [weights])
+    np.testing.assert_array_equal(np.asarray(wfn.array_variable(f'{stem} QUADRATURE FREQUENCIES')),
+                                  [record.frequencies])
+    assert wfn.variable(f'{stem} ANCHOR SHIFT MAXABS') == record.anchor_shift_maxabs
+
+
+def test_refined_dispersion_reaches_a_complete_c12_at_rank_four():
+    """O at rank 4 supplies (1,4) and (4,1): the O-O C12 sum closes, O-H does not."""
+    nodes, weights = refined_nodes('rank4', n_freq=2)
+    record = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                            quadrature_provenance=QUADRATURE)
+    o_o, o_h = record.pairs[0].coefficients[3], record.pairs[1].coefficients[3]
+    assert o_o.unrestricted_complete and o_o.included_rank_pairs == ((1, 4), (2, 3), (3, 2), (4, 1))
+    assert o_h.missing_rank_pairs == ((1, 4), (2, 3), (3, 2))
+    assert o_h.included_rank_pairs == ((4, 1),)
+    value, _ = oracle_coefficient(nodes, weights, 0, 0, 12, record.site_ranks)
+    assert o_o.value == pytest.approx(value, rel=1e-13, abs=0.0)
+
+
+def _water_wfn():
+    mol = psi4.geometry('units bohr\nsymmetry c1\nno_com\nno_reorient\n'
+                        'O 0 0 0\nH -1.45365196 0 -1.12168732\nH 1.45365196 0 -1.12168732\n')
+    wfn = core.Wavefunction.build(mol, 'sto-3g')
+    wfn.set_variable('UNRELATED SENTINEL', 1.5)
+    return wfn
+
+
+def _dispersion_keys(wfn):
+    return {k for k in wfn.variables() if 'REFINED DISPERSION' in k}
+
+
+def test_reused_wavefunction_never_holds_both_suffix_variants(l2h1_nodes):
+    """Complete -> INCOMPLETE -> complete on one wavefunction: only current keys survive."""
+    nodes, weights = l2h1_nodes
+    wfn = _water_wfn()
+    keys = ('ATOMIC REFINED DISPERSION C6 TOTAL', 'ATOMIC REFINED DISPERSION C6 O O',
+            'ATOM O C6 REFINED DISPERSION COEFFICIENT')
+    # Declaring only rank 2 on O drops the (1,1) term from every O-containing C6.
+    for site_ranks, complete in ((None, True), (((2,), (1,), (1,)), False), (None, True)):
+        record = R.refined_isotropic_dispersion(nodes, cp_weights=weights, max_order=6,
+                                                quadrature_provenance=QUADRATURE,
+                                                site_ranks=site_ranks, wfn=wfn)
+        total = 0.0
+        for p in record.pairs:
+            total += p.coefficients[0].value
+        values = (total, record.pairs[0].coefficients[0].value, record.pairs[0].coefficients[0].value)
+        assert record.pairs[0].coefficients[0].unrestricted_complete is complete
+        for key, value in zip(keys, values):
+            current, opposite = (key, key + ' INCOMPLETE') if complete else (key + ' INCOMPLETE', key)
+            assert wfn.variable(current) == value, current
+            assert not wfn.has_variable(opposite), opposite
+        assert wfn.variable('UNRELATED SENTINEL') == 1.5
+    assert not any(k.endswith('INCOMPLETE') and 'C6' in k for k in _dispersion_keys(wfn))
+
+
+def _owned(wfn):
+    """The report-owned QCVariables, arrays as nested lists."""
+    def owned(k):
+        return k.startswith('ATOMIC REFINED DISPERSION ') or (
+            k.startswith('ATOM ') and ' REFINED DISPERSION COEFFICIENT' in k)
+    out = {k: v for k, v in wfn.scalar_variables().items() if owned(k)}
+    out.update({k: np.asarray(v).tolist() for k, v in wfn.array_variables().items() if owned(k)})
+    return out
+
+
+def _expected_namespace(record):
+    """Exactly the names and values one publication of ``record`` emits."""
+    stem, out = 'ATOMIC REFINED DISPERSION', {}
+    orders = [c.order for c in record.pairs[0].coefficients]
+
+    def put(key, complete, value):
+        out[key.upper() if complete else key.upper() + ' INCOMPLETE'] = value
+
+    for p in record.pairs:
+        for c in p.coefficients:
+            put(f'{stem} C{c.order} {p.label_a} {p.label_b}', c.unrestricted_complete, c.value)
+            if p.site_a == p.site_b:
+                put(f'ATOM {p.label_a} C{c.order} REFINED DISPERSION COEFFICIENT',
+                    c.unrestricted_complete, c.value)
+    for i, n in enumerate(orders):
+        total = 0.0
+        for p in record.pairs:
+            total += p.coefficients[i].value
+        put(f'{stem} C{n} TOTAL', all(p.coefficients[i].unrestricted_complete
+                                      for p in record.pairs), total)
+    out.update({f'{stem} SITE PAIRS': float(len(record.pairs)), f'{stem} MAX ORDER': float(orders[-1]),
+                f'{stem} QUADRATURE NODES': float(len(record.cp_weights)),
+                f'{stem} ANCHOR SHIFT MAXABS': record.anchor_shift_maxabs,
+                f'{stem} QUADRATURE FREQUENCIES': [list(record.frequencies)],
+                f'{stem} CP WEIGHTS': [list(record.cp_weights)]})
+    return out
+
+
+UNRELATED = {'UNRELATED SENTINEL': 1.5, 'ATOMIC DISPERSION C6 TOTAL': 3.25,
+             'ATOM O C6 DISPERSION COEFFICIENT': 4.5, 'ATOMIC REFINED POLARIZABILITY O': 5.5,
+             'ATOM O CHARGE': -0.75}
+
+
+def _namespace_wfn():
+    wfn = _water_wfn()
+    for key, value in UNRELATED.items():
+        wfn.set_variable(key, value)
+    return wfn
+
+
+def test_publication_keeps_only_the_latest_report_namespace(l2h1_nodes):
+    """Omitted orders and former sites vanish; everything else on the wfn survives."""
+    nodes, weights = l2h1_nodes
+    wfn = _namespace_wfn()
+    core.set_variable('UNRELATED GLOBAL SENTINEL', 2.0)
+    before = dict(core.scalar_variables()), {k: np.asarray(v).tolist()
+                                             for k, v in core.array_variables().items()}
+    common = dict(cp_weights=weights, quadrature_provenance=QUADRATURE, wfn=wfn)
+    r12 = R.refined_isotropic_dispersion(nodes, max_order=12, **common)
+    assert _owned(wfn) == _expected_namespace(r12)
+    assert sum((' C10 ' in k or ' C12 ' in k) for k in _owned(wfn)) == 26
+    r8 = R.refined_isotropic_dispersion(nodes, max_order=8, **common)
+    assert _owned(wfn) == _expected_namespace(r8)
+    assert not any((' C10 ' in k or ' C12 ' in k) for k in _owned(wfn))
+    assert wfn.variable('ATOMIC REFINED DISPERSION MAX ORDER') == 8.0
+    built = case('l2h1')
+    sites = tuple(R.RefinementSite(label, s.site_type, s.origin_bohr, s.frame, s.rank_limit)
+                  for label, s in zip(('O', 'HA', 'HB'), built['model'].sites))
+    renamed, renamed_weights = refined_nodes(n_freq=2, sites=sites)
+    rr = R.refined_isotropic_dispersion(renamed, cp_weights=renamed_weights,
+                                        quadrature_provenance=QUADRATURE, wfn=wfn)
+    assert _owned(wfn) == _expected_namespace(rr)
+    assert not any(' H1' in k or ' H2' in k for k in _owned(wfn))
+    for key, value in UNRELATED.items():
+        assert wfn.variable(key) == value, key
+    after = dict(core.scalar_variables()), {k: np.asarray(v).tolist()
+                                            for k, v in core.array_variables().items()}
+    assert after == before
+    core.del_variable('UNRELATED GLOBAL SENTINEL')
+
+
+def test_refused_or_failed_calls_leave_the_last_publication(l2h1_nodes):
+    nodes, weights = l2h1_nodes
+    wfn = _namespace_wfn()
+    R.refined_isotropic_dispersion(nodes, cp_weights=weights, quadrature_provenance=QUADRATURE,
+                                   max_order=10, wfn=wfn)
+    published = _owned(wfn)
+    built = case('l2h1')
+    aliased = tuple(R.RefinementSite(label, s.site_type, s.origin_bohr, s.frame, s.rank_limit)
+                    for label, s in zip(('O', 'h', 'H'), built['model'].sites))
+    alias_nodes, alias_weights = refined_nodes(n_freq=2, sites=aliased)
+    reserved = tuple(R.RefinementSite(label, s.site_type, s.origin_bohr, s.frame, s.rank_limit)
+                     for label, s in zip(('O', 'InComplete', 'H2'), built['model'].sites))
+    reserved_nodes, reserved_weights = refined_nodes(n_freq=2, sites=reserved)
+    labels = nodes[0].model.parameter_labels
+    mixed, _ = refined_nodes(declared=lambda k: labels if k == 1 else None)
+    lines = []
+    log = _lg.StageLog(1, writer=lines.append)
+    calls = [((alias_nodes, alias_weights), 'collide'), ((reserved_nodes, reserved_weights), 'reserved'),
+             ((mixed, weights), 'declared model'),
+             ((nodes[::-1], weights[::-1]), 'strictly increasing')]
+    for (call_nodes, call_weights), match in calls:
+        with pytest.raises(ValueError, match=match):
+            R.refined_isotropic_dispersion(call_nodes, cp_weights=call_weights,
+                                           quadrature_provenance=QUADRATURE, log=log, wfn=wfn)
+        assert _owned(wfn) == published, match
+        for key, value in UNRELATED.items():
+            assert wfn.variable(key) == value, key
+    text = ''.join(lines)
+    assert text.count('Stage FAILED: isotropic dispersion') == 1 and log.stages == ()
+
+
+@pytest.mark.parametrize('labels,match', [(('O', 'h', 'H'), 'collide'),
+                                          (('O', 'H 1', 'H2'), 'whitespace'),
+                                          (('O', 'Total', 'H2'), 'reserved'),
+                                          (('TOTAL', 'H1', 'incomplete'), 'reserved')])
+def test_publication_refuses_aliasing_labels_but_the_model_keeps_them(labels, match):
+    built = case('l2h1')
+    sites = tuple(R.RefinementSite(label, s.site_type, s.origin_bohr, s.frame, s.rank_limit)
+                  for label, s in zip(labels, built['model'].sites))
+    nodes, weights = refined_nodes(n_freq=2, sites=sites)
+    wfn = _water_wfn()
+    wfn.set_variable('ATOMIC REFINED DISPERSION C6 TOTAL', -7.0)
+    lines = []
+    log = _lg.StageLog(2, writer=lines.append)
+    with pytest.raises(ValueError, match=match):
+        R.refined_isotropic_dispersion(nodes, cp_weights=weights, quadrature_provenance=QUADRATURE,
+                                       log=log, wfn=wfn)
+    # Refused before any log stage or write; prior wavefunction data untouched.
+    assert lines == [] and log.stages == ()
+    assert _dispersion_keys(wfn) == {'ATOMIC REFINED DISPERSION C6 TOTAL'}
+    assert wfn.variable('ATOMIC REFINED DISPERSION C6 TOTAL') == -7.0
+    assert wfn.variable('UNRELATED SENTINEL') == 1.5
+    record = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                            quadrature_provenance=QUADRATURE)
+    assert record.labels == labels and len(record.pairs) == 9
+
+
+def test_declared_and_cutoff_derived_nodes_are_different_models(l2h1_nodes):
+    nodes, weights = l2h1_nodes
+    labels = nodes[0].model.parameter_labels
+    mixed, _ = refined_nodes(declared=lambda k: labels if k == 1 else None)
+    with pytest.raises(ValueError, match='declared model'):
+        R.refined_isotropic_dispersion(mixed, cp_weights=weights, quadrature_provenance=QUADRATURE)
+    explicit, _ = refined_nodes(declared=lambda k: labels)
+    assert all(n.model.declared_variables == labels for n in explicit)
+    derived = R.refined_isotropic_dispersion(nodes, cp_weights=weights,
+                                             quadrature_provenance=QUADRATURE)
+    replayed = R.refined_isotropic_dispersion(explicit, cp_weights=weights,
+                                              quadrature_provenance=QUADRATURE)
+    assert replayed.pairs == derived.pairs
+
+
+def test_failed_contraction_closes_its_stage_as_failed(l2h1_nodes):
+    """Reversed nodes are refused by the kernel; the log says so and nothing is published."""
+    nodes, weights = l2h1_nodes
+    lines = []
+    log = _lg.StageLog(1, writer=lines.append)
+    wfn = _water_wfn()
+    with pytest.raises(ValueError, match='strictly increasing'):
+        R.refined_isotropic_dispersion(nodes[::-1], cp_weights=weights[::-1],
+                                       quadrature_provenance=QUADRATURE, log=log, wfn=wfn)
+    text = ''.join(lines)
+    assert 'Stage FAILED: isotropic dispersion from refined tensors (Casimir-Polder)' in text
+    assert 'strictly increasing' in text
+    assert log.stages == ()
+    assert _dispersion_keys(wfn) == set() and wfn.variable('UNRELATED SENTINEL') == 1.5
+    log.stage('next')
+    log.stage_end()
+    R.refined_isotropic_dispersion(nodes, cp_weights=weights, quadrature_provenance=QUADRATURE,
+                                   log=log)
+    text = ''.join(lines)
+    assert [name for name, _ in log.stages] == [
+        'next', 'isotropic dispersion from refined tensors (Casimir-Polder)']
+    assert text.count('Stage complete: isotropic dispersion') == 1
+    assert text.index('Stage FAILED') < text.index('Stage complete: next') \
+        < text.index('Stage complete: isotropic dispersion')
+
+
+def _replace_node(nodes, index, node):
+    return nodes[:index] + (node,) + nodes[index + 1:]
+
+
+@pytest.mark.parametrize('fault,match', [
+    ('empty', 'non-empty sequence'),
+    ('tensors', 'non-empty sequence'),
+    ('repeated', 'distinct'),
+    ('sites', 'identical declared site set'),
+    ('penalty', 'weight_coefficient differs'),
+    ('provenance', 'Provenance'),
+    ('order7', 'max_order'),
+    ('order14', 'max_order'),
+    ('order_bool', 'max_order'),
+    ('weights_short', 'one CP weight'),
+    ('weights_negative', 'non-negative'),
+    ('weights_nan', 'finite'),
+    ('weights_zero', 'not all zero'),
+    ('static_weight', 'static node'),
+    ('ranks_count', 'one rank tuple per site'),
+    ('ranks_above_limit', 'exceeds the refinement rank limit'),
+    ('ranks_order', 'strictly increasing'),
+    ('ranks_type', 'integer ranks'),
+])
+def test_refined_dispersion_refusals(l2h1_nodes, fault, match):
+    nodes, weights = l2h1_nodes
+    kwargs = dict(cp_weights=list(weights), quadrature_provenance=QUADRATURE)
+    if fault == 'empty':
+        nodes = ()
+    elif fault == 'tensors':
+        nodes = tuple(n.refined_tensors for n in nodes)
+    elif fault == 'repeated':
+        nodes = _replace_node(nodes, 2, nodes[1])
+    elif fault == 'sites':
+        nodes = _replace_node(nodes, 1, solve(case('rank4')))
+    elif fault == 'penalty':
+        nodes = _replace_node(nodes, 1, refined_nodes(weight_coefficient=2.0e-3)[0][1])
+    elif fault == 'provenance':
+        kwargs['quadrature_provenance'] = QUADRATURE.description
+    elif fault.startswith('order'):
+        kwargs['max_order'] = {'order7': 7, 'order14': 14, 'order_bool': True}[fault]
+    elif fault == 'weights_short':
+        kwargs['cp_weights'] = weights[:-1]
+    elif fault == 'weights_negative':
+        kwargs['cp_weights'][1] = -1.0
+    elif fault == 'weights_nan':
+        kwargs['cp_weights'][1] = float('nan')
+    elif fault == 'weights_zero':
+        kwargs['cp_weights'] = [0.0] * len(weights)
+    elif fault == 'static_weight':
+        kwargs['cp_weights'][0] = 1.0
+    else:
+        kwargs['site_ranks'] = {'ranks_count': ((1,), (1,)),
+                                'ranks_above_limit': ((1, 2), (1, 2), (1,)),
+                                'ranks_order': ((2, 1), (1,), (1,)),
+                                'ranks_type': ((1.0,), (1,), (1,))}[fault]
+    with pytest.raises(ValueError, match=match):
+        R.refined_isotropic_dispersion(nodes, **kwargs)
+
+
 # ------------------------------------------------------- declared variable list
 
 def test_declared_variables_replay_the_cutoff_list_exactly():
@@ -518,6 +965,123 @@ def test_declared_variables_reject_malformed_names(declared, pattern):
                            declared_variables=declared)
 
 
+# ------------------------------------------------- static-node penalized set
+
+def _with_entry(anchors, site, row, col, value):
+    """Copies of ``anchors`` with one symmetric pair of ``anchors[site]`` replaced."""
+    out = [np.array(a, dtype=float, copy=True) for a in anchors]
+    out[site][row, col] = out[site][col, row] = value
+    return out
+
+
+def _penalized(model):
+    return tuple(n for n in model.parameter_labels if n not in model.unpenalized_variables)
+
+
+def test_penalized_variables_keep_a_static_penalty_below_the_node_cutoff():
+    """CamCASP selects penalized variables once, on the static node, and writes
+    a ``Penalties`` line for each of them at every later node with that node's
+    anchor and the unchanged weight formula (process_data.F90:2112-2134,
+    2269-2275).  ``penalized_variables`` carries that static selection: a
+    variable in it stays anchored and penalized at a later node even where its
+    node anchor has fallen below the cutoff.  Omitting the argument keeps the
+    legacy per-node cutoff test for direct callers."""
+    built = case('l2h1')
+    sites, omega = built['model'].sites, 1.5
+    row, col = 1, 2
+    label = f'O_{R.COMPONENT_NAMES[row]}_{R.COMPONENT_NAMES[col]}_A'
+    static = R.refinement_model(sites, _with_entry(built['anchors'], 0, row, col, 2.0e-4),
+                                cutoff=1.0e-4, weight_type=3, weight_coefficient=1.0e-3,
+                                provenance='static node')
+    assert label in _penalized(static) and static.unpenalized_variables == ()
+    later_anchors = _with_entry(built['anchors'], 0, row, col, 5.0e-5)
+    common = dict(frequency_au=omega, cutoff=1.0e-4, weight_type=3, weight_coefficient=1.0e-3,
+                  provenance='later node', declared_variables=static.parameter_labels)
+    later = R.refinement_model(sites, later_anchors, penalized_variables=_penalized(static), **common)
+    legacy = R.refinement_model(sites, later_anchors, **common)
+    k = later.parameter_labels.index(label)
+    assert later.parameter_labels == legacy.parameter_labels == static.parameter_labels
+    assert later.unpenalized_variables == ()
+    assert later.anchors[k] == 5.0e-5
+    assert later.strengths[k] == R.penalty_weight(weight_type=3, weight_coefficient=1.0e-3, alpha=5.0e-5,
+                                                  frequency=omega, rank1=R.component_rank(row),
+                                                  rank2=R.component_rank(col))
+    assert later.strengths[k] > 0.0
+    # Everything else is the per-node model the cutoff test builds anyway.
+    others = [i for i in range(later.parameter_count) if i != k]
+    assert [later.anchors[i] for i in others] == [legacy.anchors[i] for i in others]
+    assert [later.strengths[i] for i in others] == [legacy.strengths[i] for i in others]
+    assert (later.cutoff, later.weight_type, later.weight_coefficient) == (1.0e-4, 3, 1.0e-3)
+    # Legacy direct-helper default (penalized_variables=None): the node's own cutoff test.
+    assert legacy.unpenalized_variables == (label,)
+    assert (legacy.anchors[k], legacy.strengths[k]) == (0.0, 0.0)
+
+
+def test_penalized_variables_leave_a_failed_static_extra_free_at_every_node():
+    """A declared extra that failed the STATIC cutoff is a free parameter --
+    the ``.pdef`` variable with no ``Penalties`` line -- and stays free at a
+    later node even where that node's anchor exceeds the cutoff."""
+    built = case('rank4')
+    derived = built['model']
+    extra = next(f'O_{R.COMPONENT_NAMES[i]}_{R.COMPONENT_NAMES[j]}_A'
+                 for i in range(25) for j in range(i, 25)
+                 if f'O_{R.COMPONENT_NAMES[i]}_{R.COMPONENT_NAMES[j]}_A' not in derived.parameter_labels)
+    row, col = (R.COMPONENT_NAMES.index(q) for q in extra[2:-2].split('_'))
+    assert built['anchors'][0][row, col] == 0.0
+    declared = tuple(derived.parameter_labels) + (extra,)
+    static = R.refinement_model(derived.sites, built['anchors'], cutoff=1.0e-4, weight_type=3,
+                                weight_coefficient=1.0e-3, provenance='static node',
+                                declared_variables=declared)
+    assert static.unpenalized_variables == (extra,)
+    later_anchors = _with_entry(built['anchors'], 0, row, col, 3.0e-4)
+    common = dict(frequency_au=0.75, cutoff=1.0e-4, weight_type=3, weight_coefficient=1.0e-3,
+                  provenance='later node', declared_variables=declared)
+    later = R.refinement_model(derived.sites, later_anchors, penalized_variables=_penalized(static), **common)
+    k = later.parameter_labels.index(extra)
+    assert later.unpenalized_variables == (extra,)
+    assert (later.anchors[k], later.strengths[k]) == (0.0, 0.0)
+    assert _penalized(later) == _penalized(static)
+    # The legacy per-node test would have penalized it here; that is the direct-helper default.
+    legacy = R.refinement_model(derived.sites, later_anchors, **common)
+    assert legacy.unpenalized_variables == ()
+    assert legacy.anchors[k] == 3.0e-4
+
+
+def test_an_empty_penalized_set_penalizes_nothing():
+    """An explicit empty set is a declaration that no variable is penalized,
+    not a request to fall back to the cutoff."""
+    built = case('l2h1')
+    derived = built['model']
+    free = R.refinement_model(derived.sites, built['anchors'], cutoff=1.0e-4, weight_type=3,
+                              weight_coefficient=1.0e-3, provenance='nothing penalized',
+                              declared_variables=derived.parameter_labels, penalized_variables=())
+    assert free.parameter_labels == derived.parameter_labels
+    assert free.unpenalized_variables == derived.parameter_labels
+    assert set(free.anchors) == {0.0} and set(free.strengths) == {0.0}
+
+
+@pytest.mark.parametrize('declared,penalized,pattern', [
+    (None, ('O_10_10_A',), 'penalized_variables requires declared_variables'),
+    ('all', ('O_10_10_A', 'O_10_10_A'), 'must not repeat'),
+    ('all', ('O_99_99_A',), 'is not a declared variable'),
+    ('all', ('H2_10_10_A',), 'is not a declared variable'),
+    ('all', 'O_10_10_A', 'not a single label string'),
+    ('all', (1,), 'is not a declared variable'),
+    ('all', None, None),
+])
+def test_penalized_variables_must_be_a_subset_of_the_declared_list(declared, penalized, pattern):
+    built = case('l2h1')
+    derived = built['model']
+    kwargs = dict(cutoff=1.0e-4, provenance='penalized subset',
+                  declared_variables=derived.parameter_labels if declared == 'all' else declared)
+    if pattern is None:
+        model = R.refinement_model(derived.sites, built['anchors'], penalized_variables=penalized, **kwargs)
+        assert model.anchors == derived.anchors and model.strengths == derived.strengths
+        return
+    with pytest.raises(ValueError, match=pattern):
+        R.refinement_model(derived.sites, built['anchors'], penalized_variables=penalized, **kwargs)
+
+
 # ---------------------------------------------------------------- input guards
 
 def test_refine_requires_declared_provenance():
@@ -548,6 +1112,17 @@ def test_native_direct_origin_requires_its_own_representation():
                  target_origin=core.IsaPfitTargetOrigin.NativeDirectActualPointResponse,
                  response_representation='native_point_charge_ov_operators',
                  auxiliary_basis_id='aug-cc-pVTZ-jkfit', **common)
+
+
+def test_an_undetermined_refinement_raises_rather_than_returning_parameters():
+    """Unpenalized variables (weight type 0) and one point: rank deficient."""
+    built = case('l2h1')
+    model = R.refinement_model(built['model'].sites, built['anchors'], weight_type=0,
+                               provenance='unpenalized')
+    with pytest.raises(RuntimeError, match='unavailable'):
+        R.refine(model, built['points'][:1], built['targets'][:1],
+                 target_origin=core.IsaPfitTargetOrigin.SyntheticAnalyticTest,
+                 source_id='test_isapol_refine', generation_record='one point')
 
 
 def test_rejects_a_fit_point_sitting_on_a_site():

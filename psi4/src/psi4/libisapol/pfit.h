@@ -14,13 +14,11 @@ struct IsaPfitMatrix {
     size_t rows = 0, cols = 0;
     std::vector<double> values;
 };
-/// NativeDirectActualPointResponse is this code's own direct-OV point-charge
-/// response. It is deliberately NOT interchangeable with the Supplied* origins:
-/// the historical target is a constrained-NN/fitted-propagator quantity.
+/// NativeDirectActualPointResponse is the direct-OV point-charge response, NOT
+/// interchangeable with the Supplied* (constrained-NN/fitted-propagator) origins.
 /// NativeFittedPointResponse contracts native AUX coefficient responses with
-/// exact AUX Coulomb point potentials. It requires a declared AUX identity and
-/// fitted_density_coefficients representation; it is not a supplied target or
-/// a certification of CamCASP parity.
+/// exact AUX Coulomb point potentials and requires a declared AUX identity and
+/// the fitted_density_coefficients representation.
 /// Appended, never inserted: the underlying values of the existing enumerators
 /// must not change for anything already compiled against this header.
 enum class IsaPfitTargetOrigin { Unspecified, SuppliedActualPointResponse,

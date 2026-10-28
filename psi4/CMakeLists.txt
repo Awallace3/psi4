@@ -369,7 +369,12 @@ install(
     PATTERN "f12_libint1.json"
     PATTERN "tdscf_reference_data.json"
     PATTERN "utils.py"
+    PATTERN "isapol_*.py"
   )
+install(DIRECTORY ../tests/pytests/data_isapol
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4/tests/
+        PATTERN "__pycache__" EXCLUDE
+        PATTERN "*.pyc" EXCLUDE)
 install(
   DIRECTORY
     ../tests/pytests/test_fchk_writer
@@ -478,4 +483,3 @@ configure_package_config_file(
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${psi4_INSTALL_CMAKEDIR}/psi4Config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/${psi4_INSTALL_CMAKEDIR}/psi4ConfigVersion.cmake
         DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKECONFIG_INSTALL_DIR})
-

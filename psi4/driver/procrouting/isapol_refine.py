@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 """Refinement of local polarizabilities against a point-to-point response target.
 
-This is the stage that stands between raw per-site distributed polarizabilities
-and a refined model: the raw tensors only *anchor* the fit, and the data being
-fitted is the point-to-point response ``v(i,j)`` between unit source charges at
-a point cloud.  The algebra, the model construction and the penalty convention
+Raw per-site tensors only *anchor* the fit; the data fitted is the
+point-to-point response ``v(i,j)`` between unit charges at a point cloud.  The
+algebra, the model construction and the penalty convention
 are transcribed from CamCASP 6.0 by Alston J. Misquitta and Anthony J. Stone
 (http://gitlab.com/anthonyjstone/camcasp), MIT licensed, and are referenced
 inline by file and line:
@@ -22,13 +21,10 @@ inline by file and line:
 
 No CamCASP source is executed, linked or vendored here.
 
-What this module deliberately does not do: it does not generate the target
-response (see ``isapol_bounded``), does not localize, does not
-choose rank limits or site types for the caller, does not symmetrize or repair
-the anchor tensors, and does not iterate the fit.  Components excluded by the
-cutoff are absent from the model and therefore exactly zero in the refined
-tensors, exactly as they are absent from a CamCASP ``.pdef``; they are not
-carried through from the anchors.
+The point-response targets, rank limits and site types are the caller's;
+anchors are not symmetrized or repaired; the fit is not iterated.  Components
+below the cutoff are absent from the model, hence exactly zero in the refined
+tensors, as in a CamCASP ``.pdef``.
 
 Conventions.  Multipole components are real Racah ``00,10,11c,11s,20,...``
 with no Condon-Shortley phase, the ordering of
@@ -42,7 +38,6 @@ are nonnegative imaginary-axis magnitudes in atomic units.
 """
 from dataclasses import dataclass, field
 import hashlib
-from typing import Optional, Sequence
 
 import numpy as np
 
@@ -66,6 +61,8 @@ MAX_PARAMETERS = 4096
 
 #: CamCASP's weight index (the ``WEIGHT`` key of a ``.prss`` file).
 WEIGHT_TYPES = (0, 1, 2, 3, 4, 5, 6)
+
+PENALTY_SELECTIONS = ('current', 'explicit_subset', 'static_reference')
 
 TARGET_CONVENTION = 'v_pq = -d(phi_induced at R_p)/d(q at R_q); atomic units Eh/e^2'
 
@@ -96,10 +93,8 @@ def penalty_weight(*, weight_type, weight_coefficient, alpha, frequency, rank1, 
     """CamCASP ``weights`` (process_data.F90:1810-1876), transcribed exactly.
 
     ``alpha`` is the anchor value of the parameter, ``rank1``/``rank2`` the
-    ranks of its two components.  The literals ``10.0e-3`` and ``10.0e-2`` of
-    cases 5 and 6 are upstream's and are reproduced as written, including the
-    fact that they are ten times the values the upstream comments claim.  An
-    illegal weight index stops CamCASP; here it raises.
+    ranks of its two components.  The ``10.0e-3``/``10.0e-2`` literals of cases 5
+    and 6 are upstream's as written (ten times what its comments claim).
     """
     if weight_type not in WEIGHT_TYPES:
         raise ValueError(f'weight_type must be one of {WEIGHT_TYPES}')
@@ -213,13 +208,15 @@ class RefinementModel:
 
     ``declared_variables`` is empty when the variable list was derived from the
     cutoff, and is the caller's own ``.pdef`` variable list when one was
-    supplied.  ``unpenalized_variables`` names the declared variables the
-    cutoff screens out, which are free parameters carrying anchor 0 and
-    strength 0 -- CamCASP's own split, where ``.pdef`` sets the variable list
-    and the ``Penalties`` block ``process`` writes covers only the above-cutoff
-    subset.  A model with a nonempty ``declared_variables`` is a DIFFERENT
-    DECLARED MODEL from the cutoff-derived one, even where the two share every
-    penalized variable.
+    supplied.  ``unpenalized_variables`` names the declared variables that
+    carry no penalty -- those this node's cutoff screens out, or, when
+    ``refinement_model`` was given ``penalized_variables``, those outside that
+    set -- which are free parameters carrying anchor 0 and strength 0.  This is
+    CamCASP's own split, where ``.pdef`` sets the variable list and the
+    ``Penalties`` block ``process`` writes covers only the subset the static
+    node's cutoff selected.  A model with a nonempty ``declared_variables`` is
+    a DIFFERENT DECLARED MODEL from the cutoff-derived one, even where the two
+    share every penalized variable.
     """
     sites: tuple
     site_types: tuple
@@ -242,6 +239,9 @@ class RefinementModel:
     provenance: str
     declared_variables: tuple = ()
     unpenalized_variables: tuple = ()
+    penalty_selection: str = 'current'
+    static_reference_sha256: str = ''
+    selection_sha256: str = ''
 
     @property
     def parameter_count(self):
@@ -332,9 +332,28 @@ def _validated_declared_variables(declared, sites, ordered_types, first):
     return resolved
 
 
+def _validated_penalized_variables(penalized, declared):
+    """The caller's penalized subset of the declared list, as a set of labels."""
+    if penalized is None:
+        return None
+    if declared is None:
+        raise ValueError('penalized_variables requires declared_variables')
+    if isinstance(penalized, str):
+        raise ValueError('penalized_variables is a collection of labels, not a single label string')
+    penalized = tuple(penalized)
+    if len(set(penalized)) != len(penalized):
+        raise ValueError('penalized_variables must not repeat a variable')
+    names = set(declared.values())
+    for label in penalized:
+        if label not in names:
+            raise ValueError(f'penalized variable {label!r} is not a declared variable')
+    return set(penalized)
+
+
 def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
                      weight_type=3, weight_coefficient=1e-3, provenance='',
-                     declared_variables=None):
+                     declared_variables=None, penalized_variables=None,
+                     penalty_selection=None, static_reference_tensors=None):
     """Build the variable list CamCASP's ``.pdef`` plus ``Penalties`` block encodes.
 
     ``anchor_tensors[s]`` is site ``s``'s raw local polarizability at
@@ -351,14 +370,62 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
     ``.pdef`` does, instead of deriving it from the cutoff.  It must name every
     variable the cutoff would have produced -- a declared list that omits a
     penalized variable would misrepresent the ``Penalties`` block as covering
-    the fit -- and may name more; the extra ones are free parameters with
-    anchor 0.0 and strength 0.0, exactly the state a ``.pdef`` variable with no
-    ``Penalties`` line is in.  Supplying it is a different declared model, not
-    a relaxation of the cutoff: the cutoff still decides which variables are
-    anchored and penalized, and is recorded unchanged on the model.
+    the fit -- and may name more.  Supplying it is a different declared model,
+    not a relaxation of the cutoff, which is recorded unchanged on the model.
+
+    Which declared variables carry a penalty is decided in one of two ways:
+
+    * ``penalized_variables=None`` (the default, and the legacy direct-helper
+      behaviour): this node's own cutoff test.  A declared variable whose
+      anchor here is within the cutoff is a free parameter with anchor 0.0 and
+      strength 0.0.
+    * ``penalized_variables`` given (requires ``declared_variables``): exactly
+      the named subset of the declared list is penalized, each with this
+      node's anchor and ``penalty_weight`` even where that anchor is within
+      the cutoff; every other declared variable is free.  This is CamCASP's
+      frequency sweep, where the static node's cutoff scan selects the
+      penalized variables and ``process`` writes a ``Penalties`` line for each
+      of them at every later node (process_data.F90:2112-2134, 2269-2275).
+      An empty collection penalizes nothing.
+
+    Free parameters are the state of a ``.pdef`` variable with no
+    ``Penalties`` line, e.g. a user-declared extra the static cutoff did not
+    select.  The declared-list completeness check above always uses this
+    node's cutoff.  The helper knows nothing about other nodes: a caller that
+    wants the static selection must pass it, as ``isapol_bounded`` does.
+
+    ``penalty_selection=None`` preserves both published call forms: current
+    cutoff without a subset, exact explicit subset with one (including empty).
+    An explicit ``'current'`` may not accompany a subset. ``'explicit_subset'``
+    requires one. ``'static_reference'`` requires one finite static tensor per
+    site and refuses a simultaneous subset, rather than choosing precedence.
+    It selects with the reference site's strict static cutoff, but anchors and
+    weights always use current tensors. Declared unselected extras stay free.
+    Static tensors certify caller-declared frequency/axes, not their own
+    identity. Hashes snapshot tensor bytes, not site/frame metadata.
     """
     sites = _validated_sites(sites)
     tensors = _validated_anchor_tensors(sites, anchor_tensors)
+    if penalty_selection is None:
+        penalty_selection = 'current' if penalized_variables is None else 'explicit_subset'
+    if penalty_selection not in PENALTY_SELECTIONS:
+        raise ValueError(f'penalty_selection must be one of {PENALTY_SELECTIONS}')
+    if penalty_selection == 'explicit_subset':
+        if penalized_variables is None:
+            raise ValueError('explicit_subset requires penalized_variables')
+    elif penalized_variables is not None:
+        raise ValueError('penalized_variables requires explicit_subset selection; ambiguous combination')
+    if penalty_selection == 'static_reference':
+        if static_reference_tensors is None:
+            raise ValueError('static_reference selection requires static_reference_tensors')
+        try:
+            selection_tensors = _validated_anchor_tensors(sites, static_reference_tensors)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'invalid static_reference_tensors: {exc}') from exc
+    else:
+        if static_reference_tensors is not None:
+            raise ValueError('static_reference_tensors requires static_reference selection')
+        selection_tensors = tensors
     if not np.isfinite(cutoff) or cutoff < 0.0:
         raise ValueError('cutoff must be finite and nonnegative')
     if not np.isfinite(frequency_au) or frequency_au < 0.0:
@@ -379,6 +446,7 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
             ordered_types.append(site.site_type)
     members = {t: tuple(i for i, s in enumerate(sites) if s.site_type == t) for t in ordered_types}
     declared = _validated_declared_variables(declared_variables, sites, ordered_types, first)
+    selected = _validated_penalized_variables(penalized_variables, declared)
 
     parameter_labels, parameter_entries, anchors, strengths = [], [], [], []
     nonsymmetric, copy_discrepancy = 0, 0.0
@@ -394,17 +462,19 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
             for col in range(row, site.component_count):
                 rank2 = component_rank(col)
                 alpha = float(tensor[row, col])
-                penalized = abs(alpha) > cutoff
+                above = abs(float(selection_tensors[reference][row, col])) > cutoff
                 label = (f'{site.label}_{COMPONENT_NAMES[row]}'
                          f'_{COMPONENT_NAMES[col]}_A')
                 if declared is not None and (site_type, row, col) not in declared:
                     # A variable the cutoff keeps but the declared list omits
                     # would leave a penalized anchor out of the fit entirely.
-                    if penalized:
+                    if above:
                         missing.append(label)
                     continue
-                if declared is None and not penalized:
+                if declared is None and not above:
                     continue
+                # A supplied penalized set replaces this node's cutoff test.
+                penalized = above if selected is None else label in selected
                 parameter_labels.append(label)
                 parameter_entries.append(tuple((s, row, col) for s in members[site_type]))
                 anchors.append(alpha if penalized else 0.0)
@@ -431,6 +501,17 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
     if len(parameter_labels) > MAX_PARAMETERS:
         raise ValueError(f'refinement is limited to {MAX_PARAMETERS} parameters')
 
+    anchor_sha256 = _anchor_hash(tensors)
+    static_sha256 = _anchor_hash(selection_tensors) if penalty_selection == 'static_reference' else ''
+    # Canonical subset identity is independent of declaration order and current
+    # frequency anchors. Empty explicit selection is intentionally not "current".
+    selection_sha256 = (hashlib.sha256(repr(tuple(sorted(selected))).encode()).hexdigest()
+                        if selected is not None else '')
+    provenance = provenance or ('caller-supplied raw local polarizabilities; '
+                                'CamCASP write_pfit_local_symm variable construction')
+    if penalty_selection == 'static_reference':
+        provenance += (f'; penalty_selection=static_reference; '
+                       f'static_reference_sha256={static_sha256}; anchor_sha256={anchor_sha256}')
     return RefinementModel(
         sites=sites, site_types=tuple(ordered_types),
         reference_sites=tuple(first[t] for t in ordered_types),
@@ -441,12 +522,13 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
         cutoff=float(cutoff), weight_type=int(weight_type),
         weight_coefficient=float(weight_coefficient), frequency_au=float(frequency_au),
         nonsymmetric_parameter_count=nonsymmetric,
-        anchor_sha256=_anchor_hash(tensors),
+        anchor_sha256=anchor_sha256,
         copy_anchor_discrepancy=float(copy_discrepancy),
-        provenance=provenance or 'caller-supplied raw local polarizabilities; '
-                                 'CamCASP write_pfit_local_symm variable construction',
+        provenance=provenance,
         declared_variables=() if declared is None else tuple(declared_variables),
-        unpenalized_variables=tuple(unpenalized))
+        unpenalized_variables=tuple(unpenalized),
+        penalty_selection=penalty_selection, static_reference_sha256=static_sha256,
+        selection_sha256=selection_sha256)
 
 
 def _validated_points(points_bohr):
@@ -499,16 +581,9 @@ def block_diagonal_tensor(model, per_site_tensors):
 def isotropic_scalars(result):
     """``alpha_l = trace(alpha_ll)/(2l+1)`` per site of a refinement, l = 1..limit.
 
-    The dispersion kernel wants one scalar per site and rank, not a tensor, and
-    the reduction is a trace over the ``2l+1`` components of one rank in the
-    Racah packing this module uses everywhere (00 at index 0, then 10, 11c,
-    11s, 20, ...).  Doing it here keeps the convention in one place: the same
-    reduction that :func:`isapol_lw.supplied_nonlocal_properties` applies to the
-    unrefined localized tensors, applied to the refined ones.
-
-    Rank 0 is deliberately absent.  The charge-flow block is a refinement
-    variable but not a polarizability of a rank the Casimir-Polder sum runs
-    over, and the isotropic dispersion contract starts at rank 1.
+    The same reduction :func:`isapol_lw.supplied_nonlocal_properties` applies to
+    unrefined tensors, over the Racah packing (00, 10, 11c, 11s, 20, ...).  Rank 0
+    is absent: the isotropic dispersion contract starts at rank 1.
 
     Returns ``(ranks_per_site, scalars_per_site)``: for site ``s``,
     ``ranks_per_site[s]`` is ``(1, ..., rank_limit)`` and ``scalars_per_site[s]``
@@ -533,11 +608,8 @@ def isotropic_scalars(result):
 def point_to_point_response(fields, model, per_site_tensors):
     """Forward map ``v(i,j) = sum_s T(i,s) . alpha_s . T(j,s)``.
 
-    This is what CamCASP's ``process`` evaluates when it turns a distributed
-    model back into a point-to-point response.  It is the model prediction, not
-    a target: a refinement target must come from an actual response calculation.
-    Returns the full signed matrix; use :func:`pack_lower_triangle` for the
-    packing the solver consumes.
+    CamCASP ``process``'s model prediction; never a refinement target.  Returns
+    the full signed matrix; :func:`pack_lower_triangle` gives the solver packing.
     """
     matrix = block_diagonal_tensor(model, per_site_tensors)
     fields = np.asarray(fields, dtype=float)
@@ -568,9 +640,8 @@ def _parameter_tensor(model, entries):
     return tensor
 
 
-#: Representation each declared target origin must carry, mirroring the
-#: solver's own admission rules (``pfit.cc`` 135-152) so that a caller gets the
-#: message in Python rather than a bare ValueError out of C++.
+#: Representation each target origin must carry; mirrors ``pfit.cc`` admission
+#: so the error is raised in Python.
 ORIGIN_REPRESENTATIONS = {
     'NativeDirectActualPointResponse': ('native_point_charge_ov_operators', False),
     'NativeFittedPointResponse': ('fitted_density_coefficients', True),
@@ -594,6 +665,42 @@ def _validated_origin(target_origin, response_representation, auxiliary_basis_id
     return name
 
 
+def target_provenance(target_origin, *, source_id, generation_record,
+                      response_representation='', auxiliary_basis_id=''):
+    """Validated ``core.IsaPfitTargetProvenance`` in the PFIT sign convention."""
+    _validated_origin(target_origin, response_representation, auxiliary_basis_id)
+    for name, value in (('source_id', source_id), ('generation_record', generation_record)):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f'{name} must be a nonblank string')
+    provenance = core.IsaPfitTargetProvenance()
+    provenance.origin = target_origin
+    provenance.convention = \
+        core.IsaPfitTargetConvention.NegativeInducedPotentialPerUnitSourceChargeAtomicUnits
+    provenance.source_id = source_id
+    provenance.response_representation = response_representation
+    provenance.auxiliary_basis_id = auxiliary_basis_id
+    provenance.generation_record = generation_record
+    return provenance
+
+
+def parameter_units(model):
+    """``bohr^(k1+k2+1)`` per variable, from the ranks of its two components."""
+    return [f'bohr^{component_rank(row) + component_rank(col) + 1}'
+            for entries in model.parameter_entries for (_, row, col) in entries[:1]]
+
+
+def matrix_penalty(model):
+    """The diagonal ``strengths[k]*(z[k]-anchors[k])**2`` penalty of ``model``."""
+    strength = core.IsaPfitMatrix()
+    strength.rows = model.parameter_count
+    strength.cols = model.parameter_count
+    strength.values = np.diag(np.asarray(model.strengths, dtype=float)).ravel().tolist()
+    penalty = core.IsaPfitMatrixPenalty()
+    penalty.matrix = strength
+    penalty.anchor = list(model.anchors)
+    return penalty
+
+
 def refinement_problem(model, points_bohr, packed_targets, *, target_origin=None,
                        source_id, generation_record, fields=None, damping=0.0,
                        label='refinement', response_representation='',
@@ -602,16 +709,17 @@ def refinement_problem(model, points_bohr, packed_targets, *, target_origin=None
 
     ``packed_targets`` must already be in the solver's packing, one value per
     ``j <= i``.  ``target_origin``, ``source_id`` and ``generation_record`` are
-    required and are not defaulted: the whole point of the origin tag is that a
-    native direct-OV response and a supplied fitted-propagator response are not
-    interchangeable targets, and the solver refuses a blank record anyway.
+    required: native direct-OV and supplied fitted-propagator responses are not
+    interchangeable targets.  Supplied ``fields`` are used as given: ``damping``
+    applies only to fields computed here, so supplied fields must already carry
+    any damping.
     """
     if not isinstance(model, RefinementModel):
         raise ValueError('model must be a RefinementModel')
-    _validated_origin(target_origin, response_representation, auxiliary_basis_id)
-    for name, value in (('source_id', source_id), ('generation_record', generation_record)):
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(f'{name} must be a nonblank string')
+    provenance = target_provenance(target_origin, source_id=source_id,
+                                   generation_record=generation_record,
+                                   response_representation=response_representation,
+                                   auxiliary_basis_id=auxiliary_basis_id)
     points = _validated_points(points_bohr)
     npoint = points.shape[0]
     targets = np.asarray(packed_targets, dtype=float)
@@ -628,22 +736,12 @@ def refinement_problem(model, points_bohr, packed_targets, *, target_origin=None
 
     problem = core.IsaPfitProblem()
     problem.frequency_au = model.frequency_au
-    provenance = core.IsaPfitTargetProvenance()
-    provenance.origin = target_origin
-    provenance.convention = \
-        core.IsaPfitTargetConvention.NegativeInducedPotentialPerUnitSourceChargeAtomicUnits
-    provenance.source_id = source_id
-    provenance.response_representation = response_representation
-    provenance.auxiliary_basis_id = auxiliary_basis_id
-    provenance.generation_record = generation_record
     problem.target_provenance = provenance
 
     pfit_model = core.IsaPfitModel()
     pfit_model.channel_labels = list(model.channel_labels)
     pfit_model.parameter_labels = list(model.parameter_labels)
-    pfit_model.parameter_units = [
-        f'bohr^{component_rank(row) + component_rank(col) + 1}'
-        for entries in model.parameter_entries for (_, row, col) in entries[:1]]
+    pfit_model.parameter_units = parameter_units(model)
     tensors = []
     for entries in model.parameter_entries:
         matrix = core.IsaPfitMatrix()
@@ -668,14 +766,7 @@ def refinement_problem(model, points_bohr, packed_targets, *, target_origin=None
     batch.targets = targets.tolist()
     problem.batches = [batch]
 
-    penalty = core.IsaPfitMatrixPenalty()
-    strength = core.IsaPfitMatrix()
-    strength.rows = model.parameter_count
-    strength.cols = model.parameter_count
-    strength.values = np.diag(np.asarray(model.strengths, dtype=float)).ravel().tolist()
-    penalty.matrix = strength
-    penalty.anchor = list(model.anchors)
-    problem.penalty = penalty
+    problem.penalty = matrix_penalty(model)
     problem.linear_penalties = []
     return problem
 
@@ -698,13 +789,12 @@ def refine(model, points_bohr, packed_targets, *, target_origin=None, source_id,
            generation_record, fields=None, damping=0.0, options=None, **provenance):
     """Solve the refinement and return the refined per-site local tensors.
 
-    The solver is the owned ``core.isa_pfit_solve``.  The default here is
-    ``NormalEquationsDSYSV`` because that is what CamCASP's ``pfit`` uses
-    (``process.F90::solve`` calls ``DSYSV('L',...)`` on the normal equations);
-    pass ``options`` to use the streaming QR path instead, which is more
-    accurate and not what upstream does.  A non-``Solved`` status is returned
-    rather than raised: a rank-deficient or ill-conditioned refinement is a
-    result about the model, and is reported, not repaired.
+    Uses ``core.isa_pfit_solve`` with ``NormalEquationsDSYSV`` by default, as
+    CamCASP's ``process.F90::solve`` does; ``options`` can select the more
+    accurate streaming QR.  ``fields`` and ``damping`` behave as in
+    :func:`refinement_problem`.  A rank-deficient or ill-conditioned fit raises
+    ``RuntimeError``: the solver withholds its parameters.  (The streamed
+    ``isapol_pfit_stream.refine_streamed`` raises ``ValueError`` instead.)
     """
     problem = refinement_problem(model, points_bohr, packed_targets, fields=fields,
                                  damping=damping, target_origin=target_origin,
@@ -713,9 +803,16 @@ def refine(model, points_bohr, packed_targets, *, target_origin=None, source_id,
     if options is None:
         options = core.IsaPfitOptions()
         options.solver = core.IsaPfitSolver.NormalEquationsDSYSV
-    result = core.isa_pfit_solve(problem, options)
-    parameters = tuple(map(float, result.parameters))
+    return refinement_result(model, core.isa_pfit_solve(problem, options))
 
+
+def refinement_result(model, result):
+    """Per-site refined tensors of one solved ``core.IsaPfitResult`` of ``model``.
+
+    Every COPY-equivalent site receives the same values, mirrored into both
+    triangles.  A failed fit raises ``RuntimeError`` from ``result.parameters``.
+    """
+    parameters = tuple(map(float, result.parameters))
     refined = [np.zeros((site.component_count,) * 2) for site in model.sites]
     for value, entries in zip(parameters, model.parameter_entries):
         for site, row, col in entries:
@@ -724,19 +821,16 @@ def refine(model, points_bohr, packed_targets, *, target_origin=None, source_id,
     for tensor in refined:
         tensor.flags.writeable = False
     shift = max((abs(z - a) for z, a in zip(parameters, model.anchors)), default=0.0)
-    refinement = RefinementResult(
+    return RefinementResult(
         model=model, parameters=parameters, refined_tensors=tuple(refined),
         anchor_shift_maxabs=float(shift), status=result.status,
         diagnostics=result.diagnostics, result=result,
         refinement_status='PFIT_refined_against_point_to_point_response')
-    return refinement
 
 
 # ------------------------------------------ dispersion from refined tensors ----
 
-#: Orders the isotropic Casimir-Polder kernel admits.  Odd orders need the
-#: lower-J normalization that is not certified on this branch, and are refused
-#: here rather than computed and labelled provisional.
+#: Orders the isotropic Casimir-Polder kernel admits; odd orders are refused.
 DISPERSION_ORDERS = (6, 8, 10, 12)
 
 
@@ -744,17 +838,8 @@ DISPERSION_ORDERS = (6, 8, 10, 12)
 class RefinedIsotropicDispersion:
     """Isotropic C_n contracted from PFIT-refined tensors.
 
-    Deliberately NOT an ``isapol_lw.IsotropicDispersion``: that record is typed
-    to two ``LocalProperties``, which are certified factory results of the
-    localization stage and may not be fabricated from refined tensors.  The
-    refinement is a different model of the same molecule -- it moves the
-    polarizabilities off the localized anchors to fit an actual point-to-point
-    response -- so it gets its own record, its own provenance and its own
-    QCVariable names, and the two C_n are never interchangeable.
-
-    ``site_ranks`` is the resolved per-site rank tuple, not the caller's
-    argument: which ranks entered decides whether an order is complete, so what
-    was used is stored rather than what was requested.
+    Provenance and QCVariable names distinguish it from the unrefined model.
+    ``site_ranks`` is the resolved per-site rank tuple actually contracted.
     """
     labels: tuple
     origins_bohr: tuple = field(repr=False)
@@ -795,7 +880,11 @@ def _dispersion_nodes(refinements):
         if (other.model.site_types != first.site_types
                 or other.model.parameter_labels != first.parameter_labels):
             raise ValueError('every node must share one declared variable set')
-        for name in ('weight_type', 'weight_coefficient', 'cutoff'):
+        if other.model.declared_variables != first.declared_variables:
+            raise ValueError('every node must share one declared model; a supplied .pdef '
+                             'variable list and a cutoff-derived one are different models')
+        for name in ('weight_type', 'weight_coefficient', 'cutoff',
+                     'penalty_selection', 'static_reference_sha256', 'selection_sha256'):
             if getattr(other.model, name) != getattr(first, name):
                 raise ValueError(f'every node must share one penalty scheme; {name} differs')
     frequencies = tuple(float(r.model.frequency_au) for r in nodes)
@@ -845,30 +934,16 @@ def refined_isotropic_dispersion(refinements, *, cp_weights, quadrature_provenan
                                  max_order=12, site_ranks=None, log=None, wfn=None):
     """Isotropic C_n from one refinement per Casimir-Polder frequency node.
 
-    The refinement solves one frequency at a time, so a dispersion coefficient
-    needs the whole grid: ``refinements`` is the per-node sequence, all of them
-    refining the identical declared site set under one penalty scheme, and their
-    ``frequency_au`` values are the grid that is contracted.  They are taken in
-    the order given and are NOT sorted here -- the CP weights belong to the
-    caller's node order, and reordering one without the other would silently
-    misweight the sum.
+    ``refinements`` holds one result per node, all on the identical site set and
+    penalty scheme; their ``frequency_au`` values form the grid, taken in the
+    given order (NOT sorted, since ``cp_weights`` follow that order).
 
-    The contraction itself is the same owned ``core.isa_isotropic_dispersion``
-    the unrefined path uses, with the model paired against itself.  What differs
-    is the input: ``trace(alpha_ll)/(2l+1)`` of the refined tensors rather than
-    of the localized ones.  That is a different model, so the result is a
-    :class:`RefinedIsotropicDispersion` and its variables are published under
-    ``ATOMIC REFINED DISPERSION ...``; nothing here may be compared against an
-    unrefined C_n as though it were the same quantity.
+    Contraction is ``core.isa_isotropic_dispersion`` on refined
+    ``trace(alpha_ll)/(2l+1)``, a different model from the unrefined C_n,
+    published under ``ATOMIC REFINED DISPERSION ...``.  Non-``Solved`` nodes are
+    contracted and their status recorded, not dropped.
 
-    A node whose solver status is not ``Solved`` still returned numbers, and is
-    contracted rather than dropped: the status is recorded on the result and
-    narrated per node, because a rank-deficient refinement is a fact about the
-    model and is reported, not repaired.
-
-    ``log`` and ``wfn`` are reporting surfaces only.  ``wfn`` is written to
-    solely by the reporting module; passing one does not make the C_n a property
-    of that wavefunction, and nothing here reads it back.
+    ``log`` and ``wfn`` are reporting outputs only; nothing reads ``wfn`` back.
     """
     nodes, first, frequencies = _dispersion_nodes(refinements)
     if not isinstance(quadrature_provenance, _lw.Provenance):
@@ -901,6 +976,8 @@ def refined_isotropic_dispersion(refinements, *, cp_weights, quadrature_provenan
                   f'weight={first.weight_type}/{first.weight_coefficient!r}; '
                   f'cutoff={first.cutoff!r}; anchors_sha256={anchor_sha256}; '
                   f'{first.provenance}')
+    if wfn is not None:
+        _lg.check_publication_labels(tuple(site.label for site in first.sites))
     log = _lg.silent() if log is None else log
     log.stage('isotropic dispersion from refined tensors (Casimir-Polder)',
               _lg.refined_dispersion_parameters(
@@ -908,35 +985,40 @@ def refined_isotropic_dispersion(refinements, *, cp_weights, quadrature_provenan
                   quadrature_provenance=quadrature_provenance, site_ranks=site_ranks,
                   resolved_site_ranks=resolved, anchor_sha256=anchor_sha256))
 
-    model_sites = []
-    for index, site in enumerate(first.sites):
-        column = [available[0][index].index(rank) for rank in resolved[index]]
-        table = np.array([[scalars[node][index][j] for j in column]
-                          for node in range(len(nodes))], dtype=float)
-        isosite = core.IsaIsotropicSite()
-        isosite.label, isosite.origin = site.label, list(map(float, site.origin_bohr))
-        isosite.ranks = list(resolved[index])
-        isosite.polarizabilities = core.Matrix.from_array(np.ascontiguousarray(table))
-        model_sites.append(isosite)
-    isomodel = core.IsaIsotropicModel(list(frequencies), model_sites, provenance)
-    result = core.isa_isotropic_dispersion(isomodel, isomodel, weights.tolist(), max_order)
-    labels = tuple(site.label for site in first.sites)
-    pairs = tuple(_lw.DispersionPair(
-        p.site_a, p.site_b, labels[p.site_a], labels[p.site_b],
-        tuple(_lw.Coefficient(c.order, c.value, tuple(map(tuple, c.included_rank_pairs)),
-                              tuple(map(tuple, c.missing_rank_pairs)), c.complete)
-              for c in p.coefficients)) for p in result.pairs)
-    record = RefinedIsotropicDispersion(
-        labels=labels,
-        origins_bohr=tuple(tuple(map(float, site.origin_bohr)) for site in first.sites),
-        frequencies=frequencies, cp_weights=tuple(map(float, weights)),
-        quadrature_provenance=quadrature_provenance, site_ranks=resolved, pairs=pairs,
-        anchor_shift_maxabs=max(float(r.anchor_shift_maxabs) for r in nodes),
-        anchor_sha256=anchor_sha256, weight_type=first.weight_type,
-        weight_coefficient=first.weight_coefficient,
-        refinement_status=nodes[0].refinement_status,
-        solver_status=tuple(str(r.status).rsplit('.', 1)[-1] for r in nodes),
-        provenance=provenance)
-    _lg.report_refined_dispersion(log, wfn, record)
+    try:
+        model_sites = []
+        for index, site in enumerate(first.sites):
+            column = [available[0][index].index(rank) for rank in resolved[index]]
+            table = np.array([[scalars[node][index][j] for j in column]
+                              for node in range(len(nodes))], dtype=float)
+            isosite = core.IsaIsotropicSite()
+            isosite.label, isosite.origin = site.label, list(map(float, site.origin_bohr))
+            isosite.ranks = list(resolved[index])
+            isosite.polarizabilities = core.Matrix.from_array(np.ascontiguousarray(table))
+            model_sites.append(isosite)
+        isomodel = core.IsaIsotropicModel(list(frequencies), model_sites, provenance)
+        result = core.isa_isotropic_dispersion(isomodel, isomodel, weights.tolist(), max_order)
+        labels = tuple(site.label for site in first.sites)
+        pairs = tuple(_lw.DispersionPair(
+            p.site_a, p.site_b, labels[p.site_a], labels[p.site_b],
+            tuple(_lw.Coefficient(c.order, c.value, tuple(map(tuple, c.included_rank_pairs)),
+                                  tuple(map(tuple, c.missing_rank_pairs)), c.complete)
+                  for c in p.coefficients)) for p in result.pairs)
+        record = RefinedIsotropicDispersion(
+            labels=labels,
+            origins_bohr=tuple(tuple(map(float, site.origin_bohr)) for site in first.sites),
+            frequencies=frequencies, cp_weights=tuple(map(float, weights)),
+            quadrature_provenance=quadrature_provenance, site_ranks=resolved, pairs=pairs,
+            anchor_shift_maxabs=max(float(r.anchor_shift_maxabs) for r in nodes),
+            anchor_sha256=anchor_sha256, weight_type=first.weight_type,
+            weight_coefficient=first.weight_coefficient,
+            refinement_status=nodes[0].refinement_status,
+            solver_status=tuple(str(r.status).rsplit('.', 1)[-1] for r in nodes),
+            provenance=provenance)
+        _lg.report_refined_dispersion(log, wfn, record)
+    except Exception as error:
+        # Close the stage as failed, so a later stage cannot report it complete.
+        log.stage_failed(error)
+        raise
     log.stage_end()
     return record

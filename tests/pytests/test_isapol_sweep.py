@@ -60,7 +60,7 @@ def reference(state, grids, options):
 
 def test_no_tail_sweep_uses_frozen_old_state():
     atomic, shape, density, state, grids, options = fixture()
-    sweep = core.IsaNoTailSweep(atomic, shape, [[0], [0]], density)
+    sweep = core.IsaASweep(atomic, shape, [[0], [0]], density)
     result = sweep.run(state, grids, options)
     want = reference(state, grids, options)
     np.testing.assert_allclose(result.next.atomic_coefficients, want[:, :1], atol=3e-16, rtol=3e-15)
@@ -83,18 +83,18 @@ def test_no_tail_sweep_uses_frozen_old_state():
 
 def test_no_tail_sweep_permutation_equivariance():
     atomic, shape, density, state, grids, options = fixture()
-    expected = core.IsaNoTailSweep(atomic, shape, [[0], [0]], density).run(state, grids, options)
+    expected = core.IsaASweep(atomic, shape, [[0], [0]], density).run(state, grids, options)
     permuted = core.IsaSweepState()
     permuted.atomic_coefficients = state.atomic_coefficients[::-1]
     permuted.shape_coefficients = state.shape_coefficients[::-1]
     # Molecular density centre numbering is NOT permuted with sweep atom numbering.
-    actual = core.IsaNoTailSweep(atomic[::-1], shape[::-1], [[0], [0]], density).run(permuted, grids[::-1], options)
+    actual = core.IsaASweep(atomic[::-1], shape[::-1], [[0], [0]], density).run(permuted, grids[::-1], options)
     np.testing.assert_allclose(actual.next.atomic_coefficients, expected.next.atomic_coefficients[::-1], atol=2e-16)
 
 
 def test_no_tail_clipping_screening_and_zero_denominators():
     atomic, shape, density, state, grids, options = fixture()
-    sweep = core.IsaNoTailSweep(atomic, shape, [[0], [0]], density)
+    sweep = core.IsaASweep(atomic, shape, [[0], [0]], density)
     state.shape_coefficients = [[-.8], [1.4]]
     grids[1].shape_sites = [1]
     grids[1].density_sites = [0]  # deliberately distinct index domains
@@ -117,7 +117,7 @@ def test_no_tail_sweep_rejects_grids(field, value, match):
     atomic, shape, density, state, grids, options = fixture()
     setattr(grids[0], field, value)
     with pytest.raises(ValueError, match=match):
-        core.IsaNoTailSweep(atomic, shape, [[0], [0]], density).run(state, grids, options)
+        core.IsaASweep(atomic, shape, [[0], [0]], density).run(state, grids, options)
 
 
 @pytest.mark.parametrize('field,value', [('shape_coefficients', []), ('atomic_coefficients', [[1.]]),
@@ -126,16 +126,16 @@ def test_no_tail_sweep_rejects_state(field, value):
     atomic, shape, density, state, grids, options = fixture()
     setattr(state, field, value)
     with pytest.raises(ValueError, match='count|dimension|finite'):
-        core.IsaNoTailSweep(atomic, shape, [[0], [0]], density).run(state, grids, options)
+        core.IsaASweep(atomic, shape, [[0], [0]], density).run(state, grids, options)
 
 
 def test_no_tail_sweep_constructor_and_late_failure_atomicity():
     atomic, shape, density, state, grids, options = fixture()
     with pytest.raises(ValueError, match='nonempty'):
-        core.IsaNoTailSweep([], [], [], density)
+        core.IsaASweep([], [], [], density)
     with pytest.raises(ValueError, match='count'):
-        core.IsaNoTailSweep(atomic, shape[:1], [[0], [0]], density)
-    sweep = core.IsaNoTailSweep(atomic, shape, [[0], [0]], density)
+        core.IsaASweep(atomic, shape[:1], [[0], [0]], density)
+    sweep = core.IsaASweep(atomic, shape, [[0], [0]], density)
     old_atomic, old_shape = state.atomic_coefficients, state.shape_coefficients
     grids[1].weights = [np.nan]*47
     with pytest.raises(ValueError, match='finite'):

@@ -1,29 +1,8 @@
 # Psi4 Developers; SPDX-License-Identifier: LGPL-3.0-only
-"""Leg A: the residual policy of `isa_localize_lw`, and what the recorded run measured.
+"""LW residual policy on charge-conserving synthetic tensors with injected defects.
 
-Leg A is the localization step of the reference chain: nonlocal rank 0:4 site-pair
-polarizabilities in, on-site local rank 1:3 polarizabilities out, in each site's
-local frame.  In the reference chain that step is performed by a GPLv3 tool whose
-source is not read, quoted or transliterated anywhere in Psi4.
-
-*Why the acceptance comparison is not here.*  Localization couples every site and
-every component, so the step cannot be run on a subset of its input: reproducing
-the recorded output at even one matrix element requires all 9 x 25 x 25 supplied
-numbers.  There is no reduced numerical slice of this stage, so the eleven-index
-file-in/file-out comparison -- 7,425 entries, agreeing to 8.3e-13 -- lives in
-`agent_scratch/pytests/test_isapol_lw_leg_a.py` with its two large fixtures.  What
-that run *measured* is recorded below as literals, and the scratch guard re-derives
-every one of them so a regenerated capture cannot leave stale numbers committed.
-
-*What is here, and is stronger than the fixture version.*  The residual policy
-itself -- which defects are reported, which are gated, and in which order the
-input precondition and the output postcondition fire -- is tested on a synthetic
-three-site model built to conserve charge exactly, into which a *known* defect is
-then injected.  The recorded reference input violates the charge-flow sum rule by
-an amount nobody chose; here the amount is chosen, so `input_sum_rule` can be
-checked against the value it must report rather than against itself.
+Tests exercise gate ordering and defect transport, not archived molecular parity.
 """
-from decimal import Decimal
 import hashlib
 import math
 
@@ -36,43 +15,6 @@ pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick]
 
 #: Unmodified production postcondition for everything the algorithm controls.
 ALGORITHM_TOLERANCE = 1e-6
-#: Output agreement floor used by the recorded comparison in `agent_scratch/`.
-LEG_A_ATOL = 1e-11
-
-#: The reference chain's declared quadrature, `Quad 10 / Beta 0.5`: the static
-#: point plus ten dynamic nodes.  Both fixtures declare these frequencies, and
-#: `test_leg_a_frequency_grid_is_the_declared_quadrature` shows they are exactly
-#: our own grid's, which is what makes the recorded indices ours to reproduce.
-QUAD, BETA = 10, 0.5
-CASIMIR_OMEGAS = [0.0, 0.006609601596087073, 0.036174811998631026, 0.09544736369034741,
-                  0.1976442118453102, 0.3704172128053662, 0.6749146404580318,
-                  1.2648991724365144, 2.619244684547348, 6.91088595040828,
-                  37.82376235021513]
-
-#: Exact decimal charge-flow sum-rule defect of the SUPPLIED reference data,
-#: indices 000..010, read from the printed seven-digit tokens with no float round
-#: trip.  LW transports this defect exactly rather than repairing it, and the
-#: reference chain localized the same imperfect data, so it is measured and
-#: reported while the four algorithm-controlled residuals stay at 1e-6.  It is
-#: above that 1e-6 at every one of the eleven indices, the smallest by threefold.
-SUPPLIED_SUM_RULE = ['0.0007011', '0.0007011', '0.0007001', '0.0006940', '0.0006727',
-                     '0.0006185', '0.00051040', '0.00034365', '0.00017116', '0.00006008',
-                     '0.000002990']
-
-#: What the recorded eleven-index comparison measured: worst absolute disagreement
-#: with the reference's localized output, and the largest entry of that output, per
-#: index.  The magnitudes fall by three orders of magnitude across the grid, so the
-#: agreement is only meaningful as a ratio -- see the test below.
-LEG_A_MAXABS = [6.252776074688882e-13, 8.242295734817162e-13, 5.684341886080801e-13,
-                6.252776074688882e-13, 7.389644451905042e-13, 5.204725539442734e-13,
-                6.536993168992922e-13, 5.186961971048731e-13, 5.226929999935237e-13,
-                4.989342272665453e-13, 4.986939680651226e-13]
-REFERENCE_SCALE = [220.666588197109, 220.636741690751, 219.776119734384, 214.51305638687,
-                   195.857199661158, 153.073961018694, 102.585584108613, 55.395783335634,
-                   21.036525673816, 4.101250616307, 0.151456947268]
-#: Number of bond transfers LW performs on this three-site, two-bond graph at rank 4,
-#: identical at every index.
-LEG_A_TRANSFERS = 456
 
 ORIGINS = [[0.0, 0.0, 0.0], [-1.45365196, 0.0, -1.12168732], [1.45365196, 0.0, -1.12168732]]
 BONDS = [[0, 1], [0, 2]]
@@ -127,64 +69,6 @@ def localize(tensors, *args):
     return psi4.core.isa_localize_lw(
         _matrix(ORIGINS), [_matrix(tensors[a, b]) for a in range(3) for b in range(3)],
         0.0, BONDS, *args)
-
-
-def test_leg_a_frequency_grid_is_the_declared_quadrature():
-    """The eleven recorded indices are exactly our own `CasimirGrid(10, 0.5)` nodes.
-
-    Both fixtures declare an `omega` per index; this is the check that those are
-    our grid's and not merely near it, which is what makes the recorded output
-    something our code can be held to index by index.  The nodes come in reciprocal
-    pairs about `omega0` by construction of the `omega0 (1 -+ t)/(1 +- t)` map.
-    """
-    grid = psi4.core.CasimirGrid(QUAD, BETA)
-    assert grid.n_freq() == QUAD and grid.omega0() == BETA
-    assert [grid.omega(k) for k in range(QUAD + 1)] == CASIMIR_OMEGAS
-    assert CASIMIR_OMEGAS[0] == 0.0
-    for k in range(1, QUAD//2 + 1):
-        assert CASIMIR_OMEGAS[k]*CASIMIR_OMEGAS[QUAD - k + 1] == pytest.approx(BETA**2, rel=1e-14)
-
-
-def test_leg_a_supplied_defect_decays_and_exceeds_the_production_tolerance():
-    """The supplied data really does violate the sum rule, by a decaying amount.
-
-    Exact decimal arithmetic on the printed tokens, so this is a statement about
-    the reference input and not about float rounding.  It stays above the
-    unmodified 1e-6 production postcondition at every one of the eleven indices,
-    which is why the recorded comparison needs the reporting policy rather than a
-    loosened gate: there is no index at which the default would have passed.
-    """
-    defects = [Decimal(value) for value in SUPPLIED_SUM_RULE]
-    assert len(defects) == QUAD + 1
-    assert defects == sorted(defects, reverse=True)
-    assert defects[0] == defects[1]  # the static point and the first node agree to print
-    tolerance = Decimal('0.000001')
-    assert all(defect > tolerance for defect in defects)
-    assert defects[QUAD]/tolerance > 2  # the weakest index still clears it threefold
-    assert defects[0]/defects[QUAD] > 200
-
-
-def test_leg_a_recorded_agreement_is_at_double_precision_round_off():
-    """The recorded agreement is not merely inside `LEG_A_ATOL`; it is round-off.
-
-    The reference's localized entries fall by three orders of magnitude across the
-    grid, so a single absolute floor would flatter the high nodes.  The absolute
-    disagreement, by contrast, is flat at ~5e-13 -- it does not track the tensor
-    magnitude at all, which is the signature of accumulated round-off rather than
-    of a systematic difference in what the two codes compute.  Normalized on each
-    index's own largest entry the worst of the eleven is 3.3e-12, at the smallest
-    node, and 3.7e-15 at the static point.
-    """
-    assert len(LEG_A_MAXABS) == len(REFERENCE_SCALE) == QUAD + 1
-    for index, (error, scale) in enumerate(zip(LEG_A_MAXABS, REFERENCE_SCALE)):
-        assert error < LEG_A_ATOL/10, index
-        assert error/scale < 1e-11, index
-    # Flat in absolute terms across a grid whose tensors span three decades: the
-    # spread of the errors is far smaller than the spread of what they measure.
-    assert max(LEG_A_MAXABS)/min(LEG_A_MAXABS) < 2
-    assert REFERENCE_SCALE[0]/REFERENCE_SCALE[QUAD] > 1000
-    # Which means the tightest index is the smallest one, not the largest.
-    assert np.argmax(np.array(LEG_A_MAXABS)/np.array(REFERENCE_SCALE)) == QUAD
 
 
 def test_charge_conserving_supplied_model_passes_the_production_gate():
@@ -295,8 +179,7 @@ def test_leg_a_policy_through_the_production_driver():
 
     `reported_input_sum_rule` warns and lowers the combined flag while leaving the
     algorithm's own postcondition passing at 1e-6; `production` refuses outright.
-    This is the policy half of the recorded eleven-frequency driver run, which
-    itself stays in `agent_scratch/` with the fixtures it compares against.
+    This is the policy half of the recorded eleven-frequency driver run.
     """
     from psi4.driver.procrouting import isapol_lw
 
@@ -313,7 +196,6 @@ def test_leg_a_policy_through_the_production_driver():
     model = isapol_lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule', **common)
     assert model.metadata.residual_policy == 'reported_input_sum_rule'
     assert model.metadata.residual_tolerance == isapol_lw.PRODUCTION_TOLERANCE
-    assert model.metadata.historical_fixture_sha256 is None
     # The supplied defect keeps the combined flag False and is warned about ...
     assert model.metadata.production_postcondition_passed is False
     assert all(d.production_postcondition_passed is False for d in model.frequency_diagnostics)

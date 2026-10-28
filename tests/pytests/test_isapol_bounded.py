@@ -1,233 +1,45 @@
 # Copyright (c) 2007-2026 The Psi4 Developers.
 # SPDX-License-Identifier: LGPL-3.0-only
-"""Small independent bounded-backend identities, not large reference fixtures."""
-import itertools
+"""Bounded property chain: response -> LW -> PFIT -> isotropic C_n on live toy wavefunctions.
+
+The stages themselves are tested with their own modules; these tests check the
+orchestration: stage order and resources, ownership, cleanup, the streamed
+refinement against an independent dense fit, distribution and response
+selection, and refusals. Toy admissions are not molecular acceptance.
+"""
+import math
+import re
+
 import numpy as np
 import pytest
 from psi4 import core
-from psi4.driver.procrouting import isapol_bounded_response as backend
 from psi4.driver.procrouting import isapol_bounded as driver
+from psi4.driver.procrouting import isapol_bounded_response as backend
 from psi4.driver.procrouting import isapol_refine as refine
-from psi4.driver.procrouting.isapol_factorized_response import FactorizedDFOperators
+from psi4.driver.procrouting.isapol_logging import StageLog
+
+GEOMETRIES = {'water': 'O 0 0 0\nH .757 0 .586\nH -.757 0 .586',
+              'ammonia': 'N 0 0 .116\nH 0 .939 -.271\nH .813197854 -.4695 -.271\nH -.813197854 -.4695 -.271'}
+NAMESPACE = ('ATOMIC REFINED DISPERSION', 'REFINED DISPERSION COEFFICIENT')
 
 
-def ledger():
-    return backend._Ledger(backend.BoundedResources(512*1024**2, 6_000_000_000_000, 64*1024**3))
-
-
-@pytest.mark.parametrize('field,value', [('max_bytes', True), ('max_work', 6_000_000_000_001),
-                                      ('max_io_bytes', 0)])
-def test_resource_declarations_fail_closed(field, value):
-    args = dict(max_bytes=512*1024**2, max_work=6_000_000_000_000, max_io_bytes=64*1024**3)
-    args[field] = value
-    with pytest.raises(ValueError):
-        backend.BoundedResources(**args)
-
-
-def test_byte_budget_has_no_fixed_ceiling():
-    assert backend.BoundedResources(8*1024**3, 1, 1).max_bytes == 8*1024**3
-
-
-def test_ledger_never_resets_between_stages():
-    budget = backend._Ledger(backend.BoundedResources(100, 100, 100), reserved=20)
-    budget.admit('one', 80, 60)
-    with pytest.raises(ValueError, match='cumulative work'):
-        budget.admit('two', 80, 41)
-    budget.admit('three', 80, 40)
-    with pytest.raises(ValueError, match='shared numeric'):
-        budget.admit('four', 81)
-    budget.charge_io(60)
-    with pytest.raises(ValueError, match='I/O'):
-        budget.charge_io(41)
-    assert budget.work == 100 and budget.peak == 100 and budget.io == 60
-
-
-def test_checkpoint_identity_and_duplicate_refusals(tmp_path):
-    store = backend._Store(tmp_path, ledger())
-    store.save('a', np.eye(3))
-    np.testing.assert_array_equal(store.load('a'), np.eye(3))
-    with pytest.raises(ValueError, match='duplicate'):
-        store.save('a', np.eye(3))
-    np.save(tmp_path/'a.npy', np.ones((3, 3)))
-    with pytest.raises(ValueError, match='identity'):
-        store.load('a')
-
-
-@pytest.mark.parametrize('exchange', [0., .25, 1.])
-def test_exchange_indexing_matches_independent_factor_actions(exchange):
-    rng = np.random.default_rng(818)
-    oo, ov, dual, vv = [rng.normal(size=shape) for shape in
-                        [(5, 2, 2), (5, 2, 3), (5, 2, 3), (5, 3, 3)]]
-    gaps = np.arange(1., 7.)
-    ops = FactorizedDFOperators(gaps, oo, ov, dual, vv, exact_exchange=exchange)
-    v, y = backend._gram_terms(ov, dual)
-    x = backend._exchange_x(oo, [vv.reshape(5, 9)[:, :4], vv.reshape(5, 9)[:, 4:]], 3)
-    np.testing.assert_allclose(np.diag(gaps)+4*v-exchange*(x+y), ops.apply_h1(np.eye(6)), atol=1e-13)
-    np.testing.assert_allclose(np.diag(gaps)-exchange*(x-y), ops.apply_h2(np.eye(6)), atol=1e-13)
-    with pytest.raises(ValueError, match='coverage'):
-        backend._exchange_x(oo, [vv.reshape(5, 9)[:, :4]], 3)
-
-
-@pytest.mark.parametrize('omega', [0., .7])
-def test_response_uses_distinct_target_and_anchor_legs(tmp_path, omega):
-    store = backend._Store(tmp_path, ledger())
-    rng = np.random.default_rng(231)
-    a, b = rng.normal(size=(6, 6)), rng.normal(size=(6, 6))
-    h1, h2 = a.T@a+np.eye(6), b.T@b+np.eye(6)
-    d, anchor = rng.normal(size=(6, 4)), rng.normal(size=(6, 3))
-    for name, value in [('h1', h1), ('h2', h2), ('target', d), ('anchor', anchor)]:
-        store.save(name, value)
-    response = backend._H2H1Response(store, (4, 2, 3), 3)
-    try:
-        coefficient, raw, residual = response.solve(omega)
-    finally:
-        response.close()
-    effective = h1+omega**2*np.linalg.inv(h2)
-    np.testing.assert_allclose(coefficient, -4*d.T@np.linalg.solve(effective, d), atol=1e-12)
-    np.testing.assert_allclose(raw, 4*anchor.T@np.linalg.solve(effective, anchor), atol=1e-12)
-    assert residual < 1e-12
-    assert backend._stability(store, 6)['h1']['minimum_symmetric_eigenvalue'] > 0
-
-
-def test_minimum_eigenvalue_finds_modes_orthogonal_to_symmetric_starts():
-    n = 120
-    q, _ = np.linalg.qr(np.random.default_rng(3).normal(size=(n, n)))
-    q[:, 0] -= q[:, 0].mean()  # lowest mode orthogonal to the all-ones vector
-    q, _ = np.linalg.qr(q)
-    values = np.linspace(.2, 30., n)
-    a = (q*values)@q.T
-    a = (a+a.T)*.5
-    assert abs(backend._minimum_eigenvalue(a)-values[0]) < 1e-12
-    assert backend._minimum_eigenvalue(a-.3*np.eye(n)) <= 0
-
-
-def test_instability_is_not_repaired(tmp_path):
-    store = backend._Store(tmp_path, ledger())
-    store.save('h1', np.diag([-1., 1.]))
-    with pytest.raises(ValueError, match='stability'):
-        backend._stability(store, 2)
-
-
-def test_streamed_fit_equals_dense_fit_with_same_native_targets():
-    """One shared-design multi-frequency fit reproduces each node's dense fit."""
-    site = refine.RefinementSite('A', 'A', (0., 0., 0.), np.eye(3), 1)
-    rng = np.random.default_rng(811)
-    points = rng.normal(size=(19, 3))+[4., 4., 4.]
-    potentials = rng.normal(size=(7, len(points)))
-    source = dict(state_sha256='synthetic-state', auxiliary_sha256='synthetic-aux', model='synthetic-equation')
-    models, coefficients = [], [-np.eye(7), -np.diag(rng.random(7)+.5)]
-    for omega, scale in [(0., 1.), (.6, .7)]:
-        anchor = scale*np.diag([0., 2., 3., 4.])
-        models.append(refine.refinement_model([site], [anchor], frequency_au=omega, cutoff=1e-4,
-            weight_type=4, weight_coefficient=1e-5,
-            declared_variables=models[0].parameter_labels if models else None, provenance='synthetic identity'))
-    row_count = len(points)*(len(points)+1)//2
-    packed = np.empty((row_count, 2))
-    for t, coefficient in enumerate(coefficients):
-        driver._pack_targets(packed, t, coefficient, potentials, ledger())
-    streamed = driver._stream_fit(models, points, packed, ledger(), source)
-    assert len(streamed) == 2
-    for model, coefficient, fit in zip(models, coefficients, streamed):
-        targets = -(potentials.T @ coefficient) @ potentials
-        dense = refine.refine(model, points, targets[np.tril_indices(len(points))],
-            target_origin=core.IsaPfitTargetOrigin.NativeFittedPointResponse,
-            source_id=source['state_sha256'], auxiliary_basis_id=source['auxiliary_sha256'],
-            response_representation='fitted_density_coefficients', generation_record=source['model'])
-        np.testing.assert_allclose(fit.parameters, dense.parameters, rtol=1e-11, atol=1e-11)
-        assert fit.status == core.IsaPfitStatus.Solved
-        assert fit.result.frequency_au == model.frequency_au
-    assert not np.allclose(streamed[0].parameters, streamed[1].parameters)
-
-
-def _aux_basis(centres, shells, representation=core.IsaBasisRepresentation.Cartesian):
-    """Unit-exponent, unit-coefficient AUX shells given as (centre, l)."""
-    data = []
-    for centre, l in shells:
-        shell = core.IsaGaussianShell()
-        shell.centre, shell.l, shell.exponents, shell.coefficients = centre, l, [1.], [1.]
-        data.append(shell)
-    return core.IsaExplicitBasis(core.IsaBasisRole.MolecularAux, representation, centres, data)
-
-
-def _slater_pw92_fxc(rho):
-    """Independent unpolarized Slater + PW92 kernel, analytic in rs.
-
-    f_c = rs/(9*rho) * (rs*e_c''(rs) - 2*e_c'(rs)), original PW92 table-I A
-    (also CamCASP dft_Sx_PW92c.F90:147); .0310907 belongs to the modified
-    parameterization, not XC_LDA_C_PW.
-    """
-    rs = (3/(4*np.pi*rho))**(1/3)
-    A, alpha = .031091, .21370
-    b1, b2, b3, b4 = 7.5957, 3.5876, 1.6382, .49294
-    q = 2*A*(b1*np.sqrt(rs)+b2*rs+b3*rs**1.5+b4*rs**2)
-    dq = 2*A*(b1/(2*np.sqrt(rs))+b2+1.5*b3*np.sqrt(rs)+2*b4*rs)
-    ddq = 2*A*(-b1/(4*rs**1.5)+.75*b3/np.sqrt(rs)+2*b4)
-    dl = -dq/(q*(q+1))
-    ddl = -ddq/(q*(q+1))+dq**2*(2*q+1)/(q*q*(q+1)**2)
-    de = -2*A*(alpha*np.log1p(1/q)+(1+alpha*rs)*dl)
-    dde = -2*A*(2*alpha*dl+(1+alpha*rs)*ddl)
-    return -(3/np.pi)**(1/3)/3*rho**(-2/3) + rs/(9*rho)*(rs*dde-2*de)
-
-
-@pytest.mark.parametrize('cutoff', [0., np.exp(-2.), np.nextafter(np.exp(-2.), np.inf)])
-def test_kernel_floors_caps_and_screens_the_full_grid(cutoff):
-    """Every grid row enters; the mask keeps shell pairs at exactly the cutoff."""
-    from psi4.driver.procrouting.isapol_native_propagator import KernelSmoothing
-    # Equal unit exponents: the normalized-s screen of the pair is exp(-R**2/2).
-    aux = _aux_basis([[0., 0., 0.], [2., 0., 0.]], [(0, 0), (1, 0)])
-    grid = np.array([[0., 0., 0., .2], [.5, .1, 0., .3], [1., 0., .2, .4],
-                     [2., 0., 0., .1], [3.5, 0., 0., .25]])
-    density = np.array([.3, -.05])
-    smoothing = KernelSmoothing(1e-3, 2., .1, .1, 'CONSTANT')
-    chi = np.asarray(aux.evaluate(grid[:, :3].tolist()))
-    rho = chi @ density
-    assert (rho < smoothing.rho_epsilon).any()  # negative rows are floored, not dropped
-    fxc = _slater_pw92_fxc(np.maximum(rho, smoothing.rho_epsilon))
-    assert (np.abs(fxc) > smoothing.f_max).any()  # and the cap is active
-    expected = chi.T @ ((grid[:, 3]*np.clip(fxc, -smoothing.f_max, smoothing.f_max))[:, None]*chi)
-    if cutoff > np.exp(-2.):
-        expected[0, 1] = expected[1, 0] = 0.
-    actual = backend._kernel(aux, density, grid, smoothing, cutoff, ledger())
-    np.testing.assert_allclose(actual, expected, rtol=1e-11, atol=1e-13)
-
-
-@pytest.mark.parametrize('representation,widths', [
-    (core.IsaBasisRepresentation.Cartesian, [1, 15, 6, 3]),
-    (core.IsaBasisRepresentation.Spherical, [1, 9, 5, 3])])
-def test_kernel_screens_whole_mixed_shell_blocks(representation, widths):
-    from psi4.driver.procrouting.isapol_native_propagator import KernelSmoothing
-    centres = np.array([[0., 0., 0.], [6., 0., 0.], [1., 0., 0.]])
-    sites = [0, 1, 0, 2]
-    aux = _aux_basis(centres.tolist(), list(zip(sites, [0, 4, 2, 1])), representation)
-    grid = np.array([[0., .2, .3, .1], [.5, .1, 0., .3], [1., 0., .2, .4], [2., .1, 0., .1],
-                     [6., .3, .2, .2], [5., .1, -.1, .3], [1., -.2, .4, .5]])
-    density = np.linspace(.1, 2., sum(widths))
-    smoothing = KernelSmoothing(1e-3, 400., .1, .1, 'CONSTANT')
-    chi = np.asarray(aux.evaluate(grid[:, :3].tolist()))
-    fxc = _slater_pw92_fxc(np.maximum(chi @ density, smoothing.rho_epsilon))
-    expected = chi.T @ ((grid[:, 3]*np.clip(fxc, -400., 400.))[:, None]*chi)
-    offsets = np.cumsum([0]+widths)
-    for i, j in itertools.product(range(4), repeat=2):
-        distance = centres[sites[i]]-centres[sites[j]]
-        if np.exp(-distance @ distance/2) < np.exp(-2.):
-            expected[offsets[i]:offsets[i+1], offsets[j]:offsets[j+1]] = 0.
-    actual = backend._kernel(aux, density, grid, smoothing, np.exp(-2.), ledger())
-    np.testing.assert_allclose(actual, expected, rtol=1e-11, atol=1e-12)
+def _resources(max_bytes=512*1024**2, max_work=6_000_000_000_000, max_io_bytes=64*1024**3):
+    return backend.BoundedResources(max_bytes, max_work, max_io_bytes)
 
 
 @pytest.fixture(scope='module', params=('water', 'ammonia'))
 def small_water(request):
+    """PBE0/sto-3g, Cartesian aug-cc-pVTZ-RI AUX, rank-1 refinement on 32 lattice points, 3 nodes."""
     import psi4
-    from psi4.driver.procrouting.isapol_native_partition import BasisRecipe, ShellRecipe
+    from psi4.driver.procrouting.isapol_basis import BasisRecipe, ShellRecipe
     from psi4.driver.procrouting.isapol_native import Quadrature
     from psi4.driver.procrouting.isapol_native_propagator import KernelSmoothing
     core.be_quiet()
-    geometry = ('O 0 0 0\nH .757 0 .586\nH -.757 0 .586' if request.param == 'water' else
-                'N 0 0 .116\nH 0 .939 -.271\nH .813197854 -.4695 -.271\nH -.813197854 -.4695 -.271')
-    molecule = psi4.geometry('0 1\n'+geometry+'\nsymmetry c1\nno_com\nno_reorient')
+    core.clean_options()
+    molecule = psi4.geometry('0 1\n'+GEOMETRIES[request.param]+'\nsymmetry c1\nno_com\nno_reorient')
     psi4.set_options({'basis': 'sto-3g', 'reference': 'rks', 'scf_type': 'pk',
-                     'e_convergence': 1e-10, 'd_convergence': 1e-10,
-                     'dft_radial_points': 50, 'dft_spherical_points': 110})
+                      'e_convergence': 1e-10, 'd_convergence': 1e-10,
+                      'dft_radial_points': 50, 'dft_spherical_points': 110})
     _, wfn = psi4.energy('pbe0', molecule=molecule, return_wfn=True)
     origins = molecule.geometry().np
     basis = core.BasisSet.build(molecule, 'DF_BASIS_SCF', 'aug-cc-pVTZ-RI', puream=0)
@@ -236,7 +48,8 @@ def small_water(request):
         s = basis.shell(i)
         shells.append(ShellRecipe(int(basis.shell_to_center(i)), int(s.am),
             tuple(s.exp(k) for k in range(s.nprimitive)), tuple(s.coef(k) for k in range(s.nprimitive))))
-    recipe = BasisRecipe('aug-cc-pVTZ-RI', 'Psi4 shipped basis', 'Cartesian', tuple(map(tuple, origins)), tuple(shells))
+    recipe = BasisRecipe('aug-cc-pVTZ-RI', 'Psi4 shipped basis', 'Cartesian', tuple(map(tuple, origins)),
+                         tuple(shells))
     sites = [refine.RefinementSite(label, label, origin, np.eye(3), 1)
              for label, origin in zip(('A', 'H1', 'H2', 'H3'), origins)]
     options = core.IsaGridOptions()
@@ -250,90 +63,555 @@ def small_water(request):
         smoothing=KernelSmoothing(1e-8, 1000., .01, 1., 'FD'), shell_cutoff=1e-7,
         charge_penalty=1000., anchor_metric_damping=.0005, lattice_options=lattice,
         localization_rank_limit=2, weight_type=4, weight_coefficient=1e-5, cutoff=1e-4,
-        resources=ledger().resources, scf_correction='NONE', max_order=6)
+        resources=_resources(), scf_correction='NONE', max_order=6)
     return wfn, recipe, args
 
 
-def test_live_small_molecule_driver_completes_and_cleans_checkpoints(small_water, tmp_path):
-    from psi4.driver.procrouting.isapol_logging import StageLog
+def _owned_names(wfn):
+    from psi4.driver.procrouting.isapol_logging import _report_owned
+    return {k for k in list(wfn.scalar_variables())+list(wfn.array_variables()) if _report_owned(k, *NAMESPACE)}
+
+
+def _c6(result):
+    return [c.value for pair in result.dispersion.pairs for c in pair.coefficients]
+
+
+def _q(recipe, args):
+    from psi4.driver.procrouting.isapol_distribution import analytic_df_moments
+    sites = []
+    for s in args['sites']:
+        site = core.IsaMultipoleSite()
+        site.label, site.origin, site.rank = s.label, list(s.origin_bohr), 4
+        sites.append(site)
+    return analytic_df_moments(recipe, sites, 4)
+
+
+def _stage_names(result):
+    return [s['stage'] for s in result.resources['stages']]
+
+
+def test_live_chain_completes_in_order_and_cleans_checkpoints(small_water, tmp_path):
     messages = []
-    log = StageLog(3, writer=messages.append)
     wfn, recipe, args = small_water
-    result = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, log=log)
+    result = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path,
+                                       log=StageLog(3, writer=messages.append))
     text = ''.join(messages)
     for name in ('Native plain-DF factors', 'anchor constrained OV fit', 'target constrained OV fit',
                  'Full-grid ALDA kernel', 'H1/H2 assembly', 'Response stability checks',
-                 'Native point cloud and Coulomb potentials', 'Complete-cloud PFIT',
-                 'Casimir-Polder dispersion'):
+                 'Native point cloud', 'Complete-cloud PFIT',
+                 'isotropic dispersion from refined tensors (Casimir-Polder)', 'Bounded resource totals'):
         assert f'Stage complete: {name}' in text
     for node in range(1, 4):
-        for name in ('Original H2H1 response', 'Production LW localization'):
+        for name in ('Original H2H1 response', 'Production LW localization', 'Point-response targets'):
             assert f'Stage complete: {name}: node {node}/3' in text
-    assert 'relative response residual' in text
-    assert 'maximum localization residual' in text
-    assert 'solver status' in text
+    # The fixed variable set is admitted once, between node 1's LW and its targets.
+    assert text.count('Stage complete: Refinement model admission') == 1
+    assert (text.index('Stage complete: Production LW localization: node 1/3')
+            < text.index('Stage complete: Refinement model admission')
+            < text.index('Stage: Point-response targets: node 1/3'))
+    assert 'Stage FAILED' not in text and 'Pairwise isotropic dispersion coefficients' in text
+    # Admission order: response, cloud, then per node solve -> LW -> targets, then PFIT.
+    names = _stage_names(result)
+    sweep = names[names.index('retained point-response targets')+1:names.index('complete-cloud refinement')]
+    assert names.index('operator stability') < names.index('native fit cloud') < names.index(
+        'retained point-response targets')
+    assert sweep == ['H2H1 response operator']+['frequency response', 'production localization',
+                                                'point-response targets']*3
+    assert names[-1] == 'complete-cloud refinement'
+    assert result.resources['maximum_numeric_plan'] == max(s['numeric_bytes'] for s in result.resources['stages'])
+    assert result.resources['charged_work'] == sum(s['work'] for s in result.resources['stages'])
     assert len(result.refinements) == len(args['quadrature'].frequencies)
     assert all(r.status == core.IsaPfitStatus.Solved for r in result.refinements)
     assert result.resources['fit_rows'] == 3*32*33
     assert max(d['response_residual'] for d in result.diagnostics) < 1e-10
-    assert not list(tmp_path.iterdir())
+    assert all(d['response_diagnostics'] == () for d in result.diagnostics)
     assert result.provenance['distribution'] == 'df_centre_analytic'
+    assert result.provenance['response'] == 'reference_h2h1'
+    assert result.provenance['lw_residual_policy'] == 'production'
+    assert result.provenance['partition']['model'] == 'df_centre_analytic'
     assert all(np.isfinite(c.value) for pair in result.dispersion.pairs for c in pair.coefficients)
+    assert not list(tmp_path.iterdir())
+    assert not _owned_names(wfn)  # bounded_properties alone publishes nothing
     silent_messages = []
-    silent_result = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path,
-                                              log=StageLog(0, writer=silent_messages.append))
+    silent = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path,
+                                       log=StageLog(0, writer=silent_messages.append))
     assert not silent_messages
-    for reported, silent in zip(result.refined_tensors, silent_result.refined_tensors):
-        for a, b in zip(reported, silent):
+    for reported, quiet in zip(result.refined_tensors, silent.refined_tensors):
+        for a, b in zip(reported, quiet):
             np.testing.assert_array_equal(a, b)
-
-
-# Declaration refusals precede any molecule-dependent work; one molecule suffices.
-@pytest.mark.parametrize('small_water', ['water'], indirect=True)
-def test_missing_scf_seal_is_not_manufactured(small_water, tmp_path, monkeypatch):
-    wfn, recipe, args = small_water
-    monkeypatch.delattr(wfn, '_scf_convergence_evidence')
-    with pytest.raises(ValueError, match='convergence evidence'):
-        driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path)
-    assert not list(tmp_path.iterdir())
+    assert _c6(result) == _c6(silent) and silent.resources == result.resources
 
 
 @pytest.mark.parametrize('small_water', ['water'], indirect=True)
-def test_work_preflight_rejects_before_factor_construction(small_water, tmp_path, monkeypatch):
+def test_streamed_refinement_and_c6_match_independent_dense_oracles(small_water, tmp_path, monkeypatch):
+    """Every node's streamed fit equals a dense QR fit of independently formed targets."""
     wfn, recipe, args = small_water
-    def forbidden(*args, **kwargs):
-        pytest.fail('factor construction happened before work refusal')
-    monkeypatch.setattr(driver, 'native_plain_df_operators', forbidden)
-    args = dict(args, resources=backend.BoundedResources(512*1024**2, 1, 64*1024**3))
-    with pytest.raises(ValueError, match='work resource limit'):
-        driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path)
+    captured = []
+    original = driver.fitted_point_targets
+
+    def capture(auxiliary, points, responses, **kwargs):
+        captured.append((auxiliary, np.array(points), responses[0].copy()))
+        return original(auxiliary, points, responses, **kwargs)
+
+    monkeypatch.setattr(driver, 'fitted_point_targets', capture)
+    result = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, log=StageLog(0))
+    options = core.IsaPfitOptions()
+    options.solver = core.IsaPfitSolver.StreamingQR
+    source = result.provenance
+    for (auxiliary, points, coefficient), fit in zip(captured, result.refinements):
+        coulomb = core.IsaAuxCoulomb(auxiliary)
+        potentials = np.column_stack([np.asarray(coulomb.point_potentials(core.Matrix.from_array(points[i:i+1])))
+                                      for i in range(len(points))])
+        targets = -np.einsum('ki,kl,lj->ij', potentials, coefficient, potentials)
+        dense = refine.refine(fit.model, points, targets[np.tril_indices(len(points))], options=options,
+            target_origin=core.IsaPfitTargetOrigin.NativeFittedPointResponse,
+            source_id=source['state_sha256'], auxiliary_basis_id=source['auxiliary_sha256'],
+            response_representation='fitted_density_coefficients', generation_record=source['model'])
+        np.testing.assert_allclose(fit.parameters, dense.parameters, rtol=1e-9,
+                                   atol=1e-10*np.abs(dense.parameters).max())
+        assert fit.result.frequency_au == fit.model.frequency_au
+    assert len(captured) == 3
+    assert not np.allclose(result.refinements[0].parameters, result.refinements[2].parameters)
+    # Rank-1 C6 = binomial(4, 2) sum_f w_f alpha_a(f) alpha_b(f), alpha = trace(alpha_11)/3.
+    weights = result.dispersion.cp_weights
+    for pair in result.dispersion.pairs:
+        alpha = [[np.trace(np.asarray(r.refined_tensors[s])[1:4, 1:4])/3 for r in result.refinements]
+                 for s in (pair.site_a, pair.site_b)]
+        value = 0.
+        for w, a, b in zip(weights, *alpha):
+            if w != 0.:
+                value += w*a*b
+        assert pair.coefficients[0].value == pytest.approx(math.comb(4, 2)*value, rel=1e-13, abs=0.)
+        assert pair.coefficients[0].unrestricted_complete
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_supplied_q_leaves_response_targets_independent(small_water, tmp_path, monkeypatch):
+    from dataclasses import replace
+    wfn, recipe, args = small_water
+    q = _q(recipe, args)
+    coefficients = []
+    original = driver.fitted_point_targets
+
+    def capture(auxiliary, points, responses, **kwargs):
+        coefficients.append(responses[0].copy())
+        return original(auxiliary, points, responses, **kwargs)
+
+    monkeypatch.setattr(driver, 'fitted_point_targets', capture)
+    default = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path)
+    supplied_args = dict(args, distribution='supplied', distributed_moments=q)
+    supplied = driver.bounded_properties(wfn, recipe, **supplied_args, scratch_directory=tmp_path)
+    scaled = replace(q, values=1.01*q.values, model='scaled-Q test', provenance='explicit synthetic substitution')
+    changed = driver.bounded_properties(wfn, recipe, **dict(supplied_args, distributed_moments=scaled),
+                                        scratch_directory=tmp_path)
+    nf = len(default.frequencies)
+    for i in range(nf):
+        np.testing.assert_array_equal(coefficients[i], coefficients[nf+i])
+        np.testing.assert_array_equal(coefficients[i], coefficients[2*nf+i])
+        np.testing.assert_array_equal(default.local_tensors[i].array, supplied.local_tensors[i].array)
+        np.testing.assert_array_equal(default.refinements[i].parameters, supplied.refinements[i].parameters)
+        np.testing.assert_allclose(changed.local_tensors[i].array,
+                                   1.01**2*default.local_tensors[i].array, rtol=1e-11, atol=1e-11)
+    assert not np.allclose(default.refinements[0].parameters, changed.refinements[0].parameters,
+                           rtol=1e-10, atol=1e-10)
+    assert _c6(default) == _c6(supplied)
+    assert not np.allclose(_c6(default), _c6(changed), rtol=1e-10, atol=1e-10)
+    assert supplied.provenance['distribution'] == 'supplied'
+    assert changed.provenance['partition']['model'] == 'scaled-Q test'
+    # The supplied record stays caller-owned and unchanged; the result does not alias it.
+    np.testing.assert_array_equal(q.values, _q(recipe, args).values)
     assert not list(tmp_path.iterdir())
 
 
-def test_late_failure_cleans_owned_checkpoints(small_water, tmp_path, monkeypatch):
-    from psi4.driver.procrouting.isapol_logging import StageLog
-    messages = []
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_results_are_owned_and_consumed_inputs_are_not_reread(small_water, tmp_path, monkeypatch):
+    """Caller inputs changed mid-chain do not reach the result, and result arrays are owned."""
+    from dataclasses import replace
     wfn, recipe, args = small_water
-    def fail(*args, **kwargs):
-        raise RuntimeError('injected kernel failure')
-    monkeypatch.setattr(driver, '_kernel', fail)
-    with pytest.raises(RuntimeError, match='injected kernel'):
-        driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path,
-                                  log=StageLog(3, writer=messages.append))
-    assert 'Stage: Full-grid ALDA kernel' in ''.join(messages)
-    assert 'Stage complete: Full-grid ALDA kernel' not in ''.join(messages)
+    first = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, log=StageLog(0))
+    grid, lattice, q = args['response_grid'].copy(), core.FitPointsOptions(), _q(recipe, args)
+    lattice.npoints, lattice.seed, lattice.lolim, lattice.hilim = 32, 1, 2., 4.
+    sites = list(args['sites'])
+    original = driver.fitted_point_targets
+
+    def alter(*a, **k):
+        grid[:] = 0.
+        lattice.npoints, lattice.seed = 7, 99
+        sites[0] = replace(sites[0], rank_limit=0)
+        return original(*a, **k)
+
+    monkeypatch.setattr(driver, 'fitted_point_targets', alter)
+    altered = driver.bounded_properties(wfn, recipe, **dict(args, response_grid=grid, lattice_options=lattice,
+                                        sites=sites, distribution='supplied', distributed_moments=q),
+                                        scratch_directory=tmp_path, log=StageLog(0))
+    assert _c6(altered) == _c6(first)
+    assert altered.provenance['lattice_sha256'] == first.provenance['lattice_sha256']
+    assert altered.resources['fit_rows'] == first.resources['fit_rows']
+    with pytest.raises(ValueError):
+        altered.refined_tensors[0][0][1, 1] = 1.
+    local = altered.local_tensors[0].array
+    altered.local_tensors[0].array[:] = 0.
+    np.testing.assert_array_equal(altered.local_tensors[0].array, local)
     assert not list(tmp_path.iterdir())
 
 
-@pytest.mark.parametrize('key,value,match', [
-    ('distribution', 'ISA_A', 'df_centre'), ('caller_converged', False, 'caller_converged'),
-    ('scf_correction', 'DECLARED_MULTPOLE_AC', 'supports NONE'),
-    ('anchor_metric_damping', True, 'anchor_metric'), ('shell_cutoff', -1., 'shell_cutoff'),
-    ('localization_rank_limit', 0, 'localization_rank'),
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_stale_scf_seal_is_refused_before_any_scratch(small_water, tmp_path):
+    wfn, recipe, args = small_water
+    ca = wfn.Ca().np
+    saved = ca.copy()
+    ca[0, 0] += 1e-9  # orbitals changed after the sealed SCF
+    try:
+        with pytest.raises(ValueError, match='stale'):
+            driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, log=StageLog(0))
+    finally:
+        ca[:] = saved
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('target,stage', [
+    ('backend._kernel', 'Full-grid ALDA kernel'),
+    ('driver.fitted_point_targets', 'Point-response targets: node 1/3'),
+    ('driver.refine_streamed', 'Complete-cloud PFIT'),
 ])
 @pytest.mark.parametrize('small_water', ['water'], indirect=True)
-def test_public_declaration_refusals(small_water, tmp_path, key, value, match):
+def test_failures_close_their_stage_publish_nothing_and_clean_scratch(small_water, tmp_path, monkeypatch,
+                                                                      target, stage):
     wfn, recipe, args = small_water
-    with pytest.raises(ValueError, match=match):
-        driver.bounded_properties(wfn, recipe, **dict(args, **{key:value}), scratch_directory=tmp_path)
+    module, name = target.split('.')
+
+    def fail(*a, **k):
+        raise RuntimeError('injected failure')
+
+    monkeypatch.setattr({'backend': backend, 'driver': driver}[module], name, fail)
+    messages = []
+    with pytest.raises(RuntimeError, match='injected failure'):
+        driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, publish_qcvariables=True,
+                                  log=StageLog(3, writer=messages.append))
+    text = ''.join(messages)
+    assert f'Stage FAILED: {stage}' in text and f'Stage complete: {stage}' not in text
+    assert not _owned_names(wfn) and not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_parameter_cap_is_admitted_at_node_one_before_any_targets(small_water, tmp_path, monkeypatch):
+    """The variable set is fixed at node 1, so a model over the cap stops before targets or later solves."""
+    wfn, recipe, args = small_water
+    count = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path,
+                                      log=StageLog(0)).refinements[0].model.parameter_count
+    solves, targets = [], []
+    solve, fitted = backend.BoundedResponse.solve, driver.fitted_point_targets
+    monkeypatch.setattr(backend.BoundedResponse, 'solve',
+                        lambda self, omega: solves.append(omega) or solve(self, omega))
+    monkeypatch.setattr(driver, 'fitted_point_targets', lambda *a, **k: targets.append(1) or fitted(*a, **k))
+    # At the selected limit: admitted, full sweep.
+    driver.bounded_properties(wfn, recipe, **args, max_parameters=count, scratch_directory=tmp_path,
+                              log=StageLog(0))
+    assert (len(solves), len(targets)) == (3, 3)
+    solves.clear(), targets.clear()
+    messages = []
+    with pytest.raises(ValueError, match=f'at most {count-1} parameters'):
+        driver.bounded_properties(wfn, recipe, **args, max_parameters=count-1, scratch_directory=tmp_path,
+                                  publish_qcvariables=True, log=StageLog(1, writer=messages.append))
+    text = ''.join(messages)
+    assert (len(solves), len(targets)) == (1, 0)
+    assert 'Stage FAILED: Refinement model admission' in text
+    assert 'Stage complete: Production LW localization: node 1/3' in text
+    assert 'Stage FAILED: Production LW localization' not in text and 'Point-response targets' not in text
+    assert not _owned_names(wfn) and not list(tmp_path.iterdir())
+
+
+
+class _Reached(Exception):
+    """Raised by a patched later stage to show that an admission was passed."""
+
+
+class _CountedModel:
+    """A real node model reporting another parameter count, to drive admission past the toy's size."""
+
+    def __init__(self, model, count):
+        self._model, self._count = model, count
+
+    def __getattr__(self, name):
+        return getattr(self._model, name)
+
+    @property
+    def parameter_count(self):
+        return self._count
+
+
+def _forbid_response(monkeypatch):
+    built = []
+
+    def refuse(*args, **kwargs):
+        built.append(1)
+        raise _Reached('validation passed')
+
+    monkeypatch.setattr(driver, 'BoundedResponse', refuse)
+    return built
+
+
+@pytest.mark.parametrize('value', [73, 0, -1, True, 72., '72', np.int64(72), None])
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_max_parameters_must_be_an_exact_int_in_the_allowance(small_water, tmp_path, monkeypatch, value):
+    """Anything but an exact int in 1..72 is refused at input validation, before any response work."""
+    wfn, recipe, args = small_water
+    built = _forbid_response(monkeypatch)
+    messages = []
+    with pytest.raises(ValueError, match=r'max_parameters must be an int in 1\.\.72'):
+        driver.bounded_properties(wfn, recipe, **args, max_parameters=value, scratch_directory=tmp_path,
+                                  log=StageLog(1, writer=messages.append))
+    assert not built and not list(tmp_path.iterdir())
+    assert 'Stage FAILED: Bounded input validation' in ''.join(messages)
+    assert (driver.MAX_PARAMETERS, driver.MAX_PARAMETER_ALLOWANCE) == (64, 72)
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_declared_variable_list_admission_uses_the_selected_limit(small_water, tmp_path, monkeypatch):
+    """Default 64 keeps its message; the opt-in admits 72 declared names and refuses 73, all before work."""
+    wfn, recipe, args = small_water
+    built = _forbid_response(monkeypatch)
+    names = [f'v{i}' for i in range(73)]
+    for declared, limit, admitted in ((64, None, True), (65, None, False), (72, 72, True), (73, 72, False)):
+        extra = {} if limit is None else {'max_parameters': limit}
+        if admitted:
+            with pytest.raises(_Reached):
+                driver.bounded_properties(wfn, recipe, **args, **extra, declared_variables=names[:declared],
+                                          scratch_directory=tmp_path, log=StageLog(0))
+        else:
+            with pytest.raises(ValueError,
+                               match=rf'^bounded refinement requires 1\.\.{limit or 64} declared variables$'):
+                driver.bounded_properties(wfn, recipe, **args, **extra, declared_variables=names[:declared],
+                                          scratch_directory=tmp_path, log=StageLog(0))
+    assert len(built) == 2 and not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_cutoff_derived_model_admission_uses_the_selected_limit(small_water, tmp_path, monkeypatch):
+    """Node-1 admission: 65 refused by default (message and logged limit 64), 72 admitted and 73 refused
+    under the opt-in. Refusals stop before any target; the admitted model reaches the first target."""
+    wfn, recipe, args = small_water
+    build, solve = refine.refinement_model, backend.BoundedResponse.solve
+    solves, targets = [], []
+    count = [0]
+    monkeypatch.setattr(refine, 'refinement_model', lambda *a, **k: _CountedModel(build(*a, **k), count[0]))
+    monkeypatch.setattr(backend.BoundedResponse, 'solve',
+                        lambda self, omega: solves.append(omega) or solve(self, omega))
+
+    def first_target(*a, **k):
+        targets.append(1)
+        raise _Reached('model admitted')
+
+    monkeypatch.setattr(driver, 'fitted_point_targets', first_target)
+    for count[0], limit, error, match in ((65, None, ValueError, 'at most 64 parameters'),
+                                          (72, 72, _Reached, 'model admitted'),
+                                          (73, 72, ValueError, 'at most 72 parameters')):
+        solves.clear(), targets.clear()
+        messages = []
+        extra = {} if limit is None else {'max_parameters': limit}
+        with pytest.raises(error, match=match):
+            driver.bounded_properties(wfn, recipe, **args, **extra, scratch_directory=tmp_path,
+                                      log=StageLog(1, writer=messages.append))
+        text = ''.join(messages)
+        admission = text[text.index('Refinement model admission'):]
+        assert re.search(rf'\bparameters +{count[0]}\n', admission)
+        assert re.search(rf'\blimit +{limit or 64}\n', admission)
+        assert len(solves) == 1 and len(targets) == (error is _Reached)
+        assert ('Stage FAILED: Refinement model admission' in text) == (error is ValueError)
+        assert not list(tmp_path.iterdir())
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_exact_resource_boundaries(small_water, tmp_path, monkeypatch):
+    """The whole chain admits at its exact planned peak and work, and refuses one unit short."""
+    wfn, recipe, args = small_water
+    first = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, log=StageLog(0))
+    peak, work = first.resources['maximum_numeric_plan'], first.resources['charged_work']
+    exact = driver.bounded_properties(wfn, recipe, **dict(args, resources=_resources(peak, work)),
+                                      scratch_directory=tmp_path, log=StageLog(0))
+    assert exact.resources == first.resources and _c6(exact) == _c6(first)
+    for resources, match in ((_resources(peak-1, work), 'numeric byte'), (_resources(peak, work-1), 'work')):
+        with pytest.raises(ValueError, match=match):
+            driver.bounded_properties(wfn, recipe, **dict(args, resources=resources),
+                                      scratch_directory=tmp_path, log=StageLog(0))
+    assert not list(tmp_path.iterdir())
+    # The orchestrator's own plans cover the planned buffers of the stage-05 calls they admit.
+    targets, streamed = driver.fitted_point_targets, driver.refine_streamed
+    p = recipe.build('MolecularAux').nfunction
+    npoint, nf = args['lattice_options'].npoints, len(args['quadrature'].frequencies)
+    monkeypatch.setattr(driver, 'fitted_point_targets', lambda aux, points, responses, max_bytes: targets(
+        aux, points, responses, max_bytes=driver._target_bytes(p, npoint)-8*p*p))
+    def planned_fit(models, points, packed, **kwargs):
+        plan = driver._pfit_plan(npoint, models[0].channel_count, models[0].parameter_count, nf)[0]
+        return streamed(models, points, packed, **dict(kwargs, max_bytes=plan))
+    monkeypatch.setattr(driver, 'refine_streamed', planned_fit)
+    planned = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, log=StageLog(0))
+    assert _c6(planned) == _c6(first)
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_explicit_native_fdds_toy_chain(small_water, tmp_path):
+    """The explicit FDDS choice reaches LW (reported-input policy), PFIT and C_n on the admitted toy."""
+    wfn, recipe, args = small_water
+    fdds = backend.NativeFDDSOptions(1, 1 << 30)
+    reference = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, log=StageLog(0))
+    messages = []
+    result = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, response='native_fdds',
+                                       fdds=fdds, log=StageLog(1, writer=messages.append))
+    text = ''.join(messages)
+    assert 'Stage complete: Reported-input LW localization: node 3/3' in text
+    assert result.provenance['response'] == 'native_fdds'
+    assert result.provenance['lw_residual_policy'] == 'reported_input_sum_rule'
+    assert 'rank-0 remainder' in result.provenance['lw_disclosure']
+    guard = result.provenance['response_provenance']['metric_guard']
+    assert guard['metric_lu_rcond'] >= backend.FDDS_METRIC_RCOND_CUTOFF
+    for d in result.diagnostics:
+        ratios = dict(d['response_diagnostics'])
+        assert ratios['native_dyson_ratio'] > 2e-13 and ratios['s2_dyson_ratio'] > 2e-13
+    assert all(r.status == core.IsaPfitStatus.Solved for r in result.refinements)
+    assert result.resources['frequency_rhs'] is None
+    assert 'complete-cloud refinement' in _stage_names(result)
+    assert 'reported-input localization' in _stage_names(result)
+    assert all(np.isfinite(_c6(result))) and not np.allclose(_c6(result), _c6(reference))
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_fdds_metric_refusal_propagates_unchanged(small_water, tmp_path, monkeypatch):
+    wfn, recipe, args = small_water
+    monkeypatch.setattr(backend, 'FDDS_METRIC_RCOND_CUTOFF', 1.)
+    messages = []
+    with pytest.raises(ValueError, match='metric resolution guard'):
+        driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, response='native_fdds',
+                                  fdds=backend.NativeFDDSOptions(1, 1 << 30), publish_qcvariables=True,
+                                  log=StageLog(1, writer=messages.append))
+    assert 'Stage FAILED: Native FDDS instance' in ''.join(messages)
+    assert not _owned_names(wfn) and not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('key,value,error,match', [
+    ('distribution', 'isa', TypeError, 'explicit PartitionRecipe'),
+    ('distribution', 'mbis', ValueError, 'MBIS requires an explicit .* integration grid'),
+    ('partition_recipe', 'recipe', ValueError, 'partition_recipe requires distribution=isa'),
+    ('partition_grid', 'grid', ValueError, 'partition_grid requires distribution=isa or mbis'),
+    ('distribution', 'supplied', TypeError, 'DistributedMoments'),
+    ('distributed_moments', 'q', ValueError, 'requires distribution=supplied'),
+    ('caller_converged', False, ValueError, 'caller_converged'),
+    ('scf_correction', 'DECLARED_MULTPOLE_AC', ValueError, 'supports NONE'),
+    ('anchor_metric_damping', True, ValueError, 'anchor_metric'),
+    ('shell_cutoff', -1., ValueError, 'shell_cutoff'),
+    ('localization_rank_limit', 4, ValueError, 'localization_rank'),
+    ('max_order', 7, ValueError, 'max_order'),
+    ('response', 'native_fdds', TypeError, 'NativeFDDSOptions'),
+    ('sites', 'labels', ValueError, 'collide'),
+])
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_public_declaration_refusals(small_water, tmp_path, key, value, error, match):
+    wfn, recipe, args = small_water
+    if value == 'q':
+        value = _q(recipe, args)
+    if key == 'sites':
+        from dataclasses import replace
+        value = [replace(s, label=l) for s, l in zip(args['sites'], ('O', 'h', 'H'))]
+    with pytest.raises(error, match=match):
+        driver.bounded_properties(wfn, recipe, **dict(args, **{key: value}), scratch_directory=tmp_path,
+                                  publish_qcvariables=True, log=StageLog(0))
+    assert not list(tmp_path.iterdir()) and not _owned_names(wfn)
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_reserved_publication_labels_refuse_before_any_report_but_the_model_keeps_them(small_water, tmp_path):
+    """TOTAL/INCOMPLETE labels refuse publication up front; unpublished runs keep them, look-alikes publish."""
+    from dataclasses import replace
+    wfn, recipe, args = small_water
+
+    def labelled(*labels):
+        return [replace(s, label=l) for s, l in zip(args['sites'], labels)]
+
+    driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, publish_qcvariables=True,
+                              log=StageLog(0))
+    published = {key: wfn.variable(key) for key in _owned_names(wfn) if wfn.has_scalar_variable(key)}
+    for labels in (('O', 'Total', 'H2'), ('INCOMPLETE', 'H1', 'H2')):
+        messages = []
+        with pytest.raises(ValueError, match='reserved'):
+            driver.bounded_properties(wfn, recipe, **dict(args, sites=labelled(*labels)),
+                                      scratch_directory=tmp_path, publish_qcvariables=True,
+                                      log=StageLog(1, writer=messages.append))
+        text = ''.join(messages)
+        assert 'Stage FAILED: Bounded input validation' in text and text.count('Stage complete') == 0
+        assert {key: wfn.variable(key) for key in published} == published and not list(tmp_path.iterdir())
+    kept = driver.bounded_properties(wfn, recipe, **dict(args, sites=labelled('O', 'Total', 'incomplete')),
+                                     scratch_directory=tmp_path, log=StageLog(0))
+    assert kept.dispersion.labels == ('O', 'Total', 'incomplete')
+    assert {key: wfn.variable(key) for key in published} == published
+    similar = driver.bounded_properties(wfn, recipe, **dict(args, sites=labelled('O', 'Totals', 'H_TOTAL')),
+                                        scratch_directory=tmp_path, publish_qcvariables=True, log=StageLog(0))
+    assert similar.dispersion.labels == ('O', 'Totals', 'H_TOTAL')
+    assert wfn.has_variable('ATOMIC REFINED DISPERSION C6 O TOTALS')
+    assert wfn.has_variable('ATOM H_TOTAL C6 REFINED DISPERSION COEFFICIENT')
+    assert np.array_equal(_c6(kept), _c6(similar))
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_later_nodes_penalize_exactly_the_static_node_selection(small_water, tmp_path, monkeypatch):
+    """CamCASP selects the penalized variables on the static (first) node and
+    writes a Penalties line for each at every later node, with that node's
+    anchor and the unchanged weight formula (process_data.F90:2112-2134,
+    2269-2275). Both bounded entries -- cutoff-derived and declared -- must
+    carry that static selection to every node: a selected variable whose later
+    anchor falls below the cutoff stays penalized, and a declared extra that
+    failed the static cutoff stays free even where a later anchor exceeds it.
+
+    The real helper builds every model; the patch only replaces the selected
+    (and, in the declared run, the extra) anchor entry per node so that the toy
+    crosses the cutoff on purpose."""
+    wfn, recipe, args = small_water
+    omegas = list(args['quadrature'].frequencies)
+    selected, extra = 'A_10_11c_A', 'A_00_10_A'
+    build = refine.refinement_model
+    seen, raise_extra = [], [False]
+
+    def crossing(sites, anchors, **kwargs):
+        node = omegas.index(kwargs['frequency_au'])
+        anchors = [np.array(a, copy=True) for a in anchors]
+        anchors[0][1, 2] = anchors[0][2, 1] = 2e-4 if node == 0 else 5e-5
+        if node and raise_extra[0]:
+            anchors[0][0, 1] = anchors[0][1, 0] = 3e-4
+        model = build(sites, anchors, **kwargs)
+        seen.append((node, model))
+        return model
+
+    monkeypatch.setattr(refine, 'refinement_model', crossing)
+
+    def check(models, declared):
+        static = set(models[0].parameter_labels)-set(models[0].unpenalized_variables)
+        assert selected in static and extra not in static
+        for node, model in enumerate(models):
+            assert model.parameter_labels == models[0].parameter_labels
+            assert set(model.parameter_labels)-set(model.unpenalized_variables) == static
+            k = model.parameter_labels.index(selected)
+            alpha = 2e-4 if node == 0 else 5e-5
+            assert model.anchors[k] == alpha
+            assert model.strengths[k] == refine.penalty_weight(weight_type=args['weight_type'],
+                weight_coefficient=args['weight_coefficient'], alpha=alpha, frequency=omegas[node],
+                rank1=1, rank2=1)
+            assert model.strengths[k] > 0.0
+            if declared:
+                j = model.parameter_labels.index(extra)
+                assert extra in model.unpenalized_variables
+                assert (model.anchors[j], model.strengths[j]) == (0.0, 0.0)
+        return static
+
+    derived = driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, log=StageLog(0))
+    models = [r.model for r in derived.refinements]
+    assert len(models) == len(omegas) >= 3
+    static = check(models, False)
+    seen.clear()
+    raise_extra[0] = True
+    declared = driver.bounded_properties(wfn, recipe, **args,
+                                         declared_variables=models[0].parameter_labels+(extra,),
+                                         scratch_directory=tmp_path, log=StageLog(0))
+    explicit = [r.model for r in declared.refinements]
+    assert extra in explicit[0].parameter_labels
+    assert check(explicit, True) == static
+    assert {node for node, _ in seen} == set(range(len(omegas)))
     assert not list(tmp_path.iterdir())

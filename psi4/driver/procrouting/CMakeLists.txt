@@ -7,6 +7,13 @@ add_subdirectory(sapt)
 add_subdirectory(scf_proc)
 add_subdirectory(solvent)
 
+# The native atomic-property drivers stay Python modules even in experimental
+# Cython builds. They share dataclass identities and import one another lazily.
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4/driver/procrouting
+        FILES_MATCHING PATTERN "isapol_*.py"
+        PATTERN "__pycache__" EXCLUDE)
+
 list(APPEND sources
   empirical_dispersion
   interface_cfour

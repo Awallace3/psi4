@@ -1,5 +1,5 @@
 # Psi4 Developers; SPDX-License-Identifier: LGPL-3.0-only
-"""Explicit bounded DF-centre presets for the wavefunction-first oeprop API.
+"""Explicit bounded presets for the wavefunction-first oeprop API.
 
 No SCF, external program, reference file, or historical numerical result is
 read here. A preset declares only molecule topology: local bond frames, bonds
@@ -15,13 +15,15 @@ Unchanged option defaults do not leak into the preset.
 """
 import numpy as np
 from psi4 import core
-from .isapol_bounded import bounded_properties, BoundedResources
+from . import isapol_logging as _lg
+from .isapol_bounded import (
+    bounded_properties, BoundedResources, MAX_PARAMETERS, _closes_failed_stage, check_max_parameters,
+)
 from .isapol_native import Quadrature
-from .isapol_native_partition import BasisRecipe, ShellRecipe
+from .isapol_basis import BasisRecipe, ShellRecipe
 from .isapol_native_propagator import KernelSmoothing
 from .isapol_refine import RefinementSite
-from .isapol_logging import StageLog
-from .isapol_native_correction import correction_state
+from .scf_proc._scf_seal import correction_state
 
 
 RECOUPLED_TASK = 'ATOMIC_REFINED_RECOUPLED_DISPERSION'
@@ -44,6 +46,9 @@ OPTION_MAP = {
     'expected_grac_shift': 'ATOMIC_SCF_EXPECTED_GRAC_SHIFT',
     'verbosity': 'ATOMIC_PROPERTY_PRINT',
 }
+#: The report-owned refined-dispersion QCVariable namespace (stem, ATOM stem)
+#: written by ``isapol_logging.report_refined_dispersion``.
+REFINED_DISPERSION_NAMESPACE = ('ATOMIC REFINED DISPERSION', 'REFINED DISPERSION COEFFICIENT')
 
 
 def settings(preset, overrides):
@@ -65,8 +70,12 @@ def settings(preset, overrides):
         smoothing=KernelSmoothing(1e-8, 1000., .01, 1., 'FD'), shell_cutoff=1e-8,
         max_order=10,  # localize.py Casimir maxN = 4*wsmlimit+2
         quadrature=None, response_grid=None, lattice_options=None, auxiliary_recipe=None,
-        sites=None, bonds=None,
+        sites=None, bonds=None, distribution='df_centre_analytic', distributed_moments=None,
+        partition_recipe=None, partition_grid=None,  # explicit ISA (recipe+grid) or MBIS (grid)
         declared_variables=None,  # process_data.F90:2040-2150 cutoff-derived pdef
+        max_refinement_parameters=MAX_PARAMETERS,  # explicit finite opt-in up to 72
+        response='reference_h2h1', fdds=None,  # explicit native FDDS only on request
+        recoupled_dispersion=False,  # explicit angular local-axis coefficients only
         scratch_directory=None,
         resources=None, log=None)  # None: numeric budget = psi4.set_memory
     unknown = set(overrides)-set(values)
@@ -130,6 +139,20 @@ def preset_sites(molecule, preset, rank_limit=2, hydrogen_rank_limit=2):
     return sites, bonds
 
 
+def invalidate(wfn):
+    """Forget the latest atomic result and its refined-dispersion QCVariables.
+
+    Called when an atomic request starts, so a refused or failed request leaves
+    neither a stale result nor stale published coefficients. Only the
+    report-owned refined-dispersion names are deleted; every other variable,
+    including other ``ATOMIC``/``ATOM`` names and globals, is left alone.
+    """
+    wfn._native_atomic_property_result = None
+    for key in list(wfn.scalar_variables())+list(wfn.array_variables()):
+        if _lg._report_owned(key, *REFINED_DISPERSION_NAMESPACE):
+            wfn.del_variable(key)
+
+
 def atomic_property_result(wfn):
     """Return the owned latest atomic oeprop result (oeprop itself returns None).
 
@@ -144,62 +167,90 @@ def atomic_property_result(wfn):
 def run(wfn, tasks, *, preset, **kwargs):
     """Run explicit BOUNDED_DF oeprop tasks and attach the owned result on success.
 
-    All refined tasks share one common chain per request. Only RECOUPLED_TASK
-    adds the optional local-axis contraction. Read the owned BoundedProperties
-    record with psi4.atomic_property_result(wfn); .dispersion stays isotropic.
+    The two supported refined tasks execute the full common chain. Read its
+    BoundedProperties record with psi4.atomic_property_result(wfn). Requesting
+    ATOMIC_REFINED_DISPERSION also publishes the refined-dispersion
+    QCVariables. The distribution is analytic DF-centre, explicitly
+    ``distribution='supplied'`` with ``distributed_moments``, or the
+    experimental ``distribution='isa'`` with an explicit ``partition_recipe``
+    and ``partition_grid`` (no preset recipe exists), or ``distribution='mbis'``
+    with only ``partition_grid`` (native MBIS under the MBIS_* options); the response is
+    the reference H2H1 unless ``response='native_fdds'`` and ``fdds`` are given.
     """
     if not tasks or any(task not in TASKS for task in tasks) or len(set(tasks)) != len(tasks):
         raise ValueError('BOUNDED_DF accepts only '+', '.join(sorted(TASKS)))
     if not isinstance(wfn, core.Wavefunction):
         raise TypeError('BOUNDED_DF requires a live Psi4 Wavefunction')
-    v = settings(preset, kwargs)
-    log = v['log'] if v['log'] is not None else StageLog(v['verbosity'])
-    if not isinstance(log, StageLog):
-        raise TypeError('log must be a StageLog')
-    log.stage('Bounded preset preparation', (('preset', preset), ('model', 'DF-centre, not ISA-A')))
-    mol = wfn.molecule()
-    sites, bonds = preset_sites(mol, preset, v['rank_limit'], v['hydrogen_rank_limit'])
-    if v['sites'] is not None:
-        sites = v['sites']
-    if v['bonds'] is not None:
-        bonds = v['bonds']
-    v['scf_correction'], v['expected_grac_shift'] = resolve_correction(
-        wfn, v['scf_correction'], v['expected_grac_shift'])
-    recipe = v['auxiliary_recipe']
-    if recipe is None:
-        basis = core.BasisSet.build(mol, 'DF_BASIS_SCF', v['auxiliary_basis'], puream=0)
-        shells = []
-        for i in range(basis.nshell()):
-            s = basis.shell(i)
-            shells.append(ShellRecipe(int(basis.shell_to_center(i)), int(s.am),
-                tuple(s.exp(k) for k in range(s.nprimitive)), tuple(s.coef(k) for k in range(s.nprimitive))))
-        recipe = BasisRecipe(v['auxiliary_basis'], 'Psi4 basis DATA, native normalized',
-                             'Cartesian', tuple(map(tuple, mol.geometry().np)), tuple(shells))
-    grid = v['response_grid']
-    if grid is None:
-        options = core.IsaGridOptions()
-        options.radial_points, options.spherical_points = v['radial_points'], v['spherical_points']
-        native_grid = core.IsaGrid(mol.clone(), options)
-        grid = np.column_stack((native_grid.x(), native_grid.y(), native_grid.z(), native_grid.w()))
-        del native_grid  # Do not retain a second full grid during the bounded solve.
-    lattice = v['lattice_options']
-    if lattice is None:
-        lattice = core.FitPointsOptions()
-        lattice.npoints, lattice.seed = v['npoints'], v['seed']
-        lattice.lolim, lattice.hilim = v['lower_limit'], v['upper_limit']
-    if v['resources'] is None:
-        v['resources'] = default_resources()
-    quadrature = v['quadrature'] if v['quadrature'] is not None else Quadrature.from_casimir(core.CasimirGrid(10, .5))
-    log.items([(k, v[k]) for k in OPTION_MAP]+[('declared_variables', 'cutoff-derived'
-               if v['declared_variables'] is None else len(v['declared_variables'])),
-               ('numeric byte budget', v['resources'].max_bytes)])
-    log.stage_end()
-    keys = ('smoothing', 'shell_cutoff', 'charge_penalty', 'anchor_metric_damping',
-            'localization_rank_limit', 'weight_type', 'weight_coefficient', 'cutoff',
-            'resources', 'scf_correction', 'expected_grac_shift', 'max_order', 'scratch_directory')
-    optional = {'recoupled_dispersion': True} if RECOUPLED_TASK in tasks else {}
-    result = bounded_properties(wfn, recipe, caller_converged=True, distribution='df_centre_analytic',
-        sites=sites, bonds=bonds, quadrature=quadrature, response_grid=grid,
-        lattice_options=lattice, declared_variables=v['declared_variables'], log=log,
-        **optional, **{k:v[k] for k in keys})
-    wfn._native_atomic_property_result = result
+    try:
+        if RECOUPLED_TASK in tasks and 'recoupled_dispersion' in kwargs:
+            raise TypeError('recoupled task and recoupled_dispersion keyword are duplicate declarations')
+        v = settings(preset, kwargs)
+        if RECOUPLED_TASK in tasks:
+            v['recoupled_dispersion'] = True
+        log = v['log'] if v['log'] is not None else _lg.StageLog(v['verbosity'])
+        if not isinstance(log, _lg.StageLog):
+            raise TypeError('log must be a StageLog')
+        with _closes_failed_stage(log):
+            log.stage('Bounded preset preparation', (('preset', preset), ('distribution', v['distribution']),
+                                                     ('response', v['response'])))
+            # Refuse a bad limit before any grid, basis or lattice is built.
+            check_max_parameters(v['max_refinement_parameters'], 'max_refinement_parameters')
+            if type(v['recoupled_dispersion']) is not bool:
+                raise TypeError('recoupled_dispersion must be an explicit bool')
+            mol = wfn.molecule()
+            sites, bonds = preset_sites(mol, preset, v['rank_limit'], v['hydrogen_rank_limit'])
+            if v['sites'] is not None:
+                sites = v['sites']
+            if v['bonds'] is not None:
+                bonds = v['bonds']
+            v['scf_correction'], v['expected_grac_shift'] = resolve_correction(
+                wfn, v['scf_correction'], v['expected_grac_shift'])
+            recipe = v['auxiliary_recipe']
+            if recipe is None:
+                basis = core.BasisSet.build(mol, 'DF_BASIS_SCF', v['auxiliary_basis'], puream=0)
+                shells = []
+                for i in range(basis.nshell()):
+                    s = basis.shell(i)
+                    shells.append(ShellRecipe(int(basis.shell_to_center(i)), int(s.am),
+                        tuple(s.exp(k) for k in range(s.nprimitive)), tuple(s.coef(k) for k in range(s.nprimitive))))
+                recipe = BasisRecipe(v['auxiliary_basis'], 'Psi4 basis DATA, native normalized',
+                                     'Cartesian', tuple(map(tuple, mol.geometry().np)), tuple(shells))
+            grid = v['response_grid']
+            if grid is None:
+                options = core.IsaGridOptions()
+                options.radial_points, options.spherical_points = v['radial_points'], v['spherical_points']
+                native_grid = core.IsaGrid(mol.clone(), options)
+                grid = np.column_stack((native_grid.x(), native_grid.y(), native_grid.z(), native_grid.w()))
+                del native_grid  # Do not retain a second full grid during the bounded solve.
+            lattice = v['lattice_options']
+            if lattice is None:
+                lattice = core.FitPointsOptions()
+                lattice.npoints, lattice.seed = v['npoints'], v['seed']
+                lattice.lolim, lattice.hilim = v['lower_limit'], v['upper_limit']
+            if v['resources'] is None:
+                v['resources'] = default_resources()
+            quadrature = v['quadrature']
+            if quadrature is None:
+                quadrature = Quadrature.from_casimir(core.CasimirGrid(10, .5))
+            log.items([(k, v[k]) for k in OPTION_MAP]+[('declared_variables', 'cutoff-derived'
+                       if v['declared_variables'] is None else len(v['declared_variables'])),
+                       ('numeric byte budget', v['resources'].max_bytes)])
+            log.stage_end()
+        keys = ('smoothing', 'shell_cutoff', 'charge_penalty', 'anchor_metric_damping',
+                'localization_rank_limit', 'weight_type', 'weight_coefficient', 'cutoff',
+                'resources', 'scf_correction', 'expected_grac_shift', 'max_order', 'scratch_directory',
+                'distribution', 'distributed_moments', 'response', 'fdds',
+                'partition_recipe', 'partition_grid', 'recoupled_dispersion')
+        result = bounded_properties(wfn, recipe, caller_converged=True,
+            sites=sites, bonds=bonds, quadrature=quadrature, response_grid=grid,
+            lattice_options=lattice, declared_variables=v['declared_variables'],
+            max_parameters=v['max_refinement_parameters'], log=log,
+            publish_qcvariables='ATOMIC_REFINED_DISPERSION' in tasks, **{k:v[k] for k in keys})
+        wfn._native_atomic_property_result = result
+    except Exception:
+        # The oeprop route is all-or-nothing in its owned namespace: whatever
+        # failed (preparation, the chain, or reporting after publication), drop
+        # the attached result and refined-dispersion variables, then re-raise.
+        # A failure of this cleanup itself propagates, chained to the original.
+        invalidate(wfn)
+        raise

@@ -85,10 +85,7 @@ def test_density_neighbour_screening_and_translation():
 #: angular momentum present.  Evaluation and overlap are per-function and pairwise
 #: quantities, so the values below are exactly the corresponding submatrices of
 #: the full 97x109 (oxygen) and 97x49 (hydrogen) descriptor comparison -- this is
-#: production parity on selected elements, not a reduced-accuracy substitute.  The
-#: descriptors themselves and the complete replay live in the untracked
-#: `agent_scratch/` tree; `test_isapol_basis_production.py` there re-derives every number
-#: below from the fixture, so a regenerated fixture cannot leave these stale.
+#: production parity on selected elements, not a reduced-accuracy substitute.
 #:
 #: Four points, one per regime of the 97-point radial grid:
 #:   cusp    r ~ 1e-4  -- the tight s function is everything, and R_lm ~ r^l kills
@@ -337,35 +334,20 @@ def test_cpp_contracted_shells_against_independent_oracle(l, representation):
                                basis_tool.evaluate_basis(b, points), rtol=2e-13, atol=2e-14)
 
 
-def test_cpp_density_screening_roles_translation_and_ownership():
+def test_cpp_screening_roles_translation_and_ownership():
     from psi4 import core
     b = primitive(0)
     b['centres'] = np.array([[0., 0., 0.], [1., 0., 0.]])
     b['shells'] = np.array([[1, 0, 1, 1], [2, 0, 1, 1]])
     p = np.array([[0., 0., 0.], [1., 2., 3.]])
     mol = cpp_basis(b, core.IsaBasisRole.MolecularAux)
-    coefficients = [-2., 3.]
-    rho = core.IsaFixedDensity(mol, coefficients)
-    coefficients[0] = 100
     full = mol.evaluate(p.tolist()).np.copy()
-    np.testing.assert_allclose(rho.evaluate(p.tolist(), [0, 1]), full @ [-2., 3.])
-    assert rho.evaluate(p.tolist(), [0])[0] < 0  # no positivity clipping
-    np.testing.assert_allclose(rho.evaluate(p.tolist(), [1]), 3*full[:, 1])
-    np.testing.assert_array_equal(rho.evaluate(p.tolist(), []), [0, 0])
     np.testing.assert_array_equal(mol.evaluate_screened(p.tolist(), [1]).np[:, 0], [0, 0])
     moved = cpp_basis(dict(b, centres=b['centres']+[2, -3, 7]), core.IsaBasisRole.MolecularAux)
     np.testing.assert_allclose(moved.evaluate((p+[2, -3, 7]).tolist()).np, full)
     result = mol.evaluate(p.tolist())
     result.np[:] = 99
     np.testing.assert_array_equal(mol.evaluate(p.tolist()).np, full)
-    with pytest.raises(ValueError, match='molecular AUX'):
-        core.IsaFixedDensity(cpp_basis(b), [-2., 3.])
-    for bad in ([0, 0], [-1], [2]):
-        with pytest.raises(ValueError, match='[Nn]eighbour'):
-            rho.evaluate(p.tolist(), bad)
-    for bad in ([1.], [1., np.nan]):
-        with pytest.raises(ValueError, match='coefficient'):
-            core.IsaFixedDensity(mol, bad)
     with pytest.raises(ValueError, match='finite'):
         mol.evaluate([[np.nan, 0, 0]])
 
@@ -468,6 +450,31 @@ def test_cpp_overlap_scope_and_integrability():
         cpp_basis(huge).overlap()
 
 
+def test_cpp_fixed_density_screening_signs_and_ownership():
+    from psi4 import core
+    b = primitive(0)
+    b['centres'] = np.array([[0., 0., 0.], [1., 0., 0.]])
+    b['shells'] = np.array([[1, 0, 1, 1], [2, 0, 1, 1]])
+    p = np.array([[0., 0., 0.], [1., 2., 3.]])
+    mol = cpp_basis(b, core.IsaBasisRole.MolecularAux)
+    coefficients = [-2., 3.]
+    rho = core.IsaFixedDensity(mol, coefficients)
+    coefficients[0] = 100
+    full = mol.evaluate(p.tolist()).np.copy()
+    np.testing.assert_allclose(rho.evaluate(p.tolist(), [0, 1]), full @ [-2., 3.])
+    assert rho.evaluate(p.tolist(), [0])[0] < 0  # no positivity clipping
+    np.testing.assert_allclose(rho.evaluate(p.tolist(), [1]), 3*full[:, 1])
+    np.testing.assert_array_equal(rho.evaluate(p.tolist(), []), [0, 0])
+    with pytest.raises(ValueError, match='molecular AUX'):
+        core.IsaFixedDensity(cpp_basis(b), [-2., 3.])
+    for bad in ([0, 0], [-1], [2]):
+        with pytest.raises(ValueError, match='[Nn]eighbour'):
+            rho.evaluate(p.tolist(), bad)
+    for bad in ([1.], [1., np.nan]):
+        with pytest.raises(ValueError, match='coefficient'):
+            core.IsaFixedDensity(mol, bad)
+
+
 def mapped_test_bases():
     """s shells deliberately follow non-s blocks; shape is an explicit permutation."""
     from psi4 import core
@@ -548,6 +555,39 @@ def fit_provider_case():
     return b, atomic, density, samples
 
 
+def test_cpp_one_gaussian_provider_fit_and_shape_projection():
+    """Analytic provider oracle retained from the historical checkpoint replay.
+
+    One unnormalized exp(-r^2), sampled at the origin: overlap=(pi/2)^1.5,
+    density=2, RHS=2 and raw shape coefficient=2/overlap. No capture adapter.
+    """
+    from psi4 import core
+    b = primitive(0, exponent=1.)
+    b['contractions'][:] = 1.
+    atomic = cpp_basis(b)
+    density = core.IsaFixedDensity(cpp_basis(b, core.IsaBasisRole.MolecularAux), [2.])
+    shape = cpp_basis(b, core.IsaBasisRole.Shape)
+    samples = core.IsaAFitSamples()
+    samples.points, samples.weights = [[0., 0., 0.]], [1.]
+    samples.shape, samples.shape_sum, samples.previous = [1.], [1.], [.5]
+    samples.density_sites = [0]
+    provider = core.IsaAFitProvider(atomic, density)
+    data = provider.assemble(samples)
+    overlap = (np.pi/2.)**1.5
+    np.testing.assert_allclose(data.overlap.np, [[overlap]], rtol=0, atol=2e-15)
+    np.testing.assert_array_equal(data.basis_values.np, [[1.]])
+    np.testing.assert_array_equal(data.density, [2.])
+    np.testing.assert_array_equal(data.radius_squared, [0.])
+    assert data.exponents == [1.] and data.angular_momenta == [0]
+    result = provider.fit(samples)
+    for field, expected in (("metric", overlap), ("rhs", 2.), ("coefficients", 2./overlap)):
+        np.testing.assert_allclose(getattr(result, field).np, [[expected]], rtol=0, atol=2e-15)
+    mapping = core.IsaShapeMap(atomic, shape, [0])
+    np.testing.assert_allclose(mapping.project(result.coefficients.np[:, 0]), [2./overlap], rtol=0, atol=2e-15)
+    assert result.population == 2.
+    assert result.relative_residual < 1e-15
+
+
 def test_cpp_fit_provider_assembly_and_direct_solve():
     from psi4 import core
     b, atomic, density, samples = fit_provider_case()
@@ -616,3 +656,21 @@ def test_cpp_fit_provider_rejects_contracts():
     b['shells'] = np.array([[1, 1, 1, 1], [2, 0, 2, 2]])
     with pytest.raises(ValueError, match='co-centred'):
         core.IsaAFitProvider(cpp_basis(b), density)
+
+
+def test_recipe_module_loads_no_other_isapol_driver_module():
+    """In a fresh process the recipe module builds a basis on its own."""
+    import subprocess
+    import sys
+    subprocess.run([sys.executable, '-c', """
+import sys
+import numpy as np
+from psi4.driver.procrouting import isapol_basis as basis
+shell = basis.ShellRecipe(0, 0, (1.,), (1.,))
+recipe = basis.BasisRecipe('one s', 'test', 'Spherical', ((0., 0., 0.),), (shell,))
+built = recipe.build('MolecularAux')
+assert built.nfunction == 1
+np.testing.assert_allclose(built.evaluate([[0., 0., 0.], [1., 0., 0.]]).np[:, 0], [1., np.exp(-1.)])
+loaded = {m for m in sys.modules if m.startswith('psi4.driver.procrouting.isapol_')}
+assert loaded == {'psi4.driver.procrouting.isapol_basis'}, loaded
+"""], check=True)

@@ -14,13 +14,8 @@ namespace {
 [[noreturn]] void fail(const std::string& what) {
     throw std::invalid_argument("PFIT: " + what);
 }
-// The checks below are on the hot path of `data_rows`, which evaluates
-// `finite` three times per (parameter, channel, channel) triple.  The message
-// must therefore not be materialised unless it is actually thrown: taking a
-// `const std::string&` here made every *passing* check heap-allocate, which
-// dominated the assembly of a several-hundred-point fit.  Nothing about the
-// policy changes -- every value is still checked, with the same message, and
-// the arithmetic and its summation order are untouched.
+// Hot path of `data_rows`: take `const char*` so a passing check never builds a
+// std::string message.
 inline void require(bool ok, const char* what) {
     if (!ok) fail(what);
 }
@@ -225,7 +220,11 @@ struct IsaPfitSolverImpl {
     if(o.retain_pair_predictions) each=add(each,rows);
     each=add(each,mul(16,clouds.size()));
     size_t scalars=mul(each,nt);
-    if(o.solver==IsaPfitSolver::StreamingQR && nf) scalars=add(scalars,mul(o.qr_chunk_rows,add(nf,nt)));
+    // StreamingQR keeps the shared chunk buffer alive while one per-problem
+    // column(t) copy solves, and that copy has its own chunk*(nf+1) buffer; its
+    // r and z are inside the 40*np^2 slack above, its buffer is not.
+    if(o.solver==IsaPfitSolver::StreamingQR && nf)
+        scalars=add(scalars,add(mul(o.qr_chunk_rows,add(nf,nt)),mul(o.qr_chunk_rows,add(nf,1))));
     require(block_rows>0,"row block capacity must be positive");
     scalars=add(scalars,mul(block_rows,add(nf,mul(2,nt))));
     Budget budget{add(mul(scalars,sizeof(double)),source_bytes),o.maximum_work_bytes};

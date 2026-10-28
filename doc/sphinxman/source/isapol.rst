@@ -47,12 +47,15 @@ against the molecular point-to-point response (PFIT), and contract pairs of
 refined site polarizabilities over a Casimir |w--w| Polder quadrature into
 site |w--w| site dispersion coefficients.  The arrangement follows the ISA-Pol
 protocol of CamCASP 6.0, but this is a native implementation: it reads no
-reference file, runs no external program, and never runs an SCF, a response
-iteration or an asymptotic correction of its own inside a property request.
+reference file or external program. A property request computes its own
+response from the supplied live wavefunction, but does not run SCF or apply an
+asymptotic correction to that wavefunction.
 
-The distributed response uses CamCASP's ``DistPolAlgorithm = DF`` rule: each
-auxiliary fitting function is charged wholly to the centre it sits on.  No
-stockholder (ISA-A) partition is performed or inferred.
+The default distributed response uses the analytic DF-centre rule: each
+auxiliary fitting function is charged wholly to its centre. Explicit
+``distribution='isa'`` instead runs native ISA-A from this wavefunction's
+density, with a caller-declared partition recipe and integration grid.
+Neither route imports external orbitals, partition products or response data.
 
 .. warning:: Every setting below **names a model, not a tolerance.**  The
    auxiliary basis, the response grid, the kernel smoothing, the localization
@@ -242,6 +245,66 @@ Additional keyword arguments accept ``auxiliary_recipe``, ``response_grid``,
 ``resources``, ``max_order``, ``scratch_directory`` and ``log``.  Object
 arguments replace the corresponding generated object; scalar generation options
 then have no effect on that object.  Unknown keyword arguments are rejected.
+The explicit distribution/response declarations are ``distribution``,
+``partition_recipe``, ``partition_grid``, ``response`` and ``fdds``.
+``max_refinement_parameters`` opts into a declared allowance up to 72 without
+changing the default of 64.
+
+
+Explicit native ISA workflow
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The installed package contains a declared water regression recipe constructed
+only from its own basis data. It is not a general ISA default or a
+CamCASP-matched recipe: its tails use an absolute 1.5-bohr cutoff, not a
+Bragg-Slater multiplier. The following small acceptance calculation owns its SCF,
+partition, response, localization and fit:
+
+.. code-block:: python
+
+    import numpy as np
+    import psi4
+    from psi4.driver.procrouting.isapol_recipes import native_water_recipe
+    from psi4.driver.procrouting.isapol_native import Quadrature
+
+    mol = psi4.geometry("""
+    0 1
+    O 0 0 0
+    H -1.45365196 0 -1.12168732
+    H  1.45365196 0 -1.12168732
+    units bohr
+    symmetry c1
+    no_com
+    no_reorient
+    """)
+    psi4.set_options({"basis": "aug-cc-pvtz", "reference": "rks",
+                      "scf_type": "pk", "puream": True})
+    energy, wfn = psi4.energy("pbe0", molecule=mol, return_wfn=True)
+    recipe = native_water_recipe(mol)
+    options = psi4.core.IsaGridOptions()
+    options.radial_points, options.spherical_points = 200, 590
+    grid = psi4.core.IsaGrid(mol.clone(), options)
+    qgrid = np.column_stack((grid.x(), grid.y(), grid.z(), grid.w()))
+    psi4.oeprop(
+        wfn, "ATOMIC_REFINED_DISPERSION", atomic_backend="BOUNDED_DF",
+        preset="water", distribution="isa", partition_recipe=recipe,
+        partition_grid=qgrid, auxiliary_recipe=recipe.auxiliary,
+        quadrature=Quadrature.from_casimir(psi4.core.CasimirGrid(2, .5)),
+        npoints=64, rank_limit=1, hydrogen_rank_limit=1,
+        localization_rank_limit=2, max_order=6, scf_correction="NONE",
+        weight_type=4, weight_coefficient=1e-5)
+    result = psi4.atomic_property_result(wfn)
+
+This is a small C6 acceptance model, not production C8/C10 or quadrature/grid
+convergence evidence. Production ranks, quadrature, fitting lattice and
+resource choices must be declared and validated separately.
+
+``response='reference_h2h1'`` names a formulation, not a replay source: its
+integrals, fitted-density kernel and response operands are generated from the
+current wavefunction. ``response='native_fdds'`` is a distinct opt-in model with
+its own native stability/dual-Dyson admission. Molecular recipes which fail
+that admission are refused; changing the backend or loosening its gate to
+obtain a plot does not validate the original model.
 
 
 SCF asymptotic correction
@@ -353,8 +416,9 @@ still decides which of those variables carry anchor penalties. Refined and
 unrefined tensors remain distinct under ``refined_tensors`` and
 ``local_tensors``.
 
-The bounded route permits at most 2000 fit points, 64 sites and 64
-fit variables, subject to its stricter numerical/work admission checks. It
+The bounded route permits at most 2000 fit points and 64 sites, with 64
+fit variables by default and an explicit allowance up to 72, subject to its
+stricter numerical/work admission checks. It
 includes every packed point pair and both solver passes. Its private
 disk-staged operands are created in a fresh temporary directory, hash-checked
 when read and removed on success or failure. ``scratch_directory`` optionally
@@ -363,8 +427,10 @@ Only small local/refined results and diagnostics are retained in the result.
 
 ``BoundedResources`` is an explicit cumulative opt-in ceiling on planned
 numerical storage (caller-sized; the oeprop presets use the Psi4 memory
-setting), arithmetic work (at most 6 trillion units) and checkpoint I/O (at
-most 64 GiB). Array lifetimes, retained output allowances and LW
+setting), arithmetic work (at most 6 trillion units in the default
+``capacity='standard'``, or 100 trillion in explicitly selected
+``capacity='large'``) and checkpoint I/O (at most 64 GiB). Array lifetimes,
+retained output allowances and LW
 workspace reservations are charged together; work and I/O are not reset per
 frequency or block. These are not process-RSS or elapsed-time guarantees:
 caller-owned wavefunction/basis metadata and implementation-specific

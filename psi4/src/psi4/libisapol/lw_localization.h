@@ -36,23 +36,20 @@ struct PSI_API IsaLwGraphDiagnostics {
 PSI_API Matrix isa_lw_graph_operator(const IsaBondGraph& graph);
 /// Owned matrix/eigenvalue copies; component BFS order, ascending modes within each.
 /// Per-component LAPACK with |lambda| < 1e-4 omitted; fail closed on algebra checks.
-/// Optional diagnostics are copied only on success. No localization/parity claim.
+/// Optional diagnostics are copied only on success.
 PSI_API std::pair<Matrix, std::vector<double>> isa_lw_graph_pseudoinverse(
     const IsaBondGraph& graph, IsaLwGraphDiagnostics* diagnostics = nullptr);
-/// Storage width of the LW algebra. The working space carries the real Racah
-/// components through rank 4, (4+1)^2 = 25; the local output drops rank 0, hence 24.
-/// These are storage widths, NOT a declaration: the rank the localization actually
-/// runs at is rank_limit below, and every component above it is identically zero.
-/// A rank-3 declaration therefore occupies the leading 16/15 of these and is
-/// bitwise unchanged by the widening.
+/// Storage widths, not the declared rank: real Racah components through rank 4,
+/// (4+1)^2 = 25 working and 24 local (rank 0 dropped). Components above the
+/// declared rank_limit are identically zero, so rank 3 uses the leading 16/15.
 constexpr std::size_t kIsaLwMaxRank = 4;
 constexpr std::size_t kIsaLwWorkingComponents = (kIsaLwMaxRank + 1) * (kIsaLwMaxRank + 1);
 constexpr std::size_t kIsaLwLocalComponents = kIsaLwWorkingComponents - 1;
 using IsaLwLocalMatrix = std::array<std::array<double, kIsaLwLocalComponents>, kIsaLwLocalComponents>;
 using IsaLwWorkingMatrix = std::array<std::array<double, kIsaLwWorkingComponents>, kIsaLwWorkingComponents>;
 using IsaLwPosition = std::array<double, 3>;
-/// Supplied atomic-unit response, not a native producer or an externally refined model.
-/// Explicit finite nonnegative frequency; NaN sentinel makes missing identity fail closed.
+/// Supplied atomic-unit response. Explicit finite nonnegative frequency; the NaN
+/// sentinel makes a missing frequency fail closed.
 /// Positions in bohr; N*N ordered blocks: response coordinate first, potential second.
 /// Real Racah order 00,10,11c,11s,... through rank 4.
 struct PSI_API IsaSitePairResponse {
@@ -64,41 +61,30 @@ struct PSI_API IsaBondTransfer {
     std::size_t first, second, first_component, second_component, fixed_site;
     double amount;
 };
-/// Two distinct classes of number live here, and they must not be conflated.
-///
-/// Algorithm-controlled (LW is responsible, always gated at residual_tolerance):
-///   off_site       - off-site blocks LW is required to annihilate
+/// Algorithm-controlled, always gated at residual_tolerance:
+///   off_site       - off-site blocks LW must annihilate
 ///   reciprocity    - alpha(a,b;t,u) == alpha(b,a;u,t) after redistribution
 ///   molecular_sum  - the origin-translated molecular response LW must conserve
-///   charge_sum_transport - change in the charge-flow sums sum_b alpha(a,b;t,00)
-///                    and sum_b alpha(b,a;00,t) caused by localization. LW's bond
-///                    transfers are antisymmetric in the two site slots, so these
-///                    sums are invariants: measured at <= 2.2e-16 over the eleven
-///                    recorded water frequencies.
+///   charge_sum_transport - change in sum_b alpha(a,b;t,00) and sum_b alpha(b,a;00,t)
+///                    caused by localization; an invariant, since bond transfers
+///                    are antisymmetric in the two site slots.
 ///
-/// Supplied-input quality (LW cannot influence these; gated separately, see
-/// input_sum_rule_tolerance):
-///   input_sum_rule - max charge-flow sum-rule defect of the SUPPLIED pair data,
-///                    max over (a,t) of |sum_b alpha(a,b;t,00)| and |sum_b alpha(b,a;00,t)|.
-///   charge_sum, local_charge - the same defect after localization. Because
-///                    charge_sum_transport is at machine epsilon and off-site
-///                    blocks are annihilated, both reproduce input_sum_rule; they
-///                    are reports on the input, not measures of LW's accuracy.
+/// Supplied-input quality, gated by input_sum_rule_tolerance:
+///   input_sum_rule - max over (a,t) of |sum_b alpha(a,b;t,00)| and
+///                    |sum_b alpha(b,a;00,t)| in the SUPPLIED pair data.
+///   charge_sum, local_charge - the same defect after localization; they
+///                    reproduce input_sum_rule and do not measure LW accuracy.
 struct PSI_API IsaLocalizationResiduals {
     double off_site, charge_sum, reciprocity, molecular_sum, local_charge;
     double input_sum_rule, charge_sum_transport;
 };
 /// Owned LW result; local drops rank 0. refined_pairs is the LW workspace,
-/// NOT externally PFIT-refined data. No native-upstream or production acceptance claim.
+/// NOT externally PFIT-refined data.
 ///
-/// localization_rank_limit is the rank the localization was DECLARED at (see
-/// isa_localize_lw's rank_limit). Every component of rank above it is identically
-/// zero in local and refined_pairs, in both index slots, because it was removed
-/// from the supplied input before any transfer and never re-entered the algebra.
-/// truncated_input_maxabs is the largest absolute supplied value so removed, i.e.
-/// how much of the caller's own data the declared limit discarded. It is a report
-/// on the declaration, not a residual, and it is deliberately NOT gated: choosing
-/// a limit below the rank of the supplied data is the caller's declaration.
+/// localization_rank_limit is the declared rank_limit; components above it are
+/// identically zero in local and refined_pairs, in both index slots.
+/// truncated_input_maxabs is the largest supplied value that limit discarded. It
+/// is reported, not gated: the limit is the caller's declaration.
 struct PSI_API IsaLocalizedResponse {
     double frequency;
     std::vector<IsaLwPosition> positions;
@@ -114,14 +100,8 @@ struct PSI_API IsaLocalizedResponse {
 /// Resource policy: at most 256 sites, 1,000,000 retained transfers (including pending),
 /// and a conservative 768 MiB native workspace budget. Exceeding a cap throws;
 /// no transfers are silently discarded. Caller-owned inputs/getter copies are additional.
-///
-/// The 768 MiB budget is unchanged by the rank-4 widening, and the widening is
-/// therefore not free: the per-pair working matrix grew from 16x16 to 25x25, so the
-/// workspace estimate grew from about 8320*N^2 to about 20128*N^2 bytes and the
-/// largest admissible site count fell from the 256-site graph cap to about 174.
-/// That is a real, reported loss of capacity, not an accounting change, and the
-/// budget is deliberately NOT raised to hide it. A caller needing more sites needs
-/// a different storage scheme with its own gate, not a larger number here.
+/// The 25x25 working blocks cost about 20128*N^2 bytes, so the budget admits about
+/// 174 sites, below the graph cap. Do not raise the budget to recover them.
 constexpr std::size_t kIsaLwMaxTransfers = 1000000;
 constexpr std::size_t kIsaLwMaxWorkspaceBytes = 768 * 1024 * 1024;
 /// Shared preallocation guard for the POD entry point and bounded Python conversion.
@@ -144,47 +124,18 @@ PSI_API void isa_lw_validate_workspace(std::size_t site_count, std::size_t bond_
 /// Reporting the defect is not waiving it: the caller receives the measured value
 /// and every algorithm-controlled residual is still held to residual_tolerance.
 ///
-/// rank_limit DECLARES the rank the localization is performed at, in 1..4, and
-/// defaults to 3, for which this routine is unchanged. 4 is the full working
-/// space; 3 and below restrict it.
-/// A declared limit L restricts the whole algorithm to the first (L+1)^2 real
-/// Racah components: the supplied blocks are truncated to that range in both
-/// index slots first (reported through truncated_input_maxabs), and the
-/// component-pair loop, the translated transfer application, the molecular-sum
-/// conservation check and the local output all run inside it.
+/// rank_limit (1..4, default 3) declares the localization rank L. Supplied
+/// blocks are truncated to the first (L+1)^2 real Racah components in both slots
+/// before any transfer, and the whole algorithm then runs inside that range.
+/// This is exact: translation is rank-raising (entry (row, column) vanishes
+/// unless rank(row) >= rank(column)), so T_first * T(-d) = T_second holds on the
+/// leading range and every residual keeps the same gate.
 ///
-/// That restriction is exact, not approximate, and relaxes no tolerance. The
-/// multipole translation matrix is rank-raising -- its (row, column) entry
-/// vanishes unless rank(row) >= rank(column) -- so on the leading (L+1)^2 index
-/// range the composition T_first * T(-d) = T_second still holds identically.
-/// Off-site annihilation, reciprocity, charge-sum transport and the molecular
-/// sum are therefore each conserved within the declared space, and every
-/// residual above is gated at exactly the same threshold as at rank 3.
-///
-/// A localization at one declared limit is a DIFFERENT MODEL from one at another
-/// limit and the two must never be quoted as agreeing. In particular a rank-4
-/// localization is not a more accurate rank-3 one: it carries components the
-/// rank-3 model does not have at all. They are, however, exactly CONSISTENT, and
-/// that is a theorem about this algorithm rather than a numerical observation:
-///
-///   For any two declared limits L < L', the localized blocks at L equal the
-///   localized blocks at L' restricted to the leading (L+1)^2 components, bitwise.
-///
-/// The component-pair loop is ordered first_component <= second_component, and a
-/// transfer for the pair (t, u) writes only into the u-th slot, with the target
-/// weight delta(target, t) + T(+-d)[target][t]. Translation is rank-raising, so
-/// that weight vanishes for rank(target) < rank(t); a pair with t outside the
-/// declared space therefore writes only outside it, and t <= u puts u outside
-/// too. No higher-rank pair can reach a component below the limit, and the
-/// screening decisions for the lower pairs read only lower components, so they
-/// are unchanged as well. Measured at 0.0 over the eleven recorded water
-/// frequencies and over random reciprocal input on unrelated graphs.
-///
-/// The practical consequence is a negative one and must be reported as such: a
-/// declared localization rank limit cannot change any rank <= L observable, so
-/// it cannot explain a disagreement in one. What the limit does buy is an
-/// honest, cheaper model whose higher components are absent by declaration
-/// rather than dropped afterwards, and a limit a consumer can check against.
+/// Different limits are different models, but consistent: for L < L' the blocks
+/// at L equal those at L' restricted to (L+1)^2 components, bitwise. A transfer
+/// for component pair (t <= u) writes only slot u with weight
+/// delta(target, t) + T(+-d)[target][t], which vanishes for rank(target) < rank(t).
+/// Hence a limit cannot change any rank <= L observable.
 PSI_API IsaLocalizedResponse isa_localize_lw(const IsaSitePairResponse& response,
     const IsaBondGraph& graph, double residual_tolerance = 1.0e-6,
     double input_sum_rule_tolerance = -1.0, int rank_limit = 3);

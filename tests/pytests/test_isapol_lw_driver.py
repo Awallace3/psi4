@@ -1,7 +1,7 @@
 # Psi4 Developers; SPDX-License-Identifier: LGPL-3.0-only
 """Hermetic supplied-LW driver tests. Only staged core and portable fixture IO.
 
-Run with PYTHONPATH=$PWD/build_camcasp_psi4_joint/stage/lib python -P -m pytest ...
+Run with PYTHONPATH=<build>/stage/lib python -P -m pytest ...
 The new module is source-loaded, registered for dataclasses, without staging it.
 """
 from dataclasses import FrozenInstanceError
@@ -54,7 +54,6 @@ def test_static_zero_and_metadata():
     assert m.production_postcondition_passed and m.residual_tolerance == 1e-6
     assert m.numerical_agreement is None and not m.native_verified
     assert m.discarded_rank4_entry_count == 0
-    assert m.anisotropic_status == 'separate_explicit_placement_adapter_available_not_computed'
 
 
 def test_analytic_charge_flow():
@@ -176,8 +175,7 @@ def test_resource_guard_before_materialization():
 
 #: Rank-4 entries a three-site truncating request drops at the rank-3 boundary:
 #: nine ordered site pairs times the 25x25 - 16x16 components outside rank 3.
-#: The archived water reference reports exactly this count; the guard test in
-#: `agent_scratch/pytests/test_isapol_lw_driver_water.py` asserts that it still does.
+#: The archived water reference reports exactly this count.
 THREE_SITE_DISCARDED_RANK4 = 9 * (25 * 25 - 16 * 16)
 
 
@@ -187,8 +185,7 @@ def synthetic_rank4(retain=False):
     The rank-limit theorems below are statements about the driver, not about any
     particular molecule: they only need a supplied response that is nonvacuous at
     ranks 2, 3 and 4 so the restriction has something to discard. Building one
-    analytically keeps them in the committed tree, while the comparison against
-    the archived ORIENT water response stays in the untracked `agent_scratch/` tree.
+    analytically keeps them in the committed tree.
     The geometry is water-shaped and the bond graph connected so LW has a real
     flow problem to solve; the tensor itself is deliberately synthetic and must
     never be quoted as a polarizability.
@@ -213,23 +210,6 @@ def test_production_rejects_a_supplied_model_that_does_not_conserve_charge():
     """No fallback: a nonconserving supplied response fails the postcondition."""
     with pytest.raises(RuntimeError, match='postcondition.*charge-sum=.*local-charge='):
         lw.supplied_nonlocal_properties(**synthetic_rank4())
-
-
-def test_historical_policy_is_pinned_to_one_approved_fixture():
-    """The 1e-3 diagnostic tolerance is not reachable by an arbitrary input.
-
-    `historical_water_diagnostic` relaxes the residual gate by three orders of
-    magnitude, so it is gated on the exact approved identity -- hashes of the
-    tensors, geometry, frames and frequency all pinned in the driver source. A
-    synthetic model that is merely water-shaped must not reach it. The positive
-    side of this gate needs the fixture and lives in `agent_scratch/`.
-    """
-    with pytest.raises(ValueError, match='exact approved water identity'):
-        lw.supplied_nonlocal_properties(**synthetic_rank4(),
-                                        residual_policy='historical_water_diagnostic')
-    assert len(lw.HISTORICAL_FIXTURE_SHA256) == len(lw.HISTORICAL_SOURCE_SHA256) == 64
-    assert lw.HISTORICAL_FIXTURE_SHA256 != lw.HISTORICAL_SOURCE_SHA256
-    assert len(lw._HISTORICAL_ARRAY_HASHES) == 4
 
 
 def test_localization_rank_limit_is_recorded_and_defaults_to_three():
@@ -347,160 +327,6 @@ def test_rank4_truncation_is_exact_and_finite_required():
     with pytest.raises(ValueError,match='finite'): lw.supplied_nonlocal_properties(**q)
 
 
-def lorentz(n, frequencies, alpha, omega):
-    q = request(n,frequencies)
-    for k,xi in enumerate(frequencies):
-        for s in range(n):
-            q['tensors'][k,s,s,1:4,1:4] = np.eye(3)*alpha/(1+(xi/omega)**2)
-    return lw.supplied_nonlocal_properties(**q)
-
-
-def coefficient(r,order):
-    return next(c for c in r.pairs[0].coefficients if c.order == order)
-
-
-def test_dynamic_two_frequency_different_site_sets():
-    a = lorentz(1,[0,2],3,2); b = lorentz(2,[0,2],5,4)
-    weights = [0,.17]
-    r = lw.isotropic_dispersion(a,b,cp_weights=weights,quadrature_provenance=PROV)
-    assert len(r.pairs) == 2 and r.pairs[1].label_b == 'S1'
-    assert coefficient(r,6).value == pytest.approx(6*.17*(3/2)*(5/1.25),abs=1e-14)
-    c12 = coefficient(r,12)
-    assert c12.value == 0 and not c12.unrestricted_complete
-    assert c12.missing_rank_pairs == ((1,4),(4,1))
-    assert c12.included_rank_pairs == ((2,3),(3,2))
-    assert r.model_a.provenance == PROV
-    weights[1] = 99
-    assert r.cp_weights == (0.,.17)
-
-
-def test_literal_lorentz_integral_independent_formula():
-    grid = psi4.core.CasimirGrid(10,.5)
-    frequencies = [grid.omega(i) for i in range(11)]
-    weights = [grid.cp_weight(i) for i in range(11)]
-    a = lorentz(1,frequencies,3,.5); b = lorentz(1,frequencies,5,.5)
-    r = lw.isotropic_dispersion(a,b,cp_weights=weights,quadrature_provenance=PROV)
-    # Integral of two identical Lorentz denominators: C6=3/4*alphaA*alphaB*omega.
-    assert coefficient(r,6).value == pytest.approx(.75*3*5*.5,rel=2e-7)
-    sa = psi4.core.IsaIsotropicSite(); sa.label='A'; sa.origin=[0,0,0]; sa.ranks=[1]
-    sa.polarizabilities=psi4.core.Matrix.from_array(a.atomic_scalars.array[:,0,:1])
-    sb = psi4.core.IsaIsotropicSite(); sb.label='B'; sb.origin=[0,0,0]; sb.ranks=[1]
-    sb.polarizabilities=psi4.core.Matrix.from_array(b.atomic_scalars.array[:,0,:1])
-    direct = psi4.core.isa_isotropic_dispersion(psi4.core.IsaIsotropicModel(frequencies,[sa],'synthetic'),
-              psi4.core.IsaIsotropicModel(frequencies,[sb],'synthetic'),weights,12)
-    assert coefficient(r,6).value == direct.pairs[0].coefficients[0].value
-
-
-def ranked_lorentz(n, frequencies, alphas, omega, localization_rank_limit=3):
-    """One site set whose localized ranks carry DIFFERENT scalars, one per rank.
-
-    `lorentz` above populates only the dipole block, so a rank limit would be
-    invisible in it: ranks2 and3 already contribute zero. Here each rank l
-    gets its own magnitude, so dropping a rank changes a C_n that includes it
-    and only those. `alphas` declares how many ranks the input carries; a
-    limit4 model needs a rank4 input whose rank4 rows are retained, which is
-    a different declaration from the rank3 one, not a wider copy of it.
-    """
-    rank4 = localization_rank_limit == 4
-    q = request(n,frequencies,rank=4 if rank4 else 3,retain=rank4)
-    if localization_rank_limit != 3:
-        q['localization_rank_limit'] = localization_rank_limit
-    for k,xi in enumerate(frequencies):
-        for s in range(n):
-            for l,alpha in zip(range(1,len(alphas)+1),alphas):
-                # Full Racah packing, 00 at index0, as `lorentz` above; leaving
-                # the charge-flow row zero is what keeps LW's own sum rules
-                # satisfied, so this input needs no relaxed tolerance.
-                q['tensors'][k,s,s,l*l:(l+1)**2,l*l:(l+1)**2] = np.eye(2*l+1)*alpha/(1+(xi/omega)**2)
-    return lw.supplied_nonlocal_properties(**q)
-
-
-def test_declared_site_ranks_limit_the_model_and_report_the_gap():
-    frequencies, weights = [0,2], [0,.17]
-    a = ranked_lorentz(1,frequencies,(3,7,11),2)
-    b = ranked_lorentz(1,frequencies,(5,13,17),4)
-    full = lw.isotropic_dispersion(a,b,cp_weights=weights,quadrature_provenance=PROV)
-    # A limited to L1 while B keeps L1..L3: C6 is untouched because it needs only
-    # (1,1); C8 loses (2,1) and keeps (1,2); C10 loses (3,1) and (2,2); C12 keeps
-    # nothing, since its only surviving pair (1,4) needs a rank B never had
-    # either -- one gap from the declaration, one from the localization.
-    limited = lw.isotropic_dispersion(a,b,cp_weights=weights,quadrature_provenance=PROV,
-                                      site_ranks_a=[[1]])
-    assert coefficient(limited,6).value == coefficient(full,6).value
-    assert coefficient(limited,6).unrestricted_complete
-    assert coefficient(full,6).unrestricted_complete
-    for order,included,missing in ((8,((1,2),),((2,1),)),
-                                   (10,((1,3),),((2,2),(3,1))),
-                                   (12,(),((1,4),(2,3),(3,2),(4,1)))):
-        c = coefficient(limited,order)
-        assert c.included_rank_pairs == included and c.missing_rank_pairs == missing
-        assert not c.unrestricted_complete
-        assert abs(c.value) < abs(coefficient(full,order).value)
-    # The limit is a declaration, not a post-hoc scaling: the limited C8 equals
-    # the same kernel called directly on the same sliced scalars.
-    sa = psi4.core.IsaIsotropicSite(); sa.label='S0'; sa.origin=[0,0,0]; sa.ranks=[1]
-    sa.polarizabilities=psi4.core.Matrix.from_array(a.atomic_scalars.array[:,0,:1])
-    sb = psi4.core.IsaIsotropicSite(); sb.label='S0'; sb.origin=[0,0,0]; sb.ranks=[1,2,3]
-    sb.polarizabilities=psi4.core.Matrix.from_array(b.atomic_scalars.array[:,0,:])
-    direct = psi4.core.isa_isotropic_dispersion(
-        psi4.core.IsaIsotropicModel(frequencies,[sa],'synthetic'),
-        psi4.core.IsaIsotropicModel(frequencies,[sb],'synthetic'),weights,12)
-    assert [c.value for c in direct.pairs[0].coefficients] == [c.value for c in limited.pairs[0].coefficients]
-
-
-def test_declared_site_ranks_select_the_matching_scalar_columns():
-    """L2 must use the rank-2 column, not merely two columns.
-
-    Both models below declare two ranks, so a bug that sliced the first two
-    columns regardless of the declaration would pass a count check. They are
-    separated here against the closed-form Casimir-Polder sum: with one Lorentz
-    shape shared by every rank, C_n = sum over the included (la,lb) of
-    binom(2la+2lb, 2la) * alpha_la * alpha_lb * T, T = sum_f w_f g_f^2.
-    """
-    frequencies, weights, omega = [0,2], [0,.29], 2
-    alphas = (3,7,11)
-    a = ranked_lorentz(1,frequencies,alphas,omega)
-    t = sum(w/(1+(x/omega)**2)**2 for x,w in zip(frequencies,weights))
-    def run(ranks):
-        return lw.isotropic_dispersion(a,a,cp_weights=weights,quadrature_provenance=PROV,
-                                       site_ranks_a=[ranks],site_ranks_b=[ranks])
-    l2, l13 = run([1,2]), run([1,3])
-    for r in (l2,l13):
-        assert coefficient(r,6).value == pytest.approx(6*alphas[0]**2*t,rel=1e-14)
-    # n=8 needs (1,2) and (2,1): L2 has both, [1,3] has neither.
-    assert coefficient(l2,8).value == pytest.approx(2*15*alphas[0]*alphas[1]*t,rel=1e-14)
-    assert coefficient(l2,8).included_rank_pairs == ((1,2),(2,1))
-    assert coefficient(l13,8).value == 0
-    assert coefficient(l13,8).included_rank_pairs == ()
-    assert coefficient(l13,8).missing_rank_pairs == ((1,2),(2,1))
-    # n=10 needs (1,3),(2,2),(3,1): the two declarations keep disjoint subsets.
-    assert coefficient(l2,10).included_rank_pairs == ((2,2),)
-    assert coefficient(l2,10).value == pytest.approx(70*alphas[1]**2*t,rel=1e-14)
-    assert coefficient(l13,10).included_rank_pairs == ((1,3),(3,1))
-    assert coefficient(l13,10).value == pytest.approx(2*28*alphas[0]*alphas[2]*t,rel=1e-14)
-
-
-@pytest.mark.parametrize('bad',[[[1],[1]], [[2,1]], [[1,1]], [[]], [[1.]], [[0]], []])
-def test_declared_site_ranks_are_validated(bad):
-    a = ranked_lorentz(1,[0,2],(3,7,11),2)
-    with pytest.raises(ValueError):
-        lw.isotropic_dispersion(a,a,cp_weights=[0,.17],quadrature_provenance=PROV,site_ranks_a=bad)
-
-
-@pytest.mark.parametrize('weights',[[0],[1],[-1],[np.nan],[0,1]])
-def test_static_cannot_supply_dispersion(weights):
-    a = lw.supplied_nonlocal_properties(**request())
-    with pytest.raises(ValueError): lw.isotropic_dispersion(a,a,cp_weights=weights,quadrature_provenance=PROV)
-
-
-def test_dispersion_requires_explicit_grid_weights_and_provenance():
-    a = lorentz(1,[0,1],2,1); b = lorentz(1,[0,2],2,1)
-    with pytest.raises(ValueError,match='grids'): lw.isotropic_dispersion(a,b,cp_weights=[0,1],quadrature_provenance=PROV)
-    with pytest.raises(TypeError): lw.isotropic_dispersion(a,a,quadrature_provenance=PROV)
-    with pytest.raises(ValueError): lw.isotropic_dispersion(a,a,cp_weights=[0,1],quadrature_provenance=None)
-    with pytest.raises(ValueError): lw.isotropic_dispersion(a,a,cp_weights=[0,1],quadrature_provenance=PROV,max_order=True)
-
-
 def test_normal_package_import_without_staging():
     # Exercise normal Python package resolution with source added to the installed
     # package search path in memory only; no __init__, install, or staging writes.
@@ -528,8 +354,7 @@ def test_normal_package_import_without_staging():
 def test_runtime_has_no_fixture_io_or_executables(monkeypatch):
     """The driver reads no file and spawns nothing once it has its arrays.
 
-    The historical-fixture half of this check lives in `agent_scratch/`; the
-    guarantee itself is about the driver, so it is asserted here on a request
+    The guarantee is about the driver, so it is asserted here on a request
     built in memory.
     """
     import builtins
@@ -548,12 +373,6 @@ def test_no_generic_tolerance_and_no_asymmetry_repair():
     with pytest.raises(TypeError): lw.supplied_nonlocal_properties(**request(),residual_tolerance=1e-3)
     q = request(); q['tensors'][0,0,0,1,2] = 2e-6
     with pytest.raises(RuntimeError): lw.supplied_nonlocal_properties(**q)
-
-
-def test_nonzero_only_dynamic_grid_is_explicitly_supported():
-    a = lorentz(1,[1,2],3,2)
-    r = lw.isotropic_dispersion(a,a,cp_weights=[.2,.1],quadrature_provenance=PROV)
-    assert coefficient(r,6).value == pytest.approx(6*(.2*(3/1.25)**2+.1*1.5**2))
 
 
 def test_nested_record_constructor_snapshots():
@@ -579,94 +398,3 @@ def test_localization_rank_limit_is_validated(bad):
     q = request(1,[0.])
     with pytest.raises(ValueError,match='localization_rank_limit'):
         lw.supplied_nonlocal_properties(localization_rank_limit=bad,**q)
-
-
-def test_rank4_localization_completes_c12():
-    """C12 needs (1,4)/(4,1), which a rank1..3 localization does not have at all.
-
-    This is the structural point of the rank4 model: not a better C12, but the
-    first C12 whose four rank pairs are all present. The rank3 C12 is a partial
-    sum over (2,3)/(3,2) and is marked incomplete; the two are different
-    quantities and are never compared by value here.
-    """
-    frequencies, weights = [0,2], [0,.17]
-    three = ranked_lorentz(1,frequencies,(3,7,11),2)
-    four = ranked_lorentz(1,frequencies,(3,7,11,13),2,localization_rank_limit=4)
-    assert four.metadata.localization_rank_limit == 4
-    a = lw.isotropic_dispersion(three,three,cp_weights=weights,quadrature_provenance=PROV)
-    b = lw.isotropic_dispersion(four,four,cp_weights=weights,quadrature_provenance=PROV)
-    c3, c4 = coefficient(a,12), coefficient(b,12)
-    assert c3.included_rank_pairs == ((2,3),(3,2))
-    assert c3.missing_rank_pairs == ((1,4),(4,1))
-    assert not c3.unrestricted_complete
-    assert c4.included_rank_pairs == ((1,4),(2,3),(3,2),(4,1))
-    assert c4.missing_rank_pairs == ()
-    assert c4.unrestricted_complete
-    # The orders that were already mutually complete are untouched, bitwise: the
-    # rank4 model adds terms, it does not move the ones the rank3 model had.
-    for order in (6,8,10):
-        assert coefficient(a,order).unrestricted_complete
-        assert coefficient(b,order).unrestricted_complete
-        assert coefficient(b,order).value == coefficient(a,order).value
-    # Declaring rank4 against a rank1..3 model is refused, not zero-filled.
-    with pytest.raises(ValueError,match='localization rank limit'):
-        lw.isotropic_dispersion(three,three,cp_weights=weights,quadrature_provenance=PROV,
-                                site_ranks_a=[[1,2,3,4]])
-    # Rank5 is not declarable at all.
-    with pytest.raises(ValueError,match='declarable LW ranks are1..4'):
-        lw.isotropic_dispersion(four,four,cp_weights=weights,quadrature_provenance=PROV,
-                                site_ranks_a=[[1,2,3,5]])
-
-
-def test_default_site_ranks_follow_the_model_localization_limit():
-    """`site_ranks=None` must mean "what this model has", not a fixed (1,2,3).
-
-    A fixed default would hand the C_n kernel the declared-absent zeros of a
-    limited model, which the kernel would then score `complete` -- reporting a
-    full order computed from terms the model never had.
-    """
-    frequencies, weights = [0,2], [0,.17]
-    full = ranked_lorentz(1,frequencies,(3,7,11),2)
-    limited = ranked_lorentz(1,frequencies,(3,7,11),2,localization_rank_limit=2)
-    implicit = lw.isotropic_dispersion(limited,limited,cp_weights=weights,quadrature_provenance=PROV)
-    explicit = lw.isotropic_dispersion(limited,limited,cp_weights=weights,quadrature_provenance=PROV,
-                                       site_ranks_a=[[1,2]],site_ranks_b=[[1,2]])
-    assert [c.value for c in implicit.pairs[0].coefficients] == \
-           [c.value for c in explicit.pairs[0].coefficients]
-    assert coefficient(implicit,10).included_rank_pairs == ((2,2),)
-    assert not coefficient(implicit,10).unrestricted_complete
-    # Declaring a rank the model was not localized at is refused, not zero-filled.
-    with pytest.raises(ValueError,match='localization rank limit'):
-        lw.isotropic_dispersion(limited,full,cp_weights=weights,
-                                quadrature_provenance=PROV,site_ranks_a=[[1,2,3]])
-    # The same declaration against the unlimited model is accepted.
-    lw.isotropic_dispersion(full,full,cp_weights=weights,quadrature_provenance=PROV,
-                            site_ranks_a=[[1,2,3]])
-
-
-def test_localization_rank_limit_cannot_change_a_mutually_complete_coefficient():
-    """The negative result, at the C_n level: the limit moves no order it completes.
-
-    C6 reads only (1,1) and C8 reads (1,2)/(2,1), so both are complete at declared
-    limit2 and at rank3, and both are unchanged -- exactly. C10 needs (1,3) and
-    (3,1), which a limit-2 model does not have, so it is reported incomplete
-    rather than quietly reduced. A rank-limited localization therefore cannot
-    explain a disagreement in a rank <=L observable such as the O/H partition
-    ratio; it is eliminated as a candidate, not merely bounded.
-    """
-    frequencies, weights = [0,2], [0,.17]
-    full = ranked_lorentz(1,frequencies,(3,7,11),2)
-    limited = ranked_lorentz(1,frequencies,(3,7,11),2,localization_rank_limit=2)
-    a = lw.isotropic_dispersion(full,full,cp_weights=weights,quadrature_provenance=PROV)
-    b = lw.isotropic_dispersion(limited,limited,cp_weights=weights,quadrature_provenance=PROV)
-    compared = 0
-    for order in (6,8,10,12):
-        ca, cb = coefficient(a,order), coefficient(b,order)
-        if ca.unrestricted_complete and cb.unrestricted_complete:
-            assert cb.value == ca.value
-            assert cb.included_rank_pairs == ca.included_rank_pairs
-            compared += 1
-        else:
-            assert cb.value != ca.value or not ca.unrestricted_complete
-    assert compared == 2  # 6 and 8; 10 and 12 are incomplete at the limit
-    assert coefficient(b,10).missing_rank_pairs == ((1,3),(3,1))

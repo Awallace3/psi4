@@ -4,6 +4,9 @@ from dataclasses import dataclass
 import math
 from numbers import Real
 from psi4 import core
+from .scf_proc._scf_seal import (
+    component_definition, correction_state, grac_component_definition,
+)
 
 
 @dataclass(frozen=True)
@@ -19,38 +22,6 @@ class CorrectionProvenance:
     def response_description(self):
         return ('ALDA response using fixed-GRAC SCF orbitals; no GRAC kernel derivative'
                 if self.policy == 'FIXED_GRAC' else 'no SCF asymptotic correction')
-
-
-def component_definition(component, *, include_cutoff=False):
-    """Include overrides: mix data alone cannot detect nonhybrid LibXC tweaks.
-
-    Generic components remain sealable, but are not admitted as canonical PBE0.
-    Density cutoff is a numerical grid control, not a canonical functional scale.
-    """
-    if component is None:
-        return None
-    libxc = isinstance(component, core.LibXCFunctional)
-    definition = (component.name(), component.alpha(), component.omega(),
-            component.is_gga(), component.is_meta(), component.is_lrc(), component.is_unpolarized(), libxc,
-            tuple(component.get_mix_data()) if libxc else (),
-            tuple(sorted(component.query_libxc('XC_HYB_CAM_COEF').items())) if libxc else (),
-            tuple(sorted(component.get_tweak().items())) if libxc else ())
-    # Canonical admission ignores numerical grid controls; state seals must not.
-    return (definition, component.density_cutoff() if libxc else None) if include_cutoff else definition
-
-
-def correction_state(functional):
-    """Read actual attachments even when needs_grac is false; no ambient DFT options."""
-    return (functional.grac_shift(), functional.grac_alpha(), functional.grac_beta(),
-            (grac_component_definition(functional.grac_x_functional()),
-             grac_component_definition(functional.grac_c_functional())))
-
-
-def grac_component_definition(component):
-    if component is None:
-        return None
-    return (component_definition(component),
-            component.density_cutoff() if isinstance(component, core.LibXCFunctional) else None)
 
 
 SCALAR_KEYS = ('x_alpha', 'x_beta', 'x_omega', 'c_alpha', 'c_omega',

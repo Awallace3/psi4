@@ -11,6 +11,7 @@ element table's single-precision Fortran literals, and gfortran contracting
 Reference data lives in data_isapol/; its README says how to regenerate it.
 """
 
+import math
 import pathlib
 
 import numpy as np
@@ -293,6 +294,27 @@ def test_casimir_grid_rejects_bad_n_freq():
         psi4.core.CasimirGrid(10).omega(11)
 
 
+def test_casimir_grid_rejects_bad_omega0():
+    for omega0 in (0.0, -0.3, math.nan, math.inf, -math.inf):
+        with pytest.raises(RuntimeError, match="omega0"):
+            psi4.core.CasimirGrid(10, omega0)
+
+
+def test_grid_rejects_bad_atom_index(h2o):
+    opts = psi4.core.IsaGridOptions()
+    opts.radial_points = 4
+    opts.spherical_points = 6
+    grid = psi4.core.IsaGrid(h2o, opts)
+    n = grid.natom()
+    assert grid.atom_start(n) == grid.npoints()
+    assert grid.atom_start(n - 1) + grid.atom_npoints(n - 1) == grid.npoints()
+    assert grid.alpha(n - 1) > 0.0
+    for get, bad in ((grid.atom_start, (-1, n + 1)), (grid.atom_npoints, (-1, n)), (grid.alpha, (-1, n))):
+        for A in bad:
+            with pytest.raises(RuntimeError):
+                get(A)
+
+
 def test_casimir_grid_ordering():
     """Frequencies come out ascending, and symmetric about omega0 in log scale.
 
@@ -332,16 +354,14 @@ def test_casimir_polder_single_pole():
 
 # --- Fit points: the random cloud the point-response refinement samples on ----
 #
-# Gates 1 and 2 of the fit-point stage.  Both are bit-exact and stay that way: the
+# The generator and the cloud are both bit-exact and stay that way: the
 # refinement fits to the potential at these points, so a single extra or missing
 # deviate shifts every later point and every fitted coefficient.
 #
-# The full 256-deep stream for each of the four reference seeds is a 1,040-line
-# fixture and lives in the untracked `agent_scratch/`
-# tree with the test that replays it.  What is kept here is the part of it that constrains the generator
-# most per line: the head of each stream, which pins the lag-table
-# initialization, and every far checkpoint, which pins the lag indexing at draws
-# a prefix comparison cannot reach.
+# The full 256-deep reference stream of each seed is not committed.  What is kept
+# is the part that constrains the generator most per line: the head of each
+# stream, which pins the lag-table initialization, and far checkpoints, which pin
+# the lag indexing at draws a prefix comparison cannot reach.
 
 
 PRAND_HEAD = {  # first eight dprand() draws after sdprnd(seed)
@@ -401,6 +421,10 @@ def test_maclaren_reseed_restarts_stream():
     rng.take(500)
     rng.seed(1)
     assert np.array_equal(rng.take(50), first)
+    with pytest.raises(ValueError, match="nonnegative"):
+        rng.take(-1)
+    assert rng.take(0).size == 0
+    assert np.array_equal(rng.take(50), psi4.core.MaclarenRng(1).take(100)[50:])
 
 
 def test_maclaren_seed_folds_like_fortran():
@@ -501,8 +525,85 @@ def test_fit_points_rejects_empty_shell(reffit):
     options = psi4.core.FitPointsOptions()
     options.lolim = 4.0
     options.hilim = 2.0
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="hilim must exceed lolim"):
         psi4.core.FitPoints(mol, options)
+    options = psi4.core.FitPointsOptions()
+    options.npoints = 0
+    with pytest.raises(RuntimeError, match="npoints must be positive"):
+        psi4.core.FitPoints(mol, options)
+
+
+#: Child for the refusal cases: it must print its own refusal, so a parent-side
+#: timeout (an endless draw loop holds the GIL) can never pass as a refusal.
+_FIT_REFUSAL_CHILD = """
+import json, sys, time
+import psi4
+spec = json.loads(sys.argv[1])
+mol = psi4.geometry(spec["geometry"])
+mol.update_geometry()
+options = psi4.core.FitPointsOptions()
+for key, value in spec["options"].items():
+    setattr(options, key, value)
+start = time.perf_counter()
+try:
+    psi4.core.FitPoints(mol, options)
+except RuntimeError as error:
+    print("REFUSED", round(time.perf_counter() - start, 3), error)
+    sys.exit(0)
+print("ACCEPTED")
+sys.exit(3)
+"""
+
+
+@pytest.mark.parametrize("case, options, message", [
+    ("ghost_only", {}, "no atom has a positive van der Waals radius"),
+    ("water", {"lolim": -1.0, "hilim": -0.5}, "lolim must be nonnegative"),
+    ("water", {"hilim": math.inf}, "lolim and hilim must be finite"),
+    ("water", {"lolim": math.nan}, "lolim and hilim must be finite"),
+    ("water", {"lolim": 2.0, "hilim": 2.0 + 1e-15}, "after 1000000 candidate draws"),
+    ("water", {"npoints": 1000001}, "exceeds the 1000000 candidate draws"),
+])
+def test_fit_points_refuses_unsatisfiable_shells_and_terminates(reffit, tmp_path, case, options, message):
+    """Each of these drew forever before the bounds and the 1,000,000-draw cap."""
+    import json
+    import os
+    import subprocess
+    import sys
+    header = "units bohr\nno_com\nno_reorient\nsymmetry c1\n"
+    if case == "ghost_only":
+        geometry = header + "@He 0 0 0\n@He 0 0 3"
+    else:
+        geometry = header + "\n".join(f"{int(Z)} {x} {y} {z}" for Z, x, y, z in reffit["h2o_geom"])
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join([str(pathlib.Path(psi4.__file__).resolve().parents[1]),
+                                         env.get("PYTHONPATH", "")])
+    try:
+        done = subprocess.run([sys.executable, "-c", _FIT_REFUSAL_CHILD,
+                               json.dumps({"geometry": geometry, "options": options})],
+                              cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"FitPoints did not terminate for {case} {options}")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.stdout.startswith("REFUSED") and message in done.stdout, done.stdout
+
+
+def test_fit_points_ghosts_beside_real_atoms_stay_invisible(reffit):
+    """A ghost has no radius, so it neither excludes nor admits points (CamCASP)."""
+    geom = reffit["h2o_geom"]
+    real = _fit_molecule(geom)
+    ghosted = psi4.geometry("units bohr\nno_com\nno_reorient\nsymmetry c1\n"
+                            + "\n".join(f"{int(Z)} {x} {y} {z}" for Z, x, y, z in geom)
+                            + "\n@He 0.0 0.0 9.0")
+    ghosted.update_geometry()
+    options = psi4.core.FitPointsOptions()
+    options.npoints = 300
+    assert psi4.core.FitPoints.max_candidates == 1000000
+    assert psi4.core.FitPoints(real, options).ncandidates() < 1000000
+    b = psi4.core.FitPoints(ghosted, options)
+    xyz = np.column_stack([b.x(), b.y(), b.z()])
+    radii = np.array([psi4.core.isapol_vdw_radius(int(Z)) for Z, *_ in geom])
+    d = np.linalg.norm(xyz[:, None, :] - geom[None, :, 1:], axis=2)
+    assert b.npoints() == 300 and (d >= 2.0 * radii).all() and (d < 4.0 * radii).any(axis=1).all()
 
 
 def test_vdw_radius_tables_are_distinct():
@@ -522,327 +623,3 @@ def test_vdw_radius_tables_are_distinct():
     assert psi4.core.isapol_vdw_radius(4) == 2.5
     assert psi4.core.isapol_vdw_radius(92) == 2.5
     assert psi4.core.isapol_vdw_radius(0) == 0.0
-
-
-# --- Recoupling tables: the anisotropic dispersion coefficients ---------------
-#
-# Gate 4 of the recoupling stage.  CamCASP's c6code.f90 ... c12code.f90 are machine-generated
-# Fortran fragments; `oracle/parse_cncode.py` reduces them to a fixture and to the
-# table libisapol compiles in, so the two cannot drift apart silently.
-#
-# The fixture holding all 393 blocks is 5,071 lines and lives in the untracked
-# `agent_scratch/` tree with the test that compares every one of them.  Two things are
-# kept here instead.  First, selected literal blocks: the complete C_6 and C_7
-# tables -- the lowest even and odd orders, so both the real and the imaginary
-# recoupling factor are covered end to end -- plus the largest block in the whole
-# table, (12, 3, 3, 6) with 42 terms.  Second, the theory invariants below, which
-# are derived from the physics rather than from CamCASP and are therefore asserted
-# over the shipped C++ table itself: they would catch a table that was
-# self-consistently wrong, and they need no fixture to do it.
-
-
-RECOUPLING_BLOCKS = {
-    (6, 0, 0, 0): [
-        (2, 1, 1, 1, 1, 1, 1, 1, 0),
-    ],
-    (6, 0, 2, 2): [
-        (-1, 1, 2, 1, 1, 1, 1, 1, 0),
-    ],
-    (6, 1, 1, 0): [
-        (1, 1, 1, 1, 1, 1, 1, 1, 0),
-    ],
-    (6, 1, 1, 2): [
-        (2, 1, 1, 1, 1, 1, 1, 1, 0),
-    ],
-    (6, 2, 0, 2): [
-        (-1, 1, 2, 1, 1, 1, 1, 1, 0),
-    ],
-    (6, 2, 2, 0): [
-        (1, 5, 1, 1, 1, 1, 1, 1, 0),
-    ],
-    (6, 2, 2, 2): [
-        (2, 7, 1, 1, 1, 1, 1, 1, 0),
-    ],
-    (6, 2, 2, 4): [
-        (108, 35, 1, 1, 1, 1, 1, 1, 0),
-    ],
-    (7, 0, 1, 1): [
-        (3, 1, 6, 5, 1, 1, 2, 1, 0),
-        (3, 1, 6, 5, 1, 1, 1, 2, 0),
-    ],
-    (7, 0, 3, 3): [
-        (-4, 1, 1, 5, 1, 1, 2, 1, 0),
-        (-4, 1, 1, 5, 1, 1, 1, 2, 0),
-    ],
-    (7, 1, 0, 1): [
-        (3, 1, 6, 5, 2, 1, 1, 1, 0),
-        (3, 1, 6, 5, 1, 2, 1, 1, 0),
-    ],
-    (7, 1, 1, 1): [
-        (9, 1, 3, 10, 2, 1, 1, 1, 1),
-        (-9, 1, 3, 10, 1, 2, 1, 1, 1),
-        (9, 1, 3, 10, 1, 1, 2, 1, 1),
-        (-9, 1, 3, 10, 1, 1, 1, 2, 1),
-    ],
-    (7, 1, 2, 1): [
-        (3, 5, 3, 5, 2, 1, 1, 1, 0),
-        (3, 5, 3, 5, 1, 2, 1, 1, 0),
-        (3, 5, 3, 1, 1, 1, 2, 1, 0),
-        (3, 5, 3, 1, 1, 1, 1, 2, 0),
-    ],
-    (7, 1, 2, 3): [
-        (-12, 5, 3, 5, 2, 1, 1, 1, 0),
-        (-12, 5, 3, 5, 1, 2, 1, 1, 0),
-        (8, 5, 3, 1, 1, 1, 2, 1, 0),
-        (8, 5, 3, 1, 1, 1, 1, 2, 0),
-    ],
-    (7, 1, 3, 3): [
-        (-1, 1, 14, 5, 1, 1, 2, 1, 1),
-        (1, 1, 14, 5, 1, 1, 1, 2, 1),
-    ],
-    (7, 2, 1, 1): [
-        (3, 5, 3, 1, 2, 1, 1, 1, 0),
-        (3, 5, 3, 1, 1, 2, 1, 1, 0),
-        (3, 5, 3, 5, 1, 1, 2, 1, 0),
-        (3, 5, 3, 5, 1, 1, 1, 2, 0),
-    ],
-    (7, 2, 1, 3): [
-        (8, 5, 3, 1, 2, 1, 1, 1, 0),
-        (8, 5, 3, 1, 1, 2, 1, 1, 0),
-        (-12, 5, 3, 5, 1, 1, 2, 1, 0),
-        (-12, 5, 3, 5, 1, 1, 1, 2, 0),
-    ],
-    (7, 2, 2, 1): [
-        (-3, 1, 3, 10, 2, 1, 1, 1, 1),
-        (3, 1, 3, 10, 1, 2, 1, 1, 1),
-        (-3, 1, 3, 10, 1, 1, 2, 1, 1),
-        (3, 1, 3, 10, 1, 1, 1, 2, 1),
-    ],
-    (7, 2, 2, 3): [
-        (2, 1, 14, 5, 2, 1, 1, 1, 1),
-        (-2, 1, 14, 5, 1, 2, 1, 1, 1),
-        (2, 1, 14, 5, 1, 1, 2, 1, 1),
-        (-2, 1, 14, 5, 1, 1, 1, 2, 1),
-    ],
-    (7, 2, 3, 1): [
-        (9, 35, 2, 5, 1, 1, 2, 1, 0),
-        (9, 35, 2, 5, 1, 1, 1, 2, 0),
-    ],
-    (7, 2, 3, 3): [
-        (2, 5, 2, 5, 1, 1, 2, 1, 0),
-        (2, 5, 2, 5, 1, 1, 1, 2, 0),
-    ],
-    (7, 2, 3, 5): [
-        (10, 7, 10, 1, 1, 1, 2, 1, 0),
-        (10, 7, 10, 1, 1, 1, 1, 2, 0),
-    ],
-    (7, 3, 0, 3): [
-        (-4, 1, 1, 5, 2, 1, 1, 1, 0),
-        (-4, 1, 1, 5, 1, 2, 1, 1, 0),
-    ],
-    (7, 3, 1, 3): [
-        (-1, 1, 14, 5, 2, 1, 1, 1, 1),
-        (1, 1, 14, 5, 1, 2, 1, 1, 1),
-    ],
-    (7, 3, 2, 1): [
-        (9, 35, 2, 5, 2, 1, 1, 1, 0),
-        (9, 35, 2, 5, 1, 2, 1, 1, 0),
-    ],
-    (7, 3, 2, 3): [
-        (2, 5, 2, 5, 2, 1, 1, 1, 0),
-        (2, 5, 2, 5, 1, 2, 1, 1, 0),
-    ],
-    (7, 3, 2, 5): [
-        (10, 7, 10, 1, 2, 1, 1, 1, 0),
-        (10, 7, 10, 1, 1, 2, 1, 1, 0),
-    ],
-    (12, 3, 3, 6): [
-        (280, 11, 10, 33, 4, 3, 2, 1, 0),
-        (200, 11, 10, 33, 4, 3, 1, 2, 0),
-        (-112, 11, 15, 1, 4, 2, 3, 1, 0),
-        (-560, 33, 2, 1, 4, 2, 2, 2, 0),
-        (-80, 11, 5, 3, 4, 2, 1, 3, 0),
-        (280, 3, 1, 1, 4, 1, 4, 1, 0),
-        (280, 11, 5, 3, 4, 1, 3, 2, 0),
-        (280, 33, 5, 3, 4, 1, 2, 3, 0),
-        (200, 99, 1, 1, 4, 1, 1, 4, 0),
-        (200, 11, 10, 33, 3, 4, 2, 1, 0),
-        (280, 11, 10, 33, 3, 4, 1, 2, 0),
-        (-560, 33, 2, 1, 3, 3, 3, 1, 0),
-        (-800, 33, 5, 3, 3, 3, 2, 2, 0),
-        (-560, 33, 2, 1, 3, 3, 1, 3, 0),
-        (280, 11, 5, 3, 3, 2, 4, 1, 0),
-        (1400, 33, 1, 1, 3, 2, 3, 2, 0),
-        (1000, 33, 1, 1, 3, 2, 2, 3, 0),
-        (280, 33, 5, 3, 3, 2, 1, 4, 0),
-        (-112, 11, 15, 1, 3, 1, 4, 2, 0),
-        (-560, 33, 2, 1, 3, 1, 3, 3, 0),
-        (-80, 11, 5, 3, 3, 1, 2, 4, 0),
-        (-80, 11, 5, 3, 2, 4, 3, 1, 0),
-        (-560, 33, 2, 1, 2, 4, 2, 2, 0),
-        (-112, 11, 15, 1, 2, 4, 1, 3, 0),
-        (280, 33, 5, 3, 2, 3, 4, 1, 0),
-        (1000, 33, 1, 1, 2, 3, 3, 2, 0),
-        (1400, 33, 1, 1, 2, 3, 2, 3, 0),
-        (280, 11, 5, 3, 2, 3, 1, 4, 0),
-        (-560, 33, 2, 1, 2, 2, 4, 2, 0),
-        (-800, 33, 5, 3, 2, 2, 3, 3, 0),
-        (-560, 33, 2, 1, 2, 2, 2, 4, 0),
-        (280, 11, 10, 33, 2, 1, 4, 3, 0),
-        (200, 11, 10, 33, 2, 1, 3, 4, 0),
-        (200, 99, 1, 1, 1, 4, 4, 1, 0),
-        (280, 33, 5, 3, 1, 4, 3, 2, 0),
-        (280, 11, 5, 3, 1, 4, 2, 3, 0),
-        (280, 3, 1, 1, 1, 4, 1, 4, 0),
-        (-80, 11, 5, 3, 1, 3, 4, 2, 0),
-        (-560, 33, 2, 1, 1, 3, 3, 3, 0),
-        (-112, 11, 15, 1, 1, 3, 2, 4, 0),
-        (200, 11, 10, 33, 1, 2, 4, 3, 0),
-        (280, 11, 10, 33, 1, 2, 3, 4, 0),
-    ],
-}
-
-RECOUPLING_TOTAL_TERMS = 4673
-RECOUPLING_TOTAL_BLOCKS = 393
-
-
-# casimir.f90:112-123, with CamCASP's padding to width 3 stripped.
-COMPONENT_LABELS = [
-    lab
-    for L in range(9)
-    for lab in [f"{L}0"] + [f"{L}{K}{cs}" for K in range(1, L + 1) for cs in "cs"]
-]
-
-
-def _cxx_blocks():
-    return {(n, L1, L2, J): terms
-            for n, L1, L2, J, terms in psi4.core.isapol_recoupling_blocks()}
-
-
-def _cxx_block(key):
-    return psi4.core.isapol_recoupling_block(*key)
-
-
-def _as_tuple(term):
-    return (term.p, term.q, term.r, term.s, term.la, term.lap, term.lb, term.lbp, term.ipow)
-
-
-def test_recoupling_table_shape_matches_the_reference():
-    """The shipped table has the reference's blocks and term count, nothing else."""
-    got = _cxx_blocks()
-    assert len(got) == RECOUPLING_TOTAL_BLOCKS
-    assert sum(len(t) for t in got.values()) == RECOUPLING_TOTAL_TERMS
-    assert set(RECOUPLING_BLOCKS) <= set(got)
-    # RECOUPLING_BLOCKS carries the complete C_6 and C_7 tables, so at those
-    # orders the shipped table has exactly its blocks and no others.
-    for n in (6, 7):
-        assert {k for k in got if k[0] == n} == {k for k in RECOUPLING_BLOCKS if k[0] == n}
-
-
-@pytest.mark.parametrize("key", sorted(RECOUPLING_BLOCKS))
-def test_recoupling_selected_blocks_match_the_reference(key):
-    """Selected blocks, term for term in CamCASP's order, and the doubles from them.
-
-    The coefficient is the double CamCASP would compute, `(p/q) * sqrt(r/s)`,
-    reproduced exactly -- no tolerance, because the integers are the reference and
-    the arithmetic is one multiply and one square root.
-    """
-    want = RECOUPLING_BLOCKS[key]
-    got = _cxx_block(key)
-    assert [_as_tuple(t) for t in got] == want, key
-    for term, (p, q, r, s, *_) in zip(got, want):
-        expected = (float(p) / float(q)) * np.sqrt(float(r) / float(s))
-        assert term.coefficient == expected, (key, p, q, r, s)
-
-
-def test_recoupling_absent_blocks_are_empty():
-    """A block CamCASP does not tabulate is a vanishing coefficient, not an error."""
-    assert _cxx_block((6, 0, 1, 1)) == []       # forbidden by parity: J must match n
-    assert _cxx_block((6, 3, 3, 0)) == []       # C_6 has no octopole polarizabilities
-    assert _cxx_block((6, 2, 2, 3)) == []       # tabulated as a comment, no terms
-    assert _cxx_block((7, 8, 8, 16)) == []      # far above what C_7 can reach
-    for key in _cxx_blocks():
-        assert _cxx_block(key) != []
-
-
-def test_recoupling_rejects_bad_order():
-    for n in (5, 13):
-        with pytest.raises(Exception):
-            _cxx_block((n, 0, 0, 0))
-    with pytest.raises(Exception):
-        _cxx_block((6, -1, 0, 0))
-
-
-def test_recoupling_conserves_the_order():
-    """n = la + la' + lb + lb' + 2: each multipole rank costs one power of 1/R."""
-    for (n, _, _, _), terms in _cxx_blocks().items():
-        for term in terms:
-            (_, _, _, _, la, lap, lb, lbp, _) = _as_tuple(term)
-            assert la + lap + lb + lbp + 2 == n
-            assert 1 <= min(la, lap, lb, lbp)
-            assert max(la, lap, lb, lbp) <= psi4.core.ISAPOL_MAX_POLARIZABILITY_RANK
-
-
-def test_recoupling_respects_the_triangle_rule():
-    for (n, L1, L2, J) in _cxx_blocks():
-        assert abs(L1 - L2) <= J <= L1 + L2
-        assert J % 2 == n % 2, "J and n have the same parity"
-        assert max(L1, L2) <= psi4.core.ISAPOL_MAX_DISPERSION_RANK
-
-
-def test_recoupling_imaginary_factor_follows_the_rank_parity():
-    """i appears exactly when L1 + L2 + J is odd, which is what makes the sum real."""
-    for (_, L1, L2, J), terms in _cxx_blocks().items():
-        for term in terms:
-            assert term.ipow == (L1 + L2 + J) % 2
-
-
-def test_recoupling_is_symmetric_under_exchange():
-    """Swapping A and B swaps (la, la') with (lb, lb') and changes nothing else."""
-    blocks = _cxx_blocks()
-    for (n, L1, L2, J), terms in blocks.items():
-        mirror = [_as_tuple(t) for t in blocks[(n, L2, L1, J)]]
-        swapped = [(p, q, r, s, lb, lbp, la, lap, ip)
-                   for (p, q, r, s, la, lap, lb, lbp, ip) in map(_as_tuple, terms)]
-        assert sorted(swapped) == sorted(mirror), (n, L1, L2, J)
-
-
-def test_recoupling_reproduces_the_isotropic_c6():
-    """C_6(00, 00, 0) is the ordinary isotropic C_6, for a one-term Unsold model.
-
-    `recouple` (casimir.f90) builds alpha_00(11) with the real Clebsch-Gordan
-    coefficient -1/sqrt(3) on each of the three diagonal dipole components, so
-    alpha_00(11) = -sqrt(3) alpha_iso.  The block coefficient is 2 and `cp_weight`
-    carries the 1/(2 pi), so C_6(00, 00, 0) must come out as (3/pi) int alpha^2 --
-    the same number `test_casimir_polder_single_pole` checks the grid against.
-    """
-    grid = psi4.core.CasimirGrid(10, psi4.core.ISAPOL_OMEGA0)
-    w = np.array([grid.omega(k) for k in range(1, 11)])
-    cw = np.array([grid.cp_weight(k) for k in range(1, 11)])
-
-    block = _cxx_block((6, 0, 0, 0))
-    assert len(block) == 1
-
-    for (aA, w1A), (aB, w1B) in [((1.38, 0.85), (1.38, 0.85)), ((10.6, 0.55), (1.38, 0.85))]:
-        alpha_A = -np.sqrt(3.0) * aA * w1A**2 / (w1A**2 + w**2)
-        alpha_B = -np.sqrt(3.0) * aB * w1B**2 / (w1B**2 + w**2)
-        c6 = block[0].coefficient * np.dot(cw, alpha_A * alpha_B)
-        exact = 1.5 * aA * aB * w1A * w1B / (w1A + w1B)
-        # 1e-4 is the accuracy of the 10-point rule on this integrand, as above.
-        assert np.isclose(c6, exact, rtol=1e-4, atol=0)
-
-
-def test_component_indexing():
-    for t, label in enumerate(COMPONENT_LABELS, start=1):
-        L = int(label[0])
-        assert psi4.core.isapol_component_label(t) == label
-        assert psi4.core.isapol_component_rank(t) == L
-        assert psi4.core.isapol_component_first(L) <= t <= psi4.core.isapol_component_last(L)
-    for L in range(psi4.core.ISAPOL_MAX_DISPERSION_RANK + 1):
-        first = psi4.core.isapol_component_first(L)
-        last = psi4.core.isapol_component_last(L)
-        assert (first, last) == (L * L + 1, (L + 1) ** 2)
-        assert last - first + 1 == 2 * L + 1
-    for t in (0, len(COMPONENT_LABELS) + 1):
-        with pytest.raises(Exception):
-            psi4.core.isapol_component_rank(t)

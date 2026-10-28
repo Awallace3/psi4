@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "claim": "matched-sample frozen ISA-A update arithmetic, not converged ISA or Drho-C parity",
+  "geometry_units": "bohr",
+  "site_order": [
+    "O",
+    "H1",
+    "H2"
+  ],
+  "energy_hartree": -74.96442004397844,
+  "density": "Psi4 RHF/STO-3G, total Da+Db, PK, e_conv=1e-12, d_conv=1e-11; not CamCASP Drho-C",
+  "psi4_version": "1.12a1.dev49",
+  "psi4_core": "/home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/build_camcasp_psi4_joint/stage/lib/psi4/core.cpython-313-x86_64-linux-gnu.so",
+  "basis": "Diagnostic unnormalized [exp(-r\u00b2), x exp(-.8r\u00b2), y exp(-.8r\u00b2), z exp(-.8r\u00b2), exp(-.2r\u00b2)]; not production AtomAux",
+  "shape": "max(phi_s @ previous_s, 0), identical frozen samples in both implementations",
+  "metric": "Analytic same-centre diagnostic Gaussian overlap supplied to both; W-Eps weighting before source ridge/damping loops",
+  "grid": {
+    "radial_points": 16,
+    "spherical_points": 110
+  },
+  "adapter": "Exact executable RHS and metric-modification loops; sampled basis evaluator returns one supplied component per adapter shell. LU uses LAPACK DGESV.",
+  "compiler": "GNU Fortran (conda-forge gcc 14.3.0-18) 14.3.0",
+  "compiler_flags": "-O0 -ffp-contract=off -ffree-line-length-none -llapack -lblas",
+  "source_sha256": {
+    "src/num_integrals.F90": "d219e62508f61f792c43c1c6142b180657b5d8ed23dff8bab77578aaf4b180a6",
+    "src/stockholder.F90": "6012f1acaf1fec7aa44d38c14fd56230fa73dd6d811ffc579c8aa46391f88dd3",
+    "src/parameters.f90": "e184cc16c6e037069e109860a1149654c85ad3da807f0bdf0acd583bfe0b5e9c"
+  },
+  "oracle_program_sha256": "b08708712584fba69cf60feb986c2e5228ed06fdef2a0f0346006aa44024ae4f",
+  "fixture_sha256": "83e0aa187e5fea6a5fbdda41e9211057771f38798375884dbdd0fa42fec86a66",
+  "edge_fixture_sha256": "2a723f13bb0d966312c5715dab3e81865f9a9c6f88dd2e6fc98207deac928f9e",
+  "edge_fixture": "Synthetic supplied-input algebra: signed sums, nonzero shape at/exceeding cutoff, auto positive-coefficient eligibility, nonzero exponent-cap contributions. Not a physical basis or density.",
+  "generator_sha256": "0a4a5d8549514386758aedb54328d90eafed810605b52ee61eabeb22df9f0dac",
+  "regenerate": "python tests/pytests/data_isapol/oracle/make_isa_fit_fixture.py --camcasp /path/to/CamCASP"
+}

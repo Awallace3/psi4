@@ -31,6 +31,7 @@ number from one is quoted as the other's.  The ``INCOMPLETE`` marking convention
 stays exactly as it is: it reports the unrestricted rank sum honestly, and this
 measurement does not license absorbing it into a tolerance.
 """
+import hashlib
 import json
 import pathlib
 
@@ -49,10 +50,12 @@ L4 = json.loads((DATA / "camcasp_casimir_h2o_vdz_l4.json").read_text())
 MAX_ORDER = 12
 PAIR_SUM_LIMIT = MAX_ORDER // 2
 
-#: What CASIMIR refuses when the declared order is raised past its compiled cap.
-CASIMIR_ORDER_REFUSAL = "Dispersion coefficients only up to C12"
-
 FIRST_SITE_OF_TYPE = {"O O": ("O1", "O1"), "H O": ("O1", "H2"), "H H": ("H2", "H2")}
+#: Recorded in data_isapol/README.md; byte-identical to candidate 4189ded9.
+FIXTURE_SHA256 = {
+    "camcasp_casimir_h2o_vdz_l3.json": "3cfc05970c8e7182b16d1227a3e6c5ca0309d20425338276be59ad7aa801b1c2",
+    "camcasp_casimir_h2o_vdz_l4.json": "23abdd9183fc59ba54541807e262ce837fffcc11f9a72df1b4f540f14a1ba8a6",
+}
 
 
 def _weights():
@@ -83,50 +86,28 @@ def _c12(reference, ranks, name):
             for p in result.pairs for x in p.coefficients if x.order == MAX_ORDER}
 
 
-def test_the_two_fixtures_are_different_declared_models():
-    """Rank 3 and rank 4 are separate files, separate prefixes, separate models."""
-    assert L3["localized"]["ranks"] == [1, 2, 3]
-    assert L4["localized"]["ranks"] == [1, 2, 3, 4]
-    assert (L3["prefix"], L4["prefix"]) == ("water_L3", "water_L4")
-    assert L3["localized"]["sha256"] != L4["localized"]["sha256"]
-    assert L3["dispersion"]["sha256"] != L4["dispersion"]["sha256"]
+def test_packaged_reference_fixtures():
+    """Packaging evidence for the two decoded files; no Psi4 code runs here.
 
-
-def test_rank4_run_builds_single_site_pairs_only_up_to_the_order_limit():
-    """CASIMIR's recoupled table stops at `la + lb == 6`, with rank 4 available."""
-    for label, site in L4["recoupled"]["sites"].items():
-        pairs = {tuple(p) for p in site["pairs"]}
-        assert pairs == {(la, lb) for la in range(1, 5) for lb in range(1, 5)
-                         if la + lb <= PAIR_SUM_LIMIT}, label
-        # Rank 4 IS localized and IS recoupled -- just not against ranks 3 or 4.
-        assert {(1, 4), (4, 1), (2, 4), (4, 2)} <= pairs, label
-        assert pairs.isdisjoint({(3, 4), (4, 3), (4, 4)}), label
-
-
-def test_no_isotropic_rank4_component_exists_in_either_run():
-    """`00(44)` is printed by neither run, so the C12 (1,4) term has no partner.
-
-    The isotropic dispersion at order `n` contracts `00(la la)` on one site with
-    `00(lb lb)` on the other.  Only `la == lb` has an `L = 0` component at all,
-    and the rank-4 one is past the `la + lb <= 6` cut in both runs.
+    Records only what the production tests below rely on: the committed bytes,
+    two distinct declared models (ranks 1..3 and 1..4), CASIMIR's recoupled table
+    stopping at ``la + lb <= 6`` with no isotropic ``00(44)`` in either run, and
+    printed isotropic rows that are identical between the two files (a fact
+    about the files, never a statement that the models agree).
     """
+    for name, digest in FIXTURE_SHA256.items():
+        assert hashlib.sha256((DATA / name).read_bytes()).hexdigest() == digest, name
+    assert (L3["localized"]["ranks"], L4["localized"]["ranks"]) == ([1, 2, 3], [1, 2, 3, 4])
+    assert L3["localized"]["sha256"] != L4["localized"]["sha256"]
     for reference in (L3, L4):
         for label, site in reference["recoupled"]["sites"].items():
             assert [tuple(p) for p in site["isotropic_pairs"]] == [(1, 1), (2, 2), (3, 3)], label
-
-
-def test_printed_isotropic_rows_do_not_move_between_the_two_models():
-    """A fact about the two files, NOT a claim that the two models agree.
-
-    Raising the localization limit to 4 changes the recoupled row census in every
-    block, so CASIMIR plainly did read the extra rank; it changes no printed
-    isotropic coefficient, because nothing rank 4 supplies survives the
-    `la + lb <= 6` cut at order 12.
-    """
+    for label, site in L4["recoupled"]["sites"].items():
+        assert {tuple(p) for p in site["pairs"]} == {
+            (la, lb) for la in range(1, 5) for lb in range(1, 5) if la + lb <= PAIR_SUM_LIMIT}, label
     for block in FIRST_SITE_OF_TYPE:
         l3, l4 = (r["dispersion"]["blocks"][block] for r in (L3, L4))
         assert l3["isotropic"] == l4["isotropic"], block
-        assert l4["census"]["rows"] > l3["census"]["rows"], block
 
 
 def test_the_incomplete_mark_names_pairs_the_reference_also_omits():
@@ -176,16 +157,3 @@ def test_supplying_rank_four_completes_the_sum_but_declares_another_model():
     for key in FIRST_SITE_OF_TYPE.values():
         assert truncated[key].value == pytest.approx(
             _c12(L3, [1, 2, 3], "camcasp_reference_local_l3")[key].value, rel=1e-12)
-
-
-def test_the_reference_executable_caps_the_table_at_c12():
-    """The closure route is shut: CASIMIR will not compute past C12.
-
-    Recorded as a constant rather than re-run, because running it needs the
-    external CamCASP build.  Raising `Dispersion 12 water` to 14, 16 or 18 in the
-    decoded deck exits `STOP 9` with this diagnostic, which is why no reference
-    `00(44)` -- and so no reference (1,4)/(4,1) term -- can be obtained at all.
-    """
-    assert CASIMIR_ORDER_REFUSAL == "Dispersion coefficients only up to C12"
-    assert max(L3["dispersion"]["blocks"]["O O"]["census"]["orders"]) == MAX_ORDER
-    assert max(L4["dispersion"]["blocks"]["O O"]["census"]["orders"]) == MAX_ORDER

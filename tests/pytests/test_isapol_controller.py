@@ -212,3 +212,70 @@ def test_controller_excluded_site_still_fits_but_does_not_block_convergence():
     assert len(step.raw_sweep.fits) == 2
     assert step.atom_converged == [False, True]
     assert step.next.converged and step.next.max_delta < 1e-14
+
+
+def tails(ts):
+    return [(t.defined, t.amplitude, t.exponent, t.cutoff) for t in ts]
+
+
+def test_tail_fit_policy_when_enabled_gates_on_the_entering_flag():
+    """Opt-in schedule: fit only when the entering tail fix is on; otherwise keep the stored tails."""
+    assert core.IsaAControllerOptions().tail_fit_policy == core.IsaTailFitPolicy.always
+    options = core.IsaAControllerOptions()
+    options.tail_cutoffs = [1.5]
+    options.tail_activation = 1.
+    options.convergence = 1e-30  # keep stepping past the fixture's two-step convergence
+    options.tail_fit_policy = core.IsaTailFitPolicy.when_enabled
+    gated, state, shape, _ = fixture(options)
+    options.tail_fit_policy = core.IsaTailFitPolicy.always
+    always, _, _, _ = fixture(options)
+    initial = gated.initialize(state)
+    assert not initial.apply_tails and not initial.tails[0].defined
+
+    # Entering OFF: no fit, undefined tail retained, skip reported truthfully.
+    first = gated.step(initial)
+    skipped = first.tail_fits[0]
+    assert skipped.status == 'skipped_tail_fix_off' and not skipped.tail.defined
+    assert np.isnan(skipped.gaussian_tail_charge) and np.isnan(skipped.ionization_potential)
+    assert first.next.apply_tails and not first.next.tails[0].defined
+    assert always.step(initial).tail_fits[0].status == 'fitted'
+
+    # One site makes the stockholder ratio 1, so tails cannot move this sweep;
+    # tail consumption in the sweep is covered by the water trajectory test.
+    # Entering ON fits normally, from the entering shape.
+    second = gated.step(first.next)
+    expected = core.IsaGaussianShape(shape, first.next.coefficients.shape_coefficients[0]).fit_tail(1.5)
+    assert second.tail_fits[0].status == 'fitted'
+    assert tails(second.next.tails) == tails([expected.tail])
+    assert tails(always.step(first.next).next.tails) == tails(second.next.tails)
+
+    # OFF step keeps the stored (defined) tail; the input state is not modified.
+    stored = second.next
+    stored.apply_tails = False
+    before = tails(stored.tails)
+    third = gated.step(stored)
+    assert tails(third.next.tails) == before == tails(stored.tails)
+    assert third.tail_fits[0].status == 'skipped_tail_fix_off'
+    assert tails([third.tail_fits[0].tail]) == before
+
+    # Reactivation fits again, with the stored tail as the exponent fallback.
+    reactivated = third.next
+    reactivated.apply_tails = True
+    refit = gated.step(reactivated)
+    assert refit.tail_fits[0].status == 'fitted'
+    assert tails(refit.next.tails) == tails(always.step(reactivated).next.tails)
+
+
+def test_tail_fit_policy_when_enabled_keeps_the_separate_final_refit():
+    options = core.IsaAControllerOptions()
+    options.tail_cutoffs = [1.5]
+    options.tail_activation = 1.
+    options.tail_fit_policy = core.IsaTailFitPolicy.when_enabled
+    controller, state, shape, _ = fixture(options)
+    result = controller.run(controller.initialize(state))
+    assert result.termination == 'converged'
+    assert result.history[0].tail_fits[0].status == 'skipped_tail_fix_off'
+    final = result.state.coefficients.shape_coefficients[0]
+    expected = core.IsaGaussianShape(shape, final).fit_tail(1.5, result.state.tails[0])
+    assert result.final_tail_fits[0].status == expected.status
+    assert tails(result.final_tails) == tails([expected.tail])

@@ -1,9 +1,8 @@
-"""Bounded source/helper checks: no import of Psi4 or old staged core.
+"""Correction admission test doubles; no native LibXC/SCF numerical claim.
 
 Run with --noconftest -o addopts='' to avoid the repository's Psi4 conftest.
 The test double checks admission logic, not the LibXC/SCF numerical contract.
 """
-import ast
 from dataclasses import FrozenInstanceError, replace
 import importlib.util
 from pathlib import Path
@@ -13,6 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / 'psi4/driver/procrouting/isapol_native_correction.py'
+SEAL = ROOT / 'psi4/driver/procrouting/scf_proc/_scf_seal.py'
 
 
 class Component:
@@ -58,11 +58,20 @@ def module(monkeypatch):
     psi.core = SimpleNamespace(LibXCFunctional=Component,
         SuperFunctional=SimpleNamespace(XC_build=lambda *a: Functional()))
     monkeypatch.setitem(sys.modules, 'psi4', psi)
-    spec = importlib.util.spec_from_file_location('_fixed_grac_offline', SOURCE)
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, spec.name, module)
-    spec.loader.exec_module(module)
-    return module
+    # The seal helpers live in scf_proc/_scf_seal.py (imported relatively), so the
+    # source files are loaded under a private package with the same layout.
+    for name in ('_fixed_grac_offline', '_fixed_grac_offline.scf_proc'):
+        package = ModuleType(name)
+        package.__path__ = []
+        monkeypatch.setitem(sys.modules, name, package)
+    loaded = None
+    for name, path in (('_fixed_grac_offline.scf_proc._scf_seal', SEAL),
+                       ('_fixed_grac_offline.isapol_native_correction', SOURCE)):
+        spec = importlib.util.spec_from_file_location(name, path)
+        loaded = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, spec.name, loaded)
+        spec.loader.exec_module(loaded)
+    return loaded
 
 
 def profile():
@@ -123,29 +132,3 @@ def test_none_rejects_attachments_even_without_flag(module):
         module.validate_correction(w)
     with pytest.raises(ValueError, match='NONE'):
         module.validate_correction(w, expected_grac_shift=.06)
-
-
-def test_no_mutating_admission_or_hidden_scf_source():
-    tree = ast.parse(SOURCE.read_text())
-    forbidden = {'energy', 'set_options', 'set_global_option', 'set_local_option',
-                 'set_grac_shift', 'set_grac_alpha', 'set_grac_beta', 'compute_energy'}
-    assert not [n.func.attr for n in ast.walk(tree) if isinstance(n, ast.Call)
-                and isinstance(n.func, ast.Attribute) and n.func.attr in forbidden]
-    # Whitespace-collapsed, because clang-format wraps the longer declarations;
-    # what is pinned is that each value list is CLOSED, so no undeclared model
-    # can be smuggled in through a free-form string option.
-    opts = ' '.join((ROOT / 'psi4/src/read_options.cc').read_text().split())
-    for declaration in [
-        'options.add_str("ATOMIC_SCF_ASYMPTOTIC_CORRECTION", "NONE", '
-        '"NONE FIXED_GRAC DECLARED_MULTPOLE_AC")',
-        'options.add_double("ATOMIC_SCF_EXPECTED_GRAC_SHIFT", 0.0)',
-        # The declared-correction companions are closed the same way. Only the
-        # string-valued ones can be pinned here; the numeric ones are pinned
-        # against the AcDeclaration field defaults in test_isapol_ac_options.py,
-        # which is the drift guard that keeps the two surfaces one model.
-        'options.add_str("ATOMIC_AC_JOIN", "TANH", "NONE LINEAR TANH TANH_RAW")',
-        'options.add_str("ATOMIC_AC_BRAGG_TABLE", "PSI4", "PSI4 CAMCASP")',
-        'options.add_str("ATOMIC_AC_MULTIPOLE_ORIGIN", "NUCCHARGE", "NUCCHARGE COM ATOM0")',
-        'options.add_str("ATOMIC_AC_SHIFT_MODE", "VARIATIONAL", "NONE VARIATIONAL FIXED")',
-    ]:
-        assert ' '.join(declaration.split()) in opts

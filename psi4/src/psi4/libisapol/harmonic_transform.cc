@@ -3,7 +3,6 @@
  * CamCASP-compatible conventions; independent solid-harmonic recurrence.
  */
 #include "harmonic_transform.h"
-#include <libint2.hpp>
 #include <libint2/cgshell_ordering.h>
 #include <cmath>
 #include <array>

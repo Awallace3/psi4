@@ -48,7 +48,6 @@ class NativeRestrictedState {
                           std::size_t max_bytes);
     std::shared_ptr<Matrix> orbitals() const;
     std::shared_ptr<Vector> energies() const;
-    std::shared_ptr<Matrix> density_alpha() const;
     std::shared_ptr<BasisSet> basis_snapshot() const;
     int nbf() const { return nbf_; }
     int nmo() const { return nmo_; }
@@ -58,7 +57,7 @@ class NativeRestrictedState {
     std::size_t planned_bytes() const { return planned_bytes_; }
  private:
     std::shared_ptr<BasisSet> basis_;
-    std::shared_ptr<Matrix> c_, da_;
+    std::shared_ptr<Matrix> c_;
     std::shared_ptr<Vector> eps_;
     int nbf_ = 0, nmo_ = 0, nocc_ = 0, nvir_ = 0;
     std::size_t nov_ = 0, planned_bytes_ = 0;

@@ -1,4 +1,7 @@
 
+install(FILES _scf_seal.py
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4/driver/procrouting/scf_proc)
+
 list(APPEND sources
   scf_iterator
 )

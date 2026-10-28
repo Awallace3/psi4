@@ -22,29 +22,13 @@ struct IsaMultipoleSite {
 };
 /// Supplied-partition Q, NOT an ISA fixed point or a native property adapter.
 /// Rows concatenate sites and Racah regular real components 00,10,11c,11s,...;
-/// columns are molecular AUX functions, or occupied-fast (a*nocc+i) direct OV
-/// products under the explicit orbital constructor. Global Cartesian axes only.
+/// columns are molecular AUX functions. Global Cartesian axes only.
 /// All inputs are consumed/copied; getters return independent owned snapshots.
 class IsaPartitionedMultipoles {
  public:
     IsaPartitionedMultipoles(const IsaExplicitBasis& auxiliary,
         const std::vector<IsaMultipoleSite>& sites, const std::string& provenance,
         double denominator_cutoff = 1.e-36);
-    /// Direct occupied-fast OV moments of actual orbitals. No fitted transition
-    /// density, neutrality projection, or change to the supplied density partition.
-    IsaPartitionedMultipoles(const IsaExplicitBasis& orbital,
-        const std::vector<IsaMultipoleSite>& sites, const std::string& provenance,
-        double denominator_cutoff, std::shared_ptr<Matrix> orbitals, int nocc);
-    /// Supplied Q values with NO sampling of any kind: a closed-form or otherwise
-    /// externally declared multipole matrix, e.g. the DF-centre rule evaluated
-    /// analytically. The caller owns the model. Nothing here quadratures, forms a
-    /// stockholder denominator, renormalizes or reorders: the rows must already be
-    /// the concatenated (site, Racah component) axes the declared sites imply, and
-    /// the sites must carry no samples, so a supplied Q can never be mistaken for a
-    /// sampled one. There is no denominator cutoff because no denominator exists.
-    IsaPartitionedMultipoles(std::shared_ptr<Matrix> values,
-        const std::vector<IsaMultipoleSite>& sites, const std::string& representation,
-        const std::string& provenance);
     std::string representation() const { return representation_; }
     std::shared_ptr<Matrix> values() const;
     std::vector<int> offsets() const { return offsets_; }

@@ -132,6 +132,26 @@ IsaGrid::IsaGrid(std::shared_ptr<Molecule> molecule, const IsaGridOptions& optio
     apply_becke();
 }
 
+void IsaGrid::check_atom(int A, int end) const {
+    if (A < 0 || A >= end)
+        throw PSIEXCEPTION("IsaGrid: atom index " + std::to_string(A) + " outside [0, " + std::to_string(end) + ").");
+}
+
+int IsaGrid::atom_start(int A) const {
+    check_atom(A, natom_ + 1);
+    return start_[A];
+}
+
+int IsaGrid::atom_npoints(int A) const {
+    check_atom(A, natom_);
+    return start_[A + 1] - start_[A];
+}
+
+double IsaGrid::alpha(int A) const {
+    check_atom(A, natom_);
+    return alpha_[A];
+}
+
 void IsaGrid::build_radial(double alpha, std::vector<double>& r, std::vector<double>& wr) const {
     // radial_grid, atom_grids.F90:411.  Murray-Handy-Laming ("Euler-MacLaurin")
     // map with m_r = 2:

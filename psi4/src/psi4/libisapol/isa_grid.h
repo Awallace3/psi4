@@ -47,48 +47,35 @@ class Molecule;
 namespace isapol {
 
 /// Knobs of the ISA integration grid. Defaults are the CamCASP grid MODULE
-/// defaults (80/590), not the isa-pol-from-isa-A method preset (100/400 requested,
+/// defaults (80/590), not a method preset's grid (e.g. 100/400 requested,
 /// 434 actual angular points). Select the preset explicitly when comparing it.
 ///
-/// The four defaults below are CamCASP's own, declared in src/parameters.f90:189-197
-/// as par_num_radial_points = 80, par_num_angular_points = 590,
-/// par_becke_smoothing = 3 and par_radius_scaling = 1.0_dp, carried into
-/// src/types_secondary.F90:136-138 and copied into the atom_grids module by
-/// src/num_integration_grid.F90:438-442 immediately before make_grid.  CamCASP's
-/// fifth knob, par_integration_grid_type = 1, selects Lebedev, which is the only
-/// angular rule implemented here, so it has no counterpart.  All of these are
-/// declared model parameters: a grid declared at any other value is a different
-/// model, never a looser one.
+/// Defaults are src/parameters.f90:189-197. Only Lebedev
+/// (par_integration_grid_type = 1) is implemented. These are declared model
+/// parameters: another value is a different model, not a looser one.
 struct IsaGridOptions {
     /// CamCASP's `n_r` (its `NumRadPoints`), *not* the number of shells: the
     /// Euler-MacLaurin map generates shells i = 1 ... n_r - 1, so n_r = 80 gives
-    /// 79 shells.  Named to match CamCASP's input so a Psi4 job can mirror a
-    /// CamCASP one keyword for keyword.
+    /// 79 shells.
     int radial_points = 80;
 
-    /// Requested Lebedev order.  Rounded *up* to the next tabulated size, exactly
-    /// as CamCASP's Lbdv() does (atom_grids.F90:509), so the protocol's
-    /// `Angular 400` lands on 434 without the caller needing to know.
+    /// Requested Lebedev order, rounded *up* to the next tabulated size as
+    /// Lbdv() does (atom_grids.F90:509): `Angular 400` gives 434.
     int spherical_points = 590;
 
     /// Becke smoothing iterations, `k_mu` (atom_grids.F90:20).
     int becke_smoothing = 3;
 
-    /// Multiplies the Bragg-Slater radius that sets the radial scale, `rscale`.
-    /// CamCASP's construct_molecular_integration_grid defaults every site's radius
-    /// to AtomProp(Z)%Rslater (num_integration_grid.F90:433) and only its
-    /// density_overlap.F90 dimer path ever supplies radii explicitly, so the ISA
-    /// grid reached from df_integrals.F90:1945 is always the tabulated one.
+    /// `rscale`, multiplying the tabulated Bragg-Slater radius
+    /// (num_integration_grid.F90:433) that sets the radial scale.
     double radius_scaling = 1.0;
 };
 
 /// The molecular integration grid used by the ISA partition.
 ///
-/// This is a deliberate re-implementation of CamCASP's grid
-/// (src/num_integration_grid.F90 -> src/gdma/atom_grids.F90::make_grid) rather
-/// than a call into Psi4's DFTGrid.  Everything about the two constructions
-/// agrees -- same Lebedev tables, same Euler-MacLaurin radial map, same Becke
-/// partition -- except for three things DFTGrid does not let us turn off:
+/// Re-implements CamCASP's make_grid (src/gdma/atom_grids.F90) instead of using
+/// DFTGrid. The Lebedev tables, Euler-MacLaurin map and Becke partition agree;
+/// DFTGrid differs in three ways it cannot disable:
 ///
 ///   1. DFTGrid *rotates* each atom's Lebedev sphere into a standard orientation
 ///      (cubature.cc, OrientationMgr::MoveIntoPosition).  CamCASP only translates.
@@ -97,12 +84,9 @@ struct IsaGridOptions {
 ///   3. DFTGrid discards points below DFT_WEIGHTS_TOLERANCE.  CamCASP keeps all
 ///      of them (its suppression block is commented out).
 ///
-/// None of the three changes a converged integral, but all three move it at the
-/// 1e-8...1e-10 level, which is the level this port is held to.
-///
-/// The Lebedev tables themselves are Psi4's -- they are bit-identical to
-/// CamCASP's, both deriving from Laikov's -- reached through the
-/// lebedev_sphere() accessor in libfock/cubature.h.
+/// Each moves integrals at the 1e-8...1e-10 level this port is held to. The
+/// Lebedev tables are Psi4's (lebedev_sphere()), bit-identical to CamCASP's on
+/// the verified non-FMA build.
 class IsaGrid {
    public:
     IsaGrid(std::shared_ptr<Molecule> molecule, const IsaGridOptions& options);
@@ -122,17 +106,18 @@ class IsaGrid {
 
     /// Index of the first point belonging to atom A.  Points are laid out
     /// atom-major, then radial shell, then angular point -- CamCASP's order.
-    int atom_start(int A) const { return start_[A]; }
-    int atom_npoints(int A) const { return start_[A + 1] - start_[A]; }
+    int atom_start(int A) const;
+    int atom_npoints(int A) const;
 
     /// Radial scale factor used for atom A (bohr), i.e. rscale * R_Slater(Z_A).
-    double alpha(int A) const { return alpha_[A]; }
+    double alpha(int A) const;
 
     void print_header() const;
 
    private:
     void build_radial(double alpha, std::vector<double>& r, std::vector<double>& wr) const;
     void apply_becke();
+    void check_atom(int A, int end) const;
 
     std::shared_ptr<Molecule> molecule_;
     IsaGridOptions options_;

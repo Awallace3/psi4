@@ -1,12 +1,22 @@
 """Small AO-adaptation BLAS scope; no process-wide thread mutation."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from threading import Event
 import numpy as np
 import pytest
 import psi4
 from psi4.driver import p4util
-from psi4.driver.procrouting.isapol_native_partition import adapt_main
-from test_isapol_native_performance import threads
+from psi4.driver.procrouting.isapol_basis import adapt_main
+
+
+@contextmanager
+def threads(n):
+    saved = psi4.core.get_num_threads()
+    try:
+        psi4.core.set_num_threads(n)
+        yield
+    finally:
+        psi4.core.set_num_threads(saved)
 
 
 def test_thread_local_blas_scope_restores_success_exception_and_nested_calls():

@@ -42,16 +42,12 @@ namespace psi {
 namespace isapol {
 
 /// Highest Gauss-Legendre *order* CamCASP will accept (`MAXF`, casimir.f90:40).
-/// This bounds `n_freq`, i.e. the number of **dynamic** nodes; a grid built at
-/// this order carries `kMaxCasimirFrequencies + 1` = 11 frequencies, because the
-/// static point is index 0.  CamCASP's own `Quad 10` case names its output `f11`
-/// for exactly that reason.  The name is kept for traceability to `MAXF`.
+/// This bounds `n_freq`, the number of **dynamic** nodes; with the static point at
+/// index 0 such a grid holds 11 frequencies (CamCASP's `f11`).
 constexpr int kMaxCasimirFrequencies = 10;
 
-/// Default quadrature scale, CamCASP's `omega0` (casimir.f90:82).  This is the same
-/// parameter that `quadrature.f90` calls `Beta`, and it is 0.3 only in the standalone
-/// `casimir` program; the ISA-Pol protocols set `SET QUAD / Beta 0.5`, so the Psi4
-/// keyword default is kIsaPolOmega0 below.
+/// Standalone `casimir` default for `omega0` (casimir.f90:82), `Beta` in
+/// quadrature.f90. ISA-Pol protocols set `Beta 0.5`; see kIsaPolOmega0.
 constexpr double kCasimirOmega0 = 0.3;
 
 /// Quadrature scale used by the ISA-Pol protocols (`methods/isa-pol-from-isa-A`).
@@ -69,22 +65,18 @@ constexpr double kIsaPolOmega0 = 0.5;
 /// positive half of each rule is tabulated; the two halves are unpacked here in
 /// CamCASP's order, so `omega(1) < ... < omega(n_freq)`.
 ///
-/// Indices are 1-based, matching CamCASP, with index 0 reserved for the static
-/// point w = 0.  That point is not part of the quadrature -- it carries no weight
-/// -- but the response code evaluates it anyway (CamCASP's `SKIP` directive
-/// controls whether it appears in a `.pol` file), so it is convenient to have it
-/// in the same array.
+/// Indices are 1-based, matching CamCASP; index 0 is the unweighted static point
+/// w = 0, which the response code also evaluates.
 ///
-/// `n_freq` must be even.  CamCASP fills only i = 1 ... n_freq/2 and its mirror
-/// image, so an odd count would silently leave the middle frequency uninitialised;
-/// we reject it instead.
+/// `n_freq` must be even: CamCASP fills only i = 1 ... n_freq/2 and its mirror, so
+/// an odd count would leave the middle frequency uninitialised.
 class CasimirGrid {
    public:
     /// @param n_freq Gauss-Legendre order, i.e. the number of **dynamic**
     ///   frequencies; even, in [2, kMaxCasimirFrequencies].  The grid then holds
     ///   `n_freq + 1` frequencies, index 0 being the static point, so a caller
     ///   iterating the nodes wants `k = 0 ... n_freq()` inclusive.
-    /// @param omega0 quadrature scale in hartree
+    /// @param omega0 quadrature scale in hartree; finite and positive
     explicit CasimirGrid(int n_freq, double omega0 = kCasimirOmega0);
 
     int n_freq() const { return n_freq_; }
@@ -111,8 +103,8 @@ class CasimirGrid {
     ///     sum_k cp_weight(k) alpha_A(i w_k) alpha_B(i w_k);
     ///
     /// the remaining rank-dependent factors that turn `cpint` into a dispersion
-    /// coefficient are the recoupling coefficients of recoupling_tables.h, not part of
-    /// the quadrature.  Zero at k = 0.
+    /// coefficient belong to the dispersion contraction, not the quadrature.
+    /// Zero at k = 0.
     double cp_weight(int k) const;
 
     /// All n_freq + 1 frequencies, index 0 being the static point.

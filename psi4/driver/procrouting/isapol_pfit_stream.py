@@ -1,9 +1,12 @@
 # Copyright (c) 2007-2026 The Psi4 Developers.
 # SPDX-License-Identifier: LGPL-3.0-only
-"""Bounded complete-cloud design rows, not yet a streaming PFIT solver."""
+"""Bounded complete-cloud PFIT: packed design rows and the streamed solve."""
 
 import numpy as np
 
+from psi4 import core
+
+from . import isapol_refine as _refine
 from .isapol_refine import RefinementModel
 
 
@@ -17,18 +20,15 @@ class PackedDesignRows:
 
     Blocks are computational only: (start, rows) follows global packed order
     i*(i+1)//2+j, j<=i, including cross-block point pairs. Used field channels
-    and their per-point entry contraction are snapshotted, and each replay
-    pass reproduces the previous one bit for bit. Returned blocks are independent and mutable.
-    Retaining old blocks is the consumer's budget responsibility.
+    and their contraction are snapshotted, so each replay pass is bitwise
+    identical. Returned blocks are independent and mutable; retaining them is
+    the consumer's budget.
 
     Admission covers input/snapshot overlap, validation, the contraction and
-    bounded row workspaces; it does not cover target generation, solver state, or runtime
-    overhead. Arithmetic is conservatively bounded across all declared passes.
-    Nonfinite rows fail as ``FloatingPointError``. Requesting a pass charges
-    it immediately, even if iteration is abandoned;
-    the object has no reset. This supplies design rows only: replayable target
-    provenance and one global PFIT solve remain separate contracts. Existing
-    dense point/batch gates are not changed.
+    bounded row workspaces, not target generation, solver state or runtime
+    overhead; arithmetic is bounded across all declared passes. Nonfinite rows
+    raise ``FloatingPointError``. Requesting a pass charges it immediately and
+    there is no reset. Target provenance and the solve are separate contracts.
     """
 
     MAX_BYTES = 512*1024**2
@@ -172,3 +172,169 @@ def _aligned(shape):
     raw = np.empty(size+8)
     offset = (-raw.ctypes.data % 64)//8
     return raw[offset:offset+size].reshape(shape)
+
+
+def fitted_point_targets(auxiliary, points_bohr, coefficient_responses, *,
+                         max_bytes=PackedDesignRows.MAX_BYTES):
+    """Packed point-response targets ``v = -P^T C P`` of fitted AUX responses.
+
+    ``auxiliary`` is the declared response AUX (``core.IsaExplicitBasis``) and
+    each ``C`` a p x p coefficient response in it, e.g. the ``target_response``
+    of a bounded response node.  ``P[k, i]`` is AUX function ``k``'s exact
+    positive Coulomb potential at point ``i`` (``IsaAuxCoulomb.point_potentials``,
+    32 points per call).  Column ``t`` of the returned float64
+    ``(npoint*(npoint+1)//2, len(coefficient_responses))`` array is the lower
+    triangle of ``-P^T C[t] P``, packed for :func:`refine_streamed` with origin
+    ``NativeFittedPointResponse`` and representation
+    ``fitted_density_coefficients``.  Nothing is symmetrized or rescaled.
+
+    ``max_bytes`` must cover the point copies, P, one product and its dense
+    target, one potential block and the packed result; it is checked before
+    any of them is allocated.  Libint workspace is not charged.
+    """
+    if not isinstance(auxiliary, core.IsaExplicitBasis):
+        raise ValueError('auxiliary must be a core.IsaExplicitBasis')
+    points = np.array(points_bohr, dtype=float, copy=True)
+    if points.ndim != 2 or points.shape[1] != 3 or points.shape[0] < 1:
+        raise ValueError('points_bohr must be a nonempty npoint x 3 array')
+    responses = tuple(coefficient_responses)
+    naux, npoint, nt = auxiliary.nfunction, len(points), len(responses)
+    if nt < 1:
+        raise ValueError('at least one coefficient response is required')
+    for response in responses:
+        if (not isinstance(response, np.ndarray) or response.dtype != np.float64
+                or response.shape != (naux, naux) or not np.all(np.isfinite(response))):
+            raise ValueError(f'each coefficient response must be a finite float64 '
+                             f'{naux} x {naux} array')
+    row_count = npoint*(npoint+1)//2
+    block = min(32, npoint)
+    # Points and one Matrix block of them, P, P^T C, the dense target, one
+    # potential block and the packed result.
+    planned = 8*(3*npoint+3*block+2*naux*npoint+npoint*npoint+naux*block+row_count*nt)
+    if type(max_bytes) is not int or planned > max_bytes:
+        raise ValueError(f'fitted point targets byte resource limit exceeded ({planned} > {max_bytes})')
+    provider = core.IsaAuxCoulomb(auxiliary)
+    potentials = np.empty((naux, npoint))
+    for start in range(0, npoint, block):
+        potentials[:, start:start+block] = provider.point_potentials(
+            core.Matrix.from_array(points[start:start+block])).np
+    packed = np.empty((row_count, nt))
+    for t, response in enumerate(responses):
+        target = -(potentials.T @ response) @ potentials
+        start = 0
+        for i in range(npoint):
+            packed[start:start+i+1, t] = target[i, :i+1]
+            start += i+1
+    return packed
+
+
+def refine_streamed(models, points_bohr, packed_targets, *, target_origin=None, source_id,
+                    generation_record, response_representation='', auxiliary_basis_id='',
+                    fields=None, damping=0.0, block_rows=4096,
+                    max_bytes=PackedDesignRows.MAX_BYTES, options=None):
+    """Refine several targets over one complete cloud and one shared design.
+
+    ``models`` (typically one per frequency) must share sites, channels and
+    variables; only anchors, strengths and frequency differ.  Column ``t`` of
+    ``packed_targets`` (``npoint*(npoint+1)//2`` rows in the packing of
+    :func:`isapol_refine.pack_lower_triangle`) belongs to ``models[t]``, and all
+    columns share one declared target provenance.  The design is replayed twice
+    by :class:`PackedDesignRows` and solved by ``core.isa_pfit_solve_rows_multi``
+    with ``NormalEquationsDSYSV`` unless ``options`` says otherwise.  Each result
+    is the dense :func:`isapol_refine.refine` of its column, without that
+    function's point cap, up to the conditioning of the fit: with StreamingQR
+    the two agree to rounding, while the default normal equations amplify the
+    difference by about cond(H) (1e-8 relative overall, up to 9e-7 per
+    parameter, at the cond(H) ~ 3e9 seen on test clouds).  Supplied ``fields``
+    are used as given: ``damping`` applies only to fields computed here.
+
+    Resources: ``max_bytes`` bounds this function's planned Python buffers (the
+    row producer's plan, the point copy, computed fields and block-sized target
+    copies) and ``options.maximum_work_bytes`` the native kernel's; caller
+    ``fields`` are charged by the row producer, ``packed_targets`` stay the
+    caller's.  Targets are copied block by block and the replay digest refuses
+    any change between the two passes.  Any fit that is not ``Solved`` raises
+    ``ValueError`` (the dense ``refine`` raises ``RuntimeError``).
+    """
+    models = tuple(models)
+    if not models or any(not isinstance(m, RefinementModel) for m in models):
+        raise ValueError('a nonempty sequence of RefinementModel is required')
+    model = models[0]
+    for other in models[1:]:
+        if (other.sites != model.sites or other.channel_labels != model.channel_labels
+                or other.parameter_labels != model.parameter_labels
+                or other.parameter_entries != model.parameter_entries):
+            raise ValueError('models sharing one design must share sites, channels and variables')
+    provenance = _refine.target_provenance(target_origin, source_id=source_id,
+                                           generation_record=generation_record,
+                                           response_representation=response_representation,
+                                           auxiliary_basis_id=auxiliary_basis_id)
+    points = np.array(points_bohr, dtype=float, copy=True)
+    if points.ndim != 2 or points.shape[1] != 3 or points.shape[0] < 1:
+        raise ValueError('points_bohr must be a nonempty npoint x 3 array')
+    if not np.all(np.isfinite(points)):
+        raise ValueError('points_bohr must be finite')
+    npoint, nt = len(points), len(models)
+    row_count = npoint*(npoint+1)//2
+    targets = np.asarray(packed_targets)
+    if targets.dtype != np.float64 or targets.shape != (row_count, nt):
+        raise ValueError(f'packed_targets must be float64 of shape ({row_count}, {nt})')
+    if type(block_rows) is not int or block_rows < 1:
+        raise ValueError('block_rows must be a positive integer')
+    # Beyond the row producer's own plan: the point copy, the computed fields,
+    # one block-sized finiteness mask, and two live target-block copies.
+    block = min(block_rows, row_count)
+    overhead = 24*npoint+(8*npoint*model.channel_count if fields is None else 0)+17*block*nt
+    if type(max_bytes) is not int or overhead >= max_bytes:
+        raise ValueError('streamed refinement byte resource limit exceeded')
+    for start in range(0, row_count, block):
+        if not np.isfinite(targets[start:start+block]).all():
+            raise ValueError('packed_targets must be finite')
+    if fields is None:
+        # channel_fields caps one call at MAX_POINTS; rows are independent.
+        fields = np.empty((npoint, model.channel_count))
+        for start in range(0, npoint, 256):
+            fields[start:start+256] = _refine.channel_fields(points[start:start+256], model,
+                                                             damping=damping)
+    rows = PackedDesignRows(model, fields, block_rows=block_rows, max_passes=2,
+                            max_bytes=max_bytes-overhead)
+
+    declaration = core.IsaPfitRowModel()
+    declaration.channel_labels = list(model.channel_labels)
+    declaration.parameter_labels = list(model.parameter_labels)
+    declaration.parameter_units = _refine.parameter_units(model)
+    declaration.fixed = [False]*model.parameter_count
+    declaration.fixed_values = [0.]*model.parameter_count
+    declaration.provenance = model.provenance
+    if model.penalty_selection == 'static_reference':
+        # This declaration is shared by every frequency; a first-node current
+        # anchor hash cannot certify all nodes. Full per-node provenance stays
+        # on each RefinementResult.model and bounded frequency diagnostics.
+        declaration.provenance = (
+            f'{generation_record}; shared native declaration: site/channel/parameter inventory; '
+            'penalty_selection=static_reference; '
+            f'static_reference_sha256={model.static_reference_sha256}; '
+            'per-node current anchors/strengths/provenance: RefinementResult.model')
+    cloud = core.IsaPfitCloudRows()
+    cloud.label, cloud.points, cloud.full_row_count = 'complete cloud', npoint, row_count
+    cloud.maximum_block_rows = block_rows
+    problems = []
+    for m in models:
+        problem = core.IsaPfitRowProblem()
+        problem.frequency_au = m.frequency_au
+        problem.model, problem.cloud, problem.target_provenance = declaration, cloud, provenance
+        problem.penalty = _refine.matrix_penalty(m)
+        problems.append(problem)
+
+    def blocks():
+        for start, design in rows.blocks():
+            yield start, design, np.array(targets[start:start+len(design)], order='C')
+
+    if options is None:
+        options = core.IsaPfitOptions()
+        options.solver = core.IsaPfitSolver.NormalEquationsDSYSV
+    results = core.isa_pfit_solve_rows_multi(problems, blocks, options)
+    for m, result in zip(models, results):
+        if result.status != core.IsaPfitStatus.Solved:
+            raise ValueError(f'PFIT did not solve at frequency {m.frequency_au!r}: {result.status}')
+    return tuple(_refine.refinement_result(m, r) for m, r in zip(models, results))

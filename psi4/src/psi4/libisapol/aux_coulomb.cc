@@ -3,12 +3,19 @@
  */
 #include "aux_coulomb.h"
 #include "harmonic_transform.h"
+#include "psi4/libmints/basisset.h"
+#include "psi4/libmints/eri.h"
+#include "psi4/libmints/gshell.h"
+#include "psi4/libmints/integral.h"
 #include "psi4/libmints/matrix.h"
-#include <libint2.hpp>
+#include "psi4/libmints/molecule.h"
+#include "psi4/libmints/potential.h"
 #include <libint2/cgshell_ordering.h>
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <stdexcept>
+#include <string>
 namespace psi { namespace isapol {
 namespace {
 void aux_int_require(bool ok, const char* message) {
@@ -18,6 +25,38 @@ double aux_df(int n) { double v=1.; for (;n>0;n-=2) v*=n; return v; }
 double aux_factor(int l, const std::array<int,3>& p) {
     return std::sqrt(aux_df(2*l-1)/(aux_df(2*p[0]-1)*aux_df(2*p[1]-1)*aux_df(2*p[2]-1)));
 }
+}
+IsaAuxCoulomb::NativeBasis IsaAuxCoulomb::native_basis(const IsaExplicitBasis& explicit_basis) {
+    const int ncentre=explicit_basis.ncentre();
+    auto molecule=std::make_shared<Molecule>();
+    molecule->set_units(Molecule::Bohr);
+    // add_atom refuses centres closer than 0.05 bohr, but distinct explicit
+    // centres may coincide: add them apart, then assign the bohr coordinates.
+    Matrix geometry(ncentre,3);
+    for (int c=0;c<ncentre;++c) {
+        molecule->add_atom(0.,10.*c,0.,0.,"GH",0.,0.,"GH"+std::to_string(c+1));
+        for (int axis=0;axis<3;++axis) geometry.set(c,axis,explicit_basis.centres_[c][axis]);
+    }
+    molecule->set_geometry(geometry);
+    molecule->set_basis_all_atoms("ISAPOL-EXPLICIT","ISAPOL");
+    std::map<std::string,std::map<std::string,std::vector<ShellInfo>>> shells,ecp;
+    auto& by_centre=shells["ISAPOL-EXPLICIT"];
+    for (int c=0;c<ncentre;++c) by_centre["GH"+std::to_string(c+1)];
+    std::vector<std::vector<int>> members(ncentre);
+    for (size_t s=0;s<explicit_basis.shells_.size();++s) {
+        const auto& shell=explicit_basis.shells_[s];
+        members[shell.centre].push_back(static_cast<int>(s));
+        // Unnormalized only populates every construction array; its normalized
+        // copies are replaced by the stored coefficients below.
+        by_centre["GH"+std::to_string(shell.centre+1)].emplace_back(
+            shell.l,shell.coefficients,shell.exponents,Cartesian,Unnormalized);
+    }
+    NativeBasis result{std::make_shared<BasisSet>("ISAPOL",molecule,shells,ecp),
+                       std::vector<int>(explicit_basis.shells_.size())};
+    result.basis->use_original_coefficients_as_effective();
+    int next=0;
+    for (const auto& centre:members) for (int s:centre) result.shells[s]=next++;
+    return result;
 }
 IsaAuxCoulomb::IsaAuxCoulomb(const IsaExplicitBasis& auxiliary) : basis_(auxiliary) {
     aux_int_require(basis_.role_==IsaBasisRole::MolecularAux,"Coulomb provider requires molecular AUX role");
@@ -65,33 +104,25 @@ std::vector<double> IsaAuxCoulomb::charges() const {
 }
 std::shared_ptr<Matrix> IsaAuxCoulomb::metric() const {
     const bool pure=basis_.representation_==IsaBasisRepresentation::Spherical;
-    std::vector<libint2::Shell> shells;
     std::vector<int> offsets;
     std::vector<IsaHarmonicTransform> transforms;
-    size_t max_nprim=0;
-    int max_l=0, offset=0;
+    int offset=0;
     for (const auto& s:basis_.shells_) {
-        libint2::svector<double> exponents(s.exponents.begin(),s.exponents.end());
-        libint2::svector<double> coefficients(s.coefficients.begin(),s.coefficients.end());
-        // Fourth argument false preserves the already-effective coefficients.
-        shells.emplace_back(exponents,libint2::svector<libint2::Shell::Contraction>{{s.l,false,coefficients}},
-                            basis_.centres_[s.centre],false);
         offsets.push_back(offset);
         offset+=IsaExplicitBasis::shell_size(s.l,basis_.representation_);
         transforms.push_back(pure ? isa_dalton_transform(s.l) : IsaHarmonicTransform{});
-        max_nprim=std::max(max_nprim,s.exponents.size()); max_l=std::max(max_l,s.l);
     }
-    constexpr auto op=libint2::Operator::coulomb;
-    constexpr auto braket=libint2::BraKet::xs_xs;
-    libint2::Engine engine(op,max_nprim,max_l,0,0.0,
-                          libint2::operator_traits<op>::default_params(),braket);
-    engine.set(libint2::CartesianShellNormalization::standard);
-    const auto& unit=libint2::Shell::unit();
+    // Direct unscreened Libint2ERI, independent of INTEGRAL_PACKAGE and SCREENING:
+    // compute_shell runs the zero-precision engine with no precomputed shell pairs
+    // and no sieve. Standard Cartesian components.
+    const auto aux=native_basis(basis_);
+    const auto zero=BasisSet::zero_ao_basis_set();
+    IntegralFactory factory(aux.basis,zero,aux.basis,zero);
+    Libint2ERI eri(&factory,0.,0,false,false,false);
     auto result=std::make_shared<Matrix>("Native explicit AUX Coulomb metric",offset,offset);
-    for (size_t a=0;a<shells.size();++a) for (size_t b=0;b<=a;++b) {
-        engine.compute2<op,braket,0>(shells[a],unit,shells[b],unit);
-        const double* block=engine.results()[0];
-        if (!block) continue;
+    for (size_t a=0;a<basis_.shells_.size();++a) for (size_t b=0;b<=a;++b) {
+        if (!eri.compute_shell(aux.shells[a],0,aux.shells[b],0)) continue;
+        const double* block=eri.buffer();
         const int la=basis_.shells_[a].l,lb=basis_.shells_[b].l;
         const auto& pa=IsaExplicitBasis::cartesian_powers(la);
         const auto& pb=IsaExplicitBasis::cartesian_powers(lb);
@@ -134,30 +165,23 @@ std::shared_ptr<Matrix> IsaAuxCoulomb::point_potentials(const Matrix& points, si
     for (int p=0;p<npoint;++p) for (int axis=0;axis<3;++axis)
         aux_int_require(std::isfinite(points.get(p,axis)), "Nonfinite AUX potential point");
     const bool pure=basis_.representation_==IsaBasisRepresentation::Spherical;
-    size_t max_nprim=0;
-    int max_l=0;
-    std::vector<libint2::Shell> shells;
-    for (const auto& s:basis_.shells_) {
-        shells.emplace_back(libint2::svector<double>(s.exponents.begin(),s.exponents.end()),
-            libint2::svector<libint2::Shell::Contraction>{{s.l,false,
-                libint2::svector<double>(s.coefficients.begin(),s.coefficients.end())}},
-            basis_.centres_[s.centre],false);
-        max_nprim=std::max(max_nprim,s.exponents.size());
-        max_l=std::max(max_l,s.l);
-    }
     // A true unit shell makes a two-function nuclear integral a one-function
-    // AUX potential. Libint's nuclear operator includes a minus sign: use a
-    // negative unit source to obtain the declared positive Coulomb kernel.
-    libint2::Engine engine(libint2::Operator::nuclear,max_nprim,max_l,0,0.0);
-    engine.set(libint2::CartesianShellNormalization::standard);
+    // AUX potential. The nuclear operator includes a minus sign: use a negative
+    // unit source to obtain the declared positive Coulomb kernel. Libint2 one-body
+    // integrals ignore engine precision, so the native default adds no screening.
+    const auto aux=native_basis(basis_);
+    const auto zero=BasisSet::zero_ao_basis_set();
+    IntegralFactory factory(aux.basis,zero,aux.basis,zero);
+    auto integral=factory.ao_potential();
+    auto* potential=dynamic_cast<PotentialInt*>(integral.get());
+    aux_int_require(potential!=nullptr,"Native AUX point potential requires PotentialInt");
     auto result=std::make_shared<Matrix>("Explicit AUX positive point potentials",naux,npoint);
     for (int p=0;p<npoint;++p) {
-        engine.set_params(std::vector<std::pair<double,std::array<double,3>>>{
-            {-1.,{points.get(p,0),points.get(p,1),points.get(p,2)}}});
+        potential->set_charge_field({{-1.,{points.get(p,0),points.get(p,1),points.get(p,2)}}});
         int offset=0;
-        for (size_t s=0;s<shells.size();++s) {
-            engine.compute(shells[s],libint2::Shell::unit());
-            const auto* block=engine.results()[0];
+        for (size_t s=0;s<basis_.shells_.size();++s) {
+            potential->compute_shell(aux.shells[s],0);
+            const auto* block=potential->buffers()[0];
             const int l=basis_.shells_[s].l;
             if (block) {
                 if (pure) {
@@ -183,5 +207,29 @@ std::shared_ptr<Matrix> IsaAuxCoulomb::point_potentials(const Matrix& points, si
         }
     }
     return result;
+}
+std::pair<std::shared_ptr<BasisSet>, std::shared_ptr<Matrix>> IsaAuxCoulomb::native_auxiliary() const {
+    const bool pure=basis_.representation_==IsaBasisRepresentation::Spherical;
+    auto aux=native_basis(basis_);
+    auto map=std::make_shared<Matrix>("Declared AUX map T (declared x raw)",basis_.nfunction_,aux.basis->nbf());
+    int offset=0;
+    for (size_t s=0;s<basis_.shells_.size();++s) {
+        const int l=basis_.shells_[s].l;
+        const int first=aux.basis->shell_to_basis_function(aux.shells[s]);
+        if (pure) {
+            const auto rows=isa_dalton_transform(l);
+            for (size_t i=0;i<rows.size();++i)
+                for (const auto& e:rows[i]) map->set(offset+static_cast<int>(i),first+e.first,e.second);
+            offset+=static_cast<int>(rows.size());
+        } else {
+            const auto& powers=IsaExplicitBasis::cartesian_powers(l);
+            for (size_t i=0;i<powers.size();++i)
+                map->set(offset+static_cast<int>(i),first+libint2::INT_CARTINDEX(l,powers[i][0],powers[i][1]),
+                         aux_factor(l,powers[i]));
+            offset+=static_cast<int>(powers.size());
+        }
+    }
+    aux_int_require(offset==basis_.nfunction_,"Declared AUX map does not cover the basis");
+    return {aux.basis,map};
 }
 } }

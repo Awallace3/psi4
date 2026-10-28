@@ -29,6 +29,8 @@ IsaAController::IsaAController(const std::vector<IsaExplicitBasis>& atomic,
     controller_require(options.convergence > 0, "Controller convergence threshold must be positive");
     controller_require(std::isfinite(options.mixing) && options.mixing >= 0 && options.mixing <= 1,
                        "Controller mixing must be in [0,1]");
+    controller_require(options.tail_fit_policy == IsaTailFitPolicy::Always ||
+                       options.tail_fit_policy == IsaTailFitPolicy::WhenEnabled, "Invalid controller tail fit policy");
     controller_require(options.max_iterations > 0 && options.mixing_skip >= 0 && options.tail_iteration_limit >= 0,
                        "Controller iteration limits must be valid");
     if (options_.tail_allowed.empty()) options_.tail_allowed.assign(n,true);
@@ -122,8 +124,19 @@ IsaAControllerStep IsaAController::step(const IsaAControllerState& old) const {
         (result.next.max_delta <= options_.tail_activation || result.next.iteration > options_.tail_iteration_limit);
     // Source lag: fit NEXT tails from OLD Gaussian shapes, before committing the
     // next mixed shapes. Do not silently replace this with fitting the new state.
+    // WhenEnabled gates on the ENTERING flag; a skipped step keeps next.tails as
+    // the copied old.tails (possibly still undefined) and reports no new fit.
+    const bool fit = options_.tail_fit_policy == IsaTailFitPolicy::Always || old.apply_tails;
     if (!options_.tail_cutoffs.empty())
         for (size_t a = 0; a < shapes_.size(); ++a) {
+            if (!fit) {
+                IsaTailFitResult skipped;
+                skipped.tail = old.tails[a];
+                skipped.gaussian_tail_charge = skipped.ionization_potential = std::nan("");
+                skipped.status = "skipped_tail_fix_off";
+                result.tail_fits.push_back(std::move(skipped));
+                continue;
+            }
             auto tail = IsaGaussianShape(shapes_[a],old.coefficients.shape_coefficients[a]).fit_tail(options_.tail_cutoffs[a],old.tails[a]);
             result.next.tails[a] = tail.tail;
             result.tail_fits.push_back(std::move(tail));

@@ -119,8 +119,9 @@ def refined_recoupled_dispersion(results, *, cp_weights, quadrature_provenance,
                                  max_order, ledger):
     """Single native conversion/contraction seam, reusable outside oeprop.
 
-    Only solved RefinementResults with invariant site/channel declarations are
-    accepted. Exact reciprocal FULL tensors, including mixed-rank entries, are
+    Only solved RefinementResults with invariant site/channel declarations and
+    penalty schemes (including static-reference hashes) are accepted. Exact
+    reciprocal FULL tensors, including mixed-rank entries, are
     checked before any native recoupling/contraction. Nonzero charge response
     cannot be represented by this positive-rank core and is refused honestly.
     """
@@ -129,6 +130,13 @@ def refined_recoupled_dispersion(results, *, cp_weights, quadrature_provenance,
     results = tuple(results)
     if not results or any(not isinstance(r, RefinementResult) for r in results):
         raise TypeError('nonempty RefinementResult sequence required')
+    # Reject incompatible schemes before even table query vectors are built.
+    # This guard is independent of the isotropic consumer.
+    for r in results[1:]:
+        for name in ('weight_type', 'weight_coefficient', 'cutoff',
+                     'penalty_selection', 'static_reference_sha256', 'selection_sha256'):
+            if getattr(r.model, name) != getattr(results[0].model, name):
+                raise ValueError(f'every node must share one penalty scheme; {name} differs')
     sites = _validated_sites(results[0].model.sites)
     numeric, work = recoupled_plan(sites, len(results), max_order)
     frequencies = tuple(r.model.frequency_au for r in results)
@@ -148,7 +156,8 @@ def refined_recoupled_dispersion(results, *, cp_weights, quadrature_provenance,
             raise ValueError('recoupled dispersion requires solved PFIT')
         if (r.model.sites != sites or tuple(r.model.channel_labels) != channels
                 or r.model.parameter_labels != results[0].model.parameter_labels
-                or r.model.parameter_entries != results[0].model.parameter_entries):
+                or r.model.parameter_entries != results[0].model.parameter_entries
+                or r.model.declared_variables != results[0].model.declared_variables):
             raise ValueError('identical site/rank/frame/component ordering required at every node')
         if len(r.refined_tensors) != len(sites):
             raise ValueError('one refined tensor per site required')
@@ -172,6 +181,14 @@ def refined_recoupled_dispersion(results, *, cp_weights, quadrature_provenance,
         native_sites.append(site)
     provenance = ('native PFIT-refined full local tensors; '
                   + results[0].model.provenance + '; ' + repr(quadrature_provenance))
+    if results[0].model.penalty_selection == 'static_reference':
+        # Label the first node's provenance honestly, and retain every current
+        # anchor hash rather than implying that its hash certifies the sweep.
+        node_hashes = tuple((r.model.frequency_au, r.model.anchor_sha256) for r in results)
+        provenance = ('native PFIT-refined full local tensors; first-node model provenance: '
+                      + results[0].model.provenance
+                      + f'; current_anchor_sha256_by_frequency={node_hashes!r}; '
+                      + repr(quadrature_provenance))
     # "supplied_local_response" is the core's explicit local-tensor declaration,
     # NOT a claim that a supplied-file bridge produced these native tensors.
     local = core.IsaAnisotropicModel(frequencies, native_sites, 'supplied_local_response', provenance)

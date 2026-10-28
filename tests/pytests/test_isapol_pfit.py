@@ -252,10 +252,16 @@ def test_nearly_dependent_no_hidden_fallback(options):
         _ = r.parameters
 
 
-@pytest.mark.parametrize("bad", ["nan", "inf", "overflow", "packed", "fields", "tensor", "tensor_asym", "symmetry", "indefinite",
-                                  "negative_strength", "empty", "origin", "convention", "source", "generation",
-                                  "fitted_basis", "fitted_representation", "frequency", "labels", "anchor", "lc_shape"])
-def test_invalid_inputs(options, bad):
+# Validation and row accumulation are shared and precede the solver split, so
+# each fault runs once; StreamingQR keeps the accumulation-overflow case.
+@pytest.mark.parametrize("solver,bad", [("NormalEquationsDSYSV", bad) for bad in [
+    "nan", "inf", "overflow", "packed", "fields", "tensor", "tensor_asym", "symmetry", "indefinite",
+    "negative_strength", "empty", "origin", "convention", "source", "generation",
+    "fitted_basis", "fitted_representation", "frequency", "labels", "anchor", "lc_shape"]]
+    + [("StreamingQR", "overflow")])
+def test_invalid_inputs(solver, bad):
+    options = c.IsaPfitOptions()
+    options.solver = getattr(c.IsaPfitSolver, solver)
     p = problem()
     if bad in ("nan", "inf", "overflow", "packed", "fields"):
         b = p.batches[0]
@@ -377,7 +383,7 @@ def test_prediction_and_chunk_budget_accounting(options):
     options.qr_chunk_rows = 11
     d = solve(p, options).diagnostics.work_budget_bytes
     if options.solver == c.IsaPfitSolver.StreamingQR:
-        assert d == b + 10 * 2 * 8
+        assert d == b + 10 * (2 + 2) * 8  # shared (nf+nt) and column-copy (nf+1) chunk rows
     else:
         assert d == b  # no unused chunk allocation in the normal path
 

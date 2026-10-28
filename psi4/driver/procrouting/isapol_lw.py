@@ -1,24 +1,31 @@
 # Psi4 Developers; SPDX-License-Identifier: LGPL-3.0-only
-"""Expert supplied-nonlocal -> C++ LW -> local properties, not oeprop/SCF.
+"""Nonlocal response -> C++ LW -> owned local tensors.
 
-No input IO, graph inference, PFIT, tensor repair, or imported-ORIENT model adapter.
-Multipole tensors use real Racah 00,10,11c,11s,... order (dipoles z,x,y).
-The global_dipoles property instead uses Cartesian x,y,z on both component axes.
-The explicit array axes are frequency,response_site,potential_site,response_component,
+No input IO, graph inference, PFIT or tensor repair.
+Multipole tensors use real Racah 00,10,11c,11s,... order (dipoles z,x,y);
+global_dipoles uses Cartesian x,y,z on both component axes.
+Array axes are frequency, response_site, potential_site, response_component,
 potential_component; both site axes follow labels. Origins are bohr; frequencies
 are nonnegative imaginary-axis magnitudes in atomic units. Frames are proper
-local-to-global Cartesian columns; frames=None explicitly defaults every site to
-identity. Rank4 input requires an explicit truncation declaration, and the two are
-different models: 'discard_rank4_rows_and_columns' sends exactly the first16 rows/
-columns to LW, including rank0, and outputs ranks1..3; 'retain_rank4_rows_and_columns'
-sends all25 and outputs ranks1..4, which is the only way to obtain the C12 (1,4)/(4,1)
-rank pairs. The second is not a more accurate version of the first and the two must
-never be quoted as agreeing.
+local-to-global Cartesian columns; frames=None means identity for every site.
+Rank-4 input needs an explicit truncation, and the choices are different models:
+'discard_rank4_rows_and_columns' sends the first 16 rows/columns (including rank
+0) and outputs ranks 1..3; 'retain_rank4_rows_and_columns' sends all 25 and
+outputs ranks 1..4, the only route to the C12 (1,4)/(4,1) rank pairs.
 
 Owned arrays are immutable byte snapshots; .array returns a defensive copy.
-Core imports are lazy and package-relative, with no dependency on isapol_supplied.
-The only relaxed diagnostic is pinned to the complete historical water snapshot;
-its success does not imply production acceptance, external parity, or native prediction.
+Core imports are lazy and package-relative.
+
+LW is the Lillestolen--Wheatley localization (Lillestolen and Wheatley,
+J. Phys. Chem. A 111, 11141 (2007); CamCASP user's guide section 8.2.1), as
+implemented in ORIENT, whose output this reference-model implementation
+reproduces. It is NOT rotationally covariant: rotating the whole molecule
+(origins and tensors together) can change the local LW tensors and the rank>=2
+isotropic scalars that later feed C8/C10. Rank-1 scalars were unchanged in the
+sampled cases, but no orientation independence of C6 is guaranteed. The
+``production`` residual policy and the ``production_postcondition_passed`` flags
+gate input and residual admission only; they are not a guarantee of physical
+accuracy or of rotational invariance.
 """
 from dataclasses import dataclass, field
 import hashlib
@@ -38,15 +45,6 @@ _INPUT_WIDTH = {TRUNCATE_RANK4: 16, RETAIN_RANK4: 25, None: 16}
 PRODUCTION_TOLERANCE = 1e-6
 MAX_INPUT_BYTES = 64 * 1024 * 1024
 MAX_FREQUENCIES = 4096
-HISTORICAL_FIXTURE_SHA256 = 'b86d411e5fd81fc20358370ee211ba5b9bd997c57f8918c32ce0334c93ad7f49'
-HISTORICAL_SOURCE_SHA256 = '9b6130f42fc50b50b80d5860f13cc6b5b198002c4c74a1b3500893481502c166'
-# Canonical little-endian float64, C order, INCLUDING discarded rank4 and signed zeros.
-_HISTORICAL_ARRAY_HASHES = (
-    'd756966bfcff85ba02b05c279bba6a88eb5e177a224e6e3742d14953e826cec1',
-    '7693a87f99b542e76639c9c9d53420c2ffceec8638181dd568eb1aa1852e006c',
-    '99ffae29f099ca7f7fb81f914e8dc3f525e6bddd3ddcc87429c9acef9ab0930b',
-    'af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc',
-)
 
 
 def _text(value, name):
@@ -202,11 +200,9 @@ class Metadata:
     residual_policy: str
     residual_tolerance: float
     production_postcondition_passed: bool
-    historical_fixture_sha256: Optional[str]
     localization_rank_limit: int = 3
-    # Largest supplied magnitude discarded above the declared limit, counting BOTH
-    # the rank4 rows this module drops at the boundary and the ranks core drops
-    # inside the working block. Core's own measurement sees only the second.
+    # Largest supplied magnitude discarded above the declared limit, both at this
+    # boundary (rank-4 rows) and inside core; core reports only the latter.
     localization_truncated_input_maxabs: float = 0.0
     mode: str = 'supplied_nonlocal'
     tensor_origin: str = 'Psi4_LW'
@@ -214,7 +210,6 @@ class Metadata:
     refinement_status: str = 'no_PFIT'
     native_verified: bool = False
     numerical_agreement: Optional[bool] = None
-    anisotropic_status: str = 'separate_explicit_placement_adapter_available_not_computed'
     input_axes: str = 'frequency,response_site,potential_site,response_component,potential_component; global'
     output_axes: str = 'raw_global/raw_local: frequency,site,response_component,potential_component; ranks1..3'
     scalar_axes: str = 'frequency,site,rank; trace(alpha_ll)/(2*l+1), ranks1,2,3'
@@ -231,10 +226,8 @@ class Metadata:
         components = tuple(c for l in range(self.input_rank+1) for c in [f'{l}0'] +
                            [f'{l}{m}{s}' for m in range(1,l+1) for s in 'cs'])
         object.__setattr__(self, 'input_components', components)
-        # The stored local width follows the declared localization rank limit, so the
-        # descriptive fields never claim a rank the arrays do not carry. Limits1..3
-        # keep the historical15-wide output (ranks above the limit are identical
-        # zeros inside it); limit4 is 24 wide.
+        # Limits 1..3 keep the 15-wide output (ranks above the limit are zeros);
+        # limit 4 is 24 wide.
         width = _LOCAL_WIDTH[self.localization_rank_limit]
         object.__setattr__(self, 'local_components', components[1:width+1])
         if self.localization_rank_limit == 4:
@@ -292,40 +285,23 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
                                 localization_rank_limit: int = 3) -> LocalProperties:
     """Localize each supplied frequency with core.isa_localize_lw only.
 
-    Static-only needs neither CP weights nor a partner. No generic tolerance knob.
-    Three residual policies, none of which loosens the1e-6 algorithm gate:
-      production                  - single combined1e-6 gate over every residual.
+    The result depends on the supplied molecular orientation (see the module
+    docstring): LW localization output is not rotationally covariant.
+
+    Static-only needs neither CP weights nor a partner. Residual policies:
+      production                  - one combined 1e-6 gate over every residual.
       reported_input_sum_rule     - 1e-6 on everything LW controls (off_site,
-            reciprocity, molecular_sum, charge_sum_transport); the supplied data's
-            charge-flow sum-rule defect is measured, warned about and reported. LW
-            transports that defect exactly, so gating it would gate the producer of
-            the supplied pair data rather than this routine.
-      historical_water_diagnostic - the one genuinely relaxed path (1e-3), restricted
-            by pinned full input/geometry/frame/frequency bytes and exact labels/bond
-            order, and recording failed production acceptance independently of any
-            comparison.
-    ``localization_rank_limit`` declares the rank the localization itself runs at,
-    in1..4, default3 (for which this routine is unchanged). Limit4 requires
-    ``truncation=RETAIN_RANK4`` and is the only way to obtain rank-4 local tensors,
-    hence the C12 (1,4)/(4,1) rank pairs; it is a different model from the rank-3
-    one, not a more accurate one. Limits below3 restrict the space further. It is
-    the reference protocol's uniform ``Limit`` -- the ORIENT input template applies
-    ``Limit all rank {LIMIT}`` to the pair data and then ``Localise ... Limit
-    {LIMIT}``, and the per-site ``WSM-Limit``/``H-Limit`` reach the pfit stage, not
-    the localization -- so it is a single integer and not a per-site vector.
+            reciprocity, molecular_sum, charge_sum_transport); the supplied
+            charge-flow sum-rule defect, which LW transports exactly, is measured,
+            warned about and reported.
+    ``localization_rank_limit`` (1..4, default 3) is the protocol's single
+    ``Limit`` applied to the whole localization (per-site ``WSM-Limit``/``H-Limit``
+    belong to PFIT). Limit 4 requires ``truncation=RETAIN_RANK4``. Translation is
+    rank-raising, so the result at L equals the result at L' > L restricted to
+    ranks 1..L, bitwise; ranks above L are zeros, not computed response.
 
-    It relaxes nothing: the gate is unchanged, and because multipole translation is
-    rank-raising the restriction is exact. For any two declared limits L < L', the
-    result at L is precisely the result at L' restricted to ranks1..L, bitwise, so a
-    limit cannot change any rank <= L number. Ranks above L are identically zero, and
-    :func:`isotropic_dispersion` refuses to declare them rather than reading those
-    zeros as physics.
-
-    Input storage is capped at64MiB, frequencies at4096, sites at256. Conservative
-    native workspace admission mirrors the current768MiB core budget, which core
-    also enforces. These bounds are NOT a total process RSS guarantee. Counting
-    transfers uses the existing binding's copied list (bounded by the core's
-    one-million-transfer cap); no new count-only binding is introduced here.
+    Caps: 64 MiB input, 4096 frequencies, 256 sites, and the core's 768 MiB
+    workspace and one-million-transfer limits. These do not bound process RSS.
     """
     n = _length(labels, 'labels', 256)
     if not n:
@@ -342,13 +318,11 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
         raise ValueError('exact rank4 truncation declaration required only for rank4')
     if not isinstance(provenance, Provenance):
         raise ValueError('explicit typed Provenance required')
-    if residual_policy not in ('production', 'historical_water_diagnostic',
-                              'reported_input_sum_rule'):
+    if residual_policy not in ('production', 'reported_input_sum_rule'):
         raise ValueError('unsupported residual policy')
     if type(localization_rank_limit) is not int or localization_rank_limit not in (1,2,3,4):
         raise ValueError('localization_rank_limit must be explicit integer1,2,3 or4')
-    # The truncation declaration and the localization limit are one statement, not two:
-    # rank4 rows either reach LW and are localized, or they do not and cannot be.
+    # Retaining rank-4 input and localizing at rank 4 are one declaration.
     if (truncation == RETAIN_RANK4) != (localization_rank_limit == 4):
         raise ValueError('localization_rank_limit4 requires retained rank4 input, and retained '
                          'rank4 input requires localization_rank_limit4')
@@ -384,15 +358,7 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
                 raise ValueError('frames must be proper local-to-global rotations')
     raw = _array(tensors, (nf,n,n,m,m), 'tensors')
     raw_hash = _hash(raw)
-    historical = residual_policy == 'historical_water_diagnostic'
     reported_sum_rule = residual_policy == 'reported_input_sum_rule'
-    if historical and not (
-        input_rank == 4 and labels == ('O','H1','H2') and graph == ((0,1),(0,2))
-        and raw.shape == (1,3,3,25,25)
-        and (raw_hash, _hash(pos), _hash(frame), _hash(freq)) == _HISTORICAL_ARRAY_HASHES
-        and provenance.source_sha256 == HISTORICAL_SOURCE_SHA256
-    ):
-        raise ValueError('historical_water_diagnostic requires the exact approved water identity (full tensors, geometry, frames, frequency, ordered bonds, source hash)')
     from psi4 import core
     # The frame rotation is built at the rank the localization runs at, never wider:
     # a rotation block for a rank the model does not carry would have nothing to act on.
@@ -403,10 +369,7 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
     rotations = [np.asarray(core.isa_multipole_rotation(rotation_rank, f.tolist()))[1:width+1,1:width+1].copy()
                  for f in frame]
     globals_, locals_, scalars, dipoles, fd, td, warnings = [], [], [], [], [], [], []
-    # The rank4 rows and columns are dropped HERE, at the boundary, before core is
-    # handed a block, so core's own truncation measurement never sees them and
-    # reports zero for every discard_rank4 model. Measure them on this side; a
-    # declared discard must report its own magnitude, not inherit a vacuous zero.
+    # Discarded rank-4 rows never reach core, so their magnitude is measured here.
     truncated_maxabs = 0.0
     if input_width < m:
         truncated_maxabs = max(float(np.max(np.abs(raw[:,:,:,input_width:,:]))),
@@ -423,9 +386,7 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
                   for a in range(n) for b in range(n)]
         args = (core.Matrix.from_array(pos), blocks, float(xi), graph)
         # Never catch/retry a failed production request with relaxed tolerance.
-        if historical:
-            result = core.isa_localize_lw(*args, 1e-3, -1.0, localization_rank_limit)
-        elif reported_sum_rule:
+        if reported_sum_rule:
             # Production 1e-6 on everything LW controls; the supplied data's own
             # charge-flow sum-rule defect is measured and reported, not gated.
             result = core.isa_localize_lw(*args, PRODUCTION_TOLERANCE, math.inf,
@@ -454,7 +415,7 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
                         raise ValueError('nonfinite passivity diagnostic')
                     td.append(TensorDiagnostic(k,label,axes,asym,eig))
                     if asym:
-                        warnings.append(f'{label}[{k}] {axes}: asymmetric raw tensor ({asym:g}); no symmetrization; strict anisotropic conversion unsupported')
+                        warnings.append(f'{label}[{k}] {axes}: asymmetric raw tensor ({asym:g}); no symmetrization')
                     if eig < 0:
                         warnings.append(f'{label}[{k}] {axes}: indefinite symmetric part ({eig:g}); no clipping')
         if input_error:
@@ -469,8 +430,6 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
                 f'{PRODUCTION_TOLERANCE:g}; reported not gated, transported by LW at '
                 f'{residuals.charge_sum_transport:g} and not repaired')
         globals_.append(g); locals_.append(local); scalars.append(scalar); dipoles.append(xyz)
-    if historical:
-        warnings.append('Historical diagnostic only: production postcondition failed; no native prediction or external parity claim.')
     if reported_sum_rule:
         warnings.append('Supplied charge-flow sum-rule defect reported, not gated: the algorithm-controlled '
                         'postconditions held at the production tolerance, the input sum rule is a property of '
@@ -480,10 +439,8 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
             'localization declared at rank4: the local tensors carry ranks1..4 and the C12 (1,4)/(4,1) '
             'rank pairs become available. This is a DIFFERENT model from the rank1..3 localization, not '
             'a more accurate one, and the two must never be quoted as agreeing.')
-    # Anything the supplied model carries above the declared limit is discarded,
-    # whether core drops it or the boundary slice above already has. Gate the
-    # announcement on the input rank so a rank4 input localized at rank3 -- where
-    # rotation_rank is also 3 -- is not silently exempted from saying so.
+    # Warn on input rank, not rotation_rank, so rank-4 input localized at rank 3
+    # is still announced.
     if localization_rank_limit < input_rank:
         warnings.append(
             f'localization declared at rank {localization_rank_limit}: ranks '
@@ -493,9 +450,7 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
             f'rank-{input_rank} localization restricted to ranks 1..{localization_rank_limit} and '
             f'cannot change any number at those ranks.')
     metadata = Metadata(input_rank, truncation, nf*n*n*(m*m-input_width*input_width), raw_hash, residual_policy,
-                        1e-3 if historical else PRODUCTION_TOLERANCE,
-                        False if historical else all(d.production_postcondition_passed for d in fd),
-                        HISTORICAL_FIXTURE_SHA256 if historical else None,
+                        PRODUCTION_TOLERANCE, all(d.production_postcondition_passed for d in fd),
                         localization_rank_limit, truncated_maxabs)
     return LocalProperties(labels, ArraySnapshot.of(pos), ArraySnapshot.of(frame), tuple(map(float,freq)), graph,
                            provenance, ArraySnapshot.of(raw), ArraySnapshot.of(globals_), ArraySnapshot.of(locals_),
@@ -525,319 +480,3 @@ class DispersionPair:
 
     def __post_init__(self):
         object.__setattr__(self, 'coefficients', tuple(self.coefficients))
-
-
-@dataclass(frozen=True)
-class IsotropicDispersion:
-    model_a: LocalProperties
-    model_b: LocalProperties
-    cp_weights: tuple[float, ...]
-    quadrature_provenance: Provenance
-    pairs: tuple[DispersionPair, ...]
-    units: str = 'C_n: Eh bohr^n; cp_weights includes Jacobian and1/(2*pi)'
-    origin: str = 'Psi4_isotropic_dispersion_from_Psi4_LW'
-    anisotropic_status: str = 'separate_explicit_placement_adapter_available_not_computed'
-
-    def __post_init__(self):
-        object.__setattr__(self, 'cp_weights', tuple(self.cp_weights))
-        object.__setattr__(self, 'pairs', tuple(self.pairs))
-
-
-def isotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *,
-                         cp_weights: Sequence[float], quadrature_provenance: Provenance,
-                         max_order: int = 12, site_ranks_a: Sequence[Sequence[int]] | None = None,
-                         site_ranks_b: Sequence[Sequence[int]] | None = None,
-                         log=None, wfn=None) -> IsotropicDispersion:
-    """Explicit A/B local results and CP weights, no invented static quadrature.
-
-    Site sets may differ; frequency grids must match exactly, as in the C++ contract.
-    Weights include the Jacobian and1/(2*pi) exactly once. No interpolation, no
-    anisotropic conversion, and no Python duplication of the C_n formula.
-
-    ``site_ranks_a``/``site_ranks_b`` declare, per site and in site order, which
-    ranks that site contributes; the default is every rank the model was actually
-    localized at -- ``1..model.metadata.localization_rank_limit`` -- for every
-    site, which is ``(1, 2, 3)`` for the default rank-3 localization and
-    ``(1, 2, 3, 4)`` for a rank-4 one. The default
-    is read off the model rather than fixed at ``(1, 2, 3)`` because a model
-    localized at a declared lower limit holds identical zeros above it: a fixed
-    default would feed those zeros to the C_n kernel, which would then report the
-    order ``complete`` on terms that are absent by declaration. They exist
-    because a rank limit is a property
-    of the model the caller declares -- CamCASP's per-site ``.pdef`` ``lim``, e.g.
-    L2 on O and H1 on H -- and not something to be inferred from a target. A
-    limited site drops the corresponding terms from the C_n sum, which the kernel
-    then reports through ``missing_rank_pairs`` and ``complete`` rather than
-    silently completing: an order whose every rank pair survives is comparable,
-    one with a missing pair is not, and that distinction must stay visible.
-
-    Ranks 1..4 are declarable, but only up to what the supplied model was actually
-    localized at: a rank exceeding ``model.metadata.localization_rank_limit`` is
-    refused rather than zero-filled, because those components are absent by
-    declaration, and reading their zeros would drop C_n terms while still reporting
-    the order as complete. Rank 4 therefore requires a model built with
-    ``localization_rank_limit=4``; it is the rank pairs (1,4) and (4,1) that make
-    C12 structurally complete, and a rank-3 model is not silently promoted to one.
-
-    ``log`` and ``wfn`` are reporting surfaces only. This stage owns its own
-    banner, node table and coefficient tables because it is the only place that
-    knows which per-site ranks it resolved; a caller that narrates the stage
-    itself would have to guess them. ``wfn`` is written to solely by the
-    reporting module, which publishes this stage's machine-readable variables on
-    it; passing one does not make the C_n a property of that wavefunction, and
-    nothing here reads it back or checks the two models against it.
-    """
-    if not isinstance(model_a, LocalProperties) or not isinstance(model_b, LocalProperties):
-        raise ValueError('dispersion requires typed LW local results')
-    if not isinstance(quadrature_provenance, Provenance):
-        raise ValueError('explicit quadrature Provenance required')
-    if model_a.frequencies != model_b.frequencies:
-        raise ValueError('A/B frequency grids must match exactly; no interpolation')
-    if type(max_order) is not int or max_order not in (6,8,10,12):
-        raise ValueError('max_order must be6,8,10,12')
-    weights = _array(cp_weights, (len(model_a.frequencies),), 'cp_weights')
-    if np.any(weights < 0) or not np.any(weights > 0) or any(x == 0 and w != 0 for x,w in zip(model_a.frequencies, weights)):
-        raise ValueError('CP weights require positive dynamic weight and zero static weight')
-    from psi4 import core
-    from . import isapol_logging as _lg
-    log = _lg.silent() if log is None else log
-    log.stage('isotropic dispersion coefficients (Casimir-Polder)', _lg.dispersion_parameters(
-        model_a=model_a, model_b=model_b, max_order=max_order, cp_weights=weights,
-        quadrature_provenance=quadrature_provenance,
-        site_ranks_a=site_ranks_a, site_ranks_b=site_ranks_b))
-    def validated_ranks(model, declared):
-        if declared is None:
-            # Not (1,2,3): a model localized at a declared limit below 3 has
-            # identical zeros above it, and passing those to the kernel would
-            # score the order `complete` on declared-absent terms.
-            return (tuple(range(1, model.metadata.localization_rank_limit + 1)),) * len(model.labels)
-        declared = tuple(tuple(r for r in site) for site in declared)
-        if len(declared) != len(model.labels):
-            raise ValueError('site_ranks must declare one rank tuple per site, in site order')
-        for site in declared:
-            if not site or any(type(r) is not int for r in site):
-                raise ValueError('each site must declare a non-empty tuple of integer ranks')
-            if any(r < 1 or r > 4 for r in site):
-                raise ValueError('declarable LW ranks are1..4')
-            # Above the model's own declared localization limit the scalars are
-            # identically zero by declaration. Reading them would silently drop
-            # terms from the C_n sum while reporting the order as complete.
-            if any(r > model.metadata.localization_rank_limit for r in site):
-                raise ValueError(
-                    'declared rank exceeds the localization rank limit of the model '
-                    f'({model.metadata.localization_rank_limit}); those components are absent by '
-                    'declaration, not zero-valued physics')
-            if any(b <= a for a,b in zip(site, site[1:])):
-                raise ValueError('site ranks must be strictly increasing')
-        return declared
-    ranks_a, ranks_b = validated_ranks(model_a, site_ranks_a), validated_ranks(model_b, site_ranks_b)
-    def convert(model, per_site_ranks):
-        sites = []
-        origins, scalars = model.origins.array, model.atomic_scalars.array
-        for j,label in enumerate(model.labels):
-            site = core.IsaIsotropicSite()
-            site.label, site.origin = label, origins[j].tolist()
-            site.ranks = list(per_site_ranks[j])
-            site.polarizabilities = core.Matrix.from_array(
-                np.ascontiguousarray(scalars[:, j, [r-1 for r in per_site_ranks[j]]]))
-            sites.append(site)
-        provenance = f'Psi4_LW; source_sha256={model.provenance.source_sha256}; canonical_input_array_sha256={model.metadata.canonical_input_array_sha256}; policy={model.metadata.residual_policy}'
-        return core.IsaIsotropicModel(list(model.frequencies), sites, provenance)
-    result = core.isa_isotropic_dispersion(convert(model_a, ranks_a), convert(model_b, ranks_b),
-                                           weights.tolist(), max_order)
-    pairs = tuple(DispersionPair(p.site_a, p.site_b, model_a.labels[p.site_a], model_b.labels[p.site_b],
-                  tuple(Coefficient(c.order, c.value, tuple(map(tuple,c.included_rank_pairs)),
-                                    tuple(map(tuple,c.missing_rank_pairs)), c.complete) for c in p.coefficients)) for p in result.pairs)
-    record = IsotropicDispersion(model_a, model_b, tuple(map(float,weights)), quadrature_provenance, pairs)
-    _lg.report_dispersion(log, wfn, record)
-    log.stage_end()
-    return record
-
-
-@dataclass(frozen=True)
-class Placement:
-    """Whole-model active Cartesian placement: r_placed = rotation @ r + translation.
-
-    Both arrays are explicit, bounded immutable snapshots. Translation is in bohr;
-    rotation is proper and is NOT a multipole tensor transformation in Python.
-    """
-    rotation: ArraySnapshot
-    translation: ArraySnapshot
-
-    def __post_init__(self):
-        for value, shape in ((self.rotation, (3,3)), (self.translation, (3,))):
-            if isinstance(value, ArraySnapshot) and value.shape != shape:
-                raise ValueError('placement snapshot has invalid bounded shape')
-        r = _array(self.rotation.array if isinstance(self.rotation, ArraySnapshot) else self.rotation,
-                   (3,3), 'placement rotation')
-        t = _array(self.translation.array if isinstance(self.translation, ArraySnapshot) else self.translation,
-                   (3,), 'placement translation')
-        with np.errstate(over='ignore', invalid='ignore'):
-            if (not np.allclose(r.T @ r, np.eye(3), atol=1e-12, rtol=0)
-                    or not np.isfinite(np.linalg.det(r)) or abs(np.linalg.det(r)-1) > 1e-12):
-                raise ValueError('placement rotation must be proper Cartesian rotation')
-        object.__setattr__(self, 'rotation', ArraySnapshot.of(r))
-        object.__setattr__(self, 'translation', ArraySnapshot.of(t))
-
-
-@dataclass(frozen=True)
-class PlacedGeometry:
-    origins: ArraySnapshot
-    source_frames: ArraySnapshot
-    component_frames: ArraySnapshot
-    core_provenance: str
-    ranks: tuple[int, ...] = (1, 2, 3)
-    declaration: str = 'supplied_local_response'
-    tensor_axes: str = 'raw_global; real Racah ranks1..3; component frame is placement rotation'
-
-
-@dataclass(frozen=True)
-class AnisotropicCoefficient:
-    order: int
-    value: float
-    energy: float
-    included_rank_quadruples: tuple[tuple[int, int, int, int], ...]
-    missing_rank_quadruples: tuple[tuple[int, int, int, int], ...]
-    declared_model_complete: bool
-    unrestricted_complete: bool
-
-    def __post_init__(self):
-        for name in ('included_rank_quadruples', 'missing_rank_quadruples'):
-            object.__setattr__(self, name, tuple(map(tuple, getattr(self, name))))
-
-
-@dataclass(frozen=True)
-class AnisotropicPair:
-    site_a: int
-    site_b: int
-    label_a: str
-    label_b: str
-    distance: float
-    displacement: tuple[float, float, float]
-    direction: tuple[float, float, float]
-    coefficients: tuple[AnisotropicCoefficient, ...]
-    truncated_energy: float
-
-    def __post_init__(self):
-        for name in ('displacement', 'direction', 'coefficients'):
-            object.__setattr__(self, name, tuple(getattr(self, name)))
-
-
-@dataclass(frozen=True)
-class AnisotropicDispersion:
-    model_a: LocalProperties
-    model_b: LocalProperties
-    placement_a: Placement
-    placement_b: Placement
-    placed_a: PlacedGeometry
-    placed_b: PlacedGeometry
-    frequencies: tuple[float, ...]
-    cp_weights: tuple[float, ...]
-    quadrature_provenance: Provenance
-    max_order: int
-    pairs: tuple[AnisotropicPair, ...]
-    truncated_energy: float
-    origin: str = 'Psi4_anisotropic_dispersion_from_Psi4_LW'
-    kind: str = 'orientation_resolved_scalars_not_recoupled_components'
-    units: str = 'origins/distance: bohr; C_n: Eh bohr^n; energy: Eh; cp_weights includes Jacobian and1/(2*pi)'
-
-    def __post_init__(self):
-        for name in ('frequencies', 'cp_weights', 'pairs'):
-            object.__setattr__(self, name, tuple(getattr(self, name)))
-
-
-def anisotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *,
-                           placement_a: Placement, placement_b: Placement,
-                           cp_weights: Sequence[float], quadrature_provenance: Provenance,
-                           max_order: int = 12, log=None,
-                           wfn=None) -> AnisotropicDispersion:
-    """Expert adapter for trusted factory-produced LocalProperties (see that type).
-
-    Both entire models require explicit placements, including an explicit identity
-    for an unmoved model. Keep source results/input/provenance intact. raw_global
-    is already expressed in identity component frames: core receives those exact
-    bytes with frame=placement.rotation. Core alone rotates multipoles and contracts
-    responses; raw_local is never roundtripped, symmetrized, or used as a fallback.
-    Placed source frames are metadata only. Python performs Cartesian geometry
-    placement, not multipole translation/localization or dispersion numerics.
-
-    Exact reciprocity is mandatory, including roundoff-size defects. No tolerance
-    policy override, tensor repair, isotropic fallback, interpolation, or invented
-    quadrature is available. The historical static example cannot provide dynamic
-    weights and remains unsupported. This is not molecular-frequency acceptance.
-    Existing C++ model/pair budgets remain authoritative for core resources.
-
-    ``log`` and ``wfn`` are reporting surfaces only. The coefficients reported
-    and published are orientation-resolved scalars, named as such, and never as
-    isotropic C_n; their two completeness flags are both reported, and the
-    published name is marked INCOMPLETE on the unrestricted one, exactly as the
-    isotropic stage marks its own. Passing a wavefunction does not make this
-    adapter's result a property of it: the caller owns both placements, and
-    nothing here reads the wavefunction back.
-    """
-    if not isinstance(model_a, LocalProperties) or not isinstance(model_b, LocalProperties):
-        raise ValueError('dispersion requires typed LW local results')
-    if not isinstance(placement_a, Placement) or not isinstance(placement_b, Placement):
-        raise ValueError('explicit typed A/B Placement required')
-    if not isinstance(quadrature_provenance, Provenance):
-        raise ValueError('explicit quadrature Provenance required')
-    if type(max_order) is not int or not 6 <= max_order <= 12:
-        raise ValueError('max_order must be a Python integer6..12, including odd orders')
-    if model_a.frequencies != model_b.frequencies:
-        raise ValueError('A/B frequency grids must match exactly; no interpolation')
-    nf = _length(model_a.frequencies, 'frequencies', MAX_FREQUENCIES)
-    weights = _array(cp_weights, (nf,), 'cp_weights')
-    if (not nf or np.any(weights < 0) or not np.any(weights > 0)
-            or any(x == 0 and w != 0 for x,w in zip(model_a.frequencies, weights))):
-        raise ValueError('CP weights require positive dynamic weight and zero static weight')
-    from psi4 import core
-    from . import isapol_logging as _lg
-    log = _lg.silent() if log is None else log
-    log.stage('oriented (anisotropic) dispersion coefficients',
-              _lg.anisotropic_dispersion_parameters(
-                  model_a=model_a, model_b=model_b, placement_a=placement_a,
-                  placement_b=placement_b, max_order=max_order, cp_weights=weights,
-                  quadrature_provenance=quadrature_provenance))
-
-    def convert(model, placement):
-        raw = model.raw_global.array
-        if not np.array_equal(raw, raw.transpose(0,1,3,2)):
-            raise ValueError('strict anisotropic conversion requires exact reciprocity; no repair or fallback')
-        rotation, translation = placement.rotation.array, placement.translation.array
-        with np.errstate(over='raise', invalid='raise'):
-            origins = model.origins.array @ rotation.T + translation
-            frames = rotation @ model.frames.array
-        placed_origins, placed_frames = ArraySnapshot.of(origins), ArraySnapshot.of(frames)
-        sites = []
-        for j,label in enumerate(model.labels):
-            site = core.IsaAnisotropicSite()
-            site.label, site.origin, site.ranks = label, origins[j].tolist(), [1,2,3]
-            site.frame = rotation.tolist()
-            site.responses = [core.Matrix.from_array(a) for a in raw[:,j]]
-            sites.append(site)
-        provenance = (f'Psi4_LW; source_sha256={model.provenance.source_sha256}; '
-                      f'canonical_input_array_sha256={model.metadata.canonical_input_array_sha256}; '
-                      f'policy={model.metadata.residual_policy}; raw_global; '
-                      f'placement_rotation_sha256={placement.rotation.canonical_array_sha256}; '
-                      f'placement_translation_sha256={placement.translation.canonical_array_sha256}')
-        native = core.IsaAnisotropicModel(list(model.frequencies), sites, 'supplied_local_response', provenance)
-        geometry = PlacedGeometry(placed_origins, placed_frames,
-                                 ArraySnapshot.of(np.tile(rotation, (len(sites),1,1))), native.provenance)
-        return native, geometry
-
-    a, placed_a = convert(model_a, placement_a)
-    b, placed_b = convert(model_b, placement_b)
-    result = core.isa_anisotropic_dispersion(a, b, weights.tolist(), max_order)
-    pairs = tuple(AnisotropicPair(
-        p.site_a, p.site_b, model_a.labels[p.site_a], model_b.labels[p.site_b],
-        p.distance, tuple(p.displacement), tuple(p.direction),
-        tuple(AnisotropicCoefficient(c.order, c.value, c.energy,
-              tuple(map(tuple,c.included_rank_quadruples)), tuple(map(tuple,c.missing_rank_quadruples)),
-              c.declared_model_complete, c.unrestricted_complete) for c in p.coefficients),
-        p.truncated_energy) for p in result.pairs)
-    record = AnisotropicDispersion(model_a, model_b, placement_a, placement_b, placed_a, placed_b,
-                                 tuple(result.frequencies), tuple(result.cp_weights), quadrature_provenance,
-                                 result.max_order, pairs, result.truncated_energy)
-    _lg.report_anisotropic_dispersion(log, wfn, record)
-    log.stage_end()
-    return record

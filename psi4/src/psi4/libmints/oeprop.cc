@@ -62,10 +62,12 @@
 #include "psi4/libfock/cubature.h"
 #include "psi4/libfock/points.h"
 
+#include <algorithm>
 #include <iostream>
 #include <cstdlib>
 #include <cstdio>
 #include <cmath>
+#include <limits>
 #include <sstream>
 #include <utility>
 #include <fstream>
@@ -1822,8 +1824,32 @@ std::vector<SharedMatrix> compute_radial_moments(const std::shared_ptr<DFTGrid>&
 // Minimal Basis Iterative Stockholder (JCTC, 2016, p. 3894-3912, Verstraelen et al.)
 std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAnalysisCalc::compute_mbis_multipoles(
     bool free_atom_volumes, bool print_output) {
+    // A snapshot belongs to this attempt, never to an earlier successful call.
+    wfn_->set_scalar_variable("MBIS CONVERGED", 0.0);
+    wfn_->set_scalar_variable("MBIS ITERATIONS", 0.0);
+    wfn_->set_scalar_variable("MBIS DENSITY RESIDUAL", std::numeric_limits<double>::infinity());
+    wfn_->del_scalar_variable("MBIS GRID ELECTRONS");
+    for (const auto& name : {"MBIS SHELL COUNTS", "MBIS SHELL POPULATIONS", "MBIS SHELL WIDTHS"}) {
+        wfn_->del_array_variable(name);
+    }
+
     if (print_output) outfile->Printf("  ==> Computing MBIS Charges <==\n\n");
-    timer_on("MBIS");
+    // A failed attempt must not leave the timer on, or every retry throws.
+    struct MBISTimer {
+        bool on = true;
+        MBISTimer() { timer_on("MBIS"); }
+        void off() {
+            timer_off("MBIS");
+            on = false;
+        }
+        ~MBISTimer() {
+            if (!on) return;
+            try {
+                timer_off("MBIS");
+            } catch (...) {
+            }
+        }
+    } mbis_timer;
 
     // => Setup 1RDM on DFTGrid <= //
 
@@ -1832,6 +1858,15 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
     const double conv = options.get_double("MBIS_D_CONVERGENCE");
     const int debug = options.get_int("DEBUG");
     std::shared_ptr<Molecule> mol = basisset_->molecule();
+
+    if (!std::isfinite(conv) || conv <= 0.0) {
+        throw PSIEXCEPTION("MBIS_D_CONVERGENCE must be finite and positive.");
+    }
+    for (int atom = 0; atom < mol->natom(); atom++) {
+        if (mol->Z(atom) == 0.0) {
+            throw PSIEXCEPTION("MBIS does not support ghost sites or dummy atoms.");
+        }
+    }
 
     // MBIS grid options
     std::map<std::string, int> mbis_grid_options_int;
@@ -1913,6 +1948,10 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
     double grid_electrons = 0.0;
     for (int p = 0; p < total_points; p++) {
         grid_electrons += weights[p] * rho[p];
+    }
+    wfn_->set_scalar_variable("MBIS GRID ELECTRONS", grid_electrons);
+    if (!std::isfinite(grid_electrons)) {
+        throw PSIEXCEPTION("MBIS grid electron count is nonfinite.");
     }
 
     // Actual electron count
@@ -2032,10 +2071,12 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
 
     int iter = 1;
     bool is_converged = false;
-    double delta_rho_max_0;
+    double delta_rho_max_0 = std::numeric_limits<double>::infinity();
 
     if (print_output && debug >= 1) outfile->Printf("                     Delta D\n");
     while (iter < max_iter) {
+        wfn_->set_scalar_variable("MBIS ITERATIONS", iter);
+        wfn_->set_scalar_variable("MBIS DENSITY RESIDUAL", std::numeric_limits<double>::infinity());
 // Self-consistent update of population and density
 #pragma omp parallel for
         for (int atom = 0; atom < num_atoms; atom++) {
@@ -2053,6 +2094,18 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
 
                 Nai_next[atom][m] = sum_n;
                 Sai_next[atom][m] = sum_s / (3 * Nai_next[atom][m]);
+            }
+        }
+
+        // Check outside the parallel region: NaNs must not evade the maximum-residual test.
+        for (int atom = 0; atom < num_atoms; atom++) {
+            for (int m = 0; m < mA[atom]; m++) {
+                if (!std::isfinite(Nai_next[atom][m]) || Nai_next[atom][m] <= 0.0 ||
+                    !std::isfinite(Sai_next[atom][m]) || Sai_next[atom][m] <= 0.0) {
+                    throw PSIEXCEPTION("MBIS invalid shell update on atom " + std::to_string(atom + 1) +
+                                       ", shell " + std::to_string(m + 1) +
+                                       ": populations and widths must be finite and positive.");
+                }
             }
         }
 
@@ -2085,8 +2138,12 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
 
         delta_rho_max_0 = 0.0;
         for (int atom = 0; atom < num_atoms; atom++) {
+            if (!std::isfinite(delta_rho_atoms_0[atom])) {
+                throw PSIEXCEPTION("MBIS density residual is nonfinite on atom " + std::to_string(atom + 1) + ".");
+            }
             if (delta_rho_atoms_0[atom] > delta_rho_max_0) delta_rho_max_0 = delta_rho_atoms_0[atom];
         }
+        wfn_->set_scalar_variable("MBIS DENSITY RESIDUAL", delta_rho_max_0);
 
         // Update populations, widths, and densities
         Nai = Nai_next;
@@ -2118,6 +2175,9 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
             rho_a[atom * total_points + point] =
                 rho[point] * rho_a_0_points[atom * total_points + point] / rho_0_points[point];
         }
+    }
+    if (std::any_of(rho_a.begin(), rho_a.end(), [](double value) { return !std::isfinite(value); })) {
+        throw PSIEXCEPTION("MBIS partitioned density is nonfinite.");
     }
 
     // Kronecker Delta
@@ -2242,6 +2302,9 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
         if (free_atom == false) {
             for (int a = 0; a < num_atoms; ++a) {
                 double free_atom = wfn_->scalar_variable("MBIS FREE ATOM " + mol->label(a) + " VOLUME");
+                if (!std::isfinite(free_atom) || free_atom <= 0.0) {
+                    throw PSIEXCEPTION("MBIS FREE ATOM " + mol->label(a) + " VOLUME must be finite and positive.");
+                }
                 double vr = rmoms[1]->get(a, 0) / free_atom;
                 volume_ratios->set(a, 0, vr);
             }
@@ -2290,7 +2353,39 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
         }
     }
 
-    timer_off("MBIS");
+    mbis_timer.off();
+
+    // Publish owned, zero-padded all-shell arrays only after postprocessing succeeds.
+    for (const auto& matrix : {mpole, dpole, qpole, opole, volume_ratios}) {
+        for (int a = 0; a < matrix->nrow(); a++) {
+            for (int c = 0; c < matrix->ncol(); c++) {
+                if (!std::isfinite(matrix->get(a, c))) {
+                    throw PSIEXCEPTION("MBIS postprocessing produced a nonfinite result.");
+                }
+            }
+        }
+    }
+    for (const auto& matrix : rmoms) {
+        for (int a = 0; a < num_atoms; a++) {
+            if (!std::isfinite(matrix->get(a, 0))) {
+                throw PSIEXCEPTION("MBIS radial moment is nonfinite.");
+            }
+        }
+    }
+    auto shell_counts = std::make_shared<Matrix>("MBIS Shell Counts", num_atoms, 1);
+    auto shell_populations = std::make_shared<Matrix>("MBIS Shell Populations", num_atoms, max_shells);
+    auto shell_widths = std::make_shared<Matrix>("MBIS Shell Widths", num_atoms, max_shells);
+    for (int atom = 0; atom < num_atoms; atom++) {
+        shell_counts->set(atom, 0, mA[atom]);
+        for (int m = 0; m < mA[atom]; m++) {
+            shell_populations->set(atom, m, Nai[atom][m]);
+            shell_widths->set(atom, m, Sai[atom][m]);
+        }
+    }
+    wfn_->set_array_variable("MBIS SHELL COUNTS", shell_counts);
+    wfn_->set_array_variable("MBIS SHELL POPULATIONS", shell_populations);
+    wfn_->set_array_variable("MBIS SHELL WIDTHS", shell_widths);
+    wfn_->set_scalar_variable("MBIS CONVERGED", 1.0);
 
     return std::make_tuple(mpole, dpole, qpole, opole);
 }

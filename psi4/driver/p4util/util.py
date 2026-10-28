@@ -83,7 +83,8 @@ def oeprop(wfn: core.Wavefunction, *args: List[str], **kwargs):
     atomic_names = tuple(prop.upper() for prop in args
                          if isinstance(prop, str) and prop.upper().startswith('ATOMIC_'))
     if (atomic_names or 'atomic_backend' in kwargs) and isinstance(wfn, core.Wavefunction):
-        wfn._native_atomic_property_result = None
+        from ..procrouting.isapol_bounded_oeprop import invalidate
+        invalidate(wfn)
     if any(not isinstance(prop, str) for prop in args):
         raise ValidationError('oeprop property names must be strings')
     if 'atomic_backend' in kwargs:

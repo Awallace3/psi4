@@ -1,18 +1,11 @@
-"""Source-loaded expert native partition; no staged/source-package shadowing."""
-import importlib.util
-from pathlib import Path
-import sys
+"""Explicit-recipe ISA partition and verified MAIN representation."""
 from dataclasses import replace, FrozenInstanceError
 import numpy as np
 import pytest
 import psi4
 from psi4 import core
-
-_PATH = Path(__file__).resolve().parents[2] / 'psi4/driver/procrouting/isapol_native_partition.py'
-_SPEC = importlib.util.spec_from_file_location('_test_owned_native_isa_partition', _PATH)
-native = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = native
-_SPEC.loader.exec_module(native)
+from psi4.driver.procrouting import isapol_native_partition as native
+from psi4.driver.procrouting import isapol_basis as basis_impl
 
 
 def controls(**kw):
@@ -25,17 +18,17 @@ def controls(**kw):
 
 
 def basis(name, centre, exponents, role_rep='Spherical'):
-    return native.BasisRecipe(name, 'analytic declared normalized primitive Gaussian basis; not CamCASP preset',
-        role_rep, (centre,), tuple(native.ShellRecipe(0, 0, (a,), ((2*a/np.pi)**.75,)) for a in exponents))
+    return basis_impl.BasisRecipe(name, 'analytic declared normalized primitive Gaussian basis; not CamCASP preset',
+        role_rep, (centre,), tuple(basis_impl.ShellRecipe(0, 0, (a,), ((2*a/np.pi)**.75,)) for a in exponents))
 
 
 def recipe(wfn, **kw):
     mol = wfn.molecule()
     centres = tuple((mol.x(i), mol.y(i), mol.z(i)) for i in range(mol.natom()))
     # Physically explicit even-tempered Gaussian fitting spaces, not JKFIT aliases.
-    aux = native.BasisRecipe('declared molecular even-tempered s Gaussian AUX',
+    aux = basis_impl.BasisRecipe('declared molecular even-tempered s Gaussian AUX',
         'analytic recipe (.25,.5,1,2,4,8,16,32); normalized primitives, Cartesian', 'Cartesian', centres,
-        tuple(native.ShellRecipe(i, 0, (a,), ((2*a/np.pi)**.75,))
+        tuple(basis_impl.ShellRecipe(i, 0, (a,), ((2*a/np.pi)**.75,))
               for i in range(len(centres)) for a in (.25,.5,1.,2.,4.,8.,16.,32.)))
     sites = []
     for i, c in enumerate(centres):
@@ -92,20 +85,20 @@ def test_nonconvergence_has_no_q(helium):
 
 
 def test_collocation_accuracy_failure_is_not_repaired(helium, monkeypatch):
-    original = native._psi_samples
+    original = basis_impl._psi_samples
     def broken(basis, points):
         samples = original(basis, points)
         if len(points) == 213:  # independent shell validation set, never training
             samples[0, 0] += .01
         return samples
-    monkeypatch.setattr(native, '_psi_samples', broken)
+    monkeypatch.setattr(basis_impl, '_psi_samples', broken)
     with pytest.raises(ValueError, match='validation failure'):
-        native.adapt_main(helium, caller_converged=True)
+        basis_impl.adapt_main(helium, caller_converged=True)
 
 
 def test_declaration_and_geometry_fail_closed(helium):
     with pytest.raises(ValueError, match='caller_converged'):
-        native.adapt_main(helium, caller_converged=False)
+        basis_impl.adapt_main(helium, caller_converged=False)
     r = recipe(helium)
     with pytest.raises(ValueError, match='modern preset'):
         replace(r, track='modern_spherical_aux')
@@ -117,7 +110,8 @@ def test_declaration_and_geometry_fail_closed(helium):
 
 
 @pytest.mark.parametrize('change', [{'w_eps':np.nan}, {'convergence':0.}, {'max_iterations':0},
-                                   {'mixing':1.1}, {'fix_tails':1}, {'density_cutoff':-1.}])
+                                   {'mixing':1.1}, {'fix_tails':1}, {'density_cutoff':-1.},
+                                   {'tail_fit_policy':'camcasp'}, {'tail_fit_policy':None}])
 def test_declared_controller_rejects_invalid_values(change):
     with pytest.raises(ValueError):
         controls(**change)
@@ -126,7 +120,7 @@ def test_declared_controller_rejects_invalid_values(change):
 def test_recipe_rejects_contracted_atomaux_and_wrong_map():
     c = (0.,0.,0.)
     a = basis('primitive', c, (.5,1.))
-    contracted = replace(a, shells=(native.ShellRecipe(0,0,(.5,1.),(.7,-.1)),))
+    contracted = replace(a, shells=(basis_impl.ShellRecipe(0,0,(.5,1.),(.7,-.1)),))
     with pytest.raises(ValueError, match='primitive'):
         native.SiteRecipe('X', c, contracted, contracted, (0,), 0, 1.5, True)
     with pytest.raises(ValueError):
@@ -168,9 +162,9 @@ def test_final_tail_samples_use_stored_and_eligibility():
 @pytest.mark.parametrize('l', range(5))
 def test_independent_overlap_contracted_signed_shells(l):
     c = ((.3,-.7,1.1),)
-    sh = native.ShellRecipe(0, l, (.4,1.7), (.7,-.13))
-    b = native.BasisRecipe('signed contracted', 'analytic test definition', 'Spherical', c, (sh,))
-    np.testing.assert_allclose(native.explicit_main_overlap(b), b.build('AtomAux').overlap(), atol=2e-13, rtol=2e-13)
+    sh = basis_impl.ShellRecipe(0, l, (.4,1.7), (.7,-.13))
+    b = basis_impl.BasisRecipe('signed contracted', 'analytic test definition', 'Spherical', c, (sh,))
+    np.testing.assert_allclose(basis_impl.explicit_main_overlap(b), b.build('AtomAux').overlap(), atol=2e-13, rtol=2e-13)
 
 
 def test_actual_signed_contracted_spdfg_shell_adaptation():
@@ -187,7 +181,7 @@ no_reorient
     psi4.set_options({'basis':'ISA_PARTITION_SIGNED_MAIN', 'puream':True, 'reference':'rhf',
                       'scf_type':'pk', 'e_convergence':1e-12, 'd_convergence':1e-12})
     _, wfn = psi4.energy('hf', molecule=mol, return_wfn=True)
-    a = native.adapt_main(wfn, caller_converged=True)
+    a = basis_impl.adapt_main(wfn, caller_converged=True)
     assert {s.l for s in a.recipe.shells} == set(range(5))
     assert all(min(s.coefficients) < 0 for s in a.recipe.shells)
     assert a.global_overlap_residual < 2e-11
@@ -205,7 +199,7 @@ no_reorient
     psi4.set_options({'basis':'cc-pvdz', 'puream':True, 'reference':'rhf', 'scf_type':'pk',
                       'e_convergence':1e-12, 'd_convergence':1e-12})
     _, wfn = psi4.energy('hf', molecule=mol, return_wfn=True)
-    a = native.adapt_main(wfn, caller_converged=True)
+    a = basis_impl.adapt_main(wfn, caller_converged=True)
     assert a.global_overlap_residual < 2e-11
     assert a.transformed_orthonormality_residual < 2e-9
     result = native.native_partition(wfn, recipe(wfn), caller_converged=True)
@@ -235,47 +229,28 @@ no_reorient
     psi4.set_options({'basis':basis_name, 'puream':True, 'reference':'rhf', 'scf_type':'pk',
                       'e_convergence':1e-12, 'd_convergence':1e-12})
     _, wfn = psi4.energy('hf', molecule=mol, return_wfn=True)
-    a = native.adapt_main(wfn, caller_converged=True)
+    a = basis_impl.adapt_main(wfn, caller_converged=True)
     assert max(d.heldout_residual for d in a.diagnostics) < 2e-11
     assert a.global_overlap_residual < 2e-11
     assert a.transformed_orthonormality_residual < 2e-9
     assert max(d.rank for d in a.diagnostics) == {'cc-pvdz':1, 'cc-pvtz':2, 'cc-pvqz':3, 'cc-pv5z':4}[basis_name]
 
 
-def test_bragg_slater_tail_cutoff_is_a_declared_multiplier_not_a_length():
-    """W-TAILS R1-Multiplier = 1.5 is 1.5*R_Slater, not 1.5 bohr.
-
-    CamCASP ``src/stockholder.F90::shape_function_tail_fit1`` sets the Func-1
-    cutoff to ``AtomProp(Z)%Rslater * w_tail_r1_multiplier``, so the same
-    declaration gives a different cutoff on every element.  A flat cutoff shared
-    by O and H is a DIFFERENT declared model, which is exactly why the two
-    values below are required to differ rather than to agree.
-    """
-    o = native.bragg_slater_tail_cutoff(8, 1.5)
-    h = native.bragg_slater_tail_cutoff(1, 1.5)
-    assert o == pytest.approx(1.5*0.60/0.529177249, rel=0, abs=0)
-    assert h == pytest.approx(1.5*0.50/0.529177249, rel=0, abs=0)
-    assert abs(o - h) > .28 and abs(o - 1.5) > .2 and abs(h - 1.5) > .08
-    # The source table's two deliberate departures are transcribed, not repaired:
-    # hydrogen is twice the Slater value and each inert gas takes the preceding
-    # halogen's radius.
-    assert native.BRAGG_SLATER_RADII_ANGSTROM[1] == 0.50
-    for rare, halogen in ((10, 9), (18, 17), (36, 35), (54, 53)):
-        assert native.BRAGG_SLATER_RADII_ANGSTROM[rare] == native.BRAGG_SLATER_RADII_ANGSTROM[halogen]
-    # Undefined radii are refused, never defaulted, and neither is a bad multiplier.
-    for Z in (55, 8.0):
-        with pytest.raises(ValueError, match='Bragg-Slater|declare a cutoff'):
-            native.bragg_slater_tail_cutoff(Z, 1.5)
-    for m in (0., np.inf):
-        with pytest.raises(ValueError, match='multiplier'):
-            native.bragg_slater_tail_cutoff(8, m)
-
-
-def test_scaled_cutoff_reaches_the_controller_per_site(helium):
-    """A per-site cutoff must survive into the controller options unaltered."""
+def test_declared_cutoff_reaches_the_controller_per_site(helium):
+    """A per-site bohr cutoff must survive into the controller options unaltered."""
     r = recipe(helium)
-    sites = tuple(replace(s, tail_cutoff=native.bragg_slater_tail_cutoff(2, 1.5)) for s in r.sites)
-    assert controls().build(sites).tail_cutoffs == [native.bragg_slater_tail_cutoff(2, 1.5)]
-    # Helium is one of the inert gases that take the preceding halogen's radius,
-    # so its cutoff is fluorine's and not 1.5 bohr.
-    assert sites[0].tail_cutoff != 1.5
+    sites = tuple(replace(s, tail_cutoff=2.125) for s in r.sites)
+    assert controls().build(sites).tail_cutoffs == [2.125]
+
+
+def test_tail_fit_policy_reaches_the_controller_and_provenance(helium):
+    assert controls().tail_fit_policy == 'always'
+    r = recipe(helium)
+    assert controls().build(r.sites).tail_fit_policy == core.IsaTailFitPolicy.always
+    gated = replace(r, controller=controls(tail_fit_policy='when_enabled'))
+    assert gated.controller.build(r.sites).tail_fit_policy == core.IsaTailFitPolicy.when_enabled
+    result = native.native_partition(helium, gated, caller_converged=True, build_multipoles=False)
+    assert 'tail fit policy when_enabled' in result.provenance
+    assert result.trajectory.history[0].tail_fits[0].status == 'skipped_tail_fix_off'
+    assert 'tail fit policy always' in native.native_partition(
+        helium, r, caller_converged=True, build_multipoles=False).provenance

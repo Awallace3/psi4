@@ -52,6 +52,29 @@ def test_default_policy_rejects_actual_grac(water):
         correction.validate_correction(water)
 
 
+def test_correction_options_are_closed():
+    """Exercise the registered option validator rather than its C++ spelling."""
+    key = 'ATOMIC_SCF_ASYMPTOTIC_CORRECTION'
+    with options({key: 'NONE'}):
+        assert core.get_global_option(key) == 'NONE'
+        core.set_global_option(key, 'FIXED_GRAC')
+        assert core.get_global_option(key) == 'FIXED_GRAC'
+        with pytest.raises(RuntimeError):
+            core.set_global_option(key, 'DECLARED_MULTPOLE_AC')
+        with pytest.raises(RuntimeError):
+            core.set_global_option('ATOMIC_AC_JOIN', 'TANH')
+
+
+def test_correction_admission_does_not_mutate_scf(water, monkeypatch):
+    before = _scf_state_signature(water)
+    def forbidden(*args, **kwargs):
+        pytest.fail('correction admission must not run SCF or set options')
+    monkeypatch.setattr(psi4, 'energy', forbidden)
+    monkeypatch.setattr(psi4, 'set_options', forbidden)
+    correction.validate_correction(water, **DECLARATION)
+    assert _scf_state_signature(water) == before
+
+
 @pytest.mark.parametrize('shift', [None, 0., float('nan'), True, '0.06', SHIFT + 1e-8])
 def test_expected_shift_is_explicit_and_exact(water, shift):
     with pytest.raises(ValueError, match='shift|mismatch'):

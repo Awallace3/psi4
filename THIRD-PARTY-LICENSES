@@ -435,3 +435,11 @@ FAILURE OF THE LIBRARY TO OPERATE WITH ANY OTHER SOFTWARE), EVEN IF
 SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH
 DAMAGES.
 
+
+<< 6 >> psi4/src/psi4/libisapol/{realcg_data.inc,recoupling_data.inc}
+
+CamCASP angular numerical tables, redistributed under the MIT license.
+The complete upstream copyright and permission text is retained in
+psi4/src/psi4/libisapol/RECOUPLED_CAMCASP_LICENSE, with scope and attribution
+in ANGULAR_NOTICE. These files are installed under share/psi4/licenses/isapol.
+The native Psi4 pipeline does not require an external CamCASP installation.

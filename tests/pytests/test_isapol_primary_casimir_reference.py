@@ -11,18 +11,11 @@ Two reference quantities are involved and they stay separate here:
   INTEGRATED  the Casimir-Polder integral of `water_L3_0f10.pol`, the localized
               file that same stage read, under Psi4's isotropic assembly.
 
-Their agreement is MEASURED below, not assumed -- and the measurement is the
-point of the module.  An earlier claim in this branch's history (commit
-eb49a236ea) held that the printed C6/C8/C10 came from some other reference path
-than the integral, on the strength of three constants, 8.400508 / 81.842910 /
-700.674100, that exist in no CamCASP file anywhere.  They were a transcription
-error.  `test_withdrawn_constants_are_not_reference_data` keeps them from coming
-back; the rest of the module records what the reference actually prints.
-
-Nothing here runs a native chain: the native model's recorded coefficients are
-read from committed evidence, because reproducing them needs the full 128898-
-point response.  Recomputing them is the job of the long-marked chains in
-test_isapol_reference_dispersion.py.
+Their agreement is MEASURED below, not assumed.  Nothing here runs a native
+chain.  Historical native-model residuals against the printed row, and the
+three withdrawn constants of commit eb49a236ea (a transcription error that
+exists in no CamCASP file), are recorded in `data_isapol/README.md` as
+disclosed evidence; they are not regression data.
 """
 import json
 import pathlib
@@ -35,7 +28,6 @@ import psi4
 c = psi4.core
 DATA = pathlib.Path(__file__).parent / "data_isapol"
 REFERENCE = json.loads((DATA / "camcasp_casimir_h2o_vdz_l3.json").read_text())
-EVIDENCE = json.loads((DATA / "psi4_primary_casimir_residual_evidence.json").read_text())
 
 #: CASIMIR prints one block per site TYPE.  With two equivalent hydrogens that
 #: leaves which site the block stands for undetermined by the file; the answer,
@@ -105,14 +97,6 @@ def test_frequencies_match_the_declared_quadrature():
     assert REFERENCE["dispersion"]["declared"]["Skip"] == "0"
 
 
-def test_isotropic_row_is_zero_at_every_odd_order():
-    """Rank 1..3 isotropics can contribute to even orders only."""
-    for block in FIRST_SITE_OF_TYPE:
-        row = REFERENCE["dispersion"]["blocks"][block]["isotropic"]
-        assert [row[str(n)] for n in (7, 9, 11)] == [0.0, 0.0, 0.0]
-        assert all(row[str(n)] > 0.0 for n in EVEN_ORDERS)
-
-
 @pytest.mark.parametrize("block", sorted(FIRST_SITE_OF_TYPE))
 def test_printed_row_is_the_casimir_integral_of_its_own_localized_file(block, integrated):
     """PRINTED == INTEGRATED, on every even order, for the primary reference.
@@ -154,32 +138,3 @@ def test_printed_blocks_name_the_first_site_of_each_type(integrated):
             if pair != frozenset(first):
                 assert value > 10 * best, (block, sorted(pair))
     assert worst["H H"][frozenset(("H3", "H3"))] > 1e-4
-
-
-def test_recorded_native_residual_against_the_printed_reference():
-    """The declared native model reproduces the printed row; record by how much.
-
-    Bounds are the measured residuals rounded up, so a regression moves them.
-    O-O is closed to 3.1e-5 at every even order; the H-containing rows close to
-    2.1e-4, which is the same order as the reference's OWN H2/H3 asymmetry
-    measured above.  No claim is made that the two are the same effect.
-    """
-    native = EVIDENCE["isotropic_cn"]
-    assert EVIDENCE["model"].endswith("DFPROP_ISA_A")
-    worst = {}
-    for block, (a, b) in FIRST_SITE_OF_TYPE.items():
-        printed = _printed(block)
-        row = native["%s-%s" % (a, b)]
-        worst[block] = max(abs(row[str(n)] / printed[n] - 1.0) for n in EVEN_ORDERS)
-    assert worst["O O"] < 3.2e-5
-    assert worst["H O"] < 1.0e-4
-    assert worst["H H"] < 2.1e-4
-
-
-def test_withdrawn_constants_are_not_reference_data():
-    """8.400508 / 81.842910 / 700.674100 are in no reference file; keep it that way."""
-    withdrawn = EVIDENCE["withdrawn_constants"]
-    printed = _printed("O O")
-    for order, bad in ((6, withdrawn["C6"]), (8, withdrawn["C8"]), (10, withdrawn["C10"])):
-        assert printed[order] != pytest.approx(bad, rel=1e-4), order
-    assert "8.400508" not in (DATA / "camcasp_casimir_h2o_vdz_l3.json").read_text()

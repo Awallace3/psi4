@@ -5,8 +5,8 @@ The reference case is CamCASP `examples/properties/H2O`: weight type 4, prefix
 `H2O_aTZ`, PBE0/aug-cc-pVTZ through DALTON, CKS propagator, a constrained-NN
 density fit at `Eta = 0.0005, Lambda = 1000`, rank-4 distributed polarizabilities,
 and a PFIT refinement onto the 17-variable `.pdef` model.  It is *not* the
-`tests/H2O_props` case that `camcasp_cn_pot_h2o_l2h1.json` carries, and the two
-must not be conflated: they differ in the weight type, in the SCF back end, and
+`tests/H2O_props` case of `test_isapol_primary_casimir_reference.py`, and the
+two must not be conflated: they differ in the weight type, in the SCF back end, and
 -- decisively for any local tensor -- in the `H2O.axes` declaration (bond axes
 here, `z global Z` there).
 
@@ -19,18 +19,13 @@ frequencies, with the model's zero ranks omitted.  Committing those instead of
 the 1,271-line fixture loses no coverage of ours at all: the printed C6/C8/C10
 below must still come back out of our quadrature and pair assembly.
 
-*What only the fixture can do*, and so lives in
-`agent_scratch/pytests/test_isapol_camcasp_local_pol_oracle.py`: rebuilding all
-2,673 printed tensor entries from the 17 `.pdef` variables, the full structural
-sweep over them, and the guard test that re-derives every literal here from the
-fixture so a regenerated capture cannot leave stale numbers committed.
-
-*What no version of this file asserts.*  Nothing here compares a Psi4-computed
-polarizability to the reference's.  The reference's own two routes to the
-molecular polarizability disagree by 0.26% (`INTERNAL_INCONSISTENCY`), and its
-refinement lattice is 500 `Seed 1` random points we cannot reproduce without
-CamCASP's RNG, so its refined tensors cannot be matched exactly by construction.
-The molecular isotropic total is complete only at n = 6.
+*What is not here.*  The reference-only measurements once asserted beside
+this oracle (its printed `(-1)^l sqrt(2l + 1)` recoupled rows, the bond-frame
+COPY rule, the 7.7e-7 closure of its rank-4 sum rules) execute no Psi4 code;
+they are recorded in `data_isapol/README.md`.  Nothing here compares a
+Psi4-computed polarizability to the reference's: its own two routes to the
+molecular polarizability disagree by 0.26%.  The molecular isotropic total
+is complete only at n = 6.
 """
 import numpy as np
 import pytest
@@ -77,61 +72,8 @@ REFERENCE_CN = {'O O': {6: 21.59463, 8: 422.2789, 10: 3894.995},
 ADMISSIBLE = {'O O': [6, 8, 10], 'H O': [6, 8], 'H H': [6]}
 #: Ordered pairs of sites that map onto each printed type-pair block.
 MULTIPLICITY = {'O O': 1, 'H O': 4, 'H H': 4}
+#: `C6(OO) + 4 C6(HO) + 4 C6(HH)` of the printed blocks.
 MOLECULAR_C6 = 43.890269599999996
-#: Only n = 6 is a complete molecular total: under `L2` with rank 1 on hydrogen
-#: the H-O and H-H blocks structurally cannot carry C10 at all.
-COMPLETE_ORDERS = [6]
-
-#: Molecular isotropic C6 of the *other* fixture's Psi4 back-end row, i.e. the same
-#: property from the same code under a different declared protocol.
-OTHER_CASE_C6 = 46.617408
-
-#: The reference's own `00(l l)` recoupled rows from the same `_casimir.out`,
-#: dynamic nodes 1..10 only.  Rebuilding these from `SCALARS` tests that our
-#: `(-1)^l sqrt(2l + 1)` convention is the reference's, sign included.
-RECOUPLED = {
-    ('O', 1): [-11.273, -11.2263, -10.9517, -10.0677, -8.18726, -5.50871, -2.92179,
-               -1.11927, -0.227624, -0.00931913],
-    ('O', 2): [52.0764, 51.9081, 50.8998, 47.4809, 39.864, 29.0222, 17.5542, 7.3049,
-               1.45201, 0.0529732],
-    ('H1', 1): [-2.39177, -2.38209, -2.32611, -2.15349, -1.79905, -1.24332, -0.601205,
-                -0.162819, -0.0203502, -0.000637856],
-    ('H2', 1): [-2.39177, -2.38209, -2.32611, -2.15349, -1.79905, -1.24332, -0.601205,
-                -0.162819, -0.0203502, -0.000637856],
-}
-
-#: The two declared bond frames, local-to-global columns.  Oxygen is the identity.
-FRAMES = [[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-          [[-0.610905425288665, 0.0, -0.7917035817481662],
-           [0.0, 0.9999999999999999, 0.0],
-           [0.7917035817481661, 0.0, -0.610905425288665]],
-          [[0.610905425288665, 0.0, 0.7917035817481662],
-           [0.0, -0.9999999999999999, 0.0],
-           [0.7917035817481661, 0.0, -0.610905425288665]]]
-
-#: The static H1 dipole-dipole block in *local* axes, xyz ordered, rebuilt at
-#: capture time from the four declared H1 variables.  H2's is bit-identical.
-H1_DIPOLE_BLOCK = [[1.2967801, 0.0, -0.26821221],
-                   [0.0, 1.206554, 0.0],
-                   [-0.26821221, 0.0, 1.6399147]]
-
-#: The reference's two routes to its own static molecular isotropic polarizability:
-#: translating its rank-4 distributed tensor, versus rotating and summing its
-#: refined local tensors.  The gap is the refinement's own distortion.
-INTERNAL_INCONSISTENCY = {'distributed': 9.24735726744245, 'refined': 9.271584433333333,
-                          'absolute': 0.02422716589088303, 'relative': 0.002619901577305833}
-
-#: Residuals of the one rank-4 reference quantity, `H2O_aTZ_NL4_static.pol`, at
-#: 3 sites x 25 components.  The charge-flow sum rules close to 7.7e-7 rather than
-#: to zero: a direct measurement of the reference's constrained-NN fit quality, and
-#: the level any comparison against it is limited to.
-DISTRIBUTED_RESIDUALS = {'asymmetry_maxabs': 5.807088143683359e-11,
-                         'charge_charge_total': -3.11178860457062e-12,
-                         'sum_over_a_maxabs': 7.675323379086052e-07,
-                         'sum_over_b_maxabs': 7.675286010089266e-07}
-#: Which translation sign convention sends the C2v-forbidden xz element to zero.
-#: Measured at capture time, not assumed.
-FORBIDDEN_XZ = {'plus': 7.03403762042365e-08, 'minus': 2.0687942772212864e-06}
 
 
 def scalars(label):
@@ -211,136 +153,7 @@ def test_isotropic_dispersion_reproduces_the_reference_rows():
     # pairs; O-O C6/C8/C10, H-O C6/C8 and H-H C6.
     assert compared == sum(len(orders)*MULTIPLICITY[key] for key, orders in REFERENCE_CN.items()) == 15
     assert worst < 3.e-7, worst
-
-
-def test_molecular_isotropic_c6_is_complete_and_higher_orders_are_not():
-    """`C6(OO) + 4 C6(HO) + 4 C6(HH)`; C8 and C10 are structurally partial here."""
-    assert COMPLETE_ORDERS == [6]
-    total = sum(MULTIPLICITY[key]*orders[6] for key, orders in REFERENCE_CN.items())
-    assert total == pytest.approx(MOLECULAR_C6, rel=1e-12)
-    # Only the O-O block admits n = 10, so a "molecular" C10 is just that block.
-    assert [key for key, orders in ADMISSIBLE.items() if 10 in orders] == ['O O']
-    assert MULTIPLICITY['O O'] == 1
-
-
-def test_reference_family_spread_bounds_what_a_match_can_mean():
-    """Two reference protocols, same property, 6% apart.
-
-    `tests/H2O_props` weight 3 with the Psi4 back end gives 46.617408; this case
-    -- weight 4, DALTON, bond axes, `Eta = 0.0005` -- gives 43.890270.  Neither is
-    wrong; the gap is the reference pipeline's own sensitivity to declarations,
-    and it is larger than any tolerance a native chain could be held to against a
-    single row of it.
-
-    Both normalizations of that gap are asserted, because a one-sided percentage
-    invites being requoted against the wrong denominator: 2.727138 absolute is
-    6.21% of this case's total and 5.85% of the other's.
-    """
-    assert MOLECULAR_C6 < OTHER_CASE_C6
-    absolute = OTHER_CASE_C6 - MOLECULAR_C6
-    assert absolute == pytest.approx(2.727138, rel=1e-6)
-    assert absolute/MOLECULAR_C6 == pytest.approx(.0621354, rel=1e-5)
-    assert absolute/OTHER_CASE_C6 == pytest.approx(.0585004, rel=1e-5)
-
-
-def test_the_copy_holds_in_local_axes_and_not_in_global_ones():
-    """Independent confirmation, from the reference's own output, of the frame rule.
-
-    `H2 H2 COPY H1 H1` is a statement about *local* tensors: the two printed
-    blocks are bit-identical, and the fit therefore has one hydrogen variable set
-    rather than two.  In global axes they are not identical -- the two declared
-    bond frames differ by the molecular plane's x mirror, so the globalized blocks
-    are related by `diag(-1, 1, 1)` and differ in their xz element by twice it.
-    A refinement that pinned the two hydrogens together on *global* anchors would
-    therefore be left with that difference as an irreducible residual, which is
-    what `RefinementModel.copy_anchor_discrepancy` measures and why the
-    constrained-NN refinement is run on declared frames.
-    """
-    local = np.array(H1_DIPOLE_BLOCK)
-    # Nonzero in local axes, so the component exists to be mis-shared at all.
-    assert local[0, 2] != 0.
-
-    frames = np.array(FRAMES)
-    blocks = [frame @ local @ frame.T for frame in frames[1:]]
-    mirror = np.diag([-1., 1., 1.])
-    assert np.allclose(blocks[1], mirror @ blocks[0] @ mirror, atol=1e-12, rtol=0)
-    difference = np.max(np.abs(blocks[0] - blocks[1]))
-    assert difference == pytest.approx(2.*abs(blocks[0][0, 2]), rel=1e-12)
-    assert difference == pytest.approx(.46794962, rel=1e-7)
-    # Both declared frames are *proper* rotations, so the global x mirror cannot be
-    # the whole story: it is paired with a local y flip, `F2 = M F1 diag(1, -1, 1)`,
-    # exactly.  That local flip is invisible above because the local dipole block
-    # decouples y, which is why the globalized blocks are related by M alone.
-    for frame in frames:
-        np.testing.assert_allclose(frame @ frame.T, np.eye(3), atol=1e-15, rtol=0)
-        assert np.linalg.det(frame) == pytest.approx(1., abs=1e-15)
-    np.testing.assert_array_equal(frames[2], mirror @ frames[1] @ np.diag([1., -1., 1.]))
-    assert local[1, 0] == local[1, 2] == 0.
-
-
-def test_reference_refinement_moves_its_own_molecular_polarizability():
-    """The refinement's own distortion, measured on a partition-invariant number.
-
-    The molecular polarizability does not depend on how the response is
-    distributed, so translating the reference's rank-4 distributed tensor and
-    rotating-and-summing its refined local tensors must agree.  They differ by
-    0.024 (0.26%), which is the same order as the anchor movement our own
-    constrained-NN refinement makes, and it bounds how exactly the refined local
-    tensors can be reproduced by anything.
-    """
-    gap = INTERNAL_INCONSISTENCY
-    assert gap['refined'] - gap['distributed'] == pytest.approx(gap['absolute'], rel=1e-12)
-    # Normalized on the distributed route, which is the partition-invariant one.
-    assert gap['absolute']/gap['distributed'] == pytest.approx(gap['relative'], rel=1e-12)
-    assert .002 < gap['relative'] < .003
-    # The refined route is a rank-1 trace of the same local tensors this file
-    # reduces, so its isotropic value must be the rank-1 scalar sum at omega = 0.
-    assert sum(scalars(label)[0, 0] for label, _, _ in SITES) == pytest.approx(gap['refined'], rel=1e-14)
-
-
-def test_rank4_distributed_reference_is_constrained_but_not_exactly():
-    """How well the one rank-4 reference quantity's own constraints hold.
-
-    Its charge-flow sum rules close to 7.7e-7 rather than to zero: that is a
-    direct measurement of the reference's `Eta = 0.0005, Lambda = 1000`
-    constrained-NN fit quality, and it is the level any comparison against it is
-    limited to.  The translation sign convention is *measured*, by which choice
-    sends the C2v-forbidden xz element to zero, not assumed.
-    """
-    assert DISTRIBUTED_RESIDUALS['asymmetry_maxabs'] < 1.e-10
-    assert abs(DISTRIBUTED_RESIDUALS['charge_charge_total']) < 1.e-11
-    for key in ('sum_over_a_maxabs', 'sum_over_b_maxabs'):
-        assert 1.e-8 < DISTRIBUTED_RESIDUALS[key] < 1.e-6, key
-    assert FORBIDDEN_XZ['plus'] < .05*FORBIDDEN_XZ['minus']
-    assert FORBIDDEN_XZ['plus'] < 1.e-7
-
-
-def test_recoupling_convention_is_the_references_own_printed_convention():
-    """`alpha^{00}(l l) = (-1)^l sqrt(2 l + 1) alpha_bar_l`, checked against the source.
-
-    The closed dispersion oracle above reduces the reference's local tensors to
-    per-rank isotropic scalars, which is only legitimate if our recoupling
-    convention is the reference's.  That is not asserted here but measured: the
-    reference prints its own `00(l l)` recoupled rows in the same
-    `_casimir.out`, and rebuilding them from the scalars reproduces every one at
-    printed precision.  Sign and magnitude are both tested -- a convention
-    differing by `(-1)^l` would pass on rank 2 and fail on rank 1.
-
-    The printed rows carry the **dynamic** nodes only, 10 columns for `Quad 10`,
-    so this covers indices 1..10 and says nothing about the static point; the
-    static point is covered instead by the local/distributed agreement test.
-    """
-    compared, worst = 0, 0.
-    for (label, rank), printed in RECOUPLED.items():
-        assert len(printed) == QUAD
-        ours = ((-1.)**rank)*np.sqrt(2*rank + 1)*scalars(label)[1:, rank - 1]
-        assert np.sign(ours) @ np.sign(printed) == len(printed), (label, rank)
-        for k, value in enumerate(printed):
-            worst = max(worst, abs(ours[k]/value - 1.))
-            compared += 1
-    # O rank 1 and 2, and rank 1 on each hydrogen, over 10 dynamic nodes each.
-    assert compared == 4*QUAD == 40
-    assert worst < 1.e-5, worst
-    # Rank 1 on oxygen is negative in the recoupled form and positive as a
-    # scalar; that sign is the whole content of the `(-1)^l` factor.
-    assert RECOUPLED[('O', 1)][0] < 0. < RECOUPLED[('O', 2)][0]
+    # The molecular C6 is the sum over all nine ordered site pairs of our output.
+    c6 = [p.coefficients[0] for p in result.pairs]
+    assert all(x.order == 6 and x.complete for x in c6) and len(c6) == 9
+    assert abs(sum(x.value for x in c6)/MOLECULAR_C6 - 1.) < PRINTED

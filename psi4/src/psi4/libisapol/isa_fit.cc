@@ -6,6 +6,8 @@
  * ISA-A numerical conventions follow CamCASP by Alston J. Misquitta and
  * Anthony J. Stone. See stockholder.F90:2985-3125,3971-4094 and
  * num_integrals.F90:622-870. No CamCASP source is linked into this module.
+ * The shape map, fixed density and fit provider below were moved unchanged from
+ * explicit_basis.cc so that the basis translation unit does not depend on ISA.
  */
 #include "isa_fit.h"
 #include "parallel_work.h"
@@ -52,7 +54,120 @@ double symmetric_metric(const std::shared_ptr<Matrix>& m, int n) {
     }
     return scale;
 }
+/// Input-contract failures of the moved explicit-input classes; ValueError in Python.
+void input_require(bool ok, const char* message) {
+    if (!ok) throw std::invalid_argument(message);
+}
 }  // namespace
+
+IsaShapeMap::IsaShapeMap(const IsaExplicitBasis& atomic, const IsaExplicitBasis& shape,
+                         const std::vector<int>& shell_map) : atomic_nfunction_(atomic.nfunction()) {
+    input_require(atomic.role_ == IsaBasisRole::AtomAux && shape.role_ == IsaBasisRole::Shape,
+                  "Shape map requires AtomAux and Shape roles");
+    input_require(shell_map.size() == shape.shells_.size(), "Shape map dimension mismatch (no padding)");
+    std::vector<int> starts;
+    int column = 0;
+    for (const auto& s : atomic.shells_) {
+        starts.push_back(column);
+        column += IsaExplicitBasis::shell_size(s.l,atomic.representation_);
+    }
+    std::vector<bool> used(atomic.shells_.size(),false);
+    for (size_t i = 0; i < shell_map.size(); ++i) {
+        const int target = shell_map[i];
+        input_require(target >= 0 && static_cast<size_t>(target) < atomic.shells_.size(), "Shape map target out of range");
+        input_require(!used[target], "Duplicate shape map target");
+        used[target] = true;
+        const auto& a = atomic.shells_[target];
+        const auto& s = shape.shells_[i];
+        input_require(a.l == 0, "Shape map target must be an s shell");
+        input_require(atomic.centres_[a.centre] == shape.centres_[s.centre] &&
+                      a.exponents == s.exponents && a.coefficients == s.coefficients,
+                      "Shape map requires exactly matching shell descriptors");
+        columns_.push_back(starts[target]);
+    }
+}
+std::vector<double> IsaShapeMap::project(const std::vector<double>& atomic_coefficients) const {
+    input_require(atomic_coefficients.size() == static_cast<size_t>(atomic_nfunction_), "Atomic coefficient dimension mismatch");
+    for (double c : atomic_coefficients) input_require(std::isfinite(c), "Atomic coefficients must be finite");
+    std::vector<double> result;
+    for (int column : columns_) result.push_back(atomic_coefficients[column]);
+    return result;
+}
+IsaFixedDensity::IsaFixedDensity(const IsaExplicitBasis& basis, const std::vector<double>& coefficients)
+    : basis_(basis), coefficients_(coefficients) {
+    input_require(basis.role() == IsaBasisRole::MolecularAux, "Fixed density requires molecular AUX, not AtomAux/shape");
+    input_require(coefficients.size() == static_cast<size_t>(basis.nfunction()), "Density coefficient dimension mismatch");
+    for (double c : coefficients) input_require(std::isfinite(c), "Density coefficients must be finite");
+}
+std::vector<double> IsaFixedDensity::evaluate(const std::vector<std::array<double,3>>& points,
+                                             const std::vector<int>& sites) const {
+    // Bound AUX scratch independently of the molecular point count. Even
+    // screened zero columns participate in the original ordered k contraction.
+    input_require(points.size() <= static_cast<size_t>(std::numeric_limits<int>::max()), "Too many density points");
+    constexpr size_t scratch_bytes = 8 * 1024 * 1024;
+    const size_t row_bytes = sizeof(double)*static_cast<size_t>(basis_.nfunction());
+    input_require(row_bytes <= scratch_bytes, "Density sample row exceeds 8 MiB scratch budget");
+    const size_t blocksize = std::min(size_t(4096),scratch_bytes/row_bytes);
+    std::vector<double> density(points.size(),0.0);
+    // Validate the screening policy even for an empty point set.
+    if (points.empty()) basis_.evaluate_screened({},sites);
+    for (size_t start = 0; start < points.size(); start += blocksize) {
+        const size_t count = std::min(blocksize,points.size()-start);
+        std::vector<std::array<double,3>> block(points.begin()+start,points.begin()+start+count);
+        auto samples = basis_.evaluate_screened(block,sites);
+        auto phi = samples->pointer();
+        detail::parallel_work(count,256,[&](size_t i) {
+            for (int k = 0; k < basis_.nfunction(); ++k) density[start+i] += phi[i][k]*coefficients_[k];
+            input_require(std::isfinite(density[start+i]), "Nonfinite density sample");
+        });
+    }
+    return density;
+}
+IsaAFitProvider::IsaAFitProvider(const IsaExplicitBasis& atomic, const IsaFixedDensity& density)
+    : atomic_(atomic), density_(density), centre_(atomic.centres_[atomic.shells_[0].centre]) {
+    input_require(atomic.role_ == IsaBasisRole::AtomAux, "Fit provider requires AtomAux");
+    for (const auto& shell : atomic.shells_) {
+        input_require(atomic.centres_[shell.centre] == centre_, "Fit provider requires co-centred AtomAux");
+        input_require(shell.exponents.size() == 1, "Fit provider requires primitive (uncontracted) AtomAux shells");
+        const int n = IsaExplicitBasis::shell_size(shell.l,atomic.representation_);
+        angular_.insert(angular_.end(),n,shell.l);
+        exponents_.insert(exponents_.end(),n,shell.exponents[0]);
+    }
+}
+IsaAFitData IsaAFitProvider::assemble(const IsaAFitSamples& samples, const IsaAFitOptions& options) const {
+    const size_t n = samples.points.size();
+    input_require(n > 0 && n <= static_cast<size_t>(std::numeric_limits<int>::max()), "Fit samples require a nonempty bounded point set");
+    auto check = [](const std::vector<double>& v, size_t size) {
+        input_require(v.size() == size, "Fit sample/vector dimension mismatch");
+        for (double x : v) input_require(std::isfinite(x), "Fit sample/vector values must be finite");
+    };
+    check(samples.weights,n); check(samples.shape,n); check(samples.shape_sum,n);
+    check(samples.previous,atomic_.nfunction());
+    for (double v : {options.w_eps,options.damping,options.positive_lambda,
+                     options.positive_max_alpha,options.density_cutoff})
+        input_require(std::isfinite(v) && v >= 0, "Fit options must be finite and nonnegative");
+    IsaAFitData data;
+    data.weights = samples.weights; data.shape = samples.shape; data.shape_sum = samples.shape_sum;
+    data.previous = samples.previous; data.angular_momenta = angular_; data.exponents = exponents_;
+    data.radius_squared.reserve(n);
+    for (auto p : samples.points) {
+        double r2 = 0.0;
+        for (int axis = 0; axis < 3; ++axis) {
+            input_require(std::isfinite(p[axis]), "Fit points must be finite");
+            const double d = p[axis]-centre_[axis];
+            r2 += d*d;
+        }
+        input_require(std::isfinite(r2), "Nonfinite fit squared distance");
+        data.radius_squared.push_back(r2);
+    }
+    data.overlap = atomic_.overlap(options.w_eps,options.s_block_only);
+    data.density = density_.evaluate(samples.points,samples.density_sites);
+    data.basis_values = atomic_.evaluate(samples.points);
+    return data;
+}
+IsaAFitResult IsaAFitProvider::fit(const IsaAFitSamples& samples, const IsaAFitOptions& options) const {
+    return isa_a_fit_step(assemble(samples,options),options);
+}
 
 IsaAFitResult isa_a_fit_step(const IsaAFitData& d, const IsaAFitOptions& o) {
     const size_t np = d.weights.size(), nf = d.previous.size();

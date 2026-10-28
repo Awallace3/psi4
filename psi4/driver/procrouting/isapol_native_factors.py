@@ -13,27 +13,10 @@ def _freeze(array):
     return np.frombuffer(array.tobytes(order="C"), dtype=np.float64).reshape(array.shape)
 
 
-class _ColumnTiles:
-    """Private immutable column tiles with bounded per-AUX gathering."""
-
-    def __init__(self, tiles, nrow, ncol):
-        self.tiles = tuple(tiles)
-        self.nrow, self.ncol = nrow, ncol
-
-    def __getitem__(self, auxiliary):
-        result = np.empty(self.nrow*self.ncol)
-        offset = 0
-        for tile in self.tiles:
-            width = tile.shape[1]
-            result[offset:offset+width] = tile[auxiliary]
-            offset += width
-        return result.reshape(self.nrow, self.ncol)
-
-
 def native_plain_df_operators(auxiliary, main, coefficients, energies, *,
-                              nocc, shell_count, exact_exchange,
+                              nocc, shell_count,
                               tile_columns=708, max_bytes=512*1024**2):
-    """Build independent, owned plain-DF H1/H2 actions from native integrals.
+    """Build independent, owned plain-DF H1/H2 factors from native integrals.
 
     Explicit coefficients are in MAIN order, with occupied columns first.
     This low-level operation does not certify SCF convergence, orthonormality,
@@ -43,18 +26,14 @@ def native_plain_df_operators(auxiliary, main, coefficients, energies, *,
     or density repair; it is not Drho-C. ``shell_count`` declares the complete AUX
     shell sequence; missing or excess shells fail closed.
 
-    Raw VV storage comprises independently allocated column tiles. Each tile
-    is solved with the unchanged Coulomb metric, checked against the original
-    equation, frozen into immutable bytes, and released before the next solve.
-    There is never a complete AO tensor or a second complete VV tensor.
-    The existing arbitrary-array operator constructor is not weakened.
+    VV storage is independent column tiles, each solved with the Coulomb metric,
+    checked against the original equation, frozen and released before the next;
+    no complete AO or second VV tensor exists.
 
-    ``max_bytes`` bounds explicitly planned numeric storage, including metric
-    copies, factor payloads, freeze overlaps, validation/solve workspaces and
-    the native shell transform. Basis descriptors, caller-owned state and
-    implementation-specific BLAS/Libint overhead are excluded. A higher-level
-    consumer must subtract other live allocations from its common budget;
-    independent per-object budgets are not a whole-pipeline guarantee.
+    ``max_bytes`` bounds planned numeric storage (metric copies, factors, freeze
+    overlaps, validation/solve workspaces, shell transform), not basis
+    descriptors, caller state or BLAS/Libint overhead. Per-object budgets are not
+    a pipeline guarantee; consumers subtract other live allocations.
     """
     from psi4 import core
     from scipy.linalg import LinAlgWarning, lu_factor, lu_solve
@@ -80,9 +59,6 @@ def native_plain_df_operators(auxiliary, main, coefficients, energies, *,
     if (not isinstance(energies, np.ndarray) or energies.dtype != np.float64
             or energies.shape != (nmo,)):
         raise ValueError("energies must be float64 (nmo,)")
-    if (not np.isscalar(exact_exchange) or not np.isfinite(exact_exchange)
-            or not 0 <= exact_exchange <= 1):
-        raise ValueError("exact_exchange must be finite in [0,1]")
     nv, no = nmo-nocc, nocc
     nov = no*nv
     width = min(tile_columns, max(nv*nv, nov))
@@ -171,12 +147,8 @@ def native_plain_df_operators(auxiliary, main, coefficients, energies, *,
     result = FactorizedDFOperators.__new__(FactorizedDFOperators)
     result._gaps = _freeze(gaps)
     result._oo, result._ov = frozen_oo, frozen_ov
-    result._dual_ov = _ColumnTiles(dual_ov, no, nv)
-    result._dual_vv = _ColumnTiles(vv, nv, nv)
-    result._legs, result._kernel = None, None
+    result._dual_ov, result._dual_vv = tuple(dual_ov), tuple(vv)
     result.naux, result.nocc, result.nvir, result.nov = naux, no, nv, nov
-    result._nkernel, result._local_scale = 0, 0.
-    result._exchange = float(exact_exchange)
     result._max_bytes, result._storage = max_bytes, storage
     result.plain_density_coefficients = density
     result._native_auxiliary = auxiliary
@@ -201,15 +173,12 @@ def native_constrained_ov(operators, *, charge_penalty, offsite_metric_damping,
     A[P,Q] = (1-eta*(1-same_centre))*J[P,Q] + lambda*q[P]*q[Q].
     Zero target charge is the declared OV constraint.
     The returned matrix is (nov,naux), row a*nocc+i; the unchanged plain
-    factors continue to serve the two-electron operators. This does not attach
-    kernel legs or rebuild Hessians when fitting a different eta.
+    factors still serve the two-electron operators.
 
-    The AUX and centre map come from the original native builder, never a
-    separately supplied basis or site map. Tiled LU solves use the original
-    equation's fixed backward-residual gate, with no regularization/fallback.
-    Admission includes live operator storage, output/freezing overlap, metric/
-    LU copies and tile work. Previously returned fits and other caller-retained
-    objects must be subtracted from the shared budget by the consumer.
+    AUX and centre map come from the native builder. Tiled LU solves keep the
+    fixed backward-residual gate, with no regularization or fallback. Admission
+    covers live operators, output/freezing overlap, metric/LU copies and tile
+    work; consumers subtract previously returned fits from the shared budget.
     """
     from psi4 import core
     from scipy.linalg import LinAlgWarning, lu_factor, lu_solve
@@ -271,3 +240,70 @@ def native_constrained_ov(operators, *, charge_penalty, offsite_metric_damping,
         del rhs, solution
     return NativeConstrainedOV(_freeze(coefficients), float(charge_penalty),
                                float(offsite_metric_damping), worst, planned)
+
+
+def native_plain_density(auxiliary, main, coefficients, *, nocc, shell_count, max_bytes=512*1024**2):
+    """``native_plain_df_operators(...).plain_density_coefficients`` without its factors.
+
+    The same per-shell native MO integrals, occupied trace, Coulomb metric LU and
+    solve residual gate are applied in the same order, so the result is the same
+    float64 vector; only one AUX shell block and the trace vector are live, never
+    the OO/OV factors or the solved OV/VV tiles. Returns (density, planned_bytes).
+    """
+    from psi4 import core
+    from scipy.linalg import LinAlgWarning, lu_factor, lu_solve
+
+    if (not isinstance(auxiliary, core.IsaExplicitBasis)
+            or auxiliary.role != core.IsaBasisRole.MolecularAux
+            or not isinstance(main, core.IsaExplicitBasis)
+            or main.role != core.IsaBasisRole.Orbital):
+        raise ValueError("explicit MolecularAux and Orbital bases required")
+    if type(max_bytes) is not int or max_bytes <= 0:
+        raise ValueError("max_bytes must be positive")
+    nao, naux = main.nfunction, auxiliary.nfunction
+    if type(shell_count) is not int or not 1 <= shell_count <= naux:
+        raise ValueError("shell_count must be a positive integer at most naux")
+    if (not isinstance(coefficients, np.ndarray) or coefficients.dtype != np.float64
+            or coefficients.ndim != 2 or coefficients.shape[0] != nao):
+        raise ValueError("coefficients must be float64 (nmain,nmo)")
+    nmo = coefficients.shape[1]
+    if type(nocc) is not int or not 0 < nocc < nmo:
+        raise ValueError("nocc must leave nonempty occupied and virtual spaces")
+    transform = 8*(24*nao**2+18*nmo**2+4*nao*nmo)
+    # trace vector, one MO shell block (<= 15 rows), metric/LU/residual copies, solve vectors
+    planned = 8*naux + 8*15*nmo*nmo + 24*naux*naux + transform + 32*(naux+nmo)
+    if planned > max_bytes:
+        raise ValueError("native plain density byte resource limit exceeded")
+    if not np.isfinite(coefficients).all():
+        raise ValueError("finite coefficients required")
+    provider = core.IsaAuxCoulomb(auxiliary)
+    trace = np.empty(naux)
+    offset = 0
+    for shell in range(shell_count):
+        block = mo_three_center_shell(provider, main, coefficients, shell, max_bytes=transform)
+        stop = offset+len(block)
+        if stop > naux:
+            raise ValueError("AUX shell coverage exceeds naux")
+        trace[offset:stop] = np.trace(block[:, :nocc, :nocc], axis1=1, axis2=2)
+        offset = stop
+        del block
+    if offset != naux:
+        raise ValueError("incomplete AUX shell coverage")
+    metric = np.asarray(provider.metric())
+    if not np.isfinite(metric).all():
+        raise ValueError("nonfinite Coulomb metric")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", LinAlgWarning)
+        lu, pivots = lu_factor(metric, overwrite_a=False, check_finite=False)
+    if not np.isfinite(lu).all():
+        raise ValueError("nonfinite Coulomb metric factorization")
+    metric_norm = np.linalg.norm(metric, ord=np.inf)
+    rhs = (2*trace)[:, None]
+    with np.errstate(over="raise", invalid="raise", divide="raise"):
+        solution = lu_solve((lu, pivots), rhs, check_finite=False)
+        residual = np.linalg.norm(metric @ solution-rhs, ord=np.inf)
+        scale = metric_norm*np.linalg.norm(solution, ord=np.inf) + np.linalg.norm(rhs, ord=np.inf)
+    if (not np.isfinite(solution).all() or not np.isfinite(residual)
+            or not np.isfinite(scale) or residual > 1.e-10*scale):
+        raise ValueError("plain DF metric solve residual failed")
+    return _freeze(solution).reshape(naux), planned

@@ -11,6 +11,10 @@ namespace psi { namespace isapol {
 /// num_tail_iterations, which the reference protocol never enables). The SINGLE
 /// postconvergence tail refit that CamCASP always performs IS implemented; see
 /// IsaAControllerResult::final_tails.
+/// In-loop tail fitting schedule. Always (default) refits every step. WhenEnabled
+/// fits only when the ENTERING state's apply_tails is set and otherwise keeps the
+/// last stored tails (CamCASP's Tail-Fix-gated schedule, computed natively).
+enum class IsaTailFitPolicy { Always, WhenEnabled };
 struct IsaAControllerOptions {
     IsaAFitOptions fit;
     // Performance only: zero forces the independent uncached path. Hard ceiling
@@ -24,6 +28,7 @@ struct IsaAControllerOptions {
     double mixing = 0.0;
     int mixing_skip = 20, tail_iteration_limit = 20, max_iterations = 120;
     bool fix_tails = true;
+    IsaTailFitPolicy tail_fit_policy = IsaTailFitPolicy::Always;
     std::vector<double> tail_cutoffs;  ///< Explicit bohr radii, not inferred Slater tables
     std::vector<bool> tail_allowed, convergence_included;  ///< Empty means all sites
 };
@@ -46,22 +51,18 @@ struct IsaAControllerStep {
     std::vector<IsaTailFitResult> tail_fits;
 };
 struct IsaAControllerResult {
-    /// Restart cursor. Its tails are the LAST IN-LOOP fit, which by the documented
-    /// source lag came from the second-to-last shape, so they are NOT the tails any
-    /// downstream stage should sample. Use final_tails for that.
+    /// Restart cursor. Its tails are the LAST IN-LOOP fit (under WhenEnabled, the
+    /// last stored one), which by the documented source lag came from an earlier
+    /// shape, so they are NOT the tails any downstream stage should sample. Use
+    /// final_tails for that.
     IsaAControllerState state;
     std::vector<IsaAControllerStep> history;
     std::string termination;
-    /// Postconvergence tail refit from the FINAL shape coefficients: the tails
-    /// downstream stages must use. CamCASP leaves its iteration with update_w0
-    /// (w0 := w) and then calls analysis_and_tail_tests -> shape_function_tail_analysis
-    /// with iteration = -1 (stockholder.F90:1353 and :1401, so on both the converged
-    /// and the nonconverged exit), whose shape_function_tail_fit1 WRITES
-    /// mol%atoms(i)%w_Tail_FuncParams (:4710-4713). That stored refit, not the in-loop
-    /// one, is what create_ISA_RhoFuncExpansions and every later stage read. The refit
-    /// is ungated: it runs whether or not the tail fix was active. Its previous-exponent
-    /// fallback is the in-loop tail, matching CamCASP's w_Tail_Defined/w_Tail_FuncParams(2)
-    /// revert. Empty tail_cutoffs leaves these equal to state.tails.
+    /// Postconvergence tail refit from the FINAL shape coefficients; downstream
+    /// stages must use these. As in CamCASP (stockholder.F90:1353/:1401, :4710-4713)
+    /// the refit runs on both converged and nonconverged exits, ungated by the tail
+    /// fix, and falls back to the in-loop tail exponent. Empty tail_cutoffs leaves
+    /// these equal to state.tails.
     std::vector<IsaExponentialTail> final_tails;
     std::vector<IsaTailFitResult> final_tail_fits;
 };

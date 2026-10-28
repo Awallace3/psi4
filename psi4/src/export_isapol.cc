@@ -26,38 +26,39 @@
  * @END LICENSE
  */
 
-#include "psi4/pybind11.h"
-#include <cstring>
-
 #include "psi4/libisapol/native_response.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libmints/vector.h"
+#include "psi4/libmints/basisset.h"
 #include "psi4/libisapol/casimir_grid.h"
 #include "psi4/libisapol/pfit.h"
 #include "psi4/libisapol/fit_points.h"
 #include "psi4/libisapol/isa_grid.h"
 #include "psi4/libisapol/isa_fit.h"
+#include "psi4/libisapol/isa_shape.h"
+#include "psi4/libisapol/isa_sweep.h"
+#include "psi4/libisapol/isa_controller.h"
 #include "psi4/libisapol/explicit_basis.h"
 #include "psi4/libisapol/partitioned_response.h"
-#include "psi4/libisapol/isotropic_dispersion.h"
-#include "psi4/libisapol/anisotropic_dispersion.h"
 #include "psi4/libisapol/multipole_transform.h"
 #include "psi4/libisapol/t_functions.h"
+#include "psi4/libisapol/isotropic_dispersion.h"
+#include "psi4/libisapol/anisotropic_dispersion.h"
+#include "psi4/libisapol/realcg_tables.h"
+#include "psi4/libisapol/recoupling_tables.h"
+#include "psi4/libisapol/recoupled_dispersion.h"
 #include "psi4/libisapol/lw_localization.h"
 #include "psi4/libisapol/aux_coulomb.h"
-#include "psi4/libisapol/isa_sweep.h"
-#include "psi4/libisapol/isa_shape.h"
-#include "psi4/libisapol/isa_controller.h"
 #include "psi4/libmints/matrix.h"
-#include "psi4/libisapol/recoupling_tables.h"
-#include "psi4/libisapol/realcg_tables.h"
-#include "psi4/libisapol/recoupled_dispersion.h"
-#include <pybind11/complex.h>
 #include "psi4/libisapol/tables.h"
 #include "psi4/libmints/molecule.h"
 
 #include <pybind11/numpy.h>
+#include <pybind11/complex.h>
+#include <pybind11/stl.h>
+#include <tuple>
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 #ifdef USING_LAPACK_MKL
 #include <mkl.h>
@@ -75,6 +76,16 @@ namespace {
 py::array_t<double> grid_column(const IsaGrid& grid, const double* data) {
     return py::array_t<double>(static_cast<py::ssize_t>(grid.npoints()), data);
 }
+
+/// Owned float64 C-contiguous copy of a test-hook operand with the given rank.
+py::array_t<double, py::array::c_style> drhoc_hook_copy(const py::object& value, int ndim, const char* name) {
+    auto copy = py::module_::import("numpy").attr("array")(value, "dtype"_a = "float64", "order"_a = "C",
+                                                           "copy"_a = true);
+    auto array = copy.cast<py::array_t<double, py::array::c_style>>();
+    if (array.ndim() != ndim) throw std::invalid_argument(std::string(name) + " has the wrong number of dimensions");
+    return array;
+}
+
 
 namespace lw_binding_private {
 
@@ -212,7 +223,6 @@ void export_isapol(py::module& m) {
              "wavefunction"_a, "caller_converged"_a, "max_bytes"_a)
         .def("orbitals", &NativeRestrictedState::orbitals)
         .def("energies", &NativeRestrictedState::energies)
-        .def("density_alpha", &NativeRestrictedState::density_alpha)
         .def("basis_snapshot", &NativeRestrictedState::basis_snapshot)
         .def_property_readonly("nbf", &NativeRestrictedState::nbf)
         .def_property_readonly("nmo", &NativeRestrictedState::nmo)
@@ -543,6 +553,102 @@ void export_isapol(py::module& m) {
     m.def("isa_anisotropic_interaction", &isa_anisotropic_interaction,
           "rank_a"_a, "rank_b"_a, "displacement"_a,
           "Expert physical Coulomb T=(-1)^l H_l(grad)H_k(grad)(1/R)/(d_l*d_k), ranks 1..4, R=B-A in bohr; rank axes 0,1c,1s,...; not scaled tau.");
+
+    py::class_<RecouplingTerm>(m, "RecouplingTerm",
+                               "One Casimir-Polder term of one anisotropic dispersion coefficient")
+        .def_readonly("p", &RecouplingTerm::p, "Numerator of the rational factor; carries the sign")
+        .def_readonly("q", &RecouplingTerm::q, "Denominator of the rational factor")
+        .def_readonly("r", &RecouplingTerm::r, "Numerator under the square root")
+        .def_readonly("s", &RecouplingTerm::s, "Denominator under the square root")
+        .def_readonly("la", &RecouplingTerm::la, "First rank label of alpha^A")
+        .def_readonly("lap", &RecouplingTerm::lap, "Second rank label of alpha^A")
+        .def_readonly("lb", &RecouplingTerm::lb, "First rank label of alpha^B")
+        .def_readonly("lbp", &RecouplingTerm::lbp, "Second rank label of alpha^B")
+        .def_readonly("ipow", &RecouplingTerm::ipow, "Power of i to fold in, 0 or 1")
+        .def_property_readonly("coefficient", &RecouplingTerm::coefficient, "(p/q) sqrt(r/s)");
+    m.def("isapol_recoupling_block",
+          [](int n, int L1, int L2, int J) {
+              RecouplingBlock block = recoupling_block(n, L1, L2, J);
+              return std::vector<RecouplingTerm>(block.begin(), block.end());
+          },
+          "n"_a, "L1"_a, "L2"_a, "J"_a,
+          "Terms of C_n(t, u, J) for t of rank L1 and u of rank L2; empty if the block vanishes");
+    m.def("isapol_recoupling_blocks",
+          []() {
+              std::vector<std::tuple<int, int, int, int, std::vector<RecouplingTerm>>> all;
+              for (int i = 0; i < num_recoupling_blocks(); ++i) {
+                  int n, L1, L2, J;
+                  RecouplingBlock block = recoupling_block_at(i, &n, &L1, &L2, &J);
+                  all.emplace_back(n, L1, L2, J, std::vector<RecouplingTerm>(block.begin(), block.end()));
+              }
+              return all;
+          },
+          "Every tabulated block as (n, L1, L2, J, terms), in increasing key order");
+    m.def("isapol_component_rank", &component_rank, "t"_a, "Rank L of real spherical-tensor component t");
+    m.def("isapol_component_first", &component_first, "L"_a, "First component index of rank L");
+    m.def("isapol_component_last", &component_last, "L"_a, "Last component index of rank L");
+    m.def("isapol_component_label", &component_label, "t"_a, "CamCASP label for component t");
+    py::class_<RealCGTerm>(m, "IsaRealCGTerm")
+        .def_readonly("la", &RealCGTerm::la).def_readonly("lap", &RealCGTerm::lap)
+        .def_readonly("k", &RealCGTerm::k).def_readonly("q", &RealCGTerm::q)
+        .def_readonly("v", &RealCGTerm::v).def_readonly("p", &RealCGTerm::p)
+        .def_readonly("denominator", &RealCGTerm::denominator)
+        .def_readonly("r", &RealCGTerm::r).def_readonly("s", &RealCGTerm::s)
+        .def_property_readonly("value", &RealCGTerm::value);
+    m.def("isapol_realcg_terms", &realcg_terms, "la"_a, "lap"_a);
+    m.def("isapol_realcg_defined", &realcg_defined, "la"_a, "lap"_a,
+          "True for the ordered rank pairs upstream defines: 1<=la,lap<=4 with la+lap<=6. "
+          "casimir.f90 read_cg/recouple skip j1+j2>6, so (3,4), (4,3) and (4,4) have no "
+          "table and no initialized coupled tensor; they are structurally absent.");
+    py::class_<IsaRecoupledBlock>(m, "IsaRecoupledBlock")
+        .def_readonly("la", &IsaRecoupledBlock::la).def_readonly("lap", &IsaRecoupledBlock::lap)
+        .def_readonly("first_component", &IsaRecoupledBlock::first_component)
+        .def_readonly("last_component", &IsaRecoupledBlock::last_component)
+        .def_property_readonly("components", &IsaRecoupledBlock::components)
+        .def_property_readonly("values", [](const IsaRecoupledBlock& b) { return b.values; });
+    py::class_<IsaRecoupledModel>(m, "IsaRecoupledModel")
+        .def(py::init<const IsaAnisotropicModel&>(), "local_model"_a)
+        .def_property_readonly("source", &IsaRecoupledModel::source)
+        .def_property_readonly("frequencies", &IsaRecoupledModel::frequencies)
+        .def_property_readonly("sites", &IsaRecoupledModel::sites)
+        .def("value", &IsaRecoupledModel::value,
+             "site"_a, "frequency"_a, "la"_a, "lap"_a, "component"_a);
+    py::class_<IsaRecoupledCoefficient>(m, "IsaRecoupledCoefficient")
+        .def_readonly("order", &IsaRecoupledCoefficient::order)
+        .def_readonly("t", &IsaRecoupledCoefficient::t).def_readonly("u", &IsaRecoupledCoefficient::u)
+        .def_readonly("J", &IsaRecoupledCoefficient::J).def_readonly("value", &IsaRecoupledCoefficient::value);
+    py::class_<IsaRecoupledCoverage>(m, "IsaRecoupledCoverage")
+        .def_readonly("order", &IsaRecoupledCoverage::order)
+        .def_readonly("table_complete", &IsaRecoupledCoverage::table_complete)
+        .def_readonly("unrestricted_complete", &IsaRecoupledCoverage::unrestricted_complete)
+        .def_readonly("included_rank_quadruples", &IsaRecoupledCoverage::included_rank_quadruples)
+        .def_readonly("missing_table_rank_quadruples", &IsaRecoupledCoverage::missing_table_rank_quadruples)
+        .def_readonly("missing_unrestricted_rank_quadruples", &IsaRecoupledCoverage::missing_unrestricted_rank_quadruples);
+    py::class_<IsaRecoupledPair>(m, "IsaRecoupledPair")
+        .def_readonly("site_a", &IsaRecoupledPair::site_a).def_readonly("site_b", &IsaRecoupledPair::site_b)
+        .def_readonly("coefficients", &IsaRecoupledPair::coefficients)
+        .def_readonly("coverage", &IsaRecoupledPair::coverage)
+        .def("coefficient", &IsaRecoupledPair::coefficient, "order"_a, "t"_a, "u"_a, "J"_a);
+    py::class_<IsaRecoupledDispersionResult>(m, "IsaRecoupledDispersionResult")
+        .def_readonly("model_a", &IsaRecoupledDispersionResult::model_a)
+        .def_readonly("model_b", &IsaRecoupledDispersionResult::model_b)
+        .def_readonly("frequencies", &IsaRecoupledDispersionResult::frequencies)
+        .def_readonly("cp_weights", &IsaRecoupledDispersionResult::cp_weights)
+        .def_readonly("pairs", &IsaRecoupledDispersionResult::pairs)
+        .def_readonly("max_order", &IsaRecoupledDispersionResult::max_order);
+    m.def("isa_recoupled_dispersion", [](const IsaRecoupledModel& a, const IsaRecoupledModel& b,
+                                            const py::sequence& weights, int max_order) {
+              if (py::len(weights) != a.frequencies().size())
+                  throw std::invalid_argument("recoupled: CP weight dimensions disagree");
+              return isa_recoupled_dispersion(a,b,weights.cast<std::vector<double>>(),max_order);
+          },
+          "model_a"_a, "model_b"_a, "cp_weights"_a, "max_order"_a=12,
+          "Local-axis C6..C12(t,u,J), not scalar orientation energies; CP weights already 1/(2*pi)");
+    m.attr("ISAPOL_MIN_DISPERSION_ORDER") = kMinDispersionOrder;
+    m.attr("ISAPOL_MAX_DISPERSION_ORDER") = kMaxDispersionOrder;
+    m.attr("ISAPOL_MAX_DISPERSION_RANK") = kMaxDispersionRank;
+    m.attr("ISAPOL_MAX_POLARIZABILITY_RANK") = kMaxPolarizabilityRank;
+
     py::class_<IsaIsotropicSite>(m, "IsaIsotropicSite")
         .def(py::init<>())
         .def_readwrite("label", &IsaIsotropicSite::label)
@@ -598,12 +704,6 @@ void export_isapol(py::module& m) {
             "Supplied-partition Racah Q; global axes, bohr origins, atomic units; owned snapshots")
         .def(py::init<const IsaExplicitBasis&, const std::vector<IsaMultipoleSite>&, const std::string&, double>(),
             "auxiliary"_a, "sites"_a, "provenance"_a, "denominator_cutoff"_a=1.e-36)
-        .def(py::init<const IsaExplicitBasis&, const std::vector<IsaMultipoleSite>&, const std::string&, double,
-         std::shared_ptr<Matrix>, int>(), "orbital"_a, "sites"_a, "provenance"_a,
-         "denominator_cutoff"_a, "orbitals"_a, "nocc"_a)
-        .def(py::init<std::shared_ptr<Matrix>, const std::vector<IsaMultipoleSite>&,
-         const std::string&, const std::string&>(), "values"_a, "sites"_a,
-         "representation"_a, "provenance"_a)
     .def_property_readonly("representation", &IsaPartitionedMultipoles::representation)
     .def_property_readonly("values", &IsaPartitionedMultipoles::values)
         .def_property_readonly("offsets", &IsaPartitionedMultipoles::offsets)
@@ -655,18 +755,54 @@ void export_isapol(py::module& m) {
         .def_readonly("coefficients", &IsaDrhoCResult::coefficients)
         .def_readonly("charge_penalty", &IsaDrhoCResult::charge_penalty)
         .def_readonly("relative_residual", &IsaDrhoCResult::relative_residual)
-        .def_readonly("fitted_electrons", &IsaDrhoCResult::fitted_electrons);
+        .def_readonly("fitted_electrons", &IsaDrhoCResult::fitted_electrons)
+        .def_readonly("refinement_iterations", &IsaDrhoCResult::refinement_iterations,
+                      "Corrections applied by LU refinement (0 when none was requested)")
+        .def_readonly("refinement_displacement", &IsaDrhoCResult::refinement_displacement,
+                      "How far refinement moved the plain LU solution, as the largest coefficient "
+                      "change over the largest coefficient magnitude; an observed change, not an "
+                      "error estimate");
     py::class_<IsaAuxCoulomb>(m, "IsaAuxCoulomb", "Native Libint2 Coulomb metric and analytic charges; explicit Cartesian or spherical molecular AUX (different declared bases)")
         .def(py::init<const IsaExplicitBasis&>(), "auxiliary"_a)
         .def("charges", &IsaAuxCoulomb::charges)
         .def("metric", &IsaAuxCoulomb::metric)
-        .def("point_potentials", &IsaAuxCoulomb::point_potentials,
-             "points"_a, "max_bytes"_a=512UL*1024*1024)
         .def("three_center", &IsaAuxCoulomb::three_center, "orbital"_a)
         .def("three_center_shell_block", &IsaAuxCoulomb::three_center_shell_block,
              "orbital"_a, "first_shell"_a, "shell_count"_a, "max_bytes"_a=512UL*1024*1024)
+        .def("point_potentials", &IsaAuxCoulomb::point_potentials,
+             "points"_a, "max_bytes"_a=512UL*1024*1024)
         .def("closed_shell_rhs", &IsaAuxCoulomb::closed_shell_rhs, "orbital"_a, "occupied_coefficients"_a)
-        .def("fit_drho_c", &IsaAuxCoulomb::fit_drho_c, "orbital"_a, "occupied_coefficients"_a, "charge_penalty"_a=1000.);
+        .def("fit_drho_c", &IsaAuxCoulomb::fit_drho_c, "orbital"_a, "occupied_coefficients"_a, "charge_penalty"_a=1000.,
+             "max_refinement_iterations"_a=0)
+        .def("native_auxiliary", &IsaAuxCoulomb::native_auxiliary,
+             "(raw Cartesian BasisSet, T): fresh caller-owned copies of the twin behind metric() and the "
+             "declared map, metric = T J_raw T^T. The BasisSet is a read-only input (e.g. FDDS_Monomer with "
+             "aux_transform=T, or IntegralFactory); do not modify it. Its ghost-centre molecule is not "
+             "update_geometry()-safe, so do not pass it to MintsHelper(basis), which empties it.");
+    m.def("_isa_exact_residual",
+          [](const py::object& a, const py::object& x, const py::object& b) {
+              const auto av = drhoc_hook_copy(a, 2, "A"), xv = drhoc_hook_copy(x, 1, "x"), bv = drhoc_hook_copy(b, 1, "b");
+              const auto n = static_cast<std::size_t>(av.shape(0));
+              if (av.shape(1) != av.shape(0) || static_cast<std::size_t>(xv.shape(0)) != n ||
+                  static_cast<std::size_t>(bv.shape(0)) != n)
+                  throw std::invalid_argument("A must be n x n and x, b of length n");
+              return isa_exact_residual(av.data(), xv.data(), bv.data(), n);
+          },
+          "A"_a, "x"_a, "b"_a,
+          "Diagnostic test hook, not a supported API; may change without notice. "
+          "Correctly rounded b - A x (list) from the Drho-C exact residual.");
+    m.def("_isa_refined_lu_solve",
+          [](const py::object& a, const py::object& b, int max_iterations) {
+              const auto av = drhoc_hook_copy(a, 2, "A"), bv = drhoc_hook_copy(b, 1, "b");
+              const auto n = static_cast<std::size_t>(av.shape(0));
+              if (av.shape(1) != av.shape(0) || static_cast<std::size_t>(bv.shape(0)) != n)
+                  throw std::invalid_argument("A must be n x n and b of length n");
+              auto solve = isa_refined_lu_solve(av.data(), bv.data(), n, max_iterations);
+              return py::make_tuple(solve.x, solve.iterations, solve.displacement);
+          },
+          "A"_a, "b"_a, "max_iterations"_a,
+          "Diagnostic test hook, not a supported API; may change without notice. "
+          "(x, iterations, displacement) from the Drho-C LU solve and refinement.");
     py::class_<IsaShapeMap>(m, "IsaShapeMap", "Validated zero-based shape-shell to AtomAux-shell map; exact descriptors")
         .def(py::init<const IsaExplicitBasis&, const IsaExplicitBasis&, const std::vector<int>&>(),
              "atomic"_a, "shape"_a, "shell_map"_a)
@@ -759,7 +895,10 @@ void export_isapol(py::module& m) {
         .def("run", &IsaASweep::run, "old"_a, "grids"_a, "options"_a = IsaAFitOptions())
         .def("run_with_tails", &IsaASweep::run_with_tails, "old"_a, "grids"_a, "tails"_a,
              "apply_tail"_a, "options"_a = IsaAFitOptions());
-    m.attr("IsaNoTailSweep") = m.attr("IsaASweep");
+    py::enum_<IsaTailFitPolicy>(m, "IsaTailFitPolicy",
+                                "In-loop tail fit schedule: always refit, or only when the entering tail fix is on")
+        .value("always", IsaTailFitPolicy::Always)
+        .value("when_enabled", IsaTailFitPolicy::WhenEnabled);
     py::class_<IsaAControllerOptions>(m, "IsaAControllerOptions", "Ordinary A / W convergence, no DIIS or symmetry; explicit tail cutoffs")
         .def(py::init<>())
         .def_readwrite("fit", &IsaAControllerOptions::fit)
@@ -773,6 +912,7 @@ void export_isapol(py::module& m) {
         .def_readwrite("tail_iteration_limit", &IsaAControllerOptions::tail_iteration_limit)
         .def_readwrite("max_iterations", &IsaAControllerOptions::max_iterations)
         .def_readwrite("fix_tails", &IsaAControllerOptions::fix_tails)
+        .def_readwrite("tail_fit_policy", &IsaAControllerOptions::tail_fit_policy)
         .def_readwrite("tail_cutoffs", &IsaAControllerOptions::tail_cutoffs)
         .def_readwrite("tail_allowed", &IsaAControllerOptions::tail_allowed)
         .def_readwrite("convergence_included", &IsaAControllerOptions::convergence_included);
@@ -862,6 +1002,7 @@ void export_isapol(py::module& m) {
         .def("seed", &MaclarenRng::seed, "seed"_a)
         .def("next", &MaclarenRng::next, "Next uniform deviate on (0, 1)")
         .def("take", [](MaclarenRng& r, int n) {
+            if (n < 0) throw py::value_error("MaclarenRng.take requires a nonnegative count");
             std::vector<double> v(n);
             for (int i = 0; i < n; ++i) v[i] = r.next();
             return py::array_t<double>(v.size(), v.data());
@@ -875,7 +1016,9 @@ void export_isapol(py::module& m) {
         .def_readwrite("seed", &FitPointsOptions::seed, "Seed for the point generator");
 
     py::class_<FitPoints, std::shared_ptr<FitPoints>>(m, "FitPoints",
-                                                      "Points at which the point-response refinement samples the potential")
+                                                      "Points at which the point-response refinement samples the "
+                                                      "potential; refused if still short after max_candidates draws")
+        .def_readonly_static("max_candidates", &FitPoints::kMaxCandidates, "Fixed bound on candidate draws per cloud")
         .def(py::init<std::shared_ptr<Molecule>, const FitPointsOptions&>(), "molecule"_a, "options"_a)
         .def("npoints", &FitPoints::npoints)
         .def("ncandidates", &FitPoints::ncandidates)
@@ -885,106 +1028,6 @@ void export_isapol(py::module& m) {
         .def("x", [](const FitPoints& f) { return py::array_t<double>(f.npoints(), f.x()); })
         .def("y", [](const FitPoints& f) { return py::array_t<double>(f.npoints(), f.y()); })
         .def("z", [](const FitPoints& f) { return py::array_t<double>(f.npoints(), f.z()); });
-
-    py::class_<RecouplingTerm>(m, "RecouplingTerm",
-                               "One Casimir-Polder term of one anisotropic dispersion coefficient")
-        .def_readonly("p", &RecouplingTerm::p, "Numerator of the rational factor; carries the sign")
-        .def_readonly("q", &RecouplingTerm::q, "Denominator of the rational factor")
-        .def_readonly("r", &RecouplingTerm::r, "Numerator under the square root")
-        .def_readonly("s", &RecouplingTerm::s, "Denominator under the square root")
-        .def_readonly("la", &RecouplingTerm::la, "First rank label of alpha^A")
-        .def_readonly("lap", &RecouplingTerm::lap, "Second rank label of alpha^A")
-        .def_readonly("lb", &RecouplingTerm::lb, "First rank label of alpha^B")
-        .def_readonly("lbp", &RecouplingTerm::lbp, "Second rank label of alpha^B")
-        .def_readonly("ipow", &RecouplingTerm::ipow, "Power of i to fold in, 0 or 1")
-        .def_property_readonly("coefficient", &RecouplingTerm::coefficient, "(p/q) sqrt(r/s)");
-
-    m.def("isapol_recoupling_block",
-          [](int n, int L1, int L2, int J) {
-              RecouplingBlock block = recoupling_block(n, L1, L2, J);
-              return std::vector<RecouplingTerm>(block.begin(), block.end());
-          },
-          "n"_a, "L1"_a, "L2"_a, "J"_a,
-          "Terms of C_n(t, u, J) for t of rank L1 and u of rank L2; empty if the block vanishes");
-    m.def("isapol_recoupling_blocks",
-          []() {
-              std::vector<std::tuple<int, int, int, int, std::vector<RecouplingTerm>>> all;
-              for (int i = 0; i < num_recoupling_blocks(); ++i) {
-                  int n, L1, L2, J;
-                  RecouplingBlock block = recoupling_block_at(i, &n, &L1, &L2, &J);
-                  all.emplace_back(n, L1, L2, J, std::vector<RecouplingTerm>(block.begin(), block.end()));
-              }
-              return all;
-          },
-          "Every tabulated block as (n, L1, L2, J, terms), in increasing key order");
-    m.def("isapol_component_rank", &component_rank, "t"_a, "Rank L of real spherical-tensor component t");
-    m.def("isapol_component_first", &component_first, "L"_a, "First component index of rank L");
-    m.def("isapol_component_last", &component_last, "L"_a, "Last component index of rank L");
-    m.def("isapol_component_label", &component_label, "t"_a, "CamCASP label for component t");
-
-    py::class_<RealCGTerm>(m, "IsaRealCGTerm")
-        .def_readonly("la", &RealCGTerm::la).def_readonly("lap", &RealCGTerm::lap)
-        .def_readonly("k", &RealCGTerm::k).def_readonly("q", &RealCGTerm::q)
-        .def_readonly("v", &RealCGTerm::v).def_readonly("p", &RealCGTerm::p)
-        .def_readonly("denominator", &RealCGTerm::denominator)
-        .def_readonly("r", &RealCGTerm::r).def_readonly("s", &RealCGTerm::s)
-        .def_property_readonly("value", &RealCGTerm::value);
-    m.def("isapol_realcg_terms", &realcg_terms, "la"_a, "lap"_a);
-    m.def("isapol_realcg_defined", &realcg_defined, "la"_a, "lap"_a,
-          "True for the ordered rank pairs upstream defines: 1<=la,lap<=4 with la+lap<=6. "
-          "casimir.f90 read_cg/recouple skip j1+j2>6, so (3,4), (4,3) and (4,4) have no "
-          "table and no initialized coupled tensor; they are structurally absent.");
-    py::class_<IsaRecoupledBlock>(m, "IsaRecoupledBlock")
-        .def_readonly("la", &IsaRecoupledBlock::la).def_readonly("lap", &IsaRecoupledBlock::lap)
-        .def_readonly("first_component", &IsaRecoupledBlock::first_component)
-        .def_readonly("last_component", &IsaRecoupledBlock::last_component)
-        .def_property_readonly("components", &IsaRecoupledBlock::components)
-        .def_property_readonly("values", [](const IsaRecoupledBlock& b) { return b.values; });
-    py::class_<IsaRecoupledModel>(m, "IsaRecoupledModel")
-        .def(py::init<const IsaAnisotropicModel&>(), "local_model"_a)
-        .def_property_readonly("source", &IsaRecoupledModel::source)
-        .def_property_readonly("frequencies", &IsaRecoupledModel::frequencies)
-        .def_property_readonly("sites", &IsaRecoupledModel::sites)
-        .def("value", &IsaRecoupledModel::value,
-             "site"_a, "frequency"_a, "la"_a, "lap"_a, "component"_a);
-    py::class_<IsaRecoupledCoefficient>(m, "IsaRecoupledCoefficient")
-        .def_readonly("order", &IsaRecoupledCoefficient::order)
-        .def_readonly("t", &IsaRecoupledCoefficient::t).def_readonly("u", &IsaRecoupledCoefficient::u)
-        .def_readonly("J", &IsaRecoupledCoefficient::J).def_readonly("value", &IsaRecoupledCoefficient::value);
-    py::class_<IsaRecoupledCoverage>(m, "IsaRecoupledCoverage")
-        .def_readonly("order", &IsaRecoupledCoverage::order)
-        .def_readonly("table_complete", &IsaRecoupledCoverage::table_complete)
-        .def_readonly("unrestricted_complete", &IsaRecoupledCoverage::unrestricted_complete)
-        .def_readonly("included_rank_quadruples", &IsaRecoupledCoverage::included_rank_quadruples)
-        .def_readonly("missing_table_rank_quadruples", &IsaRecoupledCoverage::missing_table_rank_quadruples)
-        .def_readonly("missing_unrestricted_rank_quadruples", &IsaRecoupledCoverage::missing_unrestricted_rank_quadruples);
-    py::class_<IsaRecoupledPair>(m, "IsaRecoupledPair")
-        .def_readonly("site_a", &IsaRecoupledPair::site_a).def_readonly("site_b", &IsaRecoupledPair::site_b)
-        .def_readonly("coefficients", &IsaRecoupledPair::coefficients)
-        .def_readonly("coverage", &IsaRecoupledPair::coverage)
-        .def("coefficient", &IsaRecoupledPair::coefficient, "order"_a, "t"_a, "u"_a, "J"_a);
-    py::class_<IsaRecoupledDispersionResult>(m, "IsaRecoupledDispersionResult")
-        .def_readonly("model_a", &IsaRecoupledDispersionResult::model_a)
-        .def_readonly("model_b", &IsaRecoupledDispersionResult::model_b)
-        .def_readonly("frequencies", &IsaRecoupledDispersionResult::frequencies)
-        .def_readonly("cp_weights", &IsaRecoupledDispersionResult::cp_weights)
-        .def_readonly("pairs", &IsaRecoupledDispersionResult::pairs)
-        .def_readonly("max_order", &IsaRecoupledDispersionResult::max_order);
-    m.def("isa_recoupled_dispersion", [](const IsaRecoupledModel& a, const IsaRecoupledModel& b,
-                                            const py::sequence& weights, int max_order) {
-              if (py::len(weights) != a.frequencies().size())
-                  throw std::invalid_argument("recoupled: CP weight dimensions disagree");
-              return isa_recoupled_dispersion(a,b,weights.cast<std::vector<double>>(),max_order);
-          },
-          "model_a"_a, "model_b"_a, "cp_weights"_a, "max_order"_a=12,
-          "Local-axis C6..C12(t,u,J), not scalar orientation energies; CP weights already 1/(2*pi)");
-
-    m.attr("ISAPOL_MIN_DISPERSION_ORDER") = kMinDispersionOrder;
-    m.attr("ISAPOL_MAX_DISPERSION_ORDER") = kMaxDispersionOrder;
-    m.attr("ISAPOL_MAX_DISPERSION_RANK") = kMaxDispersionRank;
-    m.attr("ISAPOL_MAX_POLARIZABILITY_RANK") = kMaxPolarizabilityRank;
-    m.attr("ISAPOL_CASIMIR_OMEGA0") = kCasimirOmega0;
-    m.attr("ISAPOL_OMEGA0") = kIsaPolOmega0;
 
     m.def("isapol_slater_radius", &slater_radius, "Z"_a,
           "CamCASP Bragg-Slater radius in bohr (a_o = 0.529177249)");

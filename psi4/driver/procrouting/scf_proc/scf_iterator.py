@@ -33,6 +33,8 @@ import numpy as np
 
 from psi4 import core
 
+from ._scf_seal import component_definition, correction_state
+
 from ... import p4util
 from ...constants import constants
 from ...p4util.exceptions import SCFConvergenceError, ValidationError
@@ -67,7 +69,6 @@ def _scf_state_signature(wfn):
         'name', 'x_alpha', 'x_beta', 'x_omega', 'c_alpha', 'c_omega',
         'c_os_alpha', 'c_ss_alpha', 'vv10_b', 'vv10_c', 'grac_shift',
         'grac_alpha', 'grac_beta'))
-    from ..isapol_native_correction import component_definition, correction_state
     component_state = (tuple(component_definition(f, include_cutoff=True) for f in
                              (*functional.x_functionals(), *functional.c_functionals())),
                        correction_state(functional))
@@ -80,8 +81,21 @@ def _scf_state_signature(wfn):
                   wfn.epsilon_a(), wfn.epsilon_b()):
         array = np.asarray(value)
         digest.update(repr(array.shape).encode())
-        digest.update(array.tobytes())
+        _update_c_order(digest, array)
     return digest.hexdigest()
+
+
+def _update_c_order(digest, array):
+    """Hash the bytes of ``array.tobytes()`` without materializing that copy.
+
+    A C-contiguous array is hashed in place; otherwise one last-axis row is
+    copied at a time, which yields the same C-order byte stream.
+    """
+    if array.flags.c_contiguous:
+        digest.update(array)
+        return
+    for index in np.ndindex(array.shape[:-1]):
+        digest.update(np.ascontiguousarray(array[index]))
 
 
 def scf_compute_energy(self):

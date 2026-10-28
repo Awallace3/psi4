@@ -79,6 +79,20 @@ def test_isa_fit_numpy(s_only, eps, damping, auto):
     np.testing.assert_allclose(got.metric.np, want_metric)
 
 
+def test_isa_fit_exact_one_function_solution():
+    """Native arithmetic formerly reached through a synthetic checkpoint parser."""
+    d = psi4.core.IsaAFitData()
+    d.weights, d.density, d.shape, d.shape_sum = [1.], [2.], [1.], [1.]
+    d.radius_squared, d.previous = [0.], [.5]
+    d.angular_momenta, d.exponents = [0], [1.]
+    d.basis_values, d.overlap = matrix([[1.]]), matrix([[2.]])
+    result = psi4.core.isa_a_fit_step(d)
+    for field, expected in (("metric", [[2.]]), ("rhs", [[2.]]), ("coefficients", [[1.]])):
+        np.testing.assert_array_equal(getattr(result, field).np, expected)
+    assert result.population == 2.
+    assert result.relative_residual == 0.
+
+
 def test_isa_fit_exponent_cap_and_cutoff_damping():
     d, o = small_data(), psi4.core.IsaAFitOptions()
     d.weights = [1e-100] * 5
@@ -109,8 +123,12 @@ def test_isa_fit_rejects_invalid_samples(field, value, message):
         psi4.core.isa_a_fit_step(d)
 
 
-@pytest.mark.parametrize("field", ["w_eps", "damping", "positive_lambda", "positive_max_alpha", "density_cutoff"])
-@pytest.mark.parametrize("value", [-1., np.inf])
+# All five options share one finite/nonnegative guard; cover each field and
+# both rejection branches without their Cartesian product.
+@pytest.mark.parametrize("field,value", [
+    ("w_eps", -1.), ("damping", np.inf), ("positive_lambda", -1.),
+    ("positive_max_alpha", np.inf), ("density_cutoff", -1.),
+])
 def test_isa_fit_rejects_invalid_options(field, value):
     o = psi4.core.IsaAFitOptions()
     setattr(o, field, value)

@@ -46,25 +46,19 @@ constexpr int kMaxElementZ = 83;
 
 /// Bohr radius used by CamCASP (src/parameters.f90:114, `a_o`).
 ///
-/// This is deliberately NOT Psi4's pc_bohr2angstroms (0.52917721067).  The two
-/// differ in the eighth digit, which is enough to shift integration-grid points
-/// at the 1e-9 level and break bit-parity with CamCASP.  Do not "modernize" it.
+/// Deliberately NOT Psi4's pc_bohr2angstroms (0.52917721067): the eighth-digit
+/// difference moves grid points by ~1e-9 and breaks bit-parity with CamCASP.
 constexpr double kCamcaspBohr = 0.529177249;
 
 /// One row of CamCASP's `AtomProp` table (src/atoms.f90:38-121).
 ///
-/// Radii are stored here in the units CamCASP *enters* them in, and converted on
-/// access by the accessors below, so that the numbers can be diffed against
-/// atoms.f90 by eye.
+/// Radii are stored in the units atoms.f90 enters them in and converted by the
+/// accessors below.
 ///
-/// The numeric fields are `float`, not `double`, and that is not an oversight.
-/// CamCASP writes the table as bare Fortran literals -- `element('O ',...,0.60,...)`
-/// -- which are *default real*, i.e. single precision, and are only widened to
-/// real(dp) on assignment into the real(dp) components.  CamCASP is built without
-/// -fdefault-real-8, so the values it actually integrates with carry float32
-/// rounding: R_Slater(O) is 0.60000002384185791 A, not 0.60.  That shifts grid
-/// radii by ~4e-8 relative, which is 8 orders of magnitude above the parity
-/// target.  Storing float here reproduces the rounding exactly, by construction.
+/// The fields are `float` on purpose: CamCASP's bare Fortran literals are default
+/// (single-precision) real, widened only on assignment, so it integrates with
+/// float32-rounded values (R_Slater(O) = 0.60000002384185791 A). Using double
+/// would move grid radii by ~4e-8 relative.
 struct ElementData {
     const char* symbol;
     float mass;            ///< amu (CRC Handbook, 72nd ed.)
@@ -83,20 +77,15 @@ const ElementData& element_data(int Z);
 ///   * hydrogen's radius is *twice* Slater's value (0.50 A, not 0.25),
 ///   * the inert gases take the radius of the preceding halogen,
 ///   * the dummy site (Z = 0) is given a non-zero radius, 0.65 A.
-/// This is the radial scale factor `alpha` of the integration grid,
-/// so it must agree with CamCASP exactly; it differs from Psi4's GetBSRadius() for
-/// H, He, Ne and (by rounding) Ti, Cr, Mn, Fe.
-///
-/// CamCASP tabulates zero for Z >= 55, so this throws there rather than handing
-/// back a radius of zero for the caller to divide by.
+/// This is the grid's radial scale `alpha`, so it must match CamCASP exactly; it
+/// differs from Psi4's GetBSRadius() for H, He, Ne and (by rounding) Ti, Cr, Mn, Fe.
+/// Throws for Z >= 55, where CamCASP tabulates zero.
 double slater_radius(int Z);
 
 /// Bondi van der Waals radius in bohr, from `AtomProp` (already in bohr there).
 ///
-/// NOT the same numbers as vdw_radius() below, despite both citing Bondi 1964.
-/// CamCASP carries two copies of this table and this one, in `AtomProp`, is
-/// written as default-real literals and so is rounded to float32.  Use this one
-/// only where CamCASP reads `AtomProp(Z)%RvdwBondi`.
+/// The float32-rounded copy; not vdw_radius() below. Use only where CamCASP
+/// reads `AtomProp(Z)%RvdwBondi`.
 double vdw_radius_bondi(int Z);
 
 /// Fallback van der Waals radius for elements MODULE radii does not tabulate
@@ -108,16 +97,10 @@ constexpr int kMaxVdwRadiusZ = 82;
 
 /// Bondi van der Waals radius in bohr, from `MODULE radii` (atoms.f90:191-211).
 ///
-/// This is the *double precision* copy of the table -- CamCASP writes these
-/// literals with an explicit `d0`, so unlike vdw_radius_bondi() above they carry
-/// no float32 rounding, and the two differ by ~1e-8 relative.  Elements CamCASP
-/// leaves out, and every Z outside [0, kMaxVdwRadiusZ], get kVdwRadiusDefault;
-/// nothing throws, because CamCASP's table is indexed unconditionally.
-///
-/// This is the table the fit-point lattice uses (lattice.F90:6, `use radii, only
-/// : vdw_radius`), so fit_points.cc must call this and not vdw_radius_bondi().
-/// At 2000 points and a rejection threshold this shifts by ~1e-8, the difference
-/// is enough to flip an accept/reject decision and break bit-parity.
+/// The double-precision (`d0`) copy, ~1e-8 relative from vdw_radius_bondi().
+/// Untabulated elements and Z outside [0, kMaxVdwRadiusZ] get kVdwRadiusDefault;
+/// nothing throws. The fit-point lattice uses this table (lattice.F90:6); the
+/// float32 copy can flip an accept/reject decision there.
 double vdw_radius(int Z);
 
 /// Grimme van der Waals radius in bohr.

@@ -23,10 +23,12 @@
 #include <map>
 #include <stdexcept>
 #include <vector>
-#include <libint2.hpp>
+#include <libint2/shell.h>  // snapshot checks read shell data; no engines here
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/coordentry.h"
 #include "psi4/libmints/gshell.h"
+#include "psi4/libmints/integral.h"
+#include "psi4/libmints/onebody.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/vector.h"
@@ -204,7 +206,7 @@ void validate_restricted_state(const std::shared_ptr<Wavefunction>& wfn, const R
         require_native(std::isfinite(gap) && gap>0,"occupied-virtual gaps must be finite and positive");
     }
 }
-struct OwnedState { std::shared_ptr<BasisSet> basis; SharedMatrix c, da; SharedVector eps; };
+struct OwnedState { std::shared_ptr<BasisSet> basis; SharedMatrix c; SharedVector eps; };
 OwnedState own_restricted_state(const std::shared_ptr<Wavefunction>& wfn, const RestrictedDims& d,
                                bool bounded_geometry = false) {
     OwnedState s;
@@ -212,28 +214,27 @@ OwnedState own_restricted_state(const std::shared_ptr<Wavefunction>& wfn, const 
         // Copy numerical state only: caller-controlled matrix/vector names
         // and Dimension metadata are not bounded by scientific dimensions.
         s.c=std::make_shared<Matrix>(d.nbf,d.nmo);
-        s.da=std::make_shared<Matrix>(d.nbf,d.nbf);
         s.eps=std::make_shared<Vector>(d.nmo);
-        for(int mu=0;mu<d.nbf;++mu) {
+        for(int mu=0;mu<d.nbf;++mu)
             for(int p=0;p<d.nmo;++p) s.c->set(mu,p,wfn->Ca()->get(mu,p));
-            for(int nu=0;nu<d.nbf;++nu) s.da->set(mu,nu,wfn->Da()->get(mu,nu));
-        }
         for(int p=0;p<d.nmo;++p) s.eps->set(p,wfn->epsilon_a()->get(p));
     } else {
-        s.c=wfn->Ca()->clone(); s.da=wfn->Da()->clone();
+        s.c=wfn->Ca()->clone();
         s.eps=std::make_shared<Vector>(*wfn->epsilon_a());
     }
     s.basis=snapshot_basis(wfn->basisset(), bounded_geometry);
     auto overlap=std::make_shared<Matrix>(d.nbf,d.nbf);
-    // Local serial engine: no OneBodyAOInt/global tolerance or Process threads.
+    // Native OverlapInt over the ordinary (normalized, source-puream) snapshot,
+    // driven serially shell pair by shell pair: no Process threads, and one-body
+    // integrals consult no tolerance option. Not the explicit-AUX raw bridge.
     // snapshot_basis has validated all shell dimensions and AO offsets before
-    // these ordered shell-pair buffers (and the ERI buffers below) are indexed.
-    libint2::Engine overlap_engine(libint2::Operator::overlap,s.basis->max_nprimitive(),s.basis->max_am(),0);
-    overlap_engine.set_precision(1.e-15);
+    // these ordered shell-pair buffers are indexed.
+    IntegralFactory factory(s.basis);
+    auto overlap_int=factory.ao_overlap();
     for(int s0=0;s0<s.basis->nshell();++s0) for(int s1=0;s1<s.basis->nshell();++s1) {
         const auto& sh0=s.basis->shell(s0); const auto& sh1=s.basis->shell(s1);
-        overlap_engine.compute(s.basis->l2_shell(s0),s.basis->l2_shell(s1));
-        const double* buf=overlap_engine.results()[0];
+        overlap_int->compute_shell(s0,s1);
+        const double* buf=overlap_int->buffers()[0];
         if(!buf) continue;
         std::size_t index=0;
         for(int m=0;m<sh0.nfunction();++m) for(int n=0;n<sh1.nfunction();++n,++index) {
@@ -263,12 +264,11 @@ NativeRestrictedState::NativeRestrictedState(std::shared_ptr<Wavefunction> wfn,
     require_native(std::isfinite(wfn->energy()), "nonfinite wavefunction energy");
     auto owned = own_restricted_state(wfn, d, true);
     basis_ = std::move(owned.basis);
-    c_ = std::move(owned.c); da_ = std::move(owned.da); eps_ = std::move(owned.eps);
+    c_ = std::move(owned.c); eps_ = std::move(owned.eps);
     nbf_ = d.nbf; nmo_ = d.nmo; nocc_ = d.nocc; nvir_ = d.nvir; nov_ = d.nov;
 }
 SharedMatrix NativeRestrictedState::orbitals() const { return c_->clone(); }
 SharedVector NativeRestrictedState::energies() const { return std::make_shared<Vector>(*eps_); }
-SharedMatrix NativeRestrictedState::density_alpha() const { return da_->clone(); }
 std::shared_ptr<BasisSet> NativeRestrictedState::basis_snapshot() const {
     return snapshot_basis(basis_, true);
 }

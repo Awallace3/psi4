@@ -51,6 +51,7 @@
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/twobody.h"
+#include "psi4/libmints/eri.h"
 #include "psi4/libpsi4util/PsiOutStream.h"
 #include "psi4/libqt/qt.h"
 #include "psi4/libpsi4util/process.h"
@@ -108,7 +109,7 @@ void DFHelper::AO_filename_maker(size_t i) {
 }
 
 std::string DFHelper::start_filename(std::string start) {
-    std::string name = PSIOManager::shared_object()->get_default_path();
+    std::string name = scratch_path_.empty() ? PSIOManager::shared_object()->get_default_path() : scratch_path_;
     std::string safe_mol = primary_->molecule()->name();
     safe_mol.erase(std::remove(safe_mol.begin(), safe_mol.end(), '/'), safe_mol.end());
     name += start + "." + std::to_string(SYSTEM_GETPID());
@@ -315,7 +316,7 @@ void DFHelper::prepare_sparsity() {
     size_t screen_threads = (nthreads_ == 1 ? 1 : 2);  // TODO: Replace screen_threads with nthreads_?
     auto rifactory = std::make_shared<IntegralFactory>(primary_, primary_, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(screen_threads);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = make_eri(*rifactory);
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
 #pragma omp parallel num_threads(screen_threads) if (nbf_ > 1000)
     {
@@ -424,7 +425,7 @@ void DFHelper::prepare_AO() {
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = make_eri(*rifactory);
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
     for(int rank = 1; rank < nthreads_; rank++) {
         eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
@@ -496,7 +497,7 @@ void DFHelper::prepare_AO_wK() {
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = make_eri(*rifactory);
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
 #pragma omp parallel num_threads(nthreads_)
     {
@@ -516,7 +517,7 @@ void DFHelper::prepare_AO_core() {
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = make_eri(*rifactory);
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
 #pragma omp parallel num_threads(nthreads_)
     {
@@ -593,7 +594,7 @@ void DFHelper::prepare_AO_wK_core() {
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> weri(nthreads_);
 
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = make_eri(*rifactory);
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
 
     weri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->erf_eri(omega_));
@@ -1227,7 +1228,6 @@ void DFHelper::compute_sparse_pQq_blocking_p(const size_t start, const size_t st
                                              std::vector<std::shared_ptr<TwoBodyAOInt>> eri) {
     size_t begin = pshell_aggs_[start];
     size_t end = pshell_aggs_[stop + 1] - 1;
-    size_t block_size = end - begin + 1;
     size_t startind = big_skips_[begin];
     //    outfile->Printf("      MU shell: (%zu, %zu)", start, stop);
     //    outfile->Printf(", nbf_ index: (%zu, %zu), size: %zu\n", begin, end, block_size);
@@ -1285,7 +1285,6 @@ void DFHelper::compute_sparse_pQq_blocking_p_symm(const size_t start, const size
                                                   std::vector<std::shared_ptr<TwoBodyAOInt>> eri) {
     size_t begin = pshell_aggs_[start];
     size_t end = pshell_aggs_[stop + 1] - 1;
-    size_t block_size = end - begin + 1;
     size_t startind = symm_big_skips_[begin];
     //    outfile->Printf("      MU shell: (%zu, %zu)", start, stop);
     //    outfile->Printf(", nbf_ index: (%zu, %zu), size: %zu\n", begin, end, block_size);
@@ -1352,7 +1351,6 @@ void DFHelper::compute_sparse_pQq_blocking_p_symm_abw(const size_t start, const 
 ) {
     size_t begin = pshell_aggs_[start];
     size_t end = pshell_aggs_[stop + 1] - 1;
-    size_t block_size = end - begin + 1;
     size_t startind = symm_big_skips_[begin];
     //    outfile->Printf("      MU shell: (%zu, %zu)", start, stop);
     //    outfile->Printf(", nbf_ index: (%zu, %zu), size: %zu\n", begin, end, block_size);
@@ -1430,7 +1428,14 @@ void DFHelper::grab_AO(const size_t start, const size_t stop, double* Mp) {
         sta += size;
     }
 }
+std::shared_ptr<TwoBodyAOInt> DFHelper::make_eri(IntegralFactory& factory) const {
+    if (!libint2_eri_) return std::shared_ptr<TwoBodyAOInt>(factory.eri());
+    // The arguments IntegralFactory::eri() passes to Libint2ERI.
+    return std::make_shared<Libint2ERI>(&factory, Process::environment.options.get_double("INTS_TOLERANCE"), 0,
+                                        true, false);
+}
 void DFHelper::prepare_metric_core() {
+    if (supplied_metric_) throw PSIEXCEPTION("DFHelper: set_fitting_metric is unsupported with hold_met.");
     timer_on("DFH: metric construction");
     FittingMetric J(aux_, true);
     J.form_fitting_metric();
@@ -1460,10 +1465,18 @@ double* DFHelper::metric_prep_core(double m_pow) {
     return metrics_[power]->pointer()[0];
 }
 void DFHelper::prepare_metric() {
-    // construct metric
-    FittingMetric J(aux_, true);
-    J.form_fitting_metric();
-    auto metric = J.get_metric();
+    // construct metric, or take the caller's
+    SharedMatrix metric;
+    if (supplied_metric_) {
+        if (supplied_metric_->nirrep() != 1 || (size_t)supplied_metric_->rowspi()[0] != naux_ ||
+            (size_t)supplied_metric_->colspi()[0] != naux_)
+            throw PSIEXCEPTION("DFHelper: the supplied fitting metric must be C1 naux x naux.");
+        metric.swap(supplied_metric_);
+    } else {
+        FittingMetric J(aux_, true);
+        J.form_fitting_metric();
+        metric = J.get_metric();
+    }
     auto Mp = metric->pointer()[0];
 
     // create file
@@ -1860,7 +1873,6 @@ void DFHelper::transform() {
     timer_on("DFH: transform()");
     // outfile->Printf("\n     ==> DFHelper:--Begin Transformations <==\n\n");
 
-    size_t nthreads = nthreads_;
 
     // reset tranposes (in case the transpose() function was called)
     tsizes_.clear();
@@ -1884,7 +1896,7 @@ void DFHelper::transform() {
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthread);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = make_eri(*rifactory);
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
 #pragma omp parallel num_threads(nthreads_)
     {

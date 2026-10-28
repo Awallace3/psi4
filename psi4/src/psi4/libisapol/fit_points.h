@@ -48,13 +48,10 @@ namespace isapol {
 /// Maclaren's (1992) additive lagged-Fibonacci generator, CamCASP's `sdprnd` /
 /// `dprand` (src/random.f90).
 ///
-/// Reimplemented here rather than linked because the fit-point cloud has to be
-/// reproduced draw for draw: the point-response refinement fits to
-/// the potential sampled at these points, so a single extra or missing draw
-/// changes every subsequent point and every fitted coefficient.  The generator
-/// itself is published --- N. M. Maclaren, "A Limited Portable Fortran-77 Random
-/// Number Generator", University of Cambridge (1992) --- and CamCASP's copy
-/// carries the notice reproduced below, whose condition this comment discharges:
+/// Reimplemented so the fit-point cloud is reproduced draw for draw; one extra or
+/// missing draw changes every later point and fitted coefficient. Published as
+/// N. M. Maclaren, "A Limited Portable Fortran-77 Random Number Generator",
+/// University of Cambridge (1992); its notice, passed on as it requires:
 ///
 ///     Copyright (C) 1992  N. M. Maclaren
 ///     Copyright (C) 1992  The University of Cambridge
@@ -65,20 +62,12 @@ namespace isapol {
 ///     onto all subsequent recipients of the software, whether modified or not.
 ///
 /// The state is 101 lags held as exact integers in `double`, plus a second,
-/// independent multiplicative generator mixed in modulo 1.  Everything is done
-/// in floating point on purpose: the recurrence is exact in double precision
-/// (the modulus is under 2^30), and the published algorithm's rounding is part
-/// of the definition.  Do not "improve" it into integer arithmetic.
+/// independent multiplicative generator mixed in modulo 1. Floating point is part
+/// of the definition (exact below 2^30); do not convert it to integer arithmetic.
 class MaclarenRng {
    public:
-    /// Seeds with `seed`, which CamCASP documents as an integer in [0, 9999];
-    /// larger values are folded by `mod(abs(seed), 10000)` exactly as `sdprnd`
-    /// does, so nothing is rejected.
-    ///
-    /// CamCASP's `sdprnd(0)` re-seeds only if the generator has never been
-    /// seeded, using a module-wide `inital` flag.  Here the state is per object,
-    /// so a freshly constructed MaclarenRng always seeds --- which is what a
-    /// fresh CamCASP process does too.
+    /// Seeds with `mod(abs(seed), 10000)`, as `sdprnd` does. State is per object,
+    /// so construction always seeds, like a fresh CamCASP process.
     explicit MaclarenRng(int seed_value = 0);
 
     /// Re-seed in place.
@@ -98,9 +87,8 @@ class MaclarenRng {
 /// `methods/isa-pol-from-isa-A`, i.e. CamCASP's `SET Lattice / Charge 1.0 /
 /// LoLim 2.0 / HiLim 4.0 / Random 2000 / Seed 1 / END`.
 struct FitPointsOptions {
-    /// Number of points to *accept*, CamCASP's `nlat`.  Candidates are drawn
-    /// until this many pass, so the cost is set by the acceptance rate, not by
-    /// this number alone.
+    /// Number of points to *accept*, CamCASP's `nlat`; candidates are drawn until
+    /// this many pass.
     int npoints = 2000;
 
     /// Inner cutoff in units of the van der Waals radius, CamCASP's `lowlim`.
@@ -123,20 +111,22 @@ struct FitPointsOptions {
 /// the unweighted mean of the nuclear positions, and kept if they lie in the
 /// shell between lolim and hilim van der Waals radii --- see accepted().
 ///
-/// Two details of the construction matter for reproducing CamCASP and are easy
-/// to get wrong:
+/// Reproduction details:
+///   * `dmax` is one cube half-width, the largest of |cm_j - x_j(i)| +
+///     hilim * R_vdW(i) over atoms i and Cartesian directions j; not a radius.
+///   * Rejected candidates still consume three deviates, drawn x, y, z.
 ///
-///   * `dmax` is *not* a radius.  It is the largest of |cm_j - x_j(i)| +
-///     hilim * R_vdW(i) over every atom i and every Cartesian direction j, i.e.
-///     a single half-width shared by all three axes, mixing a component-wise
-///     displacement with a spherical envelope.  The sampled region is a cube.
-///   * Rejected candidates still consume three deviates.  x, y and z are drawn
-///     in that order, one call each, before the accept test runs.
+/// The probe charge (`LatticeCharge`) belongs to the refinement, not here.
 ///
-/// The points carry a charge (CamCASP's `LatticeCharge`, +1 by default) used
-/// when the potential is evaluated; that belongs to the refinement, not here.
+/// Termination: at most kMaxCandidates candidates are drawn per cloud, and a
+/// cloud still short of npoints then throws.  Nonfinite or negative cutoffs,
+/// hilim <= lolim, npoints > kMaxCandidates and a molecule with no positive van
+/// der Waals radius (only ghosts) are refused before any draw.
 class FitPoints {
    public:
+    /// Fixed bound on candidate draws per cloud (3 deviates each).
+    static constexpr int kMaxCandidates = 1000000;
+
     FitPoints(std::shared_ptr<Molecule> molecule, const FitPointsOptions& options);
 
     int npoints() const { return static_cast<int>(x_.size()); }
@@ -146,9 +136,7 @@ class FitPoints {
     const double* y() const { return y_.data(); }
     const double* z() const { return z_.data(); }
 
-    /// Candidates drawn, accepted and rejected together; 3 * ncandidates()
-    /// deviates were consumed.  Diagnostic only --- a low acceptance rate means
-    /// a badly shaped molecule, not a bug.
+    /// Candidates drawn, accepted and rejected; 3 * ncandidates() deviates.
     int ncandidates() const { return ncandidates_; }
 
     /// Cube half-width actually used (bohr); see the class comment.
