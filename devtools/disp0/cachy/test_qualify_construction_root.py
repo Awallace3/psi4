@@ -1,6 +1,7 @@
 """Private whole-install and CUDA-copy provenance CPU-only regressions."""
 import copy
 import os
+import shutil
 from pathlib import Path
 import sys
 import tempfile
@@ -110,6 +111,22 @@ class Qualification(unittest.TestCase):
                     (installed/"core.fake.so").unlink()
                 with self.assertRaises(RuntimeError):
                     qualify.installed_inventory(root,"frozen")
+
+    def test_new_whole_prefix_is_selectable_without_replacing_baseline_install(self):
+        with tempfile.TemporaryDirectory() as tmp,patch.object(qualify,"clean"):
+            root=Path(tmp)
+            installed,_,_=self.fixture(root)
+            stage=root/"install-owned-candidate"
+            shutil.copytree(root/"install",stage)
+            package,core,inventory=qualify.installed_inventory(root,"frozen",stage)
+            self.assertEqual(package,stage/"lib/python3.13/site-packages/psi4")
+            self.assertEqual(package.parents[3],stage)
+            self.assertEqual(core.name,"core.fake.so")
+            self.assertTrue((installed/"core.fake.so").is_file())
+            invalid=root/"not-an-install"
+            invalid.mkdir()
+            with self.assertRaisesRegex(RuntimeError,"explicit whole install"):
+                qualify.installed_inventory(root,"frozen",invalid)
 
     def test_actual_sdk_mapping_outside_stage_is_required_and_bootstrap_admits_it(self):
         with tempfile.TemporaryDirectory() as tmp:

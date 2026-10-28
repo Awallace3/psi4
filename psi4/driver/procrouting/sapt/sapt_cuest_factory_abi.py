@@ -66,11 +66,12 @@ def configure_factory_abi(native):
     return tuple(FACTORY_ABI)
 
 
-def audit_factory_maps(native, proof, manifest, *, text=None):
+def audit_factory_maps(native, proof, manifest, *, text=None, owner=None):
     """Admit every constructor/configuration/cleanup symbol before first call."""
     names = configure_factory_abi(native)
     text = Path("/proc/self/maps").read_text() if text is None else text
-    result = identity.audit_maps(native,proof,manifest,text=text)
+    options = {"owner":owner} if owner is not None else {}
+    result = identity.audit_maps(native,proof,manifest,text=text,**options)
     rows = identity.mapped_rows(text)
     for name in names:
         address = ct.cast(getattr(native,name),H).value
@@ -168,7 +169,9 @@ class _FactoryAPI:
     def assert_identity(self):
         self.check()
         try:
-            self.maps = audit_factory_maps(self.native,self.proof,self.manifest)
+            owner = getattr(self.session,"identity_owner",None)
+            options = {"owner":owner} if owner is not None else {}
+            self.maps = audit_factory_maps(self.native,self.proof,self.manifest,**options)
         except BaseException:
             self.failed = True
             raise
@@ -187,9 +190,11 @@ def admit_factory_api(*, session, sdk_root, archive, cuda_manifest, cuda_manifes
         raise ValueError("Factory CUDA closure differs from frozen receipt hash")
     manifest = json.loads(canonical)
     session.check()
-    proof = identity.verify_files(sdk_root,archive)
-    native, _ = library(proof["native_path"],identity.NATIVE_SHA256)
-    maps = audit_factory_maps(native,proof,manifest)
+    owner = getattr(session,"identity_owner",None)
+    options = {"owner":owner} if owner is not None else {}
+    proof = identity.verify_files(sdk_root,archive,**options)
+    native, _ = library(proof["native_path"],identity.NATIVE_SHA256,**options)
+    maps = audit_factory_maps(native,proof,manifest,**options)
     if maps["cuda_mapped_sha256"].get(session.blas_path) != session.blas_sha256:
         raise RuntimeError("Factory and CUDA session use different cuBLAS closure")
     return _FactoryAPI(session,native,proof,manifest,maps)

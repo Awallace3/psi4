@@ -155,6 +155,7 @@ def child(args):
     report = {
         "status":"RUNNING","scope":"RTX3090_CONSTRUCTION_DEBUG_ONLY_NOT_SPEEDUP_OR_NUMERICAL_GATE",
         "source_pin":config["source_pin"],"runtime_config_sha256":args.config_sha256,
+        "identity_contract":config.get("identity_contract","fresh-bytes-v1"),
         "helper_pin":helper_pin,"helper_sha256":digest(__file__),
         "geometry_sha256":args.geometry_sha256,"basis":args.basis,"jkfit":args.jkfit,
         "rifit":args.rifit,"jit_compile_threads":args.threads,"pid":os.getpid(),
@@ -183,10 +184,12 @@ def child(args):
             bases = build_bases(runtime.psi4,args.geometry.read_text(),args.basis,args.jkfit,args.rifit)
         report["basis_dimensions"] = dict(zip(("primary","JKFIT","RIFIT"),(int(b.nbf()) for b in bases)))
         with timing.measure("construction_and_cleanup_total"):
-            measure_pair(runtime,*bases,args.threads,report,checkpoint)
+            runtime.guarded_call(measure_pair,runtime,*bases,args.threads,report,checkpoint)
         if basis_provenance(runtime.psi4,names) != report["basis_files"]:
             raise RuntimeError("Installed basis files changed during construction")
         runtime.verify_optional_modules()
+        if runtime.identity_owner is not None:
+            report["immutable_runtime"]=runtime.identity_owner.report()
         report.update(status="PASS_CONSTRUCTION_ONLY",bootstrap_events=events)
     except BaseException as error:
         report.update(status="FAILED",error=f"{type(error).__name__}: {error}")
@@ -205,7 +208,8 @@ def compare(records):
         raise RuntimeError("Both explicit JIT thread settings must complete")
     first = records[0]
     for row in records:
-        for name in ("source_pin","helper_pin","helper_sha256","runtime_config_sha256","geometry_sha256","basis",
+        for name in ("source_pin","helper_pin","helper_sha256","identity_contract",
+                     "runtime_config_sha256","geometry_sha256","basis",
                      "jkfit","rifit","basis_dimensions","basis_files","cache_policy"):
             if row[name] != first[name]:
                 raise RuntimeError("Construction arm changed "+name)

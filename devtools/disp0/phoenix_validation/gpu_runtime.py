@@ -179,6 +179,37 @@ def verify_qualified_imports(config,build):
         verify_modules((name,),root,inventory)
 
 
+def activate_identity_contract(config, manifest, cuda, abi):
+    """Explicit worker opt-in; legacy stages keep their fresh-byte behavior."""
+    contract=config.get("identity_contract","fresh-bytes-v1")
+    if contract not in ("fresh-bytes-v1","process-owned-kernel-read-leases-v1"):
+        raise ValueError("Unknown native identity contract")
+    name=abi.__package__+".sapt_cuest_owned_runtime"
+    try:
+        module=importlib.import_module(name)
+    except ModuleNotFoundError as error:
+        if error.name!=name:raise
+        if contract!="fresh-bytes-v1":
+            raise RuntimeError("Owned identity requires the coherently installed owned-runtime module") from error
+        return None
+    if contract=="fresh-bytes-v1":
+        if module.current_owned_runtime() is not None:
+            raise RuntimeError("Cannot downgrade an owned runtime within one worker")
+        return None
+    native=str((Path(config["cuest_root"])/"lib/13/libcuest.so.0.2.50").resolve(strict=True))
+    pins={native:abi.identity.NATIVE_SHA256}
+    for row in manifest["components"]:
+        path=str(Path(row["path"]).resolve(strict=True))
+        if path in pins:raise RuntimeError("Duplicate owned immutable library locator")
+        pins[path]=row["sha256"]
+    owner=module.admit_owned_runtime(pins,dedicated_worker=True)
+    library,_=cuda.library(native,abi.identity.NATIVE_SHA256,owner=owner)
+    # File leases are not a substitute for the existing symbol/root/ABI gates.
+    # No native context/version-probing handle is created by this admission.
+    abi.audit_factory_maps(library,{"native_path":native},manifest,owner=owner)
+    return owner
+
+
 class AuditedRuntime:
     """No implicit paths, hidden plan, library substitution or execution retry."""
     def __init__(self, config_path, config_sha256):
@@ -241,19 +272,32 @@ class AuditedRuntime:
         if len(matches) != 1:
             raise RuntimeError("One frozen cuBLAS DSO required")
         self.blas = matches[0]
+        self.identity_owner=activate_identity_contract(config,self.manifest,self.cuda,self.abi)
         self.report = {"source_pin": config["source_pin"],
-                       "runtime_config_sha256": config_sha256, "plans": []}
+                       "runtime_config_sha256": config_sha256, "plans": [],
+                       "identity_contract":config.get("identity_contract","fresh-bytes-v1")}
+        if self.identity_owner is not None:
+            self.report["immutable_runtime"]=self.identity_owner.report()
+
+    def guarded_call(self, function, *args, **kwargs):
+        owner=getattr(self,"identity_owner",None)
+        if owner is None:return function(*args,**kwargs)
+        return owner.guarded_call(function,*args,**kwargs)
 
     def require_device_admission(self):
         if self.config["device_family"]=="RTX3090":
             require_local_lease(self.config["local_lease"])
 
     def verify_optional_modules(self):
+        owner=getattr(self,"identity_owner",None)
+        if owner is not None:owner.check_live()
         config=self.config
         if optional_inventory(config)!=config["optional_files"]:
             raise RuntimeError("Optional runtime inventory changed during scientific execution")
         verify_modules(("cuda",),config["optional_python_path"],config["optional_files"],
                        ("cuda",) if config.get("schema")==2 else None)
+        if owner is not None:
+            self.report["immutable_runtime"]=owner.report()
 
     def device_identity(self, session):
         """Correlate the actual owning PID/context UUID with allocation hardware."""
@@ -335,6 +379,9 @@ class AuditedRuntime:
             record["error"] = f"{type(error).__name__}: {error}"
             raise
         finally:
+            identity_owner=getattr(self,"identity_owner",None)
+            if identity_owner is not None:
+                self.report["immutable_runtime"]=identity_owner.report()
             if owner is not None:
                 record["owner_cleanup"] = owner.report()
             if session is not None:

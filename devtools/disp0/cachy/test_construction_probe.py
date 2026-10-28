@@ -66,6 +66,7 @@ class ConstructionProbe(unittest.TestCase):
         report = {"status":"PASS_CONSTRUCTION_ONLY","jit_compile_threads":4,
             "source_pin":"frozen","runtime_config_sha256":"frozen","geometry_sha256":"frozen",
             "helper_pin":"helper-frozen","helper_sha256":"helper-file-frozen",
+            "identity_contract":"fresh-bytes-v1",
             "basis":"primary","jkfit":"jk","rifit":"ri",
             "basis_dimensions":{"primary":primary.nbf(),"JKFIT":auxiliary.nbf(),"RIFIT":auxiliary.nbf()},
             "basis_files":{name:{"path":name,"sha256":"frozen"} for name in ("primary","JKFIT","RIFIT")},

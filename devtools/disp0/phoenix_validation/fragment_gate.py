@@ -476,7 +476,8 @@ def main():
                         return out
                     stack.enter_context(patch.object(terms,name,timed))
             start = time.perf_counter()
-            energy, wfn = psi4.energy("sapt(dft)", molecule=molecule, return_wfn=True,
+            invoke=runtime.guarded_call if runtime else lambda function,*args,**kw:function(*args,**kw)
+            energy, wfn = invoke(psi4.energy,"sapt(dft)", molecule=molecule, return_wfn=True,
                 **({"cuda_provider_factory":factory,"cuda_dispersion_block_size":args.block_size}
                    if runtime else {}))
             result["diagnostic_whole_energy_seconds"] = time.perf_counter()-start

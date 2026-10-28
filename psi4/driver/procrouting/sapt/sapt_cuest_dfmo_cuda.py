@@ -55,12 +55,14 @@ class CuESTDFMOProvider:
         require_spherical_basis(auxiliary_basis,role="auxiliary")
         self.session = session
         self.pid = os.getpid()
-        self.proof = identity.verify_files(sdk_root,archive)
+        owner = getattr(session,"identity_owner",None)
+        options = {"owner":owner} if owner is not None else {}
+        self.proof = identity.verify_files(sdk_root,archive,**options)
         # verify_files already admitted the archive; preserve its locator for
         # fresh admission when a real sibling plan is requested.
         self.archive = Path(archive).resolve()
         self.proof["cuda_manifest_sha256"] = cuda_manifest_sha256
-        self.native, _ = library(self.proof["native_path"],identity.NATIVE_SHA256)
+        self.native, _ = library(self.proof["native_path"],identity.NATIVE_SHA256,**options)
         identity.configure_abi(self.native)
         self.handle, self.plan = handle, plan
         self.primary_basis, self.auxiliary_basis = primary_basis, auxiliary_basis
@@ -135,7 +137,9 @@ class CuESTDFMOProvider:
 
     def assert_identity(self):
         self.session.check()
-        self.maps = identity.audit_maps(self.native,self.proof,self.cuda_manifest)
+        owner = getattr(self.session,"identity_owner",None)
+        options = {"owner":owner} if owner is not None else {}
+        self.maps = identity.audit_maps(self.native,self.proof,self.cuda_manifest,**options)
         self.version = identity.native_version(self.native,self.handle)
         self.math_mode = identity.native_math_mode(self.native,self.handle)
         expected = self.maps["cuda_mapped_sha256"].get(self.session.blas_path)
@@ -372,6 +376,9 @@ class CuESTDFMOProvider:
         if self._device_owner and not self.cleanup_complete:
             self.closed = True
             try:
+                owner = getattr(self.session,"identity_owner",None)
+                if owner is not None:
+                    owner.check_live()
                 if not self.session.native_owners or self.session.native_owners[-1] is not self:
                     raise RuntimeError("Later native leases must finish before DFMO parameter teardown")
                 # Cleanup may run after the session disables execution. Admit
@@ -382,7 +389,8 @@ class CuESTDFMOProvider:
                 current = self.session.rt(self.session.runtime.cudaGetDevice())
                 if current != self.session.device:
                     raise RuntimeError("Native DFMO cleanup requires the original CUDA device")
-                maps = identity.audit_maps(self.native,self.proof,self.cuda_manifest)
+                options = {"owner":owner} if owner is not None else {}
+                maps = identity.audit_maps(self.native,self.proof,self.cuda_manifest,**options)
                 if maps["cuda_mapped_sha256"].get(self.session.blas_path) != self.session.blas_sha256:
                     raise RuntimeError("Native DFMO cleanup CUDA closure differs from session")
                 self.session.synchronize_device()

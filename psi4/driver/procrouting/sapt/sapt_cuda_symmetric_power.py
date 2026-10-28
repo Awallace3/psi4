@@ -60,7 +60,9 @@ class CuSolverSymmetricPower:
         self.workspace_limit_bytes,self.max_dimension=workspace_limit_bytes,max_dimension
         records=[r for r in owner.api.manifest["components"] if Path(r["path"]).name.startswith("libcusolver.so.")]
         if len(records)!=1:raise ValueError("One explicit frozen cuSOLVER DSO required")
-        self.native,self.path=library(records[0]["path"],records[0]["sha256"])
+        identity_owner=getattr(self.session,"identity_owner",None)
+        options={"owner":identity_owner} if identity_owner is not None else {}
+        self.native,self.path=library(records[0]["path"],records[0]["sha256"],**options)
         self._bind()
         self.handle=owner._new_native("FP64 symmetric cuSOLVER handle",
                                      self.native.cusolverDnCreate,self.native.cusolverDnDestroy,

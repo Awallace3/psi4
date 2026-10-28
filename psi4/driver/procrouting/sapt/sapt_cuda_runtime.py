@@ -1,6 +1,6 @@
 """Lazy, explicit CUDA ownership/NVRTC/cuBLAS transport for SAPT0 Python.
 
-Requires cuda-bindings, not CuPy. No context reset, global handles, import-time
+Requires cuda-bindings, not CuPy. No context reset, global GPU handles, import-time
 CUDA calls, allocation retry or CPU fallback. A session is an explicit lifetime.
 """
 from contextlib import contextmanager
@@ -14,7 +14,15 @@ import numpy as np
 from .sapt_dispersion_cuda_kernels import CUDA_SOURCE
 
 
-def library(path, sha256):
+def _identity_guard(session):
+    owner = getattr(session,"identity_owner",None)
+    if owner is not None:
+        owner.check_live()
+
+
+def library(path, sha256, *, owner=None):
+    if owner is not None:
+        return owner.load_library(path,sha256)
     path = Path(path).resolve(strict=True)
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -79,12 +87,16 @@ class _Allocation:
     def free(self):
         if not self.freed:
             try:
+                _identity_guard(self.session)
                 self.session.rt(self.session.runtime.cudaFree(self.pointer))
+                # Preserve the observed successful free even if subsequent
+                # immutable-runtime validation fails. Never free it twice.
+                self.freed = True
+                self.session.live_bytes -= self.nbytes
+                _identity_guard(self.session)
             except BaseException:
                 self.session.failed = True
                 raise
-            self.freed = True
-            self.session.live_bytes -= self.nbytes
 
 
 class CUDASession:
@@ -115,12 +127,17 @@ class CUDASession:
         self.functions = {}
         self.blas_calls = {}
         self.kernel_launches = {}
-        self.blas, self.blas_path = library(cublas_library, cublas_sha256)
+        from .sapt_cuest_owned_runtime import owner_for_session
+        self.identity_owner = owner_for_session()
+        options = {"owner":self.identity_owner} if self.identity_owner is not None else {}
+        self.blas, self.blas_path = library(cublas_library, cublas_sha256,**options)
         self.blas_sha256 = cublas_sha256
+        _identity_guard(self)
         self.device = self.rt(runtime.cudaGetDevice())
         if self.rt(runtime.cudaGetDeviceCount()) < 1 or self.rt(runtime.cudaRuntimeGetVersion()) != expected_cudart:
             raise RuntimeError("An actual NVIDIA device and the pinned CUDA runtime are required")
         try:
+            _identity_guard(self)
             self.stream = self.rt(runtime.cudaStreamCreate())
             # Runtime stream creation establishes its primary context. Never
             # create, switch or release another driver's context.
@@ -131,6 +148,7 @@ class CUDASession:
             self.arch = f"compute_{major}{minor}"
             self._setup_blas()
             self._compile()
+            _identity_guard(self)
         except BaseException as error:
             self.failed = True
             cleanup(error, [self.close])
@@ -144,8 +162,12 @@ class CUDASession:
         return values[0] if len(values) == 1 else values
 
     def check(self):
-        if self.closed or self.failed or self.rt(self.runtime.cudaGetDevice()) != self.device:
+        if self.closed or self.failed:
             raise RuntimeError("Closed/invalidated CUDA session or changed device; no retry")
+        _identity_guard(self)
+        if self.rt(self.runtime.cudaGetDevice()) != self.device:
+            raise RuntimeError("Closed/invalidated CUDA session or changed device; no retry")
+        _identity_guard(self)
 
     def check_memory(self, requested):
         self.check()
@@ -220,14 +242,18 @@ class CUDASession:
 
     def synchronize(self):
         try:
+            _identity_guard(self)
             self.rt(self.runtime.cudaStreamSynchronize(self.stream))
+            _identity_guard(self)
         except BaseException:
             self.failed = True
             raise
 
     def synchronize_device(self):
         try:
+            _identity_guard(self)
             self.rt(self.runtime.cudaDeviceSynchronize())
+            _identity_guard(self)
         except BaseException:
             self.failed = True
             raise
@@ -314,6 +340,7 @@ class CUDASession:
         self._blas("cublasSetAtomicsMode", handle, 0)    # No atomic algorithm.
 
     def _blas(self, name, *args):
+        _identity_guard(self)
         status = getattr(self.blas, name)(*args)
         if status != 0:
             self.failed = True
@@ -322,29 +349,32 @@ class CUDASession:
 
     def _compile(self):
         nv, dr = self.nvrtc, self.driver
-        major, minor = self.rt(nv.nvrtcVersion())
+        def native(function, *args):
+            _identity_guard(self)
+            return function(*args)
+        major, minor = self.rt(native(nv.nvrtcVersion))
         if (major, minor) != (13, 3):
             raise RuntimeError("NVRTC differs from explicitly selected CUDA13.3")
-        program = self.rt(nv.nvrtcCreateProgram(
+        program = self.rt(native(nv.nvrtcCreateProgram,
             CUDA_SOURCE.encode(), b"sapt0_blocks.cu", 0, None, None))
         primary = None
         try:
             self.options = [b"--std=c++14", b"--fmad=false", f"--gpu-architecture={self.arch}".encode()]
-            status = nv.nvrtcCompileProgram(program, len(self.options), self.options)
+            status = native(nv.nvrtcCompileProgram,program,len(self.options),self.options)
             if int(status[0]) != 0:
-                length = self.rt(nv.nvrtcGetProgramLogSize(program))
+                length = self.rt(native(nv.nvrtcGetProgramLogSize,program))
                 if length > 1024**2:
                     raise RuntimeError("NVRTC error log exceeds bounded capture")
                 log = bytearray(length)
-                self.rt(nv.nvrtcGetProgramLog(program, log))
+                self.rt(native(nv.nvrtcGetProgramLog,program,log))
                 raise RuntimeError("NVRTC compilation failed: " + bytes(log).decode(errors="replace"))
-            size = self.rt(nv.nvrtcGetPTXSize(program))
+            size = self.rt(native(nv.nvrtcGetPTXSize,program))
             if not 0 < size <= 16 * 1024**2:
                 raise RuntimeError("Invalid/oversized NVRTC PTX")
             ptx = bytearray(size)
-            self.rt(nv.nvrtcGetPTX(program, ptx))
+            self.rt(native(nv.nvrtcGetPTX,program,ptx))
             self.ptx_sha256 = hashlib.sha256(ptx).hexdigest()
-            self.module = self.rt(dr.cuModuleLoadData(bytes(ptx)))
+            self.module = self.rt(native(dr.cuModuleLoadData,bytes(ptx)))
             for name in ("pack_factors", "reduce_dispersion", "matrix_window",
                          "fragment_scale_factor", "apply_fragment_scale",
                          "linear_combination", "reduce_components", "permute_occupied_a",
@@ -358,12 +388,12 @@ class CUDASession:
                          "inverse_sqrt_weights", "scale_eigenvector_rows", "gather_indexed_matrix",
                          "set_identity", "ibo_objective", "ibo_pair", "ibo_sweep_finish",
                          "ibo_fock_diagonal", "ibo_permutation", "ibo_charges", "ibo_population_error"):
-                self.functions[name] = self.rt(dr.cuModuleGetFunction(self.module, name.encode()))
+                self.functions[name] = self.rt(native(dr.cuModuleGetFunction,self.module,name.encode()))
         except BaseException as error:
             primary = error
             raise
         finally:
-            cleanup(primary, [lambda: self.rt(nv.nvrtcDestroyProgram(program))])
+            cleanup(primary, [lambda: self.rt(native(nv.nvrtcDestroyProgram,program))])
 
     def launch(self, name, grid, threads, arguments):
         self.check()
@@ -497,21 +527,28 @@ class CUDASession:
         actions = [allocation.free for allocation in reversed(self.allocations)]
         if self.handle is not None:
             def destroy_handle():
+                _identity_guard(self)
                 self._blas("cublasDestroy_v2",self.handle)
                 self.handle=None
+                _identity_guard(self)
             actions.append(destroy_handle)
         if self.module is not None:
             def destroy_module():
+                _identity_guard(self)
                 self.rt(self.driver.cuModuleUnload(self.module))
                 self.module=None
+                _identity_guard(self)
             actions.append(destroy_module)
         if self.stream is not None:
             def destroy_stream():
+                _identity_guard(self)
                 self.rt(self.runtime.cudaStreamDestroy(self.stream))
                 self.stream=None
+                _identity_guard(self)
             actions.append(destroy_stream)
         try:
             cleanup(None, actions)
+            _identity_guard(self)
         except BaseException:
             self.failed=True
             raise

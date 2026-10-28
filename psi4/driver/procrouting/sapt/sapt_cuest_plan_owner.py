@@ -31,9 +31,13 @@ class _Resource:
 def _cleanup_admission(api):
     # Cleanup is allowed after API/session execution is invalidated, but never
     # in a fork, on another device, or through an unadmitted mapped library.
+    owner = getattr(api.session,"identity_owner",None)
+    if owner is not None:
+        owner.check_live()
     if api.pid != os.getpid():
         raise RuntimeError("Native cleanup belongs to another process")
-    maps = abi.audit_factory_maps(api.native,api.proof,api.manifest)
+    options = {"owner":owner} if owner is not None else {}
+    maps = abi.audit_factory_maps(api.native,api.proof,api.manifest,**options)
     if maps["cuda_mapped_sha256"].get(api.session.blas_path) != api.session.blas_sha256:
         raise RuntimeError("Native cleanup CUDA closure differs from the session")
     current = api.session.rt(api.session.runtime.cudaGetDevice())

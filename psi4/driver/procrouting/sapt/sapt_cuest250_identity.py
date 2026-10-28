@@ -108,7 +108,7 @@ def canonical_headers(archive):
     return records
 
 
-def verify_files(sdk_root, archive):
+def verify_files(sdk_root, archive, *, owner=None):
     root = Path(sdk_root).resolve(strict=True)
     records = canonical_headers(archive)
     actual = {str(path.relative_to(root)) for path in (root/"include").rglob("*") if path.is_file()}
@@ -118,7 +118,9 @@ def verify_files(sdk_root, archive):
         require(path.is_relative_to(root) and path.stat().st_size == record["bytes"]
                 and file_digest(path) == record["sha256"], f"Wrong cuEST0.2.50 header: {name}")
     native = (root/"lib/13/libcuest.so.0.2.50").resolve(strict=True)
-    require(native.is_relative_to(root) and file_digest(native) == NATIVE_SHA256,
+    require(native.is_relative_to(root), "cuEST CUDA13 native bytes are not canonical0.2.50")
+    native_sha = file_digest(native) if owner is None else owner.require_library(native,NATIVE_SHA256)
+    require(native_sha == NATIVE_SHA256,
             "cuEST CUDA13 native bytes are not canonical0.2.50")
     tree_sha,nul_sha = header_digests(records)
     return {"sdk_version":"0.2.50", "sdk_root":str(root), "archive_sha256":ARCHIVE_SHA256,
@@ -200,7 +202,29 @@ def mapped_rows(text):
     return result
 
 
-def audit_maps(native, proof, cuda_manifest, *, text=None):
+def audit_maps(native, proof, cuda_manifest, *, text=None, owner=None):
+    """Fresh mapping/ABI audit, optionally under an explicit immutable owner.
+
+    Without an owner every mapped file is hashed afresh, as before. The fast
+    adapter accepts only the exact published process owner; any audit failure
+    revokes it permanently rather than silently falling back to fresh hashing.
+    """
+    if owner is None:
+        return _audit_maps(native,proof,cuda_manifest,text=text)
+    from .sapt_cuest_owned_runtime import _OwnedRuntime, current_owned_runtime
+    if not isinstance(owner,_OwnedRuntime) or owner is not current_owned_runtime():
+        raise TypeError("The exact admitted process-owned immutable runtime is required")
+    try:
+        owner.check_live()
+        result = _audit_maps(native,proof,cuda_manifest,text=text,owner=owner)
+        owner.check_live()
+        return {**result,"identity_contract":"process-owned-kernel-read-leases-v1"}
+    except BaseException as error:
+        owner.invalidate("Mapped native identity audit failed: "+str(error))
+        raise
+
+
+def _audit_maps(native, proof, cuda_manifest, *, text=None, owner=None):
     """Exact mapped native/function ownership and explicitly rooted CUDA closure.
 
     cuda_manifest: {cuda_root:absolute, components:[{path:absolute,sha256:...}]}.
@@ -217,7 +241,9 @@ def audit_maps(native, proof, cuda_manifest, *, text=None):
     paths = {name for _,_,name,_,_ in rows}
     expected = proof["native_path"]
     native_paths = {name for name in paths if Path(name).name.startswith("libcuest.so")}
-    require(native_paths == {expected} and mapped_file_digest(expected,rows) == NATIVE_SHA256,
+    prove = (lambda path:owner.mapped_sha256(path,rows)) if owner is not None else (
+        lambda path:mapped_file_digest(path,rows))
+    require(native_paths == {expected} and prove(expected) == NATIVE_SHA256,
             "Missing/foreign/duplicate actual cuEST native world (including0.2.2)")
     for name in configure_abi(native):
         address = ct.cast(getattr(native,name),ct.c_void_p).value
@@ -244,16 +270,23 @@ def audit_maps(native, proof, cuda_manifest, *, text=None):
         check_cuda13_name(path)
         require(path in allowed,
                 f"Foreign/changed loaded CUDA component: {path}")
-    # Every audit still hashes every mapped file afresh through the original
+    # Legacy audits hash every mapped file afresh through the original
     # same-FD/inode/device/before-and-after checks. Only independent file reads
     # run concurrently; native admission/symbol binding above stays serial.
     # Scoped shutdown joins workers even on BaseException, before any caller
     # can enter native teardown. No cache or detached work survives this call.
-    with ThreadPoolExecutor(max_workers=min(4,len(ordered_cuda_paths))) as workers:
-        hashes = workers.map(lambda path: mapped_file_digest(path,rows),ordered_cuda_paths)
-        for path, observed in zip(ordered_cuda_paths,hashes):
-            require(observed == allowed[path],
+    if owner is not None:
+        # Kernel lease checks are main-thread-affine and cheap; no hash workers
+        # are necessary or allowed for this explicit process-owned adapter.
+        for path in ordered_cuda_paths:
+            require(prove(path) == allowed[path],
                     f"Foreign/changed loaded CUDA component: {path}")
+    else:
+        with ThreadPoolExecutor(max_workers=min(4,len(ordered_cuda_paths))) as workers:
+            hashes = workers.map(lambda path: mapped_file_digest(path,rows),ordered_cuda_paths)
+            for path, observed in zip(ordered_cuda_paths,hashes):
+                require(observed == allowed[path],
+                        f"Foreign/changed loaded CUDA component: {path}")
     return {"pid":os.getpid(), "native_mapped_path":expected,
             "cuda_root":str(root), "cuda_mapped_sha256":{p:allowed[p] for p in sorted(cuda_paths)},
             "scope":"Actual loaded bytes/ABI ownership; NOT DFMO numerical/device correctness"}

@@ -18,7 +18,7 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE.parent/"phoenix_validation"))
-from gpu_runtime import digest, optional_inventory, read_config
+from gpu_runtime import digest, optional_inventory, read_config, activate_identity_contract
 from coherent_stage11 import clean, lease, policy, run_command, save
 from response_reuse_probe import resource_scope
 from response_cuda_closure import canonical_sha, COPY_HELPER_SHA
@@ -44,11 +44,15 @@ def relocate_manifest(original, directory):
     }
 
 
-def installed_inventory(root, pin):
+def installed_inventory(root, pin, stage=None):
     clean(root/"source",pin)
-    if (root/"install/BUILT_FROM").read_text().strip() != pin:
+    stage = root/"install" if stage is None else Path(stage).resolve(strict=True)
+    if (stage.parent != root or not (
+            stage.name=="install" or stage.name.startswith("install-owned-"))):
+        raise RuntimeError("An explicit whole install inside the private performance root is required")
+    if (stage/"BUILT_FROM").read_text().strip() != pin:
         raise RuntimeError("Private install BUILT_FROM differs from the frozen source")
-    package = root/"install/lib/python3.13/site-packages/psi4"
+    package = stage/"lib/python3.13/site-packages/psi4"
     staged = root/"build/stage/lib/python3.13/site-packages/psi4"
     inventory = {p.relative_to(package).as_posix():digest(p) for p in package.rglob("*.py")}
     if not inventory or inventory != {
@@ -151,7 +155,10 @@ def executable_copy(identity, manifest, sdk, archive, native, target, metadata, 
     }
 
 
-def prepare(root, pin, reference_path, reference_sha, output):
+def prepare(root, pin, reference_path, reference_sha, output, *, stage=None,
+            identity_contract="fresh-bytes-v1"):
+    if identity_contract not in ("fresh-bytes-v1","process-owned-kernel-read-leases-v1"):
+        raise ValueError("Unknown native identity contract")
     if digest(reference_path) != reference_sha:
         raise RuntimeError("Frozen reference configuration changed")
     reference = json.loads(reference_path.read_text())
@@ -176,7 +183,8 @@ def prepare(root, pin, reference_path, reference_sha, output):
     import_order = metadata/"import_order.py"
     if old_proof["provenance_sha256"].get(str(import_order)) != digest(import_order):
         raise RuntimeError("Authenticated core-first loader changed")
-    package,core,inventory = installed_inventory(root,pin)
+    package,core,inventory = installed_inventory(root,pin,stage)
+    stage=package.parents[3]
     original = json.loads(Path(reference["cuda_manifest"]).read_text())
     if canonical_sha(original) != reference["cuda_manifest_sha256"]:
         raise RuntimeError("Reference CUDA manifest changed")
@@ -220,7 +228,8 @@ def prepare(root, pin, reference_path, reference_sha, output):
             "versions":config["optional_package_versions"]}
     save(output/"optional-artifact-lock.json",lock)
     config.update(schema=2,device_family="RTX3090",local_lease=policy(root),
-        source_pin=pin,stage=str(root/"install"),threads=4,host_memory="2 GiB",
+        source_pin=pin,stage=str(stage),threads=4,host_memory="2 GiB",
+        identity_contract=identity_contract,
         build_proof=str(output/"whole-build-proof.json"),
         wheel_lock=str(output/"optional-artifact-lock.json"),
         wheel_lock_sha256=digest(output/"optional-artifact-lock.json"),
@@ -247,7 +256,7 @@ def child(args):
     initial = json.loads(args.preparation.read_text())
     config = initial["config"]
     clean(args.root/"source",args.pin)
-    package,core,inventory = installed_inventory(args.root,args.pin)
+    package,core,inventory = installed_inventory(args.root,args.pin,Path(config["stage"]))
     if str(core) != initial["core"] or digest(core) != initial["core_sha256"]:
         raise RuntimeError("Private core changed before smoke")
     if os.environ.get("LD_LIBRARY_PATH") != config["startup_library_path"] or os.environ.get("LD_PRELOAD"):
@@ -286,8 +295,12 @@ def child(args):
     psi4.set_num_threads(4)
     psi4.core.set_output_file(str(args.output/"cpu-smoke.out"),False)
     psi4.set_options({"use_cuest":False,"scf_type":"pk","reference":"rhf"})
+    cuda=importlib.import_module("psi4.driver.procrouting.sapt.sapt_cuda_runtime")
+    abi=importlib.import_module("psi4.driver.procrouting.sapt.sapt_cuest_factory_abi")
+    identity_owner=activate_identity_contract(config,manifest,cuda,abi)
     molecule = psi4.geometry("0 1\nH 0 0 0\nH 0 0 0.74\nunits angstrom\nsymmetry c1")
-    energy = float(psi4.energy("hf/sto-3g",molecule=molecule))
+    compute=lambda:float(psi4.energy("hf/sto-3g",molecule=molecule))
+    energy=identity_owner.guarded_call(compute) if identity_owner is not None else compute()
     if not math.isfinite(energy) or abs(energy-(-1.1167593074)) > 1e-6:
         raise RuntimeError("Private native CPU RHF smoke differs")
     modules = (psi4,psi4.core,einsums,einsums._core,waggle,qcelemental,qcengine,optking)
@@ -304,7 +317,7 @@ def child(args):
         raise RuntimeError("Native CPU smoke did not map its exact core")
     provenance = [args.preparation,Path(config["metadata_path"])/"import_order.py",
         args.output/"executable-copy.json",
-        Path(config["wheel_lock"]),args.root/"install/BUILT_FROM",
+        Path(config["wheel_lock"]),Path(config["stage"])/"BUILT_FROM",
         args.root/"build/CMakeCache.txt",
         args.root/"build/psi4-core-prefix/src/psi4-core-build/install_manifest.txt"]
     provenance.extend(Path(name) for name in initial["copy_helper_provenance"])
@@ -322,7 +335,8 @@ def child(args):
         "provenance_sha256":{str(p):digest(p) for p in provenance},
         "CPU_RHF_Eh":energy,"bootstrap_events":events,
     }
-    installed_inventory(args.root,args.pin)
+    if identity_owner is not None:proof["immutable_runtime_smoke"]=identity_owner.report()
+    installed_inventory(args.root,args.pin,Path(config["stage"]))
     save(Path(config["build_proof"]),proof)
     config["build_proof_sha256"] = digest(config["build_proof"])
     save(args.output/"runtime-config.json",config)
@@ -334,6 +348,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root",type=Path,required=True)
     parser.add_argument("--pin",required=True)
+    parser.add_argument("--stage",type=Path)
+    parser.add_argument("--identity-contract",choices=(
+        "fresh-bytes-v1","process-owned-kernel-read-leases-v1"),default="fresh-bytes-v1")
     parser.add_argument("--reference-config",type=Path)
     parser.add_argument("--reference-config-sha256")
     parser.add_argument("--attempt",required=True)
@@ -356,7 +373,8 @@ def main():
         output = args.root/"runs"/args.attempt
         output.mkdir(mode=0o700)
         (output/"scratch").mkdir()
-        initial = prepare(args.root,args.pin,args.reference_config,args.reference_config_sha256,output)
+        initial = prepare(args.root,args.pin,args.reference_config,args.reference_config_sha256,output,
+                          stage=args.stage,identity_contract=args.identity_contract)
         config = initial["config"]
         env = {k:os.environ[k] for k in ("HOME","USER","DISP0_LOCAL_LEASE_FD") if k in os.environ}
         env.update(PATH=config["dependency_environment"]+"/bin:/usr/bin:/bin",
