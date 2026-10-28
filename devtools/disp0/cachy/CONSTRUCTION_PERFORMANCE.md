@@ -126,7 +126,9 @@ must still complete.
 
 `qualify_construction_root.py` supplies that private-root CPU qualification:
 it compares the complete installed/staged Python inventories, checks
-source-matching scientific files and the staged/installed native core, admits
+source-matching scientific files and the staged/installed native core (with the
+generated `metadata.py` explicitly checked against the clean seven-digit source
+version rather than the checked-in inplace placeholder), admits
 read-only dependencies against the existing frozen proof, and matches every
 private CUDA copy by its original hash. It creates aliases only in the private
 run directory; obsolete reference tmpfs paths are never revived or repointed.

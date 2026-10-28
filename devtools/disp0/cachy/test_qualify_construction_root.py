@@ -50,6 +50,9 @@ class Qualification(unittest.TestCase):
         for directory in (installed,staged,source):
             directory.mkdir(parents=True)
             (directory/"science.py").write_text("science = 'frozen'\n")
+            (directory/"metadata.py").write_text(
+                "__version_long = 'test+frozen'\n__version_is_clean = 'True'\n")
+        (source/"metadata.py").write_text("__version_long = 'inplace-placeholder'\n")
         (installed/"core.fake.so").write_bytes(b"whole native core")
         (staged/"core.fake.so").write_bytes(b"whole native core")
         (root/"install/BUILT_FROM").write_text("frozen\n")
@@ -62,11 +65,12 @@ class Qualification(unittest.TestCase):
             package,core,inventory = qualify.installed_inventory(root,"frozen")
             self.assertEqual(package,installed)
             self.assertEqual(core,installed/"core.fake.so")
-            self.assertEqual(inventory,{"science.py":qualify.digest(installed/"science.py")})
+            self.assertEqual(inventory,{name:qualify.digest(installed/name)
+                                       for name in ("science.py","metadata.py")})
             clean.assert_called_once_with(root/"source","frozen")
 
     def test_source_stage_core_and_built_from_drift_each_reject(self):
-        for failure in ("source","stage","core","pin","extra_core","missing_core"):
+        for failure in ("source","stage","core","pin","extra_core","missing_core","version","dirty_version"):
             with self.subTest(failure=failure),tempfile.TemporaryDirectory() as tmp, \
                     patch.object(qualify,"clean"):
                 root = Path(tmp)
@@ -81,6 +85,12 @@ class Qualification(unittest.TestCase):
                     (root/"install/BUILT_FROM").write_text("foreign\n")
                 elif failure == "extra_core":
                     (installed/"core.extra.so").write_bytes(b"extra core")
+                elif failure in ("version","dirty_version"):
+                    contents = ("__version_long = 'test+foreign'\n__version_is_clean = 'True'\n"
+                                if failure == "version" else
+                                "__version_long = 'test+frozen'\n__version_is_clean = 'False'\n")
+                    for directory in (installed,staged):
+                        (directory/"metadata.py").write_text(contents)
                 else:
                     (installed/"core.fake.so").unlink()
                 with self.assertRaises(RuntimeError):

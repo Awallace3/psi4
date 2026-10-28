@@ -4,6 +4,7 @@ No dependency installation, scientific overlays, or GPU calculation. Existing
 qualified dependency bytes are reused read-only; CUDA/cuEST copies are private.
 """
 import argparse
+import ast
 import ctypes
 import importlib.util
 import json
@@ -52,8 +53,17 @@ def installed_inventory(root, pin):
         raise RuntimeError("Whole installed/staged Python inventories differ")
     for name,checksum in inventory.items():
         source = root/"source/psi4"/name
-        if source.is_file() and digest(source) != checksum:
+        if name != "metadata.py" and source.is_file() and digest(source) != checksum:
             raise RuntimeError("Installed scientific Python differs from source: "+name)
+    # CMake generates metadata.py; it is deliberately not the checked-in
+    # inplace placeholder. Bind its actual generated version to the clean pin.
+    metadata = ast.parse((package/"metadata.py").read_text())
+    values = {node.targets[0].id:node.value.value for node in metadata.body
+              if isinstance(node,ast.Assign) and isinstance(node.targets[0],ast.Name)
+              and isinstance(node.value,ast.Constant)}
+    if (values.get("__version_long","").rsplit("+",1)[-1] != pin[:7]
+            or values.get("__version_is_clean") != "True"):
+        raise RuntimeError("Generated installed version does not identify the clean source pin")
     cores = list(package.glob("core*.so"))
     if len(cores) != 1 or digest(cores[0]) != digest(staged/cores[0].name):
         raise RuntimeError("Whole installed/staged native core differs")
