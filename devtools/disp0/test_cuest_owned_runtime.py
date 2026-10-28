@@ -128,6 +128,25 @@ class OwnedRuntime(unittest.TestCase):
             assert solver.path==str(path)
         ''',executable=True)
 
+    def test_full_live_snapshot_brackets_files_without_repeating_caller_checks(self):
+        self.run_case('''
+            other=root/"other.so"
+            other.write_bytes(payload)
+            owner=owned.admit_owned_runtime({str(path):checksum,str(other):checksum})
+            with patch.object(owned.signal,"pthread_sigmask",wraps=signal.pthread_sigmask) as masks, \
+                    patch.object(owned.os,"stat",wraps=os.stat) as stats, \
+                    patch.object(owned.os,"fstat",wraps=os.fstat) as fstats, \
+                    patch.object(owned.fcntl,"fcntl",wraps=fcntl.fcntl) as controls:
+                owner.check_live()
+                owner.check_live()  # No retained proof/cache on the second call.
+            assert masks.call_count==4,masks.call_count
+            assert len([c for c in stats.call_args_list if str(c.args[0]) in pins or str(c.args[0])==str(other)])==4
+            assert fstats.call_count==4
+            assert [c.args[1] for c in controls.call_args_list].count(fcntl.F_GETLEASE)==4
+            assert [c.args[1] for c in controls.call_args_list].count(fcntl.F_GETOWN)==4
+            assert [c.args[1] for c in controls.call_args_list].count(fcntl.F_GETSIG)==4
+        ''')
+
     def test_origin_dependency_closure_must_be_preloaded_before_descriptor_reuse(self):
         for state in ("absent","mmap","linker"):
             self.run_case(f'''
@@ -604,16 +623,57 @@ class OwnedRuntime(unittest.TestCase):
         ''',revoked=True)
         self.run_case('''
             owner=owned.admit_owned_runtime(pins)
-            original=Path.stat
-            def changed(self,*args,**kwargs):
-                value=original(self,*args,**kwargs)
-                if self==path:
+            original=os.stat
+            def changed(name,*args,**kwargs):
+                value=original(name,*args,**kwargs)
+                if os.fspath(name)==str(path):
                     owner.failed=True
                     owner.reason="simulated notification during stat"
                 return value
-            with patch.object(Path,"stat",changed):
+            with patch.object(owned.os,"stat",changed):
                 owner.require_library(path,checksum)
             print("UNSAFE library receipt",flush=True)
+        ''',revoked=True)
+
+    def test_owned_factory_uses_one_fresh_mapping_parse_for_all_symbols(self):
+        self.run_case('''
+            sys.path.insert(0,str(Path(sys.argv[1]).parents[3]/"devtools/disp0"))
+            import test_cuest250_identity as fixture
+            identity=fixture.identity
+            module=importlib.import_module(fixture.PACKAGE+".sapt_cuest_owned_runtime")
+            abi=importlib.import_module(fixture.PACKAGE+".sapt_cuest_factory_abi")
+            case=fixture.Identity()
+            create_temp=fixture.tempfile.TemporaryDirectory
+            with patch.object(fixture.tempfile,"TemporaryDirectory",
+                    side_effect=lambda *a,**kw:create_temp(*a,dir=root,**kw)):
+                _,native,proof,manifest,text=case.fixture()
+            ct=identity.ct
+            for name in abi.FACTORY_ABI:
+                fn=ct.CFUNCTYPE(ct.c_int)(lambda:0)
+                setattr(native,name,fn)
+                address=ct.cast(fn,ct.c_void_p).value
+                row=mapping(Path(proof["native_path"]))
+                text+=(f"\\n{address:x}-{address+1:x} r-xp 0 "
+                       f"{row[4][0]:x}:{row[4][1]:x} {row[3]} {row[2]}")
+            admitted={proof["native_path"]:identity.file_digest(proof["native_path"])}
+            admitted.update({r["path"]:r["sha256"] for r in manifest["components"]})
+            owner=module.admit_owned_runtime(admitted,dedicated_worker=True)
+            with patch.object(identity,"NATIVE_SHA256",admitted[proof["native_path"]]), \
+                    patch.object(identity,"mapped_rows",wraps=identity.mapped_rows) as parses:
+                first=abi.audit_factory_maps(native,proof,manifest,text=text,owner=owner)
+                assert parses.call_count==1,parses.call_count
+                assert first["factory_symbols"]==tuple(abi.FACTORY_ABI)
+                assert first["identity_contract"]=="process-owned-kernel-read-leases-v1"
+                second=abi.audit_factory_maps(native,proof,manifest,text=text,owner=owner)
+                assert parses.call_count==2,parses.call_count
+                assert first==second
+                # No reuse across admissions: remove only a FACTORY symbol's
+                # ownership row and demand revocation on the very next audit.
+                address=ct.cast(native.cuestDFIntPlanCreate,ct.c_void_p).value
+                bad="\\n".join(line for line in text.splitlines()
+                               if not line.startswith(f"{address:x}-"))
+                abi.audit_factory_maps(native,proof,manifest,text=bad,owner=owner)
+                print("UNSAFE omitted factory symbol accepted",flush=True)
         ''',revoked=True)
 
     def test_multifile_admission_rollback_attempts_all_closes_after_baseexception(self):
@@ -761,6 +821,68 @@ class OwnedRuntime(unittest.TestCase):
                 invalid(getattr(session,{method!r}))
                 assert calls==["native synchronization"],calls
                 assert "cuda.bindings" not in sys.modules
+            ''',revoked=True)
+
+    def test_real_lease_proof_is_rechecked_after_launch_argument_coercion(self):
+        self.run_case('''
+            runtime=importlib.import_module(package.__name__+".sapt_cuda_runtime")
+            owner=owned.admit_owned_runtime(pins)
+            session=runtime.CUDASession.__new__(runtime.CUDASession)
+            session.identity_owner=owner
+            session.closed=session.failed=False
+            session.device=0
+            session.stream=9
+            session.functions={"fixture":7}
+            session.kernel_launches={}
+            session.runtime=types.SimpleNamespace(cudaGetDevice=lambda:(0,0))
+            def forbidden(*args):
+                print("UNSAFE native launch after lost descriptor",flush=True)
+                return (0,)
+            session.driver=types.SimpleNamespace(cuLaunchKernel=forbidden)
+            class ClosedDuringPacking:
+                def __index__(self):
+                    os.close(owner._files[str(path)].fd)
+                    return 1
+            session.launch("fixture",1,128,[ClosedDuringPacking()])
+            print("UNSAFE launch result returned",flush=True)
+        ''',revoked=True)
+
+    def test_throwing_launch_preparation_cannot_unwind_a_revoked_proof(self):
+        for kind in ("scalar","iterator","descriptor"):
+            self.run_case(f'''
+                runtime=importlib.import_module(package.__name__+".sapt_cuda_runtime")
+                owner=owned.admit_owned_runtime(pins)
+                session=runtime.CUDASession.__new__(runtime.CUDASession)
+                session.identity_owner=owner
+                session.closed=session.failed=False
+                session.device=0
+                session.stream=9
+                session.functions={{"fixture":7}}
+                session.kernel_launches={{}}
+                session.runtime=types.SimpleNamespace(cudaGetDevice=lambda:(0,0))
+                def forbidden(*args):
+                    print("UNSAFE native launch after lost descriptor",flush=True)
+                    return (0,)
+                session.driver=types.SimpleNamespace(cuLaunchKernel=forbidden)
+                def revoke():
+                    os.close(owner._files[str(path)].fd)
+                    raise ValueError("throwing {kind} preparation")
+                class Scalar:
+                    def __index__(self):return revoke()
+                class Iterator:
+                    def __iter__(self):return self
+                    def __next__(self):return revoke()
+                class Descriptor:
+                    def __int__(self):return revoke()
+                arguments=[Scalar()]
+                if {kind!r}=="iterator":arguments=Iterator()
+                elif {kind!r}=="descriptor":
+                    arguments=[]
+                    session.stream=Descriptor()
+                try:
+                    session.launch("fixture",1,128,arguments)
+                finally:
+                    print("UNSAFE caller cleanup after revoked preparation",flush=True)
             ''',revoked=True)
 
     def test_cleanup_revocation_preserves_observed_free_and_quarantines_parents(self):

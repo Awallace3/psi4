@@ -20,6 +20,23 @@ def _identity_guard(session):
         owner.check_live()
 
 
+def _argument_pointer(session, value):
+    """Pure address packing, NOT an identity/context admission.
+
+    Owned native entrypoints validate the complete proof/device again AFTER
+    packing and before enqueue. Do not call DeviceArray.pointer recursively
+    for every operand in that same operation. The public property and legacy
+    adapter retain their existing full checks.
+    """
+    if getattr(session,"identity_owner",None) is None:
+        return value.pointer
+    if not isinstance(value,DeviceArray) or value.allocation.session is not session:
+        raise ValueError("Native argument must belong to this CUDA session")
+    if value.allocation.freed:
+        raise RuntimeError("Device allocation lifetime has ended")
+    return value.allocation.pointer+value.offset
+
+
 def library(path, sha256, *, owner=None):
     if owner is not None:
         return owner.load_library(path,sha256)
@@ -340,7 +357,13 @@ class CUDASession:
         self._blas("cublasSetAtomicsMode", handle, 0)    # No atomic algorithm.
 
     def _blas(self, name, *args):
-        _identity_guard(self)
+        if (getattr(self,"identity_owner",None) is not None
+                and name in ("cublasDgemm_v2","cublasDgemmStridedBatched")):
+            # Operands were packed without recursive native admission. Check
+            # the full proof AND current device at the actual compute seam.
+            self.check()
+        else:
+            _identity_guard(self)
         status = getattr(self.blas, name)(*args)
         if status != 0:
             self.failed = True
@@ -397,20 +420,43 @@ class CUDASession:
 
     def launch(self, name, grid, threads, arguments):
         self.check()
-        # Typed scalar holders MUST outlive cuLaunchKernel's parameter read.
-        holders = [ct.c_void_p(value.pointer if value is not None else 0)
-                   if isinstance(value, DeviceArray) or value is None
-                   else ct.c_int(value) if isinstance(value, bool) else ct.c_longlong(value)
-                   for value in arguments]
-        parameters = (ct.c_void_p * len(holders))(
-            *[ct.cast(ct.pointer(value), ct.c_void_p) for value in holders])
+        owned=getattr(self,"identity_owner",None) is not None
         try:
+            if owned:
+                arguments=tuple(arguments)
+                function=self.functions[name]
+                grid,threads,stream=int(grid),int(threads),int(self.stream)
+            # Typed scalar holders MUST outlive cuLaunchKernel's parameter read.
+            holders = [ct.c_void_p(_argument_pointer(self,value) if value is not None else 0)
+                       if isinstance(value, DeviceArray) or value is None
+                       else ct.c_int(value) if isinstance(value, bool) else ct.c_longlong(value)
+                       for value in arguments]
+            parameters = (ct.c_void_p * len(holders))(
+                *[ct.cast(ct.pointer(value), ct.c_void_p) for value in holders])
+        except BaseException:
+            # A converter/iterator may revoke the proof AND throw. Validate
+            # before allowing caller/native cleanup to unwind. A healthy
+            # proof preserves the original ordinary input exception.
+            if owned:
+                _identity_guard(self)
+            raise
+        try:
+            if owned:
+                # Scalar coercion/generator iteration may execute Python code.
+                # Never enqueue with a proof, device, lifetime or address which
+                # changed while arguments were being assembled.
+                self.check()
+                for value,holder in zip(arguments,holders):
+                    if isinstance(value,DeviceArray) and holder.value != _argument_pointer(self,value):
+                        raise RuntimeError("Device argument address changed during packing")
             self.rt(self.driver.cuLaunchKernel(
-                self.functions[name], grid, 1, 1, threads, 1, 1, 0,
-                int(self.stream), ct.addressof(parameters), 0))
+                function if owned else self.functions[name], grid, 1, 1, threads, 1, 1, 0,
+                stream if owned else int(self.stream), ct.addressof(parameters), 0))
             self.kernel_launches[name] = self.kernel_launches.get(name,0)+1
         except BaseException:
             self.failed = True
+            if owned:
+                _identity_guard(self)
             raise
 
     def gemm_at_b(self, left, right):
@@ -427,8 +473,8 @@ class CUDASession:
         out = self.empty((m, n))
         alpha, beta = ct.c_double(1.0), ct.c_double(0.0)
         self._blas("cublasDgemm_v2", self.handle, 0, 1, n, m, k,
-                   ct.byref(alpha), right.pointer, n, left.pointer, m,
-                   ct.byref(beta), out.pointer, n)
+                   ct.byref(alpha), _argument_pointer(self,right), n, _argument_pointer(self,left), m,
+                   ct.byref(beta), _argument_pointer(self,out), n)
         return out
 
     def gemm(self, left, right):
@@ -445,8 +491,8 @@ class CUDASession:
         out = self.empty((m,n))
         alpha, beta = ct.c_double(1.0), ct.c_double(0.0)
         self._blas("cublasDgemm_v2", self.handle, 0, 0, n, m, k,
-                   ct.byref(alpha), right.pointer, n, left.pointer, k,
-                   ct.byref(beta), out.pointer, n)
+                   ct.byref(alpha), _argument_pointer(self,right), n, _argument_pointer(self,left), k,
+                   ct.byref(beta), _argument_pointer(self,out), n)
         return out
 
     def gemm_batched(self, left, right, *, transpose_left=False, transpose_right=False,
@@ -466,7 +512,7 @@ class CUDASession:
             if (len(value.shape) not in (2, 3) or value.dtype != np.float64
                     or value.order != "C" or value.allocation.session is not self):
                 raise ValueError("Batched GEMM needs owned C-order FP64 matrices")
-            value.pointer  # Reject ended lifetimes before allocating output.
+            _argument_pointer(self,value)  # Reject ended lifetimes before allocating output.
         lb = left.shape[0] if len(left.shape) == 3 else None
         rb = right.shape[0] if len(right.shape) == 3 else None
         if lb is not None and rb is not None and lb != rb:
@@ -489,7 +535,7 @@ class CUDASession:
                     or out.dtype != np.float64 or out.order != "C"
                     or out.allocation.session is not self):
                 raise ValueError("Batched GEMM output needs an owned C-order FP64 extent")
-            out.pointer  # Reject ended lifetimes before passing native pointers.
+            _argument_pointer(self,out)  # Reject ended lifetimes before passing native pointers.
             for value in (left, right):
                 if (out.allocation is value.allocation
                         and out.offset < value.offset + value.nbytes
@@ -499,8 +545,9 @@ class CUDASession:
         # C-order C.T = op(right).T @ op(left).T: reverse operands/dimensions.
         self._blas("cublasDgemmStridedBatched", self.handle,
                    int(transpose_right), int(transpose_left), n, m, k,
-                   ct.byref(alpha), right.pointer, rc, rs, left.pointer, lc, ls,
-                   ct.byref(beta), out.pointer, n, cs, batches)
+                   ct.byref(alpha), _argument_pointer(self,right), rc, rs,
+                   _argument_pointer(self,left), lc, ls,
+                   ct.byref(beta), _argument_pointer(self,out), n, cs, batches)
         return out
 
     def close(self):

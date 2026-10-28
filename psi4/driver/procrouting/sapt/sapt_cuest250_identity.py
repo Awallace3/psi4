@@ -188,8 +188,15 @@ def native_math_mode(native, handle):
     return mode.value
 
 
-def mapped_rows(text):
+def mapped_rows(text, *, resolve_once=False):
+    """Preserve all segments; optionally resolve each name once per snapshot.
+
+    The dictionary exists for this invocation only. A subsequent snapshot
+    resolves every path again; no mtime, mapped-file or byte proof is cached.
+    The compatibility path retains per-segment resolution.
+    """
     result = []
+    resolved = {}
     for line in text.splitlines():
         fields = line.split(maxsplit=5)
         if len(fields) == 6 and fields[5].startswith("/"):
@@ -198,25 +205,37 @@ def mapped_rows(text):
                 continue
             lo, hi = (int(x,16) for x in fields[0].split("-"))
             device=tuple(int(part,16) for part in fields[3].split(":"))
-            result.append((lo,hi,str(Path(fields[5]).resolve()),int(fields[4]),device))
+            name = fields[5]
+            if not resolve_once:
+                canonical = str(Path(name).resolve())
+            else:
+                if name not in resolved:
+                    resolved[name] = str(Path(name).resolve())
+                canonical = resolved[name]
+            result.append((lo,hi,canonical,int(fields[4]),device))
     return result
 
 
-def audit_maps(native, proof, cuda_manifest, *, text=None, owner=None):
+def audit_maps(native, proof, cuda_manifest, *, text=None, owner=None, extra_symbols=()):
     """Fresh mapping/ABI audit, optionally under an explicit immutable owner.
 
     Without an owner every mapped file is hashed afresh, as before. The fast
     adapter accepts only the exact published process owner; any audit failure
     revokes it permanently rather than silently falling back to fresh hashing.
+    Owned factory callers may request extra native symbols in the same fresh
+    snapshot; no mapping rows or byte-proof cache is exposed to callers.
     """
     if owner is None:
+        if extra_symbols:
+            raise ValueError("Additional symbols require explicit owned-runtime admission")
         return _audit_maps(native,proof,cuda_manifest,text=text)
     from .sapt_cuest_owned_runtime import _OwnedRuntime, current_owned_runtime
     if not isinstance(owner,_OwnedRuntime) or owner is not current_owned_runtime():
         raise TypeError("The exact admitted process-owned immutable runtime is required")
     try:
         owner.check_live()
-        result = _audit_maps(native,proof,cuda_manifest,text=text,owner=owner)
+        result = _audit_maps(native,proof,cuda_manifest,text=text,owner=owner,
+                             extra_symbols=extra_symbols)
         owner.check_live()
         return {**result,"identity_contract":"process-owned-kernel-read-leases-v1"}
     except BaseException as error:
@@ -224,7 +243,7 @@ def audit_maps(native, proof, cuda_manifest, *, text=None, owner=None):
         raise
 
 
-def _audit_maps(native, proof, cuda_manifest, *, text=None, owner=None):
+def _audit_maps(native, proof, cuda_manifest, *, text=None, owner=None, extra_symbols=()):
     """Exact mapped native/function ownership and explicitly rooted CUDA closure.
 
     cuda_manifest: {cuda_root:absolute, components:[{path:absolute,sha256:...}]}.
@@ -237,7 +256,8 @@ def _audit_maps(native, proof, cuda_manifest, *, text=None, owner=None):
     require(cuda_manifest.get("cuda_runtime_version") == 13030
             and cuda_manifest.get("nvrtc_version") == [13,3],
             "DFMO CUDA closure must declare the explicitly selected13.3 ABI")
-    rows = mapped_rows(Path("/proc/self/maps").read_text() if text is None else text)
+    text = Path("/proc/self/maps").read_text() if text is None else text
+    rows = mapped_rows(text,resolve_once=True) if owner is not None else mapped_rows(text)
     paths = {name for _,_,name,_,_ in rows}
     expected = proof["native_path"]
     native_paths = {name for name in paths if Path(name).name.startswith("libcuest.so")}
@@ -245,7 +265,7 @@ def _audit_maps(native, proof, cuda_manifest, *, text=None, owner=None):
         lambda path:mapped_file_digest(path,rows))
     require(native_paths == {expected} and prove(expected) == NATIVE_SHA256,
             "Missing/foreign/duplicate actual cuEST native world (including0.2.2)")
-    for name in configure_abi(native):
+    for name in (*configure_abi(native),*extra_symbols):
         address = ct.cast(getattr(native,name),ct.c_void_p).value
         owners = {path for lo,hi,path,_,_ in rows if lo <= address < hi}
         require(owners == {expected}, f"cuEST symbol resolved outside canonical0.2.50: {name}")

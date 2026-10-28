@@ -234,6 +234,11 @@ class _OwnedRuntime:
 
     def _check_file(self, record):
         self._check_caller()
+        self._check_file_state(record)
+        self._check_caller()
+
+    def _check_file_state(self, record):
+        """File-only validation; caller proof brackets the entire snapshot."""
         try:
             # While a writer is still BLOCKED, F_GETLEASE already returns the
             # requested target F_UNLCK. Never wait for bytes to change or renew.
@@ -243,13 +248,12 @@ class _OwnedRuntime:
                     or fcntl.fcntl(record.fd,fcntl.F_GETSIG) != 0):
                 self._fail("Kernel lease notification ownership changed: "+record.path)
             descriptor = os.fstat(record.fd)
-            current = Path(record.path).stat()
+            current = os.stat(record.path)
             if (_fingerprint(descriptor) != record.fingerprint
                     or _fingerprint(current) != record.fingerprint):
                 self._fail("Immutable library descriptor/path changed: "+record.path)
         except OSError as error:
             self._fail("Immutable library descriptor/path unavailable: "+record.path+": "+str(error))
-        self._check_caller()
 
     def check_live(self):
         self.live_checks += 1
@@ -257,7 +261,7 @@ class _OwnedRuntime:
         if not self.admitted:
             self._fail("Immutable byte admission is incomplete")
         for record in self._files.values():
-            self._check_file(record)
+            self._check_file_state(record)
         self._check_caller()
 
     def mapped_sha256(self, path, mappings):
@@ -302,7 +306,7 @@ class _OwnedRuntime:
         # Never discover dependencies or execute first-load ELF constructors
         # through this descriptor adapter.
         from .sapt_cuest250_identity import mapped_rows
-        rows = mapped_rows(Path("/proc/self/maps").read_text())
+        rows = mapped_rows(Path("/proc/self/maps").read_text(),resolve_once=True)
         # A manifest can additionally pin unused toolkit libraries. Lease and
         # guard those files too, but do not demand irrelevant ELF loads.
         self.mapped_sha256(canonical,rows)

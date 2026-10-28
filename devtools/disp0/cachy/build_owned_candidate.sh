@@ -18,6 +18,8 @@ INNER="$ROOT/build/psi4-core-prefix/src/psi4-core-build"
 [[ -f $ROOT/build/CMakeCache.txt && -f $INNER/CMakeCache.txt ]]
 "$ENV/bin/python" -B -m unittest discover -s "$ROOT/source/devtools/disp0" \
     -p 'test_cuest_owned_runtime*.py'
+"$ENV/bin/python" -B -m unittest discover -s "$ROOT/source/devtools/disp0" \
+    -p 'test_cuda_owned_arguments.py'
 cmake -S "$ROOT/source" -B "$ROOT/build" -DCMAKE_INSTALL_PREFIX="$PREFIX"
 # ExternalProject stamps can otherwise skip Python/configured-version changes.
 cmake -S "$ROOT/source/psi4" -B "$INNER"

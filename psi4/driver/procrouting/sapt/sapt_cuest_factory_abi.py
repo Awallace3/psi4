@@ -70,8 +70,13 @@ def audit_factory_maps(native, proof, manifest, *, text=None, owner=None):
     """Admit every constructor/configuration/cleanup symbol before first call."""
     names = configure_factory_abi(native)
     text = Path("/proc/self/maps").read_text() if text is None else text
-    options = {"owner":owner} if owner is not None else {}
+    options = {"owner":owner,"extra_symbols":names} if owner is not None else {}
     result = identity.audit_maps(native,proof,manifest,text=text,**options)
+    if owner is not None:
+        # Identity and every factory symbol are checked against this SAME fresh
+        # parsed snapshot, inside the owner's entry/exit validation. Never
+        # return rows or retain them for a later admission.
+        return {**result, "factory_symbols":names}
     rows = identity.mapped_rows(text)
     for name in names:
         address = ct.cast(getattr(native,name),H).value

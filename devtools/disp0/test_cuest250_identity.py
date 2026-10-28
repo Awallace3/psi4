@@ -20,6 +20,36 @@ identity=importlib.import_module(f"{PACKAGE}.sapt_cuest250_identity")
 
 
 class Identity(unittest.TestCase):
+    def test_mapping_resolution_memo_is_snapshot_local_and_preserves_every_segment(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            target=root/"native.so";target.write_bytes(b"mapping fixture")
+            alias=root/"alias.so";alias.symlink_to(target)
+            text="\n".join(f"{4096+i*256:x}-{4097+i*256:x} r-xp 0 00:01 7 {alias}"
+                           for i in range(5))
+            # One real resolution per distinct path in THIS snapshot only.
+            original=Path.resolve
+            calls=[]
+            def resolve(path,*args,**kw):
+                calls.append(str(path))
+                return original(path,*args,**kw)
+            with patch.object(Path,"resolve",resolve):
+                first=identity.mapped_rows(text,resolve_once=True)
+                self.assertEqual(calls,[str(alias)])
+                replacement=root/"replacement.so";replacement.write_bytes(b"other")
+                alias.unlink();alias.symlink_to(replacement)
+                second=identity.mapped_rows(text,resolve_once=True)
+                self.assertEqual(calls,[str(alias),str(alias)])
+            self.assertEqual(len(first),5)
+            self.assertEqual([r[:2] for r in first],[r[:2] for r in second])
+            self.assertEqual({r[2] for r in first},{str(target)})
+            self.assertEqual({r[2] for r in second},{str(replacement)})
+            # Compatibility path keeps its existing per-segment resolution.
+            calls.clear()
+            with patch.object(Path,"resolve",resolve):
+                identity.mapped_rows(text)
+            self.assertEqual(calls,[str(alias)]*5)
+
     def fixture(self, version=(0,2,50)):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
         root=Path(temp.name)
