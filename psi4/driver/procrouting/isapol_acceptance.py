@@ -44,6 +44,62 @@ def _sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def _write_tensor_artifact(path, result):
+    """Export numeric arrays, preserving the different LW/PFIT rank layouts."""
+    local = np.concatenate([snapshot.array for snapshot in result.local_tensors], axis=0)
+    refined = np.asarray(result.refined_tensors)
+    nf, ns = len(result.frequencies), len(result.refinements[0].model.sites)
+    if (local.ndim != 4 or local.shape[:2] != (nf, ns)
+            or local.shape[2:] != (24, 24)
+            or refined.ndim != 4 or refined.shape[:2] != (nf, ns)
+            or refined.shape[2] != refined.shape[3]):
+        raise RuntimeError('unexpected native tensor export dimensions')
+    for name, array in (('local', local), ('refined', refined)):
+        if array.dtype != np.float64 or not np.isfinite(array).all():
+            raise RuntimeError(f'{name} tensor export requires finite float64 arrays')
+    np.savez(path, local=local, refined=refined)
+    with np.load(path, allow_pickle=False) as saved:
+        for name, original in (('local', local), ('refined', refined)):
+            if not np.array_equal(saved[name], original):
+                raise RuntimeError(f'{name} tensor export roundtrip differs')
+    return dict(
+        axes='frequency,site,response_component,potential_component',
+        local_components='positive ranks1..4; 10,11c,11s,...; no00',
+        refined_components='includes00; declared per-site rank; 00,10,11c,11s,...',
+        frame='local-axis real Racah/no-CS',
+        units='atomic units', dtype='float64',
+        local_shape=local.shape, refined_shape=refined.shape,
+    )
+
+
+def _angular_export(angular):
+    """Keep table, declared-model and unrestricted completeness distinct."""
+    return dict(
+        schema='native-recoupled-dispersion/1',
+        convention=angular.convention, charge_policy=angular.charge_policy,
+        component_indices='t/u: one-based real components00,10,11c,11s,...; J: angular momentum',
+        units='atomic units', frequencies=angular.frequencies,
+        cp_weights=angular.cp_weights, max_order=angular.max_order,
+        cp_weight_convention='includes1/(2*pi); static node weight zero',
+        pair_labels=angular.pair_labels,
+        declared_model_coverage=_plain(angular.declared_model_coverage),
+        quadrature_provenance=_plain(angular.quadrature_provenance),
+        provenance=angular.provenance,
+        pairs=[
+            dict(site_a=p.site_a, site_b=p.site_b,
+                 coefficients=[dict(order=c.order, t=c.t, u=c.u, J=c.J, value=c.value)
+                               for c in p.coefficients],
+                 coverage=[
+                     dict(order=c.order, table_complete=c.table_complete,
+                          unrestricted_complete=c.unrestricted_complete,
+                          included_rank_quadruples=c.included_rank_quadruples,
+                          missing_table_rank_quadruples=c.missing_table_rank_quadruples,
+                          missing_unrestricted_rank_quadruples=c.missing_unrestricted_rank_quadruples)
+                     for c in p.coverage])
+            for p in angular.pairs],
+    )
+
+
 def _verify_build(manifest):
     """Require the installed module/core bytes recorded by the fresh build."""
     if not manifest.get('clean_source') or not manifest.get('fresh_build'):
@@ -172,16 +228,10 @@ no_reorient
         model_qualification='Declared regression ISA recipe with absolute1.5-bohr tails; property-grid convergence not established',
         max_order=6 if profile == 'smoke' else 10,
     )
-    np.savez(output / 'tensors.npz',
-             local=np.asarray(result.local_tensors),
-             refined=np.asarray(result.refined_tensors))
+    record['tensor_layout'] = _write_tensor_artifact(output / 'tensors.npz', result)
     if result.recoupled_dispersion is not None:
-        angular = [dict(site_a=p.site_a, site_b=p.site_b,
-                        coefficients=[dict(order=c.order, t=c.t, u=c.u, J=c.J, value=c.value)
-                                      for c in p.coefficients])
-                   for p in result.recoupled_dispersion.pairs]
         with gzip.open(output / 'angular.json.gz', 'wt') as f:
-            json.dump(angular, f, allow_nan=False)
+            json.dump(_plain(_angular_export(result.recoupled_dispersion)), f, allow_nan=False)
         record['angular_sha256'] = _sha(output / 'angular.json.gz')
     record['tensors_sha256'] = _sha(output / 'tensors.npz')
     (output / 'file-access.json').write_text(json.dumps(reads, indent=2))

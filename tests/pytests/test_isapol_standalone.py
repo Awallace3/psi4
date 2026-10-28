@@ -3,6 +3,7 @@
 import json
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -78,3 +79,58 @@ print(json.dumps({'recipe': native_water_recipe.__module__, 'standalone_import':
     record = json.loads(p.stdout.strip().splitlines()[-1])
     assert record['standalone_import'] is True
     assert record['recipe'] == 'psi4.driver.procrouting.isapol_recipes'
+
+
+def test_acceptance_tensor_artifact_is_numeric_and_pickle_free(tmp_path):
+    from psi4.driver.procrouting.isapol_acceptance import _write_tensor_artifact
+    from psi4.driver.procrouting.isapol_lw import ArraySnapshot
+    local = np.arange(2*3*24*24, dtype=np.float64).reshape(2, 3, 24, 24)
+    refined = np.arange(2*3*9*9, dtype=np.float64).reshape(2, 3, 9, 9)
+    result = SimpleNamespace(
+        frequencies=(0., .5),
+        local_tensors=tuple(ArraySnapshot.of(a[None]) for a in local),
+        refined_tensors=refined,
+        refinements=(SimpleNamespace(model=SimpleNamespace(sites=(None,)*3)),)*2,
+    )
+    path = tmp_path / 'tensors.npz'
+    layout = _write_tensor_artifact(path, result)
+    with np.load(path, allow_pickle=False) as saved:
+        np.testing.assert_array_equal(saved['local'], local)
+        np.testing.assert_array_equal(saved['refined'], refined)
+        assert saved['local'].dtype == saved['refined'].dtype == np.float64
+    assert layout['local_shape'] == (2, 3, 24, 24)
+    assert 'no00' in layout['local_components']
+    assert 'includes00' in layout['refined_components']
+    result.refined_tensors = refined.astype(object)
+    with pytest.raises(RuntimeError, match='float64'):
+        _write_tensor_artifact(tmp_path / 'object.npz', result)
+    result.refined_tensors = np.full_like(refined, np.nan)
+    with pytest.raises(RuntimeError, match='finite'):
+        _write_tensor_artifact(tmp_path / 'nonfinite.npz', result)
+
+
+def test_acceptance_angular_export_preserves_coverage_and_conventions():
+    from psi4.driver.procrouting.isapol_acceptance import _angular_export, _plain
+    from psi4.driver.procrouting.isapol_native_recoupled import DeclaredPairCoverage
+    missing = ((1, 1, 1, 5),)
+    coverage = SimpleNamespace(
+        order=10, table_complete=True, unrestricted_complete=False,
+        included_rank_quadruples=((2, 2, 2, 2),),
+        missing_table_rank_quadruples=(), missing_unrestricted_rank_quadruples=missing,
+    )
+    angular = SimpleNamespace(
+        convention='local-axis real Racah/no-CS Cn(t,u,J); no dimer placement or energy',
+        charge_policy='00 row/column exactly zero; omitted, not rank1',
+        frequencies=(0., .5), cp_weights=(0., .1), max_order=10,
+        pair_labels=(('O', 'O'),),
+        declared_model_coverage=(DeclaredPairCoverage(0, 0, 10, True, ()),),
+        quadrature_provenance='synthetic export unit test', provenance='synthetic',
+        pairs=(SimpleNamespace(site_a=0, site_b=0, coefficients=(), coverage=(coverage,)),),
+    )
+    exported = json.loads(json.dumps(_plain(_angular_export(angular)), allow_nan=False))
+    assert exported['declared_model_coverage'][0]['declared_model_complete']
+    cov = exported['pairs'][0]['coverage'][0]
+    assert cov['table_complete'] and not cov['unrestricted_complete']
+    assert cov['missing_unrestricted_rank_quadruples'] == [[1, 1, 1, 5]]
+    assert exported['cp_weights'][0] == 0.
+    assert 'no dimer placement or energy' in exported['convention']
