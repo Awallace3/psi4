@@ -21,7 +21,11 @@ import sys
 
 REFERENCE="3ea43ee66ebb2920138c9dfc89c1951d6fbb3673"
 CONFIG_SHA="4f3fbda55b461b75550094466d03392570270afc57ee620f483a915a29ea8ef1"
-REQUIRED=fcntl.F_SEAL_WRITE|fcntl.F_SEAL_GROW|fcntl.F_SEAL_SHRINK|fcntl.F_SEAL_SEAL
+# Conda's Python may be built against headers lacking these Python attributes.
+# Linux UAPI values verified against Cachy's6.18 linux/fcntl.h and memfd.h.
+F_ADD_SEALS=getattr(fcntl,"F_ADD_SEALS",1033)
+F_GET_SEALS=getattr(fcntl,"F_GET_SEALS",1034)
+REQUIRED=0x0008|0x0004|0x0002|0x0001
 # Linux UAPI since6.3. Unsupported kernels fail, never silently downgrade.
 EXEC_FLAG=getattr(os,"MFD_EXEC",0x0010)
 EXEC_SEAL=getattr(fcntl,"F_SEAL_EXEC",0x0020)
@@ -40,10 +44,21 @@ def fingerprint(s):
             s.st_mode,s.st_uid,s.st_nlink)
 
 
+def create_memfd(name):
+    flags=0x0002|0x0001|EXEC_FLAG  # ALLOW_SEALING|CLOEXEC|EXEC.
+    if hasattr(os,"memfd_create"):
+        return os.memfd_create(name,flags)
+    libc=ct.CDLL(None,use_errno=True)
+    create=libc.memfd_create
+    create.argtypes,create.restype=[ct.c_char_p,ct.c_uint],ct.c_int
+    fd=create(name.encode(),flags)
+    if fd<0:raise OSError(ct.get_errno(),"libc memfd_create")
+    return fd
+
+
 def snapshot(item,aliases):
     source=Path(item["source"])
-    fd=os.memfd_create("sealed-prototype-"+item["name"],
-        os.MFD_ALLOW_SEALING|os.MFD_CLOEXEC|EXEC_FLAG)
+    fd=create_memfd("sealed-prototype-"+item["name"])
     checksum=hashlib.sha256()
     with source.open("rb") as stream:
         before=os.fstat(stream.fileno())
@@ -55,8 +70,8 @@ def snapshot(item,aliases):
     assert os.fstat(fd).st_size==item["bytes"]
     # Keep write permission: rejection below must come from seals, not chmod.
     os.fchmod(fd,0o700)
-    fcntl.fcntl(fd,fcntl.F_ADD_SEALS,REQUIRED|EXEC_SEAL)
-    seals=fcntl.fcntl(fd,fcntl.F_GET_SEALS)
+    fcntl.fcntl(fd,F_ADD_SEALS,REQUIRED|EXEC_SEAL)
+    seals=fcntl.fcntl(fd,F_GET_SEALS)
     assert seals&REQUIRED==REQUIRED and not os.get_inheritable(fd)
     os.lseek(fd,0,os.SEEK_SET)
     after=hashlib.sha256()
@@ -80,7 +95,7 @@ def cannot_write(record,alias):
     actions=(lambda:os.pwrite(fd,b"X",0),lambda:os.ftruncate(fd,size+1),
              lambda:os.ftruncate(fd,size-1),
              lambda:mmap.mmap(fd,0,flags=mmap.MAP_SHARED,prot=mmap.PROT_READ|mmap.PROT_WRITE),
-             lambda:fcntl.fcntl(fd,fcntl.F_ADD_SEALS,0))
+             lambda:fcntl.fcntl(fd,F_ADD_SEALS,0))
     for action in actions:
         try:action()
         except OSError as error:assert error.errno==errno.EPERM,error
@@ -191,6 +206,7 @@ def child(input_path):
         "explicit_cuda_driver_calls":0,"explicit_cuda_runtime_calls":0,
         "explicit_cuest_api_calls":0,"origin_parent_value":7,"source_files_removed":True,
         "nvrtc_cpu_compile":compiler,
+        "memfd_provider":"os.memfd_create" if hasattr(os,"memfd_create") else "libc.memfd_create",
         "records":records,"preloaded":plan["preload_order"],"symbol_ownership":ownership,
         "driver_sha256":digest(__file__),"input_sha256":digest(input_path)}
     Path(plan["result"]).write_text(json.dumps(report,indent=2,sort_keys=True)+"\n")

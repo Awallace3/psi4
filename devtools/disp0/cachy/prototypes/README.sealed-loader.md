@@ -30,6 +30,12 @@ still return7. Writes, resizing, shared writable maps, reopened-FD writes and
 further seal changes must fail with EPERM—even though owner write permission is
 still set. An initial local run passed with kernel seal mask63.
 
+The first Cachy attempt stopped at import before creating snapshots: its conda
+Python omits the memfd/seal attributes despite kernel6.18 and libc support.
+The probe uses libc's declared `memfd_create` entrypoint when necessary and
+stable Linux UAPI constants verified against the host headers. No package,
+driver, sysctl or environment installation is changed.
+
 The vendor probe reads only existing private durable inputs. It copies/checks
 all17 pinned libraries and preloads the same nine libraries as the qualified
 bootstrap. It verifies every required cuEST native/factory symbol against the
