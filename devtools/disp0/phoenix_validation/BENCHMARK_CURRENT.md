@@ -1,5 +1,28 @@
 # Current-stage split F-SAPT benchmark
 
+## Queued H200 switched to embers (latest)
+
+User request: **switch queue qos=embers because of group billing limit**.
+The only pending benchmark job was GPU14481883; peptide CPU was complete,
+nanotube CPU had failed repeat qualification, and protein83 CPU was running.
+No running or terminal CPU job was modified.
+
+Task `bf207cd56` verified the pending GPU's identity, account, resource request,
+8-hour cap and embers headroom, then switched the **same job** with:
+`scontrol update JobId=14481883 QOS=embers TimeLimit=08:00:00`.
+Controller readback confirms **embers**, the unchanged 8-hour cap, one H200,
+8 host CPUs, 160 GiB and no dependency. The immediate post-update reason was
+None (awaiting scheduler reevaluation), not a promise of an allocated node.
+The job is now preemptible; no replacement submission or automatic retry.
+
+The runtime guard checks the declared scheduler QoS, so only `qos` in the GPU
+run manifest was changed to embers before the scheduler update. All scientific
+fields, runtime/input hashes, source/helper pins and memory limits are unchanged.
+Original manifest bytes are preserved as `gpu/manifest.before-embers.json`.
+`gpu/qos-change-embers.json` records the exact command, before/after controller
+fields and both manifest SHA256 values. The pinned source/stage was not edited.
+The existing monitors follow the unchanged job ID.
+
 ## CPU scheduling independence (latest)
 
 The user explicitly requested **CPU should not wait on GPU job**.
