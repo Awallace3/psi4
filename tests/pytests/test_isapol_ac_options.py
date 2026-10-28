@@ -15,7 +15,7 @@ These tests also hold the front end to three requirements.
 *The policy is an acceptance declaration; the producer is a named call.*  No
 option runs the correction.  ``run()`` refuses before it looks at a
 wavefunction unless the policy has been declared, so the model produced is
-always the model a later property request admits.
+explicitly the producer's model, not bounded property admission.
 
 *The declaration is resolved once, before any orbital exists.*  Every
 ATOMIC_AC_* option is read into one frozen ``AcDeclaration`` whose ``label()``
@@ -26,11 +26,9 @@ rather than inferred from a HOMO eigenvalue.
 DECLARED_MULTPOLE_AC each refuse the other two's orbitals; only one companion
 declaration is ever forwarded.
 
-Everything here is SCF-free.  The end-to-end guard -- what the correction does
-to alpha and C6-C12, that the producer's energy sits above the SCF minimum, that
-the invalidated SCF seal is replaced by the producer's own verified record, and
-that every refusal leaves the wavefunction intact -- lives in the gitignored
-``agent_scratch/pytests/test_isapol_declared_ac_full.py``.
+Everything here is SCF-free. These tests establish option/producer contracts
+and early bounded-route refusal, not a successful corrected-orbital property
+chain. The original SCF seal is not renewed by applying this correction.
 """
 import ast
 import dataclasses
@@ -91,9 +89,8 @@ def test_every_option_default_is_the_declaration_field_default():
 
 
 def test_the_producer_controls_are_the_tightest_the_admission_accepts():
-    """Defaults that a property request would refuse would make the exposed
-    producer unusable out of the box, so they are pinned against the admission
-    ceilings rather than merely to a number."""
+    """Defaults are pinned against the separate correction validator's ceilings,
+    not a promise of bounded property admission."""
     assert aco.producer_controls() == {'maxiter': 200, 'energy_threshold': 1.e-10,
                                        'gradient_threshold': 1.e-8}
     controls = aco.producer_controls()
@@ -249,3 +246,32 @@ def test_the_public_producer_is_exported_and_names_its_mutation():
     assert 'seal is deliberately invalidated' in doc
     assert 'not a variational one' in doc
     assert 'never runs the correction iteration itself' in doc
+    assert 'property route does not admit its orbitals' in doc
+
+
+@pytest.mark.parametrize('response', ['reference_h2h1', 'native_fdds'])
+def test_declared_ac_bounded_refusal_precedes_state_or_scratch_work(tmp_path, response):
+    from psi4.driver.procrouting.isapol_basis import BasisRecipe, ShellRecipe
+    from psi4.driver.procrouting.isapol_native import Quadrature
+    from psi4.driver.procrouting.isapol_bounded_response import (
+        BoundedResponse, BoundedResources, KernelSmoothing, NativeFDDSOptions,
+    )
+
+    class UntouchableState:
+        def molecule(self):
+            raise AssertionError('unsupported policy touched the wavefunction')
+
+    auxiliary = BasisRecipe('synthetic', 'unit test', 'Cartesian', ((0., 0., 0.),),
+                            (ShellRecipe(0, 0, (1.,), (1.,)),))
+    with pytest.raises(ValueError, match='NONE or FIXED_GRAC'):
+        BoundedResponse(
+            UntouchableState(), auxiliary, (),
+            caller_converged=True, quadrature=Quadrature.from_casimir(core.CasimirGrid(2, .5)),
+            response_grid=None, smoothing=KernelSmoothing(1e-12, 1e6, .1, 1., 'FD'),
+            shell_cutoff=0., charge_penalty=0., anchor_metric_damping=0.,
+            resources=BoundedResources(4*1024**3, 6_000_000_000_000, 64*1024**3),
+            scf_correction='DECLARED_MULTPOLE_AC', scratch_directory=tmp_path,
+            response=response,
+            fdds=NativeFDDSOptions(1, 1024**3) if response == 'native_fdds' else None,
+        )
+    assert not list(tmp_path.iterdir())

@@ -13,23 +13,23 @@ What this module does, and what it deliberately does not
   ``AcDeclaration``, validated by that class, BEFORE any orbital is produced. A
   string option cannot carry a declaration, so the eleven fields that make up the
   model's identity each have their own validated option and the resolution is a
-  single point of truth shared by the producer and by property admission.
+  single point of truth for the explicit producer. The complete bounded
+  property route does not admit DECLARED_MULTPOLE_AC orbitals.
 * :func:`run` drives the ALREADY EXPLICIT POST-SCF PRODUCER. It does not integrate
   the correction potential into Psi4's own SCF, and it is not reachable from a
-  property request: admission (``isapol_native_correction.validate_correction``)
-  only ever *verifies* orbitals that a prior explicit call produced, which is
-  what keeps "no hidden correction iterations inside property requests"
-  literally true rather than merely intended.
+  property request. The separate correction validator only *verifies* orbitals
+  that a prior explicit call produced; it does not imply bounded property
+  admission or hidden correction iterations inside a property request.
 * The choice is recorded rather than left implicit: the front end drives the
   post-SCF producer. Integrating the potential into core SCF would put a
   non-variational energy behind Psi4's own SCF seal, and the seal is the evidence
-  every native property request checks. The post-SCF route instead VERIFIES that
+  the bounded NONE/FIXED_GRAC routes check. The post-SCF route instead VERIFIES that
   seal, then invalidates it by an explicitly named mutation and publishes its own
   convergence record, so a corrected state can never be mistaken for a converged
   Kohn-Sham minimum.
 * ``shift_damping`` and ``diis_subspace`` are producer solver details that do not
-  change the admitted model -- the variational Tozer-Handy constant is re-checked
-  at its fixed point to 1e-6 at admission -- so they are NOT given options here.
+  change the declared model -- the variational Tozer-Handy constant is re-checked
+  at its fixed point to 1e-6 by the separate validator -- so they are NOT given options here.
   Callers who need them keep using ``isapol_native_ac`` directly.
 
 Nothing here computes an ionization potential. ``ATOMIC_AC_IONIZATION_POTENTIAL``
@@ -137,16 +137,15 @@ def run(wfn):
     density, which is not a variational minimum.
 
     The ``ATOMIC_SCF_ASYMPTOTIC_CORRECTION`` policy must already name
-    DECLARED_MULTPOLE_AC. That is not red tape: production and property admission
-    then read the SAME resolved declaration from the same options, so a run cannot
-    produce one model and later admit its orbitals as another.
+    DECLARED_MULTPOLE_AC. The option declares the producer's model, not support
+    by the bounded property route; that route refuses these corrected orbitals.
     """
     policy = core.get_global_option(POLICY_OPTION)
     if policy != AC_POLICY:
         raise ValueError(
             f'{POLICY_OPTION} is {policy}; producing a declared asymptotic correction '
-            f'requires declaring it. Set {POLICY_OPTION} to {AC_POLICY} first, so that '
-            'the model produced here is the model a later property request admits.')
+            f'requires declaring it. Set {POLICY_OPTION} to {AC_POLICY} first. '
+            'The bounded property route does not admit this correction policy.')
     # One log for both stages, at the same verbosity the property request uses.
     # Narration is gated by it; no number below depends on it.
     log = _lg.StageLog(int(core.get_global_option('ATOMIC_PROPERTY_PRINT')))

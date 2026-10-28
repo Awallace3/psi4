@@ -133,8 +133,10 @@ def atomic_asymptotic_correction(wfn):
     the ``ATOMIC_AC_*`` options and resolved into one immutable declaration
     before any orbital is produced.
 
-    ``ATOMIC_SCF_ASYMPTOTIC_CORRECTION`` must already be DECLARED_MULTPOLE_AC, so
-    that the model produced here is the model a later property request admits.
+    ``ATOMIC_SCF_ASYMPTOTIC_CORRECTION`` must already be DECLARED_MULTPOLE_AC.
+    This is a separate producer/validation policy: the complete bounded atomic
+    property route does not admit its orbitals and supports only NONE or
+    FIXED_GRAC. Do not relabel the corrected state to enter that route.
 
     This MUTATES *wfn*: its orbitals, density, Fock matrix, eigenvalues and energy
     are replaced, and its successful-SCF seal is deliberately invalidated, because
