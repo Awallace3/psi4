@@ -165,3 +165,36 @@ strict executable-mapping probe. CUDA aliases are private to the run. The new
 runtime proof binds the copied SDK, mapped binaries and copy-helper provenance;
 no identity check is bypassed. Executable copies are temporary test artifacts,
 not new build dependencies.
+
+`private-cpu-qual-03` **passed** with the executable copies: 1,757,239,987 bytes
+under the fresh `/tmp/psi4-disp0-perf-private-cpu-qual-03`, original strict mapping
+probe passed, and CPU-only H2 RHF energy was `-1.1167593073781577 Eh`.
+The durable build/source remains science pin `a13849f8b0`; qualification helper
+checkout is `41b1093e28932c7ca49262950a6fecfdff948326`.
+
+The first actual water construction comparison is `construction-water-01`,
+running from the original science pin's helper, with serialized order `[1,4]`
+and 600 seconds per child. Its common lease/HOLD and 4 CPU/12 GiB/no-swap/128-task
+limits remain enforced. It has no SCF or DFMO/F-SAPT evaluation.
+
+- Runtime config SHA256:
+  `ef70c4651425e54a015e372ecbd93c4192bb82f91746af4bc518dbe3b71cb83a`.
+- Frozen water geometry SHA256:
+  `67ca57effd611a5ca3d3199ae8da475445aa0d3a086f49fe5354f47677cfa212`.
+- Run directory: `~/gits/psi4-disp0-perf-cachy/runs/construction-water-01`.
+
+Launch/provenance success is not a construction timing result or numerical gate.
+
+`construction-water-01` **failed before any plan construction**:
+`ModuleNotFoundError: No module named 'psi4'`. The child environment was
+sanitized, but the new launcher omitted the existing whole-stage `--psiapi`
+step used by the shared numerical gate. No timing result is accepted.
+
+The corrected command uses the already SHA-verified `stage/bin/psi4 --psiapi`
+launcher before executing the child Python interpreter. A real subprocess
+regression first demonstrates the missing-private-import failure, then verifies
+that the launcher restores imports and preserves arguments containing spaces.
+Helper and installed-science pins are now explicitly separate: each checkout
+must be clean at its own pin, and the actual construction helper must appear
+unchanged in the qualified byte inventory. No scientific module is overlaid.
+Preserve attempt01 and use a new qualified helper/runtime/output for the retry.

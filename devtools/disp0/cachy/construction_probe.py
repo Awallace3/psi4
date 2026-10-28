@@ -14,7 +14,7 @@ import time
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE.parent/"phoenix_validation"))
 from gpu_runtime import AuditedRuntime, digest, read_config, require_local_lease
-from coherent_stage11 import clean, lease, policy, run_command, save
+from coherent_stage11 import clean, git, lease, policy, run_command, save
 from response_reuse_probe import resource_scope
 
 
@@ -119,6 +119,26 @@ def basis_provenance(psi4, names):
     return records
 
 
+def helper_identity(config, build, root):
+    """Launch helpers and installed science have separate, explicit Git pins."""
+    filename = Path(__file__).resolve()
+    if build["provenance_sha256"].get(str(filename)) != digest(filename):
+        raise RuntimeError("Construction helper differs from the qualified byte inventory")
+    helper_pin = git(HERE.parents[2],"rev-parse","HEAD")
+    clean(HERE.parents[2],helper_pin)
+    clean(root/"source",config["source_pin"])
+    return helper_pin
+
+
+def launch_command(config, python, script, arguments):
+    # Match the shared gate's authenticated launcher contract. A sanitized
+    # child environment alone cannot locate a private whole Psi4 installation.
+    return ["/bin/bash","-c",
+        'set -euo pipefail; eval "$("$1" --psiapi)"; exec "$2" -B "$3" "${@:4}"',
+        "psi4-construction",str(Path(config["stage"])/"bin/psi4"),
+        str(python),str(script),*map(str,arguments)]
+
+
 def child(args):
     # Same authenticated import order as the whole scientific gate; no module
     # is loaded from the source checkout over an older installed core.
@@ -127,13 +147,14 @@ def child(args):
     config,build = read_config(args.config,args.config_sha256)
     if config["schema"] != 2 or config["device_family"] != "RTX3090":
         raise RuntimeError("Construction probe is local RTX3090 only")
-    clean(HERE.parents[2],config["source_pin"])
+    helper_pin = helper_identity(config,build,args.root)
     if digest(args.geometry) != args.geometry_sha256:
         raise RuntimeError("Frozen geometry changed")
     timing = None
     report = {
         "status":"RUNNING","scope":"RTX3090_CONSTRUCTION_DEBUG_ONLY_NOT_SPEEDUP_OR_NUMERICAL_GATE",
         "source_pin":config["source_pin"],"runtime_config_sha256":args.config_sha256,
+        "helper_pin":helper_pin,"helper_sha256":digest(__file__),
         "geometry_sha256":args.geometry_sha256,"basis":args.basis,"jkfit":args.jkfit,
         "rifit":args.rifit,"jit_compile_threads":args.threads,"pid":os.getpid(),
         "resource_scope":resource_scope(),
@@ -183,7 +204,7 @@ def compare(records):
         raise RuntimeError("Both explicit JIT thread settings must complete")
     first = records[0]
     for row in records:
-        for name in ("source_pin","runtime_config_sha256","geometry_sha256","basis",
+        for name in ("source_pin","helper_pin","helper_sha256","runtime_config_sha256","geometry_sha256","basis",
                      "jkfit","rifit","basis_dimensions","basis_files","cache_policy"):
             if row[name] != first[name]:
                 raise RuntimeError("Construction arm changed "+name)
@@ -246,6 +267,7 @@ def main():
         return
     with lease(args.root) as fd:
         config,build = read_config(args.config,args.config_sha256)
+        helper_identity(config,build,args.root)
         if config["schema"] != 2 or config["device_family"] != "RTX3090" or config["threads"] != 4:
             raise RuntimeError("Qualified local four-host-thread configuration required")
         if digest(args.geometry) != args.geometry_sha256:
@@ -265,12 +287,12 @@ def main():
                 OPENBLAS_NUM_THREADS="4",CUDA_VISIBLE_DEVICES=config["local_lease"]["expected_uuid"],
                 CUDA_CACHE_PATH=str(folder/"cuda-cache"),PSI_SCRATCH=str(folder/"scratch"),
                 TMPDIR=str(folder/"scratch"))
-            argv = [sys.executable,"-B",str(Path(__file__)),
-                "--root",str(args.root),"--attempt",args.attempt,
+            arguments = ["--root",str(args.root),"--attempt",args.attempt,
                 "--config",str(args.config),"--config-sha256",args.config_sha256,
                 "--geometry",str(args.geometry),"--geometry-sha256",args.geometry_sha256,
                 "--basis",args.basis,"--jkfit",args.jkfit,"--rifit",args.rifit,
                 "--seconds",str(args.seconds),"--child","--threads",str(threads),"--output",str(folder)]
+            argv = launch_command(config,sys.executable,Path(__file__),arguments)
             save(folder/"launch.json",{"argv":argv,"deadline_seconds":args.seconds,
                 "scope":"CONSTRUCTION_ONLY","native_context_sharing":False,
                 "config_sha256":args.config_sha256,"geometry_sha256":args.geometry_sha256})

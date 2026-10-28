@@ -1,8 +1,12 @@
 """Construction schedule/comparison CPU spies, not GPU performance evidence."""
 import copy
 import ast
+import os
 from pathlib import Path
 import sys
+import shlex
+import subprocess
+import tempfile
 import types
 import unittest
 from unittest.mock import Mock, patch
@@ -61,6 +65,7 @@ class ConstructionProbe(unittest.TestCase):
             fakes.basis_fakes.Shell(0,1),fakes.basis_fakes.Shell(1,0)])
         report = {"status":"PASS_CONSTRUCTION_ONLY","jit_compile_threads":4,
             "source_pin":"frozen","runtime_config_sha256":"frozen","geometry_sha256":"frozen",
+            "helper_pin":"helper-frozen","helper_sha256":"helper-file-frozen",
             "basis":"primary","jkfit":"jk","rifit":"ri",
             "basis_dimensions":{"primary":primary.nbf(),"JKFIT":auxiliary.nbf(),"RIFIT":auxiliary.nbf()},
             "basis_files":{name:{"path":name,"sha256":"frozen"} for name in ("primary","JKFIT","RIFIT")},
@@ -99,6 +104,7 @@ class ConstructionProbe(unittest.TestCase):
         self.assertEqual(probe.compare([one,four])["status"],"PASS_PAIRED_CONSTRUCTION_ONLY")
         changes = [
             lambda r:r.update(geometry_sha256="changed"),
+            lambda r:r.update(helper_pin="unqualified-helper"),
             lambda r:r.update(basis_dimensions={"primary":999}),
             lambda r:r["basis_files"]["JKFIT"].update(sha256="changed"),
             lambda r:r["owners"]["RIFIT"].update(auxiliary_fingerprint="changed"),
@@ -143,6 +149,46 @@ class ConstructionProbe(unittest.TestCase):
         self.assertEqual([c.kwargs for c in calls],[{"puream":1}]*3)
         self.assertEqual(calls[1].args[1:],("DF_BASIS_SCF","jk","JKFIT","primary"))
         self.assertEqual(calls[2].args[1:],("DF_BASIS_MP2","ri","RIFIT","primary"))
+
+    def test_whole_stage_launcher_supplies_private_import_path_and_preserves_arguments(self):
+        with tempfile.TemporaryDirectory(prefix="construction launcher ") as tmp:
+            stage = Path(tmp)/"whole stage"
+            launcher = stage/"bin/psi4"
+            launcher.parent.mkdir(parents=True)
+            package = stage/"private Python"
+            package.mkdir()
+            (package/"_qualified_probe.py").write_text("token = 'whole stage'\n")
+            export = "export PYTHONPATH="+shlex.quote(str(package))
+            launcher.write_text("#!/bin/sh\n[ \"$1\" = \"--psiapi\" ] || exit 23\n"
+                                "printf '%s\\n' "+shlex.quote(export)+"\n")
+            launcher.chmod(0o700)
+            script = Path(tmp)/"child probe.py"
+            script.write_text("import sys\nimport _qualified_probe\n"
+                              "assert _qualified_probe.token == 'whole stage'\n"
+                              "assert sys.argv[1:] == ['argument with spaces']\n")
+            env = dict(os.environ)
+            env.pop("PYTHONPATH",None)
+            arguments = ["argument with spaces"]
+            # Red-capable: direct Python cannot import the private package.
+            direct = subprocess.run([sys.executable,"-B",str(script),*arguments],
+                env=env,capture_output=True,text=True,timeout=10)
+            self.assertNotEqual(direct.returncode,0)
+            self.assertIn("ModuleNotFoundError",direct.stderr)
+            command = probe.launch_command({"stage":str(stage)},sys.executable,script,arguments)
+            completed = subprocess.run(command,env=env,capture_output=True,text=True,timeout=10)
+            self.assertEqual(completed.returncode,0,completed.stderr)
+
+    def test_helper_and_scientific_pins_are_both_clean_and_byte_admitted(self):
+        filename = str(Path(probe.__file__).resolve())
+        config = {"source_pin":"science-pin"}
+        build = {"provenance_sha256":{filename:probe.digest(filename)}}
+        with patch.object(probe,"git",return_value="helper-pin"),patch.object(probe,"clean") as clean:
+            self.assertEqual(probe.helper_identity(config,build,Path("/private")),"helper-pin")
+            self.assertEqual(clean.call_args_list[0].args,(probe.HERE.parents[2],"helper-pin"))
+            self.assertEqual(clean.call_args_list[1].args,(Path("/private/source"),"science-pin"))
+            build["provenance_sha256"][filename] = "changed"
+            with self.assertRaisesRegex(RuntimeError,"helper differs"):
+                probe.helper_identity(config,build,Path("/private"))
 
 
 if __name__ == "__main__":
