@@ -89,3 +89,48 @@ Its coexistence samples cannot establish whole-workflow peak-memory admission.
 Actual native numerical gates, zero-skip GPU tests, before/after parity and full
 workflow admission remain required before selecting a faster default or moving
 to Phoenix. Cache-budget and context-sharing changes are separate experiments.
+
+## Private build attempts
+
+Scientific candidate: `a13849f8b066752e8f1df999321047136ae9f8da`.
+The detached private source is clean; cuEST library and archive hashes match the
+canonical 0.2.50 constants. The reference roots/environment remain read-only.
+
+1. `psi4-disp0-perf-build-a13849f8b0.service` configured successfully, then
+   **failed with `Result=oom-kill`** at the 12 GiB cgroup limit during C++
+   compilation. Its log is preserved at
+   `~/gits/psi4-disp0-perf-cachy/build-attempt-01-oom.log`. No installed-stage
+   success or GPU test resulted. Top-level `-j 4` alone does not establish a
+   bound on nested external-project Ninja builds. The generated
+   `build/build.ninja` confirms that the inner step runs only `cmake --build .`,
+   with no explicit job limit; the failed unit's environment did not set
+   `CMAKE_BUILD_PARALLEL_LEVEL`. Its recorded `MemoryPeak` equals the exact
+   12,884,901,888-byte limit. CPU quota throttles execution, not compiler-process
+   concurrency or aggregate memory. This was a build-launch mistake, not water
+   dimer or GPU memory usage.
+2. Retry unit `psi4-disp0-perf-build-a13849f8b0-serial.service` explicitly sets
+   both `JOBS=1` and `CMAKE_BUILD_PARALLEL_LEVEL=1`, plus one OpenMP/BLAS thread.
+   The limits remain 4 CPU quota, 12 GiB RAM, zero swap and 128 tasks, with a
+   90-minute deadline. Output is `build-attempt-02.log`. The completion monitor
+   requires both `BUILD_OK` and the exact `install/BUILT_FROM` pin above.
+   A subsequent point-in-time inspection showed 6,102,331,392 bytes peak
+   (about 5.7 GiB) and 8 current tasks, with the serial environment verified.
+   This is an intermediate build observation, not a completed-build result.
+   The serial retry subsequently **completed successfully**: the monitor verified
+   `BUILD_OK` and exact `install/BUILT_FROM`. Its native core is
+   `install/lib/python3.13/site-packages/psi4/core.cpython-313-x86_64-linux-gnu.so`.
+
+Neither a started retry nor a successful build is construction-performance or
+GPU correctness evidence. The qualified-runtime proof and actual paired probe
+must still complete.
+
+`qualify_construction_root.py` supplies that private-root CPU qualification:
+it compares the complete installed/staged Python inventories, checks
+source-matching scientific files and the staged/installed native core, admits
+read-only dependencies against the existing frozen proof, and matches every
+private CUDA copy by its original hash. It creates aliases only in the private
+run directory; obsolete reference tmpfs paths are never revived or repointed.
+It imports the exact new whole core before Einsums and runs a separate
+**CPU-only H2 RHF/STO-3G build smoke with cuEST disabled**, then freezes a
+schema-2 runtime proof. This build smoke is not part of the timed water-dimer
+construction test and is not GPU numerical qualification.
