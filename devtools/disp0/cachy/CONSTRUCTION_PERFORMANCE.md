@@ -126,9 +126,10 @@ must still complete.
 
 `qualify_construction_root.py` supplies that private-root CPU qualification:
 it compares the complete installed/staged Python inventories, checks
-source-matching scientific files and the staged/installed native core (with the
-generated `metadata.py` explicitly checked against the clean seven-digit source
-version rather than the checked-in inplace placeholder), admits
+source-matching scientific files and the staged/installed native core. The
+generated `__init__.py`, `extras.py` and `metadata.py` must match their configured
+build outputs, not checked-in templates; generated version metadata must also
+identify the clean seven-digit source pin. The qualifier admits
 read-only dependencies against the existing frozen proof, and matches every
 private CUDA copy by its original hash. It creates aliases only in the private
 run directory; obsolete reference tmpfs paths are never revived or repointed.
@@ -136,3 +137,13 @@ It imports the exact new whole core before Einsums and runs a separate
 **CPU-only H2 RHF/STO-3G build smoke with cuEST disabled**, then freezes a
 schema-2 runtime proof. This build smoke is not part of the timed water-dimer
 construction test and is not GPU numerical qualification.
+
+The first private qualification attempt (`private-cpu-qual-01`) correctly stopped
+before importing the core or running a GPU test, but on an overly strict helper
+comparison: it compared configured `__init__.py` to its source template.
+The corrected helper checks all three generated files against actual configured
+outputs and retains installed/staged equality and version-pin checks. A separate
+preload-contract regression also requires the canonical, actually mapped cuEST
+SDK DSO in the binary proof even though it is outside the install/environment
+prefixes; otherwise the unchanged authenticated bootstrap rejects it.
+Keep the failed attempt unchanged and qualify with a fresh output directory.

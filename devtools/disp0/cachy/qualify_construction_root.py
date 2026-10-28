@@ -51,9 +51,14 @@ def installed_inventory(root, pin):
     if not inventory or inventory != {
             p.relative_to(staged).as_posix():digest(p) for p in staged.rglob("*.py")}:
         raise RuntimeError("Whole installed/staged Python inventories differ")
+    configured = root/"build/psi4-core-prefix/src/psi4-core-build"
+    generated = {"__init__.py","extras.py","metadata.py"}
     for name,checksum in inventory.items():
         source = root/"source/psi4"/name
-        if name != "metadata.py" and source.is_file() and digest(source) != checksum:
+        if name in generated:
+            if digest(configured/name) != checksum:
+                raise RuntimeError("Installed generated file differs from configured output: "+name)
+        elif source.is_file() and digest(source) != checksum:
             raise RuntimeError("Installed scientific Python differs from source: "+name)
     # CMake generates metadata.py; it is deliberately not the checked-in
     # inplace placeholder. Bind its actual generated version to the clean pin.
@@ -68,6 +73,20 @@ def installed_inventory(root, pin):
     if len(cores) != 1 or digest(cores[0]) != digest(staged/cores[0].name):
         raise RuntimeError("Whole installed/staged native core differs")
     return package,cores[0],inventory
+
+
+def mapped_binary_inventory(text, prefixes, extra):
+    """Include exact admitted SDK preloads even outside the stage/env prefixes."""
+    result = {}
+    for line in text.splitlines():
+        fields = line.split(maxsplit=5)
+        if len(fields) == 6 and fields[5].startswith("/") and ".so" in fields[5]:
+            path = Path(fields[5])
+            if str(path) in extra or any(path.is_relative_to(prefix) for prefix in prefixes):
+                result[str(path)] = digest(path)
+    if any(result.get(path) != checksum for path,checksum in extra.items()):
+        raise RuntimeError("Admitted SDK preload is missing/changed in actual mapped binaries")
+    return result
 
 
 def prepare(root, pin, reference_path, reference_sha, output):
@@ -209,14 +228,9 @@ def child(args):
         directory = Path(module.__file__).resolve().parent
         for path in directory.rglob("*.py"):
             dependencies[str(path)] = digest(path)
-    binary = {}
     prefixes = tuple(Path(config[key]).resolve() for key in ("stage","dependency_environment"))
-    for line in Path("/proc/self/maps").read_text().splitlines():
-        fields = line.split(maxsplit=5)
-        if len(fields) == 6 and fields[5].startswith("/") and ".so" in fields[5]:
-            path = Path(fields[5])
-            if any(path.is_relative_to(prefix) for prefix in prefixes):
-                binary[str(path)] = digest(path)
+    binary = mapped_binary_inventory(Path("/proc/self/maps").read_text(),prefixes,
+        {initial["sdk_native_path"]:initial["sdk_native_sha256"]})
     if str(core) not in binary:
         raise RuntimeError("Native CPU smoke did not map its exact core")
     provenance = [args.preparation,Path(config["metadata_path"])/"import_order.py",
