@@ -175,6 +175,86 @@ class PlanOwner(unittest.TestCase):
             api,primary,auxiliary,coefficient_candidate="UNVALIDATED_PSI4_COEF",**kwargs)
         return owner,session,native,primary,auxiliary
 
+    def test_explicit_jit_threads_roundtrip_and_construction_cleanup_timings(self):
+        for threads in (1,4):
+            owner,session,native,*_ = self.fixture(jit_compile_threads=threads)
+            with self.subTest(threads=threads),owner:
+                report = owner.report()
+                self.assertEqual(report["requested_jit_compile_threads"],threads)
+                self.assertEqual(report["context_parameter_readback"]["jit_compile_threads"],threads)
+                phases = report["host_phase_timings"]["phases"]
+                for phase in ("owner_admission","basis_snapshot","build_total",
+                              "context.native_create","context.synchronize",
+                              "primary_basis_total","auxiliary_basis_total",
+                              "primary pair list.workspace_query","DF plan.workspace_query",
+                              "DF plan.native_create"):
+                    self.assertEqual(phases[phase]["calls"],1,phase)
+                    self.assertEqual(phases[phase]["failures"],0,phase)
+                    self.assertGreaterEqual(phases[phase]["wall_seconds"],0.,phase)
+                    self.assertGreaterEqual(phases[phase]["process_cpu_seconds"],0.,phase)
+                self.assertEqual(phases["primary shells.native_create"]["calls"],len(owner.primary_snapshot.shells))
+                self.assertNotIn("cleanup_total",phases)
+            self.assertEqual(owner.report()["host_phase_timings"]["phases"]["cleanup_total"]["calls"],1)
+            self.assertEqual(session.live_bytes,0)
+            self.assertEqual(native.objects,{})
+
+    def test_invalid_jit_threads_reject_before_native_ownership_or_construction(self):
+        owner,session,native,primary,auxiliary = self.fixture()
+        owner.close()
+        for threads in (True,False,0,-1,257,1.5,"4",None):
+            with self.subTest(threads=threads),self.assertRaisesRegex(ValueError,"JIT compile threads"):
+                owner_module.DiagnosticPlanOwner(
+                    abi._FactoryAPI(session,native,{},{"components":[]},{}),
+                    primary,auxiliary,coefficient_candidate="UNVALIDATED_PSI4_COEF",
+                    jit_compile_threads=threads)
+            self.assertEqual(session.native_owners,[])
+            self.assertEqual(session.live_bytes,0)
+            native.cuestParametersCreate.assert_not_called()
+
+    def test_timing_failure_preserves_original_error_and_resource_cleanup(self):
+        owner,session,native,*_ = self.fixture(jit_compile_threads=4)
+        native.fail_at = "query:plan"
+        with self.assertRaisesRegex(RuntimeError,"workspace query failed: 23"):
+            with owner: self.fail("failed construction yielded")
+        phases = owner.report()["host_phase_timings"]["phases"]
+        self.assertEqual(phases["build_total"]["failures"],1)
+        self.assertEqual(phases["DF plan.workspace_query"]["failures"],1)
+        self.assertEqual(phases["cleanup_total"]["calls"],1)
+        self.assertEqual(native.objects,{})
+        self.assertEqual(session.live_bytes,0)
+
+    def test_sibling_inherits_explicit_jit_limit_without_sharing_context_ownership(self):
+        dfmo = importlib.import_module(PACKAGE+".sapt_cuest_dfmo_cuda")
+        owner,session,native,primary,auxiliary = self.fixture(jit_compile_threads=4)
+        with owner:
+            provider = types.SimpleNamespace(
+                owned_plan=lambda:owner,_device_owner=True,_device_ambiguous=False,
+                session=session,primary_basis=primary,pid=owner.pid,
+                proof={"sdk_root":"unused","cuda_manifest_sha256":"unused"},
+                archive="unused",cuda_manifest={},order="C",variable_bytes=0,
+                cleanup_complete=False,close=lambda:None)
+            session.retain_native_owner(provider)
+            api = abi._FactoryAPI(session,native,{},{"components":[]},{})
+            sibling_stub = Mock()
+            sibling_stub.__enter__ = Mock(return_value=sibling_stub)
+            sibling_stub.__exit__ = Mock(return_value=False)
+            constructor = owner_module.DiagnosticPlanOwner
+            sibling_provider = dfmo.CuESTDFMOProvider.sibling_provider
+            with patch.object(abi,"admit_factory_api",return_value=api), \
+                 patch.object(owner_module,"DiagnosticPlanOwner",wraps=constructor) as create, \
+                 patch.object(dfmo,"CuESTDFMOProvider",return_value=sibling_stub):
+                with sibling_provider(provider,auxiliary) as sibling:
+                    self.assertIs(sibling,sibling_stub)
+                    self.assertEqual(create.call_args.kwargs["jit_compile_threads"],4)
+                    sibling_owner = session.native_owners[-1]
+                    self.assertEqual(sibling_owner.context_parameters["jit_compile_threads"],4)
+                    self.assertNotEqual(sibling_owner.handle,owner.handle)
+                sibling_stub.prepare_device_compute.assert_called_once_with()
+                self.assertTrue(sibling_owner.cleanup_complete)
+                self.assertEqual(session.native_owners,[owner,provider])
+            provider.cleanup_complete=True
+            session.release_native_owner(provider)
+
     def test_full_graph_native_policy_dimensions_candidate_coefficients_and_accounting(self):
         owner,session,native,primary,auxiliary = self.fixture()
         with owner as active:

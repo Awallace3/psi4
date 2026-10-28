@@ -14,6 +14,7 @@ import numpy as np
 from . import sapt_cuest_factory_abi as abi
 from .sapt_cuda_runtime import cleanup
 from .sapt_cuest_basis import snapshot_pair
+from .sapt_cuest_timing import PhaseTimings
 
 
 @dataclass
@@ -56,7 +57,7 @@ class DiagnosticPlanOwner:
     COEFFICIENT_CANDIDATE = "UNVALIDATED_PSI4_COEF"
 
     def __init__(self, api, primary, auxiliary, *, coefficient_candidate,
-                 host_workspace_limit=256*1024**2):
+                 host_workspace_limit=256*1024**2, jit_compile_threads=1):
         if not isinstance(api,abi._FactoryAPI):
             raise TypeError("An explicitly admitted canonical native factory API is required")
         if coefficient_candidate != self.COEFFICIENT_CANDIDATE:
@@ -64,10 +65,17 @@ class DiagnosticPlanOwner:
         if (isinstance(host_workspace_limit,bool) or not isinstance(host_workspace_limit,int)
                 or host_workspace_limit <= 0):
             raise ValueError("An explicit positive host workspace bound is required")
-        api.check()
+        if (isinstance(jit_compile_threads,bool) or not isinstance(jit_compile_threads,int)
+                or not 1 <= jit_compile_threads <= 256):
+            raise ValueError("JIT compile threads must be an explicit integer1..256")
+        self.timings = PhaseTimings()
+        self.jit_compile_threads = jit_compile_threads
+        with self.timings.measure("owner_admission"):
+            api.check()
         if getattr(api,"_plan_owner",None) is not None:
             raise RuntimeError("This native API already has a plan owner")
-        p,a = snapshot_pair(primary,auxiliary)
+        with self.timings.measure("basis_snapshot"):
+            p,a = snapshot_pair(primary,auxiliary)
         allowance = api.session.native_bytes
         if isinstance(allowance,bool) or not isinstance(allowance,int) or allowance <= 0:
             raise ValueError("Declare an opaque-native memory allowance; workspaces alone are not total VRAM")
@@ -80,6 +88,7 @@ class DiagnosticPlanOwner:
         self.built = self.building = self.entered = False
         self._context = self._primary = self._auxiliary = self._pairs = self._plan = None
         self.version = self.context_parameters = self.plan_parameters = None
+        self.math_mode = None
         self.session.retain_native_owner(self)  # BEFORE any native construction.
         api._plan_owner = self
 
@@ -125,15 +134,19 @@ class DiagnosticPlanOwner:
         return self._raw(self._plan).value
 
     def _new_native(self, label, create, destroy, keepalive=()):
-        self._check_construction()
-        self.api.assert_identity()
+        # Aggregate shell calls by role rather than growing one row per shell.
+        phase = label.split(" shell",1)[0]+" shells" if " shell" in label else label
+        with self.timings.measure(phase+".admission"):
+            self._check_construction()
+            self.api.assert_identity()
         resource = _Resource(label,handle=ct.c_void_p(),keepalive=tuple(keepalive))
         resource.destroy = lambda:destroy(resource.handle)
         self.resources.append(resource)  # Retain the output slot BEFORE the call.
         status_observed = False
         try:
-            status = create(ct.byref(resource.handle))
-            status_observed = True
+            with self.timings.measure(phase+".native_create"):
+                status = create(ct.byref(resource.handle))
+                status_observed = True
             if status != 0:
                 resource.uncertain = bool(resource.handle.value)
                 resource.uncertainty_stage = "create" if resource.uncertain else ""
@@ -142,7 +155,8 @@ class DiagnosticPlanOwner:
                 resource.uncertain = True
                 resource.uncertainty_stage = "create"
                 raise RuntimeError("Successful native creation returned a null object")
-            self.session.synchronize_device()
+            with self.timings.measure(phase+".synchronize"):
+                self.session.synchronize_device()
             return resource
         except BaseException:
             if not status_observed:
@@ -190,12 +204,15 @@ class DiagnosticPlanOwner:
         return workspace
 
     def _workspace_object(self, label, query, create, destroy, keepalive=()):
-        self._check_construction()
-        self.api.assert_identity()
+        with self.timings.measure(label+".query_admission"):
+            self._check_construction()
+            self.api.assert_identity()
         persistent,temporary = abi._Descriptor(),abi._Descriptor()
-        self.api.status(label+" workspace query",query(ct.byref(persistent),ct.byref(temporary)))
-        p = self._workspace(label+" persistent",persistent,False)
-        t = self._workspace(label+" creation temporary",temporary,True)
+        with self.timings.measure(label+".workspace_query"):
+            self.api.status(label+" workspace query",query(ct.byref(persistent),ct.byref(temporary)))
+        with self.timings.measure(label+".workspace_allocation"):
+            p = self._workspace(label+" persistent",persistent,False)
+            t = self._workspace(label+" creation temporary",temporary,True)
         return self._new_native(
             label,lambda out:create(ct.byref(p),ct.byref(t),out),
             destroy,(*keepalive,p,t))
@@ -238,6 +255,10 @@ class DiagnosticPlanOwner:
         return result
 
     def build(self):
+        with self.timings.measure("build_total"):
+            return self._build()
+
+    def _build(self):
         self._check_construction()
         if self.built or self.building:
             raise RuntimeError("Native construction is single-use")
@@ -245,16 +266,21 @@ class DiagnosticPlanOwner:
         try:
             native = self.api.native
             hp = self._parameters(0)
-            self.context_parameters = self.api.configure_context_parameters(
-                self._raw(hp).value,stream=int(self.session.stream),jit_compile_threads=1)
+            with self.timings.measure("context_configuration"):
+                self.context_parameters = self.api.configure_context_parameters(
+                    self._raw(hp).value,stream=int(self.session.stream),
+                    jit_compile_threads=self.jit_compile_threads)
             self._context = self._new_native(
                 "context",lambda out:native.cuestCreate(self._raw(hp),out),native.cuestDestroy)
-            self.api.assert_identity()  # Include any lazy constructor-loaded libraries.
-            self.version = abi.identity.native_version(native,self._raw(self._context).value)
-            self.api.set_owned_context_fp64(self._raw(self._context).value,handle_pid=self.pid)
+            with self.timings.measure("context_identity_and_fp64"):
+                self.api.assert_identity()  # Include any lazy constructor-loaded libraries.
+                self.version = abi.identity.native_version(native,self._raw(self._context).value)
+                self.math_mode = self.api.set_owned_context_fp64(self._raw(self._context).value,handle_pid=self.pid)
             sp,bp = self._parameters(1),self._parameters(2)
-            self._primary = self._basis(self.primary_snapshot,sp,bp)
-            self._auxiliary = self._basis(self.auxiliary_snapshot,sp,bp)
+            with self.timings.measure("primary_basis_total"):
+                self._primary = self._basis(self.primary_snapshot,sp,bp)
+            with self.timings.measure("auxiliary_basis_total"):
+                self._auxiliary = self._basis(self.auxiliary_snapshot,sp,bp)
             pp = self._parameters(3)
             xyz = np.asarray(self.primary_snapshot.coordinates,dtype=np.float64).reshape(-1)
             pair_args = (self._raw(self._context),self._raw(self._primary),
@@ -265,7 +291,8 @@ class DiagnosticPlanOwner:
                 lambda p,t,out:native.cuestAOPairListCreate(*pair_args,p,t,out),
                 native.cuestAOPairListDestroy,(xyz,))
             dp = self._parameters(5)
-            self.plan_parameters = self.api.configure_df_plan_parameters(self._raw(dp).value)
+            with self.timings.measure("plan_configuration"):
+                self.plan_parameters = self.api.configure_df_plan_parameters(self._raw(dp).value)
             plan_args = (self._raw(self._context),self._raw(self._primary),
                          self._raw(self._auxiliary),self._raw(self._pairs),self._raw(dp))
             self._plan = self._workspace_object(
@@ -273,8 +300,9 @@ class DiagnosticPlanOwner:
                 lambda p,t:native.cuestDFIntPlanCreateWorkspaceQuery(*plan_args,p,t,None),
                 lambda p,t,out:native.cuestDFIntPlanCreate(*plan_args,p,t,out),
                 native.cuestDFIntPlanDestroy)
-            self.session.synchronize_device()
-            self.api.assert_identity()
+            with self.timings.measure("final_synchronize_and_identity"):
+                self.session.synchronize_device()
+                self.api.assert_identity()
             self.built = True
             return self
         except BaseException:
@@ -288,14 +316,16 @@ class DiagnosticPlanOwner:
             return
         if self.cleanup_failed:
             raise RuntimeError("Native cleanup previously failed; explicit retry_cleanup() required")
-        self._close()
+        with self.timings.measure("cleanup_total"):
+            self._close()
 
     def retry_cleanup(self):
         if self.cleanup_complete:
             return
         if not self.cleanup_failed:
             raise RuntimeError("No failed native cleanup to retry")
-        self._close()
+        with self.timings.measure("cleanup_total"):
+            self._close()
 
     def _release_retired_inputs(self):
         for resource in self.retired_waiting_for_sync:
@@ -354,10 +384,13 @@ class DiagnosticPlanOwner:
         return {
             "scope":"Diagnostic resource factory, NOT production/numerical admission",
             "pid":self.pid,"native_version":self.version,
+            "native_math_mode":self.math_mode,
             "coefficient_candidate":self.COEFFICIENT_CANDIDATE,
             "primary_fingerprint":self.primary_snapshot.fingerprint,
             "auxiliary_fingerprint":self.auxiliary_snapshot.fingerprint,
             "context_parameter_readback":self.context_parameters,
+            "requested_jit_compile_threads":self.jit_compile_threads,
+            "host_phase_timings":self.timings.report(),
             "plan_parameter_readback":self.plan_parameters,
             "pair_thresholdPQ":0.0,"production_provider_admitted":False,
             "basis_layout_metric_rank_admitted":False,

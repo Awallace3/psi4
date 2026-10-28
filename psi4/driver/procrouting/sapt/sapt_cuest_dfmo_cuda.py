@@ -16,6 +16,7 @@ import numpy as np
 from . import sapt_cuest250_identity as identity
 from .sapt_cuda_runtime import cleanup, library
 from .sapt_cuest_basis import require_spherical_basis
+from .sapt_cuest_timing import PhaseTimings
 
 
 class _Descriptor(ct.Structure):
@@ -72,6 +73,7 @@ class CuESTDFMOProvider:
         self.closed = self.failed = False
         self.calls = self.input_bytes = self.output_bytes = 0
         self.elapsed = 0.0
+        self.device_timings = PhaseTimings()
         self._device_parameters = None
         self._device_pending = []
         self._device_owner = self._device_ambiguous = self.cleanup_complete = False
@@ -119,7 +121,8 @@ class CuESTDFMOProvider:
             cuda_manifest_sha256=self.proof["cuda_manifest_sha256"])
         with DiagnosticPlanOwner(api,self.primary_basis,auxiliary_basis,
                 coefficient_candidate=owner.COEFFICIENT_CANDIDATE,
-                host_workspace_limit=owner.host_limit) as sibling_owner:
+                host_workspace_limit=owner.host_limit,
+                jit_compile_threads=owner.jit_compile_threads) as sibling_owner:
             with CuESTDFMOProvider(session=self.session,sdk_root=self.proof["sdk_root"],
                     archive=self.archive,cuda_manifest=self.cuda_manifest,
                     cuda_manifest_sha256=self.proof["cuda_manifest_sha256"],
@@ -265,6 +268,10 @@ class CuESTDFMOProvider:
         Pending call inputs are retained until successful synchronization, or
         native parameter teardown after a failed call. No execution retry.
         """
+        with self.device_timings.measure("call_total"):
+            return self._compute_device(pairs)
+
+    def _compute_device(self, pairs):
         from .sapt_dispersion_cuda_setup import DeviceMath
         if (self.closed or self.failed or self.pid != os.getpid() or not self._device_owner
                 or self._device_parameters is None or self._device_ambiguous):
@@ -286,38 +293,46 @@ class CuESTDFMOProvider:
         # Register BEFORE any operation that can fail after native code borrows.
         self._device_pending.append(pending)
         try:
-            self.assert_identity()
-            # Factory map audits can reset ctypes descriptors. Rebind the exact
-            # canonical eleven-argument DFMO ABI immediately before use.
-            identity.configure_abi(self.native)
+            with self.device_timings.measure("identity_and_abi"):
+                self.assert_identity()
+                # Factory map audits can reset ctypes descriptors. Rebind the
+                # exact canonical eleven-argument DFMO ABI before use.
+                identity.configure_abi(self.native)
             count = self.naux*sum(l*r for l,r in zip(nl,nr))
-            output = self.session.empty((count,))
+            with self.device_timings.measure("output_allocation"):
+                output = self.session.empty((count,))
             pending["output"] = output
-            with self.session.scope():
-                cl,cr = m.pack_coefficients(left),m.pack_coefficients(right)
+            with self.device_timings.measure("scope_including_cleanup"), self.session.scope():
+                with self.device_timings.measure("coefficient_packing_enqueue"):
+                    cl,cr = m.pack_coefficients(left),m.pack_coefficients(right)
                 pending["packed"] = (cl,cr)
                 nl_values = (ct.c_uint64*len(nl))(*nl)
                 nr_values = (ct.c_uint64*len(nr))(*nr)
                 variable,temporary = _Descriptor(0,self.variable_bytes),_Descriptor()
                 pending["descriptors"] = (nl_values,nr_values,variable,temporary)
-                self.session.synchronize_device()
+                with self.device_timings.measure("pre_query_synchronize"):
+                    self.session.synchronize_device()
                 args = (ct.c_void_p(self.handle),ct.c_void_p(self.plan),self._device_parameters,
                         ct.byref(variable),None,len(names),nl_values,nr_values,
                         ct.c_void_p(cl.pointer),ct.c_void_p(cr.pointer),ct.c_void_p(output.pointer))
-                self.status("device workspace query",self.native.cuestDFMOIntegralsComputeWorkspaceQuery(
-                    *args[:4],ct.byref(temporary),*args[5:]))
+                with self.device_timings.measure("workspace_query"):
+                    self.status("device workspace query",self.native.cuestDFMOIntegralsComputeWorkspaceQuery(
+                        *args[:4],ct.byref(temporary),*args[5:]))
                 if temporary.host_bytes > 256*1024**2:
                     raise MemoryError("DFMO host workspace exceeds explicit256MiB cap")
-                host = np.empty(temporary.host_bytes,dtype=np.uint8)
-                pending["host"] = host
-                device = (self.session.empty((temporary.device_bytes,),dtype=np.uint8)
-                          if temporary.device_bytes else None)
+                with self.device_timings.measure("workspace_allocation"):
+                    host = np.empty(temporary.host_bytes,dtype=np.uint8)
+                    pending["host"] = host
+                    device = (self.session.empty((temporary.device_bytes,),dtype=np.uint8)
+                              if temporary.device_bytes else None)
                 workspace = _Workspace(host.ctypes.data if host.size else 0,host.size,
                                        device.pointer if device is not None else 0,temporary.device_bytes)
                 pending["workspace"] = (device,workspace)
-                self.status("device compute",self.native.cuestDFMOIntegralsCompute(
-                    *args[:4],ct.byref(workspace),*args[5:]))
-                self.session.synchronize_device()
+                with self.device_timings.measure("native_compute_enqueue"):
+                    self.status("device compute",self.native.cuestDFMOIntegralsCompute(
+                        *args[:4],ct.byref(workspace),*args[5:]))
+                with self.device_timings.measure("completion_synchronize"):
+                    self.session.synchronize_device()
             # Native work and scope cleanup both completed before host release.
             self._device_pending.remove(pending)
         except BaseException:
@@ -341,6 +356,7 @@ class CuESTDFMOProvider:
                 "coefficient_h2d_bytes":self.input_bytes,"device_factor_bytes":self.output_bytes,
                 "device_coefficient_bytes":self.device_input_bytes,
                 "producer_seconds":self.elapsed,"sdk_file_proof":self.proof,
+                "device_host_phase_timings":self.device_timings.report(),
                 "native_version":self.version,"loaded_maps":self.maps,"declared_plan_policy":POLICY,
                 "native_math_mode":self.math_mode,
                 "basis_metric_rank_eigenvalue_semantics_verified":False,

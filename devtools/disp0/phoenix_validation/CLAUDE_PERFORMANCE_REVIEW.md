@@ -82,3 +82,8 @@ creation. Compare JIT threads1 versus a host-budgeted value such as4.
 Keep cache changes separate. Follow with unchanged numerical gates before
 another H200 benchmark. No implementation change or GPU test was launched
 as part of this review.
+
+Follow-up implementation and local execution contract:
+[`../cachy/CONSTRUCTION_PERFORMANCE.md`](../cachy/CONSTRUCTION_PERFORMANCE.md).
+This adds instrumentation and an explicit thread-count experiment; it does not
+replace the measured whole-call regression with an inferred speedup.

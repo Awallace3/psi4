@@ -112,6 +112,33 @@ class DeviceTransport(unittest.TestCase):
         p.close()
         self.assertEqual(n.destroyed,1)
         self.assertEqual(p._device_pending,[])
+        phases=p.device_timings.report()["phases"]
+        self.assertEqual(phases["call_total"]["failures"],2)  # failure plus rejected retry
+        self.assertEqual(phases["native_compute_enqueue"]["failures"],1)
+        self.assertEqual(phases["workspace_query"]["calls"],1)
+        self.assertNotIn("completion_synchronize",phases)
+
+    def test_device_phase_timings_keep_calls_audits_and_numerics_unchanged(self):
+        p,s,n,ao,sp=self.fixture()
+        p.prepare_device_compute()
+        matrices={"x":(sp["r"],sp["a"])}
+        pairs={name:tuple(s.upload(v) for v in values) for name,values in matrices.items()}
+        with s.scope():
+            for _ in range(2):
+                result=p.compute_device(pairs)
+                np.testing.assert_allclose(host(result["x"]),
+                    np.einsum("Qmn,mi,nj->Qij",ao,*matrices["x"]),rtol=1e-12,atol=1e-12)
+        phases=p.report()["device_host_phase_timings"]["phases"]
+        for phase in ("call_total","identity_and_abi","output_allocation",
+                      "scope_including_cleanup","coefficient_packing_enqueue",
+                      "pre_query_synchronize","workspace_query","workspace_allocation",
+                      "native_compute_enqueue","completion_synchronize"):
+            self.assertEqual(phases[phase]["calls"],2,phase)
+            self.assertEqual(phases[phase]["failures"],0,phase)
+        self.assertEqual(p.calls,2)
+        self.assertEqual(n.computed,2)
+        self.assertEqual(p._device_pending,[])
+        p.close()
 
     def test_failed_sync_retains_temporary_device_and_host_buffers_for_cleanup_only(self):
         p,s,n,_,sp = self.fixture()
