@@ -1,5 +1,10 @@
 # cuEST construction performance: first discriminating experiment
 
+**Completed result:** [CONSTRUCTION_RESULTS.md](CONSTRUCTION_RESULTS.md).
+The paired water diagnostic passed: over 98% of owner-build time was in
+per-object admission, while JIT 1 versus 4 showed no established improvement.
+The chronological setup/failure record below is retained.
+
 Starting point: [independent review](../phoenix_validation/CLAUDE_PERFORMANCE_REVIEW.md).
 The measured H200 whole-call regression remains unresolved. None of the source
 changes below establishes a speedup or releases another Phoenix allocation.
@@ -201,3 +206,13 @@ Helper and installed-science pins are now explicitly separate: each checkout
 must be clean at its own pin, and the actual construction helper must appear
 unchanged in the qualified byte inventory. No scientific module is overlaid.
 Preserve attempt01 and use a new qualified helper/runtime/output for the retry.
+
+The corrected fresh retry, `construction-water-02`, subsequently completed
+both arms and the strict paired comparator with `PASS_PAIRED_CONSTRUCTION_ONLY`.
+It used fresh whole CPU qualification `private-cpu-qual-04` and an independently
+pinned launcher-helper checkout, leaving the original scientific source and
+earlier qualified helper checkout unchanged. See the results page for actual
+measurements, provenance and limits.
+After completion, both private temporary executable-copy trees were verified
+and removed under the common lease. Their runtime configurations are expired,
+not reusable launch configurations; durable inputs and all evidence remain.

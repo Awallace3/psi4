@@ -87,3 +87,10 @@ Follow-up implementation and local execution contract:
 [`../cachy/CONSTRUCTION_PERFORMANCE.md`](../cachy/CONSTRUCTION_PERFORMANCE.md).
 This adds instrumentation and an explicit thread-count experiment; it does not
 replace the measured whole-call regression with an inferred speedup.
+
+The [completed water construction diagnostic](../cachy/CONSTRUCTION_RESULTS.md)
+found over 98.46% of owner-build time in per-object admission blocks.
+JIT 1 versus 4 did not establish an improvement; native context creation was
+milliseconds on that control. This is Cachy evidence, not a decomposition of
+the earlier H200 peptide run. The next fix needs an explicit identity-lifetime
+contract rather than deleting or blindly caching the existing checks.
