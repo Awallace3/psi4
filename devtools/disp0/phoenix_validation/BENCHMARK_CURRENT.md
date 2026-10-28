@@ -1,5 +1,43 @@
 # Current-stage split F-SAPT benchmark
 
+## CPU batch terminal; first H200 sample (2026-10-28 checkpoint)
+
+CPU-only watcher `b113822d4` reached ALL-TERMINAL. No CPU job was waiting
+for GPU14481883.
+
+| System | Job | Result |
+|---|---|---|
+| peptide | 14481886 | Three fresh CPU repeats, median **295.103911 s**, range 264.639815–296.875835 s |
+| nanotube | 14481888 | Two completed calls, 5334.743746 / 5156.415041 s; repeat-localization check FAILED; no qualified median |
+| protein83 | 14481890 | First child reached the **28800 s supervisor deadline** during fragment coupled induction; no completed sample |
+
+Peptide result/sample/NPZ hashes, distinct process identities and cleanup were
+verified. Its mode is exact per-source CPHF, not the cheaper historical
+scalar-scaled uncoupled CPU partition. Nanotube's first failing field is the
+signed/permuted `Locc_A` coefficient comparison (max violating difference
+1.00277e-8 against unchanged atol/rtol1e-9). This does not establish that all
+other fields pass, nor justify relaxing a guard. Both native calls exited0.
+Protein83's allocation was24h for three calls; the per-child8h cap stopped
+the first. The stderr SIGINT trace is the supervisor's interruption, not a
+diagnosed segmentation fault or OOM. Its last log is in source-resolved
+fragment induction after a DiskDFJK simple-constructor warning. The warning
+is not by itself a measured attribution of all elapsed time.
+Owned children were reaped and scratch cleanup completed for both failed jobs.
+No paid retries were submitted.
+
+After the QoS switch, H20014481883 is **RUNNING on embers**, node
+`atl1-1-03-019-2-0`. The finalized water control confirms NVIDIA H200,
+UUID `GPU-edf24d8b-43c2-1ce9-9967-7862cf713a99`, driver615.71.09,
+143771MiB, compute90. Water energy differs from the current native CPU
+control by -2.80618e-12Eh; this aggregate control is not the full matrix oracle.
+
+The first peptide GPU call completed in **994.512498 s** with native cleanup;
+the second was active at inspection. This first observation is slower than the
+295.103911s CPU median, not evidence of acceleration. It is **one unqualified
+GPU sample**, not a three-repeat GPU median or accepted CPU/GPU speedup.
+Full repeat and independent CPU matrix qualification remain outstanding.
+The running GPU job, source and inputs were not modified during inspection.
+
 ## Queued H200 switched to embers (latest)
 
 User request: **switch queue qos=embers because of group billing limit**.
