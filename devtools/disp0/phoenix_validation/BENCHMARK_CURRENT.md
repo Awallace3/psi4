@@ -1,5 +1,26 @@
 # Current-stage split F-SAPT benchmark
 
+## Terminal GPU checkpoint (2026-10-28)
+
+Watcher `baf5af493` reached ALL-TERMINAL. H200 job **14481883 was PREEMPTED**
+on embers after **1:00:16**. The runner records receipt of SIGTERM15, rather
+than a spontaneous numerical exception; owned child groups were reaped and
+scratch cleanup completed. The batch/step exit1 reflects this interruption.
+
+All three peptide GPU calls finished with exit0 before preemption:
+994.512498, 994.536646 and 993.473989 seconds; median **994.512498 s**.
+The case passed its repeat checks and is recorded as
+`PASS_REPEATS_AWAITING_OTHER_RESOURCE_CLASS`. Compared with the CPU median
+295.103911 s, this is diagnostically **3.370 times slower**, not an accepted
+scientifically qualified speedup: independent CPU fixed-GPU-gauge matrix
+validation is still outstanding.
+
+Nanotube's first GPU child was interrupted with no completed timing sample;
+protein83 GPU was not reached. No full scaling curve is available.
+The CPU outcomes below remain unchanged. No automatic retry or new allocation
+was submitted. Earlier RUNNING/first-sample statements below are historical
+checkpoints, superseded by this terminal record.
+
 Measured peptide regression analysis (two completed GPU calls):
 [`PEPTIDE_PERFORMANCE_DIAGNOSIS.md`](PEPTIDE_PERFORMANCE_DIAGNOSIS.md).
 Both calls take about994.5s; about823s lies in fresh native factory/plan setup
