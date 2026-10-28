@@ -16,12 +16,14 @@ identity, actual mappings, symbol ownership and ABI. It is not an mtime cache.
 Revocation terminates that worker without native/Python finalizers: exit29 for
 kernel SIGIO, exit86 for a failed live check. There is no retry, downgrade,
 proof renewal or in-process transition from an existing legacy session.
-The authenticated bootstrap must already map the complete pinned closure
-through canonical paths; descriptor loading is reuse only, not first-load
+The authenticated bootstrap must already load each library being reused and
+its dependencies through canonical paths; descriptor loading is reuse only, not first-load
 dependency discovery (`$ORIGIN` would otherwise change). `RTLD_NOLOAD` also
 requires actual dynamic-linker residence: read-only file mappings alone are
 insufficient. Revocation writes
 nothing to stderr, so even a full logging pipe cannot prevent retirement.
+Unused toolkit libraries may still be pinned without being loaded. Their
+leases remain part of every live check; all actual native mappings remain audited.
 
 ## CPU verification
 
@@ -71,3 +73,24 @@ temporary executable copies; the earlier baseline configurations have expired.
 Then run the same water construction schedule in fresh-byte and owned modes,
 retain failures and complete cleanup evidence, and run numerical/before-after
 GPU gates before changing a default or moving to Phoenix.
+
+## First real candidate qualification
+
+Candidate `98f18ab3cb` built successfully into its separate whole prefix, with a
+clean source pin/generated version and all 29 lease/lifetime tests passing on
+Cachy. The original `install/` baseline was not overwritten.
+
+`owned-fresh-cpu-01` passed CPU-only whole-install RHF qualification.
+`owned-owned-cpu-01` exited86 during owned admission, **before the calculation**.
+The unit peaked at 3,858,890,752 host bytes; this was not an OOM or GPU failure.
+Both attempts and their inputs remain preserved.
+
+A separate CPU-only trace (never a qualification) identified the rejection:
+the 16-file toolkit catalog contains eight unused libraries not included in
+the nine-file CUDA/cuEST bootstrap preload list. Demanding a mapping for unused
+cuFFT incorrectly rejected an otherwise admitted set. The minimal ELF regression
+now includes a leased-but-unloaded second library: it failed with exit86 before
+the correction and passes afterward. `RTLD_NOLOAD` still rejects first loads and
+mmap-only residence. All pins retain live lease checks, and actual mappings
+retain their existing audits. A fresh coherent candidate qualification is
+required; no candidate GPU calculation has been launched.

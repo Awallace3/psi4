@@ -298,13 +298,14 @@ class _OwnedRuntime:
             self._fail("Library locator changed before descriptor load")
         self._check_file(record)
         # /proc/self/fd changes $ORIGIN on a FIRST dlopen. Bootstrap must have
-        # already loaded the full pinned closure through its canonical paths.
+        # already loaded this object/dependencies through canonical paths.
         # Never discover dependencies or execute first-load ELF constructors
         # through this descriptor adapter.
         from .sapt_cuest250_identity import mapped_rows
         rows = mapped_rows(Path("/proc/self/maps").read_text())
-        for name in self._files:
-            self.mapped_sha256(name,rows)
+        # A manifest can additionally pin unused toolkit libraries. Lease and
+        # guard those files too, but do not demand irrelevant ELF loads.
+        self.mapped_sha256(canonical,rows)
         try:
             library = ct.CDLL("/proc/self/fd/"+str(record.fd),
                               mode=os.RTLD_NOLOAD|os.RTLD_NOW)

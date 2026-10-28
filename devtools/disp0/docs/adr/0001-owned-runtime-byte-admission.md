@@ -17,12 +17,14 @@ until process exit because upstream C++ owners and loaded ELF objects may
 outlive Python CUDA sessions. There is no proof close, renewal or transfer.
 Explicit library loads use `/proc/self/fd/<leased-fd>`, not a second open of a
 potentially retargeted pathname. Existing mapping/root/symbol checks still apply.
-The complete pinned ELF closure must already be mapped by the authenticated
-canonical-path bootstrap. Descriptor loading is reuse only: a first load changes
+The object being reused and its dependencies must already be loaded by the
+authenticated canonical-path bootstrap. Descriptor loading is reuse only: a first load changes
 `$ORIGIN` dependency resolution, so missing mappings revoke the proof before
 `dlopen`, rather than discovering dependencies through `/proc/self/fd`.
 `RTLD_NOLOAD` enforces dynamic-linker residence; arbitrary read-only ELF mmaps
 are not sufficient evidence of a previous load.
+The manifest can additionally catalog unused toolkit libraries; they remain
+leased/hashed/guarded, but need not be loaded merely to reuse another library.
 
 A read lease is **revocable**, not an unbreakable seal: attempted writes or
 truncation notify SIGIO, and `F_GETLEASE` reports the pending target unlock even

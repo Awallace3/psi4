@@ -81,7 +81,9 @@ class OwnedRuntime(unittest.TestCase):
             source.write_text("int owned_fixture(void) { return 42; }")
             subprocess.run(["cc","-shared","-fPIC",str(source),"-o",str(other)],check=True)
             checksum=hashlib.sha256(path.read_bytes()).hexdigest()
-            pins={str(path):checksum}
+            # A manifest may also pin unused libraries (e.g. cuFFT) which the
+            # authenticated bootstrap deliberately does not load.
+            pins={str(path):checksum,str(other):hashlib.sha256(other.read_bytes()).hexdigest()}
             alias=root/"libcusolver.so.13"
             alias.symlink_to(path)
             # Bootstrap may already have loaded the actual file.
@@ -99,7 +101,7 @@ class OwnedRuntime(unittest.TestCase):
             assert canonical==str(path)
             assert loaded._handle==original._handle
             assert loaded.owned_fixture()==7
-            assert owner.report()["full_hash_calls"]==1
+            assert owner.report()["full_hash_calls"]==2
             # The actual cuSOLVER constructor must pass this same owner into
             # descriptor loading, not re-open its manifest's mutable alias.
             power=importlib.import_module(package.__name__+".sapt_cuda_symmetric_power")
