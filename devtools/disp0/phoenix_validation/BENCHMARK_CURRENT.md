@@ -1,5 +1,11 @@
 # Current-stage split F-SAPT benchmark
 
+Measured peptide regression analysis (two completed GPU calls):
+[`PEPTIDE_PERFORMANCE_DIAGNOSIS.md`](PEPTIDE_PERFORMANCE_DIAGNOSIS.md).
+Both calls take about994.5s; about823s lies in fresh native factory/plan setup
+windows before the fragment-term loop. This is not an accepted speedup or
+a measured attribution specifically to JIT/audits; those subphases need timers.
+
 ## CPU batch terminal; first H200 sample (2026-10-28 checkpoint)
 
 CPU-only watcher `b113822d4` reached ALL-TERMINAL. No CPU job was waiting
