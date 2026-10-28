@@ -134,7 +134,8 @@ def launch_command(config, python, script, arguments):
     # Match the shared gate's authenticated launcher contract. A sanitized
     # child environment alone cannot locate a private whole Psi4 installation.
     return ["/bin/bash","-c",
-        'set -euo pipefail; eval "$("$1" --psiapi)"; exec "$2" -B "$3" "${@:4}"',
+        'set -euo pipefail; export PYTHONPATH="${PYTHONPATH-}"; '
+        'eval "$("$1" --psiapi)"; exec "$2" -B "$3" "${@:4}"',
         "psi4-construction",str(Path(config["stage"])/"bin/psi4"),
         str(python),str(script),*map(str,arguments)]
 

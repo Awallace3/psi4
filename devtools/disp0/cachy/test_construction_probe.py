@@ -158,7 +158,9 @@ class ConstructionProbe(unittest.TestCase):
             package = stage/"private Python"
             package.mkdir()
             (package/"_qualified_probe.py").write_text("token = 'whole stage'\n")
-            export = "export PYTHONPATH="+shlex.quote(str(package))
+            # The real --psiapi output appends $PYTHONPATH. Parent sanitization
+            # deliberately leaves it unset, so nounset must be handled too.
+            export = "export PYTHONPATH="+shlex.quote(str(package))+":$PYTHONPATH"
             launcher.write_text("#!/bin/sh\n[ \"$1\" = \"--psiapi\" ] || exit 23\n"
                                 "printf '%s\\n' "+shlex.quote(export)+"\n")
             launcher.chmod(0o700)

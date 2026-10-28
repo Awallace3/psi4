@@ -194,6 +194,9 @@ The corrected command uses the already SHA-verified `stage/bin/psi4 --psiapi`
 launcher before executing the child Python interpreter. A real subprocess
 regression first demonstrates the missing-private-import failure, then verifies
 that the launcher restores imports and preserves arguments containing spaces.
+It also reproduces and fixes `PYTHONPATH: unbound variable` under `set -u`:
+the real `--psiapi` output appends `$PYTHONPATH`, so an unset sanitized variable
+must be initialized to empty before evaluating that output.
 Helper and installed-science pins are now explicitly separate: each checkout
 must be clean at its own pin, and the actual construction helper must appear
 unchanged in the qualified byte inventory. No scientific module is overlaid.
