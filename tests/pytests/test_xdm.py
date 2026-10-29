@@ -1517,3 +1517,83 @@ def test_xdm_gpu_chunking_and_density_gather(case, blocking):
         assert abs(e - ref[0]) < 1.0e-12
         np.testing.assert_allclose(p[:, 2:], ref[1][:, 2:], rtol=1.0e-12, atol=1.0e-14)
         np.testing.assert_array_equal(p[:, :2], ref[1][:, :2])
+
+
+def _grid_origins(text):
+    """Each XDM call's grid line: kind, plus ", the SCF's" when it integrated on the SCF's grid."""
+    return re.findall(r"XDM grid: ((?:psi4|cuEST)(?:, the SCF's)?),", text)
+
+
+@pytest.mark.xdm
+@pytest.mark.parametrize("case", ["rks", "uks"])
+def test_xdm_reuses_scf_grid(case, tmp_path):
+    """XDM integrates on the SCF's XC grid when it is the grid XDM would build, and matches its
+    own build of that grid (XDM_GRID_REUSE false) to rounding."""
+    wfn_out = tmp_path / "reuse.dat"
+    psi4.set_output_file(str(wfn_out), False)
+    try:
+        wfn = _cuest_grid_wfn(case)
+        e_scf, p_scf = wfn.variable("XDM ENERGY"), psi4.core.array_variable("XDM ATOMIC PROPERTIES").np.copy()
+        e_own, p_own = _xdm_on_grid(wfn, False, "PSI4", XDM_GRID_REUSE=False)
+        e_again, _ = _xdm_on_grid(wfn, False, "PSI4", XDM_GRID_REUSE=True)
+    finally:
+        psi4.set_output_file("pytest_output.dat", True)
+    assert _grid_origins(wfn_out.read_text()) == ["psi4, the SCF's", "psi4", "psi4, the SCF's"]
+    assert abs(e_own - e_scf) < 1.0e-12 and abs(e_again - e_scf) < 1.0e-12
+    np.testing.assert_allclose(p_own[:, 2:], p_scf[:, 2:], rtol=1.0e-12, atol=1.0e-14)
+    np.testing.assert_array_equal(p_own[:, :2], p_scf[:, :2])
+
+
+@pytest.mark.xdm
+def test_xdm_builds_own_grid_unless_scf_grid_matches(tmp_path):
+    """A grid option changed after the SCF, or a wavefunction without an XC potential, makes XDM
+    build its own grid."""
+    out = tmp_path / "own.dat"
+    psi4.set_output_file(str(out), False)
+    try:
+        wfn = _cuest_grid_wfn("cartesian")
+        e_scf = wfn.variable("XDM ENERGY")
+        psi4.set_options({"DFT_SPHERICAL_POINTS": 434})
+        e_434, _ = _xdm_on_grid(wfn, False, "PSI4")
+        psi4.set_options({"DFT_SPHERICAL_POINTS": 302})
+        _, hf_wfn = psi4.energy("hf", molecule=wfn.molecule(), return_wfn=True)
+        assert hf_wfn.V_potential() is None
+        psi4.core.XDMDispersion.build("b3lyp", 0.6, 1.4).compute_energy(hf_wfn, 0.2)
+    finally:
+        psi4.set_output_file("pytest_output.dat", True)
+    assert _grid_origins(out.read_text()) == ["psi4, the SCF's", "psi4", "psi4"]
+    assert abs(e_434 - e_scf) > 1.0e-10
+
+
+@pytest.mark.xdm
+def test_xdm_reuses_scf_cuest_grid(tmp_path):
+    """On the GPU route XDM reads cuEST's points through the SCF's grid and XC plan, and matches
+    its own grid and placeholder plan to rounding. Host blocking of cuEST's points writes host
+    blocks into the grid, so that route builds its own."""
+    if not psi4.addons("cuest"):
+        pytest.skip("XDM_GRID CUEST needs a cuEST build")
+    geom, basis = _xdm_gpu_cases["rks"]
+    mol = psi4.geometry(geom + "\nsymmetry c1\nno_com\nno_reorient")
+    psi4.set_options({
+        "basis": basis,
+        "dft_radial_points": 75,
+        "dft_spherical_points": 302,
+        "XDM_DISPERSION_PARAMETERS": [0.6, 1.4],
+        "XDM_GPU": True,
+        "USE_CUEST": True,
+        "CUEST_MIXED_PRECISION": False,
+    })
+    out = tmp_path / "cuest_reuse.dat"
+    psi4.set_output_file(str(out), False)
+    try:
+        _, wfn = psi4.energy("b3lyp-xdm", molecule=mol, return_wfn=True)
+        e_scf, p_scf = wfn.variable("XDM ENERGY"), psi4.core.array_variable("XDM ATOMIC PROPERTIES").np.copy()
+        e_own, p_own = _xdm_on_grid(wfn, True, "CUEST", "DEVICE", XDM_GRID_REUSE=False)
+        psi4.set_options({"XDM_GRID_REUSE": True})
+        _xdm_on_grid(wfn, True, "CUEST", "HOST")
+    finally:
+        psi4.set_output_file("pytest_output.dat", True)
+    assert _grid_origins(out.read_text()) == ["cuEST, the SCF's", "cuEST", "cuEST"]
+    assert abs(e_own - e_scf) < 1.0e-12
+    np.testing.assert_allclose(p_own[:, 2:], p_scf[:, 2:], rtol=1.0e-12, atol=1.0e-14)
+    np.testing.assert_array_equal(p_own[:, :2], p_scf[:, :2])

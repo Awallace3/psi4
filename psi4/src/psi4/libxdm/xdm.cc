@@ -37,6 +37,7 @@
 
 #include "psi4/libfock/cubature.h"
 #include "psi4/libfock/points.h"
+#include "psi4/libfock/v.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/molecule.h"
@@ -45,6 +46,7 @@
 #include "psi4/libpsi4util/exception.h"
 #include "psi4/libpsi4util/process.h"
 #include "psi4/libqt/qt.h"
+#include "psi4/libscf_solver/hf.h"
 #include "psi4/physconst.h"
 #include "psi4/psi4-dec.h"
 
@@ -176,11 +178,23 @@ void integrate_on_device(std::shared_ptr<Wavefunction> wfn, const DFTGrid& grid,
 }
 #endif
 
-// One thread's scratch for integrate_on_host. Collocation is function-major
-// ([function][point], row stride = the block's point count), the layout gau2grid writes,
-// so D . phi is one GEMM with no transpose.
+// The SCF's XC potential when its grid is exactly the one XDM would build (same basis, final grid,
+// equal DFTGrid::spec()), else null. Its grid lives as long as the wavefunction's potential.
+std::shared_ptr<VBase> scf_potential_on_grid(const std::shared_ptr<Wavefunction>& wfn, const BasisSet& basis,
+                                             const std::string& spec) {
+    auto hf = std::dynamic_pointer_cast<scf::HF>(wfn);
+    auto V = hf ? hf->V_potential() : nullptr;
+    if (!V || !V->grid() || V->initial_grid() || V->basis().get() != &basis) return nullptr;
+    return V->grid()->spec() == spec ? V : nullptr;
+}
+
+// One thread's scratch for integrate_on_host. Collocation is row-major by function: row m holds
+// phi_m at the block's np points, then its x, y, z derivatives and its Laplacian (row stride 5 np).
+// The first four planes of the rows are then one (nl x 4 np) operand, and D . [phi phi_x phi_y phi_z]
+// is a single GEMM into T, row m = [D.phi | D.phi_x | D.phi_y | D.phi_z]_m (row stride 4 np).
 struct HostScratch {
-    std::vector<double> xyz, phi[5], hess, D, T;  // phi: value, x, y, z, Laplacian
+    std::vector<double> xyz, shell[4], hess;  // one shell's value, x, y, z and Hessian, as gau2grid writes them
+    std::vector<double> phi, D, T;
     std::vector<double> rho, grad[3], lapl, tau;  // one spin at the block's points
     std::vector<double> rho_s[2], b_s[2];         // per spin, kept for the moments
     std::vector<double> arho, r;                  // promolecule atoms at one point
@@ -189,10 +203,11 @@ struct HostScratch {
 };
 
 // Host counterpart of integrate_on_device. Threads take whole blocks, as psi4's V builds do,
-// so BLAS runs single-threaded inside the region. Per spin sigma, with T = D_sigma . phi:
-//   rho = phi.T, grad rho = 2 phi_c.T, tau (no 1/2) = sum_c phi_c.(D_sigma phi_c),
-//   lapl rho = 2 (lapl phi).T + 2 tau,
-// four GEMMs per spin. Of the Hessian only lapl phi is kept. Hirshfeld weights are formed
+// so BLAS runs single-threaded inside the region. Per spin sigma, with T_0 = D_sigma . phi and
+// T_c = D_sigma . phi_c:
+//   rho = phi.T_0, grad rho = 2 phi_c.T_0, tau (no 1/2) = sum_c phi_c.T_c,
+//   lapl rho = 2 (lapl phi).T_0 + 2 tau,
+// one GEMM per spin for all four T. Of the Hessian only lapl phi is kept. Hirshfeld weights are formed
 // per point inside the moment loop.
 void integrate_on_host(const DFTGrid& grid, const BasisSet& basis, const ProatomDensity& proatom,
                        const std::vector<int>& atomic_nums, const std::vector<std::array<double, 3>>& atom_coords,
@@ -211,9 +226,9 @@ void integrate_on_host(const DFTGrid& grid, const BasisSet& basis, const Proatom
         const size_t L = basis.shell(Q).am();
         max_nfunc = std::max(max_nfunc, (L + 1) * (L + 2) / 2);
     }
-    const size_t plane = (mf + max_nfunc) * mp;
+    const size_t plane = mf * mp;
     const size_t per_thread =
-        sizeof(double) * (6 * plane + mf * mf + 6 * max_nfunc * mp + 13 * mp + 7 * static_cast<size_t>(natom));
+        sizeof(double) * (9 * plane + mf * mf + 10 * max_nfunc * mp + 13 * mp + 7 * static_cast<size_t>(natom));
 
     // Each thread holds its own scratch; fewer threads when psi4's memory cannot hold them all.
     int nthreads = std::max(1, std::min<int>(Process::environment.get_n_threads(), static_cast<int>(blocks.size())));
@@ -223,10 +238,11 @@ void integrate_on_host(const DFTGrid& grid, const BasisSet& basis, const Proatom
     std::vector<HostScratch> scratch(nthreads);
     for (auto& s : scratch) {
         s.xyz.resize(3 * mp);
-        for (auto& v : s.phi) v.resize(plane);
+        for (auto& v : s.shell) v.resize(max_nfunc * mp);
         s.hess.resize(6 * max_nfunc * mp);
+        s.phi.resize(5 * plane);
         s.D.resize(mf * mf);
-        s.T.resize(plane);
+        s.T.resize(4 * plane);
         for (auto* v : {&s.rho, &s.lapl, &s.tau, &s.grad[0], &s.grad[1], &s.grad[2], &s.rho_s[0], &s.rho_s[1],
                         &s.b_s[0], &s.b_s[1]})
             v->resize(mp);
@@ -257,19 +273,23 @@ void integrate_on_host(const DFTGrid& grid, const BasisSet& basis, const Proatom
         std::copy(block->y(), block->y() + np, s.xyz.begin() + np);
         std::copy(block->z(), block->z() + np, s.xyz.begin() + 2 * np);
         const size_t hs = max_nfunc * np;
+        const size_t ld = 5 * np;
         double* h = s.hess.data();
         size_t row = 0;
         for (int Q : block->shells_local_to_global()) {
             const GaussianShell& shell = basis.shell(Q);
             const Vector3 v = shell.center();
             const double center[3] = {v[0], v[1], v[2]};
-            const size_t off = row * np;
             gg_collocation_deriv2(shell.am(), np, s.xyz.data(), 1, shell.nprimitive(), shell.coefs(), shell.exps(),
-                                  center, order, s.phi[0].data() + off, s.phi[1].data() + off, s.phi[2].data() + off,
-                                  s.phi[3].data() + off, h, h + hs, h + 2 * hs, h + 3 * hs, h + 4 * hs, h + 5 * hs);
-            const size_t n = static_cast<size_t>(shell.nfunction()) * np;
-            double* lap = s.phi[4].data() + off;
-            for (size_t k = 0; k < n; k++) lap[k] = h[k] + h[3 * hs + k] + h[5 * hs + k];
+                                  center, order, s.shell[0].data(), s.shell[1].data(), s.shell[2].data(),
+                                  s.shell[3].data(), h, h + hs, h + 2 * hs, h + 3 * hs, h + 4 * hs, h + 5 * hs);
+            for (int k = 0; k < shell.nfunction(); k++) {
+                const size_t o = static_cast<size_t>(k) * np;
+                double* out = s.phi.data() + (row + k) * ld;
+                for (int c = 0; c < 4; c++) std::copy_n(s.shell[c].data() + o, np, out + c * np);
+                double* lap = out + 4 * np;
+                for (size_t P = 0; P < np; P++) lap[P] = h[o + P] + h[3 * hs + o + P] + h[5 * hs + o + P];
+            }
             row += shell.nfunction();
         }
         auto t1 = clock::now();
@@ -282,46 +302,27 @@ void integrate_on_host(const DFTGrid& grid, const BasisSet& basis, const Proatom
                 double* out = s.D.data() + static_cast<size_t>(m) * nl;
                 for (int n = 0; n < nl; n++) out[n] = Drow[fmap[n]];
             }
-            C_DGEMM('N', 'N', nl, np, nl, 1.0, s.D.data(), nl, s.phi[0].data(), np, 0.0, s.T.data(), np);
+            C_DGEMM('N', 'N', nl, 4 * np, nl, 1.0, s.D.data(), nl, s.phi.data(), ld, 0.0, s.T.data(), 4 * np);
             auto tb = clock::now();
             std::fill_n(s.rho.begin(), np, 0.0);
             std::fill_n(s.lapl.begin(), np, 0.0);
             std::fill_n(s.tau.begin(), np, 0.0);
             for (auto& g : s.grad) std::fill_n(g.begin(), np, 0.0);
             for (int m = 0; m < nl; m++) {
-                const size_t o = static_cast<size_t>(m) * np;
-                const double* t = s.T.data() + o;
-                const double* p0 = s.phi[0].data() + o;
-                const double* px = s.phi[1].data() + o;
-                const double* py = s.phi[2].data() + o;
-                const double* pz = s.phi[3].data() + o;
-                const double* pl = s.phi[4].data() + o;
+                const double* p = s.phi.data() + static_cast<size_t>(m) * ld;
+                const double* t = s.T.data() + static_cast<size_t>(m) * 4 * np;
                 for (size_t P = 0; P < np; P++) {
-                    s.rho[P] += p0[P] * t[P];
-                    s.grad[0][P] += px[P] * t[P];
-                    s.grad[1][P] += py[P] * t[P];
-                    s.grad[2][P] += pz[P] * t[P];
-                    s.lapl[P] += pl[P] * t[P];
+                    const double t0 = t[P];
+                    s.rho[P] += p[P] * t0;
+                    s.grad[0][P] += p[np + P] * t0;
+                    s.grad[1][P] += p[2 * np + P] * t0;
+                    s.grad[2][P] += p[3 * np + P] * t0;
+                    s.lapl[P] += p[4 * np + P] * t0;
+                    s.tau[P] += p[np + P] * t[np + P] + p[2 * np + P] * t[2 * np + P] + p[3 * np + P] * t[3 * np + P];
                 }
             }
-            auto tc = clock::now();
-            double gemm = std::chrono::duration<double>(tb - ta).count();
-            double points = std::chrono::duration<double>(tc - tb).count();
-            for (int c = 1; c <= 3; c++) {
-                auto td = clock::now();
-                C_DGEMM('N', 'N', nl, np, nl, 1.0, s.D.data(), nl, s.phi[c].data(), np, 0.0, s.T.data(), np);
-                auto te = clock::now();
-                for (int m = 0; m < nl; m++) {
-                    const size_t o = static_cast<size_t>(m) * np;
-                    const double* t = s.T.data() + o;
-                    const double* pc = s.phi[c].data() + o;
-                    for (size_t P = 0; P < np; P++) s.tau[P] += pc[P] * t[P];
-                }
-                gemm += std::chrono::duration<double>(te - td).count();
-                points += std::chrono::duration<double>(clock::now() - te).count();
-            }
-            s.seconds[1] += gemm;
-            s.seconds[2] += points;
+            s.seconds[1] += std::chrono::duration<double>(tb - ta).count();
+            s.seconds[2] += std::chrono::duration<double>(clock::now() - tb).count();
 
             // Becke-Roussel b; points where the solve fails count toward the warning and use b = 0.
             auto tf = clock::now();
@@ -493,8 +494,9 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
 #endif
     std::map<std::string, int> int_opts;
     std::map<std::string, std::string> str_opts;
-    // ATOMIC blocking needs the host atomic grids, which a cuEST grid never builds.
-    str_opts["DFT_BLOCK_SCHEME"] = grid_kind == "CUEST" ? "OCTREE" : "ATOMIC";
+    // A psi4 grid is blocked by DFT_BLOCK_SCHEME, as the SCF's is; a cuEST grid with OCTREE, since
+    // ATOMIC needs the host atomic grids, which a cuEST grid never builds.
+    if (grid_kind == "CUEST") str_opts["DFT_BLOCK_SCHEME"] = "OCTREE";
 
     // Where cuEST's points are blocked: HOST copies them out and blocks with OCTREE; DEVICE
     // sorts and blocks them on the GPU, where a GPU integration then reads them in place.
@@ -504,13 +506,25 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
         throw PSIEXCEPTION("XDM_GRID_BLOCKING DEVICE needs XDM_GRID CUEST: only cuEST's points live on the device.");
     }
 
+    // Borrow the SCF's grid when it is the one XDM would build. Host blocking of cuEST's points,
+    // and device blocks handed to the host integrator, write host blocks into the grid, so those
+    // routes always build their own.
+    const bool writes_grid = grid_kind == "CUEST" && (blocking == "HOST" || !use_gpu);
+    std::shared_ptr<VBase> scf_V;
+    if (options.get_bool("XDM_GRID_REUSE") && !writes_grid) {
+        scf_V = scf_potential_on_grid(wfn, *primary,
+                                      DFTGrid::spec_for(options, int_opts, str_opts, {}, grid_kind == "CUEST"));
+    }
+    const char* origin = scf_V ? ", the SCF's" : "";
+
     std::shared_ptr<DFTGrid> grid;
 #ifdef USING_cuEST
     std::unique_ptr<DeviceGridBlocks> device_blocks;
 #endif
     {
         ScopedTimer t("XDM: grid");
-        grid = std::make_shared<DFTGrid>(mol, primary, int_opts, str_opts, options, grid_kind == "CUEST");
+        grid = scf_V ? scf_V->grid()
+                     : std::make_shared<DFTGrid>(mol, primary, int_opts, str_opts, options, grid_kind == "CUEST");
 #ifdef USING_cuEST
         if (grid_kind == "CUEST" && blocking == "HOST") grid->host_blocks_from_cuest();
         if (blocking == "DEVICE") {
@@ -518,7 +532,7 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
             size_t ncuest = 0;
             {
                 ScopedTimer tp("cuEST points");
-                ncuest = grid->cuest_device_points(&d_xyz, &d_w);
+                ncuest = grid->cuest_device_points(&d_xyz, &d_w, scf_V ? scf_V->cuest_xc_plan() : nullptr);
             }
             ScopedTimer tb("device blocking");
             std::vector<std::array<double, 3>> centres(natom);
@@ -543,15 +557,16 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
 #ifdef USING_cuEST
     if (device_blocks) {
         const double mib = 1.0 / (1024.0 * 1024.0);
-        outfile->Printf("\n  XDM grid: cuEST, %zu points in %zu blocks (%zu with shells), blocked on the device.\n",
-                        device_blocks->npoints(), device_blocks->nblocks(), device_blocks->nblocks_with_shells());
+        outfile->Printf("\n  XDM grid: cuEST%s, %zu points in %zu blocks (%zu with shells), blocked on the device.\n",
+                        origin, device_blocks->npoints(), device_blocks->nblocks(), device_blocks->nblocks_with_shells());
         outfile->Printf("    Device blocking peak %.1f MiB; %.1f MiB of points kept for the integration.\n",
                         device_blocks->peak_device_bytes() * mib, device_blocks->resident_device_bytes() * mib);
     } else
 #endif
     {
-        outfile->Printf("\n  XDM grid: %s, %d points in %zu blocks%s.\n", grid_kind == "CUEST" ? "cuEST" : "psi4",
-                        grid->npoints(), grid->blocks().size(), blocking == "DEVICE" ? ", blocked on the device" : "");
+        outfile->Printf("\n  XDM grid: %s%s, %d points in %zu blocks%s.\n", grid_kind == "CUEST" ? "cuEST" : "psi4",
+                        origin, grid->npoints(), grid->blocks().size(),
+                        blocking == "DEVICE" ? ", blocked on the device" : "");
     }
 
     // Collect atom data

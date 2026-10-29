@@ -2129,6 +2129,13 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         then 32 bytes per kept point for the integration. ``AUTO`` is ``DEVICE`` for a ``CUEST``
         grid with |scf__xdm_gpu| and ``HOST`` otherwise. !expert -*/
         options.add_str("XDM_GRID_BLOCKING", "AUTO", "AUTO HOST DEVICE");
+        /*- Integrate XDM on the SCF's own XC grid instead of building another, when it is the same
+        grid: the same basis, the final grid, and the same grid options (|scf__xdm_grid| ``PSI4`` on a
+        host XC grid, ``CUEST`` on a cuEST one). With |scf__xdm_grid_blocking| ``DEVICE`` and
+        |scf__xdm_gpu| the points are also read through the SCF's cuEST XC plan. Routes that block a
+        cuEST grid's points on the host, and wavefunctions without an XC potential, always build
+        their own grid. The output names the grid used. !expert -*/
+        options.add_bool("XDM_GRID_REUSE", true);
         /*- Parameters defining the -NL/-V dispersion correction. First b, then C -*/
         options.add("NL_DISPERSION_PARAMETERS", new ArrayType());
         /*- Number of spherical points (A :ref:`Lebedev Points <table:lebedevorder>` number) for VV10 NL integration.

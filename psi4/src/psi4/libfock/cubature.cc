@@ -4385,51 +4385,75 @@ DFTGrid::DFTGrid(std::shared_ptr<Molecule> molecule, std::shared_ptr<BasisSet> p
 }
 DFTGrid::~DFTGrid() {}
 
+namespace {
+// Every option a DFTGrid's points, weights and blocks are built from, with the caller's overrides applied.
+struct ResolvedGridOptions {
+    std::map<std::string, std::string> str;
+    std::map<std::string, int> ints;
+    std::map<std::string, double> floats;
+    bool remove_distant_points;
+};
+
+ResolvedGridOptions resolve_grid_options(Options &options, const std::map<std::string, int> &int_opts_map,
+                                         const std::map<std::string, std::string> &str_opts_map,
+                                         const std::map<std::string, double> &float_opts_map) {
+    ResolvedGridOptions r;
+    for (const char *key : {"DFT_RADIAL_SCHEME", "DFT_PRUNING_SCHEME", "DFT_NUCLEAR_SCHEME", "DFT_GRID_NAME",
+                            "DFT_BLOCK_SCHEME", "DFT_GRID_ORIENTATION"}) {
+        auto it = str_opts_map.find(key);
+        r.str[key] = it != str_opts_map.end() ? it->second : options.get_str(key);
+    }
+    for (const char *key : {"DFT_BLOCK_MAX_POINTS", "DFT_BLOCK_MIN_POINTS", "DFT_SPHERICAL_POINTS",
+                            "DFT_RADIAL_POINTS", "PRINT", "DEBUG", "BENCH"}) {
+        auto it = int_opts_map.find(key);
+        r.ints[key] = it != int_opts_map.end() ? it->second : options.get_int(key);
+    }
+    for (const char *key : {"DFT_BS_RADIUS_ALPHA", "DFT_PRUNING_ALPHA", "DFT_WEIGHTS_TOLERANCE",
+                            "DFT_BLOCK_MAX_RADIUS", "DFT_BASIS_TOLERANCE"}) {
+        auto it = float_opts_map.find(key);
+        r.floats[key] = it != float_opts_map.end() ? it->second : options.get_double(key);
+    }
+    r.remove_distant_points = options.get_bool("DFT_REMOVE_DISTANT_POINTS");
+    return r;
+}
+
+bool builds_cuest_grid(bool use_cuest) {
+#ifdef USING_cuEST
+    return use_cuest;
+#else
+    // Without cuEST compiled in there is no GPU grid to build; always fall back to the host grid.
+    return false;
+#endif
+}
+
+// PRINT, DEBUG and BENCH change only what is printed, so they are left out.
+std::string grid_spec(const ResolvedGridOptions &r, bool is_cuest) {
+    std::ostringstream spec;
+    spec.precision(17);
+    for (const auto &[key, value] : r.str) spec << key << '=' << value << ';';
+    for (const auto &[key, value] : r.ints)
+        if (key != "PRINT" && key != "DEBUG" && key != "BENCH") spec << key << '=' << value << ';';
+    for (const auto &[key, value] : r.floats) spec << key << '=' << value << ';';
+    spec << "DFT_REMOVE_DISTANT_POINTS=" << r.remove_distant_points << ";CUEST=" << is_cuest;
+    return spec.str();
+}
+}  // namespace
+
+std::string DFTGrid::spec_for(Options &options, const std::map<std::string, int> &int_opts_map,
+                              const std::map<std::string, std::string> &str_opts_map,
+                              const std::map<std::string, double> &float_opts_map, bool use_cuest) {
+    return grid_spec(resolve_grid_options(options, int_opts_map, str_opts_map, float_opts_map),
+                     builds_cuest_grid(use_cuest));
+}
+
 void DFTGrid::buildGridFromOptions(std::map<std::string, int> int_opts_map,
                                    std::map<std::string, std::string> str_opts_map,
                                    std::map<std::string, double> float_opts_map, bool use_cuest) {
-    std::map<std::string, std::string> full_str_options;
-    std::vector<std::string> str_keys = {"DFT_RADIAL_SCHEME", "DFT_PRUNING_SCHEME", "DFT_NUCLEAR_SCHEME",
-                                         "DFT_GRID_NAME", "DFT_BLOCK_SCHEME", "DFT_GRID_ORIENTATION"};
-    for (auto key : str_keys) {
-        if (str_opts_map.find(key) != str_opts_map.end()) {
-            full_str_options[key] = str_opts_map[key];
-        } else {
-            full_str_options[key] = options_.get_str(key);
-        }
-        // printf("%s : %s\n", key.c_str(), full_str_options[key].c_str());
-    }
-
-    std::map<std::string, int> full_int_options;
-    std::vector<std::string> int_keys = {"DFT_BLOCK_MAX_POINTS",
-                                         "DFT_BLOCK_MIN_POINTS",
-                                         "DFT_SPHERICAL_POINTS",
-                                         "DFT_RADIAL_POINTS",
-                                         "PRINT",
-                                         "DEBUG",
-                                         "BENCH"};
-    for (auto key : int_keys) {
-        if (int_opts_map.find(key) != int_opts_map.end()) {
-            full_int_options[key] = int_opts_map[key];
-        } else {
-            full_int_options[key] = options_.get_int(key);
-        }
-        // printf("%s : %d\n", key.c_str(), full_int_options[key]);
-    }
-
-    std::map<std::string, double> full_float_options;
-    std::vector<std::string> float_keys = {"DFT_BS_RADIUS_ALPHA",
-                                           "DFT_PRUNING_ALPHA",
-                                           "DFT_WEIGHTS_TOLERANCE",
-                                           "DFT_BLOCK_MAX_RADIUS",
-                                           "DFT_BASIS_TOLERANCE"};
-    for (const auto& key : float_keys) {
-        if (float_opts_map.find(key) != float_opts_map.end()) {
-            full_float_options[key] = float_opts_map[key];
-        } else {
-            full_float_options[key] = options_.get_double(key);
-        }
-    }
+    auto resolved = resolve_grid_options(options_, int_opts_map, str_opts_map, float_opts_map);
+    spec_ = grid_spec(resolved, builds_cuest_grid(use_cuest));
+    auto &full_str_options = resolved.str;
+    auto &full_int_options = resolved.ints;
+    auto &full_float_options = resolved.floats;
 
     // TODO: Move both the double and bool parts from a global to a grid specific option.
     //  possibly via an approach listed here:
@@ -4445,7 +4469,7 @@ void DFTGrid::buildGridFromOptions(std::map<std::string, int> int_opts_map,
     opt.weights_cutoff = full_float_options["DFT_WEIGHTS_TOLERANCE"];
     opt.blockscheme = full_str_options["DFT_BLOCK_SCHEME"];
     opt.input_orientation = (full_str_options["DFT_GRID_ORIENTATION"] == "INPUT");
-    opt.remove_distant_points = options_.get_bool("DFT_REMOVE_DISTANT_POINTS");
+    opt.remove_distant_points = resolved.remove_distant_points;
 
     // printing and debug options
     opt.print = full_int_options["PRINT"];
@@ -4493,11 +4517,7 @@ void DFTGrid::buildGridFromOptions(std::map<std::string, int> int_opts_map,
     // below is skipped for it. This is requested explicitly by the caller (see the DFTGrid
     // constructor docs) instead of being inferred from the global USE_CUEST option, so that host
     // consumers such as MBIS still get a usable grid inside a cuEST-accelerated run.
-    bool is_cuest = use_cuest;
-#ifndef USING_cuEST
-    // Without cuEST compiled in there is no GPU grid to build; always fall back to the host grid.
-    is_cuest = false;
-#endif
+    const bool is_cuest = builds_cuest_grid(use_cuest);
     MolecularGrid::buildGridFromOptions(opt, is_cuest);
     timer_off("build grid");
     if (is_cuest) {
@@ -4549,37 +4569,49 @@ class ScopeTimer {
 };
 }  // namespace
 
-size_t DFTGrid::cuest_device_points(double **d_xyz_out, double **d_w_out) {
+size_t DFTGrid::cuest_device_points(double **d_xyz_out, double **d_w_out, cuestXCIntPlan_t given_plan) {
     if (!cuest_molecular_grid_ || !cuest_extents_) {
         throw PSIEXCEPTION("DFTGrid::cuest_device_points: this grid was not built with use_cuest.");
     }
     uint64_t ncuest = 0;
     CHECK_CUEST(cuestQuery(cuest_handle, CUEST_MOLECULARGRID, cuest_molecular_grid_, CUEST_MOLECULARGRID_NUM_POINT,
                            &ncuest, sizeof(uint64_t)));
-    // Points and weights are only exposed through an XC plan; HF is a placeholder functional.
+    // Points and weights are only exposed through an XC plan. Without the caller's, a placeholder
+    // plan (HF functional) is built for this read and destroyed after it.
     cuestXCIntPlanParameters_t plan_params = nullptr;
-    CHECK_CUEST(cuestParametersCreate(CUEST_XCINTPLAN_PARAMETERS, reinterpret_cast<void **>(&plan_params)));
-    OnExit free_plan_params([&] { cuestParametersDestroy(CUEST_XCINTPLAN_PARAMETERS, plan_params); });
+    cuestWorkspace_t *plan_ws = nullptr;
+    cuestWorkspace_t *tmp_ws = nullptr;
+    cuestXCIntPlan_t own_plan = nullptr;
     cuestWorkspaceDescriptor_t persistent_desc{}, temporary_desc{};
-    CHECK_CUEST(cuestXCIntPlanCreateWorkspaceQuery(cuest_handle, primary_->cuest_basis(), cuest_molecular_grid_,
-                                                   CUEST_XCINTPLAN_PARAMETERS_FUNCTIONAL_HF, plan_params,
-                                                   &persistent_desc, &temporary_desc, nullptr));
-    cuestWorkspace_t *plan_ws = cuest_common::allocateWorkspace(&persistent_desc);
-    OnExit free_plan_ws([&] { cuest_common::freeWorkspace(plan_ws); });
-    cuestWorkspace_t *tmp_ws = cuest_common::allocateWorkspace(&temporary_desc);
+    OnExit free_plan_params([&] {
+        if (plan_params) cuestParametersDestroy(CUEST_XCINTPLAN_PARAMETERS, plan_params);
+    });
+    OnExit free_plan_ws([&] {
+        if (plan_ws) cuest_common::freeWorkspace(plan_ws);
+    });
     OnExit free_tmp_ws([&] {
         if (tmp_ws) cuest_common::freeWorkspace(tmp_ws);
     });
-    cuestXCIntPlan_t plan = nullptr;
-    CHECK_CUEST(cuestXCIntPlanCreate(cuest_handle, primary_->cuest_basis(), cuest_molecular_grid_,
-                                     CUEST_XCINTPLAN_PARAMETERS_FUNCTIONAL_HF, plan_params, plan_ws, tmp_ws, &plan));
     // On a throw the computes below may still be running on cuEST's stream: finish them first.
     OnExit free_plan([&] {
+        if (!own_plan) return;
         cudaDeviceSynchronize();
-        cuestXCIntPlanDestroy(plan);
+        cuestXCIntPlanDestroy(own_plan);
     });
-    cuest_common::freeWorkspace(tmp_ws);
-    tmp_ws = nullptr;
+    if (!given_plan) {
+        CHECK_CUEST(cuestParametersCreate(CUEST_XCINTPLAN_PARAMETERS, reinterpret_cast<void **>(&plan_params)));
+        CHECK_CUEST(cuestXCIntPlanCreateWorkspaceQuery(cuest_handle, primary_->cuest_basis(), cuest_molecular_grid_,
+                                                       CUEST_XCINTPLAN_PARAMETERS_FUNCTIONAL_HF, plan_params,
+                                                       &persistent_desc, &temporary_desc, nullptr));
+        plan_ws = cuest_common::allocateWorkspace(&persistent_desc);
+        tmp_ws = cuest_common::allocateWorkspace(&temporary_desc);
+        CHECK_CUEST(cuestXCIntPlanCreate(cuest_handle, primary_->cuest_basis(), cuest_molecular_grid_,
+                                         CUEST_XCINTPLAN_PARAMETERS_FUNCTIONAL_HF, plan_params, plan_ws, tmp_ws,
+                                         &own_plan));
+        cuest_common::freeWorkspace(tmp_ws);
+        tmp_ws = nullptr;
+    }
+    cuestXCIntPlan_t plan = given_plan ? given_plan : own_plan;
 
     double *d_xyz = nullptr, *d_w = nullptr;
     OnExit free_points([&] {
@@ -4620,7 +4652,7 @@ size_t DFTGrid::cuest_device_points(double **d_xyz_out, double **d_w_out) {
     if (cudaDeviceSynchronize() != cudaSuccess) {
         throw PSIEXCEPTION("DFTGrid::cuest_device_points: computing the grid points failed.");
     }
-    // Success: the caller owns the points; the guards free the plan and its workspaces.
+    // Success: the caller owns the points; the guards free any placeholder plan and the workspaces.
     free_points.release();
     *d_xyz_out = d_xyz;
     *d_w_out = d_w;

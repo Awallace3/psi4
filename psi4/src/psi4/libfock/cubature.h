@@ -236,6 +236,8 @@ class DFTGrid : public MolecularGrid {
                               std::map<std::string, double> float_opts_map, bool use_cuest = false);
     /// The Options object
     Options& options_;
+    /// spec_for() of the arguments this grid was built from
+    std::string spec_;
 #if USING_cuEST
     /// Blocking settings resolved by the build, kept for host_blocks_from_cuest().
     std::shared_ptr<BasisExtents> cuest_extents_;
@@ -246,6 +248,13 @@ class DFTGrid : public MolecularGrid {
 
    public:
     std::shared_ptr<BasisSet> primary() const { return primary_; }
+    /// Every option the points, weights and blocks were built from, overrides applied, as one string.
+    const std::string& spec() const { return spec_; }
+    /// The spec() a DFTGrid built now with these arguments would have. On the same molecule and
+    /// basis, equal specs mean the same points, weights and blocks.
+    static std::string spec_for(Options& options, const std::map<std::string, int>& int_opts_map,
+                                const std::map<std::string, std::string>& str_opts_map,
+                                const std::map<std::string, double>& float_opts_map, bool use_cuest);
 #if USING_cuEST
     /// Give a cuEST grid host blocks on cuEST's own points: copy its points and total
     /// (Becke-partitioned) weights to the host, drop weights below DFT_WEIGHTS_TOLERANCE and,
@@ -254,8 +263,10 @@ class DFTGrid : public MolecularGrid {
     /// blocks(), npoints(), etc. describe the same points cuest_grid() integrates over.
     void host_blocks_from_cuest();
     /// cuEST's points (interleaved x, y, z) and total weights, left on the device. Allocated with
-    /// cudaMalloc; the caller owns *d_xyz and *d_w. Returns the point count. Unsieved.
-    size_t cuest_device_points(double** d_xyz, double** d_w);
+    /// cudaMalloc; the caller owns *d_xyz and *d_w. Returns the point count. Unsieved. cuEST exposes
+    /// them only through an XC plan: pass one built on this grid and basis (e.g. the SCF's) to read
+    /// them from it, or none to build and destroy a placeholder plan here.
+    size_t cuest_device_points(double** d_xyz, double** d_w, cuestXCIntPlan_t plan = nullptr);
     /// Install host blocks over a partition computed elsewhere (XDM's device blocking). x/y/z/w hold
     /// the points block after block; block_start/block_npoints index them. Each block's shells are
     /// screened on the host as usual, and blocks no basis function reaches are dropped, as OCTREE does.
