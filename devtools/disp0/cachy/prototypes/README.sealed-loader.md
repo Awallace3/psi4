@@ -56,3 +56,28 @@ Primary references:
 - https://man7.org/linux/man-pages/man2/memfd_create.2.html
 - https://man7.org/linux/man-pages/man2/F_ADD_SEALS.2const.html
 - https://docs.nvidia.com/cuda/nvrtc/index.html
+
+## CPU verdict: feasible, not integrated
+
+`sealed-prototype-cpu-02` passed on Cachy with prototype code
+`689388fd63e1bf4cf9e164d124d0eba16fae0927`.
+Result SHA256:
+`0ddca4f8e23a3cbf69aa5936e393b9b9602612befe6f94cc9f37ea9c185d1923`.
+
+- All17 exact pinned vendor files (1,756,549,808 bytes), plus two toy ELFs,
+  were sealed with mask63.
+- All nine requested vendor preloads succeeded through private aliases.
+- All25 required cuEST native/factory symbols belonged to the sealed SDK
+  snapshot's actual mapped inode/device/name.
+- The `$ORIGIN` dependency probe returned7 after original toy files were removed.
+- Writes/resizing/shared writable maps/reopened-FD writes/seal changes were
+  rejected by the kernel for every snapshot.
+- NVRTC13.3 compiled528 bytes of PTX with its cache disabled, without loading
+  or executing that kernel. Eight explicit CPU compiler calls were made;
+  zero explicit CUDA driver/runtime or cuEST API calls were made.
+
+This settles the CPU loader/kernel-seal feasibility question affirmatively.
+It does not yet test Python CUDA-binding lazy loading, actual cuEST context/JIT
+initialization, GPU module loading/execution, or integration with the qualified
+Psi4 loader/admission checks. Those remain separate gates. The qualified
+implementation and its default admission contract have not changed.
