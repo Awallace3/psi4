@@ -34,6 +34,7 @@
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libpsi4util/PsiOutStream.h"
 
+#include <functional>
 #include <map>
 #include <tuple>
 
@@ -55,6 +56,11 @@ class FISAPT {
     size_t doubles_;
     /// Reference wavefunction
     std::shared_ptr<Wavefunction> reference_;
+
+    /// Opt-in CPU reference seam; bound callbacks retain the original monomers.
+    /// solve returns +H^-1 W; find applies its existing physical minus sign.
+    std::function<SharedMatrix(std::string, size_t, SharedMatrix)> cpks_solve_;
+    std::function<std::map<std::string, double>()> cpks_finish_;
 
     /// Orbital Basis Set (full molecule)
     std::shared_ptr<BasisSet> primary_;
@@ -143,6 +149,10 @@ class FISAPT {
     void fexch();
     /// Induction
     void find();
+    /// Expert paired callbacks; XC-off never invokes these.
+    void set_cpks_response_callbacks(
+        std::function<SharedMatrix(std::string, size_t, SharedMatrix)> solve,
+        std::function<std::map<std::string, double>()> finish);
     /// Dispersion
     void fdisp();
     /// Output
