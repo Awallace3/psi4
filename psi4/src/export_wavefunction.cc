@@ -398,6 +398,8 @@ void export_wavefunction(py::module& m) {
         .def("set_external_cpscf_perturbation", &scf::HF::set_external_cpscf_perturbation,
              "Add an external potential/perturbation to the private external_cpscf_perturbations map for CPSCF", "name"_a, "function"_a)
         .def("clear_external_cpscf_perturbations", &scf::HF::clear_external_cpscf_perturbations, "Clear private external_cpscf_perturbations map")
+        .def("has_external_cpscf_terms", &scf::HF::has_external_cpscf_terms,
+             "Whether stored external potentials, PCM, or external CPSCF callbacks are present.")
         .def_property("iteration_", &scf::HF::iteration, &scf::HF::set_iteration, "Internal iterator for SCF cycles. After completion, this equals the number of iterations taken to converge the SCF equations.")
         .def_property("diis_enabled_", &scf::HF::diis_enabled, &scf::HF::set_diis_enabled, "docstring")
         .def_property("diis_start_", &scf::HF::diis_start, &scf::HF::set_diis_start, "docstring")
@@ -500,6 +502,8 @@ void export_wavefunction(py::module& m) {
         .def("print_trailer", &fisapt::FISAPT::print_trailer, "Print SAPT results.")
         .def("set_vector", &fisapt::FISAPT::set_vector, "Set internal vectors by dictionary")
         .def("set_scalar", &fisapt::FISAPT::set_scalar, "Set internal scalars by dictionary")
+        .def("set_cpks_response_callbacks", &fisapt::FISAPT::set_cpks_response_callbacks,
+             "Expert CPU CPKS solve(side, source, W) -> +H^-1 W and finish() -> diagnostics callbacks.")
         .def("set_matrix", &fisapt::FISAPT::set_matrix, "Set internal matrices by dictionary");
 
     /// IBOLocalizer2 for FISAPT

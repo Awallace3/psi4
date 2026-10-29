@@ -29,9 +29,11 @@
 #include "fisapt.h"
 
 #include <algorithm>
+#include <cmath>
 #include <ctime>
 #include <functional>
 #include <set>
+#include <utility>
 #include "psi4/mcscf/block_matrix.h"
 #ifdef _OPENMP
 #include <omp.h>
@@ -5891,15 +5893,51 @@ void FISAPT::fexch() {
     dfh_->clear_transformations();
 }
 
+void FISAPT::set_cpks_response_callbacks(
+    std::function<SharedMatrix(std::string, size_t, SharedMatrix)> solve,
+    std::function<std::map<std::string, double>()> finish) {
+    if (static_cast<bool>(solve) != static_cast<bool>(finish)) {
+        throw PSIEXCEPTION("CPKS find requires paired solve and validation callbacks.");
+    }
+    cpks_solve_ = std::move(solve);
+    cpks_finish_ = std::move(finish);
+}
+
 // Compute fragment-fragment partitioning of induction contribution
 void FISAPT::find() {
+    // Python option lookups and registered CPU callbacks share this Options
+    // object. Native dispatch must honor FISAPT-local flags, not ambient SCF
+    // or SAPT context left by preceding work.
+    options_.set_current_module("FISAPT");
     outfile->Printf("  ==> F-SAPT Induction <==\n\n");
 
     // => Options <= //
 
     bool ind_resp = options_.get_bool("FISAPT_FSAPT_IND_RESPONSE");
     bool ind_scale = options_.get_bool("FISAPT_FSAPT_IND_SCALE");
+    bool ind_xc = options_.get_bool("FISAPT_FSAPT_IND_XC_RESPONSE");
     std::string link_assignment = options_.get_str("FISAPT_LINK_ASSIGNMENT");
+    if (ind_xc && (!ind_resp || !cpks_solve_ || !cpks_finish_
+                   || link_assignment != "C" || options_.get_bool("SSAPT0_SCALE")
+                   || options_.get_bool("FISAPT_EXCH_PARPERP")
+                   || reference_->has_potential_variable("A")
+                   || reference_->has_potential_variable("B")
+                   || reference_->has_potential_variable("C"))) {
+        throw PSIEXCEPTION("XC-coupled find requires registered CPU monomer response callbacks, "
+                           "IND_RESPONSE=true, C assignment, and no extra response/readout scaling.");
+    }
+    if (ind_xc) {
+        // C assignment only. Six copies per directional element: three
+        // internal raw snapshots and three independent returned-wfn copies.
+        const long double oa = matrices_["Locc0A"]->colspi()[0];
+        const long double ob = matrices_["Locc0B"]->colspi()[0];
+        const long double atoms = primary_->molecule()->natom();
+        const long double raw_doubles = 6.L * (oa * (atoms + ob + 1) + (atoms + oa + 1) * ob);
+        const long double raw_budget = std::min(static_cast<long double>(doubles_) / 8.L,
+                                                64.L * 1024 * 1024 / sizeof(double));
+        if (raw_doubles > raw_budget)
+            throw PSIEXCEPTION("XC-coupled find raw snapshots exceed the admitted extra array budget.");
+    }
 
     // => Sizing <= //
 
@@ -6385,6 +6423,8 @@ void FISAPT::find() {
 
     if (ind_resp) {
         outfile->Printf("  COUPLED INDUCTION (You asked for it!):\n\n");
+        outfile->Printf(ind_xc ? "    Mode: original whole-monomer XC response (HF reference limit allowed)\n\n"
+                              : "    Mode: legacy full-exchange response; no XC kernel\n\n");
 
         // ==> Coupled Targets <== //
 
@@ -6417,59 +6457,87 @@ void FISAPT::find() {
         // => JK Object <= //
 
         // TODO: Account for 2-index overhead in memory
-        auto nso = primary_->nbf();
-        auto jk_memory = (long int)doubles_;
-        jk_memory -= 24 * nso * nso;
-        jk_memory -= 4 * na * nso;
-        jk_memory -= 4 * nb * nso;
-        if (jk_memory < 0L) {
-            throw PSIEXCEPTION("Too little static memory for FISAPT::induction");
+        std::shared_ptr<JK> jk;
+        if (!ind_xc) {
+            auto nso = primary_->nbf();
+            auto jk_memory = (long int)doubles_;
+            jk_memory -= 24 * nso * nso;
+            jk_memory -= 4 * na * nso;
+            jk_memory -= 4 * nb * nso;
+            if (jk_memory < 0L) {
+                throw PSIEXCEPTION("Too little static memory for FISAPT::induction");
+            }
+
+            jk = JK::build_JK(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, false, (size_t)jk_memory);
+
+            jk->set_memory((size_t)jk_memory);
+            jk->set_do_J(true);
+            jk->set_do_K(true);
+            jk->initialize();
+            jk->print_header();
         }
-
-        std::shared_ptr<JK> jk =
-            JK::build_JK(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, false, (size_t)jk_memory);
-
-        jk->set_memory((size_t)jk_memory);
-        jk->set_do_J(true);
-        jk->set_do_K(true);
-        jk->initialize();
-        jk->print_header();
 
         // ==> Master Loop over perturbing atoms <== //
 
         int nC = std::max(nA + na1 + 1, nB + nb1 + 1); // add one for external potential
 
         for (size_t C = 0; C < nC; C++) {
-            if (C < nB + nb1) dfh_->fill_tensor("WBar", wB, {C, C + 1});
-            if (C < nA + na1) dfh_->fill_tensor("WAbs", wB, {C, C + 1});
+            // Each direction has a distinct ov shape. Never load WAbs into
+            // wB, reuse a preceding source, or omit the final (external) slot.
+            wB->zero();
+            wA->zero();
+            if (C < nB + nb1 + 1) dfh_->fill_tensor("WBar", wB, {C, C + 1});
+            if (C < nA + na1 + 1) dfh_->fill_tensor("WAbs", wA, {C, C + 1});
 
             outfile->Printf("    Responses for (A <- Source B = %3zu) and (B <- Source A = %3zu)\n\n",
                             (C < nB + nb1 ? C : nB + nb1), (C < nA + na1 ? C : nA + na1));
 
-            auto cphf = std::make_shared<CPHF_FISAPT>();
+            if (ind_xc) {
+                xA = wB->clone();
+                xB = wA->clone();
+                xA->zero();
+                xB->zero();
+                if (C < nB + nb1 + 1) xA = cpks_solve_("A", C, wB);
+                if (C < nA + na1 + 1) xB = cpks_solve_("B", C, wA);
+                if (!xA || !xB || xA->nirrep() != 1 || xB->nirrep() != 1
+                    || xA->nrow() != na || xA->ncol() != nr
+                    || xB->nrow() != nb || xB->ncol() != ns) {
+                    throw PSIEXCEPTION("CPKS find returned incompatible response dimensions.");
+                }
+                for (const auto& x : {xA, xB}) {
+                    for (size_t i = 0; i < x->nrow(); ++i) {
+                        for (size_t a = 0; a < x->ncol(); ++a) {
+                            if (!std::isfinite(x->get(i, a)))
+                                throw PSIEXCEPTION("CPKS find returned a nonfinite amplitude.");
+                        }
+                    }
+                }
+            } else {
+                auto cphf = std::make_shared<CPHF_FISAPT>();
 
-            // Effective constructor
-            cphf->delta_ = options_.get_double("CPHF_R_CONVERGENCE");
-            cphf->maxiter_ = options_.get_int("MAXITER");
-            cphf->jk_ = jk;
+                // Effective constructor
+                cphf->delta_ = options_.get_double("CPHF_R_CONVERGENCE");
+                cphf->maxiter_ = options_.get_int("MAXITER");
+                cphf->jk_ = jk;
 
-            cphf->w_A_ = wB;  // Reversal of convention
-            cphf->Cocc_A_ = Cocc_A;
-            cphf->Cvir_A_ = Cvir_A;
-            cphf->eps_occ_A_ = eps_occ_A;
-            cphf->eps_vir_A_ = eps_vir_A;
+                cphf->w_A_ = wB;  // Reversal of convention
+                cphf->Cocc_A_ = Cocc_A;
+                cphf->Cvir_A_ = Cvir_A;
+                cphf->eps_occ_A_ = eps_occ_A;
+                cphf->eps_vir_A_ = eps_vir_A;
 
-            cphf->w_B_ = wA;  // Reversal of convention
-            cphf->Cocc_B_ = Cocc_B;
-            cphf->Cvir_B_ = Cvir_B;
-            cphf->eps_occ_B_ = eps_occ_B;
-            cphf->eps_vir_B_ = eps_vir_B;
+                cphf->w_B_ = wA;  // Reversal of convention
+                cphf->Cocc_B_ = Cocc_B;
+                cphf->Cvir_B_ = Cvir_B;
+                cphf->eps_occ_B_ = eps_occ_B;
+                cphf->eps_vir_B_ = eps_vir_B;
 
-            // Gogo CPKS
-            cphf->compute_cphf();
+                // Legacy full-exchange CPHF-like operator, even on KS inputs.
+                cphf->compute_cphf();
 
-            xA = cphf->x_A_;
-            xB = cphf->x_B_;
+                xA = cphf->x_A_;
+                xB = cphf->x_B_;
+            }
 
             xA->scale(-1.0);
             xB->scale(-1.0);
@@ -6527,6 +6595,37 @@ void FISAPT::find() {
         Ind = Ind20r + ExchInd20r;
         Ind_AB_terms = Indr_AB_terms;
         Ind_BA_terms = Indr_BA_terms;
+        if (ind_xc) {
+            // These checks precede EVERY optional normalization. A combined
+            // total alone must not hide incorrect individual components.
+            const auto check_component = [&](const std::string& key, double actual) {
+                auto found = scalars_.find(key);
+                if (found == scalars_.end() || !std::isfinite(found->second)
+                    || !std::isfinite(actual)
+                    || std::abs(actual - found->second) > 2.e-9 + 1.e-7 * std::abs(found->second)) {
+                    throw PSIEXCEPTION("Raw XC-coupled find disagrees with canonical " + key);
+                }
+            };
+            check_component("Ind20,r (A<-B)", Ind20r_AB);
+            check_component("Exch-Ind20,r (A<-B)", ExchInd20r_AB);
+            check_component("Ind20,r (B<-A)", Ind20r_BA);
+            check_component("Exch-Ind20,r (B<-A)", ExchInd20r_BA);
+            check_component("Ind20,r", Ind20r);
+            check_component("Exch-Ind20,r", ExchInd20r);
+            for (const auto& diagnostic : cpks_finish_()) {
+                if (!std::isfinite(diagnostic.second)) throw PSIEXCEPTION("Nonfinite CPKS diagnostic.");
+                scalars_[diagnostic.first] = diagnostic.second;
+            }
+            matrices_["CPKS_Ind20r_AB_raw"] = Ind20r_AB_terms->clone();
+            matrices_["CPKS_ExchInd20r_AB_raw"] = ExchInd20r_AB_terms->clone();
+            matrices_["CPKS_Ind20r_BA_raw"] = Ind20r_BA_terms->clone();
+            matrices_["CPKS_ExchInd20r_BA_raw"] = ExchInd20r_BA_terms->clone();
+            matrices_["CPKS_IndAB_raw"] = Indr_AB_terms->clone();
+            matrices_["CPKS_IndBA_raw"] = Indr_BA_terms->clone();
+            scalars_["CPKS RESPONSE SCALE (A<-B)"] = 1.0;
+            scalars_["CPKS RESPONSE SCALE (B<-A)"] = 1.0;
+            scalars_["CPKS DELTAHF SCALE"] = 1.0;
+        }
     }
 
     // => Induction scaling <= //
@@ -6538,6 +6637,9 @@ void FISAPT::find() {
             dHF = scalars_["SAPT0 dHF"];
             outfile->Printf("    Using SAPT0 dHF for induction scaling: %11.3E [Eh]\n", dHF);
         } else if (scalars_["HF"] != 0.0) {
+            if (ind_xc) {
+                throw PSIEXCEPTION("CPKS deltaHF redistribution requires an explicit SAPT0 dHF correction.");
+            }
             dHF = scalars_["HF"] - scalars_["Elst10,r"] - scalars_["Exch10"] - scalars_["Ind20,r"] -
                   scalars_["Exch-Ind20,r"];
             outfile->Printf("    No provided dHF correction found; using (HF - Elst10,r - Exch10 - Ind20,r - Exch-Ind20,r) for induction scaling: %11.3E [Eh]\n", dHF);
@@ -6545,7 +6647,19 @@ void FISAPT::find() {
         double IndHF = scalars_["Ind20,r"] + scalars_["Exch-Ind20,r"] + dHF;
         double IndSAPT0 = scalars_["Ind20,r"] + scalars_["Exch-Ind20,r"];
 
-        double Sdelta = IndHF / IndSAPT0;
+        if (ind_xc && (!std::isfinite(dHF)
+            || (dHF != 0.0 && std::abs(IndSAPT0) <=
+                std::max(1.e-12, 1.e-10 * (std::abs(scalars_["Ind20,r"])
+                                         + std::abs(scalars_["Exch-Ind20,r"])))))) {
+            throw PSIEXCEPTION("Undefined/cancellation-dominated CPKS deltaHF redistribution.");
+        }
+        // Zero higher-order correction needs no division, including zero/zero.
+        double Sdelta = (ind_xc && dHF == 0.0) ? 1.0 : IndHF / IndSAPT0;
+        if (ind_xc) {
+            if (!std::isfinite(Sdelta)) throw PSIEXCEPTION("Nonfinite CPKS deltaHF redistribution.");
+            scalars_["CPKS DELTAHF SCALE"] = Sdelta;
+            outfile->Printf("    CPKS: response factor is one; optional deltaHF remains an approximation.\n");
+        }
         double SrAB = (ind_resp ? 1.0
                                 : (scalars_["Ind20,r (A<-B)"] + scalars_["Exch-Ind20,r (A<-B)"]) /
                                       (scalars_["Ind20,u (A<-B)"] + scalars_["Exch-Ind20,u (A<-B)"]));
@@ -6555,7 +6669,7 @@ void FISAPT::find() {
 
         double sIndHF = scalars_["Ind20,r"] + scalars_["sExch-Ind20,r"] + dHF;
 
-        double sSdelta = sIndHF / IndSAPT0;
+        double sSdelta = ind_xc ? Sdelta : sIndHF / IndSAPT0;
 
         double sSrAB = (ind_resp ? 1.0
                                  : (scalars_["Ind20,r (A<-B)"] + scalars_["sExch-Ind20,r (A<-B)"]) /
@@ -6640,6 +6754,17 @@ void FISAPT::find() {
     }
     // We're done with dfh_'s integrals
     dfh_->clear_all();
+    if (ind_xc) {
+        // Preserve evidence after the short-lived native FISAPT object dies.
+        for (const auto& item : matrices_) {
+            if (item.first.rfind("CPKS_", 0) == 0)
+                reference_->set_array_variable("FSAPT_" + item.first, item.second);  // setter clones
+        }
+        for (const auto& item : scalars_) {
+            if (item.first.rfind("CPKS ", 0) == 0)
+                reference_->set_scalar_variable("FSAPT " + item.first, item.second);
+        }
+    }
 }
 
 // Compute fragment-fragment partitioning of dispersion contribution
@@ -8012,6 +8137,11 @@ void CPHF_FISAPT::compute_cphf() {
 
     double b2A = sqrt(w_A_->vector_dot(w_A_));
     double b2B = sqrt(w_B_->vector_dot(w_B_));
+    // A physical source may be zero for one or both monomers. Do not form
+    // 0/0 CG steps or apply JK to an empty active-direction batch.
+    if (b2A == 0.0) r2A = 0.0;
+    if (b2B == 0.0) r2B = 0.0;
+    if (b2A == 0.0 && b2B == 0.0) return;
 
     outfile->Printf("  ==> CPHF Iterations <==\n\n");
 

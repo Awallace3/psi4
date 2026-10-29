@@ -372,6 +372,70 @@ only the intermolecular atom-pair contributions from the dimer calculation and
 therefore need not sum to the authoritative scalar dispersion or total
 interaction energy; Psi4 prints a warning when this approximation is used.
 
+Experimental source-resolved XC response
+"""""""""""""""""""""""""""""""""""""""""
+
+The default induction partition is unchanged:
+``FISAPT_FSAPT_IND_RESPONSE=false`` and ``FISAPT_FSAPT_IND_SCALE=true``.
+It uses uncoupled orbital-gap response and scales each direction to its
+canonical *combined induction plus exchange-induction* total. Matching those
+totals does not establish the accuracy of the individual fragment weights.
+
+``FISAPT_FSAPT_IND_XC_RESPONSE=true`` selects an experimental CPU reference
+using the original whole-monomer Kohn--Sham Hessian for every physical source.
+It must be enabled together with ``FISAPT_FSAPT_IND_RESPONSE=true`` and
+``SAPT_DFT_INDUCTION_TYPE=CPKS``. The source changes the perturbation, not the
+reference density or XC kernel; the solved occupied amplitudes are rotated into
+the one shared localized gauge before induction and exchange-induction readout.
+SAPT readout exchange remains bare, separate from functional-weighted response
+exchange.
+
+For example, for an unshifted PBE reference::
+
+    set {
+        sapt_dft_functional          pbe
+        sapt_dft_do_fsapt            fisapt
+        sapt_dft_induction_type      cpks
+        sapt_dft_grac_compute        none
+        sapt_dft_grac_shift_a        0.0
+        sapt_dft_grac_shift_b        0.0
+        fisapt_fsapt_ind_response    true
+        fisapt_fsapt_ind_xc_response true
+        cphf_r_convergence           1.e-10
+    }
+
+.. warning::
+
+   This path requires a matching native build and is initially restricted to
+   unshifted HF (reference limit), SVWN and PBE, restricted closed-shell C1
+   monomers, two unembedded molecular fragments, C link assignment and
+   unscaled S2 exchange-induction. Hybrids including PBE0, range separation,
+   meta-GGA, GRAC/level shifts, external response and deltaDFT redistribution
+   are rejected. Matching-build native numerical qualification remains a
+   prerequisite for removing the experimental status or widening admission.
+
+With the new flag **off**, enabling only
+``FISAPT_FSAPT_IND_RESPONSE`` retains the legacy full-exchange
+``gap + 4J - K - K.T`` operator on the supplied orbitals. On KS orbitals
+this is HF-like response, not true HF-reference CPHF and not functional-weighted
+response with only its XC term omitted. Source-buffer, final-slot and zero-RHS
+fixes apply to both coupled paths; erroneous older coupled cells are not a
+compatibility target.
+
+The XC-coupled path checks raw induction and exchange-induction totals
+separately, source completeness/additivity, and independent true residuals
+**before** any scaling. Its response factor is one: do not multiply it by the
+legacy coupled/uncoupled ratio again. Optional uniform deltaHF redistribution
+remains a separately labeled approximation requiring the explicit SAPT0
+correction; it does not change relative fragment weights.
+
+Raw matrices are retained on the returned wavefunction as
+``FSAPT_CPKS_IND20R_AB_RAW``, ``FSAPT_CPKS_EXCHIND20R_AB_RAW`` and
+``FSAPT_CPKS_INDAB_RAW``, with corresponding ``BA`` names.
+Scalar diagnostics include ``FSAPT CPKS RESPONSE SCALE (A<-B)``,
+``FSAPT CPKS RESPONSE SCALE (B<-A)``, ``FSAPT CPKS DELTAHF SCALE``, and
+directional source counts and true residuals.
+
 
 Order-1 Visualization with PyMol
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
