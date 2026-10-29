@@ -247,7 +247,9 @@ def main():
         parser.error("--root is required unless --toy-only is selected")
     assert not args.gpu or not args.toy_only
     if not args.gpu:assert os.environ.get("CUDA_VISIBLE_DEVICES")==""
-    assert args.output is not None and not args.output.exists()
+    assert args.output is not None
+    args.output=args.output.resolve()
+    assert not args.output.exists()
     args.output.mkdir(mode=0o700)
     scratch=args.output/"scratch";scratch.mkdir()
     aliases=args.output/"vendor-aliases";aliases.mkdir(mode=0o700)

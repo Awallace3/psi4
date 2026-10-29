@@ -31,7 +31,8 @@ def maps(records):
                 for name,r in records.items()}
     prefixes=("libcudart","libcublas","libcusolver","libcusparse","libnvrtc",
               "libnvJitLink","libcufft","libcurand","libcuest","libcufile",
-              "libnvfatbin","libnvjpeg","libnvvm","libnvptxcompiler","libcutensor")
+              "libnvfatbin","libnvjpeg","libnvvm","libnvptxcompiler","libcutensor",
+              "libcupti","libcudnn")
     seen=set()
     for line in Path("/proc/self/maps").read_text().splitlines():
         row=line.split(maxsplit=5)
