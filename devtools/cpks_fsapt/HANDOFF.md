@@ -45,6 +45,9 @@ tests skipped** (42 total, unittest discovery command below). Syntax,
 whitespace and CPU-only dependency scans pass. The read-only review's
 stored-embedding and quadratic-validation-memory findings were fixed and
 covered by focused contracts; a follow-up inspection was requested.
+Follow-up **d334d46e81584ae49df88679482478b67** found no further actionable
+defects in those fixes. It was inspection-only, not build/native qualification;
+the draft and matching-build merge blockers remain unchanged.
 
 Completed **exploratory donor-runtime** fixed-PBE0 phenol studies support the
 scientific distinction, not this candidate's compiled-native qualification:
