@@ -81,3 +81,26 @@ It does not yet test Python CUDA-binding lazy loading, actual cuEST context/JIT
 initialization, GPU module loading/execution, or integration with the qualified
 Psi4 loader/admission checks. Those remain separate gates. The qualified
 implementation and its default admission contract have not changed.
+
+## Next bounded GPU compatibility probe
+
+User approved the separate `--gpu` mode. It requires the established resource
+scope and common nonblocking GPU lock/HOLD monitoring. A fresh child starts with
+only the sealed aliases and existing shared environment on its loader path.
+It imports the exact existing CUDA13.3 bindings, forces their runtime/NVRTC lazy
+loading, executes a one-element FP64 kernel (`2 -> 3`), then creates one cuEST
+context with a borrowed stream, FP64 math and one JIT compiler thread.
+Its HOME/cache is private to this experiment. All explicit native/device resources
+are released, without resetting or releasing the runtime's primary context.
+
+After lazy loads, cuEST initialization and cleanup, it rejects every toolkit
+mapping not backed by the exact sealed snapshots. This is loader compatibility,
+not a production identity owner, full SCF, numerical gate, or performance result.
+No installed scientific module or qualified runtime configuration is changed.
+
+```bash
+# Only after GPU permission, within <=4CPU/12GiB/no-swap/128-task scope.
+"$ENV/bin/python" -B devtools/disp0/cachy/prototypes/sealed_loader_probe.py \
+  --gpu --root "$HOME/gits/psi4-disp0-perf-cachy" \
+  --output "$HOME/gits/psi4-disp0-perf-cachy/runs/sealed-prototype-gpu-FRESH"
+```

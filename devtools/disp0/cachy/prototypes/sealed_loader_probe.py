@@ -1,7 +1,8 @@
-"""THROWAWAY: can sealed ELF snapshots preserve loader behavior CPU-only?
+"""THROWAWAY: can sealed ELF snapshots preserve loader behavior?
 
 This probes real kernel seals, $ORIGIN and exact cuEST/CUDA symbol ownership.
-It is not a state simulation, Psi4 overlay, GPU test or production admission.
+Default CPU-only; --gpu adds an explicitly approved compatibility gate.
+It is not a state simulation, Psi4 overlay or production admission.
 Run --toy-only locally; --root selects the existing private Cachy inputs.
 """
 import argparse
@@ -124,7 +125,7 @@ def symbol_owner(function,record):
     return expected
 
 
-def compile_ptx_cpu(native,record):
+def compile_ptx_cpu(native,record,ptx_output=None):
     """NVRTC is a CPU compiler. Disable its optional cuInit-backed cache."""
     assert os.environ.get("CUDA_CACHE_DISABLE")=="1"
     V,P,C,Z=ct.c_void_p,ct.POINTER,ct.c_char_p,ct.c_size_t
@@ -155,14 +156,18 @@ def compile_ptx_cpu(native,record):
     ptx=ct.create_string_buffer(size.value)
     assert native.nvrtcGetPTX(program,ptx)==0
     assert native.nvrtcDestroyProgram(ct.byref(program))==0
+    if ptx_output is not None:ptx_output.write_bytes(ptx.raw)
     return {"version":[major.value,minor.value],"ptx_bytes":len(ptx.raw),
             "ptx_sha256":hashlib.sha256(ptx.raw).hexdigest(),"explicit_compiler_calls":8,
             "cache_disabled":True,"kernel_loaded_or_executed":False}
 
 
 def child(input_path):
-    assert os.environ.get("CUDA_VISIBLE_DEVICES")==""
     plan=json.loads(input_path.read_text())
+    if plan.get("gpu"):
+        from sealed_gpu_probe import gpu_policy
+        gpu_policy(plan)
+    else:assert os.environ.get("CUDA_VISIBLE_DEVICES")==""
     aliases=Path(plan["aliases"]);toy_aliases=Path(plan["toy_aliases"])
     assert os.environ["LD_LIBRARY_PATH"]==plan["startup_library_path"]
     records={}
@@ -196,7 +201,8 @@ def child(input_path):
         ownership={name:symbol_owner(getattr(native,name),records[native_name]) for name in names}
         state("vendor_symbols_passed",symbols=len(ownership),explicit_vendor_calls=0)
         nvrtc=loaded[plan["preload_order"].index("libnvrtc.so.13")]
-        compiler=compile_ptx_cpu(nvrtc,records["libnvrtc.so.13"])
+        ptx_output=input_path.parent/"probe.ptx" if plan.get("gpu") else None
+        compiler=compile_ptx_cpu(nvrtc,records["libnvrtc.so.13"],ptx_output)
         state("nvrtc_cpu_compile_passed",**compiler)
     for name,record in records.items():
         cannot_write(record,(toy_aliases if name.startswith("libsealed_") else aliases)/name)
@@ -209,9 +215,16 @@ def child(input_path):
         "memfd_provider":"os.memfd_create" if hasattr(os,"memfd_create") else "libc.memfd_create",
         "records":records,"preloaded":plan["preload_order"],"symbol_ownership":ownership,
         "driver_sha256":digest(__file__),"input_sha256":digest(input_path)}
+    if plan.get("gpu"):
+        from sealed_gpu_probe import probe
+        report["gpu"]=probe(plan,records,loaded)
+        report["status"]="PASS_GPU_SEALED_LOADER_PROTOTYPE_ONLY"
+        report["scope"]="THROWAWAY_NOT_PSI4_NUMERICAL_OR_PERFORMANCE_QUALIFICATION"
+        for field in ("explicit_cuda_driver_calls","explicit_cuda_runtime_calls",
+                      "explicit_cuest_api_calls"):
+            report.pop(field)
     Path(plan["result"]).write_text(json.dumps(report,indent=2,sort_keys=True)+"\n")
-    state("passed",sealed_files=len(records),explicit_cuest_calls=0,
-          nvrtc_cpu_calls=compiler.get("explicit_compiler_calls",0),cuda_driver_or_runtime_calls=0)
+    state("passed",sealed_files=len(records),status=report["status"])
     # Raw FDs and CDLL references deliberately last until this worker exits.
 
 
@@ -224,6 +237,7 @@ def main():
     parser.add_argument("--output",type=Path)
     parser.add_argument("--root",type=Path)
     parser.add_argument("--toy-only",action="store_true")
+    parser.add_argument("--gpu",action="store_true",help="Approved bounded compatibility probe only")
     parser.add_argument("--child",type=Path,help=argparse.SUPPRESS)
     args=parser.parse_args()
     if args.child is not None:
@@ -231,7 +245,8 @@ def main():
         return
     if not args.toy_only and args.root is None:
         parser.error("--root is required unless --toy-only is selected")
-    assert os.environ.get("CUDA_VISIBLE_DEVICES")==""
+    assert not args.gpu or not args.toy_only
+    if not args.gpu:assert os.environ.get("CUDA_VISIBLE_DEVICES")==""
     assert args.output is not None and not args.output.exists()
     args.output.mkdir(mode=0o700)
     scratch=args.output/"scratch";scratch.mkdir()
@@ -277,12 +292,38 @@ def main():
                    and any(isinstance(t,ast.Name) and t.id=="FACTORY_ABI" for t in n.targets))
         plan["factory_symbols"]=[ast.literal_eval(k) for k in table.keys]
         plan["startup_library_path"]+=":"+config["dependency_environment"]+"/lib"
+        if args.gpu:
+            spec=importlib.util.spec_from_file_location("_prototype_header_identity",
+                                                       plan["identity_helper"])
+            identity=importlib.util.module_from_spec(spec);spec.loader.exec_module(identity)
+            plan["abi_header_sha256"]={}
+            for name,sha in identity.REQUIRED_HEADERS.items():
+                assert digest(root/"runtime/cuest"/name)==sha
+                plan["abi_header_sha256"][name]=sha
+            plan.update(gpu=True,root=str(root),optional_python_path=config["optional_python_path"],
+                        expected_uuid=config["local_lease"]["expected_uuid"],
+                        gpu_probe_sha256=digest(Path(__file__).with_name("sealed_gpu_probe.py")))
     assert sum(r["bytes"] for r in plan["vendor"])<=2*1024**3
     input_path=args.output/"input.json";input_path.write_text(json.dumps(plan,indent=2,sort_keys=True)+"\n")
     env=dict(os.environ,LD_LIBRARY_PATH=plan["startup_library_path"],CUDA_VISIBLE_DEVICES="",
              CUDA_CACHE_DISABLE="1")
     assert not env.get("LD_PRELOAD")
     state("starting",vendor_files=len(plan["vendor"]),vendor_preloads=len(plan["preload_order"]))
+    if args.gpu:
+        # The immutable scientific checkout supplies orchestration only.
+        sys.path.insert(0,str(root/"source/devtools/disp0/cachy"))
+        from coherent_stage11 import lease,run_command
+        from response_reuse_probe import resource_scope
+        resource_scope()
+        home=args.output/"private-home";home.mkdir(mode=0o700)
+        env.update(CUDA_VISIBLE_DEVICES=plan["expected_uuid"],HOME=str(home),
+                   PYTHONPATH=plan["optional_python_path"],PYTHONNOUSERSITE="1")
+        with lease(root) as fd:
+            env["DISP0_LOCAL_LEASE_FD"]=str(fd)
+            run_command([sys.executable,"-B",__file__,"--child",str(input_path)],
+                        root,args.output,"worker",env,fd,300)
+        print((args.output/"worker.stdout").read_text(),end="",flush=True)
+        return
     with (args.output/"worker.stdout").open("x") as out,(args.output/"worker.stderr").open("x") as err:
         subprocess.run([sys.executable,"-B",__file__,"--child",str(input_path)],
                        env=env,stdout=out,stderr=err,check=True,timeout=240)
