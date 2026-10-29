@@ -38,6 +38,12 @@ before constructing those arrays, including highly asymmetric ov spaces.
 
 ## Evidence and merge blockers
 
+Candidate CPU contract run **b0cbe969e**: **39 passed, 3 matching-build native
+tests skipped** (42 total, unittest discovery command below). Syntax,
+whitespace and CPU-only dependency scans pass. The read-only review's
+stored-embedding and quadratic-validation-memory findings were fixed and
+covered by focused contracts; a follow-up inspection was requested.
+
 Completed **exploratory donor-runtime** fixed-PBE0 phenol studies support the
 scientific distinction, not this candidate's compiled-native qualification:
 XC-only omission retaining 25% exchange gives summed-pair L1 errors
