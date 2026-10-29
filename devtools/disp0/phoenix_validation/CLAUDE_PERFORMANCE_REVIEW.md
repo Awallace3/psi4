@@ -103,3 +103,11 @@ host-audit overhead, not an H200 kernel speedup. Whole-energy diagnostics still
 take155.5–158.6 seconds; a CPU-only profile isolates repeated live checks and
 pathname resolution as the next targets. The original fresh-byte path remains
 the default, and no Phoenix run or broad production release is implied.
+
+The [second hot-path follow-up](../cachy/HOT_PATH_ADMISSION.md), at science
+pin`3ea43ee66e`, reduces the diagnostic whole calls to42.5–44.4 seconds while
+passing all ten numerical cases and a strict1e-9 before/after comparison of
+all23 fields. A qualified caller profile still identifies substantial live-check
+and mapping overhead. The user selected a separate CPU-first sealed-loader
+prototype to investigate removing that filesystem polling through stronger
+kernel immutability; it is not yet a production/GPU-qualified change.

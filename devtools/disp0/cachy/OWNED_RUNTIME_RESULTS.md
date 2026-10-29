@@ -1,5 +1,9 @@
 # Owned runtime: matched water construction diagnostic
 
+**Historical first step.** The [second hot-path step](HOT_PATH_ADMISSION.md)
+retains this evidence and reduces the whole-call diagnostics to42.5–44.4 s,
+with another numerical gate and strict before/after comparison.
+
 **RTX 3090, debug only. Not an H200 speedup or numerical qualification.**
 Construction passed in both modes. The small restricted-water numerical gate
 also passed; this is not a broad backend or Phoenix release.
