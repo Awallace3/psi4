@@ -1,5 +1,7 @@
 # CPU/native CPKS F-SAPT draft split
 
+- Draft PR: https://github.com/Awallace3/psi4/pull/38
+  (base/head and draft status verified; no CI build checks requested).
 - Base: `saptdft_ein_fi_option_d4`, `d7b5a01d4c9dc7b17832f91d0c32f0bf78deecfd`.
 - Candidate: `fsapt-cpks-native-cpu`, prepared in the existing isolated CPKS
   worktree. No other checkout, environment, target-branch commit or running
