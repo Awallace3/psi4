@@ -176,3 +176,14 @@ Artifact:`runs/sealed-prototype-gpu-01/result.json`, SHA256
 This is **only loader compatibility**, not a production owner, native basis/DFMO
 JIT gate, whole-Psi4 numerical/performance result or zero-cache-memory claim.
 The qualified implementation remains unchanged.
+
+Independent probe inspection found two defects, subsequently fixed on the
+prototype branch: include cuDNN/CUPTI in foreign-toolkit rejection, and resolve
+relative outputs before changing the worker directory. CPU negatives reject
+real unsealed mappings for both families. Corrected code`6997a49701` passed
+`sealed-prototype-gpu-02`, including a deliberately relative output path.
+Its current result SHA256 is
+`cced9283e58983183b1628a6e8a3ebcb5a922534a078a74ef08be11afc7085d3`;
+this supersedes attempt01's narrower classifier. Kernel/context/readbacks and
+all explicit resource cleanup passed again. Production integration and the
+whole-water numerical/performance gate remain the next steps.
