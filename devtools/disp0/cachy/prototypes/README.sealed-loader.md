@@ -132,3 +132,21 @@ compatibility question. Native basis/DFMO construction and its lazy JIT paths,
 whole Psi4 integration, a reviewed immutable-owner contract, numerical parity,
 memory comparison and whole-call performance remain untested in sealed mode.
 No production implementation/default was changed and no Phoenix job was run.
+
+### Reviewed repeat
+
+Independent inspection found two probe-only defects: cuDNN/CUPTI were omitted
+from the foreign-toolkit classifier, and relative output paths were not
+canonicalized before the worker changed directory. Code`6997a49701` fixes both.
+Fresh CPU subprocess probes now reject real unsealed ELF mappings named for
+either omitted family; the relative-output toy probe also passes.
+
+The corrected GPU repeat `sealed-prototype-gpu-02` passed with full code pin
+`6997a497016170254f7f681ec9e4fcf636a49194`. Its parent deliberately started
+from a different directory with relative `--output`, exercising that fix too.
+Result SHA256:
+`cced9283e58983183b1628a6e8a3ebcb5a922534a078a74ef08be11afc7085d3`.
+This is the current compatibility result, superseding attempt01's narrower
+mapping classifier. The kernel result, native version/FP64 readbacks and all six
+explicit cleanup steps passed again. The same scope limits and all limitations
+above remain in force; it is still not a reviewed production owner or speedup.
