@@ -162,5 +162,17 @@ native/factory symbols map to the correct sealed SDK inode/device. NVRTC13.3
 compiled PTX with its cache disabled, without loading/executing a GPU kernel.
 Result:`runs/sealed-prototype-cpu-02/result.json`, SHA256
 `0ddca4f8e23a3cbf69aa5936e393b9b9602612befe6f94cc9f37ea9c185d1923`.
-Python CUDA-binding lazy loading and real cuEST context/JIT remain untested.
-No sealed-snapshot production implementation or GPU qualification is implied.
+At that CPU-only stage, Python CUDA-binding lazy loading and real cuEST
+context/JIT were still untested. No production or GPU qualification was implied.
+
+The separately approved bounded GPU compatibility probe subsequently passed
+at prototype code`57c6af5366`. Existing CUDA13.3 bindings lazily loaded the
+sealed toolkit, a one-element FP64 kernel returned3.0 from2.0, and one native
+cuEST0.2.50 FP64 context was created/destroyed with one compiler thread and a
+private cache HOME. All explicit resource cleanup completed; no second/unsealed
+toolkit appeared at the recorded mapping checkpoints.
+Artifact:`runs/sealed-prototype-gpu-01/result.json`, SHA256
+`0c20aa4b9aa07d0189683a8edaa1552b07b1be1e39d9458da1f220cb91e1d42b`.
+This is **only loader compatibility**, not a production owner, native basis/DFMO
+JIT gate, whole-Psi4 numerical/performance result or zero-cache-memory claim.
+The qualified implementation remains unchanged.
