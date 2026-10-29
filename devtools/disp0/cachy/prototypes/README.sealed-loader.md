@@ -104,3 +104,31 @@ No installed scientific module or qualified runtime configuration is changed.
   --gpu --root "$HOME/gits/psi4-disp0-perf-cachy" \
   --output "$HOME/gits/psi4-disp0-perf-cachy/runs/sealed-prototype-gpu-FRESH"
 ```
+
+## GPU compatibility verdict: passed, still not integrated
+
+`sealed-prototype-gpu-01` passed with code pin
+`57c6af5366a32723ae9471021d866b24e8b1e5a9`.
+Result SHA256:
+`0c20aa4b9aa07d0189683a8edaa1552b07b1be1e39d9458da1f220cb91e1d42b`.
+
+- CUDA Python bindings13.3.0 imported from the existing selected environment.
+  Runtime/NVRTC lazy-loading calls succeeded against the sealed toolkit.
+- Exactly one one-element FP64 kernel ran and returned3.0 from input2.0.
+- One cuEST0.2.50 context was created with the borrowed stream and one JIT
+  compiler thread. Native version and FP64 math-mode1 readbacks succeeded.
+- At all recorded mapping checkpoints (binding import, lazy calls, kernel,
+  context creation, cleanup), all nine mapped toolkit/SDK objects belonged
+  to the exact sealed snapshots; no second/unsealed toolkit was observed.
+- Synchronization, cuEST handle/parameter destruction, device-buffer free,
+  module unload and stream destruction all succeeded. The runtime primary
+  context was neither replaced nor reset/released.
+- The service exited0 under verified4CPU/12GiB/no-swap/128-task limits, with
+  host cgroup peak2,042,314,752 bytes. Device free-memory endpoints differed
+  by2MiB; these are **not** an allocation peak or proof of zero total caching.
+
+This settles the narrow CUDA-binding, tiny-kernel and cuEST-context loader
+compatibility question. Native basis/DFMO construction and its lazy JIT paths,
+whole Psi4 integration, a reviewed immutable-owner contract, numerical parity,
+memory comparison and whole-call performance remain untested in sealed mode.
+No production implementation/default was changed and no Phoenix job was run.
