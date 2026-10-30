@@ -111,3 +111,11 @@ process tracing, fresh output/scratch directories and a TERM-safe wrapper.
 No paid allocation, retry or historical runtime composition is authorized by
 these files. A new convenience entry point creates a new source snapshot:
 prior water results must not be relabeled as runs of that descendant commit.
+
+The login-node operational checkout may be sparse to avoid expanding the
+whole repository there. Git copies that sparsity into new worktrees, so the
+build helper explicitly disables it **only in its new private build
+worktree** and verifies required CMake/native/producer files plus clean
+commit/tree identity before installing dependencies or configuring. The
+Git-only `test_source_checkout.py` regression checks both complete build
+sources and the unchanged sparse launcher.

@@ -26,6 +26,23 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def materialize_source(repository, snapshot, commit, tree, env):
+    """Create a private commit-derived build source; require real source files."""
+    subprocess.run(['git', 'worktree', 'add', '--detach', str(snapshot), commit],
+                   cwd=repository, env=env, check=True)
+    # Git copies the sparse operational checkout's worktree configuration.
+    # Materialize the NEW private build tree, without modifying the launcher.
+    subprocess.run(['git', 'sparse-checkout', 'disable'], cwd=snapshot, env=env, check=True)
+    required = ('CMakeLists.txt', 'cmake/psi4OptionsTools.cmake', 'psi4/src/export_isapol.cc',
+                'psi4/driver/procrouting/isapol_benzene_acceptance.py')
+    if any(not (snapshot/path).is_file() for path in required):
+        raise RuntimeError('incomplete private build checkout')
+    for args, expected in ((['rev-parse', 'HEAD'], commit), (['rev-parse', 'HEAD^{tree}'], tree),
+                           (['status', '--porcelain'], '')):
+        if subprocess.check_output(['git', *args], cwd=snapshot, env=env, text=True).strip() != expected:
+            raise RuntimeError('private build source identity mismatch')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
@@ -81,6 +98,8 @@ def main():
     tmp = Path('/storage/scratch1/3/awallace43')/('ccasp-native-build-'+os.environ['SLURM_JOB_ID'])
     tmp.mkdir(exist_ok=False)
     env.update(TMPDIR=str(tmp), SCRATCH=str(tmp), PSI_SCRATCH=str(tmp))
+    snapshot = root/'source'
+    materialize_source(SOURCE, snapshot, args.commit, args.tree, env)
     for compiler, frontend in (('cc', 'cc1'), ('c++', 'cc1plus')):
         executable = base/('bin/x86_64-conda-linux-gnu-'+compiler)
         actual = subprocess.check_output(
@@ -100,13 +119,6 @@ def main():
     frozen = subprocess.check_output(
         [str(python), '-I', '-B', '-m', 'pip', 'freeze'], env=env, text=True)
     (root/'dependencies.freeze.txt').write_text(frozen)
-    snapshot = root/'source'
-    subprocess.run(['git', 'worktree', 'add', '--detach', str(snapshot), args.commit],
-                   cwd=SOURCE, env=env, check=True)
-    snapshot_head = subprocess.check_output(
-        ['git', 'rev-parse', 'HEAD'], cwd=snapshot, text=True).strip()
-    if snapshot_head != args.commit:
-        raise RuntimeError('private commit-derived source snapshot mismatch')
     values = dict(
         CMAKE_BUILD_TYPE='Release', CMAKE_INSTALL_PREFIX=str(root/'env'),
         PYMOD_INSTALL_LIBDIR='/python3.13/site-packages',
