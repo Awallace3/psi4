@@ -36,6 +36,7 @@
 
 #include "psi4/libfock/cubature.h"
 #include "psi4/libfock/points.h"
+#include "psi4/libfock/v.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/molecule.h"
@@ -44,6 +45,7 @@
 #include "psi4/libpsi4util/exception.h"
 #include "psi4/libpsi4util/process.h"
 #include "psi4/libqt/qt.h"
+#include "psi4/libscf_solver/hf.h"
 #include "psi4/physconst.h"
 #include "psi4/psi4-dec.h"
 
@@ -87,6 +89,16 @@ int gg_order(bool puream) {
 #else
 #error "unknown value of macro psi4_SHGSHELL_ORDERING"
 #endif
+}
+
+// The SCF's XC potential when its grid is exactly the one XDM would build (same basis, equal
+// DFTGrid::spec()), else null. Its grid lives as long as the wavefunction's potential.
+std::shared_ptr<VBase> scf_potential_on_grid(const std::shared_ptr<Wavefunction>& wfn, const BasisSet& basis,
+                                             const std::string& spec) {
+    auto hf = std::dynamic_pointer_cast<scf::HF>(wfn);
+    auto V = hf ? hf->V_potential() : nullptr;
+    if (!V || !V->grid() || V->basis().get() != &basis) return nullptr;
+    return V->grid()->spec() == spec ? V : nullptr;
 }
 
 // One thread's scratch for integrate_on_host. Collocation is function-major
@@ -383,17 +395,23 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     SharedMatrix Da = wfn->Da_subset("AO");
     SharedMatrix Db = restricted ? Da : wfn->Db_subset("AO");
 
-    // --- Build DFT grid with ATOMIC blockscheme ---
+    // --- Grid: the DFT grid, blocked by DFT_BLOCK_SCHEME as the SCF's is ---
     std::map<std::string, int> int_opts;
     std::map<std::string, std::string> str_opts;
-    str_opts["DFT_BLOCK_SCHEME"] = "ATOMIC";
+
+    // Borrow the SCF's grid when it is the one XDM would build.
+    std::shared_ptr<VBase> scf_V;
+    if (options.get_bool("XDM_GRID_REUSE")) {
+        scf_V = scf_potential_on_grid(wfn, *primary, DFTGrid::spec_for(options, int_opts, str_opts, {}));
+    }
 
     std::shared_ptr<DFTGrid> grid;
     {
         ScopedTimer t("XDM: grid");
-        grid = std::make_shared<DFTGrid>(mol, primary, int_opts, str_opts, options);
+        grid = scf_V ? scf_V->grid() : std::make_shared<DFTGrid>(mol, primary, int_opts, str_opts, options);
     }
-    outfile->Printf("\n  XDM grid: psi4, %d points in %zu blocks.\n", grid->npoints(), grid->blocks().size());
+    outfile->Printf("\n  XDM grid: psi4%s, %d points in %zu blocks.\n", scf_V ? ", the SCF's" : "", grid->npoints(),
+                    grid->blocks().size());
 
     // Collect atom data
     std::vector<int> atomic_nums(natom);
