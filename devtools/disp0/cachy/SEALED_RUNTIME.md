@@ -1,4 +1,4 @@
-# Opt-in sealed runtime integration — not yet GPU-qualified
+# Opt-in sealed runtime — small-water gate passed, performance still incomplete
 
 Target: the qualified water profile still makes163,164 complete17-file lease
 checks per energy call. The latest accepted small-water result remains42–44s.
@@ -108,3 +108,89 @@ symbol-address checks. Legacy behavior stays strict; sealed failures retire the
 worker rather than unwinding native owners. Real sealed-ELF binder regressions
 were run red for all three consumers, then green; a foreign function pointer
 also verifies fail-stop retirement. The host suites passed375+33+109=**517 tests**.
+
+## Completed small-water gate at`86b31abd59`
+
+The fresh whole prefix`install-owned-sealed-86b31abd59` passed70 real target
+CPU tests and CPU RHF qualification. `sealed-full-water-gate-02` then passed
+all ten fresh CPU/GPU/oracle/displacement/repeat processes. All GPU cases
+performed actual native/device work and completed cleanup.
+
+| Diagnostic energy-call wall (s) | Previous lease owner | Sealed owner |
+|---|---:|---:|
+| Unscaled | 43.728 | 32.365 |
+| Scaled | 42.472 | 32.259 |
+| Displaced | 44.433 | 31.605 |
+| Fresh scaled repeat | 43.482 | 31.381 |
+
+These are **RTX3090 host-overhead diagnostics**, not H200 FP64 speedups or
+cache-matched production benchmarks. New workers use private native cache homes
+and disable CUDA caching. No numerical policy, workspace/reserve or factor-cache
+budget changed. Tracked device peaks match the baseline exactly:88,794,624 bytes
+for unscaled/scaled/repeat and88,793,600 for displaced geometry.
+
+The separately timed, unprofiled scaled worker took**43.171s end to end**,
+including interpreter, snapshot/bootstrap/import work, science, normal output
+and native cleanup; its energy call took31.767s. Its strict fresh-repeat check
+passed. There is no matched historical whole-worker measurement, so no
+end-to-end ratio is inferred from the energy-call table.
+
+Snapshot preparation costs2.887–3.290s per GPU worker, with1,756,549,808 host
+bytes retained and34 whole-file hashes (source plus sealed destination).
+All17 files have seal mask63. Startup preloading costs0.064–0.072s. The full
+service's host cgroup peak was3,640,930,304 bytes under the existing12GiB limit.
+Complete execution still makes about177,000 constant-time live checks and6,273
+mapped-byte receipts; reducing repeated mapping work remains a measured target,
+not permission to cache an unobserved loader state.
+
+Construction/cleanup takes8.174/8.214s for JIT1/4 (previous9.695/9.906s).
+Whole construction children take16.101/16.173s; preparation cannot be omitted
+when assessing the remaining latency. Tracked device peak stays33,757,184 bytes,
+with zero live bytes/native owners after teardown.
+
+The offline before/after comparison passed all23 fields in each of four GPU
+cases at unchanged1e-9 tolerances, with only orbital-label/sign matching.
+Maximum field error was1.245e-11 Eh. It also checks complete installed Python
+and support inventories, respective core proofs, unchanged CUDA/SDK bytes,
+native policies, device/driver/PTX, actual work, device peaks and full cleanup.
+Historical configurations are evidence only, never reactivated.
+
+Under the private performance root's`runs/`:
+
+| Artifact | SHA256 |
+|---|---|
+| `sealed-owned-cpu-03/runtime-config.json` | `25a2c2cefa68e4f507853e5c9dc454b0783082e6bcd7accccb32469a634e4256` |
+| `construction-sealed-water-02/comparison.json` | `eca3927916510ccf6733e55d42b29e16416f171826dbfc999129edd477a67f7d` |
+| `sealed-full-water-gate-02/gate-result.json` | `67a946394d7b1c90bd3aaa570ab6265e6bcbb95e443fa03dd241143e4809ad6a` |
+| `sealed-gpu-launch-02.json` | `5c0fffa3c9db1d0374ed84628b08cbed429a7cd471b0a2229080bdd229d0a4c5` |
+| `sealed-before-after-01.json` | `87217339b7b1fd70fe38bd4c2e157bb6dd54345105d0e86e8d661429399154a5` |
+
+This is still restricted small-water evidence. Defaults are unchanged, broader
+edge cases are not released, and no Phoenix job/H200 measurement was made.
+An external caller profile is the next step before another optimization.
+
+## Next measured target: literal mapping names
+
+`sealed-profile-water-01` passed its strict fresh-repeat comparison. Its
+profiled durations are **not** accepted timing samples and overlap:
+
+| Profiled scope | Calls | Inclusive seconds |
+|---|---:|---:|
+| Constant-time `check_live` | 177,277 | 0.292 |
+| `mapped_rows` | 737 | 17.184 |
+| `_audit_maps` | 692 | 23.629 |
+| Python3.13 `Path.name` | 1,182,910 | 9.748 |
+
+Direct callers attribute829,012 `Path.name` operations to the sealed parser
+and323,844 to identity classification. This supports optimizing literal name
+parsing, not deleting any mapping audit. Profile result SHA256:
+`c8b7b51ec2b402ce9d9f6933cc862ba24d342d8fd4b547ca89d9c3873521eac4`.
+
+The next candidate uses a stateless POSIX final-component operation for normal
+kernel filenames, preserving `Path.name` fallback behavior for empty/dot final
+components. Only sealed-mode classification changes; every fresh snapshot,
+segment, mapped inode/device and symbol check remains. No resolved-path memo,
+mapping receipt, filesystem or loader-state cache is introduced. Equivalence
+and no-normal-case-Path tests join the full376+33+109=**518-test** host pass.
+The candidate still needs its own coherent build and GPU gate before a further
+timing improvement can be claimed.

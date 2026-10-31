@@ -300,9 +300,13 @@ def _audit_maps(native, proof, cuda_manifest, *, text=None, owner=None, extra_sy
             "DFMO CUDA closure must declare the explicitly selected13.3 ABI")
     text = Path("/proc/self/maps").read_text() if text is None else text
     rows = _owned_rows(text,owner)
+    if owner is not None and owner.contract == "process-owned-kernel-sealed-snapshots-v1":
+        from psi4_runtime_support.sealed import _mapped_basename as basename
+    else:
+        basename=lambda path:Path(path).name
     paths = {name for _,_,name,_,_ in rows}
     expected = proof["native_path"]
-    native_paths = {name for name in paths if Path(name).name.startswith("libcuest.so")}
+    native_paths = {name for name in paths if basename(name).startswith("libcuest.so")}
     prove = (lambda path:owner.mapped_sha256(path,rows)) if owner is not None else (
         lambda path:mapped_file_digest(path,rows))
     require(native_paths == {expected} and prove(expected) == NATIVE_SHA256,
@@ -323,8 +327,8 @@ def _audit_maps(native, proof, cuda_manifest, *, text=None, owner=None, extra_sy
         require(len(record["sha256"]) == 64, "Missing CUDA component hash")
         require(canonical not in allowed, "Duplicate CUDA component identity")
         allowed[canonical] = record["sha256"]
-    cuda_paths = {path for path in paths if Path(path).name.startswith(CUDA_PREFIXES)}
-    require(all(any(Path(path).name.startswith(prefix) for path in cuda_paths)
+    cuda_paths = {path for path in paths if basename(path).startswith(CUDA_PREFIXES)}
+    require(all(any(basename(path).startswith(prefix) for path in cuda_paths)
                 for prefix in ("libcudart.so","libcublas.so","libcublasLt.so")),
             "Actual CUDA runtime/cuBLAS closure is not mapped")
     ordered_cuda_paths = sorted(cuda_paths)

@@ -52,6 +52,20 @@ def admit(selected=pins):
 
 
 class SealedRuntime(unittest.TestCase):
+    def test_kernel_basename_preserves_posix_path_name_without_normal_case_path_objects(self):
+        from psi4_runtime_support.sealed import _mapped_basename
+        paths=("/usr/lib/libc.so.6","/memfd:psi4-sealed-libcuest.so.0 (deleted)",
+               "/tmp/name with spaces.so","/tmp/é.so","/tmp//libfoo.so","/",
+               "//","","." ,"..","/tmp/libfoo.so/","/tmp/libfoo.so/.",
+               "/tmp/libfoo.so/./","/tmp/libfoo.so/..")
+        self.assertEqual([_mapped_basename(path) for path in paths],
+                         [Path(path).name for path in paths])
+        self.run_case(r'''
+with patch.object(sealed,"Path",side_effect=AssertionError("Path in ordinary kernel basename")):
+    for path in ("/usr/lib/libc.so.6","/tmp/name with spaces.so"):
+        assert sealed._mapped_basename(path)==path.rsplit("/",1)[-1]
+''')
+
     def run_case(self, body, *, code=0):
         with tempfile.TemporaryDirectory(prefix="psi4-sealed-cpu-") as temporary:
             root = Path(temporary)

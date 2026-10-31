@@ -83,6 +83,16 @@ def _descriptor_digest(fd):
     return checksum.hexdigest()
 
 
+def _mapped_basename(path):
+    """POSIX kernel filenames, without constructing a Path for every segment.
+
+    Preserve Path.name's normalization for the unusual empty/dot final fields;
+    no filesystem lookup, resolved-path memo, or mapping receipt is involved.
+    """
+    tail = path.rsplit("/",1)[-1]
+    return tail if tail and tail != "." else Path(path).name
+
+
 class _SealedRuntime:
     """Private implementation of the existing process-owned runtime interface."""
     contract = CONTRACT
@@ -337,7 +347,7 @@ class _SealedRuntime:
                 if ".so" in name:
                     self._fail("Foreign/deleted binary is not a sealed snapshot")
                 continue
-            elif Path(name).name.startswith(CUDA_PREFIXES):
+            elif _mapped_basename(name).startswith(CUDA_PREFIXES):
                 self._fail("Unsealed/foreign mapped CUDA or cuEST library")
             rows.append((lo, hi, name, inode, device))
         self.check_live()
