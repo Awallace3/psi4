@@ -183,3 +183,26 @@ declared account/resources. CPU14784757 is RUNNING (prolog: embers);
 H20014784867 is PENDING(Dependency), with H200 constraint and8-hour cap.
 No inferno, automatic retry, old-proof reactivation or scientific-code overlay.
 This remains a submitted pilot, not a completed gate or accepted speedup.
+
+### Corrected CPU prerequisite passed
+
+Job14784757 completed in10m09s with job/batch/step exit0:0 and no TERM.
+Whole-build proof is PASS at exact pin`6c6cc8885d`. All376 CPU regressions
+passed without skips;116 helper tests completed with the same single optional
+literal-input-suite skip documented above. Native CPU RHF remains
+`-1.1167143250625702 Eh`. Fresh unscaled/scaled water CPU controls completed
+at`-0.007157905730603095` and`-0.008584114664472444 Eh`.
+
+Under`phoenix-sealed-build-6c6cc8885d/job-14784757/`:
+
+| Artifact | SHA256 |
+|---|---|
+| `result.json` | `cc65a8e184a2d9e0361662256391ac53f70ac8157726f1359a6d71fb60ba961d` |
+| `gpu-runtime/preparation-result.json` | `cac5129e79f00bec80e615df7f3e4513bb1255b4dc22b0ee449173dbebc1bdc9` |
+| `gpu-runtime/runtime-config.json` | `ff6ef5c63b60f224f5446c843a6eb6ec80d087239784065188f6f3e1d956d778` |
+| `cpu-fragment-unscaled/result.json` | `48cf5beb69c108cc73c49d8e0044713a88f146438c922948140c1019d46f2c47` |
+| `cpu-fragment-scaled/result.json` | `d996aeb29b14b25471e857aad5c5fcfd767fa949696eb2d37e1718e8288e54d3` |
+
+H20014784867 is now PENDING(Priority), no longer waiting on the CPU build.
+The frozen remote checkout and queued job are unchanged. No H200 computation,
+small-gate PASS or accepted timing/speedup is inferred from CPU completion.
