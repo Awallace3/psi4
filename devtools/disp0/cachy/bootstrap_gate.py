@@ -1,6 +1,8 @@
 """Authenticated whole-stage import order for the shared small scientific gate."""
 import argparse
+import ast
 import ctypes
+import importlib
 import importlib.abc
 import importlib.machinery
 import json
@@ -11,7 +13,56 @@ import sys
 
 HERE=Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE.parent/"phoenix_validation"))
-from gpu_runtime import digest,read_config,require_local_lease,require_cuda_manifest,verify_qualified_imports
+from gpu_runtime import (digest,read_config,require_local_lease,require_cuda_manifest,
+    verify_qualified_imports,require_runtime_support,sealed_startup_path,verify_modules)
+
+SEALED = "process-owned-kernel-sealed-snapshots-v1"
+NATIVE_SHA = "65c9e559201ee589cb742b919cc1c5d80c45aa480b64aede17ac96aff9e4963c"
+
+
+def native_symbols(package):
+    """Read authenticated ABI declarations without importing the science package."""
+    folder=Path(package)/"driver/procrouting/sapt"
+    tree=ast.parse((folder/"sapt_cuest250_identity.py").read_text())
+    function=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=="configure_abi")
+    table=next(n.value for n in function.body if isinstance(n,ast.Assign)
+               and any(isinstance(t,ast.Name) and t.id=="specs" for t in n.targets))
+    names=[ast.literal_eval(key) for key in table.keys]
+    tree=ast.parse((folder/"sapt_cuest_factory_abi.py").read_text())
+    table=next(n.value for n in tree.body if isinstance(n,ast.Assign)
+               and any(isinstance(t,ast.Name) and t.id=="FACTORY_ABI" for t in n.targets))
+    names.extend(ast.literal_eval(key) for key in table.keys)
+    if len(names)!=25 or len(set(names))!=25:
+        raise RuntimeError("Canonical native/bootstrap capability table changed")
+    return tuple(names)
+
+
+def prepare_sealed_owner(config,build,manifest):
+    """Normal import of authenticated, coherently installed stdlib support."""
+    if "psi4" in sys.modules or "einsums" in sys.modules:
+        raise RuntimeError("Sealed preparation must precede native consumers")
+    root=require_runtime_support(build)
+    if root is None:raise RuntimeError("Whole sealed support installation required")
+    directory=Path(os.environ["DISP0_SEALED_ALIAS_DIRECTORY"])
+    if os.environ.get("LD_LIBRARY_PATH")!=sealed_startup_path(config,directory):
+        raise RuntimeError("Exact sealed startup environment required")
+    sys.path.insert(0,str(root.parent))
+    try:
+        support=importlib.import_module("psi4_runtime_support")
+        importlib.import_module("psi4_runtime_support.sealed")
+    finally:
+        sys.path.pop(0)
+    verify_modules(("psi4_runtime_support",),root,build["runtime_support_sha256"])
+    native=str((Path(config["cuest_root"])/"lib/13/libcuest.so.0.2.50").resolve(strict=True))
+    pins={native:NATIVE_SHA}
+    for row in manifest["components"]:
+        path=str(Path(row["path"]).resolve(strict=True))
+        if path in pins:raise RuntimeError("Duplicate sealed input locator")
+        pins[path]=row["sha256"]
+    owner=support.prepare_sealed_runtime(pins,alias_directory=directory,dedicated_worker=True)
+    owner.preload(config["native_preload_paths"])
+    owner.verify_symbols(native,native_symbols(build["python_package"]))
+    return owner
 
 
 class ConfigureEinsums(importlib.abc.MetaPathFinder):
@@ -50,7 +101,10 @@ def bootstrap(config,build):
     require_local_lease(config["local_lease"])
     if "psi4" in sys.modules or "einsums" in sys.modules:
         raise RuntimeError("Cachy bootstrap requires a fresh interpreter")
-    if os.environ.get("LD_LIBRARY_PATH")!=config["startup_library_path"] or os.environ.get("LD_PRELOAD"):
+    sealed=config.get("identity_contract")==SEALED
+    startup=(sealed_startup_path(config,os.environ["DISP0_SEALED_ALIAS_DIRECTORY"])
+             if sealed else config["startup_library_path"])
+    if os.environ.get("LD_LIBRARY_PATH")!=startup or os.environ.get("LD_PRELOAD"):
         raise RuntimeError("Exact authenticated startup loader required")
     alias_dir=Path(config["native_alias_directory"])
     if {str(p) for p in alias_dir.iterdir()}!=set(config["native_alias_links"]):
@@ -62,11 +116,15 @@ def bootstrap(config,build):
     manifest=require_cuda_manifest(config)
     allowed={item["path"]:item["sha256"] for item in manifest["components"]}
     allowed.update(build["binary_sha256"])
-    owners=[]
-    for filename in config["native_preload_paths"]:
-        if filename not in allowed or digest(filename)!=allowed[filename]:
-            raise RuntimeError("Unauthenticated native preload")
-        owners.append(ctypes.CDLL(filename,mode=os.RTLD_NOW|os.RTLD_GLOBAL))
+    if sealed:
+        owner=prepare_sealed_owner(config,build,manifest)
+        owners=[owner]
+    else:
+        owners=[]
+        for filename in config["native_preload_paths"]:
+            if filename not in allowed or digest(filename)!=allowed[filename]:
+                raise RuntimeError("Unauthenticated native preload")
+            owners.append(ctypes.CDLL(filename,mode=os.RTLD_NOW|os.RTLD_GLOBAL))
     # read_config authenticated the helper and exact installed package/core.
     sys.path.insert(0,config["metadata_path"])
     try:from import_order import import_psi4_core_first
@@ -78,10 +136,16 @@ def bootstrap(config,build):
             before_einsums=lambda core:None,
             expected_core_path=build["module_files"]["psi4.core"],
             expected_core_sha256=build["binary_sha256"][build["module_files"]["psi4.core"]])
+    except BaseException:
+        if sealed:owner.invalidate("Sealed core/bootstrap import failed")
+        raise
     finally:
         sys.meta_path.remove(observer)
     if not observer.configured:raise RuntimeError("E2 pre-lookup policy was not executed")
     verify_qualified_imports(config,build)
+    if sealed:
+        native=str((Path(config["cuest_root"])/"lib/13/libcuest.so.0.2.50").resolve(strict=True))
+        owner.verify_symbols(native,native_symbols(build["python_package"]))
     # Keep every preload alive through scientific execution and teardown.
     return owners,events
 

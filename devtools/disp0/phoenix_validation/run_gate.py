@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import time
 import numpy as np
-from gpu_runtime import read_config,require_local_lease
+from gpu_runtime import read_config,require_local_lease,sealed_startup_path
 from repeat_gauge import compare_repeat
 
 
@@ -31,11 +31,12 @@ def compare(cpu,gpu):
     return checks
 
 
-def environment(config,*,gpu):
+def environment(config,*,gpu,sealed_alias_directory=None):
     env=dict(os.environ)
     for name in ("PYTHONHOME","PYTHONPATH","PYTHONOPTIMIZE","LD_PRELOAD",
                  "CUDA_HOME","CUDA_PATH","CUDA_ROOT","CUDAToolkit_ROOT",
-                 "CPATH","C_INCLUDE_PATH","CPLUS_INCLUDE_PATH","LIBRARY_PATH"):
+                 "CPATH","C_INCLUDE_PATH","CPLUS_INCLUDE_PATH","LIBRARY_PATH",
+                 "DISP0_SEALED_ALIAS_DIRECTORY"):
         env.pop(name,None)
     if config.get("schema")==2:
         env.update(LD_LIBRARY_PATH=config["startup_library_path"],
@@ -45,6 +46,18 @@ def environment(config,*,gpu):
             OPENBLAS_NUM_THREADS=str(config["threads"]),OMP_DYNAMIC="FALSE",
             EINSUMS_PACKED_GEMM_BATCH_PROMOTION="1")
         env["CUDA_VISIBLE_DEVICES"]=config["local_lease"]["expected_uuid"] if gpu else ""
+        if config.get("identity_contract")=="process-owned-kernel-sealed-snapshots-v1":
+            if sealed_alias_directory is None:
+                raise RuntimeError("Sealed workers need an explicit fresh startup alias directory")
+            directory=Path(sealed_alias_directory)
+            env["LD_LIBRARY_PATH"]=sealed_startup_path(config,directory)
+            env["DISP0_SEALED_ALIAS_DIRECTORY"]=str(directory)
+            home=directory.with_name(directory.name+"-home")
+            home.mkdir(mode=0o700)
+            env["HOME"]=str(home)
+            env["CUDA_CACHE_DISABLE"]="1"
+        elif sealed_alias_directory is not None:
+            raise ValueError("Snapshot aliases cannot be selected for another identity contract")
         return env
     cuda_root=str(Path(config["cuda_manifest"]).parent/"cuda13")
     env.update(CUDA_HOME=cuda_root,CUDA_PATH=cuda_root,CUDA_ROOT=cuda_root)
@@ -91,7 +104,11 @@ def main():
         remaining=deadline-time.monotonic()
         if remaining<=0:raise TimeoutError("Bounded whole-gate deadline exhausted")
         with (root/(label+".stdout")).open("x") as out,(root/(label+".stderr")).open("x") as err:
-            env=environment(config,gpu=arm=="gpu")
+            aliases=None
+            if config.get("identity_contract")=="process-owned-kernel-sealed-snapshots-v1":
+                aliases=Path(config["sealed_alias_parent"])/(root.name+"-"+label)
+                aliases.mkdir(mode=0o700)
+            env=environment(config,gpu=arm=="gpu",sealed_alias_directory=aliases)
             scratch=root/(label+"-scratch");scratch.mkdir()
             env["PSI_SCRATCH"]=str(scratch)
             if local:

@@ -8,12 +8,13 @@ import importlib
 import json
 import os
 from pathlib import Path
+import pwd
 import sys
 import time
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE.parent/"phoenix_validation"))
-from gpu_runtime import AuditedRuntime, digest, read_config, require_local_lease
+from gpu_runtime import AuditedRuntime, digest, read_config, require_local_lease,sealed_startup_path
 from coherent_stage11 import clean, git, lease, policy, run_command, save
 from response_reuse_probe import resource_scope
 
@@ -163,6 +164,8 @@ def child(args):
         "cache_policy":"Fresh per-arm CUDA_CACHE_PATH; vendor/library-wide cache state unknown",
         "upstream_scf_context_present":False,
     }
+    if config.get("identity_contract")=="process-owned-kernel-sealed-snapshots-v1":
+        report["cache_policy"]="Private per-arm HOME/native cache; CUDA cache disabled"
     def checkpoint():
         save(args.output/"result.json",report)
     checkpoint()
@@ -260,7 +263,7 @@ def main():
     args.geometry = args.geometry.resolve(strict=True)
     if (not args.attempt.replace("-","").isalnum() or not 30 <= args.seconds <= 900
             or set(args.order) != {1,4} or not 2 <= len(args.order) <= 4
-            or args.root.parent != Path.home()/"gits"
+            or args.root.parent != Path(pwd.getpwuid(os.getuid()).pw_dir)/"gits"
             or args.root.name in ("psi4-disp0-cachy","psi4-saptdft-cuest-cachy","psi4-xdm-cuest-cachy")):
         raise RuntimeError("Private local root, fresh attempt and bounded 1/4-thread comparison required")
     resource_scope()
@@ -292,6 +295,12 @@ def main():
                 OPENBLAS_NUM_THREADS="4",CUDA_VISIBLE_DEVICES=config["local_lease"]["expected_uuid"],
                 CUDA_CACHE_PATH=str(folder/"cuda-cache"),PSI_SCRATCH=str(folder/"scratch"),
                 TMPDIR=str(folder/"scratch"))
+            if config.get("identity_contract")=="process-owned-kernel-sealed-snapshots-v1":
+                aliases=Path(config["sealed_alias_parent"])/(output.name+"-"+folder.name)
+                aliases.mkdir(mode=0o700)
+                home=aliases.with_name(aliases.name+"-home");home.mkdir(mode=0o700)
+                env.update(LD_LIBRARY_PATH=sealed_startup_path(config,aliases),
+                    DISP0_SEALED_ALIAS_DIRECTORY=str(aliases),HOME=str(home),CUDA_CACHE_DISABLE="1")
             arguments = ["--root",str(args.root),"--attempt",args.attempt,
                 "--config",str(args.config),"--config-sha256",args.config_sha256,
                 "--geometry",str(args.geometry),"--geometry-sha256",args.geometry_sha256,

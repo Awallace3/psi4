@@ -12,16 +12,32 @@ import math
 import mmap
 import os
 from pathlib import Path
+import pwd
 import shutil
 import subprocess
 import sys
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE.parent/"phoenix_validation"))
-from gpu_runtime import digest, optional_inventory, read_config, activate_identity_contract
+from gpu_runtime import (digest, optional_inventory, read_config, activate_identity_contract,
+                         sealed_startup_path)
 from coherent_stage11 import clean, lease, policy, run_command, save
 from response_reuse_probe import resource_scope
 from response_cuda_closure import canonical_sha, COPY_HELPER_SHA
+SEALED = "process-owned-kernel-sealed-snapshots-v1"
+
+
+def runtime_support_proof(root,stage):
+    package=Path(stage)/"lib/python3.13/site-packages/psi4_runtime_support"
+    staged=root/"build/stage/lib/python3.13/site-packages/psi4_runtime_support"
+    source=root/"source/psi4_runtime_support"
+    science=package.parent/"psi4/driver/procrouting/sapt/sapt_cuest_sealed_runtime.py"
+    if not science.exists() and not package.exists():return {}  # Historical prefix.
+    inventories=[{p.relative_to(folder).as_posix():digest(p) for p in folder.rglob("*.py")}
+                 for folder in (package,staged,source)]
+    if not inventories[0] or not inventories[0]==inventories[1]==inventories[2]:
+        raise RuntimeError("Whole source/staged/installed runtime support differ")
+    return {"runtime_support_package":str(package),"runtime_support_sha256":inventories[0]}
 
 
 def relocate_manifest(original, directory):
@@ -79,12 +95,28 @@ def installed_inventory(root, pin, stage=None):
     cores = list(package.glob("core*.so"))
     if len(cores) != 1 or digest(cores[0]) != digest(staged/cores[0].name):
         raise RuntimeError("Whole installed/staged native core differs")
+    runtime_support_proof(root,stage)
     return package,cores[0],inventory
 
 
-def mapped_binary_inventory(text, prefixes, extra):
+def mapped_binary_inventory(text, prefixes, extra, *, sealed_owner=None):
     """Include exact admitted SDK preloads even outside the stage/env prefixes."""
     result = {}
+    if sealed_owner is not None:
+        # Logical SDK locators identify immutable snapshots, not original-file
+        # mappings. Preserve their receipt keys while proving actual snapshot
+        # inode/device ownership; ordinary core/dependency files stay physical.
+        rows=sealed_owner.mapped_rows(text)
+        sealed_files=sealed_owner.report()["files"]
+        for _,_,name,_,_ in rows:
+            path=Path(name)
+            if name in extra:
+                result[name]=sealed_owner.mapped_sha256(name,rows)
+            elif name not in sealed_files and any(path.is_relative_to(p) for p in prefixes):
+                if ".so" in name:result[name]=digest(path)
+        if any(result.get(path)!=sha for path,sha in extra.items()):
+            raise RuntimeError("Admitted sealed SDK preload is missing/changed")
+        return result
     for line in text.splitlines():
         fields = line.split(maxsplit=5)
         if len(fields) == 6 and fields[5].startswith("/") and ".so" in fields[5]:
@@ -157,7 +189,7 @@ def executable_copy(identity, manifest, sdk, archive, native, target, metadata, 
 
 def prepare(root, pin, reference_path, reference_sha, output, *, stage=None,
             identity_contract="fresh-bytes-v1"):
-    if identity_contract not in ("fresh-bytes-v1","process-owned-kernel-read-leases-v1"):
+    if identity_contract not in ("fresh-bytes-v1","process-owned-kernel-read-leases-v1",SEALED):
         raise ValueError("Unknown native identity contract")
     if digest(reference_path) != reference_sha:
         raise RuntimeError("Frozen reference configuration changed")
@@ -196,9 +228,15 @@ def prepare(root, pin, reference_path, reference_sha, output, *, stage=None,
     sdk = root/"runtime/cuest"
     archive = root/"dependencies/cuest-artifact/cuest_v0.2.50.tar.gz"
     native = identity.verify_files(sdk,archive)
-    manifest,sdk,native,copy_receipt = executable_copy(
-        identity,manifest,sdk,archive,native,
-        Path("/tmp")/("psi4-disp0-perf-"+output.name),metadata,old_proof)
+    if identity_contract==SEALED:
+        # Snapshot copying establishes the actual mapped inodes itself, so it
+        # does not need the Btrfs workaround or reusable tmpfs dependencies.
+        copy_receipt={"scope":"Durable pinned inputs; per-worker sealed executable snapshots",
+                      "copy_helper_provenance":{},"copied_bytes":0,"files":[]}
+    else:
+        manifest,sdk,native,copy_receipt = executable_copy(
+            identity,manifest,sdk,archive,native,
+            Path("/tmp")/("psi4-disp0-perf-"+output.name),metadata,old_proof)
     save(output/"executable-copy.json",copy_receipt)
     save(output/"cuda-manifest.json",manifest)
     aliases = output/"native-aliases"
@@ -239,6 +277,9 @@ def prepare(root, pin, reference_path, reference_sha, output, *, stage=None,
         startup_library_path=str(aliases)+":"+str(environment/"lib"),
         native_alias_directory=str(aliases),native_alias_links=alias_links,
         metadata_path=str(metadata),native_preload_paths=paths)
+    if identity_contract==SEALED:
+        parent=output/"sealed-workers";parent.mkdir(mode=0o700)
+        config.update(startup_library_path=str(environment/"lib"),sealed_alias_parent=str(parent))
     initial = {"config":config,"core":str(core),"core_sha256":digest(core),
         "package":str(package),"scientific_python_sha256":inventory,
         "sdk_native_path":native["native_path"],"sdk_native_sha256":native["native_sha256"],
@@ -246,6 +287,7 @@ def prepare(root, pin, reference_path, reference_sha, output, *, stage=None,
         "copy_helper_provenance":copy_receipt["copy_helper_provenance"],
         "reference_build_proof":str(old_proof_path),
         "reference_build_proof_sha256":digest(old_proof_path)}
+    initial.update(runtime_support_proof(root,stage))
     save(output/"preparation.json",initial)
     return initial
 
@@ -259,7 +301,10 @@ def child(args):
     package,core,inventory = installed_inventory(args.root,args.pin,Path(config["stage"]))
     if str(core) != initial["core"] or digest(core) != initial["core_sha256"]:
         raise RuntimeError("Private core changed before smoke")
-    if os.environ.get("LD_LIBRARY_PATH") != config["startup_library_path"] or os.environ.get("LD_PRELOAD"):
+    sealed=config.get("identity_contract")==SEALED
+    startup=(sealed_startup_path(config,os.environ["DISP0_SEALED_ALIAS_DIRECTORY"])
+             if sealed else config["startup_library_path"])
+    if os.environ.get("LD_LIBRARY_PATH") != startup or os.environ.get("LD_PRELOAD"):
         raise RuntimeError("Exact private startup library closure required")
     owners = []
     manifest = json.loads(Path(config["cuda_manifest"]).read_text())
@@ -267,10 +312,17 @@ def child(args):
         raise RuntimeError("Private CUDA manifest changed before smoke")
     allowed = {row["path"]:row["sha256"] for row in manifest["components"]}
     allowed[initial["sdk_native_path"]] = initial["sdk_native_sha256"]
-    for filename in config["native_preload_paths"]:
-        if filename not in allowed or digest(filename) != allowed[filename]:
-            raise RuntimeError("Private preload changed")
-        owners.append(ctypes.CDLL(filename,mode=os.RTLD_NOW|os.RTLD_GLOBAL))
+    if sealed:
+        from bootstrap_gate import prepare_sealed_owner
+        interim={"stage":config["stage"],"python_package":initial["package"],
+                 "scientific_python_sha256":inventory,
+                 **runtime_support_proof(args.root,Path(config["stage"]))}
+        owners.append(prepare_sealed_owner(config,interim,manifest))
+    else:
+        for filename in config["native_preload_paths"]:
+            if filename not in allowed or digest(filename) != allowed[filename]:
+                raise RuntimeError("Private preload changed")
+            owners.append(ctypes.CDLL(filename,mode=os.RTLD_NOW|os.RTLD_GLOBAL))
     sys.path.insert(0,config["metadata_path"])
     try:
         from import_order import import_psi4_core_first
@@ -312,7 +364,8 @@ def child(args):
             dependencies[str(path)] = digest(path)
     prefixes = tuple(Path(config[key]).resolve() for key in ("stage","dependency_environment"))
     binary = mapped_binary_inventory(Path("/proc/self/maps").read_text(),prefixes,
-        {initial["sdk_native_path"]:initial["sdk_native_sha256"]})
+        {initial["sdk_native_path"]:initial["sdk_native_sha256"]},
+        sealed_owner=identity_owner if sealed else None)
     if str(core) not in binary:
         raise RuntimeError("Native CPU smoke did not map its exact core")
     provenance = [args.preparation,Path(config["metadata_path"])/"import_order.py",
@@ -334,6 +387,7 @@ def child(args):
         "dependency_python_sha256":dependencies,"binary_sha256":binary,
         "provenance_sha256":{str(p):digest(p) for p in provenance},
         "CPU_RHF_Eh":energy,"bootstrap_events":events,
+        **runtime_support_proof(args.root,Path(config["stage"])),
     }
     if identity_owner is not None:proof["immutable_runtime_smoke"]=identity_owner.report()
     installed_inventory(args.root,args.pin,Path(config["stage"]))
@@ -350,7 +404,7 @@ def main():
     parser.add_argument("--pin",required=True)
     parser.add_argument("--stage",type=Path)
     parser.add_argument("--identity-contract",choices=(
-        "fresh-bytes-v1","process-owned-kernel-read-leases-v1"),default="fresh-bytes-v1")
+        "fresh-bytes-v1","process-owned-kernel-read-leases-v1",SEALED),default="fresh-bytes-v1")
     parser.add_argument("--reference-config",type=Path)
     parser.add_argument("--reference-config-sha256")
     parser.add_argument("--attempt",required=True)
@@ -360,7 +414,7 @@ def main():
     parser.add_argument("--output",type=Path)
     args = parser.parse_args()
     args.root = args.root.resolve(strict=True)
-    if (args.root != Path.home()/"gits/psi4-disp0-perf-cachy"
+    if (args.root != Path(pwd.getpwuid(os.getuid()).pw_dir)/"gits/psi4-disp0-perf-cachy"
             or not args.attempt.replace("-","").isalnum()):
         raise RuntimeError("Explicit private performance root and fresh attempt required")
     resource_scope()
@@ -382,6 +436,12 @@ def main():
             LD_LIBRARY_PATH=config["startup_library_path"],CUDA_VISIBLE_DEVICES="",
             OMP_NUM_THREADS="4",MKL_NUM_THREADS="4",OPENBLAS_NUM_THREADS="4",
             TMPDIR=str(output/"scratch"),PSI_SCRATCH=str(output/"scratch"))
+        if config.get("identity_contract")==SEALED:
+            aliases=Path(config["sealed_alias_parent"])/"cpu-smoke";aliases.mkdir(mode=0o700)
+            env["LD_LIBRARY_PATH"]=sealed_startup_path(config,aliases)
+            env["DISP0_SEALED_ALIAS_DIRECTORY"]=str(aliases)
+            home=aliases.with_name("cpu-smoke-home");home.mkdir(mode=0o700)
+            env.update(HOME=str(home),CUDA_CACHE_DISABLE="1")
         argv = [sys.executable,"-B",str(Path(__file__)),"--root",str(args.root),
             "--pin",args.pin,"--attempt",args.attempt,"--child","--output",str(output),
             "--preparation",str(output/"preparation.json"),

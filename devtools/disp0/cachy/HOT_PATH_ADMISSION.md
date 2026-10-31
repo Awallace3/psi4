@@ -187,3 +187,14 @@ Its current result SHA256 is
 this supersedes attempt01's narrower classifier. Kernel/context/readbacks and
 all explicit resource cleanup passed again. Production integration and the
 whole-water numerical/performance gate remain the next steps.
+
+The [sealed-runtime integration](SEALED_RUNTIME.md) now has a separate adapter
+and normally installed pre-native support package under CPU validation. Review
+reproduced a constructor-time hole in the first alias-based candidate; its
+substituted-dependency regression was run red and then green after switching
+first loads and pinned dependencies to sealed descriptors/explicit SONAMEs.
+Diagnostic aliases are excluded from the loader search path. A separate Cachy
+CPU probe passed all nine exact descriptor-only vendor preloads and NVRTC
+compilation. Neither the candidate nor a further whole-water speedup is
+GPU-qualified yet; the earlier alias-prototype PASS is not treated as a
+production first-load admission proof.

@@ -230,14 +230,16 @@ def audit_maps(native, proof, cuda_manifest, *, text=None, owner=None, extra_sym
             raise ValueError("Additional symbols require explicit owned-runtime admission")
         return _audit_maps(native,proof,cuda_manifest,text=text)
     from .sapt_cuest_owned_runtime import _OwnedRuntime, current_owned_runtime
-    if not isinstance(owner,_OwnedRuntime) or owner is not current_owned_runtime():
+    from .sapt_cuest_sealed_runtime import _SealedRuntime
+    if (type(owner) not in (_OwnedRuntime,_SealedRuntime)
+            or owner is not current_owned_runtime()):
         raise TypeError("The exact admitted process-owned immutable runtime is required")
     try:
         owner.check_live()
         result = _audit_maps(native,proof,cuda_manifest,text=text,owner=owner,
                              extra_symbols=extra_symbols)
         owner.check_live()
-        return {**result,"identity_contract":"process-owned-kernel-read-leases-v1"}
+        return {**result,"identity_contract":owner.contract}
     except BaseException as error:
         owner.invalidate("Mapped native identity audit failed: "+str(error))
         raise
@@ -257,7 +259,10 @@ def _audit_maps(native, proof, cuda_manifest, *, text=None, owner=None, extra_sy
             and cuda_manifest.get("nvrtc_version") == [13,3],
             "DFMO CUDA closure must declare the explicitly selected13.3 ABI")
     text = Path("/proc/self/maps").read_text() if text is None else text
-    rows = mapped_rows(text,resolve_once=True) if owner is not None else mapped_rows(text)
+    if owner is not None and owner.contract == "process-owned-kernel-sealed-snapshots-v1":
+        rows = owner.mapped_rows(text)
+    else:
+        rows = mapped_rows(text,resolve_once=True) if owner is not None else mapped_rows(text)
     paths = {name for _,_,name,_,_ in rows}
     expected = proof["native_path"]
     native_paths = {name for name in paths if Path(name).name.startswith("libcuest.so")}

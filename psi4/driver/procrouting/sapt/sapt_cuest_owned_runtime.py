@@ -1,4 +1,9 @@
-"""Opt-in Linux process-owned byte proofs backed by revocable kernel read leases.
+"""Explicit process-owned runtime selection; legacy defaults are unchanged.
+
+admit_owned_runtime() retains the revocable Linux read-lease contract below.
+admit_sealed_runtime() adopts the separately prepared irreversible snapshot
+adapter. A process can select only one contract and cannot upgrade a
+legacy CUDA session in place.
 
 No CUDA imports, ELF loading, or import-time file-lease acquisition. This is
 not an mtime hash cache. All files are hashed through leased descriptors once;
@@ -24,6 +29,7 @@ import signal
 import stat
 import sys
 import threading
+from psi4_runtime_support import selection_lock
 
 try:
     import fcntl
@@ -34,7 +40,7 @@ except ImportError:  # Keep ordinary non-Linux imports harmless.
 _PROCESS_OWNER = None
 _LEGACY_SESSION_STARTED = False
 _ADMISSION_IN_PROGRESS = False
-_STATE_LOCK = threading.Lock()
+_STATE_LOCK = selection_lock()
 REVOKED_EXIT_CODE = 86
 KERNEL_NOTIFICATION_EXIT_CODE = int(signal.SIGIO) if hasattr(signal,"SIGIO") else None
 
@@ -43,7 +49,7 @@ def _after_fork():
     # A lock held by a vanished parent thread must not hide the PID guard.
     # Retain the proof/FD state; never unlock inherited open file descriptions.
     global _STATE_LOCK
-    _STATE_LOCK = threading.Lock()
+    _STATE_LOCK = selection_lock()
 
 
 if hasattr(os,"register_at_fork"):
@@ -136,6 +142,7 @@ class _PinnedFile:
 
 class _OwnedRuntime:
     """Created only by admit_owned_runtime(); never released after publication."""
+    contract = "process-owned-kernel-read-leases-v1"
     def _initialize(self, pins):
         self.pid = os.getpid()
         self.thread = threading.get_ident()
@@ -417,14 +424,19 @@ def admit_owned_runtime(pins, *, dedicated_worker=False):
     if dedicated_worker is not True:
         raise ValueError("Explicit dedicated_worker=True is required; revocation terminates this worker")
     snapshot = _normalized_pins(pins)
+    from psi4_runtime_support import sealed_preparation_active
     with _STATE_LOCK:
         if _PROCESS_OWNER is not None:
             _PROCESS_OWNER.check_live()
+            if type(_PROCESS_OWNER) is not _OwnedRuntime:
+                raise RuntimeError("Process already owns a different immutable runtime contract")
             if snapshot != _PROCESS_OWNER.snapshot:
                 raise RuntimeError("Process already owns a different immutable runtime; new process required")
             return _PROCESS_OWNER
         if _ADMISSION_IN_PROGRESS:
             raise RuntimeError("Immutable runtime admission is already in progress")
+        if sealed_preparation_active():
+            raise RuntimeError("Cannot replace a prepared sealed runtime with a lease contract")
         if _LEGACY_SESSION_STARTED:
             raise RuntimeError("Cannot upgrade a process after a legacy CUDA session; new process required")
         _ADMISSION_IN_PROGRESS = True
@@ -451,6 +463,54 @@ def admit_owned_runtime(pins, *, dedicated_worker=False):
     return owner
 
 
+def admit_sealed_runtime(pins, *, alias_directory, dedicated_worker=False):
+    """Adopt the exact early preparation of process-owned sealed ELF snapshots.
+
+    The authenticated stdlib support bootstrap must have prepared snapshots and
+    preloaded the declared closure before importing native consumers. This call
+    adopts only that exact process-retained object, never sealing late or taking
+    a supplied proof dictionary. No source-file mutation can revoke a
+    sealed snapshot; fork/thread/lifetime misuse still retires this dedicated
+    worker without native unwinding. There is no fallback to leases/fresh hashes.
+    """
+    global _PROCESS_OWNER, _ADMISSION_IN_PROGRESS
+    if dedicated_worker is not True:
+        raise ValueError("Explicit dedicated_worker=True is required for sealed runtime admission")
+    from .sapt_cuest_sealed_runtime import _SealedRuntime
+    from psi4_runtime_support import prepared_runtime
+    snapshot = _normalized_pins(pins)
+    directory = os.fspath(alias_directory)
+    prepared = prepared_runtime()
+    if (prepared is None or type(prepared) is not _SealedRuntime
+            or prepared.snapshot != snapshot or prepared.alias_directory != directory):
+        raise RuntimeError("Exact sealed runtime must be prepared by the early bootstrap")
+    with _STATE_LOCK:
+        if _PROCESS_OWNER is not None:
+            _PROCESS_OWNER.check_live()
+            if (type(_PROCESS_OWNER) is not _SealedRuntime
+                    or snapshot != _PROCESS_OWNER.snapshot
+                    or directory != _PROCESS_OWNER.alias_directory):
+                raise RuntimeError("Process already owns a different immutable runtime contract/set")
+            return _PROCESS_OWNER
+        if _ADMISSION_IN_PROGRESS:
+            raise RuntimeError("Immutable runtime admission is already in progress")
+        if _LEGACY_SESSION_STARTED:
+            raise RuntimeError("Cannot upgrade a process after a legacy CUDA session; new process required")
+        _ADMISSION_IN_PROGRESS = True
+    try:
+        # Bootstrap prepared this exact stdlib support object before importing
+        # Psi4. The support module retains it independently through failures and
+        # teardown. No dictionary/foreign object can stand in for that object.
+        owner = prepared
+        with _STATE_LOCK:
+            _PROCESS_OWNER = owner
+    finally:
+        with _STATE_LOCK:
+            _ADMISSION_IN_PROGRESS = False
+    owner.check_live()
+    return owner
+
+
 def current_owned_runtime():
     """Return the explicit process owner, or None for legacy fresh-byte audits."""
     return _PROCESS_OWNER
@@ -459,11 +519,14 @@ def current_owned_runtime():
 def owner_for_session():
     """Select the adapter before a session's first native CUDA operation."""
     global _LEGACY_SESSION_STARTED
+    from psi4_runtime_support import sealed_preparation_active
     with _STATE_LOCK:
         if _ADMISSION_IN_PROGRESS:
             raise RuntimeError("CUDA session selection is forbidden during immutable admission")
         owner = _PROCESS_OWNER
         if owner is None:
+            if sealed_preparation_active():
+                raise RuntimeError("Prepared sealed runtime must be adopted before CUDA session selection")
             _LEGACY_SESSION_STARTED = True
     if owner is not None:
         owner.check_live()

@@ -96,6 +96,43 @@ def optional_inventory(config):
     return result
 
 
+def require_runtime_support(build):
+    """Authenticate the normally imported pre-native support package."""
+    inventory = build.get("runtime_support_sha256")
+    root = Path(build["python_package"]).parent/"psi4_runtime_support"
+    needed = (root.exists()
+              or "driver/procrouting/sapt/sapt_cuest_sealed_runtime.py" in build["scientific_python_sha256"])
+    if inventory is None and not needed:
+        return None  # Historical whole prefixes never imported this package.
+    if (not isinstance(inventory,dict) or not inventory
+            or build.get("runtime_support_package") != str(root)
+            or not root.resolve(strict=True).is_relative_to(Path(build["stage"]).resolve())):
+        raise RuntimeError("Missing coherent pre-native support inventory")
+    actual = {p.relative_to(root).as_posix():digest(p) for p in root.rglob("*.py")}
+    if actual != inventory:
+        raise RuntimeError("Whole installed runtime support inventory changed")
+    return root
+
+
+def sealed_startup_path(config, directory):
+    """Diagnostic aliases are private and NEVER part of the loader namespace."""
+    if (config.get("schema") != 2
+            or config.get("identity_contract") != "process-owned-kernel-sealed-snapshots-v1"):
+        raise ValueError("Explicit local sealed-snapshot configuration required")
+    directory = Path(directory)
+    parent = Path(config["sealed_alias_parent"])
+    if (not parent.is_absolute() or parent.resolve(strict=True) != parent
+            or not directory.is_absolute() or directory.resolve(strict=True) != directory
+            or not directory.is_relative_to(parent) or directory == parent
+            or directory.stat().st_uid != os.getuid()
+            or stat.S_IMODE(directory.stat().st_mode) != 0o700):
+        raise RuntimeError("Private per-worker startup alias directory required")
+    # Do not expose the original toolkit/SDK locators on the loader path.
+    if config["startup_library_path"] != str(Path(config["dependency_environment"])/"lib"):
+        raise RuntimeError("Sealed startup must contain only snapshots and qualified environment")
+    return config["startup_library_path"]
+
+
 def read_config(path, expected_sha256):
     path = Path(path).resolve(strict=True)
     if digest(path) != expected_sha256:
@@ -142,6 +179,7 @@ def read_config(path, expected_sha256):
                       for p in package.rglob("*.py")}
     if actual_science != build["scientific_python_sha256"]:
         raise RuntimeError("Whole installed scientific Python inventory changed")
+    require_runtime_support(build)
     for filename, checksum in build["dependency_python_sha256"].items():
         if digest(filename) != checksum:
             raise RuntimeError("CPU-qualified dependency Python changed: " + filename)
@@ -182,7 +220,8 @@ def verify_qualified_imports(config,build):
 def activate_identity_contract(config, manifest, cuda, abi):
     """Explicit worker opt-in; legacy stages keep their fresh-byte behavior."""
     contract=config.get("identity_contract","fresh-bytes-v1")
-    if contract not in ("fresh-bytes-v1","process-owned-kernel-read-leases-v1"):
+    if contract not in ("fresh-bytes-v1","process-owned-kernel-read-leases-v1",
+                         "process-owned-kernel-sealed-snapshots-v1"):
         raise ValueError("Unknown native identity contract")
     name=abi.__package__+".sapt_cuest_owned_runtime"
     try:
@@ -202,7 +241,15 @@ def activate_identity_contract(config, manifest, cuda, abi):
         path=str(Path(row["path"]).resolve(strict=True))
         if path in pins:raise RuntimeError("Duplicate owned immutable library locator")
         pins[path]=row["sha256"]
-    owner=module.admit_owned_runtime(pins,dedicated_worker=True)
+    if contract == "process-owned-kernel-sealed-snapshots-v1":
+        import psi4_runtime_support
+        prepared = psi4_runtime_support.prepared_runtime()
+        if prepared is None:
+            raise RuntimeError("Sealed contract requires authenticated early bootstrap preparation")
+        owner = module.admit_sealed_runtime(pins,alias_directory=prepared.alias_directory,
+                                            dedicated_worker=True)
+    else:
+        owner=module.admit_owned_runtime(pins,dedicated_worker=True)
     library,_=cuda.library(native,abi.identity.NATIVE_SHA256,owner=owner)
     # File leases are not a substitute for the existing symbol/root/ABI gates.
     # No native context/version-probing handle is created by this admission.
