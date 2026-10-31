@@ -26,7 +26,9 @@ from .isapol_bounded_response import BoundedResources, BoundedResponse
 from .isapol_distribution import (
     DistributedMoments, isa_moments, mbis_moments, validate_isa_inputs, validate_mbis_inputs,
 )
-from .isapol_pfit_stream import PackedDesignRows, fitted_point_targets, refine_streamed
+from .isapol_pfit_stream import (
+    PackedDesignRows, check_replay_work, fitted_point_targets, refine_streamed,
+)
 
 #: Distributions this orchestrator dispatches; every other name is refused.
 DISTRIBUTIONS = ('df_centre_analytic', 'isa', 'mbis', 'supplied')
@@ -37,6 +39,10 @@ MAX_PARAMETERS = 64
 #: types x 36. A policy bound, not a solver or resource limit; the default
 #: stays MAX_PARAMETERS.
 MAX_PARAMETER_ALLOWANCE = 72
+#: Closed opt-in policies. The legacy default/72-variable ceiling is unchanged;
+#: independently typed molecular sites may explicitly admit a larger finite
+#: inventory, under the same cumulative numeric/work resource ledger.
+REFINEMENT_CAPACITIES = {'standard': MAX_PARAMETER_ALLOWANCE, 'molecular': 1024}
 #: Rows per PFIT design block.
 BLOCK_ROWS = 4096
 
@@ -89,24 +95,47 @@ def _pfit_plan(npoint, channels, count, nt):
     """Planned bytes and work of the complete-cloud refinement.
 
     Copied fields, row producer and C++ solver workspaces on top of the
-    retained packed targets; both design passes are charged up front.
+    retained packed targets; both design passes are charged up front. Per-node
+    dense work also includes the penalty and normal-matrix eigendiagnostics,
+    penalty-root Gram/augmented rows, DSYSV and condition/residual diagnostics.
+    The64*n^3+64*n^2 allowance is a conservative arithmetic planning policy,
+    not a LAPACK iteration-count or wall-time guarantee. Charge the full
+    declared dimension even when some parameters may subsequently be fixed.
     """
     row_count, chunk = npoint*(npoint+1)//2, PackedDesignRows.MAX_CHUNK
     plan = (8*(5*npoint*channels+npoint*channels*count+2*chunk*npoint*count
                +16*count*count*nt+BLOCK_ROWS*(8*count+32*nt)) + 8*1024**2)
     work = (2*((row_count+chunk*npoint)*2*channels*count+row_count*(4*count+8))
-            +2*row_count*count*count+4*row_count*count*nt)
+            +2*row_count*count*count+4*row_count*count*nt
+            +nt*(64*count**3+64*count**2))
     return plan, work
 
 
-def check_max_parameters(value, name='max_parameters'):
-    """Refuse anything but an exact Python int in 1..MAX_PARAMETER_ALLOWANCE.
+def check_max_parameters(value, name='max_parameters', *, capacity='standard'):
+    """Refuse anything but an exact Python int in the selected finite capacity.
 
     bool, float, str and NumPy integers are refused, so a limit is never coerced.
     """
-    if type(value) is not int or not 1 <= value <= MAX_PARAMETER_ALLOWANCE:
-        raise ValueError(f'{name} must be an int in 1..{MAX_PARAMETER_ALLOWANCE}')
+    if type(capacity) is not str or capacity not in REFINEMENT_CAPACITIES:
+        raise ValueError(f'refinement capacity must be one of {tuple(REFINEMENT_CAPACITIES)}')
+    ceiling = REFINEMENT_CAPACITIES[capacity]
+    if type(value) is not int or not 1 <= value <= ceiling:
+        raise ValueError(f'{name} must be an int in 1..{ceiling}')
     return value
+
+
+def refinement_limits(max_parameters, resources, *, capacity='standard',
+                      max_replay_work=None, parameter_name='max_parameters'):
+    """Shared fail-fast admission for the direct and oeprop entry points."""
+    if not isinstance(resources, BoundedResources):
+        raise TypeError('explicit BoundedResources required')
+    check_max_parameters(max_parameters, parameter_name, capacity=capacity)
+    replay_work = check_replay_work(
+        PackedDesignRows.MAX_WORK if max_replay_work is None else max_replay_work)
+    if ((capacity == 'molecular' or replay_work > PackedDesignRows.MAX_WORK)
+            and resources.capacity != 'large'):
+        raise ValueError('molecular refinement/replay requires explicit large resource capacity')
+    return replay_work
 
 
 def _refinement_node(sites, anchors, omega, *, cutoff, weight_type, weight_coefficient,
@@ -196,7 +225,8 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                        scratch_directory=None, log=None,
                        distributed_moments=None, response='reference_h2h1', fdds=None,
                        publish_qcvariables=False, partition_recipe=None, partition_grid=None,
-                       recoupled_dispersion=False):
+                       recoupled_dispersion=False, refinement_capacity='standard',
+                       max_replay_work=None):
     """Run the complete native chain under one explicit resource contract.
 
     Scientific scope: canonical restricted C1 PBE0, NONE or FIXED_GRAC, plain
@@ -229,8 +259,11 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
     ``lattice_options`` is an explicit core.FitPointsOptions (at most 2000
     points); all pairs and both PFIT passes are used, with at most
     ``max_parameters`` fit variables (default 64; an explicit opt-in may raise
-    it to at most 72, which changes admission only, never the model, labels or
-    fit). The variable list and its penalized subset are both fixed at the
+    it to at most72 under the standard refinement policy. A separately
+    declared ``refinement_capacity='molecular'`` admits up to1024 only with
+    explicit large resources. ``max_replay_work`` is a finite opt-in for the
+    two packed design passes; its default remains64 billion. These change
+    admission only, never the model, labels or fit). The variable list and its penalized subset are both fixed at the
     first (static) node, as CamCASP's sweep fixes them: every later node
     penalizes exactly the variables the static cutoff selected, with its own
     anchor and the same weight formula, and leaves declared variables the
@@ -251,9 +284,9 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
         raise TypeError('log must be a StageLog')
     with _closes_failed_stage(log):
         log.stage('Bounded input validation')
-        if not isinstance(resources, BoundedResources):
-            raise TypeError('explicit BoundedResources required')
-        check_max_parameters(max_parameters)
+        replay_work = refinement_limits(
+            max_parameters, resources, capacity=refinement_capacity,
+            max_replay_work=max_replay_work)
         if distribution not in DISTRIBUTIONS:
             raise ValueError(f'distribution must be one of {DISTRIBUTIONS}')
         if distribution != 'isa' and partition_recipe is not None:
@@ -331,7 +364,7 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
             charge_penalty=charge_penalty, anchor_metric_damping=anchor_metric_damping, resources=resources,
             scf_correction=scf_correction, expected_grac_shift=expected_grac_shift,
             scratch_directory=scratch_directory, log=log, label=distribution, input_bytes=input_bytes,
-            response=response, fdds=fdds)
+            response=response, fdds=fdds, retained_parameters=max_parameters)
         with runner as solver:
             ledger, auxiliary = solver.ledger, solver.auxiliary
             if angular_plan is not None:
@@ -340,6 +373,8 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
             q, nf = 25*len(sites), len(quadrature.frequencies)
             source = dict(state_sha256=solver.state_sha256, auxiliary_sha256=solver.auxiliary_sha256,
                           correction=repr(solver.correction), distribution=distribution,
+                          refinement_capacity=refinement_capacity, max_parameters=max_parameters,
+                          max_replay_work=replay_work,
                           grid_sha256=solver.grid_sha256,
                           kernel_smoothing=repr(smoothing), shell_cutoff=float(shell_cutoff),
                           sites=repr(sites), bonds=bonds, frequencies=quadrature.frequencies,
@@ -475,7 +510,7 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                 generation_record=source['model'], target_origin=core.IsaPfitTargetOrigin.NativeFittedPointResponse,
                 response_representation='fitted_density_coefficients',
                 auxiliary_basis_id=source['auxiliary_sha256'], block_rows=BLOCK_ROWS,
-                max_bytes=resources.max_bytes-ledger.reserved)
+                max_bytes=resources.max_bytes-ledger.reserved, max_work=replay_work)
             del packed
             ledger.reserved -= retained
             for node, result in enumerate(results, 1):

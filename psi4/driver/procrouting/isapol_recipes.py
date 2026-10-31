@@ -116,3 +116,65 @@ def native_benzene_recipe(molecule, *, tail_fit_policy='always'):
                              1e-5, 1e-5, 1e-6, 0., 20, 20, True,
                              tail_fit_policy=tail_fit_policy),
         'Drho1e-2', atomic_initialization='zero_atomic_D0')
+
+
+def native_monomer_recipe(molecule, *, profile, tail_fit_policy='always'):
+    """Declare the separate experimental S66 CHNO ISA-A-v1 model.
+
+    This is a new scientific profile, not a claim of a general validated ISA
+    default. Neutral3..17-atom CHNO singlets use native Cartesian
+    aug-cc-pVTZ-RI angular shells, normalized primitive s sequences
+    C/N/O:2**[8..-3], H:2**[5..-2], and1.5xBragg-Slater tails for EVERY atom.
+    In particular nitrogen's sequence and campaign water's tails are explicit
+    new declarations. Local frames, bonds and independent per-site fit
+    parameters are separate caller inputs; this function invents no COPY.
+    Legacy water/benzene recipes are unchanged.
+    """
+    from psi4.driver.p4util import OptionsState
+    if profile != 's66-chno-isa-a-v1':
+        raise ValueError('explicit supported monomer profile required: s66-chno-isa-a-v1')
+    symbols = tuple(molecule.symbol(i) for i in range(molecule.natom()))
+    if (not 3 <= len(symbols) <= 17 or any(s not in ('C', 'H', 'N', 'O') for s in symbols)
+            or any(molecule.Z(i) <= 0 for i in range(len(symbols)))
+            or molecule.molecular_charge() != 0 or molecule.multiplicity() != 1):
+        raise ValueError('S66 profile requires3..17 real CHNO atoms, neutral singlet')
+    stash = OptionsState(['PUREAM'])
+    try:
+        core.set_global_option('PUREAM', False)
+        native = core.BasisSet.build(molecule, 'DF_BASIS_SCF', 'aug-cc-pVTZ-RI', puream=0)
+    finally:
+        stash.restore()
+    if native.has_puream() or native.nbf() != native.nao():
+        raise ValueError('campaign AUX must be actual Cartesian native basis data')
+    centres = tuple(map(tuple, molecule.geometry().np))
+    shells = tuple(ShellRecipe(
+        int(native.shell_to_center(i)), int(native.shell(i).am),
+        tuple(native.shell(i).exp(k) for k in range(native.shell(i).nprimitive)),
+        tuple(native.shell(i).coef(k) for k in range(native.shell(i).nprimitive)))
+        for i in range(native.nshell()))
+    origin = ('s66-chno-isa-a-v1; current Psi4 aug-cc-pVTZ-RI; explicit normalized '
+              'H s2**[5..-2], C/N/O s2**[8..-3]; all tails1.5xBragg-Slater; '
+              'experimental new campaign recipe, no convergence/parity claim')
+    auxiliary = BasisRecipe('aug-cc-pVTZ-RI', origin, 'Cartesian', centres, shells)
+    counts, sites = {}, []
+    for index, (symbol, centre) in enumerate(zip(symbols, centres)):
+        counts[symbol] = counts.get(symbol, 0)+1
+        label = f'{symbol}{counts[symbol]}'
+        powers = range(5, -3, -1) if symbol == 'H' else range(8, -4, -1)
+        ss = tuple(ShellRecipe(0, 0, (2.**p,), ((2.*2.**p/np.pi)**.75,)) for p in powers)
+        angular = tuple(ShellRecipe(0, s.l, s.exponents, s.coefficients)
+                        for s in shells if s.centre == index and s.l > 0)
+        shape = BasisRecipe(label+' shape', origin, 'Spherical', (centre,), ss)
+        atomic = BasisRecipe(label+' atomic', origin, 'Spherical', (centre,), ss+angular)
+        sites.append(isa.SiteRecipe(
+            label, centre, atomic, shape, tuple(range(len(ss))), 4,
+            isa.bragg_slater_tail_cutoff(int(molecule.Z(index)), 1.5), True))
+    return isa.PartitionRecipe(
+        'Explicit S66 CHNO native monomer ISA-A-v1', origin,
+        'explicit_cartesian_drho_c_isa_a', auxiliary, tuple(sites),
+        isa.GridRecipe(100, 200, 3, 1., 'native_tabulated_bragg_slater',
+                       'all_sites_unscreened_full_molecular_grid'),
+        isa.ControllerRecipe(1e-9, 120, .17, .001, .2, True, 0., True, 1e-36,
+                             1e-5, 1e-5, 1e-6, 0., 20, 20, True,
+                             tail_fit_policy=tail_fit_policy),
+        'Drho1e-2', atomic_initialization='zero_atomic_D0')

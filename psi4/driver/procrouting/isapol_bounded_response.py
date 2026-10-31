@@ -74,6 +74,15 @@ class BoundedResources:
 #: Canonical response selector spellings; the reference is the default.
 RESPONSE_MODELS = ('reference_h2h1', 'native_fdds')
 
+
+def retained_frequency_bytes(sites, frequencies, *, parameters=64):
+    """Small retained local/model outputs; explicit larger fits are not64²."""
+    for name, value, ceiling in (('sites', sites, 64), ('frequencies', frequencies, None),
+                                  ('parameters', parameters, 4096)):
+        if type(value) is not int or value < 1 or (ceiling is not None and value > ceiling):
+            raise ValueError(f'invalid retained-output {name}')
+    return frequencies*(sites*25*25*8*4+4*parameters*parameters*8)
+
 #: Adapter-only refusal of an explicit native FDDS instance whose declared
 #: metric LU 1-norm reciprocal condition estimate is below this value. A
 #: heuristic separator of the sampled epsilon-level metrics (<= 1.13e-15) from
@@ -500,8 +509,10 @@ class BoundedResponse:
     def __init__(self, wfn, auxiliary_recipe, sites, *, caller_converged, quadrature, response_grid,
                  smoothing, shell_cutoff, charge_penalty, anchor_metric_damping, resources,
                  scf_correction, expected_grac_shift=None, scratch_directory=None, log=None,
-                 label='df_centre_analytic', input_bytes=0, response='reference_h2h1', fdds=None):
+                 label='df_centre_analytic', input_bytes=0, response='reference_h2h1', fdds=None,
+                 retained_parameters=64):
         from psi4 import core
+        retained_frequency_bytes(1, 1, parameters=retained_parameters)
         if response not in RESPONSE_MODELS:
             raise ValueError(f'response must be one of {RESPONSE_MODELS}')
         if response == 'reference_h2h1' and fdds is not None:
@@ -548,6 +559,7 @@ class BoundedResponse:
         self.resources, self.scf_correction, self.expected_grac_shift = resources, scf_correction, expected_grac_shift
         self.scratch_directory, self.log, self.label, self.input_bytes = scratch_directory, log, label, input_bytes
         self.response, self.fdds = response, fdds
+        self.retained_parameters = retained_parameters
         if response == 'reference_h2h1':
             self.model = (f'plain DF PBE0; fitted-density ALDA Slater/PW92; lambda={charge_penalty}; '
                           f'target/kernel eta=0; anchor eta={anchor_metric_damping}; original H2H1; -B.T C0 B')
@@ -592,7 +604,8 @@ class BoundedResponse:
                    ('distribution', self.label), ('correction', repr(self.correction)),
                    ('resource ceilings', repr(resources))))
         # Frequency outputs (local tensors, PFIT models) are retained across the sweep.
-        self._retained = self.response_grid.nbytes+self.input_bytes+nf*(len(self.sites)*25*25*8*4+4*64*64*8)
+        self._retained = self.response_grid.nbytes+self.input_bytes+retained_frequency_bytes(
+            len(self.sites), nf, parameters=self.retained_parameters)
         if self.response == 'native_fdds':
             self._fdds_preflight(state, grid, main)
         else:

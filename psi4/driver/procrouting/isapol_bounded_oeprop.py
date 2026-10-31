@@ -17,7 +17,7 @@ import numpy as np
 from psi4 import core
 from . import isapol_logging as _lg
 from .isapol_bounded import (
-    bounded_properties, BoundedResources, MAX_PARAMETERS, _closes_failed_stage, check_max_parameters,
+    bounded_properties, BoundedResources, MAX_PARAMETERS, _closes_failed_stage, refinement_limits,
 )
 from .isapol_native import Quadrature
 from .isapol_basis import BasisRecipe, ShellRecipe
@@ -53,8 +53,8 @@ REFINED_DISPERSION_NAMESPACE = ('ATOMIC REFINED DISPERSION', 'REFINED DISPERSION
 
 def settings(preset, overrides):
     """Resolve only documented inputs; reject typos instead of ignoring them."""
-    if preset not in ('water', 'benzene'):
-        raise ValueError("bounded preset must be 'water' or 'benzene'")
+    if preset not in ('water', 'benzene', 'explicit'):
+        raise ValueError("bounded preset must be 'water', 'benzene' or 'explicit'")
     # CamCASP defaults. CIF = src/tools/cluster_file_interface.F90.
     values = dict(
         auxiliary_basis='aug-cc-pVTZ-RI',  # CIF aux aug-cc-pVTZ, Cartesian, limit G
@@ -74,6 +74,7 @@ def settings(preset, overrides):
         partition_recipe=None, partition_grid=None,  # explicit ISA (recipe+grid) or MBIS (grid)
         declared_variables=None,  # process_data.F90:2040-2150 cutoff-derived pdef
         max_refinement_parameters=MAX_PARAMETERS,  # explicit finite opt-in up to 72
+        refinement_capacity='standard', max_replay_work=None,
         response='reference_h2h1', fdds=None,  # explicit native FDDS only on request
         recoupled_dispersion=False,  # explicit angular local-axis coefficients only
         scratch_directory=None,
@@ -85,6 +86,8 @@ def settings(preset, overrides):
         if core.has_global_option_changed(option):
             values[key] = core.get_global_option(option)
     values.update(overrides)
+    if preset == 'explicit' and (values['sites'] is None or values['bonds'] is None):
+        raise ValueError("explicit preset requires caller-declared sites and bonds")
     return values
 
 
@@ -194,15 +197,25 @@ def run(wfn, tasks, *, preset, **kwargs):
             log.stage('Bounded preset preparation', (('preset', preset), ('distribution', v['distribution']),
                                                      ('response', v['response'])))
             # Refuse a bad limit before any grid, basis or lattice is built.
-            check_max_parameters(v['max_refinement_parameters'], 'max_refinement_parameters')
+            if v['resources'] is None:
+                v['resources'] = default_resources()
+            refinement_limits(v['max_refinement_parameters'], v['resources'],
+                capacity=v['refinement_capacity'], max_replay_work=v['max_replay_work'],
+                parameter_name='max_refinement_parameters')
             if type(v['recoupled_dispersion']) is not bool:
                 raise TypeError('recoupled_dispersion must be an explicit bool')
             mol = wfn.molecule()
-            sites, bonds = preset_sites(mol, preset, v['rank_limit'], v['hydrogen_rank_limit'])
-            if v['sites'] is not None:
-                sites = v['sites']
-            if v['bonds'] is not None:
-                bonds = v['bonds']
+            if preset == 'explicit':
+                sites, bonds = tuple(v['sites']), tuple(v['bonds'])
+                if (not sites or any(not isinstance(s, RefinementSite) for s in sites)
+                        or not np.array_equal([s.origin_bohr for s in sites], mol.geometry().np)):
+                    raise ValueError('explicit sites must match every live molecule centre in atom order')
+            else:
+                sites, bonds = preset_sites(mol, preset, v['rank_limit'], v['hydrogen_rank_limit'])
+                if v['sites'] is not None:
+                    sites = v['sites']
+                if v['bonds'] is not None:
+                    bonds = v['bonds']
             v['scf_correction'], v['expected_grac_shift'] = resolve_correction(
                 wfn, v['scf_correction'], v['expected_grac_shift'])
             recipe = v['auxiliary_recipe']
@@ -240,7 +253,8 @@ def run(wfn, tasks, *, preset, **kwargs):
                 'localization_rank_limit', 'weight_type', 'weight_coefficient', 'cutoff',
                 'resources', 'scf_correction', 'expected_grac_shift', 'max_order', 'scratch_directory',
                 'distribution', 'distributed_moments', 'response', 'fdds',
-                'partition_recipe', 'partition_grid', 'recoupled_dispersion')
+                'partition_recipe', 'partition_grid', 'recoupled_dispersion',
+                'refinement_capacity', 'max_replay_work')
         result = bounded_properties(wfn, recipe, caller_converged=True,
             sites=sites, bonds=bonds, quadrature=quadrature, response_grid=grid,
             lattice_options=lattice, declared_variables=v['declared_variables'],

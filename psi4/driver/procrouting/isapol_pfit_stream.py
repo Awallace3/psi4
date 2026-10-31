@@ -10,6 +10,53 @@ from . import isapol_refine as _refine
 from .isapol_refine import RefinementModel
 
 
+MAX_REPLAY_WORK_ALLOWANCE = 2_000_000_000_000
+
+
+def check_replay_work(value):
+    """Require an explicit finite Python-int replay budget, never infinity."""
+    if type(value) is not int or not 1 <= value <= MAX_REPLAY_WORK_ALLOWANCE:
+        raise ValueError(f'max_work must be an int in 1..{MAX_REPLAY_WORK_ALLOWANCE}')
+    return value
+
+
+def packed_design_plan(*, npoint, channel_count, parameter_count, used_channels,
+                       block_rows=256, max_passes=2, max_bytes=512*1024**2,
+                       max_work=None):
+    """Dimension-only admission before allocating any design/field buffers.
+
+    The optional larger replay budget changes admission, never rows, weights or
+    passes. The legacy64-billion default remains unchanged. A shared molecular
+    caller must independently charge this entire plan to its cumulative ledger.
+    """
+    for name, value in (('npoint', npoint), ('channel_count', channel_count),
+                        ('parameter_count', parameter_count), ('used_channels', used_channels)):
+        if type(value) is not int or value < 1:
+            raise ValueError(f'{name} must be a positive integer')
+    if used_channels > channel_count or parameter_count > _refine.MAX_PARAMETERS:
+        raise ValueError('invalid packed design channel/parameter dimensions')
+    if type(block_rows) is not int or not 1 <= block_rows <= 4096:
+        raise ValueError('block_rows must be an integer in [1,4096]')
+    if type(max_passes) is not int or not 1 <= max_passes <= 2:
+        raise ValueError('max_passes must be 1 or 2')
+    if type(max_bytes) is not int or max_bytes <= 0:
+        raise ValueError('max_bytes must be a positive integer')
+    budget = check_replay_work(PackedDesignRows.MAX_WORK if max_work is None else max_work)
+    row_count = npoint*(npoint+1)//2
+    block = min(block_rows, row_count)
+    chunk = max(1, min(PackedDesignRows.MAX_CHUNK, 16*block//npoint))
+    planned = (9*npoint*channel_count+8*npoint*(used_channels*(parameter_count+1)+1)
+               +max_passes*8*(npoint*chunk*parameter_count+block*(2*parameter_count+12))+256)
+    if planned > max_bytes:
+        raise ValueError('packed design byte resource limit exceeded')
+    work = max_passes*((row_count+PackedDesignRows.MAX_CHUNK*npoint)*2*used_channels*parameter_count
+                       +row_count*(4*parameter_count+8))
+    if work > budget:
+        raise ValueError('packed design replay work resource limit exceeded')
+    return dict(row_count=row_count, block_rows=block, chunk=chunk,
+                planned_bytes=planned, planned_work=work, max_work=budget)
+
+
 class PackedDesignRows:
     """Replay deterministic per-point design contractions for one complete cloud.
 
@@ -36,7 +83,7 @@ class PackedDesignRows:
     MAX_CHUNK = 64
 
     def __init__(self, model, fields, *, block_rows=256, max_passes=2,
-                 max_bytes=MAX_BYTES):
+                 max_bytes=MAX_BYTES, max_work=None):
         if not isinstance(model, RefinementModel):
             raise ValueError("explicit RefinementModel required")
         if type(block_rows) is not int or not 1 <= block_rows <= 4096:
@@ -86,23 +133,11 @@ class PackedDesignRows:
                  for r, c in pairs for row, col in (((r, c), (c, r)) if r != c else ((r, c),))]
         used = sorted({col for _, _, col in terms})
         position = {channel: k for k, channel in enumerate(used)}
-        # A pass evaluates `chunk` points' runs as one BLAS product; the chunk
-        # is tied to the block size so small blocks keep a small workspace.
-        chunk = max(1, min(self.MAX_CHUNK, 16*block//npoint))
-        # Caller input and its isfinite mask, the owned used-channel fields,
-        # the point contraction H, one chunk product per declared pass, and
-        # one shared block plus each yielded copy.
-        planned = (fields.nbytes + fields.size + 8*npoint*(len(used)*(nparam+1)+1)
-                   + max_passes*8*(npoint*chunk*nparam+block*(2*nparam+12)) + 256)
-        if planned > max_bytes:
-            raise ValueError("packed design byte resource limit exceeded")
-        # Dense (used channels x parameters) products, including the unused
-        # j > i corner of the widest possible chunk, plus writes. H is formed
-        # once. Charge the entire replay contract.
-        work = ((row_count+self.MAX_CHUNK*npoint)*2*len(used)*nparam
-                + row_count*(4*nparam+8))
-        if max_passes*work > self.MAX_WORK:
-            raise ValueError("packed design replay work resource limit exceeded")
+        plan = packed_design_plan(
+            npoint=npoint, channel_count=channels, parameter_count=nparam,
+            used_channels=len(used), block_rows=block_rows, max_passes=max_passes,
+            max_bytes=max_bytes, max_work=max_work)
+        chunk = plan['chunk']
         if not np.isfinite(fields).all():
             raise ValueError("fields must be finite")
         # Row (i, j) of parameter p is F[j] @ H[:, i, p] with
@@ -120,7 +155,8 @@ class PackedDesignRows:
         self._chunk = chunk
         self._block = np.empty((block, nparam))
         self.row_count, self.parameter_count = row_count, nparam
-        self.planned_bytes, self.planned_work = planned, max_passes*work
+        self.planned_bytes, self.planned_work = plan['planned_bytes'], plan['planned_work']
+        self.max_work = plan['max_work']
         self._block_rows, self._max_passes = block, max_passes
         self._passes_used = 0
 
@@ -231,7 +267,7 @@ def fitted_point_targets(auxiliary, points_bohr, coefficient_responses, *,
 def refine_streamed(models, points_bohr, packed_targets, *, target_origin=None, source_id,
                     generation_record, response_representation='', auxiliary_basis_id='',
                     fields=None, damping=0.0, block_rows=4096,
-                    max_bytes=PackedDesignRows.MAX_BYTES, options=None):
+                    max_bytes=PackedDesignRows.MAX_BYTES, max_work=None, options=None):
     """Refine several targets over one complete cloud and one shared design.
 
     ``models`` (typically one per frequency) must share sites, channels and
@@ -297,7 +333,7 @@ def refine_streamed(models, points_bohr, packed_targets, *, target_origin=None, 
             fields[start:start+256] = _refine.channel_fields(points[start:start+256], model,
                                                              damping=damping)
     rows = PackedDesignRows(model, fields, block_rows=block_rows, max_passes=2,
-                            max_bytes=max_bytes-overhead)
+                            max_bytes=max_bytes-overhead, max_work=max_work)
 
     declaration = core.IsaPfitRowModel()
     declaration.channel_labels = list(model.channel_labels)

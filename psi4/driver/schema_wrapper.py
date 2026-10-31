@@ -642,7 +642,28 @@ def run_json_qcschema(json_data, clean, json_serialization, keep_wfn=False):
         molschemus = json_data["molecule"]  # dtype >=2
     else:
         molschemus = json_data  # dtype =1
+    spec_data = json_data["specification"]
+    native_request = native_geometry = None
+    function_inputs = spec_data["keywords"].get("function_kwargs", {})
+    # Presence matters: null/false/{} are malformed native requests, never an
+    # instruction to silently fall back to ordinary properties.
+    if isinstance(function_inputs, dict) and "native_monomer" in function_inputs:
+        from .procrouting.isapol_schema import (
+            admit_native_schema, check_native_geometry, execute_native_request,
+            validate_native_request,
+        )
+        try:
+            if clean is not True:
+                raise ValueError("native schema requires a clean Psi4 option environment")
+            native_request, native_geometry = admit_native_schema(spec_data, molschemus)
+        except (KeyError, TypeError, ValueError) as error:
+            raise p4util.ValidationError(f"native monomer admission: {error}") from error
     mol = core.Molecule.from_schema(molschemus, nonphysical=True)
+    if native_request is not None:
+        try:
+            check_native_geometry(mol, native_geometry)
+        except ValueError as error:
+            raise p4util.ValidationError(f"native monomer geometry admission: {error}") from error
 
     # Update molecule geometry as we orient and fix_com
     json_data["molecule"]["geometry"] = mol.geometry().np.ravel().tolist()
@@ -665,9 +686,9 @@ def run_json_qcschema(json_data, clean, json_serialization, keep_wfn=False):
         # Restore current module
         psi_options.set_current_module(current_module)
 
-    spec_data = json_data["specification"]
-
-    kwargs = spec_data["keywords"].pop("function_kwargs", {})
+    kwargs = copy.deepcopy(spec_data["keywords"].pop("function_kwargs", {}))
+    if native_request is not None:
+        kwargs.pop("native_monomer")
     p4util.set_options(spec_data["keywords"])
 
     # Setup the computation
@@ -678,7 +699,14 @@ def run_json_qcschema(json_data, clean, json_serialization, keep_wfn=False):
     # Handle special properties case
     if spec_data["driver"] == "properties":
         if "properties" not in kwargs:
-            kwargs["properties"] = list(default_properties_)
+            kwargs["properties"] = ["dipole"] if native_request is not None else list(default_properties_)
+
+    if native_request is not None:
+        try:
+            validate_native_request(native_request.as_dict(), method=method,
+                                    basis=spec_data["model"]["basis"], molecule=mol)
+        except (TypeError, ValueError) as error:
+            raise p4util.ValidationError(f"native monomer admission: {error}") from error
 
     # Handle extra files
     extra_infiles = spec_data["extras"].get("extra_infiles", {})
@@ -687,12 +715,20 @@ def run_json_qcschema(json_data, clean, json_serialization, keep_wfn=False):
 
     # Actual driver run
     val, wfn = methods_dict_[spec_data["driver"]](method, **kwargs)
+    native_payload = None
+    if native_request is not None:
+        check_native_geometry(wfn.molecule(), native_geometry)
+        # Ordinary properties/SCF completed above. This shipped native seam
+        # consumes that live sealed wavefunction, not an imported result.
+        native_payload = execute_native_request(wfn, native_request)
     result_data = {
         "input_data": input_data,
         "extras": {"qcvars": {}},
         "provenance": {},
         "molecule": mol.to_schema(dtype=3, quiet=True),
     }
+    if native_payload is not None:
+        result_data["extras"]["psi4:native_monomer"] = native_payload
 
     # Pull out a standard set of SCF properties
     current_qcvars_only = spec_data["extras"].get("current_qcvars_only", False)
