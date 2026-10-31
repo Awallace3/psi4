@@ -5,6 +5,13 @@ Whole-call diagnostics now take42.5–44.4 seconds instead of155.5–158.6.
 This is RTX3090 host-overhead debugging, not an H200 speedup measurement.
 Performance is still not considered solved.
 
+**Historical step:** the subsequently gated
+[sealed-runtime follow-up](SEALED_RUNTIME.md#completed-follow-up-gate-at0433ec0452)
+at`0433ec0452` takes26.2–26.7s per energy call and37.631s for a fresh whole
+worker. It retains fresh mapping/symbol audits and passes the ten-process
+numerical gate plus strict before/after comparison with unchanged tracked
+device peaks. The prototype/CPU-only status below describes earlier stages.
+
 ## Measured target
 
 The [first-step CPU profile](OWNED_RUNTIME_RESULTS.md) found approximately
@@ -195,6 +202,8 @@ substituted-dependency regression was run red and then green after switching
 first loads and pinned dependencies to sealed descriptors/explicit SONAMEs.
 Diagnostic aliases are excluded from the loader search path. A separate Cachy
 CPU probe passed all nine exact descriptor-only vendor preloads and NVRTC
-compilation. Neither the candidate nor a further whole-water speedup is
-GPU-qualified yet; the earlier alias-prototype PASS is not treated as a
-production first-load admission proof.
+compilation. Neither the candidate nor a further whole-water speedup was
+GPU-qualified at that historical stage; the earlier alias-prototype PASS is
+not treated as a production first-load admission proof. The completed
+descriptor-bound whole-water gates and latest measurements are recorded in
+[SEALED_RUNTIME.md](SEALED_RUNTIME.md).

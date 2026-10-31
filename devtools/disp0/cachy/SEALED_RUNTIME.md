@@ -1,9 +1,10 @@
 # Opt-in sealed runtime — small-water gate passed, performance still incomplete
 
-Target: the qualified water profile still makes163,164 complete17-file lease
-checks per energy call. The latest accepted small-water result remains42–44s.
-The separately captured loader prototype passed CPU and bounded GPU compatibility
-checks; see [the measured ledger](HOT_PATH_ADMISSION.md).
+The latest accepted restricted small-water energy calls take26.2–26.7s;
+a fresh whole worker takes37.631s including startup and cleanup.
+This is **RTX3090 host-overhead debugging**, not an H200 speedup measurement.
+The previous lease owner took42–44s per energy call and made163,164 complete
+17-file lease checks. See [the historical ledger](HOT_PATH_ADMISSION.md).
 
 ## Contract
 
@@ -169,7 +170,7 @@ This is still restricted small-water evidence. Defaults are unchanged, broader
 edge cases are not released, and no Phoenix job/H200 measurement was made.
 An external caller profile is the next step before another optimization.
 
-## Next measured target: literal mapping names
+## Profile-guided follow-up: literal mapping names
 
 `sealed-profile-water-01` passed its strict fresh-repeat comparison. Its
 profiled durations are **not** accepted timing samples and overlap:
@@ -186,11 +187,59 @@ and323,844 to identity classification. This supports optimizing literal name
 parsing, not deleting any mapping audit. Profile result SHA256:
 `c8b7b51ec2b402ce9d9f6933cc862ba24d342d8fd4b547ca89d9c3873521eac4`.
 
-The next candidate uses a stateless POSIX final-component operation for normal
+The follow-up uses a stateless POSIX final-component operation for normal
 kernel filenames, preserving `Path.name` fallback behavior for empty/dot final
 components. Only sealed-mode classification changes; every fresh snapshot,
 segment, mapped inode/device and symbol check remains. No resolved-path memo,
 mapping receipt, filesystem or loader-state cache is introduced. Equivalence
 and no-normal-case-Path tests join the full376+33+109=**518-test** host pass.
-The candidate still needs its own coherent build and GPU gate before a further
-timing improvement can be claimed.
+
+## Completed follow-up gate at`0433ec0452`
+
+Science/helper pin:`0433ec0452679cfc2ec2f7226ae941c0fc6719ef`.
+The separate whole prefix`install-owned-sealed-0433ec0452` passed71 target CPU
+tests and CPU qualification. The ten-process water gate, paired construction
+probe and extra inclusive scaled repeat all passed. No scientific overlays,
+changed tolerances, omitted mapping audits or cache-budget changes were used.
+
+| Diagnostic energy-call wall (s) | Lease owner | First gated sealed owner | Literal-name follow-up |
+|---|---:|---:|---:|
+| Unscaled | 43.728 | 32.365 | 26.444 |
+| Scaled | 42.472 | 32.259 | 26.477 |
+| Displaced | 44.433 | 31.605 | 26.725 |
+| Fresh scaled repeat | 43.482 | 31.381 | 26.196 |
+
+The separately timed fresh scaled worker took**37.631s end to end**, including
+snapshot/bootstrap/import work, science, output and cleanup; the energy call
+inside took26.405s. The preceding sealed iteration took43.171s end to end.
+These are individual diagnostic observations, not a cache-matched statistical
+benchmark. The latest inclusive repeat passed all23 fields at unchanged1e-9
+tolerances; its largest field error was2.087e-12.
+
+Construction/cleanup takes6.281/6.228s for JIT1/4, with whole children taking
+14.282/14.200s. This does not establish a JIT-thread advantage. Construction
+tracked device peak remains33,757,184 bytes. Whole-energy tracked peaks remain
+88,794,624 bytes (88,793,600 for displaced geometry), exactly matching the lease
+baseline; all native owners and live tracked bytes are released. These tracked
+peaks do not measure opaque native internals or total desktop GPU usage.
+
+The strict offline comparison against`3ea43ee66e` passed all23 fields in each
+of four GPU cases, with orbital-label/sign matching only and no energy
+rotations. Maximum field error was1.205e-11. Complete installed/support
+inventories, respective core proofs, identical CUDA/SDK bytes, device/driver/PTX,
+actual device work and full cleanup were also checked.
+
+Under the private performance root's`runs/`:
+
+| Artifact | SHA256 |
+|---|---|
+| `sealed-owned-cpu-04/runtime-config.json` | `4034046cb74140a7ade016e8cd290d61fa316f405cccccee1c238bd8f8d6b187` |
+| `construction-sealed-water-03/comparison.json` | `80fd74d3611760e9c1da2445da90bbb03dbb13bf7ec64a640b1b75b4d4b7c39e` |
+| `sealed-full-water-gate-03/gate-result.json` | `2ed367bc2940ffedf941c095405de2f6e35de038d79395dcb1c272c85f359b8c` |
+| `sealed-gpu-launch-03.json` | `9c0fcfbacdf86c2343324a4e744cda55d065d843f4e43af3dad1d081be07cfc9` |
+| `sealed-before-after-02.json` | `ae48fc4ffe32fe0ecd01c8ec34c65bd13300821f1dbff7a096a40fd38a63e9a1` |
+
+Performance remains incomplete. Fresh mapping scans, canonical metadata
+verification and startup remain costs; do not replace them with an unobserved
+loader-state cache. This remains opt-in restricted-water evidence, not broader
+edge-case qualification or a default change. No Phoenix job was submitted.

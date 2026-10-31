@@ -110,4 +110,18 @@ passing all ten numerical cases and a strict1e-9 before/after comparison of
 all23 fields. A qualified caller profile still identifies substantial live-check
 and mapping overhead. The user selected a separate CPU-first sealed-loader
 prototype to investigate removing that filesystem polling through stronger
-kernel immutability; it is not yet a production/GPU-qualified change.
+kernel immutability; it was not yet a production/GPU-qualified change at that
+stage.
+
+The subsequent [descriptor-bound sealed-runtime follow-up](../cachy/SEALED_RUNTIME.md)
+is now gated for the same restricted small-water fixture. Science/helper
+pin`0433ec0452` takes26.2–26.7s per energy call; a separately timed fresh whole
+worker takes37.631s, including startup and cleanup (previous sealed
+iteration43.171s). Stateless literal mapping-name parsing removes measured
+Python overhead without omitting fresh mapping or symbol checks. All ten
+numerical processes, paired construction and strict before/after comparison
+pass at unchanged tolerances and tracked device peaks. Construction/cleanup
+takes6.281/6.228s for JIT1/4; this still does not establish a JIT-thread benefit.
+The adapter remains opt-in, broader edge cases are not qualified, and
+performance is not considered solved. These are RTX3090 debug observations,
+not an H200 kernel-speedup claim; no Phoenix job was submitted.
