@@ -150,3 +150,23 @@ This is the current compatibility result, superseding attempt01's narrower
 mapping classifier. The kernel result, native version/FP64 readbacks and all six
 explicit cleanup steps passed again. The same scope limits and all limitations
 above remain in force; it is still not a reviewed production owner or speedup.
+
+## Descriptor-bound first-load follow-up
+
+Production integration review reproduced a constructor-time hole in alias-based
+first loading: a dependency alias could be substituted before `dlopen`, allowing
+its foreign constructor to run before a later mapping check. The earlier alias
+probes establish compatibility only, **not** a safe production first-load rule.
+
+Code`8fd153b61b` adds `--descriptor-bound`: first-load the pinned dependencies by
+sealed FD/SONAME, then first-load parents by FD. The alias directories are absent
+from the worker's loader path. The local descriptor/dependency toy passed, as did
+the exact vendor CPU probe on Cachy:
+`runs/sealed-descriptor-cpu-01/result.json`, SHA256
+`d30c4a723fe0aa81ef44cbdb5283c6d741e7b188c9c7d7b6646125dc1a7496a8`.
+All nine vendor preloads,25 native symbols and CPU-only NVRTC compilation passed;
+the post-compiler mapping check found only exact sealed toolkit images.
+
+This establishes descriptor-loading/CPU-compiler feasibility. It does not test
+the production bounded ELF dependency parser, cuEST context/GPU behavior through
+the new descriptors, or whole-Psi4 numerical/performance qualification.
