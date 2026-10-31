@@ -57,7 +57,9 @@ def worker_command(helper, manifest, config, output, *, system=None, oracle=None
         raise ValueError("Never schedule an independent CPU oracle on a GPU node")
     argv = [str(Path(config["stage"])/"bin/psi4"),
             config["dependency_environment"]+"/bin/python",
-            str(helper/"fragment_gate.py"), "--config", manifest["config"],
+            str(helper/("sealed_bootstrap.py" if config.get("identity_contract")==
+                        "process-owned-kernel-sealed-snapshots-v1" else "fragment_gate.py")),
+            "--config", manifest["config"],
             "--config-sha256", manifest["config_sha256"], "--arm", "gpu" if gpu else "cpu",
             "--scaled", "--benchmark", "--output", str(output),
             "--block-size", "24" if system else "5"]
@@ -150,7 +152,11 @@ def _execute(root, groups):
         work = scratch/label
         work.mkdir(mode=0o700)
         argv = worker_command(helper, manifest, config, output, system=system, oracle=oracle)
-        env = environment(config, gpu=kind == "gpu")
+        aliases = None
+        if config.get("identity_contract") == "process-owned-kernel-sealed-snapshots-v1":
+            aliases = Path(config["sealed_alias_parent"])/(root.name+"-"+label)
+            aliases.mkdir(mode=0o700)
+        env = environment(config, gpu=kind == "gpu", sealed_alias_directory=aliases)
         env.update(TMPDIR=str(work), SCRATCH=str(work), PSI_SCRATCH=str(work))
         row = {"label": label, "argv": argv}
         result["processes"].append(row)
@@ -166,7 +172,9 @@ def _execute(root, groups):
             def reaped(pid):
                 groups.discard(pid)
                 row["owned_group_reaped"] = True
+            started = time.perf_counter()
             code = execute_owned(argv, env, out, err, remaining, launched, reaped=reaped)
+            row["child_inclusive_seconds"] = time.perf_counter()-started
         row["returncode"] = code
         checkpoint()
         if code:

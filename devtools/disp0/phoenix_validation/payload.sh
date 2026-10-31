@@ -73,10 +73,15 @@ export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$DISP0_E2_PREFIX/lib:$DISP0_CUEST_ROOT/
 export PYTHONPATH="$DISP0_E2_PREFIX/lib"
 test -x "$run/build/stage/bin/psi4"
 eval "$("$run/build/stage/bin/psi4" --psiapi)"
-"$python" -B -m unittest discover -s "$source_root/devtools/disp0" -p 'test_*.py' -v \
+# Kernel-lease/ELF fixtures need executable node-local storage, not Lustre.
+# This changes only test temporaries; build/runtime dependencies stay durable.
+fixture_root="$(mktemp -d "/var/tmp/psi4-disp0-cpu-tests-$SLURM_JOB_ID.XXXXXX")"
+[[ "$(stat -f -c %T "$fixture_root")" =~ ^(xfs|ext2/ext3|tmpfs|btrfs)$ ]]
+TMPDIR="$fixture_root" "$python" -B -m unittest discover -s "$source_root/devtools/disp0" -p 'test_*.py' -v \
     > "$run/cpu-guards.stdout" 2> "$run/cpu-guards.stderr"
-"$python" -B -m unittest discover -s "$helper" -p 'test_*.py' -v \
+TMPDIR="$fixture_root" "$python" -B -m unittest discover -s "$helper" -p 'test_*.py' -v \
     > "$run/job-guards.stdout" 2> "$run/job-guards.stderr"
+rmdir "$fixture_root"
 "$python" -B "$source_root/devtools/disp0_einsums_api_probe.py" > "$run/api-probe.json"
 "$python" -B "$helper/validate.py"
 if [[ "${DISP0_PREPARE_GPU_RUNTIME:-0}" == 1 ]]; then

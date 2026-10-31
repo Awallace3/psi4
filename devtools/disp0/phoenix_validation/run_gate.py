@@ -38,15 +38,19 @@ def environment(config,*,gpu,sealed_alias_directory=None):
                  "CPATH","C_INCLUDE_PATH","CPLUS_INCLUDE_PATH","LIBRARY_PATH",
                  "DISP0_SEALED_ALIAS_DIRECTORY"):
         env.pop(name,None)
-    if config.get("schema")==2:
+    sealed=config.get("identity_contract")=="process-owned-kernel-sealed-snapshots-v1"
+    if config.get("schema")==2 or sealed:
         env.update(LD_LIBRARY_PATH=config["startup_library_path"],
             PYTHONPATH=config["optional_python_path"]+":"+config["einsums_prefix"]+"/lib",
             PYTHONNOUSERSITE="1",PYTHONDONTWRITEBYTECODE="1",
             OMP_NUM_THREADS=str(config["threads"]),MKL_NUM_THREADS=str(config["threads"]),
             OPENBLAS_NUM_THREADS=str(config["threads"]),OMP_DYNAMIC="FALSE",
             EINSUMS_PACKED_GEMM_BATCH_PROMOTION="1")
-        env["CUDA_VISIBLE_DEVICES"]=config["local_lease"]["expected_uuid"] if gpu else ""
-        if config.get("identity_contract")=="process-owned-kernel-sealed-snapshots-v1":
+        if config.get("schema")==2:
+            env["CUDA_VISIBLE_DEVICES"]=config["local_lease"]["expected_uuid"] if gpu else ""
+        elif not gpu:
+            env["CUDA_VISIBLE_DEVICES"]=""
+        if sealed:
             if sealed_alias_directory is None:
                 raise RuntimeError("Sealed workers need an explicit fresh startup alias directory")
             directory=Path(sealed_alias_directory)
@@ -88,9 +92,12 @@ def main():
     deadline=time.monotonic()+3300
     def child(label,arm,*,scaled=False,change=0.,oracle=None):
         output=root/label
+        script=(helper.parent/"cachy/bootstrap_gate.py" if local else
+                helper/"sealed_bootstrap.py" if config.get("identity_contract")==
+                "process-owned-kernel-sealed-snapshots-v1" else helper/"fragment_gate.py")
         argv=[str(Path(config["stage"])/"bin/psi4"),
               config["dependency_environment"]+"/bin/python",
-              str(helper.parent/"cachy/bootstrap_gate.py" if local else helper/"fragment_gate.py"),
+              str(script),
               "--config",str(args.config),"--config-sha256",args.config_sha256,
               "--arm",arm,"--distance-change",str(change),"--output",str(output)]
         if scaled:argv.append("--scaled")
@@ -110,7 +117,7 @@ def main():
                 aliases.mkdir(mode=0o700)
             env=environment(config,gpu=arm=="gpu",sealed_alias_directory=aliases)
             scratch=root/(label+"-scratch");scratch.mkdir()
-            env["PSI_SCRATCH"]=str(scratch)
+            env.update(TMPDIR=str(scratch), SCRATCH=str(scratch), PSI_SCRATCH=str(scratch))
             if local:
                 from owned_process import execute
                 fd=require_local_lease(config["local_lease"])

@@ -101,6 +101,9 @@ def validate_installed(source, run, dependencies, e2):
     import einsums.sealed as sealed
     import waggle
     import waggle._core
+    import qcelemental
+    import qcengine
+    import optking
     for module in (ein, ein._core, waggle, waggle._core):
         require(Path(module.__file__).resolve().is_relative_to(e2), "Foreign E2/Waggle package")
     world = sealed.world()
@@ -144,6 +147,13 @@ def validate_installed(source, run, dependencies, e2):
     count = re.search(r"Ran (\d+) tests", guard_text)
     require(count is not None and int(count[1]) >= 244 and guard_text.rstrip().endswith("OK"),
             "Missing/incomplete expanded CPU regressions")
+    support = package.parent / "psi4_runtime_support"
+    support_inventory = {p.relative_to(support).as_posix(): digest(p)
+                         for p in support.rglob("*.py")}
+    require(support_inventory and support_inventory == {
+        p.relative_to(source / "psi4_runtime_support").as_posix(): digest(p)
+        for p in (source / "psi4_runtime_support").rglob("*.py")},
+        "Whole staged runtime support differs from the pinned source")
     save(run / "result.json", {
         "status": "PASS", "scope": "CPU_BUILD_VALIDATION_ONLY",
         "gpu_correctness_verified": False, "protein_fisapt_admitted": False,
@@ -151,16 +161,23 @@ def validate_installed(source, run, dependencies, e2):
         "job_id": os.environ["SLURM_JOB_ID"], "stage": str(stage),
         "psi4_version": psi4.__version__, "einsums_world": world,
         "scientific_python_sha256": scientific_python,
+        "runtime_support_package": str(support),
+        "runtime_support_sha256": support_inventory,
+        "provenance_sha256": {
+            str(p): digest(p)
+            for folder in ("phoenix_validation", "cachy")
+            for p in (source/"devtools/disp0"/folder).glob("*.py")},
         "python_package": str(package),
         "native_cpu_rhf_Eh": energy, "dependency_environment": str(dependencies),
         "cpu_guard_count": int(count[1]), "api_probe_sha256": digest(run / "api-probe.json"),
         "read_only_einsums_dependency": str(e2),
         "dependency_python_sha256": {
             str(p.resolve()): digest(p)
-            for module in (ein, waggle)
+            for module in (ein, waggle, qcelemental, qcengine, optking)
             for p in Path(module.__file__).resolve().parent.rglob("*.py")},
         "module_files": {module.__name__: str(Path(module.__file__).resolve())
-                         for module in (psi4, core, ein, ein._core, sealed, waggle, waggle._core)},
+                         for module in (psi4, core, ein, ein._core, sealed, waggle,
+                                        waggle._core, qcelemental, qcengine, optking)},
         "binary_sha256": {str(p): digest(p) for p in binaries},
         "mapped_paths": mapped,
         "cpu_guard_log_sha256": digest(run / "cpu-guards.stderr"),

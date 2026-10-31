@@ -116,9 +116,10 @@ def require_runtime_support(build):
 
 def sealed_startup_path(config, directory):
     """Diagnostic aliases are private and NEVER part of the loader namespace."""
-    if (config.get("schema") != 2
+    if ((config.get("schema") != 2
+         and (config.get("schema"),config.get("device_family")) != (1,"H200"))
             or config.get("identity_contract") != "process-owned-kernel-sealed-snapshots-v1"):
-        raise ValueError("Explicit local sealed-snapshot configuration required")
+        raise ValueError("Explicit sealed-snapshot configuration required")
     directory = Path(directory)
     parent = Path(config["sealed_alias_parent"])
     if (not parent.is_absolute() or parent.resolve(strict=True) != parent
@@ -151,6 +152,22 @@ def read_config(path, expected_sha256):
     if (build["status"] != "PASS" or build["pin"] != value["source_pin"]
             or build["stage"] != value["stage"]):
         raise RuntimeError("Runtime differs from the completed exact whole stage")
+    if value.get("identity_contract")=="process-owned-kernel-sealed-snapshots-v1" and value["schema"]==1:
+        if build.get("scope")!="CPU_BUILD_VALIDATION_ONLY":
+            raise RuntimeError("Completed Phoenix CPU build proof required")
+        helpers=build.get("provenance_sha256",{})
+        here=Path(__file__).resolve().parent
+        for code in (Path(__file__).resolve(),here/"sealed_bootstrap.py",
+                     here.parent/"cachy/bootstrap_gate.py",here/"run_gate.py"):
+            if helpers.get(str(code))!=digest(code):
+                raise RuntimeError("Missing/changed authenticated Phoenix bootstrap helper")
+        for filename,checksum in helpers.items():
+            if digest(filename)!=checksum:
+                raise RuntimeError("Pinned Phoenix helper changed: "+filename)
+        required={"psi4","psi4.core","einsums","einsums._core","waggle","qcelemental","qcengine","optking"}
+        if not required.issubset(build["module_files"]):
+            raise RuntimeError("Incomplete qualified Phoenix module identity closure")
+        require_cuda_manifest(value)
     if value["schema"]==2:
         if build.get("scope")!="WHOLE_BUILD_CPU_SMOKE_ONLY_NOT_GPU_QUALIFICATION":
             raise RuntimeError("Explicit completed whole local CPU build proof required")
