@@ -176,19 +176,28 @@ def child(input_path):
     # Only load the parent. The child is neither preloaded nor on LD_LIBRARY_PATH:
     # its sealed snapshot must be found via the parent's real $ORIGIN RUNPATH.
     assert str(toy_aliases) not in os.environ["LD_LIBRARY_PATH"].split(":")
-    parent=ct.CDLL(str(toy_aliases/"libsealed_parent.so"),mode=os.RTLD_NOW|os.RTLD_GLOBAL)
+    dependency=None
+    if plan.get("descriptor_bound"):
+        dependency=ct.CDLL("/proc/self/fd/"+str(records["libsealed_child.so"]["fd"]),
+                           mode=os.RTLD_NOW|os.RTLD_GLOBAL)
+        parent_path="/proc/self/fd/"+str(records["libsealed_parent.so"]["fd"])
+    else:parent_path=str(toy_aliases/"libsealed_parent.so")
+    parent=ct.CDLL(parent_path,mode=os.RTLD_NOW|os.RTLD_GLOBAL)
     parent.parent.argtypes=[];parent.parent.restype=ct.c_int
     assert parent.parent()==7
     symbol_owner(parent.parent,records["libsealed_parent.so"])
     symbol_owner(parent.child,records["libsealed_child.so"])
     for item in plan["toy"]:Path(item["source"]).unlink()
     assert parent.parent()==7
-    state("origin_passed",parent_value=7,source_files_removed=True)
+    state("descriptor_dependency_passed" if plan.get("descriptor_bound") else "origin_passed",
+          parent_value=7,source_files_removed=True)
     for item in plan["vendor"]:
         records[item["name"]]=snapshot(item,aliases)
     loaded=[]
     for name in plan["preload_order"]:
-        loaded.append(ct.CDLL(str(aliases/name),mode=os.RTLD_NOW|os.RTLD_GLOBAL))
+        locator=("/proc/self/fd/"+str(records[name]["fd"])
+                 if plan.get("descriptor_bound") else str(aliases/name))
+        loaded.append(ct.CDLL(locator,mode=os.RTLD_NOW|os.RTLD_GLOBAL))
         state("vendor_loaded",name=name,loaded_count=len(loaded))
     ownership={};compiler={}
     if plan["vendor"]:
@@ -204,6 +213,9 @@ def child(input_path):
         ptx_output=input_path.parent/"probe.ptx" if plan.get("gpu") else None
         compiler=compile_ptx_cpu(nvrtc,records["libnvrtc.so.13"],ptx_output)
         state("nvrtc_cpu_compile_passed",**compiler)
+        if plan.get("descriptor_bound"):
+            from sealed_gpu_probe import maps
+            state("descriptor_closure_passed",mapped=maps(records))
     for name,record in records.items():
         cannot_write(record,(toy_aliases if name.startswith("libsealed_") else aliases)/name)
     assert "psi4" not in sys.modules and "cuda" not in sys.modules
@@ -211,6 +223,7 @@ def child(input_path):
         "scope":"THROWAWAY_NOT_GPU_OR_PSI4_QUALIFICATION",
         "explicit_cuda_driver_calls":0,"explicit_cuda_runtime_calls":0,
         "explicit_cuest_api_calls":0,"origin_parent_value":7,"source_files_removed":True,
+        "descriptor_bound":bool(plan.get("descriptor_bound")),
         "nvrtc_cpu_compile":compiler,
         "memfd_provider":"os.memfd_create" if hasattr(os,"memfd_create") else "libc.memfd_create",
         "records":records,"preloaded":plan["preload_order"],"symbol_ownership":ownership,
@@ -238,6 +251,8 @@ def main():
     parser.add_argument("--root",type=Path)
     parser.add_argument("--toy-only",action="store_true")
     parser.add_argument("--gpu",action="store_true",help="Approved bounded compatibility probe only")
+    parser.add_argument("--descriptor-bound",action="store_true",
+                        help="First-load only through sealed FDs; preloaded SONAME dependencies")
     parser.add_argument("--child",type=Path,help=argparse.SUPPRESS)
     args=parser.parse_args()
     if args.child is not None:
@@ -264,9 +279,10 @@ def main():
     subprocess.run([cc,"-shared","-fPIC",str(source),"-L"+str(scratch),"-lsealed_child",
                     "-Wl,-rpath,$ORIGIN","-o",str(parent_lib)],check=True)
     plan={"toy":[item(child_lib),item(parent_lib)],"vendor":[],"preload_order":[],
-          "reference_pin":REFERENCE,
+          "reference_pin":REFERENCE,"descriptor_bound":args.descriptor_bound,
           "aliases":str(aliases),"toy_aliases":str(toy_aliases),
-          "startup_library_path":str(aliases),"result":str(args.output/"result.json")}
+          "startup_library_path":"" if args.descriptor_bound else str(aliases),
+          "result":str(args.output/"result.json")}
     if not args.toy_only:
         root=args.root.resolve(strict=True)
         assert root==Path.home()/"gits/psi4-disp0-perf-cachy"
@@ -294,6 +310,8 @@ def main():
                    and any(isinstance(t,ast.Name) and t.id=="FACTORY_ABI" for t in n.targets))
         plan["factory_symbols"]=[ast.literal_eval(k) for k in table.keys]
         plan["startup_library_path"]+=":"+config["dependency_environment"]+"/lib"
+        if args.descriptor_bound:
+            plan["startup_library_path"]=config["dependency_environment"]+"/lib"
         if args.gpu:
             spec=importlib.util.spec_from_file_location("_prototype_header_identity",
                                                        plan["identity_helper"])
