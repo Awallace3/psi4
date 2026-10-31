@@ -476,6 +476,60 @@ assert owned.owner_for_session() is prepared
 assert prepared.load_library(path,checksum)[0].value()==7
 ''')
 
+    def test_one_electron_and_solver_binders_admit_real_sealed_symbol_images(self):
+        for role in ("potential","overlap","solver"):
+            with self.subTest(role=role):
+                self.run_case(f'''
+role={role!r}
+names=("cuestOEIntPlanCreate","cuestOEIntPlanCreateWorkspaceQuery","cuestOEIntPlanDestroy",
+       "cuestPotentialCompute","cuestPotentialComputeWorkspaceQuery",
+       "cuestOverlapCompute","cuestOverlapComputeWorkspaceQuery",
+       "cusolverDnCreate","cusolverDnDestroy","cusolverDnSetStream",
+       "cusolverDnDsyevd_bufferSize","cusolverDnDsyevd")
+path,checksum=library("libfixture.so",
+    "\\n".join("int "+name+"(void){{return 0;}}" for name in names))
+owner=admit({{str(path):checksum}});owner.preload([str(path)])
+native,_=owner.load_library(path,checksum)
+session=types.SimpleNamespace(identity_owner=owner)
+api=types.SimpleNamespace(native=native,proof={{"native_path":str(path)}},
+                         assert_identity=owner.check_live)
+parent=types.SimpleNamespace(session=session,api=api,assert_live=owner.check_live)
+if role=="potential":
+    module=importlib.import_module(package.__name__+".sapt_cuest_potential_cuda")
+    node=module.CuESTPointPotential.__new__(module.CuESTPointPotential)
+elif role=="overlap":
+    module=importlib.import_module(package.__name__+".sapt_cuest_overlap_cuda")
+    node=module.CuESTOverlapBlocks.__new__(module.CuESTOverlapBlocks)
+    node.snapshot=types.SimpleNamespace(assert_unchanged=lambda:None)
+else:
+    module=importlib.import_module(package.__name__+".sapt_cuda_symmetric_power")
+    node=module.CuSolverSymmetricPower.__new__(module.CuSolverSymmetricPower)
+    node.native,node.path=native,str(path)
+node.owner,node.session=parent,session
+node._bind()
+assert "cuda" not in sys.modules and "psi4" not in sys.modules
+''')
+
+    def test_additional_symbol_outside_snapshot_retires_before_unwinding(self):
+        self.run_case(r'''
+names=("cuestOEIntPlanCreate","cuestOEIntPlanCreateWorkspaceQuery","cuestOEIntPlanDestroy",
+       "cuestPotentialCompute","cuestPotentialComputeWorkspaceQuery")
+path,checksum=library("libfixture.so",
+    "\n".join("int "+name+"(void){return 0;}" for name in names))
+owner=admit({str(path):checksum});owner.preload([str(path)])
+native,_=owner.load_library(path,checksum)
+native.cuestPotentialCompute=ct.CFUNCTYPE(ct.c_int)(lambda:0)
+session=types.SimpleNamespace(identity_owner=owner)
+api=types.SimpleNamespace(native=native,proof={"native_path":str(path)},
+                         assert_identity=owner.check_live)
+module=importlib.import_module(package.__name__+".sapt_cuest_potential_cuda")
+node=module.CuESTPointPotential.__new__(module.CuESTPointPotential)
+node.owner=types.SimpleNamespace(session=session,api=api,assert_live=owner.check_live)
+node.session=session
+try:node._bind()
+finally:print("UNSAFE additional-symbol teardown",flush=True)
+''',code=86)
+
 
 if __name__ == "__main__":
     unittest.main()

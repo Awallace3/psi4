@@ -8,7 +8,6 @@ import ctypes as ct
 from dataclasses import dataclass,replace
 import hashlib
 import json
-from pathlib import Path
 import numpy as np
 
 from . import sapt_cuest250_identity as identity
@@ -160,11 +159,10 @@ class CuESTOverlapBlocks:
             "cuestOEIntPlanCreateWorkspaceQuery":[V]*4+[D,D,ct.POINTER(V)],
             "cuestOEIntPlanDestroy":[V],"cuestOverlapCompute":[V]*3+[W,abi.PD],
             "cuestOverlapComputeWorkspaceQuery":[V]*3+[D,abi.PD]}
-        rows=identity.mapped_rows(Path("/proc/self/maps").read_text())
+        identity.audit_symbol_owners(owner.api.native,owner.api.proof["native_path"],specs,
+            owner=getattr(self.session,"identity_owner",None))
         for name,args in specs.items():
-            fn=getattr(owner.api.native,name);pointer=ct.cast(fn,V).value
-            owners={path for lo,hi,path,_,_ in rows if lo<=pointer<hi}
-            identity.require(owners=={owner.api.proof["native_path"]},"Overlap symbol outside canonical cuEST: "+name)
+            fn=getattr(owner.api.native,name)
             fn.argtypes,fn.restype=args,ct.c_int
 
     def compute(self):

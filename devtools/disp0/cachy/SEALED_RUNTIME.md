@@ -93,3 +93,18 @@ qualification: conda's`cc` injected an absolute RPATH into the tiny test ELFs.
 The fixtures now explicitly use`/usr/bin/cc`; production loader checks are not
 relaxed. The corrected local fixture/bootstrap/argument suites passed37 tests.
 A fresh coherent prefix/CPU proof is required for the corrected source pin.
+
+`install-owned-sealed-7047c13de2` then passed68 target CPU tests and whole-prefix
+CPU qualification (`CPU_RHF_Eh=-1.1167593073781577`). Configuration SHA256:
+`33e11e7804acb6a93d8a582942c675e9c4d2a01bd4b1e19415ddc097484f3652`.
+Both construction/JIT arms passed, but the first full-water GPU process stopped
+at an additional point-potential symbol audit that still called the legacy
+deleted-library parser. No whole-water result or speedup from that attempt is
+accepted. Its outputs remain under`sealed-full-water-gate-01`.
+
+Additional point-potential, overlap and cuSOLVER symbol binding now uses a
+shared fresh audit with the exact selected owner, including mapped-inode and
+symbol-address checks. Legacy behavior stays strict; sealed failures retire the
+worker rather than unwinding native owners. Real sealed-ELF binder regressions
+were run red for all three consumers, then green; a foreign function pointer
+also verifies fail-stop retirement. The host suites passed375+33+109=**517 tests**.

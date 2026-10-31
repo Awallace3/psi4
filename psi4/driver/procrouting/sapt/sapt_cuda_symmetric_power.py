@@ -79,11 +79,10 @@ class CuSolverSymmetricPower:
         specs={"cusolverDnCreate":[ct.POINTER(V)],"cusolverDnDestroy":[V],"cusolverDnSetStream":[V,V],
             "cusolverDnDsyevd_bufferSize":[V,I,I,I,D,I,D,ct.POINTER(I)],
             "cusolverDnDsyevd":[V,I,I,I,D,I,D,D,I,ct.POINTER(I)]}
-        rows=identity.mapped_rows(Path("/proc/self/maps").read_text())
+        identity.audit_symbol_owners(self.native,self.path,specs,
+            owner=getattr(self.session,"identity_owner",None))
         for name,args in specs.items():
-            fn=getattr(self.native,name);pointer=ct.cast(fn,V).value
-            owners={path for lo,hi,path,_,_ in rows if lo<=pointer<hi}
-            identity.require(owners=={self.path},"cuSOLVER symbol outside frozen DSO: "+name)
+            fn=getattr(self.native,name)
             fn.argtypes,fn.restype=args,I
 
     def inverse_sqrt(self,value,*,condition=1e-7):

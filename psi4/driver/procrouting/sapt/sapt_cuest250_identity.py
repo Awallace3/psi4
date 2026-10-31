@@ -216,6 +216,50 @@ def mapped_rows(text, *, resolve_once=False):
     return result
 
 
+def _require_owner(owner):
+    from .sapt_cuest_owned_runtime import _OwnedRuntime, current_owned_runtime
+    from .sapt_cuest_sealed_runtime import _SealedRuntime
+    if (type(owner) not in (_OwnedRuntime,_SealedRuntime)
+            or owner is not current_owned_runtime()):
+        raise TypeError("The exact admitted process-owned immutable runtime is required")
+
+
+def _owned_rows(text, owner):
+    if owner is not None and owner.contract == "process-owned-kernel-sealed-snapshots-v1":
+        return owner.mapped_rows(text)
+    return mapped_rows(text,resolve_once=True) if owner is not None else mapped_rows(text)
+
+
+def audit_symbol_owners(native, path, names, *, owner=None, text=None):
+    """Fresh additional-symbol admission; no parsed rows escape or are reused.
+
+    The preceding caller-specific native/manifest admission remains required.
+    For an owned runtime, independently bind the image's actual mapped identity
+    as well as every function pointer; any failure retires the dedicated worker.
+    Legacy callers retain fresh filesystem-name/symbol ownership checks.
+    """
+    if owner is not None:
+        _require_owner(owner)
+        owner.check_live()
+    try:
+        text=Path("/proc/self/maps").read_text() if text is None else text
+        rows=_owned_rows(text,owner)
+        expected=str(path)
+        if owner is not None:
+            owner.mapped_sha256(expected,rows)
+        addresses={}
+        for name in names:
+            address=ct.cast(getattr(native,name),ct.c_void_p).value
+            owners={p for lo,hi,p,_,_ in rows if lo<=address<hi}
+            require(owners=={expected},"Native symbol outside admitted image: "+name)
+            addresses[name]=address
+        if owner is not None:owner.check_live()
+        return addresses
+    except BaseException as error:
+        if owner is not None:owner.invalidate("Additional native symbol audit failed: "+str(error))
+        raise
+
+
 def audit_maps(native, proof, cuda_manifest, *, text=None, owner=None, extra_symbols=()):
     """Fresh mapping/ABI audit, optionally under an explicit immutable owner.
 
@@ -229,11 +273,7 @@ def audit_maps(native, proof, cuda_manifest, *, text=None, owner=None, extra_sym
         if extra_symbols:
             raise ValueError("Additional symbols require explicit owned-runtime admission")
         return _audit_maps(native,proof,cuda_manifest,text=text)
-    from .sapt_cuest_owned_runtime import _OwnedRuntime, current_owned_runtime
-    from .sapt_cuest_sealed_runtime import _SealedRuntime
-    if (type(owner) not in (_OwnedRuntime,_SealedRuntime)
-            or owner is not current_owned_runtime()):
-        raise TypeError("The exact admitted process-owned immutable runtime is required")
+    _require_owner(owner)
     try:
         owner.check_live()
         result = _audit_maps(native,proof,cuda_manifest,text=text,owner=owner,
@@ -259,10 +299,7 @@ def _audit_maps(native, proof, cuda_manifest, *, text=None, owner=None, extra_sy
             and cuda_manifest.get("nvrtc_version") == [13,3],
             "DFMO CUDA closure must declare the explicitly selected13.3 ABI")
     text = Path("/proc/self/maps").read_text() if text is None else text
-    if owner is not None and owner.contract == "process-owned-kernel-sealed-snapshots-v1":
-        rows = owner.mapped_rows(text)
-    else:
-        rows = mapped_rows(text,resolve_once=True) if owner is not None else mapped_rows(text)
+    rows = _owned_rows(text,owner)
     paths = {name for _,_,name,_,_ in rows}
     expected = proof["native_path"]
     native_paths = {name for name in paths if Path(name).name.startswith("libcuest.so")}

@@ -5,7 +5,6 @@ graph. It creates no hidden CUDA context and has no independent teardown:
 the parent graph retains its plans, parameters, workspaces and pending inputs.
 """
 import ctypes as ct
-from pathlib import Path
 
 from . import sapt_cuest_factory_abi as abi
 from . import sapt_cuest250_identity as identity
@@ -58,15 +57,12 @@ class CuESTPointPotential:
             "cuestOEIntPlanDestroy":[V],
             "cuestPotentialCompute":[V]*3+[W,ct.c_uint64]+[abi.PD]*3,
             "cuestPotentialComputeWorkspaceQuery":[V]*3+[D,ct.c_uint64]+[abi.PD]*3}
-        rows=identity.mapped_rows(Path("/proc/self/maps").read_text())
-        self.symbols={}
+        identity_owner=getattr(self.session,"identity_owner",None)
+        self.symbols=identity.audit_symbol_owners(
+            native,owner.api.proof["native_path"],specs,owner=identity_owner)
         for name,types in specs.items():
-            fn=getattr(native,name);address=ct.cast(fn,V).value
-            owners={path for lo,hi,path,_,_ in rows if lo<=address<hi}
-            identity.require(owners=={owner.api.proof["native_path"]},
-                             "Point potential symbol outside canonical cuEST: "+name)
+            fn=getattr(native,name)
             fn.argtypes,fn.restype=types,ct.c_int
-            self.symbols[name]=address
 
     def _precision(self):
         owner=self.owner;raw=owner._raw
