@@ -223,9 +223,18 @@ class DFTGrid : public MolecularGrid {
                               std::map<std::string, double> float_opts_map);
     /// The Options object
     Options& options_;
+    /// spec_for() of the arguments this grid was built from
+    std::string spec_;
 
    public:
     std::shared_ptr<BasisSet> primary() const { return primary_; }
+    /// Every option the points, weights and blocks were built from, overrides applied, as one string.
+    const std::string& spec() const { return spec_; }
+    /// The spec() a DFTGrid built now with these arguments would have. On the same molecule and
+    /// basis, equal specs mean the same points, weights and blocks.
+    static std::string spec_for(Options& options, const std::map<std::string, int>& int_opts_map,
+                                const std::map<std::string, std::string>& str_opts_map,
+                                const std::map<std::string, double>& float_opts_map);
 
     DFTGrid(std::shared_ptr<Molecule> molecule, std::shared_ptr<BasisSet> primary, Options& options);
     DFTGrid(std::shared_ptr<Molecule> molecule, std::shared_ptr<BasisSet> primary,

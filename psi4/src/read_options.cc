@@ -1987,6 +1987,10 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         counterpoise subsystem jobs run outside that driver. Ignored when
         |scf__xdm_dispersion_parameters| is set. -*/
         options.add_bool("XDM_COUNTERPOISE", false);
+        /*- Integrate XDM on the SCF's own XC grid instead of building another, when it is the same
+        grid: the same basis and the same grid options. Wavefunctions without an XC potential always
+        build their own grid. The output names the grid used. !expert -*/
+        options.add_bool("XDM_GRID_REUSE", true);
         /*- Parameters defining the -NL/-V dispersion correction. First b, then C -*/
         options.add("NL_DISPERSION_PARAMETERS", new ArrayType());
         /*- Number of spherical points (A :ref:`Lebedev Points <table:lebedevorder>` number) for VV10 NL integration.
