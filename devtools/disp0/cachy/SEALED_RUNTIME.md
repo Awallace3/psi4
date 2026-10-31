@@ -86,3 +86,10 @@ water CPU/GPU/oracle/displacement/repeat gate, and compare before/after artifact
 at unchanged tolerances. Record snapshot host memory/startup separately from
 whole-energy time and tracked device memory. No Phoenix submission or H200
 performance claim is implied.
+
+The first whole prefix,`install-owned-sealed-a7ca4a86a9`, built successfully and
+preserved every prior prefix's`BUILT_FROM`. Target CPU tests stopped before
+qualification: conda's`cc` injected an absolute RPATH into the tiny test ELFs.
+The fixtures now explicitly use`/usr/bin/cc`; production loader checks are not
+relaxed. The corrected local fixture/bootstrap/argument suites passed37 tests.
+A fresh coherent prefix/CPU proof is required for the corrected source pin.

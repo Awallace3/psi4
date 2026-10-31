@@ -38,7 +38,9 @@ def library(name,body="int value(void) { return 7; }",flags=()):
     source=root/(name+".c")
     source.write_text(body)
     target=root/name
-    subprocess.run(["cc","-shared","-fPIC",str(source),*flags,"-o",str(target)],check=True)
+    # Conda's cc injects its own absolute RPATH. These are tiny Linux loader
+    # fixtures, not conda-linked modules; keep their search paths intentional.
+    subprocess.run(["/usr/bin/cc","-shared","-fPIC",str(source),*flags,"-o",str(target)],check=True)
     return target,hashlib.sha256(target.read_bytes()).hexdigest()
 path,checksum=library("libfixture.so")
 pins={str(path):checksum}

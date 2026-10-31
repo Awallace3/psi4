@@ -40,7 +40,7 @@ environment=root/"environment";(environment/"lib").mkdir(parents=True)
 runtime=root/"runtime";sdk=runtime/"cuest";(sdk/"lib/13").mkdir(parents=True)
 def library(path,body):
     source=path.with_name(path.name+".c");source.write_text(body)
-    subprocess.run(["cc","-shared","-fPIC",str(source),"-o",str(path)],check=True)
+    subprocess.run(["/usr/bin/cc","-shared","-fPIC",str(source),"-o",str(path)],check=True)
     return hashlib.sha256(path.read_bytes()).hexdigest()
 names=bootstrap.native_symbols(package)
 native=sdk/"lib/13/libcuest.so.0.2.50"
