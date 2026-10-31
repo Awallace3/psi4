@@ -152,3 +152,34 @@ ownership proof; complete cleanup of that original attempt is not claimed.
 No automatic replacement job was submitted. A corrected attempt requires a
 fresh coherent source/build proof and new output roots, not editing the frozen
 whole stage or reviving its helper proof.
+
+## Explicitly approved corrected submission
+
+After reviewing the scratch-launch failure and149 passing offline tests, the
+user explicitly selected **Resubmit on embers**. New frozen source/helper:
+`6c6cc8885d04bf943c807805387565559efe9ec1`, checkout
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-sealed-h200-6c6cc8885d`.
+The prior source, whole build, manifests and failed job remain untouched.
+
+| Job | Role | Route | Cap |
+|---|---|---|---|
+| **14784757** | New whole build/CPU prerequisite | gts-cs207-chemx / cpu-small / embers | 3h |
+| **14784867** | Corrected H200 pilot | gts-cs207-chemx / gpu-h200 / embers | 8h |
+
+H200 resources remain1 GPU/8 host CPUs/160GiB, with the full small gate before
+three fresh peptide calls. The CPU prerequisite remains8 CPUs/48GiB/no GPU.
+Dependency:`afterany:14784757`, plus successful exact-pin CPU artifact checks.
+Test-only scheduler IDs14784756/14784865 are not compute jobs.
+
+Fresh roots under
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/`:
+
+- `phoenix-sealed-build-6c6cc8885d`
+- `phoenix-sealed-h200-6c6cc8885d`
+
+State-change watchers:`bc14f6c6e` (both jobs),`bd0ce55a9` (CPU prerequisite).
+Controller readback confirms both effective QoS values are embers with the
+declared account/resources. CPU14784757 is RUNNING (prolog: embers);
+H20014784867 is PENDING(Dependency), with H200 constraint and8-hour cap.
+No inferno, automatic retry, old-proof reactivation or scientific-code overlay.
+This remains a submitted pilot, not a completed gate or accepted speedup.
