@@ -170,3 +170,10 @@ the post-compiler mapping check found only exact sealed toolkit images.
 This establishes descriptor-loading/CPU-compiler feasibility. It does not test
 the production bounded ELF dependency parser, cuEST context/GPU behavior through
 the new descriptors, or whole-Psi4 numerical/performance qualification.
+
+The subsequent bounded `sealed-descriptor-gpu-01` repeat also passed the tiny
+FP64 kernel, cuEST0.2.50 FP64 context creation and all explicit cleanup. Result
+SHA256:`0e19acc6cc5cba9cfaa5ced72283a91b9a2048bfc3aec623b179d5dda82b2b38`.
+All recorded toolkit mappings still belonged to exact sealed snapshots.
+This extends descriptor-only compatibility to that narrow GPU/context scope;
+it does not qualify the separate production parser/owner or whole Psi4 workflow.
