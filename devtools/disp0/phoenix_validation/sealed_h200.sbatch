@@ -27,10 +27,8 @@ export OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 OMP_DYNAMIC=FA
 export CONDA_PREFIX="$env" MKL_INTERFACE_LAYER=LP64
 while IFS= read -r name; do unset "$name"; done < <(compgen -v EINSUMS_ || true)
 export EINSUMS_PACKED_GEMM_BATCH_PROMOTION=1
-export TMPDIR="/storage/scratch1/3/awallace43/disp0-sealed-h200-$SLURM_JOB_ID"
-mkdir -m 0700 "$TMPDIR"
-export TMPDIR="$(readlink -f "$TMPDIR")"
-export SCRATCH="$TMPDIR" PSI_SCRATCH="$TMPDIR" DISP0_SPLIT_SCRATCH_CREATED="$TMPDIR"
+# The Python step creates/binds its private scratch AFTER srun has applied
+# scheduler step-environment rewrites. Never export a stale batch TMPDIR proof.
 srun --kill-on-bad-exit=1 "$env/bin/python" -B \
     "$DISP0_SOURCE/devtools/disp0/phoenix_validation/sealed_h200.py" \
     --execute "$DISP0_RUN_ROOT/manifest.json" &

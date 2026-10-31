@@ -119,3 +119,36 @@ Under`phoenix-sealed-build-c850f57a32/job-14779212/`:
 H20014779252 is now PENDING(Priority), no longer waiting on the CPU dependency.
 No H200 computation, small-gate PASS or accepted speedup is inferred yet.
 The frozen remote checkout/configuration and queued job remain unchanged.
+
+## H200 attempt14779252 failed before scientific work
+
+Job/batch/step report FAILED1:0 after9s (the Python step ran2s).
+The prolog confirms embers on`atl1-1-03-019-14-0`, with one H200 requested,
+8 CPUs and160GiB. The exception is from the first scratch-ownership check:
+`Scratch must be this payload's own fresh external directory`.
+It occurs before configuration preparation, CUDA admission, the small gate,
+or any peptide sample. There is no accepted timing, numerical result or
+GPU device-identity evidence from this attempt; no OOM is reported.
+
+The batch wrapper created/bound scratch before`srun`, but its step entered
+with an inconsistent scratch environment. The inherited values were not
+captured in the failed process. Moving creation and binding into the Python
+step removes dependence on`srun` preserving batch TMPDIR: the step creates
+its own job-named0700 directory, validates ownership, then sets all four
+scratch variables together. Existing directories reject; scheduler-provided
+temporary directories are neither adopted nor deleted. The owned-directory
+guard itself is unchanged.
+
+The regression starts with conflicting scheduler/batch scratch variables,
+checks all four variables bind the newly created directory, rejects reuse,
+and verifies cleanup leaves scheduler scratch untouched. Failure before
+scientific preflight still records FAILED and cleans the new owned directory.
+The corrected offline suites passed116 Phoenix helper tests and33 Cachy
+compatibility/bootstrap tests; shell syntax and whitespace checks passed.
+
+Original logs/status, successful CPU build and frozen checkout are preserved.
+The failed batch-created scratch directory was not removed by a successful
+ownership proof; complete cleanup of that original attempt is not claimed.
+No automatic replacement job was submitted. A corrected attempt requires a
+fresh coherent source/build proof and new output roots, not editing the frozen
+whole stage or reviving its helper proof.

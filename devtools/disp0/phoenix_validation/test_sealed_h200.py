@@ -17,11 +17,12 @@ class SealedH200Contracts(unittest.TestCase):
     def test_failed_preflight_cleans_only_owned_scratch_and_records_failure(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp).resolve()
-            root, scratch = base/"output", base/"scratch"
+            root, scratch = base/"output", base/"disp0-sealed-h200-123"
             root.mkdir()
-            scratch.mkdir(mode=0o700)
-            with patch.dict(os.environ, {"TMPDIR": str(scratch),
-                    "DISP0_SPLIT_SCRATCH_CREATED": str(scratch), "DISP0_JOB_RUN": str(root)}):
+            with patch.object(sealed_h200, "STEP_SCRATCH_PARENT", base), \
+                    patch.dict(os.environ, {"TMPDIR": "/scheduler/step/tmp",
+                    "DISP0_SPLIT_SCRATCH_CREATED": "/stale/batch/tmp",
+                    "SLURM_JOB_ID": "123", "DISP0_JOB_RUN": str(root)}):
                 with self.assertRaises(FileNotFoundError):
                     sealed_h200.execute(base/"missing-manifest.json")
             self.assertFalse(scratch.exists())
@@ -29,6 +30,27 @@ class SealedH200Contracts(unittest.TestCase):
             self.assertEqual(proof["status"], "FAILED")
             self.assertEqual(proof["accepted_speedup_count"], 0)
             self.assertTrue(proof["scratch_cleanup"]["complete"])
+
+    def test_step_scratch_rebinds_srun_overrides_without_adopting_them(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            root = base/"output"
+            root.mkdir()
+            scheduler = base/"scheduler-tmp"
+            scheduler.mkdir()
+            with patch.object(sealed_h200, "STEP_SCRATCH_PARENT", base), \
+                    patch.dict(os.environ, {"TMPDIR": str(scheduler),
+                    "SCRATCH": "/stale/batch/tmp", "PSI_SCRATCH": "/stale/batch/tmp",
+                    "DISP0_SPLIT_SCRATCH_CREATED": "/stale/batch/tmp", "SLURM_JOB_ID": "456"}):
+                owner = sealed_h200.step_scratch(root)
+                expected = base/"disp0-sealed-h200-456"
+                for key in ("TMPDIR","SCRATCH","PSI_SCRATCH","DISP0_SPLIT_SCRATCH_CREATED"):
+                    self.assertEqual(os.environ[key], str(expected))
+                self.assertEqual(expected.stat().st_mode & 0o777, 0o700)
+                with self.assertRaises(FileExistsError):
+                    sealed_h200.step_scratch(root)
+                self.assertTrue(owner.cleanup(set())["complete"])
+            self.assertTrue(scheduler.is_dir())  # Never delete scheduler-owned scratch.
 
     def test_only_explicit_embers_h200_afterany_with_fixed_caps(self):
         argv = sealed_h200.command(Path("/source"), Path("/fresh"), "123")

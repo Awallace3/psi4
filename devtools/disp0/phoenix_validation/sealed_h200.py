@@ -17,6 +17,7 @@ from owned_process import termination_signals
 from submit_split import save_new, source_pin
 
 CONTRACT = "process-owned-kernel-sealed-snapshots-v1"
+STEP_SCRATCH_PARENT = Path("/storage/scratch1/3/awallace43")
 PRELOAD = ("libcudart.so.13", "libnvJitLink.so.13", "libcublasLt.so.13",
            "libcublas.so.13", "libcusparse.so.12", "libcusolver.so.12",
            "libnvrtc-builtins.so.13.3", "libnvrtc.so.13", "libcuest.so.0.2.50")
@@ -64,12 +65,25 @@ def configuration(base, build, root):
             "native_persistent_bytes": 12*1024**3}
 
 
-def execute(manifest_path):
+def step_scratch(root):
+    """Create/bind private scratch AFTER srun's step-environment rewriting."""
     from split_scratch import OwnedScratch
+    job = os.environ["SLURM_JOB_ID"]
+    if not job.isdecimal():
+        raise RuntimeError("Explicit numeric scheduler job ID required")
+    path = STEP_SCRATCH_PARENT/("disp0-sealed-h200-"+job)
+    path.mkdir(mode=0o700)  # Never adopt an existing directory or inherited TMPDIR.
+    path = path.resolve(strict=True)
+    owner = OwnedScratch(path, str(path), root)
+    for key in ("TMPDIR", "SCRATCH", "PSI_SCRATCH", "DISP0_SPLIT_SCRATCH_CREATED"):
+        os.environ[key] = str(path)
+    return owner
+
+
+def execute(manifest_path):
     from run_full import save
     root = Path(os.environ["DISP0_JOB_RUN"]).resolve(strict=True)
-    owner = OwnedScratch(Path(os.environ["TMPDIR"]).resolve(strict=True),
-                         os.environ["DISP0_SPLIT_SCRATCH_CREATED"], root)
+    owner = step_scratch(root)
     groups = set()
     path = root/"pilot-result.json"
     try:
