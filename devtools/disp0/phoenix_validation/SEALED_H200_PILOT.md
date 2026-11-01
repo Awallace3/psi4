@@ -1,9 +1,9 @@
 # Sealed-runtime H200 peptide pilot
 
-**Latest:** H20014784867 failed its first GPU small-gate worker with exit86;
-no peptide benchmark ran. A real CPU ELF fixture reproduces a manifest-locator
-binding mismatch. The diagnostic/fix candidate adds a CPU-only admission gate;
-no further allocation has been submitted.
+**Latest:** CPU-only validation14942939 is submitted on embers for the
+locator fix and real sealed cuBLAS/cuSOLVER admission. No H200 retry is queued.
+H20014784867 failed its first GPU small-gate worker with exit86; no peptide
+benchmark ran. A real CPU ELF fixture reproduces a manifest-locator mismatch.
 
 User requested an **embers H200 speedup test** after the restricted-water
 Cachy gate at `0433ec0452`. This pilot keeps that scientific/runtime source
@@ -290,3 +290,27 @@ foreign/retargeted locators, full/closed diagnostic receivers, forced blocking
 descriptor flags, interrupted socket setup/rollback, actual descriptor passage
 through the PsiAPI/Bash/exec chain, and absence of CUDA-session creation in the
 CPU admission mode. These are host evidence, not GPU numerical qualification.
+
+## User-approved CPU-only validation14942939
+
+The user explicitly selected **CPU-only validation**, not another H200
+submission. Frozen source/helper:
+`927283f8ed0a94d42179c35dd2a1a5bce674347e`, checkout
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-sealed-admission-927283f8ed`.
+
+Job**14942939** uses`gts-cs207-chemx / cpu-small / embers`,8 CPUs,48GiB,
+3-hour cap and **no GPU request**. It makes a fresh coherent whole stage,
+runs CPU regressions and native water controls, then exercises the new
+CPU-only sealed adapter and cuBLAS/cuSOLVER binding/symbol checks.
+Scheduler test-only ID14942938 is not a compute job.
+
+Output root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-sealed-cpu-admission-927283f8ed`.
+Important final artifacts are`result.json`,
+`cpu-sealed-admission/preflight-result.json` and
+`cpu-sealed-admission/runtime-admission.json` inside the job directory.
+Watcher:`bbf417ea0`.
+Initial controller readback and prolog confirm RUNNING on embers with the
+declared account/CPU/memory/wall cap; neither requested nor allocated TRES
+contains a GPU.
+Submission is not admission PASS, GPU qualification or a speedup result.

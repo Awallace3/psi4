@@ -125,3 +125,10 @@ takes6.281/6.228s for JIT1/4; this still does not establish a JIT-thread benefit
 The adapter remains opt-in, broader edge cases are not qualified, and
 performance is not considered solved. These are RTX3090 debug observations,
 not an H200 kernel-speedup claim; no Phoenix job was submitted.
+
+The subsequently requested [embers H200 pilot](SEALED_H200_PILOT.md) has not
+produced an accepted timing: its first attempt stopped at scratch ownership,
+and the corrected attempt retired its first GPU small-gate worker with86.
+A real CPU ELF test reproduces a cold SDK-locator/canonical-snapshot mismatch.
+The fix retains hot identity checks; user-approved CPU-only job14942939 now
+validates actual sealed cuBLAS/cuSOLVER binding before another H200 retry.
