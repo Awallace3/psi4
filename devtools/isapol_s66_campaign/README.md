@@ -259,3 +259,26 @@ non-`B:` TERM warning policy. An interrupted batch-shell wait forwards TERM
 once, reaps the child through a bounded20-second grace and never prints a
 delivery-complete marker after interruption. Stop requests during claim or
 input validation are rechecked before application submission.
+
+## Independent post-run checks
+
+`validate_numeric.py` imports no Psi4 code. It checks bounded finite tensor
+layouts, full11-node/site/order inventory, rank3 structural-zero padding,
+reciprocity, residual/budget metadata and partial-C10 declarations. It
+independently reconstructs C6/C8/C10(2,2) from dipole/quadrupole tensor traces
+and the exported CP weights using scalar factors6/15/70 and compensated sums.
+`PASS_NUMERIC_TRANSPORT_ONLY` is neither an origin audit nor an accuracy or
+independent-solver certificate; nonpositive BJ inputs remain reported.
+
+`runtime_audit.py` with its small `embers` wrapper reads a finished case without
+executing quantum work or changing QCArchive. It checks fresh-record/claim/
+history receipts, independently decompresses the local result and compares
+the server envelope, rechecks native and manager implementation hashes, and
+applies the **unchanged** decoded-FD file/exec gate from the case's operational
+revision. Every CLI trace must contain only its initial private interpreter;
+discovery modes are distinguished from exactly one bounded molecular
+QCSchema call. Missing traces, unsealed inputs and extra programs fail closed.
+
+Even `PASS_SINGLE_PILOT_EVIDENCE` qualifies only that one controlled run under
+ordinary OS trust—not a hostile-host/TOCTOU proof, full C10, grid/recipe
+convergence, accuracy/parity or full-S66x8 coverage.
