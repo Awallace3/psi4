@@ -96,6 +96,7 @@ if [[ "${DISP0_PREPARE_GPU_RUNTIME:-0}" == 1 ]]; then
             --config-sha256 "$config_sha" --arm cpu "${flags[@]}" \
             --output "$run/cpu-fragment-$mode"
     done
+    "$python" -B "$helper/sealed_h200.py" --prepare-cpu-admission "$run"
 fi
 [[ "$(git -C "$source_root" rev-parse HEAD)" == "$DISP0_PIN" ]]
 git -C "$source_root" diff HEAD --exit-code

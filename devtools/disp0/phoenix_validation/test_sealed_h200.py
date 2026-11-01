@@ -2,18 +2,116 @@
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import benchmark_suite
 import sealed_bootstrap
 import sealed_h200
-from gpu_runtime import sealed_startup_path
+from gpu_runtime import digest, retirement_channel, sealed_startup_path
 from run_gate import environment
 
 
 class SealedH200Contracts(unittest.TestCase):
+    def test_cpu_admission_never_creates_a_cuda_session_or_claims_gpu_evidence(self):
+        from unittest.mock import Mock
+        runtime = SimpleNamespace(
+            identity_owner=SimpleNamespace(contract=sealed_h200.CONTRACT,
+                                           verify_symbols=Mock(), report=Mock(return_value={})),
+            report={"identity_contract": sealed_h200.CONTRACT},
+            manifest={"components": [
+                {"path": "/manifest/libcublas.so.13", "sha256": "blas"},
+                {"path": "/manifest/libcusolver.so.12", "sha256": "solver"}]},
+            cuda=SimpleNamespace(
+                CUDASession=Mock(side_effect=AssertionError("GPU session")),
+                library=Mock(side_effect=lambda path,sha256,owner:
+                             (object(),"/canonical/"+Path(path).name))))
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": "", "SLURM_JOB_GPUS": ""}), \
+                patch.object(sealed_bootstrap, "AuditedRuntime", return_value=runtime):
+            output = Path(temp)/"admission.json"
+            sealed_bootstrap.cpu_admission({"source_pin": "pin"}, Path("/config"), "sha", output)
+            proof = json.loads(output.read_text())
+            self.assertEqual(proof["status"], "PASS")
+            self.assertFalse(proof["cuda_session_created"])
+            self.assertFalse(proof["gpu_correctness_verified"])
+            self.assertEqual(len(proof["bindings"]), 2)
+            self.assertEqual(runtime.identity_owner.verify_symbols.call_count, 2)
+            runtime.cuda.CUDASession.assert_not_called()
+
+    def test_cpu_admission_rejects_gpu_visibility_or_allocation_before_adapter(self):
+        for visible, allocated in (("0", ""), ("", "0")):
+            with patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": visible,
+                                        "SLURM_JOB_GPUS": allocated}), \
+                    patch.object(sealed_bootstrap, "AuditedRuntime") as adapter:
+                with self.assertRaisesRegex(RuntimeError, "CPU-only"):
+                    sealed_bootstrap.cpu_admission({}, Path("/config"), "sha", Path("/out"))
+                adapter.assert_not_called()
+
+    def test_retirement_channel_is_private_nonblocking_and_removed_after_use(self):
+        import socket
+        env = {}
+        with retirement_channel(env) as channel:
+            self.assertIsNone(channel.reason())
+            fd = int(env["DISP0_RETIREMENT_FD"])
+            with socket.socket(fileno=os.dup(fd)) as sender:
+                sender.send(b"bounded fixture reason", socket.MSG_DONTWAIT | socket.MSG_NOSIGNAL)
+            self.assertEqual(channel.reason(), "bounded fixture reason")
+            self.assertEqual(channel.pass_fds, (fd,))
+        self.assertNotIn("DISP0_RETIREMENT_FD", env)
+
+    def test_retirement_descriptor_survives_real_psiapi_bash_exec_chain(self):
+        from run_full import execute_owned
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            launcher = root/"psiapi"
+            launcher.write_text("#!/bin/sh\nprintf 'export FIXTURE_PSIAPI=1\\n'\n")
+            launcher.chmod(0o700)
+            env = dict(os.environ)
+            groups = set()
+            code = ("import os,socket; assert os.environ['FIXTURE_PSIAPI']=='1'; "
+                    "s=socket.socket(fileno=int(os.environ['DISP0_RETIREMENT_FD'])); "
+                    "s.send(b'bridge reason',socket.MSG_DONTWAIT|socket.MSG_NOSIGNAL); "
+                    "os._exit(86)")
+            argv = ["/bin/bash", "-c",
+                    'set -euo pipefail; eval "$("$1" --psiapi)"; exec "$2" -B -c "$3"',
+                    "fixture-bootstrap", str(launcher), sys.executable, code]
+            with (root/"stdout").open("w") as out, (root/"stderr").open("w") as err, \
+                    retirement_channel(env) as channel:
+                result = execute_owned(argv,env,out,err,10,groups.add,
+                                       reaped=groups.discard,pass_fds=channel.pass_fds)
+                self.assertEqual(result,86)
+                self.assertEqual(channel.reason(),"bridge reason")
+            self.assertFalse(groups)
+            self.assertEqual((root/"stderr").read_text(),"")
+
+    def test_h200_requires_exact_successful_cpu_admission_and_reaped_children(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            folder = root/"cpu-sealed-admission"
+            folder.mkdir()
+            proof_path = folder/"runtime-admission.json"
+            proof = {"status": "PASS", "source_pin": "pin", "cuda_session_created": False,
+                     "gpu_correctness_verified": False}
+            proof_path.write_text(json.dumps(proof))
+            receipt = {"status": "PASS", "source_pin": "pin", "owned_groups_reaped": True,
+                       "runtime_admission_sha256": digest(proof_path)}
+            path = folder/"preflight-result.json"
+            path.write_text(json.dumps(receipt))
+            self.assertEqual(sealed_h200.require_cpu_admission(root, "pin"), digest(path))
+            for changed in ({**receipt,"owned_groups_reaped": False},
+                            {**receipt,"status": "FAILED"}, {**receipt,"source_pin": "old"}):
+                path.write_text(json.dumps(changed))
+                with self.assertRaisesRegex(RuntimeError, "CPU runtime admission"):
+                    sealed_h200.require_cpu_admission(root, "pin")
+            path.write_text(json.dumps(receipt))
+            proof_path.write_text(json.dumps({**proof,"cuda_session_created": True}))
+            with self.assertRaisesRegex(RuntimeError, "CPU runtime admission"):
+                sealed_h200.require_cpu_admission(root, "pin")
+
     def test_failed_preflight_cleans_only_owned_scratch_and_records_failure(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp).resolve()

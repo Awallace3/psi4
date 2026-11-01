@@ -5,6 +5,7 @@ Each dedicated worker owns its process-lifetime handles and exits after a case.
 """
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import tempfile
@@ -66,7 +67,7 @@ with patch.object(sealed,"Path",side_effect=AssertionError("Path in ordinary ker
         assert sealed._mapped_basename(path)==path.rsplit("/",1)[-1]
 ''')
 
-    def run_case(self, body, *, code=0):
+    def run_case(self, body, *, code=0, diagnostics=None):
         with tempfile.TemporaryDirectory(prefix="psi4-sealed-cpu-") as temporary:
             root = Path(temporary)
             aliases = root / "aliases"
@@ -74,12 +75,138 @@ with patch.object(sealed,"Path",side_effect=AssertionError("Path in ordinary ker
             env = dict(os.environ, CUDA_VISIBLE_DEVICES="", PYTHONNOUSERSITE="1",
                        LD_LIBRARY_PATH="")
             env.pop("LD_PRELOAD", None)
-            run = subprocess.run(
-                [sys.executable, "-B", "-c", PREFIX + body, str(SAPT), str(root)],
-                env=env, capture_output=True, text=True, timeout=20)
+            env.pop("DISP0_RETIREMENT_FD", None)
+            receive = send = None
+            try:
+                pass_fds = ()
+                if diagnostics:
+                    receive, send = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+                    env["DISP0_RETIREMENT_FD"] = str(send.fileno())
+                    pass_fds = (send.fileno(),)
+                    if diagnostics == "full":
+                        send.setblocking(False)
+                        while True:
+                            try:send.send(b"filled")
+                            except BlockingIOError:break
+                        send.setblocking(True)  # Per-send flags must still prevent blocking.
+                    elif diagnostics == "closed":
+                        receive.close()
+                run = subprocess.run(
+                    [sys.executable, "-B", "-c", PREFIX + body, str(SAPT), str(root)],
+                    env=env, capture_output=True, text=True, timeout=20, pass_fds=pass_fds)
+                if diagnostics == "open":
+                    receive.settimeout(.5)
+                    try:run.retirement_reason = receive.recv(1024).decode()
+                    except TimeoutError:run.retirement_reason = None
+            finally:
+                if receive is not None:receive.close()
+                if send is not None:send.close()
             self.assertEqual(run.returncode, code, run.stdout + run.stderr)
             self.assertNotIn("UNSAFE", run.stdout)
             return run
+
+    def test_retirement_reason_uses_nonblocking_socket_not_stderr(self):
+        run = self.run_case(r'''
+owner=admit()
+owner.invalidate("fixture diagnostic reason")
+print("UNSAFE retirement returned")
+''', code=86, diagnostics="open")
+        self.assertEqual(run.retirement_reason, "fixture diagnostic reason")
+        self.assertEqual(run.stderr, "")
+
+    def test_full_or_closed_diagnostic_receiver_cannot_delay_or_change_exit86(self):
+        for state in ("full", "closed"):
+            self.run_case(r'''
+import socket
+socket.setdefaulttimeout(30)
+owner=admit()
+fd=owner._retirement_socket.fileno()
+fcntl.fcntl(fd,fcntl.F_SETFL,fcntl.fcntl(fd,fcntl.F_GETFL)&~os.O_NONBLOCK)
+signal.signal(signal.SIGPIPE,signal.SIG_DFL)
+owner.invalidate("receiver cannot block fail-stop")
+print("UNSAFE retirement returned")
+''', code=86, diagnostics=state)
+
+    def test_non_socket_diagnostic_rejects_without_leaking_duplicates(self):
+        self.run_case(r'''
+fd=os.open("/dev/null",os.O_RDONLY)
+os.environ["DISP0_RETIREMENT_FD"]=str(fd)
+before=set(os.listdir("/proc/self/fd"))
+try:admit()
+except OSError:pass
+else:raise AssertionError("Non-socket diagnostic admitted")
+assert set(os.listdir("/proc/self/fd"))==before
+assert owned.current_owned_runtime() is None
+os.close(fd)
+''')
+
+    def test_interrupted_diagnostic_setup_rolls_back_every_duplicated_socket(self):
+        for operation in ("getsockopt", "setblocking"):
+            self.run_case(r'''
+import socket
+receive,send=socket.socketpair(socket.AF_UNIX,socket.SOCK_DGRAM)
+os.environ["DISP0_RETIREMENT_FD"]=str(send.fileno())
+before=set(os.listdir("/proc/self/fd"))
+original=socket.socket
+kept=[]
+def interrupted(*args,**kwargs):
+    native=original(*args,**kwargs)
+    class Proxy:
+        def __getattr__(self,name):
+            if name==OPERATION:
+                def stop(*args,**kwargs):raise InterruptedError("fixture diagnostic setup")
+                return stop
+            return getattr(native,name)
+    result=Proxy();kept.append(result);return result
+with patch.object(sealed.socket,"socket",side_effect=interrupted):
+    try:admit()
+    except InterruptedError:pass
+    else:raise AssertionError("Interrupted diagnostic setup admitted")
+assert all(channel.fileno()==-1 for channel in kept)
+assert set(os.listdir("/proc/self/fd"))==before
+assert owned.current_owned_runtime() is None
+receive.close();send.close()
+'''.replace("OPERATION", repr(operation)))
+
+    def test_manifest_locator_symlink_binds_the_canonical_sealed_library(self):
+        self.run_case(r'''
+owner=admit();owner.preload([str(path)])
+locator=root/"cuda13"/"lib64"/path.name
+locator.parent.mkdir(parents=True)
+locator.symlink_to(path)
+transport=importlib.import_module(package.__name__+".sapt_cuda_runtime")
+native,canonical=transport.library(str(locator),checksum,owner=owner)
+assert canonical==str(path) and native.value()==7
+assert set(owner.report()["files"])=={str(path)}
+''')
+
+    def test_retargeted_manifest_locator_cannot_select_an_unadmitted_image(self):
+        self.run_case(r'''
+owner=admit();owner.preload([str(path)])
+foreign,foreign_sha=library("foreign.so","int value(void) { return 99; }")
+locator=root/"manifest-library.so"
+locator.symlink_to(foreign)
+transport=importlib.import_module(package.__name__+".sapt_cuda_runtime")
+try:transport.library(str(locator),checksum,owner=owner)
+finally:print("UNSAFE foreign locator unwound")
+''', code=86)
+
+    def test_locator_retarget_after_cold_resolution_cannot_change_loaded_bytes(self):
+        self.run_case(r'''
+owner=admit();owner.preload([str(path)])
+foreign,foreign_sha=library("foreign.so","int value(void) { return 99; }")
+locator=root/"manifest-library.so"
+locator.symlink_to(path)
+transport=importlib.import_module(package.__name__+".sapt_cuda_runtime")
+original=owner.load_library
+def retarget(canonical,sha256):
+    assert canonical==str(path)
+    locator.unlink();locator.symlink_to(foreign)
+    return original(canonical,sha256)
+with patch.object(owner,"load_library",side_effect=retarget):
+    native,canonical=transport.library(str(locator),checksum,owner=owner)
+assert canonical==str(path) and native.value()==7
+''')
 
     def test_loaded_image_survives_source_overwrite_removal_and_has_no_hot_file_io(self):
         self.run_case(r'''

@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import time
 import numpy as np
-from gpu_runtime import read_config,require_local_lease,sealed_startup_path
+from gpu_runtime import read_config,require_local_lease,sealed_startup_path,retirement_channel
 from repeat_gauge import compare_repeat
 
 
@@ -36,7 +36,7 @@ def environment(config,*,gpu,sealed_alias_directory=None):
     for name in ("PYTHONHOME","PYTHONPATH","PYTHONOPTIMIZE","LD_PRELOAD",
                  "CUDA_HOME","CUDA_PATH","CUDA_ROOT","CUDAToolkit_ROOT",
                  "CPATH","C_INCLUDE_PATH","CPLUS_INCLUDE_PATH","LIBRARY_PATH",
-                 "DISP0_SEALED_ALIAS_DIRECTORY"):
+                 "DISP0_SEALED_ALIAS_DIRECTORY","DISP0_RETIREMENT_FD"):
         env.pop(name,None)
     sealed=config.get("identity_contract")=="process-owned-kernel-sealed-snapshots-v1"
     if config.get("schema")==2 or sealed:
@@ -123,8 +123,19 @@ def main():
                 fd=require_local_lease(config["local_lease"])
                 code=execute(command,env,out,err,min(600,remaining),fd,config["local_lease"])
             else:
-                code=subprocess.run(command,env=env,stdout=out,stderr=err,
-                                    timeout=min(600,remaining)).returncode
+                if config.get("identity_contract")=="process-owned-kernel-sealed-snapshots-v1":
+                    with retirement_channel(env) as channel:
+                        code=subprocess.run(command,env=env,stdout=out,stderr=err,
+                                            timeout=min(600,remaining),
+                                            pass_fds=channel.pass_fds).returncode
+                        reason=channel.reason()
+                        if reason is not None:
+                            record["retirement_reason"]=reason
+                            if not code:
+                                raise RuntimeError("Retirement reported by a successful child")
+                else:
+                    code=subprocess.run(command,env=env,stdout=out,stderr=err,
+                                        timeout=min(600,remaining)).returncode
         record["returncode"]=code
         if code:raise RuntimeError("Fresh diagnostic process failed: "+label)
         document=json.loads((output/"result.json").read_text())

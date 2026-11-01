@@ -10,7 +10,26 @@ import subprocess
 import sys
 import stat
 import re
+import socket
 import uuid as uuid_module
+
+
+@contextmanager
+def retirement_channel(env):
+    """Best-effort private reason receipt after a child has exited; no blocking."""
+    receive, send = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    receive.setblocking(False)
+    env["DISP0_RETIREMENT_FD"] = str(send.fileno())
+    class Channel:
+        pass_fds = (send.fileno(),)
+        def reason(self):
+            try:return receive.recv(1024).decode("utf-8","replace")
+            except BlockingIOError:return None
+    try:
+        with receive, send:
+            yield Channel()
+    finally:
+        env.pop("DISP0_RETIREMENT_FD",None)
 
 
 def digest(path):

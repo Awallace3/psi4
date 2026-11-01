@@ -243,3 +243,28 @@ Performance remains incomplete. Fresh mapping scans, canonical metadata
 verification and startup remain costs; do not replace them with an unobserved
 loader-state cache. This remains opt-in restricted-water evidence, not broader
 edge-case qualification or a default change. No Phoenix job was submitted.
+
+## Phoenix port: cold locators and retirement diagnostics
+
+Subsequent user-approved embers attempts are recorded in
+[SEALED_H200_PILOT.md](../phoenix_validation/SEALED_H200_PILOT.md). They have
+not produced an accepted H200 timing or full small-gate PASS. The second
+attempt passed sealed CPU water, then its first GPU worker retired with86.
+Its manifest uses SDK-locator symlinks, unlike Cachy's regular-file closure.
+A real CPU ELF fixture reproduces forwarding those locator strings to an
+owner keyed by canonical snapshot sources.
+
+The new candidate canonicalizes locators only at the cold CUDA library-binding
+seam. Direct owner snapshot access and hot checks remain filesystem-free;
+retargeted foreign locators still reject and no new audit cache is introduced.
+This candidate needs its own coherent CPU admission and physical GPU gate;
+the26–27s Cachy table above belongs only to the already-recorded old pin.
+
+Optional diagnostics use a retained private Unix datagram socket, not stderr
+or a file/pipe. A retirement sends at most512 bytes with explicit nonblocking
+and SIGPIPE-suppression flags, then exits86 even if delivery fails. Full queues,
+closed receivers, inherited socket timeouts and descriptor flag changes must
+not block retirement. This is only the sealed Python guard; the lease/SIGIO
+handler and its immediate native exit remain unchanged. Fresh CPU preparation
+now tests actual cuBLAS/cuSOLVER snapshot binding without a CUDA session before
+another H200 allocation is considered.

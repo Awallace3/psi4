@@ -22,6 +22,7 @@ import ctypes as ct
 import hashlib
 import os
 from pathlib import Path
+import socket
 import stat
 import sys
 import threading
@@ -114,6 +115,25 @@ class _SealedRuntime:
         self.prepare_seconds = self.preload_seconds = 0.0
         self._rollback_complete = False
         self._aliases_created = []
+        self._retirement_socket = None
+        diagnostic = os.environ.get("DISP0_RETIREMENT_FD")
+        if diagnostic is not None:
+            # Optional parent-owned diagnostics, never stderr/file/pipe writes.
+            # Duplicate and retain the socket before publication. Per-send
+            # DONTWAIT/NOSIGNAL remain effective even if fd status flags change.
+            descriptor = int(diagnostic)
+            if descriptor < 3:
+                raise RuntimeError("Explicit retirement diagnostic socket required")
+            duplicate = os.dup(descriptor)
+            try:channel = socket.socket(fileno=duplicate)
+            except BaseException:
+                os.close(duplicate)
+                raise
+            self._retirement_socket = channel  # Rollback owns every later failure.
+            if (channel.family != socket.AF_UNIX
+                    or channel.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE) != socket.SOCK_DGRAM):
+                raise RuntimeError("Retirement diagnostics require a Unix datagram socket")
+            channel.setblocking(False)  # Avoid Python timeout/select before send().
         if (not sys.platform.startswith("linux") or fcntl is None
                 or os.uname().machine != "x86_64"):
             raise RuntimeError("Sealed snapshots require Linux x86-64 executable memfds")
@@ -214,6 +234,13 @@ class _SealedRuntime:
         if self.reason is None:
             self.reason = str(reason)
         if self.published:
+            try:
+                if self._retirement_socket is not None:
+                    self._retirement_socket.send(
+                        self.reason[:512].encode("utf-8","replace")[:512],
+                        socket.MSG_DONTWAIT | socket.MSG_NOSIGNAL)
+            except BaseException:
+                pass  # Full/closed/invalid diagnostics must never delay retirement.
             os._exit(86)
 
     def _fail(self, reason):
@@ -433,6 +460,9 @@ class _SealedRuntime:
                 os._exit(86)  # Interrupted close cannot safely be retried.
         self._files.clear()
         self._fds.clear()
+        if self._retirement_socket is not None:
+            try:self._retirement_socket.close()
+            except BaseException as error:errors.append(error)
         self._rollback_complete = True
         if errors:
             raise RuntimeError("Sealed admission alias rollback failed: " + str(errors))

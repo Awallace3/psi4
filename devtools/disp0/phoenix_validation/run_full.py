@@ -54,11 +54,12 @@ def validate_allocation(job,manifest):
         raise RuntimeError("Effective allocation differs from declared H200 resource/charge limits")
 
 
-def execute_owned(command,env,out,err,timeout,started,*,reaped=None):
+def execute_owned(command,env,out,err,timeout,started,*,reaped=None,pass_fds=()):
     """Supervise/reap only this fresh process group; no local GPU lease logic."""
     with termination_signals():
         subreaper()
-        child=subprocess.Popen(command,env=env,stdout=out,stderr=err,start_new_session=True)
+        child=subprocess.Popen(command,env=env,stdout=out,stderr=err,start_new_session=True,
+                               pass_fds=pass_fds)
         try:
             started(child.pid)
             code=child.wait(timeout=timeout)

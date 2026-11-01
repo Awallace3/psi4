@@ -12,7 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from gpu_runtime import digest, read_config, require_cuda_manifest
+from gpu_runtime import digest, read_config, require_cuda_manifest, retirement_channel
 from owned_process import termination_signals
 from submit_split import save_new, source_pin
 
@@ -63,6 +63,76 @@ def configuration(base, build, root):
             "threads": 8, "host_memory": "96 GiB",
             "device_memory_limit_bytes": 120*1024**3,
             "native_persistent_bytes": 12*1024**3}
+
+
+def prepare_cpu_admission(build_root):
+    """Fast red/green binding gate on a CPU allocation, before any H200 retry."""
+    if os.environ.get("CUDA_VISIBLE_DEVICES") != "" or os.environ.get("SLURM_JOB_GPUS"):
+        raise RuntimeError("Runtime admission diagnostic requires a CPU-only allocation")
+    from run_gate import environment
+    from run_full import execute_owned, save
+    base_path = build_root/"gpu-runtime/runtime-config.json"
+    base, build = read_config(base_path, digest(base_path))
+    output = build_root/"cpu-sealed-admission"
+    output.mkdir(mode=0o700)
+    config = configuration(base, build, output)
+    path = output/"runtime-config.json"
+    save_new(path, config)
+    checksum = digest(path)
+    aliases = Path(config["sealed_alias_parent"])/"worker"
+    aliases.mkdir(mode=0o700)
+    env = environment(config, gpu=False, sealed_alias_directory=aliases)
+    scratch = output/"scratch"
+    scratch.mkdir(mode=0o700)
+    env.update(TMPDIR=str(scratch), SCRATCH=str(scratch), PSI_SCRATCH=str(scratch))
+    helper = Path(__file__).resolve().with_name("sealed_bootstrap.py")
+    proof_path = output/"runtime-admission.json"
+    argv = ["/bin/bash", "-c",
+            'set -euo pipefail; eval "$("$1" --psiapi)"; exec "$2" -B "$3" "${@:4}"',
+            "cpu-runtime-admission", str(Path(config["stage"])/"bin/psi4"),
+            config["dependency_environment"]+"/bin/python", str(helper),
+            "--config", str(path), "--config-sha256", checksum,
+            "--runtime-admission-only", "--admission-output", str(proof_path)]
+    groups = set()
+    receipt = {"status": "STARTED", "scope": "CPU_RUNTIME_ADMISSION_ONLY_NOT_GPU_QUALIFICATION",
+               "source_pin": config["source_pin"], "gpu_correctness_verified": False}
+    try:
+        with (output/"stdout").open("x") as out, (output/"stderr").open("x") as err, \
+                retirement_channel(env) as channel:
+            code = execute_owned(argv, env, out, err, 240, groups.add,
+                                 reaped=groups.discard, pass_fds=channel.pass_fds)
+            receipt.update(returncode=code, retirement_reason=channel.reason(),
+                           owned_groups_reaped=not groups)
+        if code:
+            raise RuntimeError("CPU runtime admission failed: "+str(receipt["retirement_reason"]))
+        if receipt["retirement_reason"] is not None:
+            raise RuntimeError("Retirement reported despite successful CPU child")
+        proof = json.loads(proof_path.read_text())
+        if (proof["status"] != "PASS" or proof["source_pin"] != config["source_pin"]
+                or proof["runtime_config_sha256"] != checksum
+                or proof["cuda_session_created"] is not False
+                or proof["gpu_correctness_verified"] is not False):
+            raise RuntimeError("Incomplete CPU runtime-admission proof")
+        receipt.update(status="PASS", runtime_admission_sha256=digest(proof_path))
+    except BaseException as error:
+        receipt.update(status="FAILED", error=f"{type(error).__name__}: {error}")
+        raise
+    finally:
+        save(output/"preflight-result.json", receipt)
+
+
+def require_cpu_admission(build_root, pin):
+    folder = build_root/"cpu-sealed-admission"
+    receipt = json.loads((folder/"preflight-result.json").read_text())
+    proof = json.loads((folder/"runtime-admission.json").read_text())
+    if (receipt["status"] != "PASS" or proof["status"] != "PASS"
+            or receipt["source_pin"] != pin or proof["source_pin"] != pin
+            or not receipt["owned_groups_reaped"]
+            or proof["cuda_session_created"] is not False
+            or proof["gpu_correctness_verified"] is not False
+            or digest(folder/"runtime-admission.json") != receipt["runtime_admission_sha256"]):
+        raise RuntimeError("Completed exact CPU runtime admission required before H200")
+    return digest(folder/"preflight-result.json")
 
 
 def step_scratch(root):
@@ -118,6 +188,7 @@ def _execute(manifest_path, root, groups):
     base, build = read_config(base_path, digest(base_path))
     if base["source_pin"] != manifest["helper_pin"]:
         raise RuntimeError("Whole stage and helper pin differ")
+    admission_sha = require_cpu_admission(build_root, base["source_pin"])
     from split_jobs import validate_allocation
     from validate_cpu_allocation import fields
     raw = subprocess.check_output(
@@ -126,7 +197,8 @@ def _execute(manifest_path, root, groups):
     if len(os.sched_getaffinity(0)) < 8:
         raise RuntimeError("Insufficient allocated CPU affinity")
     save_new(root/"allocation.json", {"scheduler_job": raw,
-                                     "kernel": os.uname().release})
+                                     "kernel": os.uname().release,
+                                     "cpu_runtime_admission_sha256": admission_sha})
     config = configuration(base, build, root)
     path = root/"runtime-config.json"
     save_new(path, config)
@@ -220,6 +292,7 @@ def submit(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--execute", type=Path)
+    parser.add_argument("--prepare-cpu-admission", type=Path)
     parser.add_argument("--source", type=Path)
     parser.add_argument("--pin")
     parser.add_argument("--build-root", type=Path)
@@ -228,7 +301,11 @@ def main():
     parser.add_argument("--inputs-sha256")
     parser.add_argument("--root", type=Path)
     args = parser.parse_args()
-    if args.execute:
+    if args.prepare_cpu_admission:
+        if args.execute:
+            parser.error("CPU admission and H200 execution are separate modes")
+        prepare_cpu_admission(args.prepare_cpu_admission.resolve(strict=True))
+    elif args.execute:
         if digest(args.execute) != os.environ["DISP0_MANIFEST_SHA256"]:
             raise RuntimeError("Submitted H200 manifest changed")
         execute(args.execute.resolve(strict=True))

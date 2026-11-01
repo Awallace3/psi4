@@ -38,8 +38,21 @@ def _argument_pointer(session, value):
 
 
 def library(path, sha256, *, owner=None):
+    """Bind a filesystem locator at setup; execution uses the retained image.
+
+    CUDA manifests may contain SDK-locator symlinks. Sealed owners are keyed
+    by canonical admitted sources, not those mutable locator strings. Resolve
+    here at the cold binding seam, never in kernel/live checks or the sealed
+    owner's direct snapshot API.
+    """
     if owner is not None:
-        return owner.load_library(path,sha256)
+        owner.check_live()
+        try:
+            canonical = str(Path(path).resolve(strict=True))
+        except BaseException:
+            owner.check_live()
+            raise
+        return owner.load_library(canonical,sha256)
     path = Path(path).resolve(strict=True)
     digest = hashlib.sha256()
     with path.open("rb") as stream:

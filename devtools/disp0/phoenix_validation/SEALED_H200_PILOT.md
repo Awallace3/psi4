@@ -1,5 +1,10 @@
 # Sealed-runtime H200 peptide pilot
 
+**Latest:** H20014784867 failed its first GPU small-gate worker with exit86;
+no peptide benchmark ran. A real CPU ELF fixture reproduces a manifest-locator
+binding mismatch. The diagnostic/fix candidate adds a CPU-only admission gate;
+no further allocation has been submitted.
+
 User requested an **embers H200 speedup test** after the restricted-water
 Cachy gate at `0433ec0452`. This pilot keeps that scientific/runtime source
 unchanged and ports its early bootstrap into the Phoenix launchers.
@@ -206,3 +211,82 @@ Under`phoenix-sealed-build-6c6cc8885d/job-14784757/`:
 H20014784867 is now PENDING(Priority), no longer waiting on the CPU build.
 The frozen remote checkout and queued job are unchanged. No H200 computation,
 small-gate PASS or accepted timing/speedup is inferred from CPU completion.
+
+## Corrected H200 attempt14784867: guard retirement before peptide
+
+Job/batch/step report FAILED1:0 after34s (Python step29s), not preemption.
+The prolog confirms embers on`atl1-1-03-020-18-0`, one H200/8 CPUs/160GiB.
+The corrected private scratch setup passed, and the fresh sealed CPU-unscaled
+water worker returned0. The first GPU worker returned86 before producing a
+result; its Psi4 log contains only the memory/thread settings. The exact
+retirement reason was not captured by the intentionally silent guard.
+No peptide sample, physical primitive-control PASS, full small-gate PASS or
+accepted speedup exists from this attempt. OOM is not reported.
+
+Under`phoenix-sealed-h200-6c6cc8885d/job-14784867/`:
+
+| Artifact | SHA256 |
+|---|---|
+| `pilot-result.json` | `8fa251067a160ed9942feb0ce992b254756cbdc9412b5632bb7f247946b5f2e9` |
+| `runtime-config.json` | `0f655f936c1a49b2981db229eb3de176159cd69e6ba5943d2c9d75e953d7d903` |
+| `small-gate/gate-result.json` | `b3d9f2f503a4a2838a62a6438e85c04facbd7b7ed3941533f87c2eac49e096ae` |
+| `small-gate/cpu-unscaled/result.json` | `055180aa66852046de1cfec6dae36afd63005bedc6d1edcdfae377d9221ca795` |
+
+The pilot records zero accepted speedups and successful removal of its owned
+top-level scratch directory after child-group reaping. This is not a claim of
+graceful native GPU teardown inside the fail-stopped worker.
+
+### Reproduced cold-binding mismatch
+
+Read-only inspection of the frozen configuration shows both cuBLAS/cuSOLVER
+manifest locators are private SDK symlinks, while their already-preloaded
+sealed snapshot keys are canonical files under
+`miniconda/envs/p4cuest_sapt/targets/x86_64-linux/lib/`.
+For example the manifest's`gpu-runtime/cuda13/lib64/libcublas.so.13.6.0.2`
+is not that canonical source string.
+
+The shared CUDA `library()` adapter previously forwarded the unresolved
+locator to the sealed owner, which intentionally accepts exact admitted
+source keys. A tiny real sealed-ELF/SDK-locator fixture reproduced exit86
+instead of loading the retained image. This is consistent with the H200
+failure boundary, but the old worker's missing reason is not retroactively
+invented.
+
+The candidate resolves filesystem locators at the **cold library-binding
+boundary**, brackets that resolution with owner validity checks, and still
+loads only the admitted retained image. The sealed owner's direct snapshot
+API and hot execution checks perform no new filesystem resolution. SHA,
+mapped inode/device, symbol, root and native/device/FP64 checks are not removed.
+Foreign targets still retire; a locator retargeted after resolution cannot
+change the loaded bytes. No mapping/loader-state cache is introduced.
+
+### Diagnostic and CPU-first gate
+
+The missing-reason fixture was run red before adding an optional private Unix
+datagram receipt. Retirement sends at most512 bytes with per-call
+`MSG_DONTWAIT|MSG_NOSIGNAL` and Python socket timeout0, then exits86 regardless
+of send success. No stderr/file/pipe write is added to invalidation. A full
+blocking-mode socket, closed receiver and default SIGPIPE cannot delay/change
+retirement; dropped diagnostics never authorize continued execution.
+Review found a diagnostic-setup rollback leak if socket validation/setup
+raises. Ownership is now registered immediately after construction, before
+either operation; injected interruptions verify closure of every duplicate.
+
+Fresh CPU preparation now bootstraps/adopts the actual sealed GPU adapter,
+binds cuBLAS/cuSOLVER through the same shared loader, and verifies native
+symbol ownership **without creating a CUDASession**. It hides/allocates no
+GPUs and makes no correctness/timing claim. A finalized exact-pin PASS with
+reaped children is required before H200 execution. This narrows the feedback
+loop before spending another H200 allocation; later GPU-specific failures
+remain possible and still require the full physical gate.
+
+Both failed attempts, successful CPU builds, frozen sources and configurations
+remain unchanged. No further CPU/H200 job was automatically submitted.
+
+Candidate host validation passed**383+121+33=537 tests**, without skips,
+plus shell/whitespace checks. The real-ELF locator regression and missing-reason
+regression were each run red before their fixes. Additional checks cover
+foreign/retargeted locators, full/closed diagnostic receivers, forced blocking
+descriptor flags, interrupted socket setup/rollback, actual descriptor passage
+through the PsiAPI/Bash/exec chain, and absence of CUDA-session creation in the
+CPU admission mode. These are host evidence, not GPU numerical qualification.
