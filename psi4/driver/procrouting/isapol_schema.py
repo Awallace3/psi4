@@ -8,6 +8,7 @@ accuracy, convergence, or an OS-level independence audit.
 """
 from dataclasses import asdict, dataclass
 import base64
+import copy
 import hashlib
 import io
 import json
@@ -23,7 +24,7 @@ from psi4 import core
 from .isapol_bounded import BoundedResources
 from .isapol_molecular import MolecularDeclaration, independent_sites, plan_molecular_refinement
 
-REQUEST_SCHEMA = 'native-monomer-request/1'
+REQUEST_SCHEMA = 'native-monomer-request/2'
 MAX_TENSOR_BYTES = 16*1024**2
 MAX_ENVELOPE_BYTES = 8*1024**2
 SCHEMA_KEYWORDS = frozenset((
@@ -44,8 +45,11 @@ class NativeMonomerRequest:
     resources: BoundedResources
     max_replay_work: int
     implementation_sha256: tuple
+    point_group: str
 
     def __post_init__(self):
+        if type(self.point_group) is not str or self.point_group != 'c1':
+            raise ValueError('native request requires explicit computational point_group=c1')
         if not isinstance(self.declaration, MolecularDeclaration):
             raise TypeError('explicit molecular declaration required')
         plan_molecular_refinement(self.declaration, self.resources,
@@ -60,7 +64,7 @@ class NativeMonomerRequest:
     @classmethod
     def from_dict(cls, value):
         if (type(value) is not dict
-                or set(value) != {'schema', 'declaration', 'resources', 'max_replay_work',
+                or set(value) != {'schema', 'point_group', 'declaration', 'resources', 'max_replay_work',
                                   'implementation_sha256'}
                 or value['schema'] != REQUEST_SCHEMA):
             raise ValueError('exact versioned native request required')
@@ -70,10 +74,11 @@ class NativeMonomerRequest:
             raise ValueError('explicit native resources and implementation pins required')
         return cls(MolecularDeclaration.from_dict(value['declaration']),
                    BoundedResources(**value['resources']), value['max_replay_work'],
-                   tuple(value['implementation_sha256'].items()))
+                   tuple(value['implementation_sha256'].items()), value['point_group'])
 
     def as_dict(self):
-        return dict(schema=REQUEST_SCHEMA, declaration=self.declaration.as_dict(),
+        return dict(schema=REQUEST_SCHEMA, point_group=self.point_group,
+                    declaration=self.declaration.as_dict(),
                     resources=asdict(self.resources), max_replay_work=self.max_replay_work,
                     implementation_sha256=dict(self.implementation_sha256))
 
@@ -174,11 +179,12 @@ def admit_native_schema(specification, molecule_schema):
     if type(extras) is not dict or extras.get('extra_infiles'):
         raise ValueError('native schema forbids extra input files')
     request = NativeMonomerRequest.from_dict(kwargs['native_monomer'])
-    symmetry = molecule_schema.get('fix_symmetry')
     if (molecule_schema.get('fix_com') is not True
-            or molecule_schema.get('fix_orientation') is not True
-            or type(symmetry) is not str or symmetry.lower() != 'c1'):
-        raise ValueError('native schema requires explicit fixed COM/orientation and C1')
+            or molecule_schema.get('fix_orientation') is not True):
+        raise ValueError('native schema requires explicit fixed COM/orientation')
+    symmetry = molecule_schema.get('fix_symmetry')
+    if symmetry is not None and type(symmetry) is not str:
+        raise ValueError('invalid input molecular symmetry metadata')
     symbols = tuple(molecule_schema.get('symbols', ()))
     count = len(symbols)
     geometry = np.asarray(molecule_schema.get('geometry'), dtype=float)
@@ -205,6 +211,21 @@ def admit_native_schema(specification, molecule_schema):
         symbols, tuple(tuple(float(v) for v in xyz) for xyz in geometry.reshape(count, 3)))
 
 
+def native_molecule_schema(molecule_schema, request):
+    """Apply explicit computational symmetry to a private construction copy.
+
+    QCArchive deduplication does not hash fix_symmetry. Never modify an
+    existing server molecule or perturb its coordinates to obtain a new hash.
+    The request declares C1 as a calculation input, independently of cached
+    molecular metadata; original input_data remains available in the result.
+    """
+    if not isinstance(request, NativeMonomerRequest):
+        raise TypeError('explicit native request required for private molecule construction')
+    result = copy.deepcopy(molecule_schema)
+    result['fix_symmetry'] = request.point_group
+    return result
+
+
 def check_native_geometry(molecule, snapshot):
     """Compare against admitted coordinates, never an overwritten schema."""
     if (not isinstance(snapshot, GeometrySnapshot)
@@ -213,6 +234,7 @@ def check_native_geometry(molecule, snapshot):
             or not np.allclose(molecule.geometry().np, snapshot.geometry_bohr, rtol=0, atol=1e-10)
             or molecule.molecular_charge() != 0 or molecule.multiplicity() != 1):
         raise ValueError('native molecule geometry/order/state differs from admitted input')
+    return float(np.max(np.abs(molecule.geometry().np-np.asarray(snapshot.geometry_bohr))))
 
 
 def tensor_artifact(data):
@@ -315,7 +337,7 @@ def execute_native_request(wfn, request):
             if implementation_identity()['sha256'] != identity['sha256']:
                 raise RuntimeError('native implementation changed during calculation')
             envelope = dict(
-                schema='native-monomer-artifacts/1', request=request.as_dict(),
+                schema='native-monomer-artifacts/2', request=request.as_dict(),
                 implementation=identity, result=record,
                 artifacts={'tensors.npz': artifact},
                 qualification='Native numeric export; installed/runtime trace and QCArchive roundtrip qualification are separate. Experimental rank2 model, C10 partial(2,2).')

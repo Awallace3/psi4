@@ -15,7 +15,7 @@ from psi4.driver.procrouting.isapol_schema import NativeMonomerRequest
 def request_data():
     declaration = MolecularDeclaration(PROFILE, (np.eye(3),)*3, ((0, 1), (0, 2)))
     return dict(
-        schema='native-monomer-request/1', declaration=declaration.as_dict(),
+        schema='native-monomer-request/2', point_group='c1', declaration=declaration.as_dict(),
         resources=dict(max_bytes=1024**3, max_work=100_000_000_000_000,
                        max_io_bytes=64*1024**3, capacity='large'),
         max_replay_work=1_000_000_000_000,
@@ -31,7 +31,7 @@ def test_native_request_is_strict_json_and_retains_finite_model_inputs():
     with pytest.raises(ValueError, match='versioned native request'):
         NativeMonomerRequest.from_dict(dict(raw, reference_dispersion=-2.))
     with pytest.raises(ValueError, match='versioned native request'):
-        NativeMonomerRequest.from_dict(dict(raw, schema='native-monomer-request/2'))
+        NativeMonomerRequest.from_dict(dict(raw, schema='native-monomer-request/1'))
 
 
 @pytest.mark.parametrize('change', [
@@ -44,6 +44,12 @@ def test_native_request_is_strict_json_and_retains_finite_model_inputs():
 def test_unbounded_or_unpinned_native_requests_are_refused(change):
     with pytest.raises((TypeError, ValueError)):
         NativeMonomerRequest.from_dict(dict(request_data(), **change))
+
+
+@pytest.mark.parametrize('point_group', [None, True, 'c2v'])
+def test_native_computational_symmetry_is_not_inferred_or_relaxed(point_group):
+    with pytest.raises(ValueError, match='point_group=c1'):
+        NativeMonomerRequest.from_dict(dict(request_data(), point_group=point_group))
 
 
 def input_molecule():
@@ -195,6 +201,23 @@ def test_schema_admission_binds_geometry_without_mutating_inputs():
     assert json.dumps([spec, molecule], sort_keys=True) == before
 
 
+@pytest.mark.parametrize('cached_symmetry', [None, 'c2v'])
+def test_computational_c1_is_explicit_and_does_not_mutate_cached_molecule(cached_symmetry):
+    from psi4 import core
+    from psi4.driver.procrouting import isapol_schema as api
+    cached = dict(molecule_schema(), fix_symmetry=cached_symmetry,
+                  schema_name='qcschema_molecule', schema_version=2)
+    original = json.dumps(cached, sort_keys=True)
+    request, snapshot = api.admit_native_schema(schema_spec(), cached)
+    constructed = api.native_molecule_schema(cached, request)
+    assert request.point_group == 'c1' and constructed['fix_symmetry'] == 'c1'
+    assert constructed['geometry'] == cached['geometry']
+    molecule = core.Molecule.from_schema(constructed, nonphysical=True)
+    api.check_native_geometry(molecule, snapshot)
+    assert molecule.schoenflies_symbol() == 'c1'
+    assert json.dumps(cached, sort_keys=True) == original
+
+
 @pytest.mark.parametrize('name,value', [
     ('dft_functional', 'b3lyp'), ('scf__reference', 'uhf'),
     ('basis', 'sto-3g'), ('perturb_h', True), ('grac_shift', .1),
@@ -252,7 +275,9 @@ def test_schema_runner_refuses_malformed_native_presence_before_driver(monkeypat
 
 
 @pytest.mark.parametrize('version', [1, 2])
-def test_synthetic_qcschema_route_preserves_extras_and_standard_dipole(monkeypatch, tmp_path, version):
+@pytest.mark.parametrize('cached_symmetry', [None, 'c2v', 'c1'])
+def test_synthetic_qcschema_route_preserves_extras_and_standard_dipole(
+        monkeypatch, tmp_path, version, cached_symmetry):
     """Stub the quantum boundary; this is NOT a molecular acceptance run."""
     from psi4 import core, schema_wrapper
     from psi4.driver.procrouting import isapol_schema as api
@@ -270,7 +295,7 @@ def test_synthetic_qcschema_route_preserves_extras_and_standard_dipole(monkeypat
         wfn.set_variable('PBE0 DIPOLE', dipole)
         seen.append(wfn)
         return 0., wfn
-    payload = dict(schema='native-monomer-artifacts/1',
+    payload = dict(schema='native-monomer-artifacts/2',
                    qualification='SYNTHETIC TRANSPORT FIXTURE, NOT MOLECULAR DATA')
     def synthetic_native(wfn, request):
         assert wfn is seen[-1] and request.as_dict() == request_data()
@@ -278,7 +303,7 @@ def test_synthetic_qcschema_route_preserves_extras_and_standard_dipole(monkeypat
     monkeypatch.setitem(schema_wrapper.methods_dict_, 'properties', descriptor_driver)
     monkeypatch.setattr(api, 'execute_native_request', synthetic_native)
     specification = schema_spec()
-    molecule = dict(molecule_schema(), schema_name='qcschema_molecule',
+    molecule = dict(molecule_schema(), fix_symmetry=cached_symmetry, schema_name='qcschema_molecule',
                     schema_version=2 if version == 1 else 3)
     if version == 1:
         data = dict(schema_name='qcschema_input', schema_version=1, molecule=molecule,
@@ -295,6 +320,10 @@ def test_synthetic_qcschema_route_preserves_extras_and_standard_dipole(monkeypat
         manager.set_default_path(previous_scratch)
     assert output['success'], output.get('error')
     assert output['extras']['psi4:native_monomer'] == payload
+    construction = output['extras']['psi4:native_monomer']['molecule_construction']
+    assert construction['input_fix_symmetry'] == cached_symmetry
+    assert construction['requested_point_group'] == construction['effective_point_group'] == 'c1'
+    assert construction['max_abs_coordinate_change_bohr'] == 0.
     np.testing.assert_array_equal(np.asarray(output['return_result']['dipole']).ravel(), [.1, .2, .3])
     stored_input = output['input_data'] if version == 2 else output
     if version == 2:

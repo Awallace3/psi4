@@ -650,7 +650,7 @@ def run_json_qcschema(json_data, clean, json_serialization, keep_wfn=False):
     if isinstance(function_inputs, dict) and "native_monomer" in function_inputs:
         from .procrouting.isapol_schema import (
             admit_native_schema, check_native_geometry, execute_native_request,
-            validate_native_request,
+            validate_native_request, native_molecule_schema, MAX_ENVELOPE_BYTES,
         )
         try:
             if clean is not True:
@@ -658,7 +658,9 @@ def run_json_qcschema(json_data, clean, json_serialization, keep_wfn=False):
             native_request, native_geometry = admit_native_schema(spec_data, molschemus)
         except (KeyError, TypeError, ValueError) as error:
             raise p4util.ValidationError(f"native monomer admission: {error}") from error
-    mol = core.Molecule.from_schema(molschemus, nonphysical=True)
+    construction_schema = (native_molecule_schema(molschemus, native_request)
+                           if native_request is not None else molschemus)
+    mol = core.Molecule.from_schema(construction_schema, nonphysical=True)
     if native_request is not None:
         try:
             check_native_geometry(mol, native_geometry)
@@ -717,10 +719,17 @@ def run_json_qcschema(json_data, clean, json_serialization, keep_wfn=False):
     val, wfn = methods_dict_[spec_data["driver"]](method, **kwargs)
     native_payload = None
     if native_request is not None:
-        check_native_geometry(wfn.molecule(), native_geometry)
+        coordinate_change = check_native_geometry(wfn.molecule(), native_geometry)
         # Ordinary properties/SCF completed above. This shipped native seam
         # consumes that live sealed wavefunction, not an imported result.
         native_payload = execute_native_request(wfn, native_request)
+        native_payload["molecule_construction"] = dict(
+            input_fix_symmetry=molschemus.get("fix_symmetry"),
+            requested_point_group=native_request.point_group,
+            effective_point_group=wfn.molecule().schoenflies_symbol(),
+            max_abs_coordinate_change_bohr=coordinate_change)
+        if len(json.dumps(native_payload, allow_nan=False).encode()) > MAX_ENVELOPE_BYTES:
+            raise ValueError("native monomer result exceeds bounded JSON transport size")
     result_data = {
         "input_data": input_data,
         "extras": {"qcvars": {}},

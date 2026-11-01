@@ -90,11 +90,11 @@ inputs. Source-under-test unit checks are not installed scientific acceptance.
 
 ## QCSchema transport seam under development
 
-`isapol_schema.py` defines a strict `native-monomer-request/1` JSON input:
+`isapol_schema.py` defines a strict `native-monomer-request/2` JSON input:
 the explicit declaration, finite resources/replay allowance, and required
 SHA256 pins for the imported native core, all installed `isapol_*.py`
 sources and the shipped schema/driver routing files. Preflight requires
-PBE0/aug-cc-pVTZ, neutral singlet C1 and fixed
+PBE0/aug-cc-pVTZ, a neutral singlet and fixed
 COM/orientation, so declared local frames cannot silently follow a geometry
 reorientation. These pins identify implementation bytes, not scientific
 accuracy or an independent runtime audit.
@@ -112,6 +112,15 @@ after successful native execution. Its narrow initial input surface requires
 explicit spherical RHF/PK, fresh SAD and tight stopping thresholds; it rejects
 alternate functionals/bases, embedding, extra input files and ambient options.
 Malformed requests are `ValidationError`, not silent ordinary calculations.
+
+Version2 requires `point_group="c1"` as an explicit **calculation** input.
+QCArchive's molecule hash ignores `fix_symmetry`; the actual pilot geometry
+already existed with that field unset. The wrapper therefore constructs a
+private schema copy with the requested C1 before SCF, without changing atom
+coordinates, order or the existing server molecule. Output metadata preserves
+the incoming symmetry field, requested/effective point group and measured
+coordinate change. Version1 requests are refused, not silently upgraded.
+The native artifact envelope is version2; the numeric rank2 model is unchanged.
 
 Source tests exercise v1/v2 schema conversion and artifact preservation with
 an explicitly **synthetic stub** at the quantum boundary; they do not compute
@@ -141,6 +150,25 @@ the choice is not presented as covariant. Frame inputs and policy evidence
 are bound to each representative's full molecule hash, including atom order.
 No atom sharing or COPY is introduced, and no molecular quantum computation
 or QCArchive registration is performed by this preparation.
+
+## Installed-only operational checks
+
+`phoenix_installed_checks.py` and its TERM-safe `.sbatch` wrapper verify a
+completed private build's manifest/runtime hashes, assert imported package
+and core paths, and run the native schema/molecular/PFIT plus legacy bounded
+tests against **that installation**. No source-module overlay is permitted.
+The test files come from the original build's clean source snapshot.
+The complete private file/directory inventory must match, not merely the
+previously listed file hashes: added `.pth` files and standalone bytecode are
+refused. Child Python uses a fresh bytecode prefix; inherited pytest options
+and plugin declarations are stripped, plugin autoload is disabled, and empty,
+failed or skipped test runs cannot produce a passing report.
+
+The operational harness has its own separate commit/hash in the report;
+adding a test launcher must never relabel the scientific build as a run of a
+newer commit. All hashing/tests run in an explicitly free `embers` compute
+allocation. Tests and sealed-file checks are not campaign molecular, runtime
+independence or QCArchive round-trip acceptance.
 
 ## Dataset entry preparation
 
