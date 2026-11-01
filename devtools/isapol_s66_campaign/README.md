@@ -1,8 +1,9 @@
 # Native S66x8 monomer campaign preparation
 
-This directory prepares **raw geometry inputs only** for a future native
-PBE0/aug-cc-pVTZ ISA/response/refinement campaign. It does not submit work,
-execute Psi4, or load CamCASP molecular products.
+The preparation commands in this directory produce **raw geometry inputs
+only**, without submission or Psi4 execution. The separately described
+operational bootstraps validate and run a native PBE0/aug-cc-pVTZ
+ISA/response/refinement campaign; none loads CamCASP molecular products.
 
 ```console
 python -m pytest --noconftest -c /dev/null -p no:cacheprovider -q \
@@ -225,3 +226,36 @@ Python. A passing preflight means neither molecular success nor a QCArchive
 roundtrip or OS-level independence certificate. Manager bootstrap, fresh
 record acquisition, result retrieval and scientific qualification remain
 separate gates.
+
+## First QCArchive pilot bootstrap
+
+`phoenix_pilot.py` and `.sbatch` implement the first **water-only** allocation:
+four cores,24GiB, six-hour explicit `embers`, one local compute0.63 executor
+and one fresh record. The installed scientific build is unchanged. Bootstrap
+requires the exact successful worker-preflight and installed-test receipts,
+rechecks their runtime and pins the inspected private manager API sources.
+Credentials are read in place from the existing approved server config,
+never copied into run artifacts.
+
+It creates a new dedicated dataset (refusing an existing name), inserts the
+one raw entry with reference attributes, registers an immutable specification
+and submits with `find_existing=False`. Automatic error-correction protocols
+are explicitly disabled and internal QCEngine retries must be zero; this
+tightens failure handling without altering the preflighted native request.
+The actual claimed dispatcher, keywords, protocols, geometry/order and tag
+are checked before submitting the application. A cached symmetry field is
+preserved; the request's computational C1 remains independently explicit.
+
+The owned manager stops after acknowledgment, including acknowledged failure,
+without resetting/cancelling records or touching existing managers. A complete
+server record must have one history from that manager and exactly the locally
+produced native envelope/checksum. Delivery output remains
+`DELIVERED_NATIVE_ARTIFACTS_PENDING_QUALIFICATION`: independent tensor,
+scientific and OS-trace checks are still required before advancing pilots.
+Preemption/failure preserves phase receipts and server state; this script
+does not blindly restart, reuse an existing dataset or create a paid fallback.
+The molecular payload runs as an explicit `srun` step, retaining Phoenix's
+non-`B:` TERM warning policy. An interrupted batch-shell wait forwards TERM
+once, reaps the child through a bounded20-second grace and never prints a
+delivery-complete marker after interruption. Stop requests during claim or
+input validation are rechecked before application submission.

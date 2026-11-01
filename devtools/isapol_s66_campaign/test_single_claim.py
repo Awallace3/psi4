@@ -20,6 +20,7 @@ class FakeManager:
         self.finished = []
         self.return_meta = Obj(accepted_ids=[], rejected_info=[])
         self.stopped = False
+        self._is_stopping = False
         self.inside_update = False
 
     def claim(self, programs, tags, limit):
@@ -45,6 +46,7 @@ class FakeManager:
     def stop(self):
         assert not self.inside_update, 'must finish processing delivery before shutdown'
         self.stopped = True
+        self._is_stopping = True
 
 
 class Manager(module.SingleClaimMixin, FakeManager):
@@ -134,6 +136,40 @@ def test_ambiguous_claim_connection_failure_stops_without_retry_or_execution():
     m._update(new_tasks=False)
     m._update(new_tasks=True)
     assert len(calls) == 1
+
+
+def test_invalid_claimed_payload_stops_before_application_submission():
+    m = manager()
+
+    def reject(tasks):
+        raise ValueError('Claimed payload does not match immutable execution inputs')
+
+    m.preprocess_new_tasks = reject
+    m._update(new_tasks=True)
+    assert m.stopped and m.delivery_outcome == 'task_submission_error' and not m.submitted
+    assert m.submission_error_type == 'ValueError'
+    m._update(new_tasks=False)
+    assert len(m.claim_calls) == 1
+
+
+@pytest.mark.parametrize('phase', ['claim', 'preprocessing'])
+def test_stop_requested_during_acquisition_or_validation_never_submits(phase):
+    m = manager()
+    if phase == 'claim':
+        original = m.client.claim
+
+        def claim_and_stop(*args):
+            result = original(*args)
+            m.stop()
+            return result
+
+        m.client.claim = claim_and_stop
+    else:
+        m.preprocess_new_tasks = lambda tasks: m.stop()
+    m._update(new_tasks=True)
+    assert m.stopped and not m.submitted
+    m._update(new_tasks=True)
+    assert len(m.claim_calls) == 1
 
 
 @pytest.mark.parametrize('tag', ['*', 'native,*', '', 'Uppercase'])

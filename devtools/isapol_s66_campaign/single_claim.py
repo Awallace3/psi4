@@ -22,6 +22,7 @@ class SingleClaimMixin:
         self.acquisition_closed = False
         self.delivery_outcome = None
         self.claim_error_type = None
+        self.submission_error_type = None
         self.acquisition_deadline = time.monotonic()+acquisition_seconds
         super().__init__(*args, **kwargs)
         executors = self.manager_config.executors
@@ -51,7 +52,7 @@ class SingleClaimMixin:
         if self.delivery_outcome is not None:
             self.stop()
             return
-        if self.acquisition_closed or not new_tasks:
+        if self.acquisition_closed or self._is_stopping or not new_tasks:
             return
         if time.monotonic() >= self.acquisition_deadline:
             self.acquisition_closed = True
@@ -70,6 +71,9 @@ class SingleClaimMixin:
             self.claim_error_type = type(exc).__name__
             self.stop()
             return
+        if self._is_stopping or self.acquisition_closed:
+            self.acquisition_closed = True
+            return
         if not tasks:
             return
         # Close before validation/submission. Even a failed result accepted and
@@ -80,5 +84,12 @@ class SingleClaimMixin:
             self.stop()
             return
         self.target_task_id = tasks[0].id
-        self.preprocess_new_tasks(tasks)
-        self._submit_tasks(self.pilot_executor, tasks)
+        try:
+            self.preprocess_new_tasks(tasks)
+            if self._is_stopping:
+                return
+            self._submit_tasks(self.pilot_executor, tasks)
+        except Exception as exc:
+            self.delivery_outcome = 'task_submission_error'
+            self.submission_error_type = type(exc).__name__
+            self.stop()

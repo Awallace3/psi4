@@ -21,7 +21,7 @@ export PYTHONPYCACHEPREFIX="$CCASP_NATIVE_CACHE"
 # stdout/stderr or exit status. Analysis must distinguish CLI/metadata
 # processes from prohibited external scientific programs; zero children is
 # not a valid claim for the QCEngine subprocess route.
-exec /usr/bin/strace -f -qq -s 4096 -e trace=%file,%process \
+exec /usr/bin/strace -f -qq -yy -s 4096 -e trace=%file,%process \
     -o "$CCASP_NATIVE_TRACE/psi4-$$.strace" \
     "$CCASP_NATIVE_ENV/bin/python" -I -B -X "pycache_prefix=$CCASP_NATIVE_CACHE" \
     "$CCASP_NATIVE_ENV/bin/psi4" "$@"

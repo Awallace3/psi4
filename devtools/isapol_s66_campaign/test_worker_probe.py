@@ -51,3 +51,12 @@ def test_discovery_cannot_advertise_foreign_version_or_import(programs, cli, sci
 
 def test_all_three_version_observations_must_agree_without_parent_scientific_import():
     probe.validate_worker_discovery({'psi4': '1.12'}, '1.12', '1.12', scientific_imported=False)
+
+
+def test_native_cli_traces_include_resolved_fd_targets_and_child_processes():
+    import shlex
+    text = Path(__file__).with_name('native_psi4.sh').read_text().replace('\\\n', ' ')
+    command = next(line for line in text.splitlines() if line.startswith('exec /usr/bin/strace '))
+    tokens = shlex.split(command)
+    assert '-yy' in tokens and '-f' in tokens
+    assert 'trace=%file,%process' in tokens
