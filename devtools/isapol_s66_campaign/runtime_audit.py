@@ -40,11 +40,26 @@ def load(path, name):
     return module
 
 
+def scratch_for_outcome(outcome):
+    job = outcome['allocation']['JobId']
+    checkpoint = outcome.get('append_checkpoint')
+    label = 'water' if checkpoint is None else checkpoint['monomer_id']
+    if checkpoint is not None and label != 'monomer-0004':
+        raise ValueError('unsupported molecular checkpoint scratch identity')
+    expected = Path('/storage/scratch1/3/awallace43')/('ccasp-native-'+label+'-'+job)
+    if outcome.get('scratch_path', str(expected)) != str(expected):
+        raise ValueError('scratch path differs from validated case identity')
+    return expected
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('build', 'case', 'worker-preflight', 'run'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
+    parser.add_argument('--pilot', type=Path)
+    append = load(Path(__file__).with_name('append_receipts.py'), 'append_receipts')
+    append.add_arguments(parser)
     args = parser.parse_args()
     source = Path(__file__).resolve().parents[2]
     helper = load(Path(__file__).with_name('phoenix_installed_checks.py'), 'installed_checks')
@@ -70,6 +85,42 @@ def main():
     manifest_path = build/'build-identity.json'
     manifest = json.loads(manifest_path.read_text())
     preflight = json.loads(args.worker_preflight.read_text())
+    checkpoint = append.verify(args)
+    preservation = None
+    if checkpoint is not None:
+        if (outcome.get('append_checkpoint') != checkpoint
+                or preflight.get('append_checkpoint') != checkpoint
+                or preflight['operational_commit'] != outcome['operational_commit']
+                or outcome['dataset_id'] != 353
+                or outcome.get('append_transport_binding') != preflight.get('append_transport_binding')
+                or outcome.get('append_transport_binding') != append.helper('dataset_append').transport_binding()):
+            raise RuntimeError('append receipt/operational chain differs')
+        guard = append.helper('dataset_guard')
+        probe = append.helper('phoenix_worker_probe')
+        draft, _ = append.load(args.pilot)
+        rebuilt = probe.runtime_input(draft)
+        rebuilt['specification']['protocols'] = pilot.execution_specification(draft['specification'])['protocols']
+        if expected != rebuilt:
+            raise RuntimeError('expected runtime was not reconstructed from bound raw input')
+        baseline, _ = append.load(args.append_baseline)
+        before = read('dataset-before.json')
+        if before != baseline['snapshot']:
+            raise RuntimeError('case before-state differs from approved baseline')
+        name = draft['entry']['name']
+        guard.assert_append_delta(before, read('dataset-after-entry.json'), entry_name=name)
+        for filename in ('dataset-after-submit.json', 'dataset-after-delivery.json'):
+            snapshot = read(filename)
+            guard.assert_append_delta(before, snapshot, entry_name=name, record_id=outcome['record_id'])
+            guard.validate_stored_entry(snapshot['entries'][name], draft['entry'])
+        preservation = read('dataset-preservation.json')
+        if (preservation['status'] != 'PASS_EXISTING_DATASET_PRESERVED'
+                or preservation['before_sha256'] != guard.digest(before)
+                or preservation['after_sha256'] != guard.digest(read('dataset-after-delivery.json'))
+                or preservation['added_entry'] != name
+                or preservation['added_record'] != outcome['record_id']):
+            raise RuntimeError('dataset-preservation receipt differs')
+    elif outcome.get('append_checkpoint') is not None:
+        raise RuntimeError('append case requires all bound input receipts for audit')
     if (outcome['status'] != 'DELIVERED_NATIVE_ARTIFACTS_PENDING_QUALIFICATION'
             or not outcome['runtime_unchanged']
             or outcome['build_identity_sha256'] != helper.digest(manifest_path)
@@ -120,7 +171,7 @@ def main():
     gate = load(gate_path, 'decoded_fd_gate')
     environment = build/'env'
     base = Path('/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt')
-    scratch = Path('/storage/scratch1/3/awallace43')/('ccasp-native-water-'+job)
+    scratch = scratch_for_outcome(outcome)
     helper.verify_runtime(environment, manifest)
     raw = (data/'server-tensors.npz').read_bytes()
     numeric_report = numeric.validate_numeric(envelope, raw)
@@ -167,6 +218,7 @@ def main():
         scientific_build_commit=manifest['commit'], case_operational_commit=outcome['operational_commit'],
         audit_commit=args.commit, file_gate_sha256=helper.digest(gate_path),
         case_outcome_sha256=helper.digest(data/'pilot-outcome.json'), roles=dict(roles),
+        append_checkpoint=checkpoint, dataset_preservation=preservation,
         numeric=numeric_report, traces=reports, runtime_unchanged=True,
         qualification='One fresh native/QCArchive pilot, numeric/export and decoded-FD input evidence only. '
                       'Ordinary OS trust, not hostile-host/TOCTOU proof. No full-C10, solver certification, '

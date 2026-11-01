@@ -69,12 +69,16 @@ def main():
     for name in ('build', 'qualification', 'pilot', 'run'):
         parser.add_argument('--'+name, type=Path)
     parser.add_argument('--commit')
+    append = load_helper('append_receipts')
+    append.add_arguments(parser)
     args = parser.parse_args()
     if args.scientific_probe:
         scientific_probe(args.scientific_probe)
         return
     if any(getattr(args, name) is None for name in ('build', 'qualification', 'pilot', 'run', 'commit')):
         parser.error('all parent preflight paths and exact operational commit are required')
+    checkpoint = append.verify(args)
+    transport_binding = append.helper('dataset_append').transport_binding() if checkpoint is not None else None
     helper = load_helper('phoenix_installed_checks')
     allocation = helper.allocation()
     source = Path(__file__).resolve().parents[2]
@@ -201,6 +205,8 @@ def main():
         qcengine_version=str(qcengine.__version__), qcfractalcompute_version=str(qcfractalcompute.__version__),
         harness_path=str(harness_path), harness_sha256=helper.digest(harness_path),
         discovered_psi4=programs['psi4'], psi4_cli=shutil.which('psi4'),
+        append_checkpoint=checkpoint,
+        append_transport_binding=transport_binding,
         trace_files=[p.name for p in sorted(traces.glob('*.strace'))],
         qualification='No SCF, molecular calculation, manager acquisition or QCArchive writes; OS traces not yet an independence certificate.')
     (payload/'worker-preflight.json').write_text(json.dumps(report, indent=2, allow_nan=False))

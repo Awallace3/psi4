@@ -262,6 +262,77 @@ The submission policy is fresh records (`find_existing=False`), one initial
 worker and explicit `embers`; neither the draft nor the installed tests
 establish QCEngine/manager compatibility or molecular acceptance.
 
+## First owned-dataset append checkpoint
+
+After accepted water record5234314, the next checkpoint authorizes **methanol
+`monomer-0004` only**, not an unrestricted monomer selector. Dataset353 is
+`S66x8-native-CCASP-acf54c28e5-v1`, owned by `awallace43`; retain its existing
+`pbe0-atz-native-request2` specification and original provenance. Descriptor
+job14953119 qualified water/methanol/methylamine dimensions against the sealed
+scientific build, with no quantum execution or server writes. Methylamine
+still requires methanol's own strict molecular acceptance before proceeding.
+
+`prepare_append_baseline.py` is read-only on the server. It binds the exact
+accepted water audit/envelope bytes, rechecks ownership/source/specification,
+and snapshots the complete water-only dataset twice before writing a new
+baseline artifact. It does not approve arbitrary current server state.
+`append_receipts.py` joins that baseline with the exact methanol draft and
+actual descriptor allocation/child receipts; protocol-free runtime hashes stay
+distinct from the separately explicit no-correction execution protocol.
+
+Worker preflight, pilot and audit take all five checkpoint flags together:
+`--append-baseline`, `--previous-audit`, `--previous-envelope`,
+`--descriptor-allocation`, `--descriptor-report`. The audit additionally takes
+`--pilot`. The new worker preflight must use the same operational commit as
+the pilot and bind all these receipts and relevant operational-file hashes.
+No old water preflight is reused or relabeled.
+
+`dataset_guard.py` uses fresh objects, forced specification/entry/association
+enumerations and an independent record query, avoiding QCPortal0.63's cached
+entry/absence fallbacks. It preserves every pre-existing entry, specification,
+record body/history/artifact identity and association. The only legal deltas
+are the new entry, then one fresh record attached to the existing
+specification. Compressed task data are fingerprinted, never decompressed
+into a second scientific input source.
+
+The append path never creates/replaces a dataset/specification or resets,
+retags, cancels or requeues anything. `dataset_append.py` contains exactly two
+singleton writes through a source/version-pinned QCPortal0.63 client adapter.
+It forces both `allow_retries=False` **and** `internal_retry=False` for the two
+append POST endpoints. Stock0.63 drops the former flag when recursively
+resending after an expired-token401; the adapter makes that401 a hard failure
+instead. Normal model serialization/response parsing and unrelated read
+behavior remain intact. An ambiguous/nonfresh response stops, preserving
+evidence rather than rolling back or trying again.
+Before/after-entry, after-submit and after-delivery snapshots are retained.
+Failures get a best-effort read-only snapshot without masking the original
+exception. These snapshots detect drift under ordinary server/OS trust, not
+an atomic lock or hostile TOCTOU guarantee.
+
+The one-shot manager, zero internal retries, local/server-envelope equality,
+decoded-FD native-input audit and numerical acceptance remain required.
+New scratch/tag identities are monomer-bound; archived water's existing
+scratch convention remains supported without changing its receipts.
+Only after the new strict audit may a later checkpoint authorize another
+monomer. A delivered record, passing descriptor plan or unchanged old record
+is not itself convergence, accuracy/parity or full-set qualification.
+
+The fake-client unit tests are insufficient transport coverage. Also run
+`transport_tests.py` explicitly with the real version-pinned `p4qca` Python:
+
+```console
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /path/to/p4qca/bin/python -B -m pytest \
+  --noconftest -c /dev/null -p no:cacheprovider -q \
+  devtools/isapol_s66_campaign/transport_tests.py
+```
+
+These tests use the real QCPortal request/serialization stack and mocked HTTP
+session responses only: expired-token401 and connection failure must produce
+exactly one append POST, successful metadata still parses, the unadapted
+client reproduces the resend, and unrelated reads retain token refresh.
+They make no actual network/server or quantum calls. The client transport
+source hashes and adapter hash are bound in worker/pilot/audit receipts.
+
 `single_claim.py` is a compute0.63-specific operational mixin, not a running
 manager. It disables the parent's three-slots-per-worker acquisition, claims
 one exact record once and drains through ordinary acknowledged/deferred

@@ -8,6 +8,22 @@ import json
 import math
 import re
 
+_FAILURE_SNAPSHOT = None
+
+
+def preserve_failure_snapshot():
+    """Read-only best effort after an exception; never mask it or roll back."""
+    if _FAILURE_SNAPSHOT is None:
+        return
+    client, guard, save = _FAILURE_SNAPSHOT
+    try:
+        save('dataset-failure-snapshot.json', guard.snapshot_dataset(client))
+    except BaseException as error:
+        try:
+            save('dataset-failure-snapshot-error.json', dict(error_type=type(error).__name__))
+        except BaseException:
+            pass
+
 
 def pilot_config(server, run, scratch, compute_tag):
     """Construct, rather than overlay, the single owned local executor."""
@@ -111,7 +127,13 @@ def main():
     for name in ('build', 'qualification', 'worker-preflight', 'pilot', 'run'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
+    append_spec = importlib.util.spec_from_file_location(
+        'append_receipts', Path(__file__).with_name('append_receipts.py'))
+    append = importlib.util.module_from_spec(append_spec)
+    append_spec.loader.exec_module(append)
+    append.add_arguments(parser)
     args = parser.parse_args()
+    checkpoint = append.verify(args)
     spec = importlib.util.spec_from_file_location(
         'worker_probe', Path(__file__).with_name('phoenix_worker_probe.py'))
     probe = importlib.util.module_from_spec(spec)
@@ -126,7 +148,8 @@ def main():
     prefix = Path('/storage/project/r-cs207-0/awallace43/runs')
     build, run = args.build.resolve(), args.run.resolve()
     if (not build.is_relative_to(prefix) or not run.is_relative_to(prefix)
-            or not run.name.startswith('ccasp-native-s66-')):
+            or not run.name.startswith('ccasp-native-s66-')
+            or build.is_relative_to(run) or run.is_relative_to(build)):
         raise RuntimeError('unexpected pilot paths')
     manifest_path = build/'build-identity.json'
     manifest = json.loads(manifest_path.read_text())
@@ -143,8 +166,11 @@ def main():
             or preflight['qualification_sha256'] != helper.digest(args.qualification)
             or preflight['pilot_sha256'] != helper.digest(args.pilot)
             or draft['status'] != 'PREPARED_NOT_REGISTERED_OR_SUBMITTED'
-            or draft['monomer_id'] != 'monomer-0001'):
-        raise RuntimeError('exact installed qualification, worker preflight and first water pilot required')
+            or (checkpoint is None and draft['monomer_id'] != 'monomer-0001')
+            or (checkpoint is not None and (
+                preflight.get('append_checkpoint') != checkpoint
+                or preflight['operational_commit'] != args.commit))):
+        raise RuntimeError('exact installed qualification, worker preflight and pilot checkpoint required')
     helper.junit_summary(args.qualification.with_name('junit.xml'), expected=197)
     changes = helper.git(source, 'diff', '--name-only', manifest['commit'], args.commit).splitlines()
     if any(not p.startswith('devtools/isapol_s66_campaign/') and p not in helper.TEST_ONLY_CHANGES
@@ -172,7 +198,9 @@ def main():
     launcher = payload/'launcher'
     launcher.mkdir()
     (launcher/'psi4').symlink_to(source/'devtools/isapol_s66_campaign/native_psi4.sh')
-    scratch = Path('/storage/scratch1/3/awallace43')/('ccasp-native-water-'+os.environ['SLURM_JOB_ID'])
+    monomer = draft['monomer_id']
+    scratch_label = 'water' if checkpoint is None else monomer
+    scratch = Path('/storage/scratch1/3/awallace43')/('ccasp-native-'+scratch_label+'-'+os.environ['SLURM_JOB_ID'])
     scratch.mkdir(exist_ok=False)
     for name in ('home', 'cache', 'cwd'):
         (scratch/name).mkdir()
@@ -219,11 +247,16 @@ def main():
     # Read credentials in place; never serialize the config into run artifacts.
     config_path = Path('/storage/project/r-cs207-0/awallace43/qca/resources_losii_ac.yml')
     server = yaml.safe_load(config_path.read_text())['server']
-    tag = 'ccasp-native-s66-water-'+os.environ['SLURM_JOB_ID']
+    tag = 'ccasp-native-s66-'+scratch_label+'-'+os.environ['SLURM_JOB_ID']
     config = FractalComputeConfig(**pilot_config(server, payload, scratch, tag))
-    client = PortalClient(config.server.fractal_uri, username=config.server.username,
-                          password=config.server.password, verify=config.server.verify,
-                          show_motd=False)
+    mutation = append.helper('dataset_append') if checkpoint is not None else None
+    transport_binding = mutation.transport_binding() if mutation is not None else None
+    if checkpoint is not None and preflight.get('append_transport_binding') != transport_binding:
+        raise RuntimeError('append transport changed since bound worker preflight')
+    client_type = mutation.client_class() if mutation is not None else PortalClient
+    client = client_type(config.server.fractal_uri, username=config.server.username,
+                         password=config.server.password, verify=config.server.verify,
+                         show_motd=False)
     info = client.get_server_information()
     if info['name'] != 'CDS QCFractal Server' or info['version'] != '0.70':
         raise RuntimeError('unexpected approved deployment identity')
@@ -241,39 +274,75 @@ def main():
         build_identity_sha256=manifest_hash, pilot_sha256=helper.digest(args.pilot),
         installed_qualification_sha256=helper.digest(args.qualification),
         worker_preflight_sha256=helper.digest(args.worker_preflight),
+        monomer_id=monomer, scratch_path=str(scratch), append_checkpoint=checkpoint,
+        append_transport_binding=transport_binding,
         manager_sources=MANAGER_FILES, maximum_records=1, find_existing=False,
         execution_protocols=execution_spec['protocols'], qcengine_internal_retries=0)
     save('started.json', started)
     dataset_name = 'S66x8-native-CCASP-'+manifest['commit'][:10]+'-v1'
-    save('dataset-create-attempt.json', dict(name=dataset_name, tag=tag, time=time.time()))
-    dataset = client.add_dataset(
-        'singlepoint', dataset_name, existing_ok=False, default_tag=tag,
-        description='Fresh native PBE0/aug-cc-pVTZ experimental independent-site monomers. '
-                    'First water pilot only; rank2 C10 partial(2,2); no accuracy/parity claim.',
-        provenance=dict(scientific_build_commit=manifest['commit'],
-                        implementation_sha256=preflight['science']['implementation']['sha256']))
-    save('dataset-created.json', dict(dataset_id=dataset.id, name=dataset_name))
     entry = SinglepointDatasetNewEntry(**draft['entry'])
-    if not dataset.add_entries([entry]).success:
-        raise RuntimeError('pilot entry insertion failed')
     specification_name = 'pbe0-atz-native-request2'
-    if not dataset.add_specification(
-            specification_name, QCSpecification(**execution_spec)).success:
-        raise RuntimeError('immutable pilot specification insertion failed')
-    stored_entry = dataset.get_entry(entry.name, force_refetch=True)
-    if (stored_entry.attributes != entry.attributes
-            or stored_entry.additional_keywords != entry.additional_keywords
-            or dataset.get_record(entry.name, specification_name) is not None):
-        raise RuntimeError('stored entry changed or already has a computational record')
+    before = None
+    if checkpoint is not None:
+        guard = append.helper('dataset_guard')
+        baseline, _ = append.load(args.append_baseline)
+        before = guard.snapshot_dataset(client)
+        if before != baseline['snapshot'] or server['username'] != 'awallace43':
+            raise RuntimeError('owned server baseline changed before first append')
+        guard.validate_owned(before, authenticated_owner=server['username'],
+                             implementation=preflight['science']['implementation']['sha256'],
+                             specification=QCSpecification(**execution_spec),
+                             water_envelope_sha256=baseline['water_envelope_canonical_sha256'])
+        guard.validate_new_entry(before, draft)
+        save('dataset-before.json', before)
+        global _FAILURE_SNAPSHOT
+        _FAILURE_SNAPSHOT = (client, guard, save)
+        save('entry-insert-attempt.json', dict(dataset_id=353, entry=entry.name, transport_retries=False))
+        mutation.insert_entry_once(client, draft['entry'])
+        after_entry = guard.snapshot_dataset(client)
+        guard.assert_append_delta(before, after_entry, entry_name=entry.name)
+        guard.validate_stored_entry(after_entry['entries'][entry.name], draft['entry'])
+        save('dataset-after-entry.json', after_entry)
+        dataset = client.get_dataset_by_id(353)
+    else:
+        save('dataset-create-attempt.json', dict(name=dataset_name, tag=tag, time=time.time()))
+        dataset = client.add_dataset(
+            'singlepoint', dataset_name, existing_ok=False, default_tag=tag,
+            description='Fresh native PBE0/aug-cc-pVTZ experimental independent-site monomers. '
+                        'First water pilot only; rank2 C10 partial(2,2); no accuracy/parity claim.',
+            provenance=dict(scientific_build_commit=manifest['commit'],
+                            implementation_sha256=preflight['science']['implementation']['sha256']))
+        save('dataset-created.json', dict(dataset_id=dataset.id, name=dataset_name))
+        if not dataset.add_entries([entry]).success:
+            raise RuntimeError('pilot entry insertion failed')
+        if not dataset.add_specification(specification_name, QCSpecification(**execution_spec)).success:
+            raise RuntimeError('immutable pilot specification insertion failed')
+        stored_entry = dataset.get_entry(entry.name, force_refetch=True)
+        if (stored_entry.attributes != entry.attributes
+                or stored_entry.additional_keywords != entry.additional_keywords
+                or dataset.get_record(entry.name, specification_name) is not None):
+            raise RuntimeError('stored entry changed or already has a computational record')
     save('record-submit-attempt.json', dict(
         dataset_id=dataset.id, entry=entry.name, specification=specification_name,
         compute_tag=tag, find_existing=False))
-    inserted = dataset.submit(entry_names=[entry.name], specification_names=[specification_name],
-                              compute_tag=tag, find_existing=False)
+    if checkpoint is not None:
+        if guard.snapshot_dataset(client) != after_entry:
+            raise RuntimeError('owned dataset changed immediately before singleton submission')
+        inserted = mutation.submit_record_once(client, entry_name=entry.name, compute_tag=tag)
+    else:
+        inserted = dataset.submit(entry_names=[entry.name], specification_names=[specification_name],
+                                  compute_tag=tag, find_existing=False)
     if not inserted.success or inserted.n_inserted != 1 or inserted.n_existing != 0:
         raise RuntimeError('pilot did not create exactly one fresh record')
     record = dataset.get_record(entry.name, specification_name, force_refetch=True)
     record_id = record.id
+    if checkpoint is not None:
+        after_submit = guard.snapshot_dataset(client)
+        guard.assert_append_delta(before, after_submit, entry_name=entry.name, record_id=record_id)
+        guard.validate_stored_entry(after_submit['entries'][entry.name], draft['entry'])
+        guard.validate_fresh_record(after_submit['records'][str(record_id)], tag=tag,
+                                    specification=QCSpecification(**execution_spec), entry=draft['entry'])
+        save('dataset-after-submit.json', after_submit)
     save('record-created.json', dict(
         dataset_id=dataset.id, record_id=record_id, molecule_id=record.molecule_id,
         compute_tag=tag, n_inserted=inserted.n_inserted, n_existing=inserted.n_existing))
@@ -355,6 +424,16 @@ def main():
     save('server-native-envelope.json', envelope)
     with (payload/'server-tensors.npz').open('xb') as stream:
         stream.write(raw)
+    if checkpoint is not None:
+        after = guard.snapshot_dataset(client)
+        guard.assert_append_delta(before, after, entry_name=entry.name, record_id=record_id)
+        guard.validate_stored_entry(after['entries'][entry.name], draft['entry'])
+        save('dataset-after-delivery.json', after)
+        save('dataset-preservation.json', dict(
+            status='PASS_EXISTING_DATASET_PRESERVED', dataset_id=353,
+            before_sha256=guard.digest(before), after_sha256=guard.digest(after),
+            added_entry=entry.name, added_record=record_id, previous_record_ids=sorted(before['records']),
+            qualification='Fresh read-only snapshots, not an atomic server lock.'))
     helper.verify_runtime(environment, manifest)
     if (helper.digest(manifest_path) != manifest_hash
             or helper.git(source, 'rev-parse', 'HEAD') != args.commit
@@ -369,9 +448,14 @@ def main():
                   qualification='Fresh QCArchive result/checksum delivery only; '
                   'independent tensor/scientific/OS-trace qualification remains.')
     save('pilot-outcome.json', report)
+    _FAILURE_SNAPSHOT = None
     print(json.dumps(dict(status=report['status'], record_id=record_id,
                           dataset_id=dataset.id, report=str(payload/'pilot-outcome.json'))))
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except BaseException:
+        preserve_failure_snapshot()
+        raise

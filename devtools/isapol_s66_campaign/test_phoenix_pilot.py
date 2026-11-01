@@ -93,3 +93,19 @@ def test_execution_specification_explicitly_disables_automatic_scientific_change
     assert 'protocols' not in original
     assert result['protocols'] == {'error_correction': {'default_policy': False}}
     assert result['keywords'] == original['keywords']
+
+
+def test_failure_snapshot_is_read_only_best_effort_and_cannot_mask_original(monkeypatch):
+    from types import SimpleNamespace as NS
+    written = {}
+    client = object()
+    guard = NS(snapshot_dataset=lambda c: {'observed': c is client})
+    monkeypatch.setattr(pilot, '_FAILURE_SNAPSHOT', (client, guard, lambda n, d: written.update({n: d})))
+    pilot.preserve_failure_snapshot()
+    assert written == {'dataset-failure-snapshot.json': {'observed': True}}
+    def failed(c):
+        raise TimeoutError('must not serialize credentials or error details')
+    guard.snapshot_dataset = failed
+    written.clear()
+    pilot.preserve_failure_snapshot()
+    assert written == {'dataset-failure-snapshot-error.json': {'error_type': 'TimeoutError'}}
