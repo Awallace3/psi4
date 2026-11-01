@@ -354,3 +354,20 @@ Under`phoenix-sealed-cpu-admission-927283f8ed/job-14942939/`:
 The qualified whole prefix and remote source stay frozen. A new H200 attempt
 still requires its physical small gate before three peptide repeats; none
 has been submitted under this CPU-only authorization.
+
+### Reusing the completed prerequisite
+
+The user subsequently approved the H200 pilot using this validated build,
+without another build. The submission-only helper accepts finalized exit0/
+no-TERM CPU artifacts, checks exact source/build-proof hashes and successful
+sealed admission, and omits a scheduler dependency on an already-completed
+job ID (which SLURM may have purged). Pending prerequisites still use
+`afterany` with the original runtime artifact checks. Failed, interrupted,
+changed or wrong-pin completed proofs reject before submission.
+
+Submission recipe and execution helper pins are recorded separately.
+The actual job, bootstrap, installed science and complete execution-helper
+checkout remain frozen at`927283f8ed`; no worker code is copied or overlaid.
+The actual H200 worker still reauthenticates the whole prefix and CPU admission
+before the physical gate. Removing an obsolete scheduling dependency does
+not waive any scientific/runtime gate or authorize automatic retries.

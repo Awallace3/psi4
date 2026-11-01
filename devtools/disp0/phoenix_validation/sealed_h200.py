@@ -24,17 +24,19 @@ PRELOAD = ("libcudart.so.13", "libnvJitLink.so.13", "libcublasLt.so.13",
 
 
 def command(source, root, parent):
-    if not str(parent).isdecimal():
+    if parent is not None and not str(parent).isdecimal():
         raise ValueError("Exact CPU build job ID required")
-    return ["sbatch", "--parsable", "--job-name=disp0-sealed-h200",
+    argv = ["sbatch", "--parsable", "--job-name=disp0-sealed-h200",
             "--account=gts-cs207-chemx", "--qos=embers", "--partition=gpu-h200",
             "--constraint=H200", "--gres=gpu:h200:1", "--nodes=1", "--ntasks=1",
             "--cpus-per-task=8", "--mem=160G", "--time=08:00:00",
             "--no-requeue", "--signal=TERM@120",
-            "--dependency=afterany:"+str(parent), "--kill-on-invalid-dep=yes",
             "--chdir="+str(root), "--output="+str(root/"logs/%x-%j.out"),
             "--error="+str(root/"logs/%x-%j.err"), "--export=ALL",
             str(source/"devtools/disp0/phoenix_validation/sealed_h200.sbatch")]
+    if parent is not None:
+        argv[1:1] = ["--dependency=afterany:"+str(parent), "--kill-on-invalid-dep=yes"]
+    return argv
 
 
 def configuration(base, build, root):
@@ -243,6 +245,31 @@ def _execute(manifest_path, root, groups):
         "accepted_speedup_count": 0, "automatic_retry": False})
 
 
+def completed_cpu_prerequisite(build_root, pin):
+    """Bounded artifact preflight; do not depend on a purged completed job ID.
+
+    The actual H200 worker still authenticates the whole prefix before native
+    work. Submission reads/hashes only these small finalized proof documents.
+    """
+    status = build_root/"job-status.env"
+    if not status.exists():
+        return None  # Still queued/running: retain afterany and runtime checks.
+    if status.read_text().splitlines()[:2] != ["exit_code=0","term_received=0"]:
+        raise RuntimeError("CPU prerequisite failed/interrupted; no H200 submission")
+    config_path = build_root/"gpu-runtime/runtime-config.json"
+    config = json.loads(config_path.read_text())
+    proof_path = Path(config["build_proof"])
+    proof = json.loads(proof_path.read_text())
+    if ((config["schema"],config["device_family"]) != (1,"H200")
+            or config["source_pin"] != pin or proof["pin"] != pin
+            or proof["status"] != "PASS" or proof["scope"] != "CPU_BUILD_VALIDATION_ONLY"
+            or digest(proof_path) != config["build_proof_sha256"]):
+        raise RuntimeError("Completed exact whole CPU proof required")
+    return {"build_proof_sha256": digest(proof_path),
+            "base_config_sha256": digest(config_path),
+            "cpu_admission_sha256": require_cpu_admission(build_root,pin)}
+
+
 def submit(args):
     source = args.source.resolve(strict=True)
     pin = source_pin(source)
@@ -253,15 +280,22 @@ def submit(args):
     root = args.root
     if not root.is_absolute():
         raise ValueError("Fresh absolute run root required")
-    root.mkdir(mode=0o700)
-    (root/"logs").mkdir()
     build_root = args.build_root.resolve()
     if build_root.name != "job-"+str(args.build_job) or not build_root.parent.is_dir():
         raise RuntimeError("Explicit submitted CPU build root/job locator required")
+    completed = completed_cpu_prerequisite(build_root,pin)
+    parent = None if completed is not None else args.build_job
+    recipe = Path(__file__).resolve()
+    recipe_pin = source_pin(recipe.parents[3])
+    root.mkdir(mode=0o700)
+    (root/"logs").mkdir()
     manifest = {
         "source": str(source), "helper_pin": pin, "science_pin": pin,
         "build_root": str(build_root),
         "build_job": str(args.build_job), "kind": "gpu",
+        "completed_cpu_prerequisite": completed, "scheduler_parent": parent,
+        "submission_recipe": str(recipe), "submission_recipe_pin": recipe_pin,
+        "submission_recipe_sha256": digest(recipe),
         "inputs": str(args.inputs.resolve(strict=True)), "inputs_sha256": args.inputs_sha256,
         "systems": ["peptide"], "qos": "embers", "account": "gts-cs207-chemx",
         "allocation_wall_seconds": 28800, "automatic_retry": False,
@@ -270,7 +304,7 @@ def submit(args):
     env = {k:v for k,v in os.environ.items() if not k.startswith(("SBATCH_", "SLURM_"))}
     env.update(DISP0_SOURCE=str(source), DISP0_PIN=pin, DISP0_RUN_ROOT=str(root),
                DISP0_MANIFEST_SHA256=digest(root/"manifest.json"))
-    argv = command(source, root, args.build_job)
+    argv = command(source, root, parent)
     for trial, output in ((True, "test-only.json"), (False, "submission.json")):
         if not trial:
             save_new(root/"SUBMISSION_ATTEMPTED.json", {"command": argv})

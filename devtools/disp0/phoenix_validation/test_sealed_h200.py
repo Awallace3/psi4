@@ -16,6 +16,73 @@ from run_gate import environment
 
 
 class SealedH200Contracts(unittest.TestCase):
+    def test_completed_cpu_artifacts_need_no_dependency_on_a_purged_job_id(self):
+        argv = sealed_h200.command(Path("/frozen-source"),Path("/fresh"),None)
+        self.assertFalse(any(value.startswith("--dependency=") for value in argv))
+        self.assertNotIn("--kill-on-invalid-dep=yes",argv)
+        for value in ("--qos=embers","--constraint=H200","--gres=gpu:h200:1",
+                      "--cpus-per-task=8","--mem=160G","--time=08:00:00"):
+            self.assertIn(value,argv)
+
+    def test_completed_prerequisite_rejects_failed_changed_or_wrong_pin_proofs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.assertIsNone(sealed_h200.completed_cpu_prerequisite(root,"pin"))
+            status = root/"job-status.env"
+            status.write_text("exit_code=1\nterm_received=0\n")
+            with self.assertRaisesRegex(RuntimeError,"failed/interrupted"):
+                sealed_h200.completed_cpu_prerequisite(root,"pin")
+            status.write_text("exit_code=0\nterm_received=0\n")
+            proof = root/"result.json"
+            proof.write_text(json.dumps({"status":"PASS","scope":"CPU_BUILD_VALIDATION_ONLY","pin":"pin"}))
+            runtime = root/"gpu-runtime"
+            runtime.mkdir()
+            config = {"schema":1,"device_family":"H200","source_pin":"pin",
+                      "build_proof":str(proof),"build_proof_sha256":digest(proof)}
+            path = runtime/"runtime-config.json"
+            path.write_text(json.dumps(config))
+            with patch.object(sealed_h200,"require_cpu_admission",return_value="admission") as admit:
+                receipt = sealed_h200.completed_cpu_prerequisite(root,"pin")
+                self.assertEqual(receipt["cpu_admission_sha256"],"admission")
+                admit.assert_called_once_with(root,"pin")
+                for changed in ({**config,"source_pin":"old"},
+                                {**config,"build_proof_sha256":"changed"}):
+                    path.write_text(json.dumps(changed))
+                    with self.assertRaisesRegex(RuntimeError,"exact whole CPU"):
+                        sealed_h200.completed_cpu_prerequisite(root,"pin")
+
+    def test_submission_recipe_cannot_advance_the_frozen_execution_source(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            source,build = base/"frozen-source",base/"build"/"job-123"
+            source.mkdir()
+            build.mkdir(parents=True)
+            inputs = base/"inputs.json"
+            inputs.write_text("{}")
+            root = base/"fresh-h200"
+            args = SimpleNamespace(source=source,pin="execution-pin",build_job="123",
+                                   build_root=build,inputs=inputs,inputs_sha256="input",root=root)
+            responses = [SimpleNamespace(returncode=0,stdout="test-only\n",stderr=""),
+                         SimpleNamespace(returncode=0,stdout="456\n",stderr="")]
+            scheduler = Mock(side_effect=responses)
+            with patch.object(sealed_h200,"source_pin",side_effect=["execution-pin","recipe-pin"]), \
+                    patch.object(sealed_h200,"completed_cpu_prerequisite",return_value={"proof":"sealed"}), \
+                    patch("full_inputs.load_point"), \
+                    patch.object(sealed_h200.subprocess,"run",scheduler):
+                sealed_h200.submit(args)
+            manifest = json.loads((root/"manifest.json").read_text())
+            self.assertEqual(manifest["helper_pin"],"execution-pin")
+            self.assertEqual(manifest["science_pin"],"execution-pin")
+            self.assertEqual(manifest["submission_recipe_pin"],"recipe-pin")
+            self.assertIsNone(manifest["scheduler_parent"])
+            argv = scheduler.call_args.args[0]
+            env = scheduler.call_args.kwargs["env"]
+            self.assertEqual(env["DISP0_SOURCE"],str(source))
+            self.assertEqual(env["DISP0_PIN"],"execution-pin")
+            self.assertEqual(argv[-1],str(source/"devtools/disp0/phoenix_validation/sealed_h200.sbatch"))
+            self.assertFalse(any(value.startswith("--dependency=") for value in argv))
+
     def test_cpu_admission_never_creates_a_cuda_session_or_claims_gpu_evidence(self):
         from unittest.mock import Mock
         runtime = SimpleNamespace(
