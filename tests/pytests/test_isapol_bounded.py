@@ -9,6 +9,7 @@ selection, and refusals. Toy admissions are not molecular acceptance.
 """
 import math
 import re
+from dataclasses import dataclass, fields, is_dataclass, replace
 
 import numpy as np
 import pytest
@@ -115,8 +116,14 @@ def test_live_chain_completes_in_order_and_cleans_checkpoints(small_water, tmp_p
     sweep = names[names.index('retained point-response targets')+1:names.index('complete-cloud refinement')]
     assert names.index('operator stability') < names.index('native fit cloud') < names.index(
         'retained point-response targets')
-    assert sweep == ['H2H1 response operator']+['frequency response', 'production localization',
-                                                'point-response targets']*3
+    assert sweep == ['retained static reference tensors', 'H2H1 response operator']+[
+        'frequency response', 'production localization', 'point-response targets']*3
+    stages = {stage['stage']: stage for stage in result.resources['stages']}
+    reference = stages['retained static reference tensors']
+    before_reference = stages['retained point-response targets']
+    assert reference['numeric_bytes']-before_reference['numeric_bytes'] == (
+        8*sum(site.component_count**2 for site in args['sites']))
+    assert reference['work'] == 0
     assert names[-1] == 'complete-cloud refinement'
     assert result.resources['maximum_numeric_plan'] == max(s['numeric_bytes'] for s in result.resources['stages'])
     assert result.resources['charged_work'] == sum(s['work'] for s in result.resources['stages'])
@@ -326,18 +333,42 @@ class _Reached(Exception):
     """Raised by a patched later stage to show that an admission was passed."""
 
 
-class _CountedModel:
+@dataclass(frozen=True)
+class _CountedModel(refine.RefinementModel):
     """A real node model reporting another parameter count, to drive admission past the toy's size."""
-
-    def __init__(self, model, count):
-        self._model, self._count = model, count
-
-    def __getattr__(self, name):
-        return getattr(self._model, name)
+    _count: int = 0
 
     @property
     def parameter_count(self):
         return self._count
+
+
+def _counted_model(model, count):
+    return _CountedModel(**{field.name: getattr(model, field.name)
+                            for field in fields(refine.RefinementModel)}, _count=count)
+
+
+def test_counted_admission_fixture_preserves_static_reference_dataclass(monkeypatch):
+    """Exercise the real static-node replacement without any SCF or targets."""
+    site = refine.RefinementSite('A', 'A', (0., 0., 0.), np.eye(3), 1)
+    anchors = (np.diag([0., 1., 1., 1.]),)
+    build = refine.refinement_model
+    original = []
+    def counted(*args, **kwargs):
+        model = build(*args, **kwargs)
+        original.append(model)
+        return _counted_model(model, 72)
+    monkeypatch.setattr(refine, 'refinement_model', counted)
+    model, _, _, _ = driver._refinement_node(
+        (site,), anchors, 0., cutoff=1e-4, weight_type=4, weight_coefficient=1e-5,
+        declared=None, static_penalized=None, static_reference=None, provenance='count fixture')
+    assert is_dataclass(model) and model.parameter_count == 72
+    assert model.penalty_selection == 'static_reference' and model.static_reference_sha256
+    copied = replace(model, provenance='copied count fixture')
+    assert copied.parameter_count == 72
+    for name in ('sites', 'parameter_labels', 'parameter_entries', 'anchors', 'strengths'):
+        assert getattr(copied, name) == getattr(original[-1], name)
+    assert isinstance(copied.sites[0], refine.RefinementSite)
 
 
 def _forbid_response(monkeypatch):
@@ -394,7 +425,7 @@ def test_cutoff_derived_model_admission_uses_the_selected_limit(small_water, tmp
     build, solve = refine.refinement_model, backend.BoundedResponse.solve
     solves, targets = [], []
     count = [0]
-    monkeypatch.setattr(refine, 'refinement_model', lambda *a, **k: _CountedModel(build(*a, **k), count[0]))
+    monkeypatch.setattr(refine, 'refinement_model', lambda *a, **k: _counted_model(build(*a, **k), count[0]))
     monkeypatch.setattr(backend.BoundedResponse, 'solve',
                         lambda self, omega: solves.append(omega) or solve(self, omega))
 

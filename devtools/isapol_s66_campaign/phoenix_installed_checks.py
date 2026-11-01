@@ -1,8 +1,8 @@
 """Installed-only tests in a private Phoenix embers allocation.
 
-The scientific build pin and operational harness pin are separate. Tests are
-read from the original build snapshot; this script never overlays Python
-modules, changes the install, runs campaign monomers or registers records.
+The scientific build pin and test/harness pin are separate. A newer revision
+may change only explicitly allowed tests/operational files; it may not change
+scientific or build code. No production modules are overlaid or reinstalled.
 """
 import argparse
 import hashlib
@@ -21,6 +21,11 @@ TEST_FILES = (
     'test_isapol_molecular_declaration.py', 'test_isapol_pfit_stream.py',
     'test_isapol_bounded_oeprop.py', 'test_isapol_bounded.py',
 )
+EXPECTED_TESTS = 196
+TEST_ONLY_CHANGES = frozenset('tests/pytests/'+name for name in TEST_FILES) | frozenset(
+    'devtools/isapol_s66_campaign/'+name for name in (
+        'phoenix_installed_checks.py', 'phoenix_installed_checks.sbatch',
+        'test_installed_checks.py', 'README.md'))
 
 
 def digest(path):
@@ -31,13 +36,15 @@ def digest(path):
     return result.hexdigest()
 
 
-def junit_summary(path):
+def junit_summary(path, *, expected=None):
     root = ET.parse(path).getroot()
     suites = [root] if root.tag == 'testsuite' else root.findall('testsuite')
     result = {key: sum(int(suite.get(key, '0')) for suite in suites)
               for key in ('tests', 'failures', 'errors', 'skipped')}
     if result['tests'] <= 0 or result['failures'] or result['errors'] or result['skipped']:
         raise ValueError('nonempty fully successful installed test run required')
+    if expected is not None and result['tests'] != expected:
+        raise ValueError(f'installed suite must run exactly{expected} cases')
     return result
 
 
@@ -80,6 +87,11 @@ def test_environment(original):
 
 def installed_python_command(python, cache, *arguments):
     return [str(python), '-I', '-B', '-X', 'pycache_prefix='+str(cache), *arguments]
+
+
+def validate_test_revision(changed_paths):
+    if set(changed_paths)-TEST_ONLY_CHANGES:
+        raise ValueError('newer test revision changes scientific/build or undeclared files')
 
 
 def git(source, *args):
@@ -135,6 +147,8 @@ def main():
                              (('status', '--porcelain'), '')):
         if git(source, *values) != expected:
             raise RuntimeError('original scientific source changed')
+    changed = git(harness, 'diff', '--name-only', args.commit, args.harness_commit).splitlines()
+    validate_test_revision(changed)
     rows = subprocess.check_output([
         '/opt/slurm/current/bin/sacct', '-n', '-P', '-j', str(receipt['job']),
         '-o', 'JobIDRaw,State,ExitCode'], text=True)
@@ -168,6 +182,8 @@ def main():
     started = dict(
         status='started', build_commit=args.commit, build_tree=args.tree,
         harness_commit=args.harness_commit, harness_sha256=digest(__file__),
+        test_source_commit=args.harness_commit, test_source_path=str(harness/'tests/pytests'),
+        test_only_revision_changes=changed, expected_test_count=EXPECTED_TESTS,
         build_identity_sha256=manifest_hash, allocation=allocated, started=time.time(),
         qualification='Installed interface/contract tests, not campaign molecular or QCArchive acceptance.')
     (payload/'started.json').write_text(json.dumps(started, indent=2))
@@ -188,25 +204,30 @@ def main():
     if digest(imported['core']) != imported['implementation']['sha256']['core']:
         raise RuntimeError('core identity differs from imported native implementation')
     (payload/'imported-identity.json').write_text(json.dumps(imported, indent=2))
-    tests = [source/'tests/pytests'/name for name in TEST_FILES]
+    tests = [harness/'tests/pytests'/name for name in TEST_FILES]
     if not all(path.is_file() for path in tests):
-        raise RuntimeError('original installed-test sources missing')
+        raise RuntimeError('pinned installed-test sources missing')
+    test_hashes = {path.name: digest(path) for path in tests}
     junit = payload/'junit.xml'
     command = installed_python_command(
         python, cache, '-m', 'pytest', '--noconftest', '-c', '/dev/null',
-        '-p', 'no:cacheprovider', '-q', '--tb=short', '--junitxml='+str(junit), *map(str, tests))
+        '-p', 'no:cacheprovider', '--import-mode=importlib', '-q', '--tb=short',
+        '--junitxml='+str(junit), *map(str, tests))
     with (payload/'pytest.log').open('w') as stream:
         result = subprocess.run(command, env=env, cwd=cwd, stdin=subprocess.DEVNULL,
                                 stdout=stream, stderr=subprocess.STDOUT)
     if result.returncode:
         raise RuntimeError('installed tests failed; inspect payload/pytest.log and junit.xml')
-    summary = junit_summary(junit)
+    summary = junit_summary(junit, expected=EXPECTED_TESTS)
     verify_runtime(environment, manifest)
-    if digest(manifest_path) != manifest_hash or git(source, 'status', '--porcelain'):
+    if (digest(manifest_path) != manifest_hash or git(source, 'status', '--porcelain')
+            or git(harness, 'rev-parse', 'HEAD') != args.harness_commit
+            or git(harness, 'status', '--porcelain')
+            or any(digest(path) != test_hashes[path.name] for path in tests)):
         raise RuntimeError('build identity/source changed during installed tests')
     report = dict(started, status='passed', finished=time.time(), command=command,
                   test_summary=summary, imported_identity_sha256=digest(payload/'imported-identity.json'),
-                  junit_sha256=digest(junit), runtime_unchanged=True)
+                  junit_sha256=digest(junit), runtime_unchanged=True, test_source_sha256=test_hashes)
     (payload/'installed-validation.json').write_text(json.dumps(report, indent=2))
     print('PHOENIX_INSTALLED_NATIVE_TESTS', json.dumps(dict(
         status='passed', build_commit=args.commit, job=os.environ['SLURM_JOB_ID'],

@@ -107,3 +107,27 @@ def test_real_pytest_runs_all_explicit_tests_despite_inherited_selection(tmp_pat
     result = subprocess.run(command, env=env, cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, (result.stdout+result.stderr)[-2000:]
     assert checks.junit_summary(report)['tests'] == 2
+
+
+def test_newer_test_revision_cannot_change_scientific_or_build_code():
+    checks.validate_test_revision([
+        'tests/pytests/test_isapol_bounded.py',
+        'devtools/isapol_s66_campaign/phoenix_installed_checks.py',
+        'devtools/isapol_s66_campaign/README.md',
+    ])
+    for forbidden in ('psi4/driver/procrouting/isapol_bounded.py', 'CMakeLists.txt',
+                      'psi4/src/psi4/libisapol/pfit.cc', 'cmake/psi4OptionsTools.cmake'):
+        with pytest.raises(ValueError, match='scientific/build'):
+            checks.validate_test_revision([forbidden])
+
+
+def test_installed_suite_requires_the_exact_declared_case_count(tmp_path):
+    report = tmp_path/'junit.xml'
+    for count in (195, 197):
+        report.write_text(
+            f'<testsuites><testsuite tests="{count}" failures="0" errors="0" skipped="0"/></testsuites>')
+        with pytest.raises(ValueError, match='exactly196'):
+            checks.junit_summary(report, expected=196)
+    report.write_text(
+        '<testsuites><testsuite tests="196" failures="0" errors="0" skipped="0"/></testsuites>')
+    assert checks.junit_summary(report, expected=196)['tests'] == 196

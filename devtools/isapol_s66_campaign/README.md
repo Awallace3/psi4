@@ -157,12 +157,17 @@ or QCArchive registration is performed by this preparation.
 completed private build's manifest/runtime hashes, assert imported package
 and core paths, and run the native schema/molecular/PFIT plus legacy bounded
 tests against **that installation**. No source-module overlay is permitted.
-The test files come from the original build's clean source snapshot.
+The test revision is pinned and may be newer only when Git confirms every
+changed path is an explicitly allowed test/operational file, with no
+scientific/build-code change. Report the test and scientific-build commits
+separately; never relabel an existing installation as a newer build.
 The complete private file/directory inventory must match, not merely the
 previously listed file hashes: added `.pth` files and standalone bytecode are
 refused. Child Python uses a fresh bytecode prefix; inherited pytest options
 and plugin declarations are stripped, plugin autoload is disabled, and empty,
-failed or skipped test runs cannot produce a passing report.
+failed or skipped test runs cannot produce a passing report. The current
+explicit suite must report exactly196 successful cases; a smaller passing
+subset is not qualification.
 
 The operational harness has its own separate commit/hash in the report;
 adding a test launcher must never relabel the scientific build as a run of a
