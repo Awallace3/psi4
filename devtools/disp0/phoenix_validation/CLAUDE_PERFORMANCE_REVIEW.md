@@ -130,5 +130,6 @@ The subsequently requested [embers H200 pilot](SEALED_H200_PILOT.md) has not
 produced an accepted timing: its first attempt stopped at scratch ownership,
 and the corrected attempt retired its first GPU small-gate worker with86.
 A real CPU ELF test reproduces a cold SDK-locator/canonical-snapshot mismatch.
-The fix retains hot identity checks; user-approved CPU-only job14942939 now
-validates actual sealed cuBLAS/cuSOLVER binding before another H200 retry.
+The fix retains hot identity checks; user-approved CPU-only job14942939 passed
+actual sealed cuBLAS/cuSOLVER binding and symbol-owner checks without a CUDA
+session. A new physical H200 gate and benchmark remain outstanding.

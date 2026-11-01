@@ -1,7 +1,7 @@
 # Sealed-runtime H200 peptide pilot
 
-**Latest:** CPU-only validation14942939 is submitted on embers for the
-locator fix and real sealed cuBLAS/cuSOLVER admission. No H200 retry is queued.
+**Latest:** CPU-only validation14942939 **passed** on embers, including real
+sealed cuBLAS/cuSOLVER locator binding and symbol ownership. No H200 retry is queued.
 H20014784867 failed its first GPU small-gate worker with exit86; no peptide
 benchmark ran. A real CPU ELF fixture reproduces a manifest-locator mismatch.
 
@@ -314,3 +314,43 @@ Initial controller readback and prolog confirm RUNNING on embers with the
 declared account/CPU/memory/wall cap; neither requested nor allocated TRES
 contains a GPU.
 Submission is not admission PASS, GPU qualification or a speedup result.
+
+### CPU validation14942939 passed
+
+Job/batch/step completed0:0 in10m56s; payload exit0/no TERM.
+The whole-build proof is PASS at exact pin`927283f8ed`;383 CPU regressions
+passed without skips and121 helper tests completed with the same single
+optional literal-input-suite skip. Native CPU RHF remains
+`-1.1167143250625702 Eh`.
+
+The new real CPU runtime admission returned0 with no retirement reason and
+all owned child groups reaped. Both private manifest symlink locators bound
+the preloaded canonical snapshots:
+
+- cuBLAS`libcublas.so.13.6.0.2`, SHA256
+  `c13e3af56f07357b3419f01f183013577274709637b8a35aec008c3fe6ab6102`,
+  with`cublasCreate_v2`/`cublasDestroy_v2` owner checks.
+- cuSOLVER`libcusolver.so.12.2.6.9`, SHA256
+  `b0825c65a735cc2eba019194103043b7db05e4e54ef79b788071c20b5582864f`,
+  with`cusolverDnCreate`/`cusolverDnDestroy` owner checks.
+
+The proof explicitly records`cuda_session_created=false` and
+`gpu_correctness_verified=false`. This validates the binding fix on the real
+Phoenix dependencies, not a CUDA calculation or accepted performance sample.
+The actual Phoenix closure contains10 sealed files/20 source-plus-destination
+hashes, all with seal mask63, retaining1,353,495,253 snapshot bytes. It is not
+silently described as Cachy's different17-image dependency copy.
+
+Under`phoenix-sealed-cpu-admission-927283f8ed/job-14942939/`:
+
+| Artifact | SHA256 |
+|---|---|
+| `result.json` | `a8915b40305761542426494fbe2a373727fc3de0a38b6d90a3f82eb3a06a6c42` |
+| `gpu-runtime/preparation-result.json` | `eb4eff4c84d6eedb2eba0cf0002686b9826d03bd3c7113acdb7f313d530c788b` |
+| `gpu-runtime/runtime-config.json` | `9539fdedd71d30fd719b5e35e50f8754aeca9fb9df9bad64389efbf4024c8b7f` |
+| `cpu-sealed-admission/preflight-result.json` | `c1f1d57993c807f82a3a93ff63447fd24d7da89cb179ad1dd0f7be350f4c42fe` |
+| `cpu-sealed-admission/runtime-admission.json` | `2c7caab8deb0a90442992fe622636f1cf4c66194eb275b5cddfa6f1338dd485a` |
+
+The qualified whole prefix and remote source stay frozen. A new H200 attempt
+still requires its physical small gate before three peptide repeats; none
+has been submitted under this CPU-only authorization.
