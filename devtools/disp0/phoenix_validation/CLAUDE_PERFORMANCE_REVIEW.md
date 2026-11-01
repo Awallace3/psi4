@@ -133,3 +133,5 @@ A real CPU ELF test reproduces a cold SDK-locator/canonical-snapshot mismatch.
 The fix retains hot identity checks; user-approved CPU-only job14942939 passed
 actual sealed cuBLAS/cuSOLVER binding and symbol-owner checks without a CUDA
 session. A new physical H200 gate and benchmark remain outstanding.
+User-approved H20014946636 is now queued on embers using that unchanged
+validated build, with the physical gate before three peptide repeats.

@@ -1,7 +1,8 @@
 # Sealed-runtime H200 peptide pilot
 
-**Latest:** CPU-only validation14942939 **passed** on embers, including real
-sealed cuBLAS/cuSOLVER locator binding and symbol ownership. No H200 retry is queued.
+**Latest:** H20014946636 is submitted on embers using the unchanged whole
+build`927283f8ed`. CPU-only validation14942939 **passed**, including real
+sealed cuBLAS/cuSOLVER locator binding and symbol ownership.
 H20014784867 failed its first GPU small-gate worker with exit86; no peptide
 benchmark ran. A real CPU ELF fixture reproduces a manifest-locator mismatch.
 
@@ -371,3 +372,31 @@ checkout remain frozen at`927283f8ed`; no worker code is copied or overlaid.
 The actual H200 worker still reauthenticates the whole prefix and CPU admission
 before the physical gate. Removing an obsolete scheduling dependency does
 not waive any scientific/runtime gate or authorize automatic retries.
+
+## H20014946636 submitted using the validated build
+
+The user explicitly approved **Submit H200 on embers** after the real CPU
+admission PASS. One job was accepted: **14946636**,
+`gts-cs207-chemx / gpu-h200 / embers`, one H200,8 host CPUs,160GiB,8-hour cap.
+It must pass the full physical small gate before three fresh peptide calls.
+No rebuild, additional CPU allocation, large CPU oracle on the GPU node or
+automatic retry was submitted.
+
+Execution source/helper and whole stage remain exactly
+`927283f8ed0a94d42179c35dd2a1a5bce674347e`, using completed CPU job14942939.
+Submission-only recipe:
+`04db1a673925b1709cd7bf97bca0bd3708385e36`, from
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-sealed-submit-04db1a6739`.
+The fresh manifest records both pins, recipe SHA and the completed CPU proof/
+admission hashes. Its scheduler parent is null because the finalized CPU
+artifacts are already valid; the runtime checks remain mandatory.
+Test-only scheduler ID14946635 is not a compute job.
+
+Output root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-sealed-h200-927283f8ed`.
+Watcher:`b95fa6655`.
+Controller readback confirms PENDING(Priority), no dependency, embers,
+one requested H200/8 CPUs/160GiB/8h and`Features=H200`. The manifest's
+completed-proof hashes match the CPU artifacts above. The submission-only
+helper suite passed124 tests; no scientific or execution-helper code changed.
+Submission is not a small-gate PASS or an accepted speedup.
