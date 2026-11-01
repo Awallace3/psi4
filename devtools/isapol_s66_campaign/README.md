@@ -190,3 +190,38 @@ never appear in the molecule or `additional_keywords`. This command does
 not connect to the existing QCArchive deployment, register a specification,
 or submit a job. Runtime declarations and the installed QCSchema artifact
 round trip must be qualified first.
+
+## First pilot preparation
+
+`pilot.py` joins one exact entry/declaration geometry identity only after a
+sealed197-case installed qualification. Its command takes the qualification
+JSON, checksum-matching sibling imported identity and JUnit, explicit finite
+numeric/work/I/O/replay limits, and one monomer identifier. It writes a new
+JSON draft exclusively, never connects to QCArchive or executes Psi4.
+
+The draft places the declared frames, resource limits, explicit computational
+C1 and actual installed implementation hashes in per-entry
+`function_kwargs.native_monomer`. SAPT components remain solely in entry
+attributes; they never enter the specification, molecule or execution
+keywords. The scientific build and installed-test revisions stay separate.
+The submission policy is fresh records (`find_existing=False`), one initial
+worker and explicit `embers`; neither the draft nor the installed tests
+establish QCEngine/manager compatibility or molecular acceptance.
+
+`single_claim.py` is a compute0.63-specific operational mixin, not a running
+manager. It disables the parent's three-slots-per-worker acquisition, claims
+one exact record once and drains through ordinary acknowledged/deferred
+delivery. A failed result accepted by the server cannot be reacquired.
+Ambiguous claim errors stop gracefully without retry; record success must
+still be checked independently after retrieval.
+
+`phoenix_worker_probe.py` with its `.sbatch` wrapper is a **no-SCF** compute
+preflight. It rechecks the scientific runtime inventory, admits the request
+and refinement descriptor plan in the private installation, then exercises
+actual compute-manager discovery using p4qca's Python. `native_psi4.sh` is
+the owned CLI-only boundary to the sealed scientific interpreter; its
+discovery/calculation processes are traced and never overlaid into manager
+Python. A passing preflight means neither molecular success nor a QCArchive
+roundtrip or OS-level independence certificate. Manager bootstrap, fresh
+record acquisition, result retrieval and scientific qualification remain
+separate gates.
