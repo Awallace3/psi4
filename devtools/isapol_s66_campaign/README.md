@@ -83,6 +83,59 @@ allowance is not a vendor-library iteration-count or wall-time guarantee.
 `plan_molecular_refinement()` allocates no design buffer and is explicitly
 **refinement-only**, not a complete SCF/ISA/response or wall-time guarantee.
 
+### Complete bounded-ledger prediction
+
+`resource_plan.py` is an **operational arithmetic mirror**, not a change to the
+installed scientific producer. Its thirteen source hashes bind the policy to
+`acf54c28e50822b5b825f4d26e5d9f9a2835d773`, including native state, grid and PFIT
+admission. It constructs no wavefunction, integrals, point grid or fit array.
+Only descriptor-derived dimensions from the sealed installation can qualify
+an actual input; the unit-test element-width fixtures are not such receipts.
+
+The plan includes the full120-iteration ISA and ten-step Drho allowances,
+both constrained fits, Q, factors/kernel/assembly/stability, the once-retained
+H2H1 operator, all11 solves/localizations/targets and complete-cloud refinement.
+Memory follows live reservations, while work and checkpoint I/O accumulate.
+Packed replay and the existing quadrature heuristic remain separate gates:
+they are not added a second time to the charged ledger.
+The pre-SCF orbital envelope is `nmo<=nbf`; actual SCF dimensions and all
+numerical convergence/stability gates still have to pass.
+
+The accepted generic water fixture reproduces charged work2,114,541,737,496,
+checkpoint I/O46,480,064 bytes and peak planned numeric memory1,356,480,224
+bytes, including ISA work1,988,699,339,376 and refinement83,676,664,704.
+Exact/one-unit-short tests exercise work, checkpoint I/O, numeric bytes and
+packed replay. These counters are not measured runtime, total process memory
+or actual filesystem traffic; SCF/integrals/vendor workspaces, Python objects,
+isotropic contraction and export/transport remain explicit exclusions.
+
+The independent-site methanol/methylamine ISA allowances alone exceed the
+water request's six-trillion work budget. Moreover the native PFIT solver has
+its **own256MiB enforced cap** in this producer: independent-site benzene's
+base plan already exceeds it. The mirror refuses this instead of pretending
+that the larger outer ledger, fewer rows, site COPY or fewer variables fixes
+the issue. It additionally reserves the whole native cap beside Python's fit
+allowance as a separately named conservative numeric policy; queried LAPACK
+workspace must still fit above the native base at execution.
+Larger fits need an explicit finite native-workspace policy and newly
+qualified scientific implementation, not a silent retry or relabeled build.
+
+`plan()` returns only `WITHIN_PREDICTED_LEDGER_LIMITS` or `REFUSED`: even a
+passing arithmetic calculation has no checked source/build/descriptor receipt.
+`descriptor_probe.py` extracts actual MAIN/AUX/atomic/shape shell descriptors
+from the private installation without constructing a wavefunction, point grid
+or integral engine. `phoenix_descriptor_probe.py` supervises that child in an
+explicit30-minute embers allocation, verifies the complete existing
+197-case installed qualification and sealed runtime before/after, checks exact
+Git blobs for the thirteen policy sources, and binds every child receipt to
+the input, operational files, imported implementation and intended memory.
+No QCArchive connection, record creation/claim or manager discovery occurs.
+Its passing status remains **descriptor plans only**, not molecular acceptance.
+An allocation exit0 can also preserve an explicitly refused descriptor plan:
+always require `descriptor-allocation.json` and inspect its status and each
+per-input refusal, rather than interpreting the batch completion marker as
+admission. Partial/interrupted payloads require fresh paths, not reuse.
+
 `export_molecular_result()` requires the actual wavefunction-owned result,
 complete11-node independent-site fit inventory and finite numeric exports.
 It retains partial-C10/solver-certification qualifications and reports
