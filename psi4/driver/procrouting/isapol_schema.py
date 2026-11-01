@@ -7,7 +7,8 @@ Installed implementation pins identify code; they do not certify molecular
 accuracy, convergence, or an OS-level independence audit.
 
 Request/2 retains the native256MiB fit cap and its original exact field set.
-Request/3 requires an explicit finite ``pfit_maximum_work_bytes``; it cannot
+Request/3 requires an explicit finite ``pfit_maximum_work_bytes`` and is the
+only serialized version permitting the optional extended work tier; it cannot
 silently extend a request/2 or infer an unlimited workspace from outer memory.
 """
 from dataclasses import asdict, dataclass
@@ -58,6 +59,9 @@ class NativeMonomerRequest:
             raise ValueError('native request requires explicit computational point_group=c1')
         if not isinstance(self.declaration, MolecularDeclaration):
             raise TypeError('explicit molecular declaration required')
+        if (isinstance(self.resources, BoundedResources) and self.resources.capacity == 'extended'
+                and self.pfit_maximum_work_bytes is None):
+            raise ValueError('extended capacity requires request/3 with explicit native workspace')
         plan_molecular_refinement(self.declaration, self.resources,
                                   max_replay_work=self.max_replay_work,
                                   pfit_maximum_work_bytes=self.pfit_maximum_work_bytes)
@@ -84,6 +88,8 @@ class NativeMonomerRequest:
                 or set(value['resources']) != {'max_bytes', 'max_work', 'max_io_bytes', 'capacity'}
                 or type(value['implementation_sha256']) is not dict):
             raise ValueError('explicit native resources and implementation pins required')
+        if not explicit and value['resources']['capacity'] == 'extended':
+            raise ValueError('extended capacity requires request/3 with explicit native workspace')
         return cls(MolecularDeclaration.from_dict(value['declaration']),
                    BoundedResources(**value['resources']), value['max_replay_work'],
                    tuple(value['implementation_sha256'].items()), value['point_group'],

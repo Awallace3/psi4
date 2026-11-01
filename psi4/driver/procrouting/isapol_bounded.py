@@ -131,7 +131,7 @@ def refinement_limits(max_parameters, resources, *, capacity='standard',
     replay_work = check_replay_work(
         PackedDesignRows.MAX_WORK if max_replay_work is None else max_replay_work)
     if ((capacity == 'molecular' or replay_work > PackedDesignRows.MAX_WORK)
-            and resources.capacity != 'large'):
+            and resources.capacity not in ('large', 'extended')):
         raise ValueError('molecular refinement/replay requires explicit large resource capacity')
     return replay_work
 
@@ -259,7 +259,7 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
     ``max_parameters`` fit variables (default 64; an explicit opt-in may raise
     it to at most72 under the standard refinement policy. A separately
     declared ``refinement_capacity='molecular'`` admits up to1024 only with
-    explicit large resources. ``max_replay_work`` is a finite opt-in for the
+    explicit large or extended resources. ``max_replay_work`` is a finite opt-in for the
     two packed design passes; its default remains64 billion. The optional
     ``pfit_maximum_work_bytes`` is an exact positive integer native-kernel cap
     (None retains256MiB); its entire value is reserved beside the Python fit

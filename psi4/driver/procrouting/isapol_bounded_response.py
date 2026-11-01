@@ -28,11 +28,15 @@ from .isapol_native_propagator import KernelSmoothing
 from .isapol_native_response import native_restricted_state_from_wavefunction
 
 
-#: Closed capacity tiers: finite (max_work, max_io_bytes) ceilings. 'large' is
-#: an explicit opt-in whose ``max_bytes`` may not exceed the Psi4 memory setting.
+#: Closed finite tiers. Neither larger tier is selected automatically, and
+#: both require ``max_bytes`` no greater than the Psi4 memory setting.
+#: 'extended' accommodates the full independent-site CHNO dimension envelope
+#: (source-policy forecast up to105.125T work); charges are not discounted.
+#: These ceilings are not runtime estimates or permission for a paid QoS.
 RESOURCE_CAPACITIES = {
     'standard': (6_000_000_000_000, 64*1024**3),
     'large': (100_000_000_000_000, 64*1024**3),
+    'extended': (128_000_000_000_000, 64*1024**3),
 }
 
 
@@ -526,8 +530,8 @@ class BoundedResponse:
         if not isinstance(resources, BoundedResources):
             raise TypeError('explicit BoundedResources required')
         # Refused before any state, ledger, scratch or native work.
-        if resources.capacity == 'large' and resources.max_bytes > int(core.get_memory()):
-            raise ValueError('large capacity numeric budget exceeds the Psi4 memory setting')
+        if resources.capacity != 'standard' and resources.max_bytes > int(core.get_memory()):
+            raise ValueError(f'{resources.capacity} capacity numeric budget exceeds the Psi4 memory setting')
         if not isinstance(auxiliary_recipe, BasisRecipe):
             raise ValueError('explicit AUX recipe required')
         if not isinstance(quadrature, Quadrature) or not isinstance(smoothing, KernelSmoothing):

@@ -42,7 +42,8 @@ def test_legacy_three_field_declaration_is_unchanged():
     with pytest.raises(ValueError, match=r'^max_work must be a positive integer <= 6000000000000$'):
         backend.BoundedResources(1, 6_000_000_000_001, 1)
     assert backend.RESOURCE_CAPACITIES == {'standard': (6_000_000_000_000, 64*1024**3),
-                                           'large': (100_000_000_000_000, 64*1024**3)}
+                                           'large': (100_000_000_000_000, 64*1024**3),
+                                           'extended': (128_000_000_000_000, 64*1024**3)}
 
 
 def test_large_capacity_is_explicit_and_finite():
@@ -71,7 +72,7 @@ def test_capacity_str_subclass_is_refused():
         backend.BoundedResources(1, 1, 1, capacity=_Text('large'))
 
 
-@pytest.mark.parametrize('capacity', ['standard', 'large'])
+@pytest.mark.parametrize('capacity', ['standard', 'large', 'extended'])
 @pytest.mark.parametrize('field', ['max_bytes', 'max_work', 'max_io_bytes'])
 @pytest.mark.parametrize('value', [True, False, 1., 64e12, float('inf'), float('nan'), np.int64(1), '1', 0, -1, None])
 def test_every_field_keeps_exact_positive_integer_validation(capacity, field, value):
@@ -81,7 +82,9 @@ def test_every_field_keeps_exact_positive_integer_validation(capacity, field, va
         backend.BoundedResources(**args)
 
 
-@pytest.mark.parametrize('capacity,work_ceiling', [('standard', 6_000_000_000_000), ('large', 100_000_000_000_000)])
+@pytest.mark.parametrize('capacity,work_ceiling', [('standard', 6_000_000_000_000),
+                                                 ('large', 100_000_000_000_000),
+                                                 ('extended', 128_000_000_000_000)])
 def test_tier_ceilings_are_inclusive_and_finite(capacity, work_ceiling):
     io = 64*1024**3
     at = backend.BoundedResources(2**200, work_ceiling, io, capacity)  # bytes: no class ceiling (memory rule below)
@@ -93,7 +96,7 @@ def test_tier_ceilings_are_inclusive_and_finite(capacity, work_ceiling):
             backend.BoundedResources(**args)
 
 
-@pytest.mark.parametrize('capacity', ['standard', 'large'])
+@pytest.mark.parametrize('capacity', ['standard', 'large', 'extended'])
 def test_ledger_never_resets_between_stages(capacity):
     budget = backend._Ledger(backend.BoundedResources(100, 100, 100, capacity), reserved=20)
     budget.admit('one', 80, 60)
@@ -108,7 +111,7 @@ def test_ledger_never_resets_between_stages(capacity):
     assert budget.work == 100 and budget.peak == 100 and budget.io == 60
 
 
-@pytest.mark.parametrize('capacity', ['standard', 'large'])
+@pytest.mark.parametrize('capacity', ['standard', 'large', 'extended'])
 def test_ledger_reservations_count_against_numeric_plans(capacity):
     budget = backend._Ledger(backend.BoundedResources(1000, 10, 10, capacity), reserved=100)
     budget.reserved += 400
