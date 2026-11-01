@@ -15,7 +15,8 @@ from pathlib import Path
 import numpy as np
 from psi4 import core
 
-from .isapol_bounded import BoundedResources, refinement_limits, _pfit_plan
+from .isapol_bounded import BoundedResources, refinement_limits
+from .isapol_pfit_plan import combined_fit_plan
 from .isapol_native import Quadrature
 from .isapol_native_correction import require_scf_seal, validate_correction
 from .isapol_native_propagator import KernelSmoothing
@@ -89,37 +90,40 @@ def full_rank2_variables(sites):
                  for site in sites for i in range(1, 9) for j in range(i, 9))
 
 
-def plan_molecular_refinement(declaration, resources, *, max_replay_work):
+def plan_molecular_refinement(declaration, resources, *, max_replay_work,
+                              pfit_maximum_work_bytes=None):
     """Cheap refinement-only preflight; NOT a complete SCF/ISA/response plan."""
     if not isinstance(declaration, MolecularDeclaration):
         raise TypeError('explicit MolecularDeclaration required')
     count = 36*len(declaration.frames)
     work = refinement_limits(count, resources, capacity='molecular',
                              max_replay_work=max_replay_work)
+    fit = combined_fit_plan(2000, 9*len(declaration.frames), count, 11,
+                            maximum_work_bytes=pfit_maximum_work_bytes)
     plan = packed_design_plan(
         npoint=2000, channel_count=9*len(declaration.frames), parameter_count=count,
         used_channels=8*len(declaration.frames), block_rows=4096,
         max_bytes=resources.max_bytes, max_work=work)
-    fit_bytes, fit_work = _pfit_plan(2000, 9*len(declaration.frames), count, 11)
-    if fit_work > resources.max_work:
+    if fit['complete_refinement_work'] > resources.max_work:
         raise ValueError('complete refinement alone exceeds cumulative work resource limit')
-    if fit_bytes > resources.max_bytes:
+    if fit['complete_refinement_bytes'] > resources.max_bytes:
         raise ValueError('complete refinement alone exceeds numeric byte resource limit')
     return dict(scope='refinement_only_not_complete_molecular_admission',
                 parameters=count, sites=len(declaration.frames), nodes=11,
                 planned_work_scope='packed_replay_only',
-                complete_refinement_work=fit_work, complete_refinement_bytes=fit_bytes, **plan)
+                **fit, **plan)
 
 
 def run_molecular_properties(wfn, declaration, resources, *, max_replay_work,
-                             scratch_directory, log=None):
+                             scratch_directory, log=None, pfit_maximum_work_bytes=None):
     """Compute from the caller's live state through the ordinary oeprop route."""
     from psi4.driver.p4util.util import oeprop, atomic_property_result
     from .isapol_bounded_oeprop import invalidate
     if not isinstance(wfn, core.Wavefunction):
         raise TypeError('live Psi4 Wavefunction required')
     invalidate(wfn)
-    plan_molecular_refinement(declaration, resources, max_replay_work=max_replay_work)
+    plan_molecular_refinement(declaration, resources, max_replay_work=max_replay_work,
+                              pfit_maximum_work_bytes=pfit_maximum_work_bytes)
     require_scf_seal(wfn)
     validate_correction(wfn, scf_correction='NONE', require_canonical=True)
     if resources.max_bytes > int(core.get_memory()):
@@ -149,6 +153,7 @@ def run_molecular_properties(wfn, declaration, resources, *, max_replay_work,
         weight_type=3, weight_coefficient=.001, cutoff=1e-4,
         declared_variables=full_rank2_variables(sites), max_refinement_parameters=36*len(sites),
         refinement_capacity='molecular', max_replay_work=max_replay_work,
+        pfit_maximum_work_bytes=pfit_maximum_work_bytes,
         max_order=10, scf_correction='NONE', recoupled_dispersion=False,
         resources=resources, scratch_directory=scratch_directory, log=log)
     return atomic_property_result(wfn)

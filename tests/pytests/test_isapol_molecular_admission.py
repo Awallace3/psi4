@@ -2,6 +2,24 @@
 import pytest
 
 
+def test_independent_benzene_preflight_refuses_default_native_cap_before_allocating(monkeypatch):
+    import numpy as np
+    from psi4.driver.procrouting.isapol_bounded_response import BoundedResources
+    from psi4.driver.procrouting.isapol_molecular import (
+        MolecularDeclaration, PROFILE, plan_molecular_refinement)
+    frame = tuple(map(tuple, np.eye(3)))
+    declaration = MolecularDeclaration(PROFILE, (frame,)*12, tuple((i, i+1) for i in range(11)))
+    resources = BoundedResources(64*1024**3, 100_000_000_000_000, 64*1024**3, capacity='large')
+    def forbidden(*args, **kwargs):
+        raise AssertionError('admission must refuse before allocating a design or scientific state')
+    monkeypatch.setattr(np, 'empty', forbidden)
+    monkeypatch.setattr(np, 'zeros', forbidden)
+    # The legacy native base is688,747,264 bytes; the independent kernel cap
+    # remains256MiB even when the outer Python budget has ample space.
+    with pytest.raises(ValueError, match='native.*(budget|cap|workspace)'):
+        plan_molecular_refinement(declaration, resources, max_replay_work=1_000_000_000_000)
+
+
 def test_small_cloud_large_fit_charges_cubic_solver_work_before_admission():
     from psi4.driver.procrouting import isapol_bounded as driver
     from psi4.driver.procrouting.isapol_bounded_response import BoundedResources, _Ledger

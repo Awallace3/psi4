@@ -29,6 +29,7 @@ from .isapol_distribution import (
 from .isapol_pfit_stream import (
     PackedDesignRows, check_replay_work, fitted_point_targets, refine_streamed,
 )
+from .isapol_pfit_plan import combined_fit_plan, fit_envelope, native_work_limit
 
 #: Distributions this orchestrator dispatches; every other name is refused.
 DISTRIBUTIONS = ('df_centre_analytic', 'isa', 'mbis', 'supplied')
@@ -102,13 +103,10 @@ def _pfit_plan(npoint, channels, count, nt):
     not a LAPACK iteration-count or wall-time guarantee. Charge the full
     declared dimension even when some parameters may subsequently be fixed.
     """
-    row_count, chunk = npoint*(npoint+1)//2, PackedDesignRows.MAX_CHUNK
-    plan = (8*(5*npoint*channels+npoint*channels*count+2*chunk*npoint*count
-               +16*count*count*nt+BLOCK_ROWS*(8*count+32*nt)) + 8*1024**2)
-    work = (2*((row_count+chunk*npoint)*2*channels*count+row_count*(4*count+8))
-            +2*row_count*count*count+4*row_count*count*nt
-            +nt*(64*count**3+64*count**2))
-    return plan, work
+    # Compatibility interface: the original envelope/work remain unchanged.
+    # Execution separately reserves the entire resolved native cap beside it.
+    return fit_envelope(npoint, channels, count, nt, block_rows=BLOCK_ROWS,
+                        max_chunk=PackedDesignRows.MAX_CHUNK)
 
 
 def check_max_parameters(value, name='max_parameters', *, capacity='standard'):
@@ -226,7 +224,7 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                        distributed_moments=None, response='reference_h2h1', fdds=None,
                        publish_qcvariables=False, partition_recipe=None, partition_grid=None,
                        recoupled_dispersion=False, refinement_capacity='standard',
-                       max_replay_work=None):
+    max_replay_work=None, pfit_maximum_work_bytes=None):
     """Run the complete native chain under one explicit resource contract.
 
     Scientific scope: canonical restricted C1 PBE0, NONE or FIXED_GRAC, plain
@@ -262,8 +260,13 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
     it to at most72 under the standard refinement policy. A separately
     declared ``refinement_capacity='molecular'`` admits up to1024 only with
     explicit large resources. ``max_replay_work`` is a finite opt-in for the
-    two packed design passes; its default remains64 billion. These change
-    admission only, never the model, labels or fit). The variable list and its penalized subset are both fixed at the
+    two packed design passes; its default remains64 billion. The optional
+    ``pfit_maximum_work_bytes`` is an exact positive integer native-kernel cap
+    (None retains256MiB); its entire value is reserved beside the Python fit
+    envelope and retained live buffers. Native LAPACK workspace queries may
+    still refuse a fit, without a retry or automatic cap increase. These
+    allowances change admission only, never the model, labels or fit).
+    The variable list and its penalized subset are both fixed at the
     first (static) node, as CamCASP's sweep fixes them: every later node
     penalizes exactly the variables the static cutoff selected, with its own
     anchor and the same weight formula, and leaves declared variables the
@@ -287,6 +290,7 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
         replay_work = refinement_limits(
             max_parameters, resources, capacity=refinement_capacity,
             max_replay_work=max_replay_work)
+        native_fit_bytes = native_work_limit(pfit_maximum_work_bytes)
         if distribution not in DISTRIBUTIONS:
             raise ValueError(f'distribution must be one of {DISTRIBUTIONS}')
         if distribution != 'isa' and partition_recipe is not None:
@@ -374,7 +378,7 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
             source = dict(state_sha256=solver.state_sha256, auxiliary_sha256=solver.auxiliary_sha256,
                           correction=repr(solver.correction), distribution=distribution,
                           refinement_capacity=refinement_capacity, max_parameters=max_parameters,
-                          max_replay_work=replay_work,
+                          max_replay_work=replay_work, pfit_maximum_work_bytes=native_fit_bytes,
                           grid_sha256=solver.grid_sha256,
                           kernel_smoothing=repr(smoothing), shell_cutoff=float(shell_cutoff),
                           sites=repr(sites), bonds=bonds, frequencies=quadrature.frequencies,
@@ -419,7 +423,10 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
             retained = 8*(row_count*nf+3*npoint)
             ledger.reserved += retained
             ledger.admit('retained point-response targets', 0)
-            packed = np.empty((row_count, nf))
+            # Keep the conservative live reservation throughout localization,
+            # but allocate targets only after the first actual model clears
+            # native-base admission. Its variable inventory owns every node.
+            packed = None
             local_tensors, models, diagnostics = [], [], []
             frames = [s.frame for s in sites]
             if response == 'reference_h2h1':
@@ -487,6 +494,9 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                               ('limit', max_parameters), ('declared variables', len(model.declared_variables))))
                     if model.parameter_count > max_parameters:
                         raise ValueError(f'bounded refinement supports at most {max_parameters} parameters')
+                    combined_fit_plan(npoint, model.channel_count, model.parameter_count, nf,
+                                      block_rows=BLOCK_ROWS, maximum_work_bytes=native_fit_bytes)
+                    packed = np.empty((row_count, nf))
                 log.stage(f'Point-response targets: {tag}', (('points', npoint),))
                 ledger.admit('point-response targets', _target_bytes(p, npoint),
                              2*p*p*npoint+2*p*npoint*npoint)
@@ -505,12 +515,19 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution=
                       (('parameters', count), ('rows per pass', row_count),
                        ('frequencies', nf), ('passes', 2), ('weight type', weight_type),
                        ('weight coefficient', weight_coefficient), ('cutoff', cutoff)))
-            ledger.admit('complete-cloud refinement', *_pfit_plan(npoint, channels, count, nf))
+            fit_plan = combined_fit_plan(npoint, channels, count, nf, block_rows=BLOCK_ROWS,
+                                         maximum_work_bytes=native_fit_bytes)
+            ledger.admit('complete-cloud refinement', fit_plan['complete_refinement_bytes'],
+                         fit_plan['complete_refinement_work'])
+            source['pfit_plan'] = fit_plan
+            fit_options = core.IsaPfitOptions()
+            fit_options.solver = core.IsaPfitSolver.NormalEquationsDSYSV
+            fit_options.maximum_work_bytes = native_fit_bytes
             results = refine_streamed(models, points, packed, source_id=source['state_sha256'],
                 generation_record=source['model'], target_origin=core.IsaPfitTargetOrigin.NativeFittedPointResponse,
                 response_representation='fitted_density_coefficients',
                 auxiliary_basis_id=source['auxiliary_sha256'], block_rows=BLOCK_ROWS,
-                max_bytes=resources.max_bytes-ledger.reserved, max_work=replay_work)
+                max_bytes=fit_plan['python_fit_bytes'], max_work=replay_work, options=fit_options)
             del packed
             ledger.reserved -= retained
             for node, result in enumerate(results, 1):

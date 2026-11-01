@@ -8,16 +8,15 @@ from psi4 import core
 
 from . import isapol_refine as _refine
 from .isapol_refine import RefinementModel
+from . import isapol_pfit_plan as _plan
 
 
-MAX_REPLAY_WORK_ALLOWANCE = 2_000_000_000_000
+MAX_REPLAY_WORK_ALLOWANCE = _plan.MAX_REPLAY_WORK
 
 
 def check_replay_work(value):
     """Require an explicit finite Python-int replay budget, never infinity."""
-    if type(value) is not int or not 1 <= value <= MAX_REPLAY_WORK_ALLOWANCE:
-        raise ValueError(f'max_work must be an int in 1..{MAX_REPLAY_WORK_ALLOWANCE}')
-    return value
+    return _plan.check_replay_work(value)
 
 
 def packed_design_plan(*, npoint, channel_count, parameter_count, used_channels,
@@ -29,32 +28,11 @@ def packed_design_plan(*, npoint, channel_count, parameter_count, used_channels,
     passes. The legacy64-billion default remains unchanged. A shared molecular
     caller must independently charge this entire plan to its cumulative ledger.
     """
-    for name, value in (('npoint', npoint), ('channel_count', channel_count),
-                        ('parameter_count', parameter_count), ('used_channels', used_channels)):
-        if type(value) is not int or value < 1:
-            raise ValueError(f'{name} must be a positive integer')
-    if used_channels > channel_count or parameter_count > _refine.MAX_PARAMETERS:
-        raise ValueError('invalid packed design channel/parameter dimensions')
-    if type(block_rows) is not int or not 1 <= block_rows <= 4096:
-        raise ValueError('block_rows must be an integer in [1,4096]')
-    if type(max_passes) is not int or not 1 <= max_passes <= 2:
-        raise ValueError('max_passes must be 1 or 2')
-    if type(max_bytes) is not int or max_bytes <= 0:
-        raise ValueError('max_bytes must be a positive integer')
-    budget = check_replay_work(PackedDesignRows.MAX_WORK if max_work is None else max_work)
-    row_count = npoint*(npoint+1)//2
-    block = min(block_rows, row_count)
-    chunk = max(1, min(PackedDesignRows.MAX_CHUNK, 16*block//npoint))
-    planned = (9*npoint*channel_count+8*npoint*(used_channels*(parameter_count+1)+1)
-               +max_passes*8*(npoint*chunk*parameter_count+block*(2*parameter_count+12))+256)
-    if planned > max_bytes:
-        raise ValueError('packed design byte resource limit exceeded')
-    work = max_passes*((row_count+PackedDesignRows.MAX_CHUNK*npoint)*2*used_channels*parameter_count
-                       +row_count*(4*parameter_count+8))
-    if work > budget:
-        raise ValueError('packed design replay work resource limit exceeded')
-    return dict(row_count=row_count, block_rows=block, chunk=chunk,
-                planned_bytes=planned, planned_work=work, max_work=budget)
+    return _plan.packed_design_plan(
+        npoint=npoint, channel_count=channel_count, parameter_count=parameter_count,
+        used_channels=used_channels, block_rows=block_rows, max_passes=max_passes,
+        max_bytes=max_bytes, max_work=PackedDesignRows.MAX_WORK if max_work is None else max_work,
+        max_chunk=PackedDesignRows.MAX_CHUNK)
 
 
 class PackedDesignRows:
@@ -288,7 +266,10 @@ def refine_streamed(models, points_bohr, packed_targets, *, target_origin=None, 
     row producer's plan, the point copy, computed fields and block-sized target
     copies) and ``options.maximum_work_bytes`` the native kernel's; caller
     ``fields`` are charged by the row producer, ``packed_targets`` stay the
-    caller's.  Targets are copied block by block and the replay digest refuses
+    caller's. A bounded caller separately reserves the full native cap beside
+    its Python envelope. Native-base admission precedes field/row construction;
+    queried LAPACK workspace is still independently enforced by native.
+    Targets are copied block by block and the replay digest refuses
     any change between the two passes.  Any fit that is not ``Solved`` raises
     ``ValueError`` (the dense ``refine`` raises ``RuntimeError``).
     """
@@ -312,6 +293,24 @@ def refine_streamed(models, points_bohr, packed_targets, *, target_origin=None, 
         raise ValueError('points_bohr must be finite')
     npoint, nt = len(points), len(models)
     row_count = npoint*(npoint+1)//2
+    # Snapshot once so a user callback cannot change the admitted native cap,
+    # solver or diagnostics policy between Python planning and native dispatch.
+    copied = core.IsaPfitOptions()
+    if options is None:
+        copied.solver = core.IsaPfitSolver.NormalEquationsDSYSV
+    else:
+        if not isinstance(options, core.IsaPfitOptions):
+            raise TypeError('explicit native IsaPfitOptions required')
+        for name in ('solver', 'qr_chunk_rows', 'maximum_work_bytes',
+                     'rank_relative_tolerance', 'minimum_solver_rcond', 'retain_pair_predictions'):
+            setattr(copied, name, getattr(options, name))
+    options = copied
+    solver = {core.IsaPfitSolver.NormalEquationsDSYSV: 'NormalEquationsDSYSV',
+              core.IsaPfitSolver.StreamingQR: 'StreamingQR'}.get(options.solver)
+    _plan.native_row_plan(
+        npoint, model.parameter_count, nt, block_rows=block_rows,
+        maximum_work_bytes=options.maximum_work_bytes, solver=solver,
+        qr_chunk_rows=options.qr_chunk_rows, retain_pair_predictions=options.retain_pair_predictions)
     targets = np.asarray(packed_targets)
     if targets.dtype != np.float64 or targets.shape != (row_count, nt):
         raise ValueError(f'packed_targets must be float64 of shape ({row_count}, {nt})')
@@ -320,7 +319,8 @@ def refine_streamed(models, points_bohr, packed_targets, *, target_origin=None, 
     # Beyond the row producer's own plan: the point copy, the computed fields,
     # one block-sized finiteness mask, and two live target-block copies.
     block = min(block_rows, row_count)
-    overhead = 24*npoint+(8*npoint*model.channel_count if fields is None else 0)+17*block*nt
+    overhead = _plan.streamed_overhead(npoint, model.channel_count, nt, block_rows,
+                                      computed_fields=fields is None)
     if type(max_bytes) is not int or overhead >= max_bytes:
         raise ValueError('streamed refinement byte resource limit exceeded')
     for start in range(0, row_count, block):
@@ -366,9 +366,6 @@ def refine_streamed(models, points_bohr, packed_targets, *, target_origin=None, 
         for start, design in rows.blocks():
             yield start, design, np.array(targets[start:start+len(design)], order='C')
 
-    if options is None:
-        options = core.IsaPfitOptions()
-        options.solver = core.IsaPfitSolver.NormalEquationsDSYSV
     results = core.isa_pfit_solve_rows_multi(problems, blocks, options)
     for m, result in zip(models, results):
         if result.status != core.IsaPfitStatus.Solved:

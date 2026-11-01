@@ -13,7 +13,7 @@ import pytest
 
 def main():
     root = Path(__file__).resolve().parents[2]
-    for name in ('isapol_pfit_stream', 'isapol_bounded_response', 'isapol_bounded',
+    for name in ('isapol_pfit_plan', 'isapol_pfit_stream', 'isapol_bounded_response', 'isapol_bounded',
                  'isapol_bounded_oeprop', 'isapol_recipes', 'isapol_molecular',
                  'isapol_schema'):
         qualified = 'psi4.driver.procrouting.'+name

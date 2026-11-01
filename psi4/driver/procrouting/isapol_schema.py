@@ -5,6 +5,10 @@ This seam carries only declared native calculation inputs. Benchmark labels
 and SAPT references belong on QCArchive entry attributes, never here.
 Installed implementation pins identify code; they do not certify molecular
 accuracy, convergence, or an OS-level independence audit.
+
+Request/2 retains the native256MiB fit cap and its original exact field set.
+Request/3 requires an explicit finite ``pfit_maximum_work_bytes``; it cannot
+silently extend a request/2 or infer an unlimited workspace from outer memory.
 """
 from dataclasses import asdict, dataclass
 import base64
@@ -25,6 +29,7 @@ from .isapol_bounded import BoundedResources
 from .isapol_molecular import MolecularDeclaration, independent_sites, plan_molecular_refinement
 
 REQUEST_SCHEMA = 'native-monomer-request/2'
+EXPLICIT_WORKSPACE_REQUEST_SCHEMA = 'native-monomer-request/3'
 MAX_TENSOR_BYTES = 16*1024**2
 MAX_ENVELOPE_BYTES = 8*1024**2
 SCHEMA_KEYWORDS = frozenset((
@@ -46,6 +51,7 @@ class NativeMonomerRequest:
     max_replay_work: int
     implementation_sha256: tuple
     point_group: str
+    pfit_maximum_work_bytes: int = None
 
     def __post_init__(self):
         if type(self.point_group) is not str or self.point_group != 'c1':
@@ -53,7 +59,8 @@ class NativeMonomerRequest:
         if not isinstance(self.declaration, MolecularDeclaration):
             raise TypeError('explicit molecular declaration required')
         plan_molecular_refinement(self.declaration, self.resources,
-                                  max_replay_work=self.max_replay_work)
+                                  max_replay_work=self.max_replay_work,
+                                  pfit_maximum_work_bytes=self.pfit_maximum_work_bytes)
         identity = dict(self.implementation_sha256)
         if (set(identity) != {'core', 'isapol_python'}
                 or any(type(value) is not str or re.fullmatch('[0-9a-f]{64}', value) is None
@@ -63,10 +70,15 @@ class NativeMonomerRequest:
 
     @classmethod
     def from_dict(cls, value):
-        if (type(value) is not dict
-                or set(value) != {'schema', 'point_group', 'declaration', 'resources', 'max_replay_work',
-                                  'implementation_sha256'}
-                or value['schema'] != REQUEST_SCHEMA):
+        fields = {'schema', 'point_group', 'declaration', 'resources', 'max_replay_work',
+                  'implementation_sha256'}
+        explicit = (type(value) is dict
+                    and value.get('schema') == EXPLICIT_WORKSPACE_REQUEST_SCHEMA)
+        if explicit:
+            fields.add('pfit_maximum_work_bytes')
+        if (type(value) is not dict or set(value) != fields
+                or value.get('schema') not in (REQUEST_SCHEMA, EXPLICIT_WORKSPACE_REQUEST_SCHEMA)
+                or (explicit and value['pfit_maximum_work_bytes'] is None)):
             raise ValueError('exact versioned native request required')
         if (type(value['resources']) is not dict
                 or set(value['resources']) != {'max_bytes', 'max_work', 'max_io_bytes', 'capacity'}
@@ -74,13 +86,18 @@ class NativeMonomerRequest:
             raise ValueError('explicit native resources and implementation pins required')
         return cls(MolecularDeclaration.from_dict(value['declaration']),
                    BoundedResources(**value['resources']), value['max_replay_work'],
-                   tuple(value['implementation_sha256'].items()), value['point_group'])
+                   tuple(value['implementation_sha256'].items()), value['point_group'],
+                   value.get('pfit_maximum_work_bytes'))
 
     def as_dict(self):
-        return dict(schema=REQUEST_SCHEMA, point_group=self.point_group,
+        result = dict(schema=REQUEST_SCHEMA, point_group=self.point_group,
                     declaration=self.declaration.as_dict(),
                     resources=asdict(self.resources), max_replay_work=self.max_replay_work,
                     implementation_sha256=dict(self.implementation_sha256))
+        if self.pfit_maximum_work_bytes is not None:
+            result.update(schema=EXPLICIT_WORKSPACE_REQUEST_SCHEMA,
+                          pfit_maximum_work_bytes=self.pfit_maximum_work_bytes)
+        return result
 
 
 def _file_digest(path):
@@ -324,7 +341,8 @@ def execute_native_request(wfn, request):
             scratch.mkdir()
             result = run_molecular_properties(
                 wfn, request.declaration, request.resources,
-                max_replay_work=request.max_replay_work, scratch_directory=scratch)
+                max_replay_work=request.max_replay_work, scratch_directory=scratch,
+                pfit_maximum_work_bytes=request.pfit_maximum_work_bytes)
             record = export_molecular_result(
                 wfn, result, request.declaration, output=work/'export')
             artifact = tensor_artifact((work/'export/tensors.npz').read_bytes())
