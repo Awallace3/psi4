@@ -123,11 +123,11 @@ def test_newer_test_revision_cannot_change_scientific_or_build_code():
 
 def test_installed_suite_requires_the_exact_declared_case_count(tmp_path):
     report = tmp_path/'junit.xml'
-    for count in (195, 197):
+    for count in (196, 198):
         report.write_text(
             f'<testsuites><testsuite tests="{count}" failures="0" errors="0" skipped="0"/></testsuites>')
-        with pytest.raises(ValueError, match='exactly196'):
-            checks.junit_summary(report, expected=196)
+        with pytest.raises(ValueError, match='exactly197'):
+            checks.junit_summary(report, expected=197)
     report.write_text(
-        '<testsuites><testsuite tests="196" failures="0" errors="0" skipped="0"/></testsuites>')
-    assert checks.junit_summary(report, expected=196)['tests'] == 196
+        '<testsuites><testsuite tests="197" failures="0" errors="0" skipped="0"/></testsuites>')
+    assert checks.junit_summary(report, expected=197)['tests'] == 197

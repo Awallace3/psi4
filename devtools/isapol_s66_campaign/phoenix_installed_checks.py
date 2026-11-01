@@ -21,7 +21,7 @@ TEST_FILES = (
     'test_isapol_molecular_declaration.py', 'test_isapol_pfit_stream.py',
     'test_isapol_bounded_oeprop.py', 'test_isapol_bounded.py',
 )
-EXPECTED_TESTS = 196
+EXPECTED_TESTS = 197
 TEST_ONLY_CHANGES = frozenset('tests/pytests/'+name for name in TEST_FILES) | frozenset(
     'devtools/isapol_s66_campaign/'+name for name in (
         'phoenix_installed_checks.py', 'phoenix_installed_checks.sbatch',

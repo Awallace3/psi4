@@ -320,7 +320,7 @@ def test_live_oeprop_publishes_latest_result_and_clears_it_on_refusal(sealed_wat
 
 def _isa_route(wfn, tmp_path, resources, messages):
     from psi4.driver.procrouting.isapol_native import Quadrature
-    from isapol_water_recipe import native_water_recipe
+    from psi4.driver.procrouting.isapol_recipes import native_water_recipe
     recipe = native_water_recipe(wfn.molecule())
     options = core.IsaGridOptions()
     options.radial_points, options.spherical_points = 20, 50
@@ -331,6 +331,17 @@ def _isa_route(wfn, tmp_path, resources, messages):
         npoints=32, rank_limit=1, hydrogen_rank_limit=1, localization_rank_limit=1, weight_type=4,
         weight_coefficient=1e-5, max_order=8, quadrature=Quadrature.from_casimir(core.CasimirGrid(2, .5)),
         resources=resources, scratch_directory=tmp_path, log=StageLog(1, writer=messages.append))
+
+
+def test_isa_resource_route_requires_only_the_shipped_recipe(water, tmp_path, monkeypatch):
+    """Descriptor/grid-only regression; no SCF or repository recipe adapter."""
+    monkeypatch.setitem(sys.modules, 'isapol_water_recipe', None)
+    recipe, grid, route = _isa_route(water, tmp_path, None, [])
+    assert route['partition_recipe'] is recipe
+    assert route['auxiliary_recipe'] is recipe.auxiliary
+    assert route['partition_grid'] is grid and route['response_grid'] is grid
+    assert [site.label for site in recipe.sites] == ['O', 'H1', 'H2']
+    assert np.isfinite(grid).all()
 
 
 @pytest.mark.parametrize('capacity', ['large', 'standard'])

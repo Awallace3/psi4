@@ -166,7 +166,7 @@ previously listed file hashes: added `.pth` files and standalone bytecode are
 refused. Child Python uses a fresh bytecode prefix; inherited pytest options
 and plugin declarations are stripped, plugin autoload is disabled, and empty,
 failed or skipped test runs cannot produce a passing report. The current
-explicit suite must report exactly196 successful cases; a smaller passing
+explicit suite must report exactly197 successful cases; a smaller passing
 subset is not qualification.
 
 The operational harness has its own separate commit/hash in the report;
