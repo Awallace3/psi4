@@ -448,6 +448,19 @@ def test_watcher_adapter_uses_installed_waiter_once(monkeypatch):
     assert calls == [([str(remote.watcher), '-i', '300', 'phoenix2', '123'], dict(check=True))]
 
 
+def test_remote_environment_launcher_never_resolves_user_path_env(monkeypatch):
+    import shlex
+    monkeypatch.setattr(controller.Remote, 'seal', lambda self: 'd'*64)
+    remote = controller.Remote(NS(source=SOURCE, commit=COMMIT, campaign=CAMPAIGN))
+    calls = []
+    def execute(command, **kwargs):
+        calls.append(command)
+        return NS(returncode=0, stdout=controller.PREFIX+'{}\n', stderr='')
+    monkeypatch.setattr(controller.subprocess, 'run', execute)
+    remote.call('initialize', dict(checkpoint='/parent', checkpoint_sha256=CP_SHA))
+    assert shlex.split(calls[0][1])[0] == '/usr/bin/env'
+
+
 @pytest.mark.parametrize('problem', ['dirty', 'wrong_commit'])
 def test_wrong_or_dirty_source_stops_before_code_inventory(monkeypatch, problem):
     def git(command, **kw):

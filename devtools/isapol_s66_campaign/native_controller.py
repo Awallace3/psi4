@@ -458,7 +458,7 @@ class Remote:
         for key in ('monomer', 'phase'):
             if key in state:
                 command += ['--'+key, state[key]]
-        clean = ['env', '-u', 'PYTHONPATH', '-u', 'PYTHONHOME', '-u', 'LD_PRELOAD',
+        clean = ['/usr/bin/env', '-u', 'PYTHONPATH', '-u', 'PYTHONHOME', '-u', 'LD_PRELOAD',
                  'PYTHONNOUSERSITE=1', 'PYTHONDONTWRITEBYTECODE=1',
                  'PATH='+str(MANAGER/'bin')+':/usr/bin:/bin', 'LD_LIBRARY_PATH='+str(MANAGER/'lib')]
         response = subprocess.run([str(self.phx), shlex.join(clean+command)],
