@@ -29,6 +29,15 @@ TEST_ONLY_CHANGES = {
     'tests/pytests/test_isapol_molecular_declaration.py',
 }
 TEST_SUMMARY = dict(tests=430, failures=0, errors=0, skipped=0)
+PROFILE_ID = 'cb63305'
+_PIN_NAMES = (
+    'SCIENTIFIC_COMMIT', 'SCIENTIFIC_TREE', 'TEST_COMMIT', 'VERSION',
+    'IMPLEMENTATION', 'PFIT_SHA256', 'RECEIPT_SHA256', 'TEST_ONLY_CHANGES',
+    'TEST_SUMMARY', 'PROFILE_ID')
+
+
+def _profile():
+    return {key: globals()[key] for key in _PIN_NAMES}
 
 
 def verify_receipts(blobs):
@@ -37,15 +46,31 @@ def verify_receipts(blobs):
     A caller cannot select another profile, relax the case count or reuse an
     old receipt. This proves receipt identity only, not current runtime bytes.
     """
+    return _verify_receipts(blobs, _profile())
+
+
+def _verify_receipts(blobs, pins):
+    """Shared receipt engine; only closed, code-pinned wrappers call this seam.
+
+    No CLI/path/JSON profile is accepted by either public wrapper. Historical
+    verify_receipts() retains its original constants and interpretation.
+    """
+    SCIENTIFIC_COMMIT, SCIENTIFIC_TREE, TEST_COMMIT, VERSION = (
+        pins[k] for k in ('SCIENTIFIC_COMMIT', 'SCIENTIFIC_TREE', 'TEST_COMMIT', 'VERSION'))
+    IMPLEMENTATION, PFIT_SHA256, RECEIPT_SHA256, TEST_ONLY_CHANGES, TEST_SUMMARY, profile_id = (
+        pins[k] for k in ('IMPLEMENTATION', 'PFIT_SHA256', 'RECEIPT_SHA256', 'TEST_ONLY_CHANGES',
+                         'TEST_SUMMARY', 'PROFILE_ID'))
+    if profile_id not in ('cb63305', 'ed561666'):
+        raise ValueError('closed installed producer required')
     if type(blobs) is not dict or set(blobs) != set(RECEIPT_SHA256):
-        raise ValueError('exact cb63305 receipt roles required')
+        raise ValueError(f'exact {profile_id} receipt roles required')
     observed = {}
     for role, expected in RECEIPT_SHA256.items():
         if type(blobs[role]) is not bytes:
             raise ValueError('immutable receipt bytes required')
         observed[role] = hashlib.sha256(blobs[role]).hexdigest()
         if observed[role] != expected:
-            raise ValueError('qualified cb63305 receipt hash differs: '+role)
+            raise ValueError(f'qualified {profile_id} receipt hash differs: '+role)
     manifest = json.loads(blobs['build_identity'])
     qualification = json.loads(blobs['installed_qualification'])
     identity = json.loads(blobs['imported_identity'])
@@ -60,14 +85,14 @@ def verify_receipts(blobs):
             or qualification.get('build_tree') != SCIENTIFIC_TREE
             or qualification.get('harness_commit') != TEST_COMMIT
             or qualification.get('test_source_commit') != TEST_COMMIT
-            or qualification.get('expected_test_count') != 430
+            or qualification.get('expected_test_count') != TEST_SUMMARY['tests']
             or qualification.get('test_summary') != TEST_SUMMARY
             or qualification.get('build_identity_sha256') != observed['build_identity']
             or qualification.get('imported_identity_sha256') != observed['imported_identity']
             or qualification.get('junit_sha256') != observed['junit']
             or set(qualification.get('test_only_revision_changes', ())) != TEST_ONLY_CHANGES
             or len(qualification['test_only_revision_changes']) != len(TEST_ONLY_CHANGES)):
-        raise ValueError('qualified cb63305 source/test/runtime receipt differs')
+        raise ValueError(f'qualified {profile_id} source/test/runtime receipt differs')
     if (identity.get('version') != VERSION
             or identity.get('implementation', {}).get('sha256') != IMPLEMENTATION
             or identity.get('core') != manifest.get('installed_core')
@@ -76,14 +101,14 @@ def verify_receipts(blobs):
                 'procrouting/isapol_pfit_plan.py') != PFIT_SHA256
             or manifest.get('installed_files', {}).get(
                 'driver/procrouting/isapol_pfit_plan.py') != PFIT_SHA256):
-        raise ValueError('qualified cb63305 installed implementation differs')
+        raise ValueError(f'qualified {profile_id} installed implementation differs')
     root = ET.fromstring(blobs['junit'])
     suites = [root] if root.tag == 'testsuite' else root.findall('testsuite')
     summary = {key: sum(int(suite.get(key, '0')) for suite in suites) for key in TEST_SUMMARY}
     if summary != TEST_SUMMARY:
-        raise ValueError('exact430 successful unskipped installed cases required')
+        raise ValueError(f'exact{TEST_SUMMARY["tests"]} successful unskipped installed cases required')
     return dict(
-        schema='native-cb63305-qualified-producer-pins/1',
+        schema=f'native-{profile_id}-qualified-producer-pins/1',
         status='VERIFIED_INSTALLED_PRODUCER_RECEIPTS_ONLY',
         scientific_commit=SCIENTIFIC_COMMIT, scientific_tree=SCIENTIFIC_TREE,
         installed_test_commit=TEST_COMMIT, implementation_sha256=dict(IMPLEMENTATION),
