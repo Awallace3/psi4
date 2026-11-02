@@ -15,6 +15,7 @@ BASE = Path('/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt')
 MANAGER = Path('/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca')
 SOURCES = (
     'phoenix_worker_cb63305.py', 'phoenix_worker_cb63305.sbatch', 'pilot_cb63305.py',
+    'case_cb63305.py',
     'dataset_fresh_cb63305.py', 'dataset_append.py', 'prepare_descriptor_bank_cb63305.py',
     'qualified_cb63305.py', 'resource_plan_cb63305.py', 'descriptor_probe_cb63305.py',
     'descriptor_probe.py', 'descriptor_admission_cb63305.py', 'descriptor_scratch_cb63305.py',
@@ -24,7 +25,7 @@ SOURCES = (
 HELPERS = {
     'pilot_cb63305', 'phoenix_installed_checks', 'phoenix_worker_probe', 'phoenix_pilot',
     'descriptor_admission_cb63305', 'descriptor_scratch_cb63305',
-    'phoenix_descriptor_bank_cb63305', 'dataset_fresh_cb63305',
+    'phoenix_descriptor_bank_cb63305', 'dataset_fresh_cb63305', 'case_cb63305',
 }
 
 
@@ -45,11 +46,34 @@ def source_hashes():
             for name in SOURCES}
 
 
-def admit_allocation(allocation):
+def admit_allocation(allocation, *, execution_profile=None):
     expected = dict(Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small',
                     NumCPUs='4', NumNodes='1', MinMemoryNode='24G', TimeLimit='00:45:00')
+    if execution_profile is not None:
+        cases = helper('case_cb63305')
+        name = execution_profile.get('name')
+        if name not in cases.PROFILES:
+            raise ValueError('explicit finite remaining-case worker profile required')
+        profile = dict(name=name, **cases.PROFILES[name], account='gts-cs207-chemx',
+                       partition='cpu-small', qos='embers', concurrency=1)
+        if cases.json_digest(profile) != cases.json_digest(execution_profile):
+            raise ValueError('remaining-case worker profile changed')
+        expected.update(NumCPUs=str(profile['cores']),
+                        MinMemoryNode=str(profile['job_memory_GiB'])+'G')
     if any(allocation.get(k) != v for k, v in expected.items()):
         raise ValueError('exact effective expanded-worker embers allocation required')
+
+
+def prepare_draft(args, manifest_path):
+    """Reconstruct either the archived first-case shape or a full remaining case."""
+    if args.remaining_case:
+        return helper('case_cb63305').verify_prepared_from_paths(
+            args.pilot, args.inputs, manifest_path, args.qualification, args.descriptors)
+    draft = helper('pilot_cb63305').prepare_from_paths(
+        args.inputs, manifest_path, args.qualification, args.descriptors)
+    if json.loads(args.pilot.read_bytes()) != draft:
+        raise ValueError('pilot does not reproduce from admitted raw/descriptor/producer receipts')
+    return draft
 
 
 def validate_versions(qcengine, compute):
@@ -72,10 +96,11 @@ def main():
     for name in ('build', 'qualification', 'inputs', 'descriptors', 'pilot', 'run'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
+    parser.add_argument('--remaining-case', action='store_true',
+                        help='Require a fully reconstructed remaining-bank case, not the first pilot')
     args = parser.parse_args()
-    checks, preparation = helper('phoenix_installed_checks'), helper('pilot_cb63305')
+    checks = helper('phoenix_installed_checks')
     allocation = checks.allocation()
-    admit_allocation(allocation)
     source = Path(__file__).resolve().parents[2]
     if (checks.git(source, 'rev-parse', 'HEAD') != args.commit
             or checks.git(source, 'status', '--porcelain')):
@@ -86,10 +111,10 @@ def main():
             or run.is_relative_to(build) or build.is_relative_to(run)):
         raise ValueError('disjoint private build and worker run required')
     manifest_path = build/'build-identity.json'
-    draft = preparation.prepare_from_paths(args.inputs, manifest_path, args.qualification, args.descriptors)
+    draft = prepare_draft(args, manifest_path)
+    profile = draft['execution_profile'] if args.remaining_case else None
+    admit_allocation(allocation, execution_profile=profile)
     pilot_sha = checks.digest(args.pilot)
-    if json.loads(args.pilot.read_bytes()) != draft:
-        raise ValueError('pilot does not reproduce from admitted raw/descriptor/producer receipts')
     manifest = json.loads(manifest_path.read_bytes())
     identity = json.loads(args.qualification.with_name('imported-identity.json').read_bytes())
     changes = checks.git(source, 'diff', '--name-only', manifest['commit'], args.commit).splitlines()
@@ -115,6 +140,8 @@ def main():
     common = helper('phoenix_descriptor_bank_cb63305')
     disk = common.quota_snapshot(scratch, payload, helper('descriptor_scratch_cb63305'))
     env = common.child_environment(environment, scratch)
+    if profile is not None:
+        env.update(OMP_NUM_THREADS=str(profile['cores']), MKL_NUM_THREADS=str(profile['cores']))
     probe = helper('phoenix_worker_probe')
     runtime = probe.runtime_input(draft)
     runtime_path = payload/'runtime-input.json'
@@ -152,8 +179,15 @@ def main():
     import inspect
     import qcengine
     import qcfractalcompute
+    from qcengine.config import get_config
     from qcfractalcompute.apps.app_manager import discover_programs_conda
     validate_versions(str(qcengine.__version__), str(qcfractalcompute.__version__))
+    worker_shape = (profile['cores'], profile['science_memory_GiB']) if profile else (4, 20)
+    task_config = get_config(task_config=dict(ncores=worker_shape[0], memory=float(worker_shape[1]),
+                                             scratch_directory=str(scratch)))
+    if (task_config.ncores != worker_shape[0] or task_config.memory != worker_shape[1]
+            or task_config.retries != 0):
+        raise ValueError('exact worker cores/scientific memory and zero internal retries required')
     transport = helper('dataset_fresh_cb63305').transport_binding()
     harness = qcengine.get_program('psi4')
     harness_path = Path(inspect.getfile(type(harness))).resolve()
@@ -171,14 +205,17 @@ def main():
             or checks.digest(harness_path) != harness_sha
             or helper('dataset_fresh_cb63305').transport_binding() != transport
             or any(checks.digest(manager_sources/name) != expected for name, expected in manager_pins.items())
-            or preparation.prepare_from_paths(args.inputs, manifest_path, args.qualification,
-                                              args.descriptors) != draft):
+            or prepare_draft(args, manifest_path) != draft):
         raise ValueError('worker source, runtime, raw inputs or harness changed during discovery')
-    report = dict(status='PASS_EXPANDED_WORKER_PREFLIGHT_ONLY', allocation=allocation,
+    report = dict(status=('PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY' if args.remaining_case
+                          else 'PASS_EXPANDED_WORKER_PREFLIGHT_ONLY'), allocation=allocation,
         scientific_build_commit=manifest['commit'], operational_commit=args.commit,
         build_identity_sha256=checks.digest(manifest_path), pilot_sha256=pilot_sha,
         qualification_sha256=checks.digest(args.qualification), runtime_unchanged=True,
         runtime_input_sha256=draft['runtime_input_sha256'], monomer_id=draft['monomer_id'],
+        execution_profile=profile,
+        task_config=dict(ncores=task_config.ncores, memory_GiB=task_config.memory,
+                         internal_retries=task_config.retries),
         science=science, descriptor_verification=result, scratch_snapshot=disk,
         operational_sources_sha256=operations, manager_sources_sha256=manager_pins,
         transport_binding=transport, manager_python=sys.executable,

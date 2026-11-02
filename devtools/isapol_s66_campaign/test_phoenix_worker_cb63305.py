@@ -1,9 +1,11 @@
 """Pure expanded-worker launch boundaries; never scheduler/discovery/science."""
 import ast
+import copy
 import importlib.util
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace as NS
 
 import pytest
 
@@ -29,6 +31,40 @@ def test_exact_effective_route_and_reviewed_versions():
     for versions in [('0.34', '0.63'), ('v0.34.1+3.gd56a0598', '0.64')]:
         with pytest.raises(ValueError, match='reviewed'):
             worker.validate_versions(*versions)
+
+
+@pytest.mark.parametrize('name', ['s20', 's40', 's80'])
+def test_remaining_case_preflight_requires_exact_finite_effective_allocation(name):
+    cases = worker.helper('case_cb63305')
+    profile = dict(name=name, **cases.PROFILES[name], account='gts-cs207-chemx',
+                   partition='cpu-small', qos='embers', concurrency=1)
+    live = allocation() | dict(NumCPUs=str(profile['cores']),
+                              MinMemoryNode=str(profile['job_memory_GiB'])+'G')
+    worker.admit_allocation(live, execution_profile=profile)
+    for key, value in [('QOS', 'inferno'), ('NumCPUs', '4'), ('MinMemoryNode', '24G'),
+                       ('TimeLimit', profile['time_limit'])]:
+        with pytest.raises(ValueError):
+            worker.admit_allocation(live | {key: value}, execution_profile=profile)
+    changed = copy.deepcopy(profile)
+    changed['science_memory_GiB'] += 1
+    with pytest.raises(ValueError, match='profile changed'):
+        worker.admit_allocation(live, execution_profile=changed)
+
+
+def test_remaining_case_is_fully_reconstructed_not_first_pilot_or_labels(monkeypatch, tmp_path):
+    seen = []
+    args = NS(remaining_case=True, pilot=tmp_path/'case.json', inputs=tmp_path/'inputs',
+              qualification=tmp_path/'qualification', descriptors=tmp_path/'descriptors')
+    manifest = tmp_path/'manifest'
+    def verify(*paths):
+        seen.append(paths)
+        return {'SYNTHETIC': 'fully reconstructed case'}
+    def helper(name):
+        assert name == 'case_cb63305'
+        return NS(verify_prepared_from_paths=verify)
+    monkeypatch.setattr(worker, 'helper', helper)
+    assert worker.prepare_draft(args, manifest) == {'SYNTHETIC': 'fully reconstructed case'}
+    assert seen == [(args.pilot, args.inputs, manifest, args.qualification, args.descriptors)]
 
 
 def test_help_is_safe_without_psi4_or_manager_packages():
