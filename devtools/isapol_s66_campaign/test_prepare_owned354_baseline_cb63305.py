@@ -61,3 +61,28 @@ def test_baseline_uses_two_snapshots_and_never_mutates(monkeypatch, change):
 def test_baseline_has_no_entry_specification_or_record_write_helper():
     with pytest.raises(ValueError, match='closed'):
         prep.helper('dataset_append')
+
+
+def test_cap32_baseline_selection_is_explicit_on_both_reads_and_acceptance(monkeypatch):
+    effects = []
+    value = dict(entries={'synthetic': {}}, records={'123': {}})
+    def accepted(blobs, *, producer):
+        effects.append(('acceptance', producer))
+        return {'synthetic': True}
+    def snapshot(client, *, producer):
+        effects.append(('snapshot', producer))
+        return copy.deepcopy(value)
+    def checkpoint(snapshot, *, producer, **kwargs):
+        effects.append(('checkpoint', producer))
+        return dict(status='READ_ONLY_INITIAL_BASELINE', dataset_id=355, snapshot=snapshot)
+    guard = NS(verify_first_acceptance=accepted, snapshot_dataset=snapshot,
+               prepare_initial_checkpoint=checkpoint)
+    monkeypatch.setattr(prep, 'helper', lambda name: guard)
+    result = prep.prepare_baseline(NS(get_server_information=lambda: dict(prep.SERVER)),
+        blobs={}, authenticated_owner='awallace43', specification={}, producer='ed561666')
+    assert result['dataset_id'] == 355
+    assert effects == [('acceptance', 'ed561666'), ('snapshot', 'ed561666'),
+                       ('checkpoint', 'ed561666'), ('snapshot', 'ed561666')]
+    with pytest.raises(ValueError, match='closed'):
+        prep.prepare_baseline(object(), blobs={}, authenticated_owner='awallace43',
+                              specification={}, producer='arbitrary')

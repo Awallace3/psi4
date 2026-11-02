@@ -30,7 +30,7 @@ PROFILES = {
 
 def helper(name):
     if name not in ('prepare_descriptor_bank_cb63305', 'descriptor_admission_cb63305',
-                    'phoenix_worker_probe', 'pilot_cb63305'):
+                    'phoenix_worker_probe', 'pilot_cb63305', 'owned_dataset_cb63305'):
         raise ValueError('closed generic-case helpers required')
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_bank_case_'+name, path)
@@ -95,10 +95,24 @@ def verify_admitted_bank(inputs, receipts, resources, bank_raw, allocation_raw, 
     return bank, allocation
 
 
-def prepare_case(inputs, receipts, resources, bank_raw, allocation_raw, reports, *, monomer_id, profile):
-    bank, allocation = verify_admitted_bank(inputs, receipts, resources, bank_raw, allocation_raw, reports)
-    if monomer_id == 'monomer-0006':
-        raise ValueError('audited methylamine is already present; never resubmit it as a remaining case')
+def prepare_case(inputs, receipts, resources, bank_raw, allocation_raw, reports, *, monomer_id, profile,
+                 producer='cb63305'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+        raise ValueError('closed remaining-case producer required')
+    selection = {} if producer == 'cb63305' else dict(producer=producer)
+    bank, allocation = verify_admitted_bank(inputs, receipts, resources, bank_raw, allocation_raw,
+                                            reports, **selection)
+    selected = dict(dataset_id=DATASET_ID, dataset_name=DATASET_NAME, first_monomer='monomer-0006',
+                    audit_sha256=METHYLAMINE_AUDIT_SHA256, bank_sha256=BANK_SHA256,
+                    allocation_sha256=DESCRIPTOR_SHA256)
+    if producer == 'ed561666':
+        selected = helper('owned_dataset_cb63305').context(producer)
+        pins = helper('pilot_cb63305').producer_pins(producer)
+        selected.update(audit_sha256=selected['accepted_sha256']['audit'],
+                        bank_sha256=pins['bank_sha256'], allocation_sha256=pins['allocation_sha256'])
+    if monomer_id == selected['first_monomer']:
+        name = 'methylamine' if producer == 'cb63305' else 'benzene'
+        raise ValueError('audited '+name+' is already present; never resubmit it as a remaining case')
     matches = [row for row in bank['monomers'] if row['monomer_id'] == monomer_id]
     if len(matches) != 1:
         raise ValueError('one exact remaining bank representative required')
@@ -118,21 +132,26 @@ def prepare_case(inputs, receipts, resources, bank_raw, allocation_raw, reports,
     if measurement['runtime_input_sha256'] != row['runtime_input_sha256']:
         raise ValueError('actual descriptor input hash differs from selected case')
     result = dict(schema='native-bank-molecular-case/1', status='PREPARED_NOT_REGISTERED_OR_SUBMITTED',
-        monomer_id=monomer_id, dataset_id=DATASET_ID, dataset_name=DATASET_NAME,
+        monomer_id=monomer_id, dataset_id=selected['dataset_id'], dataset_name=selected['dataset_name'],
         specification_name=SPECIFICATION_NAME, producer=bank['producer'],
         entry=entry, specification=dict(program='psi4', driver=spec['driver'], **spec['model'],
             keywords={k: copy.deepcopy(v) for k, v in spec['keywords'].items() if k != 'function_kwargs'}),
         intended_memory_bytes=row['intended_memory_bytes'], execution_profile=execution,
         runtime_input_sha256=row['runtime_input_sha256'], geometry_sha256=row['geometry_sha256'],
-        descriptor_bank_sha256=BANK_SHA256, descriptor_allocation_sha256=DESCRIPTOR_SHA256,
+        descriptor_bank_sha256=selected['bank_sha256'], descriptor_allocation_sha256=selected['allocation_sha256'],
         descriptor_report_sha256=measurement['descriptor_report_sha256'],
         descriptor_dimensions=measurement['dimensions'], input_sha256=bank['input_sha256'],
         resource_declarations_sha256=bank['resource_declarations_sha256'],
-        required_first_pilot_audit_sha256=METHYLAMINE_AUDIT_SHA256,
+        required_first_pilot_audit_sha256=selected['audit_sha256'],
         submission=dict(find_existing=False, maximum_records=1, maximum_concurrency=1, qos='embers'),
         qualification='Remaining-case raw preparation only. Resource profiles add allocation headroom, '
             'not scientific work/byte/cap changes or measured SCF memory/scratch guarantees. '
             'Owned354 preservation, actual worker/resource pilots, molecular delivery and audit remain required.')
+    if producer == 'ed561666':
+        result.update(producer_profile=producer, dataset_mode='append',
+            qualification='Raw preparation for the audited cap32 dataset only; not append authorization, '
+                          'resource measurement or a molecular result. The live owned355 checkpoint, '
+                          'case-bound worker preflight, singleton delivery and independent audit are required.')
     rebuilt = helper('phoenix_worker_probe').runtime_input(result)
     if rebuilt != runtime or json_digest(rebuilt) != row['runtime_input_sha256']:
         raise ValueError('operational case changed the descriptor-admitted scientific runtime')
@@ -140,7 +159,10 @@ def prepare_case(inputs, receipts, resources, bank_raw, allocation_raw, reports,
     return result
 
 
-def prepare_from_paths(inputs_path, build_identity, qualification, descriptors, *, monomer_id, profile):
+def prepare_from_paths(inputs_path, build_identity, qualification, descriptors, *, monomer_id, profile,
+                       producer='cb63305'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+        raise ValueError('closed remaining-case producer required')
     prepare = helper('prepare_descriptor_bank_cb63305')
     inputs = {name: (inputs_path/(name.replace('_', '-')+'.json')).read_bytes()
               for name in prepare.INPUT_SHA256}
@@ -149,20 +171,25 @@ def prepare_from_paths(inputs_path, build_identity, qualification, descriptors, 
         imported_identity=q.with_name('imported-identity.json').read_bytes(),
         junit=q.with_name('junit.xml').read_bytes())
     allocation_raw = (descriptors/'descriptor-allocation.json').read_bytes()
-    if digest(allocation_raw) != DESCRIPTOR_SHA256:
+    expected_sha = (DESCRIPTOR_SHA256 if producer == 'cb63305' else
+                    helper('pilot_cb63305').producer_pins(producer)['allocation_sha256'])
+    if digest(allocation_raw) != expected_sha:
         raise ValueError('exact descriptor allocation required before child-report reads')
     rows = json.loads(allocation_raw)['reports']
     return prepare_case(inputs, receipts, (inputs_path/'resource-declarations.json').read_bytes(),
         (inputs_path/'descriptor-bank.json').read_bytes(), allocation_raw,
         {row['descriptor_report']: (descriptors/row['descriptor_report']).read_bytes() for row in rows},
-        monomer_id=monomer_id, profile=profile)
+        monomer_id=monomer_id, profile=profile,
+        **({} if producer == 'cb63305' else dict(producer=producer)))
 
 
-def verify_prepared_from_paths(case_path, inputs_path, build_identity, qualification, descriptors):
+def verify_prepared_from_paths(case_path, inputs_path, build_identity, qualification, descriptors,
+                               *, producer='cb63305'):
     """Reproduce the entire case from closed receipts; labels alone prove nothing."""
     prepared = json.loads(case_path.read_bytes())
     reproduced = prepare_from_paths(inputs_path, build_identity, qualification, descriptors,
-        monomer_id=prepared['monomer_id'], profile=prepared['execution_profile']['name'])
+        monomer_id=prepared['monomer_id'], profile=prepared['execution_profile']['name'],
+        **({} if producer == 'cb63305' else dict(producer=producer)))
     if json_digest(prepared) != json_digest(reproduced):
         raise ValueError('entire prepared case differs from pinned-input reconstruction')
     return reproduced
@@ -173,10 +200,11 @@ def main():
     for name in ('inputs', 'build-identity', 'qualification', 'descriptors', 'output'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--monomer-id', required=True)
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666'), default='cb63305')
     parser.add_argument('--profile', choices=tuple(PROFILES), required=True)
     args = parser.parse_args()
     result = prepare_from_paths(args.inputs, args.build_identity, args.qualification, args.descriptors,
-                                monomer_id=args.monomer_id, profile=args.profile)
+                                monomer_id=args.monomer_id, profile=args.profile, producer=args.producer)
     with args.output.open('x') as stream:
         json.dump(result, stream, indent=2, allow_nan=False)
     print(json.dumps(dict(status=result['status'], case_id=result['case_id'],

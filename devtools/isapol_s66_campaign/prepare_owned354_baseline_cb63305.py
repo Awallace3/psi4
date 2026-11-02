@@ -25,16 +25,20 @@ def helper(name):
     return module
 
 
-def prepare_baseline(client, *, blobs, authenticated_owner, specification):
+def prepare_baseline(client, *, blobs, authenticated_owner, specification, producer='cb63305'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+        raise ValueError('closed baseline producer required')
+    selection = {} if producer == 'cb63305' else dict(producer=producer)
     info = client.get_server_information()
     if {key: info.get(key) for key in SERVER} != SERVER:
         raise ValueError('approved owned deployment identity changed')
     guard = helper('owned_dataset_cb63305')
-    accepted = guard.verify_first_acceptance(blobs)
-    before = guard.snapshot_dataset(client)
+    accepted = guard.verify_first_acceptance(blobs, **selection)
+    before = guard.snapshot_dataset(client, **selection)
     checkpoint = guard.prepare_initial_checkpoint(before,
-        authenticated_owner=authenticated_owner, specification=specification, accepted=accepted)
-    after = guard.snapshot_dataset(client)
+        authenticated_owner=authenticated_owner, specification=specification, accepted=accepted,
+        **selection)
+    after = guard.snapshot_dataset(client, **selection)
     if before != after:
         raise RuntimeError('owned dataset changed during read-only baseline preparation')
     return dict(checkpoint, server=SERVER,
@@ -48,14 +52,17 @@ def main():
     for role in ('audit', 'outcome', 'pilot', 'envelope', 'output'):
         parser.add_argument('--'+role, type=Path, required=True)
     parser.add_argument('--commit', required=True)
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666'), default='cb63305')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     git = lambda *argv: subprocess.check_output(['git', '-C', str(root), *argv], text=True).strip()
     if git('rev-parse', 'HEAD') != args.commit or git('status', '--porcelain'):
         raise ValueError('exact clean baseline-preparation checkout required')
     guard = helper('owned_dataset_cb63305')
-    blobs = {role: getattr(args, role).read_bytes() for role in guard.ACCEPTED_SHA256}
-    guard.verify_first_acceptance(blobs)
+    selection = {} if args.producer == 'cb63305' else dict(producer=args.producer)
+    selected = guard.context(args.producer)
+    blobs = {role: getattr(args, role).read_bytes() for role in selected['accepted_sha256']}
+    guard.verify_first_acceptance(blobs, **selection)
     # Credentials remain in the approved remote config and never enter output.
     import yaml
     from qcportal.singlepoint import QCSpecification
@@ -64,18 +71,18 @@ def main():
     if server.get('fractal_uri') != URI or server.get('username') != OWNER:
         raise ValueError('approved owner and URI required')
     transport = helper('dataset_fresh_cb63305')
-    binding = transport.transport_binding()
-    client = transport.client_class()(URI, username=OWNER, password=server['password'],
+    binding = transport.transport_binding(**selection)
+    client = transport.client_class(**selection)(URI, username=OWNER, password=server['password'],
                                       verify=server['verify'], show_motd=False)
     pilot = json.loads(blobs['pilot'])
     specification = QCSpecification(**helper('phoenix_pilot').execution_specification(pilot['specification']))
     report = prepare_baseline(client, blobs=blobs, authenticated_owner=OWNER,
-                              specification=specification)
+                              specification=specification, **selection)
     report.update(operational_commit=args.commit, transport_binding=binding,
         source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
     with args.output.open('x') as stream:
         json.dump(report, stream, indent=2, allow_nan=False)
-    print(json.dumps(dict(status=report['status'], dataset_id=354,
+    print(json.dumps(dict(status=report['status'], dataset_id=selected['dataset_id'],
         entries=len(report['snapshot']['entries']), records=len(report['snapshot']['records']),
         sha256=hashlib.sha256(args.output.read_bytes()).hexdigest())))
 

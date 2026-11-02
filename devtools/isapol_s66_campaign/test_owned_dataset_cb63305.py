@@ -180,3 +180,58 @@ def test_snapshot_uses_explicit354_and_bounded131_without_retargeting_legacy_glo
     assert owned.snapshot_dataset(object()) == {'unit': True}
     assert seen == [dict(dataset_id=354, max_entries=131)]
     assert core.DATASET_ID == 353 and core.SPECIFICATION == 'pbe0-atz-native-request2'
+
+
+def fixture_ed():
+    snapshot, accepted, specification = fixture()
+    selected = owned.context('ed561666')
+    entry = accepted['entry']
+    entry['name'] = selected['first_entry']
+    entry['attributes']['monomer_id'] = selected['first_monomer']
+    record = snapshot['records'].pop(str(owned.FIRST_RECORD))
+    record.update(id=selected['first_record'], tensor_sha256=selected['first_tensor'],
+                  native_envelope_sha256='SYNTHETIC_CANONICAL_NOT_EVIDENCE')
+    accepted.update(accepted_sha256=selected['accepted_sha256'],
+                    canonical_envelope_sha256=record['native_envelope_sha256'])
+    snapshot['metadata'].update(id=355, name=selected['dataset_name'])
+    snapshot['records'] = {str(selected['first_record']): record}
+    snapshot['entries'] = {selected['first_entry']: copy.deepcopy(entry)}
+    snapshot['associations'] = {selected['first_entry']: {owned.SPECIFICATION: selected['first_record']}}
+    return snapshot, accepted, specification
+
+
+def test_cap32_initial_checkpoint_targets_new355_not_old_datasets_or_cb_acceptance():
+    snapshot, accepted, specification = fixture_ed()
+    result = owned.prepare_initial_checkpoint(snapshot, authenticated_owner=owned.OWNER,
+        specification=specification, accepted=accepted, producer='ed561666')
+    assert result['schema'] == 'native-owned-dataset-checkpoint/2'
+    assert result['dataset_id'] == 355 and result['producer_profile'] == 'ed561666'
+    assert result['generation'] == 1 and result['audited_records'] == [5234318]
+    for identifier in (353, 354):
+        changed = copy.deepcopy(snapshot)
+        changed['metadata']['id'] = identifier
+        with pytest.raises(ValueError):
+            owned.prepare_initial_checkpoint(changed, authenticated_owner=owned.OWNER,
+                specification=specification, accepted=accepted, producer='ed561666')
+    with pytest.raises(ValueError):
+        owned.prepare_initial_checkpoint(snapshot, authenticated_owner=owned.OWNER,
+            specification=specification, accepted=accepted)
+
+
+def test_cap32_context_copies_pins_and_snapshot_never_retargets_historical_globals(monkeypatch):
+    selected = owned.context('ed561666')
+    selected['accepted_sha256']['audit'] = 'SYNTHETIC_MUTATION'
+    assert owned.context('ed561666')['accepted_sha256']['audit'].startswith('f07ec8ca')
+    with pytest.raises(ValueError, match='closed'):
+        owned.context('arbitrary')
+    calls = []
+    core = owned.base()
+    monkeypatch.setattr(core, 'snapshot_dataset', lambda client, **kw: calls.append(kw) or {})
+    owned.snapshot_dataset(object(), producer='ed561666')
+    assert calls == [dict(dataset_id=355, max_entries=131)]
+    assert owned.DATASET_ID == 354 and core.DATASET_ID == 353
+    with pytest.raises(ValueError, match='roles'):
+        owned.verify_first_acceptance({}, producer='ed561666')
+    with pytest.raises(ValueError, match='hash differs'):
+        owned.verify_first_acceptance({key: b'SYNTHETIC_NOT_A_RECEIPT'
+            for key in owned.context('ed561666')['accepted_sha256']}, producer='ed561666')

@@ -116,6 +116,37 @@ def test_profile_choices_are_finite_embers_and_leave_at_least_35percent_allocati
         case.helper('arbitrary_loader')
 
 
+def test_cap32_prepares_all_other130_including_fresh_methylamine_without_reusing_benzene(monkeypatch):
+    args, bank = fixture(monkeypatch)
+    allocation = json.loads(args['allocation_raw'])
+    seen = []
+    def admitted(*values, producer):
+        seen.append(producer)
+        return copy.deepcopy(bank), copy.deepcopy(allocation)
+    monkeypatch.setattr(case, 'verify_admitted_bank', admitted)
+    prepared = []
+    for row in bank['monomers']:
+        if row['monomer_id'] == 'monomer-0047':
+            continue
+        profile = next(name for name, p in case.PROFILES.items()
+                       if row['intended_memory_bytes'] == p['science_memory_GiB']*case.GIB)
+        result = case.prepare_case(**args, monomer_id=row['monomer_id'], profile=profile,
+                                   producer='ed561666')
+        assert result['dataset_id'] == 355 and result['dataset_mode'] == 'append'
+        assert result['producer_profile'] == 'ed561666'
+        assert result['required_first_pilot_audit_sha256'] == case.helper(
+            'owned_dataset_cb63305').context('ed561666')['accepted_sha256']['audit']
+        assert case.helper('phoenix_worker_probe').runtime_input(result) == row['runtime_input']
+        assert result['runtime_input_sha256'] == row['runtime_input_sha256']
+        assert result['submission']['find_existing'] is False
+        prepared.append(result)
+    assert len(prepared) == 130 and len({r['case_id'] for r in prepared}) == 130
+    assert any(r['monomer_id'] == 'monomer-0006' for r in prepared)
+    assert set(seen) == {'ed561666'}
+    with pytest.raises(ValueError, match='audited benzene'):
+        case.prepare_case(**args, monomer_id='monomer-0047', profile='s40', producer='ed561666')
+
+
 @pytest.mark.parametrize('change', ['none', 'geometry', 'request', 'producer', 'profile', 'case_id'])
 def test_stored_case_must_equal_fresh_closed_receipt_reconstruction(monkeypatch, tmp_path, change):
     args, _ = fixture(monkeypatch)
