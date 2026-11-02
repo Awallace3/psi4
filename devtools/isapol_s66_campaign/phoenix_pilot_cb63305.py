@@ -1,4 +1,4 @@
-"""First fresh cb/request3 QCArchive molecular pilot; delivery is not audit."""
+"""Fresh cb/request3 QCArchive singleton; delivery is not independent audit."""
 import argparse
 import base64
 import hashlib
@@ -18,7 +18,8 @@ BASE = Path('/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt')
 MANAGER = Path('/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca')
 HELPERS = {'pilot_cb63305', 'phoenix_worker_cb63305', 'phoenix_installed_checks',
     'phoenix_worker_probe', 'phoenix_pilot', 'dataset_fresh_cb63305',
-    'single_record_cb63305', 'descriptor_scratch_cb63305', 'phoenix_descriptor_bank_cb63305'}
+    'single_record_cb63305', 'descriptor_scratch_cb63305', 'phoenix_descriptor_bank_cb63305',
+    'case_cb63305', 'dataset_owned354_cb63305', 'owned_dataset_cb63305'}
 
 
 def helper(name):
@@ -32,16 +33,30 @@ def helper(name):
     return module
 
 
-def admit_allocation(allocation):
+def admit_allocation(allocation, *, execution_profile=None):
     expected = dict(Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small',
                     NumCPUs='4', NumNodes='1', MinMemoryNode='24G', TimeLimit='02:00:00')
+    if execution_profile is not None:
+        cases = helper('case_cb63305')
+        name = execution_profile.get('name')
+        if name not in cases.PROFILES:
+            raise ValueError('explicit finite remaining-case molecular profile required')
+        profile = dict(name=name, **cases.PROFILES[name], account='gts-cs207-chemx',
+                       partition='cpu-small', qos='embers', concurrency=1)
+        if cases.json_digest(profile) != cases.json_digest(execution_profile):
+            raise ValueError('remaining-case molecular profile changed')
+        expected.update(NumCPUs=str(profile['cores']),
+                        MinMemoryNode=str(profile['job_memory_GiB'])+'G',
+                        TimeLimit=profile['time_limit'])
     if any(allocation.get(k) != v for k, v in expected.items()):
         raise ValueError('exact effective two-hour expanded molecular embers allocation required')
 
 
 def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pilot_sha,
                        worker_sources, transport):
-    if (preflight.get('status') != 'PASS_EXPANDED_WORKER_PREFLIGHT_ONLY'
+    profile = draft.get('execution_profile')
+    status = 'PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY' if profile else 'PASS_EXPANDED_WORKER_PREFLIGHT_ONLY'
+    if (preflight.get('status') != status
             or preflight.get('runtime_unchanged') is not True
             or preflight.get('monomer_id') != draft['monomer_id']
             or preflight.get('scientific_build_commit') != draft['producer']['scientific_commit']
@@ -55,9 +70,37 @@ def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pil
                 draft['producer']['implementation_sha256']
             or preflight.get('descriptor_verification', {}).get('status') != 'PASS_DESCRIPTOR_PLAN_ONLY'):
         raise ValueError('exact expanded installed worker discovery and raw pilot binding required')
+    if profile is not None and (
+            preflight.get('execution_profile') != profile
+            or preflight.get('task_config') != dict(ncores=profile['cores'],
+                memory_GiB=profile['science_memory_GiB'], internal_retries=0)):
+        raise ValueError('exact remaining-case scientific worker profile required')
 
 
-def scratch_snapshot(scratch, payload, guard):
+def load_append_inputs(args):
+    roles = ('audit', 'outcome', 'pilot', 'envelope')
+    paths = {role: getattr(args, 'accepted_'+role) for role in roles}
+    if not args.remaining_case:
+        if args.owned_checkpoint or args.checkpoint_sha256 or any(paths.values()):
+            raise ValueError('owned append inputs cannot be ignored in first-case mode')
+        return None
+    if not args.owned_checkpoint or not args.checkpoint_sha256 or not all(paths.values()):
+        raise ValueError('remaining case requires all closed acceptance receipts and checkpoint')
+    blobs = {role: path.read_bytes() for role, path in paths.items()}
+    accepted = helper('owned_dataset_cb63305').verify_first_acceptance(blobs)
+    raw = args.owned_checkpoint.read_bytes()
+    helper('dataset_owned354_cb63305').validate_checkpoint(raw, args.checkpoint_sha256, accepted)
+    return dict(first_receipt_blobs=blobs, checkpoint_raw=raw,
+                checkpoint_sha256=args.checkpoint_sha256)
+
+
+def validate_server_config(server):
+    if (server.get('username') != 'awallace43'
+            or server.get('fractal_uri') != 'http://128.61.254.96:7777'):
+        raise ValueError('approved authenticated owner and deployment URI required')
+
+
+def scratch_snapshot(scratch, payload, guard, *, execution_profile=None):
     """Conservative pilot headroom snapshot, not a certified SCF disk bound."""
     import shutil
     if scratch.stat().st_dev != SCRATCH.stat().st_dev:
@@ -73,7 +116,8 @@ def scratch_snapshot(scratch, payload, guard):
             stream.write(result.stdout)
     result = guard.admit_scratch(free_bytes=shutil.disk_usage(scratch).free,
         free_files=os.statvfs(scratch).f_favail, user_quota=quotas['user'], group_quota=quotas['group'],
-        required_bytes=64*1024**3, required_files=65536)
+        required_bytes=execution_profile['scratch_bytes'] if execution_profile else 64*1024**3,
+        required_files=execution_profile['scratch_files'] if execution_profile else 65536)
     result['qualification'] = ('Conservative pilot free-space/quota snapshot only; not a reservation, '
                                'certified SCF disk bound or guarantee against concurrent usage.')
     return result
@@ -84,11 +128,16 @@ def main():
     for name in ('build', 'qualification', 'inputs', 'descriptors', 'pilot', 'worker-preflight', 'run'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
+    parser.add_argument('--remaining-case', action='store_true')
+    parser.add_argument('--owned-checkpoint', type=Path)
+    parser.add_argument('--checkpoint-sha256')
+    for role in ('audit', 'outcome', 'pilot', 'envelope'):
+        parser.add_argument('--accepted-'+role, type=Path)
     args = parser.parse_args()
-    checks, prep, worker = (helper(name) for name in (
-        'phoenix_installed_checks', 'pilot_cb63305', 'phoenix_worker_cb63305'))
+    append_inputs = load_append_inputs(args)
+    checks, worker = (helper(name) for name in (
+        'phoenix_installed_checks', 'phoenix_worker_cb63305'))
     allocation = checks.allocation()
-    admit_allocation(allocation)
     source = Path(__file__).resolve().parents[2]
     if (checks.git(source, 'rev-parse', 'HEAD') != args.commit
             or checks.git(source, 'status', '--porcelain')):
@@ -99,9 +148,9 @@ def main():
             or build.is_relative_to(run) or run.is_relative_to(build)):
         raise ValueError('disjoint private build and molecular run required')
     manifest_path = build/'build-identity.json'
-    draft = prep.prepare_from_paths(args.inputs, manifest_path, args.qualification, args.descriptors)
-    if draft != json.loads(args.pilot.read_bytes()):
-        raise ValueError('first molecular draft differs from descriptor-admitted raw inputs')
+    draft = worker.prepare_draft(args, manifest_path)
+    profile = draft['execution_profile'] if args.remaining_case else None
+    admit_allocation(allocation, execution_profile=profile)
     pilot_sha = checks.digest(args.pilot)
     manifest = json.loads(manifest_path.read_bytes())
     manifest_sha = checks.digest(manifest_path)
@@ -114,6 +163,9 @@ def main():
     operations = worker.source_hashes()
     operations.update({name: checks.digest(Path(__file__).with_name(name)) for name in (
         'phoenix_pilot_cb63305.py', 'phoenix_pilot_cb63305.sbatch', 'single_record_cb63305.py')})
+    if args.remaining_case:
+        operations.update({name: checks.digest(Path(__file__).with_name(name)) for name in (
+            'dataset_owned354_cb63305.py', 'owned_dataset_cb63305.py', 'dataset_guard.py')})
     worker_sources = {key: operations[key] for key in worker.SOURCES}
     legacy = helper('phoenix_pilot')
     manager_sources = MANAGER/'lib/python3.13/site-packages/qcfractalcompute'
@@ -135,14 +187,17 @@ def main():
     scratch.mkdir(mode=0o700, exist_ok=False)
     for name in ('home', 'cache', 'cwd'):
         (scratch/name).mkdir()
-    disk = scratch_snapshot(scratch, payload, helper('descriptor_scratch_cb63305'))
+    disk = scratch_snapshot(scratch, payload, helper('descriptor_scratch_cb63305'),
+                            execution_profile=profile)
     common = helper('phoenix_descriptor_bank_cb63305')
     env = common.child_environment(environment, scratch)
+    worker_shape = (profile['cores'], profile['science_memory_GiB']) if profile else (4, 20)
     env.update(PATH=f'{payload}/launcher:{MANAGER}/bin:/usr/bin:/bin',
         LD_LIBRARY_PATH=str(MANAGER/'lib'), PYTHONPYCACHEPREFIX=str(scratch/'cache'),
         CCASP_NATIVE_ENV=str(environment), CCASP_NATIVE_BASE=str(BASE),
         CCASP_NATIVE_CACHE=str(scratch/'cache'), CCASP_NATIVE_HOME=str(scratch/'home'),
-        CCASP_NATIVE_TRACE=str(payload/'traces'), OMP_NUM_THREADS='4', MKL_NUM_THREADS='4')
+        CCASP_NATIVE_TRACE=str(payload/'traces'), OMP_NUM_THREADS=str(worker_shape[0]),
+        MKL_NUM_THREADS=str(worker_shape[0]))
     os.environ.clear()
     os.environ.update(env)
     if Path(sys.executable).resolve() != (MANAGER/'bin/python').resolve():
@@ -156,7 +211,7 @@ def main():
     from qcfractalcompute.config import FractalComputeConfig
     from qcfractalcompute.apps.app_manager import discover_programs_conda
     worker.validate_versions(str(qcengine.__version__), str(qcfractalcompute.__version__))
-    mutation = helper('dataset_fresh_cb63305')
+    mutation = helper('dataset_owned354_cb63305' if args.remaining_case else 'dataset_fresh_cb63305')
     transport = mutation.transport_binding()
     validate_preflight(preflight, draft, manifest_sha=manifest_sha,
         qualification_sha=checks.digest(args.qualification), pilot_sha=pilot_sha,
@@ -168,9 +223,11 @@ def main():
             or checks.digest(harness_path) != preflight['harness_sha256']
             or 'task_config' not in inspect.signature(qcengine.compute).parameters):
         raise ValueError('reviewed QCEngine harness changed')
-    task_config = get_config(task_config=dict(memory=20., ncores=4, scratch_directory=str(scratch)))
-    if task_config.retries != 0:
-        raise ValueError('zero internal QCEngine retries required')
+    task_config = get_config(task_config=dict(memory=float(worker_shape[1]), ncores=worker_shape[0],
+                                             scratch_directory=str(scratch)))
+    if (task_config.retries != 0 or task_config.ncores != worker_shape[0]
+            or task_config.memory != worker_shape[1]):
+        raise ValueError('exact scientific worker shape and zero internal QCEngine retries required')
     version = harness.get_version()
     programs = worker.discover_manager_programs(env, discover_programs_conda)
     helper('phoenix_worker_probe').validate_worker_discovery(
@@ -182,10 +239,13 @@ def main():
     # Credentials stay on Phoenix in the approved config; never save config.
     server = yaml.safe_load(Path(
         '/storage/project/r-cs207-0/awallace43/qca/resources_losii_ac.yml').read_text())['server']
-    if server.get('username') != 'awallace43':
-        raise ValueError('approved authenticated owner required')
+    validate_server_config(server)
     tag = 'ccasp-native-cb63305-'+draft['monomer_id']+'-'+os.environ['SLURM_JOB_ID']
-    config = FractalComputeConfig(**legacy.pilot_config(server, payload, scratch, tag))
+    config_data = legacy.pilot_config(server, payload, scratch, tag)
+    config_data['executors']['pilot'].update(cores_per_worker=worker_shape[0],
+                                            memory_per_worker=float(worker_shape[1]))
+    config = FractalComputeConfig(**config_data)
+    helper('single_record_cb63305').validate_session_config(config, tag, worker_shape=worker_shape)
     client = mutation.client_class()(config.server.fractal_uri, username=config.server.username,
         password=config.server.password, verify=config.server.verify, show_motd=False)
     info = client.get_server_information()
@@ -205,19 +265,32 @@ def main():
         operational_sources_sha256=operations, manager_sources=legacy.MANAGER_FILES,
         transport_binding=transport, scratch_path=str(scratch), scratch_snapshot=disk,
         maximum_records=1, find_existing=False, execution_protocols=runtime['specification']['protocols'],
+        execution_profile=profile,
+        checkpoint_sha256=args.checkpoint_sha256 if args.remaining_case else None,
         qcengine_internal_retries=0, dataset_name=draft['dataset_name'],
         specification_name=draft['specification_name'])
     save('started.json', started)
-    dataset, _ = mutation.register_once(client, draft, tag, save)
-    inserted = mutation.submit_once(client, dataset, draft, tag, save)
+    if args.remaining_case:
+        created = mutation.append_once(client, case_path=args.pilot, inputs=args.inputs,
+            build_identity=manifest_path, qualification=args.qualification, descriptors=args.descriptors,
+            **append_inputs, authenticated_owner=server['username'], compute_tag=tag, save=save)
+        dataset = client.get_dataset_by_id(354)
+        if (dataset.id != 354 or dataset.name != draft['dataset_name']
+                or getattr(dataset, '_client', None) is not client):
+            raise ValueError('owned354 append returned another dataset/client identity')
+    else:
+        dataset, _ = mutation.register_once(client, draft, tag, save)
+        inserted = mutation.submit_once(client, dataset, draft, tag, save)
+        created = dict(n_inserted=inserted.n_inserted, n_existing=inserted.n_existing)
     record = dataset.get_record(draft['entry']['name'], draft['specification_name'], force_refetch=True)
-    if record.id in (5234314, 5234315):
+    if (record.id in (5234314, 5234315)
+            or args.remaining_case and record.id != created['record_id']):
         raise ValueError('historical record cannot be a fresh expanded-pilot result')
     save('record-created.json', dict(dataset_id=dataset.id, record_id=record.id,
         molecule_id=record.molecule_id, compute_tag=tag,
-        n_inserted=inserted.n_inserted, n_existing=inserted.n_existing))
+        n_inserted=created['n_inserted'], n_existing=created['n_existing']))
     session = helper('single_record_cb63305').run_session(config, record_id=record.id,
-        compute_tag=tag, runtime=runtime, payload=payload, save=save)
+        compute_tag=tag, runtime=runtime, payload=payload, save=save, worker_shape=worker_shape)
     record = dataset.get_record(draft['entry']['name'], draft['specification_name'], force_refetch=True)
     history = record.compute_history
     save('server-record-outcome.json', dict(record_id=record.id, status=record.status.value,
@@ -240,6 +313,12 @@ def main():
     save('server-native-envelope.json', envelope)
     with (payload/'server-tensors.npz').open('xb') as stream:
         stream.write(raw)
+    if args.remaining_case:
+        owned = helper('owned_dataset_cb63305')
+        after_delivery = owned.snapshot_dataset(client)
+        owned.assert_append_delta(json.loads((payload/'owned-before-entry.json').read_bytes()),
+            after_delivery, entry_name=draft['entry']['name'], record_id=record.id)
+        save('owned-after-delivery.json', after_delivery)
     checks.verify_runtime(environment, manifest)
     if (any(checks.digest(Path(__file__).with_name(n)) != v for n, v in operations.items())
             or any(checks.digest(manager_sources/n) != v for n, v in legacy.MANAGER_FILES.items())
@@ -249,7 +328,8 @@ def main():
             or mutation.transport_binding() != transport
             or checks.git(source, 'rev-parse', 'HEAD') != args.commit
             or checks.git(source, 'status', '--porcelain')
-            or prep.prepare_from_paths(args.inputs, manifest_path, args.qualification, args.descriptors) != draft):
+            or worker.prepare_draft(args, manifest_path) != draft
+            or load_append_inputs(args) != append_inputs):
         raise RuntimeError('runtime, source, manager, transport or raw receipts changed')
     outcome = dict(started, status='DELIVERED_EXPANDED_NATIVE_ARTIFACTS_PENDING_QUALIFICATION',
         dataset_id=dataset.id, record_id=record.id, task_id=session['task_id'], manager=session['manager'],

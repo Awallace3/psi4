@@ -1,6 +1,8 @@
 """Synthetic expanded-pilot audit guards; no real molecular qualification."""
 import copy
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -94,6 +96,78 @@ def test_scratch_identity_is_not_inferred_from_old_append_or_water_defaults(fiel
     outcome[field] = value
     with pytest.raises(ValueError):
         audit.scratch_for_outcome(outcome)
+
+
+def test_remaining_case_scratch_binds_reconstructed_monomer_not_firstcase_default():
+    outcome = fixture()[0]
+    outcome.update(monomer_id='monomer-0047', dataset_id=354,
+        compute_tag='ccasp-native-cb63305-monomer-0047-123',
+        scratch_path=str(audit.SCRATCH/'ccasp-native-cb63305-monomer-0047-123'))
+    assert audit.scratch_for_outcome(outcome, expected_monomer='monomer-0047').name.endswith('0047-123')
+    for expected in ('monomer-0006', 'monomer-0132', 'monomer-0047/../../history'):
+        with pytest.raises(ValueError):
+            audit.scratch_for_outcome(outcome, expected_monomer=expected)
+    values = list(fixture())
+    with pytest.raises(ValueError, match='owned354'):
+        audit.validate_delivery(*values, owned354=True)
+
+
+@pytest.mark.parametrize('change', ['none', 'old_record', 'foreign_manager', 'fresh_history', 'checkpoint',
+                                   'delivered_envelope_hash', 'delivered_tensor_hash',
+                                   'envelope_tensor_hash', 'tensor_bytes', 'outcome_tensor_hash'])
+def test_independent_captured_preservation_reduction_checks_all_old_state(
+        monkeypatch, tmp_path, change):
+    example = load('append_snapshot_examples', 'test_dataset_owned354_cb63305.py')
+    client, kwargs, saved, guard = example.setup(monkeypatch, tmp_path)
+    created = example.append.append_once(client, **kwargs)
+    tensor = b'SYNTHETIC_UNIT_ONLY_NOT_A_NUMERIC_NPZ'
+    envelope = dict(synthetic='unit_only_not_molecular_evidence',
+        artifacts={'tensors.npz': {'sha256': hashlib.sha256(tensor).hexdigest()}})
+    delivered = copy.deepcopy(saved['owned-after-record.json'])
+    delivered['records']['9999'].update(status='complete', history=[{'manager_name': 'SYNTHETIC_MANAGER'}],
+        native_envelope_sha256=guard.base().digest(envelope), tensor_sha256=hashlib.sha256(tensor).hexdigest())
+    saved['owned-after-delivery.json'] = delivered
+    outcome = dict(record_id=created['record_id'], manager='SYNTHETIC_MANAGER', compute_tag=example.TAG,
+                   checkpoint_sha256=kwargs['checkpoint_sha256'],
+                   tensors_sha256=hashlib.sha256(tensor).hexdigest(), tensor_bytes=len(tensor))
+    if change == 'old_record':
+        delivered['records'][str(guard.FIRST_RECORD)]['status'] = 'error'
+    elif change == 'foreign_manager':
+        delivered['records']['9999']['history'][0]['manager_name'] = 'foreign'
+    elif change == 'fresh_history':
+        saved['owned-after-record.json']['records']['9999']['history'] = [{}]
+    elif change == 'checkpoint':
+        outcome['checkpoint_sha256'] = 'foreign'
+    elif change == 'delivered_envelope_hash':
+        delivered['records']['9999']['native_envelope_sha256'] = 'foreign'
+    elif change == 'delivered_tensor_hash':
+        delivered['records']['9999']['tensor_sha256'] = 'foreign'
+    elif change == 'envelope_tensor_hash':
+        envelope['artifacts']['tensors.npz']['sha256'] = 'foreign'
+    elif change == 'tensor_bytes':
+        tensor += b'changed'
+    elif change == 'outcome_tensor_hash':
+        outcome['tensors_sha256'] = 'foreign'
+    data = tmp_path/'payload'
+    data.mkdir()
+    for name, value in saved.items():
+        (data/name).write_text(json.dumps(value))
+    (data/'server-native-envelope.json').write_text(json.dumps(envelope))
+    (data/'server-tensors.npz').write_bytes(tensor)
+    monkeypatch.setattr(audit, 'helper', lambda name:
+        guard if name == 'owned_dataset_cb63305' else example.append)
+    draft = json.loads(kwargs['case_path'].read_text())
+    specification = saved['owned-before-entry.json']['specifications'][guard.SPECIFICATION]['specification']
+    append_inputs = {key: kwargs[key] for key in (
+        'first_receipt_blobs', 'checkpoint_raw', 'checkpoint_sha256')}
+    if change == 'none':
+        result = audit.validate_preservation(data, outcome, draft, append_inputs, specification)
+        assert result['status'] == 'PASS_CAPTURED_OWNED354_PRESERVATION'
+        assert result['preserved_records'] == 1
+        assert 'not an atomic lock or fresh live query' in result['qualification']
+    else:
+        with pytest.raises(ValueError):
+            audit.validate_preservation(data, outcome, draft, append_inputs, specification)
 
 
 def test_request3_uses_the_unchanged_independent_numeric_reduction():

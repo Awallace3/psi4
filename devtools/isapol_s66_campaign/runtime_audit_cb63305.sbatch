@@ -10,8 +10,10 @@
 #SBATCH --time=00:45:00
 #SBATCH --signal=TERM@180
 set -euo pipefail
-[[ $# -eq 6 ]] || { printf 'SOURCE OPERATIONAL_COMMIT PILOT PREFLIGHT CASE RUN\n' >&2; exit 2; }
+[[ $# -ge 6 ]] || { printf 'SOURCE OPERATIONAL_COMMIT PILOT PREFLIGHT CASE RUN [remaining-case options]\n' >&2; exit 2; }
 SOURCE=$1 COMMIT=$2 PILOT=$3 PREFLIGHT=$4 CASE=$5 RUN=$6
+shift 6
+EXTRA=("$@")
 ROOT=/storage/project/r-cs207-0/awallace43/runs
 MANAGER=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca
 [[ "$SOURCE" = /storage/project/r-cs207-0/awallace43/gits/* ]]
@@ -28,7 +30,7 @@ setsid /opt/slurm/current/bin/srun --ntasks=1 --cpu-bind=none \
     --qualification "$ROOT/ccasp-native-s66-cb63305f41-checks001/payload/installed-validation.json" \
     --inputs "$ROOT/ccasp-native-s66-cb63305f41-preparation001" \
     --descriptors "$ROOT/ccasp-native-s66-cb63305f41-descriptors001/payload" \
-    --pilot "$PILOT" --worker-preflight "$PREFLIGHT" --case "$CASE" --run "$RUN" --commit "$COMMIT" &
+    --pilot "$PILOT" --worker-preflight "$PREFLIGHT" --case "$CASE" --run "$RUN" --commit "$COMMIT" "${EXTRA[@]}" &
 child=$!
 set +e
 ccasp_wait_child "$child" 20

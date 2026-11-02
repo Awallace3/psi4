@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace as NS
 
 import pytest
 
@@ -60,6 +61,88 @@ def test_only_exact_approved_embers_molecular_shape_is_admitted():
                        ('TimeLimit', '08:00:00')]:
         with pytest.raises(ValueError, match='exact effective'):
             pilot.admit_allocation(allocation | {key: value})
+
+
+@pytest.mark.parametrize('name', ['s20', 's40', 's80'])
+def test_remaining_molecular_shape_cannot_borrow_a_preflight_or_old_resource_route(name):
+    cases = pilot.helper('case_cb63305')
+    profile = dict(name=name, **cases.PROFILES[name], account='gts-cs207-chemx',
+                   partition='cpu-small', qos='embers', concurrency=1)
+    allocation = dict(Account=profile['account'], QOS='embers', Partition='cpu-small',
+        NumCPUs=str(profile['cores']), NumNodes='1', MinMemoryNode=str(profile['job_memory_GiB'])+'G',
+        TimeLimit=profile['time_limit'])
+    pilot.admit_allocation(allocation, execution_profile=profile)
+    for key, value in [('QOS', 'inferno'), ('NumCPUs', '4'), ('MinMemoryNode', '24G'),
+                       ('TimeLimit', '00:45:00')]:
+        with pytest.raises(ValueError):
+            pilot.admit_allocation(allocation | {key: value}, execution_profile=profile)
+    changed = dict(profile, scratch_bytes=1)
+    with pytest.raises(ValueError, match='profile changed'):
+        pilot.admit_allocation(allocation, execution_profile=changed)
+    preflight, draft, kwargs = fixture()
+    draft['execution_profile'] = profile
+    preflight.update(status='PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY', execution_profile=profile,
+        task_config=dict(ncores=profile['cores'], memory_GiB=profile['science_memory_GiB'],
+                         internal_retries=0))
+    pilot.validate_preflight(preflight, draft, **kwargs)
+    preflight['task_config']['internal_retries'] = 1
+    with pytest.raises(ValueError, match='scientific worker profile'):
+        pilot.validate_preflight(preflight, draft, **kwargs)
+
+
+def append_args():
+    return NS(remaining_case=False, owned_checkpoint=None, checkpoint_sha256=None,
+              accepted_audit=None, accepted_outcome=None, accepted_pilot=None, accepted_envelope=None)
+
+
+def test_owned_append_arguments_cannot_be_ignored_or_inferred():
+    args = append_args()
+    assert pilot.load_append_inputs(args) is None
+    args.owned_checkpoint = Path('not-opened')
+    with pytest.raises(ValueError, match='cannot be ignored'):
+        pilot.load_append_inputs(args)
+    args.remaining_case = True
+    with pytest.raises(ValueError, match='all closed acceptance receipts'):
+        pilot.load_append_inputs(args)
+
+
+def test_complete_append_input_bytes_are_verified_before_dispatch(monkeypatch, tmp_path):
+    args = append_args()
+    args.remaining_case = True
+    args.checkpoint_sha256 = 'synthetic-checkpoint-only'
+    args.owned_checkpoint = tmp_path/'checkpoint.json'
+    args.owned_checkpoint.write_bytes(b'SYNTHETIC_BASELINE')
+    roles = ('audit', 'outcome', 'pilot', 'envelope')
+    for role in roles:
+        path = tmp_path/(role+'.json')
+        path.write_bytes(('SYNTHETIC_'+role).encode())
+        setattr(args, 'accepted_'+role, path)
+    effects = []
+    def accepted(blobs):
+        effects.append('closed_receipts')
+        assert set(blobs) == set(roles)
+        return {'synthetic_accepted': True}
+    def checkpoint(raw, sha, acceptance):
+        effects.append('closed_checkpoint')
+        assert raw == b'SYNTHETIC_BASELINE' and sha == args.checkpoint_sha256
+        assert acceptance == {'synthetic_accepted': True}
+    monkeypatch.setattr(pilot, 'helper', lambda name:
+        NS(verify_first_acceptance=accepted) if name == 'owned_dataset_cb63305'
+        else NS(validate_checkpoint=checkpoint))
+    result = pilot.load_append_inputs(args)
+    assert effects == ['closed_receipts', 'closed_checkpoint']
+    assert result['checkpoint_raw'] == b'SYNTHETIC_BASELINE'
+    assert result['first_receipt_blobs']['audit'] == b'SYNTHETIC_audit'
+
+
+def test_dispatch_cannot_silently_change_the_approved_server_uri_or_owner():
+    config = dict(username='awallace43', fractal_uri='http://128.61.254.96:7777',
+                  password='SYNTHETIC_NOT_A_CREDENTIAL')
+    pilot.validate_server_config(config)
+    for changed in (dict(config, username='foreign'),
+                    dict(config, fractal_uri='http://unapproved.invalid:7777')):
+        with pytest.raises(ValueError, match='deployment URI'):
+            pilot.validate_server_config(changed)
 
 
 def test_help_is_pure_and_wrapper_is_term_safe_with_no_false_acceptance_marker():

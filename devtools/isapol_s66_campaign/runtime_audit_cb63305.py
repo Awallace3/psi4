@@ -18,7 +18,8 @@ BASE = Path('/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt')
 MANAGER = Path('/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca')
 HELPERS = {'pilot_cb63305', 'phoenix_pilot_cb63305', 'phoenix_worker_cb63305',
     'phoenix_installed_checks', 'phoenix_worker_probe', 'phoenix_pilot', 'runtime_audit',
-    'validate_numeric', 'dataset_fresh_cb63305', 'phoenix_descriptor_bank_cb63305'}
+    'validate_numeric', 'dataset_fresh_cb63305', 'phoenix_descriptor_bank_cb63305',
+    'owned_dataset_cb63305', 'dataset_owned354_cb63305'}
 
 
 def helper(name):
@@ -32,19 +33,22 @@ def helper(name):
     return module
 
 
-def scratch_for_outcome(outcome):
+def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006'):
     job = outcome['allocation']['JobId']
     if (type(job) is not str or re.fullmatch(r'[0-9]+', job) is None
-            or outcome.get('monomer_id') != 'monomer-0006'):
-        raise ValueError('first expanded-pilot job and monomer identity required')
-    expected = SCRATCH/('ccasp-native-cb63305-monomer-0006-'+job)
+            or type(expected_monomer) is not str
+            or re.fullmatch(r'monomer-[0-9]{4}', expected_monomer) is None
+            or not 1 <= int(expected_monomer[-4:]) <= 131
+            or outcome.get('monomer_id') != expected_monomer):
+        raise ValueError('exact expanded-pilot job and reconstructed monomer identity required')
+    expected = SCRATCH/('ccasp-native-cb63305-'+expected_monomer+'-'+job)
     if (outcome.get('scratch_path') != str(expected)
-            or outcome.get('compute_tag') != 'ccasp-native-cb63305-monomer-0006-'+job):
+            or outcome.get('compute_tag') != 'ccasp-native-cb63305-'+expected_monomer+'-'+job):
         raise ValueError('expanded molecular scratch/tag differs from actual case identity')
     return expected
 
 
-def validate_delivery(outcome, delivery, created, claimed, server):
+def validate_delivery(outcome, delivery, created, claimed, server, *, owned354=False):
     if (outcome.get('schema') != 'native-expanded-pilot-outcome/1'
             or outcome.get('status') != 'DELIVERED_EXPANDED_NATIVE_ARTIFACTS_PENDING_QUALIFICATION'
             or outcome.get('runtime_unchanged') is not True
@@ -54,6 +58,8 @@ def validate_delivery(outcome, delivery, created, claimed, server):
             or type(outcome.get('record_id')) is not int or outcome['record_id'] <= 0
             or outcome['record_id'] in (5234314, 5234315)):
         raise ValueError('fresh delivered expanded single-record case required')
+    if owned354 and (outcome['dataset_id'] != 354 or outcome['record_id'] == 5234316):
+        raise ValueError('one fresh remaining record in owned354 required')
     record, task, manager = outcome['record_id'], outcome['task_id'], outcome['manager']
     stats = delivery['local_statistics']
     if (created['dataset_id'] != outcome['dataset_id']
@@ -70,11 +76,64 @@ def validate_delivery(outcome, delivery, created, claimed, server):
         raise ValueError('singleton claim, delivery or server history differs')
 
 
+def validate_preservation(data, outcome, draft, append_inputs, specification):
+    """Independently reduce captured server snapshots; no live writes or manager."""
+    guard = helper('owned_dataset_cb63305')
+    accepted = guard.verify_first_acceptance(append_inputs['first_receipt_blobs'])
+    checkpoint = helper('dataset_owned354_cb63305').validate_checkpoint(
+        append_inputs['checkpoint_raw'], append_inputs['checkpoint_sha256'], accepted)
+    read = lambda name: json.loads((data/name).read_bytes())
+    before, entry, record, delivered = (read(name) for name in (
+        'owned-before-entry.json', 'owned-after-entry.json',
+        'owned-after-record.json', 'owned-after-delivery.json'))
+    if (outcome.get('checkpoint_sha256') != append_inputs['checkpoint_sha256']
+            or before != checkpoint['snapshot']):
+        raise ValueError('actual append differs from sealed owned354 baseline')
+    guard.validate_owned354(before, authenticated_owner='awallace43',
+                            specification=specification, accepted=accepted)
+    guard.validate_new_case(before, draft, reproduced_case=draft)
+    name, identifier = draft['entry']['name'], outcome['record_id']
+    guard.assert_append_delta(before, entry, entry_name=name)
+    for snapshot in (record, delivered):
+        guard.assert_append_delta(before, snapshot, entry_name=name, record_id=identifier)
+    for snapshot in (entry, record, delivered):
+        guard.base().validate_stored_entry(snapshot['entries'][name], draft['entry'])
+    guard.base().validate_fresh_record(record['records'][str(identifier)],
+        tag=outcome['compute_tag'], specification=specification, entry=draft['entry'])
+    guard.validate_owned354(delivered, authenticated_owner='awallace43',
+                            specification=specification, accepted=accepted)
+    finished = delivered['records'][str(identifier)]
+    if (finished['status'] != 'complete' or len(finished['history']) != 1
+            or finished['history'][0]['manager_name'] != outcome['manager']):
+        raise ValueError('captured delivered record differs from actual owned singleton manager')
+    envelope = read('server-native-envelope.json')
+    envelope_sha = guard.base().digest(envelope)
+    tensor_raw = (data/'server-tensors.npz').read_bytes()
+    tensor_sha = hashlib.sha256(tensor_raw).hexdigest()
+    if (finished.get('native_envelope_sha256') != envelope_sha
+            or finished.get('tensor_sha256') != tensor_sha
+            or envelope['artifacts']['tensors.npz']['sha256'] != tensor_sha
+            or outcome.get('tensors_sha256') != tensor_sha
+            or outcome.get('tensor_bytes') != len(tensor_raw)):
+        raise ValueError('captured delivered record differs from audited envelope/tensor bytes')
+    return dict(status='PASS_CAPTURED_OWNED354_PRESERVATION',
+        checkpoint_sha256=append_inputs['checkpoint_sha256'],
+        before_sha256=guard.base().digest(before), after_sha256=guard.base().digest(delivered),
+        audited_native_envelope_sha256=envelope_sha, audited_tensor_sha256=tensor_sha,
+        preserved_records=len(before['records']),
+        qualification='Reduction of captured server snapshots, not an atomic lock or fresh live query.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('build', 'case', 'worker-preflight', 'qualification', 'inputs', 'descriptors', 'pilot', 'run'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
+    parser.add_argument('--remaining-case', action='store_true')
+    parser.add_argument('--owned-checkpoint', type=Path)
+    parser.add_argument('--checkpoint-sha256')
+    for role in ('audit', 'outcome', 'pilot', 'envelope'):
+        parser.add_argument('--accepted-'+role, type=Path)
     args = parser.parse_args()
     checks = helper('phoenix_installed_checks')
     allocation = checks.allocation()
@@ -93,17 +152,19 @@ def main():
     outcome, delivery, created, claimed, server = (
         read(name) for name in ('pilot-outcome.json', 'manager-delivery.json',
                                'record-created.json', 'claim.json', 'server-record-outcome.json'))
-    validate_delivery(outcome, delivery, created, claimed, server)
-    scratch = scratch_for_outcome(outcome)
+    validate_delivery(outcome, delivery, created, claimed, server, owned354=args.remaining_case)
     bootstrap = helper('phoenix_pilot_cb63305')
-    bootstrap.admit_allocation(outcome['allocation'])
+    append_inputs = bootstrap.load_append_inputs(args)
     manifest_path = build/'build-identity.json'
     manifest = json.loads(manifest_path.read_bytes())
-    prep = helper('pilot_cb63305')
-    draft = prep.prepare_from_paths(args.inputs, manifest_path, args.qualification, args.descriptors)
-    if json.loads(args.pilot.read_bytes()) != draft:
-        raise ValueError('independent audit pilot does not reproduce from actual admitted raw inputs')
     worker, legacy = helper('phoenix_worker_cb63305'), helper('phoenix_pilot')
+    draft = worker.prepare_draft(args, manifest_path)
+    profile = draft['execution_profile'] if args.remaining_case else None
+    scratch = scratch_for_outcome(outcome, expected_monomer=draft['monomer_id'])
+    bootstrap.admit_allocation(outcome['allocation'], execution_profile=profile)
+    if args.remaining_case and outcome.get('execution_profile') != profile:
+        raise ValueError('actual molecular execution profile differs from reconstructed case')
+    worker_shape = (profile['cores'], profile['science_memory_GiB']) if profile else (4, 20)
     preflight = json.loads(args.worker_preflight.read_bytes())
     transport = helper('dataset_fresh_cb63305').transport_binding()
     bootstrap.validate_preflight(preflight, draft, manifest_sha=checks.digest(manifest_path),
@@ -119,15 +180,23 @@ def main():
             or outcome['transport_binding'] != transport
             or outcome['manager_sources'] != legacy.MANAGER_FILES):
         raise ValueError('new producer, raw pilot and installed discovery receipt chain differs')
-    intended_dataset, submitted = read('dataset-created.json'), read('record-submit-attempt.json')
-    if (intended_dataset != dict(dataset_id=outcome['dataset_id'], name=draft['dataset_name'])
-            or submitted['dataset_id'] != outcome['dataset_id']
+    submitted = read('record-submit-attempt.json')
+    sources = set(worker.SOURCES) | {
+        'phoenix_pilot_cb63305.py', 'phoenix_pilot_cb63305.sbatch', 'single_record_cb63305.py'}
+    preservation = None
+    if args.remaining_case:
+        from qcportal.singlepoint import QCSpecification
+        sources |= {'dataset_owned354_cb63305.py', 'owned_dataset_cb63305.py', 'dataset_guard.py'}
+        preservation = validate_preservation(data, outcome, draft, append_inputs,
+            QCSpecification(**legacy.execution_specification(draft['specification'])))
+    elif read('dataset-created.json') != dict(dataset_id=outcome['dataset_id'], name=draft['dataset_name']):
+        raise ValueError('fresh dataset intent differs')
+    if (submitted['dataset_id'] != outcome['dataset_id']
             or submitted['entry'] != draft['entry']['name']
             or submitted['specification'] != draft['specification_name']
             or submitted['compute_tag'] != outcome['compute_tag']
             or submitted['find_existing'] is not False or submitted['transport_retries'] is not False
-            or set(outcome['operational_sources_sha256']) != set(worker.SOURCES) | {
-                'phoenix_pilot_cb63305.py', 'phoenix_pilot_cb63305.sbatch', 'single_record_cb63305.py'}):
+            or set(outcome['operational_sources_sha256']) != sources):
         raise ValueError('fresh dataset intent or complete execution-source inventory differs')
     expected = helper('phoenix_worker_probe').runtime_input(draft)
     expected['specification']['protocols'] = legacy.execution_specification(draft['specification'])['protocols']
@@ -195,7 +264,8 @@ def main():
             report['status'], report['role_error'] = 'failed', 'only the initial owned interpreter may execute'
         else:
             try:
-                report['role'] = classifier(report['executions'][0], env=environment, scratch=scratch)
+                report['role'] = classifier(report['executions'][0], env=environment, scratch=scratch,
+                                            worker_shape=worker_shape)
                 roles[report['role']] += 1
             except ValueError as error:
                 report['status'], report['role_error'] = 'failed', str(error)
@@ -206,19 +276,22 @@ def main():
                    for n, v in legacy.MANAGER_FILES.items())
             or checks.git(source, 'rev-parse', 'HEAD') != args.commit
             or checks.git(source, 'status', '--porcelain')
-            or prep.prepare_from_paths(args.inputs, manifest_path, args.qualification, args.descriptors) != draft):
+            or worker.prepare_draft(args, manifest_path) != draft
+            or bootstrap.load_append_inputs(args) != append_inputs):
         raise ValueError('runtime, manager, audit source or immutable raw receipts changed')
     passed = all(r['status'] == 'passed' for r in reports.values()) and roles['molecular_qcschema'] == 1
     output = run/'payload'
     output.mkdir(exist_ok=False)
+    verdict = 'PASS_BANK_CASE_SINGLETON_EVIDENCE' if args.remaining_case else 'PASS_EXPANDED_SINGLE_PILOT_EVIDENCE'
     report = dict(schema='native-expanded-pilot-audit/1',
-        status='PASS_EXPANDED_SINGLE_PILOT_EVIDENCE' if passed else 'FAIL_EXPANDED_RUNTIME_INPUT_AUDIT',
+        status=verdict if passed else 'FAIL_EXPANDED_RUNTIME_INPUT_AUDIT',
         allocation=allocation, monomer_id=draft['monomer_id'], case_job=job,
         dataset_id=outcome['dataset_id'], record_id=outcome['record_id'],
         scientific_build_commit=manifest['commit'], case_operational_commit=outcome['operational_commit'],
         audit_commit=args.commit, case_outcome_sha256=checks.digest(data/'pilot-outcome.json'),
         pilot_sha256=checks.digest(args.pilot), file_gate_sha256=checks.digest(gate_path),
         numeric=numeric, roles=dict(roles), traces=reports, runtime_unchanged=True,
+        execution_profile=profile, captured_preservation=preservation,
         qualification='One fresh cb/request3 molecular pilot execution/export/decoded-FD evidence only; '
                       'ordinary OS trust, not hostile-host/TOCTOU or atomic-server-lock proof. '
                       'No full-C10, independent solver, covariance, accuracy/parity or whole-set claim.')

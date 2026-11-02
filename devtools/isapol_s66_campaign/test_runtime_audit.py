@@ -29,6 +29,28 @@ def test_exact_owned_qcschema_call_is_the_molecular_role():
     assert audit.cli_role(call, env='/private/env', scratch='/fresh/scratch') == 'molecular_qcschema'
 
 
+@pytest.mark.parametrize('shape', [(8, 20.), (12, 40.), (24, 80.)])
+def test_remaining_profiles_require_exact_claimed_cli_shape(shape):
+    call = execution(['--scratch', '/fresh/scratch/case', '--nthread', str(shape[0]),
+                      '--memory', str(float(shape[1]))+'GiB', '--qcschema', 'data.msgpack'])
+    assert audit.cli_role(call, env='/private/env', scratch='/fresh/scratch',
+                          worker_shape=shape) == 'molecular_qcschema'
+    with pytest.raises(ValueError):
+        audit.cli_role(call, env='/private/env', scratch='/fresh/scratch')
+    legacy = execution(['--scratch', '/fresh/scratch/case', '--nthread', '4',
+                        '--memory', '20.0GiB', '--qcschema', 'data.msgpack'])
+    with pytest.raises(ValueError):
+        audit.cli_role(legacy, env='/private/env', scratch='/fresh/scratch', worker_shape=shape)
+
+
+@pytest.mark.parametrize('shape', [(True, 20.), (12, True), [12, 40.], (12, 80.),
+                                   (24, float('inf')), (12, float('nan'))])
+def test_trace_worker_shape_is_finite_explicit_and_not_a_broad_option_allowlist(shape):
+    with pytest.raises(ValueError, match='explicit finite'):
+        audit.cli_role(execution(['--version']), env='/private/env', scratch='/fresh/scratch',
+                       worker_shape=shape)
+
+
 @pytest.mark.parametrize('suffix', [
     ['-c', 'read_saved_model()'],
     ['--scratch', '/history', '--nthread', '4', '--memory', '20.0GiB', '--qcschema', 'data.msgpack'],
