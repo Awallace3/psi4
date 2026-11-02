@@ -1,6 +1,7 @@
 """Arithmetic-only resource predictions: no Psi4 import or quantum execution."""
 import importlib.util
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -114,9 +115,15 @@ def test_closed_capacity_limits(changes):
         planner.plan(dimensions('OHH'), resources(**changes), max_replay_work=10**12)
 
 
-def test_source_binding_covers_python_and_native_policies():
+def test_source_binding_covers_python_and_native_policies(tmp_path):
+    """The frozen acf54 policy binds acf54 blobs, never a newer producer."""
     root = Path(__file__).resolve().parents[2]
-    binding = planner.source_binding(root)
+    for path in planner.FILES:
+        target = tmp_path/path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(subprocess.check_output(
+            ['git', 'show', planner.SCIENTIFIC_COMMIT+':'+path], cwd=root))
+    binding = planner.source_binding(tmp_path)
     assert binding['scientific_commit'] == 'acf54c28e50822b5b825f4d26e5d9f9a2835d773'
     assert len(binding['files_sha256']) >= 10
     assert 'psi4/src/psi4/libisapol/pfit.cc' in binding['files_sha256']
