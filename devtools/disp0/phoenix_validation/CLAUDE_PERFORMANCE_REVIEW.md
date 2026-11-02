@@ -140,6 +140,18 @@ peptide repeats passed. Energy-call wall times are36.790–37.226s, median
 37.048s (inclusive worker median50.784s), versus the historical994.512s GPU
 diagnostic. Tracked device peak, cache budget/occupancy, producer counts and
 CUDA/PTX source hashes are unchanged. This is a26.844-fold reduction in
-recorded historical GPU latency, not an accepted CPU/GPU speedup: independent
-peptide CPU references/oracles remain outstanding. Full receipts and scope
-are recorded in[SEALED_H200_PILOT.md](SEALED_H200_PILOT.md).
+recorded historical GPU latency, not a controlled GPU-kernel speedup.
+
+Final CPU-only embers14991749 subsequently completed0:0. Three fresh CPU
+references and three independent fixed-GPU-gauge CPU oracles passed at
+unchanged tolerances (maximum energy-matrix entry error3.47301e-10Eh).
+The peptide case is now**`PASS_MATCHED_INSTRUMENTED_BENCHMARK`** with an
+accepted**7.004× CPU/GPU energy-call speedup**:259.483s CPU median on24 cores
+versus37.048s on one H200 plus8 host cores. Inclusive worker medians,
+including startup/diagnostics, are277.044s versus50.784s (**5.455×**).
+The CPU consumer records acceptance without modifying the finalized GPU
+producer. All artifact hashes, process reaping and owned scratch cleanup
+were verified. This qualifies the restricted24-atom peptide point, not
+nanotube/protein scaling, isolated kernels or a general production release.
+Full receipts and scope are recorded in
+[SEALED_H200_PILOT.md](SEALED_H200_PILOT.md).

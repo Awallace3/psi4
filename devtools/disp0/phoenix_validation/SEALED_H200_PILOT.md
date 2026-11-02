@@ -1,11 +1,13 @@
 # Sealed-runtime H200 peptide pilot
 
-**Latest:** H20014946636 completed successfully: full small-gate PASS and
-three peptide repeats with**37.048s median energy-call wall**, versus the
-historical994.512s diagnostic. Independent peptide CPU qualification remains
-outstanding in running CPU-only job14991749; no accepted CPU/GPU ratio is claimed.
-H20014784867 failed its first GPU small-gate worker with exit86; no peptide
-benchmark ran. A real CPU ELF fixture reproduces a manifest-locator mismatch.
+**Latest:** H20014946636 and CPU14991749 completed successfully.
+The peptide case is **`PASS_MATCHED_INSTRUMENTED_BENCHMARK`**, with an
+accepted **7.004× CPU/GPU energy-call speedup**: CPU median259.483s on24 cores
+versus37.048s on one H200 with8 host cores. Three fresh references, three GPU
+repeats and three independent fixed-GPU-gauge CPU oracles passed.
+Inclusive worker medians are277.044s versus50.784s (**5.455×**).
+This qualifies this restricted peptide point, not a kernel-only speedup or
+general production release. Earlier failed attempts are preserved below.
 
 User requested an **embers H200 speedup test** after the restricted-water
 Cachy gate at `0433ec0452`. This pilot keeps that scientific/runtime source
@@ -435,7 +437,7 @@ UUID`GPU-90510df2-57d7-8d2a-2e07-fc0c5dc97cf5`. PTX SHA256:
 `0f3341120728784af9804df3ee44137dd9f31989b40b8a98ec07c2075c83c118`.
 The case is24 atoms/356 AOs/20 occupied per fragment,5 frozen and15 active.
 
-### Historical comparison, not yet an accepted CPU/GPU speedup
+### Historical GPU latency comparison, separate from CPU/GPU qualification
 
 The previous H200 peptide GPU diagnostic14481883 had median994.512498s
 (993.473989–994.536646s). The new recorded median is**26.844 times lower**.
@@ -455,12 +457,12 @@ H200 UUIDs/build pins, **not** a cache/host-matched controlled GPU-kernel
 speedup. No new memory allowance, cache increase or reduced work count buys
 the observed latency reduction.
 
-The peptide status remains`PASS_REPEATS_AWAITING_OTHER_RESOURCE_CLASS`;
-`accepted_speedup_count=0` in both producer/pilot receipts. New matched CPU
-references and independent fixed-GPU-gauge CPU oracles are still required
-before accepting a CPU/GPU ratio. The historical295.104s CPU median is not
-silently reused as a newly qualified denominator. No nanotube/protein83
-speedup or broad large-system admission follows from this pilot.
+At GPU completion the peptide status was
+`PASS_REPEATS_AWAITING_OTHER_RESOURCE_CLASS`;`accepted_speedup_count=0`
+remains in both immutable producer/pilot receipts. The final CPU consumer
+records qualification separately below. The historical295.104s CPU median
+is not reused as the new denominator. No nanotube/protein83 speedup or broad
+large-system admission follows from this pilot.
 
 Under`phoenix-sealed-h200-927283f8ed/job-14946636/`:
 
@@ -520,3 +522,56 @@ The final benchmark/qualification receipt will be
 Watcher:`ba307febf`.
 No qualified CPU/GPU ratio is inferred until those independent checks and
 cleanup pass and the recorded final GPU hashes are rechecked.
+
+## CPU14991749 completed: accepted7.004× peptide speedup
+
+Job/batch/step completed0:0 in28m25s; payload exit0/no TERM.
+The parent receipt records`accepted_speedup_count=1` and peptide status
+**`PASS_MATCHED_INSTRUMENTED_BENCHMARK`**, with
+`cpu_over_gpu_ratio=7.004036032786262`. It used the same frozen scientific/
+execution pin`927283f8ed`; CPU/GPU runtime configurations differ only in
+thread count24 versus8.
+
+| Repeat | CPU energy-call wall (s) | H200 energy-call wall (s) |
+|---|---:|---:|
+| 0 | 263.152222 | 37.226450 |
+| 1 | 259.482995 | 36.789883 |
+| 2 | 258.832354 | 37.047639 |
+| **Median** | **259.482995** | **37.047639** |
+
+This is24 CPU cores versus one H200 plus8 host cores, not a matched-host-thread
+or isolated-kernel comparison. The instrumented energy timer includes normal
+scientific setup/SCF, F-SAPT output and native cleanup. Inclusive worker wall,
+also including snapshot/bootstrap, primitive controls and diagnostic overhead,
+has CPU/GPU medians277.044203/50.784330s: a separate**5.455309× latency ratio**.
+Neither timer is uninstrumented production throughput.
+
+All three fresh CPU references passed repeat checks. Three additional
+independent CPU processes recomputed the fixed-GPU-gauge oracle for the three
+GPU samples; all23 fields passed at unchanged tolerances. Maximum absolute
+energy-matrix entry errors were6.47438e-12,7.27670e-11 and3.47301e-10Eh.
+Aggregate GPU-minus-CPU energy differences were respectively
+-1.68550e-10,-1.81466e-10 and-2.38138e-10Eh.
+All six CPU results, NPZs and standard F-SAPT output hashes were verified;
+process identities were distinct, CPU-only execution was checked, all owned
+groups were reaped, and owned scratch cleanup completed.
+
+Final GPU pilot/config/gate/manifest/benchmark hashes were rechecked against
+the CPU submission manifest and are unchanged. The producer's awaiting-CPU
+status is deliberately not rewritten; the accepted result lives in the
+separate CPU consumer receipt.
+
+Under`phoenix-sealed-cpu-qualification-927283f8ed/`:
+
+| Artifact | SHA256 |
+|---|---|
+| `manifest.json` | `58ff123109c1f1188bf57b8bf0ac93b834ceb2faba658fbf38060b70232bcd2a` |
+| `runtime-config.json` | `e187f2ac0a826a136787f9ba143682523ecd19922ac24ffc818e6cdf7877e859` |
+| `job-14991749/benchmark-result.json` | `6ee50f8a3c51f74dca67893b2d15282278150050604f8031d480ddbd1b458d95` |
+
+Scope:24-atom/356-AO spherical aug-cc-pVDZ peptide, exact per-source HF CPHF
+F-SAPT with5 frozen/15 active occupied orbitals per fragment and unchanged
+64MiB factor-cache ceiling. This is not the cheaper scalar-scaled uncoupled
+CPU partition. No nanotube/protein83 scaling curve, unrestricted/Cartesian
+qualification, or broad provider/production release is established.
+No further jobs or automatic retries were submitted.

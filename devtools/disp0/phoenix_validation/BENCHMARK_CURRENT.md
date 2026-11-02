@@ -2,18 +2,43 @@
 
 ## Latest restricted peptide follow-up
 
-User-approved embers H20014946636 completed using whole stage`927283f8ed`.
-The full small physical gate and three peptide GPU repeats passed:
-median**37.047639s** (36.789883–37.226450s), inclusive worker median50.784330s.
-Historical GPU median994.512498s is26.844 times higher, at matched geometry/
-numerical options/cache/work counts and unchanged tracked device peak.
-This is not a controlled kernel-speedup or an accepted CPU/GPU ratio; current
-independent peptide CPU references/oracles remain outstanding.
+User-approved embers H20014946636 and CPU14991749 completed using whole
+stage`927283f8ed`. The peptide case is
+**`PASS_MATCHED_INSTRUMENTED_BENCHMARK`**, with an accepted
+**7.004036× CPU/GPU energy-call speedup**:
+
+| Resource | Three-repeat median (s) | Range (s) |
+|---|---:|---:|
+| CPU,24 cores | 259.482995 | 258.832354–263.152222 |
+| One H200,8 host cores | 37.047639 | 36.789883–37.226450 |
+
+The full small physical gate, three fresh CPU references, three GPU repeats
+and three independent fixed-GPU-gauge CPU oracles passed at unchanged
+tolerances. Maximum energy-matrix entry error across the oracles is
+3.47301e-10Eh. CPU/GPU configs differ only in threads; all artifact hashes,
+distinct process identities, child reaping and owned scratch cleanup were
+verified. Final GPU producer documents remain unchanged.
+
+Inclusive worker medians are277.044203s CPU and50.784330s GPU, a separate
+**5.455309× latency ratio** including startup and diagnostics. Both measures
+are instrumented whole-workflow timings, not isolated kernels or
+uninstrumented production. Resource counts differ as explicitly stated.
+The qualified point is the24-atom/356-AO spherical aug-cc-pVDZ peptide with
+exact per-source HF CPHF F-SAPT and unchanged64MiB factor-cache ceiling.
+
+Historical GPU median994.512498s is26.844 times higher than the new GPU
+median, at matched geometry/numerical options/cache/work counts and unchanged
+tracked device peak. That historical latency reduction is not a controlled
+kernel-speedup comparison; the accepted7.004× ratio uses fresh CPU results,
+not the historical CPU denominator.
 See[SEALED_H200_PILOT.md](SEALED_H200_PILOT.md) for complete provenance,
 hardware, cleanup, hashes and limitations. All earlier records below remain
 historical; no new nanotube/protein83 qualification is implied.
-CPU-only embers14991749 is now running the three fresh references and three
-independent CPU oracles against that frozen GPU producer.
+The final accepted receipt is
+`phoenix-sealed-cpu-qualification-927283f8ed/job-14991749/benchmark-result.json`,
+SHA256`6ee50f8a3c51f74dca67893b2d15282278150050604f8031d480ddbd1b458d95`.
+The immutable GPU producer still records awaiting-CPU status; acceptance is
+recorded separately by this CPU consumer, with`accepted_speedup_count=1`.
 
 ## Terminal GPU checkpoint (2026-10-28)
 
