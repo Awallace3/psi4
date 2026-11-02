@@ -33,7 +33,8 @@ def helper(name):
     return module
 
 
-def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='cb63305'):
+def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='cb63305',
+                        remaining_case=False):
     pins = helper('pilot_cb63305').producer_pins(producer)
     job = outcome['allocation']['JobId']
     if (type(job) is not str or re.fullmatch(r'[0-9]+', job) is None
@@ -42,8 +43,11 @@ def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='c
             or not 1 <= int(expected_monomer[-4:]) <= 131
             or outcome.get('monomer_id') != expected_monomer):
         raise ValueError('exact expanded-pilot job and reconstructed monomer identity required')
-    if producer == 'ed561666' and expected_monomer != pins['monomer']:
+    if producer == 'ed561666' and not remaining_case and expected_monomer != pins['monomer']:
         raise ValueError('fixed fresh cap32 monomer required')
+    if producer == 'ed561666' and remaining_case and (
+            expected_monomer == pins['monomer'] or outcome.get('dataset_mode') != 'append'):
+        raise ValueError('selected remaining cap32 monomer required')
     tag = pins['namespace']+expected_monomer+'-'+job
     expected = SCRATCH/tag
     if (outcome.get('scratch_path') != str(expected)
@@ -56,9 +60,9 @@ def validate_delivery(outcome, delivery, created, claimed, server, *, owned354=F
                       producer='cb63305'):
     pins = helper('pilot_cb63305').producer_pins(producer)
     if producer == 'ed561666' and (
-            owned354 or outcome.get('producer_profile') != producer
-            or outcome.get('dataset_mode') != 'fresh'):
-        raise ValueError('fresh cap32 delivery cannot use historical append mode')
+            outcome.get('producer_profile') != producer
+            or outcome.get('dataset_mode') != ('append' if owned354 else 'fresh')):
+        raise ValueError('selected cap32 delivery/append mode differs')
     if (outcome.get('schema') != 'native-expanded-pilot-outcome/1'
             or outcome.get('status') != 'DELIVERED_EXPANDED_NATIVE_ARTIFACTS_PENDING_QUALIFICATION'
             or outcome.get('runtime_unchanged') is not True
@@ -68,8 +72,13 @@ def validate_delivery(outcome, delivery, created, claimed, server, *, owned354=F
             or type(outcome.get('record_id')) is not int or outcome['record_id'] <= 0
             or outcome['record_id'] in pins['protected_records']):
         raise ValueError('fresh delivered expanded single-record case required')
-    if owned354 and (outcome['dataset_id'] != 354 or outcome['record_id'] == 5234316):
-        raise ValueError('one fresh remaining record in owned354 required')
+    if owned354:
+        target, first_record = 354, 5234316
+        if producer == 'ed561666':
+            context = helper('owned_dataset_cb63305').context(producer)
+            target, first_record = context['dataset_id'], context['first_record']
+        if outcome['dataset_id'] != target or outcome['record_id'] == first_record:
+            raise ValueError('one fresh remaining record in owned354/selected dataset required')
     record, task, manager = outcome['record_id'], outcome['task_id'], outcome['manager']
     stats = delivery['local_statistics']
     if (created['dataset_id'] != outcome['dataset_id']
@@ -86,12 +95,13 @@ def validate_delivery(outcome, delivery, created, claimed, server, *, owned354=F
         raise ValueError('singleton claim, delivery or server history differs')
 
 
-def validate_preservation(data, outcome, draft, append_inputs, specification):
+def validate_preservation(data, outcome, draft, append_inputs, specification, *, producer='cb63305'):
     """Independently reduce captured server snapshots; no live writes or manager."""
     guard = helper('owned_dataset_cb63305')
-    accepted = guard.verify_first_acceptance(append_inputs['first_receipt_blobs'])
+    selected = {} if producer == 'cb63305' else dict(producer=producer)
+    accepted = guard.verify_first_acceptance(append_inputs['first_receipt_blobs'], **selected)
     checkpoint = helper('dataset_owned354_cb63305').validate_checkpoint(
-        append_inputs['checkpoint_raw'], append_inputs['checkpoint_sha256'], accepted)
+        append_inputs['checkpoint_raw'], append_inputs['checkpoint_sha256'], accepted, **selected)
     read = lambda name: json.loads((data/name).read_bytes())
     before, entry, record, delivered = (read(name) for name in (
         'owned-before-entry.json', 'owned-after-entry.json',
@@ -99,9 +109,10 @@ def validate_preservation(data, outcome, draft, append_inputs, specification):
     if (outcome.get('checkpoint_sha256') != append_inputs['checkpoint_sha256']
             or before != checkpoint['snapshot']):
         raise ValueError('actual append differs from sealed owned354 baseline')
-    guard.validate_owned354(before, authenticated_owner='awallace43',
-                            specification=specification, accepted=accepted)
-    guard.validate_new_case(before, draft, reproduced_case=draft)
+    validate_owned = guard.validate_owned_dataset if selected else guard.validate_owned354
+    validate_owned(before, authenticated_owner='awallace43',
+                   specification=specification, accepted=accepted, **selected)
+    guard.validate_new_case(before, draft, reproduced_case=draft, **selected)
     name, identifier = draft['entry']['name'], outcome['record_id']
     guard.assert_append_delta(before, entry, entry_name=name)
     for snapshot in (record, delivered):
@@ -110,8 +121,8 @@ def validate_preservation(data, outcome, draft, append_inputs, specification):
         guard.base().validate_stored_entry(snapshot['entries'][name], draft['entry'])
     guard.base().validate_fresh_record(record['records'][str(identifier)],
         tag=outcome['compute_tag'], specification=specification, entry=draft['entry'])
-    guard.validate_owned354(delivered, authenticated_owner='awallace43',
-                            specification=specification, accepted=accepted)
+    validate_owned(delivered, authenticated_owner='awallace43',
+                   specification=specification, accepted=accepted, **selected)
     finished = delivered['records'][str(identifier)]
     if (finished['status'] != 'complete' or len(finished['history']) != 1
             or finished['history'][0]['manager_name'] != outcome['manager']):
@@ -126,7 +137,8 @@ def validate_preservation(data, outcome, draft, append_inputs, specification):
             or outcome.get('tensors_sha256') != tensor_sha
             or outcome.get('tensor_bytes') != len(tensor_raw)):
         raise ValueError('captured delivered record differs from audited envelope/tensor bytes')
-    return dict(status='PASS_CAPTURED_OWNED354_PRESERVATION',
+    return dict(status=('PASS_CAPTURED_OWNED_DATASET_PRESERVATION' if selected
+                        else 'PASS_CAPTURED_OWNED354_PRESERVATION'),
         checkpoint_sha256=append_inputs['checkpoint_sha256'],
         before_sha256=guard.base().digest(before), after_sha256=guard.base().digest(delivered),
         audited_native_envelope_sha256=envelope_sha, audited_tensor_sha256=tensor_sha,
@@ -173,7 +185,8 @@ def main():
     worker, legacy = helper('phoenix_worker_cb63305'), helper('phoenix_pilot')
     draft = worker.prepare_draft(args, manifest_path)
     profile = draft.get('execution_profile')
-    scratch = scratch_for_outcome(outcome, expected_monomer=draft['monomer_id'], producer=producer)
+    scratch = scratch_for_outcome(outcome, expected_monomer=draft['monomer_id'], producer=producer,
+                                  remaining_case=args.remaining_case)
     bootstrap.admit_allocation(outcome['allocation'], execution_profile=profile)
     if profile is not None and outcome.get('execution_profile') != profile:
         raise ValueError('actual molecular execution profile differs from reconstructed case')
@@ -182,7 +195,8 @@ def main():
     transport = helper('dataset_fresh_cb63305').transport_binding(producer=producer)
     bootstrap.validate_preflight(preflight, draft, manifest_sha=checks.digest(manifest_path),
         qualification_sha=checks.digest(args.qualification), pilot_sha=checks.digest(args.pilot),
-        worker_sources=worker.source_hashes(producer), transport=transport, producer=producer)
+        worker_sources=worker.source_hashes(producer, remaining_case=args.remaining_case),
+        transport=transport, producer=producer, remaining_case=args.remaining_case)
     if (outcome['scientific_build_commit'] != draft['producer']['scientific_commit']
             or outcome['build_identity_sha256'] != checks.digest(manifest_path)
             or outcome['pilot_sha256'] != checks.digest(args.pilot)
@@ -194,14 +208,15 @@ def main():
             or outcome['manager_sources'] != legacy.MANAGER_FILES):
         raise ValueError('new producer, raw pilot and installed discovery receipt chain differs')
     submitted = read('record-submit-attempt.json')
-    sources = set(worker.source_names(producer)) | {
+    sources = set(worker.source_names(producer, remaining_case=args.remaining_case)) | {
         'phoenix_pilot_cb63305.py', 'phoenix_pilot_cb63305.sbatch', 'single_record_cb63305.py'}
     preservation = None
     if args.remaining_case:
         from qcportal.singlepoint import QCSpecification
         sources |= {'dataset_owned354_cb63305.py', 'owned_dataset_cb63305.py', 'dataset_guard.py'}
         preservation = validate_preservation(data, outcome, draft, append_inputs,
-            QCSpecification(**legacy.execution_specification(draft['specification'])))
+            QCSpecification(**legacy.execution_specification(draft['specification'])),
+            **({} if producer == 'cb63305' else dict(producer=producer)))
     elif read('dataset-created.json') != dict(dataset_id=outcome['dataset_id'], name=draft['dataset_name']):
         raise ValueError('fresh dataset intent differs')
     if (submitted['dataset_id'] != outcome['dataset_id']
@@ -295,7 +310,9 @@ def main():
     passed = all(r['status'] == 'passed' for r in reports.values()) and roles['molecular_qcschema'] == 1
     output = run/'payload'
     output.mkdir(exist_ok=False)
-    verdict = ('PASS_SELECTED_FRESH_SINGLETON_EVIDENCE' if producer == 'ed561666'
+    verdict = ('PASS_SELECTED_BANK_CASE_SINGLETON_EVIDENCE'
+               if producer == 'ed561666' and args.remaining_case
+               else 'PASS_SELECTED_FRESH_SINGLETON_EVIDENCE' if producer == 'ed561666'
                else 'PASS_BANK_CASE_SINGLETON_EVIDENCE' if args.remaining_case
                else 'PASS_EXPANDED_SINGLE_PILOT_EVIDENCE')
     report = dict(schema='native-expanded-pilot-audit/1',
@@ -311,7 +328,7 @@ def main():
                       'ordinary OS trust, not hostile-host/TOCTOU or atomic-server-lock proof. '
                       'No full-C10, independent solver, covariance, accuracy/parity or whole-set claim.')
     if producer == 'ed561666':
-        report.update(producer_profile=producer, dataset_mode='fresh')
+        report.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
     with (output/'audit-report.json').open('x') as stream:
         json.dump(report, stream, indent=2, allow_nan=False)
     print(json.dumps(dict(status=report['status'], record_id=outcome['record_id'], roles=dict(roles))))

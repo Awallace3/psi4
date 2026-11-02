@@ -22,6 +22,11 @@ if [[ $# -eq 5 ]]; then
             PRODUCER=ed561666fc
             [[ "$PILOT" = /storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-ed561666fc-benzene-preparation001/pilot.json ]]
             ;;
+        --ed561666-remaining-case)
+            EXTRA=(--producer ed561666 --remaining-case)
+            PRODUCER=ed561666fc
+            [[ "$PILOT" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-ed561666fc-remaining-preparation001/cases/monomer-[0-9]{4}\.json$ ]]
+            ;;
         *) exit 2 ;;
     esac
 fi

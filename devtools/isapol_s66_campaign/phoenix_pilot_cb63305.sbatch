@@ -16,7 +16,22 @@ shift 5
 EXTRA=("$@")
 ROOT=/storage/project/r-cs207-0/awallace43/runs
 PRODUCER=cb63305f41
-if [[ $# -eq 1 && "$1" = --ed561666-fresh ]]; then
+if [[ $# -ge 1 && "$1" = --ed561666-remaining-case ]]; then
+    EXTRA=(--producer ed561666 --remaining-case)
+    PRODUCER=ed561666fc
+    shift
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --owned-checkpoint|--checkpoint-sha256|--accepted-audit|--accepted-outcome|--accepted-pilot|--accepted-envelope)
+                [[ $# -ge 2 ]] || exit 2
+                EXTRA+=("$1" "$2")
+                shift 2
+                ;;
+            *) exit 2 ;;
+        esac
+    done
+    [[ "$PILOT" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-ed561666fc-remaining-preparation001/cases/monomer-[0-9]{4}\.json$ ]]
+elif [[ $# -eq 1 && "$1" = --ed561666-fresh ]]; then
     EXTRA=(--producer ed561666)
     PRODUCER=ed561666fc
     [[ "$PILOT" = "$ROOT"/ccasp-native-s66-ed561666fc-benzene-preparation001/pilot.json ]]

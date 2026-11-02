@@ -10,7 +10,8 @@ import signal
 
 
 def helper(name):
-    if name not in ('single_claim', 'phoenix_pilot', 'pilot_cb63305', 'dataset_fresh_cb63305'):
+    if name not in ('single_claim', 'phoenix_pilot', 'pilot_cb63305', 'dataset_fresh_cb63305',
+                    'case_cb63305', 'owned_dataset_cb63305'):
         raise ValueError('closed single-record manager helpers required')
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_expanded_session_'+name, path)
@@ -42,7 +43,7 @@ def validate_session_config(config, compute_tag, *, worker_shape=(4, 20.)):
 
 
 def run_session(config, *, record_id, compute_tag, runtime, payload, save, worker_shape=(4, 20.),
-                producer='cb63305'):
+                producer='cb63305', case=None):
     """Claim once, capture compressed local output, and stop this owned manager."""
     if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
         raise ValueError('closed singleton producer required')
@@ -50,9 +51,29 @@ def run_session(config, *, record_id, compute_tag, runtime, payload, save, worke
     if producer == 'ed561666':
         pins = helper('pilot_cb63305').producer_pins(producer)
         protected = pins['protected_records']
-        if worker_shape != (12, 40.) or re.fullmatch(
-                re.escape(pins['namespace']+pins['monomer']+'-')+r'[1-9][0-9]*', compute_tag) is None:
+        monomer = pins['monomer']
+        if case is not None:
+            context = helper('owned_dataset_cb63305').context(producer)
+            monomer = case.get('monomer_id')
+            if (case.get('producer_profile') != producer or case.get('dataset_mode') != 'append'
+                    or case.get('dataset_id') != context['dataset_id']
+                    or case.get('required_first_pilot_audit_sha256') != context['accepted_sha256']['audit']
+                    or type(monomer) is not str or re.fullmatch(r'monomer-[0-9]{4}', monomer) is None
+                    or not 1 <= int(monomer[-4:]) <= 131 or monomer == context['first_monomer']):
+                raise ValueError('reconstructed owned355 singleton case required')
+            cases = helper('case_cb63305')
+            profile = cases.validate_execution_profile(case['execution_profile']['name'],
+                dict(runtime_input=runtime, intended_memory_bytes=case['intended_memory_bytes']))
+            if (cases.json_digest(profile) != cases.json_digest(case['execution_profile'])
+                    or worker_shape != (profile['cores'], profile['science_memory_GiB'])):
+                raise ValueError('case-bound finite cap32 singleton worker profile required')
+            protected += (context['first_record'],)
+        elif worker_shape != (12, 40.):
             raise ValueError('exact fresh cap32 singleton shape and namespace required')
+        if re.fullmatch(re.escape(pins['namespace']+monomer+'-')+r'[1-9][0-9]*', compute_tag) is None:
+            raise ValueError('exact fresh cap32 singleton shape and namespace required')
+    elif case is not None:
+        raise ValueError('selected singleton case binding is only supported for cap32')
     validate_session_config(config, compute_tag, worker_shape=worker_shape)
     if type(record_id) is not int or record_id <= 0 or record_id in protected:
         raise ValueError('fresh expanded-pilot record required')

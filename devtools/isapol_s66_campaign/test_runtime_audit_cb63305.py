@@ -68,6 +68,24 @@ def test_cap32_audit_keeps_fresh_mode_and_namespace_separate():
         audit.validate_delivery(*values, producer='ed561666', owned354=True)
 
 
+def test_cap32_append_audit_uses_new355_and_explicit_remaining_case_identity():
+    values = cap32_fixture()
+    tag = 'ccasp-native-ed561666-monomer-0006-123'
+    values[0].update(dataset_id=355, monomer_id='monomer-0006', dataset_mode='append',
+                     compute_tag=tag, scratch_path=str(audit.SCRATCH/tag))
+    values[2].update(dataset_id=355, compute_tag=tag)
+    audit.validate_delivery(*values, producer='ed561666', owned354=True)
+    assert audit.scratch_for_outcome(values[0], expected_monomer='monomer-0006',
+        producer='ed561666', remaining_case=True).name == tag
+    with pytest.raises(ValueError):
+        audit.scratch_for_outcome(values[0], expected_monomer='monomer-0006', producer='ed561666')
+    with pytest.raises(ValueError):
+        audit.validate_delivery(*values, producer='ed561666')
+    values[0]['record_id'] = 5234318
+    with pytest.raises(ValueError, match='fresh remaining'):
+        audit.validate_delivery(*values, producer='ed561666', owned354=True)
+
+
 @pytest.mark.parametrize('identifier', [5234314, 5234315, 5234316, 5234317])
 def test_cap32_cannot_promote_any_prior_record(identifier):
     values = cap32_fixture()
@@ -155,10 +173,11 @@ def test_remaining_case_scratch_binds_reconstructed_monomer_not_firstcase_defaul
 @pytest.mark.parametrize('change', ['none', 'old_record', 'foreign_manager', 'fresh_history', 'checkpoint',
                                    'delivered_envelope_hash', 'delivered_tensor_hash',
                                    'envelope_tensor_hash', 'tensor_bytes', 'outcome_tensor_hash'])
+@pytest.mark.parametrize('producer', ['cb63305', 'ed561666'])
 def test_independent_captured_preservation_reduction_checks_all_old_state(
-        monkeypatch, tmp_path, change):
+        monkeypatch, tmp_path, change, producer):
     example = load('append_snapshot_examples', 'test_dataset_owned354_cb63305.py')
-    client, kwargs, saved, guard = example.setup(monkeypatch, tmp_path)
+    client, kwargs, saved, guard = example.setup(monkeypatch, tmp_path, producer=producer)
     created = example.append.append_once(client, **kwargs)
     tensor = b'SYNTHETIC_UNIT_ONLY_NOT_A_NUMERIC_NPZ'
     envelope = dict(synthetic='unit_only_not_molecular_evidence',
@@ -167,11 +186,13 @@ def test_independent_captured_preservation_reduction_checks_all_old_state(
     delivered['records']['9999'].update(status='complete', history=[{'manager_name': 'SYNTHETIC_MANAGER'}],
         native_envelope_sha256=guard.base().digest(envelope), tensor_sha256=hashlib.sha256(tensor).hexdigest())
     saved['owned-after-delivery.json'] = delivered
-    outcome = dict(record_id=created['record_id'], manager='SYNTHETIC_MANAGER', compute_tag=example.TAG,
+    outcome = dict(record_id=created['record_id'], manager='SYNTHETIC_MANAGER', compute_tag=kwargs['compute_tag'],
                    checkpoint_sha256=kwargs['checkpoint_sha256'],
                    tensors_sha256=hashlib.sha256(tensor).hexdigest(), tensor_bytes=len(tensor))
     if change == 'old_record':
-        delivered['records'][str(guard.FIRST_RECORD)]['status'] = 'error'
+        identifier = (guard.FIRST_RECORD if producer == 'cb63305'
+                      else guard.context(producer)['first_record'])
+        delivered['records'][str(identifier)]['status'] = 'error'
     elif change == 'foreign_manager':
         delivered['records']['9999']['history'][0]['manager_name'] = 'foreign'
     elif change == 'fresh_history':
@@ -201,13 +222,16 @@ def test_independent_captured_preservation_reduction_checks_all_old_state(
     append_inputs = {key: kwargs[key] for key in (
         'first_receipt_blobs', 'checkpoint_raw', 'checkpoint_sha256')}
     if change == 'none':
-        result = audit.validate_preservation(data, outcome, draft, append_inputs, specification)
-        assert result['status'] == 'PASS_CAPTURED_OWNED354_PRESERVATION'
+        result = audit.validate_preservation(data, outcome, draft, append_inputs, specification,
+                                            **({} if producer == 'cb63305' else dict(producer=producer)))
+        assert result['status'] == ('PASS_CAPTURED_OWNED354_PRESERVATION' if producer == 'cb63305'
+                                   else 'PASS_CAPTURED_OWNED_DATASET_PRESERVATION')
         assert result['preserved_records'] == 1
         assert 'not an atomic lock or fresh live query' in result['qualification']
     else:
         with pytest.raises(ValueError):
-            audit.validate_preservation(data, outcome, draft, append_inputs, specification)
+            audit.validate_preservation(data, outcome, draft, append_inputs, specification,
+                                        **({} if producer == 'cb63305' else dict(producer=producer)))
 
 
 def test_request3_uses_the_unchanged_independent_numeric_reduction():

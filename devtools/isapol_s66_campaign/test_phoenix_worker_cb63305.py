@@ -112,10 +112,19 @@ def test_cap32_source_inventory_binds_shared_and_selected_helpers():
         worker.source_hashes('unknown')
 
 
-def test_cap32_cannot_use_owned_append_mode_before_any_read(tmp_path):
-    args = NS(producer='ed561666', remaining_case=True)
-    with pytest.raises(ValueError, match='fresh fixed pilot'):
-        worker.prepare_draft(args, tmp_path/'does-not-exist')
+def test_cap32_remaining_mode_uses_full_selected_case_reconstruction(monkeypatch, tmp_path):
+    args = NS(producer='ed561666', remaining_case=True, pilot=tmp_path/'case.json',
+              inputs=tmp_path/'inputs', qualification=tmp_path/'qualification',
+              descriptors=tmp_path/'descriptors')
+    seen = []
+    def verify(*paths, producer):
+        seen.append((paths, producer))
+        return {'SYNTHETIC': 'fully reconstructed selected case'}
+    monkeypatch.setattr(worker, 'helper', lambda name: NS(verify_prepared_from_paths=verify)
+                        if name == 'case_cb63305' else None)
+    manifest = tmp_path/'manifest'
+    assert worker.prepare_draft(args, manifest) == {'SYNTHETIC': 'fully reconstructed selected case'}
+    assert seen == [((args.pilot, args.inputs, manifest, args.qualification, args.descriptors), 'ed561666')]
 
 
 def test_cap32_draft_reconstructed_with_explicit_producer(monkeypatch, tmp_path):
@@ -138,6 +147,13 @@ def test_cap32_draft_reconstructed_with_explicit_producer(monkeypatch, tmp_path)
     manifest = tmp_path/'manifest'
     assert worker.prepare_draft(args, manifest) == draft
     assert seen == [((args.inputs, manifest, args.qualification, args.descriptors), 'ed561666')]
+
+
+def test_cap32_remaining_source_inventory_seals_the_owned_context():
+    hashes = worker.source_hashes('ed561666', remaining_case=True)
+    assert set(hashes) == set(worker.source_hashes('ed561666')) | {'owned_dataset_cb63305.py'}
+    with pytest.raises(ValueError, match='case mode'):
+        worker.source_hashes('ed561666', remaining_case='append')
 
 
 def test_descriptor_discovery_preflight_has_no_calculation_or_server_mutation():

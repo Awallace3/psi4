@@ -45,20 +45,23 @@ def selected_producer(args):
     producer = getattr(args, 'producer', 'cb63305')
     if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
         raise ValueError('closed molecular producer selector required')
-    if producer == 'ed561666' and args.remaining_case:
-        raise ValueError('cap32 worker requires the fresh fixed pilot, not an append case')
     return producer
 
 
-def source_names(producer='cb63305'):
+def source_names(producer='cb63305', *, remaining_case=False):
     helper('pilot_cb63305').producer_pins(producer)
-    return SOURCES + (('qualified_ed561666.py', 'resource_plan_ed561666.py',
-                      'prepare_ed561666_inputs.py') if producer == 'ed561666' else ())
+    if type(remaining_case) is not bool:
+        raise ValueError('explicit worker case mode required')
+    extra = (('qualified_ed561666.py', 'resource_plan_ed561666.py',
+              'prepare_ed561666_inputs.py') if producer == 'ed561666' else ())
+    if producer == 'ed561666' and remaining_case:
+        extra += ('owned_dataset_cb63305.py',)
+    return SOURCES + extra
 
 
-def source_hashes(producer='cb63305'):
+def source_hashes(producer='cb63305', *, remaining_case=False):
     return {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in source_names(producer)}
+            for name in source_names(producer, remaining_case=remaining_case)}
 
 
 def admit_allocation(allocation, *, execution_profile=None):
@@ -84,7 +87,8 @@ def prepare_draft(args, manifest_path):
     producer = selected_producer(args)
     if args.remaining_case:
         return helper('case_cb63305').verify_prepared_from_paths(
-            args.pilot, args.inputs, manifest_path, args.qualification, args.descriptors)
+            args.pilot, args.inputs, manifest_path, args.qualification, args.descriptors,
+            **({} if producer == 'cb63305' else dict(producer=producer)))
     draft = helper('pilot_cb63305').prepare_from_paths(
         args.inputs, manifest_path, args.qualification, args.descriptors, producer=producer)
     if json.loads(args.pilot.read_bytes()) != draft:
@@ -140,7 +144,7 @@ def main():
     if any(not p.startswith('devtools/isapol_s66_campaign/')
            and p not in checks.TEST_ONLY_CHANGES for p in changes):
         raise ValueError('worker operations change scientific/build sources')
-    operations = source_hashes(producer)
+    operations = source_hashes(producer, remaining_case=args.remaining_case)
     manager_sources = MANAGER/'lib/python3.13/site-packages/qcfractalcompute'
     manager_pins = helper('phoenix_pilot').MANAGER_FILES
     if any(checks.digest(manager_sources/name) != expected for name, expected in manager_pins.items()):
@@ -220,7 +224,8 @@ def main():
     probe.validate_worker_discovery(programs, version, science['version'],
                                    scientific_imported='psi4' in sys.modules)
     checks.verify_runtime(environment, manifest)
-    if (source_hashes(producer) != operations or checks.git(source, 'rev-parse', 'HEAD') != args.commit
+    if (source_hashes(producer, remaining_case=args.remaining_case) != operations
+            or checks.git(source, 'rev-parse', 'HEAD') != args.commit
             or checks.git(source, 'status', '--porcelain')
             or checks.digest(args.pilot) != pilot_sha
             or checks.digest(harness_path) != harness_sha
@@ -228,7 +233,9 @@ def main():
             or any(checks.digest(manager_sources/name) != expected for name, expected in manager_pins.items())
             or prepare_draft(args, manifest_path) != draft):
         raise ValueError('worker source, runtime, raw inputs or harness changed during discovery')
-    report = dict(status=('PASS_SELECTED_FRESH_WORKER_PREFLIGHT_ONLY' if producer == 'ed561666'
+    report = dict(status=('PASS_SELECTED_BANK_CASE_WORKER_PREFLIGHT_ONLY'
+                          if producer == 'ed561666' and args.remaining_case
+                          else 'PASS_SELECTED_FRESH_WORKER_PREFLIGHT_ONLY' if producer == 'ed561666'
                           else 'PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY' if args.remaining_case
                           else 'PASS_EXPANDED_WORKER_PREFLIGHT_ONLY'), allocation=allocation,
         scientific_build_commit=manifest['commit'], operational_commit=args.commit,
@@ -250,7 +257,7 @@ def main():
                       'no SCF, molecular calculation, manager acquisition or server writes. '
                       'No independent trace, molecular, RSS or SCF scratch acceptance.')
     if producer == 'ed561666':
-        report.update(producer_profile=producer, dataset_mode='fresh')
+        report.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
     with (payload/'worker-preflight.json').open('x') as stream:
         json.dump(report, stream, indent=2, allow_nan=False)
     print(json.dumps(dict(status=report['status'], job=os.environ['SLURM_JOB_ID'])))

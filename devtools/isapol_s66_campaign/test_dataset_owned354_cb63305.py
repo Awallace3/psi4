@@ -23,10 +23,20 @@ fixtures = load('test_owned_dataset_cb63305')
 TAG = 'ccasp-native-cb63305-monomer-0047-12345'
 
 
-def setup(monkeypatch, tmp_path, *, change=None):
+def setup(monkeypatch, tmp_path, *, change=None, producer='cb63305'):
     guard = fixtures.owned
-    before, accepted, specification = fixtures.fixture()
+    selected = {} if producer == 'cb63305' else dict(producer=producer)
+    before, accepted, specification = (fixtures.fixture() if not selected else fixtures.fixture_ed())
     case = fixtures.new_case()
+    tag, first_record = TAG, guard.FIRST_RECORD
+    if selected:
+        context = guard.context(producer)
+        case.update(dataset_id=355, dataset_name=context['dataset_name'], monomer_id='monomer-0006',
+            producer_profile=producer, dataset_mode='append',
+            required_first_pilot_audit_sha256=context['accepted_sha256']['audit'])
+        case['entry']['name'] = 'monomer-0006-unit-only'
+        case['entry']['attributes']['monomer_id'] = 'monomer-0006'
+        tag, first_record = 'ccasp-native-ed561666-monomer-0006-12345', context['first_record']
     case['specification'] = copy.deepcopy(specification)
     del case['specification']['protocols']
     case['entry']['molecule'].update(molecular_charge=0, molecular_multiplicity=1,
@@ -37,7 +47,7 @@ def setup(monkeypatch, tmp_path, *, change=None):
         supplied['entry']['molecule']['geometry'][0] = .25
     path.write_text(json.dumps(supplied))
     checkpoint = guard.prepare_initial_checkpoint(before, authenticated_owner='awallace43',
-        specification=specification, accepted=accepted)
+        specification=specification, accepted=accepted, **selected)
     raw = json.dumps(checkpoint).encode()
     after_entry = copy.deepcopy(before)
     entry = case['entry']['name']
@@ -48,9 +58,9 @@ def setup(monkeypatch, tmp_path, *, change=None):
     effective['keywords'].update(case['entry']['additional_keywords'])
     after_record['associations'][entry][guard.SPECIFICATION] = 9999
     after_record['records']['9999'] = dict(id=9999, molecule_id=8888, status='waiting',
-        history=[], task={'compute_tag': TAG}, specification=effective)
+        history=[], task={'compute_tag': tag}, specification=effective)
     if change == 'old_record_changed':
-        after_record['records'][str(guard.FIRST_RECORD)]['status'] = 'error'
+        after_record['records'][str(first_record)]['status'] = 'error'
     elif change == 'not_fresh':
         after_record['records']['9999']['history'] = [{'manager_name': 'foreign'}]
     elif change == 'wrong_tag':
@@ -61,10 +71,10 @@ def setup(monkeypatch, tmp_path, *, change=None):
     if change == 'concurrent':
         frames[1] = dict(before, metadata=dict(before['metadata'], name='changed'))
     iterator = iter(copy.deepcopy(frames))
-    monkeypatch.setattr(guard, 'snapshot_dataset', lambda client: next(iterator))
-    monkeypatch.setattr(guard, 'verify_first_acceptance', lambda blobs: accepted)
-    transport = NS(require_client=lambda client: None)
-    prep = NS(verify_prepared_from_paths=lambda *args: copy.deepcopy(case))
+    monkeypatch.setattr(guard, 'snapshot_dataset', lambda client, **kw: next(iterator))
+    monkeypatch.setattr(guard, 'verify_first_acceptance', lambda blobs, **kw: accepted)
+    transport = NS(require_client=lambda client, **kw: None)
+    prep = NS(verify_prepared_from_paths=lambda *args, **kw: copy.deepcopy(case))
     original = append.helper
     monkeypatch.setattr(append, 'helper', lambda name:
         {'owned_dataset_cb63305': guard, 'dataset_fresh_cb63305': transport,
@@ -89,7 +99,7 @@ def setup(monkeypatch, tmp_path, *, change=None):
             if change == 'wildcard_manager':
                 return [NS(compute_tags=['*'])]
             if change == 'matching_manager':
-                return [NS(compute_tags=[TAG])]
+                return [NS(compute_tags=[tag])]
             if change == 'manager_limit':
                 return [NS(compute_tags=['unrelated']) for _ in range(200)]
             return []
@@ -107,7 +117,7 @@ def setup(monkeypatch, tmp_path, *, change=None):
     kwargs = dict(case_path=path, inputs=None, build_identity=None, qualification=None,
         descriptors=None, first_receipt_blobs={'synthetic': b'not receipts'},
         checkpoint_raw=raw, checkpoint_sha256=hashlib.sha256(raw).hexdigest(),
-        authenticated_owner='awallace43', compute_tag=TAG, save=save)
+        authenticated_owner='awallace43', compute_tag=tag, save=save, **selected)
     return Client(), kwargs, saved, guard
 
 
@@ -175,3 +185,45 @@ def test_client_and_transport_aliases_keep_the_same_reviewed_client_class(monkey
     monkeypatch.setattr(append, 'helper', helper)
     assert append.client_class() is SyntheticClient
     assert append.transport_binding() == {'synthetic': 'transport'}
+
+
+def test_cap32_first_append_only355_preserves_audited_benzene_and_creates_fresh_methylamine(
+        monkeypatch, tmp_path):
+    client, kwargs, saved, guard = setup(monkeypatch, tmp_path, producer='ed561666')
+    result = append.append_once(client, **kwargs)
+    assert result['dataset_id'] == 355 and result['record_id'] == 9999
+    assert [endpoint for _, endpoint, _ in client.calls] == [
+        'api/v1/datasets/singlepoint/355/entries/bulkCreate',
+        'api/v1/datasets/singlepoint/355/submit']
+    assert client.calls[1][2]['body'].find_existing is False
+    assert saved['owned-before-entry.json']['records']['5234318'] == (
+        saved['owned-after-record.json']['records']['5234318'])
+    assert guard.DATASET_ID == 354
+
+
+@pytest.mark.parametrize('change,posts', [
+    ('tampered_case', 0), ('wildcard_manager', 0), ('matching_manager', 0),
+    ('manager_limit', 0), ('concurrent', 0),
+    ('lost_reply', 1), ('existing', 1), ('stored_entry_changed', 1),
+    ('submit_lost_reply', 2), ('submit_existing', 2),
+    ('old_record_changed', 2), ('not_fresh', 2), ('wrong_tag', 2)])
+def test_cap32_ambiguous_append_never_repeats_or_mutates_old_targets(
+        monkeypatch, tmp_path, change, posts):
+    client, kwargs, _, _ = setup(monkeypatch, tmp_path, producer='ed561666', change=change)
+    with pytest.raises((ValueError, RuntimeError, TimeoutError)):
+        append.append_once(client, **kwargs)
+    assert len(client.calls) == posts
+    assert all('/355/' in endpoint and kw['allow_retries'] is False
+               for _, endpoint, kw in client.calls)
+
+
+def test_cap32_initial_checkpoint_cannot_bless_an_unaudited_second_record(monkeypatch, tmp_path):
+    client, kwargs, _, _ = setup(monkeypatch, tmp_path, producer='ed561666')
+    checkpoint = json.loads(kwargs['checkpoint_raw'])
+    checkpoint['generation'] = 2
+    checkpoint['audited_records'].append(9999)
+    kwargs['checkpoint_raw'] = json.dumps(checkpoint).encode()
+    kwargs['checkpoint_sha256'] = hashlib.sha256(kwargs['checkpoint_raw']).hexdigest()
+    with pytest.raises(ValueError, match='audited cap32 initial checkpoint'):
+        append.append_once(client, **kwargs)
+    assert not client.calls

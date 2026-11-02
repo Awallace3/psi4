@@ -125,12 +125,12 @@ def test_owned_append_arguments_cannot_be_ignored_or_inferred():
         pilot.load_append_inputs(args)
 
 
-def test_cap32_rejects_append_inputs_before_opening_any_receipts():
+def test_cap32_append_requires_closed_receipts_and_cannot_be_inferred_in_fresh_mode():
     args = append_args()
     args.producer = 'ed561666'
     assert pilot.load_append_inputs(args) is None
     args.remaining_case = True
-    with pytest.raises(ValueError, match='cannot append'):
+    with pytest.raises(ValueError, match='all closed acceptance receipts'):
         pilot.load_append_inputs(args)
     args.remaining_case = False
     args.accepted_audit = Path('not-read')
@@ -138,8 +138,10 @@ def test_cap32_rejects_append_inputs_before_opening_any_receipts():
         pilot.load_append_inputs(args)
 
 
-def test_complete_append_input_bytes_are_verified_before_dispatch(monkeypatch, tmp_path):
+@pytest.mark.parametrize('producer', ['cb63305', 'ed561666'])
+def test_complete_append_input_bytes_are_verified_before_dispatch(monkeypatch, tmp_path, producer):
     args = append_args()
+    args.producer = producer
     args.remaining_case = True
     args.checkpoint_sha256 = 'synthetic-checkpoint-only'
     args.owned_checkpoint = tmp_path/'checkpoint.json'
@@ -150,11 +152,13 @@ def test_complete_append_input_bytes_are_verified_before_dispatch(monkeypatch, t
         path.write_bytes(('SYNTHETIC_'+role).encode())
         setattr(args, 'accepted_'+role, path)
     effects = []
-    def accepted(blobs):
+    def accepted(blobs, **selected):
+        assert selected == ({} if producer == 'cb63305' else dict(producer=producer))
         effects.append('closed_receipts')
         assert set(blobs) == set(roles)
         return {'synthetic_accepted': True}
-    def checkpoint(raw, sha, acceptance):
+    def checkpoint(raw, sha, acceptance, **selected):
+        assert selected == ({} if producer == 'cb63305' else dict(producer=producer))
         effects.append('closed_checkpoint')
         assert raw == b'SYNTHETIC_BASELINE' and sha == args.checkpoint_sha256
         assert acceptance == {'synthetic_accepted': True}
@@ -165,6 +169,28 @@ def test_complete_append_input_bytes_are_verified_before_dispatch(monkeypatch, t
     assert effects == ['closed_receipts', 'closed_checkpoint']
     assert result['checkpoint_raw'] == b'SYNTHETIC_BASELINE'
     assert result['first_receipt_blobs']['audit'] == b'SYNTHETIC_audit'
+
+
+@pytest.mark.parametrize('name', ['s20', 's40', 's80'])
+def test_cap32_append_preflight_explicitly_binds_mode_context_and_finite_profile(name):
+    preflight, draft, kwargs = fixture()
+    cases = pilot.helper('case_cb63305')
+    context = pilot.helper('owned_dataset_cb63305').context('ed561666')
+    profile = dict(name=name, **cases.PROFILES[name], account='gts-cs207-chemx',
+                   partition='cpu-small', qos='embers', concurrency=1)
+    draft.update(producer_profile='ed561666', dataset_mode='append', dataset_id=355,
+        monomer_id='monomer-0006', required_first_pilot_audit_sha256=context['accepted_sha256']['audit'],
+        execution_profile=profile)
+    preflight.update(status='PASS_SELECTED_BANK_CASE_WORKER_PREFLIGHT_ONLY',
+        producer_profile='ed561666', dataset_mode='append', monomer_id='monomer-0006',
+        execution_profile=profile, task_config=dict(ncores=profile['cores'],
+            memory_GiB=profile['science_memory_GiB'], internal_retries=0))
+    pilot.validate_preflight(preflight, draft, producer='ed561666', remaining_case=True, **kwargs)
+    with pytest.raises(ValueError):
+        pilot.validate_preflight(preflight, draft, producer='ed561666', **kwargs)
+    with pytest.raises(ValueError, match='owned355'):
+        pilot.validate_preflight(preflight, dict(draft, dataset_id=354),
+                                 producer='ed561666', remaining_case=True, **kwargs)
 
 
 def test_dispatch_cannot_silently_change_the_approved_server_uri_or_owner():

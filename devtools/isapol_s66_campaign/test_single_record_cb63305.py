@@ -56,6 +56,84 @@ def test_new_producer_refuses_implicit_old_worker_shape_or_tag(tmp_path):
                             payload=tmp_path, save=lambda *a: None, producer='latest')
 
 
+def selected_case(profile_name):
+    cases = session.helper('case_cb63305')
+    context = session.helper('owned_dataset_cb63305').context('ed561666')
+    profile = dict(name=profile_name, **cases.PROFILES[profile_name],
+                   account='gts-cs207-chemx', partition='cpu-small', qos='embers', concurrency=1)
+    runtime = dict(specification=dict(keywords=dict(function_kwargs=dict(
+        native_monomer=dict(resources=dict(max_bytes=12*1024**3))))))
+    case = dict(producer_profile='ed561666', dataset_mode='append', dataset_id=355,
+        monomer_id='monomer-0006', required_first_pilot_audit_sha256=context['accepted_sha256']['audit'],
+        execution_profile=profile, intended_memory_bytes=profile['science_memory_GiB']*1024**3)
+    tag = 'ccasp-native-ed561666-monomer-0006-123'
+    cfg = config()
+    cfg.executors['pilot'].cores_per_worker = profile['cores']
+    cfg.executors['pilot'].memory_per_worker = profile['science_memory_GiB']
+    cfg.executors['pilot'].compute_tags = [tag]
+    return case, runtime, tag, cfg, (profile['cores'], profile['science_memory_GiB'])
+
+
+@pytest.mark.parametrize('name', ['s20', 's40', 's80'])
+def test_cap32_append_session_binds_case_profile_and_installs_guard_before_start(
+        monkeypatch, tmp_path, name):
+    case, runtime, tag, cfg, shape = selected_case(name)
+    effects = []
+    class Manager:
+        def __init__(self, config):
+            self.manager_config = config
+            self.name = 'SYNTHETIC_UNIT_MANAGER'
+            self.client = NS()
+            self.dflow_kernel = None
+            self.statistics = NS(dict=lambda: {})
+        def start(self):
+            assert getattr(self.client, 'guarded', False)
+            effects.append('start')
+            self.target_task_id = 77
+            self.delivery_outcome = 'accepted'
+    package = ModuleType('qcfractalcompute')
+    package.__path__ = []
+    module = ModuleType('qcfractalcompute.compute_manager')
+    module.ComputeManager = Manager
+    monkeypatch.setitem(sys.modules, package.__name__, package)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    original = session.helper
+    def install(client):
+        client.guarded = True
+        effects.append('guard')
+    monkeypatch.setattr(session, 'helper', lambda name:
+        NS(guard_manager_client=install) if name == 'dataset_fresh_cb63305' else original(name))
+    result = session.run_session(cfg, record_id=9999, compute_tag=tag, runtime=runtime,
+        payload=tmp_path, save=lambda *a: None, worker_shape=shape, producer='ed561666', case=case)
+    assert result['task_id'] == 77 and effects == ['guard', 'start']
+
+
+@pytest.mark.parametrize('record', [5234314, 5234315, 5234316, 5234317, 5234318])
+def test_cap32_remaining_session_rejects_historical_and_seed_records_before_manager(tmp_path, record):
+    case, runtime, tag, cfg, shape = selected_case('s20')
+    with pytest.raises(ValueError, match='fresh expanded-pilot record'):
+        session.run_session(cfg, record_id=record, compute_tag=tag, runtime=runtime, payload=tmp_path,
+            save=lambda *a: None, worker_shape=shape, producer='ed561666', case=case)
+
+
+@pytest.mark.parametrize('change', ['dataset', 'seed', 'mode', 'shape', 'tag'])
+def test_cap32_session_cannot_infer_another_case_or_profile(tmp_path, change):
+    case, runtime, tag, cfg, shape = selected_case('s20')
+    if change == 'dataset':
+        case['dataset_id'] = 354
+    elif change == 'seed':
+        case['monomer_id'] = 'monomer-0047'
+    elif change == 'mode':
+        case['dataset_mode'] = 'fresh'
+    elif change == 'shape':
+        shape = (12, 40.)
+    else:
+        tag = 'ccasp-native-cb63305-monomer-0006-123'
+    with pytest.raises(ValueError):
+        session.run_session(cfg, record_id=9999, compute_tag=tag, runtime=runtime, payload=tmp_path,
+            save=lambda *a: None, worker_shape=shape, producer='ed561666', case=case)
+
+
 @pytest.mark.parametrize('shape', [(8, 20.), (12, 40.), (24, 80.)])
 def test_remaining_bank_requires_explicit_matching_worker_shape(shape):
     cfg = config()

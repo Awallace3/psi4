@@ -53,19 +53,30 @@ def admit_allocation(allocation, *, execution_profile=None):
 
 
 def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pilot_sha,
-                       worker_sources, transport, producer='cb63305'):
-    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+                       worker_sources, transport, producer='cb63305', remaining_case=False):
+    if (type(producer) is not str or producer not in ('cb63305', 'ed561666')
+            or type(remaining_case) is not bool):
         raise ValueError('closed molecular producer selector required')
     profile = draft.get('execution_profile')
-    status = ('PASS_SELECTED_FRESH_WORKER_PREFLIGHT_ONLY' if producer == 'ed561666'
+    status = ('PASS_SELECTED_BANK_CASE_WORKER_PREFLIGHT_ONLY'
+              if producer == 'ed561666' and remaining_case
+              else 'PASS_SELECTED_FRESH_WORKER_PREFLIGHT_ONLY' if producer == 'ed561666'
               else 'PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY' if profile
               else 'PASS_EXPANDED_WORKER_PREFLIGHT_ONLY')
     if producer == 'ed561666' and (
             preflight.get('producer_profile') != producer
-            or preflight.get('dataset_mode') != 'fresh'
-            or draft.get('producer_profile') != producer or draft.get('dataset_mode') != 'fresh'
-            or not isinstance(profile, dict) or profile.get('name') != 's40'):
-        raise ValueError('explicit fresh cap32 s40 discovery required')
+            or preflight.get('dataset_mode') != ('append' if remaining_case else 'fresh')
+            or draft.get('producer_profile') != producer
+            or draft.get('dataset_mode') != ('append' if remaining_case else 'fresh')
+            or not isinstance(profile, dict)
+            or not remaining_case and profile.get('name') != 's40'):
+        raise ValueError('explicit selected cap32 discovery mode/profile required')
+    if producer == 'ed561666' and remaining_case:
+        context = helper('owned_dataset_cb63305').context(producer)
+        if (draft.get('dataset_id') != context['dataset_id']
+                or draft.get('monomer_id') == context['first_monomer']
+                or draft.get('required_first_pilot_audit_sha256') != context['accepted_sha256']['audit']):
+            raise ValueError('reconstructed owned355 remaining case required')
     if (preflight.get('status') != status
             or preflight.get('runtime_unchanged') is not True
             or preflight.get('monomer_id') != draft['monomer_id']
@@ -91,8 +102,7 @@ def load_append_inputs(args):
     producer = getattr(args, 'producer', 'cb63305')
     if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
         raise ValueError('closed molecular producer selector required')
-    if producer == 'ed561666' and args.remaining_case:
-        raise ValueError('cap32 fresh mode cannot append to historical datasets')
+    selection = {} if producer == 'cb63305' else dict(producer=producer)
     roles = ('audit', 'outcome', 'pilot', 'envelope')
     paths = {role: getattr(args, 'accepted_'+role) for role in roles}
     if not args.remaining_case:
@@ -102,9 +112,10 @@ def load_append_inputs(args):
     if not args.owned_checkpoint or not args.checkpoint_sha256 or not all(paths.values()):
         raise ValueError('remaining case requires all closed acceptance receipts and checkpoint')
     blobs = {role: path.read_bytes() for role, path in paths.items()}
-    accepted = helper('owned_dataset_cb63305').verify_first_acceptance(blobs)
+    accepted = helper('owned_dataset_cb63305').verify_first_acceptance(blobs, **selection)
     raw = args.owned_checkpoint.read_bytes()
-    helper('dataset_owned354_cb63305').validate_checkpoint(raw, args.checkpoint_sha256, accepted)
+    helper('dataset_owned354_cb63305').validate_checkpoint(raw, args.checkpoint_sha256, accepted,
+                                                        **selection)
     return dict(first_receipt_blobs=blobs, checkpoint_raw=raw,
                 checkpoint_sha256=args.checkpoint_sha256)
 
@@ -179,13 +190,14 @@ def main():
     if any(not p.startswith('devtools/isapol_s66_campaign/')
            and p not in checks.TEST_ONLY_CHANGES for p in changes):
         raise ValueError('bootstrap operations change scientific/build sources')
-    operations = worker.source_hashes(producer)
+    operations = worker.source_hashes(producer, remaining_case=args.remaining_case)
     operations.update({name: checks.digest(Path(__file__).with_name(name)) for name in (
         'phoenix_pilot_cb63305.py', 'phoenix_pilot_cb63305.sbatch', 'single_record_cb63305.py')})
     if args.remaining_case:
         operations.update({name: checks.digest(Path(__file__).with_name(name)) for name in (
             'dataset_owned354_cb63305.py', 'owned_dataset_cb63305.py', 'dataset_guard.py')})
-    worker_sources = {key: operations[key] for key in worker.source_names(producer)}
+    worker_sources = {key: operations[key]
+                      for key in worker.source_names(producer, remaining_case=args.remaining_case)}
     legacy = helper('phoenix_pilot')
     manager_sources = MANAGER/'lib/python3.13/site-packages/qcfractalcompute'
     if any(checks.digest(manager_sources/n) != v for n, v in legacy.MANAGER_FILES.items()):
@@ -234,7 +246,8 @@ def main():
     transport = mutation.transport_binding(**transport_args)
     validate_preflight(preflight, draft, manifest_sha=manifest_sha,
         qualification_sha=checks.digest(args.qualification), pilot_sha=pilot_sha,
-        worker_sources=worker_sources, transport=transport, producer=producer)
+        worker_sources=worker_sources, transport=transport, producer=producer,
+        remaining_case=args.remaining_case)
     harness = qcengine.get_program('psi4')
     harness_path = Path(inspect.getfile(type(harness))).resolve()
     if (str(harness_path) != preflight['harness_path']
@@ -289,14 +302,15 @@ def main():
         qcengine_internal_retries=0, dataset_name=draft['dataset_name'],
         specification_name=draft['specification_name'])
     if producer == 'ed561666':
-        started.update(producer_profile=producer, dataset_mode='fresh')
+        started.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
     save('started.json', started)
     if args.remaining_case:
         created = mutation.append_once(client, case_path=args.pilot, inputs=args.inputs,
             build_identity=manifest_path, qualification=args.qualification, descriptors=args.descriptors,
-            **append_inputs, authenticated_owner=server['username'], compute_tag=tag, save=save)
-        dataset = client.get_dataset_by_id(354)
-        if (dataset.id != 354 or dataset.name != draft['dataset_name']
+            **append_inputs, authenticated_owner=server['username'], compute_tag=tag, save=save,
+            **transport_args)
+        dataset = client.get_dataset_by_id(draft['dataset_id'])
+        if (dataset.id != draft['dataset_id'] or dataset.name != draft['dataset_name']
                 or getattr(dataset, '_client', None) is not client):
             raise ValueError('owned354 append returned another dataset/client identity')
     else:
@@ -306,7 +320,10 @@ def main():
         inserted = mutation.submit_once(client, dataset, draft, tag, save, **transport_args)
         created = dict(n_inserted=inserted.n_inserted, n_existing=inserted.n_existing)
     record = dataset.get_record(draft['entry']['name'], draft['specification_name'], force_refetch=True)
-    if (record.id in pins['protected_records']
+    protected = pins['protected_records']
+    if producer == 'ed561666' and args.remaining_case:
+        protected += (helper('owned_dataset_cb63305').context(producer)['first_record'],)
+    if (record.id in protected
             or args.remaining_case and record.id != created['record_id']):
         raise ValueError('historical record cannot be a fresh expanded-pilot result')
     save('record-created.json', dict(dataset_id=dataset.id, record_id=record.id,
@@ -314,7 +331,7 @@ def main():
         n_inserted=created['n_inserted'], n_existing=created['n_existing']))
     session = helper('single_record_cb63305').run_session(config, record_id=record.id,
         compute_tag=tag, runtime=runtime, payload=payload, save=save, worker_shape=worker_shape,
-        **transport_args)
+        **transport_args, **(dict(case=draft) if producer == 'ed561666' and args.remaining_case else {}))
     record = dataset.get_record(draft['entry']['name'], draft['specification_name'], force_refetch=True)
     history = record.compute_history
     save('server-record-outcome.json', dict(record_id=record.id, status=record.status.value,
@@ -339,7 +356,7 @@ def main():
         stream.write(raw)
     if args.remaining_case:
         owned = helper('owned_dataset_cb63305')
-        after_delivery = owned.snapshot_dataset(client)
+        after_delivery = owned.snapshot_dataset(client, **transport_args)
         owned.assert_append_delta(json.loads((payload/'owned-before-entry.json').read_bytes()),
             after_delivery, entry_name=draft['entry']['name'], record_id=record.id)
         save('owned-after-delivery.json', after_delivery)
