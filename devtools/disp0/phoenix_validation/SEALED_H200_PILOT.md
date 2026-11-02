@@ -1,8 +1,9 @@
 # Sealed-runtime H200 peptide pilot
 
-**Latest:** H20014946636 is submitted on embers using the unchanged whole
-build`927283f8ed`. CPU-only validation14942939 **passed**, including real
-sealed cuBLAS/cuSOLVER locator binding and symbol ownership.
+**Latest:** H20014946636 completed successfully: full small-gate PASS and
+three peptide repeats with**37.048s median energy-call wall**, versus the
+historical994.512s diagnostic. Independent peptide CPU qualification remains
+outstanding; no accepted CPU/GPU ratio is claimed.
 H20014784867 failed its first GPU small-gate worker with exit86; no peptide
 benchmark ran. A real CPU ELF fixture reproduces a manifest-locator mismatch.
 
@@ -400,3 +401,75 @@ one requested H200/8 CPUs/160GiB/8h and`Features=H200`. The manifest's
 completed-proof hashes match the CPU artifacts above. The submission-only
 helper suite passed124 tests; no scientific or execution-helper code changed.
 Submission is not a small-gate PASS or an accepted speedup.
+
+## H20014946636 completed: small gate PASS, peptide median37.048s
+
+Job/batch completed0:0 in8m05s; the Python step completed0:0 in6m59s.
+Payload exit0/no TERM. Pilot status:
+`PASS_GPU_PILOT_AWAITING_INDEPENDENT_CPU_QUALIFICATION`.
+The physical ten-process gate records`PASS_SMALL_H200_ONLY` with actual
+small-case correctness verified. Three fresh peptide GPU calls then passed
+the existing23-field repeat checks at unchanged1e-9 tolerances.
+
+| Peptide repeat | Instrumented energy-call wall (s) | Inclusive worker wall (s) |
+|---|---:|---:|
+| 0 | 37.226450 | 50.784330 |
+| 1 | 36.789883 | 50.071116 |
+| 2 | 37.047639 | 50.843936 |
+| **Median** | **37.047639** | **50.784330** |
+
+These are instrumented whole-energy calls, not isolated kernels or
+uninstrumented production. Normal scientific setup/SCF, F-SAPT output and
+native continuation/cleanup are inside the energy timer; snapshot/bootstrap,
+primitive controls and diagnostic output also appear in the separate worker
+wall. Do not replace the energy-call timer with a subphase sum.
+
+All three result/NPZ/output-file hashes were checked, with distinct PIDs
+1986677/1986889/1987130. Each performed real native/device work and complete
+native/session cleanup, zero live tracked bytes/owners afterward, and reaped
+its owned process group. The benchmark removed its owned scratch root; the
+outer pilot confirms it is already absent.
+
+Actual hardware: NVIDIA H200,143771MiB, driver615.71.09,`compute_90`,
+UUID`GPU-90510df2-57d7-8d2a-2e07-fc0c5dc97cf5`. PTX SHA256:
+`0f3341120728784af9804df3ee44137dd9f31989b40b8a98ec07c2075c83c118`.
+The case is24 atoms/356 AOs/20 occupied per fragment,5 frozen and15 active.
+
+### Historical comparison, not yet an accepted CPU/GPU speedup
+
+The previous H200 peptide GPU diagnostic14481883 had median994.512498s
+(993.473989–994.536646s). The new recorded median is**26.844 times lower**.
+Geometry, numerical options, dimensions, block size and cache ceiling match;
+both use the same driver, PTX and CUDA kernel-source SHA. Work/memory ledgers
+also match:
+
+- tracked explicit device peak:**4,477,018,672 bytes** in every new repeat,
+  identical to the historical sample; opaque native internals are not this
+  tracked peak;
+- 64MiB cache ceiling,60,076,800 bytes allocated,5 cached slabs/65 hits;
+- 145 RIFIT producer calls and196 dispersion compute blocks;
+- unchanged12GiB declared opaque allowance.
+
+This is a historical host-overhead diagnostic comparison across different
+H200 UUIDs/build pins, **not** a cache/host-matched controlled GPU-kernel
+speedup. No new memory allowance, cache increase or reduced work count buys
+the observed latency reduction.
+
+The peptide status remains`PASS_REPEATS_AWAITING_OTHER_RESOURCE_CLASS`;
+`accepted_speedup_count=0` in both producer/pilot receipts. New matched CPU
+references and independent fixed-GPU-gauge CPU oracles are still required
+before accepting a CPU/GPU ratio. The historical295.104s CPU median is not
+silently reused as a newly qualified denominator. No nanotube/protein83
+speedup or broad large-system admission follows from this pilot.
+
+Under`phoenix-sealed-h200-927283f8ed/job-14946636/`:
+
+| Artifact | SHA256 |
+|---|---|
+| `pilot-result.json` | `31e4ea89d7215c63b93fa51951096133e41970f79e1c836615886f5ce3916c1c` |
+| `runtime-config.json` | `6dc206026d947623862659206bce8b0a1fe6f7ca070814073c06c6283c0e25ad` |
+| `small-gate/gate-result.json` | `536e5c062a4bf33137e164844802b6b9067fd0164cd8dd384dbfbb4ef42913de` |
+| `benchmark/execution/benchmark-result.json` | `76fd14b90fab00d986a9f2a16bb2f285417708f54bcfdb5e76f5c4822a00f0e7` |
+| `benchmark/execution/peptide-r0/result.json` | `4299c4963884cd7975974910ab9f77f21786ad11cb891c112f75ea4baabce76c` |
+| `benchmark/execution/peptide-r1/result.json` | `a7a20c033f8124880f591f6d687dc355e46f17981d4aea6f06d32321b26c0a97` |
+| `benchmark/execution/peptide-r2/result.json` | `dccc8b788ca62faa0a100992269c83f01eba4fc0aa1a747ef97b309371b2ef07` |

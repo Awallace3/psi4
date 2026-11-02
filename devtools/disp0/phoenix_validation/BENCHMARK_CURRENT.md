@@ -1,5 +1,18 @@
 # Current-stage split F-SAPT benchmark
 
+## Latest restricted peptide follow-up
+
+User-approved embers H20014946636 completed using whole stage`927283f8ed`.
+The full small physical gate and three peptide GPU repeats passed:
+median**37.047639s** (36.789883–37.226450s), inclusive worker median50.784330s.
+Historical GPU median994.512498s is26.844 times higher, at matched geometry/
+numerical options/cache/work counts and unchanged tracked device peak.
+This is not a controlled kernel-speedup or an accepted CPU/GPU ratio; current
+independent peptide CPU references/oracles remain outstanding.
+See[SEALED_H200_PILOT.md](SEALED_H200_PILOT.md) for complete provenance,
+hardware, cleanup, hashes and limitations. All earlier records below remain
+historical; no new nanotube/protein83 qualification is implied.
+
 ## Terminal GPU checkpoint (2026-10-28)
 
 Watcher `baf5af493` reached ALL-TERMINAL. H200 job **14481883 was PREEMPTED**

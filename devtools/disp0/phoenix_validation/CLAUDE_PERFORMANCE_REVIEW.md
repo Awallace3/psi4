@@ -135,3 +135,11 @@ actual sealed cuBLAS/cuSOLVER binding and symbol-owner checks without a CUDA
 session. A new physical H200 gate and benchmark remain outstanding.
 User-approved H20014946636 is now queued on embers using that unchanged
 validated build, with the physical gate before three peptide repeats.
+That job subsequently completed0:0: the full small H200 gate and all three
+peptide repeats passed. Energy-call wall times are36.790–37.226s, median
+37.048s (inclusive worker median50.784s), versus the historical994.512s GPU
+diagnostic. Tracked device peak, cache budget/occupancy, producer counts and
+CUDA/PTX source hashes are unchanged. This is a26.844-fold reduction in
+recorded historical GPU latency, not an accepted CPU/GPU speedup: independent
+peptide CPU references/oracles remain outstanding. Full receipts and scope
+are recorded in[SEALED_H200_PILOT.md](SEALED_H200_PILOT.md).
