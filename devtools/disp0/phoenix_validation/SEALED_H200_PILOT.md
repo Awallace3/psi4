@@ -473,3 +473,28 @@ Under`phoenix-sealed-h200-927283f8ed/job-14946636/`:
 | `benchmark/execution/peptide-r0/result.json` | `4299c4963884cd7975974910ab9f77f21786ad11cb891c112f75ea4baabce76c` |
 | `benchmark/execution/peptide-r1/result.json` | `a7a20c033f8124880f591f6d687dc355e46f17981d4aea6f06d32321b26c0a97` |
 | `benchmark/execution/peptide-r2/result.json` | `dccc8b788ca62faa0a100992269c83f01eba4fc0aa1a747ef97b309371b2ef07` |
+
+## User-approved final CPU qualification
+
+After the H200 result, the user selected **Qualify CPU/GPU ratio**:
+one CPU-only embers allocation,24 cores,160GiB,2-hour cap, three fresh
+peptide references and three independent fixed-GPU-gauge CPU oracles.
+No new GPU allocation, rebuild or automatic retry is authorized.
+
+`submit_sealed_cpu_qualification.py` is a submission-only recipe. It requires
+the finalized exit0/no-TERM H200 pilot, successful physical gate, reaped/cleaned
+producer, three distinct sealed samples and a timing summary equal to their
+actual energy timers. It records the final GPU document hashes for rechecking
+after CPU completion; the CPU worker also verifies raw/matrix artifact hashes
+before each oracle. All scientific workers, benchmark/comparison helpers and
+the whole stage execute unchanged from`927283f8ed`.
+
+CPU configuration is an exact copy of the GPU configuration except threads24
+versus8. The existing CPU benchmark driver enforces node-local scratch,
+unchanged methods/options, three same-arm repeats, retained spaces and all
+independent signed component/matrix checks before accepting a ratio.
+Per-CPU-worker diagnostic aliases are fresh children of the already-declared
+private diagnostic namespace; existing GPU aliases/data are not repointed.
+The recipe requests no GPU TRES or scheduler dependency. It passed the
+130-test helper suite, including frozen-execution-source, role/resource,
+changed-proof, duplicate-PID and fabricated-timer rejection checks.
