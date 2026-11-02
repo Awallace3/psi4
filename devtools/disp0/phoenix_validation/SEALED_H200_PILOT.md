@@ -3,7 +3,7 @@
 **Latest:** H20014946636 completed successfully: full small-gate PASS and
 three peptide repeats with**37.048s median energy-call wall**, versus the
 historical994.512s diagnostic. Independent peptide CPU qualification remains
-outstanding; no accepted CPU/GPU ratio is claimed.
+outstanding in running CPU-only job14991749; no accepted CPU/GPU ratio is claimed.
 H20014784867 failed its first GPU small-gate worker with exit86; no peptide
 benchmark ran. A real CPU ELF fixture reproduces a manifest-locator mismatch.
 
@@ -498,3 +498,25 @@ private diagnostic namespace; existing GPU aliases/data are not repointed.
 The recipe requests no GPU TRES or scheduler dependency. It passed the
 130-test helper suite, including frozen-execution-source, role/resource,
 changed-proof, duplicate-PID and fabricated-timer rejection checks.
+
+### CPU qualification14991749 submitted
+
+One job was accepted: **14991749**,
+`gts-cs207-chemx / cpu-small / embers`,24 CPUs/160GiB/2h,
+exclusive`core24&gold6226&localNVMe`, no dependency or requested GPU.
+Controller readback and prolog confirm RUNNING on embers with those resources;
+allocated TRES contains no GPU. Test-only ID14991748 is not a compute job.
+
+Execution source/helper/whole stage remain
+`927283f8ed0a94d42179c35dd2a1a5bce674347e`; submission-only recipe is
+`832ce79b3c2b316ea4d32599f3326daa023c7c47`. The recipe's checkout is
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-sealed-cpu-qual-submit-832ce79b3c`.
+The completed GPU producer and its output files are unchanged.
+
+Output root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-sealed-cpu-qualification-927283f8ed`.
+The final benchmark/qualification receipt will be
+`job-14991749/benchmark-result.json`, with per-process reference/oracle outputs.
+Watcher:`ba307febf`.
+No qualified CPU/GPU ratio is inferred until those independent checks and
+cleanup pass and the recorded final GPU hashes are rechecked.

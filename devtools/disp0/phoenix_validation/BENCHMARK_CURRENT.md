@@ -12,6 +12,8 @@ independent peptide CPU references/oracles remain outstanding.
 See[SEALED_H200_PILOT.md](SEALED_H200_PILOT.md) for complete provenance,
 hardware, cleanup, hashes and limitations. All earlier records below remain
 historical; no new nanotube/protein83 qualification is implied.
+CPU-only embers14991749 is now running the three fresh references and three
+independent CPU oracles against that frozen GPU producer.
 
 ## Terminal GPU checkpoint (2026-10-28)
 
