@@ -186,21 +186,32 @@ def test_cuest_cpscf_fixed_orbitals(method, unrestricted):
         gpu_jk = _response_jk(wfn, True)
         assert gpu_jk.name() == "cuESTJK"
         wfn.set_jk(gpu_jk)
+        # cuEST fits the attenuated exchange with its own DF convention, so range-separated
+        # host and cuEST builders differ by ~1e-5 (test_cuest_range_separated allows 5e-4 in
+        # the energy). The two cuEST transform routes share that fit and still agree at 1e-8.
+        atol = 5.e-5 if wfn.functional().is_x_lrc() else 1.e-8
+        routes = []
         for threshold in (10**9, 0):
             psi4.set_options({"cuest_gemm_min_dim": threshold})
             psi4.core.clean_timers()
             _assert_matrices(one, wfn.onel_Hx(rotations), atol=1.e-11)
-            for (combine, basis), expected in ref.items():
-                _assert_matrices(expected, wfn.twoel_Hx(rotations, combine, basis))
-            _assert_matrices(href, wfn.cphf_Hx(rotations))
+            got = {key: [m.clone() for m in wfn.twoel_Hx(rotations, *key)] for key in ref}
+            for key, expected in ref.items():
+                _assert_matrices(expected, got[key], atol=atol)
+            got["cphf"] = [m.clone() for m in wfn.cphf_Hx(rotations)]
+            _assert_matrices(href, got["cphf"], atol=atol)
             if triplet is not None:
-                _assert_matrices(triplet, wfn.twoel_Hx_full(rotations, True, "MO", False))
+                got["triplet"] = [m.clone() for m in wfn.twoel_Hx_full(rotations, True, "MO", False)]
+                _assert_matrices(triplet, got["triplet"], atol=atol)
             calls = sum(v["n_calls"] for k, v in psi4.core.get_timer_dict().items()
                         if "cuEST CPSCF: cuBLAS" in k)
             assert (calls > 0) == (threshold == 0)
+            routes.append(got)
+        for key in routes[0]:
+            _assert_matrices(routes[0][key], routes[1][key])
         # K's preweighting belongs to the attached builder, not USE_CUEST.
         psi4.set_options({"use_cuest": False})
-        _assert_matrices(href, wfn.cphf_Hx(rotations))
+        _assert_matrices(href, wfn.cphf_Hx(rotations), atol=atol)
         if method == "pbe0":
             # SAPT borrows this builder for bare exchange before CPKS.
             # Response must rescale K, not permanently change that shared plan.

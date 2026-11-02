@@ -25,6 +25,10 @@ def _range_separated_functionals():
 
         marks = []
         dispersion_type = definition.get("dispersion", {}).get("type", "")
+        # XDM damping parameters are fitted per basis and there is no def2-SVP fit; the
+        # parent functionals already cover the cuEST range-separated SCF.
+        if dispersion_type == "xdm":
+            continue
         if dispersion_type.startswith("d3"):
             marks.extend(using("dftd3"))
         elif dispersion_type.startswith("d4"):

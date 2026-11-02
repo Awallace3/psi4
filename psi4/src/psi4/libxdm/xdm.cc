@@ -33,6 +33,7 @@
 #include "becke_roussel.h"
 #include "hirshfeld.h"
 #include "xdm_data.h"
+#include "xdm_gpu.h"
 
 #include "psi4/libfock/cubature.h"
 #include "psi4/libfock/points.h"
@@ -91,13 +92,87 @@ int gg_order(bool puream) {
 #endif
 }
 
-// The SCF's XC potential when its grid is exactly the one XDM would build (same basis, equal
-// DFTGrid::spec()), else null. Its grid lives as long as the wavefunction's potential.
+#ifdef USING_cuEST
+XDMDeviceBasis describe_basis(const BasisSet& basis) {
+    XDMDeviceBasis d;
+    d.nbf = basis.nbf();
+    d.puream = basis.has_puream();
+    for (int Q = 0; Q < basis.nshell(); Q++) {
+        const GaussianShell& shell = basis.shell(Q);
+        const Vector3 v = shell.center();
+        d.center.insert(d.center.end(), {v[0], v[1], v[2]});
+        d.am.push_back(shell.am());
+        d.nprim.push_back(shell.nprimitive());
+        d.prim_offset.push_back(static_cast<int>(d.exps.size()));
+        d.func_offset.push_back(shell.function_index());
+        d.nfunc.push_back(shell.nfunction());
+        for (int K = 0; K < shell.nprimitive(); K++) {
+            d.exps.push_back(shell.exps()[K]);
+            d.coefs.push_back(shell.coefs()[K]);
+        }
+    }
+    if (d.puream) d.pure_order = gg_order(true);
+    return d;
+}
+
+// Device counterpart of the host block loop in integrate_properties: same grid blocks,
+// same screened shells, moments returned into ``atom_data``. With ``device_blocks`` the
+// points never leave the device and ``grid`` has no host blocks.
+void integrate_on_device(std::shared_ptr<Wavefunction> wfn, const DFTGrid& grid, const DeviceGridBlocks* device_blocks,
+                         const ProatomDensity& proatom, const std::vector<int>& atomic_nums,
+                         const std::vector<std::array<double, 3>>& atom_coords, SharedMatrix Da, SharedMatrix Db,
+                         std::vector<AtomicData>& atom_data, size_t& nbhole_failed, size_t& nbhole_total) {
+    const int natom = static_cast<int>(atomic_nums.size());
+    const std::size_t budget = static_cast<std::size_t>(wfn->options().get_int("XDM_GPU_MEMORY")) << 20;
+    std::unique_ptr<DeviceXDMIntegrator> device;
+    {
+        ScopedTimer t("XDM: device setup");
+        device = std::make_unique<DeviceXDMIntegrator>(natom, atomic_nums.data(), atom_coords.data(), proatom,
+                                                       describe_basis(*wfn->basisset()), Da->pointer()[0],
+                                                       Db ? Db->pointer()[0] : nullptr, budget,
+                                                       wfn->options().get_bool("XDM_GPU_RESIDENT_DENSITY"));
+    }
+    {
+        ScopedTimer t("XDM: device queue");
+        if (device_blocks) {
+            device->add_device_blocks(*device_blocks);
+        } else {
+            for (const auto& block : grid.blocks()) {
+                device->add_block(block->npoints(), block->x(), block->y(), block->z(), block->w(),
+                                  block->shells_local_to_global());
+            }
+        }
+    }
+    std::vector<std::array<double, DeviceXDMIntegrator::NMOMENT>> sums;
+    {
+        ScopedTimer t("XDM: device finish");
+        sums = device->finish(nbhole_failed, nbhole_total);
+    }
+    for (int a = 0; a < natom; a++) {
+        atom_data[a].mm1 = sums[a][DeviceXDMIntegrator::MM1];
+        atom_data[a].mm2 = sums[a][DeviceXDMIntegrator::MM2];
+        atom_data[a].mm3 = sums[a][DeviceXDMIntegrator::MM3];
+        atom_data[a].vol = sums[a][DeviceXDMIntegrator::VOLUME];
+        atom_data[a].charge = sums[a][DeviceXDMIntegrator::CHARGE];
+    }
+    const double mib = 1.0 / (1024.0 * 1024.0);
+    outfile->Printf("\n  XDM integrated on the GPU: %zu points in %zu chunks.\n", device->npoints(),
+                    device->nchunks());
+    outfile->Printf("    Device buffers %.1f MiB; device memory grew %.1f MiB over %.1f MiB already in use.\n",
+                    device->device_bytes() * mib, device->device_growth() * mib,
+                    device->device_in_use_at_start() * mib);
+    outfile->Printf("    Density matrices %s.\n", device->density_resident() ? "resident on the device"
+                                                                          : "gathered on the host per chunk");
+}
+#endif
+
+// The SCF's XC potential when its grid is exactly the one XDM would build (same basis, final grid,
+// equal DFTGrid::spec()), else null. Its grid lives as long as the wavefunction's potential.
 std::shared_ptr<VBase> scf_potential_on_grid(const std::shared_ptr<Wavefunction>& wfn, const BasisSet& basis,
                                              const std::string& spec) {
     auto hf = std::dynamic_pointer_cast<scf::HF>(wfn);
     auto V = hf ? hf->V_potential() : nullptr;
-    if (!V || !V->grid() || V->basis().get() != &basis) return nullptr;
+    if (!V || !V->grid() || V->initial_grid() || V->basis().get() != &basis) return nullptr;
     return V->grid()->spec() == spec ? V : nullptr;
 }
 
@@ -139,8 +214,9 @@ struct HostScratch {
 // then x from  x e^{-2x/3} / (x - 2) = (2/3) pi^{2/3} rho^{5/3} / Q,  and  b = (x^3 e^{-x} / (8 pi rho))^{1/3}
 // (exchange_hole_curvature and bhole).
 //
-// Threads take whole blocks, as psi4's V builds do, so BLAS runs single-threaded inside the region.
-// Hirshfeld weights are formed per point inside the moment loop rather than stored per atom.
+// Host counterpart of integrate_on_device. Threads take whole blocks, as psi4's V builds do, so BLAS
+// runs single-threaded inside the region. Hirshfeld weights are formed per point inside the moment
+// loop rather than stored per atom.
 void integrate_on_host(const DFTGrid& grid, const BasisSet& basis, const ProatomDensity& proatom,
                        const std::vector<int>& atomic_nums, const std::vector<std::array<double, 3>>& atom_coords,
                        SharedMatrix Da, SharedMatrix Db, std::vector<AtomicData>& atom_data, size_t& nbhole_failed,
@@ -420,29 +496,109 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     int natom = mol->natom();
     bool restricted = wfn->same_a_b_dens();
 
+    // XDM_GPU moves everything per grid point to the device; the grid, its blocks and the
+    // basis-function screening are the host's in both paths.
+    const bool use_gpu = options.get_bool("XDM_GPU");
+#ifndef USING_cuEST
+    if (use_gpu) {
+        throw PSIEXCEPTION("XDM_GPU requires a Psi4 built with cuEST (ENABLE_cuEST).");
+    }
+#endif
+
     // Get density matrices in AO basis (wfn stores them in SO basis)
     SharedMatrix Da = wfn->Da_subset("AO");
     SharedMatrix Db = restricted ? Da : wfn->Db_subset("AO");
 
-    // --- Grid: the DFT grid, blocked by DFT_BLOCK_SCHEME as the SCF's is ---
+    // --- Grid: the host DFT grid, or cuEST's points blocked on the host ---
+    std::string grid_kind = options.get_str("XDM_GRID");
+    if (grid_kind == "AUTO") {
+        grid_kind = use_gpu && options.get_bool("USE_CUEST") && !options["DFT_GRID_ORIENTATION"].has_changed()
+                        ? "CUEST"
+                        : "PSI4";
+    }
+#ifndef USING_cuEST
+    if (grid_kind == "CUEST") {
+        throw PSIEXCEPTION("XDM_GRID CUEST requires a Psi4 built with cuEST (ENABLE_cuEST).");
+    }
+#endif
     std::map<std::string, int> int_opts;
     std::map<std::string, std::string> str_opts;
+    // A psi4 grid is blocked by DFT_BLOCK_SCHEME, as the SCF's is; a cuEST grid with OCTREE, since
+    // ATOMIC needs the host atomic grids, which a cuEST grid never builds.
+    if (grid_kind == "CUEST") str_opts["DFT_BLOCK_SCHEME"] = "OCTREE";
 
-    // Borrow the SCF's grid when it is the one XDM would build. The moments (integrate_on_host) are grid
-    // sums, so the same points, weights and blocks give the same result as a freshly built grid,
-    // without building it again and without a second copy in memory.
-    std::shared_ptr<VBase> scf_V;
-    if (options.get_bool("XDM_GRID_REUSE")) {
-        scf_V = scf_potential_on_grid(wfn, *primary, DFTGrid::spec_for(options, int_opts, str_opts, {}));
+    // Where cuEST's points are blocked: HOST copies them out and blocks with OCTREE; DEVICE
+    // sorts and blocks them on the GPU, where a GPU integration then reads them in place.
+    std::string blocking = options.get_str("XDM_GRID_BLOCKING");
+    if (blocking == "AUTO") blocking = grid_kind == "CUEST" && use_gpu ? "DEVICE" : "HOST";
+    if (blocking == "DEVICE" && grid_kind != "CUEST") {
+        throw PSIEXCEPTION("XDM_GRID_BLOCKING DEVICE needs XDM_GRID CUEST: only cuEST's points live on the device.");
     }
+
+    // Borrow the SCF's grid when it is the one XDM would build. The moments are grid sums, so the
+    // same points, weights and blocks give the same result as a freshly built grid, without building
+    // it again and without a second copy in memory. Host blocking of cuEST's points, and device
+    // blocks handed to the host integrator, write host blocks into the grid, so those routes always
+    // build their own.
+    const bool writes_grid = grid_kind == "CUEST" && (blocking == "HOST" || !use_gpu);
+    std::shared_ptr<VBase> scf_V;
+    if (options.get_bool("XDM_GRID_REUSE") && !writes_grid) {
+        scf_V = scf_potential_on_grid(wfn, *primary,
+                                      DFTGrid::spec_for(options, int_opts, str_opts, {}, grid_kind == "CUEST"));
+    }
+    const char* origin = scf_V ? ", the SCF's" : "";
 
     std::shared_ptr<DFTGrid> grid;
+#ifdef USING_cuEST
+    std::unique_ptr<DeviceGridBlocks> device_blocks;
+#endif
     {
         ScopedTimer t("XDM: grid");
-        grid = scf_V ? scf_V->grid() : std::make_shared<DFTGrid>(mol, primary, int_opts, str_opts, options);
+        grid = scf_V ? scf_V->grid()
+                     : std::make_shared<DFTGrid>(mol, primary, int_opts, str_opts, options, grid_kind == "CUEST");
+#ifdef USING_cuEST
+        if (grid_kind == "CUEST" && blocking == "HOST") grid->host_blocks_from_cuest();
+        if (blocking == "DEVICE") {
+            double *d_xyz = nullptr, *d_w = nullptr;
+            size_t ncuest = 0;
+            {
+                ScopedTimer tp("cuEST points");
+                ncuest = grid->cuest_device_points(&d_xyz, &d_w, scf_V ? scf_V->cuest_xc_plan() : nullptr);
+            }
+            ScopedTimer tb("device blocking");
+            std::vector<std::array<double, 3>> centres(natom);
+            for (int a = 0; a < natom; a++) centres[a] = {mol->x(a), mol->y(a), mol->z(a)};
+            auto extents = grid->cuest_extents();
+            const auto Rp = extents->shell_extents();
+            std::vector<double> shell_extents(Rp->pointer(), Rp->pointer() + primary->nshell());
+            device_blocks = std::make_unique<DeviceGridBlocks>(
+                d_xyz, d_w, ncuest, grid->weights_cutoff(), grid->removes_distant_points() ? extents->maxR() : -1.0,
+                natom, centres.data(), grid->cuest_max_points(), describe_basis(*primary), shell_extents);
+            if (!use_gpu) {
+                // The host integrator walks host blocks: hand it the device partition.
+                std::vector<double> x, y, z, w;
+                device_blocks->copy_to_host(x, y, z, w);
+                grid->adopt_host_blocks(std::move(x), std::move(y), std::move(z), std::move(w),
+                                        device_blocks->block_start(), device_blocks->block_npoints());
+                device_blocks.reset();
+            }
+        }
+#endif
     }
-    outfile->Printf("\n  XDM grid: psi4%s, %d points in %zu blocks.\n", scf_V ? ", the SCF's" : "", grid->npoints(),
-                    grid->blocks().size());
+#ifdef USING_cuEST
+    if (device_blocks) {
+        const double mib = 1.0 / (1024.0 * 1024.0);
+        outfile->Printf("\n  XDM grid: cuEST%s, %zu points in %zu blocks (%zu with shells), blocked on the device.\n",
+                        origin, device_blocks->npoints(), device_blocks->nblocks(), device_blocks->nblocks_with_shells());
+        outfile->Printf("    Device blocking peak %.1f MiB; %.1f MiB of points kept for the integration.\n",
+                        device_blocks->peak_device_bytes() * mib, device_blocks->resident_device_bytes() * mib);
+    } else
+#endif
+    {
+        outfile->Printf("\n  XDM grid: %s%s, %d points in %zu blocks%s.\n", grid_kind == "CUEST" ? "cuEST" : "psi4",
+                        origin, grid->npoints(), grid->blocks().size(),
+                        blocking == "DEVICE" ? ", blocked on the device" : "");
+    }
 
     // Collect atom data
     std::vector<int> atomic_nums(natom);
@@ -478,6 +634,13 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
 
     size_t nbhole_failed = 0;
     size_t nbhole_total = 0;
+
+#ifdef USING_cuEST
+    if (use_gpu) {
+        integrate_on_device(wfn, *grid, device_blocks.get(), proatom, atomic_nums, atom_coords, Da,
+                            restricted ? nullptr : Db, atom_data, nbhole_failed, nbhole_total);
+    } else
+#endif
     {
         ScopedTimer t("XDM: host blocks");
         integrate_on_host(*grid, *primary, proatom, atomic_nums, atom_coords, Da, restricted ? nullptr : Db, atom_data,

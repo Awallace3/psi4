@@ -113,6 +113,20 @@ void ProatomDensity::prepare(int natom, const int* atomic_nums) const {
     }
 }
 
+void ProatomDensity::pack_spline(int Z, std::vector<double>& out) const {
+    if (Z < 1 || Z > FTOT_NELEM) return;
+    initialize_spline(Z);
+    int idx = Z - 1;
+    int ndata = ndata_for_z(Z);
+    for (int j = 0; j <= ndata; j++) {
+        // evaluate() adds 0.0 in place of ftot[0][idx], which the table also stores as 0.0.
+        out.push_back(j == 0 ? 0.0 : ftot[j][idx]);
+        out.push_back(spline_a_[idx][j]);
+        out.push_back(spline_b_[idx][j]);
+        out.push_back(spline_c_[idx][j]);
+    }
+}
+
 double ProatomDensity::evaluate(int Z, double r) const {
     if (Z < 1 || Z > FTOT_NELEM) return 0.0;
     if (r < 1.0e-15) return 0.0;

@@ -673,7 +673,17 @@ void JK::compute() {
     }
 
     timer_on("JK: JK");
-    compute_JK();
+    try {
+        compute_JK();
+    } catch (...) {
+        // A backend failure must not leave this timer active on the next compute().
+        // Preserve the backend exception even if timer cleanup itself fails.
+        try {
+            timer_off("JK: JK");
+        } catch (...) {
+        }
+        throw;
+    }
     timer_off("JK: JK");
 
     if (C1()) {

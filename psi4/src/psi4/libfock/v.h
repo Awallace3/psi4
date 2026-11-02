@@ -255,6 +255,12 @@ class PSI_API VBase {
         return use_cuest_xc();
     }
 
+#ifdef USING_cuEST
+    /// The cuEST XC plan on grid() (placeholder HF functional), or null on the host XC path.
+    /// Borrowed: valid until finalize() or set_grid().
+    cuestXCIntPlan_t cuest_xc_plan() const { return cuest_xcint_plan_; }
+#endif
+
     virtual void initialize();
     virtual void finalize();
     /// Rebuild the grid, workers and GPU integral plans without changing the functional.
