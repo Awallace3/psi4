@@ -2,6 +2,8 @@ import psi4
 import pytest
 import numpy as np
 import re
+
+from addons import uusing
 from psi4 import compare_values
 
 pytestmark = [pytest.mark.psi, pytest.mark.api]
@@ -881,14 +883,19 @@ def test_xdm_rejects_empirical_double_dispersion():
     from psi4.driver.procrouting import dft, proc
     from psi4.driver.procrouting.dft import dft_builder
 
-    assert dft_builder.functionals["b3lyp-d3bj"]["dispersion"]["type"] == "d3bj"
+    from qcengine.programs.empirical_dispersion_resources import get_dispersion_aliases
+
+    # qcengine resolves the "d3bj" alias to its canonical level ("d3bj2b" in newer releases).
+    d3bj = get_dispersion_aliases().get("d3bj", "d3bj")
+    assert dft_builder.functionals["b3lyp-d3bj"]["dispersion"]["type"] == d3bj
     assert "b3lyp-d3bj-xdm" not in dft_builder.functionals
 
-    with pytest.raises(ValidationError, match="XDM cannot be combined with the 'd3bj' dispersion"):
+    message = f"XDM cannot be combined with the '{d3bj}' dispersion"
+    with pytest.raises(ValidationError, match=message):
         dft.build_superfunctional("b3lyp-d3bj-xdm", True)
 
     psi4.set_options({"basis": "aug-cc-pvdz", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
-    with pytest.raises(ValidationError, match="XDM cannot be combined with the 'd3bj' dispersion"):
+    with pytest.raises(ValidationError, match=message):
         proc.build_functional_and_disp("b3lyp-d3bj-xdm", True)
 
 
@@ -1024,6 +1031,7 @@ def test_xdm_rejects_range_separation_override():
 
 
 @pytest.mark.xdm
+@uusing("ecpint")
 def test_xdm_rejects_ecp_density():
     mol = psi4.geometry("0 2\nBr 0 0 0\nunits angstrom")
     psi4.set_options({
@@ -1270,3 +1278,79 @@ symmetry c1
     assert compare_values(ie_superposed, xdm_ie, 8, "dft-xdm(sapt) XDM IE vs standalone CP superposition")
     assert abs(ie_bare - xdm_ie) > 1.0e-5, "the ghost superposition correction was not applied"
     assert xdm_ie < 0.0 and sapt_disp < 0.0
+
+
+_xdm_grid_cases = {
+    # closed shell, pure d functions
+    "rks": ("0 1\nO 0 0 0.117\nH 0 0.757 -0.467\nH 0 -0.757 -0.467\nO 0 0 3.117\nH 0 0.757 2.533\nH 0 -0.757 2.533",
+            "aug-cc-pvdz"),
+    # open shell
+    "uks": ("0 2\nO 0 0 0\nH 0 0 0.97", "aug-cc-pvdz"),
+    # Cartesian d functions
+    "cartesian": ("0 1\nO 0 0 0.117\nH 0 0.757 -0.467\nH 0 -0.757 -0.467", "6-31g*"),
+}
+
+
+def _xdm_grid_wfn(case):
+    geom, basis = _xdm_grid_cases[case]
+    mol = psi4.geometry(geom + "\nsymmetry c1\nno_com\nno_reorient")
+    psi4.set_options({
+        "basis": basis,
+        "reference": "uks" if case == "uks" else "rks",
+        "dft_radial_points": 75,
+        "dft_spherical_points": 302,
+        "XDM_DISPERSION_PARAMETERS": [0.6, 1.4],
+    })
+    _, wfn = psi4.energy("b3lyp-xdm", molecule=mol, return_wfn=True)
+    return wfn
+
+
+def _xdm_again(wfn, **options):
+    psi4.set_options(options)
+    energy = wfn._disp_functor.compute_energy(wfn.molecule(), wfn)
+    return energy, psi4.core.array_variable("XDM ATOMIC PROPERTIES").np.copy()
+
+
+def _grid_origins(text):
+    """Each XDM call's grid line: kind, plus ", the SCF's" when it integrated on the SCF's grid."""
+    return re.findall(r"XDM grid: (psi4(?:, the SCF's)?),", text)
+
+
+@pytest.mark.xdm
+@pytest.mark.parametrize("case", ["rks", "uks"])
+def test_xdm_reuses_scf_grid(case, tmp_path):
+    """XDM integrates on the SCF's XC grid when it is the grid XDM would build, and matches its
+    own build of that grid (XDM_GRID_REUSE false) to rounding."""
+    out = tmp_path / "reuse.dat"
+    psi4.set_output_file(str(out), False)
+    try:
+        wfn = _xdm_grid_wfn(case)
+        e_scf, p_scf = wfn.variable("XDM ENERGY"), psi4.core.array_variable("XDM ATOMIC PROPERTIES").np.copy()
+        e_own, p_own = _xdm_again(wfn, XDM_GRID_REUSE=False)
+        e_again, _ = _xdm_again(wfn, XDM_GRID_REUSE=True)
+    finally:
+        psi4.set_output_file("pytest_output.dat", True)
+    assert _grid_origins(out.read_text()) == ["psi4, the SCF's", "psi4", "psi4, the SCF's"]
+    assert abs(e_own - e_scf) < 1.0e-12 and abs(e_again - e_scf) < 1.0e-12
+    np.testing.assert_allclose(p_own[:, 2:], p_scf[:, 2:], rtol=1.0e-12, atol=1.0e-14)
+    np.testing.assert_array_equal(p_own[:, :2], p_scf[:, :2])
+
+
+@pytest.mark.xdm
+def test_xdm_builds_own_grid_unless_scf_grid_matches(tmp_path):
+    """A grid option changed after the SCF, or a wavefunction without an XC potential, makes XDM
+    build its own grid."""
+    out = tmp_path / "own.dat"
+    psi4.set_output_file(str(out), False)
+    try:
+        wfn = _xdm_grid_wfn("cartesian")
+        e_scf = wfn.variable("XDM ENERGY")
+        e_434, _ = _xdm_again(wfn, DFT_SPHERICAL_POINTS=434)
+        psi4.set_options({"DFT_SPHERICAL_POINTS": 302})
+        _, hf_wfn = psi4.energy("hf", molecule=wfn.molecule(), return_wfn=True)
+        assert hf_wfn.V_potential() is None
+        psi4.core.XDMDispersion.build("b3lyp", 0.6, 1.4).compute_energy(hf_wfn, 0.2)
+    finally:
+        psi4.set_output_file("pytest_output.dat", True)
+    assert _grid_origins(out.read_text()) == ["psi4, the SCF's", "psi4", "psi4"]
+    assert abs(e_434 - e_scf) > 1.0e-10
