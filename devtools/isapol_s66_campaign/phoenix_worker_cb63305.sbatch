@@ -10,12 +10,20 @@
 #SBATCH --time=00:45:00
 #SBATCH --signal=TERM@180
 set -euo pipefail
-[[ $# -eq 4 || $# -eq 5 ]] || { printf 'SOURCE OPERATIONAL_COMMIT PILOT RUN [--remaining-case]\n' >&2; exit 2; }
+[[ $# -eq 4 || $# -eq 5 ]] || { printf 'SOURCE OPERATIONAL_COMMIT PILOT RUN [--remaining-case|--ed561666-fresh]\n' >&2; exit 2; }
 SOURCE=$1 COMMIT=$2 PILOT=$3 RUN=$4
 EXTRA=()
+PRODUCER=cb63305f41
 if [[ $# -eq 5 ]]; then
-    [[ "$5" = --remaining-case ]] || exit 2
-    EXTRA=(--remaining-case)
+    case "$5" in
+        --remaining-case) EXTRA=(--remaining-case) ;;
+        --ed561666-fresh)
+            EXTRA=(--producer ed561666)
+            PRODUCER=ed561666fc
+            [[ "$PILOT" = /storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-ed561666fc-benzene-preparation001/pilot.json ]]
+            ;;
+        *) exit 2 ;;
+    esac
 fi
 ROOT=/storage/project/r-cs207-0/awallace43/runs
 MANAGER=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca
@@ -29,10 +37,10 @@ source "$SOURCE/devtools/isapol_s66_campaign/term_wait.sh"
 setsid /opt/slurm/current/bin/srun --ntasks=1 --cpu-bind=none \
     "$MANAGER/bin/python" -I -B -X "pycache_prefix=$RUN/parent-empty-cache" \
     "$SOURCE/devtools/isapol_s66_campaign/phoenix_worker_cb63305.py" \
-    --build "$ROOT/ccasp-native-s66-cb63305f41-build001" \
-    --qualification "$ROOT/ccasp-native-s66-cb63305f41-checks001/payload/installed-validation.json" \
-    --inputs "$ROOT/ccasp-native-s66-cb63305f41-preparation001" \
-    --descriptors "$ROOT/ccasp-native-s66-cb63305f41-descriptors001/payload" \
+    --build "$ROOT/ccasp-native-s66-$PRODUCER-build001" \
+    --qualification "$ROOT/ccasp-native-s66-$PRODUCER-checks001/payload/installed-validation.json" \
+    --inputs "$ROOT/ccasp-native-s66-$PRODUCER-preparation001" \
+    --descriptors "$ROOT/ccasp-native-s66-$PRODUCER-descriptors001/payload" \
     --pilot "$PILOT" --run "$RUN" --commit "$COMMIT" "${EXTRA[@]}" &
 child=$!
 set +e

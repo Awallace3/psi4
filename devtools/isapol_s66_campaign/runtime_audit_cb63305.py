@@ -33,7 +33,8 @@ def helper(name):
     return module
 
 
-def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006'):
+def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='cb63305'):
+    pins = helper('pilot_cb63305').producer_pins(producer)
     job = outcome['allocation']['JobId']
     if (type(job) is not str or re.fullmatch(r'[0-9]+', job) is None
             or type(expected_monomer) is not str
@@ -41,22 +42,31 @@ def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006'):
             or not 1 <= int(expected_monomer[-4:]) <= 131
             or outcome.get('monomer_id') != expected_monomer):
         raise ValueError('exact expanded-pilot job and reconstructed monomer identity required')
-    expected = SCRATCH/('ccasp-native-cb63305-'+expected_monomer+'-'+job)
+    if producer == 'ed561666' and expected_monomer != pins['monomer']:
+        raise ValueError('fixed fresh cap32 monomer required')
+    tag = pins['namespace']+expected_monomer+'-'+job
+    expected = SCRATCH/tag
     if (outcome.get('scratch_path') != str(expected)
-            or outcome.get('compute_tag') != 'ccasp-native-cb63305-'+expected_monomer+'-'+job):
+            or outcome.get('compute_tag') != tag):
         raise ValueError('expanded molecular scratch/tag differs from actual case identity')
     return expected
 
 
-def validate_delivery(outcome, delivery, created, claimed, server, *, owned354=False):
+def validate_delivery(outcome, delivery, created, claimed, server, *, owned354=False,
+                      producer='cb63305'):
+    pins = helper('pilot_cb63305').producer_pins(producer)
+    if producer == 'ed561666' and (
+            owned354 or outcome.get('producer_profile') != producer
+            or outcome.get('dataset_mode') != 'fresh'):
+        raise ValueError('fresh cap32 delivery cannot use historical append mode')
     if (outcome.get('schema') != 'native-expanded-pilot-outcome/1'
             or outcome.get('status') != 'DELIVERED_EXPANDED_NATIVE_ARTIFACTS_PENDING_QUALIFICATION'
             or outcome.get('runtime_unchanged') is not True
             or outcome.get('find_existing') is not False or outcome.get('maximum_records') != 1
             or type(outcome.get('dataset_id')) is not int or outcome['dataset_id'] <= 0
-            or outcome['dataset_id'] == 353
+            or outcome['dataset_id'] in pins['protected_datasets']
             or type(outcome.get('record_id')) is not int or outcome['record_id'] <= 0
-            or outcome['record_id'] in (5234314, 5234315)):
+            or outcome['record_id'] in pins['protected_records']):
         raise ValueError('fresh delivered expanded single-record case required')
     if owned354 and (outcome['dataset_id'] != 354 or outcome['record_id'] == 5234316):
         raise ValueError('one fresh remaining record in owned354 required')
@@ -129,12 +139,16 @@ def main():
     for name in ('build', 'case', 'worker-preflight', 'qualification', 'inputs', 'descriptors', 'pilot', 'run'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666'), default='cb63305')
     parser.add_argument('--remaining-case', action='store_true')
     parser.add_argument('--owned-checkpoint', type=Path)
     parser.add_argument('--checkpoint-sha256')
     for role in ('audit', 'outcome', 'pilot', 'envelope'):
         parser.add_argument('--accepted-'+role, type=Path)
     args = parser.parse_args()
+    bootstrap = helper('phoenix_pilot_cb63305')
+    append_inputs = bootstrap.load_append_inputs(args)
+    producer = args.producer
     checks = helper('phoenix_installed_checks')
     allocation = checks.allocation()
     source = Path(__file__).resolve().parents[2]
@@ -152,24 +166,23 @@ def main():
     outcome, delivery, created, claimed, server = (
         read(name) for name in ('pilot-outcome.json', 'manager-delivery.json',
                                'record-created.json', 'claim.json', 'server-record-outcome.json'))
-    validate_delivery(outcome, delivery, created, claimed, server, owned354=args.remaining_case)
-    bootstrap = helper('phoenix_pilot_cb63305')
-    append_inputs = bootstrap.load_append_inputs(args)
+    validate_delivery(outcome, delivery, created, claimed, server, owned354=args.remaining_case,
+                      producer=producer)
     manifest_path = build/'build-identity.json'
     manifest = json.loads(manifest_path.read_bytes())
     worker, legacy = helper('phoenix_worker_cb63305'), helper('phoenix_pilot')
     draft = worker.prepare_draft(args, manifest_path)
-    profile = draft['execution_profile'] if args.remaining_case else None
-    scratch = scratch_for_outcome(outcome, expected_monomer=draft['monomer_id'])
+    profile = draft.get('execution_profile')
+    scratch = scratch_for_outcome(outcome, expected_monomer=draft['monomer_id'], producer=producer)
     bootstrap.admit_allocation(outcome['allocation'], execution_profile=profile)
-    if args.remaining_case and outcome.get('execution_profile') != profile:
+    if profile is not None and outcome.get('execution_profile') != profile:
         raise ValueError('actual molecular execution profile differs from reconstructed case')
     worker_shape = (profile['cores'], profile['science_memory_GiB']) if profile else (4, 20)
     preflight = json.loads(args.worker_preflight.read_bytes())
-    transport = helper('dataset_fresh_cb63305').transport_binding()
+    transport = helper('dataset_fresh_cb63305').transport_binding(producer=producer)
     bootstrap.validate_preflight(preflight, draft, manifest_sha=checks.digest(manifest_path),
         qualification_sha=checks.digest(args.qualification), pilot_sha=checks.digest(args.pilot),
-        worker_sources=worker.source_hashes(), transport=transport)
+        worker_sources=worker.source_hashes(producer), transport=transport, producer=producer)
     if (outcome['scientific_build_commit'] != draft['producer']['scientific_commit']
             or outcome['build_identity_sha256'] != checks.digest(manifest_path)
             or outcome['pilot_sha256'] != checks.digest(args.pilot)
@@ -181,7 +194,7 @@ def main():
             or outcome['manager_sources'] != legacy.MANAGER_FILES):
         raise ValueError('new producer, raw pilot and installed discovery receipt chain differs')
     submitted = read('record-submit-attempt.json')
-    sources = set(worker.SOURCES) | {
+    sources = set(worker.source_names(producer)) | {
         'phoenix_pilot_cb63305.py', 'phoenix_pilot_cb63305.sbatch', 'single_record_cb63305.py'}
     preservation = None
     if args.remaining_case:
@@ -282,7 +295,9 @@ def main():
     passed = all(r['status'] == 'passed' for r in reports.values()) and roles['molecular_qcschema'] == 1
     output = run/'payload'
     output.mkdir(exist_ok=False)
-    verdict = 'PASS_BANK_CASE_SINGLETON_EVIDENCE' if args.remaining_case else 'PASS_EXPANDED_SINGLE_PILOT_EVIDENCE'
+    verdict = ('PASS_SELECTED_FRESH_SINGLETON_EVIDENCE' if producer == 'ed561666'
+               else 'PASS_BANK_CASE_SINGLETON_EVIDENCE' if args.remaining_case
+               else 'PASS_EXPANDED_SINGLE_PILOT_EVIDENCE')
     report = dict(schema='native-expanded-pilot-audit/1',
         status=verdict if passed else 'FAIL_EXPANDED_RUNTIME_INPUT_AUDIT',
         allocation=allocation, monomer_id=draft['monomer_id'], case_job=job,
@@ -292,9 +307,11 @@ def main():
         pilot_sha256=checks.digest(args.pilot), file_gate_sha256=checks.digest(gate_path),
         numeric=numeric, roles=dict(roles), traces=reports, runtime_unchanged=True,
         execution_profile=profile, captured_preservation=preservation,
-        qualification='One fresh cb/request3 molecular pilot execution/export/decoded-FD evidence only; '
+        qualification='One fresh request3 molecular pilot execution/export/decoded-FD evidence only; '
                       'ordinary OS trust, not hostile-host/TOCTOU or atomic-server-lock proof. '
                       'No full-C10, independent solver, covariance, accuracy/parity or whole-set claim.')
+    if producer == 'ed561666':
+        report.update(producer_profile=producer, dataset_mode='fresh')
     with (output/'audit-report.json').open('x') as stream:
         json.dump(report, stream, indent=2, allow_nan=False)
     print(json.dumps(dict(status=report['status'], record_id=outcome['record_id'], roles=dict(roles))))

@@ -41,9 +41,24 @@ def helper(name):
     return module
 
 
-def source_hashes():
+def selected_producer(args):
+    producer = getattr(args, 'producer', 'cb63305')
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+        raise ValueError('closed molecular producer selector required')
+    if producer == 'ed561666' and args.remaining_case:
+        raise ValueError('cap32 worker requires the fresh fixed pilot, not an append case')
+    return producer
+
+
+def source_names(producer='cb63305'):
+    helper('pilot_cb63305').producer_pins(producer)
+    return SOURCES + (('qualified_ed561666.py', 'resource_plan_ed561666.py',
+                      'prepare_ed561666_inputs.py') if producer == 'ed561666' else ())
+
+
+def source_hashes(producer='cb63305'):
     return {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in SOURCES}
+            for name in source_names(producer)}
 
 
 def admit_allocation(allocation, *, execution_profile=None):
@@ -66,11 +81,12 @@ def admit_allocation(allocation, *, execution_profile=None):
 
 def prepare_draft(args, manifest_path):
     """Reconstruct either the archived first-case shape or a full remaining case."""
+    producer = selected_producer(args)
     if args.remaining_case:
         return helper('case_cb63305').verify_prepared_from_paths(
             args.pilot, args.inputs, manifest_path, args.qualification, args.descriptors)
     draft = helper('pilot_cb63305').prepare_from_paths(
-        args.inputs, manifest_path, args.qualification, args.descriptors)
+        args.inputs, manifest_path, args.qualification, args.descriptors, producer=producer)
     if json.loads(args.pilot.read_bytes()) != draft:
         raise ValueError('pilot does not reproduce from admitted raw/descriptor/producer receipts')
     return draft
@@ -96,9 +112,12 @@ def main():
     for name in ('build', 'qualification', 'inputs', 'descriptors', 'pilot', 'run'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666'), default='cb63305')
     parser.add_argument('--remaining-case', action='store_true',
                         help='Require a fully reconstructed remaining-bank case, not the first pilot')
     args = parser.parse_args()
+    producer = selected_producer(args)
+    pins = helper('pilot_cb63305').producer_pins(producer)
     checks = helper('phoenix_installed_checks')
     allocation = checks.allocation()
     source = Path(__file__).resolve().parents[2]
@@ -112,7 +131,7 @@ def main():
         raise ValueError('disjoint private build and worker run required')
     manifest_path = build/'build-identity.json'
     draft = prepare_draft(args, manifest_path)
-    profile = draft['execution_profile'] if args.remaining_case else None
+    profile = draft.get('execution_profile')
     admit_allocation(allocation, execution_profile=profile)
     pilot_sha = checks.digest(args.pilot)
     manifest = json.loads(manifest_path.read_bytes())
@@ -121,7 +140,7 @@ def main():
     if any(not p.startswith('devtools/isapol_s66_campaign/')
            and p not in checks.TEST_ONLY_CHANGES for p in changes):
         raise ValueError('worker operations change scientific/build sources')
-    operations = source_hashes()
+    operations = source_hashes(producer)
     manager_sources = MANAGER/'lib/python3.13/site-packages/qcfractalcompute'
     manager_pins = helper('phoenix_pilot').MANAGER_FILES
     if any(checks.digest(manager_sources/name) != expected for name, expected in manager_pins.items()):
@@ -133,7 +152,7 @@ def main():
     for name in ('traces', 'launcher'):
         (payload/name).mkdir()
     (payload/'launcher/psi4').symlink_to(source/'devtools/isapol_s66_campaign/native_psi4.sh')
-    scratch = SCRATCH/('ccasp-native-worker-cb63305-'+os.environ['SLURM_JOB_ID'])
+    scratch = SCRATCH/(pins['worker_namespace']+os.environ['SLURM_JOB_ID'])
     scratch.mkdir(mode=0o700, exist_ok=False)
     for name in ('home', 'cache', 'cwd'):
         (scratch/name).mkdir()
@@ -153,7 +172,8 @@ def main():
     command = checks.installed_python_command(environment/'bin/python', scratch/'cache',
         str(Path(__file__).with_name('descriptor_probe_cb63305.py')),
         '--input', str(runtime_path), '--output', str(science_path),
-        '--memory-bytes', str(draft['intended_memory_bytes']), '--monomer-id', draft['monomer_id'])
+        '--memory-bytes', str(draft['intended_memory_bytes']), '--monomer-id', draft['monomer_id'],
+        '--producer', producer)
     subprocess.run(command, env=env, cwd=scratch/'cwd', stdin=subprocess.DEVNULL, check=True)
     science = json.loads(science_path.read_bytes())
     admitted_row = dict(monomer_id=draft['monomer_id'], runtime_input=runtime,
@@ -162,8 +182,9 @@ def main():
     result = helper('descriptor_admission_cb63305').verify_descriptor(science, admitted_row, identity,
         policy=science['source_policy_sha256'],
         operational_sources_sha256={key: operations[key] for key in (
-            'descriptor_probe_cb63305.py', 'descriptor_probe.py', 'resource_plan_cb63305.py')},
-        runtime_sha256=draft['runtime_input_sha256'])
+            'descriptor_probe_cb63305.py', 'descriptor_probe.py', 'resource_plan_cb63305.py')
+            + (('resource_plan_ed561666.py',) if producer == 'ed561666' else ())},
+        runtime_sha256=draft['runtime_input_sha256'], producer=producer)
     if result['status'] != 'PASS_DESCRIPTOR_PLAN_ONLY':
         raise ValueError('fresh worker descriptor plan refused; no automatic promotion')
     env.update(PATH=f'{payload}/launcher:{MANAGER}/bin:/usr/bin:/bin',
@@ -188,7 +209,7 @@ def main():
     if (task_config.ncores != worker_shape[0] or task_config.memory != worker_shape[1]
             or task_config.retries != 0):
         raise ValueError('exact worker cores/scientific memory and zero internal retries required')
-    transport = helper('dataset_fresh_cb63305').transport_binding()
+    transport = helper('dataset_fresh_cb63305').transport_binding(producer=producer)
     harness = qcengine.get_program('psi4')
     harness_path = Path(inspect.getfile(type(harness))).resolve()
     if harness_path != Path('/storage/project/r-cs207-0/awallace43/gits/qcengine/qcengine/programs/psi4.py'):
@@ -199,15 +220,16 @@ def main():
     probe.validate_worker_discovery(programs, version, science['version'],
                                    scientific_imported='psi4' in sys.modules)
     checks.verify_runtime(environment, manifest)
-    if (source_hashes() != operations or checks.git(source, 'rev-parse', 'HEAD') != args.commit
+    if (source_hashes(producer) != operations or checks.git(source, 'rev-parse', 'HEAD') != args.commit
             or checks.git(source, 'status', '--porcelain')
             or checks.digest(args.pilot) != pilot_sha
             or checks.digest(harness_path) != harness_sha
-            or helper('dataset_fresh_cb63305').transport_binding() != transport
+            or helper('dataset_fresh_cb63305').transport_binding(producer=producer) != transport
             or any(checks.digest(manager_sources/name) != expected for name, expected in manager_pins.items())
             or prepare_draft(args, manifest_path) != draft):
         raise ValueError('worker source, runtime, raw inputs or harness changed during discovery')
-    report = dict(status=('PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY' if args.remaining_case
+    report = dict(status=('PASS_SELECTED_FRESH_WORKER_PREFLIGHT_ONLY' if producer == 'ed561666'
+                          else 'PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY' if args.remaining_case
                           else 'PASS_EXPANDED_WORKER_PREFLIGHT_ONLY'), allocation=allocation,
         scientific_build_commit=manifest['commit'], operational_commit=args.commit,
         build_identity_sha256=checks.digest(manifest_path), pilot_sha256=pilot_sha,
@@ -227,6 +249,8 @@ def main():
         qualification='Installed descriptor/request and actual manager discovery only; '
                       'no SCF, molecular calculation, manager acquisition or server writes. '
                       'No independent trace, molecular, RSS or SCF scratch acceptance.')
+    if producer == 'ed561666':
+        report.update(producer_profile=producer, dataset_mode='fresh')
     with (payload/'worker-preflight.json').open('x') as stream:
         json.dump(report, stream, indent=2, allow_nan=False)
     print(json.dumps(dict(status=report['status'], job=os.environ['SLURM_JOB_ID'])))

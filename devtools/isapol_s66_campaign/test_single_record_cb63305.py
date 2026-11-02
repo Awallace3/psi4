@@ -33,6 +33,29 @@ def test_exact_single_worker_shape_and_fresh_record_required(tmp_path):
                                 runtime={}, payload=tmp_path, save=lambda *a: None)
 
 
+@pytest.mark.parametrize('record', [5234314, 5234315, 5234316, 5234317])
+def test_new_producer_blocks_every_prior_record_before_manager_construction(tmp_path, record):
+    tag = 'ccasp-native-ed561666-monomer-0047-123'
+    cfg = config()
+    cfg.executors['pilot'].cores_per_worker = 12
+    cfg.executors['pilot'].memory_per_worker = 40.
+    cfg.executors['pilot'].compute_tags = [tag]
+    with pytest.raises(ValueError, match='fresh expanded-pilot record'):
+        session.run_session(cfg, record_id=record, compute_tag=tag, runtime={},
+                            payload=tmp_path, save=lambda *a: None,
+                            worker_shape=(12, 40.), producer='ed561666')
+
+
+def test_new_producer_refuses_implicit_old_worker_shape_or_tag(tmp_path):
+    for shape, tag in (((4, 20.), 'ccasp-native-ed561666-monomer-0047-123'), ((12, 40.), TAG)):
+        with pytest.raises(ValueError, match='cap32 singleton shape and namespace'):
+            session.run_session(config(), record_id=9999, compute_tag=tag, runtime={},
+                payload=tmp_path, save=lambda *a: None, worker_shape=shape, producer='ed561666')
+    with pytest.raises(ValueError, match='closed singleton'):
+        session.run_session(config(), record_id=9999, compute_tag=TAG, runtime={},
+                            payload=tmp_path, save=lambda *a: None, producer='latest')
+
+
 @pytest.mark.parametrize('shape', [(8, 20.), (12, 40.), (24, 80.)])
 def test_remaining_bank_requires_explicit_matching_worker_shape(shape):
     cfg = config()

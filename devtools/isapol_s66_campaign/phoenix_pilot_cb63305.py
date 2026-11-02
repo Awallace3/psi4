@@ -53,9 +53,19 @@ def admit_allocation(allocation, *, execution_profile=None):
 
 
 def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pilot_sha,
-                       worker_sources, transport):
+                       worker_sources, transport, producer='cb63305'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+        raise ValueError('closed molecular producer selector required')
     profile = draft.get('execution_profile')
-    status = 'PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY' if profile else 'PASS_EXPANDED_WORKER_PREFLIGHT_ONLY'
+    status = ('PASS_SELECTED_FRESH_WORKER_PREFLIGHT_ONLY' if producer == 'ed561666'
+              else 'PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY' if profile
+              else 'PASS_EXPANDED_WORKER_PREFLIGHT_ONLY')
+    if producer == 'ed561666' and (
+            preflight.get('producer_profile') != producer
+            or preflight.get('dataset_mode') != 'fresh'
+            or draft.get('producer_profile') != producer or draft.get('dataset_mode') != 'fresh'
+            or not isinstance(profile, dict) or profile.get('name') != 's40'):
+        raise ValueError('explicit fresh cap32 s40 discovery required')
     if (preflight.get('status') != status
             or preflight.get('runtime_unchanged') is not True
             or preflight.get('monomer_id') != draft['monomer_id']
@@ -78,6 +88,11 @@ def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pil
 
 
 def load_append_inputs(args):
+    producer = getattr(args, 'producer', 'cb63305')
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+        raise ValueError('closed molecular producer selector required')
+    if producer == 'ed561666' and args.remaining_case:
+        raise ValueError('cap32 fresh mode cannot append to historical datasets')
     roles = ('audit', 'outcome', 'pilot', 'envelope')
     paths = {role: getattr(args, 'accepted_'+role) for role in roles}
     if not args.remaining_case:
@@ -128,6 +143,7 @@ def main():
     for name in ('build', 'qualification', 'inputs', 'descriptors', 'pilot', 'worker-preflight', 'run'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666'), default='cb63305')
     parser.add_argument('--remaining-case', action='store_true')
     parser.add_argument('--owned-checkpoint', type=Path)
     parser.add_argument('--checkpoint-sha256')
@@ -135,6 +151,9 @@ def main():
         parser.add_argument('--accepted-'+role, type=Path)
     args = parser.parse_args()
     append_inputs = load_append_inputs(args)
+    producer = args.producer
+    pins = helper('pilot_cb63305').producer_pins(producer)
+    transport_args = dict(producer=producer) if producer == 'ed561666' else {}
     checks, worker = (helper(name) for name in (
         'phoenix_installed_checks', 'phoenix_worker_cb63305'))
     allocation = checks.allocation()
@@ -149,7 +168,7 @@ def main():
         raise ValueError('disjoint private build and molecular run required')
     manifest_path = build/'build-identity.json'
     draft = worker.prepare_draft(args, manifest_path)
-    profile = draft['execution_profile'] if args.remaining_case else None
+    profile = draft.get('execution_profile')
     admit_allocation(allocation, execution_profile=profile)
     pilot_sha = checks.digest(args.pilot)
     manifest = json.loads(manifest_path.read_bytes())
@@ -160,13 +179,13 @@ def main():
     if any(not p.startswith('devtools/isapol_s66_campaign/')
            and p not in checks.TEST_ONLY_CHANGES for p in changes):
         raise ValueError('bootstrap operations change scientific/build sources')
-    operations = worker.source_hashes()
+    operations = worker.source_hashes(producer)
     operations.update({name: checks.digest(Path(__file__).with_name(name)) for name in (
         'phoenix_pilot_cb63305.py', 'phoenix_pilot_cb63305.sbatch', 'single_record_cb63305.py')})
     if args.remaining_case:
         operations.update({name: checks.digest(Path(__file__).with_name(name)) for name in (
             'dataset_owned354_cb63305.py', 'owned_dataset_cb63305.py', 'dataset_guard.py')})
-    worker_sources = {key: operations[key] for key in worker.SOURCES}
+    worker_sources = {key: operations[key] for key in worker.source_names(producer)}
     legacy = helper('phoenix_pilot')
     manager_sources = MANAGER/'lib/python3.13/site-packages/qcfractalcompute'
     if any(checks.digest(manager_sources/n) != v for n, v in legacy.MANAGER_FILES.items()):
@@ -183,7 +202,7 @@ def main():
     for name in ('traces', 'launcher'):
         (payload/name).mkdir()
     (payload/'launcher/psi4').symlink_to(source/'devtools/isapol_s66_campaign/native_psi4.sh')
-    scratch = SCRATCH/('ccasp-native-cb63305-'+draft['monomer_id']+'-'+os.environ['SLURM_JOB_ID'])
+    scratch = SCRATCH/(pins['namespace']+draft['monomer_id']+'-'+os.environ['SLURM_JOB_ID'])
     scratch.mkdir(mode=0o700, exist_ok=False)
     for name in ('home', 'cache', 'cwd'):
         (scratch/name).mkdir()
@@ -212,10 +231,10 @@ def main():
     from qcfractalcompute.apps.app_manager import discover_programs_conda
     worker.validate_versions(str(qcengine.__version__), str(qcfractalcompute.__version__))
     mutation = helper('dataset_owned354_cb63305' if args.remaining_case else 'dataset_fresh_cb63305')
-    transport = mutation.transport_binding()
+    transport = mutation.transport_binding(**transport_args)
     validate_preflight(preflight, draft, manifest_sha=manifest_sha,
         qualification_sha=checks.digest(args.qualification), pilot_sha=pilot_sha,
-        worker_sources=worker_sources, transport=transport)
+        worker_sources=worker_sources, transport=transport, producer=producer)
     harness = qcengine.get_program('psi4')
     harness_path = Path(inspect.getfile(type(harness))).resolve()
     if (str(harness_path) != preflight['harness_path']
@@ -240,13 +259,13 @@ def main():
     server = yaml.safe_load(Path(
         '/storage/project/r-cs207-0/awallace43/qca/resources_losii_ac.yml').read_text())['server']
     validate_server_config(server)
-    tag = 'ccasp-native-cb63305-'+draft['monomer_id']+'-'+os.environ['SLURM_JOB_ID']
+    tag = pins['namespace']+draft['monomer_id']+'-'+os.environ['SLURM_JOB_ID']
     config_data = legacy.pilot_config(server, payload, scratch, tag)
     config_data['executors']['pilot'].update(cores_per_worker=worker_shape[0],
                                             memory_per_worker=float(worker_shape[1]))
     config = FractalComputeConfig(**config_data)
     helper('single_record_cb63305').validate_session_config(config, tag, worker_shape=worker_shape)
-    client = mutation.client_class()(config.server.fractal_uri, username=config.server.username,
+    client = mutation.client_class(**transport_args)(config.server.fractal_uri, username=config.server.username,
         password=config.server.password, verify=config.server.verify, show_motd=False)
     info = client.get_server_information()
     if info.get('name') != 'CDS QCFractal Server' or info.get('version') != '0.70':
@@ -269,6 +288,8 @@ def main():
         checkpoint_sha256=args.checkpoint_sha256 if args.remaining_case else None,
         qcengine_internal_retries=0, dataset_name=draft['dataset_name'],
         specification_name=draft['specification_name'])
+    if producer == 'ed561666':
+        started.update(producer_profile=producer, dataset_mode='fresh')
     save('started.json', started)
     if args.remaining_case:
         created = mutation.append_once(client, case_path=args.pilot, inputs=args.inputs,
@@ -279,18 +300,21 @@ def main():
                 or getattr(dataset, '_client', None) is not client):
             raise ValueError('owned354 append returned another dataset/client identity')
     else:
-        dataset, _ = mutation.register_once(client, draft, tag, save)
-        inserted = mutation.submit_once(client, dataset, draft, tag, save)
+        dataset, _ = mutation.register_once(client, draft, tag, save, **transport_args)
+        if dataset.id in pins['protected_datasets']:
+            raise ValueError('protected historical dataset cannot be a fresh pilot target')
+        inserted = mutation.submit_once(client, dataset, draft, tag, save, **transport_args)
         created = dict(n_inserted=inserted.n_inserted, n_existing=inserted.n_existing)
     record = dataset.get_record(draft['entry']['name'], draft['specification_name'], force_refetch=True)
-    if (record.id in (5234314, 5234315)
+    if (record.id in pins['protected_records']
             or args.remaining_case and record.id != created['record_id']):
         raise ValueError('historical record cannot be a fresh expanded-pilot result')
     save('record-created.json', dict(dataset_id=dataset.id, record_id=record.id,
         molecule_id=record.molecule_id, compute_tag=tag,
         n_inserted=created['n_inserted'], n_existing=created['n_existing']))
     session = helper('single_record_cb63305').run_session(config, record_id=record.id,
-        compute_tag=tag, runtime=runtime, payload=payload, save=save, worker_shape=worker_shape)
+        compute_tag=tag, runtime=runtime, payload=payload, save=save, worker_shape=worker_shape,
+        **transport_args)
     record = dataset.get_record(draft['entry']['name'], draft['specification_name'], force_refetch=True)
     history = record.compute_history
     save('server-record-outcome.json', dict(record_id=record.id, status=record.status.value,
@@ -325,7 +349,7 @@ def main():
             or checks.digest(harness_path) != preflight['harness_sha256']
             or checks.digest(args.worker_preflight) != preflight_sha
             or checks.digest(args.pilot) != pilot_sha
-            or mutation.transport_binding() != transport
+            or mutation.transport_binding(**transport_args) != transport
             or checks.git(source, 'rev-parse', 'HEAD') != args.commit
             or checks.git(source, 'status', '--porcelain')
             or worker.prepare_draft(args, manifest_path) != draft

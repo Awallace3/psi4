@@ -46,6 +46,46 @@ def test_only_new_completed_singleton_delivery_and_exact_scratch_are_consistent(
     assert values[0]['status'].endswith('PENDING_QUALIFICATION')
 
 
+def cap32_fixture():
+    values = fixture()
+    outcome, _, created, _, _ = values
+    tag = 'ccasp-native-ed561666-monomer-0047-123'
+    outcome.update(producer_profile='ed561666', dataset_mode='fresh',
+                   monomer_id='monomer-0047', compute_tag=tag,
+                   scratch_path=str(audit.SCRATCH/tag))
+    created['compute_tag'] = tag
+    return values
+
+
+def test_cap32_audit_keeps_fresh_mode_and_namespace_separate():
+    values = cap32_fixture()
+    audit.validate_delivery(*values, producer='ed561666')
+    assert audit.scratch_for_outcome(values[0], expected_monomer='monomer-0047',
+        producer='ed561666').name.startswith('ccasp-native-ed561666-')
+    with pytest.raises(ValueError):
+        audit.scratch_for_outcome(values[0], expected_monomer='monomer-0047')
+    with pytest.raises(ValueError, match='append mode'):
+        audit.validate_delivery(*values, producer='ed561666', owned354=True)
+
+
+@pytest.mark.parametrize('identifier', [5234314, 5234315, 5234316, 5234317])
+def test_cap32_cannot_promote_any_prior_record(identifier):
+    values = cap32_fixture()
+    for item in values:
+        if 'record_id' in item:
+            item['record_id'] = identifier
+    with pytest.raises(ValueError, match='fresh delivered'):
+        audit.validate_delivery(*values, producer='ed561666')
+
+
+@pytest.mark.parametrize('identifier', [353, 354])
+def test_cap32_cannot_promote_old_dataset_as_fresh(identifier):
+    values = cap32_fixture()
+    values[0]['dataset_id'] = values[2]['dataset_id'] = identifier
+    with pytest.raises(ValueError, match='fresh delivered'):
+        audit.validate_delivery(*values, producer='ed561666')
+
+
 @pytest.mark.parametrize('change', [
     'old_dataset', 'old_record', 'old_status', 'runtime_changed', 'reused_record', 'two_records',
     'wrong_created_dataset', 'wrong_record', 'wrong_task', 'wrong_manager', 'interrupted',

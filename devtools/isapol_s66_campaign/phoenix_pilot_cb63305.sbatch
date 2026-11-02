@@ -15,6 +15,16 @@ SOURCE=$1 COMMIT=$2 PILOT=$3 PREFLIGHT=$4 RUN=$5
 shift 5
 EXTRA=("$@")
 ROOT=/storage/project/r-cs207-0/awallace43/runs
+PRODUCER=cb63305f41
+if [[ $# -eq 1 && "$1" = --ed561666-fresh ]]; then
+    EXTRA=(--producer ed561666)
+    PRODUCER=ed561666fc
+    [[ "$PILOT" = "$ROOT"/ccasp-native-s66-ed561666fc-benzene-preparation001/pilot.json ]]
+else
+    for arg in "${EXTRA[@]}"; do
+        [[ "$arg" != --producer* && "$arg" != --ed561666-fresh ]] || exit 2
+    done
+fi
 MANAGER=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca
 [[ "$SOURCE" = /storage/project/r-cs207-0/awallace43/gits/* ]]
 [[ "$RUN" = "$ROOT"/ccasp-native-s66-* && -d "$RUN/logs" && ! -e "$RUN/parent-empty-cache" ]]
@@ -26,10 +36,10 @@ source "$SOURCE/devtools/isapol_s66_campaign/term_wait.sh"
 setsid /opt/slurm/current/bin/srun --ntasks=1 --cpu-bind=none \
     "$MANAGER/bin/python" -I -B -X "pycache_prefix=$RUN/parent-empty-cache" \
     "$SOURCE/devtools/isapol_s66_campaign/phoenix_pilot_cb63305.py" \
-    --build "$ROOT/ccasp-native-s66-cb63305f41-build001" \
-    --qualification "$ROOT/ccasp-native-s66-cb63305f41-checks001/payload/installed-validation.json" \
-    --inputs "$ROOT/ccasp-native-s66-cb63305f41-preparation001" \
-    --descriptors "$ROOT/ccasp-native-s66-cb63305f41-descriptors001/payload" \
+    --build "$ROOT/ccasp-native-s66-$PRODUCER-build001" \
+    --qualification "$ROOT/ccasp-native-s66-$PRODUCER-checks001/payload/installed-validation.json" \
+    --inputs "$ROOT/ccasp-native-s66-$PRODUCER-preparation001" \
+    --descriptors "$ROOT/ccasp-native-s66-$PRODUCER-descriptors001/payload" \
     --pilot "$PILOT" --worker-preflight "$PREFLIGHT" --run "$RUN" --commit "$COMMIT" "${EXTRA[@]}" &
 child=$!
 set +e

@@ -37,6 +37,25 @@ def test_worker_discovery_does_not_mean_molecular_acceptance():
     assert preflight['status'] != 'PASS_SINGLE_PILOT_EVIDENCE'
 
 
+def test_cap32_fresh_discovery_not_inferred_as_owned_append_from_s40():
+    preflight, draft, kwargs = fixture()
+    cases = pilot.helper('case_cb63305')
+    profile = dict(name='s40', **cases.PROFILES['s40'], account='gts-cs207-chemx',
+                   partition='cpu-small', qos='embers', concurrency=1)
+    draft.update(producer_profile='ed561666', dataset_mode='fresh', execution_profile=profile)
+    preflight.update(status='PASS_SELECTED_FRESH_WORKER_PREFLIGHT_ONLY',
+        producer_profile='ed561666', dataset_mode='fresh', execution_profile=profile,
+        task_config=dict(ncores=12, memory_GiB=40, internal_retries=0))
+    pilot.validate_preflight(preflight, draft, producer='ed561666', **kwargs)
+    for changed in (dict(preflight, status='PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY'),
+                    dict(preflight, producer_profile='cb63305'),
+                    dict(preflight, dataset_mode='owned354')):
+        with pytest.raises(ValueError):
+            pilot.validate_preflight(changed, draft, producer='ed561666', **kwargs)
+    with pytest.raises(ValueError):
+        pilot.validate_preflight(preflight, draft, **kwargs)
+
+
 @pytest.mark.parametrize('field,value', [
     ('status', 'PASS_WORKER_PREFLIGHT_ONLY'), ('runtime_unchanged', False),
     ('monomer_id', 'monomer-0004'), ('scientific_build_commit', 'acf54'),
@@ -103,6 +122,19 @@ def test_owned_append_arguments_cannot_be_ignored_or_inferred():
         pilot.load_append_inputs(args)
     args.remaining_case = True
     with pytest.raises(ValueError, match='all closed acceptance receipts'):
+        pilot.load_append_inputs(args)
+
+
+def test_cap32_rejects_append_inputs_before_opening_any_receipts():
+    args = append_args()
+    args.producer = 'ed561666'
+    assert pilot.load_append_inputs(args) is None
+    args.remaining_case = True
+    with pytest.raises(ValueError, match='cannot append'):
+        pilot.load_append_inputs(args)
+    args.remaining_case = False
+    args.accepted_audit = Path('not-read')
+    with pytest.raises(ValueError, match='cannot be ignored'):
         pilot.load_append_inputs(args)
 
 

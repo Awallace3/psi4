@@ -5,11 +5,12 @@ worker preflight before entering this module. Result delivery is not audit.
 """
 import importlib.util
 from pathlib import Path
+import re
 import signal
 
 
 def helper(name):
-    if name not in ('single_claim', 'phoenix_pilot'):
+    if name not in ('single_claim', 'phoenix_pilot', 'pilot_cb63305', 'dataset_fresh_cb63305'):
         raise ValueError('closed single-record manager helpers required')
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_expanded_session_'+name, path)
@@ -40,10 +41,20 @@ def validate_session_config(config, compute_tag, *, worker_shape=(4, 20.)):
         raise ValueError('exact single-worker shape and tag-bound pilot required')
 
 
-def run_session(config, *, record_id, compute_tag, runtime, payload, save, worker_shape=(4, 20.)):
+def run_session(config, *, record_id, compute_tag, runtime, payload, save, worker_shape=(4, 20.),
+                producer='cb63305'):
     """Claim once, capture compressed local output, and stop this owned manager."""
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+        raise ValueError('closed singleton producer required')
+    protected = (5234314, 5234315)
+    if producer == 'ed561666':
+        pins = helper('pilot_cb63305').producer_pins(producer)
+        protected = pins['protected_records']
+        if worker_shape != (12, 40.) or re.fullmatch(
+                re.escape(pins['namespace']+pins['monomer']+'-')+r'[1-9][0-9]*', compute_tag) is None:
+            raise ValueError('exact fresh cap32 singleton shape and namespace required')
     validate_session_config(config, compute_tag, worker_shape=worker_shape)
-    if type(record_id) is not int or record_id <= 0 or record_id in (5234314, 5234315):
+    if type(record_id) is not int or record_id <= 0 or record_id in protected:
         raise ValueError('fresh expanded-pilot record required')
     from qcfractalcompute.compute_manager import ComputeManager
     mixin = helper('single_claim').SingleClaimMixin
@@ -72,6 +83,8 @@ def run_session(config, *, record_id, compute_tag, runtime, payload, save, worke
 
     manager = PilotManager(config, target_record_id=record_id, compute_tag=compute_tag,
                            acquisition_seconds=300)
+    if producer == 'ed561666':
+        helper('dataset_fresh_cb63305').guard_manager_client(manager.client)
     save('manager-started.json', dict(name=manager.name, tag=compute_tag,
         executor='local', max_workers=1, cores=worker_shape[0], memory_gib=worker_shape[1]))
     interrupted = False

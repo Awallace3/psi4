@@ -103,6 +103,43 @@ def test_closed_source_set_includes_shared_cli_and_term_handling():
         worker.helper('arbitrary')
 
 
+def test_cap32_source_inventory_binds_shared_and_selected_helpers():
+    hashes = worker.source_hashes('ed561666')
+    assert set(hashes) == set(worker.SOURCES) | {
+        'qualified_ed561666.py', 'resource_plan_ed561666.py', 'prepare_ed561666_inputs.py'}
+    assert all(len(value) == 64 for value in hashes.values())
+    with pytest.raises(ValueError, match='closed'):
+        worker.source_hashes('unknown')
+
+
+def test_cap32_cannot_use_owned_append_mode_before_any_read(tmp_path):
+    args = NS(producer='ed561666', remaining_case=True)
+    with pytest.raises(ValueError, match='fresh fixed pilot'):
+        worker.prepare_draft(args, tmp_path/'does-not-exist')
+
+
+def test_cap32_draft_reconstructed_with_explicit_producer(monkeypatch, tmp_path):
+    args = NS(producer='ed561666', remaining_case=False, pilot=tmp_path/'pilot.json',
+              inputs=tmp_path/'inputs', qualification=tmp_path/'qualification',
+              descriptors=tmp_path/'descriptors')
+    draft = {'SYNTHETIC': 'fresh cap32 s40'}
+    args.pilot.write_text(__import__('json').dumps(draft))
+    actual_helper = worker.helper
+    seen = []
+    def prepare(*paths, producer):
+        seen.append((paths, producer))
+        return draft
+    def helper(name):
+        module = actual_helper(name)
+        if name == 'pilot_cb63305':
+            module.prepare_from_paths = prepare
+        return module
+    monkeypatch.setattr(worker, 'helper', helper)
+    manifest = tmp_path/'manifest'
+    assert worker.prepare_draft(args, manifest) == draft
+    assert seen == [((args.inputs, manifest, args.qualification, args.descriptors), 'ed561666')]
+
+
 def test_descriptor_discovery_preflight_has_no_calculation_or_server_mutation():
     tree = ast.parse(Path(worker.__file__).read_text())
     calls = {ast.unparse(n.func).split('.')[-1] for n in ast.walk(tree) if isinstance(n, ast.Call)}
