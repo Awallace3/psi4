@@ -61,17 +61,21 @@ def test_all_methanol_atoms_are_independently_typed_not_element_copy():
 
 def test_largest_inventory_preflight_is_explicitly_refinement_only():
     from psi4.driver.procrouting.isapol_bounded import BoundedResources
-    resources = BoundedResources(4*1024**3, 100_000_000_000_000, 64*1024**3, capacity='large')
-    plan = plan_molecular_refinement(declaration(17), resources, max_replay_work=1_000_000_000_000)
+    resources = BoundedResources(8*1024**3, 100_000_000_000_000, 64*1024**3, capacity='large')
+    plan = plan_molecular_refinement(declaration(17), resources,
+        max_replay_work=1_000_000_000_000, pfit_maximum_work_bytes=2*1024**3)
     assert plan['parameters'] == 612 and plan['planned_work'] == 718_632_624_000
     assert plan['scope'] == 'refinement_only_not_complete_molecular_admission'
+    assert plan['native_base_bytes'] == 1_363_037_344
+    assert plan['complete_refinement_bytes'] == plan['python_fit_bytes']+2*1024**3
 
 
 def test_molecular_preflight_refuses_a_budget_that_cannot_cover_refinement_alone():
     from psi4.driver.procrouting.isapol_bounded import BoundedResources
-    resources = BoundedResources(4*1024**3, 100_000_000_000, 64*1024**3, capacity='large')
+    resources = BoundedResources(8*1024**3, 100_000_000_000, 64*1024**3, capacity='large')
     with pytest.raises(ValueError, match='complete refinement.*work'):
-        plan_molecular_refinement(declaration(17), resources, max_replay_work=1_000_000_000_000)
+        plan_molecular_refinement(declaration(17), resources,
+            max_replay_work=1_000_000_000_000, pfit_maximum_work_bytes=2*1024**3)
 
 
 def test_incomplete_export_fails_before_creating_scientific_output(tmp_path):
