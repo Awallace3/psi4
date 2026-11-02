@@ -103,6 +103,20 @@ def plan(dimensions, resources, *, max_replay_work, pfit_maximum_work_bytes):
     Whole-chain work, byte, I/O and quadrature failures remain explicit
     REFUSED predictions. Neither kind is a molecular/solver certificate.
     """
+    return _ledger(dimensions, resources, max_replay_work=max_replay_work,
+        pfit_maximum_work_bytes=pfit_maximum_work_bytes, drho_refinement_iterations=10,
+        scientific_commit=SCIENTIFIC_COMMIT, policy=POLICY)
+
+
+def _ledger(dimensions, resources, *, max_replay_work, pfit_maximum_work_bytes,
+            drho_refinement_iterations, scientific_commit, policy):
+    """Shared arithmetic; public wrappers supply closed producer constants.
+
+    Neither a wrapper nor this private calculator performs descriptor,
+    installation or molecular admission. Historical plan() stays cap10.
+    """
+    if type(drho_refinement_iterations) is not int or drho_refinement_iterations not in (10, 32):
+        raise ValueError('supported closed producer refinement budget required')
     if not isinstance(dimensions, Dimensions):
         raise ValueError('explicit Dimensions required')
     if type(resources) is not dict or set(resources) != {
@@ -145,7 +159,7 @@ def plan(dimensions, resources, *, max_replay_work, pfit_maximum_work_bytes):
                    +h*(32*s+16)+8*p*q+16*d*d+8*d*b*b+64*b*b)+256*MIB+8*(4*d+134)
     isa_work = (120*(8*g*(a2+s*t)+8*sum(w**3 for w in aa))
                 +16*d*b**3+8*d**3+4*h*q*p+16*d*d+64*d
-                +10*(256*d*(d+1)+16384*d+16*d*d+64*d))
+                +drho_refinement_iterations*(256*d*(d+1)+16384*d+16*d*d+64*d))
     storage = 8*(p*(o*o+2*n+v*v+1)+n)
     factors = (storage+24*p*p+64*p*min(512, max(v*v, n))+8*p*max(o*o, n)
                +8*(24*b*b+18*m*m+4*b*m)+32*(n+m+p))
@@ -203,16 +217,16 @@ def plan(dimensions, resources, *, max_replay_work, pfit_maximum_work_bytes):
         if value > limit:
             refusals.append(key)
     return dict(
-        schema='native-campaign-ledger-prediction/2', policy_id=POLICY,
+        schema='native-campaign-ledger-prediction/2', policy_id=policy,
         status='REFUSED' if refusals else 'WITHIN_PREDICTED_LEDGER_LIMITS',
-        policy_scientific_commit=SCIENTIFIC_COMMIT, resources=dict(resources),
+        policy_scientific_commit=scientific_commit, resources=dict(resources),
         qualification='Arithmetic prediction only; no source/build/descriptor receipt supplied '
                       'to this pure calculator. A separately verified supervisor is required.',
         max_replay_work=max_replay_work, pfit_maximum_work_bytes=cap, refusals=refusals,
         dimensions=dict(asdict(dimensions), nmo_envelope=m, nvir_envelope=v,
                         ov_envelope=n, nodes=f, parameters=k, channels=c, used_channels=u,
                         moment_channels=q, fit_points=L, isa_iterations=120,
-                        drho_refinement_iterations=10, response_grid_rows=r,
+                        drho_refinement_iterations=drho_refinement_iterations, response_grid_rows=r,
                         integration_grid_rows=h, isa_grid_accounting_rows=g),
         stages=stages, charged_work=work, peak_numeric_bytes=peak,
         peak_stage=max(stages, key=lambda t: t['numeric_bytes'])['name'],
