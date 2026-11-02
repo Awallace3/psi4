@@ -1,8 +1,10 @@
 """New producer accounting only; never construct Psi4, a state or a grid."""
 import importlib.util
+import hashlib
 import marshal
 from pathlib import Path
 import struct
+import subprocess
 import sys
 from types import ModuleType
 
@@ -42,13 +44,28 @@ def predict(symbols='OHH', *, cap=2*1024**3, replay=10**12, **changes):
                         max_replay_work=replay, pfit_maximum_work_bytes=cap)
 
 
-def test_new_policy_binds_exact_qualified_source_and_distinct_schema():
-    binding = planner.source_binding(Path(__file__).resolve().parents[2])
+def test_historical_policy_binds_its_exact_qualified_source_not_current_checkout(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    # This policy remains cb63305 even after later scientific source changes.
+    # Read the exact Git objects rather than silently accepting today's files
+    # or changing the historical production hash map to bless a newer build.
+    historical = tmp_path/'cb63305-source'
+    for relative, expected in planner.FILES.items():
+        raw = subprocess.check_output(
+            ['git', 'show', 'cb63305f4115526417a830829a0a30c36b85b4e8:'+relative],
+            cwd=root)
+        assert hashlib.sha256(raw).hexdigest() == expected
+        path = historical/relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    binding = planner.source_binding(historical)
     assert binding['scientific_commit'] == 'cb63305f4115526417a830829a0a30c36b85b4e8'
     assert planner.POLICY == 'cb63305-reference-h2h1-ledger-v2'
     assert 'psi4/driver/procrouting/isapol_pfit_plan.py' in binding['files_sha256']
     assert 'psi4/driver/procrouting/isapol_schema.py' in binding['files_sha256']
     assert predict()['schema'] == 'native-campaign-ledger-prediction/2'
+    with pytest.raises(ValueError, match='scientific planning sources differ'):
+        planner.source_binding(root)
 
 
 def test_native_cap_is_charged_once_in_the_actual_refinement_stage():
