@@ -113,12 +113,34 @@ struct HostScratch {
     double seconds[5] = {};                       // collocation, GEMM, points, Becke-Roussel, moments
 };
 
-// Moments on the host. Threads take whole blocks, as psi4's V builds do,
-// so BLAS runs single-threaded inside the region. Per spin sigma, with T = D_sigma . phi:
-//   rho = phi.T, grad rho = 2 phi_c.T, tau (no 1/2) = sum_c phi_c.(D_sigma phi_c),
-//   lapl rho = 2 (lapl phi).T + 2 tau,
-// four GEMMs per spin. Of the Hessian only lapl phi is kept. Hirshfeld weights are formed
-// per point inside the moment loop.
+// The XDM atomic moments, integrated on the grid (Becke & Johnson, J. Chem. Phys. 127, 154108 (2007)).
+// For atom A at R_A, with r_A = |r - R_A| and grid weights w_P, the Hirshfeld partition
+//   w_A(r) = rho_A^free(r_A) / sum_B rho_B^free(r_B)          (ghost centres stay in the sum)
+// gives, summed over grid points P,
+//   N_A       = sum_P w_P w_A rho                              population ("charge")
+//   V_A       = sum_P w_P w_A rho r_A^3                        Hirshfeld volume
+//   <M_l^2>_A = sum_sigma sum_P w_P w_A rho_sigma [r_A^l - (r_A - b_sigma)^l]^2,   l = 1, 2, 3
+// where b_sigma(r) is the length of the exchange-hole dipole at r (Becke-Roussel, below), and
+// r_A - b_sigma is clamped at 0. pairwise_energy turns V_A into a polarizability
+// alpha_A = alpha_A^free V_A / V_A^free, and pair_sum turns (alpha, <M_l^2>) into C6, C8, C10 and
+// the BJ-damped energy -sum_{i<j} sum_n C_n / (R^n + R_vdw^n).
+//
+// Density at the points, per spin sigma, from the collocation phi_mu(P) and the symmetric
+// density matrix D_sigma. With T_mu(P) = sum_nu D_sigma,mu,nu phi_nu(P):
+//   rho_sigma      = sum_mu phi_mu T_mu
+//   grad rho_sigma = 2 sum_mu (grad phi_mu) T_mu
+//   tau_sigma      = sum_mu,nu (grad phi_mu) . D_sigma,mu,nu (grad phi_nu)  = sum_i |grad psi_i|^2 (no 1/2)
+//   lapl rho_sigma = 2 sum_mu (lapl phi_mu) T_mu + 2 tau_sigma
+// That is four GEMMs per spin: D.phi, then D.phi_c for c = x, y, z. Of the Hessian only lapl phi is
+// kept. A restricted density uses rho_beta = rho_alpha.
+//
+// Becke-Roussel (Phys. Rev. A 39, 3761 (1989)), per point and spin: the hole curvature
+//   Q = (lapl rho - 2 D) / 6,   D = tau - |grad rho|^2 / (4 rho),
+// then x from  x e^{-2x/3} / (x - 2) = (2/3) pi^{2/3} rho^{5/3} / Q,  and  b = (x^3 e^{-x} / (8 pi rho))^{1/3}
+// (exchange_hole_curvature and bhole).
+//
+// Threads take whole blocks, as psi4's V builds do, so BLAS runs single-threaded inside the region.
+// Hirshfeld weights are formed per point inside the moment loop rather than stored per atom.
 void integrate_on_host(const DFTGrid& grid, const BasisSet& basis, const ProatomDensity& proatom,
                        const std::vector<int>& atomic_nums, const std::vector<std::array<double, 3>>& atom_coords,
                        SharedMatrix Da, SharedMatrix Db, std::vector<AtomicData>& atom_data, size_t& nbhole_failed,
@@ -177,7 +199,8 @@ void integrate_on_host(const DFTGrid& grid, const BasisSet& basis, const Proatom
         if (np == 0 || nl == 0) continue;  // no basis function reaches these points: no density
         auto t0 = clock::now();
 
-        // Collocation: value, gradient and Laplacian of every local function.
+        // Collocation: phi_mu, grad phi_mu and lapl phi_mu = d2/dx2 + d2/dy2 + d2/dz2 (Hessian xx + yy + zz)
+        // of every function that reaches this block.
         std::copy(block->x(), block->x() + np, s.xyz.begin());
         std::copy(block->y(), block->y() + np, s.xyz.begin() + np);
         std::copy(block->z(), block->z() + np, s.xyz.begin() + 2 * np);
@@ -207,6 +230,8 @@ void integrate_on_host(const DFTGrid& grid, const BasisSet& basis, const Proatom
                 double* out = s.D.data() + static_cast<size_t>(m) * nl;
                 for (int n = 0; n < nl; n++) out[n] = Drow[fmap[n]];
             }
+            // T = D_sigma . phi; then rho = phi.T, grad = (grad phi).T and lapl = (lapl phi).T,
+            // which are half of grad rho and of the orbital part of lapl rho (factors applied below).
             C_DGEMM('N', 'N', nl, np, nl, 1.0, s.D.data(), nl, s.phi[0].data(), np, 0.0, s.T.data(), np);
             auto tb = clock::now();
             std::fill_n(s.rho.begin(), np, 0.0);
@@ -232,6 +257,7 @@ void integrate_on_host(const DFTGrid& grid, const BasisSet& basis, const Proatom
             auto tc = clock::now();
             double gemm = std::chrono::duration<double>(tb - ta).count();
             double points = std::chrono::duration<double>(tc - tb).count();
+            // tau = sum_c (phi_c).(D_sigma phi_c), one GEMM per Cartesian direction c.
             for (int c = 1; c <= 3; c++) {
                 auto td = clock::now();
                 C_DGEMM('N', 'N', nl, np, nl, 1.0, s.D.data(), nl, s.phi[c].data(), np, 0.0, s.T.data(), np);
@@ -248,7 +274,8 @@ void integrate_on_host(const DFTGrid& grid, const BasisSet& basis, const Proatom
             s.seconds[1] += gemm;
             s.seconds[2] += points;
 
-            // Becke-Roussel b; points where the solve fails count toward the warning and use b = 0.
+            // Becke-Roussel b from rho, |grad rho|^2 = 4 |grad|^2, tau and lapl rho = 2 lapl + 2 tau.
+            // Points where the solve fails count toward the warning and use b = 0.
             auto tf = clock::now();
             double* rho_out = s.rho_s[sp].data();
             double* b_out = s.b_s[sp].data();
@@ -270,7 +297,9 @@ void integrate_on_host(const DFTGrid& grid, const BasisSet& basis, const Proatom
             s.seconds[3] += std::chrono::duration<double>(clock::now() - tf).count();
         }
 
-        // Hirshfeld-weighted moments; for a restricted density beta = alpha.
+        // Hirshfeld-weighted moments; for a restricted density beta = alpha. At each point,
+        // wh = w_P w_A = w_P rho_A^free / promolecule, and d_l = r_A^l - max(0, r_A - b_sigma)^l, so
+        // sums[a] gathers wh rho_sigma d_l^2 (l = 1, 2, 3), wh rho r_A^3 and wh rho.
         auto tg = clock::now();
         const double* xp = block->x();
         const double* yp = block->y();
@@ -399,7 +428,9 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     std::map<std::string, int> int_opts;
     std::map<std::string, std::string> str_opts;
 
-    // Borrow the SCF's grid when it is the one XDM would build.
+    // Borrow the SCF's grid when it is the one XDM would build. The moments (integrate_on_host) are grid
+    // sums, so the same points, weights and blocks give the same result as a freshly built grid,
+    // without building it again and without a second copy in memory.
     std::shared_ptr<VBase> scf_V;
     if (options.get_bool("XDM_GRID_REUSE")) {
         scf_V = scf_potential_on_grid(wfn, *primary, DFTGrid::spec_for(options, int_opts, str_opts, {}));
