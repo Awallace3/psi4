@@ -41,11 +41,13 @@ def digest(value):
                                      separators=(',', ':')).encode()).hexdigest()
 
 
-def snapshot_dataset(client, *, max_entries=256):
+def snapshot_dataset(client, *, max_entries=256, dataset_id=DATASET_ID):
     """Use fresh objects/forced enumerations; never trust cached absences."""
     from typing import Any, Dict
-    raw = client.make_request('get', f'api/v1/datasets/{DATASET_ID}', Dict[str, Any])
-    dataset = client.get_dataset_by_id(DATASET_ID)
+    if type(dataset_id) is not int or dataset_id <= 0:
+        raise ValueError('one explicit positive dataset identity required for read-only snapshot')
+    raw = client.make_request('get', f'api/v1/datasets/{dataset_id}', Dict[str, Any])
+    dataset = client.get_dataset_by_id(dataset_id)
     dataset.fetch_specifications(force_refetch=True)
     specifications = plain(dataset.specifications)
     dataset.fetch_entry_names()
@@ -73,7 +75,7 @@ def snapshot_dataset(client, *, max_entries=256):
             specification=plain(record.specification),
             task=body.get('task'))
     # An independent record query must agree with the refreshed association set.
-    queried = {r.id for r in client.query_singlepoints(dataset_id=DATASET_ID)}
+    queried = {r.id for r in client.query_singlepoints(dataset_id=dataset_id)}
     if queried != {r['id'] for r in records.values()}:
         raise RuntimeError('record query and association inventory differ')
     return dict(schema='native-owned-dataset-snapshot/1', metadata=plain(raw),
@@ -127,7 +129,7 @@ def validate_new_entry(before, draft):
         raise ValueError('all previously owned records must be complete and preserved')
 
 
-def assert_append_delta(before, after, *, entry_name, record_id=None):
+def assert_append_delta(before, after, *, entry_name, record_id=None, specification_name=SPECIFICATION):
     """Every old entry/specification/record/association is immutable."""
     if (before['metadata'] != after['metadata']
             or before['specifications'] != after['specifications']
@@ -150,7 +152,9 @@ def assert_append_delta(before, after, *, entry_name, record_id=None):
         raise ValueError('unexpected extra/deleted records')
     associations = {s: None for s in before['specifications']}
     if record_id is not None:
-        associations[SPECIFICATION] = record_id
+        if specification_name not in associations:
+            raise ValueError('expected immutable specification is absent')
+        associations[specification_name] = record_id
     if after['associations'][entry_name] != associations:
         raise ValueError('unexpected new record association')
 

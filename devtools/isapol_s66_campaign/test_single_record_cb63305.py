@@ -33,6 +33,25 @@ def test_exact_single_worker_shape_and_fresh_record_required(tmp_path):
                                 runtime={}, payload=tmp_path, save=lambda *a: None)
 
 
+@pytest.mark.parametrize('shape', [(8, 20.), (12, 40.), (24, 80.)])
+def test_remaining_bank_requires_explicit_matching_worker_shape(shape):
+    cfg = config()
+    cfg.executors['pilot'].cores_per_worker, cfg.executors['pilot'].memory_per_worker = shape
+    session.validate_session_config(cfg, TAG, worker_shape=shape)
+    with pytest.raises(ValueError, match='exact single-worker'):
+        session.validate_session_config(cfg, TAG)
+    cfg.executors['pilot'].max_workers = 2
+    with pytest.raises(ValueError, match='exact single-worker'):
+        session.validate_session_config(cfg, TAG, worker_shape=shape)
+
+
+@pytest.mark.parametrize('shape', [(True, 20.), (12, True), [12, 40.], (12, 80.),
+                                   (24, 160.), (12, float('inf')), (12, float('nan'))])
+def test_refuse_unbounded_or_implicit_worker_shapes(shape):
+    with pytest.raises(ValueError, match='explicit finite'):
+        session.validate_session_config(config(), TAG, worker_shape=shape)
+
+
 @pytest.mark.parametrize('case', ['accepted', 'rejected', 'interrupted', 'callback_failure'])
 def test_own_manager_cleanup_capture_and_signal_restoration(monkeypatch, tmp_path, case):
     effects, saved = [], {}

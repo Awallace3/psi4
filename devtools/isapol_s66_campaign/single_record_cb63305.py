@@ -18,20 +18,31 @@ def helper(name):
     return module
 
 
-def validate_session_config(config, compute_tag):
+def validate_session_config(config, compute_tag, *, worker_shape=(4, 20.)):
+    """Validate a finite worker shape, not molecular memory/scratch admission.
+
+    The historical singleton keeps its exact default. Remaining-bank callers
+    must separately bind their case, allocation and worker-preflight receipts.
+    """
+    if (type(worker_shape) is not tuple or len(worker_shape) != 2
+            or type(worker_shape[0]) is not int
+            or type(worker_shape[1]) not in (int, float)
+            or worker_shape not in ((4, 20.), (8, 20.), (12, 40.), (24, 80.))):
+        raise ValueError('explicit finite native worker shape required')
+    cores, memory = worker_shape
     executors = config.executors
     if set(executors) != {'pilot'}:
         raise ValueError('one dedicated local pilot executor required')
     executor = executors['pilot']
     if (executor.type != 'local' or executor.max_workers != 1
-            or executor.cores_per_worker != 4 or executor.memory_per_worker != 20.
+            or executor.cores_per_worker != cores or executor.memory_per_worker != memory
             or executor.compute_tags != [compute_tag]):
-        raise ValueError('exact single-worker four-core20GiB tag-bound pilot required')
+        raise ValueError('exact single-worker shape and tag-bound pilot required')
 
 
-def run_session(config, *, record_id, compute_tag, runtime, payload, save):
+def run_session(config, *, record_id, compute_tag, runtime, payload, save, worker_shape=(4, 20.)):
     """Claim once, capture compressed local output, and stop this owned manager."""
-    validate_session_config(config, compute_tag)
+    validate_session_config(config, compute_tag, worker_shape=worker_shape)
     if type(record_id) is not int or record_id <= 0 or record_id in (5234314, 5234315):
         raise ValueError('fresh expanded-pilot record required')
     from qcfractalcompute.compute_manager import ComputeManager
@@ -59,7 +70,7 @@ def run_session(config, *, record_id, compute_tag, runtime, payload, save):
     manager = PilotManager(config, target_record_id=record_id, compute_tag=compute_tag,
                            acquisition_seconds=300)
     save('manager-started.json', dict(name=manager.name, tag=compute_tag,
-        executor='local', max_workers=1, cores=4, memory_gib=20))
+        executor='local', max_workers=1, cores=worker_shape[0], memory_gib=worker_shape[1]))
     interrupted = False
 
     def on_term(signum, frame):

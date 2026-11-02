@@ -184,7 +184,8 @@ def test_snapshot_proves_absences_through_fresh_forced_enumerations_not_getter_c
         status, extras, compute_history = NS(value='complete'), {}, []
         specification = {}
         def __init__(self):
-            super().__init__({'id': 1, 'task': None})
+            super().__init__({'id': 1, 'task': None, 'molecule': {
+                'symbols': ['H'], 'geometry': [0., 0., 0.]}})
     entry = Model({'name': 'entry', 'attributes': {}})
     entry.name = 'entry'
     class Dataset:
@@ -219,6 +220,7 @@ def test_snapshot_proves_absences_through_fresh_forced_enumerations_not_getter_c
     snapshot = guard.snapshot_dataset(Client())
     assert snapshot['associations'] == {'entry': {'spec': 1}, 'empty-entry': {'spec': None}}
     assert set(snapshot['records']) == {'1'}
+    assert snapshot['records']['1']['body_sha256'] == guard.digest(Record().body)
 
 
 def test_compressed_record_task_bytes_are_hashed_not_decompressed_or_serialized_raw():
