@@ -1,11 +1,15 @@
-"""Read-only owned354 identity, accepted checkpoint and append-delta guards.
+"""Closed owned354/355 identities, accepted state and audited append guards.
 
 Never authorize dataset353 or reinterpret its historical append checkpoint.
-Snapshots detect changes; they do not create an atomic server lock.
+Later owned355 checkpoints require actual recorded audit-proof bytes, not just
+completed records. Ordinary-OS receipts and snapshots are not host attestation
+or an atomic server lock.
 """
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
+import re
 
 DATASET_ID = 354
 DATASET_NAME = 'S66x8-native-CCASP-cb63305f41-request3-v1'
@@ -22,6 +26,11 @@ ACCEPTED_SHA256 = {
     'envelope': '52c47332ece5abde60125cd43ad32b534052827ebba8f68501461c0bbf0675d1',
 }
 _BASE = None
+SEED_CHECKPOINT_SHA256 = '5a033c70462ba409f4ad72b0a4cef9cf8b11494a40ba46041dded70c8846b294'
+SEED_SNAPSHOT_SHA256 = '03eccb9f147d155f4f3a9d3ee7562ec63fa898ddef7cbc0595fb36530febe5e5'
+PROOF_ROLES = frozenset(('audit', 'outcome', 'case', 'envelope'))
+MAX_PROOF_BYTES = 512*1024**2
+LEGACY_INITIAL_OPS = '7438d9b04ea87423080f5ce75e7a81862bccd8eb'
 
 
 def context(producer='cb63305'):
@@ -204,4 +213,239 @@ def prepare_initial_checkpoint(snapshot, *, authenticated_owner, specification, 
         result.update(schema='native-owned-dataset-checkpoint/2', producer_profile=producer,
                       generation=1, previous_checkpoint_sha256=None,
                       audited_records=[selected['first_record']])
+    return result
+
+
+def _sha(raw):
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _sha_string(value):
+    return type(value) is str and re.fullmatch(r'[0-9a-f]{64}', value) is not None
+
+
+def _prefix(snapshot, entries, records):
+    if set(snapshot) != {'schema', 'metadata', 'specifications', 'entries', 'associations', 'records'}:
+        raise ValueError('exact captured snapshot structure required')
+    try:
+        return dict(snapshot, entries={name: snapshot['entries'][name] for name in entries},
+            associations={name: snapshot['associations'][name] for name in entries},
+            records={str(identifier): snapshot['records'][str(identifier)] for identifier in records})
+    except KeyError as error:
+        raise ValueError('audited snapshot member is missing') from error
+
+
+def _case_acceptance(receipts, accepted, before, after, previous_sha256):
+    """Reduce previously audited bytes; this does not rerun a numerical audit.
+
+    The expected audit hash comes from the recorded, approved audit execution.
+    Ordinary-OS receipt trust is required: hashes are bindings, not attestation.
+    """
+    if (set(receipts) != PROOF_ROLES or any(type(raw) is not bytes for raw in receipts.values())
+            or not _sha_string(previous_sha256)):
+        raise ValueError('exact audited case receipt bytes and predecessor hash required')
+    audit, outcome, case, envelope = (json.loads(receipts[k]) for k in ('audit', 'outcome', 'case', 'envelope'))
+    selected = context('ed561666')
+    identifier, name, monomer = audit['record_id'], case['entry']['name'], case['monomer_id']
+    job = outcome['allocation']['JobId']
+    tag = 'ccasp-native-ed561666-'+monomer+'-'+job
+    preservation, numeric = audit['captured_preservation'], audit['numeric']
+    artifact = envelope['artifacts']['tensors.npz']
+    intent_sha = outcome.get('dispatch_intent_sha256')
+    if intent_sha is None:
+        # The already reviewed/manual first append predates durable intents.
+        # It cannot authorize a later transition or silently relax new jobs.
+        if (outcome.get('operational_commit') != LEGACY_INITIAL_OPS
+                or base().digest(before) != SEED_SNAPSHOT_SHA256
+                or preservation.get('dispatch_intent_sha256') is not None):
+            raise ValueError('audited one-writer dispatch intent required after the legacy initial append')
+    elif not _sha_string(intent_sha) or preservation.get('dispatch_intent_sha256') != intent_sha:
+        raise ValueError('audited dispatch-intent commitment differs')
+    links = {role: _sha(raw) for role, raw in receipts.items()}
+    if (type(identifier) is not int or identifier <= 0 or identifier in range(5234314, 5234319)
+            or type(monomer) is not str or re.fullmatch(r'monomer-[0-9]{4}', monomer) is None
+            or not 1 <= int(monomer[-4:]) <= 131 or monomer == selected['first_monomer']
+            or type(job) is not str or re.fullmatch(r'[1-9][0-9]*', job) is None
+            or audit.get('status') != 'PASS_SELECTED_BANK_CASE_SINGLETON_EVIDENCE'
+            or any(item.get('producer_profile') != 'ed561666' or item.get('dataset_mode') != 'append'
+                   for item in (audit, outcome, case))
+            or any(item.get('dataset_id') != selected['dataset_id'] for item in (audit, outcome, case))
+            or outcome.get('record_id') != identifier or audit.get('monomer_id') != monomer
+            or outcome.get('monomer_id') != monomer or audit.get('case_job') != job
+            or audit.get('case_outcome_sha256') != links['outcome']
+            or audit.get('pilot_sha256') != links['case'] or outcome.get('pilot_sha256') != links['case']
+            or audit.get('case_operational_commit') != outcome.get('operational_commit')
+            or audit.get('scientific_build_commit') != accepted['producer']['scientific_commit']
+            or outcome.get('scientific_build_commit') != accepted['producer']['scientific_commit']
+            or case.get('producer') != accepted['producer']
+            or case.get('dataset_name') != selected['dataset_name']
+            or case.get('specification_name') != SPECIFICATION
+            or case.get('required_first_pilot_audit_sha256') != selected['accepted_sha256']['audit']
+            or audit.get('runtime_unchanged') is not True or outcome.get('runtime_unchanged') is not True
+            or outcome.get('find_existing') is not False or outcome.get('maximum_records') != 1
+            or outcome.get('status') != 'DELIVERED_EXPANDED_NATIVE_ARTIFACTS_PENDING_QUALIFICATION'
+            or outcome.get('runtime_input_sha256') != case.get('runtime_input_sha256')
+            or outcome.get('compute_tag') != tag or outcome.get('checkpoint_sha256') != previous_sha256
+            or preservation.get('status') != 'PASS_CAPTURED_OWNED_DATASET_PRESERVATION'
+            or preservation.get('checkpoint_sha256') != previous_sha256
+            or preservation.get('before_sha256') != base().digest(before)
+            or preservation.get('after_sha256') != base().digest(after)
+            or audit.get('file_gate_sha256') != 'b70b0c621d766a16a9dae94d97ce251e70b9f9d5aeeabf949b452f977e8f64ec'
+            or audit.get('roles', {}).get('molecular_qcschema') != 1
+            or not audit.get('traces') or any(t.get('status') != 'passed' for t in audit['traces'].values())
+            or numeric.get('status') != 'PASS_NUMERIC_TRANSPORT_ONLY'
+            or envelope.get('request') != case['entry']['additional_keywords']['function_kwargs']['native_monomer']
+            or envelope.get('implementation', {}).get('sha256') != accepted['producer']['implementation_sha256']
+            or type(artifact.get('size')) is not int or not 0 < artifact['size'] <= 16*1024**2
+            or outcome.get('tensor_bytes') != artifact['size']
+            or not _sha_string(artifact.get('sha256'))
+            or outcome.get('tensors_sha256') != artifact['sha256']
+            or numeric.get('tensor_sha256') != artifact['sha256']
+            or preservation.get('audited_tensor_sha256') != artifact['sha256']
+            or preservation.get('audited_native_envelope_sha256') != base().digest(envelope)):
+        raise ValueError('independently audited cap32 case/provenance/artifact chain differs')
+    validate_new_case(before, case, reproduced_case=case, producer='ed561666')
+    assert_append_delta(before, after, entry_name=name, record_id=identifier)
+    base().validate_stored_entry(after['entries'][name], case['entry'])
+    record = after['records'][str(identifier)]
+    if (record.get('status') != 'complete' or len(record.get('history', [])) != 1
+            or record['history'][0].get('manager_name') != outcome.get('manager')
+            or record.get('native_envelope_sha256') != base().digest(envelope)
+            or record.get('tensor_sha256') != artifact['sha256']):
+        raise ValueError('audited completed record/history/artifacts changed')
+    return dict(monomer_id=monomer, entry_name=name, record_id=identifier,
+        manager=outcome['manager'], compute_tag=tag, previous_checkpoint_sha256=previous_sha256,
+        before_snapshot_sha256=base().digest(before), after_snapshot_sha256=base().digest(after),
+        completed_record_sha256=base().digest(record), receipts_sha256=links,
+        native_envelope_sha256=base().digest(envelope), tensor_sha256=artifact['sha256'],
+        tensor_bytes=artifact['size'], dispatch_intent_sha256=intent_sha)
+
+
+def checkpoint_proof_hashes(checkpoint):
+    """Bounded content-addressed receipt inventory; no paths are accepted."""
+    ledger = checkpoint.get('ledger', [])
+    if type(ledger) is not list or len(ledger) > 130:
+        raise ValueError('bounded audited append ledger required')
+    result = set()
+    for link in ledger:
+        hashes = link.get('receipts_sha256', {})
+        if set(hashes) != PROOF_ROLES or any(not _sha_string(sha) for sha in hashes.values()):
+            raise ValueError('exact content-addressed audit receipt roles required')
+        result.update(hashes.values())
+    return result
+
+
+def validate_checkpoint_contents(checkpoint, accepted, proof_blobs=None):
+    """Validate all non-seed acceptance proofs against final-snapshot prefixes.
+
+    Old tensor/trace files are not re-read. Their commitments are checked against
+    the actual recorded audit receipts and current completed-record fingerprints.
+    Historical raw parent hashes remain recorded audit commitments; only an
+    advance with the actual parent bytes proves that immediate raw-byte link.
+    """
+    selected = context('ed561666')
+    proofs = {} if proof_blobs is None else proof_blobs
+    required = checkpoint_proof_hashes(checkpoint)
+    if (type(proofs) is not dict or set(proofs) != required
+            or any(type(raw) is not bytes or len(raw) > 32*1024**2 or _sha(raw) != sha
+                   for sha, raw in proofs.items())
+            or sum(len(raw) for raw in proofs.values()) > MAX_PROOF_BYTES):
+        raise ValueError('complete exact bounded audit-proof bytes required')
+    snapshot = checkpoint['snapshot']
+    generation = checkpoint.get('generation')
+    if (checkpoint.get('schema') != 'native-owned-dataset-checkpoint/2'
+            or checkpoint.get('producer_profile') != 'ed561666'
+            or checkpoint.get('dataset_id') != selected['dataset_id']
+            or checkpoint.get('accepted_receipt_sha256') != selected['accepted_sha256']
+            or accepted['accepted_sha256'] != selected['accepted_sha256']
+            or type(generation) is not int or not 1 <= generation <= 131
+            or checkpoint.get('snapshot_sha256') != base().digest(snapshot)):
+        raise ValueError('owned355 audited checkpoint identity/bytes differ')
+    entries, records = [selected['first_entry']], [selected['first_record']]
+    prefix = _prefix(snapshot, entries, records)
+    if base().digest(prefix) != SEED_SNAPSHOT_SHA256:
+        raise ValueError('coded audited benzene snapshot anchor changed')
+    ledger = checkpoint.get('ledger', [])
+    if generation == 1:
+        if (ledger or checkpoint.get('status') != 'READ_ONLY_INITIAL_BASELINE'
+                or checkpoint.get('previous_checkpoint_sha256') is not None):
+            raise ValueError('exact initial audited checkpoint required')
+    else:
+        if (checkpoint.get('status') != 'READ_ONLY_AUDITED_ADVANCE' or len(ledger) != generation-1
+                or checkpoint.get('seed_checkpoint_sha256') != SEED_CHECKPOINT_SHA256
+                or checkpoint.get('seed_snapshot_sha256') != SEED_SNAPSHOT_SHA256
+                or ledger[0].get('previous_checkpoint_sha256') != SEED_CHECKPOINT_SHA256
+                or checkpoint.get('previous_checkpoint_sha256') != ledger[-1].get('previous_checkpoint_sha256')):
+            raise ValueError('monotonic audited checkpoint ledger required')
+        for link in ledger:
+            name, identifier = link['entry_name'], link['record_id']
+            if name in entries or identifier in records:
+                raise ValueError('one unique new audited entry/record per transition required')
+            after = _prefix(snapshot, entries+[name], records+[identifier])
+            receipts = {role: proofs[sha] for role, sha in link['receipts_sha256'].items()}
+            observed = _case_acceptance(receipts, accepted, prefix, after,
+                                        link['previous_checkpoint_sha256'])
+            if base().digest(observed) != base().digest(link):
+                raise ValueError('audited ledger transition changed')
+            entries.append(name)
+            records.append(identifier)
+            prefix = after
+    if (checkpoint.get('audited_records') != records or len(records) != generation
+            or set(snapshot['entries']) != set(entries)
+            or set(snapshot['associations']) != set(entries)
+            or set(snapshot['records']) != {str(identifier) for identifier in records}):
+        raise ValueError('checkpoint cannot bless unaudited or unassociated extras')
+    return checkpoint
+
+
+def advance_checkpoint(previous_raw, previous_sha256, *, accepted, receipts,
+                       expected_audit_sha256, captured, tensor_raw, proof_blobs=None):
+    """Pure one-step acceptance reducer; never write, repair or contact QCArchive."""
+    import base64
+    import copy
+    if type(previous_raw) is not bytes or _sha(previous_raw) != previous_sha256:
+        raise ValueError('exact immediate predecessor checkpoint bytes required')
+    previous = json.loads(previous_raw)
+    proofs = {} if proof_blobs is None else dict(proof_blobs)
+    validate_checkpoint_contents(previous, accepted, proofs)
+    if (previous['generation'] == 1 and previous_sha256 != SEED_CHECKPOINT_SHA256
+            or previous['generation'] >= 131):
+        raise ValueError('coded initial checkpoint or bounded remaining generation required')
+    if (set(receipts) != PROOF_ROLES or not _sha_string(expected_audit_sha256)
+            or _sha(receipts['audit']) != expected_audit_sha256):
+        raise ValueError('independently recorded new audit receipt hash required')
+    if set(captured) != {'before', 'entry', 'record', 'delivered'} or captured['before'] != previous['snapshot']:
+        raise ValueError('captured before-state must equal the exact accepted predecessor')
+    before, entry, record, after = (captured[k] for k in ('before', 'entry', 'record', 'delivered'))
+    link = _case_acceptance(receipts, accepted, before, after, previous_sha256)
+    name, identifier = link['entry_name'], link['record_id']
+    case = json.loads(receipts['case'])
+    for snapshot, record_id in ((entry, None), (record, identifier)):
+        assert_append_delta(before, snapshot, entry_name=name, record_id=record_id)
+        base().validate_stored_entry(snapshot['entries'][name], case['entry'])
+    specification = before['specifications'][SPECIFICATION]['specification']
+    base().validate_fresh_record(record['records'][str(identifier)], tag=link['compute_tag'],
+                                specification=specification, entry=case['entry'])
+    envelope = json.loads(receipts['envelope'])
+    artifact = envelope['artifacts']['tensors.npz']
+    if (type(tensor_raw) is not bytes or len(tensor_raw) != link['tensor_bytes']
+            or _sha(tensor_raw) != link['tensor_sha256']
+            or base64.b64decode(artifact['data'], validate=True) != tensor_raw):
+        raise ValueError('actual new tensor transport bytes differ')
+    for role, raw in receipts.items():
+        sha = link['receipts_sha256'][role]
+        if sha in proofs and proofs[sha] != raw:
+            raise ValueError('content-addressed audit receipt collision')
+        proofs[sha] = raw
+    ledger = copy.deepcopy(previous.get('ledger', []))+[link]
+    result = dict(schema='native-owned-dataset-checkpoint/2', status='READ_ONLY_AUDITED_ADVANCE',
+        producer_profile='ed561666', dataset_id=355, generation=previous['generation']+1,
+        previous_checkpoint_sha256=previous_sha256, seed_checkpoint_sha256=SEED_CHECKPOINT_SHA256,
+        seed_snapshot_sha256=SEED_SNAPSHOT_SHA256, accepted_receipt_sha256=dict(accepted['accepted_sha256']),
+        audited_records=list(previous['audited_records'])+[identifier],
+        ledger=ledger, snapshot=copy.deepcopy(after), snapshot_sha256=base().digest(after),
+        qualification='One audited append advanced under ordinary-OS recorded-receipt trust; '
+            'hashes bind bytes, not execution attestation. No scientific accuracy/grid/solver claim, '
+            'automatic recovery or server lock. All prior actual audit-proof bytes remain required.')
+    validate_checkpoint_contents(result, accepted, proofs)
     return result

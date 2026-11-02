@@ -22,7 +22,7 @@ if [[ $# -ge 1 && "$1" = --ed561666-remaining-case ]]; then
     shift
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --owned-checkpoint|--checkpoint-sha256|--accepted-audit|--accepted-outcome|--accepted-pilot|--accepted-envelope)
+            --owned-checkpoint|--checkpoint-sha256|--checkpoint-proofs|--accepted-audit|--accepted-outcome|--accepted-pilot|--accepted-envelope)
                 [[ $# -ge 2 ]] || exit 2
                 EXTRA+=("$1" "$2")
                 shift 2

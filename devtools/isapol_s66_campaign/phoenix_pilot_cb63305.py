@@ -103,21 +103,30 @@ def load_append_inputs(args):
     if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
         raise ValueError('closed molecular producer selector required')
     selection = {} if producer == 'cb63305' else dict(producer=producer)
+    proof_path = getattr(args, 'checkpoint_proofs', None)
     roles = ('audit', 'outcome', 'pilot', 'envelope')
     paths = {role: getattr(args, 'accepted_'+role) for role in roles}
     if not args.remaining_case:
-        if args.owned_checkpoint or args.checkpoint_sha256 or any(paths.values()):
+        if args.owned_checkpoint or args.checkpoint_sha256 or any(paths.values()) or proof_path is not None:
             raise ValueError('owned append inputs cannot be ignored in first-case mode')
         return None
     if not args.owned_checkpoint or not args.checkpoint_sha256 or not all(paths.values()):
         raise ValueError('remaining case requires all closed acceptance receipts and checkpoint')
+    if producer != 'ed561666' and proof_path is not None:
+        raise ValueError('checkpoint advancement proof directories are cap32-only')
     blobs = {role: path.read_bytes() for role, path in paths.items()}
     accepted = helper('owned_dataset_cb63305').verify_first_acceptance(blobs, **selection)
     raw = args.owned_checkpoint.read_bytes()
-    helper('dataset_owned354_cb63305').validate_checkpoint(raw, args.checkpoint_sha256, accepted,
-                                                        **selection)
-    return dict(first_receipt_blobs=blobs, checkpoint_raw=raw,
-                checkpoint_sha256=args.checkpoint_sha256)
+    append = helper('dataset_owned354_cb63305')
+    proofs = (append.read_checkpoint_proofs(raw, args.checkpoint_sha256, proof_path)
+              if proof_path is not None else {})
+    append.validate_checkpoint(raw, args.checkpoint_sha256, accepted, **selection,
+                               **(dict(proof_blobs=proofs) if proofs else {}))
+    result = dict(first_receipt_blobs=blobs, checkpoint_raw=raw,
+                  checkpoint_sha256=args.checkpoint_sha256)
+    if proofs:
+        result['checkpoint_proof_blobs'] = proofs
+    return result
 
 
 def validate_server_config(server):
@@ -158,6 +167,7 @@ def main():
     parser.add_argument('--remaining-case', action='store_true')
     parser.add_argument('--owned-checkpoint', type=Path)
     parser.add_argument('--checkpoint-sha256')
+    parser.add_argument('--checkpoint-proofs', type=Path)
     for role in ('audit', 'outcome', 'pilot', 'envelope'):
         parser.add_argument('--accepted-'+role, type=Path)
     args = parser.parse_args()
@@ -378,6 +388,8 @@ def main():
         trace_files=[p.name for p in sorted((payload/'traces').glob('*.strace'))],
         qualification='Fresh single-record delivery only; independent numerical/export/OS-trace audit '
                       'is still required. No accuracy, solver, covariance or whole-set acceptance.')
+    if producer == 'ed561666' and args.remaining_case:
+        outcome['dispatch_intent_sha256'] = created['dispatch_intent_sha256']
     save('pilot-outcome.json', outcome)
     print(json.dumps(dict(status=outcome['status'], dataset_id=dataset.id, record_id=record.id)))
 

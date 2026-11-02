@@ -37,6 +37,8 @@ def setup(monkeypatch, tmp_path, *, change=None, producer='cb63305'):
         case['entry']['name'] = 'monomer-0006-unit-only'
         case['entry']['attributes']['monomer_id'] = 'monomer-0006'
         tag, first_record = 'ccasp-native-ed561666-monomer-0006-12345', context['first_record']
+        monkeypatch.setattr(append, 'INTENT_ROOT', tmp_path/'dispatch-intents')
+        monkeypatch.setenv('SLURM_JOB_ID', '12345')
     case['specification'] = copy.deepcopy(specification)
     del case['specification']['protocols']
     case['entry']['molecule'].update(molecular_charge=0, molecular_multiplicity=1,
@@ -49,6 +51,10 @@ def setup(monkeypatch, tmp_path, *, change=None, producer='cb63305'):
     checkpoint = guard.prepare_initial_checkpoint(before, authenticated_owner='awallace43',
         specification=specification, accepted=accepted, **selected)
     raw = json.dumps(checkpoint).encode()
+    if selected:
+        # Explicit fake anchors only: these snapshots are not molecular evidence.
+        monkeypatch.setattr(guard, 'SEED_CHECKPOINT_SHA256', hashlib.sha256(raw).hexdigest())
+        monkeypatch.setattr(guard, 'SEED_SNAPSHOT_SHA256', guard.base().digest(before))
     after_entry = copy.deepcopy(before)
     entry = case['entry']['name']
     after_entry['entries'][entry] = copy.deepcopy(case['entry'])
@@ -224,6 +230,31 @@ def test_cap32_initial_checkpoint_cannot_bless_an_unaudited_second_record(monkey
     checkpoint['audited_records'].append(9999)
     kwargs['checkpoint_raw'] = json.dumps(checkpoint).encode()
     kwargs['checkpoint_sha256'] = hashlib.sha256(kwargs['checkpoint_raw']).hexdigest()
-    with pytest.raises(ValueError, match='audited cap32 initial checkpoint'):
+    with pytest.raises(ValueError, match='audited checkpoint'):
         append.append_once(client, **kwargs)
     assert not client.calls
+
+
+def test_atomic_checkpoint_intent_blocks_second_writer_without_repeating_posts(monkeypatch, tmp_path):
+    client, kwargs, saved, _ = setup(monkeypatch, tmp_path, producer='ed561666')
+    append.append_once(client, **kwargs)
+    saved_intent = saved['dispatch-intent.json']
+    case = json.loads(kwargs['case_path'].read_bytes())
+    assert append.verify_dispatch_intent(saved_intent,
+        checkpoint_sha256=kwargs['checkpoint_sha256'],
+        snapshot_sha256=json.loads(kwargs['checkpoint_raw'])['snapshot_sha256'],
+        case_sha256=hashlib.sha256(kwargs['case_path'].read_bytes()).hexdigest(),
+        monomer_id=case['monomer_id'], entry_name=case['entry']['name'],
+        compute_tag=kwargs['compute_tag']) == saved_intent['sha256']
+    with pytest.raises(FileExistsError):
+        append.reserve_dispatch_intent(checkpoint_sha256=kwargs['checkpoint_sha256'],
+            snapshot_sha256=json.loads(kwargs['checkpoint_raw'])['snapshot_sha256'],
+            case_sha256='f'*64, monomer_id='monomer-0001', entry_name='synthetic-other-case',
+            compute_tag='ccasp-native-ed561666-monomer-0001-12345')
+    assert len(client.calls) == 2
+    assert (append.INTENT_ROOT/json.loads(kwargs['checkpoint_raw'])['snapshot_sha256']/'intent.json').exists()
+    with pytest.raises(FileExistsError):
+        append.reserve_dispatch_intent(checkpoint_sha256='e'*64,
+            snapshot_sha256=json.loads(kwargs['checkpoint_raw'])['snapshot_sha256'],
+            case_sha256='f'*64, monomer_id='monomer-0001', entry_name='synthetic-byte-alias',
+            compute_tag='ccasp-native-ed561666-monomer-0001-12345')

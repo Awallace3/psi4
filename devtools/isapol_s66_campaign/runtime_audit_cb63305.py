@@ -19,7 +19,7 @@ MANAGER = Path('/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca')
 HELPERS = {'pilot_cb63305', 'phoenix_pilot_cb63305', 'phoenix_worker_cb63305',
     'phoenix_installed_checks', 'phoenix_worker_probe', 'phoenix_pilot', 'runtime_audit',
     'validate_numeric', 'dataset_fresh_cb63305', 'phoenix_descriptor_bank_cb63305',
-    'owned_dataset_cb63305', 'dataset_owned354_cb63305'}
+    'owned_dataset_cb63305', 'dataset_owned354_cb63305', 'prepare_owned354_baseline_cb63305'}
 
 
 def helper(name):
@@ -101,7 +101,9 @@ def validate_preservation(data, outcome, draft, append_inputs, specification, *,
     selected = {} if producer == 'cb63305' else dict(producer=producer)
     accepted = guard.verify_first_acceptance(append_inputs['first_receipt_blobs'], **selected)
     checkpoint = helper('dataset_owned354_cb63305').validate_checkpoint(
-        append_inputs['checkpoint_raw'], append_inputs['checkpoint_sha256'], accepted, **selected)
+        append_inputs['checkpoint_raw'], append_inputs['checkpoint_sha256'], accepted, **selected,
+        **(dict(proof_blobs=append_inputs['checkpoint_proof_blobs'])
+           if append_inputs.get('checkpoint_proof_blobs') else {}))
     read = lambda name: json.loads((data/name).read_bytes())
     before, entry, record, delivered = (read(name) for name in (
         'owned-before-entry.json', 'owned-after-entry.json',
@@ -137,13 +139,62 @@ def validate_preservation(data, outcome, draft, append_inputs, specification, *,
             or outcome.get('tensors_sha256') != tensor_sha
             or outcome.get('tensor_bytes') != len(tensor_raw)):
         raise ValueError('captured delivered record differs from audited envelope/tensor bytes')
-    return dict(status=('PASS_CAPTURED_OWNED_DATASET_PRESERVATION' if selected
+    intent_sha = None
+    if selected:
+        intent_sha = helper('dataset_owned354_cb63305').verify_dispatch_intent(
+            read('dispatch-intent.json'), checkpoint_sha256=append_inputs['checkpoint_sha256'],
+            snapshot_sha256=checkpoint['snapshot_sha256'],
+            case_sha256=outcome['pilot_sha256'], monomer_id=draft['monomer_id'],
+            entry_name=draft['entry']['name'], compute_tag=outcome['compute_tag'])
+        if intent_sha != outcome.get('dispatch_intent_sha256'):
+            raise ValueError('audited owned dispatch intent differs from the delivered outcome')
+    result = dict(status=('PASS_CAPTURED_OWNED_DATASET_PRESERVATION' if selected
                         else 'PASS_CAPTURED_OWNED354_PRESERVATION'),
         checkpoint_sha256=append_inputs['checkpoint_sha256'],
         before_sha256=guard.base().digest(before), after_sha256=guard.base().digest(delivered),
         audited_native_envelope_sha256=envelope_sha, audited_tensor_sha256=tensor_sha,
         preserved_records=len(before['records']),
         qualification='Reduction of captured server snapshots, not an atomic lock or fresh live query.')
+    if intent_sha is not None:
+        result['dispatch_intent_sha256'] = intent_sha
+    return result
+
+
+def advance_audit_checkpoint(*, raw_audit, data, case_path, append_inputs, output, operational_commit):
+    """After a passing audit, confirm live state and emit one immutable checkpoint."""
+    audit = json.loads(raw_audit)
+    if (audit.get('status') != 'PASS_SELECTED_BANK_CASE_SINGLETON_EVIDENCE'
+            or audit.get('producer_profile') != 'ed561666' or audit.get('dataset_mode') != 'append'):
+        raise ValueError('only a passing selected append audit may advance a checkpoint')
+    baseline = helper('prepare_owned354_baseline_cb63305')
+    append = helper('dataset_owned354_cb63305')
+    from qcportal.singlepoint import QCSpecification
+    seed = json.loads(append_inputs['first_receipt_blobs']['pilot'])
+    specification = QCSpecification(**helper('phoenix_pilot').execution_specification(seed['specification']))
+    receipts = dict(audit=raw_audit, outcome=(data/'pilot-outcome.json').read_bytes(),
+                    case=case_path.read_bytes(), envelope=(data/'server-native-envelope.json').read_bytes())
+    captured = {role: json.loads((data/name).read_bytes()) for role, name in dict(
+        before='owned-before-entry.json', entry='owned-after-entry.json',
+        record='owned-after-record.json', delivered='owned-after-delivery.json').items()}
+    client, transport = baseline.approved_client(producer='ed561666')
+    checkpoint = baseline.advance_baseline(client, blobs=append_inputs['first_receipt_blobs'],
+        authenticated_owner=baseline.OWNER, specification=specification,
+        previous_raw=append_inputs['checkpoint_raw'], previous_sha256=append_inputs['checkpoint_sha256'],
+        receipts=receipts, expected_audit_sha256=hashlib.sha256(raw_audit).hexdigest(),
+        captured=captured, tensor_raw=(data/'server-tensors.npz').read_bytes(),
+        proof_blobs=append_inputs.get('checkpoint_proof_blobs'))
+    links = append.store_checkpoint_proofs(receipts)
+    if links != checkpoint['ledger'][-1]['receipts_sha256']:
+        raise ValueError('stored proof commitments differ from the passing audit')
+    checkpoint.update(operational_commit=operational_commit, transport_binding=transport,
+        advancement_source_sha256=hashlib.sha256(Path(__file__).with_name(
+            'prepare_owned354_baseline_cb63305.py').read_bytes()).hexdigest())
+    path = output/'next-checkpoint.json'
+    with path.open('x') as stream:
+        json.dump(checkpoint, stream, indent=2, allow_nan=False)
+    return dict(status='PASS_AUDITED_CHECKPOINT_ADVANCE', generation=checkpoint['generation'],
+        dataset_id=355, audited_records=checkpoint['audited_records'],
+        checkpoint_path=str(path), checkpoint_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
 
 
 def main():
@@ -155,9 +206,13 @@ def main():
     parser.add_argument('--remaining-case', action='store_true')
     parser.add_argument('--owned-checkpoint', type=Path)
     parser.add_argument('--checkpoint-sha256')
+    parser.add_argument('--checkpoint-proofs', type=Path)
+    parser.add_argument('--advance-checkpoint', action='store_true')
     for role in ('audit', 'outcome', 'pilot', 'envelope'):
         parser.add_argument('--accepted-'+role, type=Path)
     args = parser.parse_args()
+    if args.advance_checkpoint and (args.producer != 'ed561666' or not args.remaining_case):
+        raise ValueError('checkpoint advancement is only supported for selected cap32 append audits')
     bootstrap = helper('phoenix_pilot_cb63305')
     append_inputs = bootstrap.load_append_inputs(args)
     producer = args.producer
@@ -334,6 +389,18 @@ def main():
     print(json.dumps(dict(status=report['status'], record_id=outcome['record_id'], roles=dict(roles))))
     if not passed:
         raise RuntimeError('expanded molecular runtime audit failed; do not advance models')
+    if args.advance_checkpoint:
+        relative = 'devtools/isapol_s66_campaign/prepare_owned354_baseline_cb63305.py'
+        expected = subprocess.check_output(['git', '-C', str(source), 'show', args.commit+':'+relative])
+        if (source/relative).read_bytes() != expected:
+            raise ValueError('tracked read-only advancement helper differs from the pinned audit source')
+        advanced = advance_audit_checkpoint(raw_audit=(output/'audit-report.json').read_bytes(),
+            data=data, case_path=args.pilot, append_inputs=append_inputs,
+            output=output, operational_commit=args.commit)
+        checks.verify_runtime(environment, manifest)
+        if checks.git(source, 'rev-parse', 'HEAD') != args.commit or checks.git(source, 'status', '--porcelain'):
+            raise ValueError('pinned audit source changed during read-only checkpoint advancement')
+        print(json.dumps(advanced))
 
 
 if __name__ == '__main__':

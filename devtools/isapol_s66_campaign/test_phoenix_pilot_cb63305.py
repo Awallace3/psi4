@@ -136,6 +136,38 @@ def test_cap32_append_requires_closed_receipts_and_cannot_be_inferred_in_fresh_m
     args.accepted_audit = Path('not-read')
     with pytest.raises(ValueError, match='cannot be ignored'):
         pilot.load_append_inputs(args)
+    args.accepted_audit = None
+    args.checkpoint_proofs = Path('not-opened')
+    with pytest.raises(ValueError, match='cannot be ignored'):
+        pilot.load_append_inputs(args)
+
+
+def test_advanced_checkpoint_proof_bytes_reach_dispatch_validation(monkeypatch, tmp_path):
+    args = append_args()
+    args.producer, args.remaining_case = 'ed561666', True
+    args.owned_checkpoint = tmp_path/'checkpoint.json'
+    args.owned_checkpoint.write_bytes(b'SYNTHETIC_CHECKPOINT_ONLY')
+    args.checkpoint_sha256 = 'SYNTHETIC_CHECKPOINT_HASH_ONLY'
+    args.checkpoint_proofs = tmp_path/'proof-store'
+    for role in ('audit', 'outcome', 'pilot', 'envelope'):
+        path = tmp_path/(role+'.json')
+        path.write_bytes(b'SYNTHETIC_RECEIPT_ONLY')
+        setattr(args, 'accepted_'+role, path)
+    observed = []
+    proofs = {'SYNTHETIC_PROOF_HASH_ONLY': b'SYNTHETIC_PROOF_ONLY'}
+    def read(raw, sha, directory):
+        assert (raw, sha, directory) == (
+            b'SYNTHETIC_CHECKPOINT_ONLY', args.checkpoint_sha256, args.checkpoint_proofs)
+        return proofs
+    def validate(raw, sha, accepted, **kwargs):
+        observed.append(kwargs)
+    owned = NS(verify_first_acceptance=lambda blobs, **kw: {'synthetic': True})
+    append = NS(read_checkpoint_proofs=read, validate_checkpoint=validate)
+    monkeypatch.setattr(pilot, 'helper', lambda name:
+                        owned if name == 'owned_dataset_cb63305' else append)
+    result = pilot.load_append_inputs(args)
+    assert observed == [dict(producer='ed561666', proof_blobs=proofs)]
+    assert result['checkpoint_proof_blobs'] == proofs
 
 
 @pytest.mark.parametrize('producer', ['cb63305', 'ed561666'])

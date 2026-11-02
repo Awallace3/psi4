@@ -86,3 +86,51 @@ def test_cap32_baseline_selection_is_explicit_on_both_reads_and_acceptance(monke
     with pytest.raises(ValueError, match='closed'):
         prep.prepare_baseline(object(), blobs={}, authenticated_owner='awallace43',
                               specification={}, producer='arbitrary')
+
+
+@pytest.mark.parametrize('change', ['none', 'stale_live', 'concurrent', 'reducer_refusal'])
+def test_advancement_confirms_actual_live_delivery_without_any_server_write(monkeypatch, change):
+    effects = []
+    snapshot = dict(entries={'SYNTHETIC': {}}, records={'60001': {}}, metadata={'id': 355})
+    first, second = copy.deepcopy(snapshot), copy.deepcopy(snapshot)
+    if change == 'stale_live':
+        first['metadata']['id'] = 354
+    elif change == 'concurrent':
+        second['metadata']['name'] = 'foreign'
+    iterator = iter([first, second])
+    def verify(blobs, *, producer):
+        assert producer == 'ed561666'
+        effects.append('closed_seed')
+        return {'synthetic': True}
+    def read(client, *, producer):
+        assert producer == 'ed561666'
+        effects.append('snapshot')
+        return next(iterator)
+    def validate(value, **kwargs):
+        effects.append('owned')
+    def advance(raw, sha, **kwargs):
+        effects.append('advance')
+        if change == 'reducer_refusal':
+            raise ValueError('SYNTHETIC_UNAUDITED_CASE_REFUSED')
+        return dict(status='READ_ONLY_AUDITED_ADVANCE', generation=2, snapshot=copy.deepcopy(snapshot))
+    guard = NS(verify_first_acceptance=verify, snapshot_dataset=read,
+               validate_owned_dataset=validate, advance_checkpoint=advance)
+    monkeypatch.setattr(prep, 'helper', lambda name: guard)
+    class Client:
+        def get_server_information(self):
+            return dict(prep.SERVER)
+        def make_request(self, *args, **kwargs):
+            raise AssertionError('No unreviewed or mutating endpoint permitted')
+    kwargs = dict(blobs={}, authenticated_owner='awallace43', specification={},
+        previous_raw=b'SYNTHETIC_PARENT', previous_sha256='SYNTHETIC_PARENT_HASH',
+        receipts={}, expected_audit_sha256='SYNTHETIC_AUDIT_HASH',
+        captured={'delivered': snapshot}, tensor_raw=b'SYNTHETIC_TENSOR', proof_blobs={})
+    if change == 'none':
+        result = prep.advance_baseline(Client(), **kwargs)
+        assert result['generation'] == 2
+        assert effects == ['closed_seed', 'snapshot', 'owned', 'advance', 'snapshot']
+    else:
+        with pytest.raises((ValueError, RuntimeError)):
+            prep.advance_baseline(Client(), **kwargs)
+        if change == 'stale_live':
+            assert 'advance' not in effects

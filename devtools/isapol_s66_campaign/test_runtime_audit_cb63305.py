@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from types import ModuleType, SimpleNamespace as NS
 
 import pytest
 
@@ -189,6 +190,9 @@ def test_independent_captured_preservation_reduction_checks_all_old_state(
     outcome = dict(record_id=created['record_id'], manager='SYNTHETIC_MANAGER', compute_tag=kwargs['compute_tag'],
                    checkpoint_sha256=kwargs['checkpoint_sha256'],
                    tensors_sha256=hashlib.sha256(tensor).hexdigest(), tensor_bytes=len(tensor))
+    if producer == 'ed561666':
+        outcome.update(dispatch_intent_sha256=created['dispatch_intent_sha256'],
+                       pilot_sha256=hashlib.sha256(kwargs['case_path'].read_bytes()).hexdigest())
     if change == 'old_record':
         identifier = (guard.FIRST_RECORD if producer == 'cb63305'
                       else guard.context(producer)['first_record'])
@@ -244,6 +248,59 @@ def test_request3_uses_the_unchanged_independent_numeric_reduction():
     assert result['status'] == 'PASS_NUMERIC_TRANSPORT_ONLY'
     assert result['maximum_cn_absolute_difference'] == 0.
     assert not result['full_C10'] and not result['independent_solver_certified']
+
+
+def test_failed_audit_cannot_start_checkpoint_advancement(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, 'helper', lambda name: pytest.fail('must stop before helpers/network'))
+    with pytest.raises(ValueError, match='passing selected append audit'):
+        audit.advance_audit_checkpoint(raw_audit=b'{"status":"failed"}', data=tmp_path,
+            case_path=tmp_path/'not-read', append_inputs={}, output=tmp_path,
+            operational_commit='SYNTHETIC')
+
+
+def test_passing_audit_advancement_plumbing_writes_only_exclusive_metadata(monkeypatch, tmp_path):
+    data, output = tmp_path/'case-data', tmp_path/'audit-output'
+    data.mkdir()
+    output.mkdir()
+    for name in ('pilot-outcome.json', 'server-native-envelope.json'):
+        (data/name).write_text('{"synthetic":"not molecular evidence"}')
+    for name in ('owned-before-entry.json', 'owned-after-entry.json',
+                 'owned-after-record.json', 'owned-after-delivery.json'):
+        (data/name).write_text('{"synthetic":"not a server snapshot"}')
+    (data/'server-tensors.npz').write_bytes(b'SYNTHETIC_NOT_NPZ')
+    case_path = tmp_path/'case.json'
+    case_path.write_bytes(b'SYNTHETIC_RAW_CASE_ONLY')
+    raw = json.dumps(dict(status='PASS_SELECTED_BANK_CASE_SINGLETON_EVIDENCE',
+        producer_profile='ed561666', dataset_mode='append')).encode()
+    inputs = dict(first_receipt_blobs={'pilot': b'{"specification":{"synthetic":"unit-only"}}'},
+        checkpoint_raw=b'SYNTHETIC_PARENT', checkpoint_sha256='SYNTHETIC_PARENT_HASH')
+    effects = []
+    def advance(client, **kwargs):
+        assert kwargs['receipts']['audit'] == raw
+        assert kwargs['expected_audit_sha256'] == hashlib.sha256(raw).hexdigest()
+        effects.append('read_only_advance')
+        links = {role: hashlib.sha256(blob).hexdigest() for role, blob in kwargs['receipts'].items()}
+        return dict(status='READ_ONLY_AUDITED_ADVANCE', generation=2, audited_records=[5234318, 60001],
+                    ledger=[dict(receipts_sha256=links)])
+    def store(receipts):
+        effects.append('immutable_proof_metadata')
+        return {role: hashlib.sha256(blob).hexdigest() for role, blob in receipts.items()}
+    baseline = NS(OWNER='awallace43', approved_client=lambda **kw: (object(), {'unit-only': True}),
+                  advance_baseline=advance)
+    append = NS(store_checkpoint_proofs=store)
+    monkeypatch.setattr(audit, 'helper', lambda name: {
+        'prepare_owned354_baseline_cb63305': baseline, 'dataset_owned354_cb63305': append,
+        'phoenix_pilot': NS(execution_specification=lambda value: value)}[name])
+    for name in ('qcportal', 'qcportal.singlepoint'):
+        monkeypatch.setitem(sys.modules, name, ModuleType(name))
+    sys.modules['qcportal.singlepoint'].QCSpecification = lambda **kwargs: kwargs
+    result = audit.advance_audit_checkpoint(raw_audit=raw, data=data, case_path=case_path,
+        append_inputs=inputs, output=output, operational_commit='SYNTHETIC_OPS')
+    assert result['generation'] == 2 and result['audited_records'] == [5234318, 60001]
+    assert effects == ['read_only_advance', 'immutable_proof_metadata']
+    with pytest.raises(FileExistsError):
+        audit.advance_audit_checkpoint(raw_audit=raw, data=data, case_path=case_path,
+            append_inputs=inputs, output=output, operational_commit='SYNTHETIC_OPS')
 
 
 def test_help_and_term_safe_wrapper_do_not_run_science():
