@@ -65,7 +65,10 @@ def run_session(config, *, record_id, compute_tag, runtime, payload, save, worke
             for task_id, result in results.items():
                 with (payload/('local-result-'+str(task_id)+'.zstd')).open('xb') as stream:
                     stream.write(result.result_compressed)
-                self.local_native = result.result.get('extras', {}).get('psi4:native_monomer')
+                # FailedOperation legitimately has extras=None. Preserve and
+                # deliver that original failure; an ACK is not molecular success.
+                extras = result.result.get('extras')
+                self.local_native = extras.get('psi4:native_monomer') if isinstance(extras, dict) else None
 
     manager = PilotManager(config, target_record_id=record_id, compute_tag=compute_tag,
                            acquisition_seconds=300)

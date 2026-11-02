@@ -52,7 +52,8 @@ def test_refuse_unbounded_or_implicit_worker_shapes(shape):
         session.validate_session_config(config(), TAG, worker_shape=shape)
 
 
-@pytest.mark.parametrize('case', ['accepted', 'rejected', 'interrupted', 'callback_failure'])
+@pytest.mark.parametrize('case', ['accepted', 'rejected', 'interrupted', 'callback_failure',
+                                   'scientific_failure'])
 def test_own_manager_cleanup_capture_and_signal_restoration(monkeypatch, tmp_path, case):
     effects, saved = [], {}
     stats = dict(total_successful_tasks=1, total_failed_tasks=0, total_rejected_tasks=0, active_tasks=0)
@@ -79,8 +80,16 @@ def test_own_manager_cleanup_capture_and_signal_restoration(monkeypatch, tmp_pat
             self.preprocess_new_tasks([task])
             if case == 'callback_failure':
                 raise RuntimeError('synthetic callback failure')
+            result_data = {'extras': {'psi4:native_monomer': {'synthetic': 'not molecular evidence'}}}
+            if case == 'scientific_failure':
+                result_data = dict(success=False, extras=None,
+                    error=dict(error_type='unknown_error', error_message='SYNTHETIC_ORIGINAL_SCIENTIFIC_ERROR'))
+                stats.update(total_successful_tasks=0, total_failed_tasks=1)
             self.postprocess_results({task.id: NS(result_compressed=b'SYNTHETIC_UNIT_NOT_ZSTD',
-                result={'extras': {'psi4:native_monomer': {'synthetic': 'not molecular evidence'}}})})
+                                                  result=result_data)})
+            if case == 'scientific_failure':
+                assert result_data['success'] is False and result_data['extras'] is None
+                assert result_data['error']['error_message'] == 'SYNTHETIC_ORIGINAL_SCIENTIFIC_ERROR'
             if case == 'interrupted':
                 signal.raise_signal(signal.SIGTERM)
             self.delivery_outcome = 'rejected' if case == 'rejected' else 'accepted'
@@ -93,10 +102,11 @@ def test_own_manager_cleanup_capture_and_signal_restoration(monkeypatch, tmp_pat
     before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
     kwargs = dict(record_id=9999, compute_tag=TAG, runtime=runtime, payload=tmp_path,
                   save=lambda name, data: saved.__setitem__(name, data))
-    if case == 'accepted':
+    if case in ('accepted', 'scientific_failure'):
         result = session.run_session(config(), **kwargs)
         assert result['task_id'] == 77
-        assert result['local_native'] == {'synthetic': 'not molecular evidence'}
+        assert result['local_native'] == (None if case == 'scientific_failure'
+                                         else {'synthetic': 'not molecular evidence'})
     else:
         with pytest.raises(RuntimeError):
             session.run_session(config(), **kwargs)
@@ -104,6 +114,10 @@ def test_own_manager_cleanup_capture_and_signal_restoration(monkeypatch, tmp_pat
     assert saved['claim.json']['record_id'] == 9999
     assert saved['manager-delivery.json']['interrupted'] is (case == 'interrupted')
     assert saved['manager-delivery.json']['manager'] == 'SYNTHETIC_MANAGER_UNIT_ONLY'
+    if case == 'scientific_failure':
+        assert saved['manager-delivery.json']['outcome'] == 'accepted'
+        assert saved['manager-delivery.json']['local_statistics']['total_failed_tasks'] == 1
+        assert saved['manager-delivery.json']['local_statistics']['total_successful_tasks'] == 0
     assert {sig: signal.getsignal(sig) for sig in before} == before
     if case != 'callback_failure':
         assert (tmp_path/'local-result-77.zstd').read_bytes() == b'SYNTHETIC_UNIT_NOT_ZSTD'
