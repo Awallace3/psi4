@@ -124,9 +124,10 @@ def test_newer_test_revision_cannot_change_scientific_or_build_code():
 def test_installed_suite_requires_the_exact_declared_case_count(tmp_path):
     report = tmp_path/'junit.xml'
     expected = checks.EXPECTED_TESTS
-    assert expected == 430
+    assert expected == 459
     assert {'test_isapol_pfit_workspace.py', 'test_isapol_pfit_forwarding.py',
-            'test_isapol_extended_resources.py', 'test_isapol_bounded_response.py'} <= set(checks.TEST_FILES)
+            'test_isapol_extended_resources.py', 'test_isapol_bounded_response.py',
+            'test_isapol_native_partition.py'} <= set(checks.TEST_FILES)
     for count in (expected-1, expected+1):
         report.write_text(
             f'<testsuites><testsuite tests="{count}" failures="0" errors="0" skipped="0"/></testsuites>')

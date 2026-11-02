@@ -12,8 +12,10 @@ from .isapol_basis import BasisRecipe, ShellRecipe, MainAdaptation, adapt_main, 
 
 # The Drho-C LU solve is refined with an exact residual on the same factors (the
 # native fit_drho_c default stays 0, plain LU). Nonconvergence refuses; there is
-# no fallback to the plain LU coefficients.
-DRHO_REFINEMENT_ITERATIONS = 10
+# no fallback to the plain LU coefficients. Use the supported bounded ceiling:
+# ten corrections can cut off a still-contracting solve before its strict stop.
+# isa_resource_plan charges this same cap; tolerances/stagnation are unchanged.
+DRHO_REFINEMENT_ITERATIONS = 32
 TAIL_FIT_POLICIES = ('always', 'when_enabled')
 
 # Compatibility: the basis types now have one definition in isapol_basis, but

@@ -77,6 +77,30 @@ def test_actual_scf_drho_controller_q(helium):
         r.main.occupied.setflags(write=True)
 
 
+def test_supported_drho_cap_is_forwarded_and_refusal_has_no_isa_fallback(helium, monkeypatch):
+    # The frozen native benzene/aug-cc-pVTZ diagnostic required11 corrections.
+    # This wiring test is not a forward-accuracy or molecular-convergence proof.
+    assert native.DRHO_REFINEMENT_ITERATIONS == 32
+    main = basis_impl.adapt_main(helium, caller_converged=True)
+    declared = recipe(helium)
+    seen = []
+    class RefusingCoulomb:
+        def __init__(self, auxiliary):
+            pass
+        def fit_drho_c(self, orbital, occupied, penalty, *, max_refinement_iterations):
+            seen.append((penalty, max_refinement_iterations))
+            raise ValueError('sentinel native Drho-C refinement refusal')
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Drho-C refusal must not initialize ISA or fitted density')
+    monkeypatch.setattr(native, 'adapt_main', lambda *args, **kwargs: main)
+    monkeypatch.setattr(core, 'IsaAuxCoulomb', RefusingCoulomb)
+    monkeypatch.setattr(core, 'IsaFixedDensity', forbidden)
+    monkeypatch.setattr(core, 'IsaAController', forbidden)
+    with pytest.raises(ValueError, match='sentinel native Drho-C'):
+        native.native_partition(helium, declared, caller_converged=True, build_multipoles=False)
+    assert seen == [(1000., 32)]
+
+
 def test_nonconvergence_has_no_q(helium):
     r = native.native_partition(helium, recipe(helium, max_iterations=1), caller_converged=True)
     assert not r.converged and r.q is None and r.trajectory.history

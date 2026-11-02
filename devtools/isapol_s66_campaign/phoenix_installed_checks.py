@@ -22,8 +22,11 @@ TEST_FILES = (
     'test_isapol_bounded_oeprop.py', 'test_isapol_bounded.py',
     'test_isapol_pfit_workspace.py', 'test_isapol_pfit_forwarding.py',
     'test_isapol_extended_resources.py', 'test_isapol_bounded_response.py',
+    'test_isapol_native_partition.py',
 )
-EXPECTED_TESTS = 430
+# Preserve all 430 prior interface cases and add all 29 native partition cases,
+# including the bounded Drho-C forwarding/refusal regression. No local QM run.
+EXPECTED_TESTS = 459
 TEST_ONLY_CHANGES = frozenset('tests/pytests/'+name for name in TEST_FILES) | frozenset(
     'devtools/isapol_s66_campaign/'+name for name in (
         'phoenix_installed_checks.py', 'phoenix_installed_checks.sbatch',
