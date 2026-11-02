@@ -30,7 +30,7 @@ PROFILES = {
 
 def helper(name):
     if name not in ('prepare_descriptor_bank_cb63305', 'descriptor_admission_cb63305',
-                    'phoenix_worker_probe'):
+                    'phoenix_worker_probe', 'pilot_cb63305'):
         raise ValueError('closed generic-case helpers required')
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_bank_case_'+name, path)
@@ -63,19 +63,25 @@ def validate_execution_profile(name, row):
     return result
 
 
-def verify_admitted_bank(inputs, receipts, resources, bank_raw, allocation_raw, reports):
-    if digest(bank_raw) != BANK_SHA256 or digest(allocation_raw) != DESCRIPTOR_SHA256:
+def verify_admitted_bank(inputs, receipts, resources, bank_raw, allocation_raw, reports, *, producer='cb63305'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+        raise ValueError('closed admitted-bank producer required')
+    pins = (dict(bank_sha256=BANK_SHA256, allocation_sha256=DESCRIPTOR_SHA256,
+                 descriptor_ops='cbed46c755f7c1b63a1df0d9ebf0eeac4088606e', descriptor_job='14970302')
+            if producer == 'cb63305' else helper('pilot_cb63305').producer_pins(producer))
+    if digest(bank_raw) != pins['bank_sha256'] or digest(allocation_raw) != pins['allocation_sha256']:
         raise ValueError('exact actual all131 descriptor allocation and raw bank required')
-    bank = helper('prepare_descriptor_bank_cb63305').prepare_bank(inputs, receipts, resources)
+    selection = {} if producer == 'cb63305' else dict(producer=producer)
+    bank = helper('prepare_descriptor_bank_cb63305').prepare_bank(inputs, receipts, resources, **selection)
     allocation = json.loads(allocation_raw)
     if (bank != json.loads(bank_raw)
             or allocation.get('schema') != 'native-campaign-descriptor-allocation/2'
             or allocation.get('status') != 'PASS_ALL_131_DESCRIPTOR_PLANS_ONLY'
             or allocation.get('runtime_unchanged') is not True
             or allocation.get('scientific_build_commit') != bank['producer']['scientific_commit']
-            or allocation.get('operational_commit') != 'cbed46c755f7c1b63a1df0d9ebf0eeac4088606e'
-            or allocation.get('bank_sha256') != BANK_SHA256
-            or allocation.get('allocation', {}).get('JobId') != '14970302'):
+            or allocation.get('operational_commit') != pins['descriptor_ops']
+            or allocation.get('bank_sha256') != pins['bank_sha256']
+            or allocation.get('allocation', {}).get('JobId') != pins['descriptor_job']):
         raise ValueError('bank and actual installed descriptor producer receipts differ')
     ids = {row['monomer_id'] for row in bank['monomers']}
     guard = helper('descriptor_admission_cb63305')

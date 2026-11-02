@@ -19,9 +19,33 @@ DATASET_NAME = 'S66x8-native-CCASP-cb63305f41-request3-v1'
 SPECIFICATION_NAME = 'pbe0-atz-native-request3'
 
 
+def producer_pins(producer='cb63305'):
+    """Closed fresh-pilot identities; never caller-supplied receipt/path pins."""
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+        raise ValueError('closed molecular producer selector required')
+    if producer == 'cb63305':
+        return dict(producer=producer, monomer=MONOMER, dataset_name=DATASET_NAME,
+            specification_name=SPECIFICATION_NAME, bank_sha256=BANK_SHA256,
+            allocation_sha256=DESCRIPTOR_ALLOCATION_SHA256, descriptor_ops=DESCRIPTOR_OPS,
+            descriptor_job='14970302', schema='native-expanded-molecular-pilot/1',
+            protected_datasets=(353,), protected_records=(5234314, 5234315),
+            namespace='ccasp-native-cb63305-', worker_namespace='ccasp-native-worker-cb63305-')
+    return dict(producer=producer, monomer='monomer-0047',
+        dataset_name='S66x8-native-CCASP-ed561666fc-request3-v1',
+        specification_name=SPECIFICATION_NAME,
+        bank_sha256='2dff72a79c936455fd9e17fb5eaec1c2ed7ec5d3540257c1ff5e1b44cdcb2c35',
+        allocation_sha256='ab3f078941fb50e7b34522a7bca735be03b1f0afdcc7e0c51474a888dbf116ad',
+        descriptor_ops='5e5236f02d9f8701d70451eabc7f252a66c9ee78', descriptor_job='14992173',
+        selected_report_sha256='36526a6f74e8664dd7488b3c104a206bb94983d16cc859aa11e89796e5ff4f35',
+        runtime_input_sha256='01ac88fbee077abcdc863e32ae7670480fa69839a8041fa3e1cc1e2389c2fbc5',
+        schema='native-selected-molecular-pilot/1', protected_datasets=(353, 354),
+        protected_records=(5234314, 5234315, 5234316, 5234317),
+        namespace='ccasp-native-ed561666-', worker_namespace='ccasp-native-worker-ed561666-')
+
+
 def helper(name):
     if name not in ('prepare_descriptor_bank_cb63305', 'descriptor_admission_cb63305',
-                    'phoenix_worker_probe'):
+                    'phoenix_worker_probe', 'case_cb63305'):
         raise ValueError('closed first expanded-pilot helpers required')
     path = Path(__file__).with_name(name+'.py')
     raw = path.read_bytes()
@@ -36,8 +60,11 @@ def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
-def prepare_pilot(inputs, receipts, resources, bank_raw, allocation_raw, reports):
+def prepare_pilot(inputs, receipts, resources, bank_raw, allocation_raw, reports, *, producer='cb63305'):
     """Select the fixed nitrogen pilot without changing the admitted request."""
+    pins = producer_pins(producer)
+    if producer == 'ed561666':
+        return _prepare_fresh_ed(inputs, receipts, resources, bank_raw, allocation_raw, reports, pins)
     prepare = helper('prepare_descriptor_bank_cb63305')
     admission = helper('descriptor_admission_cb63305')
     if (digest(bank_raw) != BANK_SHA256
@@ -106,8 +133,56 @@ def prepare_pilot(inputs, receipts, resources, bank_raw, allocation_raw, reports
     return draft
 
 
-def prepare_from_paths(inputs_path, build_identity, qualification, descriptors):
+def _prepare_fresh_ed(inputs, receipts, resources, bank_raw, allocation_raw, reports, pins):
+    cases = helper('case_cb63305')
+    bank, allocation = cases.verify_admitted_bank(
+        inputs, receipts, resources, bank_raw, allocation_raw, reports, producer='ed561666')
+    monomer = pins['monomer']
+    row = next(r for r in bank['monomers'] if r['monomer_id'] == monomer)
+    molecule = next(m for m in json.loads(inputs['inventory'])['monomers'] if m['id'] == monomer)
+    if molecule['formula'] != 'C6H6' or molecule['representative'] != dict(
+            dimer_id='24_Benzene-Benzene_pi-pi_0.90', role='A', R=.9,
+            fragment_indices=list(range(12))):
+        raise ValueError('exact fresh benzene representative required')
+    execution = cases.validate_execution_profile('s40', row)
+    entry = copy.deepcopy(next(e for e in json.loads(inputs['entries'])['entries']
+                               if e['attributes']['monomer_id'] == monomer))
+    runtime, measurement = row['runtime_input'], next(
+        r for r in allocation['reports'] if r['monomer_id'] == monomer)
+    if (entry['name'] != row['entry_name'] or entry['molecule'] != runtime['molecule']
+            or row['runtime_input_sha256'] != pins['runtime_input_sha256']
+            or measurement['runtime_input_sha256'] != row['runtime_input_sha256']
+            or measurement['descriptor_report_sha256'] != pins['selected_report_sha256']):
+        raise ValueError('fresh benzene geometry/descriptor/runtime identity differs')
+    spec = runtime['specification']
+    request = spec['keywords']['function_kwargs']['native_monomer']
+    if request.get('schema') != 'native-monomer-request/3' or request.get('point_group') != 'c1':
+        raise ValueError('fresh producer requires exact request3/computationalC1')
+    entry['additional_keywords'] = dict(function_kwargs=copy.deepcopy(spec['keywords']['function_kwargs']))
+    draft = dict(schema=pins['schema'], status='PREPARED_NOT_REGISTERED_OR_SUBMITTED',
+        producer_profile='ed561666', dataset_mode='fresh', monomer_id=monomer, formula='C6H6',
+        dataset_name=pins['dataset_name'], specification_name=pins['specification_name'],
+        specification=dict(program='psi4', driver=spec['driver'], **spec['model'],
+            keywords={k: copy.deepcopy(v) for k, v in spec['keywords'].items() if k != 'function_kwargs'}),
+        entry=entry, producer=bank['producer'], intended_memory_bytes=row['intended_memory_bytes'],
+        execution_profile=execution, runtime_input_sha256=row['runtime_input_sha256'],
+        descriptor_allocation_sha256=pins['allocation_sha256'], descriptor_bank_sha256=pins['bank_sha256'],
+        descriptor_report_sha256=measurement['descriptor_report_sha256'],
+        descriptor_dimensions=measurement['dimensions'], descriptor_operational_commit=pins['descriptor_ops'],
+        input_sha256=bank['input_sha256'], resource_declarations_sha256=bank['resource_declarations_sha256'],
+        queue_policy=dict(qos='embers', account='gts-cs207-chemx', cpus=12, job_memory_GiB=64,
+            psi4_memory_GiB=40, concurrency=1, maximum_records=1, find_existing=False, existing_ok=False),
+        qualification='Fresh cap32 raw pilot preparation only; no dataset/record/manager, SCF or model. '
+            'References remain unchanged entry attributes. No owned354 checkpoint or old-record recovery.')
+    reconstructed = helper('phoenix_worker_probe').runtime_input(draft)
+    if reconstructed != runtime or cases.json_digest(reconstructed) != pins['runtime_input_sha256']:
+        raise ValueError('fresh operational pilot changed the admitted scientific runtime')
+    return draft
+
+
+def prepare_from_paths(inputs_path, build_identity, qualification, descriptors, *, producer='cb63305'):
     """Read the same closed raw/receipt roles for preparation and launch gates."""
+    pins = producer_pins(producer)
     prepare = helper('prepare_descriptor_bank_cb63305')
     inputs = {key: (inputs_path/(key.replace('_', '-')+'.json')).read_bytes()
               for key in prepare.INPUT_SHA256}
@@ -117,20 +192,23 @@ def prepare_from_paths(inputs_path, build_identity, qualification, descriptors):
                     imported_identity=q.with_name('imported-identity.json').read_bytes(),
                     junit=q.with_name('junit.xml').read_bytes())
     allocation = (descriptors/'descriptor-allocation.json').read_bytes()
-    if digest(allocation) != DESCRIPTOR_ALLOCATION_SHA256:
+    if digest(allocation) != pins['allocation_sha256']:
         raise ValueError('exact completed all131 descriptor allocation required before child reads')
     rows = json.loads(allocation)['reports']
     return prepare_pilot(inputs, receipts, (inputs_path/'resource-declarations.json').read_bytes(),
         (inputs_path/'descriptor-bank.json').read_bytes(), allocation,
-        {row['descriptor_report']: (descriptors/row['descriptor_report']).read_bytes() for row in rows})
+        {row['descriptor_report']: (descriptors/row['descriptor_report']).read_bytes() for row in rows},
+        producer=producer)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('inputs', 'build-identity', 'qualification', 'descriptors', 'output'):
         parser.add_argument('--'+name, type=Path, required=True)
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666'), default='cb63305')
     args = parser.parse_args()
-    result = prepare_from_paths(args.inputs, args.build_identity, args.qualification, args.descriptors)
+    result = prepare_from_paths(args.inputs, args.build_identity, args.qualification, args.descriptors,
+                                producer=args.producer)
     with args.output.open('x') as stream:
         json.dump(result, stream, indent=2, allow_nan=False)
     print(json.dumps(dict(status=result['status'], monomer_id=result['monomer_id'],
