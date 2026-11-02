@@ -426,7 +426,9 @@ How It Works Internally
 1. The SCF converges normally (without dispersion).
 2. After convergence, the XDM module integrates Hirshfeld-weighted atomic
    properties (exchange-hole multipole moments and effective volumes) from
-   the converged density on the DFT grid.
+   the converged density on the DFT grid. When the SCF's own XC grid is the
+   same grid (same basis and grid options), XDM integrates on it instead of
+   building another; |scf__xdm_grid_reuse| turns this off.
 3. Pairwise :math:`C_6`, :math:`C_8`, :math:`C_{10}` dispersion coefficients
    are assembled from these atomic properties.
 4. The BJ-damped dispersion energy (Eq. :eq:`XDMdisp`) is evaluated and added
