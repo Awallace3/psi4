@@ -23,6 +23,7 @@ OP_FILES = (
 )
 HELPERS = {
     'phoenix_installed_checks', 'qualified_cb63305', 'resource_plan_cb63305',
+    'qualified_ed561666', 'resource_plan_ed561666',
     'prepare_descriptor_bank_cb63305', 'descriptor_admission_cb63305', 'descriptor_scratch_cb63305',
 }
 
@@ -62,13 +63,18 @@ def write_json_once(path, data):
     temporary.unlink()
 
 
-def operation_hashes():
-    return {name: digest(Path(__file__).with_name(name).read_bytes()) for name in OP_FILES}
+def operation_hashes(*, producer='cb63305'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+        raise ValueError('closed descriptor source inventory producer required')
+    files = OP_FILES+(
+        ('qualified_ed561666.py', 'resource_plan_ed561666.py', 'prepare_ed561666_inputs.py')
+        if producer == 'ed561666' else ())
+    return {name: digest(Path(__file__).with_name(name).read_bytes()) for name in files}
 
 
 def policy_binding(source, manifest, planner):
     if manifest['commit'] != planner.SCIENTIFIC_COMMIT:
-        raise ValueError('exact cb63305 scientific producer required')
+        raise ValueError('exact selected scientific producer required')
     observed = {}
     for name, expected in planner.FILES.items():
         raw = subprocess.check_output(['git', '-C', str(source), 'show',
@@ -135,6 +141,7 @@ def main():
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
     parser.add_argument('--expected-bank-sha256', required=True)
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666'), default='cb63305')
     args = parser.parse_args()
     if (re.fullmatch('[0-9a-f]{40}', args.commit) is None
             or re.fullmatch('[0-9a-f]{64}', args.expected_bank_sha256) is None):
@@ -150,7 +157,9 @@ def main():
             or not run.name.startswith('ccasp-native-s66-')
             or build.is_relative_to(run) or run.is_relative_to(build)):
         raise RuntimeError('disjoint private build and descriptor run required')
-    profile, planner = helper('qualified_cb63305'), helper('resource_plan_cb63305')
+    profile, planner = helper('qualified_'+args.producer), helper('resource_plan_'+args.producer)
+    # Preserve the historical default interface; the new path is explicit.
+    selection = {} if args.producer == 'cb63305' else dict(producer=args.producer)
     prepare, admission = helper('prepare_descriptor_bank_cb63305'), helper('descriptor_admission_cb63305')
     scratch_guard = helper('descriptor_scratch_cb63305')
     paths = dict(build_identity=build/'build-identity.json',
@@ -170,7 +179,7 @@ def main():
         raise ValueError('prepared bank or private build path differs')
     bank = json.loads(blobs['bank'])
     regenerated = prepare.prepare_bank({key: blobs[key] for key in prepare.INPUT_SHA256},
-                                      receipt_blobs, blobs['resources'])
+                                      receipt_blobs, blobs['resources'], **selection)
     if bank != regenerated:
         raise ValueError('prepared bank does not reproduce from exact immutable raw inputs')
     changes = checks.git(source, 'diff', '--name-only', manifest['commit'], args.commit).splitlines()
@@ -182,7 +191,7 @@ def main():
     # Psi4. Operational checkout staging must include this fixed source file.
     planner.shared_pfit_plan()
     memory = admission.admit_memory(bank, allocation, nonnumeric_headroom_bytes=16*1024**3)
-    operations = operation_hashes()
+    operations = operation_hashes(**selection)
     environment = build/'env'
     checks.verify_runtime(environment, manifest)
     payload = run/'payload'
@@ -214,23 +223,27 @@ def main():
             command = checks.installed_python_command(environment/'bin/python', scratch/'cache',
                 str(Path(__file__).with_name('descriptor_probe_cb63305.py')),
                 '--input', str(runtime_path), '--output', str(report_path),
-                '--memory-bytes', str(row['intended_memory_bytes']), '--monomer-id', monomer)
+                '--memory-bytes', str(row['intended_memory_bytes']), '--monomer-id', monomer,
+                '--producer', args.producer)
             with (payload/(monomer+'.stdout')).open('x') as out, (payload/(monomer+'.stderr')).open('x') as err:
                 subprocess.run(command, cwd=scratch/'cwd', env=env, stdin=subprocess.DEVNULL,
                                stdout=out, stderr=err, check=True)
             raw = read_bounded(report_path)
             report = json.loads(raw)
+            child_sources = ('descriptor_probe_cb63305.py', 'descriptor_probe.py',
+                             'resource_plan_cb63305.py')
+            if args.producer == 'ed561666':
+                child_sources += ('resource_plan_ed561666.py',)
             result = admission.verify_descriptor(report, row, identity, policy=policy,
-                operational_sources_sha256={key: operations[key] for key in (
-                    'descriptor_probe_cb63305.py', 'descriptor_probe.py', 'resource_plan_cb63305.py')},
-                runtime_sha256=digest(runtime))
+                operational_sources_sha256={key: operations[key] for key in child_sources},
+                runtime_sha256=digest(runtime), **selection)
             reports.append(dict(result, descriptor_report=report_path.name,
                                 descriptor_report_sha256=digest(raw), runtime_input_sha256=digest(runtime)))
         status = admission.verify_coverage(reports, {r['monomer_id'] for r in regenerated['monomers']})
         checks.verify_runtime(environment, manifest)
         if (any(checks.digest(Path(path)) != expected for path, expected in receipts.items())
                 or checks.git(source, 'rev-parse', 'HEAD') != args.commit
-                or checks.git(source, 'status', '--porcelain') or operation_hashes() != operations):
+                or checks.git(source, 'status', '--porcelain') or operation_hashes(**selection) != operations):
             raise ValueError('source, input or runtime receipts changed during descriptor allocation')
         write_json_once(payload/'descriptor-allocation.json', dict(
             schema='native-campaign-descriptor-allocation/2', status=status,

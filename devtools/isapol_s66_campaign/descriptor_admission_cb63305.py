@@ -17,8 +17,10 @@ import re
 import sys
 
 
-def planner():
-    path = Path(__file__).with_name('resource_plan_cb63305.py')
+def planner(producer='cb63305'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+        raise ValueError('closed descriptor arithmetic producer required')
+    path = Path(__file__).with_name('resource_plan_'+producer+'.py')
     raw = path.read_bytes()
     spec = importlib.util.spec_from_file_location('_descriptor_admission_plan', path)
     module = importlib.util.module_from_spec(spec)
@@ -68,9 +70,10 @@ def admit_memory(bank, allocation, *, nonnumeric_headroom_bytes):
         concurrency=1, qualification='Declared accounting only; not total measured process RSS.')
 
 
-def verify_descriptor(report, row, identity, *, policy, operational_sources_sha256, runtime_sha256):
+def verify_descriptor(report, row, identity, *, policy, operational_sources_sha256, runtime_sha256,
+                      producer='cb63305'):
     """Recompute arithmetic from measured shell dimensions, not forecast widths."""
-    module = planner()
+    module = planner(producer)
     request = row['runtime_input']['specification']['keywords']['function_kwargs']['native_monomer']
     if (report.get('schema') != 'native-campaign-descriptor-probe/2'
             or report.get('policy_id') != module.POLICY

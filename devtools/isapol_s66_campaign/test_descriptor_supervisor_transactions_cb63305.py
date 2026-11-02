@@ -19,7 +19,7 @@ def load():
     return module
 
 
-def transaction(monkeypatch, tmp_path, case):
+def transaction(monkeypatch, tmp_path, case, *, producer='cb63305'):
     module = load()
     build, run = tmp_path/'build', tmp_path/'ccasp-native-s66-transaction'
     build.mkdir()
@@ -33,7 +33,7 @@ def transaction(monkeypatch, tmp_path, case):
     identity = dict(package=package+'/__init__.py', core=package+'/core.so',
         version='SYNTHETIC_UNIT_ONLY', implementation=dict(sha256=dict(core='0'*64, isapol_python='1'*64)))
     original_helper = module.helper
-    planner = original_helper('resource_plan_cb63305')
+    planner = original_helper('resource_plan_'+producer)
     manifest = dict(commit=planner.SCIENTIFIC_COMMIT, installed_package=package)
     request = dict(schema='native-monomer-request/3',
         resources=dict(max_bytes=12*1024**3, max_work=6*10**12, max_io_bytes=16*1024**3, capacity='large'))
@@ -72,29 +72,32 @@ def transaction(monkeypatch, tmp_path, case):
         if case == 'runtime_drift' and len(runtime_checks) > 1:
             raise RuntimeError('synthetic runtime drift')
     checks.git, checks.allocation, checks.verify_runtime = git, lambda: allocation, verify_runtime
-    profile = original_helper('qualified_cb63305')
+    profile = original_helper('qualified_'+producer)
     profile.verify_receipts = lambda _: dict(status='SYNTHETIC_UNIT_RECEIPTS_ONLY')
     prepare = original_helper('prepare_descriptor_bank_cb63305')
-    prepare.prepare_bank = lambda *args: copy.deepcopy(bank)
+    prepare.prepare_bank = lambda *args, **kw: copy.deepcopy(bank)
     admission = original_helper('descriptor_admission_cb63305')
     # Measurement/binding is independently tested. This deliberately returns
     # the supplied report ID so coverage must independently reject duplicates.
     admission.verify_descriptor = lambda report, row, identity, **kw: dict(
         monomer_id=report['monomer_id'], status=report['status'])
-    helpers = dict(phoenix_installed_checks=checks, qualified_cb63305=profile,
+    helpers = dict(phoenix_installed_checks=checks,
         prepare_descriptor_bank_cb63305=prepare, descriptor_admission_cb63305=admission,
-        resource_plan_cb63305=planner)
+        **{'qualified_'+producer: profile, 'resource_plan_'+producer: planner})
     monkeypatch.setattr(module, 'helper', lambda name: helpers.get(name) or original_helper(name))
     monkeypatch.setattr(module, 'RUNS', tmp_path)
     monkeypatch.setattr(module, 'SCRATCH', scratch)
     monkeypatch.setattr(module, 'quota_snapshot', lambda *args: {'status': 'SYNTHETIC_SNAPSHOT_ONLY'})
     monkeypatch.setattr(module, 'policy_binding', lambda *args: planner.FILES)
-    monkeypatch.setattr(module, 'operation_hashes', lambda: {name: 'a'*64 for name in module.OP_FILES})
+    real_hashes = module.operation_hashes
+    monkeypatch.setattr(module, 'operation_hashes',
+                        lambda **kw: {name: 'a'*64 for name in real_hashes(**kw)})
     monkeypatch.setenv('SLURM_JOB_ID', '123')
     def child(command, **kwargs):
         assert '-I' in command and '-B' in command and '-X' in command
         assert kwargs['stdin'] == subprocess.DEVNULL
         monomer = command[command.index('--monomer-id')+1]
+        assert command[command.index('--producer')+1] == producer
         children.append(monomer)
         if case == 'child_failure' and len(children) == 5:
             raise subprocess.CalledProcessError(1, command)
@@ -117,12 +120,15 @@ def transaction(monkeypatch, tmp_path, case):
         '--declarations', str(paths['declarations']), '--input-validation', str(paths['input_validation']),
         '--run', str(run), '--commit', ops_commit,
         '--expected-bank-sha256', hashlib.sha256(paths['bank'].read_bytes()).hexdigest()]
+    if producer != 'cb63305':
+        args += ['--producer', producer]
     monkeypatch.setattr(sys, 'argv', args)
     return module, run, children, runtime_checks
 
 
-def test_all131_mock_children_and_before_after_runtime_checks_required(monkeypatch, tmp_path):
-    module, run, children, checks = transaction(monkeypatch, tmp_path, 'success')
+@pytest.mark.parametrize('producer', ['cb63305', 'ed561666'])
+def test_all131_mock_children_and_before_after_runtime_checks_required(monkeypatch, tmp_path, producer):
+    module, run, children, checks = transaction(monkeypatch, tmp_path, 'success', producer=producer)
     module.main()
     report = json.loads((run/'payload/descriptor-allocation.json').read_text())
     assert report['status'] == 'PASS_ALL_131_DESCRIPTOR_PLANS_ONLY'

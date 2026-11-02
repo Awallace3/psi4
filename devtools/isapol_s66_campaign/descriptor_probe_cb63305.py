@@ -13,7 +13,7 @@ import sys
 
 
 def helper(name):
-    if name not in ('resource_plan_cb63305', 'descriptor_probe'):
+    if name not in ('resource_plan_cb63305', 'resource_plan_ed561666', 'descriptor_probe'):
         raise ValueError('closed installed descriptor helpers required')
     path = Path(__file__).with_name(name+'.py')
     raw = path.read_bytes()
@@ -24,15 +24,17 @@ def helper(name):
     return module
 
 
-def scientific_probe(runtime, *, memory_bytes):
+def scientific_probe(runtime, *, memory_bytes, producer='cb63305'):
     """Real basis/shell/recipe declarations only; no electronic state."""
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+        raise ValueError('closed installed descriptor producer required')
     import psi4
     from psi4.driver.procrouting.isapol_schema import (
         admit_native_schema, native_molecule_schema, validate_native_request, check_native_geometry)
     from psi4.driver.procrouting.isapol_recipes import native_monomer_recipe
     from psi4.driver.procrouting.isapol_distribution import basis_identity
     from psi4.driver.procrouting.isapol_native_partition import DRHO_REFINEMENT_ITERATIONS
-    planner, descriptors = helper('resource_plan_cb63305'), helper('descriptor_probe')
+    planner, descriptors = helper('resource_plan_'+producer), helper('descriptor_probe')
     specification = runtime['specification']
     if specification['keywords']['function_kwargs']['native_monomer']['schema'] != 'native-monomer-request/3':
         raise ValueError('expanded descriptor child requires explicit request3')
@@ -46,7 +48,7 @@ def scientific_probe(runtime, *, memory_bytes):
         basis=specification['model']['basis'], molecule=molecule)
     main = psi4.core.BasisSet.build(molecule, 'BASIS', 'aug-cc-pVTZ', puream=1)
     recipe = native_monomer_recipe(molecule, profile=request.declaration.profile)
-    if DRHO_REFINEMENT_ITERATIONS != 10:
+    if DRHO_REFINEMENT_ITERATIONS != {'cb63305': 10, 'ed561666': 32}[producer]:
         raise ValueError('native Drho refinement policy changed')
     dimensions = descriptors.descriptor_dimensions(molecule, main, recipe, request.declaration, planner)
     resources = dict(max_bytes=request.resources.max_bytes, max_work=request.resources.max_work,
@@ -88,16 +90,20 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--memory-bytes', type=int, required=True)
     parser.add_argument('--monomer-id', required=True)
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666'), default='cb63305')
     args = parser.parse_args()
     if re.fullmatch(r'monomer-\d{4}', args.monomer_id) is None:
         raise ValueError('explicit bounded monomer identifier required')
     raw = args.input.read_bytes()
-    report = scientific_probe(json.loads(raw), memory_bytes=args.memory_bytes)
+    report = scientific_probe(json.loads(raw), memory_bytes=args.memory_bytes, producer=args.producer)
+    sources = [Path(__file__), Path(__file__).with_name('descriptor_probe.py'),
+               Path(__file__).with_name('resource_plan_cb63305.py')]
+    if args.producer == 'ed561666':
+        sources.append(Path(__file__).with_name('resource_plan_ed561666.py'))
     report.update(monomer_id=args.monomer_id, runtime_input_sha256=hashlib.sha256(raw).hexdigest(),
         operational_sources_sha256={
             path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in (Path(__file__), Path(__file__).with_name('descriptor_probe.py'),
-                         Path(__file__).with_name('resource_plan_cb63305.py'))})
+            for path in sources})
     with args.output.open('x') as stream:
         json.dump(report, stream, indent=2, allow_nan=False)
     print(json.dumps(dict(status=report['status'], monomer=args.monomer_id, report=str(args.output))))

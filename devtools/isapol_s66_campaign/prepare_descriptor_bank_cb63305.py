@@ -21,7 +21,8 @@ INPUT_SHA256 = {
 
 
 def helper(name):
-    if name not in ('qualified_cb63305', 'resource_plan_cb63305'):
+    if name not in ('qualified_cb63305', 'resource_plan_cb63305',
+                    'qualified_ed561666', 'resource_plan_ed561666'):
         raise ValueError('closed descriptor preparation helpers required')
     path = Path(__file__).with_name(name+'.py')
     raw = path.read_bytes()
@@ -40,14 +41,16 @@ def json_digest(value):
     return digest(json.dumps(value, sort_keys=True, allow_nan=False).encode())
 
 
-def prepare_bank(inputs, receipts, resource_bytes):
+def prepare_bank(inputs, receipts, resource_bytes, *, producer='cb63305'):
     """Return unsubmitted runtime-only inputs, never a qualified descriptor bank."""
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+        raise ValueError('closed installed producer profile required')
     if type(inputs) is not dict or set(inputs) != set(INPUT_SHA256):
         raise ValueError('exact immutable input roles required')
     for role, expected in INPUT_SHA256.items():
         if type(inputs[role]) is not bytes or digest(inputs[role]) != expected:
             raise ValueError('validated raw input hash differs: '+role)
-    profile, planner = helper('qualified_cb63305'), helper('resource_plan_cb63305')
+    profile, planner = helper('qualified_'+producer), helper('resource_plan_'+producer)
     producer = profile.verify_receipts(receipts)
     docs = {key: json.loads(raw) for key, raw in inputs.items()}
     inventory, entries, declarations, validation = (
@@ -151,13 +154,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in (*INPUT_SHA256, 'resources', 'build_identity', 'qualification', 'output'):
         parser.add_argument('--'+name.replace('_', '-'), type=Path, required=True)
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666'), default='cb63305')
     args = parser.parse_args()
     qpath = args.qualification
     receipt_paths = dict(build_identity=args.build_identity, installed_qualification=qpath,
         imported_identity=qpath.with_name('imported-identity.json'), junit=qpath.with_name('junit.xml'))
     result = prepare_bank({role: getattr(args, role).read_bytes() for role in INPUT_SHA256},
                           {role: p.read_bytes() for role, p in receipt_paths.items()},
-                          args.resources.read_bytes())
+                          args.resources.read_bytes(), producer=args.producer)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open('x') as stream:
         json.dump(result, stream, indent=2, allow_nan=False)

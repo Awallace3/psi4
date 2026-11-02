@@ -20,7 +20,7 @@ probe = load('descriptor_probe_cb63305', 'descriptor_probe_cb63305.py')
 fixtures = load('descriptor_extraction_fixtures', 'test_descriptor_probe.py')
 
 
-def mock_boundaries(monkeypatch):
+def mock_boundaries(monkeypatch, *, producer='cb63305'):
     molecule, main, recipe, declaration = fixtures.fixtures()
     declaration.profile = 's66-chno-isa-a-v1'
     main.shell = lambda i: NS(am=1, nprimitive=1, exp=lambda j: 1., coef=lambda j: 1.)
@@ -46,25 +46,41 @@ def mock_boundaries(monkeypatch):
             check_native_geometry=lambda *a: 0.),
         'isapol_recipes': dict(native_monomer_recipe=lambda *a, **k: recipe),
         'isapol_distribution': dict(basis_identity=lambda value: 'f'*64),
-        'isapol_native_partition': dict(DRHO_REFINEMENT_ITERATIONS=10),
+        'isapol_native_partition': dict(DRHO_REFINEMENT_ITERATIONS=10 if producer == 'cb63305' else 32),
     }
     for name, attrs in definitions.items():
         module = ModuleType('psi4.driver.procrouting.'+name)
         module.__dict__.update(attrs)
         monkeypatch.setitem(sys.modules, module.__name__, module)
-    planner, descriptors = probe.helper('resource_plan_cb63305'), probe.helper('descriptor_probe')
+    planner, descriptors = probe.helper('resource_plan_'+producer), probe.helper('descriptor_probe')
     original = planner.plan
     def plan(d, resources, **kwargs):
         calls.update(plan_kwargs=kwargs, resources=resources, dimensions=d)
         return original(d, resources, **kwargs)
     planner.plan = plan
     monkeypatch.setattr(probe, 'helper', lambda name: planner
-                        if name == 'resource_plan_cb63305' else descriptors)
+                        if name == 'resource_plan_'+producer else descriptors)
     runtime = dict(molecule={}, specification=dict(
         driver='properties', model=dict(method='pbe0', basis='aug-cc-pvtz'),
         keywords=dict(reference='rhf', function_kwargs=dict(
             native_monomer={'schema': 'native-monomer-request/3'}, properties=['dipole']))))
     return runtime, calls, request
+
+
+def test_new_closed_producer_requires_native32_and_reports_charged32(monkeypatch):
+    runtime, calls, _ = mock_boundaries(monkeypatch, producer='ed561666')
+    report = probe.scientific_probe(runtime, memory_bytes=20*1024**3, producer='ed561666')
+    assert report['policy_id'] == 'ed561666-reference-h2h1-ledger-v3'
+    assert report['plan']['dimensions']['drho_refinement_iterations'] == 32
+    monkeypatch.setattr(sys.modules['psi4.driver.procrouting.isapol_native_partition'],
+                        'DRHO_REFINEMENT_ITERATIONS', 10)
+    with pytest.raises(ValueError, match='refinement policy changed'):
+        probe.scientific_probe(runtime, memory_bytes=20*1024**3, producer='ed561666')
+
+
+def test_unknown_producer_is_refused_before_importing_quantum_code():
+    with pytest.raises(ValueError, match='closed installed descriptor'):
+        probe.scientific_probe({}, memory_bytes=1, producer='../caller_module')
 
 
 def test_descriptor_function_forwards_exact_request3_caps_without_inference(monkeypatch):

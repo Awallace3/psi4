@@ -11,8 +11,8 @@ guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
 
 
-def fixture():
-    planner = guard.planner()
+def fixture(producer='cb63305'):
+    planner = guard.planner(producer)
     budget = dict(max_bytes=12*1024**3, max_work=6*10**12, max_io_bytes=16*1024**3, capacity='large')
     request = dict(schema='native-monomer-request/3', resources=budget,
         max_replay_work=10**12, pfit_maximum_work_bytes=256*1024**2,
@@ -30,6 +30,8 @@ def fixture():
     shells = [dict(centre=0, am=1, exponents=[1.], coefficients=[1.]) for _ in range(4)]
     operations = {'descriptor_probe_cb63305.py': '2'*64, 'descriptor_probe.py': '3'*64,
                   'resource_plan_cb63305.py': '4'*64}
+    if producer == 'ed561666':
+        operations['resource_plan_ed561666.py'] = '5'*64
     report = dict(schema='native-campaign-descriptor-probe/2', policy_id=planner.POLICY,
         source_policy_sha256=planner.FILES, monomer_id=row['monomer_id'],
         runtime_input_sha256=row['runtime_input_sha256'], operational_sources_sha256=operations,
@@ -45,6 +47,18 @@ def fixture():
     kwargs = dict(policy=planner.FILES, operational_sources_sha256=operations,
                   runtime_sha256=row['runtime_input_sha256'])
     return report, row, identity, kwargs
+
+
+def test_new_cap32_child_cannot_be_swapped_with_historical_cap10_arithmetic():
+    report, row, identity, kwargs = fixture('ed561666')
+    result = guard.verify_descriptor(report, row, identity, **kwargs, producer='ed561666')
+    assert result['dimensions']['drho_refinement_iterations'] == 32
+    with pytest.raises(ValueError, match='binding differs'):
+        guard.verify_descriptor(report, row, identity, **kwargs)
+    historical, _, _, _ = fixture()
+    report['plan'] = historical['plan']
+    with pytest.raises(ValueError, match='arithmetic'):
+        guard.verify_descriptor(report, row, identity, **kwargs, producer='ed561666')
 
 
 def test_measured_shell_width_and_ledger_are_recomputed_without_formula_lookup():

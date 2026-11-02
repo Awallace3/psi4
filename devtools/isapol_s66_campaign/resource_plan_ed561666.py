@@ -22,6 +22,7 @@ FILES = dict(_shared.FILES)
 FILES['psi4/driver/procrouting/isapol_native_partition.py'] = (
     '2b539fa8d539ef571ed3265fdc11168eb5bb6212efff42cac24d952244b6a643')
 Dimensions = _shared.Dimensions
+shared_pfit_plan = _shared.shared_pfit_plan
 
 
 def source_binding(root):

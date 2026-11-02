@@ -72,6 +72,41 @@ def resources(raw_inputs, contracts):
         policy_id='cb63305-reference-h2h1-ledger-v2', monomers=contracts))
 
 
+@pytest.mark.parametrize('producer', [None, True, 'latest', '../qualified_ed561666'])
+def test_unknown_or_caller_selected_producer_paths_are_rejected(producer):
+    with pytest.raises(ValueError, match='closed installed producer'):
+        prepare.prepare_bank({}, {}, b'', producer=producer)
+
+
+def test_new_closed_producer_uses_new_identity_and_requires_its_own_policy(monkeypatch):
+    documents, contracts = fixture()
+    raw = bind_inputs(monkeypatch, documents)
+    original = prepare.helper
+    def helper(name):
+        module = original(name)
+        if name == 'qualified_ed561666':
+            module.verify_receipts = lambda _: dict(status='SYNTHETIC_UNIT_RECEIPTS_ONLY',
+                scientific_commit=module.SCIENTIFIC_COMMIT,
+                implementation_sha256=dict(module.IMPLEMENTATION))
+        return module
+    monkeypatch.setattr(prepare, 'helper', helper)
+    old_resources = resources(raw, contracts)
+    new_resources = json.loads(old_resources)
+    new_resources['policy_id'] = 'ed561666-reference-h2h1-ledger-v3'
+    with pytest.raises(ValueError, match='resource declarations'):
+        prepare.prepare_bank(raw, {}, old_resources, producer='ed561666')
+    with pytest.raises(ValueError, match='resource declarations'):
+        prepare.prepare_bank(raw, {}, encode(new_resources))
+    bank = prepare.prepare_bank(raw, {}, encode(new_resources), producer='ed561666')
+    assert bank['monomer_count'] == 131 and bank['fragment_contexts'] == 1056
+    assert bank['status'] == 'PREPARED_FOR_DESCRIPTORS_ONLY'
+    assert bank['producer']['scientific_commit'] == 'ed561666fcac212fffa774429fc3bd8f8cfc903d'
+    identity = helper('qualified_ed561666').IMPLEMENTATION
+    assert all(row['runtime_input']['specification']['keywords']['function_kwargs']
+               ['native_monomer']['implementation_sha256'] == identity for row in bank['monomers'])
+    assert not any('sapt_reference' in json.dumps(row['runtime_input']) for row in bank['monomers'])
+
+
 def test_actual_input_constants_are_exact_previous_geometry_preparation_not_models():
     assert prepare.INPUT_SHA256['inventory'] == (
         '878c327424913be10e5822a8c9854bd26e38900cea2f299dbdf2d00a0a819c5b')

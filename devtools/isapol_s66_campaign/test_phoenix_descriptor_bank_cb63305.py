@@ -63,12 +63,22 @@ def test_only_fixed_helpers_and_complete_operation_sources_are_available():
     assert all(len(v) == 64 for v in hashes.values())
 
 
-def test_source_policy_binds_exact_committed_scientific_blobs():
-    planner = supervisor.helper('resource_plan_cb63305')
+@pytest.mark.parametrize('producer', ['cb63305', 'ed561666'])
+def test_source_policy_binds_exact_committed_scientific_blobs(producer):
+    planner = supervisor.helper('resource_plan_'+producer)
     source = Path(__file__).resolve().parents[2]
     assert supervisor.policy_binding(source, {'commit': planner.SCIENTIFIC_COMMIT}, planner) == planner.FILES
-    with pytest.raises(ValueError, match='exact cb63305'):
+    with pytest.raises(ValueError, match='exact selected scientific producer'):
         supervisor.policy_binding(source, {'commit': 'a'*40}, planner)
+
+
+def test_new_mode_inventories_both_new_wrappers_and_their_shared_helpers():
+    hashes = supervisor.operation_hashes(producer='ed561666')
+    assert set(hashes) == set(supervisor.OP_FILES) | {
+        'qualified_ed561666.py', 'resource_plan_ed561666.py', 'prepare_ed561666_inputs.py'}
+    assert {'qualified_cb63305.py', 'resource_plan_cb63305.py'} <= set(hashes)
+    with pytest.raises(ValueError, match='closed'):
+        supervisor.operation_hashes(producer='latest')
 
 
 def test_batch_wrapper_reuses_bounded_term_safe_wait_before_completion():
