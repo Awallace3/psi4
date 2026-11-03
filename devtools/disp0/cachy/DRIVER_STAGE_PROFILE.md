@@ -222,3 +222,64 @@ kernel timings. They identify useful next inspection targets on Cachy only.
 | `peptide-cpu/timer.dat` | `549a4ab9a7dbe682c0aa2a46228aa993b511fd6d891b6499941b2407ac40df36` |
 | `peptide-gpu/timer.dat` | `d891c4c5df54a94370a1fd96ff3113cdc8c7fe8d43c1488f992ff9c007c38b47` |
 | `peptide-gpu-profiled/profile.pstats` | `80523d4eedd53dc71b543b3ec9b3e1af7a6f67ab0babef2640649bd64e2dffef` |
+
+## Separate synchronized fragment-term follow-up
+
+Two **GPU-only** follow-ups completed with
+`PASS_RTX3090_FOUR_TERM_DIAGNOSTICS`. No CPU timing or oracle was rerun:
+the existing strict repeat checker compared all23 fields with the independently
+CPU-qualified GPU baselines above, at unchanged atol/rtol1e-9.
+
+The observer traces source boundaries in the authenticated, unchanged installed
+`fragment_terms` function and synchronizes its existing owned session before
+closing each adjacent window. It does not replace scientific functions or edit
+the installed stage. The four windows are disjoint; DISP includes rotation
+preparation, `prepare_hf` and blocked dispersion. Preparation/localization,
+plans, scaling, downloads and cleanup outside these boundaries remain overhead.
+
+| HF-reference F-SAPT/aug-cc-pVDZ fragment window | Water RTX3090 (s) | Peptide RTX3090 (s) | Peptide fragment share |
+|---|---:|---:|---:|
+| Electrostatics | 0.706218 | 7.203907 | 6.409% |
+| Exchange | 0.039286 | 0.388051 | 0.345% |
+| Exact coupled induction | 1.827227 | 50.917317 | 45.300% |
+| Dispersion, including preparation | 8.374780 | 20.741801 | 18.453% |
+| Workflow overhead residual | 6.634464 | 17.336926 | 15.424% |
+| Outer factory/cleanup residual | 6.817025 | 15.812998 | 14.068% |
+| Full traced fragment | 24.399000 | 112.401000 | 100% |
+
+All six parts close to the recorded full fragment in each run. These are
+**instrumented wall times, not GPU kernel clocks or matched per-term speedups**.
+The peptide fragment was112.401s with this observation, versus90.681s in the
+earlier unprofiled process. Do not rescale the traced parts into that baseline,
+splice them into the H200 result, or infer H200 bottleneck shares.
+Water's overhead residuals account for55.1% of its traced fragment.
+
+Both workers returned0 and reaped owned groups. Largest strict-repeat field
+errors were1.0559192409331786e-12 for water and1.0249645576720923e-10 for peptide
+(the latter is a localization field, not an energy-unit claim).
+The frozen scientific checkout remains clean at0433ec0452. After completion
+the GPU point sample was1667MiB used,22511MiB free,0% utilization.
+
+- Run: `runs/fragment-term-profile-20261103-01/`
+- Helper checkout: `profile-helper-51b5f0ad41`
+- Helper pin: `51b5f0ad41b6d8e5facdbe44186051010a629c07`
+- Original per-case config hashes unchanged.
+- Four host threads;400% CPU quota;12GiB host cap;zero swap;128 tasks.
+- Per-worker600s;controller1200s;service hard cap1300s.
+- Workflow SHA256:
+  `8d0c630ac343c5bc0e4d8aa0fe22e9294c9c66168bb4c17da33be17fb15e23c1`.
+- Observed source markers:95elst,97exch,99ind,103disp,112after-terms.
+- Local observer/parser/admission tests:12passed; independent inspect-only
+  safety review found no concrete blocker before launch.
+
+The remote final artifacts were hash-rechecked:
+
+| Artifact under the follow-up run | SHA256 |
+|---|---|
+| `term-profile-result.json` | `8c48b17012ef2c02f47297980581f3044c25ef760332db8f39f20c15de4ca6bb` |
+| `water-term-windows.json` | `a0c4a386672527e826e7c9c6257113d5f62c0999261350709d2f8bab6af0e2ef` |
+| `peptide-term-windows.json` | `65c7e17d06e5ccb7983c55c039bde550e3a1593923bffbaac15c50e25d345a91` |
+| `water-gpu/result.json` | `b65ce1792fc3b04e65a138b39eb8a3226ccd0fb10496584d3f294f6dd3031ced` |
+| `peptide-gpu/result.json` | `c58e131cdadb3a2ce45bd77998c99b715bce445ea08a0182f2da9507cfd41c1d` |
+| `water-gpu/timer.dat` | `3a02a9e1679f104d160ed911b6674eaec4cde46d17d4e3cdca6b161ea0e64e7c` |
+| `peptide-gpu/timer.dat` | `9bcca689151e9fd249aaec1a0b9f8fdae7750093c6cb9c8f5ef616ca5917d1cc` |
