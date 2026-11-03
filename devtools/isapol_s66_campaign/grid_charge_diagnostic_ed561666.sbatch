@@ -6,7 +6,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
-#SBATCH --mem=16G
+#SBATCH --mem=64G
 #SBATCH --time=04:00:00
 #SBATCH --no-requeue
 #SBATCH --signal=TERM@180
@@ -16,7 +16,7 @@ SOURCE=$1 COMMIT=$2 RUN=$3
 ROOT=/storage/project/r-cs207-0/awallace43
 MANAGER=$ROOT/miniconda/envs/p4qca
 [[ "$SOURCE" = "$ROOT"/gits/* && "$COMMIT" =~ ^[0-9a-f]{40}$ ]]
-[[ "$RUN" = "$ROOT/runs/ccasp-native-s66-ed561666fc-grid-study001" ]]
+[[ "$RUN" = "$ROOT/runs/ccasp-native-s66-ed561666fc-grid-study002" ]]
 [[ -d "$RUN/logs" && ! -e "$RUN/payload" && ! -e "$RUN/parent-empty-cache" ]]
 export PATH="$MANAGER/bin:/usr/bin:/bin" LD_LIBRARY_PATH="$MANAGER/lib"
 export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1

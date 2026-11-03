@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 from types import SimpleNamespace as NS
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -135,7 +136,7 @@ def test_grid_study_help_is_lightweight_and_no_scientific_production_is_called()
         'native_partition', 'run_molecular_properties', 'isa_localize_lw',
         'PortalClient', 'ComputeManager', 'reset_records', 'submit', 'compute'}
     batch = Path(diag.__file__).with_suffix('.sbatch').read_text()
-    assert '#SBATCH --qos=embers' in batch and '#SBATCH --mem=16G' in batch
+    assert '#SBATCH --qos=embers' in batch and '#SBATCH --mem=64G' in batch
     assert '#SBATCH --time=04:00:00' in batch and '#SBATCH --no-requeue' in batch
     assert batch.index('ccasp_wait_child "$child" 20') < batch.index('GRID_STUDY_COMPLETE')
 
@@ -164,7 +165,7 @@ def test_parent_rechecks_all_frozen_operands_after_child_before_receipt(
     real = diag.operations()
     runs = tmp_path/'runs'
     runs.mkdir()
-    run = runs/'ccasp-native-s66-ed561666fc-grid-study001'
+    run = runs/'ccasp-native-s66-ed561666fc-grid-study002'
     (run/'logs').mkdir(parents=True)
     frozen = runs/'ccasp-native-s66-ed561666fc-charge-diagnostic001/payload'
     frozen.mkdir(parents=True)
@@ -176,7 +177,9 @@ def test_parent_rechecks_all_frozen_operands_after_child_before_receipt(
             np.save(stream, np.ones(2), allow_pickle=False)
         records[role] = dict(file=path.name, shape=[2], numeric_bytes=16,
                              dtype='<f8', file_sha256=real.file_sha(path))
-    runtime_sha = real.sha(b'{}')
+    runtime_raw = json.dumps(dict(specification=dict(keywords=dict(function_kwargs=dict(
+        native_monomer=dict(resources=dict(max_bytes=32*1024**3))))))).encode()
+    runtime_sha = real.sha(runtime_raw)
     original = dict(captured_arrays=records, captured_numeric_bytes=96,
         operational_commit=diag.FROZEN_OPERATIONAL_COMMIT, runtime_input_sha256=runtime_sha,
         production_tolerance=1e-6, discriminator='FIRST_NODE_PRODUCTION_LW_REFUSAL_CAPTURED')
@@ -197,7 +200,7 @@ def test_parent_rechecks_all_frozen_operands_after_child_before_receipt(
     scratch.mkdir()
     monkeypatch.setenv('SLURM_JOB_ID', 'SYNTHETIC')
     checks = NS(allocation=lambda: dict(Account='gts-cs207-chemx', QOS='embers',
-        Partition='cpu-small', NumCPUs='12', NumNodes='1', MinMemoryNode='16G',
+        Partition='cpu-small', NumCPUs='12', NumNodes='1', MinMemoryNode='64G',
         TimeLimit='04:00:00'), verify_runtime=lambda *args: None,
         installed_python_command=lambda *args: ['SYNTHETIC_CHILD'])
     helpers = {'phoenix_installed_checks': checks, 'descriptor_scratch_cb63305': None,
@@ -209,7 +212,7 @@ def test_parent_rechecks_all_frozen_operands_after_child_before_receipt(
         SCIENTIFIC_COMMIT=real.SCIENTIFIC_COMMIT, sha=real.sha, file_sha=real.file_sha,
         write_json=real.write_json, source_identities=lambda *args: {'synthetic': 'same'},
         qualified_receipts=lambda: {'synthetic': 'qualified'},
-        helper=lambda name: helpers[name], bound_runtime=lambda raw: b'{}')
+        helper=lambda name: helpers[name], bound_runtime=lambda raw: runtime_raw)
     monkeypatch.setattr(diag, 'operations', lambda: common)
     calls = []
     def child(command, **kwargs):
@@ -217,6 +220,7 @@ def test_parent_rechecks_all_frozen_operands_after_child_before_receipt(
         common.write_json(run/'payload/grid-study.json', dict(
             status='COMPLETE_GRID_STUDY_NOT_A_MODEL', operational_commit='SYNTHETIC_OPS',
             runtime_sha256=runtime_sha, production_tolerance_unchanged=1e-6,
+            memory_admission=diag.admit_study_memory(json.loads(runtime_raw)),
             frozen_operands_owned_immutable=True,
             frozen_operand_sha256={k: r['file_sha256'] for k, r in records.items()},
             grids=[dict(status='COMPLETE_GRID_QUADRATURE_NOT_A_RESPONSE',
@@ -235,3 +239,77 @@ def test_parent_rechecks_all_frozen_operands_after_child_before_receipt(
         receipt = json.loads((run/'payload/study-receipt.json').read_bytes())
         assert receipt['frozen_operand_sha256'] == {k: r['file_sha256'] for k, r in records.items()}
     assert calls == [['SYNTHETIC_CHILD']]  # one child; never a retry
+
+
+def test_worker_honors_original_budget_through_real_python_admission(tmp_path, monkeypatch):
+    """Execute the real Python admission predicate with fake metadata, no native core."""
+    real = diag.operations()
+    state = {'memory': 0}
+    class Molecule:
+        @classmethod
+        def from_schema(cls, *args, **kwargs): return cls()
+        def molecular_charge(self): return 0
+        def multiplicity(self): return 1
+        def schoenflies_symbol(self): return 'c1'
+        def com_fixed(self): return True
+        def orientation_fixed(self): return True
+    core = NS(Molecule=Molecule, clean_options=lambda: None,
+        get_global_option=lambda name: True, get_option=lambda *args: 'RHF',
+        get_memory=lambda: state['memory'])
+    implementation = {'core': 'SYNTHETIC', 'isapol_python': 'SYNTHETIC'}
+    request = NS(resources=NS(max_bytes=32*1024**3),
+        declaration=NS(profile='SYNTHETIC'), implementation_sha256=implementation,
+        as_dict=lambda: {'synthetic_request': True})
+    source = Path(__file__).resolve().parents[2]/'psi4/driver/procrouting/isapol_schema.py'
+    tree = ast.parse(source.read_text())
+    function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                    and n.name == 'validate_native_request')
+    environment = dict(core=core, NativeMonomerRequest=NS(from_dict=lambda value: request),
+        independent_sites=lambda *args: None,
+        implementation_identity=lambda: {'sha256': implementation})
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), 'exec'), environment)
+    private = tmp_path/'build/env'
+    psi4 = ModuleType('psi4')
+    psi4.__file__ = str(private/'lib/python/site-packages/psi4/__init__.py')
+    psi4.__path__ = []
+    psi4.core = core
+    psi4.set_num_threads = lambda *args, **kw: None
+    psi4.set_memory = lambda value, **kw: state.update(memory=value)
+    schema = ModuleType('psi4.driver.procrouting.isapol_schema')
+    schema.admit_native_schema = lambda *args: (request, 'SYNTHETIC_GEOMETRY')
+    schema.native_molecule_schema = lambda *args: {'synthetic': True}
+    schema.check_native_geometry = lambda *args: None
+    schema.validate_native_request = environment['validate_native_request']
+    schema.implementation_identity = lambda: {'sha256': implementation}
+    class PassedAdmission(Exception): pass
+    recipes = ModuleType('psi4.driver.procrouting.isapol_recipes')
+    def recipe(*args, **kwargs):
+        raise PassedAdmission('stop before basis/grid/native computation')
+    recipes.native_monomer_recipe = recipe
+    for name, module in (('psi4', psi4), (schema.__name__, schema), (recipes.__name__, recipes)):
+        monkeypatch.setitem(sys.modules, name, module)
+    runtime = tmp_path/'runtime.json'
+    raw = json.dumps(dict(molecule={'synthetic': True}, specification=dict(keywords=dict(
+        function_kwargs=dict(native_monomer=dict(resources=dict(max_bytes=32*1024**3))))))).encode()
+    runtime.write_bytes(raw)
+    common = NS(BUILD=tmp_path/'build', RUNTIME_SHA256=real.sha(raw), sha=real.sha,
+        qualified_receipts=lambda: {'implementation_sha256': implementation})
+    monkeypatch.setattr(diag, 'operations', lambda: common)
+    with pytest.raises(PassedAdmission):
+        diag.worker(NS(run=tmp_path, runtime=runtime, commit='SYNTHETIC'))
+    assert state['memory'] >= 32*1024**3
+
+
+def test_study_memory_checks_catch_original_bug_before_child_launch():
+    runtime = {
+        'specification': {'keywords': {'function_kwargs': {
+            'native_monomer': {'resources': {'max_bytes': 32*1024**3}}
+        }}}
+    }
+    admitted = diag.admit_study_memory(runtime)
+    assert admitted == dict(original_request_numeric_bytes=32*1024**3,
+                            core_bytes=40*1024**3, job_bytes=64*1024**3)
+    with pytest.raises(ValueError, match='original native'):
+        diag.admit_study_memory(runtime, core_bytes=8*1024**3, job_bytes=16*1024**3)
+    with pytest.raises(ValueError, match='headroom'):
+        diag.admit_study_memory(runtime, core_bytes=40*1024**3, job_bytes=16*1024**3)

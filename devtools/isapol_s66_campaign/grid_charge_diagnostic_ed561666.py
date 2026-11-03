@@ -14,6 +14,9 @@ BLOCK_POINTS = 4096
 MAX_POINTS = 10_000_000
 MAX_AUX = 1065
 GRIDS = ((200, 974), (300, 1454), (400, 2030))
+CORE_MEMORY_BYTES = 40*1024**3
+JOB_MEMORY_BYTES = 64*1024**3
+STUDY_RUN_NAME = 'ccasp-native-s66-ed561666fc-grid-study002'
 FROZEN_REPORT_SHA256 = 'de13107c3d96f824e0303648f2c81d81b0517a52aab9ddf5c413571a9f101af5'
 FROZEN_RECEIPT_SHA256 = 'd46c1c683e6842668b1b2bfd3d3a4557098453b031348b3fc9f8e6a2d09b8a2d'
 FROZEN_OPERATIONAL_COMMIT = '1a63292f319c9f21ff5ce385bce6c0ea81f4db99'
@@ -190,6 +193,17 @@ def grid_plan(natom, radial, angular):
     return dict(points=points, planned_numeric_bytes=numeric_bytes, block_points=BLOCK_POINTS)
 
 
+def admit_study_memory(runtime, *, core_bytes=None, job_bytes=None):
+    """Honor the original native admission budget even though no producer runs."""
+    core_bytes = CORE_MEMORY_BYTES if core_bytes is None else core_bytes
+    job_bytes = JOB_MEMORY_BYTES if job_bytes is None else job_bytes
+    required = runtime['specification']['keywords']['function_kwargs']['native_monomer']['resources']['max_bytes']
+    if (any(type(value) is not int or value <= 0 for value in (required, core_bytes, job_bytes))
+            or required > core_bytes or core_bytes+4*1024**3 > job_bytes):
+        raise ValueError('original native admission memory budget and job headroom required')
+    return dict(original_request_numeric_bytes=required, core_bytes=core_bytes, job_bytes=job_bytes)
+
+
 def save_vectors(path, arrays):
     import numpy as np
     if (set(arrays) != {'direct_binary64', 'direct_extended', 'absolute_sum'}
@@ -254,9 +268,10 @@ def worker(args):
     if common.sha(raw) != common.RUNTIME_SHA256:
         raise ValueError('exact original geometry-only runtime required')
     runtime = json.loads(raw)
+    memory_admission = admit_study_memory(runtime)
     psi4.core.clean_options()
     psi4.set_num_threads(12, quiet=True)
-    psi4.set_memory(8*1024**3, quiet=True)
+    psi4.set_memory(memory_admission['core_bytes'], quiet=True)
     request, geometry = admit_native_schema(runtime['specification'], runtime['molecule'])
     molecule = psi4.core.Molecule.from_schema(
         native_molecule_schema(runtime['molecule'], request), nonphysical=True, verbose=0)
@@ -315,6 +330,7 @@ def worker(args):
         baseline_charge_agreement_screen=agreement_screen,
         baseline_charge_sums_numerically_agree=baseline_distance <= agreement_screen,
         production_tolerance_unchanged=1e-6, core_sha256=common.file_sha(psi4.core.__file__),
+        memory_admission=memory_admission,
         implementation=implementation_identity()['sha256'],
         execution_scope='Direct native grid/basis collocation and analytic charge integrals; '
             'no SCF, density fit, ISA iteration, new response solve, LW call or model fit/export.',
@@ -340,14 +356,14 @@ def parent(args):
     checks = common.helper('phoenix_installed_checks')
     allocation = checks.allocation()
     expected = dict(Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small',
-        NumCPUs='12', NumNodes='1', MinMemoryNode='16G', TimeLimit='04:00:00')
+        NumCPUs='12', NumNodes='1', MinMemoryNode='64G', TimeLimit='04:00:00')
     if any(str(allocation.get(k)) != v for k, v in expected.items()):
-        raise ValueError('exact12CPU16GiB4h embers grid-study allocation required')
+        raise ValueError('exact12CPU64GiB4h embers grid-study allocation required')
     run = args.run.resolve()
     if (args.run.is_symlink() or run.parent != common.RUNS
-            or run.name != 'ccasp-native-s66-ed561666fc-grid-study001'
+            or run.name != STUDY_RUN_NAME
             or not (run/'logs').is_dir()):
-        raise ValueError('fresh isolated grid-study001 namespace required')
+        raise ValueError('fresh isolated grid-study002 namespace required; preserve failed001')
     qualified = common.qualified_receipts()
     manifest_path = common.BUILD/'build-identity.json'
     manifest = json.loads(manifest_path.read_bytes())
@@ -356,6 +372,7 @@ def parent(args):
     frozen_payload = common.RUNS/'ccasp-native-s66-ed561666fc-charge-diagnostic001/payload'
     frozen_receipts(frozen_payload)
     raw = common.bound_runtime(common.CASE.read_bytes())
+    memory_admission = admit_study_memory(json.loads(raw))
     payload = run/'payload'
     payload.mkdir(exist_ok=False)
     scratch = common.SCRATCH/('ccasp-native-grid-study-'+os.environ['SLURM_JOB_ID'])
@@ -371,7 +388,8 @@ def parent(args):
     common.write_json(payload/'study-started.json', dict(
         allocation=allocation, operational_commit=args.commit, source_sha256=sources,
         runtime_sha256=common.RUNTIME_SHA256, scientific_commit=common.SCIENTIFIC_COMMIT,
-        build_identity_sha256=common.BUILD_SHA256, frozen_report_sha256=FROZEN_REPORT_SHA256))
+        build_identity_sha256=common.BUILD_SHA256, frozen_report_sha256=FROZEN_REPORT_SHA256,
+        memory_admission=memory_admission))
     env = common.helper('phoenix_descriptor_bank_cb63305').child_environment(environment, scratch)
     env.update(OMP_NUM_THREADS='12', MKL_NUM_THREADS='12')
     command = checks.installed_python_command(environment/'bin/python', scratch/'cache',
@@ -392,6 +410,7 @@ def parent(args):
             or report['operational_commit'] != args.commit
             or report['runtime_sha256'] != common.RUNTIME_SHA256
             or report['production_tolerance_unchanged'] != 1e-6
+            or report['memory_admission'] != memory_admission
             or report['frozen_operands_owned_immutable'] is not True
             or report['frozen_operand_sha256'] != operand_hashes
             or [(r['radial_points'], r['spherical_points']) for r in report['grids']] != list(GRIDS)
