@@ -122,3 +122,103 @@ This tiny control shows substantial GPU dimer-SCF and fragment-continuation
 overhead on the desktop. It does not rank H200 bottlenecks or predict the
 peptide outcome. At this checkpoint the peptide CPU reference has started;
 its GPU worker, oracle and separate profile are not yet complete.
+
+## Completed: water and peptide passed
+
+The controller finished at **2026-11-03T11:57:40Z**, recording
+`PASS_SMALL_RTX3090_DRIVER_DIAGNOSTICS_NOT_H200_SPEEDUP`.
+All seven workers returned0 with owned child groups reaped. Both independent
+CPU oracles checked all23 fields, and the separate profiled peptide GPU call
+passed the existing strict fresh-repeat check.
+
+The monitor reported exit3 because the completed transient systemd unit was
+garbage-collected, not because a scientific worker failed. Completion was
+subsequently established from the final controller checkpoint, worker status/
+hash receipts and completed log. No retry was launched.
+The service journal records56min30.331s elapsed and an8.5G host-cgroup
+memory peak (human-rounded journal units), below the12GiB cap. The scientific
+checkout remains clean at`0433ec0452`, and `BUILT_FROM` still identifies that
+same exact commit.
+
+### Whole-call observations
+
+| HF-reference F-SAPT/aug-cc-pVDZ | CPU4 energy (s) | RTX3090 +4 host threads energy (s) | CPU4 inclusive (s) | GPU inclusive (s) |
+|---|---:|---:|---:|---:|
+| Water | 3.227362 | 26.886316 | 15.472824 | 40.046503 |
+| Peptide | 1538.003742 | 114.928005 | 1546.180725 | 128.923484 |
+
+These are one baseline process per arm, **not medians or a qualified new
+speedup**. Cachy's CPU is an AMD Ryzen7 2700X Eight-Core Processor, using four
+threads under the explicit four-CPU quota. Do not compare its denominator with
+the24-core Gold6226 Phoenix reference, or predict H200 bottlenecks from the
+3090's restricted FP64 throughput.
+
+### Peptide driver-step wall times
+
+| `sapt_proc.py` window | CPU4 (s) | RTX3090 +4 host threads (s) |
+|---|---:|---:|
+| Dimer SCF | 18.072 | 13.601 |
+| Monomer A SCF | 9.101 | 2.936 |
+| Monomer B SCF | 9.295 | 2.857 |
+| SAPT JK/cache | 2.349 | 0.996 |
+| Canonical electrostatics | 0.001 | 0.002 |
+| Canonical exchange | 2.256 | 0.286 |
+| Canonical induction/correction | 29.473 | 3.435 |
+| Full fragment continuation | 1467.051 | 90.681 |
+| Dispersion dispatch/metadata, not fragment dispersion | 0.071 | 0.067 |
+
+The CPU fragment sum comprises localization0.219, partition0.001,
+fragment localization0.085, electrostatics4.182, exchange2.039,
+exact source-resolved induction1449.482 and dispersion11.043s.
+The GPU fragment timer contains all those terms together and must not be
+called a dispersion-only interval. Its nested blocked-dispersion diagnostic
+is19.548715s; that is not the same boundary as the complete CPU `fdisp0` call,
+so no matched dispersion-only ratio is claimed.
+
+### Separate profiled peptide worker
+
+The profiled energy call takes143.624762s versus114.928005s in the unprofiled
+baseline; profiling materially changes elapsed time. Observed inclusive
+windows include:
+
+| Window | Calls | Profiled inclusive (s) |
+|---|---:|---:|
+| Source-resolved induction `solve_source` | 88 | 42.936578 |
+| Response `apply` | 1361 | 41.891806 |
+| Native identity `_audit_maps` | 1650 | 23.554415 |
+| Sealed `mapped_rows` | 1767 | 16.775188 |
+| Native plan `build` | 2 | 21.088295 |
+| `blocked_device_dispersion` | 1 | 21.091242 |
+| `localize_iao_device` | 2 | 0.206007 |
+
+These windows are nested/overlapping, include native waiting and host audits,
+and have incomplete profiler coverage of the enclosing workflow. They must
+not be summed into a synthetic disjoint GPU-stage breakdown or relabeled as
+kernel timings. They identify useful next inspection targets on Cachy only.
+
+### Numerical, work and cleanup checks
+
+- Water: largest same-gauge field-entry difference3.48067e-12; whole-energy
+  GPU-minus-CPU difference-3.57351e-12Eh.
+- Peptide: largest same-gauge field-entry difference1.25069e-11; whole-energy
+  difference-1.27876e-9Eh between independent SCF calculations.
+- Separate profiled peptide fresh-repeat largest field error8.77555e-11,
+  below the unchanged1e-9 repeat tolerances.
+- All seven result/matrix/standard-output/timer hash receipts were rechecked.
+- Peptide tracked explicit device peak4,477,018,672 bytes,196 dispersion
+  compute blocks,145 RIFIT calls and64MiB cache ceiling match the H200 work
+  ledger. This tracked peak does not measure opaque native allocations.
+- Native/session cleanup completed with zero live tracked bytes and native
+  owners. After completion the desktop again reported1661MiB used,
+  22517MiB free and0% GPU utilization; this is a point sample, not peak telemetry.
+
+| Artifact under `runs/stage-profile-20261103-01/` | SHA256 |
+|---|---|
+| `profile-result.json` | `327b6c406177a09fc205820c043178198c0eb835a5e31af301b828a6a5e55f37` |
+| `water-cpu/result.json` | `156e444796db94d89ee2252b8cb0911828f84a603480d5b84bb7f9c8c4cfe58f` |
+| `water-gpu/result.json` | `695bdce9c298d92c877d95aac10080929c2a6705c3194cbbcbb2ee42b8d758f8` |
+| `peptide-cpu/result.json` | `3ce77b462635b82bbff4cfcb75af992b42297ff51ddc7dc3286e36a44fcb1822` |
+| `peptide-gpu/result.json` | `31c18bda45e52de9ec6b914c6698cea63f483a01a7738f560642bd4babbed566` |
+| `peptide-cpu/timer.dat` | `549a4ab9a7dbe682c0aa2a46228aa993b511fd6d891b6499941b2407ac40df36` |
+| `peptide-gpu/timer.dat` | `d891c4c5df54a94370a1fd96ff3113cdc8c7fe8d43c1488f992ff9c007c38b47` |
+| `peptide-gpu-profiled/profile.pstats` | `80523d4eedd53dc71b543b3ec9b3e1af7a6f67ab0babef2640649bd64e2dffef` |
