@@ -27,14 +27,14 @@ def compute(**changes):
     resources = dict(max_bytes=48*GIB, max_work=75*10**12,
                      max_io_bytes=16*GIB, capacity='large')
     resources.update(changes)
-    return planner.plan(dimensions(), resources, max_replay_work=2*10**12,
+    return planner.plan(dimensions(), resources, max_replay_work=10**12,
                         pfit_maximum_work_bytes=2*GIB)
 
 
 def test_dense_grid_charges_every_point_without_changing_other_science():
     new = compute()
     old = planner._legacy.plan(dimensions(), new['resources'],
-        max_replay_work=2*10**12, pfit_maximum_work_bytes=2*GIB)
+        max_replay_work=10**12, pfit_maximum_work_bytes=2*GIB)
     assert old['dimensions']['integration_grid_rows'] == 2_325_912
     assert new['dimensions']['integration_grid_rows'] == 9_719_640
     assert dict(new['dimensions'], integration_grid_rows=2_325_912) == old['dimensions']
@@ -52,6 +52,8 @@ def test_dense_grid_charges_every_point_without_changing_other_science():
         assert current == expected
     assert new['peak_numeric_bytes'] == 47_996_666_032
     assert new['charged_work'] == 63_738_054_966_384
+    assert new['max_replay_work'] == old['max_replay_work'] == 10**12
+    assert new['pfit_maximum_work_bytes'] == old['pfit_maximum_work_bytes'] == 2*GIB
     assert new['checkpoint_io_bytes'] == old['checkpoint_io_bytes']
     assert new['fit_plan'] == old['fit_plan']
     assert new['status'] == 'WITHIN_PREDICTED_LEDGER_LIMITS'
@@ -112,6 +114,6 @@ def test_candidate_source_binding_rejects_historical_and_changed_bytes(tmp_path)
 def test_private_grid_seam_is_closed_not_a_user_tunable_grid(grid):
     with pytest.raises(ValueError, match='closed integration grid'):
         planner._legacy._shared._ledger(dimensions(), compute()['resources'],
-            max_replay_work=2*10**12, pfit_maximum_work_bytes=2*GIB,
+            max_replay_work=10**12, pfit_maximum_work_bytes=2*GIB,
             drho_refinement_iterations=32, scientific_commit=planner.SCIENTIFIC_COMMIT,
             policy=planner.POLICY, integration_grid=grid)

@@ -22,7 +22,8 @@ INPUT_SHA256 = {
 
 def helper(name):
     if name not in ('qualified_cb63305', 'resource_plan_cb63305',
-                    'qualified_ed561666', 'resource_plan_ed561666'):
+                    'qualified_ed561666', 'resource_plan_ed561666',
+                    'qualified_grid400', 'resource_plan_grid400'):
         raise ValueError('closed descriptor preparation helpers required')
     path = Path(__file__).with_name(name+'.py')
     raw = path.read_bytes()
@@ -45,6 +46,24 @@ def prepare_bank(inputs, receipts, resource_bytes, *, producer='cb63305'):
     """Return unsubmitted runtime-only inputs, never a qualified descriptor bank."""
     if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
         raise ValueError('closed installed producer profile required')
+    return _prepare_bank(inputs, receipts, resource_bytes, producer=producer)
+
+
+def prepare_grid400_pilot_bank(inputs, receipts, resource_bytes):
+    """Prepare only the authorized fresh monomer0008, never an all131 bank.
+
+    Candidate installed receipts must exist and verify before construction.
+    This entry point does not accept arbitrary selections or producer modules.
+    """
+    return _prepare_bank(inputs, receipts, resource_bytes, producer='grid400',
+                         selected=('monomer-0008',))
+
+
+def _prepare_bank(inputs, receipts, resource_bytes, *, producer, selected=None):
+    if ((producer == 'grid400' and selected != ('monomer-0008',))
+            or (producer in ('cb63305', 'ed561666') and selected is not None)
+            or producer not in ('cb63305', 'ed561666', 'grid400')):
+        raise ValueError('closed descriptor producer/selection required')
     if type(inputs) is not dict or set(inputs) != set(INPUT_SHA256):
         raise ValueError('exact immutable input roles required')
     for role, expected in INPUT_SHA256.items():
@@ -70,19 +89,28 @@ def prepare_bank(inputs, receipts, resource_bytes, *, producer='cb63305'):
             or len(inventory['monomers']) != 131 or len(entries['entries']) != 131
             or len(declarations['monomers']) != 131):
         raise ValueError('complete unique131-monomer input identity set required')
+    if sum(len(entry['attributes']['dimer_contexts']) for entry in drafted.values()) != 1056:
+        raise ValueError('complete1056-context bookkeeping required')
+    active = ids if selected is None else set(selected)
     if type(resource_bytes) is not bytes:
         raise ValueError('immutable explicit resource declaration bytes required')
     resources = json.loads(resource_bytes)
-    if (set(resources) != {'schema', 'status', 'inventory_sha256', 'policy_id', 'monomers'}
-            or resources['schema'] != 'native-s66x8-resource-declarations/2'
+    expected_keys = {'schema', 'status', 'inventory_sha256', 'policy_id', 'monomers'}
+    if selected is not None:
+        expected_keys.add('selected_monomers')
+    if (set(resources) != expected_keys
+            or resources['schema'] != ('native-s66x8-resource-declarations/2'
+                if selected is None else 'native-s66x8-selected-resource-declarations/1')
             or resources['status'] != 'DECLARED_NOT_ADMITTED'
             or resources['inventory_sha256'] != INPUT_SHA256['inventory']
             or resources['policy_id'] != planner.POLICY
-            or type(resources['monomers']) is not dict or set(resources['monomers']) != ids):
-        raise ValueError('exact explicit131-monomer resource declarations required')
+            or type(resources['monomers']) is not dict or set(resources['monomers']) != active
+            or (selected is not None and resources['selected_monomers'] != list(selected))):
+        raise ValueError('exact explicit131-monomer resource declarations required'
+                         if selected is None else 'exact selected monomer0008 resource declarations required')
     pfit = planner.shared_pfit_plan()
     rows, contexts = [], 0
-    for monomer in sorted(ids):
+    for monomer in sorted(active):
         entry, declaration, contract = drafted[monomer], declared[monomer], resources['monomers'][monomer]
         geometry_hash = json_digest(entry['molecule'])
         if (entry.get('additional_keywords') != {}
@@ -107,9 +135,18 @@ def prepare_bank(inputs, receipts, resource_bytes, *, producer='cb63305'):
         memory = contract['intended_memory_bytes']
         if type(memory) is not int or memory < budget['max_bytes']:
             raise ValueError('intended Psi4 memory must cover the numeric budget')
+        if selected is not None and (budget != dict(
+                max_bytes=48*1024**3, max_work=75*10**12,
+                max_io_bytes=16*1024**3, capacity='large') or memory != 60*1024**3):
+            raise ValueError('exact approved fresh48GiB numeric/60GiB science contract required')
         cap = contract['pfit_maximum_work_bytes']
         if cap is None:
             raise ValueError('explicit finite native workspace required')
+        if selected is not None and (
+                type(cap) is not int or cap != 2*1024**3
+                or type(contract['max_replay_work']) is not int
+                or contract['max_replay_work'] != 10**12):
+            raise ValueError('exact original replay/native workspace limits required')
         pfit.check_replay_work(contract['max_replay_work'])
         count = len(entry['molecule']['symbols'])
         if (count != len(declaration['declaration']['frames'])
@@ -139,15 +176,20 @@ def prepare_bank(inputs, receipts, resource_bytes, *, producer='cb63305'):
         rows.append(dict(monomer_id=monomer, entry_name=entry['name'],
             geometry_sha256=geometry_hash, intended_memory_bytes=memory,
             runtime_input=runtime, runtime_input_sha256=json_digest(runtime)))
-    if contexts != 1056:
+    if selected is None and contexts != 1056:
         raise ValueError('complete1056-context bookkeeping required')
-    return dict(schema='native-s66x8-descriptor-preparation/2',
+    result = dict(schema='native-s66x8-descriptor-preparation/2',
         status='PREPARED_FOR_DESCRIPTORS_ONLY', policy_id=planner.POLICY,
         input_sha256={k: digest(v) for k, v in inputs.items()},
         resource_declarations_sha256=digest(resource_bytes), producer=producer,
-        monomer_count=131, fragment_contexts=contexts, monomers=rows,
+        monomer_count=len(active), fragment_contexts=contexts, monomers=rows,
         qualification='No descriptors, SCF, molecular calculations, manager discovery, '
                       'QCArchive writes or jobs. Resource declarations are not admission.')
+    if selected is not None:
+        result.update(schema='native-s66x8-selected-descriptor-preparation/1',
+            status='PREPARED_SELECTED_MONOMER_FOR_DESCRIPTORS_ONLY',
+            selected_monomers=list(selected), inventory_monomers=131, inventory_fragment_contexts=1056)
+    return result
 
 
 def main():
