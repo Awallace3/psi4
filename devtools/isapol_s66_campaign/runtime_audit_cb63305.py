@@ -33,6 +33,17 @@ def helper(name):
     return module
 
 
+def admit_audit_allocation(allocation, *, producer):
+    """Enforce this fresh audit's own shape, not the science job's shape."""
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
+        raise ValueError('closed audit allocation producer required')
+    if producer == 'grid400':
+        expected = dict(Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small',
+            NumCPUs='4', NumNodes='1', MinMemoryNode='24G', TimeLimit='00:45:00')
+        if any(allocation.get(key) != value for key, value in expected.items()):
+            raise ValueError('exact grid400 audit allocation route and4CPU24GiB45min required')
+
+
 def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='cb63305',
                         remaining_case=False):
     pins = helper('pilot_cb63305').producer_pins(producer)
@@ -45,6 +56,10 @@ def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='c
         raise ValueError('exact expanded-pilot job and reconstructed monomer identity required')
     if producer == 'ed561666' and not remaining_case and expected_monomer != pins['monomer']:
         raise ValueError('fixed fresh cap32 monomer required')
+    if producer == 'grid400' and (
+            remaining_case or expected_monomer != pins['monomer']
+            or outcome.get('producer_profile') != producer or outcome.get('dataset_mode') != 'fresh'):
+        raise ValueError('fixed fresh grid400 monomer and mode required')
     if producer == 'ed561666' and remaining_case and (
             expected_monomer == pins['monomer'] or outcome.get('dataset_mode') != 'append'):
         raise ValueError('selected remaining cap32 monomer required')
@@ -59,6 +74,12 @@ def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='c
 def validate_delivery(outcome, delivery, created, claimed, server, *, owned354=False,
                       producer='cb63305'):
     pins = helper('pilot_cb63305').producer_pins(producer)
+    if producer == 'grid400' and (
+            owned354 or outcome.get('producer_profile') != producer
+            or outcome.get('dataset_mode') != 'fresh' or outcome.get('monomer_id') != pins['monomer']
+            or outcome.get('dataset_name') != pins['dataset_name']
+            or outcome.get('specification_name') != pins['specification_name']):
+        raise ValueError('grid400 delivery must be a fresh singleton, never owned append')
     if producer == 'ed561666' and (
             outcome.get('producer_profile') != producer
             or outcome.get('dataset_mode') != ('append' if owned354 else 'fresh')):
@@ -202,7 +223,7 @@ def main():
     for name in ('build', 'case', 'worker-preflight', 'qualification', 'inputs', 'descriptors', 'pilot', 'run'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
-    parser.add_argument('--producer', choices=('cb63305', 'ed561666'), default='cb63305')
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
     parser.add_argument('--remaining-case', action='store_true')
     parser.add_argument('--owned-checkpoint', type=Path)
     parser.add_argument('--checkpoint-sha256')
@@ -218,6 +239,7 @@ def main():
     producer = args.producer
     checks = helper('phoenix_installed_checks')
     allocation = checks.allocation()
+    admit_audit_allocation(allocation, producer=producer)
     source = Path(__file__).resolve().parents[2]
     if (checks.git(source, 'rev-parse', 'HEAD') != args.commit
             or checks.git(source, 'status', '--porcelain')):
@@ -242,7 +264,8 @@ def main():
     profile = draft.get('execution_profile')
     scratch = scratch_for_outcome(outcome, expected_monomer=draft['monomer_id'], producer=producer,
                                   remaining_case=args.remaining_case)
-    bootstrap.admit_allocation(outcome['allocation'], execution_profile=profile)
+    bootstrap.admit_allocation(outcome['allocation'], execution_profile=profile,
+                               **(dict(producer=producer) if producer == 'grid400' else {}))
     if profile is not None and outcome.get('execution_profile') != profile:
         raise ValueError('actual molecular execution profile differs from reconstructed case')
     worker_shape = (profile['cores'], profile['science_memory_GiB']) if profile else (4, 20)
@@ -367,7 +390,7 @@ def main():
     output.mkdir(exist_ok=False)
     verdict = ('PASS_SELECTED_BANK_CASE_SINGLETON_EVIDENCE'
                if producer == 'ed561666' and args.remaining_case
-               else 'PASS_SELECTED_FRESH_SINGLETON_EVIDENCE' if producer == 'ed561666'
+               else 'PASS_SELECTED_FRESH_SINGLETON_EVIDENCE' if producer in ('ed561666', 'grid400')
                else 'PASS_BANK_CASE_SINGLETON_EVIDENCE' if args.remaining_case
                else 'PASS_EXPANDED_SINGLE_PILOT_EVIDENCE')
     report = dict(schema='native-expanded-pilot-audit/1',
@@ -382,7 +405,7 @@ def main():
         qualification='One fresh request3 molecular pilot execution/export/decoded-FD evidence only; '
                       'ordinary OS trust, not hostile-host/TOCTOU or atomic-server-lock proof. '
                       'No full-C10, independent solver, covariance, accuracy/parity or whole-set claim.')
-    if producer == 'ed561666':
+    if producer in ('ed561666', 'grid400'):
         report.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
     with (output/'audit-report.json').open('x') as stream:
         json.dump(report, stream, indent=2, allow_nan=False)

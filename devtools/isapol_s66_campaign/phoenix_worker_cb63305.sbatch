@@ -10,7 +10,7 @@
 #SBATCH --time=00:45:00
 #SBATCH --signal=TERM@180
 set -euo pipefail
-[[ $# -eq 4 || $# -eq 5 ]] || { printf 'SOURCE OPERATIONAL_COMMIT PILOT RUN [--remaining-case|--ed561666-fresh]\n' >&2; exit 2; }
+[[ $# -eq 4 || $# -eq 5 ]] || { printf 'SOURCE OPERATIONAL_COMMIT PILOT RUN [--remaining-case|--ed561666-fresh|--grid400-fresh]\n' >&2; exit 2; }
 SOURCE=$1 COMMIT=$2 PILOT=$3 RUN=$4
 EXTRA=()
 PRODUCER=cb63305f41
@@ -27,6 +27,11 @@ if [[ $# -eq 5 ]]; then
             PRODUCER=ed561666fc
             [[ "$PILOT" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-ed561666fc-remaining-preparation001/cases/monomer-[0-9]{4}\.json$ ]]
             ;;
+        --grid400-fresh)
+            EXTRA=(--producer grid400)
+            PRODUCER=grid400-1aaa9e0a30
+            [[ "$PILOT" = /storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-preparation001/pilot.json ]]
+            ;;
         *) exit 2 ;;
     esac
 fi
@@ -39,13 +44,13 @@ export PATH="$MANAGER/bin:/usr/bin:/bin" LD_LIBRARY_PATH="$MANAGER/lib"
 export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
 unset PYTHONPATH PYTHONHOME PSIPATH PSIDATADIR LD_PRELOAD
 source "$SOURCE/devtools/isapol_s66_campaign/term_wait.sh"
+source "$SOURCE/devtools/isapol_s66_campaign/producer_paths.sh"
+ccasp_select_paths "$PRODUCER"
 setsid /opt/slurm/current/bin/srun --ntasks=1 --cpu-bind=none \
     "$MANAGER/bin/python" -I -B -X "pycache_prefix=$RUN/parent-empty-cache" \
     "$SOURCE/devtools/isapol_s66_campaign/phoenix_worker_cb63305.py" \
-    --build "$ROOT/ccasp-native-s66-$PRODUCER-build001" \
-    --qualification "$ROOT/ccasp-native-s66-$PRODUCER-checks001/payload/installed-validation.json" \
-    --inputs "$ROOT/ccasp-native-s66-$PRODUCER-preparation001" \
-    --descriptors "$ROOT/ccasp-native-s66-$PRODUCER-descriptors001/payload" \
+    --build "$CCASP_BUILD" --qualification "$CCASP_QUALIFICATION" \
+    --inputs "$CCASP_INPUTS" --descriptors "$CCASP_DESCRIPTORS" \
     --pilot "$PILOT" --run "$RUN" --commit "$COMMIT" "${EXTRA[@]}" &
 child=$!
 set +e

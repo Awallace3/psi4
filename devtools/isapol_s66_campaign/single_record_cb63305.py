@@ -3,6 +3,7 @@
 The caller must bind the new dataset/record, frozen request3 and installed
 worker preflight before entering this module. Result delivery is not audit.
 """
+import copy
 import importlib.util
 from pathlib import Path
 import re
@@ -11,7 +12,7 @@ import signal
 
 def helper(name):
     if name not in ('single_claim', 'phoenix_pilot', 'pilot_cb63305', 'dataset_fresh_cb63305',
-                    'case_cb63305', 'owned_dataset_cb63305'):
+                    'case_cb63305', 'owned_dataset_cb63305', 'grid400_policy'):
         raise ValueError('closed single-record manager helpers required')
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_expanded_session_'+name, path)
@@ -29,7 +30,7 @@ def validate_session_config(config, compute_tag, *, worker_shape=(4, 20.)):
     if (type(worker_shape) is not tuple or len(worker_shape) != 2
             or type(worker_shape[0]) is not int
             or type(worker_shape[1]) not in (int, float)
-            or worker_shape not in ((4, 20.), (8, 20.), (12, 40.), (24, 80.))):
+            or worker_shape not in ((4, 20.), (8, 20.), (12, 40.), (24, 80.), (16, 60.))):
         raise ValueError('explicit finite native worker shape required')
     cores, memory = worker_shape
     executors = config.executors
@@ -45,10 +46,29 @@ def validate_session_config(config, compute_tag, *, worker_shape=(4, 20.)):
 def run_session(config, *, record_id, compute_tag, runtime, payload, save, worker_shape=(4, 20.),
                 producer='cb63305', case=None):
     """Claim once, capture compressed local output, and stop this owned manager."""
-    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
         raise ValueError('closed singleton producer required')
+    if producer != 'grid400' and worker_shape == (16, 60.):
+        raise ValueError('grid400 worker shape requires its explicit fresh producer')
     protected = (5234314, 5234315)
-    if producer == 'ed561666':
+    if producer == 'grid400':
+        pins = helper('pilot_cb63305').producer_pins(producer)
+        policy = helper('grid400_policy')
+        profile = policy.execution_profile()
+        if (case is not None or worker_shape != (profile['cores'], profile['science_memory_GiB'])
+                or re.fullmatch(re.escape(pins['namespace']+pins['monomer']+'-')+
+                                r'[1-9][0-9]*', compute_tag) is None):
+            raise ValueError('exact fresh grid400 singleton shape and tag, never append, required')
+        raw_runtime = copy.deepcopy(runtime)
+        protocols = raw_runtime['specification'].pop('protocols', None)
+        digest = helper('case_cb63305').json_digest
+        if (digest(protocols) != digest(helper('phoenix_pilot').execution_specification({})['protocols'])
+                or digest(raw_runtime) != pins['runtime_input_sha256']):
+            raise ValueError('exact frozen grid400 input and no-correction execution protocols required')
+        policy.validate_execution_profile(dict(monomer_id=pins['monomer'], runtime_input=raw_runtime,
+            intended_memory_bytes=profile['science_memory_GiB']*1024**3))
+        protected = pins['protected_records']
+    elif producer == 'ed561666':
         pins = helper('pilot_cb63305').producer_pins(producer)
         protected = pins['protected_records']
         monomer = pins['monomer']
@@ -102,8 +122,15 @@ def run_session(config, *, record_id, compute_tag, runtime, payload, save, worke
                 extras = result.result.get('extras')
                 self.local_native = extras.get('psi4:native_monomer') if isinstance(extras, dict) else None
 
-    manager = PilotManager(config, target_record_id=record_id, compute_tag=compute_tag,
-                           acquisition_seconds=300)
+    if producer == 'grid400':
+        with helper('dataset_fresh_cb63305').grid400_manager_client_factory() as client_type:
+            manager = PilotManager(config, target_record_id=record_id, compute_tag=compute_tag,
+                                   acquisition_seconds=300)
+            if type(manager.client) is not client_type:
+                raise ValueError('owned grid400 manager did not use the one-shot activation client')
+    else:
+        manager = PilotManager(config, target_record_id=record_id, compute_tag=compute_tag,
+                               acquisition_seconds=300)
     if producer == 'ed561666':
         helper('dataset_fresh_cb63305').guard_manager_client(manager.client)
     save('manager-started.json', dict(name=manager.name, tag=compute_tag,

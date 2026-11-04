@@ -39,9 +39,13 @@ elif [[ $# -eq 1 && "$1" = --ed561666-fresh ]]; then
     EXTRA=(--producer ed561666)
     PRODUCER=ed561666fc
     [[ "$PILOT" = "$ROOT"/ccasp-native-s66-ed561666fc-benzene-preparation001/pilot.json ]]
+elif [[ $# -eq 1 && "$1" = --grid400-fresh ]]; then
+    EXTRA=(--producer grid400)
+    PRODUCER=grid400-1aaa9e0a30
+    [[ "$PILOT" = "$ROOT"/ccasp-native-s66-grid400-1aaa9e0a30-preparation001/pilot.json ]]
 else
     for arg in "${EXTRA[@]}"; do
-        [[ "$arg" != --producer* && "$arg" != --ed561666-fresh ]] || exit 2
+        [[ "$arg" != --producer* && "$arg" != --ed561666-fresh && "$arg" != --grid400* ]] || exit 2
     done
 fi
 MANAGER=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca
@@ -52,13 +56,13 @@ export PATH="$MANAGER/bin:/usr/bin:/bin" LD_LIBRARY_PATH="$MANAGER/lib"
 export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
 unset PYTHONPATH PYTHONHOME PSIPATH PSIDATADIR LD_PRELOAD
 source "$SOURCE/devtools/isapol_s66_campaign/term_wait.sh"
+source "$SOURCE/devtools/isapol_s66_campaign/producer_paths.sh"
+ccasp_select_paths "$PRODUCER"
 setsid /opt/slurm/current/bin/srun --ntasks=1 --cpu-bind=none \
     "$MANAGER/bin/python" -I -B -X "pycache_prefix=$RUN/parent-empty-cache" \
     "$SOURCE/devtools/isapol_s66_campaign/runtime_audit_cb63305.py" \
-    --build "$ROOT/ccasp-native-s66-$PRODUCER-build001" \
-    --qualification "$ROOT/ccasp-native-s66-$PRODUCER-checks001/payload/installed-validation.json" \
-    --inputs "$ROOT/ccasp-native-s66-$PRODUCER-preparation001" \
-    --descriptors "$ROOT/ccasp-native-s66-$PRODUCER-descriptors001/payload" \
+    --build "$CCASP_BUILD" --qualification "$CCASP_QUALIFICATION" \
+    --inputs "$CCASP_INPUTS" --descriptors "$CCASP_DESCRIPTORS" \
     --pilot "$PILOT" --worker-preflight "$PREFLIGHT" --case "$CASE" --run "$RUN" --commit "$COMMIT" "${EXTRA[@]}" &
 child=$!
 set +e

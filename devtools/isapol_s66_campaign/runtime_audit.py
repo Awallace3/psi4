@@ -13,7 +13,7 @@ def cli_role(execution, *, env, scratch, worker_shape=(4, 20.)):
     if (type(worker_shape) is not tuple or len(worker_shape) != 2
             or type(worker_shape[0]) is not int
             or type(worker_shape[1]) not in (int, float)
-            or worker_shape not in ((4, 20.), (8, 20.), (12, 40.), (24, 80.))):
+            or worker_shape not in ((4, 20.), (8, 20.), (12, 40.), (24, 80.), (16, 60.))):
         raise ValueError('explicit finite CLI worker shape required')
     env, scratch = str(env), str(scratch)
     match = re.fullmatch(r'execve\("([^"]+)", (\[.*\]), .*?\)\s+=\s+0',

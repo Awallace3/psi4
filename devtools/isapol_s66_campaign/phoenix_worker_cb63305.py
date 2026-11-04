@@ -22,12 +22,14 @@ SOURCES = (
     'descriptor_profiles.py',
     'phoenix_descriptor_bank_cb63305.py', 'phoenix_installed_checks.py',
     'phoenix_worker_probe.py', 'phoenix_pilot.py', 'single_claim.py', 'native_psi4.sh', 'term_wait.sh',
+    'producer_paths.sh',
 )
 HELPERS = {
     'pilot_cb63305', 'phoenix_installed_checks', 'phoenix_worker_probe', 'phoenix_pilot',
     'descriptor_admission_cb63305', 'descriptor_scratch_cb63305',
     'phoenix_descriptor_bank_cb63305', 'dataset_fresh_cb63305', 'case_cb63305',
     'descriptor_profiles',
+    'grid400_policy',
 }
 
 
@@ -45,19 +47,26 @@ def helper(name):
 
 def selected_producer(args):
     producer = getattr(args, 'producer', 'cb63305')
-    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
         raise ValueError('closed molecular producer selector required')
     return producer
 
 
 def source_names(producer='cb63305', *, remaining_case=False):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
+        raise ValueError('closed implemented worker producer required')
     helper('pilot_cb63305').producer_pins(producer)
     if type(remaining_case) is not bool:
         raise ValueError('explicit worker case mode required')
+    if producer == 'grid400' and remaining_case:
+        raise ValueError('grid400 is fresh singleton only, never a remaining case')
     extra = (('qualified_ed561666.py', 'resource_plan_ed561666.py',
               'prepare_ed561666_inputs.py') if producer == 'ed561666' else ())
     if producer == 'ed561666' and remaining_case:
         extra += ('owned_dataset_cb63305.py',)
+    if producer == 'grid400':
+        extra += ('qualified_grid400.py', 'resource_plan_ed561666.py',
+                  'resource_plan_grid400.py', 'grid400_policy.py', 'grid400_cohort.py')
     return SOURCES + extra
 
 
@@ -66,10 +75,16 @@ def source_hashes(producer='cb63305', *, remaining_case=False):
             for name in source_names(producer, remaining_case=remaining_case)}
 
 
-def admit_allocation(allocation, *, execution_profile=None):
+def admit_allocation(allocation, *, execution_profile=None, producer='cb63305'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
+        raise ValueError('closed worker allocation producer required')
     expected = dict(Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small',
                     NumCPUs='4', NumNodes='1', MinMemoryNode='24G', TimeLimit='00:45:00')
-    if execution_profile is not None:
+    if producer == 'grid400':
+        profile = helper('grid400_policy').validate_profile(execution_profile)
+        expected.update(NumCPUs=str(profile['cores']),
+                        MinMemoryNode=str(profile['job_memory_GiB'])+'G')
+    elif execution_profile is not None:
         cases = helper('case_cb63305')
         name = execution_profile.get('name')
         if name not in cases.PROFILES:
@@ -87,6 +102,8 @@ def admit_allocation(allocation, *, execution_profile=None):
 def prepare_draft(args, manifest_path):
     """Reconstruct either the archived first-case shape or a full remaining case."""
     producer = selected_producer(args)
+    if producer == 'grid400' and args.remaining_case:
+        raise ValueError('grid400 requires a new fresh singleton, not an append case')
     if args.remaining_case:
         return helper('case_cb63305').verify_prepared_from_paths(
             args.pilot, args.inputs, manifest_path, args.qualification, args.descriptors,
@@ -118,7 +135,7 @@ def main():
     for name in ('build', 'qualification', 'inputs', 'descriptors', 'pilot', 'run'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
-    parser.add_argument('--producer', choices=('cb63305', 'ed561666'), default='cb63305')
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
     parser.add_argument('--remaining-case', action='store_true',
                         help='Require a fully reconstructed remaining-bank case, not the first pilot')
     args = parser.parse_args()
@@ -138,7 +155,8 @@ def main():
     manifest_path = build/'build-identity.json'
     draft = prepare_draft(args, manifest_path)
     profile = draft.get('execution_profile')
-    admit_allocation(allocation, execution_profile=profile)
+    admit_allocation(allocation, execution_profile=profile,
+                     **(dict(producer=producer) if producer == 'grid400' else {}))
     pilot_sha = checks.digest(args.pilot)
     manifest = json.loads(manifest_path.read_bytes())
     identity = json.loads(args.qualification.with_name('imported-identity.json').read_bytes())
@@ -236,7 +254,7 @@ def main():
         raise ValueError('worker source, runtime, raw inputs or harness changed during discovery')
     report = dict(status=('PASS_SELECTED_BANK_CASE_WORKER_PREFLIGHT_ONLY'
                           if producer == 'ed561666' and args.remaining_case
-                          else 'PASS_SELECTED_FRESH_WORKER_PREFLIGHT_ONLY' if producer == 'ed561666'
+                          else 'PASS_SELECTED_FRESH_WORKER_PREFLIGHT_ONLY' if producer in ('ed561666', 'grid400')
                           else 'PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY' if args.remaining_case
                           else 'PASS_EXPANDED_WORKER_PREFLIGHT_ONLY'), allocation=allocation,
         scientific_build_commit=manifest['commit'], operational_commit=args.commit,
@@ -257,7 +275,7 @@ def main():
         qualification='Installed descriptor/request and actual manager discovery only; '
                       'no SCF, molecular calculation, manager acquisition or server writes. '
                       'No independent trace, molecular, RSS or SCF scratch acceptance.')
-    if producer == 'ed561666':
+    if producer in ('ed561666', 'grid400'):
         report.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
     with (payload/'worker-preflight.json').open('x') as stream:
         json.dump(report, stream, indent=2, allow_nan=False)
