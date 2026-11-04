@@ -52,6 +52,13 @@ def test_grid400_source_inventory_includes_every_transitive_planner():
     assert admission.planner('grid400').POLICY == '1aaa9e0a30-reference-h2h1-grid400-ledger-v4'
 
 
+@pytest.mark.parametrize('producer', ['cb63305', 'ed561666'])
+def test_existing_worker_source_inventory_covers_shared_descriptor_profile(producer):
+    worker = load('_descriptor_closure_worker_test', 'phoenix_worker_cb63305.py')
+    assert set(profiles.profile(producer)['child_sources']) <= set(worker.source_names(producer))
+    assert worker.helper('descriptor_profiles').profile(producer) == profiles.profile(producer)
+
+
 def test_grid400_descriptor_uses_dense_arithmetic_and_unchanged_native32(monkeypatch):
     probe = fixtures.probe
     runtime, calls, request = fixtures.mock_boundaries(monkeypatch, producer='grid400')

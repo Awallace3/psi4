@@ -19,6 +19,7 @@ SOURCES = (
     'dataset_fresh_cb63305.py', 'dataset_append.py', 'prepare_descriptor_bank_cb63305.py',
     'qualified_cb63305.py', 'resource_plan_cb63305.py', 'descriptor_probe_cb63305.py',
     'descriptor_probe.py', 'descriptor_admission_cb63305.py', 'descriptor_scratch_cb63305.py',
+    'descriptor_profiles.py',
     'phoenix_descriptor_bank_cb63305.py', 'phoenix_installed_checks.py',
     'phoenix_worker_probe.py', 'phoenix_pilot.py', 'single_claim.py', 'native_psi4.sh', 'term_wait.sh',
 )
@@ -26,6 +27,7 @@ HELPERS = {
     'pilot_cb63305', 'phoenix_installed_checks', 'phoenix_worker_probe', 'phoenix_pilot',
     'descriptor_admission_cb63305', 'descriptor_scratch_cb63305',
     'phoenix_descriptor_bank_cb63305', 'dataset_fresh_cb63305', 'case_cb63305',
+    'descriptor_profiles',
 }
 
 
@@ -185,9 +187,8 @@ def main():
         intended_memory_bytes=draft['intended_memory_bytes'])
     result = helper('descriptor_admission_cb63305').verify_descriptor(science, admitted_row, identity,
         policy=science['source_policy_sha256'],
-        operational_sources_sha256={key: operations[key] for key in (
-            'descriptor_probe_cb63305.py', 'descriptor_probe.py', 'resource_plan_cb63305.py')
-            + (('resource_plan_ed561666.py',) if producer == 'ed561666' else ())},
+        operational_sources_sha256={key: operations[key]
+            for key in helper('descriptor_profiles').profile(producer)['child_sources']},
         runtime_sha256=draft['runtime_input_sha256'], producer=producer)
     if result['status'] != 'PASS_DESCRIPTOR_PLAN_ONLY':
         raise ValueError('fresh worker descriptor plan refused; no automatic promotion')
