@@ -109,7 +109,8 @@ def plan(dimensions, resources, *, max_replay_work, pfit_maximum_work_bytes):
 
 
 def _ledger(dimensions, resources, *, max_replay_work, pfit_maximum_work_bytes,
-            drho_refinement_iterations, scientific_commit, policy):
+            drho_refinement_iterations, scientific_commit, policy,
+            integration_grid=(200, 974)):
     """Shared arithmetic; public wrappers supply closed producer constants.
 
     Neither a wrapper nor this private calculator performs descriptor,
@@ -117,6 +118,10 @@ def _ledger(dimensions, resources, *, max_replay_work, pfit_maximum_work_bytes,
     """
     if type(drho_refinement_iterations) is not int or drho_refinement_iterations not in (10, 32):
         raise ValueError('supported closed producer refinement budget required')
+    if (type(integration_grid) is not tuple or len(integration_grid) != 2
+            or any(type(value) is not int for value in integration_grid)
+            or integration_grid not in ((200, 974), (400, 2030))):
+        raise ValueError('supported closed integration grid required')
     if not isinstance(dimensions, Dimensions):
         raise ValueError('explicit Dimensions required')
     if type(resources) is not dict or set(resources) != {
@@ -146,8 +151,10 @@ def _ledger(dimensions, resources, *, max_replay_work, pfit_maximum_work_bytes,
         used_channels=u, block_rows=4096, max_bytes=resources['max_bytes'],
         max_work=max_replay_work)
     packed_overhead = pfit.streamed_overhead(L, c, f, 4096, computed_fields=True)
-    # Unchanged whole-chain mirror of cb63305's inherited scientific policy.
-    r, h, g = s*99*230, s*199*974, s*99*406
+    # Historical wrappers retain their exact grid. Only a new closed producer
+    # wrapper supplies the dense integration grid; response/ISA grids stay fixed.
+    radial, angular = integration_grid
+    r, h, g = s*99*230, s*(radial-1)*angular, s*99*406
     aa, t = dimensions.atomic_widths, sum(dimensions.shape_widths)
     a2, a = sum(w*w for w in aa), sum(aa)
     gr, gh = 32*r, 32*h
