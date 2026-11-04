@@ -1,4 +1,4 @@
-"""Sealed all131 installed descriptor allocation; no SCF or QCArchive writes."""
+"""Sealed all131 or fixed candidate descriptor allocation; no SCF/QCA writes."""
 import argparse
 import hashlib
 import importlib.util
@@ -20,10 +20,12 @@ OP_FILES = (
     'propose_descriptor_resources_cb63305.py',
     'term_wait.sh',
     'qualified_cb63305.py', 'resource_plan_cb63305.py', 'phoenix_installed_checks.py',
+    'descriptor_profiles.py',
 )
 HELPERS = {
     'phoenix_installed_checks', 'qualified_cb63305', 'resource_plan_cb63305',
     'qualified_ed561666', 'resource_plan_ed561666',
+    'qualified_grid400', 'resource_plan_grid400', 'descriptor_profiles',
     'prepare_descriptor_bank_cb63305', 'descriptor_admission_cb63305', 'descriptor_scratch_cb63305',
 }
 
@@ -64,11 +66,8 @@ def write_json_once(path, data):
 
 
 def operation_hashes(*, producer='cb63305'):
-    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
-        raise ValueError('closed descriptor source inventory producer required')
-    files = OP_FILES+(
-        ('qualified_ed561666.py', 'resource_plan_ed561666.py', 'prepare_ed561666_inputs.py')
-        if producer == 'ed561666' else ())
+    profile = helper('descriptor_profiles').profile(producer)
+    files = OP_FILES+profile['parent_extra_sources']
     return {name: digest(Path(__file__).with_name(name).read_bytes()) for name in files}
 
 
@@ -141,7 +140,7 @@ def main():
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
     parser.add_argument('--expected-bank-sha256', required=True)
-    parser.add_argument('--producer', choices=('cb63305', 'ed561666'), default='cb63305')
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
     args = parser.parse_args()
     if (re.fullmatch('[0-9a-f]{40}', args.commit) is None
             or re.fullmatch('[0-9a-f]{64}', args.expected_bank_sha256) is None):
@@ -157,7 +156,8 @@ def main():
             or not run.name.startswith('ccasp-native-s66-')
             or build.is_relative_to(run) or run.is_relative_to(build)):
         raise RuntimeError('disjoint private build and descriptor run required')
-    profile, planner = helper('qualified_'+args.producer), helper('resource_plan_'+args.producer)
+    descriptor_profile = helper('descriptor_profiles').profile(args.producer)
+    profile, planner = helper(descriptor_profile['qualifier']), helper(descriptor_profile['planner'])
     # Preserve the historical default interface; the new path is explicit.
     selection = {} if args.producer == 'cb63305' else dict(producer=args.producer)
     prepare, admission = helper('prepare_descriptor_bank_cb63305'), helper('descriptor_admission_cb63305')
@@ -178,8 +178,10 @@ def main():
             or digest(blobs['bank']) != args.expected_bank_sha256):
         raise ValueError('prepared bank or private build path differs')
     bank = json.loads(blobs['bank'])
-    regenerated = prepare.prepare_bank({key: blobs[key] for key in prepare.INPUT_SHA256},
-                                      receipt_blobs, blobs['resources'], **selection)
+    raw_inputs = {key: blobs[key] for key in prepare.INPUT_SHA256}
+    regenerated = (prepare.prepare_grid400_pilot_bank(raw_inputs, receipt_blobs, blobs['resources'])
+        if descriptor_profile['selected_monomers'] is not None
+        else prepare.prepare_bank(raw_inputs, receipt_blobs, blobs['resources'], **selection))
     if bank != regenerated:
         raise ValueError('prepared bank does not reproduce from exact immutable raw inputs')
     changes = checks.git(source, 'diff', '--name-only', manifest['commit'], args.commit).splitlines()
@@ -206,7 +208,7 @@ def main():
     write_json_once(payload/'started.json', dict(status='STARTED_DESCRIPTOR_ALLOCATION_ONLY',
         allocation=allocation, bank_sha256=args.expected_bank_sha256,
         scientific_commit=manifest['commit'], operational_commit=args.commit,
-        producer=producer, policy_id=planner.POLICY, expected_monomers=131,
+        producer=producer, policy_id=planner.POLICY, expected_monomers=len(regenerated['monomers']),
         memory_contract=memory, scratch_snapshot=disk, source_policy_sha256=policy,
         operational_sources_sha256=operations, input_receipts_sha256=receipts))
     reports = []
@@ -230,23 +232,24 @@ def main():
                                stdout=out, stderr=err, check=True)
             raw = read_bounded(report_path)
             report = json.loads(raw)
-            child_sources = ('descriptor_probe_cb63305.py', 'descriptor_probe.py',
-                             'resource_plan_cb63305.py')
-            if args.producer == 'ed561666':
-                child_sources += ('resource_plan_ed561666.py',)
+            child_sources = descriptor_profile['child_sources']
             result = admission.verify_descriptor(report, row, identity, policy=policy,
                 operational_sources_sha256={key: operations[key] for key in child_sources},
                 runtime_sha256=digest(runtime), **selection)
             reports.append(dict(result, descriptor_report=report_path.name,
                                 descriptor_report_sha256=digest(raw), runtime_input_sha256=digest(runtime)))
-        status = admission.verify_coverage(reports, {r['monomer_id'] for r in regenerated['monomers']})
+        status = (admission.verify_grid400_coverage(reports)
+            if descriptor_profile['selected_monomers'] is not None
+            else admission.verify_coverage(reports, {r['monomer_id'] for r in regenerated['monomers']}))
         checks.verify_runtime(environment, manifest)
         if (any(checks.digest(Path(path)) != expected for path, expected in receipts.items())
                 or checks.git(source, 'rev-parse', 'HEAD') != args.commit
                 or checks.git(source, 'status', '--porcelain') or operation_hashes(**selection) != operations):
             raise ValueError('source, input or runtime receipts changed during descriptor allocation')
         write_json_once(payload/'descriptor-allocation.json', dict(
-            schema='native-campaign-descriptor-allocation/2', status=status,
+            schema=('native-campaign-selected-descriptor-allocation/1'
+                if descriptor_profile['selected_monomers'] is not None
+                else 'native-campaign-descriptor-allocation/2'), status=status,
             allocation=allocation, scientific_build_commit=manifest['commit'],
             operational_commit=args.commit, policy_id=planner.POLICY,
             bank_sha256=args.expected_bank_sha256, producer=producer,

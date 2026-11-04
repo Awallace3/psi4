@@ -18,9 +18,11 @@ import sys
 
 
 def planner(producer='cb63305'):
-    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
-        raise ValueError('closed descriptor arithmetic producer required')
-    path = Path(__file__).with_name('resource_plan_'+producer+'.py')
+    profile_path = Path(__file__).with_name('descriptor_profiles.py')
+    profiles = {}
+    exec(compile(profile_path.read_bytes(), str(profile_path), 'exec'), profiles)
+    profile = profiles['profile'](producer)
+    path = Path(__file__).with_name(profile['planner']+'.py')
     raw = path.read_bytes()
     spec = importlib.util.spec_from_file_location('_descriptor_admission_plan', path)
     module = importlib.util.module_from_spec(spec)
@@ -158,3 +160,15 @@ def verify_coverage(reports, expected_ids):
         raise ValueError('unknown descriptor status')
     return ('PASS_ALL_131_DESCRIPTOR_PLANS_ONLY' if statuses == {'PASS_DESCRIPTOR_PLAN_ONLY'}
             else 'REFUSED_DESCRIPTOR_PLANS')
+
+
+def verify_grid400_coverage(reports):
+    """Exact authorized singleton coverage; never an all131 verdict."""
+    if (type(reports) is not list or len(reports) != 1
+            or reports[0].get('monomer_id') != 'monomer-0008'
+            or reports[0].get('status') not in (
+                'PASS_DESCRIPTOR_PLAN_ONLY', 'REFUSED_DESCRIPTOR_PLAN')):
+        raise ValueError('exact selected monomer0008 descriptor report required')
+    return ('PASS_SELECTED_MONOMER_DESCRIPTOR_PLAN_ONLY'
+            if reports[0]['status'] == 'PASS_DESCRIPTOR_PLAN_ONLY'
+            else 'REFUSED_SELECTED_MONOMER_DESCRIPTOR_PLAN')

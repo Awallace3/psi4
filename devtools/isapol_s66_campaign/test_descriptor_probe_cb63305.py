@@ -52,14 +52,15 @@ def mock_boundaries(monkeypatch, *, producer='cb63305'):
         module = ModuleType('psi4.driver.procrouting.'+name)
         module.__dict__.update(attrs)
         monkeypatch.setitem(sys.modules, module.__name__, module)
+    original_helper = probe.helper
     planner, descriptors = probe.helper('resource_plan_'+producer), probe.helper('descriptor_probe')
     original = planner.plan
     def plan(d, resources, **kwargs):
         calls.update(plan_kwargs=kwargs, resources=resources, dimensions=d)
         return original(d, resources, **kwargs)
     planner.plan = plan
-    monkeypatch.setattr(probe, 'helper', lambda name: planner
-                        if name == 'resource_plan_'+producer else descriptors)
+    monkeypatch.setattr(probe, 'helper', lambda name: planner if name == 'resource_plan_'+producer
+                        else descriptors if name == 'descriptor_probe' else original_helper(name))
     runtime = dict(molecule={}, specification=dict(
         driver='properties', model=dict(method='pbe0', basis='aug-cc-pvtz'),
         keywords=dict(reference='rhf', function_kwargs=dict(

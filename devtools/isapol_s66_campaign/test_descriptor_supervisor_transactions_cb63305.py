@@ -42,6 +42,9 @@ def transaction(monkeypatch, tmp_path, case, *, producer='cb63305'):
     raw = json.dumps(runtime, sort_keys=True, allow_nan=False).encode()
     rows = [dict(monomer_id=f'monomer-{i:04d}', intended_memory_bytes=20*1024**3,
         runtime_input=copy.deepcopy(runtime), runtime_input_sha256=module.digest(raw)) for i in range(1, 132)]
+    if producer == 'grid400':
+        rows = [rows[7]]
+        rows[0]['intended_memory_bytes'] = 60*1024**3
     bank = dict(monomers=rows, qualification='SYNTHETIC_UNIT_ONLY_NOT_ACCEPTANCE')
     paths = dict(build_identity=build/'build-identity.json',
         qualification=qroot/'installed-validation.json',
@@ -72,10 +75,13 @@ def transaction(monkeypatch, tmp_path, case, *, producer='cb63305'):
         if case == 'runtime_drift' and len(runtime_checks) > 1:
             raise RuntimeError('synthetic runtime drift')
     checks.git, checks.allocation, checks.verify_runtime = git, lambda: allocation, verify_runtime
-    profile = original_helper('qualified_'+producer)
+    profile = (NS(RECEIPT_SHA256=dict.fromkeys((
+        'build_identity', 'installed_qualification', 'imported_identity', 'junit'), 'synthetic-only'))
+        if producer == 'grid400' else original_helper('qualified_'+producer))
     profile.verify_receipts = lambda _: dict(status='SYNTHETIC_UNIT_RECEIPTS_ONLY')
     prepare = original_helper('prepare_descriptor_bank_cb63305')
     prepare.prepare_bank = lambda *args, **kw: copy.deepcopy(bank)
+    prepare.prepare_grid400_pilot_bank = lambda *args, **kw: copy.deepcopy(bank)
     admission = original_helper('descriptor_admission_cb63305')
     # Measurement/binding is independently tested. This deliberately returns
     # the supplied report ID so coverage must independently reject duplicates.
@@ -90,8 +96,17 @@ def transaction(monkeypatch, tmp_path, case, *, producer='cb63305'):
     monkeypatch.setattr(module, 'quota_snapshot', lambda *args: {'status': 'SYNTHETIC_SNAPSHOT_ONLY'})
     monkeypatch.setattr(module, 'policy_binding', lambda *args: planner.FILES)
     real_hashes = module.operation_hashes
+    def synthetic_hashes(**kw):
+        if producer == 'grid400':
+            # Candidate measured qualifier does not exist yet. This fixture
+            # tests supervisor control flow, never real source admission.
+            names = module.OP_FILES+original_helper('descriptor_profiles').profile(
+                producer)['parent_extra_sources']
+        else:
+            names = real_hashes(**kw)
+        return {name: 'a'*64 for name in names}
     monkeypatch.setattr(module, 'operation_hashes',
-                        lambda **kw: {name: 'a'*64 for name in real_hashes(**kw)})
+                        synthetic_hashes)
     monkeypatch.setenv('SLURM_JOB_ID', '123')
     def child(command, **kwargs):
         assert '-I' in command and '-B' in command and '-X' in command
@@ -99,18 +114,19 @@ def transaction(monkeypatch, tmp_path, case, *, producer='cb63305'):
         monomer = command[command.index('--monomer-id')+1]
         assert command[command.index('--producer')+1] == producer
         children.append(monomer)
-        if case == 'child_failure' and len(children) == 5:
+        trigger = 1 if producer == 'grid400' else 5
+        if case == 'child_failure' and len(children) == trigger:
             raise subprocess.CalledProcessError(1, command)
-        if case == 'interrupted' and len(children) == 5:
+        if case == 'interrupted' and len(children) == trigger:
             raise KeyboardInterrupt
-        if case == 'missing_report' and len(children) == 5:
+        if case == 'missing_report' and len(children) == trigger:
             return NS(returncode=0)
         if case == 'input_drift' and len(children) == 1:
             paths['inventory'].write_bytes(paths['inventory'].read_bytes()+b' ')
         report = dict(monomer_id=('monomer-0001' if case == 'duplicate_report'
-                                  and len(children) == 131 else monomer),
+                                  and len(children) == len(rows) else monomer),
                       status=('REFUSED_DESCRIPTOR_PLAN' if case == 'refused'
-                              and len(children) == 5 else 'PASS_DESCRIPTOR_PLAN_ONLY'))
+                              and len(children) == trigger else 'PASS_DESCRIPTOR_PLAN_ONLY'))
         Path(command[command.index('--output')+1]).write_text(json.dumps(report))
         return NS(returncode=0)
     monkeypatch.setattr(module.subprocess, 'run', child)
@@ -157,3 +173,34 @@ def test_failure_drift_or_interruption_cannot_publish_success(monkeypatch, tmp_p
     assert report['status'] == 'FAILED_DESCRIPTOR_ALLOCATION'
     if case in ('child_failure', 'missing_report', 'interrupted'):
         assert len(children) == 5
+
+
+def test_selected_mock_supervisor_computes_only_one_and_never_claims_all131(monkeypatch, tmp_path):
+    module, run, children, checks = transaction(monkeypatch, tmp_path, 'success', producer='grid400')
+    module.main()
+    report = json.loads((run/'payload/descriptor-allocation.json').read_text())
+    assert report['schema'] == 'native-campaign-selected-descriptor-allocation/1'
+    assert report['status'] == 'PASS_SELECTED_MONOMER_DESCRIPTOR_PLAN_ONLY'
+    assert children == ['monomer-0008'] and len(report['reports']) == 1
+    assert checks == [0, 1]
+
+
+def test_selected_refused_plan_remains_a_refusal(monkeypatch, tmp_path):
+    module, run, children, _ = transaction(monkeypatch, tmp_path, 'refused', producer='grid400')
+    module.main()
+    report = json.loads((run/'payload/descriptor-allocation.json').read_text())
+    assert report['status'] == 'REFUSED_SELECTED_MONOMER_DESCRIPTOR_PLAN'
+    assert children == ['monomer-0008']
+
+
+@pytest.mark.parametrize('case', ['missing_report', 'duplicate_report', 'child_failure',
+                                  'input_drift', 'source_drift', 'runtime_drift', 'interrupted'])
+def test_selected_failure_or_drift_never_publishes_success(monkeypatch, tmp_path, case):
+    module, run, children, _ = transaction(monkeypatch, tmp_path, case, producer='grid400')
+    with pytest.raises((ValueError, RuntimeError, FileNotFoundError,
+                        subprocess.CalledProcessError, KeyboardInterrupt)):
+        module.main()
+    assert not (run/'payload/descriptor-allocation.json').exists()
+    failure = json.loads((run/'payload/descriptor-allocation-failure.json').read_text())
+    assert failure['status'] == 'FAILED_DESCRIPTOR_ALLOCATION'
+    assert children == ['monomer-0008']
