@@ -150,3 +150,31 @@ def test_unqualified_candidate_receipts_cannot_be_replaced_by_old_receipts(monke
     monkeypatch.setattr(prepare, 'helper', helper)
     with pytest.raises(ValueError, match='candidate installed receipts required'):
         compute(raw, resources)
+
+
+def test_cli_routes_grid400_to_only_the_selected_preparation(monkeypatch, tmp_path):
+    args = SimpleNamespace(producer='grid400', output=tmp_path/'output.json')
+    for name in (*prepare.INPUT_SHA256, 'resources', 'build_identity', 'qualification'):
+        path = tmp_path/(name+'.json')
+        path.write_bytes(name.encode())
+        setattr(args, name, path)
+    for name in ('imported-identity.json', 'junit.xml'):
+        (tmp_path/name).write_bytes(name.encode())
+    monkeypatch.setattr(prepare.argparse.ArgumentParser, 'parse_args', lambda self: args)
+    calls = []
+
+    def selected(inputs, receipts, resources):
+        calls.append((inputs, receipts, resources))
+        return dict(status='SYNTHETIC_SELECTED_ONLY', monomer_count=1, fragment_contexts=8)
+
+    def all131(*args, **kwargs):
+        raise AssertionError('selected CLI must not enter the all131 constructor')
+
+    monkeypatch.setattr(prepare, 'prepare_grid400_pilot_bank', selected)
+    monkeypatch.setattr(prepare, 'prepare_bank', all131)
+    prepare.main()
+    assert len(calls) == 1 and calls[0][2] == b'resources'
+    assert set(calls[0][0]) == set(prepare.INPUT_SHA256)
+    assert set(calls[0][1]) == {
+        'build_identity', 'installed_qualification', 'imported_identity', 'junit'}
+    assert json.loads(args.output.read_bytes())['monomer_count'] == 1

@@ -196,14 +196,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in (*INPUT_SHA256, 'resources', 'build_identity', 'qualification', 'output'):
         parser.add_argument('--'+name.replace('_', '-'), type=Path, required=True)
-    parser.add_argument('--producer', choices=('cb63305', 'ed561666'), default='cb63305')
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
     args = parser.parse_args()
     qpath = args.qualification
     receipt_paths = dict(build_identity=args.build_identity, installed_qualification=qpath,
         imported_identity=qpath.with_name('imported-identity.json'), junit=qpath.with_name('junit.xml'))
-    result = prepare_bank({role: getattr(args, role).read_bytes() for role in INPUT_SHA256},
-                          {role: p.read_bytes() for role, p in receipt_paths.items()},
-                          args.resources.read_bytes(), producer=args.producer)
+    inputs = {role: getattr(args, role).read_bytes() for role in INPUT_SHA256}
+    receipts = {role: p.read_bytes() for role, p in receipt_paths.items()}
+    resources = args.resources.read_bytes()
+    result = (prepare_grid400_pilot_bank(inputs, receipts, resources)
+        if args.producer == 'grid400'
+        else prepare_bank(inputs, receipts, resources, producer=args.producer))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open('x') as stream:
         json.dump(result, stream, indent=2, allow_nan=False)
