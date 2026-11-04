@@ -286,7 +286,7 @@ def sapt_empirical_dispersion(name, dimer_wfn, **kwargs):
             monomerA=monomerA,
             monomerB=monomerB,
             dimer_wfn=dimer_wfn,
-            dftd4_functional_name='hf-d4bjeeqtwo',
+            dftd4_functional_name='sapt0-d4(i)',
             d4_type='intermolecular',
             data={},
         )
