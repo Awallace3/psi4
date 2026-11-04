@@ -21,8 +21,10 @@ SPECIFICATION_NAME = 'pbe0-atz-native-request3'
 
 def producer_pins(producer='cb63305'):
     """Closed fresh-pilot identities; never caller-supplied receipt/path pins."""
-    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
         raise ValueError('closed molecular producer selector required')
+    if producer == 'grid400':
+        return helper('grid400_cohort').pins()
     if producer == 'cb63305':
         return dict(producer=producer, monomer=MONOMER, dataset_name=DATASET_NAME,
             specification_name=SPECIFICATION_NAME, bank_sha256=BANK_SHA256,
@@ -45,7 +47,7 @@ def producer_pins(producer='cb63305'):
 
 def helper(name):
     if name not in ('prepare_descriptor_bank_cb63305', 'descriptor_admission_cb63305',
-                    'phoenix_worker_probe', 'case_cb63305'):
+                    'phoenix_worker_probe', 'case_cb63305', 'grid400_cohort', 'grid400_policy'):
         raise ValueError('closed first expanded-pilot helpers required')
     path = Path(__file__).with_name(name+'.py')
     raw = path.read_bytes()
@@ -63,6 +65,8 @@ def digest(raw):
 def prepare_pilot(inputs, receipts, resources, bank_raw, allocation_raw, reports, *, producer='cb63305'):
     """Select the fixed nitrogen pilot without changing the admitted request."""
     pins = producer_pins(producer)
+    if producer == 'grid400':
+        return _prepare_fresh_grid400(inputs, receipts, resources, bank_raw, allocation_raw, reports, pins)
     if producer == 'ed561666':
         return _prepare_fresh_ed(inputs, receipts, resources, bank_raw, allocation_raw, reports, pins)
     prepare = helper('prepare_descriptor_bank_cb63305')
@@ -145,6 +149,26 @@ def _prepare_fresh_ed(inputs, receipts, resources, bank_raw, allocation_raw, rep
             fragment_indices=list(range(12))):
         raise ValueError('exact fresh benzene representative required')
     execution = cases.validate_execution_profile('s40', row)
+    return _prepare_fresh_selected(inputs, bank, allocation, pins, execution, formula='C6H6',
+        qualification='Fresh cap32 raw pilot preparation only; no dataset/record/manager, SCF or model. '
+            'References remain unchanged entry attributes. No owned354 checkpoint or old-record recovery.')
+
+
+def _prepare_fresh_grid400(inputs, receipts, resources, bank_raw, allocation_raw, reports, pins):
+    bank, allocation = helper('grid400_cohort').verify_admitted_bank(
+        inputs, receipts, resources, bank_raw, allocation_raw, reports)
+    row, = bank['monomers']
+    molecule = next(m for m in json.loads(inputs['inventory'])['monomers'] if m['id'] == pins['monomer'])
+    execution = helper('grid400_policy').validate_execution_profile(row)
+    return _prepare_fresh_selected(inputs, bank, allocation, pins, execution, formula=molecule['formula'],
+        qualification='Fresh dense-grid monomer0008 raw pilot only; no dataset/record/manager, SCF or model. '
+            'References remain entry attributes; no dataset355 append, reset or old-record recovery.')
+
+
+def _prepare_fresh_selected(inputs, bank, allocation, pins, execution, *, formula, qualification):
+    """Shared construction after the producer's measured descriptor admission."""
+    monomer = pins['monomer']
+    row = next(r for r in bank['monomers'] if r['monomer_id'] == monomer)
     entry = copy.deepcopy(next(e for e in json.loads(inputs['entries'])['entries']
                                if e['attributes']['monomer_id'] == monomer))
     runtime, measurement = row['runtime_input'], next(
@@ -153,14 +177,15 @@ def _prepare_fresh_ed(inputs, receipts, resources, bank_raw, allocation_raw, rep
             or row['runtime_input_sha256'] != pins['runtime_input_sha256']
             or measurement['runtime_input_sha256'] != row['runtime_input_sha256']
             or measurement['descriptor_report_sha256'] != pins['selected_report_sha256']):
-        raise ValueError('fresh benzene geometry/descriptor/runtime identity differs')
+        raise ValueError('fresh grid400 geometry/descriptor/runtime identity differs'
+            if pins['producer'] == 'grid400' else 'fresh benzene geometry/descriptor/runtime identity differs')
     spec = runtime['specification']
     request = spec['keywords']['function_kwargs']['native_monomer']
     if request.get('schema') != 'native-monomer-request/3' or request.get('point_group') != 'c1':
         raise ValueError('fresh producer requires exact request3/computationalC1')
     entry['additional_keywords'] = dict(function_kwargs=copy.deepcopy(spec['keywords']['function_kwargs']))
     draft = dict(schema=pins['schema'], status='PREPARED_NOT_REGISTERED_OR_SUBMITTED',
-        producer_profile='ed561666', dataset_mode='fresh', monomer_id=monomer, formula='C6H6',
+        producer_profile=pins['producer'], dataset_mode='fresh', monomer_id=monomer, formula=formula,
         dataset_name=pins['dataset_name'], specification_name=pins['specification_name'],
         specification=dict(program='psi4', driver=spec['driver'], **spec['model'],
             keywords={k: copy.deepcopy(v) for k, v in spec['keywords'].items() if k != 'function_kwargs'}),
@@ -170,12 +195,13 @@ def _prepare_fresh_ed(inputs, receipts, resources, bank_raw, allocation_raw, rep
         descriptor_report_sha256=measurement['descriptor_report_sha256'],
         descriptor_dimensions=measurement['dimensions'], descriptor_operational_commit=pins['descriptor_ops'],
         input_sha256=bank['input_sha256'], resource_declarations_sha256=bank['resource_declarations_sha256'],
-        queue_policy=dict(qos='embers', account='gts-cs207-chemx', cpus=12, job_memory_GiB=64,
-            psi4_memory_GiB=40, concurrency=1, maximum_records=1, find_existing=False, existing_ok=False),
-        qualification='Fresh cap32 raw pilot preparation only; no dataset/record/manager, SCF or model. '
-            'References remain unchanged entry attributes. No owned354 checkpoint or old-record recovery.')
+        queue_policy=dict(qos='embers', account='gts-cs207-chemx', cpus=execution['cores'],
+            job_memory_GiB=execution['job_memory_GiB'], psi4_memory_GiB=execution['science_memory_GiB'],
+            concurrency=1, maximum_records=1, find_existing=False, existing_ok=False),
+        qualification=qualification)
     reconstructed = helper('phoenix_worker_probe').runtime_input(draft)
-    if reconstructed != runtime or cases.json_digest(reconstructed) != pins['runtime_input_sha256']:
+    if reconstructed != runtime or helper('prepare_descriptor_bank_cb63305').json_digest(
+            reconstructed) != pins['runtime_input_sha256']:
         raise ValueError('fresh operational pilot changed the admitted scientific runtime')
     return draft
 
@@ -193,7 +219,8 @@ def prepare_from_paths(inputs_path, build_identity, qualification, descriptors, 
                     junit=q.with_name('junit.xml').read_bytes())
     allocation = (descriptors/'descriptor-allocation.json').read_bytes()
     if digest(allocation) != pins['allocation_sha256']:
-        raise ValueError('exact completed all131 descriptor allocation required before child reads')
+        raise ValueError('exact completed singleton descriptor allocation required before child reads'
+            if producer == 'grid400' else 'exact completed all131 descriptor allocation required before child reads')
     rows = json.loads(allocation)['reports']
     return prepare_pilot(inputs, receipts, (inputs_path/'resource-declarations.json').read_bytes(),
         (inputs_path/'descriptor-bank.json').read_bytes(), allocation,
@@ -205,7 +232,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('inputs', 'build-identity', 'qualification', 'descriptors', 'output'):
         parser.add_argument('--'+name, type=Path, required=True)
-    parser.add_argument('--producer', choices=('cb63305', 'ed561666'), default='cb63305')
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
     args = parser.parse_args()
     result = prepare_from_paths(args.inputs, args.build_identity, args.qualification, args.descriptors,
                                 producer=args.producer)
