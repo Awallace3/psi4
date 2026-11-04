@@ -12,7 +12,7 @@
 
 # Supply absolute output/error paths whose parent already exists.
 set -euo pipefail
-[[ $# -eq 7 ]] || { printf 'HARNESS BUILD_COMMIT TREE HARNESS_COMMIT BUILD RUN DEPENDENCIES\n' >&2; exit 2; }
+[[ $# -eq 7 || $# -eq 8 ]] || { printf 'HARNESS BUILD_COMMIT TREE HARNESS_COMMIT BUILD RUN DEPENDENCIES [legacy|grid400]\n' >&2; exit 2; }
 HARNESS=$1
 COMMIT=$2
 TREE=$3
@@ -20,6 +20,8 @@ HARNESS_COMMIT=$4
 BUILD=$5
 RUN=$6
 BASE=$7
+SUITE=${8:-legacy}
+[[ "$SUITE" = legacy || "$SUITE" = grid400 ]]
 [[ "$HARNESS" = /storage/project/r-cs207-0/awallace43/gits/* ]]
 [[ "$BUILD" = /storage/project/r-cs207-0/awallace43/runs/ccasp-native-* ]]
 [[ "$RUN" = /storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-* ]]
@@ -41,7 +43,7 @@ trap on_term TERM INT
 setsid "$BASE/bin/python3.13" -I -S -B -X "pycache_prefix=$RUN/parent-empty-cache" \
     "$HARNESS/devtools/isapol_s66_campaign/phoenix_installed_checks.py" \
     --build "$BUILD" --run "$RUN" --dependencies "$BASE" \
-    --commit "$COMMIT" --tree "$TREE" --harness-commit "$HARNESS_COMMIT" &
+    --commit "$COMMIT" --tree "$TREE" --harness-commit "$HARNESS_COMMIT" --suite "$SUITE" &
 child=$!
 set +e
 wait "$child"

@@ -215,3 +215,100 @@ def test_campaign_chno_recipe_is_explicit_uniform_and_does_not_leak_puream():
         core.clean_options()
     with pytest.raises(ValueError, match='profile'):
         native_monomer_recipe(molecule, profile='inferred')
+
+
+@pytest.mark.parametrize('route', ['source', 'installed'])
+def test_molecular_integration_grid_forwarding_is_dense_and_other_policies_unchanged(monkeypatch, route):
+    """Actual route body with synthetic dependencies; no grid or quantum work."""
+    import ast
+    from pathlib import Path
+    import sys
+    from types import ModuleType, SimpleNamespace as NS
+    import numpy as np
+    if route == 'source':
+        path = Path(__file__).resolve().parents[2]/'psi4/driver/procrouting/isapol_molecular.py'
+        tree = ast.parse(path.read_text())
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                    and n.name == 'run_molecular_properties')
+        namespace = dict(__name__='synthetic_molecular_route',
+                         __package__='psi4.driver.procrouting')
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), 'exec'), namespace)
+        function = namespace['run_molecular_properties']
+    else:
+        from psi4.driver.procrouting.isapol_molecular import run_molecular_properties
+        function = run_molecular_properties
+        namespace = function.__globals__
+    captured = {}
+    marker, auxiliary, quadrature = object(), object(), object()
+    class Molecule:
+        def clone(self): return self
+    molecule = Molecule()
+    class Wavefunction:
+        def molecule(self): return molecule
+        def basisset(self):
+            return NS(name=lambda: 'AUG-CC-PVTZ', has_puream=lambda: True)
+    wfn = Wavefunction()
+    class Grid:
+        def __init__(self, mol, options):
+            assert mol is molecule
+            captured['integration_grid'] = (options.radial_points, options.spherical_points)
+        def x(self): return np.array([0., 1.])
+        def y(self): return np.array([2., 3.])
+        def z(self): return np.array([4., 5.])
+        def w(self): return np.array([.25, .75])
+    def backend(state, *tasks, **kwargs):
+        assert state is wfn
+        captured.update(tasks=tasks, settings=kwargs)
+    def casimir(*args):
+        captured['casimir_arguments'] = args
+        return 'SYNTHETIC_CASIMIR_INPUT'
+    for name in ('psi4', 'psi4.driver', 'psi4.driver.p4util', 'psi4.driver.procrouting'):
+        package = ModuleType(name)
+        package.__path__ = []
+        monkeypatch.setitem(sys.modules, name, package)
+    util = ModuleType('psi4.driver.p4util.util')
+    util.oeprop, util.atomic_property_result = backend, lambda state: marker
+    api = ModuleType('psi4.driver.procrouting.isapol_bounded_oeprop')
+    api.invalidate = lambda state: None
+    monkeypatch.setitem(sys.modules, util.__name__, util)
+    monkeypatch.setitem(sys.modules, api.__name__, api)
+    replacements = dict(
+        np=np,
+        core=NS(Wavefunction=Wavefunction, get_memory=lambda: 40*1024**3,
+                IsaGridOptions=NS, IsaGrid=Grid, FitPointsOptions=NS,
+                CasimirGrid=casimir),
+        plan_molecular_refinement=lambda *args, **kwargs: None,
+        require_scf_seal=lambda state: None,
+        validate_correction=lambda *args, **kwargs: None,
+        independent_sites=lambda *args: ('SYNTHETIC_SITE',)*3,
+        native_monomer_recipe=lambda *args, **kwargs: NS(auxiliary=auxiliary),
+        Quadrature=NS(from_casimir=lambda value: quadrature),
+        KernelSmoothing=lambda *args: ('SYNTHETIC_SMOOTHING', args),
+        full_rank2_variables=lambda sites: ('SYNTHETIC_VARIABLE',))
+    for name, value in replacements.items():
+        monkeypatch.setitem(namespace, name, value)
+    declaration = NS(profile='s66-chno-isa-a-v1', bonds=((0, 1), (0, 2)))
+    resources = NS(max_bytes=32*1024**3)
+    assert function(wfn, declaration, resources, max_replay_work=123,
+                    scratch_directory='SYNTHETIC_SCRATCH',
+                    pfit_maximum_work_bytes=456) is marker
+    assert captured['integration_grid'] == (400, 2030)
+    settings = captured['settings']
+    assert settings['distribution'] == 'isa' and settings['auxiliary_recipe'] is auxiliary
+    assert settings['partition_grid'].shape == (2, 4)
+    assert settings['quadrature'] is quadrature
+    assert captured['casimir_arguments'] == (10, .5)
+    assert settings['radial_points'] == 100 and settings['spherical_points'] == 200
+    assert settings['smoothing'] == ('SYNTHETIC_SMOOTHING', (1e-8, 600., .01, 1., 'FD'))
+    lattice = settings['lattice_options']
+    assert (lattice.npoints, lattice.seed, lattice.lolim, lattice.hilim) == (2000, 1, 2., 4.)
+    assert settings['charge_penalty'] == 1000. and settings['anchor_metric_damping'] == .0005
+    assert settings['localization_rank_limit'] == settings['rank_limit'] == settings['hydrogen_rank_limit'] == 2
+    assert settings['weight_type'] == 3 and settings['weight_coefficient'] == .001
+    assert settings['cutoff'] == 1e-4 and settings['shell_cutoff'] == 1e-8
+    assert settings['max_refinement_parameters'] == 108 and settings['max_order'] == 10
+    assert settings['refinement_capacity'] == 'molecular'
+    assert settings['resources'] is resources and settings['max_replay_work'] == 123
+    assert settings['pfit_maximum_work_bytes'] == 456
+    assert settings['scf_correction'] == 'NONE' and settings['recoupled_dispersion'] is False
+    assert captured['tasks'] == ('ATOMIC_REFINED_POLARIZABILITIES', 'ATOMIC_REFINED_DISPERSION')

@@ -136,3 +136,19 @@ def test_installed_suite_requires_the_exact_declared_case_count(tmp_path):
     report.write_text(
         f'<testsuites><testsuite tests="{expected}" failures="0" errors="0" skipped="0"/></testsuites>')
     assert checks.junit_summary(report, expected=expected)['tests'] == expected
+
+
+def test_dense_grid_suite_is_closed_and_preserves_legacy_count(tmp_path):
+    assert checks.qualification_suite('legacy') == checks.EXPECTED_TESTS == 459
+    assert checks.qualification_suite('grid400') == 461
+    for invalid in (None, True, 461, '461', 'unlimited', 'grid401'):
+        with pytest.raises(ValueError, match='closed'):
+            checks.qualification_suite(invalid)
+    path = tmp_path/'junit.xml'
+    path.write_text('<testsuites><testsuite tests="460" failures="0" errors="0" skipped="0"/></testsuites>')
+    with pytest.raises(ValueError, match='exactly461'):
+        checks.junit_summary(path, expected=checks.qualification_suite('grid400'))
+    batch = Path(checks.__file__).with_suffix('.sbatch').read_text()
+    assert 'SUITE=${8:-legacy}' in batch
+    assert '"$SUITE" = legacy || "$SUITE" = grid400' in batch
+    assert '--suite "$SUITE"' in batch

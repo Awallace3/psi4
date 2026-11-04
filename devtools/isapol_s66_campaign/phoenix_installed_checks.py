@@ -27,6 +27,7 @@ TEST_FILES = (
 # Preserve all 430 prior interface cases and add all 29 native partition cases,
 # including the bounded Drho-C forwarding/refusal regression. No local QM run.
 EXPECTED_TESTS = 459
+INSTALLED_SUITES = {'legacy': EXPECTED_TESTS, 'grid400': EXPECTED_TESTS+2}
 TEST_ONLY_CHANGES = frozenset('tests/pytests/'+name for name in TEST_FILES) | frozenset(
     'devtools/isapol_s66_campaign/'+name for name in (
         'phoenix_installed_checks.py', 'phoenix_installed_checks.sbatch',
@@ -51,6 +52,18 @@ def junit_summary(path, *, expected=None):
     if expected is not None and result['tests'] != expected:
         raise ValueError(f'installed suite must run exactly{expected} cases')
     return result
+
+
+def qualification_suite(name):
+    """Closed expected counts, not filters; no caller-supplied count is accepted.
+
+    Historical harnesses retain their459-case inventory. This snapshot adds two
+    cases: selecting legacy here fails the count rather than deselecting them.
+    A fresh dense-grid qualification must explicitly select grid400.
+    """
+    if type(name) is not str or name not in INSTALLED_SUITES:
+        raise ValueError('closed installed qualification suite required')
+    return INSTALLED_SUITES[name]
 
 
 def verify_runtime(environment, manifest):
@@ -126,7 +139,9 @@ def main():
         parser.add_argument('--'+name, type=Path, required=True)
     for name in ('commit', 'tree', 'harness-commit'):
         parser.add_argument('--'+name, required=True)
+    parser.add_argument('--suite', choices=tuple(INSTALLED_SUITES), default='legacy')
     args = parser.parse_args()
+    expected_tests = qualification_suite(args.suite)
     allocated = allocation()
     build, run, base = (p.resolve() for p in (args.build, args.run, args.dependencies))
     prefix = Path('/storage/project/r-cs207-0/awallace43/runs')
@@ -188,9 +203,11 @@ def main():
         status='started', build_commit=args.commit, build_tree=args.tree,
         harness_commit=args.harness_commit, harness_sha256=digest(__file__),
         test_source_commit=args.harness_commit, test_source_path=str(harness/'tests/pytests'),
-        test_only_revision_changes=changed, expected_test_count=EXPECTED_TESTS,
+        test_only_revision_changes=changed, expected_test_count=expected_tests,
         build_identity_sha256=manifest_hash, allocation=allocated, started=time.time(),
         qualification='Installed interface/contract tests, not campaign molecular or QCArchive acceptance.')
+    if args.suite != 'legacy':
+        started['installed_suite'] = args.suite
     (payload/'started.json').write_text(json.dumps(started, indent=2))
     verify_runtime(environment, manifest)
     python = environment/'bin/python'
@@ -223,7 +240,7 @@ def main():
                                 stdout=stream, stderr=subprocess.STDOUT)
     if result.returncode:
         raise RuntimeError('installed tests failed; inspect payload/pytest.log and junit.xml')
-    summary = junit_summary(junit, expected=EXPECTED_TESTS)
+    summary = junit_summary(junit, expected=expected_tests)
     verify_runtime(environment, manifest)
     if (digest(manifest_path) != manifest_hash or git(source, 'status', '--porcelain')
             or git(harness, 'rev-parse', 'HEAD') != args.harness_commit

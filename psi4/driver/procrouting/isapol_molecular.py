@@ -135,7 +135,7 @@ def run_molecular_properties(wfn, declaration, resources, *, max_replay_work,
     sites = independent_sites(molecule, declaration)
     recipe = native_monomer_recipe(molecule, profile=declaration.profile)
     options = core.IsaGridOptions()
-    options.radial_points, options.spherical_points = 200, 974
+    options.radial_points, options.spherical_points = 400, 2030
     grid = core.IsaGrid(molecule.clone(), options)
     integration = np.column_stack((grid.x(), grid.y(), grid.z(), grid.w()))
     del grid

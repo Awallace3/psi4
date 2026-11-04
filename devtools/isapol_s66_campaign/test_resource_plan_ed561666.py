@@ -1,6 +1,7 @@
 """Pure cap32 accounting and source-boundary checks; no Psi4 import."""
 import importlib.util
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -25,14 +26,27 @@ def compute(resources=None):
         max_replay_work=2*10**12, pfit_maximum_work_bytes=2*1024**3)
 
 
-def test_new_source_binding_does_not_relabel_historical_policy():
+def historical_sources(target):
     root = Path(__file__).resolve().parents[2]
+    for name in planner.FILES:
+        path = target/name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(subprocess.check_output(
+            ['git', 'show', planner.SCIENTIFIC_COMMIT+':'+name], cwd=root))
+    return target
+
+
+def test_new_source_binding_does_not_relabel_historical_policy(tmp_path):
+    root = historical_sources(tmp_path)
     binding = planner.source_binding(root)
     assert binding['scientific_commit'] == 'ed561666fcac212fffa774429fc3bd8f8cfc903d'
     assert binding['policy_id'] == 'ed561666-reference-h2h1-ledger-v3'
     with pytest.raises(ValueError, match='sources differ'):
         planner._shared.source_binding(root)
     assert planner._shared.SCIENTIFIC_COMMIT == 'cb63305f4115526417a830829a0a30c36b85b4e8'
+    # The fresh dense-grid implementation is not the historical ed producer.
+    with pytest.raises(ValueError, match='sources differ'):
+        planner.source_binding(Path(__file__).resolve().parents[2])
 
 
 def test_all_extra_work_is_charged_and_historical_values_are_unchanged():
@@ -70,11 +84,7 @@ def test_updated_work_has_exact_one_short_boundary_and_no_automatic_promotion():
 
 def test_undeclared_current_source_is_rejected(tmp_path):
     # Exact source guards run before a prediction is considered for admission.
-    root = Path(__file__).resolve().parents[2]
-    for name in planner.FILES:
-        target = tmp_path/name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((root/name).read_bytes())
+    historical_sources(tmp_path)
     planner.source_binding(tmp_path)
     target = tmp_path/'psi4/driver/procrouting/isapol_native_partition.py'
     target.write_bytes(target.read_bytes()+b'\n# changed bytes\n')
