@@ -20,21 +20,26 @@ new = load('qualified_ed561666.py')
 old = load('qualified_cb63305.py')
 
 
-def synthetic(monkeypatch, *, change=None):
+def synthetic(monkeypatch, *, change=None, profile=None):
+    target = new if profile is None else profile
     package = '/synthetic/cap32/psi4'
-    identity = dict(version=new.VERSION, core=package+'/core.so', package=package+'/__init__.py',
-        implementation=dict(sha256=dict(new.IMPLEMENTATION),
-            python_files={'procrouting/isapol_pfit_plan.py': new.PFIT_SHA256}))
-    manifest = dict(schema='fresh-native-build-identity/1', commit=new.SCIENTIFIC_COMMIT,
-        tree=new.SCIENTIFIC_TREE, clean_source=True, fresh_build=True,
+    identity = dict(version=target.VERSION, core=package+'/core.so', package=package+'/__init__.py',
+        implementation=dict(sha256=dict(target.IMPLEMENTATION),
+            python_files={'procrouting/isapol_pfit_plan.py': target.PFIT_SHA256}))
+    manifest = dict(schema='fresh-native-build-identity/1', commit=target.SCIENTIFIC_COMMIT,
+        tree=target.SCIENTIFIC_TREE, clean_source=True, fresh_build=True,
         installed_core=identity['core'], installed_package=package,
-        installed_files={'driver/procrouting/isapol_pfit_plan.py': new.PFIT_SHA256})
-    report = dict(status='passed', runtime_unchanged=True, build_commit=new.SCIENTIFIC_COMMIT,
-        build_tree=new.SCIENTIFIC_TREE, harness_commit=new.TEST_COMMIT,
-        test_source_commit=new.TEST_COMMIT, expected_test_count=459,
-        test_summary=dict(new.TEST_SUMMARY), test_only_revision_changes=[])
+        installed_files={'driver/procrouting/isapol_pfit_plan.py': target.PFIT_SHA256})
+    count = target.TEST_SUMMARY['tests']
+    report = dict(status='passed', runtime_unchanged=True, build_commit=target.SCIENTIFIC_COMMIT,
+        build_tree=target.SCIENTIFIC_TREE, harness_commit=target.TEST_COMMIT,
+        test_source_commit=target.TEST_COMMIT, expected_test_count=count,
+        test_summary=dict(target.TEST_SUMMARY), test_only_revision_changes=[])
+    if target.PROFILE_ID == 'grid400':
+        report['installed_suite'] = 'grid400'
     data = dict(build_identity=manifest, imported_identity=identity, installed_qualification=report,
-        junit=b'<testsuites><testsuite tests="459" failures="0" errors="0" skipped="0"/></testsuites>')
+        junit=(f'<testsuites><testsuite tests="{count}" failures="0" errors="0" skipped="0"/>'
+               '</testsuites>').encode())
     if change:
         role, values = change
         if type(values) is bytes:
@@ -47,7 +52,7 @@ def synthetic(monkeypatch, *, change=None):
                      ('imported_identity_sha256', 'imported_identity'), ('junit_sha256', 'junit')):
         report[key] = hashlib.sha256(blobs[role]).hexdigest()
     blobs['installed_qualification'] = json.dumps(report, sort_keys=True).encode()
-    monkeypatch.setattr(new, 'RECEIPT_SHA256',
+    monkeypatch.setattr(target, 'RECEIPT_SHA256',
                         {key: hashlib.sha256(raw).hexdigest() for key, raw in blobs.items()})
     return blobs
 

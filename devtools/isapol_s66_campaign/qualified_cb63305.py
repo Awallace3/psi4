@@ -60,7 +60,7 @@ def _verify_receipts(blobs, pins):
     IMPLEMENTATION, PFIT_SHA256, RECEIPT_SHA256, TEST_ONLY_CHANGES, TEST_SUMMARY, profile_id = (
         pins[k] for k in ('IMPLEMENTATION', 'PFIT_SHA256', 'RECEIPT_SHA256', 'TEST_ONLY_CHANGES',
                          'TEST_SUMMARY', 'PROFILE_ID'))
-    if profile_id not in ('cb63305', 'ed561666'):
+    if profile_id not in ('cb63305', 'ed561666', 'grid400'):
         raise ValueError('closed installed producer required')
     if type(blobs) is not dict or set(blobs) != set(RECEIPT_SHA256):
         raise ValueError(f'exact {profile_id} receipt roles required')
@@ -74,6 +74,8 @@ def _verify_receipts(blobs, pins):
     manifest = json.loads(blobs['build_identity'])
     qualification = json.loads(blobs['installed_qualification'])
     identity = json.loads(blobs['imported_identity'])
+    if profile_id == 'grid400' and qualification.get('installed_suite') != 'grid400':
+        raise ValueError('explicit grid400 installed qualification suite required')
     if (manifest.get('schema') != 'fresh-native-build-identity/1'
             or manifest.get('commit') != SCIENTIFIC_COMMIT
             or manifest.get('tree') != SCIENTIFIC_TREE
