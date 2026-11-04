@@ -65,3 +65,69 @@ Base:
 
 Every embedded core wall value and all six hashes in
 `~/docs/saptdft/cuest/fsapt.html` were checked against these raw artifacts.
+
+## Backend audit: cuEST is active, cold totals conceal steady JK work
+
+The user challenged the near-1× dimer ratio. Read-only retrieval of all six
+original `psi4.out` files confirms:
+
+- Every GPU output prints `cuESTJK: GPU-Accelerated Density-Fitted J/K Matrices`
+  before the first dimer iteration; it prints88cuESTJK calls in total.
+- Both monomers print `Re-using passed JK object instead of rebuilding`.
+- CPU outputs instead identify in-core `MemDFJK`; no `cuESTJK` calls occur.
+- At the executed927283f8ed pin, `fragment_gate.options()` sets
+  `USE_CUEST=True` for the GPU arm, false for CPU, with mixed precision disabled.
+  `SCF_TYPE=DF` describes the algorithm, **not evidence of a CPU fallback**.
+- `sapt_proc.py:603,613,633` shares the dimer's saved JK with both monomers.
+  `sapt_proc.py:1023–1029` passes `wfn_B.jk()` into `sapt_dft`.
+  In this executed route `SAPT(DFT):Build JK` therefore encloses SAPT cache
+  construction using that object, not initial JK-object setup. The generic
+  function *can* initialize an object when none is supplied (`1511–1520`).
+
+The original labeling “JK object / cache” was misleading. It is now labeled
+**SAPT JK cache (not initial object setup)**, and the dimer timer is labeled
+**cold-inclusive**. No raw timing is changed or startup cost removed.
+
+### Nested paths, not additional flat contributions
+
+| Nested timer path suffix | Calls/run | CPU r0/r1/r2 (s) | H200 r0/r1/r2 (s) | Ratio of medians |
+|---|---:|---|---|---:|
+| Dimer → HF: Form core H | 1 | .064 / .059 / .067 | 2.156 / 1.802 / 1.847 | 0.035× |
+| Dimer → HF: Form G → JK: JK | 18 | 1.461 / 1.453 / 1.462 | 1.458 / 1.451 / 1.452 | 1.006× |
+| Dimer → HF: DIIS | 17 | 3.286 / 1.145 / 1.107 | .918 / .843 / .992 | 1.247× |
+| Monomer A → HF: Form G → JK: JK | 17 | .931 / .918 / .926 | .088 / .088 / .089 | 10.523× |
+| Monomer B → HF: Form G → JK: JK | 17 | .931 / .922 / .927 | .086 / .086 / .087 | 10.779× |
+| Build JK → JK: JK | 1 | .217 / .214 / .213 | .010 / .010 / .010 | 21.400× |
+
+These paths are selected from the nested tree, not the global flat `JK: JK`
+aggregate. They are explanatory child windows; never add them to their
+already-inclusive parent rows or mix them into the full-call stack.
+
+### First-use dimer call from the original native log
+
+| GPU repeat | First JK total (ms) | First J (ms) | First K (ms) | Following17 JK calls range (ms) | Following17 median (ms) |
+|---|---:|---:|---:|---|---:|
+| r0 | 1370.46 | 1366.50 | 2.06 | 5.05–5.52 | 5.10 |
+| r1 | 1362.32 | 1358.30 | 2.07 | 5.08–5.40 | 5.14 |
+| r2 | 1362.82 | 1358.78 | 2.07 | 5.10–5.37 | 5.19 |
+
+Thus the cold dimer JK interval really includes a first-call1.36s stall;
+subsequent calls are about5ms. Core-H construction also has a first-use cost,
+and DIIS/other host-side SCF work remains in the enclosing dimer timer.
+The exact opaque-library split between initialization and compilation is
+**not** measured. No artificial warmed dimer-SCF ratio is reconstructed by
+subtracting these costs from an independently timed CPU total.
+
+All36displayed nested wall/call-count pairs, all native first/later-call
+statistics, cuEST backend markers and both reuse markers were checked against
+the original local artifacts. Six output SHA256 values were independently
+matched to the remote originals; no science code or experiment was changed.
+
+| Original `psi4.out` | SHA256 |
+|---|---|
+| CPU r0 | `0df34325348c7bcb322cd3ea9f2f31e2ed6c639234a72d35ce42863fc5c3a021` |
+| CPU r1 | `68607c01f0659b3fbde990d29f4eab5b6508602e435cd7a0e1cbd040eb526b02` |
+| CPU r2 | `7829395a5ff84362b3cb7441c03ae70f0423513cd9d9ea1c0cfdf003e5c54f56` |
+| H200 r0 | `94af32a63a49051f61c8d5be3387a1365afefb2a7070a84598db66a1d0a8bc56` |
+| H200 r1 | `1a8db2ac640d979069f706ab49fb0fb5f868c795f956e9945e7a527c765ebb9e` |
+| H200 r2 | `7a9de2f14a6c7176d072bf2130475b030928d4a4e827315d986cbbf32fdddac8` |
