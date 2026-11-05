@@ -310,6 +310,22 @@ def register_once(client, draft, compute_tag, save, *, producer='cb63305'):
     selection = {} if producer == 'cb63305' else dict(producer=producer)
     require_client(client, **selection)
     pins = validate_draft(draft, compute_tag, **selection)
+    description = ('Fresh cb63305 native PBE0/aug-cc-pVTZ request3 monomers; '
+        'first methylamine pilot only; no whole-set/accuracy/parity claim.'
+        if producer == 'cb63305' else
+        'Fresh grid400 native PBE0/aug-cc-pVTZ request3 monomer0008 pilot only; '
+        'not whole-set molecular acceptance or accuracy/parity.'
+        if producer == 'grid400' else
+        'Fresh ed561666 native PBE0/aug-cc-pVTZ request3 benzene pilot only; '
+        'not whole-set molecular acceptance or accuracy/parity.')
+    return _register_verified(client, draft, compute_tag, save, pins=pins,
+        protected=_protected_datasets(producer), description=description,
+        bind=(lambda identifier: _bind_grid400_dataset(client, identifier))
+             if producer == 'grid400' else None)
+
+
+def _register_verified(client, draft, compute_tag, save, *, pins, protected, description, bind):
+    """Shared transaction after a closed adapter verifies its client and draft."""
     from qcportal.singlepoint import QCSpecification, SinglepointDatasetNewEntry
     entry = SinglepointDatasetNewEntry(**draft['entry'])
     specification = QCSpecification(**helper('phoenix_pilot').execution_specification(draft['specification']))
@@ -317,21 +333,13 @@ def register_once(client, draft, compute_tag, save, *, producer='cb63305'):
                                             existing_ok=False, transport_retries=False))
     dataset = client.add_dataset('singlepoint', pins.DATASET_NAME, existing_ok=False,
         default_tag=compute_tag,
-        description=('Fresh cb63305 native PBE0/aug-cc-pVTZ request3 monomers; '
-                     'first methylamine pilot only; no whole-set/accuracy/parity claim.'
-                     if producer == 'cb63305' else
-                     'Fresh grid400 native PBE0/aug-cc-pVTZ request3 monomer0008 pilot only; '
-                     'not whole-set molecular acceptance or accuracy/parity.'
-                     if producer == 'grid400' else
-                     'Fresh ed561666 native PBE0/aug-cc-pVTZ request3 benzene pilot only; '
-                     'not whole-set molecular acceptance or accuracy/parity.'),
+        description=description,
         provenance=dict(producer=draft['producer'], descriptor_bank_sha256=draft['descriptor_bank_sha256']))
-    protected = _protected_datasets(producer)
     if (type(dataset.id) is not int or dataset.id <= 0 or dataset.id in protected
             or dataset.name != pins.DATASET_NAME or getattr(dataset, '_client', None) is not client):
         raise RuntimeError('fresh dataset returned an invalid or historical identity; do not retry')
-    if producer == 'grid400':
-        _bind_grid400_dataset(client, dataset.id)
+    if bind is not None:
+        bind(dataset.id)
     save('dataset-created.json', dict(dataset_id=dataset.id, name=pins.DATASET_NAME))
     save('entry-insert-attempt.json', dict(dataset_id=dataset.id, entry=entry.name,
                                          transport_retries=False))
@@ -357,11 +365,16 @@ def submit_once(client, dataset, draft, compute_tag, save, *, producer='cb63305'
     require_client(client, **selection)
     pins = validate_draft(draft, compute_tag, **selection)
     protected = _protected_datasets(producer)
+    if producer == 'grid400' and getattr(client, '_grid400_dataset_id', None) != dataset.id:
+        raise ValueError('submission requires the exact newly created grid400 dataset binding')
+    return _submit_verified(client, dataset, draft, compute_tag, save, pins=pins, protected=protected)
+
+
+def _submit_verified(client, dataset, draft, compute_tag, save, *, pins, protected):
+    """Shared one-record submission after adapter-specific target binding."""
     if (type(dataset.id) is not int or dataset.id <= 0 or dataset.id in protected
             or dataset.name != pins.DATASET_NAME or getattr(dataset, '_client', None) is not client):
         raise ValueError('only the newly bound expanded-pilot dataset may be submitted')
-    if producer == 'grid400' and getattr(client, '_grid400_dataset_id', None) != dataset.id:
-        raise ValueError('submission requires the exact newly created grid400 dataset binding')
     save('record-submit-attempt.json', dict(dataset_id=dataset.id, entry=draft['entry']['name'],
         specification=pins.SPECIFICATION_NAME, compute_tag=compute_tag,
         find_existing=False, transport_retries=False))
