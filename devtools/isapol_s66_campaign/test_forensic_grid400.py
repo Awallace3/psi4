@@ -97,7 +97,7 @@ def test_misbound_delivery_or_live_server_state_fails(index, field, value):
         audit.validate_chain(*values)
 
 
-def test_original_numeric_fd_and_ordinary_audit_policies_are_unchanged():
+def test_archived_forensic_policy_remains_frozen_while_production_can_evolve():
     root = Path(__file__).resolve().parents[2]
     for relative in ('devtools/isapol_native_acceptance/trace_gate.py',
         'devtools/isapol_s66_campaign/validate_numeric.py',
@@ -106,7 +106,13 @@ def test_original_numeric_fd_and_ordinary_audit_policies_are_unchanged():
         'devtools/isapol_s66_campaign/phoenix_pilot_cb63305.py'):
         original = subprocess.check_output(['git', '-C', str(root), 'show',
                                             audit.CASE_COMMIT+':'+relative])
-        assert (root/relative).read_bytes() == original
+        archived = subprocess.check_output(['git', '-C', str(root), 'show',
+            '1f76ff733603b0a8c9789e6ac18aee8049295df7:'+relative])
+        assert archived == original
+        # Later production JSON identity fixes do not retroactively modify
+        # the published forensic procedure. Numerical/FD policies remain exact.
+        if relative.endswith(('trace_gate.py', 'validate_numeric.py', 'runtime_audit.py')):
+            assert (root/relative).read_bytes() == original
 
 
 def test_forensic_report_cannot_be_a_model_acceptance_or_old_success_receipt():

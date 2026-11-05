@@ -66,7 +66,8 @@ def source_names(producer='cb63305', *, remaining_case=False):
         extra += ('owned_dataset_cb63305.py',)
     if producer == 'grid400':
         extra += ('qualified_grid400.py', 'resource_plan_ed561666.py',
-                  'resource_plan_grid400.py', 'grid400_policy.py', 'grid400_cohort.py')
+                  'resource_plan_grid400.py', 'grid400_policy.py', 'grid400_cohort.py',
+                  'envelope_identity.py')
     return SOURCES + extra
 
 

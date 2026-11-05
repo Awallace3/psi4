@@ -19,7 +19,8 @@ MANAGER = Path('/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca')
 HELPERS = {'pilot_cb63305', 'phoenix_pilot_cb63305', 'phoenix_worker_cb63305',
     'phoenix_installed_checks', 'phoenix_worker_probe', 'phoenix_pilot', 'runtime_audit',
     'validate_numeric', 'dataset_fresh_cb63305', 'phoenix_descriptor_bank_cb63305',
-    'owned_dataset_cb63305', 'dataset_owned354_cb63305', 'prepare_owned354_baseline_cb63305'}
+    'owned_dataset_cb63305', 'dataset_owned354_cb63305', 'prepare_owned354_baseline_cb63305',
+    'envelope_identity'}
 
 
 def helper(name):
@@ -42,6 +43,23 @@ def admit_audit_allocation(allocation, *, producer):
             NumCPUs='4', NumNodes='1', MinMemoryNode='24G', TimeLimit='00:45:00')
         if any(allocation.get(key) != value for key, value in expected.items()):
             raise ValueError('exact grid400 audit allocation route and4CPU24GiB45min required')
+
+
+def verify_delivery_identity(local_result, server, saved_witness, *, producer):
+    """Independently reproduce the launcher's identity witness, never trust it."""
+    if producer not in ('cb63305', 'ed561666', 'grid400'):
+        raise ValueError('closed audited delivery producer required')
+    if not local_result['success']:
+        raise ValueError('independent local/server native envelope comparison failed')
+    local = local_result['extras']['psi4:native_monomer']
+    if producer == 'grid400':
+        identity = helper('envelope_identity').verify_native_envelope_identity(local, server)
+        if type(saved_witness) is not dict or saved_witness != identity:
+            raise ValueError('independently reproduced JSON envelope identity witness differs')
+        return identity
+    if local != server:
+        raise ValueError('independent local/server native envelope comparison failed')
+    return None
 
 
 def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='cb63305',
@@ -324,8 +342,8 @@ def main():
     from qcportal.compression import decompress, CompressionEnum
     local = decompress((data/('local-result-'+str(outcome['task_id'])+'.zstd')).read_bytes(),
                        CompressionEnum.zstd)
-    if not local['success'] or local['extras']['psi4:native_monomer'] != envelope:
-        raise ValueError('independent local/server native envelope comparison failed')
+    identity = verify_delivery_identity(local, envelope,
+        read('envelope-identity.json') if producer == 'grid400' else None, producer=producer)
     job = outcome['allocation']['JobId']
     rows = subprocess.check_output(['/opt/slurm/current/bin/sacct', '-n', '-P', '-j', job,
         '-o', 'JobIDRaw,State,ExitCode'], text=True).splitlines()
@@ -400,7 +418,7 @@ def main():
         scientific_build_commit=manifest['commit'], case_operational_commit=outcome['operational_commit'],
         audit_commit=args.commit, case_outcome_sha256=checks.digest(data/'pilot-outcome.json'),
         pilot_sha256=checks.digest(args.pilot), file_gate_sha256=checks.digest(gate_path),
-        numeric=numeric, roles=dict(roles), traces=reports, runtime_unchanged=True,
+        numeric=numeric, envelope_identity=identity, roles=dict(roles), traces=reports, runtime_unchanged=True,
         execution_profile=profile, captured_preservation=preservation,
         qualification='One fresh request3 molecular pilot execution/export/decoded-FD evidence only; '
                       'ordinary OS trust, not hostile-host/TOCTOU or atomic-server-lock proof. '

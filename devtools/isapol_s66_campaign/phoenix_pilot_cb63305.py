@@ -19,7 +19,8 @@ MANAGER = Path('/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca')
 HELPERS = {'pilot_cb63305', 'phoenix_worker_cb63305', 'phoenix_installed_checks',
     'phoenix_worker_probe', 'phoenix_pilot', 'dataset_fresh_cb63305',
     'single_record_cb63305', 'descriptor_scratch_cb63305', 'phoenix_descriptor_bank_cb63305',
-    'case_cb63305', 'dataset_owned354_cb63305', 'owned_dataset_cb63305', 'grid400_policy'}
+    'case_cb63305', 'dataset_owned354_cb63305', 'owned_dataset_cb63305', 'grid400_policy',
+    'envelope_identity'}
 
 
 def helper(name):
@@ -31,6 +32,21 @@ def helper(name):
     sys.modules[spec.name] = module
     exec(compile(path.read_bytes(), str(path), 'exec'), module.__dict__)
     return module
+
+
+def verify_delivery_envelope(local, server, request, implementation, *, producer):
+    """The production post-delivery identity seam, before artifact publication."""
+    if producer not in ('cb63305', 'ed561666', 'grid400'):
+        raise ValueError('closed delivery producer required')
+    if (not isinstance(server, dict) or server.get('schema') != 'native-monomer-artifacts/2'
+            or server.get('request') != request
+            or server.get('implementation', {}).get('sha256') != implementation):
+        raise RuntimeError('local/server request3 envelope or producer identity differs')
+    if producer == 'grid400':
+        return helper('envelope_identity').verify_native_envelope_identity(local, server)
+    if server != local:
+        raise RuntimeError('local/server request3 envelope or producer identity differs')
+    return None
 
 
 def admit_allocation(allocation, *, execution_profile=None, producer='cb63305'):
@@ -370,11 +386,10 @@ def main():
         raise RuntimeError('one complete result from the exact owned manager required')
     envelope = record.extras.get('psi4:native_monomer')
     request = runtime['specification']['keywords']['function_kwargs']['native_monomer']
-    if (not isinstance(envelope, dict) or envelope != session['local_native']
-            or envelope.get('schema') != 'native-monomer-artifacts/2'
-            or envelope.get('request') != request
-            or envelope.get('implementation', {}).get('sha256') != draft['producer']['implementation_sha256']):
-        raise RuntimeError('local/server request3 envelope or producer identity differs')
+    identity = verify_delivery_envelope(session['local_native'], envelope, request,
+        draft['producer']['implementation_sha256'], producer=producer)
+    if identity is not None:
+        save('envelope-identity.json', identity)
     artifact = envelope['artifacts']['tensors.npz']
     if type(artifact['data']) is not str or len(artifact['data']) > 4*((16*1024**2+2)//3):
         raise RuntimeError('native tensor transport bound exceeded')
