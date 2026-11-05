@@ -25,9 +25,9 @@ def helper(name):
     return module
 
 
-def scientific_probe(runtime, *, memory_bytes, producer='cb63305'):
+def scientific_probe(runtime, *, memory_bytes, producer='cb63305', scope='default'):
     """Real basis/shell/recipe declarations only; no electronic state."""
-    profile = helper('descriptor_profiles').profile(producer)
+    profile = helper('descriptor_profiles').profile(producer, scope=scope)
     import psi4
     from psi4.driver.procrouting.isapol_schema import (
         admit_native_schema, native_molecule_schema, validate_native_request, check_native_geometry)
@@ -60,7 +60,7 @@ def scientific_probe(runtime, *, memory_bytes, producer='cb63305'):
              exponents=[main.shell(i).exp(j) for j in range(main.shell(i).nprimitive)],
              coefficients=[main.shell(i).coef(j) for j in range(main.shell(i).nprimitive)])
         for i in range(main.nshell())]
-    return dict(
+    result = dict(
         schema='native-campaign-descriptor-probe/2', policy_id=planner.POLICY,
         status='PASS_DESCRIPTOR_PLAN_ONLY' if not plan['refusals'] else 'REFUSED_DESCRIPTOR_PLAN',
         package=psi4.__file__, core=psi4.core.__file__, implementation=identity,
@@ -84,6 +84,9 @@ def scientific_probe(runtime, *, memory_bytes, producer='cb63305'):
                       'molecular accuracy, total RSS or independent runtime acceptance. '
                       'AUX/atomic/shape/recipe fingerprints are trusted-child measurements, '
                       'not independently reconstructed shell-content/order proofs.')
+    if scope == 'full-bank':
+        result['campaign_scope'] = scope
+    return result
 
 
 def main():
@@ -93,14 +96,19 @@ def main():
     parser.add_argument('--memory-bytes', type=int, required=True)
     parser.add_argument('--monomer-id', required=True)
     parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
+    parser.add_argument('--scope', choices=('default', 'full-bank'), default='default')
     args = parser.parse_args()
+    scope = getattr(args, 'scope', 'default')
     if re.fullmatch(r'monomer-\d{4}', args.monomer_id) is None:
         raise ValueError('explicit bounded monomer identifier required')
-    profile = helper('descriptor_profiles').profile(args.producer)
+    profile = helper('descriptor_profiles').profile(args.producer, scope=scope)
+    if scope == 'full-bank' and not 1 <= int(args.monomer_id[-4:]) <= 131:
+        raise ValueError('full-bank descriptor monomer outside exact131 identities')
     if profile['selected_monomers'] is not None and args.monomer_id not in profile['selected_monomers']:
         raise ValueError('candidate descriptor is fixed to selected monomer0008')
     raw = args.input.read_bytes()
-    report = scientific_probe(json.loads(raw), memory_bytes=args.memory_bytes, producer=args.producer)
+    report = scientific_probe(json.loads(raw), memory_bytes=args.memory_bytes, producer=args.producer,
+                              **(dict(scope=scope) if scope != 'default' else {}))
     sources = [Path(__file__).with_name(name) for name in profile['child_sources']]
     report.update(monomer_id=args.monomer_id, runtime_input_sha256=hashlib.sha256(raw).hexdigest(),
         operational_sources_sha256={

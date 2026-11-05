@@ -19,7 +19,7 @@ def load():
     return module
 
 
-def transaction(monkeypatch, tmp_path, case, *, producer='cb63305'):
+def transaction(monkeypatch, tmp_path, case, *, producer='cb63305', scope='default'):
     module = load()
     build, run = tmp_path/'build', tmp_path/'ccasp-native-s66-transaction'
     build.mkdir()
@@ -42,7 +42,7 @@ def transaction(monkeypatch, tmp_path, case, *, producer='cb63305'):
     raw = json.dumps(runtime, sort_keys=True, allow_nan=False).encode()
     rows = [dict(monomer_id=f'monomer-{i:04d}', intended_memory_bytes=20*1024**3,
         runtime_input=copy.deepcopy(runtime), runtime_input_sha256=module.digest(raw)) for i in range(1, 132)]
-    if producer == 'grid400':
+    if producer == 'grid400' and scope == 'default':
         rows = [rows[7]]
         rows[0]['intended_memory_bytes'] = 60*1024**3
     bank = dict(monomers=rows, qualification='SYNTHETIC_UNIT_ONLY_NOT_ACCEPTANCE')
@@ -59,6 +59,8 @@ def transaction(monkeypatch, tmp_path, case, *, producer='cb63305'):
     ops_commit = 'c'*40
     allocation = dict(JobId='123', Account='gts-cs207-chemx', QOS='embers',
         Partition='cpu-small', NumNodes='1', NumCPUs='16', MinMemoryNode='96G', TimeLimit='00:45:00')
+    if scope == 'full-bank':
+        allocation.update(NumCPUs='24', MinMemoryNode='180G')
     checks = original_helper('phoenix_installed_checks')
     children, runtime_checks, statuses = [], [], []
     def git(source, *args):
@@ -82,6 +84,7 @@ def transaction(monkeypatch, tmp_path, case, *, producer='cb63305'):
     prepare = original_helper('prepare_descriptor_bank_cb63305')
     prepare.prepare_bank = lambda *args, **kw: copy.deepcopy(bank)
     prepare.prepare_grid400_pilot_bank = lambda *args, **kw: copy.deepcopy(bank)
+    prepare.prepare_grid400_full_bank = lambda *args, **kw: copy.deepcopy(bank)
     admission = original_helper('descriptor_admission_cb63305')
     # Measurement/binding is independently tested. This deliberately returns
     # the supplied report ID so coverage must independently reject duplicates.
@@ -101,7 +104,7 @@ def transaction(monkeypatch, tmp_path, case, *, producer='cb63305'):
             # Candidate measured qualifier does not exist yet. This fixture
             # tests supervisor control flow, never real source admission.
             names = module.OP_FILES+original_helper('descriptor_profiles').profile(
-                producer)['parent_extra_sources']
+                producer, scope=scope)['parent_extra_sources']
         else:
             names = real_hashes(**kw)
         return {name: 'a'*64 for name in names}
@@ -113,8 +116,10 @@ def transaction(monkeypatch, tmp_path, case, *, producer='cb63305'):
         assert kwargs['stdin'] == subprocess.DEVNULL
         monomer = command[command.index('--monomer-id')+1]
         assert command[command.index('--producer')+1] == producer
+        if scope == 'full-bank':
+            assert command[command.index('--scope')+1] == 'full-bank'
         children.append(monomer)
-        trigger = 1 if producer == 'grid400' else 5
+        trigger = 1 if producer == 'grid400' and scope == 'default' else 5
         if case == 'child_failure' and len(children) == trigger:
             raise subprocess.CalledProcessError(1, command)
         if case == 'interrupted' and len(children) == trigger:
@@ -127,6 +132,8 @@ def transaction(monkeypatch, tmp_path, case, *, producer='cb63305'):
                                   and len(children) == len(rows) else monomer),
                       status=('REFUSED_DESCRIPTOR_PLAN' if case == 'refused'
                               and len(children) == trigger else 'PASS_DESCRIPTOR_PLAN_ONLY'))
+        if scope == 'full-bank':
+            report['campaign_scope'] = 'full-bank'
         Path(command[command.index('--output')+1]).write_text(json.dumps(report))
         return NS(returncode=0)
     monkeypatch.setattr(module.subprocess, 'run', child)
@@ -138,6 +145,8 @@ def transaction(monkeypatch, tmp_path, case, *, producer='cb63305'):
         '--expected-bank-sha256', hashlib.sha256(paths['bank'].read_bytes()).hexdigest()]
     if producer != 'cb63305':
         args += ['--producer', producer]
+    if scope != 'default':
+        args += ['--scope', scope]
     monkeypatch.setattr(sys, 'argv', args)
     return module, run, children, runtime_checks
 
@@ -204,3 +213,32 @@ def test_selected_failure_or_drift_never_publishes_success(monkeypatch, tmp_path
     failure = json.loads((run/'payload/descriptor-allocation-failure.json').read_text())
     assert failure['status'] == 'FAILED_DESCRIPTOR_ALLOCATION'
     assert children == ['monomer-0008']
+
+
+@pytest.mark.parametrize('case', ['success', 'refused'])
+def test_full_grid_pool_keeps_every_child_and_honest_global_verdict(monkeypatch, tmp_path, case):
+    module, run, children, checks = transaction(
+        monkeypatch, tmp_path, case, producer='grid400', scope='full-bank')
+    module.main()
+    report = json.loads((run/'payload/descriptor-allocation.json').read_text())
+    assert len(report['reports']) == len(set(children)) == 131
+    assert checks == [0, 131]
+    assert report['status'] == (
+        'PASS_ALL_131_DESCRIPTOR_PLANS_ONLY' if case == 'success' else 'REFUSED_DESCRIPTOR_PLANS')
+    assert sum(r['status'] == 'REFUSED_DESCRIPTOR_PLAN' for r in report['reports']) == (
+        0 if case == 'success' else 1)
+
+
+@pytest.mark.parametrize('case', ['missing_report', 'duplicate_report', 'child_failure',
+                                  'input_drift', 'source_drift', 'runtime_drift', 'interrupted'])
+def test_full_grid_pool_failure_cannot_publish_allocation(monkeypatch, tmp_path, case):
+    module, run, children, _ = transaction(
+        monkeypatch, tmp_path, case, producer='grid400', scope='full-bank')
+    with pytest.raises((ValueError, RuntimeError, FileNotFoundError,
+                        subprocess.CalledProcessError, KeyboardInterrupt)):
+        module.main()
+    assert not (run/'payload/descriptor-allocation.json').exists()
+    failure = json.loads((run/'payload/descriptor-allocation-failure.json').read_text())
+    assert failure['status'] == 'FAILED_DESCRIPTOR_ALLOCATION'
+    if case in ('child_failure', 'missing_report', 'interrupted'):
+        assert len(children) == 5

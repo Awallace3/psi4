@@ -17,11 +17,11 @@ import re
 import sys
 
 
-def planner(producer='cb63305'):
+def planner(producer='cb63305', *, scope='default'):
     profile_path = Path(__file__).with_name('descriptor_profiles.py')
     profiles = {}
     exec(compile(profile_path.read_bytes(), str(profile_path), 'exec'), profiles)
-    profile = profiles['profile'](producer)
+    profile = profiles['profile'](producer, scope=scope)
     path = Path(__file__).with_name(profile['planner']+'.py')
     raw = path.read_bytes()
     spec = importlib.util.spec_from_file_location('_descriptor_admission_plan', path)
@@ -73,9 +73,11 @@ def admit_memory(bank, allocation, *, nonnumeric_headroom_bytes):
 
 
 def verify_descriptor(report, row, identity, *, policy, operational_sources_sha256, runtime_sha256,
-                      producer='cb63305'):
+                      producer='cb63305', scope='default'):
     """Recompute arithmetic from measured shell dimensions, not forecast widths."""
-    module = planner(producer)
+    module = planner(producer, **(dict(scope=scope) if scope != 'default' else {}))
+    if scope == 'full-bank' and report.get('campaign_scope') != 'full-bank':
+        raise ValueError('actual full-bank candidate descriptor scope required')
     request = row['runtime_input']['specification']['keywords']['function_kwargs']['native_monomer']
     if (report.get('schema') != 'native-campaign-descriptor-probe/2'
             or report.get('policy_id') != module.POLICY

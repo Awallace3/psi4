@@ -59,8 +59,15 @@ def prepare_grid400_pilot_bank(inputs, receipts, resource_bytes):
                          selected=('monomer-0008',))
 
 
-def _prepare_bank(inputs, receipts, resource_bytes, *, producer, selected=None):
-    if ((producer == 'grid400' and selected != ('monomer-0008',))
+def prepare_grid400_full_bank(inputs, receipts, resource_bytes):
+    """Explicitly prepare all131 candidate geometries; never descriptor admission."""
+    return _prepare_bank(inputs, receipts, resource_bytes, producer='grid400', scope='full-bank')
+
+
+def _prepare_bank(inputs, receipts, resource_bytes, *, producer, selected=None, scope='default'):
+    if (scope not in ('default', 'full-bank')
+            or scope == 'full-bank' and (producer != 'grid400' or selected is not None)
+            or (producer == 'grid400' and scope == 'default' and selected != ('monomer-0008',))
             or (producer in ('cb63305', 'ed561666') and selected is not None)
             or producer not in ('cb63305', 'ed561666', 'grid400')):
         raise ValueError('closed descriptor producer/selection required')
@@ -189,6 +196,8 @@ def _prepare_bank(inputs, receipts, resource_bytes, *, producer, selected=None):
         result.update(schema='native-s66x8-selected-descriptor-preparation/1',
             status='PREPARED_SELECTED_MONOMER_FOR_DESCRIPTORS_ONLY',
             selected_monomers=list(selected), inventory_monomers=131, inventory_fragment_contexts=1056)
+    if scope == 'full-bank':
+        result['campaign_scope'] = 'full-bank'
     return result
 
 
@@ -197,14 +206,19 @@ def main():
     for name in (*INPUT_SHA256, 'resources', 'build_identity', 'qualification', 'output'):
         parser.add_argument('--'+name.replace('_', '-'), type=Path, required=True)
     parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
+    parser.add_argument('--scope', choices=('default', 'full-bank'), default='default')
     args = parser.parse_args()
+    scope = getattr(args, 'scope', 'default')
+    if scope == 'full-bank' and args.producer != 'grid400':
+        raise ValueError('full-bank scope is explicit candidate-only')
     qpath = args.qualification
     receipt_paths = dict(build_identity=args.build_identity, installed_qualification=qpath,
         imported_identity=qpath.with_name('imported-identity.json'), junit=qpath.with_name('junit.xml'))
     inputs = {role: getattr(args, role).read_bytes() for role in INPUT_SHA256}
     receipts = {role: p.read_bytes() for role, p in receipt_paths.items()}
     resources = args.resources.read_bytes()
-    result = (prepare_grid400_pilot_bank(inputs, receipts, resources)
+    result = (prepare_grid400_full_bank(inputs, receipts, resources)
+        if scope == 'full-bank' else prepare_grid400_pilot_bank(inputs, receipts, resources)
         if args.producer == 'grid400'
         else prepare_bank(inputs, receipts, resources, producer=args.producer))
     args.output.parent.mkdir(parents=True, exist_ok=True)

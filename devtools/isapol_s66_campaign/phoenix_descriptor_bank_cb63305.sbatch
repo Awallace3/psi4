@@ -12,7 +12,7 @@
 
 # Absolute output/error paths and pre-existing log parents are submission args.
 set -euo pipefail
-[[ $# -eq 3 || $# -eq 6 ]] || { printf 'SOURCE OPERATIONAL_COMMIT RUN [ed561666|grid400 INPUT BANK_SHA]\n' >&2; exit 2; }
+[[ $# -eq 3 || $# -eq 6 || $# -eq 7 ]] || { printf 'SOURCE OPERATIONAL_COMMIT RUN [ed561666|grid400 INPUT BANK_SHA [--full-bank]]\n' >&2; exit 2; }
 SOURCE=$1
 COMMIT=$2
 RUN=$3
@@ -22,7 +22,8 @@ QUAL=/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-cb63305f41-chec
 INPUT=/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-cb63305f41-preparation001
 BANK_SHA=3492e9c0529d5790d69359c5917a6317d7a5c33bf87bdadf0da70b44522b00a1
 PRODUCER=cb63305
-if [[ $# -eq 6 ]]; then
+SCOPE=()
+if [[ $# -ge 6 ]]; then
     [[ "$4" = ed561666 || "$4" = grid400 ]]
     PRODUCER=$4
     INPUT=$5
@@ -33,10 +34,17 @@ if [[ $# -eq 6 ]]; then
         BUILD=/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-ed561666fc-build001
         QUAL=/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-ed561666fc-checks001/payload/installed-validation.json
     else
-        [[ "$INPUT" = /storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-preparation001 ]]
+        if [[ $# -eq 7 ]]; then
+            [[ "$7" = --full-bank ]]
+            [[ "$INPUT" = /storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-full-preparation001 ]]
+            SCOPE=(--scope full-bank)
+        else
+            [[ "$INPUT" = /storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-preparation001 ]]
+        fi
         BUILD=/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-build001
         QUAL=/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-installed001/payload/installed-validation.json
     fi
+    [[ $# -ne 7 || "$PRODUCER" = grid400 ]]
 fi
 [[ "$SOURCE" = /storage/project/r-cs207-0/awallace43/gits/* ]]
 [[ "$RUN" = /storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-* ]]
@@ -52,7 +60,7 @@ setsid /opt/slurm/current/bin/srun --ntasks=1 --cpu-bind=none \
     --resources "$INPUT/resource-declarations.json" --inventory "$INPUT/inventory.json" \
     --entries "$INPUT/entries.json" --declarations "$INPUT/declarations.json" \
     --input-validation "$INPUT/input-validation.json" --run "$RUN" --commit "$COMMIT" \
-    --expected-bank-sha256 "$BANK_SHA" --producer "$PRODUCER" &
+    --expected-bank-sha256 "$BANK_SHA" --producer "$PRODUCER" "${SCOPE[@]}" &
 child=$!
 set +e
 ccasp_wait_child "$child" 20

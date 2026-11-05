@@ -65,8 +65,8 @@ def write_json_once(path, data):
     temporary.unlink()
 
 
-def operation_hashes(*, producer='cb63305'):
-    profile = helper('descriptor_profiles').profile(producer)
+def operation_hashes(*, producer='cb63305', scope='default'):
+    profile = helper('descriptor_profiles').profile(producer, scope=scope)
     files = OP_FILES+profile['parent_extra_sources']
     return {name: digest(Path(__file__).with_name(name).read_bytes()) for name in files}
 
@@ -84,14 +84,17 @@ def policy_binding(source, manifest, planner):
     return observed
 
 
-def admit_route(allocation):
+def admit_route(allocation, *, scope='default'):
     """Enforce the effective allocation, not merely the submission template."""
+    if scope not in ('default', 'full-bank'):
+        raise ValueError('closed descriptor allocation scope required')
     expected = dict(Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small',
-                    NumCPUs='16', NumNodes='1', TimeLimit='00:45:00')
+                    NumCPUs='24' if scope == 'full-bank' else '16',
+                    NumNodes='1', TimeLimit='00:45:00')
     if any(str(allocation.get(key)) != value for key, value in expected.items()):
         raise ValueError('effective descriptor route differs from the fixed embers allocation')
     return dict(account=expected['Account'], qos=expected['QOS'], partition=expected['Partition'],
-                cpus=16, nodes=1, time_limit=expected['TimeLimit'])
+                cpus=int(expected['NumCPUs']), nodes=1, time_limit=expected['TimeLimit'])
 
 
 def quota_snapshot(scratch, payload, guard):
@@ -141,13 +144,15 @@ def main():
     parser.add_argument('--commit', required=True)
     parser.add_argument('--expected-bank-sha256', required=True)
     parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
+    parser.add_argument('--scope', choices=('default', 'full-bank'), default='default')
     args = parser.parse_args()
+    scope = getattr(args, 'scope', 'default')
     if (re.fullmatch('[0-9a-f]{40}', args.commit) is None
             or re.fullmatch('[0-9a-f]{64}', args.expected_bank_sha256) is None):
         raise ValueError('exact operational commit and prepared bank hash required')
     checks = helper('phoenix_installed_checks')
     allocation = checks.allocation()
-    admit_route(allocation)
+    admit_route(allocation, **(dict(scope=scope) if scope != 'default' else {}))
     source = Path(__file__).resolve().parents[2]
     if checks.git(source, 'rev-parse', 'HEAD') != args.commit or checks.git(source, 'status', '--porcelain'):
         raise RuntimeError('exact clean immutable operational checkout required')
@@ -156,10 +161,12 @@ def main():
             or not run.name.startswith('ccasp-native-s66-')
             or build.is_relative_to(run) or run.is_relative_to(build)):
         raise RuntimeError('disjoint private build and descriptor run required')
-    descriptor_profile = helper('descriptor_profiles').profile(args.producer)
+    descriptor_profile = helper('descriptor_profiles').profile(args.producer, scope=scope)
     profile, planner = helper(descriptor_profile['qualifier']), helper(descriptor_profile['planner'])
     # Preserve the historical default interface; the new path is explicit.
     selection = {} if args.producer == 'cb63305' else dict(producer=args.producer)
+    if scope != 'default':
+        selection['scope'] = scope
     prepare, admission = helper('prepare_descriptor_bank_cb63305'), helper('descriptor_admission_cb63305')
     scratch_guard = helper('descriptor_scratch_cb63305')
     paths = dict(build_identity=build/'build-identity.json',
@@ -179,7 +186,9 @@ def main():
         raise ValueError('prepared bank or private build path differs')
     bank = json.loads(blobs['bank'])
     raw_inputs = {key: blobs[key] for key in prepare.INPUT_SHA256}
-    regenerated = (prepare.prepare_grid400_pilot_bank(raw_inputs, receipt_blobs, blobs['resources'])
+    regenerated = (prepare.prepare_grid400_full_bank(raw_inputs, receipt_blobs, blobs['resources'])
+        if scope == 'full-bank'
+        else prepare.prepare_grid400_pilot_bank(raw_inputs, receipt_blobs, blobs['resources'])
         if descriptor_profile['selected_monomers'] is not None
         else prepare.prepare_bank(raw_inputs, receipt_blobs, blobs['resources'], **selection))
     if bank != regenerated:
@@ -227,6 +236,8 @@ def main():
                 '--input', str(runtime_path), '--output', str(report_path),
                 '--memory-bytes', str(row['intended_memory_bytes']), '--monomer-id', monomer,
                 '--producer', args.producer)
+            if scope != 'default':
+                command += ['--scope', scope]
             with (payload/(monomer+'.stdout')).open('x') as out, (payload/(monomer+'.stderr')).open('x') as err:
                 subprocess.run(command, cwd=scratch/'cwd', env=env, stdin=subprocess.DEVNULL,
                                stdout=out, stderr=err, check=True)
@@ -246,7 +257,7 @@ def main():
                 or checks.git(source, 'rev-parse', 'HEAD') != args.commit
                 or checks.git(source, 'status', '--porcelain') or operation_hashes(**selection) != operations):
             raise ValueError('source, input or runtime receipts changed during descriptor allocation')
-        write_json_once(payload/'descriptor-allocation.json', dict(
+        allocation_report = dict(
             schema=('native-campaign-selected-descriptor-allocation/1'
                 if descriptor_profile['selected_monomers'] is not None
                 else 'native-campaign-descriptor-allocation/2'), status=status,
@@ -258,7 +269,10 @@ def main():
             runtime_unchanged=True, reports=reports,
             qualification='Actual installed basis descriptors and predicted native ledger only. '
                           'No SCF, ISA, response/fit, QCArchive writes, molecular results, '
-                          'accuracy/covariance proof, total RSS or SCF scratch admission.'))
+                          'accuracy/covariance proof, total RSS or SCF scratch admission.')
+        if scope != 'default':
+            allocation_report['campaign_scope'] = scope
+        write_json_once(payload/'descriptor-allocation.json', allocation_report)
     except BaseException as error:
         write_json_once(payload/'descriptor-allocation-failure.json', dict(
             status='FAILED_DESCRIPTOR_ALLOCATION', completed_descriptor_reports=len(reports),
