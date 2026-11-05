@@ -12,7 +12,8 @@ import signal
 
 def helper(name):
     if name not in ('single_claim', 'phoenix_pilot', 'pilot_cb63305', 'dataset_fresh_cb63305',
-                    'case_cb63305', 'owned_dataset_cb63305', 'grid400_policy'):
+                    'case_cb63305', 'owned_dataset_cb63305', 'grid400_policy',
+                    'grid400_bank_execution'):
         raise ValueError('closed single-record manager helpers required')
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_expanded_session_'+name, path)
@@ -21,16 +22,20 @@ def helper(name):
     return module
 
 
-def validate_session_config(config, compute_tag, *, worker_shape=(4, 20.)):
+def validate_session_config(config, compute_tag, *, worker_shape=(4, 20.), campaign_scope='default'):
     """Validate a finite worker shape, not molecular memory/scratch admission.
 
     The historical singleton keeps its exact default. Remaining-bank callers
     must separately bind their case, allocation and worker-preflight receipts.
     """
+    if campaign_scope not in ('default', 'eligible-bank'):
+        raise ValueError('closed native session scope required')
+    shapes = (helper('grid400_bank_execution').worker_shapes() if campaign_scope == 'eligible-bank'
+              else ((4, 20.), (8, 20.), (12, 40.), (24, 80.), (16, 60.)))
     if (type(worker_shape) is not tuple or len(worker_shape) != 2
             or type(worker_shape[0]) is not int
             or type(worker_shape[1]) not in (int, float)
-            or worker_shape not in ((4, 20.), (8, 20.), (12, 40.), (24, 80.), (16, 60.))):
+            or worker_shape not in shapes):
         raise ValueError('explicit finite native worker shape required')
     cores, memory = worker_shape
     executors = config.executors
@@ -44,14 +49,20 @@ def validate_session_config(config, compute_tag, *, worker_shape=(4, 20.)):
 
 
 def run_session(config, *, record_id, compute_tag, runtime, payload, save, worker_shape=(4, 20.),
-                producer='cb63305', case=None):
+                producer='cb63305', case=None, campaign_scope='default'):
     """Claim once, capture compressed local output, and stop this owned manager."""
     if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
         raise ValueError('closed singleton producer required')
+    if (campaign_scope not in ('default', 'eligible-bank')
+            or campaign_scope == 'eligible-bank' and producer != 'grid400'):
+        raise ValueError('eligible bank session requires explicit grid400 producer and scope')
     if producer != 'grid400' and worker_shape == (16, 60.):
         raise ValueError('grid400 worker shape requires its explicit fresh producer')
     protected = (5234314, 5234315)
-    if producer == 'grid400':
+    if campaign_scope == 'eligible-bank':
+        protected = helper('grid400_bank_execution').validate_binding(case,
+            runtime=runtime, compute_tag=compute_tag, worker_shape=worker_shape, record_id=record_id)
+    elif producer == 'grid400':
         pins = helper('pilot_cb63305').producer_pins(producer)
         policy = helper('grid400_policy')
         profile = policy.execution_profile()
@@ -94,7 +105,8 @@ def run_session(config, *, record_id, compute_tag, runtime, payload, save, worke
             raise ValueError('exact fresh cap32 singleton shape and namespace required')
     elif case is not None:
         raise ValueError('selected singleton case binding is only supported for cap32')
-    validate_session_config(config, compute_tag, worker_shape=worker_shape)
+    scope_args = {} if campaign_scope == 'default' else dict(campaign_scope=campaign_scope)
+    validate_session_config(config, compute_tag, worker_shape=worker_shape, **scope_args)
     if type(record_id) is not int or record_id <= 0 or record_id in protected:
         raise ValueError('fresh expanded-pilot record required')
     from qcfractalcompute.compute_manager import ComputeManager
