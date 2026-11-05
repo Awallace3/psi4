@@ -10,11 +10,16 @@
 #SBATCH --time=00:45:00
 #SBATCH --signal=TERM@180
 set -euo pipefail
-[[ $# -eq 4 || $# -eq 5 ]] || { printf 'SOURCE OPERATIONAL_COMMIT PILOT RUN [--remaining-case|--ed561666-fresh|--grid400-fresh]\n' >&2; exit 2; }
+[[ $# -eq 4 || $# -eq 5 || $# -eq 9 ]] || { printf 'SOURCE COMMIT CASE RUN [MODE [BANK_CONTEXT CONTEXT_SHA BANK_CHECKPOINT CHECKPOINT_SHA]]\n' >&2; exit 2; }
 SOURCE=$1 COMMIT=$2 PILOT=$3 RUN=$4
 EXTRA=()
 PRODUCER=cb63305f41
-if [[ $# -eq 5 ]]; then
+if [[ $# -ge 5 ]]; then
+    if [[ "$5" = --grid400-bank-append ]]; then
+        [[ $# -eq 9 ]]
+    else
+        [[ $# -eq 5 ]]
+    fi
     case "$5" in
         --remaining-case) EXTRA=(--remaining-case) ;;
         --ed561666-fresh)
@@ -31,6 +36,16 @@ if [[ $# -eq 5 ]]; then
             EXTRA=(--producer grid400)
             PRODUCER=grid400-1aaa9e0a30
             [[ "$PILOT" = /storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-preparation001/pilot.json ]]
+            ;;
+        --grid400-bank-fresh|--grid400-bank-append)
+            EXTRA=(--producer grid400 --campaign-scope eligible-bank)
+            PRODUCER=grid400-1aaa9e0a30-bank
+            [[ "$PILOT" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-bank001/cases/monomer-[0-9]{4}\.json$ ]]
+            if [[ "$5" = --grid400-bank-append ]]; then
+                [[ "$7" =~ ^[0-9a-f]{64}$ && "$9" =~ ^[0-9a-f]{64}$ ]]
+                EXTRA+=(--remaining-case --bank-context "$6" --bank-context-sha256 "$7"
+                        --bank-checkpoint "$8" --bank-checkpoint-sha256 "$9")
+            fi
             ;;
         *) exit 2 ;;
     esac

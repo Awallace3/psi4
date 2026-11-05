@@ -116,6 +116,23 @@ def initialized():
     return core, pool, cases, context, checkpoint, proofs
 
 
+def test_intermediate_signed_zero_change_cannot_hide_behind_python_numeric_equality():
+    core, _, cases, context, checkpoint, proofs = initialized()
+    previous = core.encode(checkpoint)
+    case = core.bind_next_case(cases['monomer-0002'], previous, core.digest(previous),
+                              context, core.digest(context), proofs)
+    receipts, captured, tensor = delivered(core, case, checkpoint['snapshot'])
+    entry = captured['entry']['entries'][case['entry']['name']]
+    geometry = entry['molecule']['geometry']
+    index = next(i for i, value in enumerate(geometry) if value == 0.0)
+    geometry[index] = -0.0
+    assert entry == captured['record']['entries'][case['entry']['name']]
+    with pytest.raises(ValueError, match='new bank entry changed'):
+        core.advance(previous, core.digest(previous), context, core.digest(context), proofs,
+            receipts=receipts, expected_audit_sha256=core.digest(receipts['audit']),
+            captured=captured, tensor_raw=tensor)
+
+
 def test_fresh_bootstrap_then_exact_successors_finish_only_eligible_members():
     core, pool, cases, context, checkpoint, proofs = initialized()
     context_sha = core.digest(context)

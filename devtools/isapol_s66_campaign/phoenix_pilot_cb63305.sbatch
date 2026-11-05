@@ -39,6 +39,19 @@ elif [[ $# -eq 1 && "$1" = --grid400-fresh ]]; then
     EXTRA=(--producer grid400)
     PRODUCER=grid400-1aaa9e0a30
     [[ "$PILOT" = "$ROOT"/ccasp-native-s66-grid400-1aaa9e0a30-preparation001/pilot.json ]]
+elif [[ $# -ge 1 && ( "$1" = --grid400-bank-fresh || "$1" = --grid400-bank-append ) ]]; then
+    MODE=$1
+    shift
+    EXTRA=(--producer grid400 --campaign-scope eligible-bank)
+    PRODUCER=grid400-1aaa9e0a30-bank
+    [[ "$PILOT" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-bank001/cases/monomer-[0-9]{4}\.json$ ]]
+    if [[ "$MODE" = --grid400-bank-append ]]; then
+        [[ $# -eq 4 && "$2" =~ ^[0-9a-f]{64}$ && "$4" =~ ^[0-9a-f]{64}$ ]]
+        EXTRA+=(--remaining-case --bank-context "$1" --bank-context-sha256 "$2"
+                --bank-checkpoint "$3" --bank-checkpoint-sha256 "$4")
+    else
+        [[ $# -eq 0 ]]
+    fi
 else
     for arg in "${EXTRA[@]}"; do
         [[ "$arg" != --producer* && "$arg" != --ed561666-fresh && "$arg" != --grid400* ]] || exit 2

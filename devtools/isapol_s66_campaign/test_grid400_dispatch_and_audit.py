@@ -123,6 +123,9 @@ def test_other_preflights_or_append_modes_cannot_authorize_science(change):
 def append_args():
     return NS(producer='grid400', remaining_case=False, owned_checkpoint=None,
         checkpoint_sha256=None, checkpoint_proofs=None,
+        campaign_scope='default', bank_context=None, bank_context_sha256=None,
+        bank_checkpoint=None, bank_checkpoint_sha256=None,
+        advance_checkpoint=False, advance_bank_checkpoint=False,
         accepted_audit=None, accepted_outcome=None, accepted_pilot=None, accepted_envelope=None)
 
 
@@ -135,7 +138,8 @@ def test_no_owned_checkpoint_receipt_or_advancement_mode_can_be_ignored(monkeypa
         setattr(args, field, True if field == 'remaining_case' else 'not authorized')
         with pytest.raises(ValueError):
             bootstrap.load_append_inputs(args)
-    args = NS(producer='grid400', remaining_case=False, advance_checkpoint=True)
+    args = append_args()
+    args.advance_checkpoint = True
     monkeypatch.setattr(audit.argparse.ArgumentParser, 'parse_args', lambda self: args)
     with pytest.raises(ValueError, match='checkpoint advancement'):
         audit.main()

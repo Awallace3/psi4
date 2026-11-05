@@ -16,7 +16,17 @@ shift 6
 EXTRA=("$@")
 ROOT=/storage/project/r-cs207-0/awallace43/runs
 PRODUCER=cb63305f41
-if [[ $# -ge 1 && "$1" = --ed561666-remaining-case ]]; then
+if [[ $# -eq 1 && "$1" = --grid400-bank-fresh ]]; then
+    EXTRA=(--producer grid400 --campaign-scope eligible-bank --advance-bank-checkpoint)
+    PRODUCER=grid400-1aaa9e0a30-bank
+    [[ "$PILOT" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-bank001/cases/monomer-[0-9]{4}\.json$ ]]
+elif [[ $# -eq 5 && "$1" = --grid400-bank-append ]]; then
+    EXTRA=(--producer grid400 --campaign-scope eligible-bank --remaining-case
+        --bank-context "$2" --bank-context-sha256 "$3"
+        --bank-checkpoint "$4" --bank-checkpoint-sha256 "$5" --advance-bank-checkpoint)
+    PRODUCER=grid400-1aaa9e0a30-bank
+    [[ "$PILOT" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-bank001/cases/monomer-[0-9]{4}\.json$ ]]
+elif [[ $# -ge 1 && "$1" = --ed561666-remaining-case ]]; then
     EXTRA=(--producer ed561666 --remaining-case)
     PRODUCER=ed561666fc
     shift
@@ -45,7 +55,7 @@ elif [[ $# -eq 1 && "$1" = --grid400-fresh ]]; then
     [[ "$PILOT" = "$ROOT"/ccasp-native-s66-grid400-1aaa9e0a30-preparation001/pilot.json ]]
 else
     for arg in "${EXTRA[@]}"; do
-        [[ "$arg" != --producer* && "$arg" != --ed561666-fresh && "$arg" != --grid400* ]] || exit 2
+        [[ "$arg" != --producer* && "$arg" != --ed561666-fresh && "$arg" != --grid400* && "$arg" != --campaign-scope* && "$arg" != --bank-* && "$arg" != --advance-bank-checkpoint ]] || exit 2
     done
 fi
 MANAGER=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca

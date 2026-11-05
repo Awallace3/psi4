@@ -20,7 +20,8 @@ HELPERS = {'pilot_cb63305', 'phoenix_worker_cb63305', 'phoenix_installed_checks'
     'phoenix_worker_probe', 'phoenix_pilot', 'dataset_fresh_cb63305',
     'single_record_cb63305', 'descriptor_scratch_cb63305', 'phoenix_descriptor_bank_cb63305',
     'case_cb63305', 'dataset_owned354_cb63305', 'owned_dataset_cb63305', 'grid400_policy',
-    'envelope_identity'}
+    'envelope_identity', 'bank_campaign', 'bank_dataset', 'bank_append', 'bank_store',
+    'grid400_bank_policy', 'dataset_guard'}
 
 
 def helper(name):
@@ -49,13 +50,15 @@ def verify_delivery_envelope(local, server, request, implementation, *, producer
     return None
 
 
-def admit_allocation(allocation, *, execution_profile=None, producer='cb63305'):
+def admit_allocation(allocation, *, execution_profile=None, producer='cb63305', campaign_scope='default'):
     if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
         raise ValueError('closed molecular allocation producer required')
+    helper('phoenix_worker_cb63305').validate_campaign_scope(producer, campaign_scope)
     expected = dict(Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small',
                     NumCPUs='4', NumNodes='1', MinMemoryNode='24G', TimeLimit='02:00:00')
     if producer == 'grid400':
-        profile = helper('grid400_policy').validate_profile(execution_profile)
+        profile = helper('grid400_bank_policy' if campaign_scope == 'eligible-bank'
+                         else 'grid400_policy').validate_profile(execution_profile)
         expected.update(NumCPUs=str(profile['cores']),
                         MinMemoryNode=str(profile['job_memory_GiB'])+'G',
                         TimeLimit=profile['time_limit'])
@@ -77,12 +80,22 @@ def admit_allocation(allocation, *, execution_profile=None, producer='cb63305'):
 
 
 def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pilot_sha,
-                       worker_sources, transport, producer='cb63305', remaining_case=False):
+                       worker_sources, transport, producer='cb63305', remaining_case=False,
+                       campaign_scope='default'):
     if (type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400')
             or type(remaining_case) is not bool):
         raise ValueError('closed molecular producer selector required')
+    helper('phoenix_worker_cb63305').validate_campaign_scope(producer, campaign_scope)
     profile = draft.get('execution_profile')
-    if producer == 'grid400':
+    if campaign_scope == 'eligible-bank':
+        policy = helper('grid400_bank_policy')
+        for item in (preflight, draft):
+            if (item.get('producer_profile') != 'grid400'
+                    or item.get('campaign_scope') != 'eligible-bank'
+                    or item.get('dataset_mode') != ('append' if remaining_case else 'fresh')):
+                raise ValueError('explicit reconstructed eligible-bank worker and molecular mode required')
+            policy.validate_profile(item.get('execution_profile'))
+    elif producer == 'grid400':
         policy = helper('grid400_policy')
         if (remaining_case or preflight.get('producer_profile') != producer
                 or preflight.get('dataset_mode') != 'fresh'
@@ -92,7 +105,7 @@ def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pil
         policy.validate_profile(profile)
         policy.validate_profile(preflight.get('execution_profile'))
     status = ('PASS_SELECTED_BANK_CASE_WORKER_PREFLIGHT_ONLY'
-              if producer == 'ed561666' and remaining_case
+              if (producer == 'ed561666' or campaign_scope == 'eligible-bank') and remaining_case
               else 'PASS_SELECTED_FRESH_WORKER_PREFLIGHT_ONLY' if producer in ('ed561666', 'grid400')
               else 'PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY' if profile
               else 'PASS_EXPANDED_WORKER_PREFLIGHT_ONLY')
@@ -135,6 +148,22 @@ def load_append_inputs(args):
     producer = getattr(args, 'producer', 'cb63305')
     if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
         raise ValueError('closed molecular producer selector required')
+    scope = helper('phoenix_worker_cb63305').selected_scope(args)
+    bank_fields = ('bank_context', 'bank_context_sha256', 'bank_checkpoint', 'bank_checkpoint_sha256')
+    if scope == 'eligible-bank':
+        campaign = helper('bank_campaign')
+        campaign.authority()  # Refuse an unsealed pool before any checkpoint reads.
+        if any(getattr(args, name, None) is not None for name in (
+                'owned_checkpoint', 'checkpoint_sha256', 'checkpoint_proofs',
+                'accepted_audit', 'accepted_outcome', 'accepted_pilot', 'accepted_envelope')):
+            raise ValueError('historical acceptance/checkpoint inputs cannot enter the new bank campaign')
+        if args.remaining_case:
+            return campaign.load_checkpoint(args)
+        if any(getattr(args, name, None) is not None for name in bank_fields):
+            raise ValueError('fresh bank bootstrap cannot ignore prior checkpoint inputs')
+        return None
+    if any(getattr(args, name, None) is not None for name in bank_fields):
+        raise ValueError('bank checkpoint inputs require the explicit bank campaign scope')
     if producer == 'grid400' and args.remaining_case:
         raise ValueError('grid400 is a fresh singleton only, never owned-dataset append')
     selection = {} if producer == 'cb63305' else dict(producer=producer)
@@ -200,6 +229,10 @@ def main():
     parser.add_argument('--commit', required=True)
     parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
     parser.add_argument('--remaining-case', action='store_true')
+    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank'), default='default')
+    for name in ('bank-context', 'bank-checkpoint'):
+        parser.add_argument('--'+name, type=Path)
+        parser.add_argument('--'+name+'-sha256')
     parser.add_argument('--owned-checkpoint', type=Path)
     parser.add_argument('--checkpoint-sha256')
     parser.add_argument('--checkpoint-proofs', type=Path)
@@ -208,10 +241,13 @@ def main():
     args = parser.parse_args()
     append_inputs = load_append_inputs(args)
     producer = args.producer
-    pins = helper('pilot_cb63305').producer_pins(producer)
-    transport_args = dict(producer=producer) if producer != 'cb63305' else {}
     checks, worker = (helper(name) for name in (
         'phoenix_installed_checks', 'phoenix_worker_cb63305'))
+    scope = worker.selected_scope(args)
+    bank_mode = scope == 'eligible-bank'
+    scope_args = dict(campaign_scope=scope) if bank_mode else {}
+    pins = helper('bank_campaign').pins() if bank_mode else helper('pilot_cb63305').producer_pins(producer)
+    transport_args = {} if bank_mode or producer == 'cb63305' else dict(producer=producer)
     allocation = checks.allocation()
     source = Path(__file__).resolve().parents[2]
     if (checks.git(source, 'rev-parse', 'HEAD') != args.commit
@@ -224,9 +260,11 @@ def main():
         raise ValueError('disjoint private build and molecular run required')
     manifest_path = build/'build-identity.json'
     draft = worker.prepare_draft(args, manifest_path)
+    if bank_mode:
+        helper('bank_store').prepare_storage()
     profile = draft.get('execution_profile')
     admit_allocation(allocation, execution_profile=profile,
-                     **(dict(producer=producer) if producer == 'grid400' else {}))
+                     **(dict(producer=producer, **scope_args) if producer == 'grid400' else {}))
     pilot_sha = checks.digest(args.pilot)
     manifest = json.loads(manifest_path.read_bytes())
     manifest_sha = checks.digest(manifest_path)
@@ -236,14 +274,14 @@ def main():
     if any(not p.startswith('devtools/isapol_s66_campaign/')
            and p not in checks.TEST_ONLY_CHANGES for p in changes):
         raise ValueError('bootstrap operations change scientific/build sources')
-    operations = worker.source_hashes(producer, remaining_case=args.remaining_case)
+    operations = worker.source_hashes(producer, remaining_case=args.remaining_case, **scope_args)
     operations.update({name: checks.digest(Path(__file__).with_name(name)) for name in (
         'phoenix_pilot_cb63305.py', 'phoenix_pilot_cb63305.sbatch', 'single_record_cb63305.py')})
-    if args.remaining_case:
+    if args.remaining_case and not bank_mode:
         operations.update({name: checks.digest(Path(__file__).with_name(name)) for name in (
             'dataset_owned354_cb63305.py', 'owned_dataset_cb63305.py', 'dataset_guard.py')})
     worker_sources = {key: operations[key]
-                      for key in worker.source_names(producer, remaining_case=args.remaining_case)}
+                      for key in worker.source_names(producer, remaining_case=args.remaining_case, **scope_args)}
     legacy = helper('phoenix_pilot')
     manager_sources = MANAGER/'lib/python3.13/site-packages/qcfractalcompute'
     if any(checks.digest(manager_sources/n) != v for n, v in legacy.MANAGER_FILES.items()):
@@ -288,12 +326,13 @@ def main():
     from qcfractalcompute.config import FractalComputeConfig
     from qcfractalcompute.apps.app_manager import discover_programs_conda
     worker.validate_versions(str(qcengine.__version__), str(qcfractalcompute.__version__))
-    mutation = helper('dataset_owned354_cb63305' if args.remaining_case else 'dataset_fresh_cb63305')
+    mutation = helper('bank_dataset' if bank_mode else
+                      'dataset_owned354_cb63305' if args.remaining_case else 'dataset_fresh_cb63305')
     transport = mutation.transport_binding(**transport_args)
     validate_preflight(preflight, draft, manifest_sha=manifest_sha,
         qualification_sha=checks.digest(args.qualification), pilot_sha=pilot_sha,
         worker_sources=worker_sources, transport=transport, producer=producer,
-        remaining_case=args.remaining_case)
+        remaining_case=args.remaining_case, **scope_args)
     harness = qcengine.get_program('psi4')
     harness_path = Path(inspect.getfile(type(harness))).resolve()
     if (str(harness_path) != preflight['harness_path']
@@ -323,8 +362,13 @@ def main():
     config_data['executors']['pilot'].update(cores_per_worker=worker_shape[0],
                                             memory_per_worker=float(worker_shape[1]))
     config = FractalComputeConfig(**config_data)
-    helper('single_record_cb63305').validate_session_config(config, tag, worker_shape=worker_shape)
-    client = mutation.client_class(**transport_args)(config.server.fractal_uri, username=config.server.username,
+    helper('single_record_cb63305').validate_session_config(config, tag, worker_shape=worker_shape, **scope_args)
+    transaction_scope = None
+    if bank_mode:
+        transaction_scope = mutation.prepare_transaction(draft, worker.prepare_draft(args, manifest_path), tag,
+            checkpoint_raw=append_inputs['checkpoint_raw'] if args.remaining_case else None)
+    client_type = mutation.client_class(transaction_scope) if bank_mode else mutation.client_class(**transport_args)
+    client = client_type(config.server.fractal_uri, username=config.server.username,
         password=config.server.password, verify=config.server.verify, show_motd=False)
     info = client.get_server_information()
     if info.get('name') != 'CDS QCFractal Server' or info.get('version') != '0.70':
@@ -344,13 +388,27 @@ def main():
         transport_binding=transport, scratch_path=str(scratch), scratch_snapshot=disk,
         maximum_records=1, find_existing=False, execution_protocols=runtime['specification']['protocols'],
         execution_profile=profile,
-        checkpoint_sha256=args.checkpoint_sha256 if args.remaining_case else None,
+        checkpoint_sha256=(append_inputs['checkpoint_sha256'] if bank_mode and args.remaining_case
+                           else args.checkpoint_sha256 if args.remaining_case else None),
         qcengine_internal_retries=0, dataset_name=draft['dataset_name'],
         specification_name=draft['specification_name'])
     if producer in ('ed561666', 'grid400'):
         started.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
+    if bank_mode:
+        started.update(campaign_scope=scope, campaign=draft['campaign'])
     save('started.json', started)
-    if args.remaining_case:
+    if bank_mode and args.remaining_case:
+        campaign = helper('bank_campaign')
+        pool, raw_inputs = campaign.load_pool(args.inputs, manifest_path, args.qualification, args.descriptors)
+        prepared = campaign.prepared_cases(pool, raw_inputs)[draft['monomer_id']]
+        created = helper('bank_append').append_once(client, transaction_scope, draft,
+            dataset_adapter=mutation, prepared_case=prepared, **append_inputs,
+            authenticated_owner=server['username'], save=save)
+        dataset = client.get_dataset_by_id(draft['dataset_id'])
+        if (dataset.id != draft['dataset_id'] or dataset.name != draft['dataset_name']
+                or getattr(dataset, '_client', None) is not client):
+            raise ValueError('new audited bank append returned another dataset/client identity')
+    elif args.remaining_case:
         created = mutation.append_once(client, case_path=args.pilot, inputs=args.inputs,
             build_identity=manifest_path, qualification=args.qualification, descriptors=args.descriptors,
             **append_inputs, authenticated_owner=server['username'], compute_tag=tag, save=save,
@@ -360,11 +418,21 @@ def main():
                 or getattr(dataset, '_client', None) is not client):
             raise ValueError('owned354 append returned another dataset/client identity')
     else:
-        dataset, _ = mutation.register_once(client, draft, tag, save, **transport_args)
+        intent = None
+        if bank_mode:
+            intent = helper('bank_store').reserve_intent(dataset_id=None, checkpoint_sha256=None,
+                snapshot_sha256=None, context_sha256=None, case_sha256=transaction_scope.case_sha256,
+                eligibility_sha256=draft['eligibility_sha256'], monomer_id=draft['monomer_id'], compute_tag=tag)
+            save('dispatch-intent.json', intent)
+        dataset, _ = (mutation.register_once(client, transaction_scope, draft, save) if bank_mode
+                      else mutation.register_once(client, draft, tag, save, **transport_args))
         if dataset.id in pins['protected_datasets']:
             raise ValueError('protected historical dataset cannot be a fresh pilot target')
-        inserted = mutation.submit_once(client, dataset, draft, tag, save, **transport_args)
+        inserted = (mutation.submit_once(client, transaction_scope, dataset, draft, save) if bank_mode
+                    else mutation.submit_once(client, dataset, draft, tag, save, **transport_args))
         created = dict(n_inserted=inserted.n_inserted, n_existing=inserted.n_existing)
+        if intent is not None:
+            created['dispatch_intent_sha256'] = intent['sha256']
     record = dataset.get_record(draft['entry']['name'], draft['specification_name'], force_refetch=True)
     protected = pins['protected_records']
     if producer == 'ed561666' and args.remaining_case:
@@ -377,7 +445,8 @@ def main():
         n_inserted=created['n_inserted'], n_existing=created['n_existing']))
     session = helper('single_record_cb63305').run_session(config, record_id=record.id,
         compute_tag=tag, runtime=runtime, payload=payload, save=save, worker_shape=worker_shape,
-        **transport_args, **(dict(case=draft) if producer == 'ed561666' and args.remaining_case else {}))
+        **(dict(producer=producer, case=draft, campaign_scope=scope) if bank_mode else
+           dict(transport_args, **(dict(case=draft) if producer == 'ed561666' and args.remaining_case else {}))))
     record = dataset.get_record(draft['entry']['name'], draft['specification_name'], force_refetch=True)
     history = record.compute_history
     save('server-record-outcome.json', dict(record_id=record.id, status=record.status.value,
@@ -399,7 +468,18 @@ def main():
     save('server-native-envelope.json', envelope)
     with (payload/'server-tensors.npz').open('xb') as stream:
         stream.write(raw)
-    if args.remaining_case:
+    if bank_mode:
+        base = helper('dataset_guard')
+        after_delivery = base.snapshot_dataset(client, dataset_id=dataset.id,
+                                               max_entries=draft['eligible_monomer_count'])
+        if args.remaining_case:
+            base.assert_append_delta(json.loads((payload/'owned-before-entry.json').read_bytes()),
+                after_delivery, entry_name=draft['entry']['name'], record_id=record.id,
+                specification_name=draft['specification_name'])
+            save('owned-after-delivery.json', after_delivery)
+        else:
+            save('bank-initial-snapshot.json', after_delivery)
+    elif args.remaining_case:
         owned = helper('owned_dataset_cb63305')
         after_delivery = owned.snapshot_dataset(client, **transport_args)
         owned.assert_append_delta(json.loads((payload/'owned-before-entry.json').read_bytes()),
@@ -423,7 +503,7 @@ def main():
         trace_files=[p.name for p in sorted((payload/'traces').glob('*.strace'))],
         qualification='Fresh single-record delivery only; independent numerical/export/OS-trace audit '
                       'is still required. No accuracy, solver, covariance or whole-set acceptance.')
-    if producer == 'ed561666' and args.remaining_case:
+    if bank_mode or producer == 'ed561666' and args.remaining_case:
         outcome['dispatch_intent_sha256'] = created['dispatch_intent_sha256']
     save('pilot-outcome.json', outcome)
     print(json.dumps(dict(status=outcome['status'], dataset_id=dataset.id, record_id=record.id)))

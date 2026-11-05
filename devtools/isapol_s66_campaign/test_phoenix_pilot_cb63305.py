@@ -163,8 +163,10 @@ def test_advanced_checkpoint_proof_bytes_reach_dispatch_validation(monkeypatch, 
         observed.append(kwargs)
     owned = NS(verify_first_acceptance=lambda blobs, **kw: {'synthetic': True})
     append = NS(read_checkpoint_proofs=read, validate_checkpoint=validate)
+    original = pilot.helper
+    replacements = {'owned_dataset_cb63305': owned, 'dataset_owned354_cb63305': append}
     monkeypatch.setattr(pilot, 'helper', lambda name:
-                        owned if name == 'owned_dataset_cb63305' else append)
+                        replacements[name] if name in replacements else original(name))
     result = pilot.load_append_inputs(args)
     assert observed == [dict(producer='ed561666', proof_blobs=proofs)]
     assert result['checkpoint_proof_blobs'] == proofs
@@ -194,9 +196,11 @@ def test_complete_append_input_bytes_are_verified_before_dispatch(monkeypatch, t
         effects.append('closed_checkpoint')
         assert raw == b'SYNTHETIC_BASELINE' and sha == args.checkpoint_sha256
         assert acceptance == {'synthetic_accepted': True}
+    original = pilot.helper
+    replacements = {'owned_dataset_cb63305': NS(verify_first_acceptance=accepted),
+                    'dataset_owned354_cb63305': NS(validate_checkpoint=checkpoint)}
     monkeypatch.setattr(pilot, 'helper', lambda name:
-        NS(verify_first_acceptance=accepted) if name == 'owned_dataset_cb63305'
-        else NS(validate_checkpoint=checkpoint))
+        replacements[name] if name in replacements else original(name))
     result = pilot.load_append_inputs(args)
     assert effects == ['closed_receipts', 'closed_checkpoint']
     assert result['checkpoint_raw'] == b'SYNTHETIC_BASELINE'

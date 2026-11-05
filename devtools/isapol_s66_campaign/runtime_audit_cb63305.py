@@ -20,7 +20,7 @@ HELPERS = {'pilot_cb63305', 'phoenix_pilot_cb63305', 'phoenix_worker_cb63305',
     'phoenix_installed_checks', 'phoenix_worker_probe', 'phoenix_pilot', 'runtime_audit',
     'validate_numeric', 'dataset_fresh_cb63305', 'phoenix_descriptor_bank_cb63305',
     'owned_dataset_cb63305', 'dataset_owned354_cb63305', 'prepare_owned354_baseline_cb63305',
-    'envelope_identity'}
+    'envelope_identity', 'bank_campaign', 'bank_dataset', 'bank_audit', 'bank_runtime_gate'}
 
 
 def helper(name):
@@ -63,8 +63,10 @@ def verify_delivery_identity(local_result, server, saved_witness, *, producer):
 
 
 def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='cb63305',
-                        remaining_case=False):
-    pins = helper('pilot_cb63305').producer_pins(producer)
+                        remaining_case=False, campaign_scope='default'):
+    helper('phoenix_worker_cb63305').validate_campaign_scope(producer, campaign_scope)
+    bank = campaign_scope == 'eligible-bank'
+    pins = (helper('bank_campaign').pins() if bank else helper('pilot_cb63305').producer_pins(producer))
     job = outcome['allocation']['JobId']
     if (type(job) is not str or re.fullmatch(r'[0-9]+', job) is None
             or type(expected_monomer) is not str
@@ -74,7 +76,11 @@ def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='c
         raise ValueError('exact expanded-pilot job and reconstructed monomer identity required')
     if producer == 'ed561666' and not remaining_case and expected_monomer != pins['monomer']:
         raise ValueError('fixed fresh cap32 monomer required')
-    if producer == 'grid400' and (
+    if bank and (outcome.get('campaign_scope') != campaign_scope
+            or outcome.get('producer_profile') != 'grid400'
+            or outcome.get('dataset_mode') != ('append' if remaining_case else 'fresh')):
+        raise ValueError('explicit eligible bank scratch mode and producer required')
+    if producer == 'grid400' and not bank and (
             remaining_case or expected_monomer != pins['monomer']
             or outcome.get('producer_profile') != producer or outcome.get('dataset_mode') != 'fresh'):
         raise ValueError('fixed fresh grid400 monomer and mode required')
@@ -90,9 +96,17 @@ def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='c
 
 
 def validate_delivery(outcome, delivery, created, claimed, server, *, owned354=False,
-                      producer='cb63305'):
-    pins = helper('pilot_cb63305').producer_pins(producer)
-    if producer == 'grid400' and (
+                      producer='cb63305', campaign_scope='default'):
+    helper('phoenix_worker_cb63305').validate_campaign_scope(producer, campaign_scope)
+    bank = campaign_scope == 'eligible-bank'
+    pins = (helper('bank_campaign').pins() if bank else helper('pilot_cb63305').producer_pins(producer))
+    if bank and (outcome.get('campaign_scope') != campaign_scope
+            or outcome.get('producer_profile') != 'grid400'
+            or outcome.get('dataset_mode') != ('append' if owned354 else 'fresh')
+            or outcome.get('dataset_name') != pins['dataset_name']
+            or outcome.get('specification_name') != pins['specification_name']):
+        raise ValueError('explicit eligible bank delivered mode and dataset/specification required')
+    if producer == 'grid400' and not bank and (
             owned354 or outcome.get('producer_profile') != producer
             or outcome.get('dataset_mode') != 'fresh' or outcome.get('monomer_id') != pins['monomer']
             or outcome.get('dataset_name') != pins['dataset_name']
@@ -111,7 +125,7 @@ def validate_delivery(outcome, delivery, created, claimed, server, *, owned354=F
             or type(outcome.get('record_id')) is not int or outcome['record_id'] <= 0
             or outcome['record_id'] in pins['protected_records']):
         raise ValueError('fresh delivered expanded single-record case required')
-    if owned354:
+    if owned354 and not bank:
         target, first_record = 354, 5234316
         if producer == 'ed561666':
             context = helper('owned_dataset_cb63305').context(producer)
@@ -243,13 +257,28 @@ def main():
     parser.add_argument('--commit', required=True)
     parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
     parser.add_argument('--remaining-case', action='store_true')
+    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank'), default='default')
+    for name in ('bank-context', 'bank-checkpoint'):
+        parser.add_argument('--'+name, type=Path)
+        parser.add_argument('--'+name+'-sha256')
     parser.add_argument('--owned-checkpoint', type=Path)
     parser.add_argument('--checkpoint-sha256')
     parser.add_argument('--checkpoint-proofs', type=Path)
     parser.add_argument('--advance-checkpoint', action='store_true')
+    parser.add_argument('--advance-bank-checkpoint', action='store_true')
     for role in ('audit', 'outcome', 'pilot', 'envelope'):
         parser.add_argument('--accepted-'+role, type=Path)
     args = parser.parse_args()
+    worker = helper('phoenix_worker_cb63305')
+    scope = worker.selected_scope(args)
+    bank = scope == 'eligible-bank'
+    scope_args = {} if not bank else dict(campaign_scope=scope)
+    if bank:
+        helper('bank_campaign').authority()
+    if args.advance_bank_checkpoint and not bank:
+        raise ValueError('bank checkpoint publication requires explicit eligible-bank scope')
+    if bank and args.advance_checkpoint:
+        raise ValueError('historical checkpoint publication cannot be used for the new bank')
     if args.advance_checkpoint and (args.producer != 'ed561666' or not args.remaining_case):
         raise ValueError('checkpoint advancement is only supported for selected cap32 append audits')
     bootstrap = helper('phoenix_pilot_cb63305')
@@ -274,25 +303,26 @@ def main():
         read(name) for name in ('pilot-outcome.json', 'manager-delivery.json',
                                'record-created.json', 'claim.json', 'server-record-outcome.json'))
     validate_delivery(outcome, delivery, created, claimed, server, owned354=args.remaining_case,
-                      producer=producer)
+                      producer=producer, **scope_args)
     manifest_path = build/'build-identity.json'
     manifest = json.loads(manifest_path.read_bytes())
     worker, legacy = helper('phoenix_worker_cb63305'), helper('phoenix_pilot')
     draft = worker.prepare_draft(args, manifest_path)
     profile = draft.get('execution_profile')
     scratch = scratch_for_outcome(outcome, expected_monomer=draft['monomer_id'], producer=producer,
-                                  remaining_case=args.remaining_case)
+                                  remaining_case=args.remaining_case, **scope_args)
     bootstrap.admit_allocation(outcome['allocation'], execution_profile=profile,
-                               **(dict(producer=producer) if producer == 'grid400' else {}))
+                               **(dict(producer=producer, **scope_args) if producer == 'grid400' else {}))
     if profile is not None and outcome.get('execution_profile') != profile:
         raise ValueError('actual molecular execution profile differs from reconstructed case')
     worker_shape = (profile['cores'], profile['science_memory_GiB']) if profile else (4, 20)
     preflight = json.loads(args.worker_preflight.read_bytes())
-    transport = helper('dataset_fresh_cb63305').transport_binding(producer=producer)
+    transport = (helper('bank_dataset').transport_binding() if bank
+                 else helper('dataset_fresh_cb63305').transport_binding(producer=producer))
     bootstrap.validate_preflight(preflight, draft, manifest_sha=checks.digest(manifest_path),
         qualification_sha=checks.digest(args.qualification), pilot_sha=checks.digest(args.pilot),
-        worker_sources=worker.source_hashes(producer, remaining_case=args.remaining_case),
-        transport=transport, producer=producer, remaining_case=args.remaining_case)
+        worker_sources=worker.source_hashes(producer, remaining_case=args.remaining_case, **scope_args),
+        transport=transport, producer=producer, remaining_case=args.remaining_case, **scope_args)
     if (outcome['scientific_build_commit'] != draft['producer']['scientific_commit']
             or outcome['build_identity_sha256'] != checks.digest(manifest_path)
             or outcome['pilot_sha256'] != checks.digest(args.pilot)
@@ -304,10 +334,13 @@ def main():
             or outcome['manager_sources'] != legacy.MANAGER_FILES):
         raise ValueError('new producer, raw pilot and installed discovery receipt chain differs')
     submitted = read('record-submit-attempt.json')
-    sources = set(worker.source_names(producer, remaining_case=args.remaining_case)) | {
+    sources = set(worker.source_names(producer, remaining_case=args.remaining_case, **scope_args)) | {
         'phoenix_pilot_cb63305.py', 'phoenix_pilot_cb63305.sbatch', 'single_record_cb63305.py'}
     preservation = None
-    if args.remaining_case:
+    if bank and args.remaining_case:
+        preservation = helper('bank_audit').validate_preservation(data, outcome, draft, append_inputs,
+            helper('bank_audit').helper('audited_bank').normalize_specification(draft['specification']))
+    elif args.remaining_case:
         from qcportal.singlepoint import QCSpecification
         sources |= {'dataset_owned354_cb63305.py', 'owned_dataset_cb63305.py', 'dataset_guard.py'}
         preservation = validate_preservation(data, outcome, draft, append_inputs,
@@ -315,6 +348,8 @@ def main():
             **({} if producer == 'cb63305' else dict(producer=producer)))
     elif read('dataset-created.json') != dict(dataset_id=outcome['dataset_id'], name=draft['dataset_name']):
         raise ValueError('fresh dataset intent differs')
+    if bank and not args.remaining_case:
+        helper('bank_audit').validate_initial_capture(data, outcome, draft)
     if (submitted['dataset_id'] != outcome['dataset_id']
             or submitted['entry'] != draft['entry']['name']
             or submitted['specification'] != draft['specification_name']
@@ -376,7 +411,7 @@ def main():
     if not traces or [p.name for p in traces] != outcome['trace_files']:
         raise ValueError('actual scientific CLI trace inventory differs')
     roles, reports = Counter(), {}
-    classifier = helper('runtime_audit').cli_role
+    classifier = helper('bank_runtime_gate' if bank else 'runtime_audit').cli_role
     forbidden = ['/storage/project/r-cs207-0/awallace43/gits',
         '/storage/project/r-cs207-0/awallace43/qca', '/storage/project/r-cs207-0/awallace43/data',
         str(case/'inputs'), str(case/'payload'), str(args.inputs), str(args.descriptors)]
@@ -389,7 +424,7 @@ def main():
         else:
             try:
                 report['role'] = classifier(report['executions'][0], env=environment, scratch=scratch,
-                                            worker_shape=worker_shape)
+                    **(dict(execution_profile=profile) if bank else dict(worker_shape=worker_shape)))
                 roles[report['role']] += 1
             except ValueError as error:
                 report['status'], report['role_error'] = 'failed', str(error)
@@ -407,7 +442,7 @@ def main():
     output = run/'payload'
     output.mkdir(exist_ok=False)
     verdict = ('PASS_SELECTED_BANK_CASE_SINGLETON_EVIDENCE'
-               if producer == 'ed561666' and args.remaining_case
+               if (producer == 'ed561666' or bank) and args.remaining_case
                else 'PASS_SELECTED_FRESH_SINGLETON_EVIDENCE' if producer in ('ed561666', 'grid400')
                else 'PASS_BANK_CASE_SINGLETON_EVIDENCE' if args.remaining_case
                else 'PASS_EXPANDED_SINGLE_PILOT_EVIDENCE')
@@ -425,11 +460,21 @@ def main():
                       'No full-C10, independent solver, covariance, accuracy/parity or whole-set claim.')
     if producer in ('ed561666', 'grid400'):
         report.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
+    if bank:
+        report['campaign_scope'] = scope
     with (output/'audit-report.json').open('x') as stream:
         json.dump(report, stream, indent=2, allow_nan=False)
     print(json.dumps(dict(status=report['status'], record_id=outcome['record_id'], roles=dict(roles))))
     if not passed:
         raise RuntimeError('expanded molecular runtime audit failed; do not advance models')
+    if args.advance_bank_checkpoint:
+        advanced = helper('bank_audit').advance_audit_checkpoint(args=args,
+            raw_audit=(output/'audit-report.json').read_bytes(), data=data, draft=draft,
+            append_inputs=append_inputs, output=output, source=source)
+        checks.verify_runtime(environment, manifest)
+        if checks.git(source, 'rev-parse', 'HEAD') != args.commit or checks.git(source, 'status', '--porcelain'):
+            raise ValueError('pinned audit source changed during bank checkpoint publication')
+        print(json.dumps(advanced))
     if args.advance_checkpoint:
         relative = 'devtools/isapol_s66_campaign/prepare_owned354_baseline_cb63305.py'
         expected = subprocess.check_output(['git', '-C', str(source), 'show', args.commit+':'+relative])

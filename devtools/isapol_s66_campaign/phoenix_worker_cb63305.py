@@ -30,6 +30,7 @@ HELPERS = {
     'phoenix_descriptor_bank_cb63305', 'dataset_fresh_cb63305', 'case_cb63305',
     'descriptor_profiles',
     'grid400_policy',
+    'grid400_bank_policy', 'bank_campaign', 'bank_dataset', 'bank_store',
 }
 
 
@@ -52,13 +53,25 @@ def selected_producer(args):
     return producer
 
 
-def source_names(producer='cb63305', *, remaining_case=False):
+def validate_campaign_scope(producer, scope):
+    if (type(scope) is not str or scope not in ('default', 'eligible-bank')
+            or scope == 'eligible-bank' and producer != 'grid400'):
+        raise ValueError('eligible bank requires explicit grid400 producer and campaign scope')
+    return scope
+
+
+def selected_scope(args):
+    return validate_campaign_scope(selected_producer(args), getattr(args, 'campaign_scope', 'default'))
+
+
+def source_names(producer='cb63305', *, remaining_case=False, campaign_scope='default'):
     if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
         raise ValueError('closed implemented worker producer required')
     helper('pilot_cb63305').producer_pins(producer)
+    validate_campaign_scope(producer, campaign_scope)
     if type(remaining_case) is not bool:
         raise ValueError('explicit worker case mode required')
-    if producer == 'grid400' and remaining_case:
+    if producer == 'grid400' and remaining_case and campaign_scope == 'default':
         raise ValueError('grid400 is fresh singleton only, never a remaining case')
     extra = (('qualified_ed561666.py', 'resource_plan_ed561666.py',
               'prepare_ed561666_inputs.py') if producer == 'ed561666' else ())
@@ -68,21 +81,25 @@ def source_names(producer='cb63305', *, remaining_case=False):
         extra += ('qualified_grid400.py', 'resource_plan_ed561666.py',
                   'resource_plan_grid400.py', 'grid400_policy.py', 'grid400_cohort.py',
                   'envelope_identity.py')
+    if campaign_scope == 'eligible-bank':
+        extra += helper('bank_campaign').ADDITIONAL_SOURCES
     return SOURCES + extra
 
 
-def source_hashes(producer='cb63305', *, remaining_case=False):
+def source_hashes(producer='cb63305', *, remaining_case=False, campaign_scope='default'):
     return {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in source_names(producer, remaining_case=remaining_case)}
+            for name in source_names(producer, remaining_case=remaining_case, campaign_scope=campaign_scope)}
 
 
-def admit_allocation(allocation, *, execution_profile=None, producer='cb63305'):
+def admit_allocation(allocation, *, execution_profile=None, producer='cb63305', campaign_scope='default'):
     if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
         raise ValueError('closed worker allocation producer required')
+    validate_campaign_scope(producer, campaign_scope)
     expected = dict(Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small',
                     NumCPUs='4', NumNodes='1', MinMemoryNode='24G', TimeLimit='00:45:00')
     if producer == 'grid400':
-        profile = helper('grid400_policy').validate_profile(execution_profile)
+        profile = helper('grid400_bank_policy' if campaign_scope == 'eligible-bank'
+                         else 'grid400_policy').validate_profile(execution_profile)
         expected.update(NumCPUs=str(profile['cores']),
                         MinMemoryNode=str(profile['job_memory_GiB'])+'G')
     elif execution_profile is not None:
@@ -103,6 +120,8 @@ def admit_allocation(allocation, *, execution_profile=None, producer='cb63305'):
 def prepare_draft(args, manifest_path):
     """Reconstruct either the archived first-case shape or a full remaining case."""
     producer = selected_producer(args)
+    if selected_scope(args) == 'eligible-bank':
+        return helper('bank_campaign').verify_prepared_from_paths(args, manifest_path)
     if producer == 'grid400' and args.remaining_case:
         raise ValueError('grid400 requires a new fresh singleton, not an append case')
     if args.remaining_case:
@@ -139,9 +158,18 @@ def main():
     parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
     parser.add_argument('--remaining-case', action='store_true',
                         help='Require a fully reconstructed remaining-bank case, not the first pilot')
+    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank'), default='default')
+    for name in ('bank-context', 'bank-checkpoint'):
+        parser.add_argument('--'+name, type=Path)
+        parser.add_argument('--'+name+'-sha256')
     args = parser.parse_args()
     producer = selected_producer(args)
-    pins = helper('pilot_cb63305').producer_pins(producer)
+    scope = selected_scope(args)
+    if scope == 'eligible-bank':
+        helper('bank_campaign').authority()
+    scope_args = {} if scope == 'default' else dict(campaign_scope=scope)
+    pins = (helper('bank_campaign').pins() if scope == 'eligible-bank'
+            else helper('pilot_cb63305').producer_pins(producer))
     checks = helper('phoenix_installed_checks')
     allocation = checks.allocation()
     source = Path(__file__).resolve().parents[2]
@@ -157,7 +185,9 @@ def main():
     draft = prepare_draft(args, manifest_path)
     profile = draft.get('execution_profile')
     admit_allocation(allocation, execution_profile=profile,
-                     **(dict(producer=producer) if producer == 'grid400' else {}))
+                     **(dict(producer=producer, **scope_args) if producer == 'grid400' else {}))
+    if scope == 'eligible-bank':
+        helper('bank_store').prepare_storage()
     pilot_sha = checks.digest(args.pilot)
     manifest = json.loads(manifest_path.read_bytes())
     identity = json.loads(args.qualification.with_name('imported-identity.json').read_bytes())
@@ -165,7 +195,7 @@ def main():
     if any(not p.startswith('devtools/isapol_s66_campaign/')
            and p not in checks.TEST_ONLY_CHANGES for p in changes):
         raise ValueError('worker operations change scientific/build sources')
-    operations = source_hashes(producer, remaining_case=args.remaining_case)
+    operations = source_hashes(producer, remaining_case=args.remaining_case, **scope_args)
     manager_sources = MANAGER/'lib/python3.13/site-packages/qcfractalcompute'
     manager_pins = helper('phoenix_pilot').MANAGER_FILES
     if any(checks.digest(manager_sources/name) != expected for name, expected in manager_pins.items()):
@@ -199,6 +229,9 @@ def main():
         '--input', str(runtime_path), '--output', str(science_path),
         '--memory-bytes', str(draft['intended_memory_bytes']), '--monomer-id', draft['monomer_id'],
         '--producer', producer)
+    descriptor_scope = {} if scope == 'default' else dict(scope='full-bank')
+    if descriptor_scope:
+        command += ['--scope', 'full-bank']
     subprocess.run(command, env=env, cwd=scratch/'cwd', stdin=subprocess.DEVNULL, check=True)
     science = json.loads(science_path.read_bytes())
     admitted_row = dict(monomer_id=draft['monomer_id'], runtime_input=runtime,
@@ -207,8 +240,8 @@ def main():
     result = helper('descriptor_admission_cb63305').verify_descriptor(science, admitted_row, identity,
         policy=science['source_policy_sha256'],
         operational_sources_sha256={key: operations[key]
-            for key in helper('descriptor_profiles').profile(producer)['child_sources']},
-        runtime_sha256=draft['runtime_input_sha256'], producer=producer)
+            for key in helper('descriptor_profiles').profile(producer, **descriptor_scope)['child_sources']},
+        runtime_sha256=draft['runtime_input_sha256'], producer=producer, **descriptor_scope)
     if result['status'] != 'PASS_DESCRIPTOR_PLAN_ONLY':
         raise ValueError('fresh worker descriptor plan refused; no automatic promotion')
     env.update(PATH=f'{payload}/launcher:{MANAGER}/bin:/usr/bin:/bin',
@@ -233,7 +266,9 @@ def main():
     if (task_config.ncores != worker_shape[0] or task_config.memory != worker_shape[1]
             or task_config.retries != 0):
         raise ValueError('exact worker cores/scientific memory and zero internal retries required')
-    transport = helper('dataset_fresh_cb63305').transport_binding(producer=producer)
+    transport_adapter = helper('bank_dataset' if scope == 'eligible-bank' else 'dataset_fresh_cb63305')
+    transport_args = {} if scope == 'eligible-bank' else dict(producer=producer)
+    transport = transport_adapter.transport_binding(**transport_args)
     harness = qcengine.get_program('psi4')
     harness_path = Path(inspect.getfile(type(harness))).resolve()
     if harness_path != Path('/storage/project/r-cs207-0/awallace43/gits/qcengine/qcengine/programs/psi4.py'):
@@ -244,17 +279,17 @@ def main():
     probe.validate_worker_discovery(programs, version, science['version'],
                                    scientific_imported='psi4' in sys.modules)
     checks.verify_runtime(environment, manifest)
-    if (source_hashes(producer, remaining_case=args.remaining_case) != operations
+    if (source_hashes(producer, remaining_case=args.remaining_case, **scope_args) != operations
             or checks.git(source, 'rev-parse', 'HEAD') != args.commit
             or checks.git(source, 'status', '--porcelain')
             or checks.digest(args.pilot) != pilot_sha
             or checks.digest(harness_path) != harness_sha
-            or helper('dataset_fresh_cb63305').transport_binding(producer=producer) != transport
+            or transport_adapter.transport_binding(**transport_args) != transport
             or any(checks.digest(manager_sources/name) != expected for name, expected in manager_pins.items())
             or prepare_draft(args, manifest_path) != draft):
         raise ValueError('worker source, runtime, raw inputs or harness changed during discovery')
     report = dict(status=('PASS_SELECTED_BANK_CASE_WORKER_PREFLIGHT_ONLY'
-                          if producer == 'ed561666' and args.remaining_case
+                          if (producer == 'ed561666' or scope == 'eligible-bank') and args.remaining_case
                           else 'PASS_SELECTED_FRESH_WORKER_PREFLIGHT_ONLY' if producer in ('ed561666', 'grid400')
                           else 'PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY' if args.remaining_case
                           else 'PASS_EXPANDED_WORKER_PREFLIGHT_ONLY'), allocation=allocation,
@@ -278,6 +313,8 @@ def main():
                       'No independent trace, molecular, RSS or SCF scratch acceptance.')
     if producer in ('ed561666', 'grid400'):
         report.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
+    if scope == 'eligible-bank':
+        report['campaign_scope'] = scope
     with (payload/'worker-preflight.json').open('x') as stream:
         json.dump(report, stream, indent=2, allow_nan=False)
     print(json.dumps(dict(status=report['status'], job=os.environ['SLURM_JOB_ID'])))

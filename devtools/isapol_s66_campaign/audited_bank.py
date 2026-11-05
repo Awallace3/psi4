@@ -325,7 +325,7 @@ def advance(previous_raw, previous_sha256, context_raw, context_sha256, proofs,
     if (links['audit'] != expected_audit_sha256 or not _sha(expected_audit_sha256)
             or previous['generation'] >= len(context['eligible_ids'])
             or set(captured) != {'before', 'entry', 'record', 'delivered'}
-            or captured['before'] != previous['snapshot']):
+            or base.digest(captured['before']) != previous['snapshot_sha256']):
         raise ValueError('recorded next audit and exact predecessor captures required')
     bound = dict(context, context_sha256=context_sha256)
     link = _case_link(receipts, bound, captured['before'], captured['delivered'], previous_sha256)
@@ -337,6 +337,10 @@ def advance(previous_raw, previous_sha256, context_raw, context_sha256, proofs,
             entry_name=link['entry_name'], record_id=record_id,
             specification_name=context['specification_name'])
         base.validate_stored_entry(captured[role]['entries'][link['entry_name']], case['entry'])
+    entries = [base.digest(captured[role]['entries'][link['entry_name']])
+               for role in ('entry', 'record', 'delivered')]
+    if entries[0] != entries[1] or entries[1] != entries[2]:
+        raise ValueError('new bank entry changed between captured append views')
     base.validate_fresh_record(captured['record']['records'][str(link['record_id'])],
         tag=json.loads(receipts['outcome'])['compute_tag'],
         specification=previous['snapshot']['specifications'][context['specification_name']]['specification'],
