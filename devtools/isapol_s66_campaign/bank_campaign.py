@@ -25,9 +25,10 @@ BANK_SHA256 = 'f989e6aac0b76a14c2f5214d437552432356ce343a773f52eae0b2ab192b7ff2'
 RESOURCE_SHA256 = '26a87f6a44714707c17e501957ef0d7f6a2f80950624efa94022d7cc39cc8b89'
 DESCRIPTOR_OPS = 'f7d4bb4314baa7372ed47d5876e9d34475ec9c19'
 DESCRIPTOR_JOB = '15153484'
-# Deliberately inactive: never infer this hash from caller-provided bytes or
-# substitute a forecast/singleton report. Seal the completed actual pool.
-ALLOCATION_SHA256 = None
+# Actual job15153484: all131 reports independently reduced with recorded
+# source/input/producer pins; 116 admitted and15 refused, never a whole-bank pass.
+# Do not infer this authority from caller bytes or a forecast/singleton report.
+ALLOCATION_SHA256 = 'f3c8cf04297444ea67a79352f4aae8cef7b645262a48176b9b04e89832b88050'
 ADDITIONAL_SOURCES = (
     'bank_campaign.py', 'descriptor_pool.py', 'grid400_bank_policy.py',
     'grid400_bank_case.py', 'grid400_bank_execution.py', 'bank_transport.py',

@@ -1,4 +1,4 @@
-"""Closed campaign paths and deliberately inactive unsealed-pool guard."""
+"""Closed measured campaign authority and fail-closed unsealed-pool guard."""
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -38,6 +38,20 @@ def test_campaign_namespaces_and_protected_history_are_distinct_from_singleton()
     assert module.DESCRIPTOR_JOB == '15153484'
     assert module.INPUTS.name.endswith('-full-preparation001')
     assert module.CASE_ROOT.parent == module.CAMPAIGN_ROOT
+
+
+def test_sealed_authority_keeps_exact_actual_job_source_and_allocation_bytes():
+    module = load()
+    assert module.ALLOCATION_SHA256 == 'f3c8cf04297444ea67a79352f4aae8cef7b645262a48176b9b04e89832b88050'
+    assert module.DESCRIPTOR_JOB == '15153484'
+    assert module.DESCRIPTOR_OPS == 'f7d4bb4314baa7372ed47d5876e9d34475ec9c19'
+    bound = module.authority()
+    assert bound['allocation_sha256'] == module.ALLOCATION_SHA256
+    assert bound['job_id'] == module.DESCRIPTOR_JOB
+    assert bound['operational_commit'] == module.DESCRIPTOR_OPS
+    assert bound['bank_sha256'] == module.BANK_SHA256
+    assert bound['resources_sha256'] == module.RESOURCE_SHA256
+    assert bound['operational_sources_sha256']
 
 
 @pytest.mark.parametrize('change', ['old_namespace', 'context_name', 'checkpoint_name', 'hash'])
