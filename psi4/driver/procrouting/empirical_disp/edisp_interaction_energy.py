@@ -29,6 +29,7 @@
 import numpy as np
 
 from psi4 import core
+from ...p4util.exceptions import ValidationError
 
 from . import empirical_dispersion
 
@@ -305,4 +306,103 @@ def sapt_dft_vv10_interaction_energy(
         f"    VV10 IE          = {data['VV10 IE'] * 627.5095:16.8f} kcal/mol\n\n"
     )
 
+    return data
+
+
+def sapt_dft_vv10_split(
+    dimer_wfn: core.Wavefunction,
+    monomerA_wfn: core.Wavefunction,
+    monomerB_wfn: core.Wavefunction,
+    data: dict[str, object],
+) -> dict[str, object]:
+    """Split the SAPT(DFT) VV10 interaction energy into every double-sum piece.
+
+    One fused pass over an aligned dimer VV10 grid evaluates
+
+        N_X      = sum_i w_i rho_X,i
+        K_P(X,Y) = sum_ij w_i rho_X,i w_j rho_Y,j Phi(w0_P,i, kappa_P,i; w0_P,j, kappa_P,j)
+
+    for the parameter sets P = A, B (own), S (rho_A + rho_B) and D (rho_AB),
+    plus the own-parameter cross kernel CROSS = K(A with A params, B with B
+    params). With E_nl = beta N + 1/2 K, the pieces compose exactly::
+
+        IE (GRID) = CROSS + NONADD + RELAX
+        NONADD    = NONADD BETA + NONADD INTRA A + NONADD INTRA B + NONADD CROSS DAMPING
+        RELAX     = RELAX BETA + RELAX PARAM + RELAX DENSITY
+
+    Only NONADD moves to exchange in the summary; everything else stays in
+    dispersion. Every piece, the raw N and K sums, and the recombination
+    ingredients are stored in ``data`` under unique ``SAPT(DFT) VV10 ...``
+    keys, which ``_run_sapt_dft`` copies to core and to the dimer
+    wavefunction. The monomer densities must be in the dimer basis
+    (counterpoise wavefunctions).
+    """
+    V = dimer_wfn.V_potential()
+    if V is None:
+        raise ValidationError("SAPT_DFT_VV10_SPLIT: the dimer wavefunction has no V potential.")
+    Dab = dimer_wfn.Da_subset("AO")
+    Da = monomerA_wfn.Da_subset("AO")
+    Db = monomerB_wfn.Da_subset("AO")
+    nbf = Dab.rows()
+    if Da.rows() != nbf or Db.rows() != nbf:
+        raise ValidationError(
+            "SAPT_DFT_VV10_SPLIT: monomer densities must be in the dimer basis "
+            f"(nbf dimer {nbf}, A {Da.rows()}, B {Db.rows()})."
+        )
+
+    part = V.vv10_partition(Da, Db, Dab)
+    beta = part["BETA"]
+    k_sum_sum = part["K SUM AA"] + part["K SUM BB"] + 2.0 * part["K SUM AB"]
+    k_dimer_sum = part["K DIMER AA"] + part["K DIMER BB"] + 2.0 * part["K DIMER AB"]
+
+    e_a = beta * part["N A"] + 0.5 * part["K A"]
+    e_b = beta * part["N B"] + 0.5 * part["K B"]
+    e_sum = beta * part["N SUM"] + 0.5 * k_sum_sum
+    e_ab = beta * part["N DIMER"] + 0.5 * part["K DIMER DIMER"]
+
+    pre = "SAPT(DFT) VV10 "
+    vv = {}
+    for key, value in part.items():
+        vv[key] = value
+    vv["GRID ENERGY A"] = e_a
+    vv["GRID ENERGY B"] = e_b
+    vv["GRID ENERGY SUM"] = e_sum
+    vv["GRID ENERGY DIMER"] = e_ab
+
+    vv["CROSS"] = part["K CROSS"]
+    vv["NONADD BETA"] = beta * (part["N SUM"] - part["N A"] - part["N B"])
+    vv["NONADD INTRA A"] = 0.5 * (part["K SUM AA"] - part["K A"])
+    vv["NONADD INTRA B"] = 0.5 * (part["K SUM BB"] - part["K B"])
+    vv["NONADD CROSS DAMPING"] = part["K SUM AB"] - part["K CROSS"]
+    vv["NONADD"] = e_sum - e_a - e_b - part["K CROSS"]
+
+    vv["RELAX BETA"] = beta * (part["N DIMER"] - part["N SUM"])
+    vv["RELAX PARAM"] = 0.5 * (k_dimer_sum - k_sum_sum)
+    vv["RELAX DENSITY"] = 0.5 * (part["K DIMER DIMER"] - k_dimer_sum)
+    vv["RELAX"] = e_ab - e_sum
+
+    # Alternative intermolecular kernels for recombination studies
+    vv["CROSS SUM PARAMS"] = part["K SUM AB"]
+    vv["CROSS DIMER PARAMS"] = part["K DIMER AB"]
+
+    vv["IE (GRID)"] = e_ab - e_a - e_b
+    vv["IE (SCF)"] = data["VV10 IE"]
+    vv["GRID ERROR"] = data["VV10 IE"] - vv["IE (GRID)"]
+    # Keeps the summary's SCF-consistent bookkeeping: CROSS + NONADD + RELAX (SCF) = VV10 IE
+    vv["RELAX (SCF)"] = data["VV10 IE"] - vv["CROSS"] - vv["NONADD"]
+
+    for key, value in vv.items():
+        data[pre + key] = value
+
+    h2kcal = 627.5095
+    lines = [
+        "GRID ENERGY DIMER", "GRID ENERGY A", "GRID ENERGY B", "GRID ENERGY SUM",
+        "IE (GRID)", "IE (SCF)", "CROSS", "NONADD", "NONADD BETA", "NONADD INTRA A",
+        "NONADD INTRA B", "NONADD CROSS DAMPING", "RELAX", "RELAX BETA", "RELAX PARAM",
+        "RELAX DENSITY", "CROSS SUM PARAMS", "CROSS DIMER PARAMS",
+    ]
+    out = f"    VV10 split on the aligned dimer VV10 grid ({int(part['NPOINTS'])} points):\n"
+    for key in lines:
+        out += f"    {key:<28s} = {vv[key] * h2kcal:16.8f} kcal/mol\n"
+    core.print_out(out + "\n")
     return data

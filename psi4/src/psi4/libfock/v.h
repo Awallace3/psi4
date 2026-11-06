@@ -124,6 +124,13 @@ class PSI_API VBase {
     size_t nblocks();
     std::map<std::string, double>& quadrature_values() { return quad_values_; }
 
+    // => VV10 partitioning (SAPT(DFT)) <= //
+    /// Every VV10 double-sum piece of the RKS alpha AO densities DA, DB and DAB of primary_,
+    /// on one aligned VV10 grid. K = sum_ij w_i rho_i w_j rho'_j Phi_ij, N = sum_i w_i rho_i.
+    /// "K A"/"K B": own params; "K CROSS": A with A params against B with B params;
+    /// "K SUM xy": rhoA + rhoB params; "K DIMER xy": rhoAB params. E_nl = beta N + 1/2 K.
+    std::map<std::string, double> vv10_partition(SharedMatrix DA, SharedMatrix DB, SharedMatrix DAB);
+
     // Creates a collocation cache map based on stride
     void build_collocation_cache(size_t memory);
     void clear_collocation_cache() {
