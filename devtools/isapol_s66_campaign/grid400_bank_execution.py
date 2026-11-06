@@ -12,7 +12,8 @@ import re
 
 
 def helper(name):
-    if name not in ('grid400_bank_policy', 'phoenix_worker_probe', 'phoenix_pilot'):
+    if name not in ('grid400_bank_policy', 'phoenix_worker_probe', 'phoenix_pilot',
+                    'bank_wave_runtime'):
         raise ValueError('closed eligible bank execution helpers required')
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_grid400_bank_execution_'+name, path)
@@ -31,12 +32,18 @@ def worker_shapes():
         policy.execution_profile(name) for name in ('s20', 's40', 's60', 's80', 's120')))
 
 
-def validate_binding(case, *, runtime, compute_tag, worker_shape, record_id):
+def validate_binding(case, *, runtime, compute_tag, worker_shape, record_id,
+                     campaign_scope='eligible-bank', wave_binding=None, allocation=None):
     policy = helper('grid400_bank_policy')
+    if campaign_scope not in ('eligible-bank', 'eligible-wave'):
+        raise ValueError('explicit finite bank execution scope required')
+    wave = campaign_scope == 'eligible-wave'
+    if not wave and (wave_binding is not None or allocation is not None):
+        raise ValueError('wave authority cannot enter serial binding')
     if (type(case) is not dict or case.get('schema') != 'native-selected-molecular-pilot/1'
             or case.get('status') != 'PREPARED_NOT_REGISTERED_OR_SUBMITTED'
             or case.get('producer_profile') != 'grid400'
-            or case.get('campaign_scope') != 'eligible-bank'
+            or case.get('campaign_scope') != campaign_scope
             or case.get('campaign') != policy.CAMPAIGN
             or case.get('dataset_mode') not in ('fresh', 'append')
             or type(case.get('monomer_id')) is not str
@@ -46,6 +53,15 @@ def validate_binding(case, *, runtime, compute_tag, worker_shape, record_id):
             or re.fullmatch('[0-9a-f]{64}', case['eligibility_sha256']) is None
             or type(record_id) is not int or record_id <= 0 or record_id in policy.PROTECTED_RECORDS):
         raise ValueError('one reconstructed eligible grid400 bank session required')
+    if wave:
+        if wave_binding is None or allocation is None or case.get('dataset_mode') != 'append':
+            raise ValueError('registered wave binding and actual science allocation required')
+        adapter = helper('bank_wave_runtime')
+        adapter.helper('bank_wave_campaign').revalidate_binding(wave_binding)
+        slot = adapter.helper('bank_wave').validate_registered_slot(wave_binding['plan'],
+            wave_binding['registration'], wave_binding['release_permit'], case, allocation=allocation)
+        if record_id != slot['record_id'] or compute_tag != slot['compute_tag']:
+            raise ValueError('actual wave session record/tag differs from registered slot')
     if re.fullmatch(re.escape('ccasp-native-grid400-bank-'+case['monomer_id']+'-')+
                     '[1-9][0-9]*', compute_tag) is None:
         raise ValueError('one dedicated eligible grid400 bank compute tag required')

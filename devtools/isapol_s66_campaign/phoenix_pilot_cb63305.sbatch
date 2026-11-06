@@ -16,7 +16,18 @@ shift 5
 EXTRA=("$@")
 ROOT=/storage/project/r-cs207-0/awallace43/runs
 PRODUCER=cb63305f41
-if [[ $# -ge 1 && "$1" = --ed561666-remaining-case ]]; then
+if [[ $# -ge 1 && "$1" = --grid400-bank-wave ]]; then
+    [[ $# -eq 4 && "$3" =~ ^[0-9a-f]{64}$ ]]
+    WAVE_DIR=${2%/plan.json}
+    [[ "$2" = "$WAVE_DIR/plan.json" && "$WAVE_DIR" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-waves001/wave-[0-9]{4}-[0-9]{4}$ ]]
+    [[ "$4" = "$WAVE_DIR/registration.json" ]]
+    [[ "$PILOT" =~ ^"$WAVE_DIR"/cases/(monomer-[0-9]{4})\.json$ ]]
+    MID=${BASH_REMATCH[1]}
+    [[ "$RUN" = "$WAVE_DIR/members/$MID/science" && "$PREFLIGHT" = "$WAVE_DIR/members/$MID/worker/payload/worker-preflight.json" ]]
+    EXTRA=(--producer grid400 --campaign-scope eligible-wave --remaining-case
+        --wave-plan "$2" --wave-plan-sha256 "$3" --wave-registration "$4")
+    PRODUCER=grid400-1aaa9e0a30-bank
+elif [[ $# -ge 1 && "$1" = --ed561666-remaining-case ]]; then
     EXTRA=(--producer ed561666 --remaining-case)
     PRODUCER=ed561666fc
     shift
@@ -54,7 +65,7 @@ elif [[ $# -ge 1 && ( "$1" = --grid400-bank-fresh || "$1" = --grid400-bank-appen
     fi
 else
     for arg in "${EXTRA[@]}"; do
-        [[ "$arg" != --producer* && "$arg" != --ed561666-fresh && "$arg" != --grid400* ]] || exit 2
+        [[ "$arg" != --producer* && "$arg" != --ed561666-fresh && "$arg" != --grid400* && "$arg" != --wave-* ]] || exit 2
     done
 fi
 MANAGER=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca

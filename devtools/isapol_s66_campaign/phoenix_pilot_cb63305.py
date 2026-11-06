@@ -21,17 +21,22 @@ HELPERS = {'pilot_cb63305', 'phoenix_worker_cb63305', 'phoenix_installed_checks'
     'single_record_cb63305', 'descriptor_scratch_cb63305', 'phoenix_descriptor_bank_cb63305',
     'case_cb63305', 'dataset_owned354_cb63305', 'owned_dataset_cb63305', 'grid400_policy',
     'envelope_identity', 'bank_campaign', 'bank_dataset', 'bank_append', 'bank_store',
-    'grid400_bank_policy', 'dataset_guard'}
+    'grid400_bank_policy', 'dataset_guard', 'bank_wave_runtime'}
+_MODULES = {}
 
 
 def helper(name):
     if name not in HELPERS:
         raise ValueError('closed first expanded-pilot helpers required')
+    if name == 'bank_wave_runtime' and name in _MODULES:
+        return _MODULES[name]
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_expanded_bootstrap_'+name, path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     exec(compile(path.read_bytes(), str(path), 'exec'), module.__dict__)
+    if name == 'bank_wave_runtime':
+        _MODULES[name] = module
     return module
 
 
@@ -57,7 +62,7 @@ def admit_allocation(allocation, *, execution_profile=None, producer='cb63305', 
     expected = dict(Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small',
                     NumCPUs='4', NumNodes='1', MinMemoryNode='24G', TimeLimit='02:00:00')
     if producer == 'grid400':
-        profile = helper('grid400_bank_policy' if campaign_scope == 'eligible-bank'
+        profile = helper('grid400_bank_policy' if campaign_scope in ('eligible-bank', 'eligible-wave')
                          else 'grid400_policy').validate_profile(execution_profile)
         expected.update(NumCPUs=str(profile['cores']),
                         MinMemoryNode=str(profile['job_memory_GiB'])+'G',
@@ -87,14 +92,23 @@ def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pil
         raise ValueError('closed molecular producer selector required')
     helper('phoenix_worker_cb63305').validate_campaign_scope(producer, campaign_scope)
     profile = draft.get('execution_profile')
-    if campaign_scope == 'eligible-bank':
+    if campaign_scope in ('eligible-bank', 'eligible-wave'):
         policy = helper('grid400_bank_policy')
         for item in (preflight, draft):
             if (item.get('producer_profile') != 'grid400'
-                    or item.get('campaign_scope') != 'eligible-bank'
+                    or item.get('campaign_scope') != campaign_scope
                     or item.get('dataset_mode') != ('append' if remaining_case else 'fresh')):
                 raise ValueError('explicit reconstructed eligible-bank worker and molecular mode required')
             policy.validate_profile(item.get('execution_profile'))
+        if campaign_scope == 'eligible-wave':
+            if not remaining_case:
+                raise ValueError('wave is append only')
+            for key in ('dispatch_protocol', 'wave_id', 'bootstrap_context_sha256',
+                        'checkpoint_sha256', 'predecessor_snapshot_sha256'):
+                if preflight.get(key) != draft.get(key) or draft.get(key) is None:
+                    raise ValueError('exact wave worker/case authority required')
+            if draft['dispatch_protocol'] != 'registered-wave/1':
+                raise ValueError('explicit registered-wave protocol required')
     elif producer == 'grid400':
         policy = helper('grid400_policy')
         if (remaining_case or preflight.get('producer_profile') != producer
@@ -104,7 +118,8 @@ def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pil
             raise ValueError('explicit fresh grid400 worker mode required, never append')
         policy.validate_profile(profile)
         policy.validate_profile(preflight.get('execution_profile'))
-    status = ('PASS_SELECTED_BANK_CASE_WORKER_PREFLIGHT_ONLY'
+    status = ('PASS_SELECTED_WAVE_CASE_WORKER_PREFLIGHT_ONLY' if campaign_scope == 'eligible-wave'
+              else 'PASS_SELECTED_BANK_CASE_WORKER_PREFLIGHT_ONLY'
               if (producer == 'ed561666' or campaign_scope == 'eligible-bank') and remaining_case
               else 'PASS_SELECTED_FRESH_WORKER_PREFLIGHT_ONLY' if producer in ('ed561666', 'grid400')
               else 'PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY' if profile
@@ -149,6 +164,8 @@ def load_append_inputs(args):
     if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
         raise ValueError('closed molecular producer selector required')
     scope = helper('phoenix_worker_cb63305').selected_scope(args)
+    if scope == 'eligible-wave':
+        return helper('bank_wave_runtime').load_binding(args)
     bank_fields = ('bank_context', 'bank_context_sha256', 'bank_checkpoint', 'bank_checkpoint_sha256')
     if scope == 'eligible-bank':
         campaign = helper('bank_campaign')
@@ -229,7 +246,10 @@ def main():
     parser.add_argument('--commit', required=True)
     parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
     parser.add_argument('--remaining-case', action='store_true')
-    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank'), default='default')
+    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank', 'eligible-wave'), default='default')
+    parser.add_argument('--wave-plan', type=Path)
+    parser.add_argument('--wave-plan-sha256')
+    parser.add_argument('--wave-registration', type=Path)
     for name in ('bank-context', 'bank-checkpoint'):
         parser.add_argument('--'+name, type=Path)
         parser.add_argument('--'+name+'-sha256')
@@ -245,9 +265,13 @@ def main():
         'phoenix_installed_checks', 'phoenix_worker_cb63305'))
     scope = worker.selected_scope(args)
     bank_mode = scope == 'eligible-bank'
-    scope_args = dict(campaign_scope=scope) if bank_mode else {}
-    pins = helper('bank_campaign').pins() if bank_mode else helper('pilot_cb63305').producer_pins(producer)
-    transport_args = {} if bank_mode or producer == 'cb63305' else dict(producer=producer)
+    wave_mode = scope == 'eligible-wave'
+    wave = helper('bank_wave_runtime') if wave_mode else None
+    binding = append_inputs if wave_mode else None
+    scope_args = dict(campaign_scope=scope) if bank_mode or wave_mode else {}
+    pins = (wave.pins() if wave_mode else helper('bank_campaign').pins() if bank_mode
+            else helper('pilot_cb63305').producer_pins(producer))
+    transport_args = {} if bank_mode or wave_mode or producer == 'cb63305' else dict(producer=producer)
     allocation = checks.allocation()
     source = Path(__file__).resolve().parents[2]
     if (checks.git(source, 'rev-parse', 'HEAD') != args.commit
@@ -255,9 +279,11 @@ def main():
         raise ValueError('exact clean expanded bootstrap source required')
     build, run = args.build.resolve(), args.run.resolve()
     if (not build.is_relative_to(RUNS) or not run.is_relative_to(RUNS)
-            or not run.name.startswith('ccasp-native-s66-')
+            or not wave_mode and not run.name.startswith('ccasp-native-s66-')
             or build.is_relative_to(run) or run.is_relative_to(build)):
         raise ValueError('disjoint private build and molecular run required')
+    if wave_mode:
+        wave.validate_paths(args, role='science')
     manifest_path = build/'build-identity.json'
     draft = worker.prepare_draft(args, manifest_path)
     if bank_mode:
@@ -277,7 +303,7 @@ def main():
     operations = worker.source_hashes(producer, remaining_case=args.remaining_case, **scope_args)
     operations.update({name: checks.digest(Path(__file__).with_name(name)) for name in (
         'phoenix_pilot_cb63305.py', 'phoenix_pilot_cb63305.sbatch', 'single_record_cb63305.py')})
-    if args.remaining_case and not bank_mode:
+    if args.remaining_case and not bank_mode and not wave_mode:
         operations.update({name: checks.digest(Path(__file__).with_name(name)) for name in (
             'dataset_owned354_cb63305.py', 'owned_dataset_cb63305.py', 'dataset_guard.py')})
     worker_sources = {key: operations[key]
@@ -326,8 +352,9 @@ def main():
     from qcfractalcompute.config import FractalComputeConfig
     from qcfractalcompute.apps.app_manager import discover_programs_conda
     worker.validate_versions(str(qcengine.__version__), str(qcfractalcompute.__version__))
-    mutation = helper('bank_dataset' if bank_mode else
-                      'dataset_owned354_cb63305' if args.remaining_case else 'dataset_fresh_cb63305')
+    mutation = (wave.helper('bank_wave_transport') if wave_mode else
+                helper('bank_dataset' if bank_mode else
+                       'dataset_owned354_cb63305' if args.remaining_case else 'dataset_fresh_cb63305'))
     transport = mutation.transport_binding(**transport_args)
     validate_preflight(preflight, draft, manifest_sha=manifest_sha,
         qualification_sha=checks.digest(args.qualification), pilot_sha=pilot_sha,
@@ -351,7 +378,8 @@ def main():
         programs, version, preflight['science']['version'], scientific_imported='psi4' in sys.modules)
     runtime = helper('phoenix_worker_probe').runtime_input(draft)
     runtime['specification']['protocols'] = legacy.execution_specification(draft['specification'])['protocols']
-    save = lambda name, data: common.write_json_once(payload/name, data)
+    save = lambda name, data: (wave.write_json_once(payload/name, data) if wave_mode
+                              else common.write_json_once(payload/name, data))
     save('expected-runtime.json', runtime)
     # Credentials stay on Phoenix in the approved config; never save config.
     server = yaml.safe_load(Path(
@@ -367,7 +395,9 @@ def main():
     if bank_mode:
         transaction_scope = mutation.prepare_transaction(draft, worker.prepare_draft(args, manifest_path), tag,
             checkpoint_raw=append_inputs['checkpoint_raw'] if args.remaining_case else None)
-    client_type = mutation.client_class(transaction_scope) if bank_mode else mutation.client_class(**transport_args)
+    client_type = (mutation.readonly_client_class(binding, monomer_id=binding['monomer_id'])
+                   if wave_mode else mutation.client_class(transaction_scope) if bank_mode
+                   else mutation.client_class(**transport_args))
     client = client_type(config.server.fractal_uri, username=config.server.username,
         password=config.server.password, verify=config.server.verify, show_motd=False)
     info = client.get_server_information()
@@ -388,7 +418,7 @@ def main():
         transport_binding=transport, scratch_path=str(scratch), scratch_snapshot=disk,
         maximum_records=1, find_existing=False, execution_protocols=runtime['specification']['protocols'],
         execution_profile=profile,
-        checkpoint_sha256=(append_inputs['checkpoint_sha256'] if bank_mode and args.remaining_case
+        checkpoint_sha256=(append_inputs['checkpoint_sha256'] if (bank_mode or wave_mode) and args.remaining_case
                            else args.checkpoint_sha256 if args.remaining_case else None),
         qcengine_internal_retries=0, dataset_name=draft['dataset_name'],
         specification_name=draft['specification_name'])
@@ -396,8 +426,13 @@ def main():
         started.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
     if bank_mode:
         started.update(campaign_scope=scope, campaign=draft['campaign'])
+    if wave_mode:
+        started.update(wave.started_fields(binding), campaign=draft['campaign'])
     save('started.json', started)
-    if bank_mode and args.remaining_case:
+    if wave_mode:
+        consumed = wave.registered_record(client, binding, draft, allocation, preflight, save)
+        dataset, record, created = (consumed[key] for key in ('dataset', 'record', 'created'))
+    elif bank_mode and args.remaining_case:
         campaign = helper('bank_campaign')
         pool, raw_inputs = campaign.load_pool(args.inputs, manifest_path, args.qualification, args.descriptors)
         prepared = campaign.prepared_cases(pool, raw_inputs)[draft['monomer_id']]
@@ -433,19 +468,27 @@ def main():
         created = dict(n_inserted=inserted.n_inserted, n_existing=inserted.n_existing)
         if intent is not None:
             created['dispatch_intent_sha256'] = intent['sha256']
-    record = dataset.get_record(draft['entry']['name'], draft['specification_name'], force_refetch=True)
+    if not wave_mode:
+        record = dataset.get_record(draft['entry']['name'], draft['specification_name'], force_refetch=True)
     protected = pins['protected_records']
     if producer == 'ed561666' and args.remaining_case:
         protected += (helper('owned_dataset_cb63305').context(producer)['first_record'],)
     if (record.id in protected
             or args.remaining_case and record.id != created['record_id']):
         raise ValueError('historical record cannot be a fresh expanded-pilot result')
-    save('record-created.json', dict(dataset_id=dataset.id, record_id=record.id,
-        molecule_id=record.molecule_id, compute_tag=tag,
-        n_inserted=created['n_inserted'], n_existing=created['n_existing']))
+    if not wave_mode:
+        save('record-created.json', dict(dataset_id=dataset.id, record_id=record.id,
+            molecule_id=record.molecule_id, compute_tag=tag,
+            n_inserted=created['n_inserted'], n_existing=created['n_existing']))
+    else:
+        if created['compute_tag'] != tag:
+            raise ValueError('registered wave tag differs from actual science job')
+        wave.helper('bank_wave_campaign').revalidate_binding(binding)
     session = helper('single_record_cb63305').run_session(config, record_id=record.id,
         compute_tag=tag, runtime=runtime, payload=payload, save=save, worker_shape=worker_shape,
-        **(dict(producer=producer, case=draft, campaign_scope=scope) if bank_mode else
+        **(dict(producer=producer, case=draft, campaign_scope=scope,
+                wave_binding=binding, allocation=allocation) if wave_mode else
+           dict(producer=producer, case=draft, campaign_scope=scope) if bank_mode else
            dict(transport_args, **(dict(case=draft) if producer == 'ed561666' and args.remaining_case else {}))))
     record = dataset.get_record(draft['entry']['name'], draft['specification_name'], force_refetch=True)
     history = record.compute_history
@@ -468,7 +511,11 @@ def main():
     save('server-native-envelope.json', envelope)
     with (payload/'server-tensors.npz').open('xb') as stream:
         stream.write(raw)
-    if bank_mode:
+    if wave_mode:
+        wave.capture_delivery(client, binding, draft, record_id=record.id,
+            manager=session['manager'], envelope=envelope, tensor_raw=raw, save=save)
+        wave.helper('bank_wave_campaign').revalidate_binding(binding)
+    elif bank_mode:
         base = helper('dataset_guard')
         after_delivery = base.snapshot_dataset(client, dataset_id=dataset.id,
                                                max_entries=draft['eligible_monomer_count'])
@@ -503,7 +550,7 @@ def main():
         trace_files=[p.name for p in sorted((payload/'traces').glob('*.strace'))],
         qualification='Fresh single-record delivery only; independent numerical/export/OS-trace audit '
                       'is still required. No accuracy, solver, covariance or whole-set acceptance.')
-    if bank_mode or producer == 'ed561666' and args.remaining_case:
+    if bank_mode or wave_mode or producer == 'ed561666' and args.remaining_case:
         outcome['dispatch_intent_sha256'] = created['dispatch_intent_sha256']
     save('pilot-outcome.json', outcome)
     print(json.dumps(dict(status=outcome['status'], dataset_id=dataset.id, record_id=record.id)))

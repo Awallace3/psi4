@@ -20,17 +20,23 @@ HELPERS = {'pilot_cb63305', 'phoenix_pilot_cb63305', 'phoenix_worker_cb63305',
     'phoenix_installed_checks', 'phoenix_worker_probe', 'phoenix_pilot', 'runtime_audit',
     'validate_numeric', 'dataset_fresh_cb63305', 'phoenix_descriptor_bank_cb63305',
     'owned_dataset_cb63305', 'dataset_owned354_cb63305', 'prepare_owned354_baseline_cb63305',
-    'envelope_identity', 'bank_campaign', 'bank_dataset', 'bank_audit', 'bank_runtime_gate'}
+    'envelope_identity', 'bank_campaign', 'bank_dataset', 'bank_audit', 'bank_runtime_gate',
+    'bank_wave_runtime'}
+_MODULES = {}
 
 
 def helper(name):
     if name not in HELPERS:
         raise ValueError('closed expanded runtime audit helpers required')
+    if name == 'bank_wave_runtime' and name in _MODULES:
+        return _MODULES[name]
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_expanded_audit_'+name, path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     exec(compile(path.read_bytes(), str(path), 'exec'), module.__dict__)
+    if name == 'bank_wave_runtime':
+        _MODULES[name] = module
     return module
 
 
@@ -65,8 +71,9 @@ def verify_delivery_identity(local_result, server, saved_witness, *, producer):
 def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='cb63305',
                         remaining_case=False, campaign_scope='default'):
     helper('phoenix_worker_cb63305').validate_campaign_scope(producer, campaign_scope)
-    bank = campaign_scope == 'eligible-bank'
-    pins = (helper('bank_campaign').pins() if bank else helper('pilot_cb63305').producer_pins(producer))
+    bank = campaign_scope in ('eligible-bank', 'eligible-wave')
+    pins = (helper('bank_wave_runtime').pins() if campaign_scope == 'eligible-wave'
+            else helper('bank_campaign').pins() if bank else helper('pilot_cb63305').producer_pins(producer))
     job = outcome['allocation']['JobId']
     if (type(job) is not str or re.fullmatch(r'[0-9]+', job) is None
             or type(expected_monomer) is not str
@@ -98,8 +105,9 @@ def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='c
 def validate_delivery(outcome, delivery, created, claimed, server, *, owned354=False,
                       producer='cb63305', campaign_scope='default'):
     helper('phoenix_worker_cb63305').validate_campaign_scope(producer, campaign_scope)
-    bank = campaign_scope == 'eligible-bank'
-    pins = (helper('bank_campaign').pins() if bank else helper('pilot_cb63305').producer_pins(producer))
+    bank = campaign_scope in ('eligible-bank', 'eligible-wave')
+    pins = (helper('bank_wave_runtime').pins() if campaign_scope == 'eligible-wave'
+            else helper('bank_campaign').pins() if bank else helper('pilot_cb63305').producer_pins(producer))
     if bank and (outcome.get('campaign_scope') != campaign_scope
             or outcome.get('producer_profile') != 'grid400'
             or outcome.get('dataset_mode') != ('append' if owned354 else 'fresh')
@@ -257,7 +265,10 @@ def main():
     parser.add_argument('--commit', required=True)
     parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
     parser.add_argument('--remaining-case', action='store_true')
-    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank'), default='default')
+    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank', 'eligible-wave'), default='default')
+    for name in ('wave-plan', 'wave-registration', 'wave-science-barrier'):
+        parser.add_argument('--'+name, type=Path)
+        parser.add_argument('--'+name+'-sha256')
     for name in ('bank-context', 'bank-checkpoint'):
         parser.add_argument('--'+name, type=Path)
         parser.add_argument('--'+name+'-sha256')
@@ -272,7 +283,11 @@ def main():
     worker = helper('phoenix_worker_cb63305')
     scope = worker.selected_scope(args)
     bank = scope == 'eligible-bank'
-    scope_args = {} if not bank else dict(campaign_scope=scope)
+    wave_mode = scope == 'eligible-wave'
+    wave = helper('bank_wave_runtime') if wave_mode else None
+    scope_args = dict(campaign_scope=scope) if bank or wave_mode else {}
+    if wave_mode:
+        wave.validate_args(args, registered=True)
     if bank:
         helper('bank_campaign').authority()
     if args.advance_bank_checkpoint and not bank:
@@ -283,6 +298,7 @@ def main():
         raise ValueError('checkpoint advancement is only supported for selected cap32 append audits')
     bootstrap = helper('phoenix_pilot_cb63305')
     append_inputs = bootstrap.load_append_inputs(args)
+    binding = append_inputs if wave_mode else None
     producer = args.producer
     checks = helper('phoenix_installed_checks')
     allocation = checks.allocation()
@@ -297,6 +313,8 @@ def main():
                    for b in (build, case, run) if a != b)
             or len({build, case, run}) != 3):
         raise ValueError('disjoint private build, molecular case and audit run required')
+    if wave_mode:
+        wave.validate_paths(args, role='audit')
     data = case/'payload'
     read = lambda name: json.loads((data/name).read_bytes())
     outcome, delivery, created, claimed, server = (
@@ -317,7 +335,8 @@ def main():
         raise ValueError('actual molecular execution profile differs from reconstructed case')
     worker_shape = (profile['cores'], profile['science_memory_GiB']) if profile else (4, 20)
     preflight = json.loads(args.worker_preflight.read_bytes())
-    transport = (helper('bank_dataset').transport_binding() if bank
+    transport = (wave.helper('bank_wave_transport').transport_binding() if wave_mode
+                 else helper('bank_dataset').transport_binding() if bank
                  else helper('dataset_fresh_cb63305').transport_binding(producer=producer))
     bootstrap.validate_preflight(preflight, draft, manifest_sha=checks.digest(manifest_path),
         qualification_sha=checks.digest(args.qualification), pilot_sha=checks.digest(args.pilot),
@@ -333,11 +352,14 @@ def main():
             or outcome['transport_binding'] != transport
             or outcome['manager_sources'] != legacy.MANAGER_FILES):
         raise ValueError('new producer, raw pilot and installed discovery receipt chain differs')
-    submitted = read('record-submit-attempt.json')
+    submitted = None if wave_mode else read('record-submit-attempt.json')
     sources = set(worker.source_names(producer, remaining_case=args.remaining_case, **scope_args)) | {
         'phoenix_pilot_cb63305.py', 'phoenix_pilot_cb63305.sbatch', 'single_record_cb63305.py'}
     preservation = None
-    if bank and args.remaining_case:
+    if wave_mode:
+        preservation = wave.audit_preservation(data, outcome, draft, binding,
+            wave.helper('audited_bank').normalize_specification(draft['specification']))
+    elif bank and args.remaining_case:
         preservation = helper('bank_audit').validate_preservation(data, outcome, draft, append_inputs,
             helper('bank_audit').helper('audited_bank').normalize_specification(draft['specification']))
     elif args.remaining_case:
@@ -350,13 +372,14 @@ def main():
         raise ValueError('fresh dataset intent differs')
     if bank and not args.remaining_case:
         helper('bank_audit').validate_initial_capture(data, outcome, draft)
-    if (submitted['dataset_id'] != outcome['dataset_id']
+    if not wave_mode and (submitted['dataset_id'] != outcome['dataset_id']
             or submitted['entry'] != draft['entry']['name']
             or submitted['specification'] != draft['specification_name']
             or submitted['compute_tag'] != outcome['compute_tag']
-            or submitted['find_existing'] is not False or submitted['transport_retries'] is not False
-            or set(outcome['operational_sources_sha256']) != sources):
+            or submitted['find_existing'] is not False or submitted['transport_retries'] is not False):
         raise ValueError('fresh dataset intent or complete execution-source inventory differs')
+    if set(outcome['operational_sources_sha256']) != sources:
+        raise ValueError('complete execution-source inventory differs')
     expected = helper('phoenix_worker_probe').runtime_input(draft)
     expected['specification']['protocols'] = legacy.execution_specification(draft['specification'])['protocols']
     if expected != read('expected-runtime.json'):
@@ -411,7 +434,7 @@ def main():
     if not traces or [p.name for p in traces] != outcome['trace_files']:
         raise ValueError('actual scientific CLI trace inventory differs')
     roles, reports = Counter(), {}
-    classifier = helper('bank_runtime_gate' if bank else 'runtime_audit').cli_role
+    classifier = helper('bank_runtime_gate' if bank or wave_mode else 'runtime_audit').cli_role
     forbidden = ['/storage/project/r-cs207-0/awallace43/gits',
         '/storage/project/r-cs207-0/awallace43/qca', '/storage/project/r-cs207-0/awallace43/data',
         str(case/'inputs'), str(case/'payload'), str(args.inputs), str(args.descriptors)]
@@ -424,7 +447,7 @@ def main():
         else:
             try:
                 report['role'] = classifier(report['executions'][0], env=environment, scratch=scratch,
-                    **(dict(execution_profile=profile) if bank else dict(worker_shape=worker_shape)))
+                    **(dict(execution_profile=profile) if bank or wave_mode else dict(worker_shape=worker_shape)))
                 roles[report['role']] += 1
             except ValueError as error:
                 report['status'], report['role_error'] = 'failed', str(error)
@@ -441,7 +464,10 @@ def main():
     passed = all(r['status'] == 'passed' for r in reports.values()) and roles['molecular_qcschema'] == 1
     output = run/'payload'
     output.mkdir(exist_ok=False)
-    verdict = ('PASS_SELECTED_BANK_CASE_SINGLETON_EVIDENCE'
+    if wave_mode:
+        wave.helper('bank_wave_campaign').revalidate_binding(binding)
+    verdict = ('PASS_SELECTED_WAVE_CASE_SINGLETON_EVIDENCE' if wave_mode
+               else 'PASS_SELECTED_BANK_CASE_SINGLETON_EVIDENCE'
                if (producer == 'ed561666' or bank) and args.remaining_case
                else 'PASS_SELECTED_FRESH_SINGLETON_EVIDENCE' if producer in ('ed561666', 'grid400')
                else 'PASS_BANK_CASE_SINGLETON_EVIDENCE' if args.remaining_case
@@ -462,8 +488,16 @@ def main():
         report.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
     if bank:
         report['campaign_scope'] = scope
-    with (output/'audit-report.json').open('x') as stream:
-        json.dump(report, stream, indent=2, allow_nan=False)
+    if wave_mode:
+        report.update(wave.started_fields(binding), campaign=draft['campaign'],
+            compute_tag=outcome['compute_tag'],
+            worker_preflight_sha256=checks.digest(args.worker_preflight),
+            science_barrier_sha256=binding['science_barrier_sha256'])
+    if wave_mode:
+        wave.write_json_once(output/'audit-report.json', report)
+    else:
+        with (output/'audit-report.json').open('x') as stream:
+            json.dump(report, stream, indent=2, allow_nan=False)
     print(json.dumps(dict(status=report['status'], record_id=outcome['record_id'], roles=dict(roles))))
     if not passed:
         raise RuntimeError('expanded molecular runtime audit failed; do not advance models')

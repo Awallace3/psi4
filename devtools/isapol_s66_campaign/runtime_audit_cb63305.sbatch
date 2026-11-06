@@ -16,7 +16,38 @@ shift 6
 EXTRA=("$@")
 ROOT=/storage/project/r-cs207-0/awallace43/runs
 PRODUCER=cb63305f41
-if [[ $# -eq 1 && "$1" = --grid400-bank-fresh ]]; then
+if [[ $# -ge 1 && "$1" = --grid400-bank-wave ]]; then
+    [[ ( $# -eq 8 || $# -eq 10 ) && "$3" =~ ^[0-9a-f]{64}$ ]]
+    WAVE_DIR=${2%/plan.json}
+    [[ "$2" = "$WAVE_DIR/plan.json" && "$WAVE_DIR" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-waves001/wave-[0-9]{4}-[0-9]{4}$ ]]
+    [[ "$4" = "$WAVE_DIR/registration.json" ]]
+    [[ "$PILOT" =~ ^"$WAVE_DIR"/cases/(monomer-[0-9]{4})\.json$ ]]
+    MID=${BASH_REMATCH[1]}
+    [[ "$RUN" = "$WAVE_DIR/members/$MID/audit" && "$CASE" = "$WAVE_DIR/members/$MID/science" && "$PREFLIGHT" = "$WAVE_DIR/members/$MID/worker/payload/worker-preflight.json" ]]
+    EXTRA=(--producer grid400 --campaign-scope eligible-wave --remaining-case
+        --wave-plan "$2" --wave-plan-sha256 "$3" --wave-registration "$4")
+    shift 4
+    SEEN_REG=0 SEEN_BARRIER=0 SEEN_BARRIER_SHA=0
+    while [[ $# -gt 0 ]]; do
+        [[ $# -ge 2 ]]
+        case "$1" in
+            --wave-registration-sha256)
+                [[ "$SEEN_REG" -eq 0 && "$2" =~ ^[0-9a-f]{64}$ ]]
+                SEEN_REG=1 ;;
+            --wave-science-barrier)
+                [[ "$SEEN_BARRIER" -eq 0 && "$2" = "$WAVE_DIR/science-barrier.json" ]]
+                SEEN_BARRIER=1 ;;
+            --wave-science-barrier-sha256)
+                [[ "$SEEN_BARRIER_SHA" -eq 0 && "$2" =~ ^[0-9a-f]{64}$ ]]
+                SEEN_BARRIER_SHA=1 ;;
+            *) exit 2 ;;
+        esac
+        EXTRA+=("$1" "$2")
+        shift 2
+    done
+    [[ "$SEEN_BARRIER" -eq 1 && "$SEEN_BARRIER_SHA" -eq 1 ]]
+    PRODUCER=grid400-1aaa9e0a30-bank
+elif [[ $# -eq 1 && "$1" = --grid400-bank-fresh ]]; then
     EXTRA=(--producer grid400 --campaign-scope eligible-bank --advance-bank-checkpoint)
     PRODUCER=grid400-1aaa9e0a30-bank
     [[ "$PILOT" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-bank001/cases/monomer-[0-9]{4}\.json$ ]]
@@ -55,7 +86,7 @@ elif [[ $# -eq 1 && "$1" = --grid400-fresh ]]; then
     [[ "$PILOT" = "$ROOT"/ccasp-native-s66-grid400-1aaa9e0a30-preparation001/pilot.json ]]
 else
     for arg in "${EXTRA[@]}"; do
-        [[ "$arg" != --producer* && "$arg" != --ed561666-fresh && "$arg" != --grid400* && "$arg" != --campaign-scope* && "$arg" != --bank-* && "$arg" != --advance-bank-checkpoint ]] || exit 2
+        [[ "$arg" != --producer* && "$arg" != --ed561666-fresh && "$arg" != --grid400* && "$arg" != --campaign-scope* && "$arg" != --bank-* && "$arg" != --advance-bank-checkpoint && "$arg" != --wave-* ]] || exit 2
     done
 fi
 MANAGER=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca

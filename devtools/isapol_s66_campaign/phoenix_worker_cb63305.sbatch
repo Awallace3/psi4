@@ -10,17 +10,29 @@
 #SBATCH --time=00:45:00
 #SBATCH --signal=TERM@180
 set -euo pipefail
-[[ $# -eq 4 || $# -eq 5 || $# -eq 9 ]] || { printf 'SOURCE COMMIT CASE RUN [MODE [BANK_CONTEXT CONTEXT_SHA BANK_CHECKPOINT CHECKPOINT_SHA]]\n' >&2; exit 2; }
+[[ $# -eq 4 || $# -eq 5 || $# -eq 8 || $# -eq 9 ]] || { printf 'SOURCE COMMIT CASE RUN [MODE [BANK_CONTEXT CONTEXT_SHA BANK_CHECKPOINT CHECKPOINT_SHA]]\n' >&2; exit 2; }
 SOURCE=$1 COMMIT=$2 PILOT=$3 RUN=$4
 EXTRA=()
 PRODUCER=cb63305f41
 if [[ $# -ge 5 ]]; then
-    if [[ "$5" = --grid400-bank-append ]]; then
+    if [[ "$5" = --grid400-bank-wave ]]; then
+        [[ $# -eq 8 && "$7" =~ ^[0-9a-f]{64}$ && "$8" = - ]]
+    elif [[ "$5" = --grid400-bank-append ]]; then
         [[ $# -eq 9 ]]
     else
         [[ $# -eq 5 ]]
     fi
     case "$5" in
+        --grid400-bank-wave)
+            WAVE_DIR=${6%/plan.json}
+            [[ "$6" = "$WAVE_DIR/plan.json" && "$WAVE_DIR" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-waves001/wave-[0-9]{4}-[0-9]{4}$ ]]
+            [[ "$PILOT" =~ ^"$WAVE_DIR"/cases/(monomer-[0-9]{4})\.json$ ]]
+            MID=${BASH_REMATCH[1]}
+            [[ "$RUN" = "$WAVE_DIR/members/$MID/worker" ]]
+            EXTRA=(--producer grid400 --campaign-scope eligible-wave --remaining-case
+                --wave-plan "$6" --wave-plan-sha256 "$7")
+            PRODUCER=grid400-1aaa9e0a30-bank
+            ;;
         --remaining-case) EXTRA=(--remaining-case) ;;
         --ed561666-fresh)
             EXTRA=(--producer ed561666)

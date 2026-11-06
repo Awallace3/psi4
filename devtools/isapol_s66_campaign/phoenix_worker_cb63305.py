@@ -31,18 +31,24 @@ HELPERS = {
     'descriptor_profiles',
     'grid400_policy',
     'grid400_bank_policy', 'bank_campaign', 'bank_dataset', 'bank_store',
+    'bank_wave_runtime',
 }
+_MODULES = {}
 
 
 def helper(name):
     if name not in HELPERS:
         raise ValueError('closed expanded worker helpers required')
+    if name == 'bank_wave_runtime' and name in _MODULES:
+        return _MODULES[name]
     path = Path(__file__).with_name(name+'.py')
     raw = path.read_bytes()
     spec = importlib.util.spec_from_file_location('_expanded_worker_'+name, path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     exec(compile(raw, str(path), 'exec'), module.__dict__)
+    if name == 'bank_wave_runtime':
+        _MODULES[name] = module
     return module
 
 
@@ -54,14 +60,19 @@ def selected_producer(args):
 
 
 def validate_campaign_scope(producer, scope):
-    if (type(scope) is not str or scope not in ('default', 'eligible-bank')
-            or scope == 'eligible-bank' and producer != 'grid400'):
+    if (type(scope) is not str or scope not in ('default', 'eligible-bank', 'eligible-wave')
+            or scope in ('eligible-bank', 'eligible-wave') and producer != 'grid400'):
         raise ValueError('eligible bank requires explicit grid400 producer and campaign scope')
     return scope
 
 
 def selected_scope(args):
-    return validate_campaign_scope(selected_producer(args), getattr(args, 'campaign_scope', 'default'))
+    scope = validate_campaign_scope(selected_producer(args), getattr(args, 'campaign_scope', 'default'))
+    if scope != 'eligible-wave' and any(getattr(args, key, None) is not None for key in (
+            'wave_plan', 'wave_plan_sha256', 'wave_registration', 'wave_registration_sha256',
+            'wave_science_barrier', 'wave_science_barrier_sha256')):
+        raise ValueError('wave inputs require explicit eligible-wave scope')
+    return scope
 
 
 def source_names(producer='cb63305', *, remaining_case=False, campaign_scope='default'):
@@ -83,7 +94,9 @@ def source_names(producer='cb63305', *, remaining_case=False, campaign_scope='de
                   'envelope_identity.py')
     if campaign_scope == 'eligible-bank':
         extra += helper('bank_campaign').ADDITIONAL_SOURCES
-    return SOURCES + extra
+    elif campaign_scope == 'eligible-wave':
+        extra += helper('bank_wave_runtime').source_names()
+    return tuple(dict.fromkeys(SOURCES + extra))
 
 
 def source_hashes(producer='cb63305', *, remaining_case=False, campaign_scope='default'):
@@ -98,7 +111,7 @@ def admit_allocation(allocation, *, execution_profile=None, producer='cb63305', 
     expected = dict(Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small',
                     NumCPUs='4', NumNodes='1', MinMemoryNode='24G', TimeLimit='00:45:00')
     if producer == 'grid400':
-        profile = helper('grid400_bank_policy' if campaign_scope == 'eligible-bank'
+        profile = helper('grid400_bank_policy' if campaign_scope in ('eligible-bank', 'eligible-wave')
                          else 'grid400_policy').validate_profile(execution_profile)
         expected.update(NumCPUs=str(profile['cores']),
                         MinMemoryNode=str(profile['job_memory_GiB'])+'G')
@@ -120,6 +133,8 @@ def admit_allocation(allocation, *, execution_profile=None, producer='cb63305', 
 def prepare_draft(args, manifest_path):
     """Reconstruct either the archived first-case shape or a full remaining case."""
     producer = selected_producer(args)
+    if selected_scope(args) == 'eligible-wave':
+        return helper('bank_wave_runtime').prepare_draft(args, manifest_path)
     if selected_scope(args) == 'eligible-bank':
         return helper('bank_campaign').verify_prepared_from_paths(args, manifest_path)
     if producer == 'grid400' and args.remaining_case:
@@ -158,7 +173,9 @@ def main():
     parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
     parser.add_argument('--remaining-case', action='store_true',
                         help='Require a fully reconstructed remaining-bank case, not the first pilot')
-    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank'), default='default')
+    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank', 'eligible-wave'), default='default')
+    parser.add_argument('--wave-plan', type=Path)
+    parser.add_argument('--wave-plan-sha256')
     for name in ('bank-context', 'bank-checkpoint'):
         parser.add_argument('--'+name, type=Path)
         parser.add_argument('--'+name+'-sha256')
@@ -167,8 +184,11 @@ def main():
     scope = selected_scope(args)
     if scope == 'eligible-bank':
         helper('bank_campaign').authority()
+    if scope == 'eligible-wave':
+        helper('bank_wave_runtime').validate_args(args)
     scope_args = {} if scope == 'default' else dict(campaign_scope=scope)
-    pins = (helper('bank_campaign').pins() if scope == 'eligible-bank'
+    pins = (helper('bank_wave_runtime').pins() if scope == 'eligible-wave'
+            else helper('bank_campaign').pins() if scope == 'eligible-bank'
             else helper('pilot_cb63305').producer_pins(producer))
     checks = helper('phoenix_installed_checks')
     allocation = checks.allocation()
@@ -178,9 +198,11 @@ def main():
         raise ValueError('exact clean operational checkout required')
     build, run = args.build.resolve(), args.run.resolve()
     if (not build.is_relative_to(RUNS) or not run.is_relative_to(RUNS)
-            or not run.name.startswith('ccasp-native-s66-')
+            or scope != 'eligible-wave' and not run.name.startswith('ccasp-native-s66-')
             or run.is_relative_to(build) or build.is_relative_to(run)):
         raise ValueError('disjoint private build and worker run required')
+    if scope == 'eligible-wave':
+        helper('bank_wave_runtime').validate_paths(args, role='worker')
     manifest_path = build/'build-identity.json'
     draft = prepare_draft(args, manifest_path)
     profile = draft.get('execution_profile')
@@ -266,8 +288,9 @@ def main():
     if (task_config.ncores != worker_shape[0] or task_config.memory != worker_shape[1]
             or task_config.retries != 0):
         raise ValueError('exact worker cores/scientific memory and zero internal retries required')
-    transport_adapter = helper('bank_dataset' if scope == 'eligible-bank' else 'dataset_fresh_cb63305')
-    transport_args = {} if scope == 'eligible-bank' else dict(producer=producer)
+    transport_adapter = (helper('bank_wave_runtime').helper('bank_wave_transport') if scope == 'eligible-wave'
+                         else helper('bank_dataset' if scope == 'eligible-bank' else 'dataset_fresh_cb63305'))
+    transport_args = {} if scope != 'default' else dict(producer=producer)
     transport = transport_adapter.transport_binding(**transport_args)
     harness = qcengine.get_program('psi4')
     harness_path = Path(inspect.getfile(type(harness))).resolve()
@@ -288,7 +311,8 @@ def main():
             or any(checks.digest(manager_sources/name) != expected for name, expected in manager_pins.items())
             or prepare_draft(args, manifest_path) != draft):
         raise ValueError('worker source, runtime, raw inputs or harness changed during discovery')
-    report = dict(status=('PASS_SELECTED_BANK_CASE_WORKER_PREFLIGHT_ONLY'
+    report = dict(status=('PASS_SELECTED_WAVE_CASE_WORKER_PREFLIGHT_ONLY' if scope == 'eligible-wave'
+                          else 'PASS_SELECTED_BANK_CASE_WORKER_PREFLIGHT_ONLY'
                           if (producer == 'ed561666' or scope == 'eligible-bank') and args.remaining_case
                           else 'PASS_SELECTED_FRESH_WORKER_PREFLIGHT_ONLY' if producer in ('ed561666', 'grid400')
                           else 'PASS_BANK_CASE_WORKER_PREFLIGHT_ONLY' if args.remaining_case
@@ -315,8 +339,20 @@ def main():
         report.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
     if scope == 'eligible-bank':
         report['campaign_scope'] = scope
-    with (payload/'worker-preflight.json').open('x') as stream:
-        json.dump(report, stream, indent=2, allow_nan=False)
+    if scope == 'eligible-wave':
+        binding = helper('bank_wave_runtime').helper('bank_wave_campaign').load_binding(
+            args, require_registration=False)
+        report.update(campaign_scope=scope, dispatch_protocol='registered-wave/1',
+            campaign=draft['campaign'], wave_id=draft['wave_id'],
+            plan_sha256=binding['plan_sha256'],
+            bootstrap_context_sha256=draft['bootstrap_context_sha256'],
+            checkpoint_sha256=draft['checkpoint_sha256'],
+            predecessor_snapshot_sha256=draft['predecessor_snapshot_sha256'])
+    if scope == 'eligible-wave':
+        helper('bank_wave_runtime').write_json_once(payload/'worker-preflight.json', report)
+    else:
+        with (payload/'worker-preflight.json').open('x') as stream:
+            json.dump(report, stream, indent=2, allow_nan=False)
     print(json.dumps(dict(status=report['status'], job=os.environ['SLURM_JOB_ID'])))
 
 
