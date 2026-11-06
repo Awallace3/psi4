@@ -341,8 +341,9 @@ def test_global_headroom(used, new, allowed):
             controller.admit_headroom(used, new)
 
 
-def test_controller_barriers_and_exact_argv(tmp_path):
+def test_controller_barriers_and_exact_argv(monkeypatch, tmp_path):
     f, controller = fixture(tmp_path), load('bank_wave_controller')
+    monkeypatch.setattr(controller, 'PRODUCTION_ENABLED', False)
     mid = f.plan['member_ids'][0]
     worker = controller.phase_command(f.binding, mid, 'worker')
     sci = controller.phase_command(f.binding, mid, 'science')
@@ -373,6 +374,18 @@ def test_controller_barriers_and_exact_argv(tmp_path):
     assert events.index(('verify', 'audit')) < events.index(('submit', 'finalizer'))
     assert events.index(('verify', 'finalizer')) < events.index(('accept', None))
     assert controller.PRODUCTION_ENABLED is False
+
+
+def test_disabled_activation_gate_stops_before_operational_reads(monkeypatch, tmp_path):
+    controller = load('bank_wave_controller')
+    monkeypatch.setattr(controller, 'PRODUCTION_ENABLED', False)
+    monkeypatch.setattr(controller.sys, 'argv', ['bank_wave_controller.py', 'run',
+        '--source', str(tmp_path/'source'), '--commit', 'c'*40,
+        '--predecessor-state', str(tmp_path/'states/025.json')])
+    monkeypatch.setattr(controller, 'helper',
+        lambda name: pytest.fail('disabled controller reached an operational helper: '+name))
+    with pytest.raises(RuntimeError, match='production wave activation disabled'):
+        controller.main()
 
 
 def complete(f):

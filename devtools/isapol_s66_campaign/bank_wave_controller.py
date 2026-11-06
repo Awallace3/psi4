@@ -13,7 +13,7 @@ import subprocess
 import sys
 from types import SimpleNamespace as NS
 
-PRODUCTION_ENABLED = False  # Coordinator review + a new immutable commit required.
+PRODUCTION_ENABLED = True  # Coordinator review + a new immutable commit required.
 PREFIX = 'CCASP_WAVE_CONTROLLER_RESULT='
 SLURM = '/opt/slurm/current/bin/'
 _MODULES = {}
