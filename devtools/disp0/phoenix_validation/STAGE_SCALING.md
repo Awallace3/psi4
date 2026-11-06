@@ -91,3 +91,37 @@ stage_scaling.py --kind gpu --system peptide|nanotube|protein83
 It runs `sbatch --test-only` first, saves scheduler responses and the exact
 manifest, and records the numeric job ID without automatic retries. CPU mode
 additionally requires `--gpu-job-root` and `--repeat 0|1|2`.
+
+## Submitted 2026-11-06
+
+Campaign root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/stage-scaling-20261106-01`.
+Frozen outer checkout:
+`/storage/project/r-cs207-0/awallace43/gits/psi4.stage-scaling-429826db9f`,
+pin `429826db9f192b30e7e6b7509bae11ec3348b346`.
+
+| System | Actual submitted job | Wall cap | Submission root | Prerequisite |
+|---|---:|---:|---|---|
+| peptide | 15233604 | 1h | `peptide-gpu/` | None |
+| nanotube | 15233651 | 4h | `nanotube-gpu/` | `afterany:15233604` plus successful finalized artifact |
+| protein83 | 15233653 | 8h | `protein83-gpu/` | `afterany:15233604` plus successful finalized artifact |
+
+All three `--test-only` checks and actual submissions returned0. The test-only
+request IDs15233603/15233650/15233652 are **not** the actual submitted jobs.
+Peptide initially pends for Priority on embers; the others are gated behind it.
+Scheduler test-only start predictions were around2026-11-15, not a promised ETA.
+No inferno jobs, cancellations, requeues or shared-environment changes.
+
+Hourly official `watch_jobs.sh` monitors:
+peptide `b2d589ae4`, nanotube `b3a55478f`, protein83 `b5a9df59b`.
+Their terminal notifications trigger artifact qualification and eligible
+CPU-only reference/oracle submissions. No new timing or speedup is claimed at
+submission. Existing scientific source remains clean/frozen at927283f8ed.
+
+Prelaunch verification:18 local tests passed (5 campaign admission/CLI/producer
+tests,7 observer tests,6 timer-parser/admission tests), shell syntax and
+diff-whitespace checks passed. The frozen Phoenix workflow resolves the new
+observed localization boundary at88, followed by95/97/99/103/112. Independent
+inspect-only launch review found and prompted fixes to frozen `DISP0_PIN`,
+writable CPU scratch selection, whole-coordinator TERM handling, and finalized
+GPU producer/manifest/timing seals before CPU admission.
