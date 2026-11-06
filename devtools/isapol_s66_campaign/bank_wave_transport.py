@@ -10,7 +10,7 @@ _MODULES, _READ_CLIENTS = {}, {}
 # QCPortal 0.63 SinglepointRecord result/manager lifecycle fields. Unknown
 # fields, user metadata, identity, molecule and specification remain hashed.
 LIFECYCLE_FIELDS = frozenset(('status', 'manager_name', 'modified_on', 'properties', 'extras',
-                             'compute_history_', 'task_', 'native_files_', 'wavefunction_'))
+                             'compute_history', 'task', 'native_files', 'wavefunction'))
 
 
 def helper(name):
