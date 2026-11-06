@@ -186,6 +186,25 @@ def test_wave_flags_cannot_be_silently_ignored_in_legacy_scope(scope):
                                  wave_plan=Path('/unit/plan.json')))
 
 
+def test_wave_inventory_explicitly_retains_common_bank_closure(monkeypatch):
+    worker, runtime = load('phoenix_worker_cb63305'), load('bank_wave_runtime')
+    common = runtime.helper('bank_campaign').ADDITIONAL_SOURCES
+    wave_only = ('bank_wave.py', 'bank_wave_campaign.py', 'bank_wave_transport.py',
+                 'bank_wave_controller.py', 'bank_wave_ops.sbatch')
+    original = runtime.helper
+    monkeypatch.setattr(runtime, 'helper', lambda name:
+        NS(source_names=lambda: wave_only) if name == 'bank_wave_campaign' else original(name))
+    original_worker = worker.helper
+    monkeypatch.setattr(worker, 'helper', lambda name:
+        runtime if name == 'bank_wave_runtime' else original_worker(name))
+    names = worker.source_names('grid400', remaining_case=True, campaign_scope='eligible-wave')
+    assert set(common) | set(wave_only) <= set(names)
+    assert {'grid400_bank_execution.py', 'bank_runtime_gate.py', 'dataset_guard.py', 'native_controller.py',
+            'bank_wave_runtime.py', 'runtime_audit_cb63305.py',
+            'runtime_audit_cb63305.sbatch'} <= set(names)
+    assert len(names) == len(set(names))
+
+
 def test_nested_wave_paths_are_exact_and_role_bound(monkeypatch):
     runtime = load('bank_wave_runtime')
     root = Path(D)

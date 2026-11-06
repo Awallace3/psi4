@@ -11,7 +11,7 @@ import sys
 
 _MODULES = {}
 _HELPERS = {
-    'bank_wave', 'bank_wave_campaign', 'bank_wave_transport', 'bank_store',
+    'bank_wave', 'bank_wave_campaign', 'bank_wave_transport', 'bank_store', 'bank_campaign',
     'audited_bank', 'dataset_guard', 'phoenix_pilot',
 }
 
@@ -97,8 +97,10 @@ def pins():
 
 def source_names():
     return tuple(dict.fromkeys(
+        helper('bank_campaign').ADDITIONAL_SOURCES+
         helper('bank_wave_campaign').source_names()+(
-            'bank_wave_runtime.py', 'runtime_audit_cb63305.py', 'runtime_audit_cb63305.sbatch')))
+            'bank_wave_runtime.py', 'native_controller.py',
+            'runtime_audit_cb63305.py', 'runtime_audit_cb63305.sbatch')))
 
 
 def started_fields(binding):
