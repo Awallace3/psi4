@@ -15,16 +15,18 @@ import sys
 import time
 
 
-def boundaries(source):
+def boundaries(source, *, include_localization=False):
     tree = ast.parse(source)
     functions = [n for n in tree.body if isinstance(n, ast.FunctionDef)
                  and n.name == "fragment_terms"]
     if len(functions) != 1:
         raise ValueError("One fragment_terms function required")
     markers = {}
-    for name, call in (("state", "felst_device"), ("exch", "fexch_device"),
+    assignments = (("metrics", "prepare_iao_metrics"),) if include_localization else ()
+    assignments += (("state", "felst_device"), ("exch", "fexch_device"),
                        ("induction", "coupled_find_device"), ("rotations", None),
-                       ("device_outputs", None)):
+                       ("device_outputs", None))
+    for name, call in assignments:
         nodes = [n for n in ast.walk(functions[0]) if isinstance(n, ast.Assign)
                  and any(isinstance(t, ast.Name) and t.id == name for t in n.targets)]
         if len(nodes) != 1:
@@ -42,13 +44,15 @@ def boundaries(source):
         markers[name] = node.lineno
     if list(markers.values()) != sorted(set(markers.values())):
         raise ValueError("Expected sequential, distinct workflow boundaries")
-    return dict(zip(markers.values(), ("elst", "exch", "ind", "disp", "after_terms")))
+    labels = ("localization",) if include_localization else ()
+    return dict(zip(markers.values(), labels+("elst", "exch", "ind", "disp", "after_terms")))
 
 
 class TermTrace:
-    def __init__(self, workflow, source, *, clock=time.perf_counter):
+    def __init__(self, workflow, source, *, clock=time.perf_counter, include_localization=False):
         self.workflow = str(Path(workflow).resolve())
-        self.markers = boundaries(source)
+        self.markers = boundaries(source, include_localization=include_localization)
+        self.order = tuple(self.markers.values())
         self.source_sha256 = hashlib.sha256(source.encode()).hexdigest()
         self.clock = clock
         self.calls = []
@@ -82,7 +86,7 @@ class TermTrace:
                 label = self.markers.get(current.f_lineno)
                 if label is None or label in seen:
                     return local_trace
-                expected = ("elst", "exch", "ind", "disp", "after_terms")[len(seen)]
+                expected = self.order[len(seen)]
                 if label != expected:
                     raise RuntimeError("Unexpected term-boundary execution order")
                 # Complete preceding work before closing/starting adjacent terms.
@@ -100,7 +104,7 @@ class TermTrace:
             elif event == "exception":
                 row["exception_observed"] = True
             elif event == "return":
-                if arg is None or active is not None or len(seen) != 5:
+                if arg is None or active is not None or len(seen) != len(self.order):
                     row["status"] = "INCOMPLETE_OR_EXCEPTION"
                     return None
                 session.synchronize_device()
@@ -124,6 +128,8 @@ class TermTrace:
             "boundaries": {str(k): v for k, v in self.markers.items()},
             "synchronization": "Existing owned session synchronize_device at each boundary",
             "dispersion_scope": "Rotation views + prepare_hf + blocked_device_dispersion",
+            "localization_scope": ("Overlap/IAO metrics + both monomers' IAO/IBO localization"
+                                   if "localization" in self.order else "Not separately observed"),
             "workflow": self.calls[0],
         }
 
@@ -134,6 +140,7 @@ def main():
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--config-sha256", required=True)
     parser.add_argument("--trace-output", type=Path, required=True)
+    parser.add_argument("--include-localization", action="store_true")
     args, remaining = parser.parse_known_args()
     bootstrap = args.bootstrap.resolve(strict=True)
     sys.path.insert(0, str(bootstrap.parent.parent/"phoenix_validation"))
@@ -145,7 +152,7 @@ def main():
     relative = "driver/procrouting/sapt/sapt_fisapt_workflow_cuda.py"
     if digest(workflow) != build["scientific_python_sha256"][relative]:
         raise RuntimeError("Whole-installed workflow changed")
-    tracer = TermTrace(workflow, workflow.read_text())
+    tracer = TermTrace(workflow, workflow.read_text(), include_localization=args.include_localization)
     status = {"status": "STARTED", "scope": "SEPARATE_TRACED_WORKER"}
     if args.trace_output.exists():
         raise RuntimeError("Fresh trace receipt required")

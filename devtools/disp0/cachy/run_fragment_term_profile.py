@@ -14,8 +14,9 @@ from profile_sapt_steps import (
 
 def decomposition(trace, full_seconds):
     workflow = trace["workflow"]
+    names = ("localization",) if "localization" in workflow["windows"] else ()
     parts = {name: workflow["windows"][name]["wall_seconds"]
-             for name in ("elst", "exch", "ind", "disp")}
+             for name in names+("elst", "exch", "ind", "disp")}
     parts["workflow_other"] = workflow["workflow_other_seconds"]
     parts["outer_factory_other"] = full_seconds-workflow["wall_seconds"]
     if any(v < 0 for v in parts.values()):

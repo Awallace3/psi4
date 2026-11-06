@@ -24,7 +24,7 @@ def fragment_terms(provider):
 
 
 class TermTraceTests(unittest.TestCase):
-    def execute(self, source=SOURCE, *, fail=False):
+    def execute(self, source=SOURCE, *, fail=False, include_localization=False):
         filename = str(Path("/private/verified/sapt_fisapt_workflow_cuda.py").resolve())
         counter = [0.]
 
@@ -40,13 +40,14 @@ class TermTraceTests(unittest.TestCase):
             return call
 
         scope = {"__file__": filename, "felst_device": advance(2),
+                 "prepare_iao_metrics": advance(17),
                  "fexch_device": advance(3), "coupled_find_device": advance(5),
                  "prep": advance(7), "disp": advance(11), "finish": advance(13)}
         exec(compile(source, filename, "exec"), scope)
         synchronizations = []
         provider = SimpleNamespace(session=SimpleNamespace(
             synchronize_device=lambda: synchronizations.append(clock())))
-        tracer = TermTrace(filename, source, clock=clock)
+        tracer = TermTrace(filename, source, clock=clock, include_localization=include_localization)
         with tracer:
             if fail:
                 with self.assertRaises(ValueError):
@@ -107,6 +108,21 @@ class TermTraceTests(unittest.TestCase):
         self.assertEqual(sum(result["parts_seconds"].values()), 51)
         with self.assertRaises(RuntimeError):
             decomposition(tracer.report(), 40)
+
+    def test_optional_localization_is_observed_not_guessed_from_residual(self):
+        source = SOURCE.replace("    state = felst_device()",
+                                "    metrics = prepare_iao_metrics()\n    state = felst_device()")
+        tracer, syncs = self.execute(source, include_localization=True)
+        workflow = tracer.report()["workflow"]
+        self.assertEqual(workflow["windows"]["localization"]["wall_seconds"], 17)
+        self.assertEqual(workflow["workflow_other_seconds"], 13)
+        self.assertEqual(workflow["wall_seconds"], 58)
+        self.assertEqual(len(syncs), 8)
+        result = decomposition(tracer.report(), 68)
+        self.assertEqual(result["parts_seconds"]["localization"], 17)
+        self.assertEqual(sum(result["parts_seconds"].values()), 68)
+        with self.assertRaises(ValueError):
+            boundaries(SOURCE, include_localization=True)
 
 
 if __name__ == "__main__":
