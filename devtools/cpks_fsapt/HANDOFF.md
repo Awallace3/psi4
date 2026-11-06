@@ -39,7 +39,8 @@ The algebra tests compile the actual native PCG/action methods against a tiny
 Matrix fixture, checking dense solutions, source readouts/additivity, zero
 directions, curvature, gaps and true residuals. This is a small standalone
 test compilation, NOT a Psi4 build or native chemistry qualification.
-Final run **bfe7043c8**: **9 pass, 3 matching-build tests skipped**. The legacy
+Runs **bfe7043c8**, final committed-candidate **b9a0dce3f**:
+**9 pass, 3 matching-build tests skipped**. The legacy
 J/K product tail is byte-identical to target `d7b5a01d4c` (SHA256
 `b313ba78bdeaf2149f4804e3e00000709c33f1eea33adcedd693a9a9daa2aee6`).
 
