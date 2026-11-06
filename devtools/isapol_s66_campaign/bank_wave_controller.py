@@ -132,6 +132,10 @@ def phase_command(binding, mid, phase):
 
 
 def verify_held(allocation, case, actual_job):
+    # SLURM displays an exact single-node pending request as either 1 or 1-1.
+    # Normalize only that literal singleton display, without changing captures.
+    if allocation.get('NumNodes') == '1-1':
+        allocation = dict(allocation, NumNodes='1')
     profile = helper('bank_wave').helper('grid400_bank_policy').validate_profile(case['execution_profile'])
     expected = dict(JobId=actual_job, JobState='PENDING', Reason='JobHeldUser',
         Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small', NumNodes='1',

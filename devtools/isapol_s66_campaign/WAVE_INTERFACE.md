@@ -57,8 +57,10 @@ The original `bank_campaign` constants and measured pool authority are reused:
   agreement before mutation. These pins do not replace those checks.
 
 New closed root:
-`bank_campaign.RUNS / 'ccasp-native-s66-grid400-1aaa9e0a30-waves001'`.
+`bank_campaign.RUNS / 'ccasp-native-s66-grid400-1aaa9e0a30-waves002'`.
 Do not write the old serial root, state, plan, or checkout.
+Task130 supersedes only the closed namespace: partial `waves001` and immutable
+`bf2c5027bc` remain untouched; this is a fresh wave, not resume/adoption.
 Wave directory: `WAVE_ROOT / wave_id`, where
 `wave_id = 'wave-%04d-%04d' % (generation_before, generation_after)`.
 No caller-selected alternate production roots or symlink aliases.

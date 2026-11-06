@@ -23,7 +23,7 @@ def helper(name):
 
 
 WAVE_ROOT = Path('/storage/project/r-cs207-0/awallace43/runs/'
-                 'ccasp-native-s66-grid400-1aaa9e0a30-waves001')
+                 'ccasp-native-s66-grid400-1aaa9e0a30-waves002')
 CONTEXT_SHA256 = 'a92028bc139edcffe5c6f03cc8dd1945c30183149a235b94852882dc2678fec9'
 ANCHOR_SHA256 = 'd4ace10ad0823800f2b0a678feaa88539a30907c8a6a869e9363f7a91ff7ced8'
 ADDITIONAL_SOURCES = ('bank_wave.py', 'bank_wave_campaign.py', 'bank_wave_transport.py',

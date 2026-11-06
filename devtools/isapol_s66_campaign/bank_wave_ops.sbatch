@@ -12,7 +12,7 @@
 set -euo pipefail
 [[ $# -eq 6 ]] || { printf 'SOURCE COMMIT registration|finalizer PLAN PLAN_SHA RUN\n' >&2; exit 2; }
 SOURCE=$1 COMMIT=$2 PHASE=$3 PLAN=$4 PLAN_SHA=$5 RUN=$6
-ROOT=/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-waves001
+ROOT=/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-waves002
 MANAGER=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca
 [[ "$PHASE" = registration || "$PHASE" = finalizer ]]
 [[ "$SOURCE" = /storage/project/r-cs207-0/awallace43/gits/* ]]

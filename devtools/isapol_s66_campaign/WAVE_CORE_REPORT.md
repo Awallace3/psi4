@@ -1,5 +1,53 @@
 # Registered-wave core handoff
 
+## Task130: fresh waves002 singleton-display correction
+
+The first launch stopped after all eight SCI submissions because SLURM
+displayed the pending exact one-node request as `NumNodes='1-1'`, while
+`verify_held` required literal `'1'`. User-approved parent cancellation and
+relaunch concerns only the eight unused HELD jobs; no SCI execution or QCA
+registration occurred. Parent subsequently confirmed all eight CANCELLED,
+zero elapsed/no SCI execution, and retained its full cancellation receipt.
+This agent performed no cluster/job actions.
+
+The correction normalizes **only** exact `'1-1'` to `'1'` inside the held-route
+check, without mutating input/captured data or changing any other predicate.
+Wider/malformed displays remain rejected. The fresh closed root is
+`ccasp-native-s66-grid400-1aaa9e0a30-waves002`; campaign, ops and all three
+runtime wrappers reject the retired `waves001` namespace. No resume, adoption,
+operator override, receipt repair, job-command change, or scientific/cap/pin
+change is introduced. Immutable/deployed `bf2c5027bc` is not modified.
+
+Regression evidence is the **selected-fields dictionary** retained by
+diagnostic `bbebd4f45` for job15228597, not a raw `scontrol -o` line.
+The original full row was not retained. `Priority`/`UserId`, absent from that
+capture, are explicitly synthetic harness-only supplements. The same selected
+fields reproduce the original rejection using immutable bf2c's function and
+pass the corrected check without modifying the input.
+The separate exact raw fixture `task130_cancelled_15228597.scontrol.txt` comes
+from **post-cancellation** diagnostic `b965dba9a`, SHA256
+`f83a19aca81e7755bcfdae5669d24f00f86c4626eb67dffcc08bd89d1507a944`.
+It remains CANCELLED with zero runtime and is used only for real parser /
+cancelled-state rejection, never as fabricated pre-cancellation held evidence.
+
+Runtime-owner wrapper/routing-only commit
+`6be43ab468d83bba445a61a05551f294cd9522a8` is integrated as `2db770c301`.
+Task130 verification on frozen source/tests:
+
+* Focused pending-route/captured evidence, campaign namespace, wrapper routing
+  and actual SDK/runtime integration: **133 passed** (40.05s).
+* `/home/awallace43/miniconda3/envs/p4_ci/bin/python -m pytest -q
+  devtools/isapol_s66_campaign/test_*.py`: **1673 passed**, five dependency
+  deprecation warnings (129.35s).
+* `/home/awallace43/miniconda3/envs/p4qca/bin/python -m pytest -q
+  devtools/isapol_s66_campaign/*_tests.py
+  devtools/isapol_s66_campaign/test_bank_wave*.py`: **494 passed** (128.24s).
+* All four wrappers pass `bash -n`; `git diff --check` passes. Qualified SCI,
+  measured pool / accepted25 authority, scientific caps and protected
+  numeric/trace policies remain byte-unchanged against bf2c.
+
+No local merge or push is authorized until parent review.
+
 ## Frozen implementation and commits
 
 Interface `95f5c69784399c5167b6b8384b7bb362f5fbc0ad` is unchanged.
@@ -95,7 +143,7 @@ After deploying the exact activation commit into the clean remote checkout
 below, run locally in a persistent session (`COMMIT` is the activation SHA):
 
 ```bash
-SOURCE=/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-native-s66-grid400-wave001
+SOURCE=/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-native-s66-grid400-wave002
 COMMIT=$(git -C /home/awallace43/gits/psi4__worktrees/ccasp-wave-core rev-parse HEAD)
 STATE=/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-bank001/states/025.json
 /home/awallace43/miniconda3/envs/p4qca/bin/python -I -B \

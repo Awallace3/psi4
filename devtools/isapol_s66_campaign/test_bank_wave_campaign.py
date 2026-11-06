@@ -152,3 +152,15 @@ def test_original_production_cutover_pins_are_closed():
         campaign._load_predecessor(dict(bootstrap_context_path='/tmp/bank-context.json',
             bootstrap_context_sha256='a'*64, predecessor_path='/tmp/bank-checkpoint.json',
             predecessor_sha256='b'*64, generation_before=25))
+
+
+def test_task130_closed_root_is002_and_old_partial_namespace_is_rejected():
+    campaign = load('bank_wave_campaign')
+    expected = campaign.helper('bank_campaign').RUNS/'ccasp-native-s66-grid400-1aaa9e0a30-waves002'
+    assert campaign.WAVE_ROOT == expected
+    old = expected.with_name(expected.name.replace('waves002', 'waves001'))
+    with pytest.raises(ValueError, match='closed wave metadata path'):
+        campaign._closed(old/'wave-0025-0033/plan.json', expected/'wave-0025-0033/plan.json')
+    ops = Path(__file__).with_name('bank_wave_ops.sbatch').read_text()
+    assert 'ROOT='+str(expected)+'\n' in ops
+    assert str(old) not in ops
