@@ -131,3 +131,39 @@ matched to the remote originals; no science code or experiment was changed.
 | H200 r0 | `94af32a63a49051f61c8d5be3387a1365afefb2a7070a84598db66a1d0a8bc56` |
 | H200 r1 | `1a8db2ac640d979069f706ab49fb0fb5f868c795f956e9945e7a527c765ebb9e` |
 | H200 r2 | `7a9de2f14a6c7176d072bf2130475b030928d4a4e827315d986cbbf32fdddac8` |
+
+## Requested report-stage schema
+
+The main stage selector/table now uses this exact ordered schema:
+
+1. monA GRAC shift
+2. monB GRAC shift
+3. monA DFT SCF
+4. monB DFT SCF
+5. dimer SCF
+6. monA SCF
+7. monB SCF
+8. elst
+9. exch
+10. indu
+11. disp
+12. localization
+13. felst
+14. fexch
+15. find
+16. fdisp
+
+The four GRAC/DFT stages are explicitly **not executed** for the existing
+HF-reference fixture; all six original timer files lack those four timers.
+Seven upstream HF/canonical stages have matched CPU/H200 measurements.
+The five localization/fragment stages retain CPU measurements, with H200
+shown **not separately timed**, not as zero. Selecting such a stage shows the
+CPU-only interval and no speedup ratio; no Cachy timing is substituted.
+
+`localization` combines the three disjoint CPU orbital-localization,
+partition and IBO-localization windows. The GPU workflow-overhead residual
+is not relabeled as localization. `disp` is explicitly dispatch/metadata
+in this HF-reference F-SAPT route; the real dispersion work is in `fdisp`.
+JK-cache and whole-fragment/remaining aggregates stay available as separate
+**additional boundaries**, not extra rows in the requested16-stage list.
+This is a reporting schema change, not new DFT-reference qualification.
