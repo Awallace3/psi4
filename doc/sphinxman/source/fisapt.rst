@@ -387,6 +387,7 @@ It must be enabled together with ``FISAPT_FSAPT_IND_RESPONSE=true`` and
 ``SAPT_DFT_INDUCTION_TYPE=CPKS``. The source changes the perturbation, not the
 reference density or XC kernel; the solved occupied amplitudes are rotated into
 the one shared localized gauge before induction and exchange-induction readout.
+Source solves use native FISAPT PCG, not per-source Python callbacks.
 SAPT readout exchange remains bare, separate from functional-weighted response
 exchange.
 

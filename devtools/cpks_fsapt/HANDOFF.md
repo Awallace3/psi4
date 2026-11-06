@@ -1,83 +1,93 @@
-# CPU/native CPKS F-SAPT draft split
+# Compact native CPKS F-SAPT — draft PR #38
 
-- Draft PR: https://github.com/Awallace3/psi4/pull/38
-  (base/head and draft status verified; no CI build checks requested).
-- Base: `saptdft_ein_fi_option_d4`, `d7b5a01d4c9dc7b17832f91d0c32f0bf78deecfd`.
-- Candidate: `fsapt-cpks-native-cpu`, prepared in the existing isolated CPKS
-  worktree. No other checkout, environment, target-branch commit or running
-  calculation was changed.
-- Source investigation retained on `saptdft-cpks-fsapt-breakdown`; numerical
-  augmented-basis results committed there in `dbf8ddb6d1`.
-- Selective port of native integration `cb4edba686`, original-monomer adapter
-  and focused contracts. A dedicated CPU-only solver replaces the source
-  branch's shared response-helper dependency. No accelerator/backend code,
-  build changes, dispersion kernels, manuscript or scientific-run harness.
+https://github.com/Awallace3/psi4/pull/38 targets `saptdft_ein_fi_option_d4`
+(`d7b5a01d4c`). Candidate branch `fsapt-cpks-native-cpu`; no merge authorized.
+The earlier Python-heavy candidate is retained at `26f042d4b2`.
 
-## Scientific mode / compatibility
+## Native seam
 
-New `FISAPT_FSAPT_IND_XC_RESPONSE` is **false** by default. Existing default
-uncoupled/scaled weights are unchanged. With coupled response but XC off,
-the old full-exchange Hessian algebra is unchanged, even on KS inputs.
-Correct source buffers, complete final slots and zero-RHS handling apply to
-both coupled paths; erroneous older cells are not preservation targets.
+`set_cpks_monomers(A, B)` borrows the original canonical monomers and live JKs.
+Existing `CPHF_FISAPT` PCG now selects `-monomer.cphf_Hx()` for XC on; otherwise
+the old gap+4J−K−Kᵀ product remains unchanged. Native `find()` retains source
+construction, the shared localized gauge and bare-SAPT readout. No additional
+gap/J/K or hybrid fraction is applied to the original monomer action.
 
-XC on borrows the original whole-monomer `cphf_Hx()` and live canonical JK,
-solves each RHS in the canonical gauge, then uses the native common localized
-readout. One operator per monomer; no isolated-density XC. Raw directional
-induction and exchange-induction, source completeness/additivity and true
-residuals are checked before scaling. Full response factor is one; uniform
-deltaHF remains a separately labeled approximation. Raw arrays/metadata survive
-on the returned wavefunction.
+Python is only admission/wiring: one 43-line helper, versus three modules /
+572 lines before. The duplicate Python PCG and unused source/export framework
+are removed. Source buffers, final slots and zero-RHS fixes remain.
+Both flags default off; default uncoupled/scaled behavior is unchanged.
 
-Production admission remains unshifted HF/SVWN/PBE, restricted closed-shell C1,
-two unembedded fragments, native C assignment and S2 readout. Hybrids/PBE0,
-range separation, meta-GGA, GRAC/level shifts, external response, sSAPT and
-deltaDFT redistribution are rejected.
-Admission checks module-effective SCF embedding options and read-only stored
-monomer external-potential/PCM/CPSCF state, not merely current global flags.
-The response preflight includes quadratic Fock/diagonal validation scratch
-before constructing those arrays, including highly asymmetric ov spaces.
+Full raw directional induction/exchange-induction, independent physical true
+residuals, source completeness and amplitude additivity precede scaling.
+The response factor is one; uniform deltaHF remains a separately labeled
+approximation. Raw matrices and scaling/error metadata survive on the returned
+wavefunction. Extra PCG, Fock-validation and snapshot arrays are admitted
+before tensor construction against min(64 MiB, native FISAPT budget / 8).
 
-## Evidence and merge blockers
+Admission remains restricted C1, unembedded two-fragment HF/SVWN/PBE references.
+Effective SCF options and stored external-potential/CPSCF state are checked.
+Hybrids/PBE0, range separation, meta-GGA, GRAC/level shifts, external response,
+sSAPT/Sinf readout and deltaDFT redistribution are rejected.
 
-Candidate CPU contract run **b0cbe969e**: **39 passed, 3 matching-build native
-tests skipped** (42 total, unittest discovery command below). Syntax,
-whitespace and CPU-only dependency scans pass. The read-only review's
-stored-embedding and quadratic-validation-memory findings were fixed and
-covered by focused contracts; a follow-up inspection was requested.
-Follow-up **d334d46e81584ae49df88679482478b67** found no further actionable
-defects in those fixes. It was inspection-only, not build/native qualification;
-the draft and matching-build merge blockers remain unchanged.
+## Verification scope
 
-Completed **exploratory donor-runtime** fixed-PBE0 phenol studies support the
-scientific distinction, not this candidate's compiled-native qualification:
-XC-only omission retaining 25% exchange gives summed-pair L1 errors
-**1.39937% / 1.46189%** at jun-cc-pVDZ / aug-cc-pVDZ, versus scaled uncoupled
-**15.65518% / 14.41336%**. Legacy full exchange on KS fails curvature both ways.
-Full aug-cc-pVDZ raw component error is ≤3.71e-14 Eh, true residual ≤2.22e-12.
-The separate HF all-component electrostatic discrepancy remains explicitly
-failed; induction-only checks do not relabel it as a full success.
+```
+python -m unittest discover -s tests/pytests -p 'test_fsapt_cpks*.py' -v
+```
 
-Report:
-https://cos-4a16505.tail7d58ac.ts.net/docs/saptdft/cpks/cpks-fsapt.html#phenol-aug
+The algebra tests compile the actual native PCG/action methods against a tiny
+Matrix fixture, checking dense solutions, source readouts/additivity, zero
+directions, curvature, gaps and true residuals. This is a small standalone
+test compilation, NOT a Psi4 build or native chemistry qualification.
+Final run **bfe7043c8**: **9 pass, 3 matching-build tests skipped**. The legacy
+J/K product tail is byte-identical to target `d7b5a01d4c` (SHA256
+`b313ba78bdeaf2149f4804e3e00000709c33f1eea33adcedd693a9a9daa2aee6`).
 
-**Not ready for merge:** native C++/callback ABI has not been compiled or
-numerically qualified on a matching runtime. No matching build exists locally;
-no native build/install/GPU/SSH/cluster work is authorized by this PR split.
-Run the opt-in native HF/SVWN/PBE tests after a matching build is provided:
+Actual-kernel agreement **b218c2c40** uses the pinned donor's original monomer
+`cphf_Hx`, native IBO gauge and bare-SAPT readout on H2–water/STO-3G.
+Compare historical Python PCG (`26f042d4b2`) with extracted compiled native PCG,
+before all scaling, grid 75/302, configured CC-PVTZ-MINAO, two CPU threads /
+256 MiB. Source/pair matrices and separate canonical totals agree:
+
+| Functional | Max old/new raw pair difference (Eh) | Max actual true residual |
+|---|---:|---:|
+| HF | 1.085e-19 | 1.670e-13 |
+| SVWN | 1.085e-19 | 1.225e-13 |
+| PBE | 1.085e-19 | 1.461e-13 |
+| PBE0 | 4.066e-20 | 1.011e-12 |
+
+Maximum amplitude difference is 3.470e-17; separate canonical-component
+mismatch ≤6.560e-16 Eh. All true residuals pass unchanged
+`max(1e-12, 1e-10*||RHS||)`. This qualifies solver agreement on actual donor
+kernels, NOT this whole native integration or production PBE0 admission.
+Receipt: `/tmp/compact-cpks-agreement-vhy_a9ar/comparison.json`,
+SHA256 `f303ce6200c5a0316d996fde07c7bbb67262d8831eb262468d698941199755da`.
+Checker: `/tmp/compare_compact_cpks.py`; no installed source was overlaid.
+The receipt's four candidate/fixture source hashes match the checked code.
+Setup-only failed checker attempts used a literal `minao` basis name and a
+nonexistent Python `Matrix.ncol()`; corrected to configured MINAO_BASIS and
+`.np.shape`, without changing response policy. Static review
+**dacd9b50cb65770e661e6f029d51f309a** found no actionable native-code defects.
+
+Frozen-source phenol receipt rechecks **b8f445005**: **5 pass**, retaining both
+jun/aDZ tables and the explicitly failed HF all-component scope. This is
+saved-data arithmetic, not a new candidate phenol run.
+
+Matching-build HF/SVWN/PBE tests check independent physical source cells,
+production dispatch and deltaHF on/off, but remain explicitly gated:
 
 ```
 PSI4_RUN_FSAPT_CPKS_NATIVE=1 python -m unittest discover \
   -s tests/pytests -p 'test_fsapt_cpks_native.py' -v
 ```
 
-Pure CPU contracts can run without importing native Psi4:
+**Merge blocker:** no matching built native integration exists locally.
+Do not substitute the donor core or infer qualification from algebra tests.
+No heavy native build/install, GPU or cluster execution is authorized.
+Commits retain `[skip ci]` to avoid requesting remote build resources.
 
-```
-python -m unittest discover -s tests/pytests -p 'test_fsapt_cpks*.py' -v
-```
-
-Those synthetic/API/source contracts must not be presented as native chemical
-qualification. Draft PR creation is authorized; merging is not.
-Commit messages retain `[skip ci]` to avoid automatically requesting remote
-build resources under the current no-build/no-paid-job limits.
+Earlier phenol jun/aDZ evidence remains on `saptdft-cpks-fsapt-breakdown`
+(`98a40d0f6b`, numerical receipts `dbf8ddb6d1`); it is donor-runtime evidence,
+not execution of this compact native FISAPT integration. The separate HF
+electrostatic export mismatch remains flagged, not normalized away.
+Report: https://cos-4a16505.tail7d58ac.ts.net/docs/saptdft/cpks/cpks-fsapt.html#phenol-aug

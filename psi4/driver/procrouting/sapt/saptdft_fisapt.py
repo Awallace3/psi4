@@ -329,7 +329,7 @@ def setup_fisapt_object(
     fisapt.set_scalar(scalar_cache)
     if core.get_option("FISAPT", "FISAPT_FSAPT_IND_XC_RESPONSE"):
         from .sapt_fisapt_cpks_find import install
-        install(core, fisapt, wfn, wfn_A, wfn_B, cache)
+        install(core, fisapt, wfn_A, wfn_B)
     return fisapt
 
 
