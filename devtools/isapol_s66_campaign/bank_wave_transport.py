@@ -9,7 +9,7 @@ import sys
 _MODULES, _READ_CLIENTS = {}, {}
 # QCPortal 0.63 SinglepointRecord result/manager lifecycle fields. Unknown
 # fields, user metadata, identity, molecule and specification remain hashed.
-LIFECYCLE_FIELDS = frozenset(('status', 'manager_name', 'modified_on', 'properties', 'extras',
+LIFECYCLE_FIELDS = frozenset(('status', 'manager_name', 'modified_on', 'properties',
                              'compute_history', 'task', 'native_files', 'wavefunction'))
 
 
@@ -38,8 +38,15 @@ def transport_binding():
 def stable_record_identity(body):
     if type(body) is not dict:
         raise ValueError('full actual record body required')
-    return helper('dataset_guard').digest(
-        {key: value for key, value in body.items() if key not in LIFECYCLE_FIELDS})
+    stable = {key: value for key, value in body.items() if key not in LIFECYCLE_FIELDS}
+    extras = stable.get('extras')
+    if extras is not None and type(extras) is not dict:
+        raise ValueError('closed record extras dictionary required')
+    # ONLY this campaign's declared native result slot may change. In
+    # particular an unrelated user/unknown extras key is not lifecycle data.
+    stable['extras'] = {key: value for key, value in (extras or {}).items()
+                        if key != 'psi4:native_monomer'}
+    return helper('dataset_guard').digest(stable)
 
 
 def _snapshot_dataset(client, plan, predecessor_snapshot=None):
