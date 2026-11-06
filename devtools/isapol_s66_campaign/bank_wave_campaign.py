@@ -27,7 +27,7 @@ WAVE_ROOT = Path('/storage/project/r-cs207-0/awallace43/runs/'
 CONTEXT_SHA256 = 'a92028bc139edcffe5c6f03cc8dd1945c30183149a235b94852882dc2678fec9'
 ANCHOR_SHA256 = 'd4ace10ad0823800f2b0a678feaa88539a30907c8a6a869e9363f7a91ff7ced8'
 ADDITIONAL_SOURCES = ('bank_wave.py', 'bank_wave_campaign.py', 'bank_wave_transport.py',
-                      'bank_wave_controller.py', 'bank_wave_ops.sbatch')
+                      'bank_wave_controller.py', 'bank_wave_ops.sbatch', 'native_controller.py')
 
 
 def pins():

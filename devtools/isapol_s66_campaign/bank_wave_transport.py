@@ -1,4 +1,5 @@
 """Registration-only one-shot transport and separately owned read-only clients."""
+import copy
 import importlib.util
 import json
 import os
@@ -206,8 +207,11 @@ class WaveScope:
         # Validate held identities and real registration role, without reserving.
         core.helper('bank_store')._wave_body(**helper('bank_wave_campaign').intent_fields(
             binding, members, registration_role), require_job=True)
-        self.binding, self.cases, self.members = binding, cases, members
-        self.registration_role = registration_role
+        # Freeze caller authority before any Pydantic model can share nested
+        # dictionaries with it. Typed payload construction/mutation must not
+        # rewrite the scope's expected native request.
+        self.binding, self.cases, self.members = copy.deepcopy((binding, cases, members))
+        self.registration_role = copy.deepcopy(registration_role)
         self.attempted, self.finished = set(), []
         self.client_type, self.active = None, None
 

@@ -88,6 +88,29 @@ def _serial_required(checkpoint, context):
     return required
 
 
+def _plan_identity(plan, previous, context, context_sha256, predecessor_sha256):
+    g = previous['generation']
+    mids = context['eligible_ids'][g:g+8]
+    if (not mids or plan.get('schema') != 'native-eligible-wave-plan/1'
+            or plan.get('campaign_scope') != SCOPE or plan.get('dispatch_protocol') != PROTOCOL
+            or plan.get('dataset_id') != DATASET or context['dataset_id'] != DATASET
+            or plan.get('generation_before') != g or type(plan.get('generation_before')) is not int
+            or plan.get('generation_after') != g+len(mids)
+            or type(plan.get('generation_after')) is not int
+            or plan.get('wave_id') != 'wave-%04d-%04d' % (g, g+len(mids))
+            or plan.get('eligible_ids') != context['eligible_ids']
+            or plan.get('refused_ids') != context['refused_ids']
+            or plan.get('eligibility_sha256') != context['eligibility_sha256']
+            or plan.get('bootstrap_context_sha256') != context_sha256
+            or plan.get('predecessor_sha256') != predecessor_sha256
+            or plan.get('predecessor_snapshot_sha256') != previous['snapshot_sha256']
+            or plan.get('member_ids') != mids or set(plan.get('members', {})) != set(mids)
+            or type(plan.get('source')) is not str or not Path(plan['source']).is_absolute()
+            or re.fullmatch('[0-9a-f]{40}', plan.get('operational_commit', '')) is None):
+        raise ValueError('exact next bounded eligible wave required')
+    return mids
+
+
 def validate_checkpoint(raw, expected_sha256, context_raw, context_sha256, proofs, *, _depth=0):
     """Validate actual serial anchor or linked whole waves; no projected prefixes."""
     checkpoint, context = decoded(raw, expected_sha256), decoded(context_raw, context_sha256)
@@ -210,6 +233,8 @@ def validate_registration(plan, registration_raw, registration_sha256, *,
         slot, case, views = reg['members'][mid], cases[mid], captures[mid]
         name, spec = case['entry']['name'], case['specification_name']
         identifier, actual_job = positive(slot['record_id']), job(slot['science_job_id'])
+        if identifier in helper('grid400_bank_policy').PROTECTED_RECORDS:
+            raise ValueError('protected historical record cannot enter wave registration')
         positive(slot['molecule_id'])
         tag = 'ccasp-native-grid400-bank-'+mid+'-'+actual_job
         if (set(views) != {'before', 'entry', 'record'}
@@ -373,7 +398,7 @@ def _member_receipts(plan, reg, permit, barrier_sha, mid, receipts, delivered, f
             or digest(tensor) != artifact['sha256']):
         raise ValueError('actual audited member tensor bytes differ')
     common = dict(campaign_scope=SCOPE, dispatch_protocol=PROTOCOL, dataset_mode='append',
-        producer_profile='grid400', wave_id=plan['wave_id'], dataset_id=DATASET,
+        producer_profile='grid400', campaign=case['campaign'], wave_id=plan['wave_id'], dataset_id=DATASET,
         monomer_id=mid, record_id=slot['record_id'], compute_tag=slot['compute_tag'],
         bootstrap_context_sha256=plan['bootstrap_context_sha256'],
         checkpoint_sha256=plan['predecessor_sha256'],
@@ -440,14 +465,11 @@ def _reduce_link(previous, context_raw, context_sha256, proofs, link):
     plan, reg, permit = map(decoded, (plan_raw, reg_raw, permit_raw))
     # The whole original inventory is reconstructed by campaign at entry.
     # Here case commitments must match the unchanged bootstrap inventory.
-    mids = context['eligible_ids'][previous['generation']:previous['generation']+8]
-    if (plan['member_ids'] != mids or plan['generation_before'] != previous['generation']
-            or plan['generation_after'] != previous['generation']+len(mids)
-            or plan['predecessor_sha256'] != link['predecessor_sha256']
-            or plan['bootstrap_context_sha256'] != context_sha256
-            or plan['predecessor_snapshot_sha256'] != previous['snapshot_sha256']
-            or plan['eligible_ids'] != context['eligible_ids'] or plan['refused_ids'] != context['refused_ids']):
-        raise ValueError('whole-wave successor differs')
+    mids = _plan_identity(plan, previous, context, context_sha256, link['predecessor_sha256'])
+    if (plan['eligible_ids'] != sorted(set(plan['eligible_ids']))
+            or plan['refused_ids'] != sorted(set(plan['refused_ids']))
+            or set(plan['eligible_ids']) & set(plan['refused_ids'])):
+        raise ValueError('whole-wave eligible/refused membership differs')
     cases, receipts, captures = {}, {}, {}
     for mid in mids:
         receipts[mid] = {role: proofs[key] for role, key in link['receipts_sha256'][mid].items()}
@@ -458,6 +480,8 @@ def _reduce_link(previous, context_raw, context_sha256, proofs, link):
             raw_case.pop(key, None)
         raw_case.update(campaign_scope='eligible-bank', dataset_mode='awaiting-audited-bootstrap')
         if (digest(encode(raw_case)) != context['prepared_case_sha256'][mid]
+                or plan['members'][mid]['prepared_case_sha256'] != digest(encode(raw_case))
+                or encode(plan['members'][mid]['execution_profile']) != encode(raw_case['execution_profile'])
                 or encode(bind_member(raw_case, plan=plan, monomer_id=mid)) != encode(cases[mid])):
             raise ValueError('wave proof raw scientific case differs')
         captures[mid] = {role: decoded(proofs[key])
@@ -474,6 +498,8 @@ def _reduce_link(previous, context_raw, context_sha256, proofs, link):
     final = decoded(get('final_snapshot_sha256'))
     validate_capture(plan, reg, predecessor_snapshot=previous['snapshot'],
                      registered_snapshot=registered, snapshot=final, require_complete=True)
+    audit_jobs = set()
+    science_jobs = {reg['members'][mid]['science_job_id'] for mid in mids}
     for mid in mids:
         delivered = decoded(proofs[link['deliveries_sha256'][mid]])
         validate_capture(plan, reg, predecessor_snapshot=previous['snapshot'],
@@ -483,6 +509,11 @@ def _reduce_link(previous, context_raw, context_sha256, proofs, link):
             if decoded(receipts[mid][role])['release_permit_sha256'] != digest(permit_raw):
                 raise ValueError('actual permit bytes changed')
         report = decoded(receipts[mid]['audit'])
+        audit_job = job(report['allocation']['JobId'])
+        if (audit_job in audit_jobs or audit_job in science_jobs
+                or audit_job == reg['registration_role']['job_id']):
+            raise ValueError('distinct independent member audit allocations required')
+        audit_jobs.add(audit_job)
         helper('native_controller').admit_audit_allocation(report['allocation'], report['allocation']['JobId'])
         completed_accounting(proofs[link['audit_accounting_sha256'][mid]], report['allocation']['JobId'])
     inherited = (set(previous['proof_sha256']) if 'proof_sha256' in previous

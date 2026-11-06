@@ -378,6 +378,9 @@ class Production:
 
     def binding(self, *, registered=False, audit=False):
         plan = read(self.args.wave_plan)
+        if (plan['source'] != str(self.args.source)
+                or plan['operational_commit'] != self.args.commit):
+            raise ValueError('wave plan must bind this actual operational checkout/commit')
         args = NS(**vars(self.args), producer='grid400', campaign_scope='eligible-wave',
                   remaining_case=True, pilot=self.args.wave_plan.parent/'cases'/(plan['member_ids'][0]+'.json'),
                   build=self.bank.BUILD_IDENTITY.parent, inputs=self.bank.INPUTS,
@@ -448,6 +451,8 @@ class Production:
             self._require_verified(directory, mids, 'worker')
         elif phase == 'registration':
             self.held(binding)
+            if self.queue() < len(mids):
+                raise ValueError('all held SCI jobs must appear in shared queue observation')
         elif phase == 'audit':
             if binding['science_barrier'] is None:
                 raise ValueError('all SCI positive barrier required')
@@ -491,6 +496,7 @@ class Production:
             verified, submission = read(run/'verified.json'), read(run/'submission.json')
             if (verified.get('job_id') != submission['job_id']
                     or verified.get('phase') != phase
+                    or verified.get('plan_sha256') != submission.get('plan_sha256')
                     or verified.get('accounting_sha256') != self.core.digest(raw(run/'accounting.txt'))):
                 raise ValueError('complete positive phase verification required')
             self.core.completed_accounting(raw(run/'accounting.txt'), submission['job_id'])
@@ -617,20 +623,12 @@ class Production:
         for mid, slot in held.items():
             if any(reg['members'][mid][key] != value for key, value in slot.items()):
                 raise ValueError('held identity changed after registration')
-        admit_headroom(self.queue(), 0)
+        used = self.queue()
+        if used < len(held):
+            raise ValueError('all held SCI jobs must appear in shared queue observation')
+        admit_headroom(used, 0)
         cases = {mid: read(directory/'cases'/(mid+'.json')) for mid in binding['plan']['member_ids']}
-        scratch = Path('/storage/scratch1/3/awallace43')
-        fs = os.statvfs(scratch)
-        quotas = {}
-        guard = helper('descriptor_scratch_cb63305')
-        for role, flag, owner in (('user', '-u', os.getuid()), ('group', '-g', scratch.stat().st_gid)):
-            result = subprocess.run(['/usr/bin/lfs', 'quota', flag, str(owner), str(scratch)],
-                                    check=True, capture_output=True, text=True, timeout=45)
-            if len(result.stdout) > 65536:
-                raise ValueError('bounded scratch quota observation required')
-            quotas[role+'_quota'] = guard.parse_quota(result.stdout, str(scratch))
-        admission = admit_scratch(cases, dict(free_bytes=fs.f_bavail*fs.f_frsize,
-                                  free_files=fs.f_favail, **quotas))
+        admission = admit_scratch(cases, self.scratch_observation())
         write(directory/'scratch-release-admission.json', admission)
         # Immediately recheck live registration and all held routes before permit.
         client = self.client(binding)
@@ -660,6 +658,20 @@ class Production:
                 raise RuntimeError('failed/ambiguous release; never retry or cancel')
         return dict(released=list(held))
 
+    def scratch_observation(self):
+        """Production-only free-space/quota reads; tests inject this observation."""
+        scratch = Path('/storage/scratch1/3/awallace43')
+        fs = os.statvfs(scratch)
+        quotas = {}
+        guard = helper('descriptor_scratch_cb63305')
+        for role, flag, owner in (('user', '-u', os.getuid()), ('group', '-g', scratch.stat().st_gid)):
+            result = subprocess.run(['/usr/bin/lfs', 'quota', flag, str(owner), str(scratch)],
+                                    check=True, capture_output=True, text=True, timeout=45)
+            if len(result.stdout) > 65536:
+                raise ValueError('bounded scratch quota observation required')
+            quotas[role+'_quota'] = guard.parse_quota(result.stdout, str(scratch))
+        return dict(free_bytes=fs.f_bavail*fs.f_frsize, free_files=fs.f_favail, **quotas)
+
     def _published(self, binding, result):
         directory = binding['plan_path'].parent
         checkpoint_path = self.campaign._closed(Path(result['checkpoint_path']),
@@ -669,6 +681,13 @@ class Production:
         proofs = helper('bank_store')._read_wave_proofs(set(checkpoint['proof_sha256']))
         self.core.validate_checkpoint(checkpoint_raw, result['checkpoint_sha256'],
                                      binding['context_raw'], binding['context_sha256'], proofs)
+        expected_link = dict(plan_sha256=binding['plan_sha256'],
+            registration_sha256=binding['registration_sha256'],
+            permit_sha256=binding['release_permit_sha256'],
+            barrier_sha256=binding['science_barrier_sha256'],
+            predecessor_sha256=binding['checkpoint_sha256'])
+        if any(checkpoint['wave_link'].get(key) != value for key, value in expected_link.items()):
+            raise ValueError('published checkpoint must bind this actual wave plan/registration/permit/barrier')
         if (checkpoint['previous_checkpoint_sha256'] != binding['checkpoint_sha256']
                 or checkpoint['generation'] != binding['plan']['generation_after']
                 or result['generation'] != checkpoint['generation']
@@ -791,10 +810,16 @@ class Production:
         directory = binding['plan_path'].parent
         expected_run = directory/phase
         self.campaign._closed(self.args.run, expected_run)
-        submission = read(expected_run/'submission.json')
-        if (submission['job_id'] != allocation['JobId']
-                or submission['command'] != phase_command(binding, None, phase)):
-            raise ValueError('actual ops allocation differs from submitted phase')
+        # sbatch may start this job BEFORE returning its ID to the controller.
+        # Only the command intent is available at that instant; it was fsynced
+        # before submission. Bind actual allocation in produced metadata, then
+        # require response-ID equality in controller verify before permit or
+        # acceptance. This introduces no additional hold/release permission.
+        intent = read(expected_run/'intent.json')
+        if (intent.get('plan_sha256') != binding['plan_sha256']
+                or intent.get('command') != phase_command(binding, None, phase)
+                or allocation['JobId'] != os.environ.get('SLURM_JOB_ID')):
+            raise ValueError('actual ops allocation/command differs from prewritten launch intent')
         mkdir(expected_run/'payload')
         if phase == 'registration':
             members = self.held(binding)
