@@ -25,7 +25,7 @@ if [[ $# -ge 5 ]]; then
     case "$5" in
         --grid400-bank-wave)
             WAVE_DIR=${6%/plan.json}
-            [[ "$6" = "$WAVE_DIR/plan.json" && "$WAVE_DIR" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-waves001/wave-[0-9]{4}-[0-9]{4}$ ]]
+            [[ "$6" = "$WAVE_DIR/plan.json" && "$WAVE_DIR" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-waves002/wave-[0-9]{4}-[0-9]{4}$ ]]
             [[ "$PILOT" =~ ^"$WAVE_DIR"/cases/(monomer-[0-9]{4})\.json$ ]]
             MID=${BASH_REMATCH[1]}
             [[ "$RUN" = "$WAVE_DIR/members/$MID/worker" ]]

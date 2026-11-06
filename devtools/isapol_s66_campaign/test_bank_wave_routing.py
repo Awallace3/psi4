@@ -17,7 +17,7 @@ def load(name):
 
 
 ROOT = '/storage/project/r-cs207-0/awallace43/runs'
-D = ROOT+'/ccasp-native-s66-grid400-1aaa9e0a30-waves001/wave-0025-0033'
+D = ROOT+'/ccasp-native-s66-grid400-1aaa9e0a30-waves002/wave-0025-0033'
 MID = 'monomer-0026'
 K = D+'/cases/'+MID+'.json'
 F = D+'/members/'+MID+'/worker/payload/worker-preflight.json'
@@ -74,7 +74,7 @@ def test_audit_optional_registration_hash_does_not_make_barrier_optional():
 
 
 @pytest.mark.parametrize('role', ['worker', 'science', 'audit'])
-@pytest.mark.parametrize('change', ['plan_hash', 'case', 'run', 'root', 'extra', 'mixed',
+@pytest.mark.parametrize('change', ['plan_hash', 'case', 'run', 'retired_root', 'extra', 'mixed',
                                   'registration', 'alias'])
 def test_wrapper_rejects_ambiguous_foreign_or_mixed_wave_arguments(role, change):
     prefix, argv = wrapper(role)
@@ -85,8 +85,8 @@ def test_wrapper_rejects_ambiguous_foreign_or_mixed_wave_arguments(role, change)
     elif change == 'run':
         index = {'worker': 3, 'science': 4, 'audit': 5}[role]
         argv[index] = argv[index]+'/nested'
-    elif change == 'root':
-        argv = [arg.replace('waves001', 'waves002') for arg in argv]
+    elif change == 'retired_root':
+        argv = [arg.replace('waves002', 'waves001') for arg in argv]
     elif change == 'extra':
         argv += ['--wave-plan', D+'/plan.json']
     elif change == 'mixed':

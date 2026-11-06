@@ -19,7 +19,7 @@ PRODUCER=cb63305f41
 if [[ $# -ge 1 && "$1" = --grid400-bank-wave ]]; then
     [[ ( $# -eq 8 || $# -eq 10 ) && "$3" =~ ^[0-9a-f]{64}$ ]]
     WAVE_DIR=${2%/plan.json}
-    [[ "$2" = "$WAVE_DIR/plan.json" && "$WAVE_DIR" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-waves001/wave-[0-9]{4}-[0-9]{4}$ ]]
+    [[ "$2" = "$WAVE_DIR/plan.json" && "$WAVE_DIR" =~ ^/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-1aaa9e0a30-waves002/wave-[0-9]{4}-[0-9]{4}$ ]]
     [[ "$4" = "$WAVE_DIR/registration.json" ]]
     [[ "$PILOT" =~ ^"$WAVE_DIR"/cases/(monomer-[0-9]{4})\.json$ ]]
     MID=${BASH_REMATCH[1]}
