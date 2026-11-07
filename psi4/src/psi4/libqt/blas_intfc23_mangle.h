@@ -44,6 +44,7 @@
 #include "FCMangle.h"
 #define F_DGBMV FC_GLOBAL(dgbmv, DGBMV)
 #define F_DGEMM FC_GLOBAL(dgemm, DGEMM)
+#define F_SGEMM FC_GLOBAL(sgemm, SGEMM)
 #define F_DGEMV FC_GLOBAL(dgemv, DGEMV)
 #define F_DGER FC_GLOBAL(dger, DGER)
 #define F_DSBMV FC_GLOBAL(dsbmv, DSBMV)
@@ -68,6 +69,7 @@
 #if FC_SYMBOL == 2
 #define F_DGBMV dgbmv_
 #define F_DGEMM dgemm_
+#define F_SGEMM sgemm_
 #define F_DGEMV dgemv_
 #define F_DGER dger_
 #define F_DSBMV dsbmv_
@@ -91,6 +93,7 @@
 #elif FC_SYMBOL == 1
 #define F_DGBMV dgbmv
 #define F_DGEMM dgemm
+#define F_SGEMM sgemm
 #define F_DGEMV dgemv
 #define F_DGER dger
 #define F_DSBMV dsbmv
@@ -114,6 +117,7 @@
 #elif FC_SYMBOL == 3
 #define F_DGBMV DGBMV
 #define F_DGEMM DGEMM
+#define F_SGEMM SGEMM
 #define F_DGEMV DGEMV
 #define F_DGER DGER
 #define F_DSBMV DSBMV
@@ -137,6 +141,7 @@
 #elif FC_SYMBOL == 4
 #define F_DGBMV DGBMV_
 #define F_DGEMM DGEMM_
+#define F_SGEMM SGEMM_
 #define F_DGEMV DGEMV_
 #define F_DGER DGER_
 #define F_DSBMV DSBMV_

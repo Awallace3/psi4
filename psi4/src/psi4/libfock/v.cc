@@ -173,9 +173,47 @@ void VBase::set_D(std::vector<SharedMatrix> Dvec) {
         }
     }
 }
+void VBase::set_grid(const std::string& name) {
+    if (name != "Initial" && name != "Final") {
+        throw PSIEXCEPTION("DFT grid must be Initial or Final.");
+    }
+    const bool initial = name == "Initial";
+    if (initial) {
+        const int radial = options_.get_int("DFT_RADIAL_POINTS_INITIAL");
+        const int angular = options_.get_int("DFT_SPHERICAL_POINTS_INITIAL");
+        if (radial <= 0 || angular <= 0) {
+            throw PSIEXCEPTION("Set both DFT_RADIAL_POINTS_INITIAL and DFT_SPHERICAL_POINTS_INITIAL positive.");
+        }
+        if (options_.get_str("DFT_GRID_NAME").empty() &&
+            (radial > options_.get_int("DFT_RADIAL_POINTS") || angular > options_.get_int("DFT_SPHERICAL_POINTS") ||
+             (radial == options_.get_int("DFT_RADIAL_POINTS") &&
+              angular == options_.get_int("DFT_SPHERICAL_POINTS")))) {
+            throw PSIEXCEPTION("The initial DFT grid must be smaller than the final grid.");
+        }
+    }
+    if (grid_ && initial_grid_ == initial) return;
+    finalize();
+    cache_map_.clear();
+    point_workers_.clear();
+    functional_workers_.clear();
+    quad_values_.clear();
+    initial_grid_ = initial;
+    const bool had_grac = grac_initialized_;
+    grac_initialized_ = false;
+    initialize();  // virtual: RV/UV resize their point workers as well
+    if (had_grac) set_grac_shift(functional_->grac_shift());
+}
 void VBase::initialize() {
     timer_on("V: Grid");
-    grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, options_);
+    if (initial_grid_) {
+        std::map<std::string, int> ints = {
+            {"DFT_RADIAL_POINTS", options_.get_int("DFT_RADIAL_POINTS_INITIAL")},
+            {"DFT_SPHERICAL_POINTS", options_.get_int("DFT_SPHERICAL_POINTS_INITIAL")}};
+        std::map<std::string, std::string> strings = {{"DFT_GRID_NAME", ""}};
+        grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, ints, strings, options_);
+    } else {
+        grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, options_);
+    }
     timer_off("V: Grid");
 
     for (size_t i = 0; i < num_threads_; i++) {

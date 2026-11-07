@@ -1871,6 +1871,44 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_int("DFT_SPHERICAL_POINTS", 302);
         /*- Number of radial points. -*/
         options.add_int("DFT_RADIAL_POINTS", 75);
+        /*- Initial SCF radial grid size. Set both this and
+        |scf__dft_spherical_points_initial| to positive values to enable XC grid
+        switching. Zero disables switching. Normal DFT settings define the final
+        grid; response and property grids are unchanged. -*/
+        options.add_int("DFT_RADIAL_POINTS_INITIAL", 0);
+        /*- Initial SCF angular grid size (a supported Lebedev number).
+        Used with |scf__dft_radial_points_initial|. The initial grid inherits the
+        radial and pruning schemes, but not a named final grid. -*/
+        options.add_int("DFT_SPHERICAL_POINTS_INITIAL", 0);
+        /*- Switch to the final XC grid when both energy change and orbital
+        residual fall below this multiple of their SCF convergence tolerances.
+        Must be positive. Final-grid SCF convergence is always required, including
+        at least one additional iteration after switching. -*/
+        options.add_double("DFT_GRID_SWITCH_FACTOR", 10.0);
+        /*- How the DIIS subspace crosses the XC grid switch. SHIFT adds V_final(D) - V_initial(D)
+        at the switch density to every stored Fock matrix and error vector (one extra
+        initial-grid V build); RESET discards the subspace. -*/
+        options.add_str("DFT_GRID_SWITCH_DIIS", "SHIFT", "SHIFT RESET");
+        /*- What triggers the XC grid switch: both the energy change and the density residual
+        below their scaled tolerances (ENERGY_AND_DENSITY), or the density residual alone
+        (DENSITY). The energy change lags the residual by about one iteration. -*/
+        options.add_str("DFT_GRID_SWITCH_ON", "ENERGY_AND_DENSITY", "ENERGY_AND_DENSITY DENSITY");
+        /*- Build the exchange matrix in single precision (in-core DF only) until the SCF density
+        residual falls below this value, then switch to double precision for the remaining
+        iterations. Convergence is only accepted with double-precision exchange. 0 disables. -*/
+        options.add_double("SCF_K_FP32_CONVERGENCE", 0.0);
+        /*- MemDF: contract the in-core 3-index integrals with the Cholesky factor of the Coulomb
+        metric (a triangular solve) instead of J^-1/2. Same J and K up to roundoff for a
+        well-conditioned metric, about half the cost; DF_FITTING_CONDITION is not applied. -*/
+        options.add_bool("SCF_DF_METRIC_CHOLESKY", false);
+        /*- Layout of the in-core DF-K first-transform intermediate. QI is the original (Q x i)
+        layout; IQ stores (i x Q) with the occupied count padded to 8, which is faster with MKL on
+        AMD Zen2 and slower at large basis sets on Intel Cascade Lake. -*/
+        options.add_str("SCF_DF_K_LAYOUT", "QI", "QI IQ");
+        /*- Test E_CONVERGENCE against the first-order predicted energy change to the next
+        iterate, Tr[F (D_new - D_old)], instead of the change from the previous iterate. This
+        saves the final iteration that only confirms the energy change. -*/
+        options.add_bool("SCF_E_CONV_PREDICTED", false);
         /*- Spherical Scheme. -*/
         options.add_str("DFT_SPHERICAL_SCHEME", "LEBEDEV", "LEBEDEV");
         /*- Radial Scheme. -*/

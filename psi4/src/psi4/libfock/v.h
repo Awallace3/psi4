@@ -78,6 +78,8 @@ class PSI_API VBase {
     std::vector<std::shared_ptr<PointFunctions>> point_workers_;
     /// Integration grid, built by KSPotential
     std::shared_ptr<DFTGrid> grid_;
+    /// Only SCF potentials opt into the initial grid; response grids stay final.
+    bool initial_grid_ = false;
     /// Quadrature values obtained during integration
     std::map<std::string, double> quad_values_;
     // Caches collocation grids
@@ -145,6 +147,9 @@ class PSI_API VBase {
 
     virtual void initialize();
     virtual void finalize();
+    /// Rebuild the grid and workers on the "Initial" (coarse SCF) or "Final" grid.
+    void set_grid(const std::string& name);
+    bool initial_grid() const { return initial_grid_; }
 
     /// Doubles held by per-thread V accumulators during compute_V (0 if unused).
     /// The SCF charges this to its memory budget before splitting JK and collocation memory.

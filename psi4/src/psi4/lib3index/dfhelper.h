@@ -78,13 +78,30 @@ class PSI_API DFHelper {
     /// defaults to 256,000,000 (2.04GB)
     ///
     void set_memory(size_t doubles) { memory_ = doubles; }
-    size_t get_memory() { return memory_; }
+
+    /// Build K (in-core, non-wK) in single precision until switched off. Meant for early SCF
+    /// iterations: the error (~1e-7 relative) is far below the orbital gradient there. Turning it
+    /// off frees the single-precision tensor. Falls back to double if memory does not allow it.
+    void set_K_fp32(bool on) {
+        K_fp32_ = on;
+        if (!on) Ppq_f_.reset();
+    }
+    bool K_fp32() const { return K_fp32_; }
+    /// In-core symmetric AO tensors with metric power -1/2: contract with the Cholesky factor
+    /// of the metric (triangular solve) instead of J^-1/2. Same J/K; no eigenvalue cutoff.
+    void set_metric_cholesky(bool on) { metric_cholesky_ = on; }
+    /// Store the K first-transform intermediate as (i,Q) with nocc padded to 8 instead of (Q,i).
+    /// Faster with MKL on AMD Zen2, slower at large nbf on Intel Skylake/Cascade Lake.
+    void set_K_layout_iQ(bool on) { K_layout_iQ_ = on; }
     /// Free the compute_JK scratch that is otherwise kept between builds
     void clear_JK_scratch() {
         jk_T1_.reset();
         jk_T2_.reset();
         jk_T1_size_ = jk_T2_size_ = 0;
     }
+    /// doubles-equivalent held by the single-precision K tensor (0 when not allocated)
+    size_t K_fp32_memory() const { return Ppq_f_ ? big_skips_[nbf_] / 2 : 0; }
+    size_t get_memory() { return memory_; }
 
     ///
     /// Indicates whether to use the in-core or out-of-core
@@ -387,6 +404,17 @@ class PSI_API DFHelper {
     /// compute_JK scratch, kept between builds (see compute_JK)
     std::unique_ptr<double[]> jk_T1_, jk_T2_;
     size_t jk_T1_size_ = 0, jk_T2_size_ = 0;
+    /// single-precision copy of Ppq_ for low-precision K builds (see set_K_fp32)
+    std::unique_ptr<float[]> Ppq_f_;
+    bool K_fp32_ = false;
+    bool metric_cholesky_ = false;
+    bool K_layout_iQ_ = false;
+    bool prepare_K_fp32();
+    void compute_J_symm_fp32(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* T1p, double* T2p,
+                             std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size);
+    void compute_K_fp32(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright, std::vector<SharedMatrix> K,
+                        double* T1p, double* T2p, size_t bcount, size_t block_size,
+                        std::vector<std::vector<double>>& C_buffers, bool lr_symmetric);
     // Maps x -> (P|Q) ^ x.
     std::map<double, SharedMatrix> metrics_;
 
@@ -411,7 +439,8 @@ class PSI_API DFHelper {
 
 
 
-    void contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* metp, size_t begin, size_t end);
+    void contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* metp, size_t begin, size_t end,
+                                      bool cholesky = false);
     void grab_AO(const size_t start, const size_t stop, double* Mp);
 
     // => wK AO building machinery <=
@@ -421,6 +450,8 @@ class PSI_API DFHelper {
     void copy_upper_lower_wAO_core_symm(double* Qpq, double* Ppq, size_t begin, size_t end);
 
     // first integral transforms
+    void first_transform_pQq_K(size_t nocc, size_t nocc_pad, size_t bcount, size_t block_size, double* Mp, double* Tp,
+                               double* Bp, std::vector<std::vector<double>>& C_buffers);
     void first_transform_pQq(size_t bsize, size_t bcount, size_t block_size, double* Mp, double* Tp, double* Bp,
                              std::vector<std::vector<double>>& C_buffers);
 
