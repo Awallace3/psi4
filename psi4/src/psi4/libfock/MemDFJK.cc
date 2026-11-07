@@ -77,6 +77,7 @@ void MemDFJK::preiterations() {
     dfh_->set_schwarz_cutoff(cutoff_);
     dfh_->set_method("STORE");
     dfh_->set_fitting_condition(condition_);
+    dfh_->set_metric_cholesky(options_.exists("SCF_DF_METRIC_CHOLESKY") && options_.get_bool("SCF_DF_METRIC_CHOLESKY"));
     dfh_->set_memory(memory_ - memory_overhead());
     dfh_->set_do_wK(do_wK_);
     dfh_->set_omega(omega_);

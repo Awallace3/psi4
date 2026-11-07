@@ -4806,21 +4806,28 @@ void OctreeGridBlocker::block() {
     }
 
     blocks_.clear();
-    index = 0;
     max_points_ = 0;
+    // BlockOPoints construction (significant-shell search) is independent per block: build them
+    // in parallel, then keep the original order.
+    std::vector<size_t> offsets(completed_tree.size() + 1, 0);
+    for (size_t A = 0; A < completed_tree.size(); A++) offsets[A + 1] = offsets[A] + completed_tree[A].size();
+    std::vector<std::shared_ptr<BlockOPoints>> built(completed_tree.size());
+#pragma omp parallel for schedule(dynamic, 16)
     for (size_t A = 0; A < completed_tree.size(); A++) {
-        std::vector<int> block = completed_tree[A];
-        if (!block.size()) continue;
-        auto bop =
-            std::make_shared<BlockOPoints>(A, block.size(), &x_[index], &y_[index], &z_[index], &w_[index], extents_);
+        const size_t n = completed_tree[A].size();
+        if (!n) continue;
+        const size_t off = offsets[A];
+        built[A] = std::make_shared<BlockOPoints>(A, n, &x_[off], &y_[off], &z_[off], &w_[off], extents_);
+    }
+    for (size_t A = 0; A < completed_tree.size(); A++) {
+        auto& bop = built[A];
         // BlockOPoints construction performs additional pruning. Need to test if any points remain.
-        if (bop->local_nbf()) {
+        if (bop && bop->local_nbf()) {
             blocks_.push_back(bop);
-            if ((size_t)max_points_ < block.size()) {
-                max_points_ = block.size();
+            if ((size_t)max_points_ < completed_tree[A].size()) {
+                max_points_ = completed_tree[A].size();
             }
         }
-        index += block.size();
     }
 
     max_functions_ = 0;

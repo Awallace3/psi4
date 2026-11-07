@@ -1215,6 +1215,10 @@ void UHF::compute_nos() {
 std::shared_ptr<UHF> UHF::c1_deep_copy(std::shared_ptr<BasisSet> basis) {
     auto wfn = Wavefunction::c1_deep_copy(basis);
     auto hf_wfn = std::make_shared<UHF>(wfn, functional_, wfn->options(), wfn->psio());
+    // Construction may select the initial SCF grid; a copy is not a new SCF.
+    if (potential_ && hf_wfn->potential_ && !potential_->initial_grid()) {
+        hf_wfn->potential_->set_grid("Final");
+    }
 
     // now just have to copy the matrices that UHF initializes
     // include only those that are not temporary (some deleted in finalize())
@@ -1237,7 +1241,12 @@ std::shared_ptr<UHF> UHF::c1_deep_copy(std::shared_ptr<BasisSet> basis) {
 void UHF::setup_potential() {
     if (functional_->needs_xc()) {
         potential_ = std::make_shared<UV>(functional_, basisset_, options_);
-        potential_->initialize();
+        if (options_.get_int("DFT_RADIAL_POINTS_INITIAL") != 0 ||
+            options_.get_int("DFT_SPHERICAL_POINTS_INITIAL") != 0) {
+            potential_->set_grid("Initial");
+        } else {
+            potential_->initialize();
+        }
     } else {
         potential_ = nullptr;
     }

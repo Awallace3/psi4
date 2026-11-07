@@ -46,6 +46,7 @@ namespace {
 extern "C" {
 extern void F_DGBMV(char*, int*, int*, int*, int*, double*, double*, int*, double*, int*, double*, double*, int*);
 extern void F_DGEMM(char*, char*, int*, int*, int*, double*, double*, int*, double*, int*, double*, double*, int*);
+extern void F_SGEMM(char*, char*, int*, int*, int*, float*, float*, int*, float*, int*, float*, float*, int*);
 extern void F_DGEMV(char*, int*, int*, double*, double*, int*, double*, int*, double*, double*, int*);
 extern void F_DGER(int*, int*, double*, double*, int*, double*, int*, double*, int*);
 extern void F_DSBMV(char*, int*, int*, double*, double*, int*, double*, int*, double*, double*, int*);
@@ -328,6 +329,13 @@ PSI_API void C_DGEMM(char transa, char transb, int m, int n, int k, double alpha
                      int ldb, double beta, double* c, int ldc) {
     if (m == 0 || n == 0 || k == 0) return;
     ::F_DGEMM(&transb, &transa, &n, &m, &k, &alpha, b, &ldb, a, &lda, &beta, c, &ldc);
+}
+
+/// Single-precision C_DGEMM (row-major convention, same argument order).
+PSI_API void C_SGEMM(char transa, char transb, int m, int n, int k, float alpha, float* a, int lda, float* b,
+                     int ldb, float beta, float* c, int ldc) {
+    if (m == 0 || n == 0 || k == 0) return;
+    ::F_SGEMM(&transb, &transa, &n, &m, &k, &alpha, b, &ldb, a, &lda, &beta, c, &ldc);
 }
 
 /**

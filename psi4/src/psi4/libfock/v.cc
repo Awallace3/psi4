@@ -173,9 +173,47 @@ void VBase::set_D(std::vector<SharedMatrix> Dvec) {
         }
     }
 }
+void VBase::set_grid(const std::string& name) {
+    if (name != "Initial" && name != "Final") {
+        throw PSIEXCEPTION("DFT grid must be Initial or Final.");
+    }
+    const bool initial = name == "Initial";
+    if (initial) {
+        const int radial = options_.get_int("DFT_RADIAL_POINTS_INITIAL");
+        const int angular = options_.get_int("DFT_SPHERICAL_POINTS_INITIAL");
+        if (radial <= 0 || angular <= 0) {
+            throw PSIEXCEPTION("Set both DFT_RADIAL_POINTS_INITIAL and DFT_SPHERICAL_POINTS_INITIAL positive.");
+        }
+        if (options_.get_str("DFT_GRID_NAME").empty() &&
+            (radial > options_.get_int("DFT_RADIAL_POINTS") || angular > options_.get_int("DFT_SPHERICAL_POINTS") ||
+             (radial == options_.get_int("DFT_RADIAL_POINTS") &&
+              angular == options_.get_int("DFT_SPHERICAL_POINTS")))) {
+            throw PSIEXCEPTION("The initial DFT grid must be smaller than the final grid.");
+        }
+    }
+    if (grid_ && initial_grid_ == initial) return;
+    finalize();
+    cache_map_.clear();
+    point_workers_.clear();
+    functional_workers_.clear();
+    quad_values_.clear();
+    initial_grid_ = initial;
+    const bool had_grac = grac_initialized_;
+    grac_initialized_ = false;
+    initialize();  // virtual: RV/UV resize their point workers as well
+    if (had_grac) set_grac_shift(functional_->grac_shift());
+}
 void VBase::initialize() {
     timer_on("V: Grid");
-    grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, options_);
+    if (initial_grid_) {
+        std::map<std::string, int> ints = {
+            {"DFT_RADIAL_POINTS", options_.get_int("DFT_RADIAL_POINTS_INITIAL")},
+            {"DFT_SPHERICAL_POINTS", options_.get_int("DFT_SPHERICAL_POINTS_INITIAL")}};
+        std::map<std::string, std::string> strings = {{"DFT_GRID_NAME", ""}};
+        grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, ints, strings, options_);
+    } else {
+        grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, options_);
+    }
     timer_off("V: Grid");
 
     for (size_t i = 0; i < num_threads_; i++) {
@@ -1318,7 +1356,10 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
     }
 
     auto V_AO = std::make_shared<Matrix>("V AO Temp", nbf_, nbf_);
-    auto Vp = V_AO->pointer();
+    // Per-thread accumulators: scattering each block with omp atomics costs ~2 atomics per
+    // local (m, n) pair per block, a large share of the V build. Reduced after the loop.
+    std::vector<SharedMatrix> V_thread(num_threads_);
+    for (size_t i = 0; i < num_threads_; i++) V_thread[i] = std::make_shared<Matrix>("V Thread", nbf_, nbf_);
 
     std::vector<double> functionalq(num_threads_);
     std::vector<double> rhoaq(num_threads_);
@@ -1375,19 +1416,29 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         const auto& function_map = block->functions_local_to_global();
         int nlocal = function_map.size();
 
+        auto Vp = V_thread[rank]->pointer();
         for (int ml = 0; ml < nlocal; ml++) {
             int mg = function_map[ml];
             for (int nl = 0; nl < ml; nl++) {
                 int ng = function_map[nl];
-#pragma omp atomic update
                 Vp[mg][ng] += V2p[ml][nl];
-#pragma omp atomic update
                 Vp[ng][mg] += V2p[ml][nl];
             }
-#pragma omp atomic update
             Vp[mg][mg] += V2p[ml][ml];
         }
         parallel_timer_off("V_xc", rank);
+    }
+
+    // Reduce the per-thread accumulators (fixed order: deterministic, unlike the atomics).
+    {
+        double* Vt = V_AO->pointer()[0];
+        const size_t n2 = static_cast<size_t>(nbf_) * nbf_;
+#pragma omp parallel for schedule(static) num_threads(num_threads_)
+        for (size_t x = 0; x < n2; x++) {
+            double sum = 0.0;
+            for (size_t t = 0; t < num_threads_; t++) sum += V_thread[t]->pointer()[0][x];
+            Vt[x] = sum;
+        }
     }
 
     // Do we need VV10?

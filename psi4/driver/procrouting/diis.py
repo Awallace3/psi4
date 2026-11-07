@@ -117,6 +117,23 @@ class DIIS:
         # their quantities are N^2, so we assume the savings are negligible.
         self.cached_dot_products = dict()
 
+    def shift_entries(self, deltas: dict):
+        """ Add ``deltas[name][item]`` to that item of every stored entry.
+
+        Used when an SCF switches to a more accurate Fock build mid-run: shifting the
+        stored Fock matrices (and their error vectors) by the change in the build keeps
+        the subspace consistent with the new level instead of discarding it.
+        """
+        for entry_num, entry in enumerate(self.stored_vectors):
+            for name, items in deltas.items():
+                for item_num, delta in enumerate(items):
+                    if delta is None:
+                        continue
+                    quantity = self.load_quantity(name, entry_num, item_num)
+                    quantity.add(delta)
+                    entry[name][item_num] = self.copier(quantity, self.get_name(name, entry_num, item_num))
+        self.cached_dot_products = dict()
+
     def copier(self, x, new_name: str):
         """ Copy the object x and give it a new_name. Save it to disk if needed. """
         if isinstance(x, (core.Matrix, core.Vector)):
