@@ -190,7 +190,10 @@ class RV : public VBase {
     // compute_V assuming same orbitals for different spin. Computes V_alpha, not spin-summed V.
     void compute_V(std::vector<SharedMatrix> ret) override;
     size_t V_thread_scratch_size() const override {
-        return V_thread_accumulators_ ? static_cast<size_t>(num_threads_) * nbf_ * nbf_ : 0;
+        // primary_->nbf(), not nbf_: nbf_ is only set once a density arrives (set_D / compute_V),
+        // and the SCF asks for this size before the first iteration.
+        const size_t n = primary_->nbf();
+        return V_thread_accumulators_ ? static_cast<size_t>(num_threads_) * n * n : 0;
     }
     /// Compute the orbital derivative of the KS potential, contract against Dx, and
     /// putting the result in ret. ret[i] is Vx where x = Dx[i]. The "true" vector has
