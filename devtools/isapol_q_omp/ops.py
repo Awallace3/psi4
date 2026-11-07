@@ -59,7 +59,8 @@ FROZEN = {
     "devtools/isapol_q_omp/test_workspace.py": "1789984f7c88c6740400913f50ab356f2ac5594c896ab26d3d8e59a07ab06be4",
 }
 OPS = {"devtools/isapol_q_omp/" + name for name in
-       ("ops.py", "oracle.sbatch", "build.sbatch", "test_ops.py", "OPS.md")}
+       ("ops.py", "oracle.sbatch", "build.sbatch", "test_ops.py", "OPS.md",
+        "validate.py", "validate.sbatch", "test_validate.py")}
 TEST = "tests/pytests/test_isapol_q_parallel.py"
 
 
@@ -302,14 +303,14 @@ def dependency_gate(prefix, manifest):
 
 
 def installed_python_gate(source, build, package, names):
-    """Two configured templates; every actual source-backed Python file strict.
+    """Three generated outputs; every actual source-backed Python file strict.
 
     CMakeLists.txt's psi4-core ExternalProject uses its default binary directory;
-    psi4/CMakeLists.txt configures these two files in that inner CMAKE_BINARY_DIR.
-    Never compare installed template expansions against raw @ONLY input bytes.
+    psi4/CMakeLists.txt configures two templates and runs versioner.py to generate
+    metadata.py in that inner CMAKE_BINARY_DIR. None installs raw source bytes.
     """
     core_build = build / "psi4-core-prefix/src/psi4-core-build"
-    configured = {name: core_build/name for name in ("__init__.py", "extras.py")}
+    configured = {name: core_build/name for name in ("__init__.py", "extras.py", "metadata.py")}
     checked = {}
     for name in sorted(set(names) | set(configured)):
         if not name.endswith(".py"):
@@ -362,7 +363,7 @@ def allocation(mode):
     row = dict(v.split("=", 1) for v in text.split() if "=" in v)
     expected = dict(Account="gts-cs207-chemx", QOS="embers", NumNodes="1", NumTasks="1",
                     NumCPUs="8", **{"CPUs/Task": "8"}, MinMemoryNode="32G",
-                    TimeLimit="02:00:00" if mode == "oracle" else "08:00:00", Requeue="0", Restarts="0")
+                    TimeLimit="08:00:00" if mode == "build" else "02:00:00", Requeue="0", Restarts="0")
     need(all(row.get(k) == v for k, v in expected.items()), "actual allocation differs from finite contract")
     need(row.get("Partition") == "cpu-small", "actual partition differs")
     return row
@@ -477,7 +478,8 @@ def finalize(args):
         try:
             source_gate(args.source, args.commit, args.tree)
             value = read(args.root / "result.json")
-            expected = "READY_ORACLE_NOT_ACCEPTANCE" if args.mode == "oracle" else "READY_BUILD_NOT_QUALIFIED"
+            expected = {"oracle": "READY_ORACLE_NOT_ACCEPTANCE", "build": "READY_BUILD_NOT_QUALIFIED",
+                        "validate": "READY_DIAGNOSTIC_NOT_ACCEPTANCE"}[args.mode]
             need(value["status"] == expected and value["old_runtime_unchanged"] is True
                  and value["launch_token"] == args.launch_token, "helper did not finish successfully")
         except Exception:

@@ -40,7 +40,8 @@ os.execv(args[0],args)
             fake_srun.chmod(0o700)
             # This shim uses the current real finalizer, but never imports Psi4,
             # compiles, runs pytest, or queries an allocation.
-            (helper_dir/"ops.py").write_text("""
+            helper_name = "validate.py" if wrapper_name == "validate.sbatch" else "ops.py"
+            (helper_dir/helper_name).write_text("""
 import argparse,importlib.util,json,os,pathlib,signal,sys,time
 p=argparse.ArgumentParser()
 p.add_argument("operation")
@@ -57,7 +58,8 @@ if not a.operation.endswith("-finalize"):
     a.root.mkdir()
     m.write(a.root/"owner.json",dict(token=a.launch_token,mode=a.mode))
     m.write(a.root/"result.json",dict(
-        status="READY_ORACLE_NOT_ACCEPTANCE" if a.mode=="oracle" else "READY_BUILD_NOT_QUALIFIED",
+        status={"oracle":"READY_ORACLE_NOT_ACCEPTANCE","build":"READY_BUILD_NOT_QUALIFIED",
+                "validate":"READY_DIAGNOSTIC_NOT_ACCEPTANCE"}[a.mode],
         old_runtime_unchanged=True,launch_token=a.launch_token))
     sys.exit(0)
 if a.exit_code==0:
@@ -128,7 +130,7 @@ sys.exit(m.finalize(a))
                         process.wait(timeout=5)
 
     def test_term_and_int_during_finalization_never_publish_success(self):
-        for wrapper in ("oracle.sbatch", "build.sbatch"):
+        for wrapper in ("oracle.sbatch", "build.sbatch", "validate.sbatch"):
             for phase in ("before_publish", "after_publish"):
                 for sig in (signal.SIGTERM, signal.SIGINT):
                     with self.subTest(wrapper=wrapper, phase=phase, signal=sig):
@@ -144,7 +146,8 @@ sys.exit(m.finalize(a))
             self.assertEqual(ops.sha(SOURCE / name), digest, name)
 
     def test_finite_wrappers_and_no_site_stack_mutation(self):
-        for name, duration in (("oracle.sbatch", "02:00:00"), ("build.sbatch", "08:00:00")):
+        for name, duration in (("oracle.sbatch", "02:00:00"), ("build.sbatch", "08:00:00"),
+                               ("validate.sbatch", "02:00:00")):
             path = HERE / name
             subprocess.run(["bash", "-n", str(path)], check=True)
             text = path.read_text()
@@ -283,16 +286,17 @@ sys.exit(m.finalize(a))
             package.mkdir(parents=True)
             (source/"psi4/driver/procrouting").mkdir(parents=True)
             (package/"driver/procrouting").mkdir(parents=True)
-            for name in ("__init__.py", "extras.py"):
+            for name in ("__init__.py", "extras.py", "metadata.py"):
                 (source/"psi4"/name).write_text("unconfigured @TEMPLATE@")
                 (inner/name).write_text("known configured bytes")
                 (package/name).write_text("known configured bytes")
             name = "driver/procrouting/isapol_distribution.py"
             (source/"psi4"/name).write_text("committed isapol bytes")
             (package/name).write_text("committed isapol bytes")
-            names = ["__init__.py", "extras.py", name]
+            names = ["__init__.py", "extras.py", "metadata.py", name]
             checks = ops.installed_python_gate(source, build, package, names)
             self.assertEqual(checks["extras.py"]["kind"], "configured")
+            self.assertEqual(checks["metadata.py"]["kind"], "configured")
             self.assertEqual(checks[name]["kind"], "source")
             (package/name).write_text("wrong installed isapol bytes")
             with self.assertRaisesRegex(ValueError, "install differs"):
@@ -302,7 +306,7 @@ sys.exit(m.finalize(a))
             with self.assertRaisesRegex(ValueError, "missing isapol source"):
                 ops.installed_python_gate(source, build, package, names)
             (source/"psi4"/name).write_text("committed isapol bytes")
-            (inner/"extras.py").unlink()
+            (inner/"metadata.py").unlink()
             with self.assertRaisesRegex(ValueError, "configured build output"):
                 ops.installed_python_gate(source, build, package, names)
 
