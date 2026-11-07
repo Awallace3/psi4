@@ -64,6 +64,76 @@ class Sampler:
 
 
 class Tests(unittest.TestCase):
+    def test_actual_tuple_rows_through_original_return_snapshot_archive_roundtrip(self):
+        """Producer outer tuple + native getter lists; real observer/codec seam.
+
+        NumPy/Psi4 are forbidden locally: array('d') stands in for each _owned
+        float64 row. Only the returned Q view needs the ndarray.shape protocol.
+        No capture/header/metadata/reconstruction function is mocked.
+        """
+        class QView(list):
+            shape = (75, 246)
+        with mock.patch.object(r, "N", 2), tempfile.TemporaryDirectory() as d:
+            manifest, unused = fixture()
+            basis = types.SimpleNamespace(name="literal recipe", origin="pure fixture",
+                representation="Spherical", centres=((0., -0., 0.), (1., 0., 0.), (0., 1., 0.)),
+                shells=tuple(types.SimpleNamespace(centre=i%3, l=0, exponents=(1.,),
+                    coefficients=([-.7, 5.e-324, -0.][i] if i < 3 else 1.,)) for i in range(246)))
+            xyz, weights = [[0., -0., 1.], [1., 2., 3.]], [-0., .5]
+            sampled = tuple(array.array("d", row) for row in (
+                [-0., 5.e-324], [-5.e-324, .25], [.75, -0.]))
+            denominator = [-0., 1.]  # Already-produced operand; never recompute.
+            view = QView([[0.]*246 for _ in range(75)])
+            view[0][:3] = [-0., 5.e-324, -5.e-324]
+            returned = []
+            def original_adapter(auxiliary, sites, rank, points, weights, sampled, provenance, cutoff):
+                total = denominator
+                qsites = [types.SimpleNamespace(label=str(i), origin=list(auxiliary.centres[i]), rank=rank,
+                    samples=types.SimpleNamespace(points=[list(p) for p in points], weights=list(weights),
+                        shape=row.tolist(), shape_sum=list(total), auxiliary_sites=[] if i == 1 else [2,0]))
+                    for i,row in enumerate(sampled)]
+                response_aux = types.SimpleNamespace(nfunction=246, shell_layout=lambda: manifest["shell_layout"])
+                q = types.SimpleNamespace(values=types.SimpleNamespace(np=view), offsets=[0,25,50,75],
+                    ranks=[4]*3, labels=[str(i) for i in range(3)], components=["00"]*75,
+                    origins=[s.origin for s in qsites], excluded_denominators=[1,1,1], negative_ratios=[0,1,1],
+                    provenance=provenance, denominator_cutoff=cutoff,
+                    representation="fitted_density_coefficients", frame="global_cartesian", units="atomic_units")
+                values = view
+                returned.append(q)
+                return q, values, 0.
+            path = Path(d)/"molecular-q-input.npz"
+            digest = []
+            def snapshot(local, value):
+                self.assertIs(type(local["sampled"]), tuple)
+                self.assertIs(type(local["qsites"][0].samples.shape), list)
+                digest.append(r.capture(local, value, path, {"fixture":"f"*64}, "a"*64))
+            with r.ReturnObserver(original_adapter, snapshot):
+                original_adapter(basis, (), 4, xyz, weights, sampled, "literal provenance", 1.e-36)
+            meta, loaded = r.archive_read(path, digest[0])
+            self.assertEqual(meta["original_output"], r.metadata(returned[0]))
+            for name, expected in (("points",xyz), ("weights",weights), ("shape",sampled),
+                                   ("shape_sum",denominator), ("Q",view)):
+                r.same(loaded[name], expected)
+            rebuilt_basis, rebuilt_sites = r.reconstruct(FakeCore, meta, loaded)
+            for i, site in enumerate(rebuilt_sites):
+                r.same(site.samples.shape, sampled[i])
+                r.same(site.samples.shape_sum, denominator)
+                self.assertEqual(site.samples.auxiliary_sites, [] if i == 1 else [2,0])
+            r.same(rebuilt_basis.shells[1].coefficients, [5.e-324])
+            r.same(rebuilt_basis.shells[2].coefficients, [-0.])
+
+    def test_capture_rejects_missing_or_ragged_sample_rows_before_archive_creation(self):
+        with mock.patch.object(r, "N", 2), tempfile.TemporaryDirectory() as d:
+            path = Path(d)/"not-created.npz"
+            local = dict(auxiliary=None, qsites=[None]*3, points=[[0.,0.,0.]]*2,
+                         weights=[1.,1.], total=[1.,1.])
+            for sampled in (([1.,1.],)*2, ([1.,1.],[1.],[1.,1.]), ([1.,1.],)*2+([1.,1.,1.],)):
+                with self.subTest(row_lengths=list(map(len,sampled))):
+                    local["sampled"] = sampled
+                    with self.assertRaisesRegex(ValueError,"sampled site/row lengths"):
+                        r.capture(local,(None,None,0.),path,{},"a"*64)
+                    self.assertFalse(path.exists())
+
     def test_observer_original_code_only_disable_before_io_and_trace_still_works(self):
         calls, traces = [], []
         def target(x):

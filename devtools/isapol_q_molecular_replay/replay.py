@@ -276,8 +276,12 @@ def capture(locals_, returned, path, fixture_hashes, code_sha):
     q, values, charge_error = returned
     aux, sites = locals_["auxiliary"], locals_["qsites"]
     points, weights, sampled, total = (locals_[n] for n in ("points", "weights", "sampled", "total"))
-    need(len(points) == len(weights) == len(total) == N and len(sites) == 3
-         and tuple(sampled.shape) == (3, N), "unexpected molecular capture dimensions")
+    need(len(points) == len(weights) == len(total) == N and len(sites) == 3,
+         "unexpected molecular capture dimensions")
+    # final_shape_samples returns a tuple of owned 1-D arrays, not a 2-D ndarray.
+    # Validate row lengths without stacking/casting or recomputing any operand.
+    need(len(sampled) == 3 and all(len(row) == N for row in sampled),
+         "unexpected molecular capture sampled site/row lengths")
     need(locals_["rank"] == 4 and tuple(values.shape) == (75, 246), "unexpected molecular Q dimensions")
     need(len(aux.centres) == 3 and locals_["response_aux"].nfunction == 246, "unexpected AUX dimensions")
     rows = []
