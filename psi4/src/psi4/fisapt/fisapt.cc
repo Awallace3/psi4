@@ -5944,7 +5944,7 @@ void FISAPT::find() {
     }
     if (ind_xc) {
         // Extra scratch, admitted before reference checks or disk tensors:
-        // PCG scratch, canonicality products, raw snapshots + wfn copies.
+        // PCG scratch, raw snapshots + wfn copies (conservative budget).
         const long double oa = matrices_["Locc0A"]->colspi()[0];
         const long double ob = matrices_["Locc0B"]->colspi()[0];
         const long double va = matrices_["Cvir0A"]->colspi()[0], vb = matrices_["Cvir0B"]->colspi()[0];
@@ -6007,36 +6007,15 @@ void FISAPT::find() {
         for (auto item : {std::make_pair(std::string("A"), cpks_A_), std::make_pair(std::string("B"), cpks_B_)}) {
             const auto side = item.first;
             auto wfn = item.second;
-            auto density = matrices_["D_" + side];
-            if (!density || !density->equal(wfn->Da(), 1.e-12)
-                || !std::isfinite(density->rms()) || !std::isfinite(wfn->Da()->rms()))
-                throw PSIEXCEPTION("CPKS find original density mismatch.");
             for (const std::string space : {"OCC", "VIR"}) {
                 const bool occupied = space == "OCC";
                 auto C = matrices_[(occupied ? "Cocc0" : "Cvir0") + side];
                 auto eps = vectors_[(occupied ? "eps_occ0" : "eps_vir0") + side];
-                auto original = wfn->epsilon_a_subset("AO", space);
-                auto original_c = wfn->Ca_subset("AO", space);
-                if (!C || !C->equal(original_c, 1.e-12)
-                    || !std::isfinite(C->rms()) || !std::isfinite(original_c->rms()))
-                    throw PSIEXCEPTION("CPKS find original orbitals mismatch.");
-                if (eps->dim() < 1 || eps->dim() != original->dim())
+                const int size = occupied ? wfn->nalpha() : wfn->nmo() - wfn->nalpha();
+                if (!C || !eps || C->nirrep() != 1 || eps->nirrep() != 1 || size < 1
+                    || C->nrow() != wfn->basisset()->nbf() || C->ncol() != size || eps->dim() != size)
                     throw PSIEXCEPTION("CPKS find requires full nonempty canonical orbital spaces.");
-                auto fock = linalg::triplet(C, wfn->Fa(), C, true, false, false);
-                for (int i = 0; i < eps->dim(); ++i) {
-                    if (!std::isfinite(eps->get(i)) || std::abs(eps->get(i)-original->get(i)) > 1.e-12)
-                        throw PSIEXCEPTION("CPKS find canonical gap reference mismatch.");
-                    for (int j = 0; j < eps->dim(); ++j) {
-                        const double expected = i == j ? eps->get(i) : 0., actual = fock->get(i, j);
-                        if (!std::isfinite(actual) || std::abs(actual-expected) > 1.e-8*(1.+std::abs(expected)))
-                            throw PSIEXCEPTION("CPKS find Fock/gap reference mismatch.");
-                    }
-                }
             }
-            auto cross = linalg::triplet(matrices_["Cocc0" + side], wfn->Fa(),
-                                          matrices_["Cvir0" + side], true, false, false);
-            if (!std::isfinite(cross->rms()) || cross->absmax() > 1.e-8)
-                throw PSIEXCEPTION("CPKS find occupied/virtual Fock block mismatch.");
         }
     }
 

@@ -209,7 +209,9 @@ class Admission(unittest.TestCase):
         self.assertIn("wfn->cphf_Hx({item.second})", text)
         self.assertNotIn("cpks_close", text)
         self.assertNotIn("amplitude_sum_A", text)
-        self.assertIn('density->equal(wfn->Da(), 1.e-12)', text)
+        self.assertIn('eps->dim() != size', text)
+        find_setup = text.split("void FISAPT::find()", 1)[1].split("// => DFHelper", 1)[0]
+        self.assertNotIn("wfn->Fa()", find_setup)
         self.assertIn('raw_doubles > raw_budget', text)
         self.assertIn('get_option("SCF", name)', Path(spec.origin).read_text())
         self.assertNotIn("sapt_fisapt_cpks_solver", Path(spec.origin).read_text())

@@ -80,6 +80,19 @@ def test_saptdft_fsapt_cpks_source_response(tmp_path, monkeypatch):
         for side, other, wfn, order in (("A", "B", wfn_a, "AB"), ("B", "A", wfn_b, "BA")):
             co, cv = cache["Cocc_" + side].np, cache["Cvir_" + side].np
             rotation = matrices["Uocc0" + side].np
+            # Reference/gauge consistency is an integration invariant, not
+            # an extra set of Fock transformations in every production find().
+            np.testing.assert_allclose(matrices["D_" + side].np, wfn.Da().np, rtol=0, atol=1e-12)
+            fock = wfn.Fa().np
+            for space, prefix, coefficients in (("OCC", "occ", co), ("VIR", "vir", cv)):
+                original = wfn.Ca_subset("AO", space).np
+                np.testing.assert_allclose(coefficients, original, rtol=0, atol=1e-12)
+                np.testing.assert_allclose(matrices["C" + prefix + "0" + side].np, original, rtol=0, atol=1e-12)
+                eps = vectors["eps_" + prefix + "0" + side].np
+                np.testing.assert_allclose(eps, wfn.epsilon_a_subset("AO", space).np, rtol=0, atol=1e-12)
+                np.testing.assert_allclose(coefficients.T @ fock @ coefficients, np.diag(eps),
+                                           rtol=1e-8, atol=1e-8)
+            np.testing.assert_allclose(co.T @ fock @ cv, 0., rtol=0, atol=1e-8)
             sources, jk = [], wfn.jk()
             for atom, charge in enumerate(vectors["Z" + other].np):
                 potential = psi4.core.ExternalPotential()
