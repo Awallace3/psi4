@@ -85,12 +85,9 @@ def test_each_budget_accepts_exact_limit_and_refuses_one_short(field, measured, 
 
 def test_candidate_source_binding_rejects_historical_and_changed_bytes(tmp_path):
     root = Path(__file__).resolve().parents[2]
-    binding = planner.source_binding(root)
-    assert binding['scientific_commit'] == '1aaa9e0a306373b42a3decc25c7dfa106dbc8ea2'
-    assert binding['policy_id'] == planner.POLICY
+    # This historical policy must not bless the optimized current checkout.
     with pytest.raises(ValueError, match='sources differ'):
-        planner._legacy.source_binding(root)
-    changed = 'psi4/driver/procrouting/isapol_molecular.py'
+        planner.source_binding(root)
     for name, expected in planner.FILES.items():
         raw = subprocess.check_output(
             ['git', 'show', planner.SCIENTIFIC_COMMIT+':'+name], cwd=root)
@@ -98,13 +95,19 @@ def test_candidate_source_binding_rejects_historical_and_changed_bytes(tmp_path)
         target = tmp_path/name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(raw)
-    planner.source_binding(tmp_path)
+    binding = planner.source_binding(tmp_path)
+    assert binding['scientific_commit'] == '1aaa9e0a306373b42a3decc25c7dfa106dbc8ea2'
+    assert binding['policy_id'] == planner.POLICY
+    with pytest.raises(ValueError, match='sources differ'):
+        planner._legacy.source_binding(tmp_path)
+    changed = 'psi4/driver/procrouting/isapol_molecular.py'
     target = tmp_path/changed
+    historical = target.read_bytes()
     target.write_bytes(subprocess.check_output(
         ['git', 'show', planner._legacy.SCIENTIFIC_COMMIT+':'+changed], cwd=root))
     with pytest.raises(ValueError, match='sources differ'):
         planner.source_binding(tmp_path)
-    target.write_bytes((root/changed).read_bytes()+b'\n# changed bytes\n')
+    target.write_bytes(historical+b'\n# changed bytes\n')
     with pytest.raises(ValueError, match='sources differ'):
         planner.source_binding(tmp_path)
 
