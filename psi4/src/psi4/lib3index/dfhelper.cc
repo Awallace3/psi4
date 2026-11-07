@@ -3622,9 +3622,16 @@ void DFHelper::compute_K_fp32(std::vector<SharedMatrix> Cleft, std::vector<Share
         if (!lr_symmetric) transform(nocc, nocc_pad, Cright[i]->pointer()[0], T2f);
         timer_off("DFH: K first transform");
 
+        // Chunk the inner dimension: one SGEMM with a very long inner dimension makes MKL (AVX-512
+        // path) first-touch a large internal buffer, costing ~1 s of page faults on the first call.
         timer_on("DFH: K final GEMM");
-        C_SGEMM('N', 'T', nbf_, nbf_, nocc_pad * block_size, 1.0f, T1f, nocc_pad * block_size, T2f,
-                nocc_pad * block_size, 0.0f, Kf.data(), nbf_);
+        const size_t kdim = nocc_pad * block_size;
+        size_t kc = kdim;
+        if (const char* s = std::getenv("PSI_KFP32_KCHUNK")) kc = std::max<size_t>(1, std::strtoul(s, nullptr, 10));
+        for (size_t k0 = 0; k0 < kdim; k0 += kc) {
+            const size_t kk = std::min(kc, kdim - k0);
+            C_SGEMM('N', 'T', nbf_, nbf_, kk, 1.0f, T1f + k0, kdim, T2f + k0, kdim, k0 ? 1.0f : 0.0f, Kf.data(), nbf_);
+        }
         timer_off("DFH: K final GEMM");
         double* Kp = K[i]->pointer()[0];
 #pragma omp parallel for simd num_threads(nthreads_) schedule(static)
