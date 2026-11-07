@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LGPL-3.0-only
  */
 #include "partitioned_response.h"
+#include "parallel_work.h"
 #include "psi4/libmints/matrix.h"
 #include <algorithm>
 #include <cmath>
@@ -64,29 +65,60 @@ IsaPartitionedMultipoles::IsaPartitionedMultipoles(const IsaExplicitBasis& auxil
         // original point-order running sums; never reduce independent block sums.
         const size_t batch_size = std::min<size_t>(4096,(8*1024*1024)/sizeof(double)/columns);
         property_require(batch_size > 0, "AUX multipole row exceeds collocation scratch budget");
+        const size_t components = static_cast<size_t>((site.rank+1)*(site.rank+1));
+        // At most 25*8 independent tasks, never one task per grid point.
+        // Splitting columns also permits rank-zero rows to use the workers.
+        const size_t tiles = std::min<size_t>(8,(static_cast<size_t>(columns)+63)/64);
+        const size_t tile_width = (static_cast<size_t>(columns)+tiles-1)/tiles;
         for (size_t begin = 0; begin < std::max<size_t>(1,s.points.size()); begin += batch_size) {
             const size_t end = std::min(s.points.size(),begin+batch_size);
             std::vector<std::array<double,3>> block(s.points.begin()+begin,s.points.begin()+end);
             auto basis = auxiliary.evaluate_screened(block, s.auxiliary_sites);
-        for (size_t p = begin; p < end; ++p) {
-            property_require(std::isfinite(s.weights[p]) && std::isfinite(s.shape[p]) &&
-                             std::isfinite(s.shape_sum[p]), "Nonfinite partition sample");
-            if (std::abs(s.shape_sum[p]) <= cutoff) { ++excluded; continue; }
-            double ratio = s.shape[p]/s.shape_sum[p];
-            property_require(std::isfinite(ratio), "Nonfinite partition ratio");
-            if (ratio < 0) ++negative;
-            double weight = s.weights[p]*ratio;
-            property_require(std::isfinite(weight), "Nonfinite partition integration weight");
-            std::array<double,3> r;
-            for (int d = 0; d < 3; ++d) r[d] = s.points[p][d]-site.origin[d];
-            auto harmonics = isa_regular_multipoles(site.rank, r);
-            for (size_t t = 0; t < harmonics.size(); ++t) {
-                double prefactor = weight*harmonics[t];
-                property_require(std::isfinite(prefactor), "Nonfinite weighted multipole");
-                for (int k = 0; k < columns; ++k)
-                    q_->add(offsets_[a]+t, k, prefactor*basis->get(p-begin, k));
+            const size_t count = end-begin;
+            if (count == 0) continue;  // Empty grids still validated their complete screen above.
+            // Per-batch scratch only, no full-grid samples/cache. Worst-case
+            // payload: 4096*(25*sizeof(double)+1) = 823296 bytes. The Python
+            // ISA/MBIS planners charge this plus 4 KiB of task-control headroom.
+            std::vector<double> prefactors(components*count);
+            std::vector<unsigned char> active(count,0);
+            // Keep point validation/diagnostics and exception precedence serial,
+            // AFTER collocation of this exact original batch, even if excluded.
+            for (size_t p = begin; p < end; ++p) {
+                property_require(std::isfinite(s.weights[p]) && std::isfinite(s.shape[p]) &&
+                                 std::isfinite(s.shape_sum[p]), "Nonfinite partition sample");
+                if (std::abs(s.shape_sum[p]) <= cutoff) { ++excluded; continue; }
+                double ratio = s.shape[p]/s.shape_sum[p];
+                property_require(std::isfinite(ratio), "Nonfinite partition ratio");
+                if (ratio < 0) ++negative;
+                double weight = s.weights[p]*ratio;
+                property_require(std::isfinite(weight), "Nonfinite partition integration weight");
+                std::array<double,3> r;
+                for (int d = 0; d < 3; ++d) r[d] = s.points[p][d]-site.origin[d];
+                auto harmonics = isa_regular_multipoles(site.rank, r);
+                for (size_t t = 0; t < harmonics.size(); ++t) {
+                    double prefactor = weight*harmonics[t];
+                    property_require(std::isfinite(prefactor), "Nonfinite weighted multipole");
+                    prefactors[(p-begin)*components+t] = prefactor;
+                }
+                active[p-begin] = 1;
             }
-        }
+            auto phi = basis->pointer();
+            auto rows = q_->pointer();
+            const size_t tasks = components*tiles;
+            detail::parallel_work(tasks,count >= 256 ? 1 : tasks+1,[&](size_t task) {
+                const size_t t = task/tiles, tile = task%tiles;
+                const size_t first = tile*tile_width;
+                const size_t last = std::min(static_cast<size_t>(columns),first+tile_width);
+                auto row = rows[offsets_[a]+t];
+                for (size_t p = 0; p < count; ++p) {
+                    // Do NOT add synthetic zeros for excluded points or skip
+                    // screened basis zeros: both would change signed-zero/order.
+                    if (!active[p]) continue;
+                    const double prefactor = prefactors[p*components+t];
+                    for (size_t k = first; k < last; ++k)
+                        row[k] += prefactor*phi[p][k];
+                }
+            });
         }
         excluded_.push_back(excluded); negative_.push_back(negative);
     }
