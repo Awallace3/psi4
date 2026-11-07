@@ -151,12 +151,30 @@ def validate_isa_inputs(wfn, recipe, auxiliary, sites, rank, integration_grid):
     _validate_rank_and_grid('ISA', rank, integration_grid)
 
 
+def _q_accumulation_workspace_bytes(naux, rank, npoint):
+    """Native Q's reused per-batch prefactors/flags and bounded task headroom.
+
+    This is admission accounting, not a caller-selectable cache/thread knob.
+    Collocation's original 8 MiB/4096-point batches stay unchanged. At rank4
+    the extra payload is at most823296 bytes plus4 KiB for <=200 tasks.
+    """
+    if (type(naux) is not int or naux <= 0 or type(rank) is not int or not 0 <= rank <= 4
+            or type(npoint) is not int or npoint < 0):
+        raise ValueError('finite native Q workspace dimensions required')
+    block = min(4096, (8*1024**2)//8//naux)
+    if block == 0:
+        raise ValueError('AUX multipole row exceeds collocation scratch budget')
+    count = min(block, npoint)
+    return count*(8*(rank+1)**2+1) + 4096
+
+
 def isa_resource_plan(wfn, recipe, auxiliary, integration_grid, rank):
     """Conservative numeric/work estimates, not RSS or integral-engine CPU caps.
 
     Charge full-grid atomic collocation even when native cache admission chooses
     the uncached path, all max_iterations history metrics, copied grids and Q,
-    MAIN/Drho buffers, plus 256 MiB scratch. Lebedev rounding is bounded by
+    MAIN/Drho buffers, plus 256 MiB scratch and the explicitly charged native-Q
+    prefactor/active-flag workspace. Lebedev rounding is bounded by
     2*requested+6 (the native grid clamps at 5294). No per-iteration refund.
     Drho-C refinement is charged explicitly, not taken from the scratch term or
     the d**3 solve term. Bytes: 4d doubles and the 134-digit accumulator when
@@ -185,6 +203,7 @@ def isa_resource_plan(wfn, recipe, auxiliary, integration_grid, rank):
     q = ns*(rank+1)**2
     numeric = 8*(g*(sum(a)+40*ns+40)+(it+12)*(a2+16*sum(a)+16*s)
                  +h*(32*ns+16)+8*p*q+16*d*d+8*d*b*b+64*b*b)+256*1024**2
+    numeric += _q_accumulation_workspace_bytes(p, rank, h)
     work = (it*(8*g*(a2+ns*s)+8*sum(k**3 for k in a))
             +16*d*b**3+8*d**3+4*h*q*p)
     if refinement:
@@ -359,7 +378,8 @@ def mbis_resource_plan(wfn, auxiliary, integration_grid, rank):
     moments = max(4, values['MAX_RADIAL_MOMENT'])-1
     native_work = (2*g*b*b+g*ns*(MBIS_MAX_SHELLS*64+256+32*moments)
                    +updates*g*ns*(MBIS_MAX_SHELLS*128+16))
-    sampling = 8*h*(64+16*ns)+32*p*q+grid_copy+MBIS_SCRATCH_BYTES
+    sampling = (8*h*(64+16*ns)+32*p*q+grid_copy+MBIS_SCRATCH_BYTES
+                +_q_accumulation_workspace_bytes(p, rank, h))
     sampling_work = h*ns*(MBIS_MAX_SHELLS*64+64)+4*h*q*p
     return (int(native), int(native_work)), (int(sampling), int(sampling_work))
 
