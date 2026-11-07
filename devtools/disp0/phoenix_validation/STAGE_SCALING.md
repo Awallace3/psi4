@@ -125,3 +125,47 @@ observed localization boundary at88, followed by95/97/99/103/112. Independent
 inspect-only launch review found and prompted fixes to frozen `DISP0_PIN`,
 writable CPU scratch selection, whole-coordinator TERM handling, and finalized
 GPU producer/manifest/timing seals before CPU admission.
+
+## Peptide GPU passed; CPU qualification submitted 2026-11-07
+
+GPU job15233604 completed0:0 without TERM in7min14s. Final artifact status:
+`PASS_GPU_REPEATS_AND_TRACE_AWAITING_CPU`. The small H200 gate, three fresh
+baseline repeat checks, separate trace repeat, retirement checks, owned group
+reaping and owned scratch cleanup all passed.
+
+- Unprofiled energy samples:37.137074203 /37.009711522 /36.967758893s.
+- Median:37.009711522s; no new accepted CPU/GPU ratio yet.
+- Separate traced energy:52.307596960s; traced fragment:43.109s.
+- GPU localization0.767025920, felst5.206729961, fexch0.026774131,
+  find9.069857403, fdisp3.908926633s.
+- Additional traced workflow overhead11.844163563s and outer factory/
+  cleanup12.285522389s remain residuals, not localization or dispersion.
+- These five windows plus both residuals close to43.109s; none is rescaled
+  into the37.010s unprofiled median. Instrumentation is intrusive.
+- Final producer SHA256:
+  `d4a8feb328aca041844143852f15e3a39661ac7822fd43d538d784f545cf3806`.
+  Local downloaded bytes match the immutable hash sealed by CPU submission.
+- Trace SHA256:
+  `b300dc349d8b640e86ffaaa60772961757d5b107c37dace14d5d1a4f832618bb`.
+- Traced worker result SHA256:
+  `61a1e50ce34d842b3d3878807d61e89b448b20b29bca11ed4204701a3255f021`.
+- Traced timer SHA256:
+  `0926418c29c01ad1013697a3c576c29dbb6ce2d7ae46a17e073042021cc3e637`.
+
+Three CPU-only reference+oracle jobs were submitted successfully, each with
+one-hour cap,24Gold6226cores,160GiB,exclusive local-NVMe CPU-small and embers:
+
+| Repeat | Actual job | Submission root |
+|---|---:|---|
+| r0 | 15278472 | `peptide-cpu-r0/` |
+| r1 | 15278474 | `peptide-cpu-r1/` |
+| r2 | 15278476 | `peptide-cpu-r2/` |
+
+All three were confirmed RUNNING after submission; no GPU is reserved.
+Test-only IDs15278471/15278473/15278475 are not actual submitted jobs.
+Monitor `b4ea7cfb9` checks all three hourly. **These CPU jobs already exist;
+do not resubmit them when the earlier GPU monitor delivers completion.**
+After final artifacts pass, compare all three CPU references with the existing
+strict repeat helper before publishing a ratio of the new per-arm medians.
+Nanotube15233651 and Protein8315233653 were still pending at this checkpoint,
+with the peptide prerequisite satisfied.
