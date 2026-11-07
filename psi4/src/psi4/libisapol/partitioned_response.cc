@@ -4,6 +4,7 @@
 #include "partitioned_response.h"
 #include "parallel_work.h"
 #include "psi4/libmints/matrix.h"
+#include "psi4/libpsi4util/process.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -52,6 +53,9 @@ IsaPartitionedMultipoles::IsaPartitionedMultipoles(const IsaExplicitBasis& auxil
     property_require(std::isfinite(cutoff) && cutoff >= 0, "Invalid partition denominator cutoff");
     declare_sites(sites);
     q_ = std::make_shared<Matrix>("Partitioned molecular AUX multipoles", offsets_.back(), columns);
+    // Avoid staged-prefactor/tiled traversal overhead at the measured low
+    // thread counts. Collocation retains its existing worker policy.
+    const bool original_accumulation = Process::environment.get_n_threads() <= 2;
     for (size_t a = 0; a < sites.size(); ++a) {
         const auto& site = sites[a]; const auto& s = site.samples;
         property_require(s.points.size() == s.weights.size() && s.points.size() == s.shape.size() &&
@@ -76,6 +80,28 @@ IsaPartitionedMultipoles::IsaPartitionedMultipoles(const IsaExplicitBasis& auxil
             auto basis = auxiliary.evaluate_screened(block, s.auxiliary_sites);
             const size_t count = end-begin;
             if (count == 0) continue;  // Empty grids still validated their complete screen above.
+            if (original_accumulation) {
+                for (size_t p = begin; p < end; ++p) {
+                    property_require(std::isfinite(s.weights[p]) && std::isfinite(s.shape[p]) &&
+                                     std::isfinite(s.shape_sum[p]), "Nonfinite partition sample");
+                    if (std::abs(s.shape_sum[p]) <= cutoff) { ++excluded; continue; }
+                    double ratio = s.shape[p]/s.shape_sum[p];
+                    property_require(std::isfinite(ratio), "Nonfinite partition ratio");
+                    if (ratio < 0) ++negative;
+                    double weight = s.weights[p]*ratio;
+                    property_require(std::isfinite(weight), "Nonfinite partition integration weight");
+                    std::array<double,3> r;
+                    for (int d = 0; d < 3; ++d) r[d] = s.points[p][d]-site.origin[d];
+                    auto harmonics = isa_regular_multipoles(site.rank, r);
+                    for (size_t t = 0; t < harmonics.size(); ++t) {
+                        double prefactor = weight*harmonics[t];
+                        property_require(std::isfinite(prefactor), "Nonfinite weighted multipole");
+                        for (int k = 0; k < columns; ++k)
+                            q_->add(offsets_[a]+t, k, prefactor*basis->get(p-begin, k));
+                    }
+                }
+                continue;
+            }
             // Per-batch scratch only, no full-grid samples/cache. Worst-case
             // payload: 4096*(25*sizeof(double)+1) = 823296 bytes. The Python
             // ISA/MBIS planners charge this plus 4 KiB of task-control headroom.
