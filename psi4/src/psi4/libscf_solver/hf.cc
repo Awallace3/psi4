@@ -386,6 +386,8 @@ void HF::finalize() {
     // This will be the only one
     if (!options_.get_bool("SAVE_JK")) {
         jk_.reset();
+    } else if (jk_) {
+        jk_->release_scratch();
     }
 
     // Clean up after DIIS

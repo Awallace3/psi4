@@ -57,6 +57,7 @@ void export_fock(py::module &m) {
                     })
         .def("name", &JK::name)
         .def("memory_estimate", &JK::memory_estimate)
+        .def("release_scratch", &JK::release_scratch, "Free scratch kept between compute() calls, leaving the integrals.")
         .def("initialize", &JK::initialize)
         .def("basisset", &JK::basisset)
         .def("set_print", &JK::set_print)
