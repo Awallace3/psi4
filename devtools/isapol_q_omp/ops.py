@@ -17,6 +17,38 @@ OLD = Path("/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-grid400-
 BASE = Path("/storage/project/r-cs207-0/awallace43/miniconda/envs/p4cuest_sapt")
 PATCH = "5ae597cd9305588d14681d0da435834ef761c264"
 OLD_MANIFEST = "d2b4049c2e5818e462ad3c6ac36f93d6a9623a6a205c701b885887ec2a9f3bfd"
+APPROVED_RECORD_SHA = "896949860e3eb012e07b2ec45556ab4580d87e36de094ca5567d800149803380"
+APPROVED_RECORD_BYTES = 4356
+# Parent-approved qualified build record, not an approval derived at job launch.
+# Keep argv exact, including the intentional PYMOD_INSTALL_LIBDIR suffix.
+APPROVED_CONFIGURE = (
+    f"{BASE}/bin/cmake", "-S", f"{OLD}/source", "-B", f"{OLD}/build", "-G", "Ninja",
+    "-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_INSTALL_PREFIX={OLD}/env",
+    "-DPYMOD_INSTALL_LIBDIR=/python3.13/site-packages",
+    f"-DCMAKE_C_COMPILER={BASE}/bin/x86_64-conda-linux-gnu-cc",
+    f"-DCMAKE_CXX_COMPILER={BASE}/bin/x86_64-conda-linux-gnu-c++",
+    f"-DCMAKE_PREFIX_PATH={BASE}", "-DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON",
+    "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF", "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF",
+    "-DENABLE_Einsums=OFF", "-DENABLE_adcc=OFF", "-DENABLE_CYTHONIZE=OFF",
+    "-DENABLE_OPENMP=ON", "-DENABLE_XHOST=OFF",
+    "-DCMAKE_C_FLAGS=-march=x86-64-v3", "-DCMAKE_CXX_FLAGS=-march=x86-64-v3",
+    "-Dpsi4_CMAKE_UNITY_BUILD=ON", "-Dpsi4_CMAKE_UNITY_BUILD_BATCH_SIZE=8",
+    "-Dpsi4_ENABLE_PRECOMPILE_HEADERS=OFF", "-DBUILD_TESTING=ON",
+    "-DBUILD_Libint2_GENERATOR=OFF", "-DFC_SYMBOL=2", "-DMAX_AM_ERI=5", "-DBLAS_TYPE=MKL",
+    f"-DBLAS_LIBRARIES={BASE}/lib/libmkl_rt.so", f"-DLAPACK_LIBRARIES={BASE}/lib/libmkl_rt.so",
+    f"-DBLAS_INCLUDE_DIRS={BASE}/include", f"-DLAPACK_INCLUDE_DIRS={BASE}/include",
+    f"-DPython_EXECUTABLE={OLD}/env/bin/python", f"-DPython_ROOT_DIR={BASE}",
+    f"-DPython_INCLUDE_DIR={BASE}/include/python3.13",
+    f"-DPython_LIBRARY={BASE}/lib/libpython3.13.so",
+    f"-DPython_NumPy_INCLUDE_DIR={OLD}/env/lib/python3.13/site-packages/numpy/_core/include",
+    f"-DLibint2_DIR={BASE}/lib/cmake/libint2", f"-DLibxc_DIR={BASE}/lib/cmake/Libxc",
+    f"-Dgau2grid_DIR={BASE}/share/cmake/gau2grid",
+    f"-Dpybind11_DIR={OLD}/env/lib/python3.13/site-packages/pybind11/share/cmake/pybind11",
+    "-DCMAKE_INSIST_FIND_PACKAGE_pybind11=ON", "-DCMAKE_INSIST_FIND_PACKAGE_gau2grid=ON",
+    "-DCMAKE_INSIST_FIND_PACKAGE_Libint2=ON", "-DCMAKE_INSIST_FIND_PACKAGE_Libxc=ON",
+    "-DCMAKE_INSIST_FIND_PACKAGE_qcelemental=ON", "-DCMAKE_INSIST_FIND_PACKAGE_qcengine=ON",
+    "-DCMAKE_INSIST_FIND_PACKAGE_optking=ON",
+)
 OLD_ID = dict(core="ef69cddb2dd7b675688a733e4c5dd68b78fc78ac35b77b363114d638ac9dae44",
               isapol_python="e1476e2d0b8e395c40b48219ca8bc8def9e69035cab3ab970f6b88940bebc74b")
 FROZEN = {
@@ -100,11 +132,16 @@ def old_seal():
 def environment(prefix, scratch):
     env = dict(os.environ)
     for key in list(env):
-        if key.startswith("PIP_") or key in (
+        if key.startswith(("PIP_", "CMAKE_")) or key in (
             "PYTHONPATH", "PYTHONHOME", "PSIPATH", "PSIDATADIR", "LD_PRELOAD", "GCC_ROOT",
+            "DESTDIR", "LD_AUDIT", "GCC_EXEC_PREFIX", "COMPILER_PATH",
             "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH", "LIBRARY_PATH",
-            "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "CC", "CXX", "CMAKE_PREFIX_PATH",
-            "CMAKE_TOOLCHAIN_FILE", "CMAKE_ARGS"):
+            "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "FFLAGS", "CUDAFLAGS",
+            "CC", "CXX", "FC", "F77", "F90", "CUDACXX", "AR", "RANLIB", "LD", "AS",
+            "BASH_ENV", "ENV", "CDPATH", "LD_RUN_PATH", "LDSHARED",
+            "MAKEFLAGS", "MFLAGS", "GNUMAKEFLAGS", "NINJAFLAGS",
+            "SDKROOT", "CONDA_BUILD_SYSROOT", "VIRTUAL_ENV", "PYTHONUSERBASE", "PYTHONSTARTUP",
+            "_PYTHON_SYSCONFIGDATA_NAME", "_PYTHON_HOST_PLATFORM", "PYTEST_ADDOPTS", "PYTEST_PLUGINS"):
             env.pop(key, None)
     env.update(PATH=f"{prefix}/bin:{BASE}/bin:/usr/bin:/bin",
                LD_LIBRARY_PATH=f"{prefix}/lib:{BASE}/lib",
@@ -194,20 +231,31 @@ def clone_runtime(old, new, base):
     return changes
 
 
+def approved_record(path):
+    raw = Path(path).read_bytes()
+    need(len(raw) == APPROVED_RECORD_BYTES
+         and hashlib.sha256(raw).hexdigest() == APPROVED_RECORD_SHA,
+         "original build record differs from parent-approved bytes")
+    record = json.loads(raw)
+    need(tuple(record["configure"]) == APPROVED_CONFIGURE, "unapproved original configure argv")
+    return record
+
+
 def configure(record, source, root):
-    args = list(record["configure"])
-    required = ("-DCMAKE_BUILD_TYPE=Release", "-DENABLE_OPENMP=ON", "-DENABLE_XHOST=OFF",
-                "-DBLAS_TYPE=MKL", "-DBUILD_Libint2_GENERATOR=OFF")
-    need(all(flag in args for flag in required), "original configuration stack differs")
-    for package in ("pybind11", "gau2grid", "Libint2", "Libxc", "qcelemental", "qcengine", "optking"):
-        need("-DCMAKE_INSIST_FIND_PACKAGE_"+package+"=ON" in args, "dependency fallback/download forbidden")
-    need(Path(args[0]).resolve() == (BASE / "bin/cmake").resolve(), "original CMake must use BASE")
+    # Exact equality rejects duplicates, -C/preload/toolchain options, changed
+    # write-bearing paths, reordered flags and newly appended overrides alike.
+    need(tuple(record["configure"]) == APPROVED_CONFIGURE, "unapproved original configure argv")
+    args = list(APPROVED_CONFIGURE)
     args[args.index("-S")+1], args[args.index("-B")+1] = str(source), str(root / "build")
-    args = [arg.replace(str(OLD / "env"), str(root / "env")) for arg in args]
+    # Only four approved -D values are rooted in OLD/env. No arbitrary substring
+    # substitution or extra configure arguments are permitted.
+    for i, arg in enumerate(args):
+        if arg.startswith("-D") and "=" in arg:
+            key, value = arg.split("=", 1)
+            if value == str(OLD/"env") or value.startswith(str(OLD/"env")+"/"):
+                args[i] = key + "=" + str(root/"env") + value[len(str(OLD/"env")):]
     need("-DCMAKE_INSTALL_PREFIX="+str(root / "env") in args, "candidate install prefix differs")
     need("-DPython_EXECUTABLE="+str(root / "env/bin/python") in args, "candidate Python differs")
-    args += ["-DFETCHCONTENT_FULLY_DISCONNECTED=ON", "-DFETCHCONTENT_UPDATES_DISCONNECTED=ON",
-             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"]
     return args
 
 
@@ -251,6 +299,36 @@ def dependency_gate(prefix, manifest):
     for name, expected in manifest["runtime_files"].items():
         if not science_owned(name):
             need(sha(prefix / name) == expected, "candidate changed an original dependency: "+name)
+
+
+def installed_python_gate(source, build, package, names):
+    """Two configured templates; every actual source-backed Python file strict.
+
+    CMakeLists.txt's psi4-core ExternalProject uses its default binary directory;
+    psi4/CMakeLists.txt configures these two files in that inner CMAKE_BINARY_DIR.
+    Never compare installed template expansions against raw @ONLY input bytes.
+    """
+    core_build = build / "psi4-core-prefix/src/psi4-core-build"
+    configured = {name: core_build/name for name in ("__init__.py", "extras.py")}
+    checked = {}
+    for name in sorted(set(names) | set(configured)):
+        if not name.endswith(".py"):
+            continue
+        expected = configured.get(name, source/"psi4"/name)
+        if name in configured:
+            need(expected.is_file() and expected.resolve().is_relative_to(build.resolve()),
+                 "missing/outside configured build output: "+name)
+        elif not expected.is_file():
+            need(not Path(name).name.startswith("isapol"), "missing isapol source: "+name)
+            continue  # Preserve previous handling of other generated/non-source files.
+        actual = package/name
+        need(actual.is_file() and actual.resolve().is_relative_to(package.resolve()),
+             "missing/outside candidate installed Python: "+name)
+        digest = sha(expected)
+        need(sha(actual) == digest, "candidate Python install differs: "+name)
+        checked[name] = dict(kind="configured" if name in configured else "source",
+                             expected=str(expected), sha256=digest)
+    return checked
 
 
 IDENTITY = """import json,pathlib,psi4
@@ -321,23 +399,22 @@ def perform(args):
         manifest = old_seal()
         runner.check()
         if args.mode == "build":
+            record_path = OLD / "build-record.json"
+            # Authenticate the original record before any clone/configure work.
+            record = approved_record(record_path)
+            command = configure(record, args.source, args.root)
+            result.update(original_configure_sha256=APPROVED_RECORD_SHA, configure=command,
+                          oracle_receipt_sha256=args.oracle_sha256)
             write(args.root / "clone-links.json", clone_runtime(OLD / "env", prefix, BASE))
             dependency_gate(prefix, manifest)
-            record_path = OLD / "build-record.json"
-            record_sha = sha(record_path)
-            command = configure(read(record_path), args.source, args.root)
             runner.run("configure", command)
             runner.run("build-install", [BASE / "bin/cmake", "--build", args.root / "build",
                                          "--target", "install", "-j", "2"])
-            need(sha(record_path) == record_sha, "original configure record changed")
-            result.update(original_configure_sha256=record_sha, configure=command,
-                          oracle_receipt_sha256=args.oracle_sha256)
+            approved_record(record_path)
             dependency_gate(prefix, manifest)
             package = prefix / "lib/python3.13/site-packages/psi4"
-            for name in manifest["installed_files"]:
-                original_source = args.source / "psi4" / name
-                if name.endswith(".py") and original_source.is_file():
-                    need(sha(package / name) == sha(original_source), "candidate Python install differs: "+name)
+            result["installed_python_checks"] = installed_python_gate(
+                args.source, args.root/"build", package, manifest["installed_files"])
         ident = identity(runner, prefix / "bin/python", prefix, args.scratch_root, "identity-before")
         if args.mode == "oracle":
             need(ident["implementation"] == OLD_ID, "original qualified implementation differs")
@@ -364,6 +441,8 @@ def perform(args):
             old_seal()
             result["old_runtime_unchanged"] = True
             source_gate(args.source, args.commit, args.tree)
+            if args.mode == "build":
+                approved_record(OLD / "build-record.json")
             if args.mode == "build" and manifest is not None and prefix.exists():
                 dependency_gate(prefix, manifest)
             if runner.interrupted:

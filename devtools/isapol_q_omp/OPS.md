@@ -72,18 +72,30 @@ wrong digest, source identity, old runtime identity or wrapper completion.
   External BASE file links are materialized as identical private bytes to
   prevent install-through writes; unexpected external directory links/`.pth`
   old-env injection fail closed for parent review.
-- Replays OLD/build-record.json configure arguments, replacing only source,
+- Pins OLD/build-record.json to the parent-reviewed **4356 bytes**, SHA256
+  `896949860e3eb012e07b2ec45556ab4580d87e36de094ca5567d800149803380`,
+  before cloning/configuring and checks it again after build and at finalization.
+  Replays its exact configure arguments, replacing only source,
   object-dir and private-prefix/Python paths. Original Release/OpenMP/x86-64-v3/
-  MKL/Libint2/Libxc/gau2grid/Python stack flags remain. Requires all original
-  insist-find flags; FetchContent download/update is disabled and pip index use
-  disabled. No dependency-package installation/download or new dependency stack.
-- Clears GCC_ROOT, site includes/compiler flags, preload/Python contamination.
+  MKL/Libint2/Libxc/gau2grid/Python stack flags remain, including the intentional
+  `PYMOD_INSTALL_LIBDIR=/python3.13/site-packages` suffix. Exact argv matching
+  rejects duplicate overrides, `-C`/preload/toolchain injection and changed
+  write-bearing paths; no additional configure flags are appended.
+  Original insist-find dependency flags and disabled pip index remain.
+  No dependency-package installation/download step or new stack is introduced;
+  missing original dependencies require stopping, not fetching replacements.
+- Clears DESTDIR, CMAKE_* (including CMAKE_INSTALL_MODE/toolchain overrides),
+  GCC_ROOT, site includes/compiler/make flags, shell-startup/preload/Python contamination.
   Direct clone Python, explicit private/BASE PATH and LD_LIBRARY_PATH.
 - Normal CMake install: `BASE/bin/cmake --build CAND/build --target install -j2`.
   Two heavy Libint TUs can each use~4.3GiB;32GiB/-j2 is conservative, not a
   promise of measured peakRSS/runtime.
 - Original non-science dependency bytes checked in clone before/after install.
-  Candidate installed Python compared with committed source; imported package/
+  Candidate installed Python compared with committed source, **except** the
+  two CMake templates `__init__.py` and `extras.py`: these compare strictly with
+  `CAND/build/psi4-core-prefix/src/psi4-core-build/{__init__,extras}.py`,
+  the known configured outputs, not raw source templates. Missing configured
+  outputs fail; actual isapol source byte checks remain strict. Imported package/
   core must resolve under CAND/env, new core/Python digests must differ from OLD.
 - Candidate32-case oracle plus existing `test_isapol_native_performance.py` and
   `test_isapol_partitioned_response.py`, no SCF. All must pass/no skips.
@@ -135,7 +147,7 @@ offline symlink copying, original configure replay, exact32-case/no-skip gates,
 parent-bound oracle digest/completion, failure/foreign-root finalization and a
 plain stdlib child's TERM handling. They invoke no real Slurm/compiler/Psi4.
 
-Local result: **13 ops metadata tests +5 pure workspace tests passed**, both
+Previous7eb local result: **13 ops metadata tests +5 pure workspace tests passed**, both
 batch files passed `bash -n`. The five reviewed5ae files were hash-checked
 unchanged. No32-case native test, configure, clone of a real science environment,
 build or cluster operation has run locally.
@@ -144,3 +156,18 @@ The new deterministic regression signals both wrappers **during FINALIZATION**,
 before and after success publication, with TERM and INT (eight scenarios).
 It also runs the original b0 wrapper bytes from Git in temporary test copies and
 reproduces their ignored-TERM/COMPLETED0 bug. No old checkout or receipt is edited.
+
+The ops-only build fix adds exact approved-argv/raw-record rejection tests,
+inherited install/toolchain/site-environment poisoning tests, and configured-
+template versus strict isapol source tests. Original oracle002's independently
+verified32/32 pass on job15279995 belongs only to its immutable7eb source.
+Every new ops commit requires a **fresh same-source original oracle** before
+building; oracle002 is not adopted or rewritten. Parent must verify actual
+allocation, batch and step exit0 as well as JUnit/markers. Candidate native tests,
+build, scientific validation and performance measurement remain pending.
+
+Build-fix local verification: **17 ops metadata +5 pure workspace tests passed**,
+both batch files passed `bash -n`, frozen5ae file diff and `git diff --check`
+passed. A stdlib-only read of the confirmed transferred record passed the raw
+pin and exact argv gate (51 original and replay arguments; only indices
+2/4/8/35/39/43 changed). No local native execution or build.

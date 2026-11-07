@@ -1,5 +1,6 @@
 """Pure ops metadata tests, no Psi4, real SLURM, compiler or native test calls."""
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -212,23 +213,98 @@ sys.exit(m.finalize(a))
                 ops.clone_runtime(old, root/"new", base)
 
     def test_configure_replays_original_stack_into_new_prefix(self):
-        flags = ["-DCMAKE_BUILD_TYPE=Release", "-DENABLE_OPENMP=ON", "-DENABLE_XHOST=OFF",
-                 "-DBLAS_TYPE=MKL", "-DBUILD_Libint2_GENERATOR=OFF"]
-        flags += ["-DCMAKE_INSIST_FIND_PACKAGE_"+p+"=ON" for p in
-                  ("pybind11", "gau2grid", "Libint2", "Libxc", "qcelemental", "qcengine", "optking")]
-        record = dict(configure=[str(ops.BASE/"bin/cmake"), "-S", str(ops.OLD/"source"),
-            "-B", str(ops.OLD/"build"), "-DCMAKE_INSTALL_PREFIX="+str(ops.OLD/"env"),
-            "-DPython_EXECUTABLE="+str(ops.OLD/"env/bin/python"),
-            "-DCMAKE_PREFIX_PATH="+str(ops.BASE), *flags])
+        record = dict(configure=list(ops.APPROVED_CONFIGURE))
+        canonical = json.dumps(record["configure"], separators=(",", ":"), ensure_ascii=True).encode()
+        # Independently recorded from the transferred, parent-approved record.
+        self.assertEqual(hashlib.sha256(canonical).hexdigest(),
+                         "04478ce47a99f0399bbd414b0ede79e018757c0ec62444918c7a7a3d28aaf3fe")
         result = ops.configure(record, Path("/candidate/source"), Path("/candidate/root"))
         self.assertIn("-DCMAKE_INSTALL_PREFIX=/candidate/root/env", result)
         self.assertIn("-DPython_EXECUTABLE=/candidate/root/env/bin/python", result)
         self.assertIn("-DCMAKE_PREFIX_PATH="+str(ops.BASE), result)
-        self.assertIn("-DFETCHCONTENT_FULLY_DISCONNECTED=ON", result)
+        self.assertIn("-DPYMOD_INSTALL_LIBDIR=/python3.13/site-packages", result)
+        self.assertEqual(len(result), len(record["configure"]))
+        # Every other byte must be preserved; no added flags or stack changes.
+        expected = [arg.replace(str(ops.OLD/"env"), "/candidate/root/env")
+                    for arg in record["configure"]]
+        expected[2], expected[4] = "/candidate/source", "/candidate/root/build"
+        self.assertEqual(result, expected)
         self.assertEqual(record["configure"][2], str(ops.OLD/"source"))
-        broken = dict(configure=[v for v in record["configure"] if v != "-DBLAS_TYPE=MKL"])
-        with self.assertRaises(ValueError):
-            ops.configure(broken, Path("/source"), Path("/new"))
+
+    def test_configure_rejects_unapproved_overrides_and_even_duplicate_equal_flags(self):
+        original = list(ops.APPROVED_CONFIGURE)
+        mutations = [original + extra for extra in (
+            ["-DCMAKE_BUILD_TYPE=Release"], ["-DCMAKE_INSTALL_PREFIX=/old/install"],
+            ["-C", "/preload.cmake"], ["-C/preload.cmake"],
+            ["--toolchain", "/toolchain.cmake"], ["-DCMAKE_TOOLCHAIN_FILE=/toolchain.cmake"],
+            ["-DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=/injected.cmake"],
+            ["-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"])]
+        mutations += [[a.replace(str(ops.BASE), "/other-stack") for a in original],
+                      original[:-1]]
+        for args in mutations:
+            with self.subTest(args=args):
+                with self.assertRaisesRegex(ValueError, "unapproved"):
+                    ops.configure(dict(configure=args), Path("/source"), Path("/new"))
+
+    def test_build_record_requires_parent_pinned_raw_bytes_not_just_safe_argv(self):
+        self.assertEqual(ops.APPROVED_RECORD_BYTES, 4356)
+        self.assertEqual(ops.APPROVED_RECORD_SHA,
+                         "896949860e3eb012e07b2ec45556ab4580d87e36de094ca5567d800149803380")
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d)/"build-record.json"
+            raw = json.dumps(dict(configure=list(ops.APPROVED_CONFIGURE))).encode()
+            # Same argv with different record/provenance/serialization is NOT
+            # authorization. Also reject forged records of the expected size.
+            for data in (raw, b" "*4356):
+                path.write_bytes(data)
+                with self.assertRaisesRegex(ValueError, "parent-approved bytes"):
+                    ops.approved_record(path)
+
+    def test_inherited_install_toolchain_and_site_flags_are_removed(self):
+        poisoned = dict(DESTDIR="/old", CMAKE_INSTALL_MODE="SYMLINK",
+                        CMAKE_TOOLCHAIN_FILE="/toolchain", CMAKE_ARGS="-C /preload",
+                        CMAKE_INSTALL_PREFIX="/old", CPATH="/site", GCC_ROOT="/site",
+                        LD_PRELOAD="/inject", LD_AUDIT="/inject", CC="/site/cc",
+                        CXXFLAGS="-include /site/header", MAKEFLAGS="DESTDIR=/old",
+                        PYTHONPATH="/site", PYTEST_ADDOPTS="--skip-all")
+        with mock.patch.dict(os.environ, poisoned):
+            env = ops.environment(Path("/candidate/env"), Path("/candidate/scratch"))
+        for key in poisoned:
+            self.assertNotIn(key, env)
+        self.assertEqual(env["PATH"], f"/candidate/env/bin:{ops.BASE}/bin:/usr/bin:/bin")
+        self.assertEqual(env["LD_LIBRARY_PATH"], f"/candidate/env/lib:{ops.BASE}/lib")
+
+    def test_installed_templates_use_configured_outputs_and_isapol_stays_strict(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            source, build, package = root/"source", root/"build", root/"env/psi4"
+            inner = build/"psi4-core-prefix/src/psi4-core-build"
+            inner.mkdir(parents=True)
+            package.mkdir(parents=True)
+            (source/"psi4/driver/procrouting").mkdir(parents=True)
+            (package/"driver/procrouting").mkdir(parents=True)
+            for name in ("__init__.py", "extras.py"):
+                (source/"psi4"/name).write_text("unconfigured @TEMPLATE@")
+                (inner/name).write_text("known configured bytes")
+                (package/name).write_text("known configured bytes")
+            name = "driver/procrouting/isapol_distribution.py"
+            (source/"psi4"/name).write_text("committed isapol bytes")
+            (package/name).write_text("committed isapol bytes")
+            names = ["__init__.py", "extras.py", name]
+            checks = ops.installed_python_gate(source, build, package, names)
+            self.assertEqual(checks["extras.py"]["kind"], "configured")
+            self.assertEqual(checks[name]["kind"], "source")
+            (package/name).write_text("wrong installed isapol bytes")
+            with self.assertRaisesRegex(ValueError, "install differs"):
+                ops.installed_python_gate(source, build, package, names)
+            (package/name).write_text("committed isapol bytes")
+            (source/"psi4"/name).unlink()
+            with self.assertRaisesRegex(ValueError, "missing isapol source"):
+                ops.installed_python_gate(source, build, package, names)
+            (source/"psi4"/name).write_text("committed isapol bytes")
+            (inner/"extras.py").unlink()
+            with self.assertRaisesRegex(ValueError, "configured build output"):
+                ops.installed_python_gate(source, build, package, names)
 
     def junit(self, path, count=32, skipped=False):
         root = ET.Element("testsuites")
