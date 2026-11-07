@@ -22,15 +22,41 @@ done
 [[ $source_root == /* ]] || exit 2
 helper=$source_root/devtools/isapol_q_omp/ops.py
 token=$(/usr/bin/python3 -I -B -c 'import uuid; print(uuid.uuid4())')
-child= interrupted=0
-term() { interrupted=1; [[ -z $child ]] || kill -TERM "$child" 2>/dev/null || true; }
+child= interrupted=0 finalizing=0 failure_cleanup=0 status=0
+failed_finalization() {
+    failure_cleanup=1
+    /usr/bin/python3 -I -B "$helper" build-finalize "${args[@]}" \
+        --launch-token "$token" --exit-code "$status" || true
+}
+term() {
+    interrupted=1
+    status=143
+    # Failure metadata is already irrevocably non-successful; do not kill its
+    # short cleanup, but keep detecting every subsequent TERM/INT.
+    (( failure_cleanup == 0 )) || return 0
+    if [[ -n $child ]] && kill -0 "$child" 2>/dev/null; then
+        kill -TERM "$child" 2>/dev/null || true
+    elif (( finalizing )); then
+        failed_finalization
+    fi
+}
 finish() {
     status=$?
     trap - EXIT
-    trap '' TERM INT
+    finalizing=1
     (( interrupted == 0 )) || status=143
+    (( status == 0 )) || failure_cleanup=1
     /usr/bin/python3 -I -B "$helper" build-finalize "${args[@]}" \
-        --launch-token "$token" --exit-code "$status" || status=$?
+        --launch-token "$token" --exit-code "$status" &
+    child=$!
+    if (( interrupted && !failure_cleanup )); then term; fi
+    wait "$child" || status=$?
+    if (( interrupted )); then
+        while kill -0 "$child" 2>/dev/null; do wait "$child" || true; done
+        status=143
+    fi
+    child=
+    (( status == 0 )) || failed_finalization
     exit "$status"
 }
 trap term TERM INT

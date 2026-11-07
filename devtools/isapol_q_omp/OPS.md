@@ -108,6 +108,15 @@ An unpredictable per-launch token prevents writing FAILED/COMPLETED into a
 preexisting or foreign root. SIGKILL/node loss may leave partial evidence and
 no final marker; a marker is not a scientific acceptance certificate.
 
+TERM/INT handlers remain active **through finalization**, not ignored or
+inherited as SIG_IGN. Success finalization runs as a tracked background child;
+an interrupt is forwarded and forces exit143/failure finalization. If success
+was already published while the finalizer was still alive, its record is
+retained as `COMPLETED_INTERRUPTED` (or `COMPLETED_INVALIDATED` for another
+failure), not left as `COMPLETED`; `FAILED` is monotonic/idempotent. The short
+non-success cleanup is not killed again, but further signals are still detected
+and keep the wrapper nonzero.
+
 No QCA, held-job, receipt mutation, paid QoS, source optimization extension or
 PFIT change is performed. Full candidate profiling is separate after native
 checks, with a derived benchmark-only identity/input—not weakened835 guards.
@@ -126,7 +135,12 @@ offline symlink copying, original configure replay, exact32-case/no-skip gates,
 parent-bound oracle digest/completion, failure/foreign-root finalization and a
 plain stdlib child's TERM handling. They invoke no real Slurm/compiler/Psi4.
 
-Local result: **11 ops metadata tests +5 pure workspace tests passed**, both
+Local result: **13 ops metadata tests +5 pure workspace tests passed**, both
 batch files passed `bash -n`. The five reviewed5ae files were hash-checked
 unchanged. No32-case native test, configure, clone of a real science environment,
 build or cluster operation has run locally.
+
+The new deterministic regression signals both wrappers **during FINALIZATION**,
+before and after success publication, with TERM and INT (eight scenarios).
+It also runs the original b0 wrapper bytes from Git in temporary test copies and
+reproduces their ignored-TERM/COMPLETED0 bug. No old checkout or receipt is edited.

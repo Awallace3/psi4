@@ -387,6 +387,13 @@ def finalize(args):
         need(args.root.stat().st_uid == os.getuid(), "root not owned by this user")
     except Exception:
         return status or 1  # No writes when helper did not create our root.
+    failed = args.root / "FAILED"
+    if failed.exists():
+        previous = read(failed)
+        need(type(previous["exit_code"]) is int and previous["exit_code"] != 0
+             and previous["mode"] == args.mode and previous["acceptance"] is False,
+             "invalid existing failure marker")
+        status = status or previous["exit_code"]
     if status == 0:
         try:
             source_gate(args.source, args.commit, args.tree)
@@ -396,8 +403,19 @@ def finalize(args):
                  and value["launch_token"] == args.launch_token, "helper did not finish successfully")
         except Exception:
             status = 1
-    marker = args.root / ("COMPLETED" if status == 0 else "FAILED")
-    write(marker, dict(exit_code=status, acceptance=False, mode=args.mode))
+    completed = args.root / "COMPLETED"
+    if status != 0 and completed.exists():
+        # A signal may arrive after publication but before the finalizer exits.
+        # Preserve that superseded record, but never leave a successful marker.
+        archived = args.root / ("COMPLETED_INTERRUPTED" if status == 143 else "COMPLETED_INVALIDATED")
+        if archived.exists():
+            need(sha(archived) == sha(completed), "conflicting completion evidence")
+        else:
+            os.link(completed, archived)
+        completed.unlink()
+    marker = completed if status == 0 else failed
+    if not marker.exists():
+        write(marker, dict(exit_code=status, acceptance=False, mode=args.mode))
     return status
 
 

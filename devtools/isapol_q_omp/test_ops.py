@@ -3,10 +3,12 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 from unittest import mock
@@ -20,6 +22,122 @@ spec.loader.exec_module(ops)
 
 
 class OpsTests(unittest.TestCase):
+    def finalization_window(self, wrapper_name, phase, sig, original=False):
+        """Actual Bash finish + real ops.finalize, fake completed operation only."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            source = root/"source"
+            helper_dir = source/"devtools/isapol_q_omp"
+            helper_dir.mkdir(parents=True)
+            fake_srun = root/"fake-srun"
+            fake_srun.write_text("""#!/usr/bin/python3
+import os,sys
+args=sys.argv[1:]
+while args and args[0].startswith("--"): args.pop(0)
+os.execv(args[0],args)
+""")
+            fake_srun.chmod(0o700)
+            # This shim uses the current real finalizer, but never imports Psi4,
+            # compiles, runs pytest, or queries an allocation.
+            (helper_dir/"ops.py").write_text("""
+import argparse,importlib.util,json,os,pathlib,signal,sys,time
+p=argparse.ArgumentParser()
+p.add_argument("operation")
+for name in ("source","commit","tree","root","scratch-root","launch-token"):
+    p.add_argument("--"+name,required=True)
+p.add_argument("--exit-code",type=int)
+a=p.parse_args();a.root=pathlib.Path(a.root);a.source=pathlib.Path(a.source)
+a.mode=a.operation.split("-")[0]
+s=importlib.util.spec_from_file_location("real_ops",os.environ["FINALIZE_REAL_OPS"])
+m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+m.source_gate=lambda *unused:None
+state=pathlib.Path(os.environ["FINALIZE_STATE"])
+if not a.operation.endswith("-finalize"):
+    a.root.mkdir()
+    m.write(a.root/"owner.json",dict(token=a.launch_token,mode=a.mode))
+    m.write(a.root/"result.json",dict(
+        status="READY_ORACLE_NOT_ACCEPTANCE" if a.mode=="oracle" else "READY_BUILD_NOT_QUALIFIED",
+        old_runtime_unchanged=True,launch_token=a.launch_token))
+    sys.exit(0)
+if a.exit_code==0:
+    def term(*unused):
+        (state/"FORWARDED_TERM").write_text("finalizer received TERM")
+        sys.exit(143)
+    signal.signal(signal.SIGTERM,term)
+    if os.environ["FINALIZE_PHASE"]=="after_publish": m.finalize(a)
+    (state/"FINALIZING").write_text(str(os.getpid()))
+    while not (state/"RELEASE").exists(): time.sleep(.01)
+sys.exit(m.finalize(a))
+""")
+            text = (HERE/wrapper_name).read_text()
+            if original:
+                text = subprocess.check_output(
+                    ["git", "-C", str(SOURCE), "show",
+                     "b0f9c0c5d6ac54eb159cfb9df7a312f99b79ed6e:devtools/isapol_q_omp/"+wrapper_name],
+                    text=True)
+            wrapper = root/"wrapper.sbatch"
+            wrapper.write_text(text.replace("/opt/slurm/current/bin/srun", str(fake_srun)))
+            out = root/"output"
+            env = dict(os.environ, FINALIZE_REAL_OPS=str(HERE/"ops.py"),
+                       FINALIZE_STATE=str(root), FINALIZE_PHASE=phase)
+            command = ["bash", str(wrapper), "--source", str(source), "--commit", "0"*40,
+                       "--tree", "1"*40, "--root", str(out), "--scratch-root", str(root/"scratch")]
+            process = subprocess.Popen(command, env=env, cwd=root, text=True,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       start_new_session=True)
+            try:
+                deadline = time.monotonic()+8
+                while not (root/"FINALIZING").exists() and time.monotonic() < deadline:
+                    if process.poll() is not None:
+                        break
+                    time.sleep(.01)
+                self.assertTrue((root/"FINALIZING").exists(), "did not reach finalization window")
+                process.send_signal(sig)
+                if original:
+                    # Deterministically release the ignored signal's finalizer:
+                    # b0 then publishes COMPLETED/0, reproducing the blocker.
+                    (root/"RELEASE").write_text("release original ignored-signal finalizer")
+                else:
+                    deadline = time.monotonic()+5
+                    while not (root/"FORWARDED_TERM").exists() and time.monotonic() < deadline:
+                        if process.poll() is not None:
+                            break
+                        time.sleep(.01)
+                    self.assertTrue((root/"FORWARDED_TERM").exists(),
+                                    "TERM/INT was not forwarded during FINALIZATION")
+                stdout, stderr = process.communicate(timeout=8)
+                if original:
+                    self.assertEqual(process.returncode, 0, stderr)
+                    self.assertTrue((out/"COMPLETED").exists())
+                    self.assertFalse((out/"FAILED").exists())
+                else:
+                    self.assertEqual(process.returncode, 143, stderr)
+                    self.assertFalse((out/"COMPLETED").exists())
+                    self.assertEqual(ops.read(out/"FAILED")["exit_code"], 143)
+                    if phase == "after_publish":
+                        self.assertEqual(ops.read(out/"COMPLETED_INTERRUPTED")["exit_code"], 0)
+            finally:
+                (root/"RELEASE").touch()
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait(timeout=5)
+
+    def test_term_and_int_during_finalization_never_publish_success(self):
+        for wrapper in ("oracle.sbatch", "build.sbatch"):
+            for phase in ("before_publish", "after_publish"):
+                for sig in (signal.SIGTERM, signal.SIGINT):
+                    with self.subTest(wrapper=wrapper, phase=phase, signal=sig):
+                        self.finalization_window(wrapper, phase, sig)
+
+    def test_regression_reproduces_ignored_finalization_term_on_b0(self):
+        for wrapper in ("oracle.sbatch", "build.sbatch"):
+            with self.subTest(wrapper=wrapper):
+                self.finalization_window(wrapper, "before_publish", signal.SIGTERM, original=True)
+
     def test_five_reviewed_files_are_still_frozen(self):
         for name, digest in ops.FROZEN.items():
             self.assertEqual(ops.sha(SOURCE / name), digest, name)
