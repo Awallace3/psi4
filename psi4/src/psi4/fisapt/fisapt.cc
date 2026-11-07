@@ -5896,24 +5896,6 @@ void FISAPT::fexch() {
     dfh_->clear_transformations();
 }
 
-// Return the measured error as well as checking it, so diagnostics need no
-// additional arrays. This is also used for canonical orbitals and source sums.
-static double cpks_close(SharedMatrix actual, SharedMatrix expected, const std::string& name,
-                         double atol = 2.e-9, double rtol = 1.e-7) {
-    if (!actual || !expected || actual->nirrep() != 1 || expected->nirrep() != 1
-        || actual->nrow() != expected->nrow() || actual->ncol() != expected->ncol())
-        throw PSIEXCEPTION("Incompatible CPKS " + name);
-    double error = 0.;
-    for (size_t i = 0; i < actual->nrow(); ++i)
-        for (size_t a = 0; a < actual->ncol(); ++a) {
-            const double x = actual->get(i, a), y = expected->get(i, a);
-            if (!std::isfinite(x) || !std::isfinite(y) || std::abs(x-y) > atol + rtol*std::abs(y))
-                throw PSIEXCEPTION("Unnormalized CPKS " + name + " mismatch");
-            error = std::max(error, std::abs(x-y));
-        }
-    return error;
-}
-
 void FISAPT::set_cpks_monomers(SharedWavefunction A, SharedWavefunction B) {
     auto a = std::dynamic_pointer_cast<scf::RHF>(A), b = std::dynamic_pointer_cast<scf::RHF>(B);
     if (!a || !b || reference_->molecule()->nfragments() != 2)
@@ -5962,7 +5944,7 @@ void FISAPT::find() {
     }
     if (ind_xc) {
         // Extra scratch, admitted before reference checks or disk tensors:
-        // PCG/source sums, canonicality products, raw snapshots + wfn copies.
+        // PCG scratch, canonicality products, raw snapshots + wfn copies.
         const long double oa = matrices_["Locc0A"]->colspi()[0];
         const long double ob = matrices_["Locc0B"]->colspi()[0];
         const long double va = matrices_["Cvir0A"]->colspi()[0], vb = matrices_["Cvir0B"]->colspi()[0];
@@ -6025,13 +6007,19 @@ void FISAPT::find() {
         for (auto item : {std::make_pair(std::string("A"), cpks_A_), std::make_pair(std::string("B"), cpks_B_)}) {
             const auto side = item.first;
             auto wfn = item.second;
-            cpks_close(matrices_["D_" + side], wfn->Da(), "original density", 1.e-12, 0.);
+            auto density = matrices_["D_" + side];
+            if (!density || !density->equal(wfn->Da(), 1.e-12)
+                || !std::isfinite(density->rms()) || !std::isfinite(wfn->Da()->rms()))
+                throw PSIEXCEPTION("CPKS find original density mismatch.");
             for (const std::string space : {"OCC", "VIR"}) {
                 const bool occupied = space == "OCC";
                 auto C = matrices_[(occupied ? "Cocc0" : "Cvir0") + side];
                 auto eps = vectors_[(occupied ? "eps_occ0" : "eps_vir0") + side];
                 auto original = wfn->epsilon_a_subset("AO", space);
-                cpks_close(C, wfn->Ca_subset("AO", space), "original orbitals", 1.e-12, 0.);
+                auto original_c = wfn->Ca_subset("AO", space);
+                if (!C || !C->equal(original_c, 1.e-12)
+                    || !std::isfinite(C->rms()) || !std::isfinite(original_c->rms()))
+                    throw PSIEXCEPTION("CPKS find original orbitals mismatch.");
                 if (eps->dim() < 1 || eps->dim() != original->dim())
                     throw PSIEXCEPTION("CPKS find requires full nonempty canonical orbital spaces.");
                 auto fock = linalg::triplet(C, wfn->Fa(), C, true, false, false);
@@ -6047,9 +6035,8 @@ void FISAPT::find() {
             }
             auto cross = linalg::triplet(matrices_["Cocc0" + side], wfn->Fa(),
                                           matrices_["Cvir0" + side], true, false, false);
-            auto zero = cross->clone();
-            zero->zero();
-            cpks_close(cross, zero, "occupied/virtual Fock block", 1.e-8, 0.);
+            if (!std::isfinite(cross->rms()) || cross->absmax() > 1.e-8)
+                throw PSIEXCEPTION("CPKS find occupied/virtual Fock block mismatch.");
         }
     }
 
@@ -6570,12 +6557,8 @@ void FISAPT::find() {
         cphf->Cocc_B_ = Cocc_B; cphf->Cvir_B_ = Cvir_B;
         cphf->eps_occ_A_ = eps_occ_A; cphf->eps_vir_A_ = eps_vir_A;
         cphf->eps_occ_B_ = eps_occ_B; cphf->eps_vir_B_ = eps_vir_B;
-        SharedMatrix rhs_sum_A, rhs_sum_B, amplitude_sum_A, amplitude_sum_B;
         if (ind_xc) {
             cphf->monomer_A_ = cpks_A_; cphf->monomer_B_ = cpks_B_;
-            rhs_sum_A = wB->clone(); amplitude_sum_A = wB->clone();
-            rhs_sum_B = wA->clone(); amplitude_sum_B = wA->clone();
-            for (auto x : {rhs_sum_A, rhs_sum_B, amplitude_sum_A, amplitude_sum_B}) x->zero();
             for (const std::string d : {"A<-B", "B<-A"})
                 for (const std::string key : {"SOURCES", "ITERATIONS", "MAX TRUE RESIDUAL"})
                     scalars_["CPKS " + key + " (" + d + ")"] = 0.;
@@ -6596,8 +6579,6 @@ void FISAPT::find() {
             xA = cphf->x_A_;
             xB = cphf->x_B_;
             if (ind_xc) {
-                rhs_sum_A->add(wB); amplitude_sum_A->add(xA);
-                rhs_sum_B->add(wA); amplitude_sum_B->add(xB);
                 for (auto side : {std::string("A"), std::string("B")}) {
                     const bool a = side == "A";
                     const std::string d = a ? "A<-B" : "B<-A";
@@ -6682,23 +6663,10 @@ void FISAPT::find() {
             check_component("Exch-Ind20,r (B<-A)", ExchInd20r_BA);
             check_component("Ind20,r", Ind20r);
             check_component("Exch-Ind20,r", ExchInd20r);
-            auto total_rhs = [&](const std::string& other, SharedMatrix co, SharedMatrix cv) {
-                auto potential = matrices_["V_" + other]->clone();
-                potential->axpy(2., matrices_["J_" + other]);
-                return linalg::triplet(co, potential, cv, true, false, false);
-            };
-            cphf->w_A_ = total_rhs("B", Cocc_A, Cvir_A);
-            cphf->w_B_ = total_rhs("A", Cocc_B, Cvir_B);
-            scalars_["CPKS SOURCE SUM ERROR (A<-B)"] = cpks_close(rhs_sum_A, cphf->w_A_, "source completeness");
-            scalars_["CPKS SOURCE SUM ERROR (B<-A)"] = cpks_close(rhs_sum_B, cphf->w_B_, "source completeness");
-            cphf->compute_cphf();
-            scalars_["CPKS AMPLITUDE SUM ERROR (A<-B)"] = cpks_close(amplitude_sum_A, cphf->x_A_, "source additivity");
-            scalars_["CPKS AMPLITUDE SUM ERROR (B<-A)"] = cpks_close(amplitude_sum_B, cphf->x_B_, "source additivity");
             for (const std::string d : {"A<-B", "B<-A"}) {
                 const bool a = d == "A<-B";
                 if (scalars_["CPKS SOURCES (" + d + ")"] != (a ? nB + nb1 + 1 : nA + na1 + 1))
                     throw PSIEXCEPTION("Incomplete CPKS source partition.");
-                scalars_["CPKS AGGREGATE TRUE RESIDUAL (" + d + ")"] = a ? cphf->residual_A_ : cphf->residual_B_;
                 scalars_["CPKS HF REFERENCE LIMIT (" + d + ")"] =
                     (a ? cpks_A_ : cpks_B_)->functional()->x_alpha() == 1. ? 1. : 0.;
             }

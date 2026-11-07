@@ -106,6 +106,11 @@ def test_saptdft_fsapt_cpks_source_response(tmp_path, monkeypatch):
             da, db = cache["D_" + side].np, cache["D_" + other].np
             wa = cache["V_" + side].np + 2 * cache["J_" + side].np
             wb = cache["V_" + other].np + 2 * cache["J_" + other].np
+            total_rhs = co.T @ wb @ cv
+            np.testing.assert_allclose(sources.sum(axis=0), total_rhs, rtol=1e-10, atol=1e-12)
+            np.testing.assert_allclose(
+                kappa.sum(axis=0), -np.linalg.solve(hessian, total_rhs.ravel()).reshape(shape),
+                rtol=1e-10, atol=1e-12)
             ka, kb = cache["K_" + side].np, cache["K_" + other].np
             ko = cache["K_O"].np if side == "A" else cache["K_O"].np.T
             left = -(wa - ka) + overlap @ da @ wb + wa @ db @ overlap - ko.T
