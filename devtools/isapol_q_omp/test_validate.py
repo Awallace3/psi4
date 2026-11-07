@@ -51,6 +51,13 @@ class ValidationTests(unittest.TestCase):
                 put(source/"psi4/driver"/name, "source "+name)
                 put(package/"driver"/name, "source "+name)
                 files["driver/"+name] = ""
+            for name, original in (
+                ("tests/isapol_factorial_oracle.py", source/"tests/pytests/isapol_factorial_oracle.py"),
+                ("tests/scf/test_input.py", source/"tests/scf/test_input.py"),
+            ):
+                put(original, "strict installed test "+name)
+                put(package/name, "strict installed test "+name)
+                files[name] = ""
             core_name = "core.cpython-fake.so"
             for path in (inner/"src"/core_name, package/core_name, staged/core_name):
                 put(path, "never executed fake core bytes")
@@ -131,10 +138,15 @@ class ValidationTests(unittest.TestCase):
         with self.fixture() as (args, proof, manifest, gate):
             checks, core = v.candidate_gate(args, proof, manifest)
             self.assertEqual(checks["metadata.py"]["kind"], "configured")
+            self.assertEqual(checks["tests/isapol_factorial_oracle.py"]["kind"], "pytest-source")
+            self.assertEqual(checks["tests/scf/test_input.py"]["kind"], "sample-test-source")
             for path, message in (
                 (args.candidate_root/"env"/v.PACKAGE/"metadata.py", "install differs"),
                 (args.candidate_root/"env"/v.PACKAGE/"driver/procrouting/isapol_distribution.py",
                  "install differs"),
+                (args.candidate_root/"env"/v.PACKAGE/"tests/isapol_factorial_oracle.py",
+                 "install differs"),
+                (args.candidate_root/"env"/v.PACKAGE/"tests/scf/test_input.py", "install differs"),
                 (core, "core differs"),
                 (args.candidate_root/"build/CMakeCache.txt", "cache source"),
             ):

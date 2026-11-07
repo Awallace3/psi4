@@ -175,8 +175,6 @@ def candidate_gate(args, proof, manifest):
     # generated whitelist, rather than a Python digest merely differing from OLD.
     for path in package.rglob("*.py"):
         rel = str(path.relative_to(package))
-        if rel.startswith("tests/"):
-            continue  # Installed tests are not the executed frozen source tests.
         ops.need(rel in checks, "unvalidated installed Python: "+rel)
     return checks, installed
 

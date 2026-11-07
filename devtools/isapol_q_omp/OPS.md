@@ -237,8 +237,9 @@ with that explicit source-control-flow basis, never stored exit receipts or a
 successful historical build. Fresh native test exit0 is independently enforced
 by the new Runner and JUnit; no source exception is treated as native success.
 
-Candidate checks compare all installed non-test Python with source or the three
-explicit generated outputs; generated/staged/installed files must match.
+Candidate checks compare **all installed Python, including installed tests**,
+with explicit CMake source projections or the three generated outputs;
+generated/staged/installed files must match.
 Compiled/staged/installed core bytes must equal the parent-bound digest.
 Outer/inner CMake caches must bind compiled source/prefix/compiler/OpenMP and
 x86-64-v3 (XHOST OFF checked in outer cache only). Imported Python implementation
@@ -282,3 +283,51 @@ have zero diff. Profiler835 remains clean. Diagnostic tests use only fake
 files/stdlib children, including native-child/import failure, candidate mutation,
 pre-import CWD protection and actual finalization TERM/INT scenarios.
 No real candidate native test, rebuild, cluster or quantum action ran locally.
+
+## Source005 narrow installed-test mapping correction
+
+Validation001 job15281287 failed before native import/tests at
+`tests/isapol_factorial_oracle.py`; it is not a kernel-test failure.
+Both that diagnostic and build001 remain FAILED with original receipts intact.
+No rebuild/install or scientific/test/tolerance change is required.
+
+The mapper follows **all** Python install classes in psi4/CMakeLists.txt:
+
+| Package-relative path | Expected source | CMake lines |
+|---|---|---|
+| `driver/**.py` | `SOURCE/psi4/driver/**.py` (pytest directories excluded) | 330–335 |
+| `header.py` | `SOURCE/psi4/header.py` | 338–339 |
+| `__init__.py`, `extras.py` | known inner-build configured outputs | 341–345 |
+| `metadata.py` | known inner-build versioner output | 303–312 |
+| `tests/{pytest-file}` | `SOURCE/tests/pytests/{pytest-file}` | 356–373 |
+| `tests/data_isapol/**`, four writer/QCSchema directories | matching `SOURCE/tests/pytests/**` | 374–385 |
+| `tests/{sample}/test_input.py`, `input.py`, selected Psithon helpers | `SOURCE/tests/{sample}/...` | 387–413 |
+
+Trailing slash on `../tests/pytests/` flattens that root into package/tests.
+The subsequent raw-tests install keeps sample subdirectories. An unexpected
+ambiguity between selected source projections fails closed—never choose by
+precedence or whichever source hash happens to match. Raw pytests/CFour
+exclusions are retained.
+
+Every installed `.py` is inventoried independently of OLD's manifest and
+must map to an existing contained source/generated file and match its bytes.
+Missing/tampered tests fail, including isapol helpers. Unknown classes fail;
+there is no generic missing-source skip or installed-tests exemption.
+Native tests still execute unchanged compiled SOURCE003 test bytes.
+
+Local source/CMake projection audit: **1000 paths**,3 generated,169 runtime
+source,180 pytest-source,648 raw sample-test-source; zero missing sources.
+Parent's full actual installed audit b9c2fd6a8 independently reports1000 files
+with the same3/169/180/648 split: **zero unknown, zero hash differences, zero
+ambiguous source paths**. This is a byte/mapping audit, not native execution.
+The actual isapol factorial helper matches source SHA256
+`0be372d66094dac68707b87fb0cabc1e511c23d491a442261adae3b21974981c`.
+Sample `tests/aediis-1/test_input.py` maps to SOURCE/tests/aediis-1/test_input.py,
+SHA256 `37c7f7b3d644cf241b0eceb8290ce44d9b0384e5b358de88c6676c0dff3643dc`.
+
+New SOURCE005 must use new validation002 output/scratch/log roots, **same**
+parent-bound evidence SHA
+`44582da052154970c01f309d0f623299896559f1a1ce58dad1d8b42ba7b1e2f9`,
+existing CAND build001/core676ea1..., and immutable compiled SOURCE0035f83.
+Do not edit SOURCE004, validation001, build001, OLD,835 or frozen5ae tests.
+No benchmark implementation/work is authorized by this mapping correction.

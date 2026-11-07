@@ -310,6 +310,104 @@ sys.exit(m.finalize(a))
             with self.assertRaisesRegex(ValueError, "configured build output"):
                 ops.installed_python_gate(source, build, package, names)
 
+    def test_every_cmake_python_mapping_class_including_installed_tests(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            source, build, package = root/"source", root/"build", root/"package"
+            inner = build/"psi4-core-prefix/src/psi4-core-build"
+            cases = {
+                "__init__.py": ("configured", inner/"__init__.py"),
+                "extras.py": ("configured", inner/"extras.py"),
+                "metadata.py": ("configured", inner/"metadata.py"),
+                "header.py": ("source", source/"psi4/header.py"),
+                "driver/procrouting/isapol_distribution.py":
+                    ("source", source/"psi4/driver/procrouting/isapol_distribution.py"),
+            }
+            for name in ("isapol_factorial_oracle.py", "test_isapol_q_parallel.py", "__init__.py",
+                         "addons.py", "conftest.py", "standard_suite_runner.py",
+                         "standard_suite_ref_local.py", "utils.py", "data_isapol/fixture.py",
+                         "test_fchk_writer/helper.py", "test_gauxc_writer/helper.py",
+                         "test_molden_writer/helper.py", "test_psi4_qcschema/helper.py"):
+                cases["tests/"+name] = ("pytest-source", source/"tests/pytests"/name)
+            for name in ("scf/test_input.py", "scf/input.py", "psithon2/psiaux1/helper.py",
+                         "psithon2/psiaux1/myplugin1/helper.py", "psithon2/psiaux2/helper.py",
+                         "dftd3/psithon2/psiaux1/helper.py",
+                         "dftd3/psithon2/psiaux1/myplugin1/helper.py",
+                         "dftd3/psithon2/psiaux2/helper.py"):
+                cases["tests/"+name] = ("sample-test-source", source/"tests"/name)
+            for name, (kind, expected) in cases.items():
+                expected.parent.mkdir(parents=True, exist_ok=True)
+                expected.write_text("expected "+name)
+                installed = package/name
+                installed.parent.mkdir(parents=True, exist_ok=True)
+                installed.write_text("expected "+name)
+            # Empty manifest still audits EVERY installed Python entry.
+            checks = ops.installed_python_gate(source, build, package, [])
+            self.assertEqual(set(checks), set(cases))
+            for name, (kind, expected) in cases.items():
+                self.assertEqual(checks[name]["kind"], kind)
+                self.assertEqual(checks[name]["expected"], str(expected))
+
+    def test_installed_test_mapping_missing_and_tamper_fail_not_skip(self):
+        for name, original in (
+            ("tests/isapol_factorial_oracle.py", "tests/pytests/isapol_factorial_oracle.py"),
+            ("tests/data_isapol/fixture.py", "tests/pytests/data_isapol/fixture.py"),
+            ("tests/scf/test_input.py", "tests/scf/test_input.py"),
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                source, build, package = root/"source", root/"build", root/"package"
+                inner = build/"psi4-core-prefix/src/psi4-core-build"
+                for parent in (inner, package):
+                    parent.mkdir(parents=True)
+                    for generated in ("__init__.py", "extras.py", "metadata.py"):
+                        (parent/generated).write_text("generated")
+                expected = source/original
+                expected.parent.mkdir(parents=True)
+                expected.write_text("strict test bytes")
+                actual = package/name
+                actual.parent.mkdir(parents=True)
+                actual.write_text("strict test bytes")
+                self.assertIn(name, ops.installed_python_gate(source, build, package, []))
+                actual.write_text("tampered test")
+                with self.assertRaisesRegex(ValueError, "install differs: tests/"):
+                    ops.installed_python_gate(source, build, package, [])
+                actual.write_text("strict test bytes")
+                expected.unlink()
+                with self.assertRaisesRegex(ValueError, "missing installed test source"):
+                    ops.installed_python_gate(source, build, package, [])
+                expected.write_text("strict test bytes")
+                actual.unlink()
+                with self.assertRaisesRegex(ValueError, "missing/outside candidate"):
+                    ops.installed_python_gate(source, build, package, [name])
+
+    def test_ambiguous_test_sources_fail_instead_of_guessing_by_priority_or_hash(self):
+        with tempfile.TemporaryDirectory() as d:
+            source = Path(d)
+            pytest_source, sample_source = source/"tests/pytests/test_input.py", source/"tests/test_input.py"
+            pytest_source.parent.mkdir(parents=True)
+            pytest_source.write_text("first pytest copy")
+            sample_source.write_text("later raw-tests copy")
+            with self.assertRaisesRegex(ValueError, "ambiguous installed test"):
+                ops.installed_python_source(source, source/"build", "tests/test_input.py")
+            pytest_source.unlink()
+            kind, expected = ops.installed_python_source(source, source/"build", "tests/test_input.py")
+            self.assertEqual(kind, "sample-test-source")
+            self.assertEqual(expected, sample_source)
+            # No arbitrary source/psi4/tests fallback, or excluded raw CFour.
+            (source/"tests/cfour").mkdir()
+            (source/"tests/cfour/test_input.py").write_text("excluded from raw copy")
+            with self.assertRaisesRegex(ValueError, "missing installed test"):
+                ops.installed_python_source(source, source/"build", "tests/cfour/test_input.py")
+
+    def test_unknown_or_escaping_python_mapping_is_never_silently_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for name in ("unexpected.py", "../outside.py", "/absolute.py", "tests/unselected.py"):
+                with self.subTest(name=name):
+                    with self.assertRaises(ValueError):
+                        ops.installed_python_source(root, root/"build", name)
+
     def junit(self, path, count=32, skipped=False):
         root = ET.Element("testsuites")
         suite = ET.SubElement(root, "testsuite")

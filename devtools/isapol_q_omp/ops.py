@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Private oracle/build operations only. No Psi4 import in this controller."""
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
@@ -302,33 +303,71 @@ def dependency_gate(prefix, manifest):
             need(sha(prefix / name) == expected, "candidate changed an original dependency: "+name)
 
 
+def installed_python_source(source, build, name):
+    """Explicit Python install projections from psi4/CMakeLists.txt299–413."""
+    rel = Path(name)
+    need(not rel.is_absolute() and ".." not in rel.parts, "unsafe installed Python path: "+name)
+    generated = ("__init__.py", "extras.py", "metadata.py")
+    if name in generated:
+        return "configured", build/"psi4-core-prefix/src/psi4-core-build"/name
+    if name == "header.py" or rel.parts[0] == "driver":
+        return "source", source/"psi4"/rel
+    if rel.parts[0] == "tests" and len(rel.parts) > 1:
+        test = Path(*rel.parts[1:])
+        # The trailing slash on ../tests/pytests/ flattens that root into
+        # package/tests/. Dedicated data/writer-directory copies are unfiltered.
+        pytest_names = ("__init__.py", "addons.py", "conftest.py", "standard_suite_runner.py",
+                        "standard_suite_ref_local.py", "utils.py")
+        full_dirs = ("data_isapol", "test_fchk_writer", "test_gauxc_writer",
+                     "test_molden_writer", "test_psi4_qcschema")
+        candidates = []
+        if (test.name in pytest_names or test.match("test_*.py") or test.match("isapol_*.py")
+                or test.parts[0] in full_dirs):
+            candidates.append(("pytest-source", source/"tests/pytests"/test))
+        # Raw-tests install uses a distinct projection. The independently
+        # audited candidate has no collisions; reject an unexpected ambiguity
+        # instead of guessing by precedence or matching an installed hash.
+        sample_extras = ("psithon2/psiaux1/*", "psithon2/psiaux1/myplugin1/*",
+                         "psithon2/psiaux2/*", "dftd3/psithon2/psiaux1/*",
+                         "dftd3/psithon2/psiaux1/myplugin1/*", "dftd3/psithon2/psiaux2/*")
+        if (test.parts[0] not in ("pytests", "cfour") and
+                (test.name in ("test_input.py", "input.py")
+                 or any(fnmatch.fnmatchcase(test.as_posix(), p) for p in sample_extras))):
+            candidates.append(("sample-test-source", source/"tests"/test))
+        present = [(kind, path) for kind, path in candidates if path.is_file()]
+        need(len(present) <= 1, "ambiguous installed test source mapping: "+name)
+        if present:
+            return present[0]
+        need(False, "missing installed test source/mapping: "+name)
+    need(False, "unknown installed Python mapping: "+name)
+
+
 def installed_python_gate(source, build, package, names):
-    """Three generated outputs; every actual source-backed Python file strict.
+    """Every installed Python file, including tests, has a strict source.
 
     CMakeLists.txt's psi4-core ExternalProject uses its default binary directory;
     psi4/CMakeLists.txt configures two templates and runs versioner.py to generate
     metadata.py in that inner CMAKE_BINARY_DIR. None installs raw source bytes.
     """
-    core_build = build / "psi4-core-prefix/src/psi4-core-build"
-    configured = {name: core_build/name for name in ("__init__.py", "extras.py", "metadata.py")}
     checked = {}
-    for name in sorted(set(names) | set(configured)):
+    inventory = set(names) | {"__init__.py", "extras.py", "metadata.py"} | {
+        str(path.relative_to(package)) for path in package.rglob("*.py")}
+    for name in sorted(inventory):
         if not name.endswith(".py"):
             continue
-        expected = configured.get(name, source/"psi4"/name)
-        if name in configured:
+        kind, expected = installed_python_source(source, build, name)
+        if kind == "configured":
             need(expected.is_file() and expected.resolve().is_relative_to(build.resolve()),
                  "missing/outside configured build output: "+name)
-        elif not expected.is_file():
-            need(not Path(name).name.startswith("isapol"), "missing isapol source: "+name)
-            continue  # Preserve previous handling of other generated/non-source files.
+        else:
+            missing = "missing isapol source: " if Path(name).name.startswith("isapol") else "missing Python source: "
+            need(expected.is_file() and expected.resolve().is_relative_to(source.resolve()), missing+name)
         actual = package/name
         need(actual.is_file() and actual.resolve().is_relative_to(package.resolve()),
              "missing/outside candidate installed Python: "+name)
         digest = sha(expected)
         need(sha(actual) == digest, "candidate Python install differs: "+name)
-        checked[name] = dict(kind="configured" if name in configured else "source",
-                             expected=str(expected), sha256=digest)
+        checked[name] = dict(kind=kind, expected=str(expected), sha256=digest)
     return checked
 
 
