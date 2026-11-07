@@ -169,3 +169,54 @@ After final artifacts pass, compare all three CPU references with the existing
 strict repeat helper before publishing a ratio of the new per-arm medians.
 Nanotube15233651 and Protein8315233653 were still pending at this checkpoint,
 with the peptide prerequisite satisfied.
+
+## Peptide qualification passed
+
+CPU allocations15278472/15278474/15278476 completed0:0 with no TERM in
+9min38s/9min35s/9min35s. Each produced
+`PASS_CPU_REFERENCE_AND_ORACLE_NEEDS_THREE_REPEAT_AGGREGATION`, passed all23
+independent fixed-GPU-gauge oracle fields and signed/whole-energy controls,
+reported no retirement, reaped both workers and cleaned its owned scratch.
+
+The separate `qualify_stage_scaling.py` consumer then rechecked immutable
+GPU/CPU submission and producer seals, all worker/result/timer/stdout/NPZ/F-SAPT
+file hashes, source/helper/config/input identities, independent oracle matrices
+at the original tolerances, and **strict CPU cross-repeat agreement** using the
+original frozen helper. It does not modify any scientific producer or consume
+the extra traced timing as a speedup sample.
+
+| Baseline energy timing | r0 (s) | r1 (s) | r2 (s) | Median (s) |
+|---|---:|---:|---:|---:|
+| CPU24 | 266.905526779 | 262.917661584 | 263.234152672 | 263.234152672 |
+| H200+8 host CPUs | 37.137074203 | 37.009711522 | 36.967758893 | 37.009711522 |
+
+**Qualified ratio of medians:7.112569697154473×.**
+This fresh cohort reproduces the earlier approximately7× result; it is not a
+new scientific/kernel optimization or a larger-system scaling point.
+The separate52.307596960s traced GPU process is excluded from the ratio.
+
+CPU cross-repeat maximum field differences:
+9.924094879210088e-11 /8.722905731062269e-11.
+Independent oracle largest major energy-matrix entry error:
+1.0735120778426754e-10Eh (`IndBA_AB`, repeat1).
+
+- Qualification recipe pin:`024957c4b3`.
+- Output:`stage-scaling-20261106-01/peptide-qualification-01/qualification.json`.
+- Status:`PASS_MATCHED_INSTRUMENTED_BENCHMARK`; accepted speedup count1.
+- Qualification SHA256:
+  `017095fc4e4cecc94f09ea28a1e0f6c4af4aeb31e7f5b36400ab01a1eb0e6db6`.
+- CPU result-controller SHA256 values:
+  `b87b6dad923d56dc82a196344f33d503f6c5d7070afba7a3fa30365e7f865bdc`,
+  `139de65332050280db45a44761aa795f6c886fb6cee4133a09913aa21bc27f79`,
+  `34a7e792f28b58c054dceb29c197b6b966dd9d600ffddc450bd364468562dafd`.
+
+The immutable GPU producer still has its original awaiting-CPU status and
+accepted count0. Qualification is the separate consumer above. Downloaded
+qualification/CPU documents were matched to those sealed SHA256 values.
+The HTML now defaults its stage view to the new CPU-baseline/H200-trace
+comparison, with an explicit selector retaining the original matched timers.
+Both localization and all four fragment stages have actual H200 lines; no
+per-stage speedup is claimed from a3-sample CPU baseline versus one intrusive
+GPU trace. The original7.004× campaign and its clocks remain separately labeled.
+Nanotube15233651 and Protein8315233653 remain pending at this qualification
+checkpoint; no larger-system ratio is inferred.
