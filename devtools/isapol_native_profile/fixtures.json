@@ -1,0 +1,26 @@
+{
+  "monomer-0001": {
+    "case.json": "fecb7750a8181ae858c6da4e6cad5080e1c701299bf7f32e24168cc0c8df444e",
+    "claimed-input.json": "b3a8c96797aaf5c5eb55e37a93349e50ad71fddb0efe14d6f18474b91fab6d0d",
+    "expected-runtime.json": "635bfd866c2403f8386e63a1204648a03ae20fbf73ce55f41f7ff7f90d9d8c9c",
+    "pilot-outcome.json": "33d9a52f4d59e9db63482e3089c265c57a7cd50726c19c23afb981da59b7ccf2",
+    "server-native-envelope.json": "0292f0044bd737dbce65ebecb43c0fe7ea69bfa3a73ce84284372554490dc52e",
+    "server-tensors.npz": "bc4cb71cee506e00fd251ef6f61833383b97ff359efa679a3d884d8e1877b4fb"
+  },
+  "monomer-0002": {
+    "case.json": "3f4902bb2b72a3bcb2491d940adbe9609867b0dc83babc628cb1a678d60cdc6d",
+    "claimed-input.json": "b3a22e0493dbed6aed2f879bc4ddf789f7466c9e02a4cc4aface0b8b048fdb0d",
+    "expected-runtime.json": "1018f5ab06c796abc57abe11467e342537112dff076034abf6fa46be7808a32b",
+    "pilot-outcome.json": "3ed3b1ae1a2cc2eb8c50415fb2ca7d08beb858d123706ffb8ef33267e239bd5b",
+    "server-native-envelope.json": "bc539b22b97ca42bbda75c0c6e2d4690cd9c0dc0b5c21bfdff1c379bcccc99b2",
+    "server-tensors.npz": "e17ad527a8d899961d4dcc2a994c3e7640bb76fb2acd72f0a2560877891fe864"
+  },
+  "monomer-0025": {
+    "case.json": "7aaeeff008d4188f89daf2cdb29651c2f4d2ae98567d0a428eb651f65c54e07d",
+    "claimed-input.json": "e493ef174319608db9a81f7bd18a915d6fdd18e094fdf5f7d689319d3d76aedc",
+    "expected-runtime.json": "ffcfb7d77728466e1f4ffc21132abf20522c10a8ae37d68b4ccf4613fb04ff10",
+    "pilot-outcome.json": "5343a164545a8d0b0d06f7b328c44634116df7fa8c444efd8310b4682666abe2",
+    "server-native-envelope.json": "85887504e8f28f6380b4701a11edf380f2f2bc340086971b3a7447114cba7df6",
+    "server-tensors.npz": "33edda95449e36b8ccca836721ec3b460bb16377e79cf6a9b4a54bc928e58403"
+  }
+}
