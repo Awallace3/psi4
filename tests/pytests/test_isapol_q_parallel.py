@@ -163,6 +163,25 @@ def test_q_worker_admission_threshold_keeps_bits(count):
             assert actual.excluded_denominators == excluded and actual.negative_ratios == negative
 
 
+@pytest.mark.parametrize("workers", (1, 2))
+def test_q_low_thread_original_path_reselected_across_batches(workers):
+    aux = auxiliary(core.IsaBasisRepresentation.Spherical, 65)
+    # Three native collocation batches; bounded independent reference <4.3 MiB.
+    xyz = np.random.default_rng(139).normal(size=(2*4096+7, 3))
+    sites = [frozen_site("low-A", 4, xyz, [0], 41),
+             frozen_site("low-B", 1, xyz[::-1].copy(), [0], 97)]
+    with threads(1):
+        expected, excluded, negative = original_serial(aux, sites)
+    # Selection must use the current call's thread count, not cached state.
+    for count in (workers, 4, workers, 8, workers):
+        with threads(count):
+            actual = calculate(aux, sites)
+            assert_bits(actual.values.np, expected)
+            assert actual.excluded_denominators == excluded
+            assert actual.negative_ratios == negative
+            assert actual.offsets == [0, 25, 29]
+
+
 def test_q_repeated_workers_do_not_race_or_reuse_mutable_results():
     aux = auxiliary(core.IsaBasisRepresentation.Cartesian)
     xyz = np.random.default_rng(23).normal(size=(513, 3))

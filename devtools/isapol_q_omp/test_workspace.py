@@ -1,12 +1,25 @@
 """Pure planning/source tests; no Psi4/numpy imports or native computation."""
 import ast
 from pathlib import Path
+import subprocess
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = ROOT / "psi4/driver/procrouting/isapol_distribution.py"
 CPP = ROOT / "psi4/src/psi4/libisapol/partitioned_response.cc"
+ORIGINAL = "1aaa9e0a306373b42a3decc25c7dfa106dbc8ea2"
+
+
+def cpp_body(source, marker):
+    """Brace-delimited body for these fixed reviewed code sections."""
+    start = source.index("{", source.index(marker))
+    depth = 1
+    end = start + 1
+    while depth:
+        depth += (source[end] == "{") - (source[end] == "}")
+        end += 1
+    return source[start+1:end-1], end
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -81,6 +94,49 @@ class WorkspaceTests(unittest.TestCase):
                     self.assertTrue(all(a < b for a, b in intervals))
                     self.assertTrue(all(left[1] == right[0]
                                         for left, right in zip(intervals, intervals[1:])))
+
+
+    def test_low_thread_path_restores_exact_original_point_loop(self):
+        source = CPP.read_text()
+        original = subprocess.check_output(
+            ["git", "-C", str(ROOT), "show",
+             ORIGINAL+":psi4/src/psi4/libisapol/partitioned_response.cc"], text=True)
+        branch, _ = cpp_body(source, "if (original_accumulation)")
+        marker = "for (size_t p = begin; p < end; ++p)"
+        actual, _ = cpp_body(branch, marker)
+        expected, _ = cpp_body(original, marker)
+        self.assertEqual("".join(actual.split()), "".join(expected.split()))
+        self.assertIn("continue;", branch)
+        self.assertNotIn("prefactors", branch)
+        self.assertNotIn("active[", branch)
+        self.assertNotIn("parallel_work", branch)
+
+    def test_dispatch_is_per_constructor_before_dynamic_parallel_scratch(self):
+        source = CPP.read_text()
+        selector = "const bool original_accumulation = Process::environment.get_n_threads() <= 2;"
+        self.assertEqual(source.count(selector), 1)
+        self.assertLess(source.index(selector), source.index("for (size_t a"))
+        _, end = cpp_body(source, "if (original_accumulation)")
+        self.assertLess(source.index("auxiliary.evaluate_screened("), source.index("if (original_accumulation)"))
+        self.assertLess(end, source.index("std::vector<double> prefactors"))
+        self.assertLess(end, source.index("std::vector<unsigned char> active"))
+        self.assertNotIn("static const bool original_accumulation", source)
+        self.assertNotIn("set_n_threads", source)
+        # Both callers conservatively reserve the same workspace, even when
+        # the low-thread branch uses no staged-prefactor/active payload.
+        for workers in (1, 2, 4, 8):
+            self.assertEqual(self.workspace(65, 4, 8199), 827392, workers)
+
+    def test_high_thread_accumulation_and_python_planner_unchanged_from_5ae(self):
+        base = subprocess.check_output(
+            ["git", "-C", str(ROOT), "show",
+             "5ae597cd9305588d14681d0da435834ef761c264:"+str(CPP.relative_to(ROOT))], text=True)
+        marker = "            // Per-batch scratch only"
+        self.assertEqual(CPP.read_text().split(marker, 1)[1], base.split(marker, 1)[1])
+        planner = subprocess.check_output(
+            ["git", "-C", str(ROOT), "show",
+             "5ae597cd9305588d14681d0da435834ef761c264:"+str(PYTHON.relative_to(ROOT))], text=True)
+        self.assertEqual(PYTHON.read_text(), planner)
 
 
 if __name__ == "__main__":
