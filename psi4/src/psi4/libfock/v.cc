@@ -1296,6 +1296,12 @@ void RV::initialize() {
 }
 void RV::finalize() { VBase::finalize(); }
 void RV::print_header() const { VBase::print_header(); }
+size_t RV::V_thread_scratch_size() const {
+    // primary_->nbf(), not nbf_: nbf_ is only set once a density arrives (set_D / compute_V),
+    // and the SCF asks for this size before the first iteration.
+    const size_t n = primary_->nbf();
+    return V_thread_accumulators_ ? static_cast<size_t>(num_threads_) * n * n : 0;
+}
 void RV::compute_V(std::vector<SharedMatrix> ret) {
     // => Validate object <=
     timer_on("RV: Form V");
