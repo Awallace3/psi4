@@ -79,6 +79,12 @@ class PSI_API DFHelper {
     ///
     void set_memory(size_t doubles) { memory_ = doubles; }
     size_t get_memory() { return memory_; }
+    /// Free the compute_JK scratch that is otherwise kept between builds
+    void clear_JK_scratch() {
+        jk_T1_.reset();
+        jk_T2_.reset();
+        jk_T1_size_ = jk_T2_size_ = 0;
+    }
 
     ///
     /// Indicates whether to use the in-core or out-of-core
@@ -378,6 +384,9 @@ class PSI_API DFHelper {
     // => in-core machinery <=
     void AO_core(bool set_AO_core);
     std::unique_ptr<double[]> Ppq_;
+    /// compute_JK scratch, kept between builds (see compute_JK)
+    std::unique_ptr<double[]> jk_T1_, jk_T2_;
+    size_t jk_T1_size_ = 0, jk_T2_size_ = 0;
     // Maps x -> (P|Q) ^ x.
     std::map<double, SharedMatrix> metrics_;
 

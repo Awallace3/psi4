@@ -1648,29 +1648,71 @@ void DFHelper::contract_metric_AO_core(double* Qpq, double* metp) {
 }
 
 void DFHelper::contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* metp, size_t begin, size_t end) {
-    // loop and contract
+    // Qpq holds, for each p in [begin, end], a (naux x mi) block of the significant q >= p.
+    // One small DGEMM per p re-streams the whole (naux x naux) metric from memory for every p,
+    // so instead gather runs of p into a dense (naux x ncol) panel, contract it with a single
+    // threaded DGEMM, and scatter the result into both the upper (p, q) and lower (q, p) slots of Ppq.
     size_t startind = symm_big_skips_[begin];
-#pragma omp parallel for num_threads(nthreads_) schedule(guided)
-    for (size_t j = begin; j <= end; j++) {
-        size_t mi = symm_small_skips_[j];
-        size_t si = small_skips_[j];
-        size_t jump = symm_ignored_columns_[j];
-        size_t skip1 = big_skips_[j];
-        size_t skip2 = symm_big_skips_[j] - startind;
-        C_DGEMM('N', 'N', naux_, mi, naux_, 1.0, metp, naux_, &Qpq[skip2], mi, 0.0, &Ppq[skip1 + jump], si);
+    const size_t target_cols = std::max<size_t>(8192, nbf_);
+
+    std::vector<size_t> col_off;  // panel column offset of each p in the current chunk
+    std::vector<std::vector<size_t>> upper(nbf_);  // significant q >= p, in column order
+    for (size_t p = begin; p <= end; p++) {
+        upper[p].reserve(symm_small_skips_[p]);
+        for (size_t q = p; q < nbf_; q++)
+            if (schwarz_fun_index_[p * nbf_ + q]) upper[p].push_back(q);
     }
-// copy upper-to-lower
+
+    std::vector<double> panel, out;
+    for (size_t p0 = begin; p0 <= end;) {
+        size_t ncol = 0, p1 = p0;
+        col_off.clear();
+        while (p1 <= end && (ncol == 0 || ncol + symm_small_skips_[p1] <= target_cols)) {
+            col_off.push_back(ncol);
+            ncol += symm_small_skips_[p1];
+            p1++;
+        }
+        if (ncol == 0) {
+            p0 = p1;
+            continue;
+        }
+        if (panel.size() < naux_ * ncol) {
+            panel.resize(naux_ * ncol);
+            out.resize(naux_ * ncol);
+        }
+
+        timer_on("DFH: AO-Met. gather");
 #pragma omp parallel for num_threads(nthreads_) schedule(static)
-    for (size_t omu = begin; omu <= end; omu++) {
         for (size_t Q = 0; Q < naux_; Q++) {
-            for (size_t onu = omu + 1; onu < nbf_; onu++) {
-                if (schwarz_fun_index_[omu * nbf_ + onu]) {
-                    size_t ind1 = big_skips_[onu] + Q * small_skips_[onu] + schwarz_fun_index_[onu * nbf_ + omu] - 1;
-                    size_t ind2 = big_skips_[omu] + Q * small_skips_[omu] + schwarz_fun_index_[omu * nbf_ + onu] - 1;
-                    Ppq[ind1] = Ppq[ind2];
+            for (size_t p = p0; p < p1; p++) {
+                size_t mi = symm_small_skips_[p];
+                const double* src = &Qpq[symm_big_skips_[p] - startind + Q * mi];
+                std::copy(src, src + mi, &panel[Q * ncol + col_off[p - p0]]);
+            }
+        }
+        timer_off("DFH: AO-Met. gather");
+
+        timer_on("DFH: AO-Met. GEMM");
+        C_DGEMM('N', 'N', naux_, ncol, naux_, 1.0, metp, naux_, panel.data(), ncol, 0.0, out.data(), ncol);
+        timer_off("DFH: AO-Met. GEMM");
+
+        timer_on("DFH: AO-Met. scatter");
+#pragma omp parallel for num_threads(nthreads_) schedule(static)
+        for (size_t Q = 0; Q < naux_; Q++) {
+            for (size_t p = p0; p < p1; p++) {
+                const double* row = &out[Q * ncol + col_off[p - p0]];
+                const size_t mi = symm_small_skips_[p];
+                std::copy(row, row + mi, &Ppq[big_skips_[p] + Q * small_skips_[p] + symm_ignored_columns_[p]]);
+                const auto& qs = upper[p];
+                for (size_t k = 0; k < mi; k++) {
+                    size_t q = qs[k];
+                    if (q == p) continue;
+                    Ppq[big_skips_[q] + Q * small_skips_[q] + schwarz_fun_index_[q * nbf_ + p] - 1] = row[k];
                 }
             }
         }
+        timer_off("DFH: AO-Met. scatter");
+        p0 = p1;
     }
 }
 void DFHelper::copy_upper_lower_wAO_core_symm(double* Qpq, double* Ppq, size_t begin, size_t end) {
@@ -3078,15 +3120,18 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
 
     // declare bufs
     std::unique_ptr<double[]> M;   // AOs
-    std::unique_ptr<double[]> T1;  // Ktmp1
-    std::unique_ptr<double[]> T2;  // Ktmp2
 
     // allocate first Ktmp
     size_t Ktmp_size = (!max_nocc ? totsb * 1 : totsb * max_nocc);
     Ktmp_size = std::max(Ktmp_size * nbf_, nthreads_ * naux_);  // max necessary
     Ktmp_size = std::max(Ktmp_size, nbf_ * nbf_); 
-    T1 = std::make_unique<double[]>(Ktmp_size);
-    double* T1p = T1.get();
+    // Scratch persists across builds: a fresh ~GiB buffer per SCF iteration is mostly page faults.
+    if (jk_T1_size_ < Ktmp_size) {
+        jk_T1_.reset();
+        jk_T1_ = std::unique_ptr<double[]>(new double[Ktmp_size]);
+        jk_T1_size_ = Ktmp_size;
+    }
+    double* T1p = jk_T1_.get();
 
     // if lr_symmetric, we can be more clever with mem usage. T2 is used for both the
     // second tmp in the K build, as well as the completed, pruned J build.
@@ -3100,8 +3145,12 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
     Ktmp_size = std::max(Ktmp_size, nbf_ * nbf_); 
     Ktmp_size = std::max(Ktmp_size, nthreads_ * naux_);
 
-    T2 = std::make_unique<double[]>(Ktmp_size);
-    double* T2p = T2.get();
+    if (jk_T2_size_ < Ktmp_size) {
+        jk_T2_.reset();
+        jk_T2_ = std::unique_ptr<double[]>(new double[Ktmp_size]);
+        jk_T2_size_ = Ktmp_size;
+    }
+    double* T2p = jk_T2_.get();
 
     double* Mp;
     if (!AO_core_) {

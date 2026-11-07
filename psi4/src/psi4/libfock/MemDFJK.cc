@@ -109,7 +109,7 @@ void MemDFJK::compute_JK() {
         }
     }
 }
-void MemDFJK::postiterations() {}
+void MemDFJK::postiterations() { dfh_->clear_JK_scratch(); }
 void MemDFJK::print_header() const {
     // dfh_->print_header();
     if (print_) {

@@ -1318,7 +1318,10 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
     }
 
     auto V_AO = std::make_shared<Matrix>("V AO Temp", nbf_, nbf_);
-    auto Vp = V_AO->pointer();
+    // Per-thread accumulators: scattering each block with omp atomics costs ~2 atomics per
+    // local (m, n) pair per block, a large share of the V build. Reduced after the loop.
+    std::vector<SharedMatrix> V_thread(num_threads_);
+    for (size_t i = 0; i < num_threads_; i++) V_thread[i] = std::make_shared<Matrix>("V Thread", nbf_, nbf_);
 
     std::vector<double> functionalq(num_threads_);
     std::vector<double> rhoaq(num_threads_);
@@ -1375,19 +1378,29 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         const auto& function_map = block->functions_local_to_global();
         int nlocal = function_map.size();
 
+        auto Vp = V_thread[rank]->pointer();
         for (int ml = 0; ml < nlocal; ml++) {
             int mg = function_map[ml];
             for (int nl = 0; nl < ml; nl++) {
                 int ng = function_map[nl];
-#pragma omp atomic update
                 Vp[mg][ng] += V2p[ml][nl];
-#pragma omp atomic update
                 Vp[ng][mg] += V2p[ml][nl];
             }
-#pragma omp atomic update
             Vp[mg][mg] += V2p[ml][ml];
         }
         parallel_timer_off("V_xc", rank);
+    }
+
+    // Reduce the per-thread accumulators (fixed order: deterministic, unlike the atomics).
+    {
+        double* Vt = V_AO->pointer()[0];
+        const size_t n2 = static_cast<size_t>(nbf_) * nbf_;
+#pragma omp parallel for schedule(static) num_threads(num_threads_)
+        for (size_t x = 0; x < n2; x++) {
+            double sum = 0.0;
+            for (size_t t = 0; t < num_threads_; t++) sum += V_thread[t]->pointer()[0][x];
+            Vt[x] = sum;
+        }
     }
 
     // Do we need VV10?
