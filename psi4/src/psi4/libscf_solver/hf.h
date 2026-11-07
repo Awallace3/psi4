@@ -443,6 +443,11 @@ class HF : public Wavefunction {
         external_cpscf_perturbations_[name] = fun;
     }
     void clear_external_cpscf_perturbations() { external_cpscf_perturbations_.clear(); }
+    /// Read-only admission check, including state retained after SCF options change.
+    bool has_external_cpscf_terms() const {
+        return PCM_enabled() || static_cast<bool>(external_pot_) || !external_potentials_.empty()
+               || !external_cpscf_perturbations_.empty();
+    }
     void compute_fvpi();
 };
 }  // namespace scf

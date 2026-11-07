@@ -42,6 +42,7 @@ namespace psi {
 class JK;
 class BasisSet;
 class DFHelper;
+namespace scf { class HF; }
 
 namespace fisapt {
 
@@ -55,6 +56,9 @@ class FISAPT {
     size_t doubles_;
     /// Reference wavefunction
     std::shared_ptr<Wavefunction> reference_;
+
+    /// Original monomers retain their XC potential/grid and canonical response JK.
+    std::shared_ptr<scf::HF> cpks_A_, cpks_B_;
 
     /// Orbital Basis Set (full molecule)
     std::shared_ptr<BasisSet> primary_;
@@ -143,6 +147,8 @@ class FISAPT {
     void fexch();
     /// Induction
     void find();
+    /// Borrow the original canonical monomers; XC-off never uses them.
+    void set_cpks_monomers(SharedWavefunction A, SharedWavefunction B);
     /// Dispersion
     void fdisp();
     /// Output
@@ -186,6 +192,7 @@ class FISAPTSCF {
     /// Global JK object
     std::shared_ptr<JK> jk_;
 
+
     /// Map of scalars
     std::map<std::string, double> scalars_;
     /// Map of vectors
@@ -227,6 +234,12 @@ class CPHF_FISAPT {
     int maxiter_;
     // JK Object
     std::shared_ptr<JK> jk_;
+
+    // Optional whole-monomer Hessians. Null preserves the legacy J/K product.
+    std::shared_ptr<scf::HF> monomer_A_, monomer_B_;
+    int iterations_A_ = 0, iterations_B_ = 0;
+    double residual_A_ = 0., residual_B_ = 0.;
+    void check_residuals();
 
     // => Monomer A Problem <= //
 

@@ -105,6 +105,10 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         The dimer wavefunction with SAPT(DFT) results stored as variables.
     """
     core.prepare_options_for_module("SAPT")
+    if core.get_option("FISAPT", "FISAPT_FSAPT_IND_XC_RESPONSE"):
+        from .sapt_fisapt_cpks_find import validate_request
+        validate_request(core, external_potentials=kwargs.get("external_potentials"))
+    core.prepare_options_for_module("SAPT")
     induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper()
@@ -1346,6 +1350,12 @@ def sapt_dft(
 
     induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
     fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper()
+    if core.get_option("FISAPT", "FISAPT_FSAPT_IND_XC_RESPONSE"):
+        if do_delta_dft:
+            raise ValidationError("XC-coupled find does not admit deltaDFT redistribution")
+        from .sapt_fisapt_cpks_find import validate_request
+        validate_request(core, external_potentials=external_potentials)
+    core.prepare_options_for_module("SAPT")
     if induction_type == "CPHF" and do_dft and "Ind20,r" not in data:
         raise ValidationError(
             "SAPT_DFT_INDUCTION_TYPE=CPHF reuses the SAPT0 induction terms computed by the "
