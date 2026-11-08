@@ -6,7 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from stage_scaling import (configuration, traced_command, require_producer, submit,
-                           SCIENCE_PIN, digest, cpu_scratch_parent, cpu_wall_seconds)
+                           SCIENCE_PIN, digest, cpu_scratch_parent, cpu_wall_seconds,
+                           require_cpu_runtime_admission)
 
 
 class StageScalingTests(unittest.TestCase):
@@ -110,6 +111,65 @@ class StageScalingTests(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "Scheduler-provided"):
                 cpu_scratch_parent()
+
+    def test_cpu_admission_requires_final_exit_exact_proof_and_same_runtime_closure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            (root/"result.json").write_text("{}")
+            folder=root/"cpu-sealed-admission"
+            folder.mkdir()
+            config={**self.base(),"build_proof":str(root/"result.json"),
+                    "sealed_alias_parent":"/admission/aliases"}
+            path=folder/"runtime-config.json"
+            path.write_text(json.dumps(config))
+            proof={"status":"PASS","source_pin":SCIENCE_PIN,
+                   "cuda_session_created":False,"gpu_correctness_verified":False,
+                   "runtime_config_sha256":digest(path)}
+            (folder/"runtime-admission.json").write_text(json.dumps(proof))
+            receipt={"status":"PASS","source_pin":SCIENCE_PIN,"owned_groups_reaped":True,
+                     "runtime_admission_sha256":digest(folder/"runtime-admission.json")}
+            (folder/"preflight-result.json").write_text(json.dumps(receipt))
+            successful_status=("exit_code=0\nterm_received=0\n"
+                               "CPU_BUILD_VALIDATION_ONLY_CHECK_RESULT_JSON\n")
+            (root/"job-status.env").write_text(successful_status)
+            sealed=require_cpu_runtime_admission(config)
+            self.assertEqual(sealed["receipt_sha256"],digest(folder/"preflight-result.json"))
+            self.assertEqual(require_cpu_runtime_admission(
+                {**config,"threads":24,"sealed_alias_parent":"/new/aliases"}),sealed)
+            with self.assertRaisesRegex(RuntimeError,"runtime closure"):
+                require_cpu_runtime_admission({**config,"stage":"/different/stage"})
+            # A newly built source without finalized loader admission must fail.
+            (root/"job-status.env").write_text("exit_code=1\nterm_received=0\n")
+            with self.assertRaisesRegex(RuntimeError,"CPU prerequisite"):
+                require_cpu_runtime_admission(config)
+            (root/"job-status.env").write_text(successful_status)
+            receipt["status"]="FAILED"
+            (folder/"preflight-result.json").write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(RuntimeError,"CPU runtime admission"):
+                require_cpu_runtime_admission(config)
+            # Exercise the actual submission path: PASS build alone must
+            # never reach even sbatch --test-only if loader admission failed.
+            build={"status":"PASS","pin":SCIENCE_PIN}
+            (root/"result.json").write_text(json.dumps(build))
+            base={**config,"source":str(root),"build_proof_sha256":digest(root/"result.json")}
+            base_path=root/"base.json"
+            base_path.write_text(json.dumps(base))
+            arguments=SimpleNamespace(kind="gpu",system="protein83",base_config=base_path)
+            def git_query(argv, **kwargs):
+                return SCIENCE_PIN+"\n" if "rev-parse" in argv else ""
+            with patch("stage_scaling.subprocess.check_output",side_effect=git_query), \
+                    patch("stage_scaling.subprocess.run") as scheduler:
+                with self.assertRaisesRegex(RuntimeError,"CPU runtime admission"):
+                    submit(arguments)
+                scheduler.assert_not_called()
+            receipt["status"]="PASS"
+            (folder/"preflight-result.json").write_text(json.dumps(receipt))
+            proof["source_pin"]="a"*40
+            (folder/"runtime-admission.json").write_text(json.dumps(proof))
+            receipt["runtime_admission_sha256"]=digest(folder/"runtime-admission.json")
+            (folder/"preflight-result.json").write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(RuntimeError,"CPU runtime admission"):
+                require_cpu_runtime_admission(config)
 
 
 if __name__ == "__main__":

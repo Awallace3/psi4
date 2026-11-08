@@ -108,3 +108,25 @@ SVP frozen data was copied (not execution code) to:
 `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/benchmark-inputs-def2-svp-e93a40f2ca96/inputs.json`.
 SHA256:
 `e93a40f2ca961461cb98ba423b8eff5f199d7b201a0925185c80fff610dfe327`.
+
+## Launch-review admission gap closed
+
+Independent review found that the newly generalized stage launcher accepted
+a matching PASS whole-build proof without explicitly requiring the separate
+sealed CPU runtime-admission receipt. The CPU build already produces that
+receipt, but its existence/success must be a launch requirement, not an
+assumption inferred from the source pin.
+
+The outer launcher now requires the finalized CPU prerequisite exit0/no-TERM,
+including the build wrapper's `CPU_BUILD_VALIDATION_ONLY_CHECK_RESULT_JSON` marker,
+reuses the frozen source's `require_cpu_admission` checks, binds its admitted
+runtime-config SHA to the proof, and compares the entire runtime closure
+against the requested config (only threads and per-run alias parent may
+differ). It seals the admission receipt/config hashes into the submission
+manifest and revalidates them at execution before the small H200 gate.
+A regression exercises the actual submission path and confirms that even
+`sbatch --test-only` is not called for a PASS build with FAILED admission.
+
+This correction is a separately pinned **outer launcher** change. The
+running15317825 source/build at1cad631980 stays frozen; no installed science,
+build proof, worker or shared dependency is edited or relabeled.

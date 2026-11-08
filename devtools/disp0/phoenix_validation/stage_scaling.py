@@ -33,6 +33,25 @@ def cpu_wall_seconds(system, profile):
     return 3600 if system=="peptide" else 28800
 
 
+def require_cpu_runtime_admission(config):
+    """Bind a finalized CPU sealed-loader proof to this exact runtime closure."""
+    from sealed_h200 import require_cpu_admission
+    root=Path(config["build_proof"]).resolve(strict=True).parent
+    if (root/"job-status.env").read_text().splitlines()!=[
+            "exit_code=0","term_received=0","CPU_BUILD_VALIDATION_ONLY_CHECK_RESULT_JSON"]:
+        raise RuntimeError("Finalized uninterrupted CPU prerequisite required before H200")
+    receipt_sha=require_cpu_admission(root,pinned_science(config["source_pin"]))
+    path=root/"cpu-sealed-admission/runtime-config.json"
+    admitted=json.loads(path.read_text())
+    proof=json.loads((root/"cpu-sealed-admission/runtime-admission.json").read_text())
+    config_sha=digest(path)
+    closure=lambda value: {k:v for k,v in value.items()
+                           if k not in ("threads","sealed_alias_parent")}
+    if (proof["runtime_config_sha256"]!=config_sha or closure(admitted)!=closure(config)):
+        raise RuntimeError("CPU sealed-runtime admission differs from requested runtime closure")
+    return {"root":str(root),"receipt_sha256":receipt_sha,"config_sha256":config_sha}
+
+
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -163,6 +182,8 @@ def execute(manifest_path):
         config, _ = read_config(Path(manifest["config"]), manifest["config_sha256"])
         if config["source_pin"]!=science_pin:
             raise RuntimeError("Runtime and submission scientific pins differ")
+        if require_cpu_runtime_admission(config)!=manifest["cpu_runtime_admission"]:
+            raise RuntimeError("CPU sealed-runtime admission changed after submission")
         if config["threads"] != (8 if manifest["kind"] == "gpu" else 24):
             raise RuntimeError("Wrong worker thread policy")
         if len(os.sched_getaffinity(0)) < config["threads"]:
@@ -366,6 +387,7 @@ def submit(args):
     if (proof.get("status") != "PASS" or proof.get("pin") != science_pin
             or digest(proof_path) != base["build_proof_sha256"]):
         raise RuntimeError("Completed exact whole-stage CPU build proof required")
+    admission=require_cpu_runtime_admission(base)
     load_point(args.inputs, args.inputs_sha256, args.system)
     profile=input_basis_profile(json.loads(args.inputs.read_text()))
     wall = WALL[args.system] if args.kind=="gpu" else cpu_wall_seconds(args.system,profile)
@@ -393,6 +415,7 @@ def submit(args):
     write(config_path, config)
     manifest = {"source": str(source), "science_pin": science_pin, "outer_pin": pin,
                 "basis_profile": profile,
+                "cpu_runtime_admission": admission,
                 "kind": args.kind, "system": args.system, "repeat": args.repeat,
                 "config": str(config_path), "config_sha256": digest(config_path),
                 "inputs": str(args.inputs.resolve(strict=True)), "inputs_sha256": args.inputs_sha256,
