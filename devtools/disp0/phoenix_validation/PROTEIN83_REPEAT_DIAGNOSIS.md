@@ -344,3 +344,25 @@ small H200 F-SAPT gate (signed controls, independent same-gauge CPU oracle,
 repeat and changed geometry). The new outer helper runs against the completed
 build above; it neither advances the source checkout nor overlays installed
 code. Both results remain non-benchmark gates with accepted speedup count0.
+
+### Physical native/small GPU gate submitted15323651
+
+Outer launcher pin:`a3434ede733a4ee7f97d4133dd14e3784086f2c1`,
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-native-tests-a3434ede73`.
+All154 host launcher tests and the three native fitting source guards passed;
+the independent launch review found no concrete blockers. Neither mocks nor
+source guards are numerical GPU evidence.
+
+Submitted **15323651**, effective route read back as
+`gts-cs207-chemx / gpu-h200 / embers`,1H200,8CPUs,160GiB,30min.
+Initially PENDING for Priority. Test-only15323649 is not the allocation.
+Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/native-jk-regression-a3434ede73-01`.
+Manifest SHA256:
+`a34f68b9de17359807ea851fc7873e1d1e40918ac00329e346db70313d7766e1`.
+Runtime-config SHA256:
+`08082fff7d5eb31f1e8463a5f2d26d51097c80c589c5e5f3747dfafd9f7a6f1e`.
+Official hourly watcher:`be362e84f`.
+
+The immutable native source remains`e0da305c02`; no Protein83 benchmark
+retry or new accepted speedup is implied by this correctness submission.
