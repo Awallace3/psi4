@@ -182,3 +182,44 @@ and one separate traced process. No CPU protein reference is submitted
 until this producer passes and cleans up. There is no def2 timing, GPU
 correctness PASS or accepted protein speedup at submission. No old worktree,
 proof, memory budget or correctness tolerance was changed; no automatic retry.
+
+## Protein83/SVP fits; strict energy repeat failed
+
+Job15318800 FAILED1:0 without TERM in17min37s. Its small physical gate
+passed. Both Protein83 workers exited0 without retirement, completed the
+whole energy call (422.041109226 /425.392494615s), were reaped, and the
+owned scratch was cleaned. The tracked fragment-session explicit-allocation
+peak was53,069,953,624bytes (about49.4GiB) in both processes. The earlier
+120GiB declared-budget failure did not recur.
+
+Qualification stopped at the unchanged1e-9 absolute/relative scalar repeat
+check, before the third baseline or trace:
+
+| Quantity | r1 minus r0 (Eh) |
+|---|---:|
+| Full interaction energy | -4.018948517731102e-9 |
+| `DHF VALUE` | -4.021444510726724e-9 |
+| `SAPT DISP ENERGY` | +2.495992995621421e-12 |
+| Monomer A HF energy | -2.7063151719630696e-9 |
+| Monomer B HF energy | +9.147242963081226e-10 |
+
+The total-energy repeat difference tracks dimer-minus-monomer HF interaction
+energy, not dispersion. This narrows the investigation to upstream HF inputs;
+it does not yet identify whether SCF convergence or native integral/JK
+repeatability is responsible. SCF E/D convergence remains10 in both arms.
+The downstream orbital/matrix repeat checks were not reached by the failed
+controller; no claim that they passed follows from the scalar diagnosis.
+
+- Final controller report SHA256:
+  `a2d68e626510ad76baddd532dd7df15133608a3f9088c4768f8c4ed1c2ed6a3d`.
+- Completed r0 result SHA256:
+  `59838c6873d4f386aeccb4bdad7f699bf4111d354c1bc7113dfdbe04b218cbf5`.
+- Completed r1 result SHA256:
+  `92fa03a6f97526c8f2782bb5d90c32f4f060ea67f7708124b3b0ce5ca9091d14`.
+
+Read-only result/raw-HF/fragment snapshots and logs were retrieved to
+`/tmp/fsapt-protein83-def2-15318800/r0` and`r1` for offline diagnosis.
+The original `repeat_gauge.close` on the two saved `energy_Eh` values
+reproduced exactly the scalar failure locally in0.3s. No tolerance was
+changed, no third run or CPU qualification was submitted, and there is
+still no accepted Protein83 CPU/GPU speedup.
