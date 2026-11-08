@@ -1,5 +1,87 @@
 # Closed fb11 genuine build / installed-check mode
 
+## 152: exact three-entry BASE metadata compatibility; current ops004
+
+Historical verification15322764 failed BEFORE native import/collection in
+`existing_snapshot(BASE)`: strict resolution of the malformed compiler
+`TOOLS=addr2line` link found a missing target. This is diagnostic metadata
+failure, not science or Q mismatch. Preserve failedcollection003/ops003 and
+all compiled002/earlier records unchanged. No automatic retry or BASE repair.
+
+Parent's complete sealed-link census found exactly THREE known missing-target
+links, all with raw text matching original protected snapshot99558a98:
+
+|BASE-relative link|Exact raw text|Lexical target / current absent anchor|
+|---|---|---|
+|libexec/gcc/x86_64-conda-linux-gnu/14.3.0/TOOLS=addr2line|../../../../bin/x86_64-conda-linux-gnu-TOOLS=addr2line|bin/x86_64-conda-linux-gnu-TOOLS=addr2line (terminal)|
+|share/cmake/Einsums/tests/cxx23_static_call_operator.cu|../../cmake/tests/cxx23_static_call_operator.cpp|share/cmake/cmake/tests/cxx23_static_call_operator.cpp / share/cmake/cmake|
+|share/cmake/Einsums/tests/cxx23_static_call_operator.hip|../../cmake/tests/cxx23_static_call_operator.cpp|share/cmake/cmake/tests/cxx23_static_call_operator.cpp / share/cmake/cmake|
+
+This is a literal three-entry table, not permission to ignore broken links in
+the baseline. It applies ONLY when the full snapshot explicitly selects the
+actual BASE root, never compiled prefix/OLD/required executables/imports.
+Original protected-before raw size18257504/SHA99558a98 is checked before JSON
+use. Require exact historical kind/raw row, unchanged actual symlink/raw text,
+canonical non-symlink sealed directories for link and anchor parents, exact
+lexical target, and specific `lstat` ENOENT at the table's anchor. All other
+errors/missing ancestors fail. Creating/repairing an anchor (file/dir/link),
+retargeting, permissions, loops, namespace changes or an unknown broken link
+fail. Presence of an anchor/target row in original sealed metadata also fails;
+missing inventory entries are NOT historical filesystem/content attestations.
+Snapshot rows explicitly record CURRENT absence and historical raw metadata
+only, with no target hash. Recheck at start, row capture and end, as well as
+whole-operation pre/post integrity. Generic valid-link resolved/content
+bindings and original raw BASE comparison remain unchanged.
+
+The malformed compiler name is not normal`bin/addr2line`; Einsums is OFF in
+the approved configure and collection/checks do not compile packaged CMake
+tests. Normal addr2line still must resolve to the sealed regular
+`bin/x86_64-conda-linux-gnu-addr2line`, SHA
+`c1f9abaad54a61ae6cb621566b4388f5265853ffb4de7b26c004dbe34d66966f`.
+No `resolve(strict=False)`, shared-environment modification, native/source/
+test change, count discount, cap/policy change or observed-hash approval.
+
+Current closed paths (all others, including TEST003, remain unchanged):
+
+```
+OPS=$P/gits/psi4.ccasp-native-s66-qomp-ops004
+COLLECT=$P/runs/ccasp-native-s66-qomp-fb11-collection004
+CHECK=$P/runs/ccasp-native-s66-qomp-fb11-installed004
+# corresponding fresh scratch basenames and sibling -logs
+```
+
+After reviewed Git staging, from an already clean approved parent environment:
+
+```bash
+/usr/bin/env -i PATH=/usr/bin:/bin USER=awallace43 LOGNAME=awallace43 HOME="$APPROVED_HOME" \
+ /usr/bin/python3 -I -S -B - "$OPS" "$OPS_COMMIT" "$OPS_TREE" <<'PY'
+import pathlib,sys,types
+p=pathlib.Path(sys.argv[1])/'devtools/isapol_s66_campaign/phoenix_installed_checks.py'
+ns={'__name__':'_metadata_only','__file__':str(p)}
+exec(compile(p.read_bytes(),str(p),'exec'),ns)
+engine=ns['qomp_engine'](); engine.qomp_enter()
+args=types.SimpleNamespace(ops_commit=sys.argv[2],ops_tree=sys.argv[3])
+print(ns['existing_source_gate'](engine,args))
+engine.qomp_library()  # verify frozen8573 Git bytes
+print(ns['existing_base_metadata_preflight'](engine))
+assert 'psi4' not in sys.modules
+print('three exact BASE metadata cases + normal addr2line PASS; no native')
+PY
+```
+
+This hashes ONE pinned historical JSON and ONE normal executable as data;
+it stats only the declared links/parents/anchors. No environment traversal,
+compiler/executable call, native import, collection, config/receipt write,
+network or full-prefix verification. Earlier loader/site execution cannot be
+undone by `env -i`; parent still supplies explicitly clean approved exports.
+After separate review/approval, use the151 two-mode CLI below with these004
+paths and NEW reviewed ops commit/tree, both2h/8CPU/32GiB embers, never003.
+Successful collection still needs independently observed literal new hashes
+and actual allocation/batch/.0 COMPLETED0 before separate556 qualification.
+All acceptance/adoption flags remain false; no actual native pass is claimed.
+
+## Archived151 interface: use152's004 paths, not the003 examples
+
 ## 151: separate read-only verification of failed build002 (ops003)
 
 **Not a successful normal build or production adoption.** Job15320675 and its

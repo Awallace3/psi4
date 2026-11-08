@@ -978,7 +978,7 @@ class ExistingInstallPureTests(unittest.TestCase):
     def test_historical_literal_anchors_closed_paths_and_failed_receipts(self):
         paths = C.existing_paths(B)
         self.assertEqual(paths['build'], B.QOMP_BUILD)
-        self.assertEqual(paths['ops'].name, 'psi4.ccasp-native-s66-qomp-ops003')
+        self.assertEqual(paths['ops'].name, 'psi4.ccasp-native-s66-qomp-ops004')
         self.assertEqual(paths['tests'].name, 'psi4.ccasp-native-s66-qomp-tests003')
         self.assertEqual(C.EXISTING_ANCHORS['result.json'],
                          'a67fe225027d06d2cb805b3c606b2f5f9a753670551c772ce5dd111eea5a0400')
@@ -1258,6 +1258,279 @@ class ExistingInstallPureTests(unittest.TestCase):
                 core.write_bytes(b'tamper')
                 with self.assertRaises(ValueError):
                     C.existing_identity(value, prefix)
+
+
+class BaseLink152Tests(unittest.TestCase):
+    NAME = 'libexec/gcc/x86_64-conda-linux-gnu/14.3.0/TOOLS=addr2line'
+    RAW = '../../../../bin/x86_64-conda-linux-gnu-TOOLS=addr2line'
+    TARGET = 'bin/x86_64-conda-linux-gnu-TOOLS=addr2line'
+    CMAKE = 'share/cmake/Einsums/tests/cxx23_static_call_operator.'
+    CMAKE_RAW = '../../cmake/tests/cxx23_static_call_operator.cpp'
+
+    def fixture(self, root):
+        base, build, old = root/'base', root/'build', root/'old'
+        (base/Path(self.NAME).parent).mkdir(parents=True)
+        (base/'bin').mkdir()
+        (base/self.NAME).symlink_to(self.RAW)
+        (base/Path(self.CMAKE).parent).mkdir(parents=True)
+        for suffix in ('cu', 'hip'):
+            (base/(self.CMAKE+suffix)).symlink_to(self.CMAKE_RAW)
+        normal = base/'bin/x86_64-conda-linux-gnu-addr2line'
+        normal.write_bytes(b'inert sealed normal addr2line fixture, never executed')
+        (base/'bin/addr2line').symlink_to(normal.name)
+        (build/'env').mkdir(parents=True)
+        (old/'env').mkdir(parents=True)
+        protected = dict(base=B.qomp_inventory(base, NS(sha=C.digest)), old={},
+                         manifest_sha256='0'*64, record_sha256='1'*64)
+        for name in ('protected-before.json', 'protected-after.json'):
+            (build/name).write_text(json.dumps(protected))
+        (build/'installed-python-checks.json').write_text('{}')
+        original = dict(runtime_files={}, runtime_directories=['.'], installed_files={},
+                        external_runtime_files={})
+        lib = NS(OLD=old, read=lambda p: json.loads(Path(p).read_text()),
+                 old_seal=lambda: original, installed_python_gate=lambda *a: {},
+                 dependency_gate=lambda *a: None)
+        engine = NS(QOMP_BASE=base, qomp_protected=lambda lib: protected,
+                    qomp_installed_names=lambda names: names)
+        return NS(base=base, build=build, old=old, protected=protected, lib=lib, engine=engine,
+                  baseline_sha=C.digest(build/'protected-before.json'),
+                  baseline_bytes=(build/'protected-before.json').stat().st_size,
+                  normal_sha=C.digest(normal))
+
+    def proof(self, f):
+        """Only ephemeral fixture pins, never observed shared-BASE selfapproval."""
+        from contextlib import ExitStack
+        stack = ExitStack()
+        stack.enter_context(patch.object(C, 'existing_paths', return_value=dict(build=f.build)))
+        stack.enter_context(patch.dict(C.EXISTING_ANCHORS, {
+            'protected-before.json': f.baseline_sha, 'protected-after.json': f.baseline_sha}))
+        stack.enter_context(patch.object(C, 'EXISTING_PROTECTED_BYTES', f.baseline_bytes))
+        stack.enter_context(patch.object(C, 'EXISTING_ADDR2LINE_SHA', f.normal_sha))
+        return stack
+
+    def test_exact_sealed_base_case_through_complete_current_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.fixture(Path(tmp))
+            anchors = dict(C.EXISTING_ANCHORS,
+                           **{'protected-before.json': f.baseline_sha,
+                              'protected-after.json': f.baseline_sha})
+            with patch.object(C, 'existing_paths', return_value=dict(build=f.build)), \
+                 patch.object(C, 'existing_historical', return_value=({}, set(), [])), \
+                 patch.dict(C.EXISTING_ANCHORS, anchors), \
+                 patch.object(C, 'EXISTING_PROTECTED_BYTES', f.baseline_bytes, create=True):
+                before = C.existing_current(f.engine, f.lib)
+                after = C.existing_current(f.engine, f.lib)
+            self.assertEqual(before, after)
+            marker = before['protected_bindings']['base'][self.NAME]
+            self.assertEqual(marker['kind'], 'known-dangling-base-metadata-link')
+            self.assertEqual(marker['target_absence'], 'current-lstat-ENOENT')
+            self.assertEqual(marker['target'], self.RAW)
+            self.assertNotIn('sha256', marker)
+            # The original raw BASE snapshot remains an unchanged link row.
+            self.assertEqual(before['protected']['base'][self.NAME],
+                             dict(kind='link', target=self.RAW))
+            for suffix in ('cu', 'hip'):
+                cmake = before['protected_bindings']['base'][self.CMAKE+suffix]
+                self.assertEqual(cmake['kind'], 'known-dangling-base-metadata-link')
+                self.assertEqual(cmake['absent_anchor'], str(f.base/'share/cmake/cmake'))
+                self.assertNotIn('sha256', cmake)
+
+    def test_parent_literals_and_exact_three_entry_table(self):
+        self.assertEqual(C.EXISTING_PROTECTED_BYTES, 18257504)
+        self.assertEqual(C.EXISTING_ANCHORS['protected-before.json'],
+                         '99558a98ede3f04c1c854b425e6a967e68a7b0579529725dda2cc04453918525')
+        self.assertEqual(C.EXISTING_ADDR2LINE_SHA,
+                         'c1f9abaad54a61ae6cb621566b4388f5265853ffb4de7b26c004dbe34d66966f')
+        self.assertEqual(C.EXISTING_BASE_METADATA, (
+            (self.NAME, self.RAW, self.TARGET, self.TARGET),
+            (self.CMAKE+'cu', self.CMAKE_RAW,
+             'share/cmake/cmake/tests/cxx23_static_call_operator.cpp', 'share/cmake/cmake'),
+            (self.CMAKE+'hip', self.CMAKE_RAW,
+             'share/cmake/cmake/tests/cxx23_static_call_operator.cpp', 'share/cmake/cmake')))
+        self.assertEqual(C.EXISTING_BASE_OPS, 'cef3c6cdecdefb7a6a356d2019a6d07d0a121cd2')
+        self.assertEqual(C.existing_paths(B)['collect'].name, 'ccasp-native-s66-qomp-fb11-collection004')
+        self.assertEqual(C.existing_paths(B)['checks'].name, 'ccasp-native-s66-qomp-fb11-installed004')
+        with self.assertRaisesRegex(ValueError, 'unreviewed'):
+            C.existing_base_metadata_case(Path('/not-accessed'), {}, ('unknown', 'x', 'x', 'x'))
+
+    def test_targeted_preflight_no_walk_execute_or_native_and_valid_binding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.fixture(Path(tmp))
+            with self.proof(f), patch.object(Path, 'rglob', side_effect=AssertionError('no tree walk')), \
+                 patch.object(os, 'scandir', side_effect=AssertionError('no scandir')), \
+                 patch.object(subprocess, 'run', side_effect=AssertionError('no execute')), \
+                 patch.object(subprocess, 'check_output', side_effect=AssertionError('no execute')):
+                value = C.existing_base_metadata_preflight(f.engine)
+            self.assertEqual(len(value['metadata']), 3)
+            self.assertEqual(value['normal_addr2line']['sha256'], f.normal_sha)
+            self.assertEqual(value['normal_addr2line']['resolved'],
+                             str(f.base/'bin/x86_64-conda-linux-gnu-addr2line'))
+            self.assertNotIn('psi4', sys.modules)
+            with self.proof(f):
+                before = C.existing_snapshot(f.base, {}, base_engine=f.engine)
+                normal = before['bin/addr2line']
+                self.assertEqual(normal['kind'], 'link')
+                self.assertEqual(normal['sha256'], f.normal_sha)
+                (f.base/'bin/x86_64-conda-linux-gnu-addr2line').write_bytes(b'changed normal binary')
+                with self.assertRaisesRegex(ValueError, 'normal BASE addr2line'):
+                    C.existing_base_metadata_preflight(f.engine)
+                after = C.existing_snapshot(f.base, {}, base_engine=f.engine)
+                self.assertNotEqual(normal, after['bin/addr2line'])
+
+    def test_deny_each_changed_raw_type_missing_link_or_loop(self):
+        for case in C.EXISTING_BASE_METADATA:
+            for mutation in ('raw', 'file', 'directory', 'missing', 'loop'):
+                with self.subTest(name=case[0], mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                    f = self.fixture(Path(tmp))
+                    link = f.base/case[0]
+                    link.unlink()
+                    if mutation == 'raw':
+                        link.symlink_to('another-missing-target')
+                    elif mutation == 'file':
+                        link.write_text('replaced')
+                    elif mutation == 'directory':
+                        link.mkdir()
+                    elif mutation == 'loop':
+                        link.symlink_to(link.name)
+                    with self.proof(f), self.assertRaises((ValueError, FileNotFoundError)):
+                        C.existing_base_metadata_preflight(f.engine)
+
+    def test_deny_anchor_appearance_even_when_cpp_target_still_missing(self):
+        for case in C.EXISTING_BASE_METADATA:
+            for kind in ('file', 'directory', 'symlink-loop'):
+                with self.subTest(name=case[0], kind=kind), tempfile.TemporaryDirectory() as tmp:
+                    f = self.fixture(Path(tmp))
+                    anchor = f.base/case[3]
+                    if kind == 'file':
+                        anchor.write_text('new target/ancestor')
+                    elif kind == 'directory':
+                        anchor.mkdir()
+                    else:
+                        anchor.symlink_to(anchor.name)
+                    with self.proof(f), self.assertRaisesRegex(ValueError, 'anchor appeared'):
+                        C.existing_base_metadata_preflight(f.engine)
+
+    def test_deny_other_root_prefix_and_unknown_even_historically_sealed_broken_link(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.fixture(Path(tmp))
+            with self.proof(f):
+                with self.assertRaisesRegex(ValueError, 'another root'):
+                    C.existing_snapshot(f.build/'env', {}, base_engine=f.engine)
+                # Same spelling in any prefix has NO metadata exception.
+                name = f.build/'env'/self.NAME
+                name.parent.mkdir(parents=True)
+                name.symlink_to(self.RAW)
+                with self.assertRaises(FileNotFoundError):
+                    C.existing_snapshot(f.build/'env', {})
+                with self.assertRaises(FileNotFoundError):
+                    C.existing_snapshot(f.base, {})  # Explicit BASE routing required.
+            unknown = f.base/'bin/new-unknown-broken-link'
+            unknown.symlink_to('absent')
+            f.protected['base'][str(unknown.relative_to(f.base))] = dict(kind='link', target='absent')
+            # Even an independently sealed hypothetical broken link is not an
+            # allowance: the production table is EXACTLY these three entries.
+            for name in ('protected-before.json', 'protected-after.json'):
+                (f.build/name).write_text(json.dumps(f.protected))
+            f.baseline_sha = C.digest(f.build/'protected-before.json')
+            f.baseline_bytes = (f.build/'protected-before.json').stat().st_size
+            with self.proof(f), self.assertRaises(FileNotFoundError):
+                C.existing_snapshot(f.base, {}, base_engine=f.engine)
+            unknown.unlink()
+            unknown.symlink_to(unknown.name)
+            with self.proof(f), self.assertRaises((RuntimeError, OSError)):
+                C.existing_snapshot(f.base, {}, base_engine=f.engine)
+
+    def test_missing_or_linked_ancestor_and_noncanonical_base_fail(self):
+        for parent in ('bin', 'libexec/gcc', 'share/cmake', '.'):
+            for kind in ('missing', 'symlink'):
+                with self.subTest(parent=parent, kind=kind), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    f = self.fixture(root)
+                    path = f.base/parent
+                    saved = root/'saved'
+                    path.rename(saved)
+                    if kind == 'symlink':
+                        path.symlink_to(saved, target_is_directory=True)
+                    with self.proof(f), self.assertRaises((ValueError, FileNotFoundError)):
+                        C.existing_base_metadata_preflight(f.engine)
+
+    def test_only_specific_lstat_enoent_not_permissions_loop_or_other_filename(self):
+        import errno
+        real_lstat = Path.lstat
+        for case in C.EXISTING_BASE_METADATA:
+            for which in ('permission', 'loop', 'wrong-filename', 'ancestor-permission'):
+                with self.subTest(name=case[0], which=which), tempfile.TemporaryDirectory() as tmp:
+                    f = self.fixture(Path(tmp))
+                    anchor = f.base/case[3]
+                    selected = anchor.parent if which == 'ancestor-permission' else anchor
+                    def lstat(path, *args, **kwargs):
+                        if path == selected:
+                            if 'permission' in which:
+                                raise PermissionError(errno.EACCES, 'injected permission', str(path))
+                            if which == 'loop':
+                                raise OSError(errno.ELOOP, 'injected loop', str(path))
+                            raise FileNotFoundError(errno.ENOENT, 'wrong missing path',
+                                                    str(f.base/'unrelated'))
+                        return real_lstat(path, *args, **kwargs)
+                    with self.proof(f), patch.object(Path, 'lstat', lstat), \
+                         self.assertRaises((ValueError, OSError)):
+                        C.existing_base_metadata_preflight(f.engine)
+
+    def test_target_appearing_after_initial_and_row_checks_is_not_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.fixture(Path(tmp))
+            actual = C.existing_base_metadata_case
+            calls = {}
+            def changing(base, sealed, case):
+                row = actual(base, sealed, case)
+                calls[case[0]] = calls.get(case[0], 0)+1
+                if case[0] == self.CMAKE+'hip' and calls[case[0]] == 2:
+                    (base/'share/cmake/cmake').mkdir()  # After the last row's check.
+                return row
+            with self.proof(f), patch.object(C, 'existing_base_metadata_case', side_effect=changing), \
+                 self.assertRaisesRegex(ValueError, 'anchor appeared'):
+                C.existing_snapshot(f.base, {}, base_engine=f.engine)
+
+    def test_original_baseline_pin_rows_and_required_normal_link_stay_failclosed(self):
+        for mutation in ('sha', 'bytes', 'raw-row', 'anchor-row', 'normal-raw', 'normal-kind',
+                         'normal-target', 'baseline-symlink'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                f = self.fixture(Path(tmp))
+                with self.proof(f):
+                    if mutation == 'sha':
+                        with patch.dict(C.EXISTING_ANCHORS, {'protected-before.json': '0'*64}), \
+                             self.assertRaisesRegex(ValueError, 'parent-pinned'):
+                            C.existing_base_metadata_preflight(f.engine)
+                        continue
+                    if mutation == 'bytes':
+                        (f.build/'protected-before.json').write_bytes(b'changed same-owner metadata')
+                    elif mutation in ('raw-row', 'anchor-row'):
+                        sealed = f.protected['base']
+                        if mutation == 'raw-row':
+                            sealed[self.NAME]['target'] = 'unapproved'
+                        else:
+                            sealed[self.TARGET] = dict(kind='directory')
+                        with patch.object(C, 'existing_base_metadata_proof', return_value=(f.base, sealed)), \
+                             self.assertRaises(ValueError):
+                            C.existing_base_metadata_preflight(f.engine)
+                        continue
+                    elif mutation in ('normal-raw', 'normal-kind'):
+                        link = f.base/'bin/addr2line'
+                        link.unlink()
+                        if mutation == 'normal-raw':
+                            link.symlink_to('./x86_64-conda-linux-gnu-addr2line')
+                        else:
+                            link.write_text('not a symlink')
+                    elif mutation == 'normal-target':
+                        target = f.base/'bin/x86_64-conda-linux-gnu-addr2line'
+                        target.unlink()
+                        target.symlink_to('absent')
+                    else:
+                        before = f.build/'protected-before.json'
+                        before.rename(f.build/'actual-proof')
+                        before.symlink_to('actual-proof')
+                    with self.assertRaises((ValueError, OSError)):
+                        C.existing_base_metadata_preflight(f.engine)
 
 
 if __name__ == '__main__':

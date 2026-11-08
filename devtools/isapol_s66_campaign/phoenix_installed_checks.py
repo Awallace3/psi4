@@ -446,7 +446,7 @@ def qomp_main():
 # it a successful normal build. These parent-observed anchors are immutable.
 EXISTING_TEST_COMMIT = '311d17bf9177a972f3212c048e2f2177408b95d7'
 EXISTING_TEST_TREE = '57ff961824c0da6d76cf48e4da63fc83979f4f91'
-EXISTING_BASE_OPS = 'd8b4870ab29abb34d85536ec4df1db84f539b53b'
+EXISTING_BASE_OPS = 'cef3c6cdecdefb7a6a356d2019a6d07d0a121cd2'
 EXISTING_TEST_FILE = 'tests/pytests/test_isapol_isa_grid_accounting.py'
 EXISTING_TEST_SHA = '75096d590cf161c76fd6e0f39db25270208fd9dd7d1be44b1490f1290a07751c'
 EXISTING_PAIR = dict(
@@ -486,11 +486,11 @@ EXISTING_ANCHORS = dict([
 
 def existing_paths(engine):
     root = engine.QOMP_ROOT
-    return dict(ops=root/'gits/psi4.ccasp-native-s66-qomp-ops003',
+    return dict(ops=root/'gits/psi4.ccasp-native-s66-qomp-ops004',
                 tests=root/'gits/psi4.ccasp-native-s66-qomp-tests003',
                 build=root/'runs/ccasp-native-s66-qomp-fb11-build002',
-                collect=root/'runs/ccasp-native-s66-qomp-fb11-collection003',
-                checks=root/'runs/ccasp-native-s66-qomp-fb11-installed003')
+                collect=root/'runs/ccasp-native-s66-qomp-fb11-collection004',
+                checks=root/'runs/ccasp-native-s66-qomp-fb11-installed004')
 
 
 def existing_need(condition, message):
@@ -550,9 +550,9 @@ def existing_parametrize_lint(text):
 
 def existing_source_gate(engine, args):
     paths = existing_paths(engine)
-    existing_need(engine.SOURCE == paths['ops'], 'closed ops003 source required')
+    existing_need(engine.SOURCE == paths['ops'], 'closed ops004 source required')
     existing_need(engine.qomp_git(paths['ops'], 'merge-base', EXISTING_BASE_OPS, args.ops_commit)
-                  == EXISTING_BASE_OPS, 'ops must descend from d8b')
+                  == EXISTING_BASE_OPS, 'ops must descend from reviewed cef3')
     changed = set(engine.qomp_git(paths['ops'], 'diff', '--name-only',
                                   EXISTING_BASE_OPS, args.ops_commit).splitlines())
     existing_need(changed <= engine.QOMP_OPS_FILES, 'ops changed paths outside allowlist')
@@ -597,18 +597,140 @@ def existing_manifest(path, prefix, entries, unique):
     return {str(Path(line).relative_to(prefix)) for line in lines}
 
 
-def existing_snapshot(root, external):
+EXISTING_PROTECTED_BYTES = 18257504
+EXISTING_ADDR2LINE_SHA = 'c1f9abaad54a61ae6cb621566b4388f5265853ffb4de7b26c004dbe34d66966f'
+# Exact unused BASE metadata, NOT a general "sealed broken link" allowance.
+# Tuple columns: link, raw text, lexical target, currently absent anchor.
+# Einsums is OFF in the approved configure; these packaged CMake-test sources
+# and the malformed TOOLS= artifact are not invoked by collection/check modes.
+EXISTING_BASE_METADATA = (
+    ('libexec/gcc/x86_64-conda-linux-gnu/14.3.0/TOOLS=addr2line',
+     '../../../../bin/x86_64-conda-linux-gnu-TOOLS=addr2line',
+     'bin/x86_64-conda-linux-gnu-TOOLS=addr2line',
+     'bin/x86_64-conda-linux-gnu-TOOLS=addr2line'),
+    ('share/cmake/Einsums/tests/cxx23_static_call_operator.cu',
+     '../../cmake/tests/cxx23_static_call_operator.cpp',
+     'share/cmake/cmake/tests/cxx23_static_call_operator.cpp', 'share/cmake/cmake'),
+    ('share/cmake/Einsums/tests/cxx23_static_call_operator.hip',
+     '../../cmake/tests/cxx23_static_call_operator.cpp',
+     'share/cmake/cmake/tests/cxx23_static_call_operator.cpp', 'share/cmake/cmake'),
+)
+
+
+def existing_base_metadata_proof(engine, root):
+    """Fixed historical raw metadata pin, not historical target contents."""
+    import stat
+    base = engine.QOMP_BASE
+    existing_need(Path(root) == base and base.is_absolute(),
+                  'BASE metadata exception cannot apply to another root')
+    path = existing_paths(engine)['build']/'protected-before.json'
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        existing_need(stat.S_ISREG(info.st_mode) and info.st_size == EXISTING_PROTECTED_BYTES,
+                      'original protected snapshot kind/size differs')
+        raw = stream.read(EXISTING_PROTECTED_BYTES+1)
+    existing_need(len(raw) == EXISTING_PROTECTED_BYTES and hashlib.sha256(raw).hexdigest()
+                  == EXISTING_ANCHORS['protected-before.json'],
+                  'parent-pinned original protected snapshot differs')
+    sealed = json.loads(raw)['base']
+    existing_need(type(sealed) is dict, 'invalid original BASE inventory')
+    return base, sealed
+
+
+def existing_base_metadata_case(base, sealed, case):
+    """Only exact lstat ENOENT at this entry's declared anchor is permitted."""
+    import errno
+    import stat
+    existing_need(case in EXISTING_BASE_METADATA, 'unreviewed BASE metadata case')
+    name, raw, relative_target, relative_anchor = case
+    link, target, anchor = base/name, base/relative_target, base/relative_anchor
+    existing_need(sealed.get(name) == dict(kind='link', target=raw),
+                  'original BASE metadata link row differs')
+    existing_need(str(target) == os.path.normpath(str(link.parent/raw))
+                  and target.is_relative_to(anchor)
+                  and relative_anchor not in sealed and relative_target not in sealed,
+                  'BASE metadata target/anchor inventory differs')
+
+    def parents():
+        required = {base}
+        for start in (link.parent, anchor.parent):
+            existing_need(start.is_relative_to(base), 'BASE metadata parent escapes')
+            required.add(start)
+            required.update(p for p in start.parents if p.is_relative_to(base))
+        for parent in sorted(required, key=lambda p: len(p.parts)):
+            existing_need(stat.S_ISDIR(parent.lstat().st_mode), 'BASE metadata parent is not a directory')
+            if parent != base:
+                existing_need(sealed.get(str(parent.relative_to(base))) == dict(kind='directory'),
+                              'BASE metadata parent is not a sealed directory')
+        existing_need(base.resolve(strict=True) == base, 'BASE metadata root is not canonical')
+
+    parents()  # A missing/denied/linked ancestor is NOT the permitted absence.
+    existing_need(stat.S_ISLNK(link.lstat().st_mode) and os.readlink(link) == raw,
+                  'BASE metadata link kind/raw text changed')
+    try:
+        anchor.lstat()
+    except FileNotFoundError as error:
+        existing_need(error.errno == errno.ENOENT and error.filename == str(anchor),
+                      'unexplained BASE metadata absence')
+    else:
+        raise ValueError('BASE metadata absent anchor appeared or was repaired')
+    parents()  # Also catch an ancestor disappearing during the anchor check.
+    existing_need(stat.S_ISLNK(link.lstat().st_mode) and os.readlink(link) == raw,
+                  'BASE metadata link changed during absence check')
+    return dict(kind='known-dangling-base-metadata-link', target=raw,
+                expected_target=str(target), absent_anchor=str(anchor),
+                target_absence='current-lstat-ENOENT',
+                historical_evidence='pinned raw link metadata only; no target content/absence proof',
+                baseline_sha256=EXISTING_ANCHORS['protected-before.json'])
+
+
+def existing_base_metadata_rows(base, sealed):
+    return {case[0]: existing_base_metadata_case(base, sealed, case)
+            for case in EXISTING_BASE_METADATA}
+
+
+def existing_base_metadata_preflight(engine):
+    """Targeted three-case + normal addr2line check: no walk/native/execute."""
+    import stat
+    base, sealed = existing_base_metadata_proof(engine, engine.QOMP_BASE)
+    rows = existing_base_metadata_rows(base, sealed)
+    link, target = base/'bin/addr2line', base/'bin/x86_64-conda-linux-gnu-addr2line'
+    original = sealed.get('bin/addr2line', {})
+    existing_need(original.get('kind') == 'link' and stat.S_ISLNK(link.lstat().st_mode)
+                  and os.readlink(link) == original['target']
+                  and link.resolve(strict=True) == target
+                  and sealed.get('bin/x86_64-conda-linux-gnu-addr2line') == dict(
+                      kind='file', sha256=EXISTING_ADDR2LINE_SHA)
+                  and stat.S_ISREG(target.lstat().st_mode)
+                  and digest(target) == EXISTING_ADDR2LINE_SHA,
+                  'required normal BASE addr2line binding changed')
+    existing_need(existing_base_metadata_rows(base, sealed) == rows,
+                  'BASE metadata absence changed during preflight')
+    return dict(base=str(base), metadata=rows, normal_addr2line=dict(
+        target=original['target'], resolved=str(target), sha256=EXISTING_ADDR2LINE_SHA))
+
+
+def existing_snapshot(root, external, *, base_engine=None):
     """Full current namespace plus resolved link bindings, not a sandbox.
 
     External directory links are refused (the offline clone materializes BASE
     file links). Every external file must be in a verified dependency inventory.
     Internal directory links bind the complete underlying namespace via rows.
+    Only the explicit BASE route admits the three pinned metadata cases above;
+    every other root/link still requires strict resolution.
     """
+    known = None
+    if base_engine is not None:
+        base, sealed = existing_base_metadata_proof(base_engine, root)
+        known = existing_base_metadata_rows(base, sealed)
     root = root.resolve(strict=True)
     rows = {}
     for path in sorted(root.rglob('*')):
         rel = path.relative_to(root).as_posix()
-        if path.is_symlink():
+        if known is not None and rel in known:
+            case = next(case for case in EXISTING_BASE_METADATA if case[0] == rel)
+            rows[rel] = existing_base_metadata_case(base, sealed, case)
+        elif path.is_symlink():
             target = path.resolve(strict=True)
             existing_need(target != root and target != path, 'cyclic/root directory link')
             if not target.is_relative_to(root):
@@ -630,6 +752,10 @@ def existing_snapshot(root, external):
             name = str(Path(row['resolved']).relative_to(root))
             existing_need(name in rows and rows[name]['kind'] in ('file', 'directory'),
                           'internal link target absent from full namespace')
+    if known is not None:
+        existing_need(existing_base_metadata_rows(base, sealed) == known
+                      and {name: rows.get(name) for name in known} == known,
+                      'BASE metadata absence/namespace changed during snapshot')
     return rows
 
 
@@ -824,7 +950,7 @@ def existing_current(engine, lib):
                      for name, row in protected['base'].items() if row['kind'] == 'file'})
     snapshot = existing_snapshot(root, external)
     bindings = dict(old=existing_snapshot(lib.OLD/'env', external),
-                    base=existing_snapshot(engine.QOMP_BASE, external))
+                    base=existing_snapshot(engine.QOMP_BASE, external, base_engine=engine))
     checks = lib.installed_python_gate(root/'source', root/'build',
         prefix/'lib/python3.13/site-packages/psi4',
         engine.qomp_installed_names(original['installed_files']))
