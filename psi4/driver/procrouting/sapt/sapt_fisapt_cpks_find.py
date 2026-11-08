@@ -1,7 +1,11 @@
-"""Admission and original-monomer wiring; source solves/readout stay native."""
+"""Opt-in admission and original-monomer wiring; source solves/readout stay native.
+
+Each source changes the RHS, never the whole-monomer reference XC kernel.
+"""
 
 
 def validate_request(core, *, external_potentials=None):
+    """Reject unqualified modes explicitly; an XC-off request leaves legacy dispatch intact."""
     if not core.get_option("FISAPT", "FISAPT_FSAPT_IND_XC_RESPONSE"):
         return False
     if ("BRIANQC_ENABLE" in core.get_global_option_list()
@@ -34,6 +38,7 @@ def validate_request(core, *, external_potentials=None):
 
 
 def install(core, fisapt, wfn_a, wfn_b):
+    """Retain the canonical monomers in FISAPT, including their live response JK/grid."""
     try:
         if validate_request(core):
             if not hasattr(fisapt, "set_cpks_monomers"):

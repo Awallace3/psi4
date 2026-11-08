@@ -147,7 +147,7 @@ class FISAPT {
     void fexch();
     /// Induction
     void find();
-    /// Borrow the original canonical monomers; XC-off never uses them.
+    /// Retain the original canonical monomers; XC-off never uses them.
     void set_cpks_monomers(SharedWavefunction A, SharedWavefunction B);
     /// Dispersion
     void fdisp();

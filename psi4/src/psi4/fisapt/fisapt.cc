@@ -5897,6 +5897,8 @@ void FISAPT::fexch() {
 }
 
 void FISAPT::set_cpks_monomers(SharedWavefunction A, SharedWavefunction B) {
+    // Keep the canonical response reference alive, rather than rebuilding XC
+    // from individual source densities. Admit only the supported native modes.
     auto a = std::dynamic_pointer_cast<scf::RHF>(A), b = std::dynamic_pointer_cast<scf::RHF>(B);
     if (!a || !b || reference_->molecule()->nfragments() != 2)
         throw PSIEXCEPTION("CPKS find requires two original restricted monomers.");
@@ -5919,7 +5921,9 @@ void FISAPT::set_cpks_monomers(SharedWavefunction A, SharedWavefunction B) {
     cpks_B_ = b;
 }
 
-// Compute fragment-fragment partitioning of induction contribution
+// Partition induction by changing source RHSs in one shared localized gauge.
+// XC-off retains the uncoupled/legacy J/K modes; XC-on reuses the same native
+// PCG/readout with each original monomer's full response Hessian.
 void FISAPT::find() {
     // Python option lookups and registered CPU callbacks share this Options
     // object. Native dispatch must honor FISAPT-local flags, not ambient SCF
@@ -5943,7 +5947,7 @@ void FISAPT::find() {
                            "IND_RESPONSE=true, C assignment, and no extra response/readout scaling.");
     }
     if (ind_xc) {
-        // Extra scratch, admitted before reference checks or disk tensors:
+        // Extra scratch, admitted before building disk tensors:
         // PCG scratch, raw snapshots + wfn copies (conservative budget).
         const long double oa = matrices_["Locc0A"]->colspi()[0];
         const long double ob = matrices_["Locc0B"]->colspi()[0];
@@ -5998,6 +6002,8 @@ void FISAPT::find() {
     double response_tol = 0.;
     int response_maxiter = 0;
     if (ind_xc) {
+        // Here, check only space sizes and solver controls.
+        // Detailed reference/Fock consistency is covered by the numerical pytest.
         options_.set_current_module("SAPT");
         response_tol = options_.get_double("CPHF_R_CONVERGENCE");
         response_maxiter = options_.get_int("MAXITER");
@@ -6569,6 +6575,8 @@ void FISAPT::find() {
                 }
             }
 
+            // PCG solves H*x = W internally; physical amplitudes are kappa = -x.
+            // Rotate those amplitudes, not the reference kernel, into the LO gauge.
             xA->scale(-1.0);
             xB->scale(-1.0);
 
@@ -6663,6 +6671,9 @@ void FISAPT::find() {
 
     // => Induction scaling <= //
 
+    // Genuine coupled CPKS already has the canonical response total: no further
+    // coupled/uncoupled fit. Optional deltaHF redistribution is separate, and
+    // the raw matrices above remain unchanged by that approximation.
     if (ind_scale) {
         double dHF = 0.0;
         // When coming from SAPT(DFT), we want a dHF from SAPT0 terms, so check it this scalar, 'SAPT0 dHF' exists, and if not, compute, but log that we're doing so.
@@ -8135,6 +8146,8 @@ void FISAPTSCF::print_orbitals(const std::string& header, int start, std::shared
 CPHF_FISAPT::CPHF_FISAPT() {}
 CPHF_FISAPT::~CPHF_FISAPT() {}
 void CPHF_FISAPT::compute_cphf() {
+    // Both response modes share this PCG loop. Original monomers select the
+    // full Hessian action; null monomers select the legacy gap/J/K action.
     if (static_cast<bool>(monomer_A_) != static_cast<bool>(monomer_B_))
         throw PSIEXCEPTION("CPKS requires both original monomer Hessians.");
     iterations_A_ = iterations_B_ = 0;
@@ -8312,6 +8325,8 @@ void CPHF_FISAPT::compute_cphf() {
 }
 
 void CPHF_FISAPT::check_residuals() {
+    // Recompute W-H*x with a fresh Hessian action: recursive CG residuals can drift.
+    // An absolute floor keeps the criterion meaningful for tiny or zero sources.
     const auto products = product({{"A", x_A_}, {"B", x_B_}});
     for (const std::string side : {"A", "B"}) {
         auto rhs = side == "A" ? w_A_ : w_B_, residual = rhs->clone();
@@ -8350,6 +8365,9 @@ std::map<std::string, std::shared_ptr<Matrix> > CPHF_FISAPT::product(
     std::map<std::string, std::shared_ptr<Matrix> > s;
 
     if (monomer_A_) {
+        // The original wavefunction owns gaps, J/K and the full-reference XC
+        // kernel. Only trial amplitudes vary between sources; adding response
+        // terms or exchange fractions here would count them twice.
         for (const auto& item : b) {
             auto wfn = item.first == "A" ? monomer_A_ : monomer_B_;
             auto values = wfn->cphf_Hx({item.second});
