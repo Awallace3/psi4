@@ -100,14 +100,16 @@ Use actual reviewed ops commit/tree, not SCI as an ops alias:
 ```bash
 # Parent first checks all freshness/protected paths and sbatch --test-only.
 # No script here submits, retries, resumes or chains work.
-sbatch --parsable --account=gts-cs207-chemx --partition=cpu-small --qos=embers \
+/opt/slurm/current/bin/sbatch --parsable --export=USER,LOGNAME,HOME,PATH,LANG,LC_ALL \
+ --account=gts-cs207-chemx --partition=cpu-small --qos=embers \
  --nodes=1 --ntasks=1 --cpus-per-task=8 --mem=32G --time=08:00:00 --no-requeue \
  --chdir="$BUILD-logs" --output="$BUILD-logs/job-%j.out" --error="$BUILD-logs/job-%j.err" \
  "$OPS_SOURCE/devtools/isapol_native_acceptance/qomp.sbatch" \
  build "$OPS_SOURCE" "$OPS_COMMIT" "$OPS_TREE"
 
 # ONLY AFTER parent independently verifies actual new build+collection data:
-sbatch --parsable --account=gts-cs207-chemx --partition=cpu-small --qos=embers \
+/opt/slurm/current/bin/sbatch --parsable --export=USER,LOGNAME,HOME,PATH,LANG,LC_ALL \
+ --account=gts-cs207-chemx --partition=cpu-small --qos=embers \
  --nodes=1 --ntasks=1 --cpus-per-task=8 --mem=32G --time=02:00:00 --no-requeue \
  --chdir="$CHECK-logs" --output="$CHECK-logs/job-%j.out" --error="$CHECK-logs/job-%j.err" \
  "$OPS_SOURCE/devtools/isapol_native_acceptance/qomp.sbatch" \
@@ -145,3 +147,50 @@ payload and FINALIZATION after fake completion publication for both modes.
 Run documented campaign pure suites and frozen8573 pure ops regressions too.
 No new performance, full solver/scientific acceptance or water3 attribution
 claim. Inode policy147/cohort148 remain separate.
+
+##149 control and import confinement correction (child of40ce)
+
+The submitted command above is permitted **only from a known clean parent
+submission context**: USER/LOGNAME=awallace43, the approved HOME,
+PATH=/usr/bin:/bin, LANG/LC_ALL=C.UTF-8. Export only those explicitly approved
+fields, not the inherited environment/ALL. Parent verifies site submission
+does not repopulate an unreviewed login environment. No LD_*/DYLD_*, Git repo/
+config selectors, BASH_ENV/startup injection or exported functions are
+approved at scheduler launch.
+
+The wrapper pins `/bin/bash`, and uses shell builtins to discard other
+inherited environment variables BEFORE its first external command, including
+token Python, srun, payload and finalizers. Control Python runs-I-S-B.
+The Python control environment independently uses a small explicit scheduler/
+identity allowlist and clean PATH; inherited GIT_* selectors/count/key/value,
+loader and Python injection are absent. Its owned Git settings disable
+system/global config, prompts and attribute files. All qomp verification,
+library loading, detachment checks and materialization pin `/usr/bin/git`,
+disable hooks/fsmonitor/pagers and transports. Local/worktree includes and
+executable hooks/filter/diff/alias config are rejected, not executed.
+The historical materializer/8573 library remain unchanged; qomp uses a small
+pinned-Git materialization adapter. Model child environment starts from these
+clean controls, then adds only the reviewed prefix/BASE loader paths.
+
+**Boundary:** neither cleanup can undo code already executed by the scheduler's
+initial shell loader or site startup. System binaries, scheduler and ordinary
+host/repository trust still apply. This is not a hostile-host or network sandbox.
+
+Guarded identity/collection/test Python also uses-I-S-B, avoiding automatic
+site/.pth execution. Before importing Psi4 it validates every resolved sys.path
+entry: only BASE's reviewed3.13 stdlib/zip/dynload and private site-packages;
+then adds only the already sealed private site directory. It checks again
+after Psi4 (which may append addon paths). SCI, ops, build-source trees,
+foreign site-packages, empty/relative/unknown and symlink-escaping entries
+fail. Before pytest/helper imports, every installed test Python file is checked
+against the complete source-verified inventory; ONLY then may the resolved
+private package/tests directory be added. Paths are rechecked before/after
+pytest import. No foreign addon path gets an automatic allowance. Actual
+installed compatibility remains a compute gate, not a local-native claim.
+
+The unchanged trusted fb11 test bodies may launch their own subprocesses;
+this top-level bootstrap is not a test-code/process sandbox. Existing complete
+runtime/dependency before/after and actual node/JUnit gates still apply.
+Regression tests use stdlib fakes, temporary Git repositories, inert marker
+hooks/fakegit and loader-variable assertions before any exec; no hostile
+shared object or real Psi4 is loaded.

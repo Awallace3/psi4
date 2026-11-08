@@ -94,6 +94,7 @@ class QompPureTests(unittest.TestCase):
                 return 'devtools/isapol_native_acceptance/phoenix_build.py'
             return ''
         with patch.object(B, 'QOMP_OPS_SOURCE', B.SOURCE), patch.object(B, 'qomp_git', side_effect=git), \
+             patch.object(B, 'qomp_config_gate'), \
              patch.object(B.subprocess, 'run', return_value=NS(returncode=1)):
             value = B.qomp_source_gate('a'*40, 'b'*40)
             self.assertEqual(value['scientific_commit'], B.QOMP_SCI)
@@ -174,6 +175,8 @@ class QompPureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(B, 'QOMP_SCI_SOURCE', ROOT):
             root = Path(tmp)
             lib = self.lib
+            lib.write(root/'installed-python-checks.json', {
+                'tests/isapol_water_recipe.py': dict(sha256='0'*64)})
             class FakeRunner:
                 def run(self, label, command):
                     self.command = command
@@ -185,6 +188,8 @@ class QompPureTests(unittest.TestCase):
             B.qomp_pytest(runner, root/'env', root/'scratch', lib, collect=True)
             script = runner.command[-1]
             self.assertLess(script.index('assert package =='), script.index('import pytest'))
+            self.assertLess(script.index('qomp_search_path(sys.path'), script.index('import psi4'))
+            self.assertIn("'-S'", repr(runner.command))
             self.assertIn("sys.path.insert(0,str(package/'tests'))", script)
             self.assertNotIn('sys.path.insert(0,str(SOURCE', script)
             value = lib.read(root/'collection.json')
@@ -445,12 +450,20 @@ class QompPureTests(unittest.TestCase):
                     os.chdir(saved_cwd)
 
     def test_finalizer_no_foreign_writes_failure_or_interruption_adoption(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, dict(os.environ)):
             root = Path(tmp)
             token = '00000000-0000-0000-0000-000000000000'
             args = NS(root=root, launch_token=token, mode='build',
                       ops_commit='a'*40, ops_tree='b'*40, exit_code=0)
-            with patch.object(B, 'qomp_library', return_value=self.lib), \
+            def clean_library():
+                self.assertNotIn('LD_PRELOAD', os.environ)
+                self.assertNotIn('GIT_CONFIG_COUNT', os.environ)
+                self.assertEqual(os.environ['PATH'], '/usr/bin:/bin')
+                return self.lib
+            os.environ.update(LD_PRELOAD='/never-loaded.so', LD_LIBRARY_PATH='/not-used',
+                              GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='core.hooksPath',
+                              GIT_CONFIG_VALUE_0='/not-used', PATH='/fake/bin')
+            with patch.object(B, 'qomp_library', side_effect=clean_library), \
                  patch.object(B, 'qomp_source_gate', return_value={}):
                 self.assertEqual(B.qomp_finalize(args), 1)
                 self.assertEqual(list(root.iterdir()), [])
@@ -465,6 +478,126 @@ class QompPureTests(unittest.TestCase):
                 self.assertTrue((root/'COMPLETED_INVALIDATED').exists())
                 args.exit_code = 0
                 self.assertEqual(B.qomp_finalize(args), 143)
+
+    def test_control_environment_removes_path_git_and_loader_injection(self):
+        dirty = dict(os.environ, PATH='/fake/bin', GIT_DIR='/fake/repo',
+                     GIT_COMMON_DIR='/fake/common', GIT_WORK_TREE='/fake/tree',
+                     GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='core.hooksPath',
+                     GIT_CONFIG_VALUE_0='/fake/hooks', GIT_CONFIG='/fake/config',
+                     GIT_EXEC_PATH='/fake/exec', LD_PRELOAD='/never-loaded.so',
+                     LD_LIBRARY_PATH='/fake/lib', BASH_ENV='/fake/startup',
+                     PYTHONPATH='/fake/site', SLURM_JOB_ID='123')
+        clean = B.qomp_control_environment(dirty)
+        self.assertEqual(clean['PATH'], '/usr/bin:/bin')
+        self.assertEqual(clean['SLURM_JOB_ID'], '123')
+        for key in dirty:
+            if key.startswith(('LD_', 'PYTHON')) or key.startswith('GIT_') and key not in clean:
+                self.assertNotIn(key, clean)
+        self.assertEqual(clean['GIT_CONFIG_GLOBAL'], '/dev/null')
+        self.assertEqual(clean['GIT_CONFIG_SYSTEM'], '/dev/null')
+        self.assertNotIn('BASH_ENV', clean)
+        self.assertEqual(B.QOMP_GIT[0], '/usr/bin/git')
+        # Pure mock inspects exec environment; never launch a loader with LD_*.
+        with patch.dict(os.environ, dirty), patch.object(B, 'qomp_config_gate'), \
+             patch.object(B.subprocess, 'check_output', return_value='ok') as process:
+            self.assertEqual(B.qomp_git(Path('/fake/repo'), 'rev-parse', 'HEAD'), 'ok')
+            self.assertEqual(process.call_args.args[0][0], '/usr/bin/git')
+            self.assertNotIn('LD_PRELOAD', process.call_args.kwargs['env'])
+            self.assertNotIn('GIT_CONFIG_COUNT', process.call_args.kwargs['env'])
+        for key in ('include.path', 'core.fsmonitor', 'core.alternateRefsCommand',
+                    'protocol.ssh.allow', 'filter.fake.process', 'credential.helper'):
+            with patch.object(B.subprocess, 'check_output', return_value=key):
+                with self.assertRaisesRegex(ValueError, 'Git configuration'):
+                    B.qomp_config_gate(Path('/fake/repo'), clean)
+
+    def test_pinned_git_materialization_ignores_inherited_hook_and_fake_git(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, snapshot, hooks, fakebin = [root/name for name in ('repo', 'snapshot', 'hooks', 'bin')]
+            for path in (repo, hooks, fakebin):
+                path.mkdir()
+            marker = root/'hook-or-fake-git-ran'
+            hook = hooks/'post-checkout'
+            hook.write_text('#!/bin/sh\n: > "'+str(marker)+'"\n')
+            hook.chmod(0o700)
+            fake = fakebin/'git'
+            fake.write_text('#!/bin/sh\n: > "'+str(marker)+'"\nexit 99\n')
+            fake.chmod(0o700)
+            env = B.qomp_control_environment({})
+            def git(*args):
+                return subprocess.check_output([*B.QOMP_GIT, '-c', 'user.name=Pure test',
+                    '-c', 'user.email=test@example.invalid', '-C', str(repo), *args],
+                    env=env, text=True).strip()
+            git('init', '-q')
+            for name in ('CMakeLists.txt', 'cmake/psi4OptionsTools.cmake', 'psi4/src/export_isapol.cc',
+                         'psi4/driver/procrouting/isapol_benzene_acceptance.py'):
+                path = repo/name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('# fake source, never compiled or imported\n')
+            git('add', '.')
+            git('commit', '-qm', 'pure fixture')
+            commit, tree = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}')
+            with patch.dict(os.environ, dict(PATH=str(fakebin), GIT_CONFIG_COUNT='1',
+                            GIT_CONFIG_KEY_0='core.hooksPath', GIT_CONFIG_VALUE_0=str(hooks),
+                            GIT_DIR=str(root/'not-a-repo'))), \
+                 patch.object(B, 'QOMP_SCI_SOURCE', repo), patch.object(B, 'QOMP_SCI', commit), \
+                 patch.object(B, 'QOMP_TREE', tree):
+                B.qomp_materialize(snapshot)
+                self.assertFalse(marker.exists())
+                self.assertEqual(B.qomp_git(snapshot, 'rev-parse', 'HEAD'), commit)
+            git('config', 'core.hooksPath', str(hooks))
+            with self.assertRaisesRegex(ValueError, 'Git configuration'):
+                B.qomp_git(repo, 'status', '--porcelain')
+            self.assertFalse(marker.exists())
+
+    def test_resolved_search_paths_exact_allowlist_and_escapes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix, base = root/'env', root/'base'
+            forbidden = [root/'science', root/'ops', root/'build/source']
+            valid = [str(base/'lib/python313.zip'), str(base/'lib/python3.13'),
+                     str(base/'lib/python3.13/lib-dynload'), str(prefix/'lib/python3.13/site-packages')]
+            B.qomp_search_path(valid, prefix, base, forbidden)
+            for path in ('', '.', str(root/'foreign/site-packages'), str(forbidden[0]),
+                         str(forbidden[1]/'psi4'), str(forbidden[2]/'driver'),
+                         str(base/'lib/python3.13/site-packages'), str(root/'unknown.zip')):
+                with self.assertRaises(ValueError):
+                    B.qomp_search_path(valid+[path], prefix, base, forbidden)
+            helpers = str(prefix/'lib/python3.13/site-packages/psi4/tests')
+            with self.assertRaises(ValueError):
+                B.qomp_search_path(valid+[helpers], prefix, base, forbidden)
+            B.qomp_search_path(valid+[helpers], prefix, base, forbidden, helpers=True)
+            link = root/'looks-safe'
+            link.symlink_to(forbidden[0], target_is_directory=True)
+            with self.assertRaises(ValueError):
+                B.qomp_search_path(valid+[str(link)], prefix, base, forbidden)
+
+    def test_bootstrap_rejects_before_psi4_and_after_its_path_addition(self):
+        import builtins
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix, base = root/'env', root/'base'
+            initial = [str(base/'lib/python3.13'), str(base/'lib/python3.13/lib-dynload')]
+            imported = []
+            original_import = builtins.__import__
+            def fake_import(name, *args, **kwargs):
+                if name == 'psi4':
+                    imported.append(name)
+                    sys.path.append(str(root/'foreign/site-packages'))
+                    return NS()
+                return original_import(name, *args, **kwargs)
+            with patch.object(B, 'QOMP_BASE', base):
+                script = B.qomp_bootstrap(prefix)
+            with patch.object(sys, 'path', initial+[str(root/'bad')]), \
+                 patch.object(builtins, '__import__', side_effect=fake_import):
+                with self.assertRaisesRegex(ValueError, 'search path'):
+                    exec(script, {})
+            self.assertEqual(imported, [])
+            with patch.object(sys, 'path', list(initial)), \
+                 patch.object(builtins, '__import__', side_effect=fake_import):
+                with self.assertRaisesRegex(ValueError, 'search path'):
+                    exec(script, {})
+            self.assertEqual(imported, ['psi4'])  # Fake only, no native import.
 
     def test_junit_checks_all_names_not_only_counts(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(C, 'qomp_engine', return_value=B):
@@ -492,7 +625,9 @@ class QompPureTests(unittest.TestCase):
                     helper.parent.mkdir(parents=True)
                     helper.write_text("""
 import os,pathlib,signal,sys
-r=pathlib.Path(os.environ['FAKE_ROOT'])
+r=pathlib.Path(__file__).resolve().parents[3]
+assert os.environ['PATH']=='/usr/bin:/bin'
+assert not any(k in os.environ for k in ('LD_PRELOAD','LD_LIBRARY_PATH','GIT_CONFIG_COUNT','GIT_DIR'))
 if sys.argv[2]=='finalize':
  code=int(sys.argv[sys.argv.index('--exit-code')+1])
  if code:
@@ -501,7 +636,7 @@ if sys.argv[2]=='finalize':
  (r/'COMPLETED').write_text('0')
  print('FINAL_READY',flush=True);signal.pause()
 else:
- if os.environ['WINDOW']=='payload':
+ if (r/'WINDOW').read_text()=='payload':
   print('PAYLOAD_READY',flush=True);signal.pause()
 """)
                     target = root/'source/devtools/isapol_s66_campaign/phoenix_installed_checks.py'
@@ -513,13 +648,21 @@ else:
                     srun.chmod(0o700)
                     script = root/'wrapper'
                     self.assertEqual(wrapper.count('/opt/slurm/current/bin/srun'), 1)
-                    script.write_text(wrapper.replace('/opt/slurm/current/bin/srun', str(srun)))
+                    poison = ('export LD_PRELOAD=/not-loaded-test.so LD_LIBRARY_PATH=/not-used '
+                              'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath '
+                              'GIT_CONFIG_VALUE_0=/not-used GIT_DIR=/not-used\n')
+                    clean_assert = ('[[ ! -v LD_PRELOAD && ! -v LD_LIBRARY_PATH '
+                                    '&& ! -v GIT_CONFIG_COUNT && ! -v GIT_DIR ]] || exit 97\n')
+                    text = wrapper.replace('umask 077\n', 'umask 077\n'+poison)
+                    text = text.replace('export GIT_OPTIONAL_LOCKS=0\n',
+                                        'export GIT_OPTIONAL_LOCKS=0\n'+clean_assert)
+                    script.write_text(text.replace('/opt/slurm/current/bin/srun', str(srun)))
+                    (root/'WINDOW').write_text(window)
                     args = ['bash', str(script), mode, str(root/'source'), 'a'*40, 'b'*40]
                     if mode == 'checks':
                         args += ['c'*64, 'd'*64, 'e'*64]
                     process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                               text=True, env=dict(os.environ, FAKE_ROOT=str(root),
-                                                                   WINDOW=window))
+                                               text=True, env=dict(os.environ))
                     try:
                         ready = select.select([process.stdout], [], [], 8)[0]
                         self.assertTrue(ready, 'fake child did not reach exact signal window')

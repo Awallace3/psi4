@@ -324,7 +324,8 @@ def qomp_build_gate(engine, lib, args):
                          and saved['interrupted'] is False, 'actual build command did not return0')
     allocation_rows = subprocess.check_output([
         '/opt/slurm/current/bin/sacct', '-n', '-P', '-j', str(record['job']),
-        '-o', 'JobIDRaw,State,ExitCode'], text=True)
+        '-o', 'JobIDRaw,State,ExitCode'],
+        env=engine.qomp_control_environment(os.environ), text=True)
     rows = [row.split('|')[:3] for row in allocation_rows.splitlines() if row.strip()]
     engine.qomp_need(all([str(record['job'])+suffix, 'COMPLETED', '0:0'] in rows
                          for suffix in ('', '.batch', '.0')), 'build job/batch/step not COMPLETED0')
@@ -433,6 +434,7 @@ def qomp_qualify(runner, lib, result, args):
 def qomp_main():
     import sys
     engine = qomp_engine()
+    engine.qomp_enter()
     engine.qomp_need(sys.argv[2:3] == ['checks'], 'closed installed qomp operation required')
     args = engine.qomp_parser('checks')
     engine.qomp_perform(args, qomp_qualify)

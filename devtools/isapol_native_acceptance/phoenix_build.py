@@ -248,8 +248,86 @@ def qomp_need(ok, message):
         raise ValueError(message)
 
 
+QOMP_SCHEDULER_ENV = (
+    'SLURM_JOB_ID', 'SLURM_JOBID', 'SLURM_CPUS_PER_TASK', 'SLURM_CLUSTER_NAME',
+    'SLURMD_NODENAME', 'SLURM_JOB_NODELIST', 'SLURM_NODELIST', 'SLURM_JOB_NUM_NODES',
+    'SLURM_NNODES', 'SLURM_NTASKS', 'SLURM_NPROCS', 'SLURM_TASKS_PER_NODE',
+    'SLURM_JOB_CPUS_PER_NODE', 'SLURM_NODEID', 'SLURM_PROCID', 'SLURM_LOCALID', 'SLURM_STEP_ID',
+)
+QOMP_GIT = (
+    '/usr/bin/git', '--no-pager', '-c', 'core.hooksPath=/dev/null',
+    '-c', 'core.fsmonitor=false', '-c', 'core.pager=cat',
+    '-c', 'core.attributesFile=/dev/null', '-c', 'protocol.allow=never',
+)
+
+
+def qomp_control_environment(original):
+    """Owned control environment, not inherited Git/loader/Python selectors."""
+    env = {key: original[key] for key in QOMP_SCHEDULER_ENV+('USER', 'LOGNAME', 'HOME')
+           if key in original}
+    env.update(PATH='/usr/bin:/bin', LANG='C.UTF-8', LC_ALL='C.UTF-8',
+               GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_SYSTEM='/dev/null',
+               GIT_CONFIG_GLOBAL='/dev/null', GIT_ATTR_NOSYSTEM='1',
+               GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0')
+    return env
+
+
+def qomp_enter():
+    # This cannot undo code already loaded by the scheduler's initial shell.
+    clean = qomp_control_environment(os.environ)
+    os.environ.clear()
+    os.environ.update(clean)
+
+
+def qomp_config_gate(source, env):
+    """Read key NAMES only before commands that could use repository config.
+
+    System/global configs are disabled. Reject local/worktree includes and
+    executable filters/hooks/fsmonitor rather than guessing safe values.
+    This is ordinary trusted-repository/host confinement, not Git sandboxing.
+    """
+    scopes = ['--local']
+    for scope in scopes:
+        text = subprocess.check_output(
+            [*QOMP_GIT, '-C', str(source), 'config', scope, '--no-includes', '--name-only', '--list'],
+            env=env, text=True)
+        for key in text.lower().splitlines():
+            executable = (key.startswith(('include.', 'includeif.', 'filter.', 'alias.', 'protocol.'))
+                          or key in ('core.hookspath', 'core.fsmonitor', 'core.gitproxy', 'core.sshcommand')
+                          or key in ('core.editor', 'sequence.editor', 'extensions.partialclone')
+                          or key.endswith(('command', '.program', '.helper', '.driver', '.askpass', '.promisor'))
+                          or key == 'diff.external'
+                          or key.startswith('diff.') and key.endswith(('.command', '.textconv')))
+            qomp_need(not executable, 'unreviewed executable/include Git configuration')
+        # Git rejects --worktree in a multi-worktree repository unless this
+        # extension is enabled. Disabled config.worktree files are not read.
+        if scope == '--local' and 'extensions.worktreeconfig' in text.lower().splitlines():
+            enabled = subprocess.check_output(
+                [*QOMP_GIT, '-C', str(source), 'config', '--local', '--no-includes',
+                 '--bool', '--get', 'extensions.worktreeConfig'], env=env, text=True).strip()
+            qomp_need(enabled in ('true', 'false'), 'invalid worktree Git config extension')
+            if enabled == 'true':
+                scopes.append('--worktree')
+
+
 def qomp_git(source, *args):
-    return subprocess.check_output(['git', '-C', str(source), *args], text=True).strip()
+    env = qomp_control_environment(os.environ)
+    qomp_config_gate(source, env)
+    return subprocess.check_output([*QOMP_GIT, '-C', str(source), *args],
+                                   env=env, text=True).strip()
+
+
+def qomp_materialize(snapshot):
+    """Qomp-only pinned/clean Git adapter; historical materializer unchanged."""
+    qomp_git(QOMP_SCI_SOURCE, 'worktree', 'add', '--detach', str(snapshot), QOMP_SCI)
+    qomp_git(snapshot, 'sparse-checkout', 'disable')
+    for values, expected in ((('rev-parse', 'HEAD'), QOMP_SCI),
+                             (('rev-parse', 'HEAD^{tree}'), QOMP_TREE),
+                             (('status', '--porcelain', '--untracked-files=all'), '')):
+        qomp_need(qomp_git(snapshot, *values) == expected, 'materialized scientific source differs')
+    qomp_need(all((snapshot/p).is_file() for p in (
+        'CMakeLists.txt', 'cmake/psi4OptionsTools.cmake', 'psi4/src/export_isapol.cc',
+        'psi4/driver/procrouting/isapol_benzene_acceptance.py')), 'incomplete scientific source')
 
 
 def qomp_module(raw, name, filename):
@@ -263,8 +341,10 @@ def qomp_module(raw, name, filename):
 
 def qomp_library():
     """Execute exactly reviewed Git bytes, not a checkout/cache/search result."""
-    raw = subprocess.check_output(['git', '-C', str(SOURCE), 'show',
-                                   QOMP_LIBRARY_COMMIT+':'+QOMP_LIBRARY_PATH])
+    env = qomp_control_environment(os.environ)
+    qomp_config_gate(SOURCE, env)
+    raw = subprocess.check_output([*QOMP_GIT, '-C', str(SOURCE), 'show',
+                                   QOMP_LIBRARY_COMMIT+':'+QOMP_LIBRARY_PATH], env=env)
     qomp_need(hashlib.sha256(raw).hexdigest() == QOMP_LIBRARY_SHA, '8573 helper bytes differ')
     return qomp_module(raw, '_qomp_pinned_8573', QOMP_LIBRARY_PATH)
 
@@ -291,8 +371,10 @@ def qomp_source_gate(commit, tree):
                   'scientific/test source identity differs')
         qomp_need(not qomp_git(source, 'status', '--porcelain', '--untracked-files=all'),
                   'source must remain clean')
-    detached = subprocess.run(['git', '-C', str(QOMP_SCI_SOURCE), 'symbolic-ref', '-q', 'HEAD'],
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    env = qomp_control_environment(os.environ)
+    qomp_config_gate(QOMP_SCI_SOURCE, env)
+    detached = subprocess.run([*QOMP_GIT, '-C', str(QOMP_SCI_SOURCE), 'symbolic-ref', '-q', 'HEAD'],
+                              env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     qomp_need(detached.returncode == 1, 'scientific source must be detached exact fb11')
     return dict(scientific_commit=QOMP_SCI, scientific_tree=QOMP_TREE,
                 scientific_source=str(QOMP_SCI_SOURCE), test_source_commit=QOMP_SCI,
@@ -401,6 +483,45 @@ def qomp_nodes_gate(value, *, executed=False):
     return dict(groups=groups, focused_modules=focused, tests=556)
 
 
+def qomp_search_path(paths, prefix, base, forbidden, helpers=False):
+    """Exact resolved runtime entries; never accept arbitrary descendants."""
+    from pathlib import Path
+    prefix, base = Path(prefix).resolve(), Path(base).resolve()
+    site = prefix/'lib/python3.13/site-packages'
+    allowed = [base/'lib/python313.zip', base/'lib/python3.13', base/'lib/python3.13/lib-dynload', site]
+    if helpers:
+        allowed.append(site/'psi4/tests')
+    for path in allowed:
+        root = prefix if path == site or path == site/'psi4/tests' else base
+        if not path.resolve().is_relative_to(root):
+            raise ValueError('runtime search path escapes reviewed prefix')
+    allowed = {path.resolve() for path in allowed}
+    forbidden = [Path(path).resolve() for path in forbidden]
+    for entry in paths:
+        if type(entry) is not str or not entry or not Path(entry).is_absolute():
+            raise ValueError('empty/relative/invalid Python search path')
+        path = Path(entry).resolve()
+        if any(path.is_relative_to(root) for root in forbidden) or path not in allowed:
+            raise ValueError('unreviewed Python search path')
+
+
+def qomp_bootstrap(prefix):
+    """-S avoids .pth execution; add only the already sealed private site."""
+    import inspect
+    forbidden = [str(QOMP_SCI_SOURCE), str(SOURCE), str(QOMP_BUILD/'source')]
+    return (inspect.getsource(qomp_search_path)
+            + '\nPREFIX='+repr(str(prefix))+'\nBASE='+repr(str(QOMP_BASE))
+            + '\nFORBIDDEN='+repr(forbidden)+'\n'
+            + """import pathlib,sys
+qomp_search_path(sys.path,PREFIX,BASE,FORBIDDEN)
+private_site=pathlib.Path(PREFIX)/'lib/python3.13/site-packages'
+sys.path.append(str(private_site))
+qomp_search_path(sys.path,PREFIX,BASE,FORBIDDEN)
+import psi4
+qomp_search_path(sys.path,PREFIX,BASE,FORBIDDEN)
+""")
+
+
 def qomp_pytest(runner, prefix, scratch, lib, *, collect):
     """Fixed selectors, installed helper directory only; no source path fallback."""
     package = prefix/'lib/python3.13/site-packages/psi4'
@@ -412,12 +533,25 @@ def qomp_pytest(runner, prefix, scratch, lib, *, collect):
     arguments += qomp_targets()
     # Assertion precedes even pytest/helper imports. Test source is fb11;
     # the ONLY added helper directory is the verified private installed tests.
-    script = """import json,pathlib,sys,psi4
+    mapping = lib.read(prefix.parent/'installed-python-checks.json')
+    helpers = {name.removeprefix('tests/'): row['sha256'] for name, row in mapping.items()
+               if name.startswith('tests/') and name.endswith('.py')}
+    qomp_need('isapol_water_recipe.py' in helpers, 'missing verified installed test helper inventory')
+    script = """import hashlib,json,pathlib,sys
 package=pathlib.Path(psi4.__file__).resolve().parent
 assert package == pathlib.Path(PACKAGE)
 assert pathlib.Path(psi4.core.__file__).resolve().parent == package
+testdir=package/'tests'
+assert {str(p.relative_to(testdir)) for p in testdir.rglob('*.py')} == set(HELPERS)
+for name,digest in HELPERS.items():
+ p=testdir/name
+ assert p.resolve().is_relative_to(testdir.resolve())
+ assert hashlib.sha256(p.read_bytes()).hexdigest() == digest
+qomp_search_path(sys.path,PREFIX,BASE,FORBIDDEN)
 sys.path.insert(0,str(package/'tests'))
+qomp_search_path(sys.path,PREFIX,BASE,FORBIDDEN,helpers=True)
 import pytest
+qomp_search_path(sys.path,PREFIX,BASE,FORBIDDEN,helpers=True)
 class Inventory:
  def __init__(self):
   self.nodes=[]; self.call_nodes=[]; self.collection_errors=0
@@ -435,9 +569,9 @@ with open(OUTPUT,'x') as stream:
  json.dump(dict(vars(plugin),returncode=code),stream,indent=2)
 sys.exit(code)
 """
-    command = [prefix/'bin/python', '-I', '-B', '-X', 'pycache_prefix='+str(scratch/'cache'),
-               '-c', 'PACKAGE='+repr(str(package))+'\nARGUMENTS='+repr(arguments)
-               +'\nOUTPUT='+repr(str(output))+'\n'+script]
+    command = [prefix/'bin/python', '-I', '-S', '-B', '-X', 'pycache_prefix='+str(scratch/'cache'),
+               '-c', qomp_bootstrap(prefix)+'\nPACKAGE='+repr(str(package))+'\nARGUMENTS='+repr(arguments)
+               +'\nOUTPUT='+repr(str(output))+'\nHELPERS='+repr(helpers)+'\n'+script]
     runner.run('collect-tests' if collect else 'installed-tests', command)
     value = lib.read(output)
     counts = qomp_nodes_gate(value, executed=not collect)
@@ -453,7 +587,14 @@ sys.exit(code)
 
 
 def qomp_identity(runner, prefix, scratch, lib, label):
-    value = lib.identity(runner, prefix/'bin/python', prefix, scratch, label)
+    class GuardedRunner:
+        def run(self, name, command):
+            qomp_need(command[-2:] == ['-c', lib.IDENTITY], 'unexpected identity command')
+            command = list(command)
+            command.insert(2, '-S')
+            command[-1] = qomp_bootstrap(prefix)+lib.IDENTITY
+            return runner.run(name, command)
+    value = lib.identity(GuardedRunner(), prefix/'bin/python', prefix, scratch, label)
     package = prefix/'lib/python3.13/site-packages/psi4'
     qomp_need(value['package'] == str(package/'__init__.py')
               and Path(value['core']).parent == package, 'foreign installed identity path')
@@ -469,7 +610,7 @@ def qomp_build(runner, lib, result, args):
     root, prefix = runner.root, runner.root/'env'
     original = lib.old_seal()
     record = lib.approved_record(lib.OLD/'build-record.json')
-    materialize_source(QOMP_SCI_SOURCE, root/'source', QOMP_SCI, QOMP_TREE, runner.env)
+    qomp_materialize(root/'source')
     lib.write(root/'clone-links.json', lib.clone_runtime(lib.OLD/'env', prefix, QOMP_BASE))
     lib.dependency_gate(prefix, original)
     for compiler, frontend in (('cc', 'cc1'), ('c++', 'cc1plus')):
@@ -553,7 +694,7 @@ def qomp_parser(mode):
 
 def qomp_perform(args, action):
     import signal
-    os.environ['GIT_OPTIONAL_LOCKS'] = '0'
+    qomp_enter()
     source = qomp_source_gate(args.ops_commit, args.ops_tree)
     lib = qomp_library()
     lib.fresh_paths(args.root, args.scratch, [SOURCE, QOMP_SCI_SOURCE, lib.OLD, QOMP_BASE]
@@ -607,6 +748,7 @@ def qomp_perform(args, action):
 
 
 def qomp_finalize(args):
+    qomp_enter()
     lib = qomp_library()
     status = args.exit_code
     try:
@@ -647,7 +789,7 @@ def qomp_finalize(args):
 
 
 def qomp_main():
-    os.environ['GIT_OPTIONAL_LOCKS'] = '0'
+    qomp_enter()
     operation = sys.argv[2] if len(sys.argv) > 2 else ''
     qomp_need(operation in ('build', 'finalize'), 'closed qomp build/finalize operation required')
     args = qomp_parser(operation)
