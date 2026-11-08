@@ -1,0 +1,416 @@
+"""Fixed-density cold/warm native JK control. Never an accepted SAPT benchmark."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+from stage_scaling import (configuration, digest, pinned_science,
+                           require_cpu_runtime_admission, write)
+
+SCOPE = "FIXED_DENSITY_NATIVE_JK_DIAGNOSTIC_NOT_SAPT_TIMING_OR_QUALIFICATION"
+WALL = 1800
+REPEATS = 3
+CALLS = 4
+PLANS = 3
+
+
+def clean(folder, pin):
+    if (subprocess.check_output(["git", "-C", str(folder), "rev-parse", "HEAD"],
+                                text=True).strip() != pin
+            or subprocess.check_output(["git", "-C", str(folder), "status", "--porcelain"],
+                                       text=True).strip()):
+        raise RuntimeError("Frozen diagnostic/source checkout changed")
+
+
+def require_reference(manifest):
+    path = Path(manifest["reference_result"])
+    if digest(path) != manifest["reference_result_sha256"]:
+        raise RuntimeError("Frozen reference result changed")
+    doc = json.loads(path.read_text())
+    if (doc["status"] != "EXECUTED_REQUIRES_INDEPENDENT_COMPARISON"
+            or doc["arm"] != "gpu" or doc["system"] != "protein83"
+            or doc["source_pin"] != manifest["science_pin"]
+            or doc["basis_profile"] != "def2-svp"
+            or doc["runtime_config_sha256"] != manifest["reference_config_sha256"]
+            or doc["input_manifest_sha256"] != manifest["inputs_sha256"]
+            or doc["options"]["use_cuest"] is not True
+            or doc["options"]["sapt_dft_functional"] != "HF"
+            or doc["options"]["cuest_mixed_precision"] is not False):
+        raise RuntimeError("Completed matching FP64 Protein83/SVP reference required")
+    return doc
+
+
+def native_device_identity():
+    """Verify the native C++ context without creating another cuEST context."""
+    processes = subprocess.check_output([
+        "nvidia-smi", "--query-compute-apps=pid,gpu_uuid,used_gpu_memory",
+        "--format=csv,noheader,nounits"], text=True, timeout=20)
+    rows = [[v.strip() for v in line.split(",")] for line in processes.splitlines()]
+    uuids = {row[1] for row in rows if len(row)==3 and row[0]==str(os.getpid())}
+    if len(uuids)!=1:
+        raise RuntimeError("One actual native CUDA context UUID required")
+    uuid = next(iter(uuids))
+    if any(len(row)==3 and row[1]==uuid and row[0]!=str(os.getpid()) for row in rows):
+        raise RuntimeError("Foreign compute context on the allocated H200")
+    hardware = subprocess.check_output([
+        "nvidia-smi", "--query-gpu=uuid,name,compute_cap,driver_version,memory.total",
+        "--format=csv,noheader,nounits"], text=True, timeout=20)
+    devices = [[v.strip() for v in line.split(",")] for line in hardware.splitlines()]
+    device = next((row for row in devices if len(row)==5 and row[0]==uuid), None)
+    if device is None or "H200" not in device[1] or device[2]!="9.0":
+        raise RuntimeError("Actual native CUDA device is not H200/sm90")
+    return {"uuid": uuid, "name": device[1], "compute_capability": device[2],
+            "driver": device[3], "memory_MiB": int(device[4]), "pid": os.getpid()}
+
+
+def sample_plan(core, primary, auxiliary, coefficients):
+    """Same input bytes on every compute; destroy each plan before the next."""
+    import numpy as np
+    jk = core.JK.build(primary, auxiliary, jk_type="DF")
+    initialized = False
+    samples = []
+    try:
+        if jk.name() != "cuESTJK":
+            raise RuntimeError("Native cuEST JK required; no CPU fallback")
+        jk.set_omega_alpha(1.)
+        jk.set_omega_beta(0.)
+        jk.set_do_J(True)
+        jk.set_do_K(True)
+        jk.print_header()
+        jk.initialize()
+        initialized = True
+        for _ in range(CALLS):
+            jk.C_clear()
+            matrix = core.Matrix.from_array(coefficients.copy())
+            jk.C_left_add(matrix)
+            started = time.perf_counter()
+            jk.compute()
+            elapsed = time.perf_counter()-started
+            np.testing.assert_array_equal(matrix.np, coefficients)
+            j, k = (np.array(values[0].np, copy=True) for values in (jk.J(), jk.K()))
+            shape = (coefficients.shape[0],)*2
+            if j.shape != shape or k.shape != shape or not all(
+                    np.isfinite(v).all() and np.any(v) for v in (j, k)):
+                raise RuntimeError("Incomplete/nonfinite native JK output")
+            actual_density = np.array(jk.D()[0].np, copy=True)
+            np.testing.assert_allclose(actual_density, coefficients@coefficients.T,
+                                       atol=1e-12, rtol=1e-12)
+            samples.append((j, k, elapsed, actual_density))
+    finally:
+        # finalize() destroys the C++ cuEST plan and its workspaces.
+        if initialized:
+            jk.finalize()
+    return samples
+
+
+def matrix_delta(left, right, density):
+    import numpy as np
+    dj, dk = right[0]-left[0], right[1]-left[1]
+    return {"J_max_abs": float(np.max(np.abs(dj))),
+            "K_max_abs": float(np.max(np.abs(dk))),
+            "fixed_D_closed_shell_JK_energy_delta_Eh":
+                float(2*np.einsum("ij,ji->", density, dj)-np.einsum("ij,ji->", density, dk))}
+
+
+def child(manifest, config, build, output):
+    import numpy as np
+    from sealed_bootstrap import bootstrap
+    from gpu_runtime import AuditedRuntime
+    output = output.resolve(strict=True)
+    os.chdir(output)
+    # Keep the sealed owner alive through all native cleanup. No source overlay.
+    owner = bootstrap(config, build)
+    runtime = AuditedRuntime(Path(manifest["config"]), manifest["config_sha256"])
+    core = runtime.psi4.core
+    doc = require_reference(manifest)
+    source = Path(doc["options"]["fisapt_fsapt_filepath"]).parent
+    if source != Path(manifest["reference_result"]).parent:
+        raise RuntimeError("Reference result does not belong to its original output")
+    raw = source/"raw-hf.npz"
+    if digest(raw) != doc["artifact_sha256"]["raw-hf.npz"]:
+        raise RuntimeError("Raw fixed-wavefunction snapshot changed")
+    with np.load(raw, allow_pickle=False) as data:
+        co, s, density = (np.array(data[name], copy=True) for name in ("Cocc_A", "S", "D_A"))
+    dims = doc["orbital_dimensions"]
+    if co.shape != (dims["ao"], dims["occupied"][0]) or not np.isfinite(co).all():
+        raise RuntimeError("Complete frozen monomer-A coefficients required")
+    np.testing.assert_allclose(co.T@s@co, np.eye(co.shape[1]), atol=1e-8, rtol=1e-8)
+    np.testing.assert_allclose(density, co@co.T, atol=1e-12, rtol=1e-12)
+    runtime.psi4.set_memory(config["host_memory"])
+    runtime.psi4.set_num_threads(config["threads"])
+    core.set_output_file(str(output/"psi4.out"), False)
+    options = dict(doc["options"])
+    options["fisapt_fsapt_filepath"] = str(output/"unused-fsapt")
+    runtime.psi4.set_options(options)
+    molecule = runtime.psi4.geometry(doc["geometry"])
+    molecule.update_geometry()
+    from full_inputs import load_point
+    point, _ = load_point(
+        Path(manifest["inputs"]), manifest["inputs_sha256"], "protein83")
+    if point["geometry_sha256"] != doc["geometry_sha256"]:
+        raise RuntimeError("Reference geometry differs from frozen inputs")
+    inputs = json.loads(Path(manifest["inputs"]).read_text())
+    for item in inputs["basis_files"].values():
+        if digest(Path(core.get_datadir())/"basis"/item["filename"]) != item["sha256"]:
+            raise RuntimeError("Installed frozen basis changed")
+    primary = core.BasisSet.build(molecule, "BASIS", options["basis"], puream=1)
+    auxiliary = core.BasisSet.build(molecule, "DF_BASIS_SCF", options["df_basis_scf"],
+                                    "JKFIT", options["basis"], puream=1)
+    if (primary.nbf(), auxiliary.nbf()) != (dims["ao"], point["spherical_basis_counts"]["jkfit"]):
+        raise RuntimeError("Native primary/auxiliary dimensions changed")
+    report = {"status": "STARTED", "scope": SCOPE, "accepted_speedup_count": 0,
+              "pid": os.getpid(), "science_pin": manifest["science_pin"],
+              "reference_result_sha256": manifest["reference_result_sha256"],
+              "fixed_coefficients_sha256": hashlib.sha256(co.tobytes()).hexdigest(),
+              "scf_executed": False, "fisapt_executed": False,
+              "gpu_production_executed": False, "plans": []}
+    matrices = {"density": density}
+    try:
+        runtime.require_device_admission()
+        # No SCF or native JK has run in this fresh process before plan0.
+        # Later plans inherit the shared handle's math mode left by plan0.
+        # A second warm rebuild separates cold-only effects from rebuild noise.
+        for plan in range(PLANS):
+            samples = runtime.guarded_call(sample_plan, core, primary, auxiliary, co)
+            report["plans"].append({
+                "label": "cold" if plan == 0 else f"warm{plan}",
+                "compute_seconds_debug_only": [v[2] for v in samples],
+                "actual_density_sha256": [hashlib.sha256(v[3].tobytes()).hexdigest()
+                                          for v in samples],
+                "density_max_abs_from_snapshot": [float(np.max(np.abs(v[3]-density)))
+                                                  for v in samples],
+                "within_plan_deltas": [matrix_delta(samples[0], v, density) for v in samples[1:]],
+                "native_plan_finalize_returned": True})
+            for call, (j, k, _, _) in enumerate(samples):
+                matrices[f"J_{plan}_{call}"], matrices[f"K_{plan}_{call}"] = j, k
+            matrices[f"D_{plan}_0"] = samples[0][3]
+            write(output/"probe-result.json", report)
+        report["cold_to_warm"] = [matrix_delta(
+            (matrices["J_0_0"], matrices["K_0_0"]),
+            (matrices[f"J_{p}_0"], matrices[f"K_{p}_0"]), density)
+            for p in range(1, PLANS)]
+        report["warm_rebuild_delta"] = matrix_delta(
+            (matrices["J_1_0"], matrices["K_1_0"]),
+            (matrices["J_2_0"], matrices["K_2_0"]), density)
+        report["device"] = native_device_identity()
+        np.savez(output/"fixed-jk.npz", **matrices)
+        report["matrices_sha256"] = digest(output/"fixed-jk.npz")
+        runtime.verify_optional_modules()
+        report.update(status="EXECUTED_FIXED_DENSITY_DIAGNOSTIC_ONLY",
+                      immutable_runtime=owner.report())
+    except BaseException as error:
+        report.update(status="FAILED", error=f"{type(error).__name__}: {error}")
+        raise
+    finally:
+        write(output/"probe-result.json", report)
+
+
+def execute(path, worker=False, output=None):
+    from gpu_runtime import read_config, retirement_channel
+    from run_full import execute_owned
+    from run_gate import environment
+    from split_scratch import OwnedScratch
+    from split_jobs import validate_allocation
+    from validate_cpu_allocation import fields
+    manifest = json.loads(path.read_text())
+    if digest(path) != os.environ["DISP0_MANIFEST_SHA256"]:
+        raise RuntimeError("Frozen diagnostic manifest changed")
+    clean(Path(manifest["source"]), manifest["science_pin"])
+    clean(Path(__file__).resolve().parents[3], manifest["outer_pin"])
+    config, build = read_config(Path(manifest["config"]), manifest["config_sha256"])
+    if (config["source_pin"] != manifest["science_pin"]
+            or config["threads"] != 8
+            or require_cpu_runtime_admission(config) != manifest["cpu_runtime_admission"]):
+        raise RuntimeError("Exact finalized CPU admission required")
+    if worker:
+        child(manifest, config, build, output)
+        return
+    import numpy as np
+    root = Path(os.environ["DISP0_JOB_RUN"]).resolve(strict=True)
+    raw = subprocess.check_output(["/opt/slurm/current/bin/scontrol", "show", "job", "-o",
+                                   os.environ["SLURM_JOB_ID"]], text=True, timeout=30)
+    validate_allocation(fields(raw), manifest)
+    if len(os.sched_getaffinity(0)) < 8:
+        raise RuntimeError("Eight allocated host CPUs required")
+    scratch = Path("/storage/scratch1/3/awallace43")/("disp0-fixed-jk-"+os.environ["SLURM_JOB_ID"])
+    scratch.mkdir(mode=0o700)
+    scratch = scratch.resolve(strict=True)
+    owner = OwnedScratch(scratch, str(scratch), root)
+    os.environ.update(TMPDIR=str(scratch), SCRATCH=str(scratch), PSI_SCRATCH=str(scratch),
+                      DISP0_SPLIT_SCRATCH_CREATED=str(scratch))
+    groups = set()
+    report = {"status": "STARTED", "scope": SCOPE, "accepted_speedup_count": 0,
+              "processes": [], "scheduler_job": raw}
+    try:
+        deadline = time.monotonic()+WALL-180
+        for repeat in range(REPEATS):
+            out = root/f"r{repeat}"
+            out.mkdir()
+            work = scratch/f"r{repeat}"
+            work.mkdir()
+            aliases = Path(config["sealed_alias_parent"])/f"r{repeat}"
+            aliases.mkdir(mode=0o700)
+            env = environment(config, gpu=True, sealed_alias_directory=aliases)
+            env.update(TMPDIR=str(work), SCRATCH=str(work), PSI_SCRATCH=str(work),
+                       DISP0_MANIFEST_SHA256=digest(path))
+            argv = ["/bin/bash", "-c",
+                    'set -euo pipefail; eval "$("$1" --psiapi)"; exec "$2" -B "$3" "${@:4}"',
+                    "fixed-native-jk", str(Path(config["stage"])/"bin/psi4"),
+                    config["dependency_environment"]+"/bin/python", str(Path(__file__).resolve()),
+                    "--worker", str(path), "--output", str(out)]
+            row = {"repeat": repeat, "argv": argv}
+            report["processes"].append(row)
+            with (out/"stdout").open("x") as stdout, (out/"stderr").open("x") as stderr, \
+                    retirement_channel(env) as channel:
+                code = execute_owned(argv, env, stdout, stderr,
+                    min(500, deadline-time.monotonic()), groups.add, reaped=groups.discard,
+                    pass_fds=channel.pass_fds)
+                row.update(returncode=code, retirement_reason=channel.reason(),
+                           owned_groups_reaped=not groups)
+            if code or row["retirement_reason"] is not None or groups:
+                raise RuntimeError("Fixed-density diagnostic worker failed")
+            doc = json.loads((out/"probe-result.json").read_text())
+            native_log = (out/"psi4.out").read_text()
+            if (doc["status"] != "EXECUTED_FIXED_DENSITY_DIAGNOSTIC_ONLY"
+                    or doc["science_pin"] != manifest["science_pin"]
+                    or doc["reference_result_sha256"] != manifest["reference_result_sha256"]
+                    or doc["matrices_sha256"] != digest(out/"fixed-jk.npz")
+                    or "cuESTJK: GPU-Accelerated Density-Fitted" not in native_log
+                    or native_log.count("cuESTJK compute_JK:") != PLANS*CALLS):
+                raise RuntimeError("Incomplete/changed fixed-density diagnostic")
+            if repeat:
+                first_doc = json.loads((root/"r0/probe-result.json").read_text())
+                if doc["fixed_coefficients_sha256"] != first_doc["fixed_coefficients_sha256"]:
+                    raise RuntimeError("Fixed coefficient bytes changed between processes")
+            row.update(result_sha256=digest(out/"probe-result.json"))
+            if any(p.get("pid") == doc["pid"] for p in report["processes"][:-1]):
+                raise RuntimeError("Distinct fresh process identities required")
+            row["pid"] = doc["pid"]
+            write(root/"diagnostic-result.json", report)
+        report["fresh_process_deltas"] = []
+        with np.load(root/"r0/fixed-jk.npz", allow_pickle=False) as first:
+            for repeat in range(1, REPEATS):
+                with np.load(root/f"r{repeat}/fixed-jk.npz", allow_pickle=False) as other:
+                    np.testing.assert_array_equal(first["density"], other["density"])
+                    report["fresh_process_deltas"].append({
+                        "repeat": repeat, "plans": [matrix_delta(
+                            (first[f"J_{p}_0"], first[f"K_{p}_0"]),
+                            (other[f"J_{p}_0"], other[f"K_{p}_0"]), first["density"])
+                            for p in range(PLANS)]})
+        report["status"] = "EXECUTED_FIXED_DENSITY_DIAGNOSTIC_ONLY"
+    except BaseException as error:
+        report.update(status="FAILED", error=f"{type(error).__name__}: {error}")
+        raise
+    finally:
+        try:
+            report["scratch_cleanup"] = owner.cleanup(groups)
+        except BaseException as error:
+            report.update(status="FAILED", scratch_cleanup={"complete": False, "error": str(error)})
+            raise
+        finally:
+            write(root/"diagnostic-result.json", report)
+
+
+def submit(args):
+    outer = Path(__file__).resolve().parents[3]
+    pin = subprocess.check_output(["git", "-C", str(outer), "rev-parse", "HEAD"], text=True).strip()
+    clean(outer, pin)
+    base_path = args.config.resolve(strict=True)
+    base = json.loads(base_path.read_text())
+    source = Path(base["source"])
+    science_pin = pinned_science(base["source_pin"])
+    clean(source, science_pin)
+    sys.path.insert(0, str(source/"devtools/disp0/phoenix_validation"))
+    admission = require_cpu_runtime_admission(base)
+    proof = Path(base["build_proof"])
+    if (digest(proof) != base["build_proof_sha256"]
+            or json.loads(proof.read_text())["status"] != "PASS"):
+        raise RuntimeError("Matching PASS whole build required")
+    reference = args.reference.resolve(strict=True)
+    if digest(reference) != args.reference_sha256:
+        raise RuntimeError("Frozen reference result changed")
+    root = args.root
+    if not root.is_absolute():
+        raise ValueError("Fresh absolute diagnostic root required")
+    root.mkdir(mode=0o700)
+    (root/"logs").mkdir()
+    aliases = root/"sealed-workers"
+    aliases.mkdir(mode=0o700)
+    config = configuration(base, aliases, "protein83", "gpu")
+    config_path = root/"runtime-config.json"
+    write(config_path, config)
+    # Bind the exact original frozen inputs, not a mutable geometry module.
+    peer = json.loads((reference.parent.parent.parent/"manifest.json").read_text())
+    manifest = {"kind": "gpu", "science_pin": science_pin, "source": str(source),
+                "outer_pin": pin, "scope": SCOPE, "automatic_retry": False,
+                "accepted_speedup_count": 0, "config": str(config_path),
+                "config_sha256": digest(config_path), "cpu_runtime_admission": admission,
+                "reference_result": str(reference), "reference_result_sha256": args.reference_sha256,
+                "reference_config_sha256": digest(base_path), "inputs": peer["inputs"],
+                "inputs_sha256": peer["inputs_sha256"], "account": "gts-cs207-chemx",
+                "qos": "embers", "allocation_wall_seconds": WALL}
+    require_reference(manifest)
+    from full_inputs import load_point
+    _, dimensions = load_point(Path(manifest["inputs"]), manifest["inputs_sha256"], "protein83")
+    if json.loads(reference.read_text())["orbital_dimensions"] != dimensions:
+        raise RuntimeError("Frozen reference dimensions differ from selected inputs")
+    write(root/"manifest.json", manifest)
+    env = {k:v for k,v in os.environ.items() if not k.startswith(("SLURM_", "SBATCH_"))}
+    env.update(DISP0_OUTER=str(outer), DISP0_OUTER_PIN=pin, DISP0_RUN_ROOT=str(root),
+               DISP0_GATE_ENV=config["dependency_environment"], DISP0_STAGE_THREADS="8",
+               DISP0_MANIFEST_SHA256=digest(root/"manifest.json"),
+               DISP0_EXECUTE_DRIVER="scf_repeat_probe.py")
+    argv = ["sbatch", "--parsable", "--job-name=fsapt-fixed-jk",
+            "--account=gts-cs207-chemx", "--qos=embers", "--partition=gpu-h200",
+            "--constraint=H200", "--gres=gpu:h200:1", "--nodes=1", "--ntasks=1",
+            "--cpus-per-task=8", "--mem=160G", "--time=00:30:00", "--no-requeue",
+            "--signal=TERM@120", "--export=ALL", "--chdir="+str(root),
+            "--output="+str(root/"logs/%x-%j.out"), "--error="+str(root/"logs/%x-%j.err"),
+            str(outer/"devtools/disp0/phoenix_validation/stage_scaling.sbatch")]
+    for trial, name in ((True, "test-only.json"), (False, "submission.json")):
+        if not trial:
+            write(root/"SUBMISSION_ATTEMPTED.json", {"command": argv})
+        result = subprocess.run([argv[0], "--test-only", *argv[1:]] if trial else argv,
+                                env=env, capture_output=True, text=True, timeout=60)
+        write(root/name, {"returncode": result.returncode, "stdout": result.stdout,
+                         "stderr": result.stderr})
+        print(result.stdout+result.stderr, flush=True)
+        if result.returncode:
+            raise RuntimeError("Scheduler failure/ambiguity; no automatic retry")
+    job = result.stdout.strip().split(";")[0]
+    if not job.isdecimal():
+        raise RuntimeError("Ambiguous scheduler receipt")
+    (root/"job-id.txt").write_text(job+"\n")
+    print("SUBMITTED_JOB="+job+"\nOUTPUT_ROOT="+str(root), flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--execute", type=Path)
+    parser.add_argument("--worker", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--reference", type=Path)
+    parser.add_argument("--reference-sha256")
+    parser.add_argument("--root", type=Path)
+    args = parser.parse_args()
+    if args.execute or args.worker:
+        path = (args.execute or args.worker).resolve(strict=True)
+        manifest = json.loads(path.read_text())
+        sys.path.insert(0, str(Path(manifest["source"])/"devtools/disp0/phoenix_validation"))
+        from owned_process import termination_signals
+        with termination_signals():
+            execute(path, worker=bool(args.worker), output=args.output)
+    else:
+        if any(getattr(args, key) is None for key in
+               ("config", "reference", "reference_sha256", "root")):
+            parser.error("Explicit config/reference/hash/fresh root required")
+        submit(args)
+
+
+if __name__ == "__main__":
+    main()

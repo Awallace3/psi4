@@ -28,8 +28,10 @@ export OPENBLAS_NUM_THREADS="$DISP0_STAGE_THREADS" OMP_DYNAMIC=FALSE
 export CONDA_PREFIX="$env" MKL_INTERFACE_LAYER=LP64
 while IFS= read -r name; do unset "$name"; done < <(compgen -v EINSUMS_ || true)
 export EINSUMS_PACKED_GEMM_BATCH_PROMOTION=1
+driver="${DISP0_EXECUTE_DRIVER:-stage_scaling.py}"
+case "$driver" in stage_scaling.py|scf_repeat_probe.py) ;; *) exit 2 ;; esac
 srun --kill-on-bad-exit=1 "$env/bin/python" -B \
-    "$DISP0_OUTER/devtools/disp0/phoenix_validation/stage_scaling.py" \
+    "$DISP0_OUTER/devtools/disp0/phoenix_validation/$driver" \
     --execute "$DISP0_RUN_ROOT/manifest.json" &
 child=$!
 set +e

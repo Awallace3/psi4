@@ -460,6 +460,7 @@ def submit(args):
     env = {k:v for k,v in os.environ.items() if not k.startswith(("SLURM_", "SBATCH_"))}
     env.update(DISP0_OUTER=str(outer), DISP0_OUTER_PIN=pin, DISP0_RUN_ROOT=str(root),
                DISP0_GATE_ENV=config["dependency_environment"],
+               DISP0_EXECUTE_DRIVER="stage_scaling.py",
                DISP0_STAGE_THREADS=str(config["threads"]),
                DISP0_MANIFEST_SHA256=digest(root/"manifest.json"))
     for trial, name in ((True, "test-only.json"), (False, "submission.json")):

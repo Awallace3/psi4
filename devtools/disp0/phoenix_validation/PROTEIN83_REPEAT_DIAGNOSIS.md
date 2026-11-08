@@ -98,3 +98,38 @@ Next discriminating tests should separate fixed-density JK/native-plan
 repeatability from SCF stopping sensitivity, using one frozen wavefunction
 and unchanged numerical guards. No unchanged full benchmark retry or
 independent CPU qualification was submitted from this failed producer.
+
+## Fixed-density control
+
+`scf_repeat_probe.py` prepares a bounded native-JK control, not another full
+F-SAPT retry. It uses the already qualified1cad631980 whole installation,
+sealed loader/CPU admission, the exact completed r0 result SHA, its original
+runtime closure and frozen SVP basis/geometry files. Raw-HF payload hashes are
+checked inside each worker before loading the monomer-A coefficients.
+No source overlay, new installed native code, SCF, localization or F-SAPT
+calculation is performed. Accepted speedup count is always0.
+
+One30min embers/H200 allocation runs three fresh sealed processes. Each
+process builds three sequential native JK plans: one cold shared-handle
+construction and two warm rebuilds. Each plan evaluates J/K four times
+from identical coefficient bytes and is finalized before the next plan.
+Actual constructed density hashes/residuals are retained too. This separates:
+
+1. Same-plan/kernel accumulation drift.
+2. Warm-plan reconstruction drift at fixed global state.
+3. Cold-versus-warm effects.
+4. Fresh-process variation with one frozen wavefunction.
+
+The probe retains J/K matrices, signed fixed-density closed-shell
+`2 Tr(D deltaJ) - Tr(D deltaK)` changes, real native CUDA-context UUID/hardware,
+compute-call counts and cleanup receipts. Cold means first C++ cuEST JK plan
+in that process, not an assertion that all GPU/library caches were empty.
+Cold/warm differences alone cannot distinguish math-mode inheritance from
+other initialization/cache effects; a subsequent one-variable code experiment
+would still be required.
+
+The outer batch wrapper permits only the two explicit driver names,
+`stage_scaling.py` and`scf_repeat_probe.py`; each submitter explicitly chooses
+its driver. Source/build proof pins, thread policies, resource route,
+retirement channels, group reaping and scratch ownership remain required.
+No numerical guard, reserve or workspace budget is relaxed.
