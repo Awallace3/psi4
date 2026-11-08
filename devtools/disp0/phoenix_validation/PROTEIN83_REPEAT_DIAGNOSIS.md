@@ -228,7 +228,7 @@ conditioning and the relative/absolute cutoff semantics must be checked
 before attributing the reconstruction floor solely to unavoidable rounding.
 The completed controls above used the unchanged1cad631980 implementation.
 
-## Candidate native policy correction (not yet built/GPU-validated)
+## Candidate native policy correction (built; not yet GPU-validated)
 
 The pinned0.2.50 SDK confirms its defaults: relative cutoff1e-12 and QR
 metric fitting. Psi4's CPU metric power uses a relative eigenvalue cutoff;
@@ -254,7 +254,7 @@ compares tight1e-10 and deliberately loose0.02cutoffs on the small water
 dimer, verifies the CPU control actually changes, requires the GPU operator
 to change too, and checks CPU/GPU J/K parity at each cutoff. This numerical
 test has been syntax-checked but **not yet executed** on a candidate build.
-A new coherent native build and physical GPU gates remain required; no old
+A new coherent native build and physical GPU gates were required; no old
 proof, frozen source or stage is to be advanced or relabeled.
 
 ## Independent CPU control15321631 completed
@@ -319,3 +319,28 @@ The old1cad631980 installation, controls and data remain immutable.
 Submission is not compilation success or native/GPU validation. A completed
 exact-pin proof is required before candidate GPU tests; the fitting-cutoff
 regression must execute with zero GPU skips before any candidate speedup claim.
+
+### Build15322281 completed
+
+The fresh sm90 candidate build completed in10min04s, job/batch/step exit0,
+no TERM. All386 core CPU guards and150 helper tests passed (one optional
+literal-input-suite skip). CPU sealed-runtime admission passed and reaped
+its owned groups; it created no CUDA session. This is compilation/CPU
+qualification, **not GPU correctness or a new speedup**.
+
+Artifacts beneath
+`phoenix-scf-fit-build-e0da305c02/job-15322281/`:
+
+| Artifact | SHA256 |
+|---|---|
+| `result.json` | `0096ded04f300bff1ca6f352c3e06c0f20b856a736cb84f0fb7aeb9548e56c3b` |
+| `cpu-sealed-admission/preflight-result.json` | `ec85124145351a0686f54bbfdca3ef5424db08dcaa153c6e8109cbd267b1033c` |
+| `cpu-sealed-admission/runtime-admission.json` | `7233fd168728e20d996d8d6cc78fc392be7fce462f10fa3d8a61a69a9b3ee2ce` |
+| `cpu-sealed-admission/runtime-config.json` | `4da9bef9884e48e83564a8b3d9f1a05f56699d4a738bdbd17b7f4e093b7db5d1` |
+
+Next physical gate: the six frozen-source`test_cuest_jk.py` tests, requiring
+each named case once and zero skips/failures/errors in JUnit, then the existing
+small H200 F-SAPT gate (signed controls, independent same-gauge CPU oracle,
+repeat and changed geometry). The new outer helper runs against the completed
+build above; it neither advances the source checkout nor overlays installed
+code. Both results remain non-benchmark gates with accepted speedup count0.

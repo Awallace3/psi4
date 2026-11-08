@@ -187,6 +187,12 @@ def child(manifest, config, build, output):
     gpu=manifest["kind"]=="gpu"
     if not gpu and (os.environ.get("CUDA_VISIBLE_DEVICES")!="" or os.environ.get("SLURM_JOB_GPUS")):
         raise RuntimeError("CPU control must hide and allocate no GPUs")
+    if manifest.get("mode")=="native-tests":
+        from native_jk_regression import run
+        runtime.psi4.set_memory(config["host_memory"])
+        runtime.psi4.set_num_threads(config["threads"])
+        run(runtime,manifest,output)
+        return
     doc = require_reference(manifest)
     source = Path(doc["options"]["fisapt_fsapt_filepath"]).parent
     if source != Path(manifest["reference_result"]).parent:
@@ -283,12 +289,16 @@ def execute(path, worker=False, output=None):
     from validate_cpu_allocation import fields
     manifest = json.loads(path.read_text())
     gpu=manifest["kind"]=="gpu"
+    native_tests=manifest.get("mode")=="native-tests"
     if manifest["kind"] not in ("gpu","cpu"):
         raise ValueError("Explicit independent GPU/CPU diagnostic role required")
+    if native_tests and not gpu:
+        raise ValueError("Native GPU regressions cannot run on CPU allocation")
     if digest(path) != os.environ["DISP0_MANIFEST_SHA256"]:
         raise RuntimeError("Frozen diagnostic manifest changed")
     clean(Path(manifest["source"]), manifest["science_pin"])
     clean(Path(__file__).resolve().parents[3], manifest["outer_pin"])
+    os.environ.update(DISP0_SOURCE=manifest["source"], DISP0_PIN=manifest["science_pin"])
     config, build = read_config(Path(manifest["config"]), manifest["config_sha256"])
     if (config["source_pin"] != manifest["science_pin"]
             or config["threads"] != (8 if gpu else 24)
@@ -312,7 +322,7 @@ def execute(path, worker=False, output=None):
     os.environ.update(TMPDIR=str(scratch), SCRATCH=str(scratch), PSI_SCRATCH=str(scratch),
                       DISP0_SPLIT_SCRATCH_CREATED=str(scratch))
     groups = set()
-    report = {"status": "STARTED", "scope": SCOPE, "accepted_speedup_count": 0,
+    report = {"status": "STARTED", "scope": manifest["scope"], "accepted_speedup_count": 0,
               "kind":manifest["kind"],"science_pin":manifest["science_pin"],
               "outer_pin":manifest["outer_pin"],"manifest_sha256":digest(path),
               "processes": [], "scheduler_job": raw}
@@ -327,7 +337,7 @@ def execute(path, worker=False, output=None):
                 raise RuntimeError("CPU control needs actual local scratch and 256GiB headroom")
             report["scratch_mount"]=mount
         deadline = time.monotonic()+WALL-180
-        for repeat in range(REPEATS if gpu else 1):
+        for repeat in range(REPEATS if gpu and not native_tests else 1):
             out = root/f"r{repeat}"
             out.mkdir()
             work = scratch/f"r{repeat}"
@@ -347,7 +357,8 @@ def execute(path, worker=False, output=None):
             with (out/"stdout").open("x") as stdout, (out/"stderr").open("x") as stderr, \
                     retirement_channel(env) as channel:
                 code = execute_owned(argv, env, stdout, stderr,
-                    min(500 if gpu else 1500, deadline-time.monotonic()),
+                    min(900 if native_tests else 500 if gpu else 1500,
+                        deadline-time.monotonic()),
                     groups.add, reaped=groups.discard,
                     pass_fds=channel.pass_fds)
                 row.update(returncode=code, retirement_reason=channel.reason(),
@@ -355,6 +366,18 @@ def execute(path, worker=False, output=None):
             if code or row["retirement_reason"] is not None or groups:
                 raise RuntimeError("Fixed-density diagnostic worker failed")
             doc = json.loads((out/"probe-result.json").read_text())
+            if native_tests:
+                from native_jk_regression import junit_summary
+                if (doc["status"]!="PASS_NATIVE_JK_GPU_REGRESSION_ONLY"
+                        or doc["science_pin"]!=manifest["science_pin"]
+                        or doc["native_test_sha256"]!=manifest["native_test_sha256"]
+                        or doc["junit_sha256"]!=digest(out/"native-jk.xml")
+                        or doc["junit"]!=junit_summary(out/"native-jk.xml")):
+                    raise RuntimeError("Incomplete/changed native GPU regression")
+                row.update(result_sha256=digest(out/"probe-result.json"),pid=doc["pid"])
+                report["native_jk_regression"]=doc
+                write(root/"diagnostic-result.json",report)
+                continue
             native_log = (out/"psi4.out").read_text()
             if (doc["status"] != "EXECUTED_FIXED_DENSITY_DIAGNOSTIC_ONLY"
                     or doc["science_pin"] != manifest["science_pin"]
@@ -373,7 +396,26 @@ def execute(path, worker=False, output=None):
                 raise RuntimeError("Distinct fresh process identities required")
             row["pid"] = doc["pid"]
             write(root/"diagnostic-result.json", report)
-        if gpu:
+        if native_tests:
+            gate=root/"small-gate"
+            gate.mkdir()
+            argv=[sys.executable,"-B",str(Path(manifest["source"])/
+                "devtools/disp0/phoenix_validation/run_gate.py"),"--config",manifest["config"],
+                "--config-sha256",manifest["config_sha256"],"--output",str(gate)]
+            with (root/"small-gate.stdout").open("x") as stdout, (
+                    root/"small-gate.stderr").open("x") as stderr:
+                code=execute_owned(argv,dict(os.environ),stdout,stderr,
+                    deadline-time.monotonic(),groups.add,reaped=groups.discard)
+            if code or groups:
+                raise RuntimeError("Full small GPU gate failed after native JK tests")
+            proof=json.loads((gate/"gate-result.json").read_text())
+            if (proof["status"]!="PASS_SMALL_H200_ONLY"
+                    or proof["source_pin"]!=manifest["science_pin"]
+                    or not proof["gpu_small_case_correctness_verified"]):
+                raise RuntimeError("Incomplete/wrong-source small GPU gate")
+            report.update(small_gate_sha256=digest(gate/"gate-result.json"),
+                          status="PASS_NATIVE_JK_AND_SMALL_GPU_GATES")
+        elif gpu:
             report["fresh_process_deltas"] = []
             with np.load(root/"r0/fixed-jk.npz", allow_pickle=False) as first:
                 for repeat in range(1, REPEATS):
@@ -386,7 +428,8 @@ def execute(path, worker=False, output=None):
                                 for p in range(PLANS)]})
         else:
             report["independent_native_CPU_comparison"]=cpu_comparison(root,manifest,doc)
-        report["status"] = "EXECUTED_FIXED_DENSITY_DIAGNOSTIC_ONLY"
+        if not native_tests:
+            report["status"] = "EXECUTED_FIXED_DENSITY_DIAGNOSTIC_ONLY"
     except BaseException as error:
         report.update(status="FAILED", error=f"{type(error).__name__}: {error}")
         raise
@@ -451,13 +494,19 @@ def submit(args):
         manifest.update(gpu_control=str(target),
             gpu_control_sha256=require_gpu_control(target,args.reference_sha256))
     write(root/"manifest.json", manifest)
+    schedule(root,manifest,config,outer)
+
+
+def schedule(root, manifest, config, outer):
+    gpu=manifest["kind"]=="gpu"
+    pin=manifest["outer_pin"]
     env = {k:v for k,v in os.environ.items() if not k.startswith(("SLURM_", "SBATCH_"))}
     env.update(DISP0_OUTER=str(outer), DISP0_OUTER_PIN=pin, DISP0_RUN_ROOT=str(root),
                DISP0_GATE_ENV=config["dependency_environment"],
                DISP0_STAGE_THREADS=str(config["threads"]),
                DISP0_MANIFEST_SHA256=digest(root/"manifest.json"),
                DISP0_EXECUTE_DRIVER="scf_repeat_probe.py")
-    argv = ["sbatch", "--parsable", "--job-name=fsapt-fixed-jk-"+args.kind,
+    argv = ["sbatch", "--parsable", "--job-name=fsapt-"+manifest.get("mode","fixed-jk")+"-"+manifest["kind"],
             "--account=gts-cs207-chemx", "--qos=embers",
             "--partition="+("gpu-h200" if gpu else "cpu-small"),
             "--nodes=1", "--ntasks=1",
@@ -496,6 +545,7 @@ def main():
     parser.add_argument("--root", type=Path)
     parser.add_argument("--kind",choices=("gpu","cpu"),default="gpu")
     parser.add_argument("--gpu-control",type=Path)
+    parser.add_argument("--mode",choices=("fixed-density","native-tests"),default="fixed-density")
     args = parser.parse_args()
     if args.execute or args.worker:
         path = (args.execute or args.worker).resolve(strict=True)
@@ -505,10 +555,15 @@ def main():
         with termination_signals():
             execute(path, worker=bool(args.worker), output=args.output)
     else:
-        if any(getattr(args, key) is None for key in
-               ("config", "reference", "reference_sha256", "root")):
+        required=("config","root") if args.mode=="native-tests" else (
+            "config","reference","reference_sha256","root")
+        if any(getattr(args,key) is None for key in required):
             parser.error("Explicit config/reference/hash/fresh root required")
-        submit(args)
+        if args.mode=="native-tests":
+            from native_jk_regression import submit as submit_native
+            submit_native(args,schedule)
+        else:
+            submit(args)
 
 
 if __name__ == "__main__":
