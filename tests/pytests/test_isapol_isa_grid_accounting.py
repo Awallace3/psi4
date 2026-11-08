@@ -31,19 +31,19 @@ def test_closed_isa_grid_rows_and_atom_offsets(sites):
     assert [grid.atom_npoints(a) for a in range(sites)] == [99*230]*sites
 
 
-@pytest.mark.parametrize("radial,request,angular", [
+@pytest.mark.parametrize("radial,angular_request,angular", [
     (2, 1, 6), (7, 7, 14), (101, 194, 194), (100, 200, 230),
     (3, 5294, 5294), (3, 9999, 5294)])
-def test_general_recipe_keeps_conservative_accounting(radial, request, angular):
+def test_general_recipe_keeps_conservative_accounting(radial, angular_request, angular):
     molecule = core.Molecule.from_string("0 1\nHe 0 0 0\nunits bohr\n")
     options = core.IsaGridOptions()
-    options.radial_points, options.spherical_points = radial, request
+    options.radial_points, options.spherical_points = radial, angular_request
     options.becke_smoothing, options.radius_scaling = 2, 1.1
     grid = core.IsaGrid(molecule, options)
     envelope = isa_grid_rows(
-        1, radial_points=radial, spherical_points=request, becke_smoothing=2,
+        1, radial_points=radial, spherical_points=angular_request, becke_smoothing=2,
         radius_scaling=1.1, radius_policy="native_tabulated_bragg_slater",
         neighbour_policy="all_sites_unscreened_full_molecular_grid")
     assert grid.spherical_points() == angular
     assert grid.npoints() == (radial-1)*angular <= envelope
-    assert envelope == (radial-1)*min(5294, 2*request+6)
+    assert envelope == (radial-1)*min(5294, 2*angular_request+6)
