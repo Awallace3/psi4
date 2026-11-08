@@ -9,7 +9,7 @@ import sys
 import time
 
 from stage_scaling import (configuration, digest, pinned_science,
-                           require_cpu_runtime_admission, write)
+                           require_cpu_runtime_admission, write, cpu_scratch_parent)
 
 SCOPE = "FIXED_DENSITY_NATIVE_JK_DIAGNOSTIC_NOT_SAPT_TIMING_OR_QUALIFICATION"
 WALL = 1800
@@ -67,15 +67,19 @@ def native_device_identity():
             "driver": device[3], "memory_MiB": int(device[4]), "pid": os.getpid()}
 
 
-def sample_plan(core, primary, auxiliary, coefficients):
+def sample_plan(core, primary, auxiliary, coefficients, *, gpu=True):
     """Same input bytes on every compute; destroy each plan before the next."""
     import numpy as np
     jk = core.JK.build(primary, auxiliary, jk_type="DF")
     initialized = False
     samples = []
     try:
-        if jk.name() != "cuESTJK":
-            raise RuntimeError("Native cuEST JK required; no CPU fallback")
+        if (gpu and jk.name()!="cuESTJK") or (
+                not gpu and jk.name() not in ("MemDFJK","DiskDFJK")):
+            raise RuntimeError("Native cuEST JK required; no CPU fallback" if gpu else
+                               "Independent native CPU DFJK required; no GPU allowed")
+        if not gpu:
+            jk.set_memory(max(1, int(core.get_memory())//16))
         jk.set_omega_alpha(1.)
         jk.set_omega_beta(0.)
         jk.set_do_J(True)
@@ -99,7 +103,7 @@ def sample_plan(core, primary, auxiliary, coefficients):
             actual_density = np.array(jk.D()[0].np, copy=True)
             np.testing.assert_allclose(actual_density, coefficients@coefficients.T,
                                        atol=1e-12, rtol=1e-12)
-            samples.append((j, k, elapsed, actual_density))
+            samples.append((j, k, elapsed, actual_density, jk.name()))
     finally:
         # finalize() destroys the C++ cuEST plan and its workspaces.
         if initialized:
@@ -116,6 +120,60 @@ def matrix_delta(left, right, density):
                 float(2*np.einsum("ij,ji->", density, dj)-np.einsum("ij,ji->", density, dk))}
 
 
+def require_gpu_control(root, reference_sha):
+    if (root/"job-status.env").read_text().splitlines()!=["exit_code=0","term_received=0"]:
+        raise RuntimeError("Finalized clean GPU diagnostic required")
+    doc=json.loads((root/"diagnostic-result.json").read_text())
+    if (doc["status"]!="EXECUTED_FIXED_DENSITY_DIAGNOSTIC_ONLY"
+            or doc["scope"]!=SCOPE or doc["accepted_speedup_count"]!=0
+            or not doc["scratch_cleanup"]["complete"] or len(doc["processes"])!=REPEATS):
+        raise RuntimeError("Matching complete fixed-density GPU diagnostic required")
+    for i,row in enumerate(doc["processes"]):
+        path=root/f"r{i}/probe-result.json"
+        worker=json.loads(path.read_text())
+        if (row["returncode"] or row["retirement_reason"] is not None
+                or not row["owned_groups_reaped"] or row["result_sha256"]!=digest(path)
+                or worker["status"]!="EXECUTED_FIXED_DENSITY_DIAGNOSTIC_ONLY"
+                or worker["reference_result_sha256"]!=reference_sha
+                or worker["scf_executed"] or worker["fisapt_executed"]
+                or "H200" not in worker["device"]["name"]):
+            raise RuntimeError("GPU diagnostic worker/identity seal changed")
+    return digest(root/"diagnostic-result.json")
+
+
+def cpu_comparison(root, manifest, cpu_doc):
+    import numpy as np
+    gpu=Path(manifest["gpu_control"])
+    if require_gpu_control(gpu,manifest["reference_result_sha256"])!=manifest["gpu_control_sha256"]:
+        raise RuntimeError("GPU diagnostic changed after CPU submission")
+    results=[]
+    with np.load(root/"r0/fixed-jk.npz",allow_pickle=False) as cpu:
+        for repeat in range(REPEATS):
+            doc=json.loads((gpu/f"r{repeat}/probe-result.json").read_text())
+            path=gpu/f"r{repeat}/fixed-jk.npz"
+            if (digest(path)!=doc["matrices_sha256"]
+                    or doc["science_pin"]!=manifest["science_pin"]
+                    or doc["fixed_coefficients_sha256"]!=cpu_doc["fixed_coefficients_sha256"]):
+                raise RuntimeError("GPU matrix/input/source seal changed")
+            with np.load(path,allow_pickle=False) as target:
+                np.testing.assert_array_equal(cpu["density"],target["density"])
+                for plan in range(PLANS):
+                    checks={}
+                    for kind in ("J","K"):
+                        left,right=cpu[f"{kind}_0_0"],target[f"{kind}_{plan}_0"]
+                        # Original independent AO-JK oracle tolerance, unchanged.
+                        checks[kind]=bool(np.allclose(left,right,rtol=2e-7,atol=2e-8))
+                    results.append({"gpu_repeat":repeat,"gpu_plan":plan,
+                        **matrix_delta((cpu["J_0_0"],cpu["K_0_0"]),
+                            (target[f"J_{plan}_0"],target[f"K_{plan}_0"]),cpu["density"]),
+                        "original_AO_JK_oracle_checks":checks})
+    return {"scope":"FIXED_GAUGE_NATIVE_CPU_AO_JK_CHECK_ONLY_NOT_FULL_SAPT_ORACLE",
+            "difference_direction":"GPU_minus_CPU",
+            "rtol":2e-7,"atol":2e-8,"comparisons":results,
+            "all_original_AO_JK_checks_passed":
+                all(all(row["original_AO_JK_oracle_checks"].values()) for row in results)}
+
+
 def child(manifest, config, build, output):
     import numpy as np
     from sealed_bootstrap import bootstrap
@@ -126,6 +184,9 @@ def child(manifest, config, build, output):
     owner = bootstrap(config, build)
     runtime = AuditedRuntime(Path(manifest["config"]), manifest["config_sha256"])
     core = runtime.psi4.core
+    gpu=manifest["kind"]=="gpu"
+    if not gpu and (os.environ.get("CUDA_VISIBLE_DEVICES")!="" or os.environ.get("SLURM_JOB_GPUS")):
+        raise RuntimeError("CPU control must hide and allocate no GPUs")
     doc = require_reference(manifest)
     source = Path(doc["options"]["fisapt_fsapt_filepath"]).parent
     if source != Path(manifest["reference_result"]).parent:
@@ -144,6 +205,7 @@ def child(manifest, config, build, output):
     runtime.psi4.set_num_threads(config["threads"])
     core.set_output_file(str(output/"psi4.out"), False)
     options = dict(doc["options"])
+    options["use_cuest"]=gpu
     options["fisapt_fsapt_filepath"] = str(output/"unused-fsapt")
     runtime.psi4.set_options(options)
     molecule = runtime.psi4.geometry(doc["geometry"])
@@ -165,6 +227,7 @@ def child(manifest, config, build, output):
     report = {"status": "STARTED", "scope": SCOPE, "accepted_speedup_count": 0,
               "pid": os.getpid(), "science_pin": manifest["science_pin"],
               "reference_result_sha256": manifest["reference_result_sha256"],
+              "requested_df_fitting_condition":float(core.get_option("SCF","DF_FITTING_CONDITION")),
               "fixed_coefficients_sha256": hashlib.sha256(co.tobytes()).hexdigest(),
               "scf_executed": False, "fisapt_executed": False,
               "gpu_production_executed": False, "plans": []}
@@ -174,29 +237,31 @@ def child(manifest, config, build, output):
         # No SCF or native JK has run in this fresh process before plan0.
         # Later plans inherit the shared handle's math mode left by plan0.
         # A second warm rebuild separates cold-only effects from rebuild noise.
-        for plan in range(PLANS):
-            samples = runtime.guarded_call(sample_plan, core, primary, auxiliary, co)
+        for plan in range(PLANS if gpu else 1):
+            samples = runtime.guarded_call(sample_plan, core, primary, auxiliary, co, gpu=gpu)
             report["plans"].append({
-                "label": "cold" if plan == 0 else f"warm{plan}",
+                "label": ("cold" if plan == 0 else f"warm{plan}") if gpu else "CPU_reference",
                 "compute_seconds_debug_only": [v[2] for v in samples],
                 "actual_density_sha256": [hashlib.sha256(v[3].tobytes()).hexdigest()
                                           for v in samples],
                 "density_max_abs_from_snapshot": [float(np.max(np.abs(v[3]-density)))
                                                   for v in samples],
+                "native_jk_name":samples[0][4],
                 "within_plan_deltas": [matrix_delta(samples[0], v, density) for v in samples[1:]],
                 "native_plan_finalize_returned": True})
-            for call, (j, k, _, _) in enumerate(samples):
+            for call, (j, k, _, _, _) in enumerate(samples):
                 matrices[f"J_{plan}_{call}"], matrices[f"K_{plan}_{call}"] = j, k
             matrices[f"D_{plan}_0"] = samples[0][3]
             write(output/"probe-result.json", report)
-        report["cold_to_warm"] = [matrix_delta(
-            (matrices["J_0_0"], matrices["K_0_0"]),
-            (matrices[f"J_{p}_0"], matrices[f"K_{p}_0"]), density)
-            for p in range(1, PLANS)]
-        report["warm_rebuild_delta"] = matrix_delta(
-            (matrices["J_1_0"], matrices["K_1_0"]),
-            (matrices["J_2_0"], matrices["K_2_0"]), density)
-        report["device"] = native_device_identity()
+        if gpu:
+            report["cold_to_warm"] = [matrix_delta(
+                (matrices["J_0_0"], matrices["K_0_0"]),
+                (matrices[f"J_{p}_0"], matrices[f"K_{p}_0"]), density)
+                for p in range(1, PLANS)]
+            report["warm_rebuild_delta"] = matrix_delta(
+                (matrices["J_1_0"], matrices["K_1_0"]),
+                (matrices["J_2_0"], matrices["K_2_0"]), density)
+        report["device"] = native_device_identity() if gpu else {"gpu_used":False,"threads":24}
         np.savez(output/"fixed-jk.npz", **matrices)
         report["matrices_sha256"] = digest(output/"fixed-jk.npz")
         runtime.verify_optional_modules()
@@ -217,13 +282,16 @@ def execute(path, worker=False, output=None):
     from split_jobs import validate_allocation
     from validate_cpu_allocation import fields
     manifest = json.loads(path.read_text())
+    gpu=manifest["kind"]=="gpu"
+    if manifest["kind"] not in ("gpu","cpu"):
+        raise ValueError("Explicit independent GPU/CPU diagnostic role required")
     if digest(path) != os.environ["DISP0_MANIFEST_SHA256"]:
         raise RuntimeError("Frozen diagnostic manifest changed")
     clean(Path(manifest["source"]), manifest["science_pin"])
     clean(Path(__file__).resolve().parents[3], manifest["outer_pin"])
     config, build = read_config(Path(manifest["config"]), manifest["config_sha256"])
     if (config["source_pin"] != manifest["science_pin"]
-            or config["threads"] != 8
+            or config["threads"] != (8 if gpu else 24)
             or require_cpu_runtime_admission(config) != manifest["cpu_runtime_admission"]):
         raise RuntimeError("Exact finalized CPU admission required")
     if worker:
@@ -234,9 +302,10 @@ def execute(path, worker=False, output=None):
     raw = subprocess.check_output(["/opt/slurm/current/bin/scontrol", "show", "job", "-o",
                                    os.environ["SLURM_JOB_ID"]], text=True, timeout=30)
     validate_allocation(fields(raw), manifest)
-    if len(os.sched_getaffinity(0)) < 8:
-        raise RuntimeError("Eight allocated host CPUs required")
-    scratch = Path("/storage/scratch1/3/awallace43")/("disp0-fixed-jk-"+os.environ["SLURM_JOB_ID"])
+    if len(os.sched_getaffinity(0)) < config["threads"]:
+        raise RuntimeError("Insufficient allocated host CPUs")
+    parent=Path("/storage/scratch1/3/awallace43") if gpu else cpu_scratch_parent()
+    scratch = parent/("disp0-fixed-jk-"+os.environ["SLURM_JOB_ID"])
     scratch.mkdir(mode=0o700)
     scratch = scratch.resolve(strict=True)
     owner = OwnedScratch(scratch, str(scratch), root)
@@ -244,17 +313,28 @@ def execute(path, worker=False, output=None):
                       DISP0_SPLIT_SCRATCH_CREATED=str(scratch))
     groups = set()
     report = {"status": "STARTED", "scope": SCOPE, "accepted_speedup_count": 0,
+              "kind":manifest["kind"],"science_pin":manifest["science_pin"],
+              "outer_pin":manifest["outer_pin"],"manifest_sha256":digest(path),
               "processes": [], "scheduler_job": raw}
     try:
+        if not gpu:
+            mount=fields(subprocess.check_output(
+                ["findmnt","-T",str(scratch),"-n","-P","-o","SOURCE,FSTYPE,TARGET"],
+                text=True,timeout=30))
+            stat=os.statvfs(scratch)
+            if mount.get("FSTYPE") not in ("xfs","ext4","ext3","btrfs") or (
+                    stat.f_bavail*stat.f_frsize<256*1024**3):
+                raise RuntimeError("CPU control needs actual local scratch and 256GiB headroom")
+            report["scratch_mount"]=mount
         deadline = time.monotonic()+WALL-180
-        for repeat in range(REPEATS):
+        for repeat in range(REPEATS if gpu else 1):
             out = root/f"r{repeat}"
             out.mkdir()
             work = scratch/f"r{repeat}"
             work.mkdir()
             aliases = Path(config["sealed_alias_parent"])/f"r{repeat}"
             aliases.mkdir(mode=0o700)
-            env = environment(config, gpu=True, sealed_alias_directory=aliases)
+            env = environment(config, gpu=gpu, sealed_alias_directory=aliases)
             env.update(TMPDIR=str(work), SCRATCH=str(work), PSI_SCRATCH=str(work),
                        DISP0_MANIFEST_SHA256=digest(path))
             argv = ["/bin/bash", "-c",
@@ -267,7 +347,8 @@ def execute(path, worker=False, output=None):
             with (out/"stdout").open("x") as stdout, (out/"stderr").open("x") as stderr, \
                     retirement_channel(env) as channel:
                 code = execute_owned(argv, env, stdout, stderr,
-                    min(500, deadline-time.monotonic()), groups.add, reaped=groups.discard,
+                    min(500 if gpu else 1500, deadline-time.monotonic()),
+                    groups.add, reaped=groups.discard,
                     pass_fds=channel.pass_fds)
                 row.update(returncode=code, retirement_reason=channel.reason(),
                            owned_groups_reaped=not groups)
@@ -279,8 +360,9 @@ def execute(path, worker=False, output=None):
                     or doc["science_pin"] != manifest["science_pin"]
                     or doc["reference_result_sha256"] != manifest["reference_result_sha256"]
                     or doc["matrices_sha256"] != digest(out/"fixed-jk.npz")
-                    or "cuESTJK: GPU-Accelerated Density-Fitted" not in native_log
-                    or native_log.count("cuESTJK compute_JK:") != PLANS*CALLS):
+                    or (gpu and ("cuESTJK: GPU-Accelerated Density-Fitted" not in native_log
+                         or native_log.count("cuESTJK compute_JK:") != PLANS*CALLS))
+                    or (not gpu and ("cuESTJK:" in native_log or doc["device"]["gpu_used"]))):
                 raise RuntimeError("Incomplete/changed fixed-density diagnostic")
             if repeat:
                 first_doc = json.loads((root/"r0/probe-result.json").read_text())
@@ -291,16 +373,19 @@ def execute(path, worker=False, output=None):
                 raise RuntimeError("Distinct fresh process identities required")
             row["pid"] = doc["pid"]
             write(root/"diagnostic-result.json", report)
-        report["fresh_process_deltas"] = []
-        with np.load(root/"r0/fixed-jk.npz", allow_pickle=False) as first:
-            for repeat in range(1, REPEATS):
-                with np.load(root/f"r{repeat}/fixed-jk.npz", allow_pickle=False) as other:
-                    np.testing.assert_array_equal(first["density"], other["density"])
-                    report["fresh_process_deltas"].append({
-                        "repeat": repeat, "plans": [matrix_delta(
-                            (first[f"J_{p}_0"], first[f"K_{p}_0"]),
-                            (other[f"J_{p}_0"], other[f"K_{p}_0"]), first["density"])
-                            for p in range(PLANS)]})
+        if gpu:
+            report["fresh_process_deltas"] = []
+            with np.load(root/"r0/fixed-jk.npz", allow_pickle=False) as first:
+                for repeat in range(1, REPEATS):
+                    with np.load(root/f"r{repeat}/fixed-jk.npz", allow_pickle=False) as other:
+                        np.testing.assert_array_equal(first["density"], other["density"])
+                        report["fresh_process_deltas"].append({
+                            "repeat": repeat, "plans": [matrix_delta(
+                                (first[f"J_{p}_0"], first[f"K_{p}_0"]),
+                                (other[f"J_{p}_0"], other[f"K_{p}_0"]), first["density"])
+                                for p in range(PLANS)]})
+        else:
+            report["independent_native_CPU_comparison"]=cpu_comparison(root,manifest,doc)
         report["status"] = "EXECUTED_FIXED_DENSITY_DIAGNOSTIC_ONLY"
     except BaseException as error:
         report.update(status="FAILED", error=f"{type(error).__name__}: {error}")
@@ -333,6 +418,9 @@ def submit(args):
     reference = args.reference.resolve(strict=True)
     if digest(reference) != args.reference_sha256:
         raise RuntimeError("Frozen reference result changed")
+    gpu=args.kind=="gpu"
+    if not gpu and args.gpu_control is None:
+        raise ValueError("Completed fixed-density GPU diagnostic required for CPU comparison")
     root = args.root
     if not root.is_absolute():
         raise ValueError("Fresh absolute diagnostic root required")
@@ -340,12 +428,12 @@ def submit(args):
     (root/"logs").mkdir()
     aliases = root/"sealed-workers"
     aliases.mkdir(mode=0o700)
-    config = configuration(base, aliases, "protein83", "gpu")
+    config = configuration(base, aliases, "protein83", args.kind)
     config_path = root/"runtime-config.json"
     write(config_path, config)
     # Bind the exact original frozen inputs, not a mutable geometry module.
     peer = json.loads((reference.parent.parent.parent/"manifest.json").read_text())
-    manifest = {"kind": "gpu", "science_pin": science_pin, "source": str(source),
+    manifest = {"kind": args.kind, "science_pin": science_pin, "source": str(source),
                 "outer_pin": pin, "scope": SCOPE, "automatic_retry": False,
                 "accepted_speedup_count": 0, "config": str(config_path),
                 "config_sha256": digest(config_path), "cpu_runtime_admission": admission,
@@ -358,19 +446,28 @@ def submit(args):
     _, dimensions = load_point(Path(manifest["inputs"]), manifest["inputs_sha256"], "protein83")
     if json.loads(reference.read_text())["orbital_dimensions"] != dimensions:
         raise RuntimeError("Frozen reference dimensions differ from selected inputs")
+    if not gpu:
+        target=args.gpu_control.resolve(strict=True)
+        manifest.update(gpu_control=str(target),
+            gpu_control_sha256=require_gpu_control(target,args.reference_sha256))
     write(root/"manifest.json", manifest)
     env = {k:v for k,v in os.environ.items() if not k.startswith(("SLURM_", "SBATCH_"))}
     env.update(DISP0_OUTER=str(outer), DISP0_OUTER_PIN=pin, DISP0_RUN_ROOT=str(root),
-               DISP0_GATE_ENV=config["dependency_environment"], DISP0_STAGE_THREADS="8",
+               DISP0_GATE_ENV=config["dependency_environment"],
+               DISP0_STAGE_THREADS=str(config["threads"]),
                DISP0_MANIFEST_SHA256=digest(root/"manifest.json"),
                DISP0_EXECUTE_DRIVER="scf_repeat_probe.py")
-    argv = ["sbatch", "--parsable", "--job-name=fsapt-fixed-jk",
-            "--account=gts-cs207-chemx", "--qos=embers", "--partition=gpu-h200",
-            "--constraint=H200", "--gres=gpu:h200:1", "--nodes=1", "--ntasks=1",
-            "--cpus-per-task=8", "--mem=160G", "--time=00:30:00", "--no-requeue",
+    argv = ["sbatch", "--parsable", "--job-name=fsapt-fixed-jk-"+args.kind,
+            "--account=gts-cs207-chemx", "--qos=embers",
+            "--partition="+("gpu-h200" if gpu else "cpu-small"),
+            "--nodes=1", "--ntasks=1",
+            "--cpus-per-task="+str(config["threads"]),
+            "--mem=160G", "--time=00:30:00", "--no-requeue",
             "--signal=TERM@120", "--export=ALL", "--chdir="+str(root),
             "--output="+str(root/"logs/%x-%j.out"), "--error="+str(root/"logs/%x-%j.err"),
             str(outer/"devtools/disp0/phoenix_validation/stage_scaling.sbatch")]
+    argv[1:1]=(["--constraint=H200","--gres=gpu:h200:1"] if gpu else
+               ["--exclusive","--constraint=core24&gold6226&localNVMe"])
     for trial, name in ((True, "test-only.json"), (False, "submission.json")):
         if not trial:
             write(root/"SUBMISSION_ATTEMPTED.json", {"command": argv})
@@ -397,6 +494,8 @@ def main():
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--reference-sha256")
     parser.add_argument("--root", type=Path)
+    parser.add_argument("--kind",choices=("gpu","cpu"),default="gpu")
+    parser.add_argument("--gpu-control",type=Path)
     args = parser.parse_args()
     if args.execute or args.worker:
         path = (args.execute or args.worker).resolve(strict=True)

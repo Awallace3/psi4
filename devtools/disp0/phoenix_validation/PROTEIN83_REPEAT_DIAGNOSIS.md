@@ -165,3 +165,65 @@ The pinned SDK documents default math mode as potentially mixed precision
 and native-FP64 mode as FP64 throughout; the header does not establish how
 plan creation depends on the current mode. No causal conclusion is claimed
 before the control, and no SAPT timing or speedup will be accepted from it.
+
+### Fixed-density GPU result: reconstruction, not compute-call noise
+
+Job15319813 completed0:0 in54s without TERM. All three fresh workers
+returned0 without retirement, native plan finalization returned, groups
+were reaped and owned scratch cleanup completed. All workers used the same
+actual H200/sm90, driver615.71.09, with no foreign compute context.
+
+All36native compute calls used bitwise-identical coefficients **and**
+constructed densities (density SHA256
+`e0b92751636455378be72a31405f4516be75216274efa0acbe93d2bb493fde5c`).
+Results:
+
+| Comparison | Observed result |
+|---|---|
+| Repeated computes on one plan | J bitwise identical; K differences at most4.44e-16 |
+| Same-plan fixed-D JK energy | Differences at most4.10e-16Eh |
+| Cold to warm plan | Fixed-D JK energy differences up to1.92e-9Eh |
+| Warm to warm plan | Fixed-D JK energy differences up to1.48e-9Eh |
+| Fresh process, same plan position | Fixed-D JK energy differences up to1.78e-9Eh |
+
+Thus different SCF stopping points are **not necessary** to produce
+nanohartree-scale differences: rebuilding the native DF operator suffices.
+Warm plans also differ after the wrapper has selected FP64, so the late
+math-mode assignment is not established as the sole cause. This localizes
+the issue to reconstruction/native-plan state rather than repeated
+J/K compute calls at fixed state; it does not identify the particular
+internal factorization/reduction or prove the absolute accuracy.
+
+Final diagnostic SHA256:
+`73aaf895ff4fc488b4771a2d5a57ec011d0c0d52f04e4a7249917e00a4c95669`.
+Worker report SHA256 values:
+`d8a9b5047a42140a016b4d366dbcbd6c5ec27eaefc381a6ea20c47c47aadab46`,
+`6847b7d4575eabb9d239b8c1918f157219aeeccdad6ebee05b4c91c9cc1820b2`,
+`e923dfae90b9cbdf541be1362b074e7a7f7192dc7b11f46a637680876ccaf90f`.
+Accepted speedup count remains0.
+
+### Independent CPU control
+
+The probe now has a separate CPU-only role: one24-core Gold6226,
+160GiB,30min embers allocation with actual local scratch, no GPU GRES,
+and CUDA devices hidden. It evaluates the same saved coefficients with
+native MemDFJK/DiskDFJK, explicitly grants DF memory, retains the actual
+backend/density and compares its J/K matrices against all nine sealed GPU
+plan results. The original independent AO-JK oracle tolerances,
+rtol2e-7 /atol2e-8, are unchanged. Signed fixed-D energy differences are
+reported, not silently turned into a new scalar acceptance threshold.
+
+This is a fixed-wavefunction accuracy diagnostic, **not** a CPU SCF,
+full fragment oracle, whole-energy timing or accepted speedup. Its purpose
+is to distinguish an absolute operator-accuracy problem from a
+cross-construction repeatability floor before proposing a correction or
+any change to the experimental acceptance contract. No repeat or
+independent-oracle tolerance has been changed.
+
+The public Psi4 `DF_FITTING_CONDITION` option defaults to1e-10
+(`psi4/src/read_options.cc`), distinct from the C++ constructor's initial
+member value1e-12 before options are read. The wrapper prints/retains the
+option but does not configure it into the cuEST DF plan. Native default
+conditioning and the relative/absolute cutoff semantics must be checked
+before attributing the reconstruction floor solely to unavoidable rounding.
+No cutoff or math-mode implementation has yet been changed.
