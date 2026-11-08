@@ -299,3 +299,23 @@ Worker report SHA256:
 Candidate native-fix source pin:
 `e0da305c02b55a33c6cb6c250072d552c0606555`; source sync is separate from
 native build/qualification. No repeat or oracle tolerance was changed.
+
+## Candidate native build submitted
+
+Frozen source:
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-scf-fit-e0da305c02`,
+pin`e0da305c02b55a33c6cb6c250072d552c0606555`.
+Submitted **15322281** for a new whole sm90 build, CPU guards, small native
+CPU controls and sealed-runtime admission. Effective route:
+`gts-cs207-chemx / cpu-small / embers`,8CPUs,48GiB, three-hour cap,
+no GPU; initially PENDING for Priority. Test-only15322280 is not the job.
+Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-scf-fit-build-e0da305c02`.
+Manifest SHA256:
+`15ca7b4ca03189dfd1b90bf36e688a7907518ee11fdb64395afd04da475a618e`.
+Hourly official watcher:`bc0d4d880`.
+
+The old1cad631980 installation, controls and data remain immutable.
+Submission is not compilation success or native/GPU validation. A completed
+exact-pin proof is required before candidate GPU tests; the fitting-cutoff
+regression must execute with zero GPU skips before any candidate speedup claim.
