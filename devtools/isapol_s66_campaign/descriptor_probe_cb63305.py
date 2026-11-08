@@ -14,7 +14,8 @@ import sys
 
 def helper(name):
     if name not in ('resource_plan_cb63305', 'resource_plan_ed561666',
-                    'resource_plan_grid400', 'descriptor_profiles', 'descriptor_probe'):
+            'resource_plan_grid400', 'resource_plan_qomp', 'qualified_qomp',
+            'descriptor_profiles', 'descriptor_probe'):
         raise ValueError('closed installed descriptor helpers required')
     path = Path(__file__).with_name(name+'.py')
     raw = path.read_bytes()
@@ -25,10 +26,23 @@ def helper(name):
     return module
 
 
-def scientific_probe(runtime, *, memory_bytes, producer='cb63305', scope='default'):
+def scientific_probe(runtime, *, memory_bytes, producer='cb63305', scope='default', runtime_view=None):
     """Real basis/shell/recipe declarations only; no electronic state."""
     profile = helper('descriptor_profiles').profile(producer, scope=scope)
+    guard = None
+    if producer == 'qomp':
+        guard = helper('qualified_qomp').runtime()
+        guard.load_view(runtime_view)
+        guard.validate_python_path(sys.path)
+    elif runtime_view is not None:
+        raise ValueError('runtime view is qomp-only')
     import psi4
+    if guard is not None:
+        guard.validate_python_path(sys.path)
+        if (str(Path(psi4.__file__).resolve()) != guard.PREFIX+'/lib/python3.13/site-packages/psi4/__init__.py'
+                or str(Path(psi4.core.__file__).resolve().parent)
+                != guard.PREFIX+'/lib/python3.13/site-packages/psi4'):
+            raise ValueError('foreign qomp scientific import')
     from psi4.driver.procrouting.isapol_schema import (
         admit_native_schema, native_molecule_schema, validate_native_request, check_native_geometry)
     from psi4.driver.procrouting.isapol_recipes import native_monomer_recipe
@@ -76,7 +90,7 @@ def scientific_probe(runtime, *, memory_bytes, producer='cb63305', scope='defaul
         shape_descriptor_sha256=[basis_identity(s.shape) for s in recipe.sites],
         recipe_sha256=hashlib.sha256(repr(recipe).encode()).hexdigest(),
         grid_policy=('Source-bound response angular rounding200->230; integration400/2030; no grid constructed'
-            if producer == 'grid400'
+            if producer in ('grid400', 'qomp')
             else 'Source-bound angular rounding200->230,974->974; no grid constructed'),
         source_policy_sha256=planner.FILES, plan=plan,
         qualification='Actual installed basis descriptors and ledger prediction only; '
@@ -95,9 +109,12 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--memory-bytes', type=int, required=True)
     parser.add_argument('--monomer-id', required=True)
-    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400', 'qomp'), default='cb63305')
+    parser.add_argument('--runtime-view', type=Path)
     parser.add_argument('--scope', choices=('default', 'full-bank'), default='default')
     args = parser.parse_args()
+    if bool(getattr(args, 'runtime_view', None)) != (args.producer == 'qomp'):
+        raise ValueError('qomp requires its runtime view; historical children do not accept it')
     scope = getattr(args, 'scope', 'default')
     if re.fullmatch(r'monomer-\d{4}', args.monomer_id) is None:
         raise ValueError('explicit bounded monomer identifier required')
@@ -108,6 +125,8 @@ def main():
         raise ValueError('candidate descriptor is fixed to selected monomer0008')
     raw = args.input.read_bytes()
     report = scientific_probe(json.loads(raw), memory_bytes=args.memory_bytes, producer=args.producer,
+                              **(dict(runtime_view=args.runtime_view.read_bytes())
+                                 if args.producer == 'qomp' and args.runtime_view else {}),
                               **(dict(scope=scope) if scope != 'default' else {}))
     sources = [Path(__file__).with_name(name) for name in profile['child_sources']]
     report.update(monomer_id=args.monomer_id, runtime_input_sha256=hashlib.sha256(raw).hexdigest(),

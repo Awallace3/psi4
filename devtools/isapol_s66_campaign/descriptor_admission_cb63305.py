@@ -79,6 +79,8 @@ def verify_descriptor(report, row, identity, *, policy, operational_sources_sha2
     if scope == 'full-bank' and report.get('campaign_scope') != 'full-bank':
         raise ValueError('actual full-bank candidate descriptor scope required')
     request = row['runtime_input']['specification']['keywords']['function_kwargs']['native_monomer']
+    installed_pair = (identity['implementation'] if producer == 'qomp'
+                      else identity['implementation']['sha256'])
     if (report.get('schema') != 'native-campaign-descriptor-probe/2'
             or report.get('policy_id') != module.POLICY
             or policy != module.FILES or report.get('source_policy_sha256') != policy
@@ -87,7 +89,7 @@ def verify_descriptor(report, row, identity, *, policy, operational_sources_sha2
             or runtime_sha256 != row['runtime_input_sha256']
             or runtime_sha256 != json_digest(row['runtime_input'])
             or report.get('operational_sources_sha256') != operational_sources_sha256
-            or report.get('implementation', {}).get('sha256') != identity['implementation']['sha256']
+            or report.get('implementation', {}).get('sha256') != installed_pair
             or Path(report.get('package', '')).resolve() != Path(identity['package']).resolve()
             or Path(report.get('core', '')).resolve() != Path(identity['core']).resolve()
             or report.get('version') != identity['version']

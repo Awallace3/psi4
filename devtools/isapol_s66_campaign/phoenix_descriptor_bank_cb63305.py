@@ -26,6 +26,7 @@ HELPERS = {
     'phoenix_installed_checks', 'qualified_cb63305', 'resource_plan_cb63305',
     'qualified_ed561666', 'resource_plan_ed561666',
     'qualified_grid400', 'resource_plan_grid400', 'descriptor_profiles',
+    'qualified_qomp', 'resource_plan_qomp',
     'prepare_descriptor_bank_cb63305', 'descriptor_admission_cb63305', 'descriptor_scratch_cb63305',
 }
 
@@ -71,12 +72,12 @@ def operation_hashes(*, producer='cb63305', scope='default'):
     return {name: digest(Path(__file__).with_name(name).read_bytes()) for name in files}
 
 
-def policy_binding(source, manifest, planner):
+def policy_binding(source, manifest, planner, *, git_argv=None):
     if manifest['commit'] != planner.SCIENTIFIC_COMMIT:
         raise ValueError('exact selected scientific producer required')
     observed = {}
     for name, expected in planner.FILES.items():
-        raw = subprocess.check_output(['git', '-C', str(source), 'show',
+        raw = subprocess.check_output([*(git_argv or ['git']), '-C', str(source), 'show',
                                        manifest['commit']+':'+name])
         observed[name] = digest(raw)
         if observed[name] != expected:
@@ -143,7 +144,9 @@ def main():
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
     parser.add_argument('--expected-bank-sha256', required=True)
-    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400', 'qomp'), default='cb63305')
+    parser.add_argument('--producer-receipts',type=Path)
+    parser.add_argument('--runtime-view',type=Path)
     parser.add_argument('--scope', choices=('default', 'full-bank'), default='default')
     args = parser.parse_args()
     scope = getattr(args, 'scope', 'default')
@@ -151,10 +154,16 @@ def main():
             or re.fullmatch('[0-9a-f]{64}', args.expected_bank_sha256) is None):
         raise ValueError('exact operational commit and prepared bank hash required')
     checks = helper('phoenix_installed_checks')
+    qomp = args.producer == 'qomp'
+    metadata_git = checks.git
+    if qomp:
+        controls = checks.qomp_engine()
+        controls.qomp_enter()
+        metadata_git = controls.qomp_git
     allocation = checks.allocation()
     admit_route(allocation, **(dict(scope=scope) if scope != 'default' else {}))
     source = Path(__file__).resolve().parents[2]
-    if checks.git(source, 'rev-parse', 'HEAD') != args.commit or checks.git(source, 'status', '--porcelain'):
+    if metadata_git(source, 'rev-parse', 'HEAD') != args.commit or metadata_git(source, 'status', '--porcelain'):
         raise RuntimeError('exact clean immutable operational checkout required')
     build, run = args.build.resolve(), args.run.resolve()
     if (not build.is_relative_to(RUNS) or not run.is_relative_to(RUNS)
@@ -175,36 +184,66 @@ def main():
         junit=args.qualification.with_name('junit.xml'),
         inventory=args.inventory, entries=args.entries, declarations=args.declarations,
         input_validation=args.input_validation, resources=args.resources, bank=args.bank)
+    if qomp:
+        if not args.producer_receipts or not args.runtime_view:
+            raise ValueError('qomp distinct receipt root and finite runtime view required')
+        for key in ('build_identity','installed_qualification','imported_identity','junit'):
+            del paths[key]
+        paths.update({'qomp_'+role:args.producer_receipts/name
+                      for role,name in profile.RECEIPT_PATHS.items()})
+        paths['runtime_view'] = args.runtime_view
+        if args.qualification.resolve() != paths['qomp_qualification'].resolve():
+            raise ValueError('qualification path must be the explicit qomp receipt role')
+    elif getattr(args,'producer_receipts',None) or getattr(args,'runtime_view',None):
+        raise ValueError('historical descriptor producer cannot use qomp inputs')
     if len({p.resolve() for p in paths.values()}) != len(paths):
         raise ValueError('distinct immutable receipt and input roles required')
     blobs = {key: read_bounded(path) for key, path in paths.items()}
-    receipt_blobs = {key: blobs[key] for key in profile.RECEIPT_SHA256}
+    receipt_blobs = {key: blobs['qomp_'+key if qomp else key] for key in profile.RECEIPT_SHA256}
     producer = profile.verify_receipts(receipt_blobs)
-    manifest, identity = (json.loads(blobs[key]) for key in ('build_identity', 'imported_identity'))
+    if qomp:
+        rt = profile.runtime()
+        view = rt.load_view(blobs['runtime_view'])
+        if str(build) != rt.BUILD:
+            raise ValueError('qomp compiled prefix is fixed, not caller selected')
+        # Factual internal source/path binding ONLY, NOT a fresh-build receipt.
+        manifest = dict(schema='qomp-compiled-source-binding/1',
+            commit=profile.SCIENTIFIC_COMMIT,
+            installed_package=rt.PREFIX+'/lib/python3.13/site-packages/psi4')
+        identity = json.loads(blobs['qomp_identity'])
+        runtime_check = lambda: rt.verify_runtime_view(blobs['runtime_view'])
+    else:
+        manifest, identity = (json.loads(blobs[key]) for key in ('build_identity','imported_identity'))
+        runtime_check = lambda: checks.verify_runtime(build/'env',manifest)
     if (Path(manifest['installed_package']).resolve() != build/'env/lib/python3.13/site-packages/psi4'
             or digest(blobs['bank']) != args.expected_bank_sha256):
         raise ValueError('prepared bank or private build path differs')
     bank = json.loads(blobs['bank'])
     raw_inputs = {key: blobs[key] for key in prepare.INPUT_SHA256}
-    regenerated = (prepare.prepare_grid400_full_bank(raw_inputs, receipt_blobs, blobs['resources'])
+    regenerated = (prepare.prepare_qomp_full_bank(raw_inputs,receipt_blobs,blobs['resources'])
+        if qomp and scope == 'full-bank'
+        else prepare.prepare_grid400_full_bank(raw_inputs, receipt_blobs, blobs['resources'])
         if scope == 'full-bank'
         else prepare.prepare_grid400_pilot_bank(raw_inputs, receipt_blobs, blobs['resources'])
         if descriptor_profile['selected_monomers'] is not None
         else prepare.prepare_bank(raw_inputs, receipt_blobs, blobs['resources'], **selection))
     if bank != regenerated:
         raise ValueError('prepared bank does not reproduce from exact immutable raw inputs')
-    changes = checks.git(source, 'diff', '--name-only', manifest['commit'], args.commit).splitlines()
-    if any(not name.startswith('devtools/isapol_s66_campaign/')
+    changes = metadata_git(source, 'diff', '--name-only', manifest['commit'], args.commit).splitlines()
+    if qomp:
+        profile.verify_descriptor_operations(source,changes)
+    elif any(not name.startswith('devtools/isapol_s66_campaign/')
            and name not in checks.TEST_ONLY_CHANGES for name in changes):
         raise ValueError('descriptor operations change scientific/build code')
-    policy = policy_binding(source, manifest, planner)
+    policy = policy_binding(source, manifest, planner,
+                            **(dict(git_argv=controls.QOMP_GIT) if qomp else {}))
     # Parent arithmetic uses the same verified pure source, without importing
     # Psi4. Operational checkout staging must include this fixed source file.
     planner.shared_pfit_plan()
     memory = admission.admit_memory(bank, allocation, nonnumeric_headroom_bytes=16*1024**3)
     operations = operation_hashes(**selection)
     environment = build/'env'
-    checks.verify_runtime(environment, manifest)
+    runtime_check()
     payload = run/'payload'
     payload.mkdir(exist_ok=False)
     scratch = SCRATCH/('ccasp-expanded-descriptors-'+os.environ['SLURM_JOB_ID'])
@@ -238,6 +277,8 @@ def main():
                 '--producer', args.producer)
             if scope != 'default':
                 command += ['--scope', scope]
+            if qomp:
+                command += ['--runtime-view',str(args.runtime_view)]
             with (payload/(monomer+'.stdout')).open('x') as out, (payload/(monomer+'.stderr')).open('x') as err:
                 subprocess.run(command, cwd=scratch/'cwd', env=env, stdin=subprocess.DEVNULL,
                                stdout=out, stderr=err, check=True)
@@ -252,11 +293,13 @@ def main():
         status = (admission.verify_grid400_coverage(reports)
             if descriptor_profile['selected_monomers'] is not None
             else admission.verify_coverage(reports, {r['monomer_id'] for r in regenerated['monomers']}))
-        checks.verify_runtime(environment, manifest)
+        runtime_check()
         if (any(checks.digest(Path(path)) != expected for path, expected in receipts.items())
-                or checks.git(source, 'rev-parse', 'HEAD') != args.commit
-                or checks.git(source, 'status', '--porcelain') or operation_hashes(**selection) != operations):
+                or metadata_git(source, 'rev-parse', 'HEAD') != args.commit
+                or metadata_git(source, 'status', '--porcelain') or operation_hashes(**selection) != operations):
             raise ValueError('source, input or runtime receipts changed during descriptor allocation')
+        if qomp:
+            profile.verify_descriptor_operations(source,changes)
         allocation_report = dict(
             schema=('native-campaign-selected-descriptor-allocation/1'
                 if descriptor_profile['selected_monomers'] is not None
@@ -279,6 +322,9 @@ def main():
             reports=reports, error=str(error)[:1024],
             qualification='Partial or failed descriptor allocation is never all-bank admission.'))
         raise
+    finally:
+        if qomp:
+            runtime_check()  # Failure paths do not skip the finite post-seal.
     print(json.dumps(dict(status=status, monomers=len(reports),
                           report=str(payload/'descriptor-allocation.json'))))
 

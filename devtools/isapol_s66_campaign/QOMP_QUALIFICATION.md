@@ -465,3 +465,115 @@ Preserve failed ops001, all001 logs/intents and the absent001 run names;
 never retry/overwrite them. Parent stages/submits only after independent
 review/approval. The same approved configure/helper/science556/cap/seal/TERM
 contracts remain; no actual new identity/qualification exists yet.
+
+## Closed qomp producer after verified installed005 qualification (#146)
+
+This section supersedes the *pending evidence* description above, not the
+historical receipts. The compile allocation15320675 remains **FAILED**.
+Collection15326004 and separate installed qualification15326636 completed
+successfully:556 ordered nodes,556 JUnit cases, zero failure/error/skip.
+These are installed-interface evidence, **not** solver/model/cohort acceptance.
+`qualified_qomp.py` pins the actual distinct14-role receipt chain; it never
+calls or modifies a normal READY-build verifier.
+
+Roles stay separate: compiled/scientific fb11, corrected tests311d17,
+qualifying operations970f6. The actual private prefix is
+`runs/ccasp-native-s66-qomp-fb11-build002/env`, core f4a1b302...,
+scientific Python331bfced..., version1.12a1.dev212. Complete hashes/trees and
+the literal qualification/collection/component receipts are in the module.
+`resource_plan_qomp.py` byte-pins the existing pure ISA-grid-v1 seam and
+delegates its arithmetic unchanged. Its inner ledger remains explicitly
+unqualified; installed authority comes from the distinct producer receipts,
+not changing that ledger's old status. Response100/200, partition400/2030,
+Drho32, ISA120, Q workspace, all work/memory/IO ceilings remain unchanged.
+
+### Deployment inputs and admission interfaces (not activated)
+
+Keep the reviewed runtime view as **deployment data**, not generated tracked
+state. Its exact6807878 bytes/SHA
+`29d688df80fc3eb55a516042d86f4913100a8e845a3c8152acaf1a1eccf2ad6e`
+are required. Its candidate/acceptance flags remain false; this new closed
+producer, not a rewrite of those flags, supplies the bounded authority.
+Deploy the14 receipt files under the relative paths in
+`qualified_qomp.RECEIPT_PATHS`; relocation of that input directory cannot
+change their byte authority.
+
+Stdlib-only metadata checking (no installed runtime access):
+
+```python
+producer = qualified_qomp.verify_receipts(
+    qualified_qomp.read_receipts(receipt_root))
+rt = qualified_qomp.runtime()
+view_bytes = view_path.read_bytes()
+view = rt.load_view(view_bytes)
+```
+
+Actual runtime admission is separately `rt.verify_runtime_view(view_bytes)`
+**before and in a finally block after** scientific execution, including failed/
+interrupted Python unwind (`rt.runtime_admission` supplies that context).
+The parent still owns TERM forwarding/waiting; SIGKILL cannot run a post-seal
+and cannot be accepted. It checks15857 typed rows: complete private prefix
+(10548 files,1943 directories,1 link) plus finite BASE selected members
+(2699 files,119 directories,547 links). Prefix and complete non-site BASE
+stdlib namespaces must match, including rejecting unknown entries before
+traversing them. BASE site-packages **root and descendants** are excluded,
+not traversed. BASE parents/aliases are finite direct checks. No BUILD,
+objects, OLD, entire BASE or46MB qualification snapshot is read per case.
+Full hash IO over the conservative selected runtime is still required; this
+change removes build/dependency *audit* IO, not all runtime hash IO.
+
+Every selected file/type/raw link/resolved target/content is checked; a
+directory link's complete target subtree is included. The pyvenv.cfg hash
+and `include-system-site-packages=false` are enforced. Private.pth cannot
+appear. `BASE/lib/python313.zip` must be absent by **lstat** (a dangling link
+is present). These checks must precede ordinary interpreter startup.
+
+`ordinary_cli_launch` returns an admitted command, minimal clean environment
+and fresh owned CWD; it does **not execute** it. The caller must first create
+fresh mode0700 scratch/HOME/cache/CWD in the fixed owned layout. Only the
+existing closed execution-shape dicts are accepted: OMP/MKL equal that
+shape's CPUs, OpenBLAS1, no new affinity knobs. The unchanged ordinary route
+is `PREFIX/bin/python -I -B -X pycache_prefix=EMPTY_PRIVATE_CACHE
+PREFIX/bin/psi4 ...`, **not** qualification's guarded-S bootstrap. Clean
+private+BASE loader paths, empty cache/HOME, exact cfg/noPTH and verified
+Python/CLI bytes supply its startup-path proof. Code cannot retroactively
+undo scheduler/site loader execution: the parent launcher must itself start
+with an explicitly clean approved environment.
+
+`validate_python_path` checks exact canonical BASE stdlib/lib-dynload/absent
+zip and private site paths, with only exact private bin optionally allowed
+for the CLI. Descriptor children check actual sys.path before/after importing
+Psi4 and assert the installed package/core prefix. The unchanged ordinary
+CLI has no injected callback; its startup proof above plus decoded-FD audit
+must be used, not a claim that this function was injected into that process.
+
+`trace_projection` retains `trace_gate` decoded-FD/unfinished-syscall handling
+and `bank_runtime_gate.cli_role`. Only selected canonical runtime files or
+selected directories may be successfully opened under BASE/PREFIX. Unknown
+successful BASE-site, module, basis or fresh-directory shadow-library/cache
+opens refuse; declared inputs are hashed even inside own run/scratch.
+System libc/libm/loader and the existing enumerated OS inputs retain ordinary
+host trust. Identical DT_NEEDED/RPATH is supporting evidence, not an
+exhaustive lazy-dependency proof or hostile-host/TOCTOU sandbox.
+
+### Descriptor seam and remaining production work
+
+The existing preparation/probe/admission/supervisor Python selectors now
+explicitly accept `producer=qomp` (default or full-bank). Preparation uses
+`--producer-receipts ROOT`, **not** normal build/qualification flags.
+Supervisor additionally requires `--runtime-view FILE`, its actual pinned
+qualification path and fixed build002; old producers cannot accept these
+new input roles. Transitive source inventories cover all new helpers.
+The qomp-only source gate additionally binds the two inherited non-campaign
+build-control files to exact970 bytes; it does not permit arbitrary builder
+changes merely because those files existed in the reviewed ancestry.
+No descriptor bank, wrapper route or allocation was activated here.
+
+Production workers, independent audits and immutable new cohort/specs still
+need an explicitly reviewed qomp selection using these interfaces; existing
+historical worker/bank policy pins are unchanged and must refuse new SCI.
+The descriptor shell wrapper is deliberately unchanged/not a qomp launcher.
+Inode147 remains separate: current131072files/attempt and256GiB byte
+reservation are unchanged, including sum+largest and live quota guards.
+No old25 records, eight held jobs, dataset, acceptance flag or receipt is
+modified by these interfaces. No new environment/build is required.

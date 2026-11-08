@@ -23,7 +23,8 @@ INPUT_SHA256 = {
 def helper(name):
     if name not in ('qualified_cb63305', 'resource_plan_cb63305',
                     'qualified_ed561666', 'resource_plan_ed561666',
-                    'qualified_grid400', 'resource_plan_grid400'):
+                    'qualified_grid400', 'resource_plan_grid400',
+                    'qualified_qomp', 'resource_plan_qomp'):
         raise ValueError('closed descriptor preparation helpers required')
     path = Path(__file__).with_name(name+'.py')
     raw = path.read_bytes()
@@ -44,9 +45,13 @@ def json_digest(value):
 
 def prepare_bank(inputs, receipts, resource_bytes, *, producer='cb63305'):
     """Return unsubmitted runtime-only inputs, never a qualified descriptor bank."""
-    if type(producer) is not str or producer not in ('cb63305', 'ed561666'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'qomp'):
         raise ValueError('closed installed producer profile required')
     return _prepare_bank(inputs, receipts, resource_bytes, producer=producer)
+
+
+def prepare_qomp_full_bank(inputs, receipts, resource_bytes):
+    return _prepare_bank(inputs, receipts, resource_bytes, producer='qomp', scope='full-bank')
 
 
 def prepare_grid400_pilot_bank(inputs, receipts, resource_bytes):
@@ -66,10 +71,10 @@ def prepare_grid400_full_bank(inputs, receipts, resource_bytes):
 
 def _prepare_bank(inputs, receipts, resource_bytes, *, producer, selected=None, scope='default'):
     if (scope not in ('default', 'full-bank')
-            or scope == 'full-bank' and (producer != 'grid400' or selected is not None)
+            or scope == 'full-bank' and (producer not in ('grid400', 'qomp') or selected is not None)
             or (producer == 'grid400' and scope == 'default' and selected != ('monomer-0008',))
             or (producer in ('cb63305', 'ed561666') and selected is not None)
-            or producer not in ('cb63305', 'ed561666', 'grid400')):
+            or producer not in ('cb63305', 'ed561666', 'grid400', 'qomp')):
         raise ValueError('closed descriptor producer/selection required')
     if type(inputs) is not dict or set(inputs) != set(INPUT_SHA256):
         raise ValueError('exact immutable input roles required')
@@ -203,21 +208,33 @@ def _prepare_bank(inputs, receipts, resource_bytes, *, producer, selected=None, 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in (*INPUT_SHA256, 'resources', 'build_identity', 'qualification', 'output'):
+    for name in (*INPUT_SHA256, 'resources', 'output'):
         parser.add_argument('--'+name.replace('_', '-'), type=Path, required=True)
-    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
+    for name in ('build-identity','qualification','producer-receipts'):
+        parser.add_argument('--'+name,type=Path)
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400', 'qomp'), default='cb63305')
     parser.add_argument('--scope', choices=('default', 'full-bank'), default='default')
     args = parser.parse_args()
+    producer_receipts = getattr(args, 'producer_receipts', None)
     scope = getattr(args, 'scope', 'default')
-    if scope == 'full-bank' and args.producer != 'grid400':
+    if scope == 'full-bank' and args.producer not in ('grid400','qomp'):
         raise ValueError('full-bank scope is explicit candidate-only')
-    qpath = args.qualification
-    receipt_paths = dict(build_identity=args.build_identity, installed_qualification=qpath,
-        imported_identity=qpath.with_name('imported-identity.json'), junit=qpath.with_name('junit.xml'))
+    if args.producer == 'qomp':
+        if not producer_receipts or args.build_identity or args.qualification:
+            raise ValueError('qomp uses its distinct immutable receipt root, not normal build receipts')
+        receipts = helper('qualified_qomp').read_receipts(producer_receipts)
+    else:
+        if not args.build_identity or not args.qualification or producer_receipts:
+            raise ValueError('historical producer requires its original build/qualification roles')
+        qpath = args.qualification
+        receipt_paths = dict(build_identity=args.build_identity, installed_qualification=qpath,
+            imported_identity=qpath.with_name('imported-identity.json'), junit=qpath.with_name('junit.xml'))
+        receipts = {role: p.read_bytes() for role, p in receipt_paths.items()}
     inputs = {role: getattr(args, role).read_bytes() for role in INPUT_SHA256}
-    receipts = {role: p.read_bytes() for role, p in receipt_paths.items()}
     resources = args.resources.read_bytes()
-    result = (prepare_grid400_full_bank(inputs, receipts, resources)
+    result = (prepare_qomp_full_bank(inputs, receipts, resources)
+        if scope == 'full-bank' and args.producer == 'qomp'
+        else prepare_grid400_full_bank(inputs, receipts, resources)
         if scope == 'full-bank' else prepare_grid400_pilot_bank(inputs, receipts, resources)
         if args.producer == 'grid400'
         else prepare_bank(inputs, receipts, resources, producer=args.producer))
