@@ -127,7 +127,7 @@ class WorkspaceTests(unittest.TestCase):
         for workers in (1, 2, 4, 8):
             self.assertEqual(self.workspace(65, 4, 8199), 827392, workers)
 
-    def test_high_thread_accumulation_and_python_planner_unchanged_from_5ae(self):
+    def test_high_thread_tail_and_python_outside_isa_plan_unchanged_from_5ae(self):
         base = subprocess.check_output(
             ["git", "-C", str(ROOT), "show",
              "5ae597cd9305588d14681d0da435834ef761c264:"+str(CPP.relative_to(ROOT))], text=True)
@@ -136,7 +136,14 @@ class WorkspaceTests(unittest.TestCase):
         planner = subprocess.check_output(
             ["git", "-C", str(ROOT), "show",
              "5ae597cd9305588d14681d0da435834ef761c264:"+str(PYTHON.relative_to(ROOT))], text=True)
-        self.assertEqual(PYTHON.read_text(), planner)
+        # The separately tested ISA accounting revision may change ONLY this
+        # function. Keep every other byte (including MBIS/Q workspace) frozen.
+        def without_isa(source):
+            function = next(n for n in ast.parse(source).body
+                            if isinstance(n, ast.FunctionDef) and n.name == "isa_resource_plan")
+            lines = source.splitlines(keepends=True)
+            return "".join(lines[:function.lineno-1]+lines[function.end_lineno:])
+        self.assertEqual(without_isa(PYTHON.read_text()), without_isa(planner))
 
 
 if __name__ == "__main__":

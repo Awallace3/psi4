@@ -174,8 +174,10 @@ def isa_resource_plan(wfn, recipe, auxiliary, integration_grid, rank):
     Charge full-grid atomic collocation even when native cache admission chooses
     the uncached path, all max_iterations history metrics, copied grids and Q,
     MAIN/Drho buffers, plus 256 MiB scratch and the explicitly charged native-Q
-    prefactor/active-flag workspace. Lebedev rounding is bounded by
-    2*requested+6 (the native grid clamps at 5294). No per-iteration refund.
+    prefactor/active-flag workspace and preparation/control work at all thread
+    counts. The closed100/200 recipe has99*230 rows/site (native radial shells
+    and Lebedev rounding); other recipes retain the old2*requested+6 envelope,
+    clamped at5294. No per-iteration or worker-count refund.
     Drho-C refinement is charged explicitly, not taken from the scratch term or
     the d**3 solve term. Bytes: 4d doubles and the 134-digit accumulator when
     refinement is enabled, held once for all iterations: the solver owns three
@@ -193,8 +195,11 @@ def isa_resource_plan(wfn, recipe, auxiliary, integration_grid, rank):
     early; this adapter does not claim an exact work bound for arbitrary shells.
     """
     from .isapol_native_partition import DRHO_REFINEMENT_ITERATIONS as refinement
+    from .isapol_isa_grid_plan import isa_grid_rows, q_preparation_work
     ns = len(recipe.sites)
-    g = ns*(recipe.grid.radial_points-1)*min(5294, 2*recipe.grid.spherical_points+6)
+    g = isa_grid_rows(ns, **{name: getattr(recipe.grid, name) for name in (
+        'radial_points', 'spherical_points', 'becke_smoothing', 'radius_scaling',
+        'radius_policy', 'neighbour_policy')})
     h, p, d = len(integration_grid), _width(auxiliary), _width(recipe.auxiliary)
     a = [_width(s.atomic) for s in recipe.sites]
     s = sum(_width(site.shape) for site in recipe.sites)
@@ -209,6 +214,7 @@ def isa_resource_plan(wfn, recipe, auxiliary, integration_grid, rank):
     if refinement:
         numeric += 8*(4*d+134)
     work += 16*d*d+64*d+refinement*(256*d*(d+1)+16384*d+16*d*d+64*d)
+    work += q_preparation_work(ns, p, rank, h)
     return int(numeric), int(work)
 
 
