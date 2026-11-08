@@ -256,5 +256,190 @@ def main():
         tests=summary, report=str(payload/'installed-validation.json'))), flush=True)
 
 
+def qomp_engine():
+    """Load this ops child's shared build helpers, never native Psi4."""
+    import importlib.util
+    import sys
+    path = Path(__file__).resolve().parents[2]/'devtools/isapol_native_acceptance/phoenix_build.py'
+    spec = importlib.util.spec_from_file_location('_qomp_fresh_build_engine', path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    exec(compile(path.read_bytes(), str(path), 'exec'), module.__dict__)
+    return module
+
+
+def qomp_build_gate(engine, lib, args):
+    """No READY/failed/foreign receipt adoption; parent supplies actual digests."""
+    root = engine.QOMP_BUILD
+    for filename, attribute in (('build-identity.json', 'build_identity_sha256'),
+                                ('build-record.json', 'build_record_sha256'),
+                                ('collection.json', 'collection_sha256')):
+        expected = getattr(args, attribute)
+        engine.qomp_need(type(expected) is str and re.fullmatch('[0-9a-f]{64}', expected)
+                         and lib.sha(root/filename) == expected, 'parent build/collection digest differs')
+    engine.qomp_need(not (root/'FAILED').exists()
+                     and lib.read(root/'COMPLETED') == dict(exit_code=0, mode='build', acceptance=False),
+                     'fresh normal build must have actual successful terminal marker')
+    value = lib.read(root/'result.json')
+    manifest, record = lib.read(root/'build-identity.json'), lib.read(root/'build-record.json')
+    source = engine.qomp_source_gate(args.ops_commit, args.ops_tree)
+    engine.qomp_need(
+        value['schema'] == 'qomp-production-operation/1'
+        and value['status'] == 'FRESH_BUILD_COMPLETE_NOT_QUALIFIED'
+        and value['mode'] == 'build' and value['acceptance'] is False
+        and value['production_adoption'] is False and value['source'] == source
+        and value['old_and_base_unchanged'] is True
+        and manifest['schema'] == 'fresh-native-build-identity/1'
+        and manifest['fresh_build'] is True and manifest['clean_source'] is True
+        and manifest['commit'] == record['commit'] == engine.QOMP_SCI
+        and manifest['tree'] == record['tree'] == engine.QOMP_TREE
+        and manifest['operations'] == record['operations'] == source
+        and manifest['source_snapshot'] == record['source'] == str(root/'source')
+        and manifest['installed_package'] == str(root/'env/lib/python3.13/site-packages/psi4')
+        and record['root'] == str(root) and record['dependencies'] == str(engine.QOMP_BASE)
+        and manifest['old_manifest_sha256'] == lib.OLD_MANIFEST
+        and manifest['provisioning'] == record['provisioning'] == 'offline qualified1aaa dependency clone'
+        and value['identity']['package'] == manifest['installed_package']+'/__init__.py'
+        and value['identity']['core'] == manifest['installed_core']
+        and Path(manifest['installed_core']).resolve().parent == Path(manifest['installed_package']).resolve()
+        and value['identity']['implementation']['core'] == lib.sha(manifest['installed_core'])
+        and str(value['allocation']['JobId']) == str(manifest['allocation']['JobId']) == str(record['job'])
+        and record['status'] == 'complete'
+        and manifest['original_configure_sha256'] == record['original_configure_sha256']
+        == lib.APPROVED_RECORD_SHA
+        and record['build_identity_sha256'] == args.build_identity_sha256
+        and value['build_identity_sha256'] == args.build_identity_sha256
+        and value['build_record_sha256'] == args.build_record_sha256
+        and value['collection_sha256'] == args.collection_sha256, 'genuine exact fb11 build required')
+    expected_configure = lib.configure(lib.approved_record(lib.OLD/'build-record.json'),
+                                       root/'source', root)
+    expected_build = list(map(str, [engine.QOMP_BASE/'bin/cmake', '--build',
+                                    root/'build', '--target', 'install', '-j', '2']))
+    engine.qomp_need(record['configure'] == expected_configure and record['build'] == expected_build,
+                     'actual build commands differ from approved replay')
+    for label, argv in (('configure', expected_configure), ('build-install', expected_build)):
+        saved = lib.read(root/(label+'-result.json'))
+        engine.qomp_need(saved == record['command_results'][label] and saved['argv'] == argv
+                         and type(saved['returncode']) is int and saved['returncode'] == 0
+                         and saved['interrupted'] is False, 'actual build command did not return0')
+    allocation_rows = subprocess.check_output([
+        '/opt/slurm/current/bin/sacct', '-n', '-P', '-j', str(record['job']),
+        '-o', 'JobIDRaw,State,ExitCode'], text=True)
+    rows = [row.split('|')[:3] for row in allocation_rows.splitlines() if row.strip()]
+    engine.qomp_need(all([str(record['job'])+suffix, 'COMPLETED', '0:0'] in rows
+                         for suffix in ('', '.batch', '.0')), 'build job/batch/step not COMPLETED0')
+    for argv, expected in ((('rev-parse', 'HEAD'), engine.QOMP_SCI),
+                           (('rev-parse', 'HEAD^{tree}'), engine.QOMP_TREE),
+                           (('status', '--porcelain', '--untracked-files=all'), '')):
+        engine.qomp_need(engine.qomp_git(root/'source', *argv) == expected, 'compiled source changed')
+    verify_runtime(root/'env', manifest)
+    checks = lib.installed_python_gate(root/'source', root/'build',
+                                       Path(manifest['installed_package']), manifest['installed_files'])
+    engine.qomp_need(checks == lib.read(root/'installed-python-checks.json'),
+                     'complete installed Python mapping changed')
+    lib.dependency_gate(root/'env', lib.old_seal())
+    collection = lib.read(root/'collection.json')
+    counts = engine.qomp_nodes_gate(collection)
+    command_result = lib.read(root/'collect-tests-result.json')
+    engine.qomp_need(collection['source'] == dict(commit=engine.QOMP_SCI, tree=engine.QOMP_TREE,
+                                                 path=str(engine.QOMP_SCI_SOURCE/'tests/pytests'))
+                     and collection['group_counts'] == counts['groups']
+                     and collection['focused_modules'] == counts['focused_modules']
+                     and collection['targets'] == engine.qomp_targets()
+                     and collection['test_source_sha256'] == {
+                         Path(path.split('::')[0]).name: lib.sha(path.split('::')[0])
+                         for path in engine.qomp_targets()}
+                     and collection['command_sha256'] == lib.sha(root/'collect-tests-command.json')
+                     and collection['command_result_sha256'] == lib.sha(root/'collect-tests-result.json'),
+                     'collected test source/command binding differs')
+    engine.qomp_need(type(command_result['returncode']) is int and command_result['returncode'] == 0
+                     and command_result['interrupted'] is False
+                     and command_result['argv'] == lib.read(root/'collect-tests-command.json'),
+                     'actual collection command failed/interrupted')
+    return manifest, collection, value['identity']
+
+
+def qomp_junit_gate(path, nodes):
+    """Cross-check actual testcase names against the reviewed collection union."""
+    from collections import Counter
+    engine = qomp_engine()
+    summary = junit_summary(path, expected=556)
+    cases = ET.parse(path).getroot().findall('.//testcase')
+    files = {node.split('::')[0] for node in nodes}
+    actual = []
+    for case in cases:
+        classname = case.get('classname', '').split('.')
+        matched = [file for file in files if Path(file).stem in classname]
+        engine.qomp_need(len(matched) == 1, 'unknown/ambiguous JUnit module')
+        file = matched[0]
+        classes = classname[classname.index(Path(file).stem)+1:]
+        actual.append('::'.join([file]+classes+[case.get('name', '')]))
+    engine.qomp_need(Counter(actual) == Counter(nodes), 'JUnit omitted/replaced/duplicated nodes')
+    return summary
+
+
+def qomp_qualify(runner, lib, result, args):
+    engine = qomp_engine()
+    manifest, collection, built_identity = qomp_build_gate(engine, lib, args)
+    prefix = engine.QOMP_BUILD/'env'
+    before = engine.qomp_inventory(prefix, lib)
+    before_build = {name: lib.sha(engine.QOMP_BUILD/name) for name in (
+        'result.json', 'COMPLETED', 'build-identity.json', 'build-record.json', 'collection.json',
+        'identity-before.stdout', 'identity-after.stdout', 'installed-python-checks.json')}
+    lib.write(runner.root/'build-before.json', before_build)
+    lib.write(runner.root/'prefix-before.json', before)
+    try:
+        identity = engine.qomp_identity(runner, prefix, args.scratch, lib, 'identity-before')
+        engine.qomp_need(identity == built_identity, 'new build runtime identity changed')
+        lib.write(runner.root/'imported-identity.json', identity)
+        executed = engine.qomp_pytest(runner, prefix, args.scratch, lib, collect=False)
+        engine.qomp_need(executed['nodes'] == collection['nodes'], 'actual collected union changed')
+        summary = qomp_junit_gate(runner.root/'junit.xml', collection['nodes'])
+        engine.qomp_need(engine.qomp_identity(runner, prefix, args.scratch, lib, 'identity-after')
+                         == identity, 'qualification runtime identity changed')
+        runner.check()
+        report = dict(
+            status='passed', acceptance=False, production_adoption=False, installed_suite='qomp-fb11',
+            build_commit=engine.QOMP_SCI, build_tree=engine.QOMP_TREE,
+            harness_commit=args.ops_commit, harness_tree=args.ops_tree,
+            harness_sha256=lib.sha(Path(__file__)), test_source_commit=engine.QOMP_SCI,
+            test_source_path=str(engine.QOMP_SCI_SOURCE/'tests/pytests'),
+            expected_test_count=556, test_summary=summary,
+            collection_sha256=args.collection_sha256,
+            build_identity_sha256=args.build_identity_sha256,
+            build_record_sha256=args.build_record_sha256,
+            imported_identity_sha256=lib.sha(runner.root/'imported-identity.json'),
+            junit_sha256=lib.sha(runner.root/'junit.xml'), imported_identity=identity,
+            source=result['source'], allocation=result['allocation'])
+        # Publication happens only after the integrity finally below succeeds.
+    finally:
+        after = engine.qomp_inventory(prefix, lib)
+        after_build = {name: lib.sha(engine.QOMP_BUILD/name) for name in before_build}
+        lib.write(runner.root/'prefix-after.json', after)
+        lib.write(runner.root/'build-after.json', after_build)
+        engine.qomp_need(after == before and after_build == before_build,
+                         'private compiled prefix/build evidence changed')
+        verify_runtime(prefix, manifest)
+    report['runtime_unchanged'] = True
+    report['test_source_sha256'] = {
+        Path(path.split('::')[0]).name: lib.sha(path.split('::')[0]) for path in engine.qomp_targets()}
+    lib.write(runner.root/'installed-validation.json', report)
+    result.update(status='PASSED_INSTALLED_INTERFACE_NOT_PRODUCTION_ACCEPTANCE',
+                  identity=identity, tests=summary,
+                  installed_validation_sha256=lib.sha(runner.root/'installed-validation.json'))
+
+
+def qomp_main():
+    import sys
+    engine = qomp_engine()
+    engine.qomp_need(sys.argv[2:3] == ['checks'], 'closed installed qomp operation required')
+    args = engine.qomp_parser('checks')
+    engine.qomp_perform(args, qomp_qualify)
+    return 0
+
+
 if __name__ == '__main__':
+    import sys
+    if sys.argv[1:2] == ['qomp']:
+        sys.exit(qomp_main())
     main()
