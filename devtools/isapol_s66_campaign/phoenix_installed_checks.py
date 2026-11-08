@@ -446,7 +446,7 @@ def qomp_main():
 # it a successful normal build. These parent-observed anchors are immutable.
 EXISTING_TEST_COMMIT = '311d17bf9177a972f3212c048e2f2177408b95d7'
 EXISTING_TEST_TREE = '57ff961824c0da6d76cf48e4da63fc83979f4f91'
-EXISTING_BASE_OPS = 'cef3c6cdecdefb7a6a356d2019a6d07d0a121cd2'
+EXISTING_BASE_OPS = 'fba5f2f7cd39b2c8d3185362717c6b197efeaf64'
 EXISTING_TEST_FILE = 'tests/pytests/test_isapol_isa_grid_accounting.py'
 EXISTING_TEST_SHA = '75096d590cf161c76fd6e0f39db25270208fd9dd7d1be44b1490f1290a07751c'
 EXISTING_PAIR = dict(
@@ -486,11 +486,11 @@ EXISTING_ANCHORS = dict([
 
 def existing_paths(engine):
     root = engine.QOMP_ROOT
-    return dict(ops=root/'gits/psi4.ccasp-native-s66-qomp-ops004',
+    return dict(ops=root/'gits/psi4.ccasp-native-s66-qomp-ops005',
                 tests=root/'gits/psi4.ccasp-native-s66-qomp-tests003',
                 build=root/'runs/ccasp-native-s66-qomp-fb11-build002',
-                collect=root/'runs/ccasp-native-s66-qomp-fb11-collection004',
-                checks=root/'runs/ccasp-native-s66-qomp-fb11-installed004')
+                collect=root/'runs/ccasp-native-s66-qomp-fb11-collection005',
+                checks=root/'runs/ccasp-native-s66-qomp-fb11-installed005')
 
 
 def existing_need(condition, message):
@@ -550,9 +550,9 @@ def existing_parametrize_lint(text):
 
 def existing_source_gate(engine, args):
     paths = existing_paths(engine)
-    existing_need(engine.SOURCE == paths['ops'], 'closed ops004 source required')
+    existing_need(engine.SOURCE == paths['ops'], 'closed ops005 source required')
     existing_need(engine.qomp_git(paths['ops'], 'merge-base', EXISTING_BASE_OPS, args.ops_commit)
-                  == EXISTING_BASE_OPS, 'ops must descend from reviewed cef3')
+                  == EXISTING_BASE_OPS, 'ops must descend from reviewed fba5')
     changed = set(engine.qomp_git(paths['ops'], 'diff', '--name-only',
                                   EXISTING_BASE_OPS, args.ops_commit).splitlines())
     existing_need(changed <= engine.QOMP_OPS_FILES, 'ops changed paths outside allowlist')
@@ -617,12 +617,9 @@ EXISTING_BASE_METADATA = (
 )
 
 
-def existing_base_metadata_proof(engine, root):
-    """Fixed historical raw metadata pin, not historical target contents."""
+def existing_protected_metadata(engine):
+    """One fixed, bounded, parent-pinned JSON; never walk an environment."""
     import stat
-    base = engine.QOMP_BASE
-    existing_need(Path(root) == base and base.is_absolute(),
-                  'BASE metadata exception cannot apply to another root')
     path = existing_paths(engine)['build']/'protected-before.json'
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
         info = os.fstat(stream.fileno())
@@ -632,7 +629,15 @@ def existing_base_metadata_proof(engine, root):
     existing_need(len(raw) == EXISTING_PROTECTED_BYTES and hashlib.sha256(raw).hexdigest()
                   == EXISTING_ANCHORS['protected-before.json'],
                   'parent-pinned original protected snapshot differs')
-    sealed = json.loads(raw)['base']
+    return json.loads(raw)
+
+
+def existing_base_metadata_proof(engine, root):
+    """Fixed historical raw metadata pin, not historical target contents."""
+    base = engine.QOMP_BASE
+    existing_need(Path(root) == base and base.is_absolute(),
+                  'BASE metadata exception cannot apply to another root')
+    sealed = existing_protected_metadata(engine)['base']
     existing_need(type(sealed) is dict, 'invalid original BASE inventory')
     return base, sealed
 
@@ -710,7 +715,15 @@ def existing_base_metadata_preflight(engine):
         target=original['target'], resolved=str(target), sha256=EXISTING_ADDR2LINE_SHA))
 
 
-def existing_snapshot(root, external, *, base_engine=None):
+def existing_file_stamp(path):
+    """Ephemeral cache validation only: never persisted/cross-node compared."""
+    def fields(info):
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
+    return fields(path.lstat()), fields(path.stat())
+
+
+def existing_snapshot(root, external, *, base_engine=None, file_stats=None):
     """Full current namespace plus resolved link bindings, not a sandbox.
 
     External directory links are refused (the offline clone materializes BASE
@@ -725,6 +738,15 @@ def existing_snapshot(root, external, *, base_engine=None):
         known = existing_base_metadata_rows(base, sealed)
     root = root.resolve(strict=True)
     rows = {}
+    def hashed(path, name):
+        if file_stats is None:
+            return digest(path)
+        before = existing_file_stamp(path)
+        value = digest(path)
+        after = existing_file_stamp(path)
+        existing_need(before == after, 'file changed while hashing')
+        file_stats[name] = after
+        return value
     for path in sorted(root.rglob('*')):
         rel = path.relative_to(root).as_posix()
         if known is not None and rel in known:
@@ -740,9 +762,9 @@ def existing_snapshot(root, external, *, base_engine=None):
             existing_need(target.is_file() or target.is_dir(), 'nonregular link target')
             rows[rel] = dict(kind='link', target=os.readlink(path), resolved=str(target),
                              target_kind='file' if target.is_file() else 'directory',
-                             sha256=digest(target) if target.is_file() else None)
+                             sha256=hashed(path, rel) if target.is_file() else None)
         elif path.is_file():
-            rows[rel] = dict(kind='file', sha256=digest(path))
+            rows[rel] = dict(kind='file', sha256=hashed(path, rel))
         elif path.is_dir():
             rows[rel] = dict(kind='directory')
         else:
@@ -759,75 +781,276 @@ def existing_snapshot(root, external, *, base_engine=None):
     return rows
 
 
-def existing_cmake_origins(build, prefix):
-    """Read literal FILE/PROGRAM CMake install projections, never execute CMake.
+EXISTING_CMAKE_SOURCES = {
+    # Each blob is IDENTICAL in qualified1aaa and compiledfb11 (Git/policy
+    # source proof, not an observed installed-file allowlist).
+    'CMakeLists.txt': 'c58e1b1af558fe9661368a6c231cde97c0d299982f38a74483197b590ef1f98c',
+    'psi4/CMakeLists.txt': 'ad2867cd5309fec6d14a5fcefc4e5f5ef2d63ec4073722e26b0bb36295651d21',
+    'psi4/src/CMakeLists.txt': 'bac2116acd1e793d13b6bed9ac405c9882e0fa86404b6dba7d83149597daa91b',
+    'psi4/psi4Config.cmake.in': '1241668144aecf82ea879446e81e3850b0a22d64483c826c2fdb0770b5b32068',
+    'psi4/psi4PluginCache.cmake.in': 'cb8b12b7bd64c4d4d113ea9762a4ba8c2fc536c39b8e12b30e9c1b4f00dc4e23',
+    'psi4/versioner.py': '3e9a7b4f52de2c9dd57bcd6c473303d4cb40de482b687266a0f1483c13ebd635',
+    'cmake/custom_cxxstandard.cmake': '93fd752c21999a35b743848b724db6e5057f895a477c20216082ece810b95940',
+    'cmake/custom_static_library.cmake': 'befcd2cc45577ce1ac16f4e29b3b30ad59f6f9cec83fff6b5d9a2bbd54772914',
+    'cmake/psi4OptionsTools.cmake': 'edbc8c5a779e59a47c8e42068598b4840cc400ca82de896b0c34acceb10d33b7',
+    'cmake/xhost.cmake': '577a8b14a395a8180ba12213e207dfadaa449ad0332291160c1396f886a34887',
+}
+EXISTING_CMAKE_PSI4 = (
+    'custom_cxxstandard.cmake', 'custom_static_library.cmake', 'psi4Config.cmake',
+    'psi4ConfigVersion.cmake', 'psi4OptionsTools.cmake', 'psi4PluginCache.cmake',
+    'psi4Targets-release.cmake', 'psi4Targets.cmake', 'xhost.cmake')
+EXISTING_CMAKE_LAPACK = (
+    'FindMathOpenMP.cmake', 'FindTargetOpenMP.cmake',
+    'TargetLAPACKConfig.cmake', 'TargetLAPACKTargets.cmake')
+EXISTING_CMAKE_RELOCATIONS = {
+    'share/cmake/psi4/psi4Config.cmake': {'/env/bin/python': 1},
+    'share/cmake/psi4/psi4PluginCache.cmake': {
+        '/build/stage': 1,
+        '/env/lib/python3.13/site-packages/pybind11/share/cmake/pybind11': 1,
+        '/env/bin/python': 2},
+}
 
-    Only .cmake config files need this fallback. All other changed files have
-    explicit source projections below. Refuse variable/unattributable origins.
-    """
-    origins = {}
-    inner = build/'build/psi4-core-prefix/src/psi4-core-build'
-    fixed = {
-        'psi4PluginCache.cmake': inner/'psi4PluginCache.cmake',
+
+def existing_relocated_export(name, raw, old, new):
+    """Closed render from qualified bytes; NOT arbitrary path substitution."""
+    existing_need(name in EXISTING_CMAKE_RELOCATIONS, 'unknown relocated CMake filename')
+    old, new = str(old).encode(), str(new).encode()
+    fields = EXISTING_CMAKE_RELOCATIONS[name]
+    existing_need(raw.count(old) == sum(fields.values()), 'old export root occurrence count differs')
+    for suffix, count in fields.items():
+        token = old+suffix.encode()
+        existing_need(raw.count(token) == count, 'old export approved root field differs')
+        raw = raw.replace(token, new+suffix.encode())
+    existing_need(old not in raw, 'unreplaced old export root')
+    return raw
+
+
+def existing_cmake_context(engine, lib):
+    """Only fixed small metadata/source files; no CMake or environment walk."""
+    root = existing_paths(engine)['build']
+    inner = root/'build/psi4-core-prefix/src/psi4-core-build'
+    protected = existing_protected_metadata(engine)
+    for name, expected in EXISTING_CMAKE_SOURCES.items():
+        path = root/'source'/name
+        existing_need(path.is_file() and not path.is_symlink()
+                      and path.resolve().is_relative_to(root/'source')
+                      and digest(path) == expected, 'frozen CMake source/template differs: '+name)
+    for name in (
+            'configure-command.json', 'configure-result.json',
+            'build-install-command.json', 'build-install-result.json',
+            'build/CMakeCache.txt', 'build/install_manifest.txt',
+            'build/psi4-core-prefix/src/psi4-core-build/CMakeCache.txt',
+            'build/psi4-core-prefix/src/psi4-core-build/install_manifest.txt'):
+        path = root/name
+        existing_need(path.is_file() and not path.is_symlink()
+                      and digest(path) == EXISTING_ANCHORS[name], 'CMake context anchor differs: '+name)
+    record = lib.approved_record(lib.OLD/'build-record.json')
+    for label, expected in (
+            ('configure', lib.configure(record, root/'source', root)),
+            ('build-install', list(map(str, [engine.QOMP_BASE/'bin/cmake', '--build',
+                                            root/'build', '--target', 'install', '-j', '2'])))):
+        result = lib.read(root/(label+'-result.json'))
+        existing_need(result['argv'] == lib.read(root/(label+'-command.json')) == expected
+                      and type(result['returncode']) is int and result['returncode'] == 0
+                      and result['interrupted'] is False, 'approved CMake argv/returncode differs')
+    for cache, source, prefix in (
+            (root/'build/CMakeCache.txt', root/'source', root/'env'),
+            (inner/'CMakeCache.txt', root/'source/psi4', root/'build/stage')):
+        values = {}
+        for line in cache.read_text().splitlines():
+            if line.startswith(('#', '//')) or ':' not in line or '=' not in line:
+                continue
+            key, value = line.split('=', 1)
+            key = key.split(':', 1)[0]
+            existing_need(key not in values, 'duplicate CMake cache key')
+            values[key] = value
+        expected = dict(CMAKE_HOME_DIRECTORY=str(source), CMAKE_INSTALL_PREFIX=str(prefix),
+                        CMAKE_BUILD_TYPE='Release', CMAKE_GENERATOR='Ninja',
+                        psi4_INSTALL_CMAKEDIR='share/cmake/psi4',
+                        PYMOD_INSTALL_LIBDIR='/python3.13/site-packages')
+        existing_need(all(values.get(k) == v for k, v in expected.items()),
+                      'CMake source/prefix/generator configuration differs')
+    cmake = engine.QOMP_BASE/'bin/cmake'
+    row = protected['base'].get('bin/cmake', {})
+    existing_need(row.get('kind') == 'file' and cmake.is_file() and not cmake.is_symlink()
+                  and digest(cmake) == row['sha256'], 'original CMake generator bytes changed')
+    outer = existing_manifest(root/'build/install_manifest.txt', root/'env', 6348, 6344)
+    stage = existing_manifest(inner/'install_manifest.txt', root/'build/stage', 4985, 4985)
+    names = {'share/cmake/psi4/'+n for n in EXISTING_CMAKE_PSI4} | {
+        'share/cmake/TargetLAPACK/'+n for n in EXISTING_CMAKE_LAPACK}
+    existing_need({n for n in outer if n.endswith('.cmake')} == names
+                  and sum(line.endswith('.cmake') for line in
+                          (root/'build/install_manifest.txt').read_text().splitlines()) == 17
+                  and {n for n in stage if n.endswith('.cmake')}
+                  == {'share/cmake/psi4/'+n for n in EXISTING_CMAKE_PSI4},
+                  'exact manifest CMake export family differs')
+    return root, protected, names
+
+
+def existing_cmake_exports(engine, lib):
+    """Derive all13 from sealed OLD bytes; only two permit exact relocation."""
+    import stat
+    root, protected, names = existing_cmake_context(engine, lib)
+    inner = root/'build/psi4-core-prefix/src/psi4-core-build'
+    configured = {
         'psi4Config.cmake': inner/'share/cmake/psi4/psi4Config.cmake',
         'psi4ConfigVersion.cmake': inner/'share/cmake/psi4/psi4ConfigVersion.cmake',
-    }
-    fixed.update({name: build/'source/cmake'/name for name in (
-        'psi4OptionsTools.cmake', 'custom_static_library.cmake', 'custom_cxxstandard.cmake',
-        'xhost.cmake')})
-    for script in sorted((build/'build').rglob('cmake_install.cmake')):
-        if script.is_symlink() or not script.resolve().is_relative_to(build/'build'):
-            raise ValueError('escaping install script')
-        for body in re.findall(r'file\(INSTALL\s+(.*?)\)', script.read_text(), re.S):
-            dest = re.match(r'DESTINATION\s+"([^"]+)"\s+TYPE\s+(?:FILE|PROGRAM)\s+', body)
-            if not dest or 'FILES' not in body:
+        'psi4PluginCache.cmake': inner/'psi4PluginCache.cmake'}
+    rows = {}
+    for name in sorted(names):
+        old = lib.OLD/'env'/name
+        original = protected['old'].get(name, {})
+        existing_need(original.get('kind') == 'file' and stat.S_ISREG(old.lstat().st_mode)
+                      and old.resolve().is_relative_to(lib.OLD/'env')
+                      and old.stat().st_size <= 65536, 'unsafe original CMake export: '+name)
+        expected = old.read_bytes()
+        existing_need(hashlib.sha256(expected).hexdigest() == original['sha256'],
+                      'sealed original CMake export differs: '+name)
+        if name in EXISTING_CMAKE_RELOCATIONS:
+            expected = existing_relocated_export(name, expected, lib.OLD, root)
+        expected_sha = hashlib.sha256(expected).hexdigest()
+        matches, origins = True, [str(old)]
+        stage = root/'build/stage'/name
+        candidates = [(stage, name.startswith('share/cmake/psi4/'))]
+        if name.startswith('share/cmake/psi4/') and Path(name).name in configured:
+            path = configured[Path(name).name]
+            candidates.append((path, Path(name).name == 'psi4PluginCache.cmake'))
+        for path, required in candidates:
+            if not os.path.lexists(path):
+                matches = matches and not required
                 continue
-            directory = dest[1].replace('${CMAKE_INSTALL_PREFIX}', str(prefix))
-            if '$' in directory or Path(directory) != prefix/'share/cmake/psi4':
-                continue  # inner stage scripts use the independent stage prefix
-            rest = body.split('FILES', 1)[1]
-            renamed = re.search(r'\bRENAME\s+"([^"]+)"', body)
-            sources = re.findall(r'"([^"]+)"', rest)
-            if renamed:
-                sources = sources[:1]
-            for source in sources:
-                source = Path(source)
-                name = renamed[1] if renamed else source.name
-                destination = Path(directory)/name
-                if destination.suffix != '.cmake':
-                    continue
-                existing_need(source.is_absolute() and '$' not in str(source)
-                              and '..' not in source.parts and source.is_file()
-                              and source.resolve().is_relative_to(build),
-                              'unattributed CMake install origin')
-                rel = str(destination.relative_to(prefix))
-                # A current generated install script alone is not an origin
-                # authority for arbitrary additions. These are the only nine
-                # Psi4 CMake exports in the frozen source's install recipe.
-                permitted = (destination.parent == prefix/'share/cmake/psi4'
-                             and ((name in fixed and source == fixed[name])
-                                  or (name in ('psi4Targets.cmake', 'psi4Targets-release.cmake')
-                                      and source.is_relative_to(inner/'src/CMakeFiles/Export')
-                                      and source.name == name)))
-                existing_need(permitted, 'unreviewed CMake install projection')
-                origins.setdefault(rel, set()).add(source)
-    return origins
+            existing_need(stat.S_ISREG(path.lstat().st_mode) and path.resolve().is_relative_to(root/'build'),
+                          'unsafe CMake stage/configured output: '+name)
+            existing_need(path.stat().st_size <= 65536, 'oversized CMake stage/configured output')
+            matches = matches and path.read_bytes() == expected
+            origins.append(str(path))
+        rows[name] = dict(sha256=expected_sha, producer_matches=matches, origins=origins,
+                          projection='qualified-root-relocation' if name in EXISTING_CMAKE_RELOCATIONS
+                          else 'original-sealed-export')
+    return rows
 
 
-def existing_attribution(prefix, build, original, installed, python_checks, cmake):
+def existing_misses(names):
+    """Bound diagnostic text, retain the TOTAL; no partial success result."""
+    if names:
+        raise ValueError('no source/configured output attribution: '+json.dumps(dict(
+            total=len(names), paths=[name[:128] for name in names[:5]],
+            omitted=max(0, len(names)-5))))
+
+
+def existing_cmake_preflight(engine, lib):
+    """All13 exports + seven fixed conditional data files; no environment walk."""
+    import stat
+    root = existing_paths(engine)['build']
+    prefix = root/'env'
+    exports = existing_cmake_exports(engine, lib)
+    # Exact family membership, not a directory allowlist. Other cloned CMake
+    # packages are outside this preflight and still undergo the full inventory.
+    for directory in ('share/cmake/psi4', 'share/cmake/TargetLAPACK'):
+        expected = {Path(n).name for n in exports if str(Path(n).parent) == directory}
+        actual = set()
+        with os.scandir(prefix/directory) as entries:
+            for entry in entries:
+                existing_need(entry.name in expected and entry.is_file(follow_symlinks=False),
+                              'unknown/unsafe export family member: '+entry.name)
+                actual.add(entry.name)
+        existing_need(actual <= expected, 'unknown export family namespace')
+    misses, checks = [], {}
+    for name, proof in exports.items():
+        path = prefix/name
+        if not os.path.lexists(path):
+            misses.append(name)
+            continue
+        existing_need(stat.S_ISREG(path.lstat().st_mode) and path.resolve().is_relative_to(prefix)
+                      and path.stat().st_size <= 65536, 'unsafe installed CMake export: '+name)
+        if digest(path) != proof['sha256'] or proof['producer_matches'] is not True:
+            misses.append(name)
+        checks[name] = proof
+    protected = existing_protected_metadata(engine)
+    installed = existing_manifest(root/'build/install_manifest.txt', prefix, 6348, 6344)
+    conditional = (
+        'share/psi4/quadratures/1_x/R_avail.bin', 'share/psi4/quadratures/1_x/error.bin',
+        'share/psi4/fsapt/fsapt.py',
+        *('lib/python3.13/site-packages/psi4/tests/'+name for name in (
+            'adcc_reference_data.json', 'oei_reference_data.json', 'f12_libint1.json',
+            'tdscf_reference_data.json')))
+    for name in conditional:
+        if name not in installed:
+            continue
+        old = protected['old'].get(name, {})
+        path = prefix/name
+        existing_need(old.get('kind') == 'file' and stat.S_ISREG(path.lstat().st_mode)
+                      and path.resolve().is_relative_to(prefix), 'unsafe conditional data file: '+name)
+        # Unchanged qualified clone bytes need NO new endian/fsapt/test-data
+        # projection. If changed, stop for an exact source-based correction,
+        # never infer endian from observed hashes or approve an installed hash.
+        if digest(path) != old['sha256']:
+            misses.append(name)
+        checks[name] = dict(projection='original-sealed-data', sha256=old['sha256'])
+    existing_misses(misses)
+    return dict(exports=checks, export_count=len(exports),
+                proof='sealed OLD + two closed source-bound relocations; not full environment validation')
+
+
+def existing_attribution(prefix, build, original, installed, python_checks, cmake, *,
+                         snapshot=None, file_stats=None):
     """Attribute EVERY present file, not just the original dependency subset."""
+    import stat
     source, stage = build/'source', build/'build/stage'
     package = prefix/'lib/python3.13/site-packages/psi4'
-    rows = {}
-    for path in sorted(prefix.rglob('*')):
-        if not path.is_file():
+    rows, misses = {}, []
+    # The full gate supplies its just-hashed BUILD snapshot. Reuse only that
+    # fixed prefix slice, and require unchanged current namespace/type/link
+    # bindings. Whole-operation postseals still rehash everything; this is not
+    # an atomic/transient-write sandbox. Standalone pure callers hash locally.
+    if snapshot is None:
+        stamps = {}
+        cached = existing_snapshot(prefix, {}, file_stats=stamps)
+    else:
+        existing_need(file_stats is not None, 'snapshot reuse requires ephemeral file stamps')
+        start = str(prefix.relative_to(build))+'/'
+        cached = {name.removeprefix(start): row for name, row in snapshot.items()
+                  if name.startswith(start)}
+        stamps = {name.removeprefix(start): stamp for name, stamp in file_stats.items()
+                  if name.startswith(start)}
+    paths = sorted(prefix.rglob('*'))
+    existing_need(set(cached) == {str(p.relative_to(prefix)) for p in paths},
+                  'prefix namespace changed after hashing')
+    for path in paths:
+        name = str(path.relative_to(prefix))
+        saved = cached[name]
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            existing_need(saved['kind'] == 'link' and os.readlink(path) == saved['target']
+                          and str(path.resolve(strict=True)) == saved['resolved'],
+                          'prefix link changed after hashing')
+            mode = path.stat().st_mode
+            current_kind = 'file' if stat.S_ISREG(mode) else 'directory' if stat.S_ISDIR(mode) else 'invalid'
+            existing_need(saved['target_kind'] == current_kind and current_kind != 'invalid',
+                          'prefix link target type changed after hashing')
+        else:
+            current_kind = 'file' if stat.S_ISREG(mode) else 'directory' if stat.S_ISDIR(mode) else 'invalid'
+            existing_need(saved['kind'] == current_kind and current_kind != 'invalid',
+                          'prefix type changed after hashing')
+        if current_kind != 'file':
             continue
-        name, actual = str(path.relative_to(prefix)), digest(path)
+        actual = saved.get('sha256')
+        existing_need(name in stamps and existing_file_stamp(path) == stamps[name],
+                      'prefix file changed since snapshot hashing')
+        existing_need(type(actual) is str and re.fullmatch('[0-9a-f]{64}', actual),
+                      'unhashed prefix file')
         if path.is_relative_to(package) and path.suffix == '.py':
             rel = str(path.relative_to(package))
             existing_need(rel in python_checks and actual == python_checks[rel]['sha256'],
                           'unmapped installed Python')
             rows[name] = dict(kind='compiled-python', sha256=actual)
+            continue
+        if name in cmake:
+            existing_need(name in installed, 'unexplained prefix CMake export')
+            proof = cmake[name]
+            if actual != proof['sha256'] or proof['producer_matches'] is not True:
+                misses.append(name)
+            rows[name] = dict(kind=proof['projection'], sha256=actual, origins=proof['origins'])
             continue
         if original['runtime_files'].get(name) == actual:
             rows[name] = dict(kind='original-dependency-or-unchanged-data', sha256=actual)
@@ -849,14 +1072,20 @@ def existing_attribution(prefix, build, original, installed, python_checks, cmak
                 break
         if name == 'bin/psi4':
             candidates.append(build/'build/psi4-core-prefix/src/psi4-core-build/psi4')
-        candidates += list(cmake.get(name, ()))
+        for candidate in candidates:
+            if os.path.lexists(candidate):
+                existing_need(candidate.is_file() and candidate.resolve().is_relative_to(build),
+                              'unsafe attribution source/type: '+name)
         matches = [p for p in candidates if p.is_file()
                    and p.resolve().is_relative_to(build) and digest(p) == actual]
-        existing_need(bool(matches), 'no source/configured output attribution: '+name)
+        if not matches:
+            misses.append(name)
         staged = stage/name
-        if staged.exists():
-            existing_need(staged.is_file() and staged.resolve().is_relative_to(stage)
-                          and digest(staged) == actual, 'stage/prefix bytes differ: '+name)
+        if os.path.lexists(staged):
+            existing_need(staged.is_file() and staged.resolve().is_relative_to(stage),
+                          'unsafe stage/prefix file: '+name)
+            if digest(staged) != actual and name not in misses:
+                misses.append(name)
         rows[name] = dict(kind='source/configured-install', sha256=actual,
                           origins=sorted(map(str, matches)))
     # Directory additions also need attribution; parents of real attributed
@@ -864,10 +1093,11 @@ def existing_attribution(prefix, build, original, installed, python_checks, cmak
     allowed_dirs = set(original['runtime_directories'])
     for name in rows:
         allowed_dirs.update(str(p) for p in Path(name).parents)
-    for path in prefix.rglob('*'):
+    for path in paths:
         if path.is_dir():
             existing_need(str(path.relative_to(prefix)) in allowed_dirs,
                           'unexplained prefix directory addition')
+    existing_misses(misses)
     return rows
 
 
@@ -948,7 +1178,8 @@ def existing_current(engine, lib):
     external = dict(original['external_runtime_files'])
     external.update({str(engine.QOMP_BASE/name): row['sha256']
                      for name, row in protected['base'].items() if row['kind'] == 'file'})
-    snapshot = existing_snapshot(root, external)
+    file_stats = {}
+    snapshot = existing_snapshot(root, external, file_stats=file_stats)
     bindings = dict(old=existing_snapshot(lib.OLD/'env', external),
                     base=existing_snapshot(engine.QOMP_BASE, external, base_engine=engine))
     checks = lib.installed_python_gate(root/'source', root/'build',
@@ -958,7 +1189,7 @@ def existing_current(engine, lib):
                   'complete compiled-fb11 installed Python mapping differs')
     lib.dependency_gate(prefix, original)
     attribution = existing_attribution(prefix, root, original, installed, checks,
-                                        existing_cmake_origins(root, prefix))
+        existing_cmake_exports(engine, lib), snapshot=snapshot, file_stats=file_stats)
     return dict(snapshot=snapshot, protected=protected, protected_bindings=bindings, attribution=attribution,
                 historical_identity=identity, historical_accounting=accounting,
                 proof='Current attributed inventory, NOT a reconstructed historical full seal.')

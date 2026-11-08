@@ -936,31 +936,20 @@ class ExistingInstallPureTests(unittest.TestCase):
                 C.existing_attribution(build/'env', build, original, set(), checked, {})
 
     def test_literal_cmake_origin_not_arbitrary_installed_hash_or_escape(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            build = Path(tmp)
-            inner = build/'build/psi4-core-prefix/src/psi4-core-build'
-            prefix = build/'env'
-            inner.mkdir(parents=True)
-            configured = inner/'share/cmake/psi4/psi4Config.cmake'
-            configured.parent.mkdir(parents=True)
-            configured.write_text('# generated\n')
-            script = inner/'cmake_install.cmake'
-            def install(origin):
-                script.write_text('file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/share/cmake/psi4" '
-                                  'TYPE FILE FILES "'+str(origin)+'")\n')
-            install(configured)
-            mapping = C.existing_cmake_origins(build, prefix)
-            destination = prefix/'share/cmake/psi4/psi4Config.cmake'
-            destination.parent.mkdir(parents=True)
-            destination.write_bytes(configured.read_bytes())
-            original = dict(runtime_files={}, runtime_directories=['.'])
-            attributed = C.existing_attribution(prefix, build, original,
-                {str(destination.relative_to(prefix))}, {}, mapping)
-            self.assertEqual(len(attributed), 1)
-            for origin in (build.parent/'escape.cmake', inner/'${UNKNOWN}.cmake'):
-                install(origin)
-                with self.assertRaisesRegex(ValueError, 'CMake install origin'):
-                    C.existing_cmake_origins(build, prefix)
+        # Install scripts are no longer an origin authority at all. Only the
+        # two source-bound sealed-export relocations are expressible.
+        old, new = Path('/approved/old'), Path('/approved/new')
+        name = 'share/cmake/psi4/psi4Config.cmake'
+        raw = b'status Python=/approved/old/env/bin/python\n'
+        self.assertEqual(C.existing_relocated_export(name, raw, old, new),
+                         b'status Python=/approved/new/env/bin/python\n')
+        for file, data, root in (
+                ('share/cmake/psi4/arbitrary.cmake', raw, old),
+                (name, raw+b'# /approved/old/unreviewed\n', old),
+                (name, b'/approved/old/somewhere-else\n', old),
+                (name, raw, Path('/wrong-old-prefix'))):
+            with self.assertRaises(ValueError):
+                C.existing_relocated_export(file, data, root, new)
 
     def test_accounting_requires_actual_three_rows_with_only_known_extern(self):
         rows = '15320675|FAILED|1:0\n15320675.batch|FAILED|1:0\n15320675.0|FAILED|1:0\n'
@@ -978,7 +967,7 @@ class ExistingInstallPureTests(unittest.TestCase):
     def test_historical_literal_anchors_closed_paths_and_failed_receipts(self):
         paths = C.existing_paths(B)
         self.assertEqual(paths['build'], B.QOMP_BUILD)
-        self.assertEqual(paths['ops'].name, 'psi4.ccasp-native-s66-qomp-ops004')
+        self.assertEqual(paths['ops'].name, 'psi4.ccasp-native-s66-qomp-ops005')
         self.assertEqual(paths['tests'].name, 'psi4.ccasp-native-s66-qomp-tests003')
         self.assertEqual(C.EXISTING_ANCHORS['result.json'],
                          'a67fe225027d06d2cb805b3c606b2f5f9a753670551c772ce5dd111eea5a0400')
@@ -1316,6 +1305,7 @@ class BaseLink152Tests(unittest.TestCase):
                               'protected-after.json': f.baseline_sha})
             with patch.object(C, 'existing_paths', return_value=dict(build=f.build)), \
                  patch.object(C, 'existing_historical', return_value=({}, set(), [])), \
+                 patch.object(C, 'existing_cmake_exports', return_value={}), \
                  patch.dict(C.EXISTING_ANCHORS, anchors), \
                  patch.object(C, 'EXISTING_PROTECTED_BYTES', f.baseline_bytes, create=True):
                 before = C.existing_current(f.engine, f.lib)
@@ -1347,9 +1337,9 @@ class BaseLink152Tests(unittest.TestCase):
              'share/cmake/cmake/tests/cxx23_static_call_operator.cpp', 'share/cmake/cmake'),
             (self.CMAKE+'hip', self.CMAKE_RAW,
              'share/cmake/cmake/tests/cxx23_static_call_operator.cpp', 'share/cmake/cmake')))
-        self.assertEqual(C.EXISTING_BASE_OPS, 'cef3c6cdecdefb7a6a356d2019a6d07d0a121cd2')
-        self.assertEqual(C.existing_paths(B)['collect'].name, 'ccasp-native-s66-qomp-fb11-collection004')
-        self.assertEqual(C.existing_paths(B)['checks'].name, 'ccasp-native-s66-qomp-fb11-installed004')
+        self.assertEqual(C.EXISTING_BASE_OPS, 'fba5f2f7cd39b2c8d3185362717c6b197efeaf64')
+        self.assertEqual(C.existing_paths(B)['collect'].name, 'ccasp-native-s66-qomp-fb11-collection005')
+        self.assertEqual(C.existing_paths(B)['checks'].name, 'ccasp-native-s66-qomp-fb11-installed005')
         with self.assertRaisesRegex(ValueError, 'unreviewed'):
             C.existing_base_metadata_case(Path('/not-accessed'), {}, ('unknown', 'x', 'x', 'x'))
 
@@ -1531,6 +1521,307 @@ class BaseLink152Tests(unittest.TestCase):
                         before.symlink_to('actual-proof')
                     with self.assertRaises((ValueError, OSError)):
                         C.existing_base_metadata_preflight(f.engine)
+
+
+class Cmake153Tests(unittest.TestCase):
+    """Actual configure/template recipe, ephemeral sealed seeds; no CMake exec."""
+    def fixture(self, root):
+        f = NS(build=root/'build', old=root/'old', base=root/'base')
+        f.engine = NS(QOMP_BASE=f.base)
+        f.inner = f.build/'build/psi4-core-prefix/src/psi4-core-build'
+        def put(path, raw):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw if isinstance(raw, bytes) else raw.encode())
+        for name, expected in C.EXISTING_CMAKE_SOURCES.items():
+            raw = (ROOT/name).read_bytes()
+            self.assertEqual(__import__('hashlib').sha256(raw).hexdigest(), expected)
+            put(f.build/'source'/name, raw)
+        # Source templates, with the actual approved field values. The opaque
+        # PACKAGE_INIT expansion is an inert fixture marker: the production
+        # algorithm preserves sealed OLD bytes, it does not reimplement CMake.
+        values = dict(PACKAGE_INIT='# unchanged qualified PACKAGE_INIT fixture\n',
+            CMAKE_INSTALL_BINDIR='bin', CMAKE_INSTALL_INCLUDEDIR='include',
+            CMAKE_INSTALL_LIBDIR='lib', CMAKE_INSTALL_DATADIR='share',
+            PYMOD_INSTALL_LIBDIR='/python3.13/site-packages', PYTHON_MODULE_PREFIX='',
+            PYTHON_MODULE_EXTENSION='.cpython-313-x86_64-linux-gnu.so',
+            CMAKE_CXX_STANDARD='20', ENABLE_OPENMP='ON', Python_EXECUTABLE=str(f.old/'env/bin/python'),
+            CMAKE_C_COMPILER=str(f.base/'bin/x86_64-conda-linux-gnu-cc'),
+            CMAKE_CXX_COMPILER=str(f.base/'bin/x86_64-conda-linux-gnu-c++'),
+            CMAKE_C_FLAGS='-march=x86-64-v3', CMAKE_CXX_FLAGS='-march=x86-64-v3',
+            CMAKE_Fortran_COMPILER='', CMAKE_Fortran_FLAGS='', CMAKE_INSTALL_MESSAGE='LAZY',
+            CMAKE_INSTALL_PREFIX=str(f.old/'build/stage'),
+            pybind11_DIR=str(f.old/'env/lib/python3.13/site-packages/pybind11/share/cmake/pybind11'),
+            Python_VERSION_MAJOR='3', Python_VERSION_MINOR='13')
+        values.update({name: 'OFF' for name in (
+            'ENABLE_ambit', 'ENABLE_CheMPS2', 'ENABLE_dkh', 'ENABLE_ecpint', 'ENABLE_PCMSolver',
+            'ENABLE_simint', 'ENABLE_Einsums', 'ENABLE_IntegratorXX', 'ENABLE_gauxc',
+            'ENABLE_OpenOrbitalOptimizer')})
+        import re
+        f.names = {'share/cmake/psi4/'+n for n in C.EXISTING_CMAKE_PSI4} | {
+            'share/cmake/TargetLAPACK/'+n for n in C.EXISTING_CMAKE_LAPACK}
+        f.expected = {}
+        for name in sorted(f.names):
+            leaf = Path(name).name
+            if name in C.EXISTING_CMAKE_RELOCATIONS:
+                template = (ROOT/'psi4'/(leaf+'.in')).read_text()
+                raw = re.sub(r'@(\w+)@', lambda m: values[m[1]], template).encode()
+            elif 'cmake/'+leaf in C.EXISTING_CMAKE_SOURCES:
+                raw = (ROOT/'cmake'/leaf).read_bytes()
+            else:
+                raw = ('# sealed qualified export '+leaf+'\n').encode()
+            put(f.old/'env'/name, raw)
+            # Independent fixture construction, NOT calling the renderer.
+            expected = raw.replace(str(f.old).encode(), str(f.build).encode())
+            f.expected[name] = expected
+            put(f.build/'env'/name, expected)
+            if name.startswith('share/cmake/psi4/'):
+                put(f.build/'build/stage'/name, expected)
+        for leaf in ('psi4Config.cmake', 'psi4ConfigVersion.cmake', 'psi4PluginCache.cmake'):
+            path = f.inner/leaf if leaf == 'psi4PluginCache.cmake' else f.inner/'share/cmake/psi4'/leaf
+            put(path, f.expected['share/cmake/psi4/'+leaf])
+        f.conditional = {
+            'share/psi4/quadratures/1_x/R_avail.bin', 'share/psi4/quadratures/1_x/error.bin',
+            'share/psi4/fsapt/fsapt.py', *('lib/python3.13/site-packages/psi4/tests/'+n for n in (
+                'adcc_reference_data.json', 'oei_reference_data.json', 'f12_libint1.json',
+                'tdscf_reference_data.json'))}
+        for name in f.conditional:
+            raw = ('sealed conditional '+name+'\n').encode()
+            put(f.old/'env'/name, raw)
+            put(f.build/'env'/name, raw)
+        put(f.base/'bin/cmake', b'inert generator fixture, NEVER executed')
+        f.protected = dict(
+            old={name: dict(kind='file', sha256=C.digest(f.old/'env'/name))
+                 for name in f.names | f.conditional},
+            base={'bin/cmake': dict(kind='file', sha256=C.digest(f.base/'bin/cmake'))})
+        put(f.build/'protected-before.json', json.dumps(f.protected))
+        for cache, source, prefix in (
+                (f.build/'build/CMakeCache.txt', f.build/'source', f.build/'env'),
+                (f.inner/'CMakeCache.txt', f.build/'source/psi4', f.build/'build/stage')):
+            entries = dict(CMAKE_HOME_DIRECTORY=str(source), CMAKE_INSTALL_PREFIX=str(prefix),
+                CMAKE_BUILD_TYPE='Release', CMAKE_GENERATOR='Ninja',
+                psi4_INSTALL_CMAKEDIR='share/cmake/psi4', PYMOD_INSTALL_LIBDIR='/python3.13/site-packages')
+            put(cache, ''.join(k+':STRING='+v+'\n' for k, v in entries.items()))
+        outer = f.names | f.conditional
+        outer |= {'share/pad/'+str(i) for i in range(6344-len(outer))}
+        inner = {'share/cmake/psi4/'+n for n in C.EXISTING_CMAKE_PSI4} | f.conditional
+        inner |= {'share/pad/'+str(i) for i in range(4985-len(inner))}
+        duplicate = ['share/cmake/TargetLAPACK/'+n for n in C.EXISTING_CMAKE_LAPACK]
+        put(f.build/'build/install_manifest.txt',
+            ''.join(str(f.build/'env'/n)+'\n' for n in sorted(outer)+duplicate))
+        put(f.inner/'install_manifest.txt',
+            ''.join(str(f.build/'build/stage'/n)+'\n' for n in sorted(inner)))
+        # Retain the real approved flag sequence, replacing ONLY fixture roots.
+        lib = B.qomp_library()
+        def fixture_configure(record, source, build):
+            args = lib.configure(dict(configure=list(lib.APPROVED_CONFIGURE)), source, build)
+            return [a.replace(str(lib.BASE), str(f.base)) for a in args]
+        f.lib = NS(OLD=f.old, read=lambda p: json.loads(Path(p).read_text()),
+                   approved_record=lambda p: dict(configure=list(lib.APPROVED_CONFIGURE)),
+                   configure=fixture_configure)
+        for label, argv in (
+                ('configure', fixture_configure(None, f.build/'source', f.build)),
+                ('build-install', list(map(str, [f.base/'bin/cmake', '--build', f.build/'build',
+                                                '--target', 'install', '-j', '2'])))):
+            put(f.build/(label+'-command.json'), json.dumps(argv))
+            put(f.build/(label+'-result.json'), json.dumps(dict(argv=argv, returncode=0, interrupted=False)))
+        paths = ('configure-command.json', 'configure-result.json', 'build-install-command.json',
+            'build-install-result.json', 'build/CMakeCache.txt', 'build/install_manifest.txt',
+            'build/psi4-core-prefix/src/psi4-core-build/CMakeCache.txt',
+            'build/psi4-core-prefix/src/psi4-core-build/install_manifest.txt', 'protected-before.json')
+        f.pins = {name: C.digest(f.build/name) for name in paths}
+        f.proof_bytes = (f.build/'protected-before.json').stat().st_size
+        return f
+
+    def proof(self, f):
+        from contextlib import ExitStack
+        stack = ExitStack()
+        stack.enter_context(patch.object(C, 'existing_paths', return_value=dict(build=f.build)))
+        stack.enter_context(patch.dict(C.EXISTING_ANCHORS, f.pins))
+        stack.enter_context(patch.object(C, 'EXISTING_PROTECTED_BYTES', f.proof_bytes))
+        return stack
+
+    def test_all13_source_bound_exports_and_conditional_preflight_no_walk_native_or_execute(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.fixture(Path(tmp))
+            scans, scan = [], os.scandir
+            def bounded(path):
+                scans.append(Path(path))
+                return scan(path)
+            with self.proof(f), patch.object(Path, 'rglob', side_effect=AssertionError('no environment walk')), \
+                 patch.object(os, 'scandir', side_effect=bounded), \
+                 patch.object(subprocess, 'run', side_effect=AssertionError('no execute')), \
+                 patch.object(subprocess, 'check_output', side_effect=AssertionError('no execute')):
+                result = C.existing_cmake_preflight(f.engine, f.lib)
+            self.assertEqual(result['export_count'], 13)
+            self.assertEqual(len(result['exports']), 20)
+            self.assertEqual(set(scans), {f.build/'env/share/cmake/psi4', f.build/'env/share/cmake/TargetLAPACK'})
+            for name in f.names:
+                self.assertEqual(result['exports'][name]['sha256'],
+                                 __import__('hashlib').sha256(f.expected[name]).hexdigest())
+            self.assertNotIn('psi4', sys.modules)
+
+    def test_source_policy_is_identical_in_qualified1aaa_and_fb11(self):
+        for name, sha in C.EXISTING_CMAKE_SOURCES.items():
+            old = subprocess.check_output(['/usr/bin/git', '-C', str(ROOT), 'show',
+                '1aaa9e0a306373b42a3decc25c7dfa106dbc8ea2:'+name])
+            new = subprocess.check_output(['/usr/bin/git', '-C', str(ROOT), 'show', B.QOMP_SCI+':'+name])
+            self.assertEqual(old, new)
+            self.assertEqual(__import__('hashlib').sha256(old).hexdigest(), sha)
+
+    def test_wrong_template_cache_prefix_argv_and_generator_fail_not_selfapproval(self):
+        for mutation in ('template', 'cache', 'prefix', 'argv', 'returncode', 'generator'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                f = self.fixture(Path(tmp))
+                with self.proof(f):
+                    if mutation == 'template':
+                        p = f.build/'source/psi4/psi4Config.cmake.in'
+                        p.write_bytes(p.read_bytes()+b'# unapproved\n')
+                    elif mutation in ('cache', 'prefix'):
+                        p = f.inner/'CMakeCache.txt'
+                        p.write_text(p.read_text().replace('CMAKE_BUILD_TYPE:STRING=Release',
+                                                         'CMAKE_BUILD_TYPE:STRING=Debug') if mutation == 'cache'
+                                     else p.read_text().replace(str(f.build/'build/stage'), '/wrong/prefix'))
+                        if mutation == 'prefix':
+                            # Even a hypothetical externally pinned wrong cache
+                            # cannot change the CLOSED expected prefix.
+                            C.EXISTING_ANCHORS[str(p.relative_to(f.build))] = C.digest(p)
+                    elif mutation in ('argv', 'returncode'):
+                        p = f.build/'configure-result.json'
+                        data = json.loads(p.read_text())
+                        if mutation == 'argv':
+                            data['argv'].append('-DUNAPPROVED=ON')
+                        else:
+                            data['returncode'] = 1
+                        p.write_text(json.dumps(data))
+                        C.EXISTING_ANCHORS['configure-result.json'] = C.digest(p)
+                    else:
+                        (f.base/'bin/cmake').write_bytes(b'new generator')
+                    with self.assertRaises(ValueError):
+                        C.existing_cmake_preflight(f.engine, f.lib)
+
+    def test_old_seed_kind_hash_and_relocation_counts_fail(self):
+        for mutation in ('hash', 'link', 'directory', 'extra-root', 'wrong-root-field'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                f = self.fixture(Path(tmp))
+                p = f.old/'env/share/cmake/psi4/psi4Config.cmake'
+                raw = p.read_bytes()
+                if mutation == 'hash':
+                    p.write_bytes(raw+b'# tampered\n')
+                elif mutation in ('link', 'directory'):
+                    p.unlink()
+                    if mutation == 'directory':
+                        p.mkdir()
+                    else:
+                        p.symlink_to(f.build/'env/share/cmake/psi4/psi4Config.cmake')
+                else:
+                    raw = raw+(str(f.old)+'/unapproved\n').encode() if mutation == 'extra-root' else \
+                        raw.replace(b'/env/bin/python', b'/unapproved/python')
+                    p.write_bytes(raw)
+                    f.protected['old']['share/cmake/psi4/psi4Config.cmake']['sha256'] = C.digest(p)
+                    q = f.build/'protected-before.json'
+                    q.write_text(json.dumps(f.protected))
+                    f.pins['protected-before.json'] = C.digest(q)
+                    f.proof_bytes = q.stat().st_size
+                with self.proof(f), self.assertRaises(ValueError):
+                    C.existing_cmake_preflight(f.engine, f.lib)
+
+    def test_tampered_prefix_stage_and_configured_outputs_report_all_not_script_trust(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.fixture(Path(tmp))
+            names = sorted(C.EXISTING_CMAKE_RELOCATIONS)
+            for name in names:
+                for where in (f.build/'env', f.build/'build/stage'):
+                    (where/name).write_bytes(b'# arbitrary output cannot approve itself\n')
+            (f.inner/'cmake_install.cmake').write_text(
+                'file(INSTALL DESTINATION "anything" TYPE FILE FILES "arbitrary")\n')
+            with self.proof(f), self.assertRaisesRegex(ValueError, '"total": 2') as caught:
+                C.existing_cmake_preflight(f.engine, f.lib)
+            self.assertIn('psi4Config.cmake', str(caught.exception))
+            self.assertIn('psi4PluginCache.cmake', str(caught.exception))
+            # Current configured output is an additional binding, NEVER an
+            # authority to approve changed bytes in all three locations.
+            (f.inner/'psi4PluginCache.cmake').write_bytes(b'# same arbitrary output\n')
+            with self.proof(f), self.assertRaises(ValueError):
+                C.existing_cmake_preflight(f.engine, f.lib)
+
+    def test_unknown_filename_escape_type_missing_and_conditional_change_stop(self):
+        for mutation in ('unknown', 'escape', 'type', 'missing', 'conditional'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                f = self.fixture(Path(tmp))
+                p = f.build/'env/share/cmake/psi4/psi4Config.cmake'
+                if mutation == 'unknown':
+                    (p.parent/'unknown.cmake').write_text('# not in pinned manifest\n')
+                elif mutation == 'escape':
+                    p.unlink()
+                    p.symlink_to(f.old/'env/share/cmake/psi4/psi4Config.cmake')
+                elif mutation == 'type':
+                    p.unlink()
+                    p.mkdir()
+                elif mutation == 'missing':
+                    p.unlink()
+                else:
+                    (f.build/'env/share/psi4/fsapt/fsapt.py').write_text('# changed data\n')
+                with self.proof(f), self.assertRaises(ValueError):
+                    C.existing_cmake_preflight(f.engine, f.lib)
+
+    def test_all_misses_reuse_snapshot_and_no_partial_result_or_prefix_rehash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build = Path(tmp)
+            prefix = build/'env'
+            files = {'share/psi4/missing'+str(i)+'.dat' for i in range(8)} | {
+                'share/cmake/psi4/psi4Config.cmake', 'share/cmake/psi4/psi4PluginCache.cmake'}
+            for name in files:
+                p = prefix/name
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text('unattributed')
+            stamps = {}
+            snapshot = C.existing_snapshot(build, {}, file_stats=stamps)
+            cmake = {name: dict(sha256='0'*64, producer_matches=False, origins=[],
+                               projection='qualified-root-relocation')
+                     for name in C.EXISTING_CMAKE_RELOCATIONS}
+            original = dict(runtime_files={}, runtime_directories=['.'])
+            actual = C.digest
+            def digest(path):
+                if Path(path).is_relative_to(prefix):
+                    raise AssertionError('do not rehash just-hashed prefix files')
+                return actual(path)
+            with patch.object(C, 'digest', side_effect=digest), \
+                 self.assertRaisesRegex(ValueError, '"total": 10') as caught:
+                C.existing_attribution(prefix, build, original, files, {}, cmake,
+                                      snapshot=snapshot, file_stats=stamps)
+            self.assertIn('"omitted": 5', str(caught.exception))
+            self.assertLess(len(str(caught.exception)), 1000)
+
+    def test_snapshot_reuse_never_hides_unknown_namespace_type_or_escape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build = Path(tmp)
+            prefix = build/'env'
+            prefix.mkdir()
+            p = prefix/'known'
+            p.write_text('sealed')
+            original = dict(runtime_files={'known': C.digest(p)}, runtime_directories=['.'])
+            stamps = {}
+            saved = C.existing_snapshot(build, {}, file_stats=stamps)
+            p.write_text('changed bytes')
+            with self.assertRaisesRegex(ValueError, 'changed since snapshot'):
+                C.existing_attribution(prefix, build, original, {'known'}, {}, {},
+                                      snapshot=saved, file_stats=stamps)
+            p.unlink()
+            p.symlink_to(build/'outside')
+            with self.assertRaises(ValueError):
+                C.existing_attribution(prefix, build, original, {'known'}, {}, {},
+                                      snapshot=saved, file_stats=stamps)
+            p.unlink()
+            p.mkdir()
+            with self.assertRaises(ValueError):
+                C.existing_attribution(prefix, build, original, {'known'}, {}, {},
+                                      snapshot=saved, file_stats=stamps)
+            p.rmdir()
+            p.write_text('sealed')
+            (prefix/'unknown').write_text('new')
+            with self.assertRaisesRegex(ValueError, 'namespace changed'):
+                C.existing_attribution(prefix, build, original, {'known'}, {}, {},
+                                      snapshot=saved, file_stats=stamps)
 
 
 if __name__ == '__main__':

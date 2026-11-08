@@ -1,5 +1,78 @@
 # Closed fb11 genuine build / installed-check mode
 
+## 153: closed export derivation and aggregated attribution; current ops005
+
+Verification15324110/004 failed BEFORE native import/collection at export
+attribution. Preserve all004/003/002 history unchanged. The old mapper
+searched current install scripts for env destinations, although frozen inner
+CMake installs through stage and outer CMake copies stage to env.
+
+The entire anchored manifest family is17 raw entries/13 unique files:
+9 Psi4 +4 TargetLAPACK. Eleven are unchanged original-qualified clone bytes.
+Only`psi4Config.cmake` and`psi4PluginCache.cmake` need relocation. Derive their
+EXPECTED bytes from actual OLD files, verified as regular files against
+original protected99558a98 SHA entries. Replace ONLY approved OLD-build-root
+fields with BUILD002: Config has EXACT1`/env/bin/python`; PluginCache has
+EXACT4 fields (stage1, pybind11_DIR1, Python executables2). Unknown filename,
+root/count/field/other-byte changes fail. No new installed hash is approved.
+
+Source/policy proof: ten generation/install inputs (root/inner/src CMakeLists,
+two templates, versioner and four copied CMake helpers) are byte-identical
+qualified1aaa versusfb11 and explicitly SHA-pinned. Before deriving exports,
+check actual0 configure/install records, approved4356B configure/-j2 argv,
+both parent-pinned caches/manifests, source/prefix/Release/Ninja/install-dir
+cache context and original sealed BASE CMake executable bytes. No CMake
+execution or generic generator reimplementation. Current install scripts are
+NOT an authority and are never parsed for export attribution.
+
+Require stage equality for all9 Psi4 exports; bind explicit configured outputs
+where present (PluginCache required at its known inner path). Optional stage
+TargetLAPACK copies must match too. All13 expected bytes are from sealed OLD,
+with only the two closed source-bound relocations. Unchanged Version/Targets
+need no new CMake regeneration. These are current attributed provenance and
+preservation checks, NOT a reconstructed historical complete build seal.
+
+Full attribution reuses its just-hashed snapshot with current namespace/type/
+link-binding checks, ephemeral before/after-hash file identity/size/mtime/ctime
+stamps rechecked at use, and complete post-rehash seals. Stamps are NOT stored
+or compared across jobs/nodes. It collects ALL safe
+declared-file no-source/configured-output misses before refusing, reports
+the exact total plus at most5 paths of128characters, and returns NO partial
+success. Unknown files/directories, escapes, type errors, wrong native/Python
+identity or context remain strict immediate refusals. Snapshot reuse does not
+claim an atomic/transient-write/permissions sandbox.
+
+Current closed routes:
+`ops005`, `collection005`, `installed005`, matching fresh scratch/logs.
+Reuse immutablecompiled002/science001fb11/TEST003311; no new build/env or source
+overlay. All152 BASE cases/valid-link checks and151556/identity/history/import/
+TERM/normal READY gates remain unchanged.
+
+After reviewed Git staging, use the152 clean `-I -S -B` metadata snippet with:
+
+```python
+lib = engine.qomp_library()
+print(ns['existing_base_metadata_preflight'](engine))
+print(ns['existing_cmake_preflight'](engine, lib))
+```
+
+The latter verifies ALL13 exports, exact two directory memberships, stage/
+configured bindings and seven explicit conditional files when declared:
+the two renamed quadrature binaries, relocated fsapt and four named unit-test
+JSON datasets. Those conditional files must still be unchanged sealed clone
+bytes; otherwise STOP for an exact frozen projection, not an observed-hash
+approval. It reads only fixed metadata/source/export/data paths and scans
+two bounded export directories; no full env walk/hash, compiler, native import,
+collection, configuration/receipt write or network. Full-prefix attribution
+and all other data checks still belong to the finite allocation.
+
+Parent must review actual preflight BEFORE another allocation. Use151's two
+CLI modes with005 paths and NEW reviewed ops commit/tree,2h/8CPU/32GiB embers;
+fresh successful collection/accounting + literal digests still gate separate
+whole556 qualification. Acceptance/adoption remain false. No launch authorized.
+
+## Archived152 interface: current routes are005, not004
+
 ## 152: exact three-entry BASE metadata compatibility; current ops004
 
 Historical verification15322764 failed BEFORE native import/collection in
