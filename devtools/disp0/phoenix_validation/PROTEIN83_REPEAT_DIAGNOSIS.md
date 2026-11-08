@@ -256,3 +256,46 @@ to change too, and checks CPU/GPU J/K parity at each cutoff. This numerical
 test has been syntax-checked but **not yet executed** on a candidate build.
 A new coherent native build and physical GPU gates remain required; no old
 proof, frozen source or stage is to be advanced or relabeled.
+
+## Independent CPU control15321631 completed
+
+Frozen CPU outer helper:`af107b744fe2374d0fc274c100737aac504fdd71`,
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-fixed-jk-cpu-af107b744f`.
+Submitted15321631 on`gts-cs207-chemx / cpu-small / embers`,
+24Gold6226cores,160GiB,30min, exclusive local-NVMe constraint and **no GPU**.
+Test-only15321630 is not the job. Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/fixed-density-jk-cpu-af107b744f-01`.
+Submission/config SHA256:
+`f35f6a1aae59f14072af6d269767c03867704d7965f431e9667ed19e29dc62e9` /
+`c0192c0abc091dba6308c117b7aef0ebbc96a0c33d446e8f3cdff56cede5ef49`.
+Hourly watcher:`b13e7d1ad`.
+
+The job completed with exit0/no TERM; its worker returned0 with no retirement
+and was reaped. Scratch was actual XFS local storage and cleanup completed.
+It used **DiskDFJK**, not cuEST, with requested fitting condition1e-10,
+24threads and GPUs hidden. No SCF/F-SAPT or GPU work was performed.
+All four CPU J/K computations and all constructed densities were bitwise
+identical. Input coefficient/density hashes match the GPU controls exactly.
+
+All nine GPU plan results passed the **unchanged** independent AO-JK policy,
+rtol2e-7 /atol2e-8. Maximum absolute GPU-minus-CPU discrepancies:
+
+- J:2.014850508658128e-10.
+- K:4.519051799434237e-12.
+- Signed fixed-D JK energy changes range from-8.847443340941831e-10 to
+  -2.806572773887816e-9Eh.
+
+Thus the observed reconstruction differences are below the existing
+fixed-gauge AO-JK accuracy criterion while exceeding the separate1e-9
+cross-process energy repeat threshold. This is **not** a full fragment/energy
+oracle and does not validate a whole-system speedup. The native-policy
+correction still requires its own new build and physical regressions; this
+CPU control used the original1cad631980 whole stage.
+
+Final CPU diagnostic SHA256:
+`f2a3db20e20130b8b0b6665862083a4e57817c261f121a70ff314715a647c842`.
+Worker report SHA256:
+`62c5eafd84f7a3555193ecaf40a22343a38c9fdca428121be149006f898da49c`.
+Candidate native-fix source pin:
+`e0da305c02b55a33c6cb6c250072d552c0606555`; source sync is separate from
+native build/qualification. No repeat or oracle tolerance was changed.
