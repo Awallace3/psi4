@@ -133,3 +133,35 @@ The outer batch wrapper permits only the two explicit driver names,
 its driver. Source/build proof pins, thread policies, resource route,
 retirement channels, group reaping and scratch ownership remain required.
 No numerical guard, reserve or workspace budget is relaxed.
+
+### Control submitted
+
+Frozen outer control pin:
+`5900959ae09e6d3b477253871ffa994a42ac4af8`, checkout
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-fixed-jk-5900959ae0`.
+All148host helper tests, batch shell syntax and whitespace checks passed.
+They cover coefficient reuse, output ownership, cleanup on failure,
+rejection of CPU fallback, signed trace calculations and native-context
+identity checks; they are not GPU correctness evidence.
+
+Submitted **15319813** successfully, after finalized CPU sealed admission
+and frozen reference/config/input checks. Effective route:
+`gts-cs207-chemx / gpu-h200 / embers`, oneH200,8hostCPUs,160GiB,
+30min cap, initially PENDING for Priority. Test-only15319812 is not the
+submitted job. Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/fixed-density-jk-5900959ae0-01`.
+
+- Manifest SHA256:
+  `3d88759f6ffd13fbcea12ff442742177abfc4259355c80349ee40566b09d82c3`.
+- Diagnostic runtime config SHA256:
+  `a1082c53dd0c67d17b52b42134ca0c056678e9439c3e64aee533f3d2fc78988c`.
+- Reference result SHA256:
+  `59838c6873d4f386aeccb4bdad7f699bf4111d354c1bc7113dfdbe04b218cbf5`.
+- Hourly official watcher:`b4a66d90a`.
+
+The installed native/scientific source remains1cad631980, not the outer
+helper pin. No native precision-ordering change is present in this control.
+The pinned SDK documents default math mode as potentially mixed precision
+and native-FP64 mode as FP64 throughout; the header does not establish how
+plan creation depends on the current mode. No causal conclusion is claimed
+before the control, and no SAPT timing or speedup will be accepted from it.
