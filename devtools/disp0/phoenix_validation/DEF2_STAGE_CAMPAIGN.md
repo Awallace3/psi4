@@ -143,3 +143,42 @@ This verifies compatibility of the new admission requirement with an actual
 finalized proof; it is not admission for the new1cad631980 build or def2 GPU
 correctness evidence. H200 submission still waits for15317825's own completed
 whole-build and sealed-runtime-admission artifacts.
+
+## New prerequisite passed; Protein83/def2-SVP submitted
+
+CPU15317825 completed job/batch/step0:0 in10min01s with no TERM and the
+expected build-only marker. Its exact1cad631980 whole-build proof is PASS,
+all383core CPU tests passed, and142helper tests passed with one explicit
+optional skip (`Literal input suite not installed`). The separately frozen
+SVP manifest was validated on Phoenix and binds Protein83 to83atoms,
+766AOs, occupied78/68, frozen20/19 and active58/49. The sealed-runtime
+admission receipt is PASS, with reaped workers and no CUDA session; this
+is not GPU correctness evidence.
+
+| CPU prerequisite artifact (under `job-15317825/`) | SHA256 |
+|---|---|
+| `result.json` | `277e50b8461aeb952890b3a868ef8356681a521ec3bf477ad1de0ac748d36a6a` |
+| `gpu-runtime/preparation-result.json` | `d858eadf5c35d60e5dc68178421d5d20da18706bf71372b32909440490e4c121` |
+| `cpu-sealed-admission/preflight-result.json` | `45b1da425583628e92909026f286f6ab4f1e045d4ce8de528368630972836c04` |
+| `cpu-sealed-admission/runtime-admission.json` | `881f35c052dd7d46b44c47ec4d3adb633f534a42c958c0bca892fe662035de79` |
+| `cpu-sealed-admission/runtime-config.json` | `894a91bca74747fb633b888d7e33d6759417a8f9dd2cf93318de1732a883ca44` |
+
+The corrected387b36b92b outer launcher accepted and sealed that admission,
+then submitted **15318800** successfully. Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/def2-stage-scaling-1cad631980-01/protein83-def2-svp-gpu`.
+Effective controller route:
+`gts-cs207-chemx / gpu-h200 / embers`, one typedH200 and H200 constraint,
+8hostCPUs,160GiB host allocation, eight-hour cap. Initially PENDING for
+Priority;15318799 is only the scheduler test-only request.
+
+- Manifest SHA256:
+  `e3f2d34098ebde4b2562019ae4d29605d2e3c62a8a4104b7457ba315e0449f3e`.
+- GPU runtime config SHA256:
+  `c58337bf988b01132f1679a53da53452c0d59adaa1bd729ec05427885f057f0a`.
+- Hourly official watcher:`bd3d5e3a5`.
+
+The full small physical gate precedes three fresh strict-repeat baselines
+and one separate traced process. No CPU protein reference is submitted
+until this producer passes and cleans up. There is no def2 timing, GPU
+correctness PASS or accepted protein speedup at submission. No old worktree,
+proof, memory budget or correctness tolerance was changed; no automatic retry.
