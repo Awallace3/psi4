@@ -220,3 +220,94 @@ per-stage speedup is claimed from a3-sample CPU baseline versus one intrusive
 GPU trace. The original7.004× campaign and its clocks remain separately labeled.
 Nanotube15233651 and Protein8315233653 remain pending at this qualification
 checkpoint; no larger-system ratio is inferred.
+
+## Nanotube repeat failure and user-authorized retry
+
+Nanotube15233651 failed its strict r0/r1 repeat comparison after two clean
+GPU workers (262.827805535 /263.167531747s). Signed/permuted `Locc_A`
+coefficients exceeded the unchanged1e-9 absolute/relative tolerance:
+124/5936 entries, maximum violating difference9.38643421e-9.
+This was not an OOM or worker crash; both workers were reaped without
+retirement and owned scratch cleanup completed. No third sample, trace,
+CPU qualification or accepted nanotube speedup follows from that attempt.
+The original failed artifacts remain intact.
+
+On the user's explicit request to retry, submitted **15281853** using the
+same frozen science927283f8ed, outer helper429826db9f, inputs, resources,
+convergence settings and numerical checks. The new root is
+`stage-scaling-20261106-01/nanotube-gpu-retry-01/`.
+Both scheduler test-only and actual submission succeeded;15281852 is only
+the test-only request ID. Effective allocation:
+`gts-cs207-chemx / gpu-h200 / embers`, oneH200, eight host CPUs,
+160GiB host memory, four-hour cap; initially PENDING for Priority.
+No automatic further retries.
+
+- Submission manifest SHA256:
+  `690498e92c4256eef1a035164c26eeb6f54953e1842f564210e1719aa93a5c46`.
+- Runtime config SHA256:
+  `d121bf01f46365ad28bece5c96dce86d4935e45bc451820157c5653c14d67c7a`.
+- Hourly official watcher:`b2456afc3`.
+
+Protein8315233653 remains queued and was not duplicated or modified.
+The qualified peptide cohort is not rerun, and Protein157 remains excluded.
+
+## Protein83 subsequently failed; one authorized retry submitted
+
+The original Protein83 job15233653 subsequently FAILED1:0 in5min37s,
+without TERM. Its small gate passed, but the first large-system worker
+hit the declared CUDA budget during DF-plan creation:
+requested26,310,034,688 bytes, explicit-live92,448,450,560 bytes and
+native-reserved12,884,901,888 bytes exceeded the128,849,018,880-byte
+limit. CUDA reported32,903,987,200 free bytes; rejection was specifically
+`declared_budget`, not a demonstrated physical-device OOM.
+No baseline samples qualified. The worker was reaped, no retirement reason
+was reported, and owned scratch cleanup completed.
+
+Under the user's request to retry the runs, submitted one unchanged
+Protein83 retry, **15287406**, after confirming the original was terminal.
+The same budget failure may recur; no memory limit, reservation,
+convergence threshold or numerical check was changed. Root:
+`stage-scaling-20261106-01/protein83-gpu-retry-01/`.
+Effective route:`gts-cs207-chemx / gpu-h200 / embers`, oneH200,
+eight host CPUs,160GiB host memory, eight-hour cap, initially Priority.
+Test-only request15287405 is not the submitted job.
+
+- Manifest SHA256:
+  `dda73330033f672461733005bffa1588bfb1441ee839530ccb8d73350e0df32d`.
+- Runtime config SHA256:
+  `bc4755b46b48aa104c05634d38bcf7d68578c03b4647e6b0c304cd6805c61bb4`.
+- Hourly watcher:`bcc7e0d1e`; no automatic further retries.
+
+The failed original artifacts are retained. No CPU Protein83 job was
+submitted, no existing allocation was modified, and Protein157 stays excluded.
+
+## Nanotube retry reproduced the repeat failure
+
+Retry15281853 FAILED1:0 in12min29s without TERM. The small gate passed,
+and both large workers exited0, reported no retirement and were reaped.
+Their whole-energy timings were268.740354781 /262.302653040s, diagnostic
+only. Strict signed/permuted `Locc_A` repeat comparison again failed at
+unchanged1e-9 absolute/relative tolerances:200/5936 entries, maximum
+violating difference1.24946207e-8. No third baseline or trace ran, no
+CPU qualification was submitted, and no nanotube speedup is accepted.
+Owned scratch cleanup completed. Final report SHA256:
+`fc4753a8ccb8ce530e4fef4235225a764d0ea8e2795d4754da05baaff8493902`.
+
+This reproduces the localization-coefficient repeatability symptom; it does
+not establish whether its cause is SCF sensitivity or localization itself.
+No further unchanged retry is launched.
+
+## Protein83 retry reproduced the declared-budget failure
+
+Retry15287406 FAILED1:0 in5min30s without TERM. The small gate passed;
+the first Protein83 worker failed at DF-plan creation with exactly the
+same request/live/native/limit/free byte counts as15233653 and
+`rejected_by=declared_budget`. No complete baseline or accepted speedup
+was produced. The worker was reaped without retirement and owned scratch
+cleanup completed. Final report SHA256:
+`40061fe54009a5a635995c128b4ab48fa9c3eb2fbcfc3900328d3806183a6198`.
+
+Both authorized larger-system retries have now failed their respective
+unchanged guards. No further automatic retry or CPU qualification is
+submitted. Protein83 needs lower peak plan/workspace memory before another
+meaningful run; the successful peptide result remains7.112569697154473x.
