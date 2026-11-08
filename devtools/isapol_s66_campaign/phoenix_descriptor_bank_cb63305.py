@@ -85,6 +85,18 @@ def policy_binding(source, manifest, planner, *, git_argv=None):
     return observed
 
 
+def qomp_changed_paths(source, before, after, controls):
+    """Both rename sides, literal NUL paths, no inherited Git diff drivers."""
+    env = controls.qomp_control_environment(os.environ)
+    controls.qomp_config_gate(source, env)
+    raw = subprocess.check_output([*controls.QOMP_GIT, '-C', str(source), 'diff',
+        '--no-renames', '--no-ext-diff', '--no-textconv', '--name-only', '-z',
+        before, after, '--'], env=env)
+    if raw and not raw.endswith(b'\0'):
+        raise ValueError('unterminated qomp changed-path inventory')
+    return [name.decode('utf-8', errors='strict') for name in raw.split(b'\0')[:-1]]
+
+
 def admit_route(allocation, *, scope='default'):
     """Enforce the effective allocation, not merely the submission template."""
     if scope not in ('default', 'full-bank'):
@@ -229,7 +241,8 @@ def main():
         else prepare.prepare_bank(raw_inputs, receipt_blobs, blobs['resources'], **selection))
     if bank != regenerated:
         raise ValueError('prepared bank does not reproduce from exact immutable raw inputs')
-    changes = metadata_git(source, 'diff', '--name-only', manifest['commit'], args.commit).splitlines()
+    changes = (qomp_changed_paths(source,manifest['commit'],args.commit,controls) if qomp
+               else metadata_git(source, 'diff', '--name-only', manifest['commit'], args.commit).splitlines())
     if qomp:
         profile.verify_descriptor_operations(source,changes)
     elif any(not name.startswith('devtools/isapol_s66_campaign/')
@@ -260,6 +273,7 @@ def main():
         memory_contract=memory, scratch_snapshot=disk, source_policy_sha256=policy,
         operational_sources_sha256=operations, input_receipts_sha256=receipts))
     reports = []
+    qomp_postseal_attempted = False
     try:
         for row in regenerated['monomers']:
             monomer = row['monomer_id']
@@ -315,16 +329,36 @@ def main():
                           'accuracy/covariance proof, total RSS or SCF scratch admission.')
         if scope != 'default':
             allocation_report['campaign_scope'] = scope
+        if qomp:
+            # Publication is the commit point: no required seals in finally.
+            # Mark BEFORE calling so a failed final seal is not retried.
+            qomp_postseal_attempted = True
+            runtime_check()
         write_json_once(payload/'descriptor-allocation.json', allocation_report)
     except BaseException as error:
-        write_json_once(payload/'descriptor-allocation-failure.json', dict(
+        failure = dict(
             status='FAILED_DESCRIPTOR_ALLOCATION', completed_descriptor_reports=len(reports),
             reports=reports, error=str(error)[:1024],
-            qualification='Partial or failed descriptor allocation is never all-bank admission.'))
-        raise
-    finally:
+            qualification='Partial or failed descriptor allocation is never all-bank admission.')
         if qomp:
-            runtime_check()  # Failure paths do not skip the finite post-seal.
+            failure['error_type'] = type(error).__name__
+            if not qomp_postseal_attempted:
+                qomp_postseal_attempted = True
+                try:
+                    runtime_check()
+                except BaseException as post_error:
+                    detail = (type(post_error).__name__+': '+str(post_error))[:1024]
+                    failure['postseal_error'] = detail
+                    error.add_note('qomp unwind post-seal failed: '+detail)
+            try:
+                write_json_once(payload/'descriptor-allocation-failure.json', failure)
+            except BaseException as receipt_error:
+                # A secondary failure must not hide a child/signal/seal cause.
+                error.add_note('qomp failure receipt publication failed: '+
+                               (type(receipt_error).__name__+': '+str(receipt_error))[:1024])
+        else:
+            write_json_once(payload/'descriptor-allocation-failure.json', failure)
+        raise
     print(json.dumps(dict(status=status, monomers=len(reports),
                           report=str(payload/'descriptor-allocation.json'))))
 

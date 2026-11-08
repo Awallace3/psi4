@@ -1,11 +1,13 @@
 """Stdlib fakes only: never import Psi4 or inspect a live installed runtime."""
 import copy
+import ast
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 
@@ -512,3 +514,153 @@ def test_postseal_failure_cannot_be_success(monkeypatch):
     with pytest.raises(ValueError,match='runtime changed'):
         with rt.runtime_admission(b'pinned'):
             pass
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_source_rename_cannot_hide_science_side_in_actual_git(tmp_path, reverse):
+    """Execute main's actual changes expression, not a second test-only gate."""
+    module = load('phoenix_descriptor_bank_cb63305')
+    controls = module.helper('phoenix_installed_checks').qomp_engine()
+    env = controls.qomp_control_environment(os.environ)
+    repo = tmp_path/'repo'
+    def git(*args):
+        return subprocess.check_output([*controls.QOMP_GIT,
+            '-c','user.name=PureTest','-c','user.email=pure@example.invalid',
+            '-c','commit.gpgsign=false','-C',str(repo),*args],env=env)
+    subprocess.run([*controls.QOMP_GIT,'init','--template=',str(repo)],
+                   env=env,check=True,capture_output=True)
+    science = 'psi4/src/psi4/libscf_solver/rhf.cc'
+    campaign = 'devtools/isapol_s66_campaign/rhf.cc'
+    old, new = (campaign, science) if reverse else (science, campaign)
+    p = repo/old
+    p.parent.mkdir(parents=True)
+    p.write_text('unchanged scientific contents\n'*50)
+    git('add','--',old)
+    git('commit','-qm','before')
+    before = git('rev-parse','HEAD').decode().strip()
+    target = repo/new
+    target.parent.mkdir(parents=True,exist_ok=True)
+    p.rename(target)
+    assert not p.exists()
+    git('add','-A')
+    git('commit','-qm','rename')
+    after = git('rev-parse','HEAD').decode().strip()
+    detected = git('-c','diff.renames=true','diff','--name-only',before,after).decode().splitlines()
+    assert detected == [new]  # The original destination-only blind spot is real.
+    if not reverse:
+        q.verify_descriptor_operations(repo,detected)  # Old gate accepts hidden deletion.
+    tree = ast.parse(Path(module.__file__).read_text())
+    main = next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+    statement = next(n for n in main.body if isinstance(n,ast.Assign)
+                     and any(isinstance(t,ast.Name) and t.id=='changes' for t in n.targets))
+    namespace = dict(module.__dict__,source=repo,manifest=dict(commit=before),
+        args=SimpleNamespace(commit=after),qomp=True,controls=controls,
+        metadata_git=lambda source,*argv: git(*argv).decode().strip())
+    exec(compile(ast.Module(body=[statement],type_ignores=[]),'actual-main-changes','exec'),namespace)
+    with pytest.raises(ValueError,match='operations change'):
+        q.verify_descriptor_operations(repo,namespace['changes'])
+    # Intended campaign-only edits remain admissible under exactly that path.
+    target = repo/campaign
+    target.parent.mkdir(parents=True,exist_ok=True)
+    target.write_text('ordinary reviewed campaign edit\n')
+    git('add','-A')
+    git('commit','-qm','campaign only')
+    namespace['manifest'] = dict(commit=after)
+    namespace['args'] = SimpleNamespace(commit=git('rev-parse','HEAD').decode().strip())
+    exec(compile(ast.Module(body=[statement],type_ignores=[]),'actual-main-changes','exec'),namespace)
+    q.verify_descriptor_operations(repo,namespace['changes'])
+
+
+def qomp_transaction(monkeypatch, tmp_path, *, primary=None, final_error=None):
+    """Reuse existing pure supervisor fixture; all scientific seams are fakes."""
+    f = load('test_descriptor_supervisor_transactions_cb63305')
+    module, run, children, _ = f.transaction(monkeypatch,tmp_path,'success',producer='ed561666')
+    original = module.helper
+    checks = original('phoenix_installed_checks')
+    controls = SimpleNamespace(qomp_enter=lambda:None,qomp_git=checks.git,QOMP_GIT=('/usr/bin/git',))
+    checks.qomp_engine = lambda:controls
+    root = tmp_path/'qomp-receipts'
+    root.mkdir()
+    package = tmp_path/'build/env/lib/python3.13/site-packages/psi4'
+    identity = dict(package=str(package/'__init__.py'),core=str(package/'core.so'),
+                    implementation=q.IMPLEMENTATION,version=q.VERSION)
+    (root/'identity.json').write_text(json.dumps(identity))
+    (root/'qualification.json').write_text('{}')
+    view = tmp_path/'view.json'
+    view.write_text('{}')
+    calls = []
+    def seal(raw):
+        calls.append(len(children))
+        # Successful flow has pre, middle and final seals. Failure flow has
+        # pre and unwind seals; failing unwind must not replace the primary.
+        fail = len(calls) == (2 if primary is not None else 3)
+        if fail and final_error is not None:
+            raise final_error
+    runtime = SimpleNamespace(BUILD=str(tmp_path/'build'),PREFIX=str(tmp_path/'build/env'),
+                              load_view=lambda _:None,verify_runtime_view=seal)
+    profile = SimpleNamespace(SCIENTIFIC_COMMIT=q.SCIENTIFIC_COMMIT,
+        RECEIPT_PATHS=dict(identity='identity.json',qualification='qualification.json'),
+        RECEIPT_SHA256=dict(identity='fake',qualification='fake'),
+        verify_receipts=lambda _:dict(status='SYNTHETIC_ONLY'),
+        runtime=lambda:runtime,verify_descriptor_operations=lambda *args:None)
+    planner = load('resource_plan_qomp')
+    monkeypatch.setattr(module,'helper',lambda name:
+        profile if name=='qualified_qomp' else planner if name=='resource_plan_qomp'
+        else original(name))
+    monkeypatch.setattr(module,'policy_binding',lambda *args,**kw:planner.FILES)
+    if hasattr(module,'qomp_changed_paths'):
+        monkeypatch.setattr(module,'qomp_changed_paths',
+                            lambda *args:['devtools/isapol_s66_campaign/synthetic.py'])
+    def child(command,**kwargs):
+        if primary is not None:
+            raise primary
+        monomer = command[command.index('--monomer-id')+1]
+        children.append(monomer)
+        Path(command[command.index('--output')+1]).write_text(json.dumps(
+            dict(monomer_id=monomer,status='PASS_DESCRIPTOR_PLAN_ONLY')))
+    monkeypatch.setattr(module.subprocess,'run',child)
+    args = list(sys.argv)
+    args[args.index('--producer')+1] = 'qomp'
+    args[args.index('--qualification')+1] = str(root/'qualification.json')
+    args += ['--producer-receipts',str(root),'--runtime-view',str(view)]
+    monkeypatch.setattr(sys,'argv',args)
+    return module,run,calls
+
+
+def test_final_qomp_postseal_failure_never_leaves_admissible_receipt(monkeypatch,tmp_path):
+    module,run,calls = qomp_transaction(monkeypatch,tmp_path,final_error=ValueError('final seal failed'))
+    with pytest.raises(ValueError,match='final seal failed'):
+        module.main()
+    assert calls == [0,131,131]  # Pre and middle pass, only final seal fails.
+    assert not (run/'payload/descriptor-allocation.json').exists()
+    failure = json.loads((run/'payload/descriptor-allocation-failure.json').read_bytes())
+    assert failure['status']=='FAILED_DESCRIPTOR_ALLOCATION'
+    assert 'final seal failed' in failure['error']
+
+
+@pytest.mark.parametrize('primary',[RuntimeError('original child failure'),KeyboardInterrupt(),SystemExit(143)])
+def test_primary_failure_survives_qomp_unwind_seal_failure(monkeypatch,tmp_path,primary):
+    module,run,calls = qomp_transaction(monkeypatch,tmp_path,primary=primary,
+                                       final_error=ValueError('unwind seal failed'))
+    with pytest.raises(type(primary)) as caught:
+        module.main()
+    assert caught.value is primary
+    assert calls == [0,0]
+    assert not (run/'payload/descriptor-allocation.json').exists()
+    failure = json.loads((run/'payload/descriptor-allocation-failure.json').read_bytes())
+    assert failure['error_type']==type(primary).__name__
+    assert 'unwind seal failed' in failure['postseal_error']
+    assert any('unwind seal failed' in note for note in caught.value.__notes__)
+
+
+def test_qomp_success_published_only_after_final_seal(monkeypatch,tmp_path):
+    module,run,calls = qomp_transaction(monkeypatch,tmp_path)
+    original = module.write_json_once
+    def publish(path,value):
+        if path.name=='descriptor-allocation.json':
+            assert calls == [0,131,131]
+        original(path,value)
+    monkeypatch.setattr(module,'write_json_once',publish)
+    module.main()
+    assert (run/'payload/descriptor-allocation.json').is_file()
+    assert not (run/'payload/descriptor-allocation-failure.json').exists()

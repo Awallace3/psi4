@@ -577,3 +577,22 @@ Inode147 remains separate: current131072files/attempt and256GiB byte
 reservation are unchanged, including sum+largest and live quota guards.
 No old25 records, eight held jobs, dataset, acceptance flag or receipt is
 modified by these interfaces. No new environment/build is required.
+
+### #154 descriptor guard corrections
+
+Qomp changed paths now come from pinned, config-guarded Git with
+`--no-renames --no-ext-diff --no-textconv --name-only -z ... --`. Deletions
+cannot disappear behind an allowed rename destination; NUL paths are
+decoded without whitespace stripping or quote-path interpretation. The
+source allowlist and exact inherited970-file exceptions are unchanged.
+Real temporary-Git tests reproduce the original science-to-campaign rename
+blind spot, reject both rename directions, and retain ordinary campaign edits.
+
+All required qomp success seals now finish **before** atomic publication of
+`descriptor-allocation.json`. No late success-path finally check remains.
+On a child/source/signal exception, an unattempted final seal is attempted
+before the failure receipt. A secondary seal error is recorded separately
+and attached as a bounded exception note, never replacing the primary cause.
+A failed final seal is not retried. Qomp failure-receipt publication errors
+likewise cannot replace the primary cause. Legacy route/receipt behavior is
+unchanged. Python unwind is not SIGKILL recovery or production activation.
