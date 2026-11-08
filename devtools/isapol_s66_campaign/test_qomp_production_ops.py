@@ -43,6 +43,25 @@ def collected():
                 collection_skips=0, failed_reports=0, skipped_reports=0, returncode=0)
 
 
+def config_fixture(root):
+    """Owned Git metadata only; no scientific source/compile/server operation."""
+    repo, selected = root/'repo', root/'selected'
+    repo.mkdir()
+    env = B.qomp_control_environment({})
+    def git(path, *args):
+        return subprocess.check_output([*B.QOMP_GIT, '-c', 'user.name=Pure test',
+            '-c', 'user.email=test@example.invalid', '-C', str(path), *args],
+            env=env, text=True).strip()
+    git(repo, 'init', '-q')
+    (repo/'fixture').write_text('inert Git fixture\n')
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-qm', 'fixture')
+    git(repo, 'worktree', 'add', '--detach', str(selected), 'HEAD')
+    git(repo, 'config', 'extensions.worktreeConfig', 'true')
+    admin = Path(git(selected, 'rev-parse', '--absolute-git-dir'))
+    return repo, selected, admin, env, git
+
+
 class QompPureTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -509,6 +528,107 @@ class QompPureTests(unittest.TestCase):
             with patch.object(B.subprocess, 'check_output', return_value=key):
                 with self.assertRaisesRegex(ValueError, 'Git configuration'):
                     B.qomp_config_gate(Path('/fake/repo'), clean)
+
+    def test_enabled_optional_absence_reproduces_actual_git128_and_finalizes(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, dict(os.environ)):
+            root = Path(tmp)
+            repo, selected, admin, env, git = config_fixture(root)
+            self.assertFalse((admin/'config.worktree').exists())
+            # Same semantics as actual Phoenix Git2.52.0, not an old-Git claim.
+            raw = subprocess.run([*B.QOMP_GIT, '-C', str(selected), 'config', '--worktree',
+                                  '--no-includes', '--name-only', '--list'],
+                                 env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertEqual(raw.returncode, 128)
+            self.assertIn(str(admin/'config.worktree').encode(), raw.stderr)
+            B.qomp_config_gate(selected, env)  # RED on a6e: optional file was unconditionally read.
+            out = root/'out'
+            out.mkdir()
+            token = '00000000-0000-0000-0000-000000000000'
+            args = NS(root=out, launch_token=token, mode='build',
+                      ops_commit='a'*40, ops_tree='b'*40, exit_code=0)
+            self.lib.write(out/'owner.json', dict(token=token, mode='build'))
+            self.lib.write(out/'result.json', dict(
+                status='FRESH_BUILD_COMPLETE_NOT_QUALIFIED', old_and_base_unchanged=True,
+                launch_token=token, acceptance=False))
+            def library():
+                B.qomp_config_gate(selected, B.qomp_control_environment(os.environ))
+                return self.lib
+            with patch.object(B, 'qomp_library', side_effect=library), \
+                 patch.object(B, 'qomp_source_gate', return_value={}):
+                self.assertEqual(B.qomp_finalize(args), 0)
+                self.assertTrue((out/'COMPLETED').exists())
+                args.exit_code = 143
+                self.assertEqual(B.qomp_finalize(args), 143)
+                self.assertFalse((out/'COMPLETED').exists())
+                (admin/'config.worktree').write_text('[core]\n hooksPath = /not-used\n')
+                with self.assertRaisesRegex(ValueError, 'Git configuration'):
+                    B.qomp_finalize(args)
+                self.assertFalse((out/'COMPLETED').exists())
+
+    def test_present_worktree_config_safe_unsafe_malformed_and_read_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, selected, admin, env, git = config_fixture(root)
+            config = admin/'config.worktree'
+            config.write_text('[core]\n sparseCheckout = false\n')
+            B.qomp_config_gate(selected, env)
+            real = subprocess.check_output
+            def read_error(command, **kwargs):
+                if '--worktree' in command:
+                    raise subprocess.CalledProcessError(128, command, stderr=b'synthetic read failure')
+                return real(command, **kwargs)
+            with patch.object(B.subprocess, 'check_output', side_effect=read_error):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    B.qomp_config_gate(selected, env)  # Never swallow a generic128.
+            config.write_text('[core]\n hooksPath = /not-used\n')
+            with self.assertRaisesRegex(ValueError, 'Git configuration'):
+                B.qomp_config_gate(selected, env)
+            config.write_text('[malformed\n')
+            with self.assertRaises(subprocess.CalledProcessError):
+                B.qomp_config_gate(selected, env)
+
+    def test_optional_config_admin_selection_links_and_permission_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, selected, admin, env, git = config_fixture(root)
+            config = admin/'config.worktree'
+            foreign = root/'foreign'
+            foreign.write_text('[core]\n sparseCheckout = false\n')
+            config.symlink_to(foreign)
+            with self.assertRaises((ValueError, OSError)):
+                B.qomp_config_gate(selected, env)
+            config.unlink()
+            config.write_text('[core]\n sparseCheckout = false\n')
+            real_open = os.open
+            def unreadable(path, *args, **kwargs):
+                if Path(path) == config:
+                    raise PermissionError('synthetic unreadable optional file')
+                return real_open(path, *args, **kwargs)
+            with patch.object(B.os, 'open', side_effect=unreadable):
+                with self.assertRaises(PermissionError):
+                    B.qomp_config_gate(selected, env)
+            real = subprocess.check_output
+            def wrong_admin_path(command, **kwargs):
+                if '--git-path' in command:
+                    return str(root/'config.worktree')+'\n'
+                return real(command, **kwargs)
+            with patch.object(B.subprocess, 'check_output', side_effect=wrong_admin_path):
+                with self.assertRaisesRegex(ValueError, 'administrative'):
+                    B.qomp_config_gate(selected, env)
+
+    def test_disabled_worktree_extension_does_not_read_optional_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, selected, admin, env, git = config_fixture(root)
+            git(repo, 'config', 'extensions.worktreeConfig', 'false')
+            # This file is not selected by Git when the extension is disabled.
+            (admin/'config.worktree').write_text('[core]\n hooksPath = /not-used\n')
+            real = subprocess.check_output
+            def no_optional(command, **kwargs):
+                self.assertNotIn('--worktree', command)
+                return real(command, **kwargs)
+            with patch.object(B.subprocess, 'check_output', side_effect=no_optional):
+                B.qomp_config_gate(selected, env)
 
     def test_pinned_git_materialization_ignores_inherited_hook_and_fake_git(self):
         with tempfile.TemporaryDirectory() as tmp:

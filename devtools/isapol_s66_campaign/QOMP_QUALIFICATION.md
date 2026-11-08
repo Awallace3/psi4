@@ -20,9 +20,9 @@ Closed remote paths, no CLI overrides:
 ```
 P=/storage/project/r-cs207-0/awallace43
 SCI_SOURCE=$P/gits/psi4.ccasp-native-s66-qomp-fb11-science001
-OPS_SOURCE=$P/gits/psi4.ccasp-native-s66-qomp-ops001
-BUILD=$P/runs/ccasp-native-s66-qomp-fb11-build001
-CHECK=$P/runs/ccasp-native-s66-qomp-fb11-installed001
+OPS_SOURCE=$P/gits/psi4.ccasp-native-s66-qomp-ops002
+BUILD=$P/runs/ccasp-native-s66-qomp-fb11-build002
+CHECK=$P/runs/ccasp-native-s66-qomp-fb11-installed002
 BASE=$P/miniconda/envs/p4cuest_sapt
 ```
 
@@ -194,3 +194,30 @@ runtime/dependency before/after and actual node/JUnit gates still apply.
 Regression tests use stdlib fakes, temporary Git repositories, inert marker
 hooks/fakegit and loader-variable assertions before any exec; no hostile
 shared object or real Psi4 is loaded.
+
+##150 optional worktree-config correction
+
+Actual startup15320435 failed in9s, before BUILD creation, compilation or
+native collection. Parent's read-only capture be8f922ae found **Git2.52.0**,
+extensions.worktreeConfig=true and an absent selected administrative
+`config.worktree`; explicit `git config --worktree ... --list` returned128.
+This is normal optional-file absence, **not an older-Git-specific problem**,
+scientific failure or an invitation to swallow128.
+
+When enabled, the audit now obtains BOTH the absolute administrative
+directory and selected config path from pinned clean Git. The exact
+`admin/config.worktree` may be skipped only when lstat proves it absent
+with the administrative directory still present/unchanged. Present files
+must be regular, nonsymlink and actually readable via no-follow open/fstat.
+An escaping/dangling link, unreadable file, malformed content, unsafe keys,
+administrative mismatch or any Git command/read error still fails closed.
+Disabled extensions remain disabled; their unselected optional file is not read.
+No remote config is edited or fabricated. These checks remain ordinary-host
+observations, not a hostile concurrent-filesystem sandbox.
+
+All three new closed operations/build/check names are002; scratch inherits
+those basenames. Reuse the immutable detached fb11 **science001** source.
+Preserve failed ops001, all001 logs/intents and the absent001 run names;
+never retry/overwrite them. Parent stages/submits only after independent
+review/approval. The same approved configure/helper/science556/cap/seal/TERM
+contracts remain; no actual new identity/qualification exists yet.

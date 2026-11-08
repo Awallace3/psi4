@@ -218,9 +218,9 @@ QOMP_TREE = '3a1922c885498131b3b51b7214dcab429cac073e'
 QOMP_ROOT = Path('/storage/project/r-cs207-0/awallace43')
 QOMP_RUNS = QOMP_ROOT/'runs'
 QOMP_SCI_SOURCE = QOMP_ROOT/'gits/psi4.ccasp-native-s66-qomp-fb11-science001'
-QOMP_OPS_SOURCE = QOMP_ROOT/'gits/psi4.ccasp-native-s66-qomp-ops001'
-QOMP_BUILD = QOMP_RUNS/'ccasp-native-s66-qomp-fb11-build001'
-QOMP_CHECK = QOMP_RUNS/'ccasp-native-s66-qomp-fb11-installed001'
+QOMP_OPS_SOURCE = QOMP_ROOT/'gits/psi4.ccasp-native-s66-qomp-ops002'
+QOMP_BUILD = QOMP_RUNS/'ccasp-native-s66-qomp-fb11-build002'
+QOMP_CHECK = QOMP_RUNS/'ccasp-native-s66-qomp-fb11-installed002'
 QOMP_SCRATCH = Path('/storage/scratch1/3/awallace43')
 QOMP_BASE = QOMP_ROOT/'miniconda/envs/p4cuest_sapt'
 QOMP_LIBRARY_COMMIT = '8573ded3233001b50d99c26bf9a577e13b68c956'
@@ -279,6 +279,51 @@ def qomp_enter():
     os.environ.update(clean)
 
 
+def qomp_optional_worktree_config(source, env):
+    """True only for a present, readable regular Git-selected config file.
+
+    An enabled worktreeConfig extension does not require config.worktree to
+    exist. Git2.52.0 still returns128 when explicitly listing that absent file.
+    Prove absence at the exact administrative path BEFORE choosing to skip;
+    never turn a Git read/parser error into an optional-absence result.
+    """
+    import stat
+    admin_raw = subprocess.check_output(
+        [*QOMP_GIT, '-C', str(source), 'rev-parse', '--absolute-git-dir'], env=env, text=True).strip()
+    selected_raw = subprocess.check_output(
+        [*QOMP_GIT, '-C', str(source), 'rev-parse', '--git-path', 'config.worktree'],
+        env=env, text=True).strip()
+    admin = Path(admin_raw)
+    qomp_need(admin.is_absolute(), 'absolute Git administrative directory required')
+    admin = admin.resolve(strict=True)
+    before = admin.stat()
+    qomp_need(stat.S_ISDIR(before.st_mode), 'Git administrative directory missing')
+    selected = Path(selected_raw)
+    if not selected.is_absolute():
+        selected = Path(source)/selected
+    qomp_need(selected.name == 'config.worktree' and selected.parent.resolve(strict=True) == admin,
+              'selected Git config differs from administrative worktree config')
+    config = admin/'config.worktree'
+    try:
+        observed = config.lstat()  # Dangling links are present, not absence.
+    except FileNotFoundError:
+        after = admin.stat()  # Missing/unreadable parent is NOT optional absence.
+        qomp_need(stat.S_ISDIR(after.st_mode)
+                  and (before.st_dev, before.st_ino) == (after.st_dev, after.st_ino),
+                  'Git administrative directory changed during absence check')
+        return False
+    qomp_need(stat.S_ISREG(observed.st_mode), 'nonregular/symlink worktree config refused')
+    fd = os.open(config, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        actual = os.fstat(fd)
+        qomp_need(stat.S_ISREG(actual.st_mode)
+                  and (observed.st_dev, observed.st_ino) == (actual.st_dev, actual.st_ino),
+                  'worktree config changed during readability check')
+    finally:
+        os.close(fd)
+    return True
+
+
 def qomp_config_gate(source, env):
     """Read key NAMES only before commands that could use repository config.
 
@@ -306,7 +351,7 @@ def qomp_config_gate(source, env):
                 [*QOMP_GIT, '-C', str(source), 'config', '--local', '--no-includes',
                  '--bool', '--get', 'extensions.worktreeConfig'], env=env, text=True).strip()
             qomp_need(enabled in ('true', 'false'), 'invalid worktree Git config extension')
-            if enabled == 'true':
+            if enabled == 'true' and qomp_optional_worktree_config(source, env):
                 scopes.append('--worktree')
 
 
