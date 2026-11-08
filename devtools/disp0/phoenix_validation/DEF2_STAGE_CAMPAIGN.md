@@ -130,3 +130,16 @@ A regression exercises the actual submission path and confirms that even
 This correction is a separately pinned **outer launcher** change. The
 running15317825 source/build at1cad631980 stays frozen; no installed science,
 build proof, worker or shared dependency is edited or relabeled.
+
+Corrected outer launcher pin:
+`387b36b92b7d05175c5a4c0ad90b0b3086f4fa6f`, frozen on Phoenix at
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-def2-launch-387b36b92b`.
+All143final host helper tests passed. A bounded read-only preflight against
+the original927283f8ed CPU admission succeeded with receipt SHA256
+`c1f1d57993c807f82a3a93ff63447fd24d7da89cb179ad1dd0f7be350f4c42fe`
+and admitted config SHA256
+`7ff292aae7a4e34b13653e735fa74e65a38957527bf85aef2cb10c899578d840`.
+This verifies compatibility of the new admission requirement with an actual
+finalized proof; it is not admission for the new1cad631980 build or def2 GPU
+correctness evidence. H200 submission still waits for15317825's own completed
+whole-build and sealed-runtime-admission artifacts.
