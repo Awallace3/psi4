@@ -478,13 +478,14 @@ def qomp_runner(lib, root, cwd, env, seconds):
     return RecordedRunner(root, cwd, env, seconds)
 
 
-def qomp_targets():
+def qomp_targets(test_source=None):
     legacy = qomp_checks_module().TEST_FILES
     qomp_need(len(legacy) == len(set(legacy)) == 11
               and not set(legacy) & set(QOMP_FOCUSED)
               and 'test_isapol_distribution.py' not in legacy, 'test inventory overlap')
     names = list(legacy)+list(QOMP_FOCUSED)+list(QOMP_MOLECULAR)
-    return [str(QOMP_SCI_SOURCE/'tests/pytests'/name) for name in names]
+    return [str((QOMP_SCI_SOURCE if test_source is None else test_source)/'tests/pytests'/name)
+            for name in names]
 
 
 def qomp_installed_names(prior):
@@ -567,15 +568,16 @@ qomp_search_path(sys.path,PREFIX,BASE,FORBIDDEN)
 """)
 
 
-def qomp_pytest(runner, prefix, scratch, lib, *, collect):
+def qomp_pytest(runner, prefix, scratch, lib, *, collect, test_source=None, test_identity=None):
     """Fixed selectors, installed helper directory only; no source path fallback."""
     package = prefix/'lib/python3.13/site-packages/psi4'
     output = runner.root/('collection-nodes.json' if collect else 'executed-nodes.json')
+    test_source = QOMP_SCI_SOURCE if test_source is None else test_source
     arguments = ['--noconftest', '-c', '/dev/null', '-p', 'no:cacheprovider',
-                 '--import-mode=importlib', '--rootdir='+str(QOMP_SCI_SOURCE), '-q']
+                 '--import-mode=importlib', '--rootdir='+str(test_source), '-q']
     arguments += ['--collect-only'] if collect else [
         '--basetemp='+str(scratch/'pytest'), '--junitxml='+str(runner.root/'junit.xml')]
-    arguments += qomp_targets()
+    arguments += qomp_targets(test_source)
     # Assertion precedes even pytest/helper imports. Test source is fb11;
     # the ONLY added helper directory is the verified private installed tests.
     mapping = lib.read(prefix.parent/'installed-python-checks.json')
@@ -623,9 +625,11 @@ sys.exit(code)
     if collect:
         lib.write(runner.root/'collection.json', dict(
             value, group_counts=counts['groups'], focused_modules=counts['focused_modules'],
-            source=dict(commit=QOMP_SCI, tree=QOMP_TREE, path=str(QOMP_SCI_SOURCE/'tests/pytests')),
-            targets=qomp_targets(), test_source_sha256={
-                Path(path.split('::')[0]).name: lib.sha(path.split('::')[0]) for path in qomp_targets()},
+            source=(dict(commit=QOMP_SCI, tree=QOMP_TREE, path=str(QOMP_SCI_SOURCE/'tests/pytests'))
+                    if test_identity is None else test_identity),
+            targets=qomp_targets(test_source), test_source_sha256={
+                Path(path.split('::')[0]).name: lib.sha(path.split('::')[0])
+                for path in qomp_targets(test_source)},
             command_sha256=lib.sha(runner.root/'collect-tests-command.json'),
             command_result_sha256=lib.sha(runner.root/'collect-tests-result.json')))
     return value

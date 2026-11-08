@@ -737,7 +737,7 @@ class QompPureTests(unittest.TestCase):
 
     def test_wrapper_term_during_active_child_and_after_completion_publication(self):
         wrapper = (ROOT/'devtools/isapol_native_acceptance/qomp.sbatch').read_text()
-        for mode in ('build', 'checks'):
+        for mode in ('build', 'checks', 'collect-existing', 'checks-existing'):
             for window in ('payload', 'finalize'):
                 with self.subTest(mode=mode, window=window), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
@@ -779,7 +779,7 @@ else:
                     script.write_text(text.replace('/opt/slurm/current/bin/srun', str(srun)))
                     (root/'WINDOW').write_text(window)
                     args = ['bash', str(script), mode, str(root/'source'), 'a'*40, 'b'*40]
-                    if mode == 'checks':
+                    if mode in ('checks', 'checks-existing'):
                         args += ['c'*64, 'd'*64, 'e'*64]
                     process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                                text=True, env=dict(os.environ))
@@ -796,6 +796,468 @@ else:
                         if process.poll() is None:
                             process.kill()
                             process.communicate()
+
+
+class ExistingInstallPureTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.lib = B.qomp_library()
+
+    def test_reserved_argname_red_and_exact_real_test_alpha_rename_green(self):
+        original = subprocess.check_output(['/usr/bin/git', '-C', str(ROOT), 'show',
+            B.QOMP_SCI+':'+C.EXISTING_TEST_FILE], text=True)
+        corrected = subprocess.check_output(['/usr/bin/git', '-C', str(ROOT), 'show',
+            C.EXISTING_TEST_COMMIT+':'+C.EXISTING_TEST_FILE], text=True)
+        with self.assertRaisesRegex(ValueError, 'reserved'):
+            C.existing_parametrize_lint(original)
+        C.existing_parametrize_lint(corrected)
+        C.existing_test_ast(original, corrected)
+        for altered in (corrected.replace('(2, 1, 6)', '(2, 1, 14)'),
+                        corrected.replace('<= envelope', '< envelope'),
+                        corrected.replace('[1, 3, 17]', '[1, 3]')):
+            with self.assertRaises(ValueError):
+                C.existing_test_ast(original, altered)
+        self.assertNotIn('psi4', sys.modules)
+
+    def test_argname_literal_forms_and_uninspectable_refusal(self):
+        for names in ('"a,b"', '["a", "b"]', '("a", "b")'):
+            C.existing_parametrize_lint('@pytest.mark.parametrize('+names+',[(1,2)])\ndef t(): pass')
+        for names in ('"request"', '["a", "request"]', '("request",)', 'ARGNAMES',
+                      '"a,a"', '""', '["a", 3]'):
+            with self.assertRaises(ValueError):
+                C.existing_parametrize_lint('@pytest.mark.parametrize('+names+',[])\ndef t(): pass')
+        # Lint all actual corrected fixed selectors from Git, no source import.
+        for target in B.qomp_targets():
+            name = Path(target.split('::')[0]).name
+            text = subprocess.check_output(['/usr/bin/git', '-C', str(ROOT), 'show',
+                C.EXISTING_TEST_COMMIT+':tests/pytests/'+name], text=True)
+            C.existing_parametrize_lint(text)
+
+    def test_normal_gates_byte_exact_and_existing_modes_cannot_build(self):
+        import ast
+        text = (ROOT/'devtools/isapol_s66_campaign/phoenix_installed_checks.py').read_text()
+        previous = subprocess.check_output(['/usr/bin/git', '-C', str(ROOT), 'show',
+            C.EXISTING_BASE_OPS+':devtools/isapol_s66_campaign/phoenix_installed_checks.py'], text=True)
+        for name in ('qomp_build_gate', 'qomp_qualify', 'qomp_main', 'main', 'verify_runtime'):
+            def extract(source):
+                node = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)
+                            and n.name == name)
+                return ast.get_source_segment(source, node)
+            self.assertEqual(extract(text), extract(previous))
+        part = text[text.index('# The following diagnostic path'):]
+        for forbidden in ('qomp_build_gate(', 'clone_runtime(', 'qomp_materialize(',
+                          'qomp_build(', 'subprocess.Popen(', 'build-identity.json\'), manifest'):
+            self.assertNotIn(forbidden, part)
+
+    def test_manifest_duplicate_view_preserves_raw_and_rejects_escape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix, manifest = root/'env', root/'manifest'
+            manifest.write_text(f'{prefix}/x\n{prefix}/y\n{prefix}/x\n')
+            before = manifest.read_bytes()
+            self.assertEqual(C.existing_manifest(manifest, prefix, 3, 2), {'x', 'y'})
+            self.assertEqual(manifest.read_bytes(), before)
+            with self.assertRaises(ValueError):
+                C.existing_manifest(manifest, prefix, 3, 3)
+            for value in (str(root/'outside'), str(prefix/'../outside'), 'relative'):
+                manifest.write_text(value+'\n')
+                with self.assertRaises(ValueError):
+                    C.existing_manifest(manifest, prefix, 1, 1)
+
+    def test_complete_snapshot_namespace_and_resolved_target_bindings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tree, external = root/'build', root/'external'
+            tree.mkdir()
+            external.write_text('verified dependency')
+            (tree/'owned').write_text('object')
+            (tree/'inside').symlink_to(tree/'owned')
+            (tree/'dependency').symlink_to(external)
+            expected = {str(external): C.digest(external)}
+            before = C.existing_snapshot(tree, expected)
+            self.assertEqual(before['dependency']['resolved'], str(external))
+            with self.assertRaisesRegex(ValueError, 'escaping'):
+                C.existing_snapshot(tree, {})
+            external.write_text('changed')
+            with self.assertRaises(ValueError):
+                C.existing_snapshot(tree, expected)
+            (tree/'dependency').unlink()
+            (tree/'extra').write_text('new metadata is visible')
+            self.assertNotEqual(C.existing_snapshot(tree, {}), before)
+            (tree/'directory').symlink_to(root, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                C.existing_snapshot(tree, {})
+            (tree/'directory').unlink()
+            (tree/'broken').symlink_to(root/'absent')
+            with self.assertRaises(FileNotFoundError):
+                C.existing_snapshot(tree, {})
+
+    def test_all_prefix_attribution_rejects_unknown_changes_and_empty_dirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build = Path(tmp)
+            prefix = build/'env'
+            prefix.mkdir()
+            (prefix/'dependency').write_text('sealed')
+            original = dict(runtime_files={'dependency': C.digest(prefix/'dependency')},
+                            runtime_directories=['.'])
+            def gate(installed=(), cmake=None):
+                return C.existing_attribution(prefix, build, original, set(installed), {}, cmake or {})
+            self.assertEqual(set(gate()), {'dependency'})
+            (prefix/'arbitrary.so').write_text('unknown ELF')
+            with self.assertRaisesRegex(ValueError, 'unexplained prefix'):
+                gate()
+            with self.assertRaisesRegex(ValueError, 'native dependency'):
+                gate(['arbitrary.so'])
+            (prefix/'arbitrary.so').unlink()
+            (prefix/'empty').mkdir()
+            with self.assertRaisesRegex(ValueError, 'directory'):
+                gate()
+            (prefix/'empty').rmdir()
+            (prefix/'dependency').write_text('dependency tamper')
+            with self.assertRaises(ValueError):
+                gate(['dependency'])
+
+    def test_installed_python_is_strict_before_old_hash_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build = Path(tmp)
+            package = build/'env/lib/python3.13/site-packages/psi4'
+            package.mkdir(parents=True)
+            path = package/'metadata.py'
+            path.write_text('# configured\n')
+            original = dict(runtime_files={str(path.relative_to(build/'env')): C.digest(path)},
+                            runtime_directories=['.'])
+            with self.assertRaisesRegex(ValueError, 'unmapped installed Python'):
+                C.existing_attribution(build/'env', build, original, set(), {}, {})
+            checked = {'metadata.py': dict(sha256=C.digest(path))}
+            self.assertEqual(len(C.existing_attribution(
+                build/'env', build, original, set(), checked, {})), 1)
+            path.write_text('# tamper\n')
+            with self.assertRaises(ValueError):
+                C.existing_attribution(build/'env', build, original, set(), checked, {})
+
+    def test_literal_cmake_origin_not_arbitrary_installed_hash_or_escape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build = Path(tmp)
+            inner = build/'build/psi4-core-prefix/src/psi4-core-build'
+            prefix = build/'env'
+            inner.mkdir(parents=True)
+            configured = inner/'share/cmake/psi4/psi4Config.cmake'
+            configured.parent.mkdir(parents=True)
+            configured.write_text('# generated\n')
+            script = inner/'cmake_install.cmake'
+            def install(origin):
+                script.write_text('file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/share/cmake/psi4" '
+                                  'TYPE FILE FILES "'+str(origin)+'")\n')
+            install(configured)
+            mapping = C.existing_cmake_origins(build, prefix)
+            destination = prefix/'share/cmake/psi4/psi4Config.cmake'
+            destination.parent.mkdir(parents=True)
+            destination.write_bytes(configured.read_bytes())
+            original = dict(runtime_files={}, runtime_directories=['.'])
+            attributed = C.existing_attribution(prefix, build, original,
+                {str(destination.relative_to(prefix))}, {}, mapping)
+            self.assertEqual(len(attributed), 1)
+            for origin in (build.parent/'escape.cmake', inner/'${UNKNOWN}.cmake'):
+                install(origin)
+                with self.assertRaisesRegex(ValueError, 'CMake install origin'):
+                    C.existing_cmake_origins(build, prefix)
+
+    def test_accounting_requires_actual_three_rows_with_only_known_extern(self):
+        rows = '15320675|FAILED|1:0\n15320675.batch|FAILED|1:0\n15320675.0|FAILED|1:0\n'
+        with patch.object(C.subprocess, 'check_output', return_value=rows):
+            self.assertEqual(len(C.existing_accounting('15320675', 'FAILED', '1:0', B)), 3)
+        for text in (rows.replace('.0|FAILED', '.0|COMPLETED'), rows+rows.splitlines()[0]+'\n',
+                     rows+'15320675.extra|FAILED|1:0\n', rows.replace('1:0', '0:0')):
+            with patch.object(C.subprocess, 'check_output', return_value=text):
+                with self.assertRaises(ValueError):
+                    C.existing_accounting('15320675', 'FAILED', '1:0', B)
+        with patch.object(C.subprocess, 'check_output', return_value=
+                          rows+'15320675.extern|COMPLETED|0:0\n'):
+            C.existing_accounting('15320675', 'FAILED', '1:0', B)
+
+    def test_historical_literal_anchors_closed_paths_and_failed_receipts(self):
+        paths = C.existing_paths(B)
+        self.assertEqual(paths['build'], B.QOMP_BUILD)
+        self.assertEqual(paths['ops'].name, 'psi4.ccasp-native-s66-qomp-ops003')
+        self.assertEqual(paths['tests'].name, 'psi4.ccasp-native-s66-qomp-tests003')
+        self.assertEqual(C.EXISTING_ANCHORS['result.json'],
+                         'a67fe225027d06d2cb805b3c606b2f5f9a753670551c772ce5dd111eea5a0400')
+        self.assertEqual(C.EXISTING_ANCHORS['protected-before.json'],
+                         C.EXISTING_ANCHORS['protected-after.json'])
+        for value in C.EXISTING_ANCHORS.values():
+            self.assertRegex(value, r'^[0-9a-f]{64}$')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(C, 'existing_paths', return_value=dict(build=root)):
+                with self.assertRaisesRegex(ValueError, 'historical artifact'):
+                    C.existing_historical(B, self.lib)
+
+    def test_new_collect_pytest_targets_corrected_source_without_overlay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tests = root/'corrected'
+            for target in B.qomp_targets(tests):
+                p = Path(target.split('::')[0])
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text('# inert source, never imported\n')
+            self.lib.write(root/'installed-python-checks.json', {
+                'tests/isapol_water_recipe.py': dict(sha256='0'*64)})
+            lib = self.lib
+            class FakeRunner:
+                def run(self, label, command):
+                    self.command = command
+                    lib.write(root/(label+'-command.json'), list(map(str, command)))
+                    lib.write(root/(label+'-result.json'), dict(returncode=0))
+                    lib.write(root/'collection-nodes.json', collected())
+            runner = FakeRunner()
+            runner.root = root
+            identity = dict(commit=C.EXISTING_TEST_COMMIT, tree=C.EXISTING_TEST_TREE,
+                            path=str(tests/'tests/pytests'))
+            B.qomp_pytest(runner, root/'env', root/'scratch', lib, collect=True,
+                         test_source=tests, test_identity=identity)
+            saved = lib.read(root/'collection.json')
+            self.assertEqual(saved['source'], identity)
+            self.assertEqual(saved['targets'], B.qomp_targets(tests))
+            script = runner.command[-1]
+            self.assertIn("--rootdir="+str(tests), script)
+            self.assertNotIn('sys.path.insert(0,'+repr(str(tests)), script)
+            self.assertLess(script.index('import psi4'), script.index('import pytest'))
+            self.assertNotIn('psi4', sys.modules)
+
+    def test_new_operation_integrity_finally_on_native_exception_and_signal(self):
+        # Exercise actual perform/finalize control flow with fake identities and
+        # an inert Runner. No compiler/Psi4/allocation/server command is invoked.
+        for error in (ValueError('native fake failure'), InterruptedError('fake TERM')):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                paths = {k: root/k for k in ('ops', 'tests', 'build', 'collect', 'checks')}
+                args = NS(root=paths['collect'], scratch=root/'scratch', mode='collect-existing',
+                          ops_commit='a'*40, ops_tree='b'*40, launch_token='test-token')
+                baseline = dict(historical_identity={'fake': True})
+                lib = self.lib
+                runner = NS(stop=lambda *a: None, check=lambda: None)
+                prior = Path.cwd()
+                try:
+                    with patch.object(C, 'existing_paths', return_value=paths), \
+                         patch.object(C, 'existing_source_gate', return_value={'roles': 'fake'}), \
+                         patch.object(C, 'allocation', return_value={'JobId': 'fake'}), \
+                         patch.object(lib, 'allocation'), patch.object(B, 'qomp_runner', return_value=runner), \
+                         patch.object(C, 'existing_current', return_value=baseline) as current, \
+                         patch.object(B, 'qomp_identity', side_effect=error):
+                        with self.assertRaises(type(error)):
+                            C.existing_perform(B, lib, args)
+                    self.assertEqual(current.call_count, 2)
+                    result = lib.read(args.root/'result.json')
+                    self.assertEqual(result['status'], 'FAILED')
+                    self.assertTrue(result['preserved_current_build_and_old_base'])
+                    self.assertFalse((args.root/'verification.json').exists())
+                    self.assertFalse((args.root/'COMPLETED').exists())
+                finally:
+                    os.chdir(prior)
+
+    def test_new_finalizer_failure_monotonic_and_no_historical_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = NS(root=root, mode='collect-existing', launch_token='token',
+                      ops_commit='a'*40, ops_tree='b'*40, exit_code=143)
+            self.lib.write(root/'owner.json', dict(token='token', mode=args.mode))
+            self.lib.write(root/'COMPLETED', dict(exit_code=0, mode=args.mode, acceptance=False))
+            self.assertEqual(C.existing_finalize(B, self.lib, args), 143)
+            self.assertTrue((root/'COMPLETED_INVALIDATED').exists())
+            self.assertFalse((root/'COMPLETED').exists())
+            args.exit_code = 0
+            self.assertEqual(C.existing_finalize(B, self.lib, args), 143)
+            self.assertEqual(self.lib.read(root/'FAILED')['exit_code'], 143)
+
+    def test_distinct_collection_digest_receipt_and_role_binding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = dict(collect=root/'collect', tests=root/'tests')
+            paths['collect'].mkdir()
+            for target in B.qomp_targets(paths['tests']):
+                p = Path(target.split('::')[0])
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text('# test data only\n')
+            roles, identity, allocated = {'roles': 'exact'}, {'identity': 'exact'}, {'JobId': '100'}
+            collection = dict(collected(), source=dict(commit=C.EXISTING_TEST_COMMIT,
+                tree=C.EXISTING_TEST_TREE, path=str(paths['tests']/'tests/pytests')),
+                targets=B.qomp_targets(paths['tests']), test_source_sha256={
+                    Path(p.split('::')[0]).name: C.digest(p.split('::')[0])
+                    for p in B.qomp_targets(paths['tests'])})
+            def save(name, value):
+                (paths['collect']/name).write_text(json.dumps(value))
+            save('collect-tests-command.json', ['fixed', 'argv'])
+            save('collect-tests-result.json', dict(
+                argv=['fixed', 'argv'], returncode=0, interrupted=False))
+            for name in ('current-before.json', 'current-after.json'):
+                save(name, dict(current='attributed'))
+            collection.update(command_sha256=C.digest(paths['collect']/'collect-tests-command.json'),
+                command_result_sha256=C.digest(paths['collect']/'collect-tests-result.json'))
+            receipt = dict(schema='existing-failed-build-install-verification/1', source=roles,
+                historical_build_status='FAILED', historical_job='15320675', anchors=C.EXISTING_ANCHORS,
+                acceptance=False, production_adoption=False, identity=identity, allocation=allocated,
+                current_before_sha256=C.digest(paths['collect']/'current-before.json'),
+                current_after_sha256=C.digest(paths['collect']/'current-after.json'),
+                reconstructed_historical_full_seal=False,
+                historical_component_returncodes=dict(configure=0, install=0, identity=0, collection=2))
+            result = dict(status='VERIFIED_EXISTING_INSTALL_COLLECTED_NOT_QUALIFIED',
+                source=roles, acceptance=False, production_adoption=False, identity=identity,
+                allocation=allocated, preserved_current_build_and_old_base=True)
+            save('COMPLETED', dict(exit_code=0, mode='collect-existing', acceptance=False))
+            def invoke(r=receipt, c=collection, v=result):
+                for name, value in (('verification.json', r), ('collection.json', c), ('result.json', v)):
+                    save(name, value)
+                args = NS(ops_commit='a'*40, ops_tree='b'*40,
+                    verification_sha256=C.digest(paths['collect']/'verification.json'),
+                    collection_sha256=C.digest(paths['collect']/'collection.json'),
+                    collection_result_sha256=C.digest(paths['collect']/'result.json'))
+                return C.existing_collection_gate(B, self.lib, args)
+            with patch.object(C, 'existing_paths', return_value=paths), \
+                 patch.object(C, 'existing_source_gate', return_value=roles), \
+                 patch.object(C, 'existing_accounting'):
+                invoke()
+                for changed in (dict(receipt, schema='fresh-native-build-identity/1'),
+                                dict(receipt, historical_build_status='COMPLETED'),
+                                dict(receipt, source={'wrong': 'ops/test/compiled'}),
+                                dict(receipt, current_before_sha256='0'*64),
+                                dict(receipt, anchors={}),
+                                dict(receipt, identity={'stale': '8558'})):
+                    with self.assertRaises(ValueError):
+                        invoke(r=changed)
+                for count in (32, 82, 547, 555):
+                    with self.assertRaises(ValueError):
+                        invoke(c=dict(collection, nodes=collection['nodes'][:count]))
+                save('FAILED', dict(exit_code=1))
+                with self.assertRaises(ValueError):
+                    invoke()
+
+    def test_success_publication_after_integrity_and_initial_gap_before_import(self):
+        for state in ('success', 'initial-gap', 'postcheck-change'):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                paths = {k: root/k for k in ('ops', 'tests', 'build', 'collect', 'checks')}
+                args = NS(root=paths['collect'], scratch=root/'scratch', mode='collect-existing',
+                          ops_commit='a'*40, ops_tree='b'*40, launch_token='fake')
+                identity = dict(fake='identity')
+                baseline = dict(historical_identity=identity)
+                runner = NS(stop=lambda *unused: None, check=lambda: None)
+                def pytest(*unused, **kwargs):
+                    self.assertTrue(kwargs['collect'])
+                    self.assertEqual(kwargs['test_source'], paths['tests'])
+                    self.lib.write(args.root/'collection.json', collected())
+                    return collected()
+                current = ([baseline, baseline] if state == 'success' else
+                           [ValueError('attribution gap'), ValueError('attribution gap')]
+                           if state == 'initial-gap' else [baseline, dict(changed=True)])
+                prior = Path.cwd()
+                try:
+                    with patch.object(C, 'existing_paths', return_value=paths), \
+                         patch.object(C, 'existing_source_gate', return_value={'roles': 'fake'}), \
+                         patch.object(C, 'allocation', return_value={'JobId': 'fake'}), \
+                         patch.object(self.lib, 'allocation'), \
+                         patch.object(B, 'qomp_runner', return_value=runner), \
+                         patch.object(C, 'existing_current', side_effect=current), \
+                         patch.object(B, 'qomp_identity', return_value=identity) as imported, \
+                         patch.object(C, 'existing_identity'), \
+                         patch.object(B, 'qomp_pytest', side_effect=pytest):
+                        if state == 'success':
+                            C.existing_perform(B, self.lib, args)
+                        else:
+                            with self.assertRaises(ValueError):
+                                C.existing_perform(B, self.lib, args)
+                    result = self.lib.read(args.root/'result.json')
+                    if state == 'success':
+                        self.assertEqual(result['status'],
+                            'VERIFIED_EXISTING_INSTALL_COLLECTED_NOT_QUALIFIED')
+                        receipt = self.lib.read(args.root/'verification.json')
+                        self.assertEqual(receipt['historical_build_status'], 'FAILED')
+                        self.assertFalse(receipt['acceptance'])
+                        self.assertFalse(receipt['reconstructed_historical_full_seal'])
+                    else:
+                        self.assertEqual(result['status'], 'FAILED')
+                        self.assertFalse((args.root/'verification.json').exists())
+                    if state == 'initial-gap':
+                        imported.assert_not_called()
+                finally:
+                    os.chdir(prior)
+
+    def test_existing_source_gate_separate_roles_and_exact_allowlist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {k: root/k for k in ('ops', 'tests', 'build', 'collect', 'checks')}
+            science = root/'science'
+            corrected = subprocess.check_output(['/usr/bin/git', '-C', str(ROOT), 'show',
+                C.EXISTING_TEST_COMMIT+':'+C.EXISTING_TEST_FILE], text=True)
+            original = subprocess.check_output(['/usr/bin/git', '-C', str(ROOT), 'show',
+                B.QOMP_SCI+':'+C.EXISTING_TEST_FILE], text=True)
+            for target in B.qomp_targets(paths['tests']):
+                p = Path(target.split('::')[0])
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(corrected if p.name == Path(C.EXISTING_TEST_FILE).name else '# inert\n')
+            old = science/C.EXISTING_TEST_FILE
+            old.parent.mkdir(parents=True)
+            old.write_text(original)
+            commits = {paths['ops']: ('a'*40, 'b'*40), science: (B.QOMP_SCI, B.QOMP_TREE),
+                       paths['build']/'source': (B.QOMP_SCI, B.QOMP_TREE),
+                       paths['tests']: (C.EXISTING_TEST_COMMIT, C.EXISTING_TEST_TREE)}
+            def git(path, *args):
+                if args[0] == 'merge-base':
+                    return C.EXISTING_BASE_OPS
+                if args[0] == 'diff':
+                    return (C.EXISTING_TEST_FILE if path == paths['tests']
+                            else 'devtools/isapol_s66_campaign/phoenix_installed_checks.py')
+                if args == ('rev-parse', '--show-toplevel'):
+                    return str(path)
+                if args == ('rev-parse', 'HEAD'):
+                    return commits[path][0]
+                if args == ('rev-parse', 'HEAD^{tree}'):
+                    return commits[path][1]
+                return ''
+            args = NS(ops_commit='a'*40, ops_tree='b'*40)
+            with patch.object(C, 'existing_paths', return_value=paths), \
+                 patch.object(B, 'SOURCE', paths['ops']), patch.object(B, 'QOMP_SCI_SOURCE', science), \
+                 patch.object(B, 'qomp_checks_module', return_value=C), \
+                 patch.object(C.subprocess, 'run', return_value=NS(returncode=1)), \
+                 patch.object(B, 'qomp_git', side_effect=git):
+                value = C.existing_source_gate(B, args)
+                self.assertEqual(value['compiled']['commit'], B.QOMP_SCI)
+                self.assertEqual(value['tests']['commit'], C.EXISTING_TEST_COMMIT)
+                self.assertNotEqual(value['compiled'], value['tests'])
+                with patch.object(C.subprocess, 'run', return_value=NS(returncode=0)):
+                    with self.assertRaisesRegex(ValueError, 'must be detached'):
+                        C.existing_source_gate(B, args)
+                for path in commits:
+                    previous = commits[path]
+                    commits[path] = ('0'*40, previous[1])
+                    with self.assertRaisesRegex(ValueError, 'source role'):
+                        C.existing_source_gate(B, args)
+                    commits[path] = previous
+                with patch.object(B, 'qomp_git', side_effect=lambda p, *a:
+                    'psi4/driver/forbidden.py' if a[0] == 'diff' else git(p, *a)):
+                    with self.assertRaisesRegex(ValueError, 'allowlist'):
+                        C.existing_source_gate(B, args)
+
+    def test_current_identity_prefix_pair_version_and_real_core_required(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            package = prefix/'lib/python3.13/site-packages/psi4'
+            package.mkdir(parents=True)
+            core = package/'core.test.so'
+            core.write_bytes(b'inert NOT a native library')
+            pair = dict(core=C.digest(core), isapol_python='1'*64)
+            value = dict(implementation=pair, version='1.12a1.dev212',
+                         package=str(package/'__init__.py'), core=str(core))
+            with patch.object(C, 'EXISTING_PAIR', pair):
+                C.existing_identity(value, prefix)
+                for replacement in (dict(value, version='1.12a1.dev213'),
+                                    dict(value, package='/foreign/__init__.py'),
+                                    dict(value, implementation={'old': '8558'}),
+                                    dict(value, core=str(prefix/'foreign.so'))):
+                    with self.assertRaises(ValueError):
+                        C.existing_identity(replacement, prefix)
+                core.write_bytes(b'tamper')
+                with self.assertRaises(ValueError):
+                    C.existing_identity(value, prefix)
 
 
 if __name__ == '__main__':

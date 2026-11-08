@@ -1,5 +1,94 @@
 # Closed fb11 genuine build / installed-check mode
 
+## 151: separate read-only verification of failed build002 (ops003)
+
+**Not a successful normal build or production adoption.** Job15320675 and its
+batch/step FAILED1:0. Configure/install/identity component records returned0;
+collection returned2 because pytest reserves the parametrization name
+`request`. It collected547 nodes plus an error instead of the fixed556.
+The subsequent Runner stop-latch message is not evidence of external TERM.
+All historical bytes/statuses remain unchanged. The normal build/check gates
+below are unchanged and STILL REFUSE this failed build.
+
+Three explicit source roles:
+
+* compiled source/runtime and installed-Python mapping: exactfb11/tree3a192,
+  existing`BUILD002/source` and unchangedscience001;
+* executed tests: detached`311d17bf9177a972f3212c048e2f2177408b95d7`,
+  tree`57ff961824c0da6d76cf48e4da63fc83979f4f91`, in
+  `$P/gits/psi4.ccasp-native-s66-qomp-tests003`. Only five identifier/string
+  substitutions in the grid test; whole-AST alpha-rename and nine cases are
+  checked without imports. Literal-paramname lint covers the entire fixed
+  union before any native import. No corrected file is overlaid/installed.
+* operations: new clean child ofd8b in
+  `$P/gits/psi4.ccasp-native-s66-qomp-ops003`, explicit commit/tree and the same
+  exact five-file allowlist. Neither historical module dispatch nor source
+  pins are loosened.
+
+`collect-existing` and `checks-existing` share the sanitized wrapper, pinned
+Git/executables, guarded `-I -S -B` imports, verified8573 library, finite Runner
+and TERM/finalization behavior. They do NOT clone, configure, compile,
+materialize, install or create an environment. Their only outputs are NEW
+`$P/runs/ccasp-native-s66-qomp-fb11-{collection003,installed003}` and matching
+`/storage/scratch1/3/awallace43/<basename>`, plus parent-owned sibling logs.
+The wrapper's default remains8h for the original build mode; parent MUST use
+`--time=02:00:00` for either new mode (allocation gate checks it).
+
+Before ANY native import, verify all literal parent-observed historical
+artifact hashes, actual0 component records/approved configure/-j2 argv,
+FAILED15320675 accounting, anchored CMake caches/install manifests and
+absence of ordinary success receipts. Outer manifest has6348 entries and
+6344 unique paths: retain raw bytes/hash, explicitly deduplicate only its
+inventory view. Inner manifest has4985 unique paths. Full current prefix
+files must be attributed to original sealed clone bytes, strict compiled
+Python mapping, parent-observed core, or explicit source/configured install
+projections. Unexplained files/empty directories/new native dependencies fail.
+Literal `.cmake` install origins are read, never executed.
+
+Full BUILD002 snapshot covers prefix, objects, compiled source and EVERY
+retained metadata/log/marker, not just a selected receipt list. Link text AND
+resolved target/type/content binding are included; escaping files require
+verified dependency inventory entries; external directory links are refused.
+Internal directory targets are bound through the full namespace. OLD/BASE
+seals plus current resolved bindings and all source roles are checked before
+and after success/failure/TERM. Attribution gaps STOP, not a fallback or repair.
+This is a **new current attributed inventory**, not reconstructed historical
+full-seal evidence, a permissions sandbox or proof against transient writes.
+Cooperative TERM follows the integrity finally; SIGKILL/node loss can prevent
+postchecks. Missing postcheck equality proof is never replaced with a success claim.
+
+Parent must stage/approve, then independently verify actual job/batch/.0
+COMPLETED0, zero collection errors/skips, exact ordered556 and literal
+`verification.json`, `collection.json`, `result.json` digests before checks.
+
+```bash
+# Parent supplies new approved ops Git IDs; no launch is authorized by this doc.
+P=/storage/project/r-cs207-0/awallace43
+OPS=$P/gits/psi4.ccasp-native-s66-qomp-ops003
+# submit with explicitly clean approved scheduler environment (not --export=ALL
+# from a contaminated shell), absolute fresh sibling log paths and --chdir=$P:
+sbatch --time=02:00:00 --output="$COLLECTION_LOG/%j.out" \
+  --error="$COLLECTION_LOG/%j.err" "$OPS/devtools/isapol_native_acceptance/qomp.sbatch" \
+  collect-existing "$OPS" "$OPS_COMMIT" "$OPS_TREE"
+# ONLY after parent accounting/artifact review and literal hashes:
+sbatch --time=02:00:00 --output="$CHECK_LOG/%j.out" --error="$CHECK_LOG/%j.err" \
+  "$OPS/devtools/isapol_native_acceptance/qomp.sbatch" \
+  checks-existing "$OPS" "$OPS_COMMIT" "$OPS_TREE" \
+  "$VERIFICATION_SHA" "$COLLECTION_SHA" "$COLLECTION_RESULT_SHA"
+```
+
+The collection receipt schema is`existing-failed-build-install-verification/1`;
+qualification uses`existing-install-qualification/1`. Neither is a normal
+READY/fresh-native-build receipt or a measured production profile. All556
+tests run from corrected311d17 with ONLY hash-verified compiledfb11 installed
+helpers; the bad installed grid module is checked as data and not collected.
+Captured identity must equal parent-observed coref4a1/Python331b/versiondev212.
+Later profile/producer adoption must explicitly recognize this historical
+failure + new verification + new qualification chain, outside this phase.
+Two-hour resource budgets are not runtime promises.
+
+## Historical normal build/check interface (unchanged)
+
 Operations only, child of scientificfb11. No measured profile, descriptor/
 worker/cohort dispatch, receipt adoption or production acceptance. Historical
 producer/policy/FILES modules and old builder/check functions stay unchanged.
