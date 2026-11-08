@@ -79,3 +79,32 @@ Local generated input candidates:
 `/tmp/fsapt-def2-svp-inputs-01/inputs.json` and
 `/tmp/fsapt-def2-tzvp-inputs-01/inputs.json`.
 These are input preparation, not submitted jobs, native admission or timings.
+
+## CPU prerequisite submitted
+
+Frozen source/helper pin:`1cad631980626825918d058fd93d77455090b091`.
+Phoenix checkout:
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-def2-1cad631980`.
+The committed `psi4/` and `psi4_runtime_support/` trees are unchanged from
+the previously qualified927283f8ed source; this is still a new whole-build
+proof, not reuse or relabeling of the old proof.
+
+CPU-only build/qualification job **15317825** was submitted successfully on
+`gts-cs207-chemx / cpu-small / embers`,8CPUs,48GiB, three-hour cap.
+Controller readback and its own prolog confirm embers and RUNNING.
+Test-only request15317824 is not the submitted job.
+Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/phoenix-def2-build-1cad631980`.
+Manifest SHA256:
+`42d5a906eae8de4d8e5af13ecfbe441f05bcc0bcc72d4f3f1d84550bd76de0ce`.
+Hourly watcher:`b5300e303`.
+
+The local basis/profile/source-pin helper suite passed142tests. These are
+host-only checks, not native/GPU correctness evidence. The independent
+launch-safety review remains separate from the CPU prerequisite. No def2
+H200 producer or CPU protein reference has been submitted yet.
+
+SVP frozen data was copied (not execution code) to:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/benchmark-inputs-def2-svp-e93a40f2ca96/inputs.json`.
+SHA256:
+`e93a40f2ca961461cb98ba423b8eff5f199d7b201a0925185c80fff610dfe327`.
