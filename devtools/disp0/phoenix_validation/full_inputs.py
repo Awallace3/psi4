@@ -1,7 +1,7 @@
 """Independent frozen large-case dimensions, not an AO==MO rank assumption."""
 import hashlib
 import json
-from prepare_inputs import EXPECTED,SYSTEMS,geometry_metadata
+from prepare_inputs import SYSTEMS,geometry_metadata,input_basis_profile,expected_case
 
 
 def load_point(path,checksum,system):
@@ -9,6 +9,7 @@ def load_point(path,checksum,system):
     if hashlib.sha256(raw).hexdigest()!=checksum:
         raise RuntimeError("Frozen input manifest changed")
     value=json.loads(raw)
+    profile=input_basis_profile(value)
     if set(value["systems"])!=set(SYSTEMS) or system not in SYSTEMS:
         raise ValueError("Exactly the three requested systems required")
     point=value["systems"][system]
@@ -20,7 +21,7 @@ def load_point(path,checksum,system):
     counts=point["spherical_basis_counts"]
     actual=(sum(f["atoms"] for f in fragments),counts["primary"],counts["jkfit"],
             counts["rifit"],tuple(f["occupied"] for f in fragments))
-    if actual!=EXPECTED[system]:
+    if actual!=expected_case(profile,system):
         raise RuntimeError("Full-system input dimensions changed")
     occupied=[f["occupied"] for f in fragments]
     frozen=[f["frozen_occupied"] for f in fragments]

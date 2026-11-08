@@ -10,9 +10,42 @@ from pathlib import Path
 SYSTEMS = ("peptide", "nanotube", "protein83")
 Z = {"H":1,"C":6,"N":7,"O":8}
 BASIS = {"primary":"aug-cc-pvdz","jkfit":"aug-cc-pvdz-jkfit","rifit":"aug-cc-pvdz-ri"}
+BASIS_PROFILES = {
+    "aug-cc-pvdz": BASIS,
+    "def2-svp": {"primary": "def2-svp", "jkfit": "def2-universal-jkfit",
+                 "rifit": "def2-svp-ri"},
+    "def2-tzvp": {"primary": "def2-tzvp", "jkfit": "def2-universal-jkfit",
+                  "rifit": "def2-tzvp-ri"},
+}
 EXPECTED = {"peptide":(24,356,1308,1042,(20,20)),
             "nanotube":(42,742,2748,2240,(8,78)),
             "protein83":(83,1293,4762,3820,(78,68))}
+PROFILE_COUNTS = {
+    "aug-cc-pvdz": {system: row[1:4] for system,row in EXPECTED.items()},
+    "def2-svp": {"peptide": (210,1010,676), "nanotube": (444,2238,1472),
+                 "protein83": (766,3735,2488)},
+    "def2-tzvp": {"peptide": (394,1010,970), "nanotube": (902,2238,2216),
+                  "protein83": (1473,3735,3624)},
+}
+
+
+def expected_case(profile, system):
+    row = EXPECTED[system]
+    return (row[0], *PROFILE_COUNTS[profile][system], row[4])
+
+
+def input_basis_profile(document):
+    """A manifest cannot silently rename or mix fitting sets between arms."""
+    profile = document.get("basis_profile", "aug-cc-pvdz")
+    if (profile not in BASIS_PROFILES
+            or document.get("schema") != (1 if profile=="aug-cc-pvdz" else 2)
+            or document.get("basis_names") != BASIS_PROFILES[profile]
+            or set(document.get("basis_files", {})) != set(BASIS)):
+        raise ValueError("Unsupported/mixed frozen basis profile")
+    for role,name in BASIS_PROFILES[profile].items():
+        if document["basis_files"][role]["filename"] != name+".gbs":
+            raise ValueError("Frozen basis filename differs from selected profile")
+    return profile
 
 
 def digest(data):
@@ -65,7 +98,7 @@ def geometry_metadata(text):
     return result
 
 
-def spherical_counts(path):
+def spherical_counts(path, *, maximum_l=3):
     raw=path.read_bytes()
     lines=[line.strip() for line in raw.decode().splitlines()
            if line.strip() and not line.lstrip().startswith("!")]
@@ -84,16 +117,25 @@ def spherical_counts(path):
             counts[element]+=2*l+1;max_l[element]=max(max_l[element],l)
         elif len(fields)==3 and fields[0]=="SP":
             counts[element]+=4;max_l[element]=max(max_l[element],1)
-    if any(k not in counts or max_l[k]>3 for k in Z):
-        raise ValueError("The requested H/C/N/O basis must remain SPDF")
+    if any(k not in counts or max_l[k]>maximum_l for k in Z):
+        raise ValueError("The requested H/C/N/O basis exceeds its "
+                         + ("SPDF" if maximum_l==3 else str(maximum_l))
+                         + " angular-momentum bound")
     return {"filename":path.name,"sha256":digest(raw),
             "spherical_functions":{k:counts[k] for k in Z},
             "maximum_l":{k:max_l[k] for k in Z}}
 
 
-def prepare(module,basis_directory,output):
+def prepare(module,basis_directory,output, *, basis_profile="aug-cc-pvdz"):
+    if basis_profile not in BASIS_PROFILES:
+        raise ValueError("Explicit supported basis profile required")
+    names = BASIS_PROFILES[basis_profile]
     geometries,source_sha=literals(module)
-    bases={role:spherical_counts(basis_directory/(name+".gbs")) for role,name in BASIS.items()}
+    # Primary overlap/localization remains SPDF. Native auxiliary integrals
+    # admit the G shells present in the explicitly selected def2 fitting sets.
+    bases={role:spherical_counts(basis_directory/(name+".gbs"),
+                                maximum_l=3 if role=="primary" else 4)
+           for role,name in names.items()}
     records={}
     for name,text in geometries.items():
         fragments=geometry_metadata(text)
@@ -103,7 +145,8 @@ def prepare(module,basis_directory,output):
         occupied=tuple(f["occupied"] for f in fragments)
         actual=(sum(f["atoms"] for f in fragments),counts["primary"],
                 counts["jkfit"],counts["rifit"],occupied)
-        if actual!=EXPECTED[name]:raise ValueError("Requested dimensions changed: "+name)
+        if actual!=expected_case(basis_profile,name):
+            raise ValueError("Requested dimensions changed: "+name)
         response=[]
         for f in fragments:
             o=f["occupied"];v=counts["primary"]-o;q=counts["jkfit"]
@@ -114,9 +157,11 @@ def prepare(module,basis_directory,output):
             "response_resident_factor_lower_bounds":response}
     result={"schema":1,"scope":"FROZEN_INPUTS_AND_LOWER_BOUNDS_NOT_RUN_ADMISSION",
         "source_module":str(module),"source_module_sha256":source_sha,
-        "systems":records,"basis_names":BASIS,"basis_files":bases,
+        "systems":records,"basis_names":names,"basis_files":bases,
         "warning":"Resident factors exclude native/HF plans, workspaces, IAO/IBO and solver buffers. "
                   "These estimates do not establish H200 memory admission or timing readiness."}
+    if basis_profile!="aug-cc-pvdz":
+        result.update(schema=2,basis_profile=basis_profile)
     output.mkdir(mode=0o700)
     with (output/"inputs.json").open("x") as stream:
         json.dump(result,stream,indent=2,sort_keys=True,allow_nan=False)
@@ -128,9 +173,10 @@ def main():
     parser.add_argument("--module",type=Path,required=True)
     parser.add_argument("--basis-directory",type=Path,required=True)
     parser.add_argument("--output",type=Path,required=True)
+    parser.add_argument("--basis-profile",choices=tuple(BASIS_PROFILES),default="aug-cc-pvdz")
     args=parser.parse_args()
     value=prepare(args.module.resolve(strict=True),args.basis_directory.resolve(strict=True),
-                  args.output.resolve())
+                  args.output.resolve(),basis_profile=args.basis_profile)
     print(json.dumps({"inputs":str(args.output.resolve()/"inputs.json"),
         "systems":{k:v["spherical_basis_counts"] for k,v in value["systems"].items()}},indent=2))
 

@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from stage_scaling import (configuration, traced_command, require_producer, submit,
-                           SCIENCE_PIN, digest, cpu_scratch_parent)
+                           SCIENCE_PIN, digest, cpu_scratch_parent, cpu_wall_seconds)
 
 
 class StageScalingTests(unittest.TestCase):
@@ -29,6 +29,16 @@ class StageScalingTests(unittest.TestCase):
             self.assertEqual((gpu["threads"], cpu["threads"]), (8, 24))
         with self.assertRaises(ValueError):
             configuration(self.base(), Path("/aliases"), "protein157", "gpu")
+
+    def test_new_whole_build_pin_is_explicit_without_changing_memory_policy(self):
+        base = {**self.base(), "source_pin": "a"*40}
+        config = configuration(base, Path("/new/aliases"), "protein83", "gpu")
+        self.assertEqual(config["source_pin"], "a"*40)
+        self.assertEqual(config["device_memory_limit_bytes"], 120*1024**3)
+        self.assertEqual(config["native_persistent_bytes"], 12*1024**3)
+        for pin in ("main", "927283f8ed", "", None):
+            with self.assertRaises(ValueError):
+                configuration({**base,"source_pin":pin}, Path("/aliases"), "protein83", "gpu")
 
     def test_trace_wraps_only_authenticated_entry_and_retains_original_args(self):
         argv = ["/bin/bash", "-c", "script", "label", "/stage/psi4", "/env/python",
@@ -67,6 +77,8 @@ class StageScalingTests(unittest.TestCase):
             (root/"stage-result.json").write_text(json.dumps(proof))
             self.assertEqual(require_producer(root, "nanotube", "abc"), proof)
             with self.assertRaises(RuntimeError):
+                require_producer(root, "nanotube", "abc", science_pin="a"*40)
+            with self.assertRaises(RuntimeError):
                 require_producer(root, "peptide", "abc")
             proof["samples"][0]["energy_seconds"] = 999
             (root/"stage-result.json").write_text(json.dumps(proof))
@@ -83,7 +95,10 @@ class StageScalingTests(unittest.TestCase):
 
     def test_known_over_eight_hour_cpu_and_excluded_protein_are_not_submitted(self):
         with self.assertRaisesRegex(ValueError, "exceeded 8h"):
-            submit(SimpleNamespace(kind="cpu", system="protein83"))
+            cpu_wall_seconds("protein83", "aug-cc-pvdz")
+        with self.assertRaisesRegex(ValueError, "exceeded 8h"):
+            cpu_wall_seconds("protein83", "def2-tzvp")
+        self.assertEqual(cpu_wall_seconds("protein83", "def2-svp"), 28800)
         with self.assertRaisesRegex(ValueError, "excluded"):
             submit(SimpleNamespace(kind="gpu", system="protein157"))
 

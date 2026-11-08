@@ -13,11 +13,24 @@ import subprocess
 import sys
 import time
 import statistics
+import re
 
 SYSTEMS = ("peptide", "nanotube", "protein83")
 SCIENCE_PIN = "927283f8ed0a94d42179c35dd2a1a5bce674347e"
 NATIVE_GIB = {"peptide": 12, "nanotube": 12, "protein83": 12}
 WALL = {"peptide": 3600, "nanotube": 14400, "protein83": 28800}
+
+
+def pinned_science(pin):
+    if not isinstance(pin, str) or re.fullmatch(r"[0-9a-f]{40}", pin) is None:
+        raise ValueError("Exact scientific commit SHA required")
+    return pin
+
+
+def cpu_wall_seconds(system, profile):
+    if system=="protein83" and profile!="def2-svp":
+        raise ValueError("Prior 24-core Protein83 reference exceeded 8h; needs a separate approved plan")
+    return 3600 if system=="peptide" else 28800
 
 
 def digest(path):
@@ -32,7 +45,7 @@ def write(path, data):
 
 def configuration(base, aliases, system, kind):
     if (system not in SYSTEMS or kind not in ("gpu", "cpu")
-            or base["source_pin"] != SCIENCE_PIN or base["device_family"] != "H200"
+            or not pinned_science(base["source_pin"]) or base["device_family"] != "H200"
             or base.get("identity_contract") != "process-owned-kernel-sealed-snapshots-v1"):
         raise ValueError("Qualified frozen H200 installation and selected system required")
     return {**base, "threads": 8 if kind == "gpu" else 24,
@@ -53,13 +66,13 @@ def traced_command(command, tracer, trace):
     return command
 
 
-def require_producer(root, system, checksum):
+def require_producer(root, system, checksum, *, science_pin=SCIENCE_PIN):
     if (root/"job-status.env").read_text().splitlines() != ["exit_code=0", "term_received=0"]:
         raise RuntimeError("Finalized unpreempted GPU producer required")
     report = json.loads((root/"stage-result.json").read_text())
     if (report["status"] != "PASS_GPU_REPEATS_AND_TRACE_AWAITING_CPU"
             or not report["scratch_cleanup"]["complete"] or report["system"] != system
-            or report.get("source_pin") != SCIENCE_PIN or report.get("kind") != "gpu"
+            or report.get("source_pin") != science_pin or report.get("kind") != "gpu"
             or report["gpu_config_sha256"] != checksum or len(report["samples"]) != 3):
         raise RuntimeError("Matching complete three-repeat GPU stage producer required")
     pids, values = set(), []
@@ -68,7 +81,7 @@ def require_producer(root, system, checksum):
         if Path(row["path"]).resolve() != path.resolve() or digest(path/"result.json") != row["result_sha256"]:
             raise RuntimeError("GPU sample identity/seal changed")
         doc = json.loads((path/"result.json").read_text())
-        if (doc["source_pin"] != SCIENCE_PIN or doc["arm"] != "gpu" or doc["system"] != system
+        if (doc["source_pin"] != science_pin or doc["arm"] != "gpu" or doc["system"] != system
                 or doc["runtime_config_sha256"] != checksum or not doc["benchmark"]
                 or doc["status"] != "EXECUTED_REQUIRES_INDEPENDENT_COMPARISON"
                 or doc["benchmark_whole_energy_seconds"] != row["energy_seconds"]
@@ -95,9 +108,10 @@ def cpu_scratch_parent():
 
 def execute(manifest_path):
     manifest = json.loads(manifest_path.read_text())
+    science_pin=pinned_science(manifest["science_pin"])
     source = Path(manifest["source"])
     outer = Path(__file__).resolve().parents[3]
-    for folder, pin in ((source, SCIENCE_PIN), (outer, manifest["outer_pin"])):
+    for folder, pin in ((source, science_pin), (outer, manifest["outer_pin"])):
         if (subprocess.check_output(["git", "-C", str(folder), "rev-parse", "HEAD"],
                                     text=True).strip() != pin
                 or subprocess.check_output(["git", "-C", str(folder), "status", "--porcelain"],
@@ -106,9 +120,10 @@ def execute(manifest_path):
     # Original proof-authenticated runtime/worker helpers, not new copies.
     helper = source/"devtools/disp0/phoenix_validation"
     sys.path.insert(0, str(helper))
-    os.environ.update(DISP0_SOURCE=str(source), DISP0_PIN=SCIENCE_PIN)
+    os.environ.update(DISP0_SOURCE=str(source), DISP0_PIN=science_pin)
     from benchmark_suite import worker_command, summary
     from full_inputs import load_point
+    from prepare_inputs import input_basis_profile
     from gpu_runtime import read_config, retirement_channel
     from fragment_gate import require_oracle_config
     from repeat_gauge import compare_repeat
@@ -123,7 +138,7 @@ def execute(manifest_path):
 
     root = Path(os.environ["DISP0_JOB_RUN"]).resolve(strict=True)
     report_path = root/"stage-result.json"
-    result = {"status": "STARTED", "source_pin": SCIENCE_PIN,
+    result = {"status": "STARTED", "source_pin": science_pin,
               "outer_pin": manifest["outer_pin"], "system": manifest["system"],
               "kind": manifest["kind"], "accepted_speedup_count": 0,
               "processes": [], "samples": [], "manifest_sha256": digest(manifest_path),
@@ -137,7 +152,8 @@ def execute(manifest_path):
         if manifest.get("prerequisite"):
             prerequisite = Path(manifest["prerequisite"])
             peer = json.loads((prerequisite.parent/"manifest.json").read_text())
-            require_producer(prerequisite, "peptide", peer["config_sha256"])
+            require_producer(prerequisite, "peptide", peer["config_sha256"],
+                             science_pin=science_pin)
             result["prerequisite_result_sha256"] = digest(prerequisite/"stage-result.json")
         raw = subprocess.check_output(
             ["/opt/slurm/current/bin/scontrol", "show", "job", "-o", os.environ["SLURM_JOB_ID"]],
@@ -145,12 +161,18 @@ def execute(manifest_path):
         validate_allocation(fields(raw), manifest)
         result["scheduler_job"] = raw
         config, _ = read_config(Path(manifest["config"]), manifest["config_sha256"])
+        if config["source_pin"]!=science_pin:
+            raise RuntimeError("Runtime and submission scientific pins differ")
         if config["threads"] != (8 if manifest["kind"] == "gpu" else 24):
             raise RuntimeError("Wrong worker thread policy")
         if len(os.sched_getaffinity(0)) < config["threads"]:
             raise RuntimeError("Insufficient allocated CPU affinity")
         system = manifest["system"]
         _, dimensions = load_point(Path(manifest["inputs"]), manifest["inputs_sha256"], system)
+        profile=input_basis_profile(json.loads(Path(manifest["inputs"]).read_text()))
+        if manifest.get("basis_profile", "aug-cc-pvdz")!=profile:
+            raise RuntimeError("Submission basis differs from frozen inputs")
+        result["basis_profile"]=profile
         # Bind fresh scratch after srun has rewritten step environment variables.
         parent = (Path("/storage/scratch1/3/awallace43") if manifest["kind"] == "gpu"
                   else cpu_scratch_parent())
@@ -211,7 +233,7 @@ def execute(manifest_path):
             if code or reason is not None:
                 raise RuntimeError("Scientific child failed: "+label)
             doc = json.loads((output/"result.json").read_text())
-            if (doc["source_pin"] != SCIENCE_PIN or doc["arm"] != manifest["kind"]
+            if (doc["source_pin"] != science_pin or doc["arm"] != manifest["kind"]
                     or doc.get("system") != system or not doc["benchmark"]
                     or doc["runtime_config_sha256"] != manifest["config_sha256"]
                     or doc["status"] != "EXECUTED_REQUIRES_INDEPENDENT_COMPARISON"
@@ -273,7 +295,8 @@ def execute(manifest_path):
             if (digest(gpu_root/"stage-result.json") != manifest["gpu_producer_sha256"]
                     or digest(gpu_root.parent/"manifest.json") != manifest["gpu_manifest_sha256"]):
                 raise RuntimeError("Finalized GPU producer/manifest changed after CPU submission")
-            peer = require_producer(gpu_root, system, manifest["gpu_config_sha256"])
+            peer = require_producer(gpu_root, system, manifest["gpu_config_sha256"],
+                                    science_pin=science_pin)
             gpu_config, _ = read_config(Path(manifest["gpu_config"]),
                                        manifest["gpu_config_sha256"])
             require_oracle_config(config, gpu_config)
@@ -321,14 +344,13 @@ def execute(manifest_path):
 def submit(args):
     if args.system not in SYSTEMS:
         raise ValueError("Protein157 and unrequested systems are excluded")
-    if args.kind == "cpu" and args.system == "protein83":
-        raise ValueError("Prior 24-core Protein83 reference exceeded 8h; needs a separate approved plan")
     base_path = args.base_config.resolve(strict=True)
     base = json.loads(base_path.read_text())
+    science_pin=pinned_science(base["source_pin"])
     source = Path(base["source"]).resolve(strict=True)
     outer = Path(__file__).resolve().parents[3]
     pin = subprocess.check_output(["git", "-C", str(outer), "rev-parse", "HEAD"], text=True).strip()
-    for folder, expected in ((outer, pin), (source, SCIENCE_PIN)):
+    for folder, expected in ((outer, pin), (source, science_pin)):
         if (subprocess.check_output(["git", "-C", str(folder), "rev-parse", "HEAD"],
                                     text=True).strip() != expected
                 or subprocess.check_output(["git", "-C", str(folder), "status", "--porcelain"],
@@ -336,14 +358,17 @@ def submit(args):
             raise RuntimeError("Clean frozen helper/source required")
     sys.path.insert(0, str(source/"devtools/disp0/phoenix_validation"))
     from full_inputs import load_point
+    from prepare_inputs import input_basis_profile
     # Login-node preflight reads small immutable proof documents only.
     # Full prefix/CUDA/ELF authentication is repeated inside the allocation.
     proof_path = Path(base["build_proof"])
     proof = json.loads(proof_path.read_text())
-    if (proof.get("status") != "PASS" or proof.get("pin") != SCIENCE_PIN
+    if (proof.get("status") != "PASS" or proof.get("pin") != science_pin
             or digest(proof_path) != base["build_proof_sha256"]):
         raise RuntimeError("Completed exact whole-stage CPU build proof required")
     load_point(args.inputs, args.inputs_sha256, args.system)
+    profile=input_basis_profile(json.loads(args.inputs.read_text()))
+    wall = WALL[args.system] if args.kind=="gpu" else cpu_wall_seconds(args.system,profile)
     root = args.root
     if not root.is_absolute():
         raise ValueError("Fresh absolute output root required")
@@ -362,12 +387,12 @@ def submit(args):
             raise RuntimeError("CPU/GPU frozen input manifests differ")
         config_path = Path(peer_manifest["config"])
         peer = json.loads(config_path.read_text())
-        require_producer(gpu_root, args.system, digest(config_path))
+        require_producer(gpu_root, args.system, digest(config_path), science_pin=science_pin)
         config = {**peer, "threads": 24}
     config_path = root/"runtime-config.json"
     write(config_path, config)
-    wall = WALL[args.system] if args.kind == "gpu" else (3600 if args.system == "peptide" else 28800)
-    manifest = {"source": str(source), "science_pin": SCIENCE_PIN, "outer_pin": pin,
+    manifest = {"source": str(source), "science_pin": science_pin, "outer_pin": pin,
+                "basis_profile": profile,
                 "kind": args.kind, "system": args.system, "repeat": args.repeat,
                 "config": str(config_path), "config_sha256": digest(config_path),
                 "inputs": str(args.inputs.resolve(strict=True)), "inputs_sha256": args.inputs_sha256,
@@ -386,12 +411,13 @@ def submit(args):
         job = (prior/"job-id.txt").read_text().strip()
         if (not job.isdecimal() or args.kind != "gpu" or args.system == "peptide"
                 or prior_manifest["system"] != "peptide" or prior_manifest["kind"] != "gpu"
-                or prior_manifest["outer_pin"] != pin or prior_manifest["science_pin"] != SCIENCE_PIN):
+                or prior_manifest["outer_pin"] != pin or prior_manifest["science_pin"] != science_pin):
             raise ValueError("Same-helper peptide GPU preflight required")
         prerequisite = prior/("job-"+job)
         manifest["prerequisite"] = str(prerequisite)
         if (prerequisite/"job-status.env").exists():
-            require_producer(prerequisite, "peptide", prior_manifest["config_sha256"])
+            require_producer(prerequisite, "peptide", prior_manifest["config_sha256"],
+                             science_pin=science_pin)
         else:
             parent = job
     write(root/"manifest.json", manifest)

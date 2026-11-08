@@ -11,14 +11,14 @@ import statistics
 import subprocess
 import sys
 
-from stage_scaling import SCIENCE_PIN, SYSTEMS, digest, require_producer, write
+from stage_scaling import SCIENCE_PIN, SYSTEMS, digest, require_producer, write, pinned_science
 
 
-def completed(root, expected_status):
+def completed(root, expected_status, *, science_pin=SCIENCE_PIN):
     if (root/"job-status.env").read_text().splitlines() != ["exit_code=0", "term_received=0"]:
         raise RuntimeError("Uninterrupted exit0 allocation required: "+str(root))
     document = json.loads((root/"stage-result.json").read_text())
-    if (document["status"] != expected_status or document["source_pin"] != SCIENCE_PIN
+    if (document["status"] != expected_status or document["source_pin"] != science_pin
             or not document["scratch_cleanup"]["complete"]
             or any(p["returncode"] or not p["owned_group_reaped"]
                    or p.get("retirement_reason") is not None for p in document["processes"])):
@@ -26,7 +26,7 @@ def completed(root, expected_status):
     return document
 
 
-def worker(row, expected):
+def worker(row, expected, *, science_pin=SCIENCE_PIN):
     if Path(row["path"]).resolve(strict=True) != expected.resolve(strict=True):
         raise RuntimeError("Scientific sample path changed")
     for name, key in (("result.json", "result_sha256"), ("timer.dat", "timer_sha256"),
@@ -41,7 +41,7 @@ def worker(row, expected):
         if digest(expected/"fsapt"/name) != checksum:
             raise RuntimeError("Scientific F-SAPT output seal changed")
     if (doc["status"] != "EXECUTED_REQUIRES_INDEPENDENT_COMPARISON"
-            or doc["source_pin"] != SCIENCE_PIN or not doc["benchmark"]
+            or doc["source_pin"] != science_pin or not doc["benchmark"]
             or doc["benchmark_whole_energy_seconds"] != row["energy_seconds"]):
         raise RuntimeError("Scientific worker provenance/timer changed")
     return doc
@@ -51,12 +51,13 @@ def qualify(args):
     gpu_root = args.gpu_root.resolve(strict=True)
     gpu_manifest_path = gpu_root.parent/"manifest.json"
     manifest = json.loads(gpu_manifest_path.read_text())
+    science_pin=pinned_science(manifest["science_pin"])
     system = manifest["system"]
     if system not in SYSTEMS or len(args.cpu_roots) != 3:
         raise ValueError("Exactly three selected-system CPU reference/oracle roots required")
     source = Path(manifest["source"])
     if (subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"],
-                                text=True).strip() != SCIENCE_PIN
+                                text=True).strip() != science_pin
             or subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"],
                                        text=True).strip()):
         raise RuntimeError("Frozen original scientific/comparison helper source changed")
@@ -64,6 +65,7 @@ def qualify(args):
     import numpy as np
     from fragment_gate import FIELDS, require_oracle_config
     from full_inputs import load_point
+    from prepare_inputs import input_basis_profile, BASIS_PROFILES
     from repeat_gauge import compare_repeat
     from run_full import compare_energy
     from run_gate import compare
@@ -71,25 +73,31 @@ def qualify(args):
     args.output.mkdir(mode=0o700)  # Never rewrite any previous qualification.
     path = args.output/"qualification.json"
     report = {"status": "STARTED", "accepted_speedup_count": 0, "system": system,
-              "science_pin": SCIENCE_PIN, "execution_helper_pin": manifest["outer_pin"],
+              "science_pin": science_pin, "execution_helper_pin": manifest["outer_pin"],
               "analysis_recipe_sha256": digest(__file__), "checks": [],
               "timing_scope": "FRESH_PROCESS_WHOLE_ENERGY_BASELINES_NOT_EXTRA_TERM_TRACE"}
     write(path, report)
     try:
         gpu_hash = digest(gpu_root/"stage-result.json")
-        gpu = completed(gpu_root, "PASS_GPU_REPEATS_AND_TRACE_AWAITING_CPU")
-        require_producer(gpu_root, system, manifest["config_sha256"])
+        gpu = completed(gpu_root, "PASS_GPU_REPEATS_AND_TRACE_AWAITING_CPU",
+                        science_pin=science_pin)
+        require_producer(gpu_root, system, manifest["config_sha256"], science_pin=science_pin)
         config = json.loads(Path(manifest["config"]).read_text())
         if digest(manifest["config"]) != manifest["config_sha256"]:
             raise RuntimeError("GPU runtime configuration changed")
         _, dimensions = load_point(Path(manifest["inputs"]), manifest["inputs_sha256"], system)
+        profile=input_basis_profile(json.loads(Path(manifest["inputs"]).read_text()))
+        if config["source_pin"]!=science_pin:
+            raise RuntimeError("Runtime scientific pin changed")
+        report["basis_profile"]=profile
         cpus, values, cpu_hashes, roots = [], [], [], []
         for i, given in enumerate(args.cpu_roots):
             root = given.resolve(strict=True)
             cp = json.loads((root.parent/"manifest.json").read_text())
-            d = completed(root, "PASS_CPU_REFERENCE_AND_ORACLE_NEEDS_THREE_REPEAT_AGGREGATION")
+            d = completed(root, "PASS_CPU_REFERENCE_AND_ORACLE_NEEDS_THREE_REPEAT_AGGREGATION",
+                          science_pin=science_pin)
             if (cp["kind"] != "cpu" or cp["repeat"] != i or cp["system"] != system
-                    or cp["science_pin"] != SCIENCE_PIN or cp["outer_pin"] != manifest["outer_pin"]
+                    or cp["science_pin"] != science_pin or cp["outer_pin"] != manifest["outer_pin"]
                     or d["outer_pin"] != manifest["outer_pin"]
                     or digest(root.parent/"manifest.json") != d["manifest_sha256"]
                     or cp["gpu_producer_sha256"] != gpu_hash
@@ -103,19 +111,25 @@ def qualify(args):
             cpus.append(cp["config_sha256"])
             require_oracle_config(json.loads(Path(cp["config"]).read_text()), config)
             cpu_path = root/(system+"-cpu")
-            cpu = worker(d["reference"], cpu_path)
+            cpu = worker(d["reference"], cpu_path, science_pin=science_pin)
             original = gpu["samples"][i]
             gpu_path = gpu_root/f"{system}-r{i}"
-            peer = worker(original, gpu_path)
+            peer = worker(original, gpu_path, science_pin=science_pin)
             oracle_row = next(p for p in d["processes"] if p["label"] == system+"-oracle")
             oracle_path = root/(system+"-oracle")
-            oracle = worker(oracle_row, oracle_path)
+            oracle = worker(oracle_row, oracle_path, science_pin=science_pin)
             if (cpu["arm"] != "cpu" or peer["arm"] != "gpu" or oracle["arm"] != "cpu"
                     or any(doc["system"] != system or doc["orbital_dimensions"] != dimensions
                            for doc in (cpu, peer, oracle))
                     or oracle["oracle_input_result_sha256"] != original["result_sha256"]
                     or set(oracle["same_gauge_compared_fields"]) != set(FIELDS)):
                 raise RuntimeError("Independent oracle or scientific sample identity differs")
+            bases=BASIS_PROFILES[profile]
+            for doc in (cpu,peer,oracle):
+                for option,role in (("basis","primary"),("df_basis_scf","jkfit"),
+                                    ("df_basis_sapt","jkfit"),("df_basis_mp2","rifit")):
+                    if doc["options"][option]!=bases[role]:
+                        raise RuntimeError("Worker basis differs from frozen matched profile")
             errors = {}
             with np.load(oracle_path/"fragment-matrices.npz", allow_pickle=False) as left, \
                     np.load(gpu_path/"fragment-matrices.npz", allow_pickle=False) as right:
@@ -136,7 +150,7 @@ def qualify(args):
             cpu_hashes.append(check["cpu_report_sha256"])
             report["checks"].append(check)
             write(path, report)
-        traced = worker(gpu["trace"], gpu_root/(system+"-traced"))
+        traced = worker(gpu["trace"], gpu_root/(system+"-traced"), science_pin=science_pin)
         if traced["arm"] != "gpu":
             raise RuntimeError("Wrong separately traced worker backend")
         if len(set(roots)) != 3 or any(not 0 < v < float("inf") for v in values):
@@ -150,7 +164,7 @@ def qualify(args):
             cpu_over_gpu_ratio=statistics.median(values)/statistics.median(gpu_values),
             gpu_producer_sha256=gpu_hash, gpu_manifest_sha256=digest(gpu_manifest_path),
             cpu_report_sha256=cpu_hashes, extra_trace_excluded_from_speedup=True,
-            qualification_scope="HF-reference F-SAPT/aug-cc-pVDZ; CPU24 vs H200+8 host cores")
+            qualification_scope="HF-reference F-SAPT/"+profile+"; CPU24 vs H200+8 host cores")
     except BaseException as error:
         report.update(status="FAILED_QUALIFICATION", accepted_speedup_count=0,
                       error=f"{type(error).__name__}: {error}")

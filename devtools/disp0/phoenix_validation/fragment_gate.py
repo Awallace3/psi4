@@ -41,12 +41,16 @@ FIELDS = ("Qocc0A", "Qocc0B", "Uocc0A", "Uocc0B", "Locc_A", "Locc_B",
 WATER_DIMENSIONS={"atoms":6,"ao":82,"occupied":[5,5],"frozen":[1,1],"active":[4,4]}
 
 
-def options(gpu, scaled):
+def options(gpu, scaled, basis_profile="aug-cc-pvdz"):
+    from prepare_inputs import BASIS_PROFILES
+    if basis_profile not in BASIS_PROFILES:
+        raise ValueError("Explicit supported basis profile required")
+    bases=BASIS_PROFILES[basis_profile]
     # SAPTDFT selects the independent exact Python CPU fragment continuation.
     # FISAPT would silently select the historically different native CPU route.
-    return {"basis": "aug-cc-pvdz", "puream": True,
-        "df_basis_scf": "aug-cc-pvdz-jkfit", "df_basis_sapt": "aug-cc-pvdz-jkfit",
-        "df_basis_mp2": "aug-cc-pvdz-ri", "reference": "rhf", "scf_type": "df",
+    return {"basis": bases["primary"], "puream": True,
+        "df_basis_scf": bases["jkfit"], "df_basis_sapt": bases["jkfit"],
+        "df_basis_mp2": bases["rifit"], "reference": "rhf", "scf_type": "df",
         "use_cuest": gpu, "cuest_mixed_precision": False, "cuest_gemm_min_dim": 0,
         # cuEST's default AO-pair screening can accumulate >1e-10 nuclear
         # attraction errors for diffuse shells. Tighten the *input accuracy*
@@ -283,12 +287,15 @@ def main():
             oracle_config_sha=args.oracle_config_sha256
             result["oracle_gpu_config_sha256"]=oracle_config_sha
         expected_dimensions=WATER_DIMENSIONS
+        basis_profile="aug-cc-pvdz"
         text=WATER
         if any(v is not None for v in (args.inputs,args.inputs_sha256,args.system)):
             if not all(v is not None for v in (args.inputs,args.inputs_sha256,args.system)):
                 raise ValueError("Full-system diagnostics require frozen inputs, hash and system")
             from full_inputs import load_point
             point,expected_dimensions=load_point(args.inputs,args.inputs_sha256,args.system)
+            from prepare_inputs import input_basis_profile
+            basis_profile=input_basis_profile(json.loads(args.inputs.read_text()))
             if args.distance_change!=0:
                 raise ValueError("Full-system geometry must remain exactly frozen")
             text=point["geometry"]
@@ -319,7 +326,8 @@ def main():
         core.set_output_file(str(args.output / "psi4.out"), False)
         psi4.set_memory(config["host_memory"])
         psi4.set_num_threads(config["threads"])
-        selected = options(args.arm == "gpu", args.scaled)
+        selected = options(args.arm == "gpu", args.scaled, basis_profile)
+        result["basis_profile"]=basis_profile
         selected["fisapt_fsapt_filepath"] = str(args.output / "fsapt")
         psi4.set_options(selected)
         if not np.isfinite(args.distance_change) or abs(args.distance_change) > .2:
@@ -401,6 +409,10 @@ def main():
                         or previous["scaled"]!=args.scaled
                         or previous["runtime_config_sha256"]!=oracle_config_sha):
                     raise RuntimeError("Oracle inputs differ from requested completed GPU diagnostic")
+                scientific_options=lambda opts: {k:v for k,v in opts.items()
+                    if k not in ("use_cuest","fisapt_fsapt_filepath")}
+                if scientific_options(previous["options"])!=scientific_options(selected):
+                    raise RuntimeError("CPU/GPU oracle basis or scientific options differ")
                 for filename in ("raw-hf.npz","fragment-matrices.npz"):
                     if hashlib.sha256((args.oracle_from/filename).read_bytes()).hexdigest()!=previous["artifact_sha256"][filename]:
                         raise RuntimeError("Completed GPU oracle artifact changed: "+filename)
