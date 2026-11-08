@@ -387,7 +387,7 @@ class QompPureTests(unittest.TestCase):
     def test_failure_and_integrity_finally_record_old_base_and_never_success(self):
         lib = self.lib
         saved_cwd = Path.cwd()
-        for scenario in ('action', 'changed', 'interrupted'):
+        for scenario in ('action', 'changed', 'interrupted', 'late'):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 args = NS(root=root/'output', scratch=root/'scratch', mode='build',
@@ -401,11 +401,18 @@ class QompPureTests(unittest.TestCase):
                         if self.interrupted:
                             raise InterruptedError('fake TERM')
                 runner = FakeRunner()
-                def action(*unused):
+                def action(active, helpers, result, arguments):
                     self.assertEqual(Path.cwd(), args.root/'cwd')
                     if scenario == 'action':
                         raise RuntimeError('fake stage failure')
                     if scenario == 'interrupted':
+                        runner.stop()
+                    if scenario == 'late':
+                        result['status'] = 'FRESH_BUILD_COMPLETE_NOT_QUALIFIED'
+                original_write = lib.write
+                def write(path, value):
+                    original_write(path, value)
+                    if scenario == 'late' and path.name == 'result.json':
                         runner.stop()
                 after = dict(snapshot='changed' if scenario == 'changed' else 'unchanged')
                 try:
@@ -415,11 +422,13 @@ class QompPureTests(unittest.TestCase):
                          patch.object(B, 'qomp_checks_module', return_value=NS(allocation=lambda: {})), \
                          patch.object(lib, 'allocation', return_value={}), \
                          patch.object(B, 'qomp_runner', return_value=runner), \
+                         patch.object(lib, 'write', side_effect=write), \
                          patch.object(B, 'qomp_protected', side_effect=[dict(snapshot='unchanged'), after]):
                         with self.assertRaises((RuntimeError, ValueError, InterruptedError)):
                             B.qomp_perform(args, action)
                     value = lib.read(args.root/'result.json')
-                    self.assertEqual(value['status'], 'FAILED')
+                    if scenario != 'late':
+                        self.assertEqual(value['status'], 'FAILED')
                     self.assertFalse(value['acceptance'])
                     self.assertFalse((args.root/'COMPLETED').exists())
                     self.assertEqual(lib.read(args.root/'protected-after.json'), after)

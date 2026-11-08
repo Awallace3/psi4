@@ -593,6 +593,10 @@ def qomp_perform(args, action):
             lib.write(args.root/'result.json', result)
             for sig, handler in handlers.items():
                 signal.signal(sig, handler)
+    # Child-only TERM may arrive while publishing final metadata, after the
+    # last protected-source check. The wrapper must see nonzero even if it did
+    # not itself receive that signal; result.json is not a completion marker.
+    runner.check()
 
 
 def qomp_finalize(args):
