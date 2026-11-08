@@ -226,4 +226,33 @@ member value1e-12 before options are read. The wrapper prints/retains the
 option but does not configure it into the cuEST DF plan. Native default
 conditioning and the relative/absolute cutoff semantics must be checked
 before attributing the reconstruction floor solely to unavoidable rounding.
-No cutoff or math-mode implementation has yet been changed.
+The completed controls above used the unchanged1cad631980 implementation.
+
+## Candidate native policy correction (not yet built/GPU-validated)
+
+The pinned0.2.50 SDK confirms its defaults: relative cutoff1e-12 and QR
+metric fitting. Psi4's CPU metric power uses a relative eigenvalue cutoff;
+`MemDFJK` passes `DF_FITTING_CONDITION` into DFHelper, whose usual default
+is1e-10. The Python cuEST fragment factory already explicitly requests
+MATRIXPOWER instead of the default QR. The native SCF wrapper did neither.
+
+Candidate changes in`psi4/src/psi4/libfock/cuESTJK.cc`:
+
+- Pass the actual`condition_` option into the native fitting cutoff.
+- Explicitly select relative conditioning and MATRIXPOWER, matching the
+  CPU metric-inverse policy rather than relying on the vendor QR default.
+- Select requested FP64 math before AO-pair/DF-plan creation, not afterward.
+- Report the actual selected metric policy in the native JK header.
+
+This corrects ignored configuration and policy ordering; it is not a change
+to repeat/oracle tolerances. The three offline source-contract checks went
+red against the old wiring and green after the correction. They do not
+constitute native compilation or numerical evidence.
+
+The new GPU regression`test_cuest_jk_honors_fitting_condition_like_cpu`
+compares tight1e-10 and deliberately loose0.02cutoffs on the small water
+dimer, verifies the CPU control actually changes, requires the GPU operator
+to change too, and checks CPU/GPU J/K parity at each cutoff. This numerical
+test has been syntax-checked but **not yet executed** on a candidate build.
+A new coherent native build and physical GPU gates remain required; no old
+proof, frozen source or stage is to be advanced or relabeled.

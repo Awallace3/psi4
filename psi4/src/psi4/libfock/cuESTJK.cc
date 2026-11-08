@@ -107,6 +107,13 @@ cuESTJK::~cuESTJK() {
 
 void cuESTJK::preiterations()
 {
+    // Plan construction forms the fitting metric/operator too. Selecting FP64
+    // only after creating the plan leaves that work in the handle's inherited
+    // math mode, despite CUEST_MIXED_PRECISION=False.
+    if (!options_.get_bool("CUEST_MIXED_PRECISION")) {
+        CHECK_CUEST(cuestSetMathMode(cuest_handle, CUEST_NATIVE_FP64_MATH_MODE));
+    }
+
     auto mol = primary_->molecule();
     size_t natom = mol->natom();
 
@@ -134,6 +141,30 @@ void cuESTJK::preiterations()
     // DF Int Plan List
     cuestDFIntPlanParameters_t dfint_params;
     CHECK_CUEST(cuestParametersCreate(CUEST_DFINTPLAN_PARAMETERS, reinterpret_cast<void**>(&dfint_params)));
+
+    // Match Psi4's conditioned metric power, including the *requested* relative
+    // DF_FITTING_CONDITION. The cuEST defaults are QR with a 1e-12 cutoff;
+    // merely storing/printing condition_ does not configure that operator.
+    int32_t relative_conditioning = 1;
+    auto fitting_algorithm = CUEST_DFINTPLAN_PARAMETERS_FITTING_ALGORITHM_MATRIXPOWER;
+    CHECK_CUEST(cuestParametersConfigure(
+        CUEST_DFINTPLAN_PARAMETERS,
+        dfint_params,
+        CUEST_DFINTPLAN_PARAMETERS_FITTING_CUTOFF,
+        &condition_,
+        sizeof(double)));
+    CHECK_CUEST(cuestParametersConfigure(
+        CUEST_DFINTPLAN_PARAMETERS,
+        dfint_params,
+        CUEST_DFINTPLAN_PARAMETERS_FITTING_RELATIVE_CONDITIONING,
+        &relative_conditioning,
+        sizeof(relative_conditioning)));
+    CHECK_CUEST(cuestParametersConfigure(
+        CUEST_DFINTPLAN_PARAMETERS,
+        dfint_params,
+        CUEST_DFINTPLAN_PARAMETERS_FITTING_ALGORITHM,
+        &fitting_algorithm,
+        sizeof(fitting_algorithm)));
     
     // Psi4 and cuEST both represent exact exchange as alpha / r + beta erf(omega r) / r.
     double exchange_fraction = omega_alpha_;
@@ -218,14 +249,6 @@ void cuESTJK::preiterations()
         CUEST_DFNONSYMMETRICEXCHANGECOMPUTE_PARAMETERS_INT8_MODULUS_COUNT,
         &dfk_moduli_,
         sizeof(uint64_t)));
-
-    // Set global math mode, if CUEST_NATIVE_FP64_MATH_MODE, all forms of mixed precision emulation will be turned off
-    if (!options_.get_bool("CUEST_MIXED_PRECISION")) {
-        CHECK_CUEST(cuestSetMathMode(
-            cuest_handle,
-            CUEST_NATIVE_FP64_MATH_MODE
-        ));
-    }
 
     initialized_ = true;
 
@@ -314,7 +337,8 @@ void cuESTJK::print_header() const {
         outfile->Printf("    wK tasked:             %11s\n", (do_wK_ ? "Yes" : "No"));
         if (do_wK_) 
         outfile->Printf("    Omega:                 %11.3E\n", omega_);
-        outfile->Printf("    Pseudoinverse cutoff:  %11.1E\n", condition_);
+    outfile->Printf("    Pseudoinverse cutoff:  %11.1E\n", condition_);
+    outfile->Printf("    Metric inverse:        MATRIXPOWER (relative cutoff)\n");
         outfile->Printf("    Threshold PQ:          %11.1E\n", pq_threshold_);
         outfile->Printf("\n");
     }

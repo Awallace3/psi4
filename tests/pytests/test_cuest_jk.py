@@ -65,20 +65,24 @@ def _basis_sets():
     return primary, aux
 
 
-def _run_jk(use_cuest, primary, aux, pairs, alpha_before=None, alpha_after=None):
+def _run_jk(use_cuest, primary, aux, pairs, alpha_before=None, alpha_after=None,
+            fitting_condition=None):
     """Build a J/K object of the requested flavour and evaluate every (C_left, C_right) pair.
 
     ``alpha_before`` is applied before ``initialize()``, the way an SCF does it;
     ``alpha_after`` afterwards, the way a consumer that inherits someone else's
     J/K object has to.
     """
-    psi4.set_options({
+    options = {
         "scf_type": "df",
         "USE_CUEST": use_cuest,
         # Compare the two builders in like precision; the emulated-GEMM path has
         # its own tolerance and is not what is under test here.
         "CUEST_MIXED_PRECISION": False,
-    })
+    }
+    if fitting_condition is not None:
+        options["DF_FITTING_CONDITION"] = fitting_condition
+    psi4.set_options(options)
     jk = psi4.core.JK.build_JK(primary, aux)
     jk.set_do_J(True)
     jk.set_do_K(True)
@@ -244,3 +248,34 @@ def test_cuest_jk_exchange_fraction_is_resettable_after_initialize():
         "K mismatch after resetting the exchange fraction: max |diff| = "
         f"{np.abs(cpu_K[0] - gpu_K[0]).max():.3e}"
     )
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+def test_cuest_jk_honors_fitting_condition_like_cpu():
+    """The requested relative metric cutoff must change the actual operator.
+
+    The old wrapper printed DF_FITTING_CONDITION but left cuEST's default
+    QR/1e-12 plan unchanged. A deliberately loose cutoff makes that omission
+    visible on a small system, without relying on large-system roundoff.
+    """
+    primary, aux = _basis_sets()
+    pairs = [(_random_coeffs(primary.nbf(), 5, 110), None)]
+    records = {}
+    for label, cutoff in (("tight", 1e-10), ("loose", 2e-2)):
+        cpu_name, cpu_j, cpu_k = _run_jk(
+            False, primary, aux, pairs, fitting_condition=cutoff)
+        gpu_name, gpu_j, gpu_k = _run_jk(
+            True, primary, aux, pairs, fitting_condition=cutoff)
+        assert cpu_name != "cuESTJK" and gpu_name == "cuESTJK"
+        records[label] = (cpu_j[0], cpu_k[0], gpu_j[0], gpu_k[0])
+    assert np.max(np.abs(records["tight"][0]-records["loose"][0])) > 1e-4, (
+        "CPU cutoff control did not change the operator; test is vacuous")
+    assert np.max(np.abs(records["tight"][2]-records["loose"][2])) > 1e-4, (
+        "cuEST ignored DF_FITTING_CONDITION")
+    for label, (cpu_j, cpu_k, gpu_j, gpu_k) in records.items():
+        np.testing.assert_allclose(gpu_j, cpu_j, rtol=1e-7, atol=1e-8,
+                                   err_msg="Matched metric cutoff J: "+label)
+        np.testing.assert_allclose(gpu_k, cpu_k, rtol=1e-7, atol=1e-8,
+                                   err_msg="Matched metric cutoff K: "+label)
