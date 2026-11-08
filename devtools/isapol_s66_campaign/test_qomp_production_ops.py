@@ -119,6 +119,12 @@ class QompPureTests(unittest.TestCase):
         self.assertEqual(len(targets), len(set(targets)))
         self.assertTrue(all(p.startswith(str(B.QOMP_SCI_SOURCE/'tests/pytests')) for p in targets))
         self.assertNotIn(str(B.QOMP_SCI_SOURCE/'tests/pytests/test_isapol_distribution.py'), targets)
+        required = B.qomp_installed_names({'driver/previous.py'})
+        self.assertIn('driver/previous.py', required)
+        for name in ('driver/procrouting/isapol_isa_grid_plan.py',
+                     'tests/test_isapol_q_parallel.py', 'tests/test_isapol_isa_grid_accounting.py',
+                     'tests/isapol_water_recipe.py'):
+            self.assertIn(name, required)  # Even when absent from old/observed inventories.
         counts = B.qomp_nodes_gate(collected())
         self.assertEqual(counts['groups'], dict(legacy=461, focused=93, molecular=2))
         self.assertEqual(C.qualification_suite('grid400'), 461)

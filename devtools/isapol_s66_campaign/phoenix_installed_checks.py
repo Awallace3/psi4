@@ -334,7 +334,8 @@ def qomp_build_gate(engine, lib, args):
         engine.qomp_need(engine.qomp_git(root/'source', *argv) == expected, 'compiled source changed')
     verify_runtime(root/'env', manifest)
     checks = lib.installed_python_gate(root/'source', root/'build',
-                                       Path(manifest['installed_package']), manifest['installed_files'])
+                                       Path(manifest['installed_package']),
+                                       engine.qomp_installed_names(manifest['installed_files']))
     engine.qomp_need(checks == lib.read(root/'installed-python-checks.json'),
                      'complete installed Python mapping changed')
     lib.dependency_gate(root/'env', lib.old_seal())

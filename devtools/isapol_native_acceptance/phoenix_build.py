@@ -360,6 +360,13 @@ def qomp_targets():
     return [str(QOMP_SCI_SOURCE/'tests/pytests'/name) for name in names]
 
 
+def qomp_installed_names(prior):
+    # The old manifest cannot name NEW fb11 files. Require them even if an
+    # incomplete install omits them from the observed inventory.
+    return set(prior) | {'tests/'+Path(p.split('::')[0]).name for p in qomp_targets()} | {
+        'driver/procrouting/isapol_isa_grid_plan.py', 'tests/isapol_water_recipe.py'}
+
+
 def qomp_nodes_gate(value, *, executed=False):
     nodes = value['nodes']
     qomp_need(type(nodes) is list and len(nodes) == len(set(nodes)) == 556,
@@ -476,7 +483,7 @@ def qomp_build(runner, lib, result, args):
     runner.run('build-install', build)
     package = prefix/'lib/python3.13/site-packages/psi4'
     checks = lib.installed_python_gate(root/'source', root/'build', package,
-                                       original['installed_files'])
+                                       qomp_installed_names(original['installed_files']))
     lib.write(root/'installed-python-checks.json', checks)
     lib.dependency_gate(prefix, original)
     before = qomp_identity(runner, prefix, args.scratch, lib, 'identity-before')
