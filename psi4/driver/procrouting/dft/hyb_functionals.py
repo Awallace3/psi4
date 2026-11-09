@@ -655,6 +655,26 @@ funcs.append({
     "description": '    Hybrid Tau HCTH Meta-GGA XC Functional\n',
 })
 
+funcs.append({
+    "name": "B86BPBE-25X",
+    "alias": ["B86BPBE25X"],
+    "x_functionals": {
+        "GGA_X_B86_MGC": {
+            "alpha": 0.75
+        }
+    },
+    "x_hf": {
+        "alpha": 0.25
+    },
+    "c_functionals": {
+        "GGA_C_PBE": {}
+    },
+    "citation":
+    '    A. J. A. Price, A. Otero-de-la-Roza, E. R. Johnson, Chem. Sci. 14:1252-1262, 2023.\n',
+    "description":
+    '    B86bPBE hybrid with 25% exact exchange: 0.75 B86b + 0.25 HF exchange, PBE correlation\n',
+})
+
 functional_list = {}
 for functional in funcs:
     functional_list[functional["name"].lower()] = functional
