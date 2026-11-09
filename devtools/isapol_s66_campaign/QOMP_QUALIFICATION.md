@@ -596,3 +596,70 @@ and attached as a bounded exception note, never replacing the primary cause.
 A failed final seal is not retried. Qomp failure-receipt publication errors
 likewise cannot replace the primary cause. Legacy route/receipt behavior is
 unchanged. Python unwind is not SIGKILL recovery or production activation.
+
+### #147 closed QOMP engineering inode estimate (NOT activated)
+
+`qomp_bank_policy.py` introduces schema `qomp-bank-execution-profile/1`,
+producer `qomp`, policy `qomp-estimated-inodes65536-v1`, names
+`qomp-bank-s20/s40/s60/s80/s120`. It byte-pins and reuses the historical
+shape table, preserving every science/job memory, core, time, account, QoS,
+partition, concurrency and256GiB byte value. Only profile identity and
+estimated files differ:65536/attempt with explicit
+`scratch_files_kind=engineering_estimate_not_hard_cap`.
+Old `grid400_bank_policy.py`,131072 dicts and historical receipts are unchanged.
+
+Evidence/rationale: source-controlled native subtotal1671 is conditional;
+defensively allowing a second PSIO domain gives2171.65536 leaves63365 further
+inodes for unclosed launcher/runtime/lifecycle uncertainty, not a proof that
+those unknowns fit. One real trace's316 potential-create targets (284 dual
+tiles) are cumulative observations, not peak/hard cap. Response checkpoint
+tiles accumulate but are reused across frequencies; there is no ISA120,
+Drho32, SCF-iteration or thread-ID filename multiplier on this closed route.
+RLIMIT_NOFILE is not an inode bound. No arbitrary-quota increase or cleanup.
+
+For eight attempts plus largest-job reserve:
+old9*131072=1179648 exceeds1M user ceiling even empty;
+new9*65536=589824 requires live user usage<=410176/1M, AND sufficient
+filesystem/group headroom. Bytes remain9*256GiB=2.25TiB.
+These are estimated admission requirements, NOT reservations or promises
+against concurrent use/failed-root retention.
+
+`bank_runtime_gate.validate_execution_profile/cli_role` and
+`runtime_qomp.ordinary_cli_launch/trace_projection` accept an explicit
+`producer='qomp'` selector for the new typed profiles. Their default remains
+`producer='grid400'`, preserving cba/default consumption. Both directions
+reject cross-policy dicts; changing only a case's file count cannot select
+new policy. CLI arguments, all five shapes and decoded-FD scientific-input
+checks are unchanged. Actual cba descriptor evidence keeps its original
+source/runtime/receipt provenance; no147 source is substituted for cba.
+The qomp transitive inventory additionally names the new policy/shared role
+and quota helpers. No worker/audit/cohort/dispatch implementation is ported.
+
+Pure admission API:
+`qomp_bank_policy.admit_scratch(sequence_of_1_to_8_profiles, observe)`.
+The callback must perform NEW live same-filesystem/free-space AND user/
+effective-group quota reads DURING each invocation; mark completion with
+`time.monotonic()` in this process. Its exact observation fields are:
+`filesystem` (fixed owned scratch root), positive integer `scratch_device`
+and `quota_device` (same), float `observed_at`, integer `free_bytes`/
+`free_files`, and bounded raw `user_quota`/`group_quota` strings.
+Collector must query the actual UID/effective GID, not another owner's row.
+No collector/filesystem operations or serialized-observation adoption are
+implemented here. The interval guard rejects stale/future/foreign-clock
+snapshots without introducing a tunable age allowance.
+
+The existing `descriptor_scratch_cb63305.parse_quota/admit_scratch` performs
+the quota/byte/file predicates: each member first, then sum+largest, all
+filesystem/user/group constraints. Zero group limits mean no ceiling
+reported, not permission to bypass filesystem/user checks. Raw quota bytes
+have KiB precision; the reused byte guard still compares exact byte integers.
+Call this API for preadmission and AGAIN immediately before release with a
+fresh callback. Matching metadata alone never releases jobs or accepts a
+record. Current full bank/controller stays unchanged and cannot consume new
+profiles automatically.
+
+Native556 qualification and actual finite-runtime verification already
+support the underlying installed producer. Ordinary new-profile SCI success
+and bounded failure-lifecycle traces remain REQUIRED before production use
+or widening: include owned-root leftovers/launcher/runtime effects. No
+measured production147 receipt exists; no cap/scientific change is authorized.

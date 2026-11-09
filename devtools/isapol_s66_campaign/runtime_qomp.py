@@ -253,12 +253,12 @@ def cli_environment(home, cache, scratch, *, inherited_threads):
         LANG='C.UTF-8', LC_ALL='C.UTF-8')
 
 
-def ordinary_cli_launch(raw, argv, *, scratch, execution_profile, inherited_threads):
+def ordinary_cli_launch(raw, argv, *, scratch, execution_profile, inherited_threads, producer='grid400'):
     """Admit exact ORIGINAL -I -B CLI, not a -S replacement or Python wrapper."""
     import json
     scratch = Path(scratch)
     gate = helper('bank_runtime_gate')
-    shape = gate.helper('grid400_bank_policy').validate_profile(execution_profile)
+    shape = gate.validate_execution_profile(execution_profile,producer=producer)
     need(inherited_threads.get('OMP_NUM_THREADS') == inherited_threads.get('MKL_NUM_THREADS')
          == str(shape['cores']), 'existing execution-shape thread contract differs')
     env = cli_environment(scratch/'home',scratch/'cache',scratch,
@@ -268,12 +268,15 @@ def ordinary_cli_launch(raw, argv, *, scratch, execution_profile, inherited_thre
     command = [PREFIX+'/bin/python','-I','-B','-X','pycache_prefix='+str(Path(scratch)/'cache'),
                PREFIX+'/bin/psi4', *argv]
     execution = dict(syscall='execve('+json.dumps(command[0])+', '+json.dumps(command)+', []) = 0')
-    gate.cli_role(execution,env=PREFIX,scratch=scratch,execution_profile=execution_profile)
+    gate.cli_role(execution,env=PREFIX,scratch=scratch,execution_profile=execution_profile,producer=producer)
     return dict(command=command, environment=env, cwd=str(scratch/'cwd'))
 
 
-def trace_projection(raw, lines, *, run, scratch, allowed_inputs, forbidden, execution_profile):
+def trace_projection(raw, lines, *, run, scratch, allowed_inputs, forbidden, execution_profile,
+                     producer='grid400'):
     """Reuse decoded-FD and exact CLI roles; forbid BASE-site/shadow successful opens."""
+    role_gate = helper('bank_runtime_gate')
+    role_gate.validate_execution_profile(execution_profile,producer=producer)
     view = load_view(raw)
     run, scratch = Path(run), Path(scratch)
     lines = list(lines)
@@ -328,6 +331,6 @@ def trace_projection(raw, lines, *, run, scratch, allowed_inputs, forbidden, exe
         report['status']='failed'
         report['unselected_or_shadow_opens']=sorted(set(errors))
     if report['only_initial_python_executed']:
-        report['role']=helper('bank_runtime_gate').cli_role(report['executions'][0],
-            env=PREFIX,scratch=scratch,execution_profile=execution_profile)
+        report['role']=role_gate.cli_role(report['executions'][0],
+            env=PREFIX,scratch=scratch,execution_profile=execution_profile,producer=producer)
     return report

@@ -22,9 +22,13 @@ def profile(producer='cb63305', *, scope='default'):
     elif producer == 'qomp':
         children += ('resource_plan_ed561666.py', 'resource_plan_grid400.py',
                      'resource_plan_isa_grid_v1.py', 'resource_plan_qomp.py',
-                     'qualified_qomp.py', 'runtime_qomp.py')
+                     'qualified_qomp.py', 'runtime_qomp.py', 'qomp_bank_policy.py',
+                     'bank_runtime_gate.py', 'grid400_bank_policy.py', 'runtime_audit.py',
+                     'descriptor_scratch_cb63305.py')
         extras = ('qualified_qomp.py', 'runtime_qomp.py', 'resource_plan_ed561666.py',
-                  'resource_plan_grid400.py', 'resource_plan_isa_grid_v1.py', 'resource_plan_qomp.py')
+                  'resource_plan_grid400.py', 'resource_plan_isa_grid_v1.py', 'resource_plan_qomp.py',
+                  'qomp_bank_policy.py', 'bank_runtime_gate.py', 'grid400_bank_policy.py',
+                  'runtime_audit.py', 'descriptor_scratch_cb63305.py')
     return dict(producer=producer, qualifier='qualified_'+producer,
         planner='resource_plan_'+producer, child_sources=children, parent_extra_sources=extras,
         drho_refinement_iterations=10 if producer == 'cb63305' else 32,

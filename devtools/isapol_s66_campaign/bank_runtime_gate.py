@@ -6,7 +6,7 @@ import re
 
 
 def helper(name):
-    if name not in ('runtime_audit', 'grid400_bank_policy'):
+    if name not in ('runtime_audit', 'grid400_bank_policy', 'qomp_bank_policy'):
         raise ValueError('closed eligible-bank CLI gate helpers required')
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_bank_runtime_gate_'+name, path)
@@ -15,9 +15,15 @@ def helper(name):
     return module
 
 
-def cli_role(execution, *, env, scratch, execution_profile):
+def validate_execution_profile(value, *, producer='grid400'):
+    if type(producer) is not str or producer not in ('grid400','qomp'):
+        raise ValueError('closed execution-policy producer required')
+    return helper(producer+'_bank_policy').validate_profile(value)
+
+
+def cli_role(execution, *, env, scratch, execution_profile, producer='grid400'):
     """Classify the actual observed command; never rewrite trace bytes."""
-    profile = helper('grid400_bank_policy').validate_profile(execution_profile)
+    profile = validate_execution_profile(execution_profile,producer=producer)
     shape = (profile['cores'], profile['science_memory_GiB'])
     if shape != (24, 120):
         return helper('runtime_audit').cli_role(execution, env=env, scratch=scratch,
