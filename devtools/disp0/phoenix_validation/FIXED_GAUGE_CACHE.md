@@ -173,3 +173,33 @@ opaque-native peak or a general memory model.
 This does not change the frozen whole-energy helper's1GiB argument cap,
 qualify Protein83 SCF repeatability, change the production cache default,
 or introduce any accepted CPU/GPU speedup.
+
+### Full coexistence gate submitted15366266
+
+All161 host helper tests and7 source-boundary observer tests passed.
+Independent read-only launch review found no concrete API, ownership,
+provenance, numerical or trace blockers. Physical integration remains pending.
+
+Frozen outer pin:`d8ba38d32eca184648adc2bc507148bb2d453bbb`,
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-cache-full-d8ba38d32e`.
+Science/build remains`e0da305c02`. Submitted **15366266** on the read-back
+route`gts-cs207-chemx / gpu-h200 / embers`,1H200,8CPUs,160GiB,30min,
+initially PENDING for Priority. Test-only15366265 is not the allocation.
+The first scheduler read-back timed out; the idempotent`phoenix2` fallback
+confirmed the same job and route. No duplicate submission or job change.
+
+Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/fixed-hf-cache-full-d8ba38d32e-01`.
+Manifest SHA256:
+`507cc44c438ea23b56f0212520356badefdeba7220a0ba6ed83bc661fb7cc803`.
+Runtime-config SHA256:
+`d3288c346d8d8f2a75884ec2e0b27a398d5778ffa22cec260f0a98fd36b02635`.
+Official hourly watcher:`ba7c081fb`.
+
+The served`~/docs/saptdft/cuest/fsapt.html#protein-cache` now separates
+the11.86× fixed-input dispersion result from qualified peptide CPU/H200
+speedups and the still-failed whole-protein repeat checks. The new chart's
+six hover marks, even-sample medians, basis/NBF labels and responsive
+dark/light/mobile/ToC behavior passed browser checks without console errors.
+The existing full report regression also passed, including original driver
+selectors, exact16-stage schema, rainbows and preserved numerical ratios.

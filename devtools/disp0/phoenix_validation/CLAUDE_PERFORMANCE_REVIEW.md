@@ -155,3 +155,20 @@ were verified. This qualifies the restricted24-atom peptide point, not
 nanotube/protein scaling, isolated kernels or a general production release.
 Full receipts and scope are recorded in
 [SEALED_H200_PILOT.md](SEALED_H200_PILOT.md).
+
+## Larger-system cache finding now measured
+
+Finding3 now has a controlled H200 result on the83-atom/766-AO
+Protein83/def2-SVP fixture. Fixed saved HF inputs and one native RIFIT
+plan/session were held constant while only the cache cap changed64MiB→4GiB.
+Actual packed storage increased8.13MiB→2.770GiB, native batches fell
+871→59, and all870contraction blocks remained. ABBA blocked-call medians
+fell225.243→18.990s (**11.86×**), with pair differences below8.2e-20Eh
+and unchanged1e-12 pair/scalar checks, complete cleanup and sealed outputs.
+
+This is not a whole-protein speedup: native HF plan reconstruction still
+produces nanohartree-scale drift and the full strict repeat qualification
+failed. Full JKFIT/RIFIT/response/cache coexistence is a separate fixed-HF
+gate,15366266, submitted on H200/embers; no original tolerance or production
+cache default was changed. See [FIXED_GAUGE_CACHE.md](FIXED_GAUGE_CACHE.md)
+and [PROTEIN83_REPEAT_DIAGNOSIS.md](PROTEIN83_REPEAT_DIAGNOSIS.md).
