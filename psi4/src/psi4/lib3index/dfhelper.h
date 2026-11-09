@@ -82,6 +82,10 @@ class PSI_API DFHelper {
     /// of the metric (triangular solve) instead of J^-1/2. No eigenvalue cutoff; falls back to
     /// J^-1/2 when the metric is singular to working precision (estimated rcond < 1e-13).
     void set_metric_cholesky(bool on) { metric_cholesky_ = on; }
+    /// Columns per metric-contraction panel in the in-core symmetric AO build
+    size_t metric_panel_cols() const { return std::max<size_t>(8192, nbf_); }
+    /// Doubles allocated on top of the AOs and the metric while the in-core AOs are built
+    size_t AO_core_init_scratch() const;
     bool metric_cholesky() const { return metric_cholesky_; }
     size_t get_memory() { return memory_; }
     /// Free the compute_JK scratch that is otherwise kept between builds

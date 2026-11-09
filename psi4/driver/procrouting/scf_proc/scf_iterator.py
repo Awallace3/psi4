@@ -137,7 +137,10 @@ def scf_initialize(self):
     # Get memory in terms of doubles
     total_memory = (core.get_memory() / 8) * core.get_global_option("SCF_MEM_SAFETY_FACTOR")
 
-    # Per-thread XC accumulators (nthreads x nbf^2) live for each V build: charge them to the
+    # The Fock diagonalization keeps its DSYEVD workspace (~2 nso^2) for the whole SCF.
+    total_memory -= self.diag_scratch_size()
+
+    # Per-thread XC accumulators (nthreads x nbf^2) are kept for the whole SCF: charge them to the
     # budget, or fall back to atomic updates when they would take more than 10% of it.
     if self.V_potential():
         v_scratch = self.V_potential().V_thread_scratch_size()

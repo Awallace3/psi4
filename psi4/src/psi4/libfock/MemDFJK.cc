@@ -65,6 +65,8 @@ void MemDFJK::common_init() { dfh_ = std::make_shared<DFHelper>(primary_, auxili
 size_t MemDFJK::memory_estimate() {
     dfh_->set_nthreads(omp_nthread_);
     dfh_->set_schwarz_cutoff(cutoff_);
+    // the Cholesky metric route needs one more naux^2 while the AOs are built
+    dfh_->set_metric_cholesky(options_.exists("SCF_DF_METRIC") && options_.get_str("SCF_DF_METRIC") == "CHOLESKY");
     return dfh_->get_core_size();
 }
 

@@ -152,6 +152,9 @@ class PSI_API VBase {
     /// Use per-thread V accumulators (true) or omp atomics into one matrix (false)
     void set_V_thread_accumulators(bool on) { V_thread_accumulators_ = on; }
     bool V_thread_accumulators() const { return V_thread_accumulators_; }
+    /// Free scratch kept between compute_V calls (per-thread accumulators). HF::finalize calls this,
+    /// since the potential outlives the SCF (gradients, TDDFT) but its SCF scratch does not.
+    virtual void release_scratch() {}
 
     virtual void print_header() const;
 
@@ -175,6 +178,9 @@ class SAP : public VBase {
 
 class RV : public VBase {
    protected:
+    /// Per-thread V accumulators, kept across compute_V calls (zeroed by the reduction) and
+    /// freed by release_scratch(); V_thread_scratch_size() doubles.
+    std::vector<SharedMatrix> V_thread_;
    public:
     RV(std::shared_ptr<SuperFunctional> functional, std::shared_ptr<BasisSet> primary, Options& options);
     ~RV() override;
@@ -185,6 +191,7 @@ class RV : public VBase {
     // compute_V assuming same orbitals for different spin. Computes V_alpha, not spin-summed V.
     void compute_V(std::vector<SharedMatrix> ret) override;
     size_t V_thread_scratch_size() const override;
+    void release_scratch() override { V_thread_.clear(); }
     /// Compute the orbital derivative of the KS potential, contract against Dx, and
     /// putting the result in ret. ret[i] is Vx where x = Dx[i]. The "true" vector has
     /// 2^-0.5 Dx[i] for each input spin case and returns **half** the α component of the output.

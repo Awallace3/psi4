@@ -229,11 +229,11 @@ void DFHelper::AO_core(bool set_AO_core=true) {
     // Auxiliary metric
     required_core_size_ += naux_ * naux_;
 
-    // C_buffers (conservative estimate since I do not have max_nocc TODO)
-    required_core_size_ += nthreads_ * nbf_ * nbf_;
-
-    // Tmp buffers
-    required_core_size_ += 3 * nbf_ * nbf_ * Qshell_max_;
+    // Transients on top of the AOs and the metric: the JK build's C_buffers (conservative estimate
+    // since I do not have max_nocc TODO) and tmp buffers, or, while the AOs are built, the metric
+    // contraction's panels. They are never live together.
+    const size_t jk_tmp = nthreads_ * nbf_ * nbf_ + 3 * nbf_ * nbf_ * Qshell_max_;
+    required_core_size_ += std::max(jk_tmp, (direct_iaQ_ ? size_t(0) : AO_core_init_scratch()));
 
     // set AO_core_ if requested
     if (set_AO_core) {
@@ -511,6 +511,13 @@ void DFHelper::prepare_AO_wK() {
     std::vector<std::pair<size_t, size_t>> psteps;
     std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_, 0, psteps);
 }
+size_t DFHelper::AO_core_init_scratch() const {
+    // two (naux x panel) panels and the significant-q index lists in contract_metric_AO_core_symm,
+    // plus the copy of J the Cholesky route factors when the metric is held in core
+    size_t s = 2 * naux_ * metric_panel_cols() + small_skips_[nbf_];
+    if (metric_cholesky_ && hold_met_ && std::fabs(mpower_ + 0.5) < 1e-13) s += naux_ * naux_;
+    return s;
+}
 void DFHelper::prepare_AO_core() {
     // get each thread an eri object
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
@@ -527,9 +534,11 @@ void DFHelper::prepare_AO_core() {
         if(rank) eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
     }
 
-    // determine blocking
+    // determine blocking, leaving room for the metric contraction's panels (and Cholesky copy)
     std::vector<std::pair<size_t, size_t>> psteps;
-    std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_, 1, psteps);
+    const size_t init_scratch = AO_core_init_scratch();
+    if (init_scratch >= memory_) throw PSIEXCEPTION("DFHelper: not enough memory for the metric contraction panels.");
+    std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_ - init_scratch, 1, psteps);
 
     // allocate final AO vector
     if (direct_iaQ_) {
@@ -1698,7 +1707,7 @@ void DFHelper::contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* me
     // so instead gather runs of p into a dense (naux x ncol) panel, contract it with a single
     // threaded DGEMM, and scatter the result into both the upper (p, q) and lower (q, p) slots of Ppq.
     size_t startind = symm_big_skips_[begin];
-    const size_t target_cols = std::max<size_t>(8192, nbf_);
+    const size_t target_cols = metric_panel_cols();
 
     std::vector<size_t> col_off;  // panel column offset of each p in the current chunk
     std::vector<std::vector<size_t>> upper(nbf_);  // significant q >= p, in column order
