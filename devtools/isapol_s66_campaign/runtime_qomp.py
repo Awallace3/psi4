@@ -190,8 +190,8 @@ def validate_python_path(paths, *, cli=False):
              'unapproved Python search path')
 
 
-def verify_runtime_view(raw):
-    """Call before/after; no BUILD/object/OLD audit or whole-BASE walk."""
+def _startup_view(raw):
+    """Shared namespace/config/cache-shadow checks, without bulk content reads."""
     view = load_view(raw)
     prefix = view['scopes']['prefix']['entries']
     base = view['scopes']['base']['entries']
@@ -204,9 +204,34 @@ def verify_runtime_view(raw):
     need(not any(n.endswith('.pth') for n in prefix), 'private .pth forbidden before startup')
     absent_zip(BASE+'/lib/python313.zip')
     validate_cfg((Path(PREFIX)/'pyvenv.cfg').read_bytes())
+    return view
+
+
+def verify_runtime_view(raw):
+    """Call before/after; no BUILD/object/OLD audit or whole-BASE walk."""
+    view = _startup_view(raw)
     for scope in view['scopes'].values():
         for name,row in scope['entries'].items():
             check_entry(scope['root'], name, row)
+    return view
+
+
+def verify_metadata_runtime(raw):
+    """Literal non-native CLI discovery ONLY; outer phase retains full seals.
+
+    run_psi4.py exits for --module and --version before importing Psi4.
+    Bind startup executables/script/config/version and their canonical parents;
+    do not reread multi-GB scientific content for the SDK's 30-second probe.
+    Namespace, no-PTH and shadow-zip checks remain shared with the full route.
+    """
+    view = _startup_view(raw)
+    for label, names in (
+            ('prefix', ('bin/python','bin/python3','bin/python3.13','bin/psi4',
+                        'pyvenv.cfg','lib64','lib/python3.13/site-packages/psi4/metadata.py')),
+            ('base', ('bin/python3.13','lib','lib/python3.13','lib/python3.13/lib-dynload'))):
+        scope = view['scopes'][label]
+        for name in names:
+            check_entry(scope['root'], name, scope['entries'][name])
     return view
 
 
@@ -253,8 +278,7 @@ def cli_environment(home, cache, scratch, *, inherited_threads):
         LANG='C.UTF-8', LC_ALL='C.UTF-8')
 
 
-def ordinary_cli_launch(raw, argv, *, scratch, execution_profile, inherited_threads, producer='grid400'):
-    """Admit exact ORIGINAL -I -B CLI, not a -S replacement or Python wrapper."""
+def _cli_command(argv, *, scratch, execution_profile, inherited_threads, producer):
     import json
     scratch = Path(scratch)
     gate = helper('bank_runtime_gate')
@@ -264,12 +288,29 @@ def ordinary_cli_launch(raw, argv, *, scratch, execution_profile, inherited_thre
     env = cli_environment(scratch/'home',scratch/'cache',scratch,
                           inherited_threads=inherited_threads)
     fresh_directory(scratch/'cwd',empty=False)
-    verify_runtime_view(raw)  # Must precede interpreter startup/site processing.
     command = [PREFIX+'/bin/python','-I','-B','-X','pycache_prefix='+str(Path(scratch)/'cache'),
                PREFIX+'/bin/psi4', *argv]
     execution = dict(syscall='execve('+json.dumps(command[0])+', '+json.dumps(command)+', []) = 0')
     gate.cli_role(execution,env=PREFIX,scratch=scratch,execution_profile=execution_profile,producer=producer)
     return dict(command=command, environment=env, cwd=str(scratch/'cwd'))
+
+
+def ordinary_cli_launch(raw, argv, *, scratch, execution_profile, inherited_threads, producer='grid400'):
+    """Admit exact ORIGINAL -I -B CLI, not a -S replacement or Python wrapper."""
+    admitted = _cli_command(argv,scratch=scratch,execution_profile=execution_profile,
+                            inherited_threads=inherited_threads,producer=producer)
+    verify_runtime_view(raw)  # Must precede interpreter startup/site processing.
+    return admitted
+
+
+def metadata_cli_launch(raw, argv, *, scratch, execution_profile, inherited_threads, producer='qomp'):
+    """No caller-selectable skip flag: ONLY either exact one-token probe."""
+    need(producer == 'qomp' and type(argv) is list and argv in (['--module'],['--version']),
+         'literal metadata-only discovery required')
+    admitted = _cli_command(argv,scratch=scratch,execution_profile=execution_profile,
+                            inherited_threads=inherited_threads,producer=producer)
+    verify_metadata_runtime(raw)
+    return admitted
 
 
 def trace_projection(raw, lines, *, run, scratch, allowed_inputs, forbidden, execution_profile,

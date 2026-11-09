@@ -12,8 +12,8 @@ set -euo pipefail
 umask 077
 [[ $# -eq 5 || $# -eq 7 || $# -eq 8 ]] || exit 2
 SOURCE=$1 COMMIT=$2 PHASE=$3 RUN=$4 PILOT=$5
-[[ "$SOURCE" = /storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-native-qomp-production148 ]]
-[[ "$COMMIT" =~ ^[0-9a-f]{40}$ && "$RUN" = /storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-qomp148-* ]]
+[[ "$SOURCE" = /storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-native-qomp-production148-v2 ]]
+[[ "$COMMIT" =~ ^[0-9a-f]{40}$ && "$RUN" = /storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-qomp148-"${PHASE}002" ]]
 [[ -d "$RUN/logs" && ! -e "$RUN/controller" && ! -e "$RUN/payload" ]]
 case "$PHASE" in
   worker) [[ $# -eq 5 ]]; ENTRY=phoenix_worker_cb63305.py ;;

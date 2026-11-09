@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 
-SOURCE = Path('/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-native-qomp-production148')
+SOURCE = Path('/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-native-qomp-production148-v2')
 INTENT_ROOT = Path('/storage/home/hcoda1/3/awallace43/ccasp-native-s66-qomp148-dispatch-intents')
 _MODULES = {}
 SOURCE_NAMES = ('qomp_campaign.py','qomp_execution.py','qomp_launcher.sh','qomp148.sbatch',
@@ -67,10 +67,10 @@ def context(args):
     c=helper('qomp_campaign')
     c.need((args.build.resolve(),args.qualification.resolve(),args.inputs.resolve(),args.descriptors.resolve())
            ==(c.BUILD,c.QUALIFICATION,c.INPUTS,c.DESCRIPTORS),'closed QOMP execution input roles required')
-    c.need(args.run.resolve().parent==c.RUNS and args.run.name.startswith('ccasp-native-s66-qomp148-'),
+    c.need(args.run.resolve() in c.PHASE_ROOTS.values(),
            'fresh dedicated QOMP148 phase root required')
     if hasattr(args,'case'):
-        c.need(args.case.resolve().parent==c.RUNS and args.case.name.startswith('ccasp-native-s66-qomp148-'),
+        c.need(args.case.resolve()==c.PHASE_ROOTS['science'],
                'independent audit requires a dedicated QOMP148 science root')
     producer=qualified().verify_receipts(qualified().read_receipts(c.RECEIPTS))
     return dict(schema='qomp-verified-installed-source-binding/1',
@@ -315,6 +315,9 @@ def launcher(argv):
            'launcher operations changed')
     profile=policy().validate_profile(binding['profile'])
     rt=qualified().runtime()
+    metadata=type(argv) is list and argv in (['--module'],['--version'])
+    c.need(not any(a in ('--module','--version') for a in argv) or metadata,
+           'literal metadata discovery cannot be combined with other arguments')
     scratch=Path(binding['scratch'])
     exchange=None
     if '--qcschema' in argv:
@@ -326,7 +329,8 @@ def launcher(argv):
         exchange=(original,scratch/'cwd/data.msgpack')
         with exchange[1].open('xb') as stream:
             stream.write(incoming)  # Exact serialized bytes, no schema/numeric conversion.
-    admitted=rt.ordinary_cli_launch(c.read(c.VIEW),argv,scratch=scratch,producer='qomp',
+    admit=rt.metadata_cli_launch if metadata else rt.ordinary_cli_launch
+    admitted=admit(c.read(c.VIEW),argv,scratch=scratch,producer='qomp',
         execution_profile=profile,inherited_threads=dict(OMP_NUM_THREADS=str(profile['cores']),
             MKL_NUM_THREADS=str(profile['cores']),OPENBLAS_NUM_THREADS='1'))
     trace=Path(binding['trace'])
@@ -362,7 +366,7 @@ def launcher(argv):
         raise
     finally:
         try:
-            rt.verify_runtime_view(c.read(c.VIEW))
+            (rt.verify_metadata_runtime if metadata else rt.verify_runtime_view)(c.read(c.VIEW))
         except BaseException as post:
             if error is None:
                 raise

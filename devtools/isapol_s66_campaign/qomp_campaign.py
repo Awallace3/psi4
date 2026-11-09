@@ -17,7 +17,9 @@ RECEIPTS = RUNS/'ccasp-native-s66-qomp-runtime146-check001/inputs/receipts'
 VIEW = RECEIPTS.parent/'runtime-view.json'
 BUILD = RUNS/'ccasp-native-s66-qomp-fb11-build002'
 QUALIFICATION = RECEIPTS/'qualification/installed-validation.json'
-CAMPAIGN_ROOT = RUNS/'ccasp-native-s66-qomp-production148-001'
+CAMPAIGN_ROOT = RUNS/'ccasp-native-s66-qomp-production148-002'
+PHASE_ROOTS = {phase:RUNS/('ccasp-native-s66-qomp148-'+phase+'002')
+               for phase in ('worker','science','audit')}
 ORIGINALS = CAMPAIGN_ROOT/'inputs/original25'
 CASE_ROOT = CAMPAIGN_ROOT/'cases'
 CAMPAIGN = 'qomp-missing106-serial-pilot-v1'
@@ -225,13 +227,13 @@ def verify_prepared_from_paths(args):
 def phase_command(case,*,source,commit,phase,run,pilot,preflight=None,preflight_sha=None,science=None):
     """Exact serial operator command data; NO scheduler call is made."""
     need(phase in ('worker','science','audit') and Path(source)==
-        ROOT/'gits/psi4.ccasp-native-qomp-production148'
+        ROOT/'gits/psi4.ccasp-native-qomp-production148-v2'
         and re.fullmatch('[0-9a-f]{40}',commit),'closed QOMP serial command required')
     profile=helper('qomp_bank_policy').validate_profile(case['execution_profile'])
     cores,memory,duration=(4,24,'00:45:00') if phase=='audit' else (
         profile['cores'],profile['job_memory_GiB'],
         profile['time_limit'] if phase=='science' else '00:45:00')
-    need(Path(run).parent==RUNS and Path(run).name.startswith('ccasp-native-s66-qomp148-'),
+    need(Path(run)==PHASE_ROOTS[phase],
          'dedicated new phase root required')
     args=[str(source),commit,phase,str(run),str(pilot)]
     if phase!='worker':

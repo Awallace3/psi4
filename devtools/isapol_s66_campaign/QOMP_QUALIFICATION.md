@@ -1,5 +1,38 @@
 # Closed fb11 genuine build / installed-check mode
 
+## 157: literal non-native discovery; new operational roots only
+
+Worker15369356 failed before a success receipt or SCI/QCA writes: the actual
+QCE harness waited30s for `launcher/psi4 --module`. Launcher405 performed full
+multi-GB runtime content seals even for that metadata probe. Earlier actual
+finite seals took69s/39s; a pure timeout reproducer confirms the heavy path is
+entered. No SDK/harness/timeout/environment/binary is changed.
+
+Only exact argv `['--module']` or `['--version']` selects
+`runtime_qomp.metadata_cli_launch`; mixed/unknown arguments cannot use it.
+Frozen `run_psi4.py` exits for these literals before importing Psi4. The
+metadata route retains typed view/source/identity, complete private/non-site
+stdlib namespace, cfg/no-PTH/zip, canonical startup interpreter/script/version
+file content+alias checks, typed profile/thread policy, fresh HOME/cache/CWD,
+exact -I-B command/environment and decoded-FD tracing, before/after. It does
+NOT rehash unrelated scientific data/core/libraries on every metadata call.
+Full outer worker/SCI pre/post seals remain unchanged, as does the full
+QCSchema content pre/post route and publication-after-seal. This relies on
+the existing ordinary-host/outer-seal trust boundary, not a hostile-host or
+concurrent-modification sandbox. No reusable bypass or skip flag is exposed.
+
+Fresh source is `P/gits/psi4.ccasp-native-qomp-production148-v2`;
+PREP `P/runs/ccasp-native-s66-qomp-production148-002`; exact phase roots
+`P/runs/ccasp-native-s66-qomp148-{worker,science,audit}002`.
+Old405/source/PREP001/worker001 and failure evidence are immutable.
+Dataset/spec/tag namespace remainsv1 (none was created), and the durable
+bootstrap intent is unchanged (none was consumed by the failed worker).
+Scientific runtimes, compiledfb11/test311/qual970/producingcba/14receipts/view,
+all131 contracts and147 resource estimates/caps are unchanged.
+
+Actual compute-node discovery must still confirm this resolves the30s failure.
+Pure tests do not prove latency, native success or scientific acceptance.
+
 ## 148A: missing106 drafts and ONE ordinary new-cohort pilot
 
 `qomp_campaign.py prepare` verifies the actual131 measured reports using the

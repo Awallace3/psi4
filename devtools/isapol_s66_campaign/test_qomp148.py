@@ -128,12 +128,12 @@ def test_intended_distinct_manager_tags_are_not_mutated():
 def test_phase_commands_have_real_wrapper_and_closed_resources(monkeypatch,tmp_path):
     c,_,_,_,cases,_=synthetic(monkeypatch)
     case=next(d for d in cases.values() if d['dataset_mode']=='fresh')
-    source=c.ROOT/'gits/psi4.ccasp-native-qomp-production148'
+    source=c.ROOT/'gits/psi4.ccasp-native-qomp-production148-v2'
     for phase in ('worker','science','audit'):
         kw={} if phase=='worker' else dict(preflight='/observed/worker.json',preflight_sha='a'*64)
         if phase=='audit': kw['science']='/observed/science'
         cmd=c.phase_command(case,source=source,commit='c'*40,phase=phase,
-            run=c.RUNS/('ccasp-native-s66-qomp148-'+phase+'001'),pilot=c.CASE_ROOT/'first.json',**kw)
+            run=c.RUNS/('ccasp-native-s66-qomp148-'+phase+'002'),pilot=c.CASE_ROOT/'first.json',**kw)
         assert '--hold' not in cmd and '--no-requeue' in cmd
         assert '--qos=embers' in cmd and any(s.endswith('/qomp148.sbatch') for s in cmd)
         assert '--cpus-per-task='+('4' if phase=='audit' else '8') in cmd
@@ -141,6 +141,10 @@ def test_phase_commands_have_real_wrapper_and_closed_resources(monkeypatch,tmp_p
         assert '--time='+('02:00:00' if phase=='science' else '00:45:00') in cmd
     with pytest.raises(ValueError):
         c.phase_command(case,source=source,commit='c'*40,phase='wave',run=tmp_path,pilot=tmp_path)
+    with pytest.raises(ValueError):
+        c.phase_command(case,source=source,commit='c'*40,phase='worker',
+            run=c.RUNS/'ccasp-native-s66-qomp148-worker001',pilot=tmp_path)
+    assert c.CAMPAIGN_ROOT.name=='ccasp-native-s66-qomp-production148-002'
 
 
 @pytest.mark.parametrize('primary',[None,RuntimeError('child failure'),KeyboardInterrupt(),SystemExit(143)])
@@ -472,3 +476,166 @@ def test_durable_intent_blocks_new_tag_retry_and_changed_case(monkeypatch,tmp_pa
         with pytest.raises(FileExistsError):
             e.reserve_transaction(other,tag[:-3]+'124')
     assert path.read_bytes()==original
+
+
+@pytest.mark.parametrize('argument',['--module','--version'])
+def test_literal_metadata_discovery_does_not_enter_full_runtime_seal(monkeypatch,tmp_path,argument):
+    e,_,path,incoming,_,events=launcher_fixture(monkeypatch,tmp_path)
+    q=e.qualified()
+    def full(*args,**kwargs):
+        raise subprocess.TimeoutExpired(['owned-launcher',argument],30)
+    def metadata(raw,argv,**kwargs):
+        assert argv==[argument] and kwargs['producer']=='qomp'
+        events.append('metadata-admitted')
+        return dict(command=['/not-executed/private-python','exact-arg'],
+                    environment=dict(ONLY='approved'),cwd=str(path.parent.parent/'cwd'))
+    rt=NS(ordinary_cli_launch=full,verify_runtime_view=full,
+        metadata_cli_launch=metadata,verify_metadata_runtime=lambda raw:events.append('metadata-post'))
+    monkeypatch.setattr(e,'qualified',lambda:NS(decode=q.decode,runtime=lambda:rt))
+    assert e.launcher([argument])==0
+    assert path.read_bytes()==incoming
+    assert events==['metadata-admitted','spawn',('wait',None),'reaped','metadata-post']
+
+
+@pytest.mark.parametrize('argv',[
+    ['--module','--qcschema','data.msgpack'],['--version','--module'],
+    ['--module','--memory','20.0GiB'],['--version','--nthread','8']])
+def test_mixed_metadata_arguments_cannot_select_fast_discovery(monkeypatch,tmp_path,argv):
+    e,_,_,_,_,events=launcher_fixture(monkeypatch,tmp_path)
+    with pytest.raises(ValueError,match='cannot be combined'):
+        e.launcher(argv)
+    assert not events
+
+
+def metadata_runtime_fixture(monkeypatch,tmp_path):
+    f=load('test_qualified_qomp');rt=f.rt
+    base,prefix,view=f.fake_runtime(monkeypatch,tmp_path)
+    def directory(root,name,entries):
+        p=root/name;p.mkdir(parents=True,exist_ok=True)
+        for part in (p,*p.parents):
+            if part==root: break
+            entries[str(part.relative_to(root))]=dict(kind='directory')
+    pe,be=(view['scopes'][k]['entries'] for k in ('prefix','base'))
+    for name in ('bin','lib/python3.13/site-packages/psi4'):
+        directory(prefix,name,pe)
+    for name in ('bin','lib/python3.13/lib-dynload'):
+        directory(base,name,be)
+    for root,entries,names in (
+        (prefix,pe,('bin/python','bin/python3','bin/python3.13','bin/psi4',
+                    'lib/python3.13/site-packages/psi4/metadata.py','science-large.bin')),
+        (base,be,('bin/python3.13',))):
+        for name in names:
+            raw=('SYNTHETIC '+name).encode();(root/name).write_bytes(raw)
+            entries[name]=dict(kind='file',sha256=f.sha(raw))
+    (prefix/'lib64').symlink_to('lib',target_is_directory=True)
+    pe['lib64']=dict(kind='link',target='lib',resolved=str(prefix/'lib'),target_kind='directory')
+    return rt,base,prefix,view
+
+
+def test_metadata_content_selection_is_small_but_full_molecular_seal_unchanged(monkeypatch,tmp_path):
+    rt,base,prefix,view=metadata_runtime_fixture(monkeypatch,tmp_path)
+    actual=rt.file_sha;hashed=[]
+    def digest(path):
+        hashed.append(str(path))
+        return actual(path)
+    monkeypatch.setattr(rt,'file_sha',digest)
+    rt.verify_metadata_runtime(b'synthetic')
+    assert set(hashed)=={str(prefix/n) for n in (
+        'bin/python','bin/python3','bin/python3.13','bin/psi4','pyvenv.cfg',
+        'lib/python3.13/site-packages/psi4/metadata.py')}|{str(base/'bin/python3.13')}
+    (prefix/'science-large.bin').write_bytes(b'changed')
+    rt.verify_metadata_runtime(b'synthetic') # Full outer seals, NOT metadata, own science hashes.
+    with pytest.raises(ValueError,match='content'):
+        rt.verify_runtime_view(b'synthetic')
+
+
+@pytest.mark.parametrize('change',[
+    'script','version','interpreter','cfg','pth','zip_file','zip_dir','zip_link',
+    'lib64','stdlib_extra'])
+def test_metadata_startup_guards_remain_fail_closed(monkeypatch,tmp_path,change):
+    rt,base,prefix,_=metadata_runtime_fixture(monkeypatch,tmp_path)
+    if change in ('script','version','interpreter','cfg'):
+        name={'script':'bin/psi4','version':'lib/python3.13/site-packages/psi4/metadata.py',
+              'interpreter':'bin/python','cfg':'pyvenv.cfg'}[change]
+        (prefix/name).write_bytes(b'tampered')
+    elif change=='pth': (prefix/'evil.pth').write_bytes(b'import evil')
+    elif change.startswith('zip_'):
+        p=base/'lib/python313.zip'
+        if change=='zip_file': p.write_bytes(b'shadow')
+        elif change=='zip_dir': p.mkdir()
+        else: p.symlink_to('missing')
+    elif change=='lib64':
+        (prefix/'lib64').unlink();(prefix/'lib64').symlink_to('bin',target_is_directory=True)
+    else: (base/'lib/python3.13/extra.py').write_bytes(b'')
+    with pytest.raises(ValueError):
+        rt.verify_metadata_runtime(b'synthetic')
+
+
+@pytest.mark.parametrize('argv',[['--module','--qcschema'],['--version','--module'],
+    ['--help'],[],('--module',)])
+def test_metadata_admission_has_no_arbitrary_skip_option(argv):
+    rt=load('runtime_qomp')
+    with pytest.raises(ValueError,match='literal'):
+        rt.metadata_cli_launch(b'not-a-view',argv,scratch=Path('/never/read'),
+            execution_profile={},inherited_threads={},producer='qomp')
+
+
+@pytest.mark.parametrize('argv',[['--module'],['--version']])
+def test_metadata_launch_retains_actual_command_env_profile_cache_gate(monkeypatch,tmp_path,argv):
+    rt=load('runtime_qomp')
+    scratch=tmp_path/'ccasp-native-discovery';scratch.mkdir(mode=0o700)
+    for name in ('home','cache','cwd'): (scratch/name).mkdir(mode=0o700)
+    monkeypatch.setattr(rt,'SCRATCH_ROOT',tmp_path)
+    seen=[]
+    monkeypatch.setattr(rt,'verify_metadata_runtime',lambda raw:seen.append(raw))
+    monkeypatch.setattr(rt,'verify_runtime_view',lambda raw:pytest.fail('full seal in metadata'))
+    profile=load('qomp_bank_policy').execution_profile('s20')
+    threads=dict(OMP_NUM_THREADS='8',MKL_NUM_THREADS='8',OPENBLAS_NUM_THREADS='1')
+    admitted=rt.metadata_cli_launch(b'checked',argv,scratch=scratch,producer='qomp',
+        execution_profile=profile,inherited_threads=threads)
+    assert seen==[b'checked']
+    assert admitted['command']==[rt.PREFIX+'/bin/python','-I','-B','-X',
+        'pycache_prefix='+str(scratch/'cache'),rt.PREFIX+'/bin/psi4',*argv]
+    assert admitted['cwd']==str(scratch/'cwd')
+    assert admitted['environment']['LD_LIBRARY_PATH']==rt.PREFIX+'/lib:'+rt.BASE+'/lib'
+    with pytest.raises(ValueError,match='literal'):
+        rt.metadata_cli_launch(b'checked',argv,scratch=scratch,producer='grid400',
+            execution_profile=profile,inherited_threads=threads)
+    (scratch/'cache/old.pyc').write_bytes(b'shadow')
+    with pytest.raises(ValueError,match='preexisting'):
+        rt.metadata_cli_launch(b'checked',argv,scratch=scratch,producer='qomp',
+            execution_profile=profile,inherited_threads=threads)
+
+
+def test_frozen_cli_metadata_exits_before_native_import():
+    import ast
+    path=Path(__file__).resolve().parents[2]/'psi4/run_psi4.py'
+    tree=ast.parse(path.read_bytes())
+    native=next(n.lineno for n in ast.walk(tree) if isinstance(n,ast.Import)
+        and any(a.name=='psi4' for a in n.names))
+    for name in ('module','version'):
+        branch=next(n for n in tree.body if isinstance(n,ast.If)
+            and isinstance(n.test,ast.Subscript) and isinstance(n.test.value,ast.Name)
+            and n.test.value.id=='args' and isinstance(n.test.slice,ast.Constant)
+            and n.test.slice.value==name)
+        assert branch.lineno<native
+        assert isinstance(branch.body[-1],ast.Expr)
+        assert ast.unparse(branch.body[-1].value)=='sys.exit()'
+
+
+@pytest.mark.parametrize('interrupt',[False,True])
+def test_metadata_signal_child_and_postcheck_failure_cannot_succeed(monkeypatch,tmp_path,interrupt):
+    e,_,path,incoming,_,events=launcher_fixture(monkeypatch,tmp_path,interrupt=interrupt,code=9)
+    q=e.qualified()
+    def metadata(raw,argv,**kwargs):
+        return dict(command=['/not-executed/private-python','exact-arg'],
+                    environment=dict(ONLY='approved'),cwd=str(path.parent.parent/'cwd'))
+    def post(raw): raise ValueError('metadata postcheck failed')
+    rt=NS(metadata_cli_launch=metadata,verify_metadata_runtime=post)
+    monkeypatch.setattr(e,'qualified',lambda:NS(decode=q.decode,runtime=lambda:rt))
+    with pytest.raises(KeyboardInterrupt if interrupt else subprocess.CalledProcessError) as caught:
+        e.launcher(['--module'])
+    assert path.read_bytes()==incoming
+    assert any('metadata postcheck failed' in n for n in caught.value.__notes__)
+    if interrupt:
+        assert ('signal',777,signal.SIGTERM) in events and ('wait',60) in events
