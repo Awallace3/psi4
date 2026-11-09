@@ -13,7 +13,7 @@ import signal
 def helper(name):
     if name not in ('single_claim', 'phoenix_pilot', 'pilot_cb63305', 'dataset_fresh_cb63305',
                     'case_cb63305', 'owned_dataset_cb63305', 'grid400_policy',
-                    'grid400_bank_execution'):
+                    'grid400_bank_execution','qomp_execution'):
         raise ValueError('closed single-record manager helpers required')
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_expanded_session_'+name, path)
@@ -28,9 +28,9 @@ def validate_session_config(config, compute_tag, *, worker_shape=(4, 20.), campa
     The historical singleton keeps its exact default. Remaining-bank callers
     must separately bind their case, allocation and worker-preflight receipts.
     """
-    if campaign_scope not in ('default', 'eligible-bank', 'eligible-wave'):
+    if campaign_scope not in ('default', 'eligible-bank', 'eligible-wave','qomp-pilot'):
         raise ValueError('closed native session scope required')
-    shapes = (helper('grid400_bank_execution').worker_shapes() if campaign_scope in ('eligible-bank', 'eligible-wave')
+    shapes = (helper('grid400_bank_execution').worker_shapes() if campaign_scope in ('eligible-bank', 'eligible-wave','qomp-pilot')
               else ((4, 20.), (8, 20.), (12, 40.), (24, 80.), (16, 60.)))
     if (type(worker_shape) is not tuple or len(worker_shape) != 2
             or type(worker_shape[0]) is not int
@@ -52,17 +52,22 @@ def run_session(config, *, record_id, compute_tag, runtime, payload, save, worke
                 producer='cb63305', case=None, campaign_scope='default',
                 wave_binding=None, allocation=None):
     """Claim once, capture compressed local output, and stop this owned manager."""
-    if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400','qomp'):
         raise ValueError('closed singleton producer required')
-    if (campaign_scope not in ('default', 'eligible-bank', 'eligible-wave')
+    if (campaign_scope not in ('default', 'eligible-bank', 'eligible-wave','qomp-pilot')
             or campaign_scope in ('eligible-bank', 'eligible-wave') and producer != 'grid400'):
         raise ValueError('eligible bank session requires explicit grid400 producer and scope')
-    if producer != 'grid400' and worker_shape == (16, 60.):
+    if (producer=='qomp') != (campaign_scope=='qomp-pilot'):
+        raise ValueError('explicit QOMP fresh session scope required')
+    if producer not in ('grid400','qomp') and worker_shape == (16, 60.):
         raise ValueError('grid400 worker shape requires its explicit fresh producer')
     protected = (5234314, 5234315)
     if campaign_scope != 'eligible-wave' and (wave_binding is not None or allocation is not None):
         raise ValueError('wave authority requires explicit wave session')
-    if campaign_scope in ('eligible-bank', 'eligible-wave'):
+    if producer=='qomp':
+        protected=helper('qomp_execution').validate_binding(case,runtime=runtime,
+            compute_tag=compute_tag,worker_shape=worker_shape,record_id=record_id)
+    elif campaign_scope in ('eligible-bank', 'eligible-wave'):
         protected = helper('grid400_bank_execution').validate_binding(case,
             runtime=runtime, compute_tag=compute_tag, worker_shape=worker_shape, record_id=record_id,
             **(dict(campaign_scope=campaign_scope, wave_binding=wave_binding, allocation=allocation)
@@ -139,7 +144,7 @@ def run_session(config, *, record_id, compute_tag, runtime, payload, save, worke
                 extras = result.result.get('extras')
                 self.local_native = extras.get('psi4:native_monomer') if isinstance(extras, dict) else None
 
-    if producer == 'grid400':
+    if producer in ('grid400','qomp'):
         with helper('dataset_fresh_cb63305').grid400_manager_client_factory() as client_type:
             manager = PilotManager(config, target_record_id=record_id, compute_tag=compute_tag,
                                    acquisition_seconds=300)
@@ -163,8 +168,12 @@ def run_session(config, *, record_id, compute_tag, runtime, payload, save, worke
     previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
     for sig in previous:
         signal.signal(sig, on_term)
+    primary = None
     try:
         manager.start()
+    except BaseException as exc:
+        primary = exc
+        raise
     finally:
         try:
             # Only this freshly created manager is deactivated. No other
@@ -184,6 +193,10 @@ def run_session(config, *, record_id, compute_tag, runtime, payload, save, worke
                 claim_error_type=manager.claim_error_type,
                 submission_error_type=manager.submission_error_type,
                 local_statistics=manager.statistics.dict()))
+        except BaseException as final:
+            if producer != 'qomp' or primary is None:
+                raise
+            primary.add_note('QOMP manager finalization: '+type(final).__name__+': '+str(final)[:512])
         finally:
             for sig, handler in previous.items():
                 signal.signal(sig, handler)

@@ -1,5 +1,55 @@
 # Closed fb11 genuine build / installed-check mode
 
+## 148A: missing106 drafts and ONE ordinary new-cohort pilot
+
+`qomp_campaign.py prepare` verifies the actual131 measured reports using the
+historical **cba19-file producing inventory**, not current147/148 file hashes.
+The compiledfb11/test311/qualifying970/producingcba/new operational source
+roles remain distinct. Original states025/context/checkpoint pins determine
+25 carried IDs/records; their provenance is a separate manifest, not new
+QOMP records or re-labelled tensors. Exactly106 missing drafts are emitted;
+only the first missing monomer has runnable fresh mode. The other105 require
+a future independently audited bootstrap/serial-advance implementation.
+
+New dataset `S66x8-native-CCASP-qomp-fb11-missing106-v1`, specification
+`pbe0-atz-native-qomp-request3`, tag prefix `ccasp-native-qomp148-`.
+`qomp148.sbatch` runs the existing worker, one-record SCI and independent
+audit engines with explicit `--producer qomp --campaign-scope qomp-pilot`.
+It is not the old launcher/wave wrapper. `qomp_campaign.phase_command`
+returns exact phase resources/argv; it does not submit jobs.
+
+All three phases require the exact reviewed operational commit, finite
+runtime seals, the actual14 qualified receipts and fixed measured inputs.
+Worker discovery records the actual deployed QCE harness and SDK identities;
+SCI/audit require the parent-observed literal worker receipt digest and
+matching observed harness. No convenient local harness is substituted.
+The QOMP launcher really executes `ordinary_cli_launch`'s command/env/CWD
+under decoded-FD tracing. Its QCE exchange bridge copies exact serialized
+bytes between two new owned scratch files, without parsing native operands.
+Independent audit uses `trace_projection` and existing numeric, envelope,
+claim, export, resource and terminal-accounting checks. A final runtime/source
+seal must pass before a phase can publish its admissible success receipt.
+
+Before any new-cohort write, SCI refreshes original357's identity/specification,
+25 accepted record/entry/association projections and eight historical waiting
+IDs; any drift refuses for parent reconciliation. The one-shot transport has
+only a narrow old357 metadata-read allowance, never old mutations. Active
+manager tags must be distinct literal namespaces (wildcards refuse).
+An exclusive durable eligibility-key intent prevents re-running a bootstrap
+under a different job/tag. Lost HTTP responses/partial metadata are not repaired.
+
+The #147 typed profile, unchanged256GiB bytes and parent-approved engineering
+estimate65536 files are explicit. Actual raw FS/user/effective-group quota is
+queried afresh inside each trusted observation, before work and again
+immediately before record submission. The existing per-member/sum-plus-largest
+predicates remain mandatory. This is not a creation cap or concurrency lock.
+
+No parallel-wave controller, cohort expansion, old-job cancellation, automatic
+adoption, cleanup, solver/model acceptance or historical outlier explanation
+is provided here. Parent performs reviewed staging/preflight/submission.
+Real ordinary success and bounded failure-lifecycle traces are still required
+before expansion; pure fake-HTTP/native-operand-free tests are not those proofs.
+
 ## 153: closed export derivation and aggregated attribution; current ops005
 
 Verification15324110/004 failed BEFORE native import/collection at export

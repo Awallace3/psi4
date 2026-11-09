@@ -14,7 +14,8 @@ import re
 
 def helper(name):
     if name not in ('grid400_bank_policy', 'grid400_bank_case', 'dataset_fresh_cb63305',
-                    'phoenix_worker_probe', 'dataset_guard', 'phoenix_pilot'):
+                    'phoenix_worker_probe', 'dataset_guard', 'phoenix_pilot',
+                    'qomp_bank_policy','qomp_campaign'):
         raise ValueError('closed eligible bank transport helpers required')
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_bank_transport_'+name, path)
@@ -30,26 +31,39 @@ def _encoded(value):
 class RequestScope:
     """Consume mutation attempts before HTTP, including failed/lost responses."""
 
-    def __init__(self, case, reproduced_case, compute_tag, *, checkpoint_raw=None):
-        policy, cases = helper('grid400_bank_policy'), helper('grid400_bank_case')
+    def __init__(self, case, reproduced_case, compute_tag, *, checkpoint_raw=None,producer='grid400'):
+        if producer not in ('grid400','qomp'):
+            raise ValueError('closed transaction producer required')
+        qomp=producer=='qomp'
+        self.producer=producer
+        cases=helper('qomp_campaign' if qomp else 'grid400_bank_case')
+        policy=cases if qomp else helper('grid400_bank_policy')
+        profiles=helper('qomp_bank_policy') if qomp else policy
         if (type(case) is not dict or _encoded(case) != _encoded(reproduced_case)
                 or case.get('schema') != 'native-selected-molecular-pilot/1'
-                or case.get('producer_profile') != 'grid400'
+                or case.get('producer_profile') != producer
                 or case.get('status') != 'PREPARED_NOT_REGISTERED_OR_SUBMITTED'
                 or case.get('campaign') != policy.CAMPAIGN
-                or case.get('campaign_scope') != 'eligible-bank'
+                or case.get('campaign_scope') != ('qomp-pilot' if qomp else 'eligible-bank')
                 or case.get('dataset_name') != cases.DATASET_NAME
                 or case.get('specification_name') != cases.SPECIFICATION_NAME
                 or case.get('dataset_mode') not in ('fresh', 'append')
                 or type(case.get('monomer_id')) is not str
                 or re.fullmatch(r'monomer-[0-9]{4}', case['monomer_id']) is None
                 or not 1 <= int(case['monomer_id'][-4:]) <= 131
-                or re.fullmatch(re.escape('ccasp-native-grid400-bank-'+case['monomer_id']+'-')+
+                or re.fullmatch(re.escape((cases.NAMESPACE if qomp else 'ccasp-native-grid400-bank-')+case['monomer_id']+'-')+
                                 '[1-9][0-9]*', compute_tag) is None):
             raise ValueError('entire reconstructed eligible-bank transaction required')
-        profile = policy.validate_profile(case.get('execution_profile'))
+        if qomp and (case['dataset_mode']!='fresh' or checkpoint_raw is not None):
+            raise ValueError('QOMP148A permits only its fresh first pilot, not append/wave')
+        if qomp:
+            qualified=cases.helper('qualified_qomp')
+            if (case.get('producer',{}).get('scientific_commit')!=qualified.SCIENTIFIC_COMMIT
+                    or case['producer'].get('implementation_sha256')!=qualified.IMPLEMENTATION):
+                raise ValueError('actual qualified QOMP producer identity required')
+        profile = profiles.validate_profile(case.get('execution_profile'))
         runtime = helper('phoenix_worker_probe').runtime_input(case)
-        declared = policy.validate_execution_profile(dict(runtime_input=runtime,
+        declared = profiles.validate_execution_profile(dict(runtime_input=runtime,
             intended_memory_bytes=case.get('intended_memory_bytes')))
         if (_encoded(profile) != _encoded(declared)
                 or hashlib.sha256(_encoded(runtime)).hexdigest() != case.get('runtime_input_sha256')):
@@ -117,6 +131,9 @@ class RequestScope:
                         'api/v1/molecules/bulkGet') or re.fullmatch(
                 r'api/v1/records/(?:singlepoint/)?(?:bulkGet|query)', endpoint):
             return
+        if self.producer=='qomp' and re.fullmatch(
+                r'api/v1/datasets/singlepoint/357/(entries|records|specifications)/bulkFetch',endpoint):
+            return  # Explicit old-provenance READ only, never an old mutation.
         if endpoint == 'api/v1/datasets/singlepoint':
             if self.mode != 'fresh' or self.dataset_id is not None:
                 raise ValueError('append transport cannot create a dataset')
@@ -145,7 +162,14 @@ class RequestScope:
         self.attempted.add(role)
 
 
-def transport_binding():
+def transport_binding(*,producer='grid400'):
+    if producer=='qomp':
+        return dict(schema='qomp-serial-transport/1',producer='qomp',
+            ordinary_stack=helper('dataset_fresh_cb63305').transport_binding(producer='grid400'),
+            bank_adapter_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            mutation_policy='one-fresh-dataset-one-record-no-retry/1')
+    if producer!='grid400':
+        raise ValueError('closed bank transport producer required')
     return dict(helper('dataset_fresh_cb63305').transport_binding(producer='grid400'),
         bank_adapter_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         bank_mutation_policy='reconstructed-fresh-or-audited-append-one-attempt/1')
@@ -155,7 +179,7 @@ def client_class(scope):
     """Dedicated reviewed QCPortal class; one scope shared by any construction."""
     if type(scope) is not RequestScope or scope.client_type is not None:
         raise ValueError('one unused reconstructed bank request scope required')
-    transport_binding()
+    transport_binding(**(dict(producer='qomp') if scope.producer=='qomp' else {}))
     from qcportal import PortalClient
     from qcportal.exceptions import AuthenticationFailure
     from qcportal.serialization import serialize

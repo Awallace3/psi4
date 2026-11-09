@@ -13,7 +13,8 @@ import sys
 
 def helper(name):
     if name not in ('prepare_descriptor_bank_cb63305', 'descriptor_admission_cb63305',
-                    'descriptor_profiles', 'resource_plan_grid400', 'phoenix_descriptor_bank_cb63305'):
+                    'descriptor_profiles', 'resource_plan_grid400', 'phoenix_descriptor_bank_cb63305',
+                    'resource_plan_qomp','qomp_campaign'):
         raise ValueError('closed full descriptor pool helpers required')
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_descriptor_pool_'+name, path)
@@ -27,8 +28,14 @@ def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
-def verify_pool(inputs, receipts, resources, bank_raw, allocation_raw, reports, *, authority):
+def verify_pool(inputs, receipts, resources, bank_raw, allocation_raw, reports, *, authority,
+                producer='grid400'):
     """Return all verified rows, including refused ones; no runtime side effects."""
+    if type(producer) is not str or producer not in ('grid400','qomp'):
+        raise ValueError('closed measured-pool producer required')
+    qomp=producer=='qomp'
+    if qomp and authority!=helper('qomp_campaign').authority():
+        raise ValueError('historical producing-cba authority required, not current operational hashes')
     roles = {'bank_sha256', 'resources_sha256', 'allocation_sha256',
              'operational_commit', 'job_id', 'operational_sources_sha256'}
     if type(authority) is not dict or set(authority) != roles:
@@ -44,18 +51,22 @@ def verify_pool(inputs, receipts, resources, bank_raw, allocation_raw, reports, 
         if type(raw) is not bytes or digest(raw) != authority[key]:
             raise ValueError('descriptor pool byte identity differs: '+key)
     prepare = helper('prepare_descriptor_bank_cb63305')
-    bank = prepare.prepare_grid400_full_bank(inputs, receipts, resources)
+    bank = (prepare.prepare_qomp_full_bank if qomp else prepare.prepare_grid400_full_bank)(
+        inputs, receipts, resources)
     if bank != json.loads(bank_raw):
         raise ValueError('full raw candidate bank does not reproduce')
-    profile = helper('descriptor_profiles').profile('grid400', scope='full-bank')
-    planner = helper('resource_plan_grid400')
+    profile = helper('descriptor_profiles').profile(producer, scope='full-bank')
+    planner = helper('resource_plan_qomp' if qomp else 'resource_plan_grid400')
     operations = authority['operational_sources_sha256']
-    names = set(helper('phoenix_descriptor_bank_cb63305').OP_FILES+profile['parent_extra_sources'])
+    names = (set(helper('qomp_campaign').authority()['operational_sources_sha256']) if qomp else
+             set(helper('phoenix_descriptor_bank_cb63305').OP_FILES+profile['parent_extra_sources']))
     if (type(operations) is not dict or set(operations) != names
             or any(type(sha) is not str or re.fullmatch('[0-9a-f]{64}', sha) is None
                    for sha in operations.values())):
         raise ValueError('complete measured parent/child operational source inventory required')
     allocation = json.loads(allocation_raw)
+    if qomp:
+        helper('qomp_campaign').verify_input_receipts(allocation,inputs,receipts)
     if (allocation.get('schema') != 'native-campaign-descriptor-allocation/2'
             or allocation.get('campaign_scope') != 'full-bank'
             or allocation.get('runtime_unchanged') is not True
@@ -86,8 +97,9 @@ def verify_pool(inputs, receipts, resources, bank_raw, allocation_raw, reports, 
     if type(reports) is not dict or set(reports) != {
             mid+'-descriptors.json' for mid in expected_ids}:
         raise ValueError('complete exact131 measured child report bytes required')
-    child_sources = {name: operations[name] for name in profile['child_sources']}
-    identity = json.loads(receipts['imported_identity'])
+    child_sources = {name: operations[name] for name in (
+        helper('qomp_campaign').CBA_CHILDREN if qomp else profile['child_sources'])}
+    identity = json.loads(receipts['identity' if qomp else 'imported_identity'])
     eligible, refused = [], []
     for measurement in measurements:
         mid = measurement['monomer_id']
@@ -98,7 +110,7 @@ def verify_pool(inputs, receipts, resources, bank_raw, allocation_raw, reports, 
             raise ValueError('raw descriptor child/runtime bytes required')
         result = admission.verify_descriptor(json.loads(raw), row, identity,
             policy=planner.FILES, operational_sources_sha256=child_sources,
-            runtime_sha256=runtime_sha, producer='grid400', scope='full-bank')
+            runtime_sha256=runtime_sha, producer=producer, scope='full-bank')
         expected = dict(result, descriptor_report=name, descriptor_report_sha256=digest(raw),
                         runtime_input_sha256=runtime_sha)
         if measurement != expected:

@@ -56,6 +56,12 @@ def validate_profile(profile):
     raise ValueError('exact typed qomp execution profile required')
 
 
+def validate_execution_profile(row):
+    """Select unchanged finite numeric/science shape, then NEW execution identity."""
+    historical = helper('grid400_bank_policy').validate_execution_profile(row)
+    return execution_profile(historical['name'].removeprefix('grid400-bank-'))
+
+
 def admit_scratch(profiles, observe):
     """Immediate, pure admission seam; caller supplies NEW live reads per call.
 

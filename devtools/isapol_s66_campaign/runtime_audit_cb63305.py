@@ -21,7 +21,7 @@ HELPERS = {'pilot_cb63305', 'phoenix_pilot_cb63305', 'phoenix_worker_cb63305',
     'validate_numeric', 'dataset_fresh_cb63305', 'phoenix_descriptor_bank_cb63305',
     'owned_dataset_cb63305', 'dataset_owned354_cb63305', 'prepare_owned354_baseline_cb63305',
     'envelope_identity', 'bank_campaign', 'bank_dataset', 'bank_audit', 'bank_runtime_gate',
-    'bank_wave_runtime'}
+    'bank_wave_runtime','qomp_execution','qomp_campaign'}
 _MODULES = {}
 
 
@@ -42,9 +42,9 @@ def helper(name):
 
 def admit_audit_allocation(allocation, *, producer):
     """Enforce this fresh audit's own shape, not the science job's shape."""
-    if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400','qomp'):
         raise ValueError('closed audit allocation producer required')
-    if producer == 'grid400':
+    if producer in ('grid400','qomp'):
         expected = dict(Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small',
             NumCPUs='4', NumNodes='1', MinMemoryNode='24G', TimeLimit='00:45:00')
         if any(allocation.get(key) != value for key, value in expected.items()):
@@ -53,12 +53,12 @@ def admit_audit_allocation(allocation, *, producer):
 
 def verify_delivery_identity(local_result, server, saved_witness, *, producer):
     """Independently reproduce the launcher's identity witness, never trust it."""
-    if producer not in ('cb63305', 'ed561666', 'grid400'):
+    if producer not in ('cb63305', 'ed561666', 'grid400','qomp'):
         raise ValueError('closed audited delivery producer required')
     if not local_result['success']:
         raise ValueError('independent local/server native envelope comparison failed')
     local = local_result['extras']['psi4:native_monomer']
-    if producer == 'grid400':
+    if producer in ('grid400','qomp'):
         identity = helper('envelope_identity').verify_native_envelope_identity(local, server)
         if type(saved_witness) is not dict or saved_witness != identity:
             raise ValueError('independently reproduced JSON envelope identity witness differs')
@@ -72,7 +72,7 @@ def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='c
                         remaining_case=False, campaign_scope='default'):
     helper('phoenix_worker_cb63305').validate_campaign_scope(producer, campaign_scope)
     bank = campaign_scope in ('eligible-bank', 'eligible-wave')
-    pins = (helper('bank_wave_runtime').pins() if campaign_scope == 'eligible-wave'
+    pins = (helper('qomp_campaign').pins() if producer=='qomp' else helper('bank_wave_runtime').pins() if campaign_scope == 'eligible-wave'
             else helper('bank_campaign').pins() if bank else helper('pilot_cb63305').producer_pins(producer))
     job = outcome['allocation']['JobId']
     if (type(job) is not str or re.fullmatch(r'[0-9]+', job) is None
@@ -106,7 +106,7 @@ def validate_delivery(outcome, delivery, created, claimed, server, *, owned354=F
                       producer='cb63305', campaign_scope='default'):
     helper('phoenix_worker_cb63305').validate_campaign_scope(producer, campaign_scope)
     bank = campaign_scope in ('eligible-bank', 'eligible-wave')
-    pins = (helper('bank_wave_runtime').pins() if campaign_scope == 'eligible-wave'
+    pins = (helper('qomp_campaign').pins() if producer=='qomp' else helper('bank_wave_runtime').pins() if campaign_scope == 'eligible-wave'
             else helper('bank_campaign').pins() if bank else helper('pilot_cb63305').producer_pins(producer))
     if bank and (outcome.get('campaign_scope') != campaign_scope
             or outcome.get('producer_profile') != 'grid400'
@@ -114,6 +114,11 @@ def validate_delivery(outcome, delivery, created, claimed, server, *, owned354=F
             or outcome.get('dataset_name') != pins['dataset_name']
             or outcome.get('specification_name') != pins['specification_name']):
         raise ValueError('explicit eligible bank delivered mode and dataset/specification required')
+    if producer=='qomp' and (owned354 or outcome.get('producer_profile')!='qomp'
+            or outcome.get('campaign_scope')!='qomp-pilot' or outcome.get('dataset_mode')!='fresh'
+            or outcome.get('dataset_name')!=pins['dataset_name']
+            or outcome.get('specification_name')!=pins['specification_name']):
+        raise ValueError('fresh QOMP cohort identity required')
     if producer == 'grid400' and not bank and (
             owned354 or outcome.get('producer_profile') != producer
             or outcome.get('dataset_mode') != 'fresh' or outcome.get('monomer_id') != pins['monomer']
@@ -263,9 +268,10 @@ def main():
     for name in ('build', 'case', 'worker-preflight', 'qualification', 'inputs', 'descriptors', 'pilot', 'run'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
-    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400','qomp'), default='cb63305')
+    parser.add_argument('--worker-preflight-sha256')
     parser.add_argument('--remaining-case', action='store_true')
-    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank', 'eligible-wave'), default='default')
+    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank', 'eligible-wave','qomp-pilot'), default='default')
     for name in ('wave-plan', 'wave-registration', 'wave-science-barrier'):
         parser.add_argument('--'+name, type=Path)
         parser.add_argument('--'+name+'-sha256')
@@ -280,12 +286,22 @@ def main():
     for role in ('audit', 'outcome', 'pilot', 'envelope'):
         parser.add_argument('--accepted-'+role, type=Path)
     args = parser.parse_args()
+    if args.producer=='qomp':
+        if args.advance_checkpoint or args.advance_bank_checkpoint:
+            raise ValueError('QOMP148A audit does not adopt historical checkpoint engines')
+        return helper('qomp_execution').run_phase('audit',args,perform)
+    return perform(args)
+
+
+def perform(args):
+    qomp=args.producer=='qomp'
+    q=helper('qomp_execution') if qomp else None
     worker = helper('phoenix_worker_cb63305')
     scope = worker.selected_scope(args)
     bank = scope == 'eligible-bank'
     wave_mode = scope == 'eligible-wave'
     wave = helper('bank_wave_runtime') if wave_mode else None
-    scope_args = dict(campaign_scope=scope) if bank or wave_mode else {}
+    scope_args = dict(campaign_scope=scope) if bank or wave_mode or qomp else {}
     if wave_mode:
         wave.validate_args(args, registered=True)
     if bank:
@@ -304,8 +320,9 @@ def main():
     allocation = checks.allocation()
     admit_audit_allocation(allocation, producer=producer)
     source = Path(__file__).resolve().parents[2]
-    if (checks.git(source, 'rev-parse', 'HEAD') != args.commit
-            or checks.git(source, 'status', '--porcelain')):
+    git=q.git if qomp else checks.git
+    if (git(source, 'rev-parse', 'HEAD') != args.commit
+            or git(source, 'status', '--porcelain')):
         raise ValueError('exact clean independently pinned audit source required')
     build, case, run = (p.resolve() for p in (args.build, args.case, args.run))
     if (any(not p.is_relative_to(RUNS) for p in (build, case, run))
@@ -318,32 +335,35 @@ def main():
     data = case/'payload'
     read = lambda name: json.loads((data/name).read_bytes())
     outcome, delivery, created, claimed, server = (
-        read(name) for name in ('pilot-outcome.json', 'manager-delivery.json',
+        read(name) for name in ('qomp-outcome.json' if qomp else 'pilot-outcome.json', 'manager-delivery.json',
                                'record-created.json', 'claim.json', 'server-record-outcome.json'))
     validate_delivery(outcome, delivery, created, claimed, server, owned354=args.remaining_case,
                       producer=producer, **scope_args)
-    manifest_path = build/'build-identity.json'
-    manifest = json.loads(manifest_path.read_bytes())
+    manifest_path = helper('qomp_campaign').QUALIFICATION if qomp else build/'build-identity.json'
+    manifest = q.context(args) if qomp else json.loads(manifest_path.read_bytes())
     worker, legacy = helper('phoenix_worker_cb63305'), helper('phoenix_pilot')
     draft = worker.prepare_draft(args, manifest_path)
     profile = draft.get('execution_profile')
     scratch = scratch_for_outcome(outcome, expected_monomer=draft['monomer_id'], producer=producer,
                                   remaining_case=args.remaining_case, **scope_args)
     bootstrap.admit_allocation(outcome['allocation'], execution_profile=profile,
-                               **(dict(producer=producer, **scope_args) if producer == 'grid400' else {}))
+                               **(dict(producer=producer, **scope_args) if producer in ('grid400','qomp') else {}))
     if profile is not None and outcome.get('execution_profile') != profile:
         raise ValueError('actual molecular execution profile differs from reconstructed case')
     worker_shape = (profile['cores'], profile['science_memory_GiB']) if profile else (4, 20)
     preflight = json.loads(args.worker_preflight.read_bytes())
-    transport = (wave.helper('bank_wave_transport').transport_binding() if wave_mode
+    if qomp and checks.digest(args.worker_preflight)!=getattr(args,'worker_preflight_sha256',None):
+        raise ValueError('parent-observed worker preflight digest required for independent audit')
+    transport = (q.dataset().transport_binding(producer='qomp') if qomp else wave.helper('bank_wave_transport').transport_binding() if wave_mode
                  else helper('bank_dataset').transport_binding() if bank
                  else helper('dataset_fresh_cb63305').transport_binding(producer=producer))
     bootstrap.validate_preflight(preflight, draft, manifest_sha=checks.digest(manifest_path),
         qualification_sha=checks.digest(args.qualification), pilot_sha=checks.digest(args.pilot),
         worker_sources=worker.source_hashes(producer, remaining_case=args.remaining_case, **scope_args),
-        transport=transport, producer=producer, remaining_case=args.remaining_case, **scope_args)
+        transport=transport, producer=producer, remaining_case=args.remaining_case, **scope_args,
+        **(dict(operational_commit=args.commit) if qomp else {}))
     if (outcome['scientific_build_commit'] != draft['producer']['scientific_commit']
-            or outcome['build_identity_sha256'] != checks.digest(manifest_path)
+            or outcome['producer_binding_sha256' if qomp else 'build_identity_sha256'] != checks.digest(manifest_path)
             or outcome['pilot_sha256'] != checks.digest(args.pilot)
             or outcome['installed_qualification_sha256'] != checks.digest(args.qualification)
             or outcome['worker_preflight_sha256'] != checks.digest(args.worker_preflight)
@@ -372,6 +392,9 @@ def main():
         raise ValueError('fresh dataset intent differs')
     if bank and not args.remaining_case:
         helper('bank_audit').validate_initial_capture(data, outcome, draft)
+    if qomp:
+        q.validate_original_snapshot(read('original25-live-before.json'))
+        q.validate_initial_capture(data,outcome,draft)
     if not wave_mode and (submitted['dataset_id'] != outcome['dataset_id']
             or submitted['entry'] != draft['entry']['name']
             or submitted['specification'] != draft['specification_name']
@@ -401,7 +424,7 @@ def main():
     local = decompress((data/('local-result-'+str(outcome['task_id'])+'.zstd')).read_bytes(),
                        CompressionEnum.zstd)
     identity = verify_delivery_identity(local, envelope,
-        read('envelope-identity.json') if producer == 'grid400' else None, producer=producer)
+        read('envelope-identity.json') if producer in ('grid400','qomp') else None, producer=producer)
     job = outcome['allocation']['JobId']
     rows = subprocess.check_output(['/opt/slurm/current/bin/sacct', '-n', '-P', '-j', job,
         '-o', 'JobIDRaw,State,ExitCode'], text=True).splitlines()
@@ -412,7 +435,7 @@ def main():
     # current read-only audit checkout; never silently relax the old trace gate.
     for name, expected_hash in outcome['operational_sources_sha256'].items():
         relative = 'devtools/isapol_s66_campaign/'+name
-        raw = subprocess.check_output(['git', '-C', str(source), 'show',
+        raw = subprocess.check_output([*(q.git_argv() if qomp else ['git']), '-C', str(source), 'show',
                                         outcome['operational_commit']+':'+relative])
         if checks.digest(Path(__file__).with_name(name)) != expected_hash or hashlib.sha256(raw).hexdigest() != expected_hash:
             raise ValueError('actual case execution helper changed: '+name)
@@ -420,7 +443,7 @@ def main():
     gate_path = source/gate_relative
     for relative in (gate_relative, 'devtools/isapol_s66_campaign/validate_numeric.py',
                      'devtools/isapol_s66_campaign/runtime_audit.py'):
-        raw = subprocess.check_output(['git', '-C', str(source), 'show',
+        raw = subprocess.check_output([*(q.git_argv() if qomp else ['git']), '-C', str(source), 'show',
                                        outcome['operational_commit']+':'+relative])
         if (source/relative).read_bytes() != raw:
             raise ValueError('independent numeric/trace policy changed since actual molecular run')
@@ -428,7 +451,8 @@ def main():
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
     environment = build/'env'
-    checks.verify_runtime(environment, manifest)
+    runtime_check=q.runtime_check if qomp else lambda:checks.verify_runtime(environment,manifest)
+    runtime_check()
     numeric = helper('validate_numeric').validate_numeric(envelope, (data/'server-tensors.npz').read_bytes())
     traces = sorted((data/'traces').glob('*.strace'))
     if not traces or [p.name for p in traces] != outcome['trace_files']:
@@ -439,25 +463,31 @@ def main():
         '/storage/project/r-cs207-0/awallace43/qca', '/storage/project/r-cs207-0/awallace43/data',
         str(case/'inputs'), str(case/'payload'), str(args.inputs), str(args.descriptors)]
     for path in traces:
-        report = gate.check_trace(path.read_text().splitlines(), env=environment, base=BASE,
+        report = (q.qualified().runtime().trace_projection(
+            helper('qomp_campaign').read(helper('qomp_campaign').VIEW),path.read_text().splitlines(),
+            run=case,scratch=scratch,allowed_inputs={},forbidden=forbidden,
+            execution_profile=profile,producer='qomp') if qomp else
+            gate.check_trace(path.read_text().splitlines(), env=environment, base=BASE,
             manifest_path=manifest_path, manifest=manifest, run=case, scratch=scratch, forbidden=forbidden)
+            )
         report['trace_sha256'] = checks.digest(path)
         if len(report['executions']) != 1:
             report['status'], report['role_error'] = 'failed', 'only the initial owned interpreter may execute'
         else:
             try:
-                report['role'] = classifier(report['executions'][0], env=environment, scratch=scratch,
+                report['role'] = (report['role'] if qomp else classifier(report['executions'][0], env=environment, scratch=scratch,
                     **(dict(execution_profile=profile) if bank or wave_mode else dict(worker_shape=worker_shape)))
+                    )
                 roles[report['role']] += 1
             except ValueError as error:
                 report['status'], report['role_error'] = 'failed', str(error)
         reports[path.name] = report
-    checks.verify_runtime(environment, manifest)
+    runtime_check()
     if (checks.digest(preflight['harness_path']) != preflight['harness_sha256']
             or any(checks.digest(MANAGER/'lib/python3.13/site-packages/qcfractalcompute'/n) != v
                    for n, v in legacy.MANAGER_FILES.items())
-            or checks.git(source, 'rev-parse', 'HEAD') != args.commit
-            or checks.git(source, 'status', '--porcelain')
+            or git(source, 'rev-parse', 'HEAD') != args.commit
+            or git(source, 'status', '--porcelain')
             or worker.prepare_draft(args, manifest_path) != draft
             or bootstrap.load_append_inputs(args) != append_inputs):
         raise ValueError('runtime, manager, audit source or immutable raw receipts changed')
@@ -477,7 +507,7 @@ def main():
         allocation=allocation, monomer_id=draft['monomer_id'], case_job=job,
         dataset_id=outcome['dataset_id'], record_id=outcome['record_id'],
         scientific_build_commit=manifest['commit'], case_operational_commit=outcome['operational_commit'],
-        audit_commit=args.commit, case_outcome_sha256=checks.digest(data/'pilot-outcome.json'),
+        audit_commit=args.commit, case_outcome_sha256=checks.digest(data/('qomp-outcome.json' if qomp else 'pilot-outcome.json')),
         pilot_sha256=checks.digest(args.pilot), file_gate_sha256=checks.digest(gate_path),
         numeric=numeric, envelope_identity=identity, roles=dict(roles), traces=reports, runtime_unchanged=True,
         execution_profile=profile, captured_preservation=preservation,
@@ -486,6 +516,12 @@ def main():
                       'No full-C10, independent solver, covariance, accuracy/parity or whole-set claim.')
     if producer in ('ed561666', 'grid400'):
         report.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
+    if qomp:
+        report.update(producer_profile='qomp',dataset_mode='fresh',campaign_scope='qomp-pilot',
+            status='PASS_QOMP_ORDINARY_PILOT_EVIDENCE' if passed else 'FAIL_QOMP_RUNTIME_INPUT_AUDIT')
+        if not passed:
+            raise RuntimeError('QOMP independent numeric/export/trace audit failed')
+        return output/'audit-report.json',report
     if bank:
         report['campaign_scope'] = scope
     if wave_mode:

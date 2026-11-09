@@ -21,7 +21,7 @@ HELPERS = {'pilot_cb63305', 'phoenix_worker_cb63305', 'phoenix_installed_checks'
     'single_record_cb63305', 'descriptor_scratch_cb63305', 'phoenix_descriptor_bank_cb63305',
     'case_cb63305', 'dataset_owned354_cb63305', 'owned_dataset_cb63305', 'grid400_policy',
     'envelope_identity', 'bank_campaign', 'bank_dataset', 'bank_append', 'bank_store',
-    'grid400_bank_policy', 'dataset_guard', 'bank_wave_runtime'}
+    'grid400_bank_policy', 'dataset_guard', 'bank_wave_runtime','qomp_campaign','qomp_execution'}
 _MODULES = {}
 
 
@@ -42,13 +42,13 @@ def helper(name):
 
 def verify_delivery_envelope(local, server, request, implementation, *, producer):
     """The production post-delivery identity seam, before artifact publication."""
-    if producer not in ('cb63305', 'ed561666', 'grid400'):
+    if producer not in ('cb63305', 'ed561666', 'grid400','qomp'):
         raise ValueError('closed delivery producer required')
     if (not isinstance(server, dict) or server.get('schema') != 'native-monomer-artifacts/2'
             or server.get('request') != request
             or server.get('implementation', {}).get('sha256') != implementation):
         raise RuntimeError('local/server request3 envelope or producer identity differs')
-    if producer == 'grid400':
+    if producer in ('grid400','qomp'):
         return helper('envelope_identity').verify_native_envelope_identity(local, server)
     if server != local:
         raise RuntimeError('local/server request3 envelope or producer identity differs')
@@ -56,12 +56,16 @@ def verify_delivery_envelope(local, server, request, implementation, *, producer
 
 
 def admit_allocation(allocation, *, execution_profile=None, producer='cb63305', campaign_scope='default'):
-    if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
+    if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400','qomp'):
         raise ValueError('closed molecular allocation producer required')
     helper('phoenix_worker_cb63305').validate_campaign_scope(producer, campaign_scope)
     expected = dict(Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small',
                     NumCPUs='4', NumNodes='1', MinMemoryNode='24G', TimeLimit='02:00:00')
-    if producer == 'grid400':
+    if producer=='qomp':
+        profile=helper('qomp_execution').policy().validate_profile(execution_profile)
+        expected.update(NumCPUs=str(profile['cores']),MinMemoryNode=str(profile['job_memory_GiB'])+'G',
+                        TimeLimit=profile['time_limit'])
+    elif producer == 'grid400':
         profile = helper('grid400_bank_policy' if campaign_scope in ('eligible-bank', 'eligible-wave')
                          else 'grid400_policy').validate_profile(execution_profile)
         expected.update(NumCPUs=str(profile['cores']),
@@ -86,7 +90,12 @@ def admit_allocation(allocation, *, execution_profile=None, producer='cb63305', 
 
 def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pilot_sha,
                        worker_sources, transport, producer='cb63305', remaining_case=False,
-                       campaign_scope='default'):
+                       campaign_scope='default',operational_commit=None):
+    if producer=='qomp':
+        return helper('qomp_execution').validate_preflight(preflight,draft,
+            binding_sha=manifest_sha,qualification_sha=qualification_sha,pilot_sha=pilot_sha,
+            worker_sources=worker_sources,transport=transport,remaining_case=remaining_case,
+            campaign_scope=campaign_scope,operational_commit=operational_commit)
     if (type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400')
             or type(remaining_case) is not bool):
         raise ValueError('closed molecular producer selector required')
@@ -160,6 +169,13 @@ def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pil
 
 
 def load_append_inputs(args):
+    if getattr(args,'producer','cb63305')=='qomp':
+        if (args.remaining_case or any(getattr(args,k,None) is not None for k in (
+                'bank_context','bank_checkpoint','owned_checkpoint','checkpoint_sha256',
+                'accepted_audit','accepted_outcome','accepted_pilot','accepted_envelope',
+                'wave_plan','wave_registration'))):
+            raise ValueError('QOMP148A cannot adopt append/checkpoint/wave inputs')
+        return None
     producer = getattr(args, 'producer', 'cb63305')
     if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400'):
         raise ValueError('closed molecular producer selector required')
@@ -244,9 +260,10 @@ def main():
     for name in ('build', 'qualification', 'inputs', 'descriptors', 'pilot', 'worker-preflight', 'run'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
-    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400'), default='cb63305')
+    parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400','qomp'), default='cb63305')
+    parser.add_argument('--worker-preflight-sha256')
     parser.add_argument('--remaining-case', action='store_true')
-    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank', 'eligible-wave'), default='default')
+    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank', 'eligible-wave','qomp-pilot'), default='default')
     parser.add_argument('--wave-plan', type=Path)
     parser.add_argument('--wave-plan-sha256')
     parser.add_argument('--wave-registration', type=Path)
@@ -259,8 +276,16 @@ def main():
     for role in ('audit', 'outcome', 'pilot', 'envelope'):
         parser.add_argument('--accepted-'+role, type=Path)
     args = parser.parse_args()
+    if args.producer=='qomp':
+        return helper('qomp_execution').run_phase('science',args,perform)
+    return perform(args)
+
+
+def perform(args):
     append_inputs = load_append_inputs(args)
     producer = args.producer
+    qomp=producer=='qomp'
+    q=helper('qomp_execution') if qomp else None
     checks, worker = (helper(name) for name in (
         'phoenix_installed_checks', 'phoenix_worker_cb63305'))
     scope = worker.selected_scope(args)
@@ -268,14 +293,15 @@ def main():
     wave_mode = scope == 'eligible-wave'
     wave = helper('bank_wave_runtime') if wave_mode else None
     binding = append_inputs if wave_mode else None
-    scope_args = dict(campaign_scope=scope) if bank_mode or wave_mode else {}
-    pins = (wave.pins() if wave_mode else helper('bank_campaign').pins() if bank_mode
+    scope_args = dict(campaign_scope=scope) if bank_mode or wave_mode or qomp else {}
+    pins = (helper('qomp_campaign').pins() if qomp else wave.pins() if wave_mode else helper('bank_campaign').pins() if bank_mode
             else helper('pilot_cb63305').producer_pins(producer))
     transport_args = {} if bank_mode or wave_mode or producer == 'cb63305' else dict(producer=producer)
     allocation = checks.allocation()
     source = Path(__file__).resolve().parents[2]
-    if (checks.git(source, 'rev-parse', 'HEAD') != args.commit
-            or checks.git(source, 'status', '--porcelain')):
+    git=q.git if qomp else checks.git
+    if (git(source, 'rev-parse', 'HEAD') != args.commit
+            or git(source, 'status', '--porcelain')):
         raise ValueError('exact clean expanded bootstrap source required')
     build, run = args.build.resolve(), args.run.resolve()
     if (not build.is_relative_to(RUNS) or not run.is_relative_to(RUNS)
@@ -284,20 +310,25 @@ def main():
         raise ValueError('disjoint private build and molecular run required')
     if wave_mode:
         wave.validate_paths(args, role='science')
-    manifest_path = build/'build-identity.json'
+    manifest_path = helper('qomp_campaign').QUALIFICATION if qomp else build/'build-identity.json'
     draft = worker.prepare_draft(args, manifest_path)
     if bank_mode:
         helper('bank_store').prepare_storage()
     profile = draft.get('execution_profile')
     admit_allocation(allocation, execution_profile=profile,
-                     **(dict(producer=producer, **scope_args) if producer == 'grid400' else {}))
+                     **(dict(producer=producer, **scope_args) if producer in ('grid400','qomp') else {}))
     pilot_sha = checks.digest(args.pilot)
-    manifest = json.loads(manifest_path.read_bytes())
+    manifest = q.context(args) if qomp else json.loads(manifest_path.read_bytes())
     manifest_sha = checks.digest(manifest_path)
     preflight = json.loads(args.worker_preflight.read_bytes())
     preflight_sha = checks.digest(args.worker_preflight)
-    changes = checks.git(source, 'diff', '--name-only', manifest['commit'], args.commit).splitlines()
-    if any(not p.startswith('devtools/isapol_s66_campaign/')
+    if qomp and preflight_sha!=getattr(args,'worker_preflight_sha256',None):
+        raise ValueError('parent-observed worker preflight literal digest required')
+    changes = (q.source_changes(source,manifest['commit'],args.commit) if qomp else
+               git(source, 'diff', '--name-only', manifest['commit'], args.commit).splitlines())
+    if qomp:
+        q.qualified().verify_descriptor_operations(source,changes)
+    elif any(not p.startswith('devtools/isapol_s66_campaign/')
            and p not in checks.TEST_ONLY_CHANGES for p in changes):
         raise ValueError('bootstrap operations change scientific/build sources')
     operations = worker.source_hashes(producer, remaining_case=args.remaining_case, **scope_args)
@@ -318,18 +349,20 @@ def main():
         if not any(line.strip().split('|')[:3] == [identifier, 'COMPLETED', '0:0'] for line in rows):
             raise ValueError('worker preflight allocation/batch/step must all complete0:0')
     environment = build/'env'
-    checks.verify_runtime(environment, manifest)
+    runtime_check=q.runtime_check if qomp else lambda:checks.verify_runtime(environment,manifest)
+    runtime_check()
     payload = run/'payload'
     payload.mkdir(exist_ok=False)
     for name in ('traces', 'launcher'):
         (payload/name).mkdir()
-    (payload/'launcher/psi4').symlink_to(source/'devtools/isapol_s66_campaign/native_psi4.sh')
+    (payload/'launcher/psi4').symlink_to(source/'devtools/isapol_s66_campaign'/
+                                      ('qomp_launcher.sh' if qomp else 'native_psi4.sh'))
     scratch = SCRATCH/(pins['namespace']+draft['monomer_id']+'-'+os.environ['SLURM_JOB_ID'])
     scratch.mkdir(mode=0o700, exist_ok=False)
     for name in ('home', 'cache', 'cwd'):
         (scratch/name).mkdir()
-    disk = scratch_snapshot(scratch, payload, helper('descriptor_scratch_cb63305'),
-                            execution_profile=profile)
+    disk = (q.scratch_admission(scratch,profile) if qomp else
+            scratch_snapshot(scratch, payload, helper('descriptor_scratch_cb63305'),execution_profile=profile))
     common = helper('phoenix_descriptor_bank_cb63305')
     env = common.child_environment(environment, scratch)
     worker_shape = (profile['cores'], profile['science_memory_GiB']) if profile else (4, 20)
@@ -339,6 +372,8 @@ def main():
         CCASP_NATIVE_CACHE=str(scratch/'cache'), CCASP_NATIVE_HOME=str(scratch/'home'),
         CCASP_NATIVE_TRACE=str(payload/'traces'), OMP_NUM_THREADS=str(worker_shape[0]),
         MKL_NUM_THREADS=str(worker_shape[0]))
+    if qomp:
+        env.update(q.launch_binding(args,draft,payload,scratch,'science'))
     os.environ.clear()
     os.environ.update(env)
     if Path(sys.executable).resolve() != (MANAGER/'bin/python').resolve():
@@ -352,14 +387,15 @@ def main():
     from qcfractalcompute.config import FractalComputeConfig
     from qcfractalcompute.apps.app_manager import discover_programs_conda
     worker.validate_versions(str(qcengine.__version__), str(qcfractalcompute.__version__))
-    mutation = (wave.helper('bank_wave_transport') if wave_mode else
+    mutation = (q.dataset() if qomp else wave.helper('bank_wave_transport') if wave_mode else
                 helper('bank_dataset' if bank_mode else
                        'dataset_owned354_cb63305' if args.remaining_case else 'dataset_fresh_cb63305'))
     transport = mutation.transport_binding(**transport_args)
     validate_preflight(preflight, draft, manifest_sha=manifest_sha,
         qualification_sha=checks.digest(args.qualification), pilot_sha=pilot_sha,
         worker_sources=worker_sources, transport=transport, producer=producer,
-        remaining_case=args.remaining_case, **scope_args)
+        remaining_case=args.remaining_case, **scope_args,
+        **(dict(operational_commit=args.commit) if qomp else {}))
     harness = qcengine.get_program('psi4')
     harness_path = Path(inspect.getfile(type(harness))).resolve()
     if (str(harness_path) != preflight['harness_path']
@@ -392,10 +428,14 @@ def main():
     config = FractalComputeConfig(**config_data)
     helper('single_record_cb63305').validate_session_config(config, tag, worker_shape=worker_shape, **scope_args)
     transaction_scope = None
-    if bank_mode:
+    if qomp:
+        transaction_scope=mutation.prepare_transaction(draft,worker.prepare_draft(args,manifest_path),
+                                                       tag,producer='qomp')
+        qomp_intent_sha=q.reserve_transaction(draft,tag)
+    elif bank_mode:
         transaction_scope = mutation.prepare_transaction(draft, worker.prepare_draft(args, manifest_path), tag,
             checkpoint_raw=append_inputs['checkpoint_raw'] if args.remaining_case else None)
-    client_type = (mutation.readonly_client_class(binding, monomer_id=binding['monomer_id'])
+    client_type = (mutation.client_class(transaction_scope) if qomp else mutation.readonly_client_class(binding, monomer_id=binding['monomer_id'])
                    if wave_mode else mutation.client_class(transaction_scope) if bank_mode
                    else mutation.client_class(**transport_args))
     client = client_type(config.server.fractal_uri, username=config.server.username,
@@ -406,6 +446,9 @@ def main():
     managers = list(client.query_managers(status=['active'], limit=200))
     if len(managers) == 200 or any('*' in m.compute_tags or tag in m.compute_tags for m in managers):
         raise ValueError('singleton acquisition is not isolated from existing managers')
+    if qomp:
+        q.manager_isolation(managers,tag)
+        save('original25-live-before.json',q.live_originals(client))
     started = dict(schema='native-expanded-pilot-outcome/1', status='STARTED_NOT_QUALIFIED',
         allocation=allocation, monomer_id=draft['monomer_id'], compute_tag=tag,
         scientific_build_commit=manifest['commit'], operational_commit=args.commit,
@@ -422,10 +465,14 @@ def main():
                            else args.checkpoint_sha256 if args.remaining_case else None),
         qcengine_internal_retries=0, dataset_name=draft['dataset_name'],
         specification_name=draft['specification_name'])
-    if producer in ('ed561666', 'grid400'):
+    if producer in ('ed561666', 'grid400','qomp'):
         started.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
     if bank_mode:
         started.update(campaign_scope=scope, campaign=draft['campaign'])
+    if qomp:
+        started.update(campaign_scope=scope,campaign=draft['campaign'],
+                       producer_binding_sha256=started.pop('build_identity_sha256'),
+                       qomp_bootstrap_intent_sha256=qomp_intent_sha)
     if wave_mode:
         started.update(wave.started_fields(binding), campaign=draft['campaign'])
     save('started.json', started)
@@ -459,11 +506,13 @@ def main():
                 snapshot_sha256=None, context_sha256=None, case_sha256=transaction_scope.case_sha256,
                 eligibility_sha256=draft['eligibility_sha256'], monomer_id=draft['monomer_id'], compute_tag=tag)
             save('dispatch-intent.json', intent)
-        dataset, _ = (mutation.register_once(client, transaction_scope, draft, save) if bank_mode
+        dataset, _ = (mutation.register_once(client, transaction_scope, draft, save) if bank_mode or qomp
                       else mutation.register_once(client, draft, tag, save, **transport_args))
         if dataset.id in pins['protected_datasets']:
             raise ValueError('protected historical dataset cannot be a fresh pilot target')
-        inserted = (mutation.submit_once(client, transaction_scope, dataset, draft, save) if bank_mode
+        if qomp:
+            save('scratch-release-admission.json',q.scratch_admission(scratch,profile))
+        inserted = (mutation.submit_once(client, transaction_scope, dataset, draft, save) if bank_mode or qomp
                     else mutation.submit_once(client, dataset, draft, tag, save, **transport_args))
         created = dict(n_inserted=inserted.n_inserted, n_existing=inserted.n_existing)
         if intent is not None:
@@ -488,7 +537,7 @@ def main():
         compute_tag=tag, runtime=runtime, payload=payload, save=save, worker_shape=worker_shape,
         **(dict(producer=producer, case=draft, campaign_scope=scope,
                 wave_binding=binding, allocation=allocation) if wave_mode else
-           dict(producer=producer, case=draft, campaign_scope=scope) if bank_mode else
+           dict(producer=producer, case=draft, campaign_scope=scope) if bank_mode or qomp else
            dict(transport_args, **(dict(case=draft) if producer == 'ed561666' and args.remaining_case else {}))))
     record = dataset.get_record(draft['entry']['name'], draft['specification_name'], force_refetch=True)
     history = record.compute_history
@@ -515,7 +564,7 @@ def main():
         wave.capture_delivery(client, binding, draft, record_id=record.id,
             manager=session['manager'], envelope=envelope, tensor_raw=raw, save=save)
         wave.helper('bank_wave_campaign').revalidate_binding(binding)
-    elif bank_mode:
+    elif bank_mode or qomp:
         base = helper('dataset_guard')
         after_delivery = base.snapshot_dataset(client, dataset_id=dataset.id,
                                                max_entries=draft['eligible_monomer_count'])
@@ -532,15 +581,15 @@ def main():
         owned.assert_append_delta(json.loads((payload/'owned-before-entry.json').read_bytes()),
             after_delivery, entry_name=draft['entry']['name'], record_id=record.id)
         save('owned-after-delivery.json', after_delivery)
-    checks.verify_runtime(environment, manifest)
+    runtime_check()
     if (any(checks.digest(Path(__file__).with_name(n)) != v for n, v in operations.items())
             or any(checks.digest(manager_sources/n) != v for n, v in legacy.MANAGER_FILES.items())
             or checks.digest(harness_path) != preflight['harness_sha256']
             or checks.digest(args.worker_preflight) != preflight_sha
             or checks.digest(args.pilot) != pilot_sha
             or mutation.transport_binding(**transport_args) != transport
-            or checks.git(source, 'rev-parse', 'HEAD') != args.commit
-            or checks.git(source, 'status', '--porcelain')
+            or git(source, 'rev-parse', 'HEAD') != args.commit
+            or git(source, 'status', '--porcelain')
             or worker.prepare_draft(args, manifest_path) != draft
             or load_append_inputs(args) != append_inputs):
         raise RuntimeError('runtime, source, manager, transport or raw receipts changed')
@@ -552,6 +601,8 @@ def main():
                       'is still required. No accuracy, solver, covariance or whole-set acceptance.')
     if bank_mode or wave_mode or producer == 'ed561666' and args.remaining_case:
         outcome['dispatch_intent_sha256'] = created['dispatch_intent_sha256']
+    if qomp:
+        return payload/'qomp-outcome.json',outcome
     save('pilot-outcome.json', outcome)
     print(json.dumps(dict(status=outcome['status'], dataset_id=dataset.id, record_id=record.id)))
 
