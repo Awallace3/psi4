@@ -234,3 +234,22 @@ Worker stderr SHA256:
 The independently completed11.86× blocked-dispersion result is unaffected.
 A corrected manual submission must use a new frozen outer and fresh root;
 the original source/build, failed artifacts and tolerances remain unchanged.
+
+### Corrected manual submission15372618
+
+Frozen outer pin:`2d4a8f102d9dc382dc831eac9e0d43aac28d4379`,
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-cache-full-2d4a8f102d`.
+Native source/build remains`e0da305c02`. Submitted **15372618**, effective
+read-back route`gts-cs207-chemx / gpu-h200 / embers`,1H200,8CPUs,
+160GiB,30min, initially PENDING for Priority. Test-only15372617 is not
+the allocation. Official hourly watcher:`b21a098bd`.
+
+Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/fixed-hf-cache-full-2d4a8f102d-01`.
+Manifest SHA256:
+`947469de800f07e19743372522adc728a3cc5b266f995e550a8256e15334f220`.
+Runtime-config SHA256:
+`7f8718a4692bcd5141ec3f41dbfa0f4d2df03bddb14b367bc97bc67cc52163d7`.
+The only execution change from the previous attempt is the guard's binding
+to the original explicit/registered minimal basis; all scientific functions,
+fixed HF inputs, cache budget, field checks and memory policy are unchanged.
