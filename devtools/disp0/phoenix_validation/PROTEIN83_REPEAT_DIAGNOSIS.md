@@ -492,3 +492,26 @@ requires2.770GiB and predicts59batches with870unchanged contractions.
 The proposed [fixed-gauge cache diagnostic](FIXED_GAUGE_CACHE.md) tests that
 work-count opportunity on the **same saved wavefunction and one native plan**,
 without SCF, full F-SAPT, a source overlay or a new accepted speedup.
+
+### Offline replay of candidate snapshots
+
+Both result JSONs and their raw/fragment NPZ files were SHA-verified after
+retrieval. The original scalar checker reproduces the1.1052e-8Eh failure;
+the two dispersion scalar checks pass. Independently replaying the unchanged
+array checker also fails, at the monomer-B no-continuous-IBO-rotation check:
+maximum off-diagonal overlap1.00728207e-7 versus atol1e-9.
+This second failure was hidden behind the controller's first scalar failure.
+
+Raw overlap S is bitwise identical; V_A/V_B differ at most2.14e-14.
+Monomer-B density, exchange matrix and occupied energies differ by
+4.38717e-9,5.31520e-9 and1.11004e-8 respectively. Unaligned canonical
+coefficient differences are not interpreted as invariant errors.
+
+Local replay:
+`OPENBLAS_NUM_THREADS=1 python3 /tmp/fsapt-protein83-native-fit-15337409/diagnose.py`.
+It reports the original failures without changing tolerances or input files;
+its successful diagnostic exit does **not** mean numerical qualification.
+Replay source SHA256:
+`75149b9be29bf9da08f93170bf1225e360fce638cfcb2e143208ba1bc0457492`.
+Derived`offline-diagnosis.json` SHA256:
+`a45fc1866a8269a76d5ff798f32b9f7a8536ca977d4c4c70eb9c1ae828ce5553`.
