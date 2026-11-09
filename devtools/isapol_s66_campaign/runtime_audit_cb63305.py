@@ -105,12 +105,12 @@ def scratch_for_outcome(outcome, *, expected_monomer='monomer-0006', producer='c
 def validate_delivery(outcome, delivery, created, claimed, server, *, owned354=False,
                       producer='cb63305', campaign_scope='default'):
     helper('phoenix_worker_cb63305').validate_campaign_scope(producer, campaign_scope)
-    serial=producer=='qomp' and campaign_scope=='qomp-serial'
-    bank = campaign_scope in ('eligible-bank', 'eligible-wave') or serial
+    serial=producer=='qomp' and campaign_scope in ('qomp-serial','qomp-wave')
+    bank = campaign_scope in ('eligible-bank', 'eligible-wave','qomp-wave') or serial
     pins = (helper('qomp_campaign').pins() if producer=='qomp' else helper('bank_wave_runtime').pins() if campaign_scope == 'eligible-wave'
             else helper('bank_campaign').pins() if bank else helper('pilot_cb63305').producer_pins(producer))
     if bank and (outcome.get('campaign_scope') != campaign_scope
-            or outcome.get('producer_profile') != ('qomp' if serial else 'grid400')
+            or outcome.get('producer_profile') != ('qomp' if producer=='qomp' else 'grid400')
             or outcome.get('dataset_mode') != ('append' if owned354 else 'fresh')
             or outcome.get('dataset_name') != pins['dataset_name']
             or outcome.get('specification_name') != pins['specification_name']):
@@ -274,7 +274,7 @@ def main():
     parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400','qomp'), default='cb63305')
     parser.add_argument('--worker-preflight-sha256')
     parser.add_argument('--remaining-case', action='store_true')
-    parser.add_argument('--campaign-scope', choices=('default','eligible-bank','eligible-wave','qomp-pilot','qomp-serial'), default='default')
+    parser.add_argument('--campaign-scope', choices=('default','eligible-bank','eligible-wave','qomp-pilot','qomp-serial','qomp-wave'), default='default')
     for name in ('wave-plan', 'wave-registration', 'wave-science-barrier'):
         parser.add_argument('--'+name, type=Path)
         parser.add_argument('--'+name+'-sha256')
@@ -303,7 +303,7 @@ def perform(args):
     scope = worker.selected_scope(args)
     serial=qomp and scope=='qomp-serial'
     bank = scope == 'eligible-bank'
-    wave_mode = scope == 'eligible-wave'
+    wave_mode = scope in ('eligible-wave','qomp-wave')
     wave = helper('bank_wave_runtime') if wave_mode else None
     scope_args = dict(campaign_scope=scope) if bank or wave_mode or qomp else {}
     if wave_mode:
@@ -366,7 +366,8 @@ def perform(args):
         worker_sources=worker.source_hashes(producer, remaining_case=args.remaining_case, **scope_args),
         transport=transport, producer=producer, remaining_case=args.remaining_case, **scope_args,
         **(dict(operational_commit=args.commit,
-                **(dict(checkpoint_binding=append_inputs) if serial else {})) if qomp else {}))
+                **(dict(wave_binding=binding) if wave_mode else
+                   dict(checkpoint_binding=append_inputs) if serial else {})) if qomp else {}))
     if (outcome['scientific_build_commit'] != draft['producer']['scientific_commit']
             or outcome['producer_binding_sha256' if qomp else 'build_identity_sha256'] != checks.digest(manifest_path)
             or outcome['pilot_sha256'] != checks.digest(args.pilot)
@@ -402,7 +403,7 @@ def perform(args):
         helper('bank_audit').validate_initial_capture(data, outcome, draft)
     if qomp:
         q.validate_original_snapshot(read('original25-live-before.json'))
-        if not serial:
+        if not serial and not wave_mode:
             q.validate_initial_capture(data,outcome,draft)
     if not wave_mode and (submitted['dataset_id'] != outcome['dataset_id']
             or submitted['entry'] != draft['entry']['name']
@@ -526,8 +527,9 @@ def perform(args):
     if producer in ('ed561666', 'grid400'):
         report.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
     if qomp:
-        report.update(producer_profile='qomp',dataset_mode='append' if serial else 'fresh',campaign_scope=scope,
-            status=('PASS_QOMP_SERIAL_CASE_EVIDENCE' if serial else 'PASS_QOMP_ORDINARY_PILOT_EVIDENCE')
+        report.update(producer_profile='qomp',dataset_mode='append' if serial or wave_mode else 'fresh',campaign_scope=scope,
+            status=('PASS_QOMP_WAVE_CASE_EVIDENCE' if wave_mode else
+                    'PASS_QOMP_SERIAL_CASE_EVIDENCE' if serial else 'PASS_QOMP_ORDINARY_PILOT_EVIDENCE')
                    if passed else 'FAIL_QOMP_RUNTIME_INPUT_AUDIT')
         if not passed:
             raise RuntimeError('QOMP independent numeric/export/trace audit failed')

@@ -90,14 +90,15 @@ def admit_allocation(allocation, *, execution_profile=None, producer='cb63305', 
 
 def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pilot_sha,
                        worker_sources, transport, producer='cb63305', remaining_case=False,
-                       campaign_scope='default',operational_commit=None,checkpoint_binding=None):
+                       campaign_scope='default',operational_commit=None,checkpoint_binding=None,
+                       wave_binding=None):
     if producer=='qomp':
         return helper('qomp_execution').validate_preflight(preflight,draft,
             binding_sha=manifest_sha,qualification_sha=qualification_sha,pilot_sha=pilot_sha,
             worker_sources=worker_sources,transport=transport,remaining_case=remaining_case,
             campaign_scope=campaign_scope,operational_commit=operational_commit,
-            checkpoint_binding=checkpoint_binding)
-    if checkpoint_binding is not None:
+            checkpoint_binding=checkpoint_binding,wave_binding=wave_binding)
+    if checkpoint_binding is not None or wave_binding is not None:
         raise ValueError('QOMP checkpoint authority cannot cross a legacy preflight')
     if (type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400')
             or type(remaining_case) is not bool):
@@ -173,6 +174,8 @@ def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pil
 
 def load_append_inputs(args):
     if getattr(args,'producer','cb63305')=='qomp':
+        if args.campaign_scope=='qomp-wave':
+            return helper('bank_wave_runtime').load_binding(args)
         if args.campaign_scope=='qomp-serial':
             return helper('qomp_execution').helper('qomp_expansion').load_checkpoint(args)
         if (args.remaining_case or any(getattr(args,k,None) is not None for k in (
@@ -269,7 +272,7 @@ def main():
     parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400','qomp'), default='cb63305')
     parser.add_argument('--worker-preflight-sha256')
     parser.add_argument('--remaining-case', action='store_true')
-    parser.add_argument('--campaign-scope', choices=('default','eligible-bank','eligible-wave','qomp-pilot','qomp-serial'), default='default')
+    parser.add_argument('--campaign-scope', choices=('default','eligible-bank','eligible-wave','qomp-pilot','qomp-serial','qomp-wave'), default='default')
     parser.add_argument('--wave-plan', type=Path)
     parser.add_argument('--wave-plan-sha256')
     parser.add_argument('--wave-registration', type=Path)
@@ -297,13 +300,13 @@ def perform(args):
     scope = worker.selected_scope(args)
     serial=qomp and scope=='qomp-serial'
     bank_mode = scope == 'eligible-bank'
-    wave_mode = scope == 'eligible-wave'
+    wave_mode = scope in ('eligible-wave','qomp-wave')
     wave = helper('bank_wave_runtime') if wave_mode else None
     binding = append_inputs if wave_mode else None
     scope_args = dict(campaign_scope=scope) if bank_mode or wave_mode or qomp else {}
     pins = (helper('qomp_campaign').pins() if qomp else wave.pins() if wave_mode else helper('bank_campaign').pins() if bank_mode
             else helper('pilot_cb63305').producer_pins(producer))
-    transport_args = {} if bank_mode or wave_mode or producer == 'cb63305' else dict(producer=producer)
+    transport_args = dict(producer='qomp') if qomp else {} if bank_mode or wave_mode or producer == 'cb63305' else dict(producer=producer)
     allocation = checks.allocation()
     source = Path(__file__).resolve().parents[2]
     git=q.git if qomp else checks.git
@@ -394,7 +397,7 @@ def perform(args):
     from qcfractalcompute.config import FractalComputeConfig
     from qcfractalcompute.apps.app_manager import discover_programs_conda
     worker.validate_versions(str(qcengine.__version__), str(qcfractalcompute.__version__))
-    mutation = (q.dataset() if qomp else wave.helper('bank_wave_transport') if wave_mode else
+    mutation = (wave.helper('bank_wave_transport') if wave_mode else q.dataset() if qomp else
                 helper('bank_dataset' if bank_mode else
                        'dataset_owned354_cb63305' if args.remaining_case else 'dataset_fresh_cb63305'))
     transport = mutation.transport_binding(**transport_args)
@@ -403,7 +406,8 @@ def perform(args):
         worker_sources=worker_sources, transport=transport, producer=producer,
         remaining_case=args.remaining_case, **scope_args,
         **(dict(operational_commit=args.commit,
-                **(dict(checkpoint_binding=append_inputs) if serial else {})) if qomp else {}))
+                **(dict(wave_binding=binding) if wave_mode else
+                   dict(checkpoint_binding=append_inputs) if serial else {})) if qomp else {}))
     harness = qcengine.get_program('psi4')
     harness_path = Path(inspect.getfile(type(harness))).resolve()
     if (str(harness_path) != preflight['harness_path']
@@ -436,7 +440,7 @@ def perform(args):
     config = FractalComputeConfig(**config_data)
     helper('single_record_cb63305').validate_session_config(config, tag, worker_shape=worker_shape, **scope_args)
     transaction_scope = None
-    if qomp:
+    if qomp and not wave_mode:
         authority_args=(dict(checkpoint_raw=append_inputs['checkpoint_raw'],
             context_raw=append_inputs['context_raw'],proof_blobs=append_inputs['proof_blobs'],
             qomp_binding=append_inputs['qomp_binding']) if serial else {})
@@ -447,8 +451,8 @@ def perform(args):
     elif bank_mode:
         transaction_scope = mutation.prepare_transaction(draft, worker.prepare_draft(args, manifest_path), tag,
             checkpoint_raw=append_inputs['checkpoint_raw'] if args.remaining_case else None)
-    client_type = (mutation.client_class(transaction_scope) if qomp else mutation.readonly_client_class(binding, monomer_id=binding['monomer_id'])
-                   if wave_mode else mutation.client_class(transaction_scope) if bank_mode
+    client_type = (mutation.readonly_client_class(binding, monomer_id=binding['monomer_id'])
+                   if wave_mode else mutation.client_class(transaction_scope) if qomp or bank_mode
                    else mutation.client_class(**transport_args))
     client = client_type(config.server.fractal_uri, username=config.server.username,
         password=config.server.password, verify=config.server.verify, show_motd=False)
@@ -459,7 +463,7 @@ def perform(args):
     if len(managers) == 200 or any('*' in m.compute_tags or tag in m.compute_tags for m in managers):
         raise ValueError('singleton acquisition is not isolated from existing managers')
     if qomp:
-        q.manager_isolation(managers,tag)
+        q.manager_isolation(managers,tag,**(dict(wave_binding=binding) if wave_mode else {}))
         save('original25-live-before.json',q.live_originals(client))
     started = dict(schema='native-expanded-pilot-outcome/1', status='STARTED_NOT_QUALIFIED',
         allocation=allocation, monomer_id=draft['monomer_id'], compute_tag=tag,
@@ -487,7 +491,7 @@ def perform(args):
         if serial:
             started.update(checkpoint_sha256=append_inputs['checkpoint_sha256'],
                            bootstrap_context_sha256=append_inputs['context_sha256'])
-        else:
+        elif not wave_mode:
             started['qomp_bootstrap_intent_sha256']=qomp_intent_sha
     if wave_mode:
         started.update(wave.started_fields(binding), campaign=draft['campaign'])

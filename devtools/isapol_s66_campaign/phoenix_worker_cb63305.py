@@ -62,7 +62,7 @@ def selected_producer(args):
 
 def validate_campaign_scope(producer, scope):
     if producer=='qomp':
-        if scope not in ('qomp-pilot','qomp-serial'):
+        if scope not in ('qomp-pilot','qomp-serial','qomp-wave'):
             raise ValueError('qomp requires an explicit pilot or audited serial scope')
         return scope
     if (type(scope) is not str or scope not in ('default', 'eligible-bank', 'eligible-wave')
@@ -73,7 +73,7 @@ def validate_campaign_scope(producer, scope):
 
 def selected_scope(args):
     scope = validate_campaign_scope(selected_producer(args), getattr(args, 'campaign_scope', 'default'))
-    if scope != 'eligible-wave' and any(getattr(args, key, None) is not None for key in (
+    if scope not in ('eligible-wave','qomp-wave') and any(getattr(args, key, None) is not None for key in (
             'wave_plan', 'wave_plan_sha256', 'wave_registration', 'wave_registration_sha256',
             'wave_science_barrier', 'wave_science_barrier_sha256')):
         raise ValueError('wave inputs require explicit eligible-wave scope')
@@ -89,7 +89,7 @@ def source_names(producer='cb63305', *, remaining_case=False, campaign_scope='de
     if type(remaining_case) is not bool:
         raise ValueError('explicit worker case mode required')
     if producer=='qomp':
-        if remaining_case is not (campaign_scope=='qomp-serial'):
+        if remaining_case is not (campaign_scope in ('qomp-serial','qomp-wave')):
             raise ValueError('QOMP serial requires audited append mode')
         return tuple(dict.fromkeys(SOURCES+helper('qomp_execution').SOURCE_NAMES))
     if producer == 'grid400' and remaining_case and campaign_scope == 'default':
@@ -147,6 +147,8 @@ def prepare_draft(args, manifest_path):
     """Reconstruct either the archived first-case shape or a full remaining case."""
     producer = selected_producer(args)
     if producer=='qomp':
+        if selected_scope(args)=='qomp-wave':
+            return helper('bank_wave_runtime').prepare_draft(args,manifest_path)
         if selected_scope(args)=='qomp-serial':
             return helper('qomp_expansion').verify_prepared_from_paths(args)
         return helper('qomp_campaign').verify_prepared_from_paths(args)
@@ -191,7 +193,7 @@ def main():
     parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400','qomp'), default='cb63305')
     parser.add_argument('--remaining-case', action='store_true',
                         help='Require a fully reconstructed remaining-bank case, not the first pilot')
-    parser.add_argument('--campaign-scope', choices=('default','eligible-bank','eligible-wave','qomp-pilot','qomp-serial'), default='default')
+    parser.add_argument('--campaign-scope', choices=('default','eligible-bank','eligible-wave','qomp-pilot','qomp-serial','qomp-wave'), default='default')
     parser.add_argument('--wave-plan', type=Path)
     parser.add_argument('--wave-plan-sha256')
     for name in ('bank-context', 'bank-checkpoint'):
@@ -210,7 +212,7 @@ def perform(args):
     q=helper('qomp_execution') if qomp else None
     if scope == 'eligible-bank':
         helper('bank_campaign').authority()
-    if scope == 'eligible-wave':
+    if scope in ('eligible-wave','qomp-wave'):
         helper('bank_wave_runtime').validate_args(args)
     scope_args = {} if scope == 'default' else dict(campaign_scope=scope)
     pins = (helper('qomp_campaign').pins() if qomp else helper('bank_wave_runtime').pins() if scope == 'eligible-wave'
@@ -225,10 +227,10 @@ def perform(args):
         raise ValueError('exact clean operational checkout required')
     build, run = args.build.resolve(), args.run.resolve()
     if (not build.is_relative_to(RUNS) or not run.is_relative_to(RUNS)
-            or scope != 'eligible-wave' and not run.name.startswith('ccasp-native-s66-')
+            or scope not in ('eligible-wave','qomp-wave') and not run.name.startswith('ccasp-native-s66-')
             or run.is_relative_to(build) or build.is_relative_to(run)):
         raise ValueError('disjoint private build and worker run required')
-    if scope == 'eligible-wave':
+    if scope in ('eligible-wave','qomp-wave'):
         helper('bank_wave_runtime').validate_paths(args, role='worker')
     manifest_path = helper('qomp_campaign').QUALIFICATION if qomp else build/'build-identity.json'
     draft = prepare_draft(args, manifest_path)
@@ -325,7 +327,7 @@ def perform(args):
     if (task_config.ncores != worker_shape[0] or task_config.memory != worker_shape[1]
             or task_config.retries != 0):
         raise ValueError('exact worker cores/scientific memory and zero internal retries required')
-    transport_adapter = (q.dataset() if qomp else helper('bank_wave_runtime').helper('bank_wave_transport') if scope == 'eligible-wave'
+    transport_adapter = (helper('bank_wave_runtime').helper('bank_wave_transport') if scope in ('eligible-wave','qomp-wave') else q.dataset() if qomp
                          else helper('bank_dataset' if scope == 'eligible-bank' else 'dataset_fresh_cb63305'))
     transport_args = dict(producer='qomp') if qomp else {} if scope != 'default' else dict(producer=producer)
     transport = transport_adapter.transport_binding(**transport_args)
@@ -376,12 +378,22 @@ def perform(args):
         report.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
     if qomp:
         serial=scope=='qomp-serial'
-        report.update(status='PASS_QOMP_SERIAL_WORKER_PREFLIGHT_ONLY' if serial else 'PASS_QOMP_FRESH_WORKER_PREFLIGHT_ONLY',
-                      producer_profile='qomp',campaign_scope=scope,dataset_mode='append' if serial else 'fresh',
+        wave=scope=='qomp-wave'
+        report.update(status='PASS_QOMP_WAVE_WORKER_PREFLIGHT_ONLY' if wave else
+                      'PASS_QOMP_SERIAL_WORKER_PREFLIGHT_ONLY' if serial else 'PASS_QOMP_FRESH_WORKER_PREFLIGHT_ONLY',
+                      producer_profile='qomp',campaign_scope=scope,dataset_mode='append' if serial or wave else 'fresh',
                       producer_binding_sha256=report.pop('build_identity_sha256'))
         if serial:
             report.update(checkpoint_sha256=draft['checkpoint_sha256'],
                           bootstrap_context_sha256=draft['bootstrap_context_sha256'])
+        if wave:
+            binding=helper('bank_wave_runtime').helper('bank_wave_campaign').load_binding(
+                args,require_registration=False)
+            report.update(dispatch_protocol='registered-wave/1',campaign=draft['campaign'],
+                wave_id=draft['wave_id'],plan_sha256=binding['plan_sha256'],
+                bootstrap_context_sha256=draft['bootstrap_context_sha256'],
+                checkpoint_sha256=draft['checkpoint_sha256'],
+                predecessor_snapshot_sha256=draft['predecessor_snapshot_sha256'])
         return payload/'worker-preflight.json',report
     if scope == 'eligible-bank':
         report['campaign_scope'] = scope

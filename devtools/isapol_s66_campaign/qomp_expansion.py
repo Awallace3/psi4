@@ -304,6 +304,8 @@ def validate_source(source,commit):
 
 
 def validate_paths(args,phase=None):
+    need(helper('qomp_execution').SOURCE==SOURCE,
+         'serial operational paths belong only to the frozenv3 source, not the wave revision')
     mid=helper('native_controller').require_monomer(args.pilot.stem)
     need(args.pilot.resolve()==CASE_ROOT/(mid+'.json'),'closed QOMP serial member case required')
     allowed=(phase_path(mid,phase),) if phase is not None else tuple(

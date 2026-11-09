@@ -18,6 +18,7 @@ INTENTS = ROOT/'ccasp-native-s66-grid400-1aaa9e0a30-bank-dispatch-intents'
 PROOFS = ROOT/'ccasp-native-s66-grid400-1aaa9e0a30-bank-audit-proofs'
 QOMP_INTENTS = ROOT/'ccasp-native-s66-qomp148-serial-dispatch-intents'
 QOMP_PROOFS = ROOT/'ccasp-native-s66-qomp148-serial-audit-proofs'
+QOMP_WAVE_PROOFS = ROOT/'ccasp-native-s66-qomp148-wave-audit-proofs'
 PROOF_ROLES = frozenset(('audit', 'outcome', 'case', 'envelope'))
 MAX_PROOF_BYTES = 512*1024**2
 
@@ -229,9 +230,13 @@ def read_proofs(required, *,producer='grid400'):
 
 def _wave_body(*, dataset_id, checkpoint_sha256, snapshot_sha256, context_sha256,
                plan_sha256, eligibility_sha256, wave_id, members, registration_role,
-               require_job):
+               require_job,producer='grid400'):
     """Private wave authority; intentionally not a serial _body relaxation."""
-    if (dataset_id != 357 or type(dataset_id) is not int
+    _locations(producer)
+    valid_dataset=(type(dataset_id) is int and dataset_id>0
+        and dataset_id not in (353,354,355,356,357)) if producer=='qomp' else dataset_id==357
+    namespace='ccasp-native-qomp148-' if producer=='qomp' else 'ccasp-native-grid400-bank-'
+    if (not valid_dataset or type(dataset_id) is not int
             or type(wave_id) is not str or re.fullmatch('wave-[0-9]{4}-[0-9]{4}', wave_id) is None
             or type(members) is not dict or not 1 <= len(members) <= 8
             or registration_role.get('kind') != 'allocation'):
@@ -251,14 +256,15 @@ def _wave_body(*, dataset_id, checkpoint_sha256, snapshot_sha256, context_sha256
                 or not 1 <= int(mid[-4:]) <= 131
                 or type(science_job) is not str or re.fullmatch('[1-9][0-9]{0,19}', science_job) is None
                 or science_job in jobs or science_job == actual_job
-                or member.get('compute_tag') != 'ccasp-native-grid400-bank-'+mid+'-'+science_job
+                or member.get('compute_tag') != namespace+mid+'-'+science_job
                 or set(member) != {'science_job_id', 'compute_tag', 'case_sha256',
                                    'worker_preflight_sha256'}):
             raise ValueError('unique held wave member identity required')
         jobs.add(science_job)
         _sha(member['case_sha256'])
         _sha(member['worker_preflight_sha256'])
-    body = dict(schema='native-bank-wave-dispatch-intent/1', status='RESERVED_BEFORE_WAVE_ENTRIES',
+    body = dict(schema=('qomp-bank-wave-dispatch-intent/1' if producer=='qomp'
+                         else 'native-bank-wave-dispatch-intent/1'), status='RESERVED_BEFORE_WAVE_ENTRIES',
         dataset_id=dataset_id, checkpoint_sha256=checkpoint_sha256,
         snapshot_sha256=snapshot_sha256, bootstrap_context_sha256=context_sha256,
         plan_sha256=plan_sha256, eligibility_sha256=eligibility_sha256,
@@ -266,10 +272,11 @@ def _wave_body(*, dataset_id, checkpoint_sha256, snapshot_sha256, context_sha256
     return (str(dataset_id), snapshot_sha256), body
 
 
-def _reserve_wave_intent(**fields):
-    key, body = _wave_body(**fields, require_job=True)
-    _private_root(INTENTS)
-    parent = INTENTS/key[0]
+def _reserve_wave_intent(*,producer='grid400',**fields):
+    intents,_=_locations(producer)
+    key, body = _wave_body(**fields, require_job=True,producer=producer)
+    _private_root(intents)
+    parent = intents/key[0]
     _private_root(parent)
     # Same canonical mkdir reservation as reserve_intent, before either schema
     # is written. A serial alias cannot race a wave writer (or vice versa).
@@ -279,50 +286,76 @@ def _reserve_wave_intent(**fields):
     _sync(parent)
     raw = json.dumps(body, sort_keys=True, indent=2, allow_nan=False).encode()
     _write_once(target/'intent.json', raw)
+    if producer=='qomp':
+        # Reserve the SAME per-case canonical keys used by QOMP serial before
+        # ANY HTTP. No fake singleton/SCl authority; interrupted partial
+        # reservations stop permanently, never repair/retry/clear.
+        digest=hashlib.sha256(raw).hexdigest()
+        for mid,slot in sorted(body['members'].items()):
+            member=parent/(body['eligibility_sha256']+'-'+mid)
+            member.mkdir(mode=0o700,exist_ok=False)
+            _directory(member,private=True)
+            _sync(parent)
+            _write_once(member/'wave-member-intent.json',json.dumps(dict(
+                schema='qomp-wave-member-reservation/1',wave_intent_sha256=digest,
+                monomer_id=mid,slot=slot),sort_keys=True,allow_nan=False).encode())
     return dict(body, sha256=hashlib.sha256(raw).hexdigest())
 
 
-def _verify_wave_intent(saved, **fields):
-    key, body = _wave_body(**fields, require_job=False)
-    path = INTENTS/key[0]/key[1]/'intent.json'
-    _directory(INTENTS.parent, private=False)
-    for directory in (INTENTS, path.parent.parent, path.parent):
+def _verify_wave_intent(saved, *,producer='grid400',**fields):
+    intents,_=_locations(producer)
+    key, body = _wave_body(**fields, require_job=False,producer=producer)
+    path = intents/key[0]/key[1]/'intent.json'
+    _directory(intents.parent, private=False)
+    for directory in (intents, path.parent.parent, path.parent):
         _directory(directory, private=True)
     raw = _read_regular(path, maximum=64*1024)
     expected = dict(body, sha256=hashlib.sha256(raw).hexdigest())
     if json.loads(raw) != body or saved != expected:
         raise ValueError('wave reservation bytes/authority changed')
+    if producer=='qomp':
+        for mid,slot in body['members'].items():
+            member=path.parent.parent/(body['eligibility_sha256']+'-'+mid)
+            _directory(member,private=True)
+            wanted=dict(schema='qomp-wave-member-reservation/1',
+                wave_intent_sha256=expected['sha256'],monomer_id=mid,slot=slot)
+            if json.loads(_read_regular(member/'wave-member-intent.json',maximum=16384))!=wanted:
+                raise ValueError('QOMP per-case wave reservation differs')
     return expected['sha256']
 
 
-def _store_wave_proofs(blobs):
+def _store_wave_proofs(blobs,*,producer='grid400'):
     """Private content-addressed metadata; same durable root, no role forgery."""
     if (type(blobs) is not dict or len(blobs) > 4096
             or sum(len(raw) for raw in blobs.values()) > MAX_PROOF_BYTES):
         raise ValueError('bounded wave proof inventory required')
-    _private_root(PROOFS)
+    _locations(producer)
+    proof_root=QOMP_WAVE_PROOFS if producer=='qomp' else PROOFS
+    _private_root(proof_root)
     for sha, raw in blobs.items():
         if (type(raw) is not bytes or len(raw) > 64*1024**2
                 or hashlib.sha256(raw).hexdigest() != _sha(sha)):
             raise ValueError('exact wave proof bytes required')
-        path = PROOFS/(sha+'.json')
+        path = proof_root/(sha+'.json')
         try:
             _write_once(path, raw)
         except FileExistsError:
             if _read_regular(path, maximum=64*1024**2, durable=True) != raw:
                 raise ValueError('existing wave proof differs')
-            _sync(PROOFS)
+            _sync(proof_root)
 
 
-def _read_wave_proofs(required):
+def _read_wave_proofs(required,*,producer='grid400'):
+    _locations(producer)
+    proof_root=QOMP_WAVE_PROOFS if producer=='qomp' else PROOFS
     if type(required) is not set or len(required) > 4096:
         raise ValueError('bounded wave proof references required')
-    _directory(PROOFS.parent, private=False)
-    _directory(PROOFS, private=True)
+    _directory(proof_root.parent, private=False)
+    _directory(proof_root, private=True)
     result, used = {}, 0
     for sha in sorted(required):
         _sha(sha)
-        raw = _read_regular(PROOFS/(sha+'.json'),
+        raw = _read_regular(proof_root/(sha+'.json'),
                             maximum=min(64*1024**2, MAX_PROOF_BYTES-used))
         if hashlib.sha256(raw).hexdigest() != sha:
             raise ValueError('wave proof bytes changed')

@@ -51,8 +51,9 @@ def write_json_once(path, value):
 
 
 def validate_args(args, *, registered=False):
-    if (getattr(args, 'producer', None) != 'grid400'
-            or getattr(args, 'campaign_scope', None) != 'eligible-wave'
+    producer=getattr(args,'producer',None)
+    if (producer not in ('grid400','qomp')
+            or getattr(args, 'campaign_scope', None) != ('qomp-wave' if producer=='qomp' else 'eligible-wave')
             or getattr(args, 'remaining_case', False) is not True
             or getattr(args, 'wave_plan', None) is None
             or getattr(args, 'wave_plan_sha256', None) is None):
@@ -91,11 +92,15 @@ def load_binding(args):
     return binding
 
 
-def pins():
-    return helper('bank_wave_campaign').pins()
+def pins(producer='grid400'):
+    return helper('bank_wave_campaign').pins(producer=producer)
 
 
-def source_names():
+def source_names(producer='grid400'):
+    if producer=='qomp':
+        return helper('bank_wave_campaign').source_names(producer='qomp')+('bank_wave_runtime.py',)
+    if producer!='grid400':
+        raise ValueError('closed wave source producer required')
     return tuple(dict.fromkeys(
         helper('bank_campaign').ADDITIONAL_SOURCES+
         helper('bank_wave_campaign').source_names()+(
@@ -107,7 +112,7 @@ def started_fields(binding):
     plan, registration = binding['plan'], binding['registration']
     if registration is None or binding['release_permit'] is None:
         raise ValueError('registered wave bindings required')
-    return dict(campaign_scope='eligible-wave', dispatch_protocol='registered-wave/1',
+    return dict(campaign_scope=helper('bank_wave').settings(plan).scope, dispatch_protocol='registered-wave/1',
         wave_id=plan['wave_id'], plan_sha256=binding['plan_sha256'],
         bootstrap_context_sha256=binding['context_sha256'],
         checkpoint_sha256=binding['checkpoint_sha256'],
@@ -173,7 +178,9 @@ def registered_record(client, binding, draft, allocation, preflight, save):
             'worker/payload/worker-preflight.json')
     raw = _raw(path)
     if (_sha(raw) != slot['worker_preflight_sha256'] or not _same(json.loads(raw), preflight)
-            or preflight.get('status') != 'PASS_SELECTED_WAVE_CASE_WORKER_PREFLIGHT_ONLY'
+            or preflight.get('status') != ('PASS_QOMP_WAVE_WORKER_PREFLIGHT_ONLY'
+                if helper('bank_wave').settings(binding['plan']).producer=='qomp'
+                else 'PASS_SELECTED_WAVE_CASE_WORKER_PREFLIGHT_ONLY')
             or preflight.get('pilot_sha256') != slot['case_sha256']
             or preflight.get('plan_sha256') != binding['plan_sha256']
             or preflight.get('wave_id') != binding['plan']['wave_id']
@@ -244,7 +251,7 @@ def audit_preservation(data, outcome, draft, binding, specification):
             or outcome.get('dataset_id') != binding['plan']['dataset_id']
             or outcome.get('monomer_id') != draft['monomer_id']
             or outcome.get('campaign') != draft['campaign']
-            or outcome.get('producer_profile') != 'grid400'
+            or outcome.get('producer_profile') != helper('bank_wave').settings(binding['plan']).producer
             or outcome.get('dataset_mode') != 'append'
             or outcome.get('record_id') != slot['record_id']
             or outcome.get('compute_tag') != slot['compute_tag']
@@ -257,7 +264,9 @@ def audit_preservation(data, outcome, draft, binding, specification):
     delivered = _read(data/'owned-after-delivery.json')
     evidence = barrier['members'][draft['monomer_id']]
     if (evidence['delivery_snapshot_sha256'] != helper('dataset_guard').digest(delivered)
-            or evidence['outcome_sha256'] != _sha(_raw(data/'pilot-outcome.json'))):
+            or evidence['outcome_sha256'] != _sha(_raw(data/(
+                'qomp-outcome.json' if helper('bank_wave').settings(binding['plan']).producer=='qomp'
+                else 'pilot-outcome.json')))):
         raise ValueError('wave barrier differs from actual saved delivery')
     envelope = _read(data/'server-native-envelope.json')
     tensor = _raw(data/'server-tensors.npz', 16*1024**2)

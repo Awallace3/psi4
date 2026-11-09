@@ -28,12 +28,18 @@ def helper(name):
     return _MODULES[name]
 
 
-def transport_binding():
+def transport_binding(producer='grid400'):
     core = helper('bank_wave')
-    return dict(helper('bank_transport').transport_binding(),
+    if producer not in ('grid400','qomp'):
+        raise ValueError('closed wave transport producer required')
+    result=dict(helper('bank_transport').transport_binding(**(
+        dict(producer='qomp') if producer=='qomp' else {})),
         wave_adapter_sha256=core.digest(Path(__file__).read_bytes()),
         wave_mutation_policy='registered-wave/1', wave_identity_policy='closed-record-lifecycle/1',
         wave_lifecycle_fields=sorted(LIFECYCLE_FIELDS))
+    if producer=='qomp':
+        result.update(schema='qomp-registered-wave-transport/1',campaign_scope='qomp-wave')
+    return result
 
 
 def stable_record_identity(body):
@@ -77,7 +83,8 @@ def _snapshot_dataset(client, plan, predecessor_snapshot=None):
         def get_dataset_by_id(self, identifier):
             return Dataset(client.get_dataset_by_id(identifier))
 
-    snapshot = base.snapshot_dataset(Client(), dataset_id=357, max_entries=len(plan['eligible_ids']))
+    snapshot = base.snapshot_dataset(Client(), dataset_id=helper('bank_wave').settings(plan).dataset,
+                                     max_entries=len(plan['eligible_ids']))
     declared = {Path(plan['members'][mid]['case_path']).stem: mid for mid in plan['member_ids']}
     for identifier, (name, body) in bodies.items():
         record = snapshot['records'][str(identifier)]
@@ -96,7 +103,9 @@ def snapshot_dataset(client, *, binding):
         helper('bank_wave').decoded(binding['checkpoint_raw'])['snapshot'])
 
 
-def _endpoint(method, endpoint, dataset_id):
+def _endpoint(method, endpoint, dataset_id,*,producer='grid400'):
+    if producer not in ('grid400','qomp'):
+        raise ValueError('closed wave endpoint producer required')
     if (type(method) is not str or type(endpoint) is not str or not endpoint
             or not endpoint.isascii() or endpoint.startswith('/') or '%' in endpoint
             or '?' in endpoint or '#' in endpoint or '://' in endpoint or '//' in endpoint
@@ -111,6 +120,9 @@ def _endpoint(method, endpoint, dataset_id):
                     'api/v1/molecules/bulkGet') or re.fullmatch(
                     r'api/v1/records/(?:singlepoint/)?(?:bulkGet|query)', endpoint):
         return 'read'
+    if producer=='qomp' and re.fullmatch(
+            r'api/v1/datasets/singlepoint/357/(entries|records|specifications)/bulkFetch',endpoint):
+        return 'read'  # Historical25 preservation only; never old357 mutations.
     prefix = f'api/v1/datasets/singlepoint/{dataset_id}/'
     if endpoint.startswith(prefix):
         suffix = endpoint[len(prefix):]
@@ -171,11 +183,13 @@ def _read_key(binding, mid):
 
 def readonly_client_class(binding, *, monomer_id):
     _authority(binding)
-    transport_binding()
+    dataset=helper('bank_wave').settings(binding['plan']).dataset
+    producer=helper('bank_wave').settings(binding['plan']).producer
+    transport_binding(producer=producer)
     key = _read_key(binding, monomer_id)
     if key not in _READ_CLIENTS:
         def check(client, method, endpoint, kwargs):
-            if _endpoint(method, endpoint, 357) != 'read':
+            if _endpoint(method, endpoint, dataset,producer=producer) != 'read':
                 raise ValueError('wave compute/audit dataset client is read-only')
         cls = _engine(check)
         cls._wave_read_authority = key
@@ -228,7 +242,8 @@ class WaveScope:
         self.active = None
 
     def request(self, method, endpoint):
-        role = _endpoint(method, endpoint, 357)
+        p=helper('bank_wave').settings(self.binding['plan'])
+        role = _endpoint(method, endpoint, p.dataset,producer=p.producer)
         if role == 'read':
             return role
         if self.active is None:
@@ -245,7 +260,7 @@ class WaveScope:
 def client_class(scope):
     if type(scope) is not WaveScope or scope.client_type is not None:
         raise ValueError('one unused exact registration scope required')
-    transport_binding()
+    transport_binding(producer=helper('bank_wave').settings(scope.binding['plan']).producer)
     from qcportal.serialization import serialize
     from qcportal.singlepoint import SinglepointDatasetNewEntry
     from qcportal.dataset_models import DatasetSubmitBody

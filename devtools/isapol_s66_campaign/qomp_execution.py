@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 
-SOURCE = Path('/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-native-qomp-production148-v3')
+SOURCE = Path('/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-native-qomp-production148-v4')
 INTENT_ROOT = Path('/storage/home/hcoda1/3/awallace43/ccasp-native-s66-qomp148-dispatch-intents')
 _MODULES = {}
 SOURCE_NAMES = ('qomp_campaign.py','qomp_execution.py','qomp_launcher.sh','qomp148.sbatch',
@@ -22,13 +22,15 @@ SOURCE_NAMES = ('qomp_campaign.py','qomp_execution.py','qomp_launcher.sh','qomp1
     'dataset_guard.py','phoenix_pilot_cb63305.py','single_record_cb63305.py','envelope_identity.py',
     'runtime_audit.py','runtime_audit_cb63305.py','validate_numeric.py','audited_bank.py')
 SOURCE_NAMES += ('qomp_expansion.py','bank_append.py','bank_audit.py','native_controller.py')
+SOURCE_NAMES += ('qomp_wave_policy.py','bank_wave.py','bank_wave_campaign.py',
+    'bank_wave_controller.py','bank_wave_runtime.py','bank_wave_transport.py','bank_wave_ops.sbatch')
 
 
 def helper(name):
     if name not in ('qomp_campaign','qualified_qomp','qomp_bank_policy','bank_dataset',
         'bank_store','phoenix_installed_checks','phoenix_descriptor_bank_cb63305',
         'phoenix_worker_probe','phoenix_pilot','envelope_identity','dataset_guard','audited_bank',
-        'qomp_expansion','bank_append','bank_audit'):
+        'qomp_expansion','bank_append','bank_audit','qomp_wave_policy','bank_wave_runtime'):
         raise ValueError('closed qomp execution helper')
     if name not in _MODULES:
         path=Path(__file__).with_name(name+'.py')
@@ -69,7 +71,12 @@ def context(args):
     c=helper('qomp_campaign')
     c.need((args.build.resolve(),args.qualification.resolve(),args.inputs.resolve(),args.descriptors.resolve())
            ==(c.BUILD,c.QUALIFICATION,c.INPUTS,c.DESCRIPTORS),'closed QOMP execution input roles required')
-    helper('qomp_expansion').validate_paths(args)
+    if args.campaign_scope=='qomp-wave':
+        helper('bank_wave_runtime').validate_paths(args,role=(
+            'audit' if getattr(args,'case',None) is not None else
+            'science' if getattr(args,'worker_preflight',None) is not None else 'worker'))
+    else:
+        helper('qomp_expansion').validate_paths(args)
     producer=qualified().verify_receipts(qualified().read_receipts(c.RECEIPTS))
     return dict(schema='qomp-verified-installed-source-binding/1',
         commit=qualified().SCIENTIFIC_COMMIT,installed_package=str(c.BUILD/'env/lib/python3.13/site-packages/psi4'),
@@ -104,12 +111,14 @@ def scratch_admission(scratch,profile):
     return policy().admit_scratch([profile],lambda:observe(scratch))
 
 
-def validate_binding(case,*,runtime,compute_tag,worker_shape,record_id,checkpoint_binding=None,**kwargs):
+def validate_binding(case,*,runtime,compute_tag,worker_shape,record_id,checkpoint_binding=None,
+                     wave_binding=None,allocation=None,**kwargs):
     c=helper('qomp_campaign')
     serial=case.get('campaign_scope')=='qomp-serial'
+    wave=case.get('campaign_scope')=='qomp-wave'
     c.need(not kwargs and case['campaign']==c.CAMPAIGN
-        and case['campaign_scope'] in ('qomp-pilot','qomp-serial')
-        and case['producer_profile']=='qomp' and case['dataset_mode']==('append' if serial else 'fresh')
+        and case['campaign_scope'] in ('qomp-pilot','qomp-serial','qomp-wave')
+        and case['producer_profile']=='qomp' and case['dataset_mode']==('append' if serial or wave else 'fresh')
         and case['producer']['implementation_sha256']==qualified().IMPLEMENTATION
         and case['producer']['scientific_commit']==qualified().SCIENTIFIC_COMMIT
         and type(record_id) is int and record_id>0 and record_id not in c.PROTECTED_RECORDS,
@@ -124,6 +133,19 @@ def validate_binding(case,*,runtime,compute_tag,worker_shape,record_id,checkpoin
     c.need(c.encode(raw)==c.encode(runtime) and worker_shape==(profile['cores'],profile['science_memory_GiB'])
         and re.fullmatch(re.escape(c.NAMESPACE+case['monomer_id']+'-')+'[1-9][0-9]*',compute_tag),
         'QOMP claim/tag/protocol/worker shape differs')
+    if wave:
+        c.need(checkpoint_binding is None and wave_binding is not None and allocation is not None,
+               'registered actual QOMP wave allocation required')
+        w=helper('bank_wave_runtime')
+        w.helper('bank_wave_campaign').revalidate_binding(wave_binding)
+        slot=w._slot(wave_binding,case,allocation)
+        c.need(slot['record_id']==record_id and slot['compute_tag']==compute_tag,
+               'QOMP manager may consume only its exact registered record/tag')
+        previous=json.loads(wave_binding['checkpoint_raw'])
+        return c.PROTECTED_RECORDS+tuple(previous['audited_records'])+tuple(
+            member['record_id'] for member in wave_binding['registration']['members'].values()
+            if member['record_id']!=record_id)
+    c.need(wave_binding is None and allocation is None,'wave authority cannot cross serial/fresh session')
     if serial:
         checkpoint=helper('qomp_expansion').validate_case(case,checkpoint_binding)
         protected=c.PROTECTED_RECORDS+tuple(checkpoint['audited_records'])
@@ -135,14 +157,16 @@ def validate_binding(case,*,runtime,compute_tag,worker_shape,record_id,checkpoin
 
 def validate_preflight(preflight,draft,*,binding_sha,qualification_sha,pilot_sha,
                        worker_sources,transport,remaining_case,campaign_scope,operational_commit,
-                       checkpoint_binding=None):
+                       checkpoint_binding=None,wave_binding=None):
     c=helper('qomp_campaign')
     serial=campaign_scope=='qomp-serial'
-    c.need(remaining_case is serial and campaign_scope in ('qomp-pilot','qomp-serial')
-        and preflight['status']==('PASS_QOMP_SERIAL_WORKER_PREFLIGHT_ONLY' if serial
+    wave=campaign_scope=='qomp-wave'
+    c.need(remaining_case is (serial or wave) and campaign_scope in ('qomp-pilot','qomp-serial','qomp-wave')
+        and preflight['status']==('PASS_QOMP_WAVE_WORKER_PREFLIGHT_ONLY' if wave else
+                                  'PASS_QOMP_SERIAL_WORKER_PREFLIGHT_ONLY' if serial
                                   else 'PASS_QOMP_FRESH_WORKER_PREFLIGHT_ONLY')
         and preflight['producer_profile']=='qomp' and preflight['campaign_scope']==campaign_scope
-        and preflight['dataset_mode']==('append' if serial else 'fresh') and preflight['runtime_unchanged'] is True
+        and preflight['dataset_mode']==('append' if serial or wave else 'fresh') and preflight['runtime_unchanged'] is True
         and preflight['scientific_build_commit']==qualified().SCIENTIFIC_COMMIT
         and type(operational_commit) is str and re.fullmatch('[0-9a-f]{40}',operational_commit)
         and preflight['operational_commit']==operational_commit
@@ -158,12 +182,22 @@ def validate_preflight(preflight,draft,*,binding_sha,qualification_sha,pilot_sha
     profile=draft['execution_profile']
     c.need(preflight['task_config']==dict(ncores=profile['cores'],
         memory_GiB=profile['science_memory_GiB'],internal_retries=0),'QOMP worker task configuration drift')
-    if serial:
+    if serial or wave:
         c.need(all(preflight[k]==draft[k] for k in ('checkpoint_sha256','bootstrap_context_sha256')),
                'QOMP worker audited predecessor differs')
         exp=helper('qomp_expansion')
-        exp.validate_case(draft,checkpoint_binding)
-        seed=exp.audit_policy(checkpoint_binding['qomp_binding']).worker
+        if wave:
+            c.need(checkpoint_binding is None and wave_binding is not None
+                and preflight['plan_sha256']==wave_binding['plan_sha256']
+                and preflight['wave_id']==wave_binding['plan']['wave_id']
+                and pilot_sha==wave_binding['plan']['members'][draft['monomer_id']]['case_sha256'],
+                'exact QOMP worker wave-plan/member binding required')
+            authority=helper('qomp_wave_policy').binding_from_proofs(wave_binding['proof_blobs'])
+        else:
+            c.need(wave_binding is None,'wave preflight cannot cross serial')
+            exp.validate_case(draft,checkpoint_binding)
+            authority=checkpoint_binding['qomp_binding']
+        seed=exp.audit_policy(authority).worker
         c.need(all(preflight[k]==seed[k] for k in (
             'harness_path','harness_sha256','qcengine_version','qcfractalcompute_version',
             'manager_sources_sha256'))
@@ -222,14 +256,28 @@ def validate_initial_capture(data,outcome,draft):
     return snap
 
 
-def manager_isolation(managers,tag):
+def manager_isolation(managers,tag,*,wave_binding=None):
     c=helper('qomp_campaign')
     c.need(len(managers)<200,'saturated manager observation cannot prove isolation')
+    authorized=set()
+    if wave_binding is not None:
+        w=helper('bank_wave_runtime')
+        w.helper('bank_wave_campaign').revalidate_binding(wave_binding)
+        c.need(w.helper('bank_wave').settings(wave_binding['plan']).producer=='qomp',
+               'QOMP wave manager authority required')
+        authorized={slot['compute_tag'] for slot in wave_binding['registration']['members'].values()}
+        c.need(tag in authorized and len(authorized)==len(wave_binding['plan']['member_ids']),
+               'declared exact QOMP wave tags required')
+    seen=set()
     for manager in managers:
         tags=manager.compute_tags
         c.need(type(tags) is list and all(type(t) is str for t in tags),'manager compute_tags required')
-        c.need(not any(t==tag or any(ch in t for ch in '*?[') or t.startswith(c.NAMESPACE)
+        c.need(not any(t==tag or any(ch in t for ch in '*?[')
+                       or (t.startswith(c.NAMESPACE) and t not in authorized)
                        for t in tags),'new serial cohort tag overlaps an active/wildcard manager')
+        peer=set(tags)&authorized
+        c.need(not peer&seen,'duplicate active authorized wave manager tag')
+        seen.update(peer)
 
 
 def live_originals(client):
@@ -283,17 +331,27 @@ def run_phase(phase,args,perform):
     c=helper('qomp_campaign')
     engine=helper('phoenix_installed_checks').qomp_engine()
     engine.qomp_enter()
-    c.need(args.producer=='qomp' and args.campaign_scope=='qomp-serial'
+    wave=args.campaign_scope=='qomp-wave'
+    c.need(args.producer=='qomp' and args.campaign_scope in ('qomp-serial','qomp-wave')
            and args.remaining_case,'new operational source is append-only QOMP serial')
-    c.need(all(getattr(args,k,None) is None for k in (
+    if wave and not helper('qomp_wave_policy').PRODUCTION_ENABLED:
+        raise RuntimeError('QOMP wave activation disabled pending actual failure-lifecycle evidence/review')
+    forbidden=(
         'owned_checkpoint','checkpoint_sha256','checkpoint_proofs',
-        'accepted_audit','accepted_outcome','accepted_pilot','accepted_envelope',
+        'accepted_audit','accepted_outcome','accepted_pilot','accepted_envelope')
+    if not wave:
+        forbidden+=(
         'wave_plan','wave_plan_sha256','wave_registration','wave_registration_sha256',
-        'wave_science_barrier','wave_science_barrier_sha256')),
+        'wave_science_barrier','wave_science_barrier_sha256')
+    c.need(all(getattr(args,k,None) is None for k in forbidden),
         'QOMP serial cannot consume old/wave bindings')
     helper('phoenix_installed_checks').allocation()  # No runtime/proof hashing on a login node.
-    helper('qomp_expansion').validate_paths(args,phase)
-    helper('qomp_expansion').load_checkpoint(args)
+    if wave:
+        helper('bank_wave_runtime').validate_args(args)
+        helper('bank_wave_runtime').validate_paths(args,role=phase)
+    else:
+        helper('qomp_expansion').validate_paths(args,phase)
+        helper('qomp_expansion').load_checkpoint(args)
     context(args)
     source=Path(__file__).resolve().parents[2]
     c.need(source==SOURCE and phase in ('worker','science','audit')
@@ -305,7 +363,11 @@ def run_phase(phase,args,perform):
         runtime_check()
         result=perform(args)
         publication=(helper('qomp_expansion').prepare_audit_publication(args,result[1])
-                     if phase=='audit' else None)
+                     if phase=='audit' and not wave else None)
+        if wave:
+            campaign=helper('bank_wave_runtime').helper('bank_wave_campaign')
+            binding=campaign.load_binding(args,require_registration=phase!='worker')
+            campaign.revalidate_binding(binding)
     except BaseException as exc:
         error=exc
         raise

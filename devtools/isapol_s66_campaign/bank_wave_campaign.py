@@ -1,6 +1,7 @@
 """Closed measured-input reconstruction and bounded wave metadata loading."""
 import copy
 from pathlib import Path
+import re
 from types import SimpleNamespace as NS
 
 import importlib.util
@@ -10,7 +11,7 @@ _MODULES = {}
 
 
 def helper(name):
-    if name not in ('bank_campaign', 'bank_wave', 'bank_store', 'dataset_guard'):
+    if name not in ('bank_campaign', 'bank_wave', 'bank_store', 'dataset_guard','qomp_wave_policy'):
         raise ValueError('closed wave campaign helper required')
     if name not in _MODULES:
         path = Path(__file__).with_name(name+'.py')
@@ -30,12 +31,21 @@ ADDITIONAL_SOURCES = ('bank_wave.py', 'bank_wave_campaign.py', 'bank_wave_transp
                       'bank_wave_controller.py', 'bank_wave_ops.sbatch', 'native_controller.py')
 
 
-def pins():
+def pins(producer='grid400'):
+    if producer=='qomp':
+        c=helper('qomp_wave_policy').helper('qomp_expansion').helper('qomp_campaign')
+        return dict(c.pins(),campaign_scope='qomp-wave',dispatch_protocol='registered-wave/1')
+    if producer!='grid400':
+        raise ValueError('closed wave producer pins required')
     return dict(helper('bank_campaign').pins(), campaign_scope='eligible-wave',
                 dispatch_protocol='registered-wave/1')
 
 
-def source_names():
+def source_names(producer='grid400'):
+    if producer=='qomp':
+        return ADDITIONAL_SOURCES+('qomp_wave_policy.py','bank_wave_runtime.py')
+    if producer!='grid400':
+        raise ValueError('closed wave source producer required')
     return tuple(dict.fromkeys(helper('bank_campaign').ADDITIONAL_SOURCES+ADDITIONAL_SOURCES))
 
 
@@ -54,6 +64,8 @@ def _closed(path, expected):
 
 
 def _load_predecessor(plan):
+    if helper('bank_wave').settings(plan).producer=='qomp':
+        return helper('qomp_wave_policy').load_previous(plan)
     core, campaign, store = helper('bank_wave'), helper('bank_campaign'), helper('bank_store')
     context_path = Path(plan['bootstrap_context_path'])
     if (context_path.name != 'bank-context.json'
@@ -91,8 +103,10 @@ def _load_predecessor(plan):
 
 def _base_binding(args):
     core, campaign = helper('bank_wave'), helper('bank_campaign')
-    if (getattr(args, 'producer', None) != 'grid400'
-            or getattr(args, 'campaign_scope', None) != 'eligible-wave'
+    producer=getattr(args,'producer',None)
+    qomp=producer=='qomp'
+    if (producer not in ('grid400','qomp')
+            or getattr(args, 'campaign_scope', None) != ('qomp-wave' if qomp else 'eligible-wave')
             or getattr(args, 'remaining_case', None) is not True):
         raise ValueError('explicit eligible-wave grid400 append mode required')
     forbidden = ('bank_context', 'bank_context_sha256', 'bank_checkpoint', 'bank_checkpoint_sha256',
@@ -100,18 +114,32 @@ def _base_binding(args):
                  'accepted_audit', 'accepted_outcome', 'accepted_pilot', 'accepted_envelope')
     if any(getattr(args, key, None) is not None for key in forbidden):
         raise ValueError('wave plan is the sole predecessor authority')
-    campaign.authority()
+    if not qomp:
+        campaign.authority()
     plan_path = getattr(args, 'wave_plan', None)
     if not isinstance(plan_path, Path):
         raise ValueError('recorded wave plan path required')
     plan_raw = _raw(plan_path)
     plan_sha = core.sha(args.wave_plan_sha256)
     plan = core.decoded(plan_raw, plan_sha)
-    _closed(plan_path, WAVE_ROOT/plan['wave_id']/'plan.json')
+    if core.settings(plan).producer!=producer:
+        raise ValueError('wave plan producer crossing refused')
+    root=helper('qomp_wave_policy').WAVE_ROOT if qomp else WAVE_ROOT
+    if qomp and re.fullmatch('wave-[0-9]{4}-[0-9]{4}',plan['wave_id']) is None:
+        raise ValueError('closed QOMP wave ID required')
+    _closed(plan_path, root/plan['wave_id']/'plan.json')
     context_raw, previous_raw, proofs = _load_predecessor(plan)
-    pool, inputs = campaign.load_pool(args.inputs, args.build/'build-identity.json',
-                                      args.qualification, args.descriptors)
-    prepared = campaign.prepared_cases(pool, inputs)
+    if qomp:
+        policy=helper('qomp_wave_policy')
+        c=policy.helper('qomp_expansion').helper('qomp_campaign')
+        if (args.build!=c.BUILD or args.inputs!=c.INPUTS
+                or args.qualification!=c.QUALIFICATION or args.descriptors!=c.DESCRIPTORS):
+            raise ValueError('actual qualified QOMP input roles required')
+        pool,prepared,_=policy.prepared()
+    else:
+        pool, inputs = campaign.load_pool(args.inputs, args.build/'build-identity.json',
+                                          args.qualification, args.descriptors)
+        prepared = campaign.prepared_cases(pool, inputs)
     core.validate_plan(plan_raw, plan_sha, prepared_cases=prepared,
         checkpoint_raw=previous_raw, checkpoint_sha256=plan['predecessor_sha256'],
         context_raw=context_raw, context_sha256=plan['bootstrap_context_sha256'], proof_blobs=proofs)
@@ -127,14 +155,18 @@ def _base_binding(args):
     if mid not in cases:
         raise ValueError('undeclared wave case path')
     _closed(args.pilot, plan_path.parent/'cases'/(mid+'.json'))
-    return dict(plan_path=plan_path, plan_raw=plan_raw, plan_sha256=plan_sha, plan=plan,
+    binding=dict(plan_path=plan_path, plan_raw=plan_raw, plan_sha256=plan_sha, plan=plan,
         context_raw=context_raw, context_sha256=plan['bootstrap_context_sha256'],
         checkpoint_raw=previous_raw, checkpoint_sha256=plan['predecessor_sha256'],
-        proof_blobs=proofs, monomer_id=mid), cases
+        proof_blobs=proofs, monomer_id=mid)
+    if qomp:
+        binding['qomp_binding']=policy.binding_from_proofs(proofs)
+    return binding,cases
 
 
 def verify_prepared_from_paths(args, manifest_path):
-    if manifest_path != args.build/'build-identity.json':
+    expected=args.qualification if getattr(args,'producer',None)=='qomp' else args.build/'build-identity.json'
+    if manifest_path != expected:
         raise ValueError('actual build manifest path required')
     binding, cases = _base_binding(args)
     return cases[binding['monomer_id']]
@@ -198,7 +230,8 @@ def load_binding(args, *, require_registration=False):
         for mid in plan['member_ids']:
             member = barrier['members'][mid]
             run = directory/'members'/mid/'science'
-            outcome_path = _closed(Path(member['outcome_path']), run/'payload/pilot-outcome.json')
+            outcome_name='qomp-outcome.json' if core.settings(plan).producer=='qomp' else 'pilot-outcome.json'
+            outcome_path = _closed(Path(member['outcome_path']), run/'payload'/outcome_name)
             accounting_path = _closed(Path(member['accounting_path']), run/'accounting.txt')
             outcomes[mid], accounting[mid] = _raw(outcome_path), _raw(accounting_path)
             deliveries[mid] = core.decoded(_raw(run/'payload/owned-after-delivery.json'))
@@ -213,21 +246,27 @@ def load_binding(args, *, require_registration=False):
 
 def intent_fields(binding, members, registration_role):
     plan = binding['plan']
-    return dict(dataset_id=357, checkpoint_sha256=binding['checkpoint_sha256'],
+    result=dict(dataset_id=helper('bank_wave').settings(plan).dataset, checkpoint_sha256=binding['checkpoint_sha256'],
         snapshot_sha256=plan['predecessor_snapshot_sha256'], context_sha256=binding['context_sha256'],
         plan_sha256=binding['plan_sha256'], eligibility_sha256=plan['eligibility_sha256'],
         wave_id=plan['wave_id'], registration_role=registration_role,
         members={mid: {key: members[mid][key] for key in (
             'science_job_id', 'compute_tag', 'case_sha256', 'worker_preflight_sha256')}
             for mid in plan['member_ids']})
+    if helper('bank_wave').settings(plan).producer=='qomp':
+        result['producer']='qomp'
+    return result
 
 
 def revalidate_binding(binding):
-    campaign = helper('bank_campaign')
-    args = NS(producer='grid400', campaign_scope='eligible-wave', remaining_case=True,
+    p=helper('bank_wave').settings(binding['plan'])
+    qomp=p.producer=='qomp'
+    campaign=(helper('qomp_wave_policy').helper('qomp_expansion').helper('qomp_campaign')
+              if qomp else helper('bank_campaign'))
+    args = NS(producer=p.producer, campaign_scope=p.scope, remaining_case=True,
         wave_plan=binding['plan_path'], wave_plan_sha256=binding['plan_sha256'],
         pilot=binding['plan_path'].parent/'cases'/(binding['monomer_id']+'.json'),
-        build=campaign.BUILD_IDENTITY.parent, inputs=campaign.INPUTS,
+        build=campaign.BUILD if qomp else campaign.BUILD_IDENTITY.parent, inputs=campaign.INPUTS,
         qualification=campaign.QUALIFICATION, descriptors=campaign.DESCRIPTORS,
         wave_registration=binding['registration_path'],
         wave_registration_sha256=binding['registration_sha256'],

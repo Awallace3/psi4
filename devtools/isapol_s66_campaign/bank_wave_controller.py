@@ -23,7 +23,8 @@ def helper(name):
     if name not in ('bank_wave', 'bank_wave_campaign', 'bank_wave_transport', 'bank_store',
                     'bank_campaign', 'native_controller', 'dataset_guard', 'bank_wave_runtime',
                     'phoenix_installed_checks', 'phoenix_pilot_cb63305', 'phoenix_worker_cb63305',
-                    'runtime_audit_cb63305', 'descriptor_scratch_cb63305'):
+                    'runtime_audit_cb63305', 'descriptor_scratch_cb63305','qomp_wave_policy',
+                    'qomp_execution'):
         raise ValueError('closed bounded-wave controller helper required')
     if name not in _MODULES:
         path = Path(__file__).with_name(name+'.py')
@@ -67,8 +68,15 @@ def embers_used(text):
     return sum(line.strip() == 'embers' for line in lines)
 
 
-def admit_scratch(cases, observation):
+def admit_scratch(cases, observation=None,*,producer='grid400',observe=None):
     """Conservative whole-stage sum plus one additional largest-job headroom."""
+    if producer=='qomp':
+        if observation is not None or not callable(observe):
+            raise ValueError('fresh trusted QOMP whole-wave quota callback required')
+        return helper('qomp_wave_policy').helper('qomp_bank_policy').admit_scratch(
+            [case['execution_profile'] for case in cases.values()],observe)
+    if producer!='grid400' or observe is not None:
+        raise ValueError('closed wave scratch producer required')
     profiles = [helper('bank_wave').helper('grid400_bank_policy').validate_profile(
         case['execution_profile']) for case in cases.values()]
     if not 1 <= len(profiles) <= 8:
@@ -85,6 +93,7 @@ def admit_scratch(cases, observation):
 def phase_command(binding, mid, phase):
     """Exact published wrapper argv; no SCI command contains a future hash."""
     plan, directory = binding['plan'], binding['plan_path'].parent
+    p=helper('bank_wave').settings(plan)
     if phase not in ('worker', 'science', 'audit', 'registration', 'finalizer'):
         raise ValueError('closed wave phase required')
     member = phase in ('worker', 'science', 'audit')
@@ -97,7 +106,7 @@ def phase_command(binding, mid, phase):
     profile = plan['members'][mid]['execution_profile'] if member else None
     cores, memory, duration = (4, 24, '00:45:00')
     if phase in ('worker', 'science'):
-        helper('bank_wave').helper('grid400_bank_policy').validate_profile(profile)
+        p.profile.validate_profile(profile)
         cores, memory = profile['cores'], profile['job_memory_GiB']
         if phase == 'science':
             duration = profile['time_limit']
@@ -108,6 +117,33 @@ def phase_command(binding, mid, phase):
         '--output='+str(run/'logs/job-%j.out'), '--error='+str(run/'logs/job-%j.err')]
     if phase == 'science':
         command.append('--hold')
+    if p.producer=='qomp':
+        if source!=helper('qomp_wave_policy').SOURCE:
+            raise ValueError('closed new QOMP wave source required')
+        command.insert(2,'--export=USER,LOGNAME,HOME,PATH,LANG,LC_ALL')
+        if not member:
+            return list(map(str,command+[source/'devtools/isapol_s66_campaign/bank_wave_ops.sbatch',
+                source,commit,phase,binding['plan_path'],binding['plan_sha256'],run,'qomp',
+                plan['adoption_sha256']]))
+        worker=directory/'members'/mid/'worker'
+        wp,wh='-','-'
+        if phase!='worker':
+            proof=read(worker/'verified.json')
+            wp=worker/'payload/worker-preflight.json'
+            wh=helper('bank_wave').digest(raw(wp))
+            if (proof.get('phase')!='worker' or proof.get('plan_sha256')!=binding['plan_sha256']
+                    or proof.get('worker_preflight_sha256')!=wh):
+                raise ValueError('actual positively verified QOMP member worker SHA required')
+        values=[source,commit,phase,run,directory/'cases'/(mid+'.json'),wp,wh,
+            directory/'members'/mid/'science' if phase=='audit' else '-',
+            binding['plan_path'],binding['plan_sha256'],
+            directory/'registration.json' if phase!='worker' else '-',
+            binding.get('registration_sha256') if phase=='audit' else '-',
+            directory/'science-barrier.json' if phase=='audit' else '-',
+            binding.get('science_barrier_sha256') if phase=='audit' else '-']
+        if any(value is None for value in values):
+            raise ValueError('whole-SCI barrier precedes QOMP audit command')
+        return list(map(str,command+[source/'devtools/isapol_s66_campaign/qomp148.sbatch',*values]))
     scripts = dict(worker='phoenix_worker_cb63305.sbatch', science='phoenix_pilot_cb63305.sbatch',
                    audit='runtime_audit_cb63305.sbatch')
     if member:
@@ -136,7 +172,14 @@ def verify_held(allocation, case, actual_job):
     # Normalize only that literal singleton display, without changing captures.
     if allocation.get('NumNodes') == '1-1':
         allocation = dict(allocation, NumNodes='1')
-    profile = helper('bank_wave').helper('grid400_bank_policy').validate_profile(case['execution_profile'])
+    qomp=case.get('producer_profile')=='qomp'
+    profile=(helper('qomp_wave_policy').helper('qomp_bank_policy') if qomp
+             else helper('bank_wave').helper('grid400_bank_policy')).validate_profile(case['execution_profile'])
+    if qomp:
+        policy=helper('qomp_wave_policy')
+        if (actual_job in policy.PROTECTED_JOBS or case.get('campaign_scope')!='qomp-wave'
+                or allocation.get('Command')!=str(policy.SOURCE/'devtools/isapol_s66_campaign/qomp148.sbatch')):
+            raise ValueError('new own-source QOMP held job required; historical jobs forbidden')
     expected = dict(JobId=actual_job, JobState='PENDING', Reason='JobHeldUser',
         Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small', NumNodes='1',
         NumCPUs=str(profile['cores']), MinMemoryNode=str(profile['job_memory_GiB'])+'G',
@@ -146,11 +189,12 @@ def verify_held(allocation, case, actual_job):
         raise ValueError('actual new SCI job must remain held on the exact finite route')
 
 
-def register_once(client, scope, *, save):
+def register_once(client, scope, *, save,before_publish=None):
     """One writer; actual sequential captures, no manager and no release."""
     transport, core, store = helper('bank_wave_transport'), helper('bank_wave'), helper('bank_store')
     transport.require_registration_client(client, scope)
     binding, plan = scope.binding, scope.binding['plan']
+    p=core.settings(plan)
     helper('bank_wave_campaign').revalidate_binding(binding)
     base = helper('dataset_guard')
     previous = core.decoded(binding['checkpoint_raw'])['snapshot']
@@ -166,6 +210,9 @@ def register_once(client, scope, *, save):
     if len(managers) == 200 or any('*' in m.compute_tags or tags.intersection(m.compute_tags)
                                    for m in managers):
         raise ValueError('held wave tags are not isolated from active managers')
+    if p.producer=='qomp':
+        helper('qomp_execution').manager_isolation(managers,next(iter(tags)))
+        helper('qomp_execution').live_originals(client)
     intent = store._reserve_wave_intent(**helper('bank_wave_campaign').intent_fields(
         binding, scope.members, scope.registration_role))
     save('registration/dispatch-intent.json', intent)
@@ -187,7 +234,7 @@ def register_once(client, scope, *, save):
                   entry_name=name, transport_retries=False))
         if base.digest(snapshot()) != base.digest(before):
             raise ValueError('live state changed immediately before wave insertion')
-        meta = client.make_request('post', 'api/v1/datasets/singlepoint/357/entries/bulkCreate',
+        meta = client.make_request('post', f'api/v1/datasets/singlepoint/{p.dataset}/entries/bulkCreate',
             InsertMetadata, body=[SinglepointDatasetNewEntry(**case['entry'])], allow_retries=False)
         if not meta.success or meta.n_inserted != 1 or meta.n_existing != 0:
             raise RuntimeError('wave entry was not exactly 1new/0existing; no retry')
@@ -200,7 +247,7 @@ def register_once(client, scope, *, save):
                   compute_tag=slot['compute_tag'], find_existing=False, transport_retries=False))
         if base.digest(snapshot()) != base.digest(views['entry']):
             raise ValueError('live state changed immediately before wave submit')
-        meta = client.make_request('post', 'api/v1/datasets/singlepoint/357/submit',
+        meta = client.make_request('post', f'api/v1/datasets/singlepoint/{p.dataset}/submit',
             InsertCountsMetadata, body=DatasetSubmitBody(entry_names=[name],
                 specification_names=[spec], compute_tag=slot['compute_tag'], find_existing=False),
             allow_retries=False)
@@ -225,9 +272,9 @@ def register_once(client, scope, *, save):
     if base.digest(registered) != base.digest(before):
         raise ValueError('all slots must remain waiting before registration seal')
     save('registration/registered-snapshot.json', registered)
-    reg = dict(schema='native-eligible-wave-registration/1', campaign_scope='eligible-wave',
+    reg = dict(schema='native-eligible-wave-registration/1', campaign_scope=p.scope,
         dispatch_protocol=core.PROTOCOL, wave_id=plan['wave_id'], plan_sha256=binding['plan_sha256'],
-        dataset_id=357, bootstrap_context_sha256=binding['context_sha256'],
+        dataset_id=p.dataset, bootstrap_context_sha256=binding['context_sha256'],
         predecessor_sha256=binding['checkpoint_sha256'],
         predecessor_snapshot_sha256=plan['predecessor_snapshot_sha256'],
         registration_role=scope.registration_role, dispatch_intent_sha256=intent['sha256'],
@@ -237,6 +284,10 @@ def register_once(client, scope, *, save):
     reg_raw = core.encode(reg)
     core.validate_registration(plan, reg_raw, core.digest(reg_raw), predecessor_snapshot=previous,
         cases=scope.cases, captures=captures, registered_snapshot=registered)
+    if p.producer=='qomp' and before_publish is None:
+        raise ValueError('QOMP registration postseal required before publication')
+    if before_publish is not None:
+        before_publish()
     save('registration.json', reg)
     return reg
 
@@ -274,7 +325,7 @@ def read_checkpoint(binding):
     return helper('bank_wave').decoded(binding['checkpoint_raw'])
 
 
-def publish_wave(client, binding, *, allocation, save):
+def publish_wave(client, binding, *, allocation, save,before_publish=None):
     """Read-only independent finalizer, with proofs durable before publication."""
     core, base = helper('bank_wave'), helper('dataset_guard')
     helper('native_controller').admit_audit_allocation(allocation, allocation['JobId'])
@@ -284,6 +335,7 @@ def publish_wave(client, binding, *, allocation, save):
     if binding['science_barrier'] is None:
         raise ValueError('finalizer requires complete all-SCI barrier')
     directory, plan = binding['plan_path'].parent, binding['plan']
+    p=core.settings(plan)
     blobs = dict(binding['proof_blobs'])
     def add(value):
         key = core.digest(value)
@@ -306,7 +358,7 @@ def publish_wave(client, binding, *, allocation, save):
         link['receipts_sha256'][mid] = {
             'case': add(raw(directory/'cases'/(mid+'.json'))),
             'audit': add(raw(audit_run/'payload/audit-report.json')),
-            'outcome': add(raw(run/'payload/pilot-outcome.json')),
+            'outcome': add(raw(run/'payload'/('qomp-outcome.json' if p.producer=='qomp' else 'pilot-outcome.json'))),
             'envelope': add(raw(run/'payload/server-native-envelope.json'))}
         link['captures_sha256'][mid] = {role: add(raw(
             binding['registration']['members'][mid]['captures'][role]['path']))
@@ -323,9 +375,14 @@ def publish_wave(client, binding, *, allocation, save):
     if base.digest(snapshot()) != checkpoint['snapshot_sha256']:
         raise ValueError('double-live wave finalization disagreement')
     helper('bank_wave_campaign').revalidate_binding(binding)
+    if p.producer=='qomp' and before_publish is None:
+        raise ValueError('QOMP finalizer postseal required before accepted publication')
+    if before_publish is not None:
+        before_publish()
     # Store even metadata/accounting as content-addressed bytes, never fake
     # serial receipt roles. The original proof namespace is shared.
-    helper('bank_store')._store_wave_proofs({key: blobs[key] for key in checkpoint['proof_sha256']})
+    helper('bank_store')._store_wave_proofs({key: blobs[key] for key in checkpoint['proof_sha256']},
+        **(dict(producer='qomp') if p.producer=='qomp' else {}))
     raw_checkpoint = core.encode(checkpoint)
     core.validate_checkpoint(raw_checkpoint, core.digest(raw_checkpoint), binding['context_raw'],
                              binding['context_sha256'], blobs)
@@ -333,7 +390,7 @@ def publish_wave(client, binding, *, allocation, save):
     result = dict(status='PASS_AUDITED_BANK_WAVE_ADVANCE', allocation=allocation,
         wave_id=plan['wave_id'], plan_sha256=binding['plan_sha256'],
         registration_sha256=binding['registration_sha256'],
-        science_barrier_sha256=binding['science_barrier_sha256'], dataset_id=357,
+        science_barrier_sha256=binding['science_barrier_sha256'], dataset_id=p.dataset,
         generation=checkpoint['generation'], context_sha256=binding['context_sha256'],
         checkpoint_path=str(directory/'finalizer/payload/bank-checkpoint.json'),
         checkpoint_sha256=core.digest(raw_checkpoint), audited_records=checkpoint['audited_records'],
@@ -370,11 +427,34 @@ def run_wave(remote, wait):
 
 class Production:
     """Closed production adapters; never constructed by local unit tests."""
+    qomp=False
     def __init__(self, args):
         self.args = args
+        if getattr(args,'producer','grid400') not in ('grid400','qomp'):
+            raise ValueError('closed bounded-wave producer required')
         self.core = helper('bank_wave')
         self.campaign = helper('bank_wave_campaign')
-        self.bank = helper('bank_campaign')
+        self.qomp=getattr(args,'producer','grid400')=='qomp'
+        self.policy=helper('qomp_wave_policy') if self.qomp else None
+        self.bank=(self.policy.helper('qomp_expansion').helper('qomp_campaign')
+                   if self.qomp else helper('bank_campaign'))
+
+    def validate_source(self):
+        if self.qomp:
+            self.policy.validate_source(self.args.source,self.args.commit)
+
+    def require_enabled(self):
+        if self.qomp and not self.policy.PRODUCTION_ENABLED:
+            raise RuntimeError('QOMP wave activation disabled pending actual failure-lifecycle evidence/review')
+
+    def scratch_admission(self,binding):
+        if not self.qomp:
+            return admit_scratch({mid:read(binding['plan_path'].parent/'cases'/(mid+'.json'))
+                                  for mid in binding['plan']['member_ids']},self.scratch_observation())
+        cases={mid:read(binding['plan_path'].parent/'cases'/(mid+'.json'))
+               for mid in binding['plan']['member_ids']}
+        return admit_scratch(cases,producer='qomp',
+            observe=lambda:helper('qomp_execution').observe(self.policy.SCRATCH_ROOT))
 
     def queue(self):
         return embers_used(subprocess.check_output(
@@ -383,12 +463,14 @@ class Production:
     def binding(self, *, registered=False, audit=False):
         plan = read(self.args.wave_plan)
         if (plan['source'] != str(self.args.source)
-                or plan['operational_commit'] != self.args.commit):
+                or plan['operational_commit'] != self.args.commit
+                or self.qomp and plan.get('adoption_sha256')!=self.args.adoption_sha256):
             raise ValueError('wave plan must bind this actual operational checkout/commit')
-        args = NS(**vars(self.args), producer='grid400', campaign_scope='eligible-wave',
+        args = NS(**dict(vars(self.args),producer='qomp' if self.qomp else 'grid400',
+                  campaign_scope='qomp-wave' if self.qomp else 'eligible-wave',
                   remaining_case=True, pilot=self.args.wave_plan.parent/'cases'/(plan['member_ids'][0]+'.json'),
-                  build=self.bank.BUILD_IDENTITY.parent, inputs=self.bank.INPUTS,
-                  qualification=self.bank.QUALIFICATION, descriptors=self.bank.DESCRIPTORS)
+                  build=self.bank.BUILD if self.qomp else self.bank.BUILD_IDENTITY.parent, inputs=self.bank.INPUTS,
+                  qualification=self.bank.QUALIFICATION, descriptors=self.bank.DESCRIPTORS))
         args.wave_registration = self.args.wave_plan.parent/'registration.json'
         if audit:
             args.case = self.args.wave_plan.parent/'members'/plan['member_ids'][0]/'science'
@@ -411,7 +493,9 @@ class Production:
             # Internal read-only cutover client; no serial constructor or fake
             # registered authority. The predecessor was fully validated above.
             def check(client, method, endpoint, kwargs):
-                if transport._endpoint(method, endpoint, 357) != 'read':
+                if transport._endpoint(method, endpoint,
+                    self.core.settings(binding['plan']).dataset if self.qomp else 357,
+                    **(dict(producer='qomp') if self.qomp else {})) != 'read':
                     raise ValueError('cutover client is read-only')
             cls = transport._engine(check)
         client = cls(server['fractal_uri'], username=server['username'], password=server['password'],
@@ -421,9 +505,13 @@ class Production:
             raise ValueError('approved wave deployment differs')
         return client
 
-    def held(self, binding):
+    def held(self, binding,*,members=None):
         result = {}
-        for mid in binding['plan']['member_ids']:
+        mids=binding['plan']['member_ids'] if members is None else members
+        if (not 1<=len(mids)<=8 or len(set(mids))!=len(mids)
+                or not set(mids)<=set(binding['plan']['member_ids'])):
+            raise ValueError('declared own held member subset required')
+        for mid in mids:
             submission = read(binding['plan_path'].parent/'members'/mid/'science/submission.json')
             if submission['command'] != phase_command(binding, mid, 'science'):
                 raise ValueError('held SCI command differs')
@@ -433,7 +521,7 @@ class Production:
             verify_held(allocation, read(binding['plan_path'].parent/'cases'/(mid+'.json')),
                         submission['job_id'])
             result[mid] = dict(science_job_id=submission['job_id'],
-                compute_tag='ccasp-native-grid400-bank-'+mid+'-'+submission['job_id'],
+                compute_tag=self.core.settings(binding['plan']).namespace+mid+'-'+submission['job_id'],
                 case_sha256=binding['plan']['members'][mid]['case_sha256'],
                 worker_preflight_sha256=self.core.digest(raw(
                     binding['plan_path'].parent/'members'/mid/'worker/payload/worker-preflight.json')))
@@ -448,6 +536,7 @@ class Production:
         helper('bank_store')._write_once(run/'accounting.txt', response)
 
     def submit(self, phase):
+        self.require_enabled()
         binding = self.binding(registered=phase in ('audit', 'finalizer'),
                                audit=phase in ('audit', 'finalizer'))
         directory, mids = binding['plan_path'].parent, binding['plan']['member_ids']
@@ -466,6 +555,8 @@ class Production:
             raise ValueError('closed submission phase')
         identifiers = mids if phase in ('worker', 'science', 'audit') else [None]
         admit_headroom(self.queue(), len(identifiers))
+        if self.qomp:
+            self.scratch_admission(binding)
         jobs = {}
         for mid in identifiers:
             admit_headroom(self.queue(), 1)
@@ -481,6 +572,9 @@ class Production:
             subprocess.run(command[:1]+['--test-only']+command[1:],
                            check=True, capture_output=True, text=True)
             write(run/'intent.json', dict(plan_sha256=binding['plan_sha256'], command=command))
+            if self.qomp:
+                write(run/'pre-submit-quota.json',self.scratch_admission(binding))
+                self.validate_source()
             response = subprocess.run(command, capture_output=True, text=True, check=False)
             write(run/'submission-response.json', dict(returncode=response.returncode,
                 stdout=response.stdout, stderr=response.stderr))
@@ -530,18 +624,21 @@ class Production:
                 report = read(report_path)
                 case = read(directory/'cases'/(mid+'.json'))
                 worker, science = helper('phoenix_worker_cb63305'), helper('phoenix_pilot_cb63305')
-                worker.admit_allocation(report['allocation'], producer='grid400',
-                    campaign_scope='eligible-wave', execution_profile=case['execution_profile'])
+                p=self.core.settings(binding['plan'])
+                worker.admit_allocation(report['allocation'], producer=p.producer,
+                    campaign_scope=p.scope, execution_profile=case['execution_profile'])
                 if report['allocation']['JobId'] != submission['job_id']:
                     raise ValueError('actual worker job differs')
                 science.validate_preflight(report, case,
-                    manifest_sha=self.core.digest(raw(self.bank.BUILD_IDENTITY)),
+                    manifest_sha=self.core.digest(raw(self.bank.QUALIFICATION if self.qomp else self.bank.BUILD_IDENTITY)),
                     qualification_sha=self.core.digest(raw(self.bank.QUALIFICATION)),
                     pilot_sha=binding['plan']['members'][mid]['case_sha256'],
-                    worker_sources=worker.source_hashes('grid400', remaining_case=True,
-                                                      campaign_scope='eligible-wave'),
-                    transport=helper('bank_wave_transport').transport_binding(),
-                    producer='grid400', campaign_scope='eligible-wave', remaining_case=True)
+                    worker_sources=worker.source_hashes(p.producer, remaining_case=True,
+                                                      campaign_scope=p.scope),
+                    transport=helper('bank_wave_transport').transport_binding(**(
+                        dict(producer='qomp') if self.qomp else {})),
+                    producer=p.producer, campaign_scope=p.scope, remaining_case=True,
+                    **(dict(operational_commit=self.args.commit,wave_binding=binding) if self.qomp else {}))
             elif phase == 'delivery':
                 self._delivery(binding, mid, submission['job_id'])
             elif phase == 'audit':
@@ -549,7 +646,8 @@ class Production:
                 helper('native_controller').admit_audit_allocation(report['allocation'], submission['job_id'])
                 sci = directory/'members'/mid/'science/payload'
                 receipts = dict(audit=raw(run/'payload/audit-report.json'),
-                    case=raw(directory/'cases'/(mid+'.json')), outcome=raw(sci/'pilot-outcome.json'),
+                    case=raw(directory/'cases'/(mid+'.json')), outcome=raw(sci/(
+                        'qomp-outcome.json' if self.qomp else 'pilot-outcome.json')),
                     envelope=raw(sci/'server-native-envelope.json'))
                 delivered = read(sci/'owned-after-delivery.json')
                 self.core._member_receipts(binding['plan'], binding['registration'],
@@ -561,15 +659,19 @@ class Production:
                 self._published(binding, result)
             else:
                 raise ValueError('closed verification phase')
-            write(run/'verified.json', dict(phase=actual_phase, job_id=submission['job_id'],
+            self.validate_source()
+            fields=dict(phase=actual_phase, job_id=submission['job_id'],
                 plan_sha256=binding['plan_sha256'],
-                accounting_sha256=self.core.digest(raw(run/'accounting.txt'))))
+                accounting_sha256=self.core.digest(raw(run/'accounting.txt')))
+            if self.qomp and phase=='worker':
+                fields['worker_preflight_sha256']=self.core.digest(raw(report_path))
+            write(run/'verified.json',fields)
         return dict(verified=phase)
 
     def _delivery(self, binding, mid, actual_job):
         directory = binding['plan_path'].parent
         data = directory/'members'/mid/'science/payload'
-        outcome, case = read(data/'pilot-outcome.json'), read(directory/'cases'/(mid+'.json'))
+        outcome, case = read(data/('qomp-outcome.json' if self.qomp else 'pilot-outcome.json')), read(directory/'cases'/(mid+'.json'))
         slot = self.core.validate_registered_slot(binding['plan'], binding['registration'],
             binding['release_permit'], case, allocation=outcome['allocation'])
         if (outcome['allocation']['JobId'] != actual_job
@@ -583,7 +685,8 @@ class Production:
             raise ValueError('actual SCI delivery binding differs')
         helper('runtime_audit_cb63305').validate_delivery(outcome, read(data/'manager-delivery.json'),
             read(data/'record-created.json'), read(data/'claim.json'), read(data/'server-record-outcome.json'),
-            owned354=True, producer='grid400', campaign_scope='eligible-wave')
+            owned354=True, producer='qomp' if self.qomp else 'grid400',
+            campaign_scope='qomp-wave' if self.qomp else 'eligible-wave')
         self.core.validate_capture(binding['plan'], binding['registration'],
             predecessor_snapshot=read_checkpoint(binding)['snapshot'],
             registered_snapshot=binding['registered_snapshot'],
@@ -596,11 +699,12 @@ class Production:
         members, outcomes, accounting, deliveries = {}, {}, {}, {}
         for mid in plan['member_ids']:
             run = directory/'members'/mid/'science'
-            outcomes[mid], accounting[mid] = raw(run/'payload/pilot-outcome.json'), raw(run/'accounting.txt')
+            outcome_path=run/'payload'/('qomp-outcome.json' if self.qomp else 'pilot-outcome.json')
+            outcomes[mid], accounting[mid] = raw(outcome_path), raw(run/'accounting.txt')
             deliveries[mid] = read(run/'payload/owned-after-delivery.json')
             members[mid] = {key: binding['registration']['members'][mid][key] for key in (
                 'science_job_id', 'record_id', 'compute_tag', 'case_sha256')}
-            members[mid].update(outcome_path=str(run/'payload/pilot-outcome.json'),
+            members[mid].update(outcome_path=str(outcome_path),
                 outcome_sha256=self.core.digest(outcomes[mid]), accounting_path=str(run/'accounting.txt'),
                 accounting_sha256=self.core.digest(accounting[mid]),
                 delivery_snapshot_sha256=helper('dataset_guard').digest(deliveries[mid]))
@@ -615,6 +719,7 @@ class Production:
         return dict(barrier_sha256=self.core.digest(self.core.encode(barrier)))
 
     def release(self):
+        self.require_enabled()
         binding = self.binding()
         directory = binding['plan_path'].parent
         verified, submission = read(directory/'registration/verified.json'), read(
@@ -632,7 +737,7 @@ class Production:
             raise ValueError('all held SCI jobs must appear in shared queue observation')
         admit_headroom(used, 0)
         cases = {mid: read(directory/'cases'/(mid+'.json')) for mid in binding['plan']['member_ids']}
-        admission = admit_scratch(cases, self.scratch_observation())
+        admission = self.scratch_admission(binding) if self.qomp else admit_scratch(cases, self.scratch_observation())
         write(directory/'scratch-release-admission.json', admission)
         # Immediately recheck live registration and all held routes before permit.
         client = self.client(binding)
@@ -644,14 +749,21 @@ class Production:
         permit = dict(schema='native-eligible-wave-release-permit/1',
             dispatch_protocol=self.core.PROTOCOL, wave_id=binding['plan']['wave_id'],
             plan_sha256=binding['plan_sha256'], registration_sha256=self.core.digest(reg_raw),
-            dataset_id=357, predecessor_sha256=binding['checkpoint_sha256'],
+            dataset_id=self.core.settings(binding['plan']).dataset, predecessor_sha256=binding['checkpoint_sha256'],
             dispatch_intent_sha256=reg['dispatch_intent_sha256'], members=self.core.permit_members(reg))
         self.core.validate_release_permit(binding['plan'], binding['plan_sha256'], reg,
                                           self.core.digest(reg_raw), self.core.encode(permit))
+        if self.qomp:
+            write(directory/'pre-permit-quota.json',self.scratch_admission(binding))
+            self.validate_source()
         write(directory/'release-permit.json', permit)
         for mid in binding['plan']['member_ids']:
             run = directory/'members'/mid/'science'
             actual_job = reg['members'][mid]['science_job_id']
+            if self.qomp:
+                write(run/'pre-release-quota.json',self.scratch_admission(binding))
+                self.held(binding,members=(mid,))
+                self.validate_source()
             write(run/'release-attempt.json', dict(job_id=actual_job, plan_sha256=binding['plan_sha256'],
                 release_permit_sha256=self.core.digest(self.core.encode(permit))))
             response = subprocess.run([SLURM+'scontrol', 'release', actual_job],
@@ -682,7 +794,8 @@ class Production:
                                                directory/'finalizer/payload/bank-checkpoint.json')
         checkpoint_raw = raw(checkpoint_path)
         checkpoint = self.core.decoded(checkpoint_raw, result['checkpoint_sha256'])
-        proofs = helper('bank_store')._read_wave_proofs(set(checkpoint['proof_sha256']))
+        proofs = helper('bank_store')._read_wave_proofs(set(checkpoint['proof_sha256']),
+            **(dict(producer='qomp') if self.qomp else {}))
         self.core.validate_checkpoint(checkpoint_raw, result['checkpoint_sha256'],
                                      binding['context_raw'], binding['context_sha256'], proofs)
         expected_link = dict(plan_sha256=binding['plan_sha256'],
@@ -703,6 +816,7 @@ class Production:
         return checkpoint
 
     def accept(self):
+        self.require_enabled()
         binding = self.binding(registered=True, audit=True)
         directory = binding['plan_path'].parent
         self._require_verified(directory, binding['plan']['member_ids'], 'audit')
@@ -725,11 +839,14 @@ class Production:
             bank_context_sha256=binding['context_sha256'], bank_checkpoint=result['checkpoint_path'],
             bank_checkpoint_sha256=result['checkpoint_sha256'],
             finalizer_job_id=submitted['job_id'], finalizer_accounting_sha256=verified['accounting_sha256'])
+        self.validate_source()
         write(directory/'accepted.json', state)
         return state
 
     def initialize(self):
         """Only after positive serial cutover or a verified accepted wave."""
+        if self.qomp:
+            return self._initialize_qomp()
         campaign, core = self.bank, self.core
         state = read(self.args.predecessor_state)
         plan_stub = dict(bootstrap_context_path=state['bank_context'],
@@ -785,7 +902,7 @@ class Production:
             checkpoint_raw=previous_raw, checkpoint_sha256=plan['predecessor_sha256'],
             context_raw=context_raw, context_sha256=plan['bootstrap_context_sha256'], proof_blobs=proofs)
         # Read live before ANY new filesystem state or job submission.
-        temporary = dict(registration=None, checkpoint_raw=previous_raw)
+        temporary = dict(registration=None, checkpoint_raw=previous_raw,plan=plan)
         client = self.client(temporary)
         live = helper('bank_wave_transport')._snapshot_dataset(client, plan, previous['snapshot'])
         if helper('dataset_guard').digest(live) != previous['snapshot_sha256']:
@@ -807,7 +924,95 @@ class Production:
             predecessor_sha256=core.digest(previous_raw), live_snapshot_sha256=previous['snapshot_sha256']))
         return dict(wave_plan=str(directory/'plan.json'), wave_plan_sha256=core.digest(plan_raw))
 
+    def _initialize_qomp(self):
+        """Explicit actual37aa cutover; original603/25 provenance is not rebased."""
+        policy,core=self.policy,self.core
+        adopted=policy.load_adoption(self.args.adoption_sha256)
+        predecessor=self.args.predecessor_state
+        if predecessor==policy.WAVE_ROOT/'inputs/adopted/state.json':
+            state=adopted['state']
+            previous_path=policy.WAVE_ROOT/'inputs/adopted/bank-checkpoint.json'
+        else:
+            state=read(predecessor)
+            previous_path=Path(state['bank_checkpoint'])
+            directory=previous_path.parents[2]
+            self.campaign._closed(predecessor,directory/'accepted.json')
+            if (state.get('status')!='ORDINARY_WAVE_AUDIT_ACCEPTED'
+                    or directory.parent!=policy.WAVE_ROOT):
+                raise ValueError('actual own accepted predecessor or copied37aa cutover required')
+            run=directory/'finalizer'
+            verified=read(run/'verified.json')
+            accounting=raw(run/'accounting.txt')
+            if (verified.get('job_id')!=state['finalizer_job_id']
+                    or verified.get('phase')!='finalizer'
+                    or verified.get('accounting_sha256')!=core.digest(accounting)
+                    or state.get('finalizer_accounting_sha256')!=core.digest(accounting)):
+                raise ValueError('actual positive own finalizer accounting required')
+            helper('qomp_execution').helper('qomp_expansion').completed_rows(
+                accounting.decode(),state['finalizer_job_id'])
+        context_path=policy.WAVE_ROOT/'inputs/adopted/bank-context.json'
+        plan_stub=dict(producer_profile='qomp',
+            producer_authority=helper('bank_wave').decoded(
+                policy.bootstrap_binding()['manifest_raw']),
+            adoption_sha256=self.args.adoption_sha256,
+            bootstrap_context_path=str(context_path),bootstrap_context_sha256=policy.CONTEXT_SHA256,
+            predecessor_path=str(previous_path),predecessor_sha256=state['bank_checkpoint_sha256'],
+            generation_before=state['generation'])
+        context_raw,previous_raw,proofs=self.campaign._load_predecessor(plan_stub)
+        context,previous=map(core.decoded,(context_raw,previous_raw))
+        _,prepared,_=policy.prepared()
+        width=self.args.member_limit
+        if type(width) is not int or not 1<=width<=8:
+            raise ValueError('bounded1..8 QOMP wave width required')
+        g=previous['generation']
+        mids=context['eligible_ids'][g:g+width]
+        if not mids:
+            raise ValueError('new106 cohort already fully audited')
+        wave_id='wave-%04d-%04d'%(g,g+len(mids))
+        directory=policy.WAVE_ROOT/wave_id
+        plan=dict(plan_stub,schema='native-eligible-wave-plan/1',campaign_scope='qomp-wave',
+            dispatch_protocol=core.PROTOCOL,wave_id=wave_id,dataset_id=context['dataset_id'],
+            source=str(self.args.source),operational_commit=self.args.commit,
+            predecessor_snapshot_sha256=previous['snapshot_sha256'],
+            generation_after=g+len(mids),eligible_ids=context['eligible_ids'],refused_ids=[],
+            eligibility_sha256=context['eligibility_sha256'],member_limit=width,member_ids=mids,members={})
+        cases={mid:core.bind_member(prepared[mid],plan=plan,monomer_id=mid) for mid in mids}
+        plan['members']={mid:dict(case_path=str(directory/'cases'/(mid+'.json')),
+            prepared_case_sha256=core.digest(core.encode(prepared[mid])),
+            case_sha256=core.digest(core.encode(case)),execution_profile=case['execution_profile'])
+            for mid,case in cases.items()}
+        plan_raw=core.encode(plan)
+        core.validate_plan(plan_raw,core.digest(plan_raw),prepared_cases=prepared,
+            checkpoint_raw=previous_raw,checkpoint_sha256=plan['predecessor_sha256'],
+            context_raw=context_raw,context_sha256=policy.CONTEXT_SHA256,proof_blobs=proofs)
+        client=self.client(dict(registration=None,checkpoint_raw=previous_raw,plan=plan))
+        q=helper('qomp_execution')
+        q.manager_isolation(list(client.query_managers(status=['active'],limit=200)),None)
+        q.live_originals(client)
+        live=helper('bank_wave_transport')._snapshot_dataset(client,plan,previous['snapshot'])
+        if helper('dataset_guard').digest(live)!=previous['snapshot_sha256']:
+            raise ValueError('current QOMP dataset differs from independently audited cutover')
+        admission=admit_scratch(cases,producer='qomp',observe=lambda:q.observe(policy.SCRATCH_ROOT))
+        self.validate_source()
+        helper('bank_store')._directory(policy.WAVE_ROOT,private=True)
+        mkdir(directory)
+        for child in ('cases','members','registration'):
+            mkdir(directory/child)
+        for mid in mids:
+            write(directory/'cases'/(mid+'.json'),cases[mid])
+            mkdir(directory/'members'/mid)
+            mkdir(directory/'registration'/mid)
+        write(directory/'plan.json',plan)
+        write(directory/'cutover.json',dict(adoption_sha256=self.args.adoption_sha256,
+            producing_serial_operations=policy.SERIAL_OPS,source=self.args.commit,
+            predecessor_state=str(predecessor),predecessor_state_sha256=core.digest(raw(predecessor)),
+            predecessor_sha256=core.digest(previous_raw),live_snapshot_sha256=previous['snapshot_sha256'],
+            scratch_admission=admission))
+        return dict(wave_plan=str(directory/'plan.json'),wave_plan_sha256=core.digest(plan_raw))
+
     def operations(self, phase):
+        if self.qomp:
+            return self._qomp_operations(phase)
         binding = self.binding(registered=phase == 'finalizer', audit=phase == 'finalizer')
         allocation = helper('phoenix_installed_checks').allocation()
         helper('native_controller').admit_audit_allocation(allocation, allocation['JobId'])
@@ -837,6 +1042,56 @@ class Production:
                                 save=lambda name, value: write(expected_run/'payload'/name, value))
         raise ValueError('closed registration/finalizer operation')
 
+    def _qomp_operations(self,phase):
+        self.require_enabled()
+        if phase not in ('registration','finalizer'):
+            raise ValueError('closed QOMP wave operations role required')
+        q=helper('qomp_execution')
+        q.helper('phoenix_installed_checks').qomp_engine().qomp_enter()
+        allocation=helper('phoenix_installed_checks').allocation()
+        helper('native_controller').admit_audit_allocation(allocation,allocation['JobId'])
+        self.validate_source()
+        binding=self.binding(registered=phase=='finalizer',audit=phase=='finalizer')
+        directory=binding['plan_path'].parent
+        run=directory/phase
+        self.campaign._closed(self.args.run,run)
+        intent=read(run/'intent.json')
+        if (intent.get('plan_sha256')!=binding['plan_sha256']
+                or intent.get('command')!=phase_command(binding,None,phase)
+                or allocation['JobId']!=os.environ.get('SLURM_JOB_ID')):
+            raise ValueError('actual QOMP ops launch intent/allocation required')
+        error=None
+        sealed=False
+        def post():
+            nonlocal sealed
+            q.runtime_check()
+            self.validate_source()
+            self.campaign.revalidate_binding(binding)
+            sealed=True
+        try:
+            q.runtime_check()
+            mkdir(run/'payload')
+            if phase=='registration':
+                members=self.held(binding)
+                cases={mid:read(directory/'cases'/(mid+'.json')) for mid in binding['plan']['member_ids']}
+                role=dict(kind='allocation',job_id=allocation['JobId'],allocation=allocation)
+                scope=helper('bank_wave_transport').WaveScope(binding,cases,members,role)
+                return register_once(self.client(binding,registration_scope=scope),scope,
+                    save=lambda name,value:write(directory/name,value),before_publish=post)
+            return publish_wave(self.client(binding),binding,allocation=allocation,
+                save=lambda name,value:write(run/'payload'/name,value),before_publish=post)
+        except BaseException as exc:
+            error=exc
+            raise
+        finally:
+            if not sealed:
+                try:
+                    post()
+                except BaseException as final:
+                    if error is None:
+                        raise
+                    error.add_note('QOMP wave postseal: '+str(final)[:1024])
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -852,12 +1107,27 @@ def main():
     parser.add_argument('--action', choices=('initialize', 'submit', 'verify', 'release',
                                            'science-jobs', 'barrier', 'accept'))
     parser.add_argument('--adapter-seal')
+    parser.add_argument('--producer',choices=('grid400','qomp'),default='grid400')
+    parser.add_argument('--adoption-sha256')
+    parser.add_argument('--member-limit',type=int,default=8)
     args = parser.parse_args()
     if not PRODUCTION_ENABLED:
         raise RuntimeError('production wave activation disabled pending coordinator review')
     native = helper('native_controller')
+    qomp=args.producer=='qomp'
+    if qomp:
+        if (not helper('qomp_wave_policy').PRODUCTION_ENABLED
+                and not (args.mode=='remote' and args.action=='initialize')):
+            raise RuntimeError('QOMP wave activation disabled pending actual failure-lifecycle evidence/review')
+        helper('qomp_execution').helper('phoenix_installed_checks').qomp_engine().qomp_enter()
+        helper('bank_wave').sha(args.adoption_sha256)
+        if not 1<=args.member_limit<=8:
+            raise ValueError('QOMP wave width1..8 required')
+    elif args.adoption_sha256 is not None or args.member_limit!=8:
+        raise ValueError('QOMP authority/width cannot cross legacy wave mode')
     if args.mode in ('remote', 'ops'):
-        native.validate_source(args.source, args.commit)
+        (helper('qomp_wave_policy').validate_source if qomp else native.validate_source)(
+            args.source,args.commit)
         production = Production(args)
         if args.mode == 'ops':
             result = production.operations(args.phase)
@@ -869,7 +1139,8 @@ def main():
                                for mid, slot in binding['registration']['members'].items()})
         else:
             result = getattr(production, args.action)()
-        native.validate_source(args.source, args.commit)
+        (helper('qomp_wave_policy').validate_source if qomp else native.validate_source)(
+            args.source,args.commit)
         print(PREFIX+helper('bank_wave').encode(result).decode(), flush=True)
         return
     class Remote(native.Remote):
@@ -882,6 +1153,9 @@ def main():
                 '--action', action, '--adapter-seal', self.adapter_seal]
             if action == 'initialize':
                 command += ['--predecessor-state', str(args.predecessor_state)]
+            if qomp:
+                command += ['--producer','qomp','--adoption-sha256',args.adoption_sha256,
+                            '--member-limit',str(args.member_limit)]
             for key in ('wave_plan', 'wave_plan_sha256', 'phase'):
                 if key in state:
                     command += ['--'+key.replace('_', '-'), str(state[key])]
@@ -889,6 +1163,11 @@ def main():
                 'PYTHONNOUSERSITE=1', 'PYTHONDONTWRITEBYTECODE=1',
                 'PATH='+str(native.MANAGER/'bin')+':/usr/bin:/bin',
                 'LD_LIBRARY_PATH='+str(native.MANAGER/'lib')]
+            if qomp:
+                clean=['/usr/bin/env','-i','USER=awallace43','LOGNAME=awallace43',
+                    'HOME=/storage/home/hcoda1/3/awallace43','LANG=C.UTF-8','LC_ALL=C.UTF-8',
+                    'GIT_OPTIONAL_LOCKS=0','PATH='+str(native.MANAGER/'bin')+':/usr/bin:/bin',
+                    'LD_LIBRARY_PATH='+str(native.MANAGER/'lib')]
             response = subprocess.run([str(self.phx), shlex.join(clean+command)],
                 env=dict(os.environ, PHX_ALIAS='phoenix2'), text=True, capture_output=True, timeout=300)
             lines = [line[len(PREFIX):] for line in response.stdout.splitlines() if line.startswith(PREFIX)]

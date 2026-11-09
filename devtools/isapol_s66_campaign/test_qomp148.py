@@ -356,12 +356,14 @@ def test_real_qomp_session_callbacks_factory_and_delivery_unwind(monkeypatch,tmp
     exercise_session_callbacks(monkeypatch,tmp_path,failure,serial=False)
 
 
-def exercise_session_callbacks(monkeypatch,tmp_path,failure,*,serial):
+def exercise_session_callbacks(monkeypatch,tmp_path,failure,*,serial,wave_fixture=None):
     """Shared callback oracle; serial SDK binding is exercised in p4qca tests."""
     c,_,_,_,cases,_=synthetic(monkeypatch)
     draft=next(d for d in cases.values() if d['dataset_mode']=='fresh')
     binding=None
     execution=None
+    record_id=9999
+    allocation=None
     if serial:
         core,exp,_,cases,context,checkpoint,proofs,authority,_=load('test_qomp_expansion').synthetic(monkeypatch)
         exp._MODULES['audited_bank']=core
@@ -374,10 +376,28 @@ def exercise_session_callbacks(monkeypatch,tmp_path,failure,*,serial):
         c=exp.helper('qomp_campaign')
         execution=load('qomp_execution')
         execution._MODULES.update(qomp_expansion=exp,qomp_campaign=c)
+    if wave_fixture is not None:
+        f=wave_fixture
+        binding=f.binding
+        draft=f.cases[f.plan['member_ids'][0]]
+        c=f.policy.helper('qomp_expansion').helper('qomp_campaign')
+        execution=load('qomp_execution')
+        execution._MODULES['qomp_campaign']=c
+        runtime_adapter=execution.helper('bank_wave_runtime')
+        runtime_adapter._MODULES['bank_wave']=f.wave
+        monkeypatch.setattr(runtime_adapter.helper('bank_wave_campaign'),'revalidate_binding',lambda b:None)
+        slot=f.reg['members'][draft['monomer_id']]
+        record_id=slot['record_id']
+        allocation=dict(JobId=slot['science_job_id'],Account='gts-cs207-chemx',QOS='embers',
+            Partition='cpu-small',NumCPUs=str(draft['execution_profile']['cores']),NumNodes='1',
+            MinMemoryNode=str(draft['execution_profile']['job_memory_GiB'])+'G',
+            TimeLimit=draft['execution_profile']['time_limit'])
     session=load('single_record_cb63305')
     runtime=c.helper('phoenix_worker_probe').runtime_input(draft)
     runtime['specification']['protocols']=session.helper('phoenix_pilot').execution_specification({})['protocols']
     tag=c.NAMESPACE+draft['monomer_id']+'-123'
+    if wave_fixture is not None:
+        tag=slot['compute_tag']
     config=NS(executors=dict(pilot=NS(type='local',max_workers=1,cores_per_worker=8,
                                      memory_per_worker=20.,compute_tags=[tag])))
     effects=[];saved={};active=[False]
@@ -404,7 +424,7 @@ def exercise_session_callbacks(monkeypatch,tmp_path,failure,*,serial):
         def stop(self): effects.append('stop')
         def start(self):
             assert not active[0]
-            task=NS(id=77,record_id=9999,compute_tag=tag,function='qcengine.compute',
+            task=NS(id=77,record_id=record_id,compute_tag=tag,function='qcengine.compute',
                 required_programs={'psi4':'synthetic'},function_kwargs=dict(program='psi4',
                     input_data=dict(schema_name='qcschema_input',schema_version=1,
                         molecule=runtime['molecule'],**runtime['specification'])))
@@ -424,11 +444,13 @@ def exercise_session_callbacks(monkeypatch,tmp_path,failure,*,serial):
     original=session.helper
     monkeypatch.setattr(session,'helper',lambda name:
         NS(grid400_manager_client_factory=factory) if name=='dataset_fresh_cb63305'
-        else execution if name=='qomp_execution' and serial else original(name))
-    kwargs=dict(record_id=9999,compute_tag=tag,runtime=runtime,payload=tmp_path,
+        else execution if name=='qomp_execution' and (serial or wave_fixture is not None) else original(name))
+    kwargs=dict(record_id=record_id,compute_tag=tag,runtime=runtime,payload=tmp_path,
         save=lambda name,data:saved.setdefault(name,data),worker_shape=(8,20.),
         producer='qomp',case=draft,campaign_scope='qomp-serial' if serial else 'qomp-pilot',
         **(dict(checkpoint_binding=binding) if serial else {}))
+    if wave_fixture is not None:
+        kwargs.update(campaign_scope='qomp-wave',wave_binding=binding,allocation=allocation)
     previous=signal.getsignal(signal.SIGTERM)
     if failure:
         with pytest.raises(RuntimeError) as caught:
@@ -442,7 +464,7 @@ def exercise_session_callbacks(monkeypatch,tmp_path,failure,*,serial):
         assert (tmp_path/'local-result-77.zstd').read_bytes()==b'SYNTHETIC_COMPRESSED'
     assert effects[:2]==['factory-enter','factory-exit']
     assert effects[-2:]==['deactivate','cleanup']
-    assert saved['claimed-input.json']['record_id']==9999
+    assert saved['claimed-input.json']['record_id']==record_id
     if failure=='child_and_cleanup':
         assert 'manager-delivery.json' not in saved
         assert any('synthetic cleanup failure' in n for n in primary.__notes__)

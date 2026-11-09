@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import re
 import sys
+from types import SimpleNamespace as NS
 
 PROTOCOL = 'registered-wave/1'
 SCOPE = 'eligible-wave'
@@ -16,7 +17,7 @@ _MODULES = {}
 
 def helper(name):
     if name not in ('audited_bank', 'dataset_guard', 'grid400_bank_policy',
-                    'bank_campaign', 'bank_store', 'native_controller'):
+                    'bank_campaign', 'bank_store', 'native_controller','qomp_wave_policy'):
         raise ValueError('closed wave helper required')
     if name not in _MODULES:
         path = Path(__file__).with_name(name+'.py')
@@ -26,6 +27,31 @@ def helper(name):
         exec(compile(path.read_bytes(), str(path), 'exec'), module.__dict__)
         _MODULES[name] = module
     return _MODULES[name]
+
+
+def settings(plan):
+    """Explicit closed selector; never rewrite legacy dataset357 globals."""
+    producer=plan.get('producer_profile','grid400')
+    if producer=='qomp':
+        return helper('qomp_wave_policy').settings(plan)
+    if producer!='grid400' or 'producer_authority' in plan:
+        raise ValueError('closed wave producer required')
+    return NS(producer='grid400',scope=SCOPE,dataset=DATASET,
+        science=helper('audited_bank').SCIENCE,profile=helper('grid400_bank_policy'),
+        protected=helper('grid400_bank_policy').PROTECTED_RECORDS,
+        namespace='ccasp-native-grid400-bank-',prepared_scope='eligible-bank',
+        checkpoint_schema='native-audited-bank-wave-checkpoint/1',
+        audit_status='PASS_SELECTED_WAVE_CASE_SINGLETON_EVIDENCE')
+
+
+def member_ids(plan,context,generation):
+    p=settings(plan)
+    width=8
+    if p.producer=='qomp':
+        width=plan.get('member_limit')
+        if type(width) is not int or not 1<=width<=8:
+            raise ValueError('one through eight QOMP wave members required')
+    return context['eligible_ids'][generation:generation+width]
 
 
 def encode(value):
@@ -76,7 +102,7 @@ def _same(left, right):
 
 
 def _identity(value, plan):
-    if (value.get('wave_id') != plan['wave_id'] or value.get('dataset_id') != DATASET
+    if (value.get('wave_id') != plan['wave_id'] or value.get('dataset_id') != settings(plan).dataset
             or value.get('dispatch_protocol') != PROTOCOL):
         raise ValueError('wave identity differs')
 
@@ -89,11 +115,14 @@ def _serial_required(checkpoint, context):
 
 
 def _plan_identity(plan, previous, context, context_sha256, predecessor_sha256):
+    p=settings(plan)
+    if p.producer=='qomp':
+        sha(plan.get('adoption_sha256'))
     g = previous['generation']
-    mids = context['eligible_ids'][g:g+8]
+    mids = member_ids(plan,context,g)
     if (not mids or plan.get('schema') != 'native-eligible-wave-plan/1'
-            or plan.get('campaign_scope') != SCOPE or plan.get('dispatch_protocol') != PROTOCOL
-            or plan.get('dataset_id') != DATASET or context['dataset_id'] != DATASET
+            or plan.get('campaign_scope') != p.scope or plan.get('dispatch_protocol') != PROTOCOL
+            or plan.get('dataset_id') != p.dataset or context['dataset_id'] != p.dataset
             or plan.get('generation_before') != g or type(plan.get('generation_before')) is not int
             or plan.get('generation_after') != g+len(mids)
             or type(plan.get('generation_after')) is not int
@@ -114,17 +143,25 @@ def _plan_identity(plan, previous, context, context_sha256, predecessor_sha256):
 def validate_checkpoint(raw, expected_sha256, context_raw, context_sha256, proofs, *, _depth=0):
     """Validate actual serial anchor or linked whole waves; no projected prefixes."""
     checkpoint, context = decoded(raw, expected_sha256), decoded(context_raw, context_sha256)
-    if _depth > 16:
+    qomp=context.get('schema')=='qomp-audited-bank-context/1'
+    # New closed106 cohort permits width1 as well as8; no scientific cap changes.
+    if _depth > (106 if qomp else 16):
         raise ValueError('bounded wave chain required')
-    if checkpoint.get('schema') == 'native-audited-bank-checkpoint/1':
+    if qomp and context_sha256!=helper('qomp_wave_policy').CONTEXT_SHA256:
+        raise ValueError('unchanged actual QOMP bootstrap context required')
+    options=helper('qomp_wave_policy').reducer_options(proofs) if qomp else {}
+    if checkpoint.get('schema') == ('qomp-audited-bank-checkpoint/1' if qomp
+                                     else 'native-audited-bank-checkpoint/1'):
         required = _serial_required(checkpoint, context)
         return helper('audited_bank').validate_checkpoint(
             raw, expected_sha256, context_raw, context_sha256,
-            {key: proofs[key] for key in required})
-    if (checkpoint.get('schema') != 'native-audited-bank-wave-checkpoint/1'
+            {key: proofs[key] for key in required},**options)
+    p=settings(checkpoint)
+    if ((p.producer=='qomp') is not qomp
+            or checkpoint.get('schema') != p.checkpoint_schema
             or checkpoint.get('status') != 'READ_ONLY_AUDITED_WAVE_ADVANCE'
             or checkpoint.get('bootstrap_context_sha256') != context_sha256
-            or checkpoint.get('dataset_id') != DATASET
+            or checkpoint.get('dataset_id') != p.dataset
             or checkpoint.get('eligibility_sha256') != context['eligibility_sha256']
             or checkpoint.get('campaign') != context['campaign']):
         raise ValueError('whole-wave checkpoint identity required')
@@ -147,15 +184,18 @@ def validate_checkpoint(raw, expected_sha256, context_raw, context_sha256, proof
 def validate_plan(plan_raw, plan_sha256, *, prepared_cases, checkpoint_raw,
                   checkpoint_sha256, context_raw, context_sha256, proof_blobs):
     plan = decoded(plan_raw, plan_sha256)
+    p=settings(plan)
+    if p.producer=='qomp':
+        sha(plan.get('adoption_sha256'))
     context = decoded(context_raw, context_sha256)
     previous = validate_checkpoint(checkpoint_raw, checkpoint_sha256, context_raw,
                                    context_sha256, proof_blobs)
     g = previous['generation']
     eligible, refused = context['eligible_ids'], context['refused_ids']
-    mids = eligible[g:g+8]
+    mids = member_ids(plan,context,g)
     if (not mids or plan.get('schema') != 'native-eligible-wave-plan/1'
-            or plan.get('campaign_scope') != SCOPE or plan.get('dispatch_protocol') != PROTOCOL
-            or plan.get('dataset_id') != DATASET or context['dataset_id'] != DATASET
+            or plan.get('campaign_scope') != p.scope or plan.get('dispatch_protocol') != PROTOCOL
+            or plan.get('dataset_id') != p.dataset or context['dataset_id'] != p.dataset
             or plan.get('generation_before') != g or type(plan.get('generation_before')) is not int
             or plan.get('generation_after') != g+len(mids)
             or plan.get('wave_id') != 'wave-%04d-%04d' % (g, g+len(mids))
@@ -168,7 +208,9 @@ def validate_plan(plan_raw, plan_sha256, *, prepared_cases, checkpoint_raw,
             or set(prepared_cases) != set(eligible)
             or eligible != sorted(set(eligible)) or refused != sorted(set(refused))
             or set(eligible) & set(refused)
-            or set(eligible) | set(refused) != {f'monomer-{i:04d}' for i in range(1, 132)}
+            or (p.producer=='grid400' and set(eligible) | set(refused)
+                != {f'monomer-{i:04d}' for i in range(1, 132)})
+            or (p.producer=='qomp' and context.get('schema')!='qomp-audited-bank-context/1')
             or type(plan.get('source')) is not str or not Path(plan['source']).is_absolute()
             or re.fullmatch('[0-9a-f]{40}', plan.get('operational_commit', '')) is None):
         raise ValueError('exact next bounded eligible wave required')
@@ -195,13 +237,14 @@ def validate_plan(plan_raw, plan_sha256, *, prepared_cases, checkpoint_raw,
 
 
 def bind_member(prepared_case, *, plan, monomer_id):
+    p=settings(plan)
     if (monomer_id not in plan['member_ids'] or prepared_case.get('monomer_id') != monomer_id
-            or prepared_case.get('campaign_scope') != 'eligible-bank'
+            or prepared_case.get('campaign_scope') != p.prepared_scope
             or prepared_case.get('schema') != 'native-selected-molecular-pilot/1'
             or prepared_case.get('dataset_mode') != 'awaiting-audited-bootstrap'):
         raise ValueError('unmodified eligible prepared wave member required')
-    return dict(copy.deepcopy(prepared_case), campaign_scope=SCOPE, dispatch_protocol=PROTOCOL,
-        dataset_mode='append', dataset_id=DATASET, wave_id=plan['wave_id'],
+    return dict(copy.deepcopy(prepared_case), campaign_scope=p.scope, dispatch_protocol=PROTOCOL,
+        dataset_mode='append', dataset_id=p.dataset, wave_id=plan['wave_id'],
         bootstrap_context_sha256=plan['bootstrap_context_sha256'],
         checkpoint_sha256=plan['predecessor_sha256'],
         predecessor_snapshot_sha256=plan['predecessor_snapshot_sha256'],
@@ -211,10 +254,11 @@ def bind_member(prepared_case, *, plan, monomer_id):
 def validate_registration(plan, registration_raw, registration_sha256, *,
                           predecessor_snapshot, cases, captures, registered_snapshot):
     reg = decoded(registration_raw, registration_sha256)
+    p=settings(plan)
     _identity(reg, plan)
     base = helper('dataset_guard')
     if (reg.get('schema') != 'native-eligible-wave-registration/1'
-            or reg.get('campaign_scope') != SCOPE or reg.get('member_ids') != plan['member_ids']
+            or reg.get('campaign_scope') != p.scope or reg.get('member_ids') != plan['member_ids']
             or set(reg.get('members', {})) != set(plan['member_ids'])
             or set(captures) != set(plan['member_ids']) or set(cases) != set(plan['member_ids'])
             or reg.get('bootstrap_context_sha256') != plan['bootstrap_context_sha256']
@@ -233,10 +277,10 @@ def validate_registration(plan, registration_raw, registration_sha256, *,
         slot, case, views = reg['members'][mid], cases[mid], captures[mid]
         name, spec = case['entry']['name'], case['specification_name']
         identifier, actual_job = positive(slot['record_id']), job(slot['science_job_id'])
-        if identifier in helper('grid400_bank_policy').PROTECTED_RECORDS:
+        if identifier in p.protected:
             raise ValueError('protected historical record cannot enter wave registration')
         positive(slot['molecule_id'])
-        tag = 'ccasp-native-grid400-bank-'+mid+'-'+actual_job
+        tag = p.namespace+mid+'-'+actual_job
         if (set(views) != {'before', 'entry', 'record'}
                 or slot['case_sha256'] != plan['members'][mid]['case_sha256']
                 or slot['entry_name'] != name or slot['specification_name'] != spec
@@ -281,7 +325,7 @@ def validate_release_permit(plan, plan_sha256, registration, registration_sha256
     permit = decoded(permit_raw)
     expected = dict(schema='native-eligible-wave-release-permit/1', dispatch_protocol=PROTOCOL,
         wave_id=plan['wave_id'], plan_sha256=plan_sha256,
-        registration_sha256=registration_sha256, dataset_id=DATASET,
+        registration_sha256=registration_sha256, dataset_id=settings(plan).dataset,
         predecessor_sha256=plan['predecessor_sha256'],
         dispatch_intent_sha256=registration['dispatch_intent_sha256'],
         members=permit_members(registration))
@@ -292,12 +336,13 @@ def validate_release_permit(plan, plan_sha256, registration, registration_sha256
 
 
 def validate_registered_slot(plan, registration, release_permit, draft, *, allocation=None):
+    p=settings(plan)
     mid = draft['monomer_id']
     if mid not in plan['member_ids']:
         raise ValueError('undeclared wave member')
     slot = registration['members'][mid]
     _identity(draft, plan)
-    if (draft.get('campaign_scope') != SCOPE or draft.get('dataset_mode') != 'append'
+    if (draft.get('campaign_scope') != p.scope or draft.get('dataset_mode') != 'append'
             or digest(encode(draft)) != slot['case_sha256']
             or release_permit['members'] != permit_members(registration)
             or draft['checkpoint_sha256'] != plan['predecessor_sha256']
@@ -306,7 +351,7 @@ def validate_registered_slot(plan, registration, release_permit, draft, *, alloc
     if allocation is not None:
         if allocation.get('JobId') != slot['science_job_id']:
             raise ValueError('SCI allocation differs from registered actual job')
-        profile = helper('grid400_bank_policy').validate_profile(draft['execution_profile'])
+        profile = p.profile.validate_profile(draft['execution_profile'])
         expected = dict(Account='gts-cs207-chemx', QOS='embers', Partition='cpu-small',
             NumCPUs=str(profile['cores']), NumNodes='1',
             MinMemoryNode=str(profile['job_memory_GiB'])+'G', TimeLimit=profile['time_limit'])
@@ -387,6 +432,7 @@ def completed_accounting(raw, actual_job):
 def _member_receipts(plan, reg, permit, barrier_sha, mid, receipts, delivered, final):
     """Scientific evidence checks are unchanged; authority is explicitly wave-only."""
     serial, base = helper('audited_bank'), helper('dataset_guard')
+    p=settings(plan)
     if set(receipts) != {'audit', 'outcome', 'case', 'envelope'}:
         raise ValueError('complete member audit receipts required')
     audit, outcome, case, envelope = (decoded(receipts[key])
@@ -397,8 +443,8 @@ def _member_receipts(plan, reg, permit, barrier_sha, mid, receipts, delivered, f
     if (len(tensor) != artifact['size'] or len(tensor) > 16*1024**2
             or digest(tensor) != artifact['sha256']):
         raise ValueError('actual audited member tensor bytes differ')
-    common = dict(campaign_scope=SCOPE, dispatch_protocol=PROTOCOL, dataset_mode='append',
-        producer_profile='grid400', campaign=case['campaign'], wave_id=plan['wave_id'], dataset_id=DATASET,
+    common = dict(campaign_scope=p.scope, dispatch_protocol=PROTOCOL, dataset_mode='append',
+        producer_profile=p.producer, campaign=case['campaign'], wave_id=plan['wave_id'], dataset_id=p.dataset,
         monomer_id=mid, record_id=slot['record_id'], compute_tag=slot['compute_tag'],
         bootstrap_context_sha256=plan['bootstrap_context_sha256'],
         checkpoint_sha256=plan['predecessor_sha256'],
@@ -406,7 +452,7 @@ def _member_receipts(plan, reg, permit, barrier_sha, mid, receipts, delivered, f
         plan_sha256=reg['plan_sha256'], registration_sha256=permit['registration_sha256'],
         release_permit_sha256=digest(encode(permit)),
         dispatch_intent_sha256=reg['dispatch_intent_sha256'],
-        runtime_unchanged=True, scientific_build_commit=serial.SCIENCE,
+        runtime_unchanged=True, scientific_build_commit=p.science,
         pilot_sha256=digest(receipts['case']),
         worker_preflight_sha256=slot['worker_preflight_sha256'],
         execution_profile=case['execution_profile'])
@@ -417,7 +463,12 @@ def _member_receipts(plan, reg, permit, barrier_sha, mid, receipts, delivered, f
         if any(encode(item.get(key)) != encode(value) for key, value in common.items()):
             raise ValueError('member report wave bindings differ')
     preservation = audit.get('captured_preservation', {})
-    if (audit.get('status') != 'PASS_SELECTED_WAVE_CASE_SINGLETON_EVIDENCE'
+    if p.producer=='qomp':
+        q=helper('qomp_wave_policy').helper('qomp_expansion').helper('qualified_qomp')
+        if (outcome.get('producer_binding_sha256')!=q.RECEIPT_SHA256['qualification']
+                or outcome.get('installed_qualification_sha256')!=q.RECEIPT_SHA256['qualification']):
+            raise ValueError('actual QOMP installed qualification receipt required')
+    if (audit.get('status') != p.audit_status
             or audit.get('case_job') != slot['science_job_id']
             or audit.get('case_outcome_sha256') != digest(receipts['outcome'])
             or audit.get('science_barrier_sha256') != barrier_sha
@@ -463,6 +514,7 @@ def _reduce_link(previous, context_raw, context_sha256, proofs, link):
     get = lambda key: proofs[link[key]]
     plan_raw, reg_raw, permit_raw = get('plan_sha256'), get('registration_sha256'), get('permit_sha256')
     plan, reg, permit = map(decoded, (plan_raw, reg_raw, permit_raw))
+    p=settings(plan)
     # The whole original inventory is reconstructed by campaign at entry.
     # Here case commitments must match the unchanged bootstrap inventory.
     mids = _plan_identity(plan, previous, context, context_sha256, link['predecessor_sha256'])
@@ -478,7 +530,7 @@ def _reduce_link(previous, context_raw, context_sha256, proofs, link):
         for key in ('dispatch_protocol', 'dataset_id', 'wave_id', 'bootstrap_context_sha256',
                     'checkpoint_sha256', 'predecessor_snapshot_sha256', 'prepared_case_sha256'):
             raw_case.pop(key, None)
-        raw_case.update(campaign_scope='eligible-bank', dataset_mode='awaiting-audited-bootstrap')
+        raw_case.update(campaign_scope=p.prepared_scope, dataset_mode='awaiting-audited-bootstrap')
         if (digest(encode(raw_case)) != context['prepared_case_sha256'][mid]
                 or plan['members'][mid]['prepared_case_sha256'] != digest(encode(raw_case))
                 or encode(plan['members'][mid]['execution_profile']) != encode(raw_case['execution_profile'])
@@ -518,6 +570,9 @@ def _reduce_link(previous, context_raw, context_sha256, proofs, link):
         completed_accounting(proofs[link['audit_accounting_sha256'][mid]], report['allocation']['JobId'])
     inherited = (set(previous['proof_sha256']) if 'proof_sha256' in previous
                  else _serial_required(previous, context))
+    if p.producer=='qomp':
+        inherited.update(helper('qomp_wave_policy').extra_proofs(
+            helper('qomp_wave_policy').binding_from_proofs(proofs)))
     required = set(inherited) | {link['predecessor_sha256']}
     for key in ('plan_sha256', 'registration_sha256', 'permit_sha256', 'barrier_sha256',
                 'registered_snapshot_sha256', 'final_snapshot_sha256'):
@@ -528,8 +583,8 @@ def _reduce_link(previous, context_raw, context_sha256, proofs, link):
         for values in link[field].values():
             required.update(values.values())
     anchor = previous.get('serial_anchor_sha256', link['predecessor_sha256'])
-    return dict(schema='native-audited-bank-wave-checkpoint/1', status='READ_ONLY_AUDITED_WAVE_ADVANCE',
-        campaign=context['campaign'], dataset_id=DATASET,
+    result=dict(schema=p.checkpoint_schema, status='READ_ONLY_AUDITED_WAVE_ADVANCE',
+        campaign=context['campaign'], dataset_id=p.dataset,
         eligibility_sha256=context['eligibility_sha256'], bootstrap_context_sha256=context_sha256,
         serial_anchor_sha256=anchor, previous_checkpoint_sha256=link['predecessor_sha256'],
         wave_links=previous.get('wave_links', [])+[digest(encode(link))], wave_link=copy.deepcopy(link),
@@ -537,6 +592,9 @@ def _reduce_link(previous, context_raw, context_sha256, proofs, link):
         audited_records=previous['audited_records']+[reg['members'][mid]['record_id'] for mid in mids],
         snapshot=final, snapshot_sha256=helper('dataset_guard').digest(final),
         proof_sha256=sorted(required))
+    if p.producer=='qomp':
+        result.update(producer_profile='qomp',producer_authority=p.manifest)
+    return result
 
 
 def reduce_wave(previous_raw, previous_sha256, context_raw, context_sha256, proofs, *, link):
@@ -547,6 +605,7 @@ def reduce_wave(previous_raw, previous_sha256, context_raw, context_sha256, proo
 
 
 def validate_barrier(plan, reg, permit_raw, barrier_raw, *, outcomes, accounting, deliveries):
+    p=settings(plan)
     barrier, permit = decoded(barrier_raw), decoded(permit_raw)
     if (barrier.get('schema') != 'native-eligible-wave-science-barrier/1'
             or barrier.get('status') != 'ALL_SCIENCE_POSITIVELY_VERIFIED'
@@ -569,10 +628,10 @@ def validate_barrier(plan, reg, permit_raw, barrier_raw, *, outcomes, accounting
         if (digest(accounting[mid]) != member['accounting_sha256']
                 or helper('dataset_guard').digest(deliveries[mid]) != member['delivery_snapshot_sha256']
                 or outcome.get('allocation', {}).get('JobId') != slot['science_job_id']
-                or outcome.get('dataset_id') != DATASET or outcome.get('monomer_id') != mid
-                or outcome.get('campaign_scope') != SCOPE
+                or outcome.get('dataset_id') != p.dataset or outcome.get('monomer_id') != mid
+                or outcome.get('campaign_scope') != p.scope
                 or outcome.get('dispatch_protocol') != PROTOCOL
-                or outcome.get('producer_profile') != 'grid400'
+                or outcome.get('producer_profile') != p.producer
                 or outcome.get('dataset_mode') != 'append'
                 or outcome.get('wave_id') != plan['wave_id']
                 or outcome.get('bootstrap_context_sha256') != plan['bootstrap_context_sha256']
