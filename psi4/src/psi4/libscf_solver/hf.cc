@@ -381,10 +381,10 @@ void HF::initialize_gtfock_jk() {
 }
 
 size_t HF::diag_scratch_size() const {
-    // DSYEVD workspace for the largest irrep: lwork = 1 + 6n + 2n^2 doubles, liwork = 3 + 5n ints
+    // Matrix::diagonalize_dsyevd workspace for the largest irrep
     size_t n = 0;
     for (int h = 0; h < nirrep_; h++) n = std::max(n, static_cast<size_t>(nsopi_[h]));
-    return 1 + 6 * n + 2 * n * n + (3 + 5 * n + 1) / 2;
+    return Matrix::dsyevd_scratch_size(n);
 }
 void HF::finalize() {
     // Clean memory off, handle diis closeout, etc
@@ -1370,36 +1370,10 @@ void HF::diagonalize_F(const SharedMatrix& Fm, SharedMatrix& Cm, std::shared_ptr
     // Form F' = X'FX for canonical orthogonalization
     auto diag_F_temp = linalg::triplet(X_, Fm, X_, true, false, false);
 
-    // Form C' = eig(F'). Divide and conquer (DSYEVD) with a queried workspace: ~2x faster than
-    // Matrix::diagonalize's DSYEV with its minimal 3N workspace, once per SCF iteration.
-    // The workspace (~2N^2) is kept across iterations, charged by scf_initialize through
-    // diag_scratch_size(), and freed in finalize().
+    // Form C' = eig(F') with DSYEVD; the workspace persists across iterations, is charged by
+    // scf_initialize through diag_scratch_size(), and is freed in finalize().
     auto diag_C_temp = std::make_shared<Matrix>(nmopi_, nmopi_);
-    for (int h = 0; h < diag_F_temp->nirrep(); h++) {
-        const int n = diag_F_temp->rowspi(h);
-        if (!n) continue;
-        // F' is a temporary and symmetric: its row-major storage is its column-major storage,
-        // and DSYEVD overwrites it with the (column-major) eigenvectors.
-        double* a = diag_F_temp->pointer(h)[0];
-        double** Cp = diag_C_temp->pointer(h);
-        double* ep = epsm->pointer(h);
-        double wq;
-        int iwq;
-        int info = C_DSYEVD('V', 'U', n, a, n, ep, &wq, -1, &iwq, -1);
-        if (!info) {
-            if (diag_work_.size() < static_cast<size_t>(wq)) diag_work_.resize(static_cast<size_t>(wq));
-            if (diag_iwork_.size() < static_cast<size_t>(iwq)) diag_iwork_.resize(iwq);
-            info = C_DSYEVD('V', 'U', n, a, n, ep, diag_work_.data(), (int)diag_work_.size(), diag_iwork_.data(),
-                            (int)diag_iwork_.size());
-        }
-        if (info) {
-            // fall back to the reference path (F' was overwritten: form it again)
-            linalg::triplet(X_, Fm, X_, true, false, false)->diagonalize(diag_C_temp, epsm);
-            break;
-        }
-        for (int i = 0; i < n; i++)
-            for (int j = 0; j < n; j++) Cp[i][j] = a[static_cast<size_t>(j) * n + i];
-    }
+    diag_F_temp->diagonalize_dsyevd(*diag_C_temp, *epsm, diag_work_, diag_iwork_);
 
     // Form C = XC'
     Cm->gemm(false, false, 1.0, X_, diag_C_temp, 0.0);

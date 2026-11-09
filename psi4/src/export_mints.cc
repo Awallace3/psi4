@@ -608,6 +608,12 @@ void export_mints(py::module& m) {
              "Diagonalizes this matrix, space for the eigvectors and eigvalues must be created by caller. Only for "
              "symmetric matrices.",
              "eigvectors"_a, "eigvalues"_a, "order"_a = ascending)
+        .def(
+            "diagonalize_dsyevd",
+            [](Matrix& self, Matrix& eigvectors, Vector& eigvalues) { self.diagonalize_dsyevd(eigvectors, eigvalues); },
+            "Diagonalizes this symmetric matrix with LAPACK DSYEVD (ascending eigenvalues); this matrix is unchanged. "
+            "Space for the eigvectors and eigvalues must be created by caller.",
+            "eigvectors"_a, "eigvalues"_a)
         .def("cholesky_factorize", &Matrix::cholesky_factorize,
              "Computes the Cholesky factorization of a real symmetric positive definite matrix")
         .def(
