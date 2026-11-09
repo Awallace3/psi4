@@ -607,6 +607,8 @@ partition, concurrency and256GiB byte value. Only profile identity and
 estimated files differ:65536/attempt with explicit
 `scratch_files_kind=engineering_estimate_not_hard_cap`.
 Old `grid400_bank_policy.py`,131072 dicts and historical receipts are unchanged.
+The parent approved the65536 engineering estimate within the user's requested
+optimization; the user did not explicitly select the numeric value65536.
 
 Evidence/rationale: source-controlled native subtotal1671 is conditional;
 defensively allowing a second PSIO domain gives2171.65536 leaves63365 further
