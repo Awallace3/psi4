@@ -358,7 +358,9 @@ def perform(args):
     preflight = json.loads(args.worker_preflight.read_bytes())
     if qomp and checks.digest(args.worker_preflight)!=getattr(args,'worker_preflight_sha256',None):
         raise ValueError('parent-observed worker preflight digest required for independent audit')
-    transport = (q.dataset().transport_binding(producer='qomp') if qomp else wave.helper('bank_wave_transport').transport_binding() if wave_mode
+    transport = (wave.helper('bank_wave_transport').transport_binding(
+                    **(dict(producer='qomp') if qomp else {})) if wave_mode
+                 else q.dataset().transport_binding(producer='qomp') if qomp
                  else helper('bank_dataset').transport_binding() if bank
                  else helper('dataset_fresh_cb63305').transport_binding(producer=producer))
     bootstrap.validate_preflight(preflight, draft, manifest_sha=checks.digest(manifest_path),
@@ -526,6 +528,13 @@ def perform(args):
                       'No full-C10, independent solver, covariance, accuracy/parity or whole-set claim.')
     if producer in ('ed561666', 'grid400'):
         report.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
+    if bank:
+        report['campaign_scope'] = scope
+    if wave_mode:
+        report.update(wave.started_fields(binding), campaign=draft['campaign'],
+            compute_tag=outcome['compute_tag'],
+            worker_preflight_sha256=checks.digest(args.worker_preflight),
+            science_barrier_sha256=binding['science_barrier_sha256'])
     if qomp:
         report.update(producer_profile='qomp',dataset_mode='append' if serial or wave_mode else 'fresh',campaign_scope=scope,
             status=('PASS_QOMP_WAVE_CASE_EVIDENCE' if wave_mode else
@@ -534,13 +543,6 @@ def perform(args):
         if not passed:
             raise RuntimeError('QOMP independent numeric/export/trace audit failed')
         return output/'audit-report.json',report
-    if bank:
-        report['campaign_scope'] = scope
-    if wave_mode:
-        report.update(wave.started_fields(binding), campaign=draft['campaign'],
-            compute_tag=outcome['compute_tag'],
-            worker_preflight_sha256=checks.digest(args.worker_preflight),
-            science_barrier_sha256=binding['science_barrier_sha256'])
     if wave_mode:
         wave.write_json_once(output/'audit-report.json', report)
     else:

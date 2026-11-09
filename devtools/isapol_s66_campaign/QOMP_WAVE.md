@@ -14,6 +14,10 @@ Earlier metadata discovery failure is not such evidence. No force/skip flag
 or automatic activation is provided. Do not deploy/bind plans to a dormant
 HEAD and then advance that checkout. Parent must explicitly approve the final
 activation revision BEFORE creating its first immutable wave plan.
+While inactive, ALL controller actions, including `remote initialize` and
+the public initializer, refuse before plan publication/control/server access.
+Inactive metadata validation is only `qomp_wave_policy.load_adoption`, which
+does not create a plan or activate anything.
 
 ## Fixed authority, distinct revisions
 

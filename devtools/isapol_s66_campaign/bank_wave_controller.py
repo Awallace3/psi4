@@ -846,6 +846,7 @@ class Production:
     def initialize(self):
         """Only after positive serial cutover or a verified accepted wave."""
         if self.qomp:
+            self.require_enabled()
             return self._initialize_qomp()
         campaign, core = self.bank, self.core
         state = read(self.args.predecessor_state)
@@ -1116,8 +1117,7 @@ def main():
     native = helper('native_controller')
     qomp=args.producer=='qomp'
     if qomp:
-        if (not helper('qomp_wave_policy').PRODUCTION_ENABLED
-                and not (args.mode=='remote' and args.action=='initialize')):
+        if not helper('qomp_wave_policy').PRODUCTION_ENABLED:
             raise RuntimeError('QOMP wave activation disabled pending actual failure-lifecycle evidence/review')
         helper('qomp_execution').helper('phoenix_installed_checks').qomp_engine().qomp_enter()
         helper('bank_wave').sha(args.adoption_sha256)
