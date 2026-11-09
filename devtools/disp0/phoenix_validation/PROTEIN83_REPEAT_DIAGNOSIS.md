@@ -366,3 +366,53 @@ Official hourly watcher:`be362e84f`.
 
 The immutable native source remains`e0da305c02`; no Protein83 benchmark
 retry or new accepted speedup is implied by this correctness submission.
+
+### Physical gate15323651 passed
+
+Completed in3min32s; job, batch and step exited0 with no TERM. The real
+device was NVIDIA H200/sm90, driver615.71.09. All **six native JK tests
+passed with zero skips, failures or errors**, including the requested-cutoff
+CPU/GPU comparison. The worker returned0 with no retirement; its owned
+process group was reaped.
+
+The frozen small gate also passed: unscaled, scaled and changed-geometry
+CPU/GPU calculations, all three independent same-gauge CPU oracles, and the
+fresh GPU repeat returned0. Its status is`PASS_SMALL_H200_ONLY` with
+`gpu_small_case_correctness_verified=true`. Scratch cleanup completed.
+The combined status is`PASS_NATIVE_JK_AND_SMALL_GPU_GATES`.
+
+| Artifact beneath`native-jk-regression-a3434ede73-01/job-15323651/` | SHA256 |
+|---|---|
+| `diagnostic-result.json` | `1108303b704f7cda227324ef705bc1157b82fb4077029c370def47d2727790ca` |
+| `r0/probe-result.json` | `b62beea247956f4b7713bedeb3094408d4bf2616d436b1b0fd526b419e540f8b` |
+| `r0/native-jk.xml` | `8e1dd1d9b4e33cae6df968fd636bb94ee7072e4ddfd897240660b805255b8e8b` |
+| `small-gate/gate-result.json` | `e56dd6ae7125f3b73648dfc0dd52fbcaa3ce2fa771364e0d0b1234eeca0b4709` |
+
+These validate the native configuration correction at small size, not
+Protein83 repeatability or a whole-system speedup. The next controlled
+experiment uses the unchanged frozen Protein83/def2-SVP geometry and
+three fresh unprofiled GPU processes followed by a separate stage trace.
+All original repeat and independent-oracle tolerances remain unchanged;
+CPU reference jobs wait for a complete successful GPU producer.
+
+### Corrected Protein83/SVP producer submitted15337409
+
+Submitted **15337409** using the same frozen outer`a3434ede73` and native
+source/build`e0da305c02`. Read-back route:
+`gts-cs207-chemx / gpu-h200 / embers`,1H200,8CPUs,160GiB,8h cap,
+initially PENDING for Priority. Test-only15337408 is not the allocation.
+Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/native-fit-stage-e0da305c02-01-protein83-def2-svp-gpu`.
+Manifest SHA256:
+`9dfc4639e01d6ed7a92b4aa19980b3025accac42091af2f75dd2d163454039ba`.
+Runtime-config SHA256:
+`8c2214fa5c18991d62530776c930d156c285c94b86c9f08ec31e44874ea1d102`.
+Official hourly watcher:`badef46ed`.
+
+The83-atom/766-AO case uses the original frozen SVP input manifest
+`e93a40f2ca961461cb98ba423b8eff5f199d7b201a0925185c80fff610dfe327`,
+96GiB Psi4 host budget,120GiB device limit and12GiB native reservation.
+Only native fitting policy differs from the prior candidate. It must pass
+the original three-process strict repeat checks before the separate trace
+and independent CPU reference/oracle qualification. No automatic retry,
+relaxed tolerance, Protein157 calculation or accepted speedup was added.
