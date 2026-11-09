@@ -448,3 +448,47 @@ No third baseline, separate term trace or CPU speedup qualification ran.
 The next narrow check reuses the existing fixed-density native-JK probe
 on this candidate's saved r0 coefficients, separating plan reconstruction
 from SCF iteration without another full F-SAPT calculation or tolerance change.
+
+### Candidate fixed-density control submitted15356916
+
+Uses the existing frozen outer`a3434ede73`, candidate source/build`e0da305c02`,
+and the SHA-verified coefficient snapshot from15337409/r0. Submitted
+**15356916** on`gts-cs207-chemx / gpu-h200 / embers`,1H200,8CPUs,
+160GiB,30min, initially PENDING for Priority. Test-only15356915 is not
+the job. Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/fixed-density-native-fit-e0da305c02-01`.
+Manifest SHA256:
+`9e0771990e7c0e514bb23c5f3dfc39855fd352db8803561e838b179bec51f647`.
+Runtime-config SHA256:
+`b322568e7edf00741b0e0ff0f6d1f8a6b643f2fc360c33fd1148a1bef35c5f84`.
+Official hourly watcher:`ba9bea0e0`.
+
+Three fresh processes each construct three native DF plans and compute
+four times with identical saved coefficients. No SCF/F-SAPT is executed;
+this is a narrow reconstruction diagnostic, not a benchmark retry.
+
+### Separating numerical drift from the measured performance bottleneck
+
+The saved native headers explicitly show MATRIXPOWER/relative cutoff. The
+candidate's final HF energies nevertheless vary across the two completed
+workers:
+
+| HF segment | r0/Eh | r1/Eh |
+|---|---:|---:|
+| Dimer | -1752.51662912535357 | -1752.51662915877228 |
+| Monomer A | -984.96510089530545 | -984.96510089744891 |
+| Monomer B | -767.55240647327378 | -767.55240649350276 |
+
+The third raw induction-scaling scalar changes from-0.0003204614669364543
+to-0.00032048530184509397Eh. The induction factor changes1.36247301725933
+to1.36249997600395; the signed dispersion sum changes only-5.75423e-12Eh.
+Thus dispersion-cache tuning and upstream HF/delta-HF stability are separate
+questions. Neither is evidence for relaxing the existing acceptance contract.
+
+The saved r0 dispersion work report independently reveals871native producer
+batches and224.041s in the blocked call, with219.040s inclusive producer
+wall time. Its64MiB cache retains only a short S tail. Full packed S reuse
+requires2.770GiB and predicts59batches with870unchanged contractions.
+The proposed [fixed-gauge cache diagnostic](FIXED_GAUGE_CACHE.md) tests that
+work-count opportunity on the **same saved wavefunction and one native plan**,
+without SCF, full F-SAPT, a source overlay or a new accepted speedup.

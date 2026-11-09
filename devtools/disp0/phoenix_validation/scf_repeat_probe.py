@@ -1,4 +1,4 @@
-"""Fixed-density cold/warm native JK control. Never an accepted SAPT benchmark."""
+"""Native JK controls and fixed-gauge cache diagnostics, never accepted SAPT timings."""
 import argparse
 import hashlib
 import json
@@ -193,6 +193,10 @@ def child(manifest, config, build, output):
         runtime.psi4.set_num_threads(config["threads"])
         run(runtime,manifest,output)
         return
+    if manifest.get("mode")=="cache-profile":
+        from fixed_gauge_cache_probe import run
+        runtime.guarded_call(run,runtime,manifest,output)
+        return
     doc = require_reference(manifest)
     source = Path(doc["options"]["fisapt_fsapt_filepath"]).parent
     if source != Path(manifest["reference_result"]).parent:
@@ -290,10 +294,11 @@ def execute(path, worker=False, output=None):
     manifest = json.loads(path.read_text())
     gpu=manifest["kind"]=="gpu"
     native_tests=manifest.get("mode")=="native-tests"
+    cache_profile=manifest.get("mode")=="cache-profile"
     if manifest["kind"] not in ("gpu","cpu"):
         raise ValueError("Explicit independent GPU/CPU diagnostic role required")
-    if native_tests and not gpu:
-        raise ValueError("Native GPU regressions cannot run on CPU allocation")
+    if (native_tests or cache_profile) and not gpu:
+        raise ValueError("Native/cache GPU diagnostics cannot run on CPU allocation")
     if digest(path) != os.environ["DISP0_MANIFEST_SHA256"]:
         raise RuntimeError("Frozen diagnostic manifest changed")
     clean(Path(manifest["source"]), manifest["science_pin"])
@@ -337,7 +342,7 @@ def execute(path, worker=False, output=None):
                 raise RuntimeError("CPU control needs actual local scratch and 256GiB headroom")
             report["scratch_mount"]=mount
         deadline = time.monotonic()+WALL-180
-        for repeat in range(REPEATS if gpu and not native_tests else 1):
+        for repeat in range(REPEATS if gpu and not (native_tests or cache_profile) else 1):
             out = root/f"r{repeat}"
             out.mkdir()
             work = scratch/f"r{repeat}"
@@ -357,7 +362,7 @@ def execute(path, worker=False, output=None):
             with (out/"stdout").open("x") as stdout, (out/"stderr").open("x") as stderr, \
                     retirement_channel(env) as channel:
                 code = execute_owned(argv, env, stdout, stderr,
-                    min(900 if native_tests else 500 if gpu else 1500,
+                    min(900 if native_tests else 1500 if cache_profile else 500 if gpu else 1500,
                         deadline-time.monotonic()),
                     groups.add, reaped=groups.discard,
                     pass_fds=channel.pass_fds)
@@ -366,6 +371,13 @@ def execute(path, worker=False, output=None):
             if code or row["retirement_reason"] is not None or groups:
                 raise RuntimeError("Fixed-density diagnostic worker failed")
             doc = json.loads((out/"probe-result.json").read_text())
+            if cache_profile:
+                from fixed_gauge_cache_probe import verify
+                doc=verify(out,manifest)
+                row.update(result_sha256=digest(out/"probe-result.json"),pid=doc["pid"])
+                report["cache_diagnostic"]=doc
+                write(root/"diagnostic-result.json",report)
+                continue
             if native_tests:
                 from native_jk_regression import junit_summary
                 if (doc["status"]!="PASS_NATIVE_JK_GPU_REGRESSION_ONLY"
@@ -396,7 +408,9 @@ def execute(path, worker=False, output=None):
                 raise RuntimeError("Distinct fresh process identities required")
             row["pid"] = doc["pid"]
             write(root/"diagnostic-result.json", report)
-        if native_tests:
+        if cache_profile:
+            report["status"]="PASS_FIXED_GAUGE_CACHE_DIAGNOSTIC"
+        elif native_tests:
             gate=root/"small-gate"
             gate.mkdir()
             argv=[sys.executable,"-B",str(Path(manifest["source"])/
@@ -428,7 +442,7 @@ def execute(path, worker=False, output=None):
                                 for p in range(PLANS)]})
         else:
             report["independent_native_CPU_comparison"]=cpu_comparison(root,manifest,doc)
-        if not native_tests:
+        if not (native_tests or cache_profile):
             report["status"] = "EXECUTED_FIXED_DENSITY_DIAGNOSTIC_ONLY"
     except BaseException as error:
         report.update(status="FAILED", error=f"{type(error).__name__}: {error}")
@@ -444,6 +458,9 @@ def execute(path, worker=False, output=None):
 
 
 def submit(args):
+    cache_profile=getattr(args,"mode","fixed-density")=="cache-profile"
+    if cache_profile and args.kind!="gpu":
+        raise ValueError("Fixed-gauge cache diagnostic requires H200")
     outer = Path(__file__).resolve().parents[3]
     pin = subprocess.check_output(["git", "-C", str(outer), "rev-parse", "HEAD"], text=True).strip()
     clean(outer, pin)
@@ -484,6 +501,9 @@ def submit(args):
                 "reference_config_sha256": digest(base_path), "inputs": peer["inputs"],
                 "inputs_sha256": peer["inputs_sha256"], "account": "gts-cs207-chemx",
                 "qos": "embers", "allocation_wall_seconds": WALL}
+    if cache_profile:
+        from fixed_gauge_cache_probe import SCOPE as CACHE_SCOPE
+        manifest.update(mode="cache-profile",scope=CACHE_SCOPE)
     require_reference(manifest)
     from full_inputs import load_point
     _, dimensions = load_point(Path(manifest["inputs"]), manifest["inputs_sha256"], "protein83")
@@ -545,7 +565,8 @@ def main():
     parser.add_argument("--root", type=Path)
     parser.add_argument("--kind",choices=("gpu","cpu"),default="gpu")
     parser.add_argument("--gpu-control",type=Path)
-    parser.add_argument("--mode",choices=("fixed-density","native-tests"),default="fixed-density")
+    parser.add_argument("--mode",choices=("fixed-density","native-tests","cache-profile"),
+                        default="fixed-density")
     args = parser.parse_args()
     if args.execute or args.worker:
         path = (args.execute or args.worker).resolve(strict=True)
