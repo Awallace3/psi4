@@ -515,3 +515,40 @@ Replay source SHA256:
 `75149b9be29bf9da08f93170bf1225e360fce638cfcb2e143208ba1bc0457492`.
 Derived`offline-diagnosis.json` SHA256:
 `a45fc1866a8269a76d5ff798f32b9f7a8536ca977d4c4c70eb9c1ae828ce5553`.
+
+### Candidate fixed-density control15356916 completed
+
+Completed in51s, job/batch/step exit0 with no TERM. All three workers
+returned0, reported no retirement and reaped their groups; scratch cleanup
+completed. All used candidate`e0da305c02`, native cuEST on H200 and requested
+fitting condition1e-10. No SCF or F-SAPT ran.
+
+All36computes used one coefficient SHA256:
+`8d1893cd861c5f2533cf96a486a15fa365a7b9eddc8b91c1f53edfd04af7d2f0`,
+and one identical actual-density hash. Within a single plan, J was bitwise
+identical; K changed at most4.50e-16 and the fixed-D closed-shell JK energy
+changed at most4.95e-16Eh.
+
+Reconstruction still changes the native operator with **identical inputs**:
+
+| Recorded comparison | Largest absolute fixed-D JK energy difference/Eh |
+|---|---:|
+| Cold to warm plan, same process | 6.106303081240031e-9 |
+| Warm to warm plan, same process | 9.099074785266641e-9 |
+| Same plan position across fresh processes | 7.406552424219383e-9 |
+
+Thus SCF stopping is not necessary for candidate nanohartree-scale drift.
+The early-FP64/relative-MATRIXPOWER/actual-cutoff correction does not remove
+the native-plan reconstruction floor. The particular internal reduction or
+factorization cause remains unproven. These recorded differences are not a
+new scalar tolerance or an independent absolute-accuracy oracle.
+
+Final diagnostic SHA256:
+`7289b071e9e5756c69449889d0f4e9a06acbb5eca4efbd46920f7b512f226d20`.
+Worker report SHA256 values:
+`4c4659e6c07ca66548924dcf8090e65ea648fb2c6ab43704736228364adfedcc`,
+`901a04e3c89583281347422480cdaba7ce1c1d146810f27d97c56325cb7e95a9`,
+`a004e4ea924838f6c6a3f4ba95519f138bf71fca9d7f07f6b2729ed276a1e563`.
+Accepted speedup count remains0; another identical whole-protein retry is
+not justified by this control. The independent fixed-gauge cache experiment
+15357943 addresses measured dispersion work, not this native SCF issue.
