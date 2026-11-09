@@ -416,3 +416,35 @@ Only native fitting policy differs from the prior candidate. It must pass
 the original three-process strict repeat checks before the separate trace
 and independent CPU reference/oracle qualification. No automatic retry,
 relaxed tolerance, Protein157 calculation or accepted speedup was added.
+
+### Corrected producer15337409 failed strict repeat qualification
+
+The allocation ended FAILED1:0 after18min01s, without TERM/preemption.
+Both scientific workers completed with exit0, no retirement and reaped
+owned groups; scratch cleanup completed. The small gate passed again.
+The controller deliberately stopped at the first original repeat check:
+
+| Quantity | r0 | r1 |
+|---|---:|---:|
+| Whole energy seconds (unqualified) | 413.3834446980618 | 412.51351631607395 |
+| Interaction energy/Eh | -0.00543611225425122 | -0.005436123306273349 |
+| Disp20,u/Eh | -0.006720513768427258 | -0.006720513777717313 |
+| Exch-Disp20,u/Eh | 0.0004061582885193767 | 0.0004061582920552037 |
+
+The interaction-energy difference is-1.1052022129e-8Eh, exceeding the
+unchanged atol1e-9/rtol1e-9 repeat criterion. The candidate **did not solve
+protein-scale repeatability** despite passing the new requested-cutoff
+regression. It fixes an ignored option/policy mismatch, not a demonstrated
+large-system determinism failure. This is not an OOM or scientific-worker
+crash, and the413s samples are not a new accepted speedup.
+
+Final`stage-result.json` SHA256:
+`9e3cbbe226692c24f0b4a118c97c03afb916b990ad2ece1c7b207b1098f98cf2`.
+Worker result SHA256 values:
+`9001f1445f794a40d4349c0856d5c17fffb803d44e071d17ed7ddf66464c0164`,
+`460bddb5db1b4fe31713ec8ef09c03b7abcad492798af0385de42312b7c10376`.
+
+No third baseline, separate term trace or CPU speedup qualification ran.
+The next narrow check reuses the existing fixed-density native-JK probe
+on this candidate's saved r0 coefficients, separating plan reconstruction
+from SCF iteration without another full F-SAPT calculation or tolerance change.
