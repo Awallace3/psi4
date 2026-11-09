@@ -288,3 +288,29 @@ def test_sad_frac_occ_atomic_natural_occupations(atom, geom, expected_spin_elect
 # 0  O:   4.00000000   4.00000000   8.00000000
 # 1  H:   0.50000000   0.50000000   1.00000000
 # 2  H:   0.50000000   0.50000000   1.00000000
+
+
+@pytest.mark.parametrize("method", ["hf", "b3lyp"])
+def test_scf_df_metric_cholesky(method):
+    """SCF_DF_METRIC CHOLESKY reproduces the default J^-1/2 metric well inside the DF error."""
+
+    psi4.geometry(
+        """
+        0 1
+        O  0.000000  0.000000  0.117790
+        H  0.000000  0.755453 -0.471161
+        H  0.000000 -0.755453 -0.471161
+        symmetry c1
+        """
+    )
+    psi4.set_options(
+        {"basis": "cc-pvdz", "scf_type": "mem_df", "e_convergence": 10, "d_convergence": 10}
+    )
+
+    energies = {}
+    for metric in ["eigen", "cholesky"]:
+        psi4.set_options({"scf_df_metric": metric})
+        energies[metric] = psi4.energy(method)
+        psi4.core.clean()
+
+    assert compare_values(energies["eigen"], energies["cholesky"], 8, f"{method} CHOLESKY vs EIGEN")

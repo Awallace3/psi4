@@ -78,6 +78,11 @@ class PSI_API DFHelper {
     /// defaults to 256,000,000 (2.04GB)
     ///
     void set_memory(size_t doubles) { memory_ = doubles; }
+    /// In-core symmetric AO tensors with metric power -1/2: contract with the Cholesky factor
+    /// of the metric (triangular solve) instead of J^-1/2. No eigenvalue cutoff; falls back to
+    /// J^-1/2 when the metric is singular to working precision (estimated rcond < 1e-13).
+    void set_metric_cholesky(bool on) { metric_cholesky_ = on; }
+    bool metric_cholesky() const { return metric_cholesky_; }
     size_t get_memory() { return memory_; }
     /// Free the compute_JK scratch that is otherwise kept between builds
     void clear_JK_scratch() {
@@ -362,6 +367,7 @@ class PSI_API DFHelper {
     double mpower_ = -0.5;
     double wmpower_ = -1.0;
     bool hold_met_ = false;
+    bool metric_cholesky_ = false;
     bool built_ = false;
     bool transformed_ = false;
     std::pair<size_t, size_t> info_;
@@ -411,7 +417,8 @@ class PSI_API DFHelper {
 
 
 
-    void contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* metp, size_t begin, size_t end);
+    void contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* metp, size_t begin, size_t end,
+                                      bool cholesky = false);
     void grab_AO(const size_t start, const size_t stop, double* Mp);
 
     // => wK AO building machinery <=

@@ -557,7 +557,51 @@ void DFHelper::prepare_AO_core() {
         std::unique_ptr<double[]> metric;
         double* metp;
 
-        if (!hold_met_) {
+        // Cholesky route: B = L^-1 (Q|pq) with J = L L^T has the same B^T B as J^-1/2 (Q|pq),
+        // and a triangular solve costs half the GEMM. Skips the metric eigendecomposition too.
+        bool chol = metric_cholesky_ && std::fabs(mpower_ + 0.5) < 1e-13;
+        if (chol) {
+            timer_on("DFH: metric Cholesky");
+            metric = std::unique_ptr<double[]>(new double[naux_ * naux_]);
+            metp = metric.get();
+            if (!hold_met_) {
+                std::string filename = return_metfile(1.0);
+                get_tensor_(std::get<0>(files_[filename]), metp, 0, naux_ - 1, 0, naux_ - 1);
+            } else {
+                double* Jp = metric_prep_core(1.0);
+                std::copy(Jp, Jp + naux_ * naux_, metp);
+            }
+            // 1-norm of J (symmetric: largest absolute column sum), for the condition estimate
+            double anorm = 0.0;
+            for (size_t Q = 0; Q < naux_; Q++) {
+                double s = 0.0;
+                for (size_t P = 0; P < naux_; P++) s += std::fabs(metp[Q * naux_ + P]);
+                anorm = std::max(anorm, s);
+            }
+            // column-major upper == row-major lower L
+            int info = C_DPOTRF('U', naux_, metp, naux_);
+            double rcond = 0.0;
+            if (info == 0) {
+                std::vector<double> work(3 * naux_);
+                std::vector<int> iwork(naux_);
+                C_DPOCON('U', naux_, metp, naux_, anorm, &rcond, work.data(), iwork.data());
+            }
+            timer_off("DFH: metric Cholesky");
+            // Cholesky does not truncate small metric eigenvalues as J^-1/2 does (DF_FITTING_CONDITION);
+            // at the conditioning of standard JKFIT metrics that moves energies far less than the DF
+            // error. Fall back only when the metric is singular to working precision.
+            constexpr double rcond_min = 1.0e-13;
+            if (info != 0 || rcond < rcond_min) {
+                outfile->Printf("    DFHelper: metric Cholesky not used (info %d, rcond %.2E < %.2E); using J^-1/2.\n",
+                                info, rcond, rcond_min);
+                chol = false;
+            } else if (print_lvl_ > 0) {
+                outfile->Printf("    DFHelper: metric Cholesky, rcond %.2E\n", rcond);
+            }
+        }
+        if (chol) {
+            // metp holds L
+        } else if (!hold_met_) {
             metric = std::unique_ptr<double[]>(new double[naux_ * naux_]);
             metp = metric.get();
             std::string filename = return_metfile(mpower_);
@@ -578,7 +622,7 @@ void DFHelper::prepare_AO_core() {
 
             // contract metric
             timer_on("DFH: AO-Met. Contraction");
-            contract_metric_AO_core_symm(Mp, ppq, metp, begin, end);
+            contract_metric_AO_core_symm(Mp, ppq, metp, begin, end, chol);
             timer_off("DFH: AO-Met. Contraction");
         }
         // no more need for metrics
@@ -1647,7 +1691,8 @@ void DFHelper::contract_metric_AO_core(double* Qpq, double* metp) {
     }
 }
 
-void DFHelper::contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* metp, size_t begin, size_t end) {
+void DFHelper::contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* metp, size_t begin, size_t end,
+                                            bool cholesky) {
     // Qpq holds, for each p in [begin, end], a (naux x mi) block of the significant q >= p.
     // One small DGEMM per p re-streams the whole (naux x naux) metric from memory for every p,
     // so instead gather runs of p into a dense (naux x ncol) panel, contract it with a single
@@ -1693,7 +1738,13 @@ void DFHelper::contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* me
         timer_off("DFH: AO-Met. gather");
 
         timer_on("DFH: AO-Met. GEMM");
-        C_DGEMM('N', 'N', naux_, ncol, naux_, 1.0, metp, naux_, panel.data(), ncol, 0.0, out.data(), ncol);
+        if (cholesky) {
+            // panel <- L^-1 panel (row-major lower L)
+            C_DTRSM('L', 'L', 'N', 'N', naux_, ncol, 1.0, metp, naux_, panel.data(), ncol);
+            std::swap(panel, out);
+        } else {
+            C_DGEMM('N', 'N', naux_, ncol, naux_, 1.0, metp, naux_, panel.data(), ncol, 0.0, out.data(), ncol);
+        }
         timer_off("DFH: AO-Met. GEMM");
 
         timer_on("DFH: AO-Met. scatter");
