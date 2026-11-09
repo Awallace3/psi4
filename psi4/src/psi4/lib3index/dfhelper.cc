@@ -511,6 +511,15 @@ void DFHelper::prepare_AO_wK() {
     std::vector<std::pair<size_t, size_t>> psteps;
     std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_, 0, psteps);
 }
+size_t DFHelper::metric_panel_cols() const {
+    // Width of the dense (naux x ncol) panels contract_metric_AO_core_symm gathers runs of p into:
+    // ~8192 columns (or nbf), but never more than the significant (p, q >= p) columns that exist.
+    // A tight budget may cap it (panel_cols_cap_), down to nbf, which any single p fits in.
+    const size_t total = (naux_ && symm_big_skips_.size() == nbf_ + 1) ? symm_big_skips_[nbf_] / naux_ : nbf_;
+    size_t cols = std::max<size_t>(8192, nbf_);
+    if (panel_cols_cap_) cols = std::min(cols, std::max(panel_cols_cap_, nbf_));
+    return std::max<size_t>(1, std::min(cols, total));
+}
 size_t DFHelper::AO_core_init_scratch() const {
     // two (naux x panel) panels and the significant-q index lists in contract_metric_AO_core_symm,
     // plus the copy of J the Cholesky route factors when the metric is held in core
@@ -536,6 +545,14 @@ void DFHelper::prepare_AO_core() {
 
     // determine blocking, leaving room for the metric contraction's panels (and Cholesky copy)
     std::vector<std::pair<size_t, size_t>> psteps;
+    // Under a tight budget give the panels at most half of what the AOs and the metric leave.
+    panel_cols_cap_ = 0;
+    {
+        const size_t fixed = big_skips_[nbf_] + (hold_met_ ? naux_ * naux_ : 0);
+        const size_t spare = memory_ > fixed ? memory_ - fixed : 0;
+        const size_t panels = AO_core_init_scratch();
+        if (panels > spare / 2) panel_cols_cap_ = std::max<size_t>(1, spare / 2 / (2 * naux_));
+    }
     const size_t init_scratch = AO_core_init_scratch();
     if (init_scratch >= memory_) throw PSIEXCEPTION("DFHelper: not enough memory for the metric contraction panels.");
     std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_ - init_scratch, 1, psteps);
