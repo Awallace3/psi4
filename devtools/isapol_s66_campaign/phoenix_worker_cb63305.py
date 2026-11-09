@@ -32,7 +32,7 @@ HELPERS = {
     'grid400_policy',
     'grid400_bank_policy', 'bank_campaign', 'bank_dataset', 'bank_store',
     'bank_wave_runtime',
-    'qomp_campaign','qomp_execution',
+    'qomp_campaign','qomp_execution','qomp_expansion',
 }
 _MODULES = {}
 
@@ -62,8 +62,8 @@ def selected_producer(args):
 
 def validate_campaign_scope(producer, scope):
     if producer=='qomp':
-        if scope!='qomp-pilot':
-            raise ValueError('qomp requires its explicit fresh serial pilot scope')
+        if scope not in ('qomp-pilot','qomp-serial'):
+            raise ValueError('qomp requires an explicit pilot or audited serial scope')
         return scope
     if (type(scope) is not str or scope not in ('default', 'eligible-bank', 'eligible-wave')
             or scope in ('eligible-bank', 'eligible-wave') and producer != 'grid400'):
@@ -89,8 +89,8 @@ def source_names(producer='cb63305', *, remaining_case=False, campaign_scope='de
     if type(remaining_case) is not bool:
         raise ValueError('explicit worker case mode required')
     if producer=='qomp':
-        if remaining_case:
-            raise ValueError('qomp append/wave execution is not implemented in148A')
+        if remaining_case is not (campaign_scope=='qomp-serial'):
+            raise ValueError('QOMP serial requires audited append mode')
         return tuple(dict.fromkeys(SOURCES+helper('qomp_execution').SOURCE_NAMES))
     if producer == 'grid400' and remaining_case and campaign_scope == 'default':
         raise ValueError('grid400 is fresh singleton only, never a remaining case')
@@ -147,6 +147,8 @@ def prepare_draft(args, manifest_path):
     """Reconstruct either the archived first-case shape or a full remaining case."""
     producer = selected_producer(args)
     if producer=='qomp':
+        if selected_scope(args)=='qomp-serial':
+            return helper('qomp_expansion').verify_prepared_from_paths(args)
         return helper('qomp_campaign').verify_prepared_from_paths(args)
     if selected_scope(args) == 'eligible-wave':
         return helper('bank_wave_runtime').prepare_draft(args, manifest_path)
@@ -185,10 +187,11 @@ def main():
     for name in ('build', 'qualification', 'inputs', 'descriptors', 'pilot', 'run'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
+    parser.add_argument('--bootstrap-sha256')
     parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400','qomp'), default='cb63305')
     parser.add_argument('--remaining-case', action='store_true',
                         help='Require a fully reconstructed remaining-bank case, not the first pilot')
-    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank', 'eligible-wave','qomp-pilot'), default='default')
+    parser.add_argument('--campaign-scope', choices=('default','eligible-bank','eligible-wave','qomp-pilot','qomp-serial'), default='default')
     parser.add_argument('--wave-plan', type=Path)
     parser.add_argument('--wave-plan-sha256')
     for name in ('bank-context', 'bank-checkpoint'):
@@ -372,9 +375,13 @@ def perform(args):
     if producer in ('ed561666', 'grid400'):
         report.update(producer_profile=producer, dataset_mode='append' if args.remaining_case else 'fresh')
     if qomp:
-        report.update(status='PASS_QOMP_FRESH_WORKER_PREFLIGHT_ONLY',producer_profile='qomp',
-                      campaign_scope='qomp-pilot',dataset_mode='fresh',
+        serial=scope=='qomp-serial'
+        report.update(status='PASS_QOMP_SERIAL_WORKER_PREFLIGHT_ONLY' if serial else 'PASS_QOMP_FRESH_WORKER_PREFLIGHT_ONLY',
+                      producer_profile='qomp',campaign_scope=scope,dataset_mode='append' if serial else 'fresh',
                       producer_binding_sha256=report.pop('build_identity_sha256'))
+        if serial:
+            report.update(checkpoint_sha256=draft['checkpoint_sha256'],
+                          bootstrap_context_sha256=draft['bootstrap_context_sha256'])
         return payload/'worker-preflight.json',report
     if scope == 'eligible-bank':
         report['campaign_scope'] = scope

@@ -90,12 +90,15 @@ def admit_allocation(allocation, *, execution_profile=None, producer='cb63305', 
 
 def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pilot_sha,
                        worker_sources, transport, producer='cb63305', remaining_case=False,
-                       campaign_scope='default',operational_commit=None):
+                       campaign_scope='default',operational_commit=None,checkpoint_binding=None):
     if producer=='qomp':
         return helper('qomp_execution').validate_preflight(preflight,draft,
             binding_sha=manifest_sha,qualification_sha=qualification_sha,pilot_sha=pilot_sha,
             worker_sources=worker_sources,transport=transport,remaining_case=remaining_case,
-            campaign_scope=campaign_scope,operational_commit=operational_commit)
+            campaign_scope=campaign_scope,operational_commit=operational_commit,
+            checkpoint_binding=checkpoint_binding)
+    if checkpoint_binding is not None:
+        raise ValueError('QOMP checkpoint authority cannot cross a legacy preflight')
     if (type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400')
             or type(remaining_case) is not bool):
         raise ValueError('closed molecular producer selector required')
@@ -170,6 +173,8 @@ def validate_preflight(preflight, draft, *, manifest_sha, qualification_sha, pil
 
 def load_append_inputs(args):
     if getattr(args,'producer','cb63305')=='qomp':
+        if args.campaign_scope=='qomp-serial':
+            return helper('qomp_execution').helper('qomp_expansion').load_checkpoint(args)
         if (args.remaining_case or any(getattr(args,k,None) is not None for k in (
                 'bank_context','bank_checkpoint','owned_checkpoint','checkpoint_sha256',
                 'accepted_audit','accepted_outcome','accepted_pilot','accepted_envelope',
@@ -260,10 +265,11 @@ def main():
     for name in ('build', 'qualification', 'inputs', 'descriptors', 'pilot', 'worker-preflight', 'run'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--commit', required=True)
+    parser.add_argument('--bootstrap-sha256')
     parser.add_argument('--producer', choices=('cb63305', 'ed561666', 'grid400','qomp'), default='cb63305')
     parser.add_argument('--worker-preflight-sha256')
     parser.add_argument('--remaining-case', action='store_true')
-    parser.add_argument('--campaign-scope', choices=('default', 'eligible-bank', 'eligible-wave','qomp-pilot'), default='default')
+    parser.add_argument('--campaign-scope', choices=('default','eligible-bank','eligible-wave','qomp-pilot','qomp-serial'), default='default')
     parser.add_argument('--wave-plan', type=Path)
     parser.add_argument('--wave-plan-sha256')
     parser.add_argument('--wave-registration', type=Path)
@@ -289,6 +295,7 @@ def perform(args):
     checks, worker = (helper(name) for name in (
         'phoenix_installed_checks', 'phoenix_worker_cb63305'))
     scope = worker.selected_scope(args)
+    serial=qomp and scope=='qomp-serial'
     bank_mode = scope == 'eligible-bank'
     wave_mode = scope == 'eligible-wave'
     wave = helper('bank_wave_runtime') if wave_mode else None
@@ -334,7 +341,7 @@ def perform(args):
     operations = worker.source_hashes(producer, remaining_case=args.remaining_case, **scope_args)
     operations.update({name: checks.digest(Path(__file__).with_name(name)) for name in (
         'phoenix_pilot_cb63305.py', 'phoenix_pilot_cb63305.sbatch', 'single_record_cb63305.py')})
-    if args.remaining_case and not bank_mode and not wave_mode:
+    if args.remaining_case and not bank_mode and not wave_mode and not serial:
         operations.update({name: checks.digest(Path(__file__).with_name(name)) for name in (
             'dataset_owned354_cb63305.py', 'owned_dataset_cb63305.py', 'dataset_guard.py')})
     worker_sources = {key: operations[key]
@@ -395,7 +402,8 @@ def perform(args):
         qualification_sha=checks.digest(args.qualification), pilot_sha=pilot_sha,
         worker_sources=worker_sources, transport=transport, producer=producer,
         remaining_case=args.remaining_case, **scope_args,
-        **(dict(operational_commit=args.commit) if qomp else {}))
+        **(dict(operational_commit=args.commit,
+                **(dict(checkpoint_binding=append_inputs) if serial else {})) if qomp else {}))
     harness = qcengine.get_program('psi4')
     harness_path = Path(inspect.getfile(type(harness))).resolve()
     if (str(harness_path) != preflight['harness_path']
@@ -429,9 +437,13 @@ def perform(args):
     helper('single_record_cb63305').validate_session_config(config, tag, worker_shape=worker_shape, **scope_args)
     transaction_scope = None
     if qomp:
+        authority_args=(dict(checkpoint_raw=append_inputs['checkpoint_raw'],
+            context_raw=append_inputs['context_raw'],proof_blobs=append_inputs['proof_blobs'],
+            qomp_binding=append_inputs['qomp_binding']) if serial else {})
         transaction_scope=mutation.prepare_transaction(draft,worker.prepare_draft(args,manifest_path),
-                                                       tag,producer='qomp')
-        qomp_intent_sha=q.reserve_transaction(draft,tag)
+                                                       tag,producer='qomp',**authority_args)
+        if not serial:
+            qomp_intent_sha=q.reserve_transaction(draft,tag)
     elif bank_mode:
         transaction_scope = mutation.prepare_transaction(draft, worker.prepare_draft(args, manifest_path), tag,
             checkpoint_raw=append_inputs['checkpoint_raw'] if args.remaining_case else None)
@@ -471,14 +483,29 @@ def perform(args):
         started.update(campaign_scope=scope, campaign=draft['campaign'])
     if qomp:
         started.update(campaign_scope=scope,campaign=draft['campaign'],
-                       producer_binding_sha256=started.pop('build_identity_sha256'),
-                       qomp_bootstrap_intent_sha256=qomp_intent_sha)
+                       producer_binding_sha256=started.pop('build_identity_sha256'))
+        if serial:
+            started.update(checkpoint_sha256=append_inputs['checkpoint_sha256'],
+                           bootstrap_context_sha256=append_inputs['context_sha256'])
+        else:
+            started['qomp_bootstrap_intent_sha256']=qomp_intent_sha
     if wave_mode:
         started.update(wave.started_fields(binding), campaign=draft['campaign'])
     save('started.json', started)
     if wave_mode:
         consumed = wave.registered_record(client, binding, draft, allocation, preflight, save)
         dataset, record, created = (consumed[key] for key in ('dataset', 'record', 'created'))
+    elif serial:
+        exp=q.helper('qomp_expansion')
+        prepared=exp.unbound_case(draft['monomer_id'])
+        created=q.helper('bank_append').append_once(client,transaction_scope,draft,
+            dataset_adapter=mutation,prepared_case=prepared,**append_inputs,
+            authenticated_owner=server['username'],save=save,producer='qomp',
+            before_submit=lambda:q.scratch_admission(scratch,profile))
+        dataset=client.get_dataset_by_id(draft['dataset_id'])
+        if (dataset.id!=draft['dataset_id'] or dataset.name!=draft['dataset_name']
+                or getattr(dataset,'_client',None) is not client):
+            raise ValueError('QOMP append returned a foreign dataset/client')
     elif bank_mode and args.remaining_case:
         campaign = helper('bank_campaign')
         pool, raw_inputs = campaign.load_pool(args.inputs, manifest_path, args.qualification, args.descriptors)
@@ -537,7 +564,8 @@ def perform(args):
         compute_tag=tag, runtime=runtime, payload=payload, save=save, worker_shape=worker_shape,
         **(dict(producer=producer, case=draft, campaign_scope=scope,
                 wave_binding=binding, allocation=allocation) if wave_mode else
-           dict(producer=producer, case=draft, campaign_scope=scope) if bank_mode or qomp else
+           dict(producer=producer,case=draft,campaign_scope=scope,
+                **(dict(checkpoint_binding=append_inputs) if serial else {})) if bank_mode or qomp else
            dict(transport_args, **(dict(case=draft) if producer == 'ed561666' and args.remaining_case else {}))))
     record = dataset.get_record(draft['entry']['name'], draft['specification_name'], force_refetch=True)
     history = record.compute_history
@@ -599,7 +627,7 @@ def perform(args):
         trace_files=[p.name for p in sorted((payload/'traces').glob('*.strace'))],
         qualification='Fresh single-record delivery only; independent numerical/export/OS-trace audit '
                       'is still required. No accuracy, solver, covariance or whole-set acceptance.')
-    if bank_mode or wave_mode or producer == 'ed561666' and args.remaining_case:
+    if bank_mode or wave_mode or serial or producer == 'ed561666' and args.remaining_case:
         outcome['dispatch_intent_sha256'] = created['dispatch_intent_sha256']
     if qomp:
         return payload/'qomp-outcome.json',outcome

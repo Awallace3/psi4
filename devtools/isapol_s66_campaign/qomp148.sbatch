@@ -10,15 +10,18 @@
 #SBATCH --no-requeue
 set -euo pipefail
 umask 077
-[[ $# -eq 5 || $# -eq 7 || $# -eq 8 ]] || exit 2
+[[ $# -eq 10 || $# -eq 12 || $# -eq 13 ]] || exit 2
 SOURCE=$1 COMMIT=$2 PHASE=$3 RUN=$4 PILOT=$5
-[[ "$SOURCE" = /storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-native-qomp-production148-v2 ]]
-[[ "$COMMIT" =~ ^[0-9a-f]{40}$ && "$RUN" = /storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-qomp148-"${PHASE}002" ]]
+[[ "$SOURCE" = /storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-native-qomp-production148-v3 ]]
+MID=${PILOT##*/}; MID=${MID%.json}
+[[ "$MID" =~ ^monomer-[0-9]{4}$ && "$COMMIT" =~ ^[0-9a-f]{40}$ ]]
+BANK=/storage/project/r-cs207-0/awallace43/runs/ccasp-native-s66-qomp148-bank003
+[[ "$PILOT" = "$BANK/cases/$MID.json" && "$RUN" = "$BANK/runs/$MID/$PHASE" ]]
 [[ -d "$RUN/logs" && ! -e "$RUN/controller" && ! -e "$RUN/payload" ]]
 case "$PHASE" in
-  worker) [[ $# -eq 5 ]]; ENTRY=phoenix_worker_cb63305.py ;;
-  science) [[ $# -eq 7 ]]; ENTRY=phoenix_pilot_cb63305.py ;;
-  audit) [[ $# -eq 8 ]]; ENTRY=runtime_audit_cb63305.py ;;
+  worker) [[ $# -eq 10 ]]; ENTRY=phoenix_worker_cb63305.py ;;
+  science) [[ $# -eq 12 ]]; ENTRY=phoenix_pilot_cb63305.py ;;
+  audit) [[ $# -eq 13 ]]; ENTRY=runtime_audit_cb63305.py ;;
   *) exit 2 ;;
 esac
 P=/storage/project/r-cs207-0/awallace43
@@ -32,7 +35,14 @@ args=(--build "$P/runs/ccasp-native-s66-qomp-fb11-build002"
   --qualification "$P/runs/ccasp-native-s66-qomp-runtime146-check001/inputs/receipts/qualification/installed-validation.json"
   --inputs "$P/runs/ccasp-native-s66-qomp-profile146-preparation001"
   --descriptors "$P/runs/ccasp-native-s66-qomp-profile146-descriptors001/payload"
-  --pilot "$PILOT" --run "$RUN" --commit "$COMMIT" --producer qomp --campaign-scope qomp-pilot)
+  --pilot "$PILOT" --run "$RUN" --commit "$COMMIT" --producer qomp \
+  --campaign-scope qomp-serial --remaining-case)
+bound=("${@: -5}")
+[[ "${bound[1]}" =~ ^[0-9a-f]{64}$ && "${bound[3]}" =~ ^[0-9a-f]{64}$ \
+   && "${bound[4]}" =~ ^[0-9a-f]{64}$ ]]
+args+=(--bank-context "${bound[0]}" --bank-context-sha256 "${bound[1]}" \
+ --bank-checkpoint "${bound[2]}" --bank-checkpoint-sha256 "${bound[3]}" \
+ --bootstrap-sha256 "${bound[4]}")
 if [[ "$PHASE" != worker ]]; then
   [[ "$7" =~ ^[0-9a-f]{64}$ ]]
   args+=(--worker-preflight "$6" --worker-preflight-sha256 "$7")

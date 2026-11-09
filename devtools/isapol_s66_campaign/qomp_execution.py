@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 
-SOURCE = Path('/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-native-qomp-production148-v2')
+SOURCE = Path('/storage/project/r-cs207-0/awallace43/gits/psi4.ccasp-native-qomp-production148-v3')
 INTENT_ROOT = Path('/storage/home/hcoda1/3/awallace43/ccasp-native-s66-qomp148-dispatch-intents')
 _MODULES = {}
 SOURCE_NAMES = ('qomp_campaign.py','qomp_execution.py','qomp_launcher.sh','qomp148.sbatch',
@@ -21,12 +21,14 @@ SOURCE_NAMES = ('qomp_campaign.py','qomp_execution.py','qomp_launcher.sh','qomp1
     'bank_dataset.py','bank_transport.py','bank_readonly.py','bank_store.py',
     'dataset_guard.py','phoenix_pilot_cb63305.py','single_record_cb63305.py','envelope_identity.py',
     'runtime_audit.py','runtime_audit_cb63305.py','validate_numeric.py','audited_bank.py')
+SOURCE_NAMES += ('qomp_expansion.py','bank_append.py','bank_audit.py','native_controller.py')
 
 
 def helper(name):
     if name not in ('qomp_campaign','qualified_qomp','qomp_bank_policy','bank_dataset',
         'bank_store','phoenix_installed_checks','phoenix_descriptor_bank_cb63305',
-        'phoenix_worker_probe','phoenix_pilot','envelope_identity','dataset_guard','audited_bank'):
+        'phoenix_worker_probe','phoenix_pilot','envelope_identity','dataset_guard','audited_bank',
+        'qomp_expansion','bank_append','bank_audit'):
         raise ValueError('closed qomp execution helper')
     if name not in _MODULES:
         path=Path(__file__).with_name(name+'.py')
@@ -67,11 +69,7 @@ def context(args):
     c=helper('qomp_campaign')
     c.need((args.build.resolve(),args.qualification.resolve(),args.inputs.resolve(),args.descriptors.resolve())
            ==(c.BUILD,c.QUALIFICATION,c.INPUTS,c.DESCRIPTORS),'closed QOMP execution input roles required')
-    c.need(args.run.resolve() in c.PHASE_ROOTS.values(),
-           'fresh dedicated QOMP148 phase root required')
-    if hasattr(args,'case'):
-        c.need(args.case.resolve()==c.PHASE_ROOTS['science'],
-               'independent audit requires a dedicated QOMP148 science root')
+    helper('qomp_expansion').validate_paths(args)
     producer=qualified().verify_receipts(qualified().read_receipts(c.RECEIPTS))
     return dict(schema='qomp-verified-installed-source-binding/1',
         commit=qualified().SCIENTIFIC_COMMIT,installed_package=str(c.BUILD/'env/lib/python3.13/site-packages/psi4'),
@@ -106,10 +104,12 @@ def scratch_admission(scratch,profile):
     return policy().admit_scratch([profile],lambda:observe(scratch))
 
 
-def validate_binding(case,*,runtime,compute_tag,worker_shape,record_id,**kwargs):
+def validate_binding(case,*,runtime,compute_tag,worker_shape,record_id,checkpoint_binding=None,**kwargs):
     c=helper('qomp_campaign')
-    c.need(not kwargs and case['campaign']==c.CAMPAIGN and case['campaign_scope']=='qomp-pilot'
-        and case['producer_profile']=='qomp' and case['dataset_mode']=='fresh'
+    serial=case.get('campaign_scope')=='qomp-serial'
+    c.need(not kwargs and case['campaign']==c.CAMPAIGN
+        and case['campaign_scope'] in ('qomp-pilot','qomp-serial')
+        and case['producer_profile']=='qomp' and case['dataset_mode']==('append' if serial else 'fresh')
         and case['producer']['implementation_sha256']==qualified().IMPLEMENTATION
         and case['producer']['scientific_commit']==qualified().SCIENTIFIC_COMMIT
         and type(record_id) is int and record_id>0 and record_id not in c.PROTECTED_RECORDS,
@@ -124,16 +124,25 @@ def validate_binding(case,*,runtime,compute_tag,worker_shape,record_id,**kwargs)
     c.need(c.encode(raw)==c.encode(runtime) and worker_shape==(profile['cores'],profile['science_memory_GiB'])
         and re.fullmatch(re.escape(c.NAMESPACE+case['monomer_id']+'-')+'[1-9][0-9]*',compute_tag),
         'QOMP claim/tag/protocol/worker shape differs')
+    if serial:
+        checkpoint=helper('qomp_expansion').validate_case(case,checkpoint_binding)
+        protected=c.PROTECTED_RECORDS+tuple(checkpoint['audited_records'])
+        c.need(record_id not in protected,'QOMP audited-prefix record cannot be claimed')
+        return protected
+    c.need(checkpoint_binding is None,'fresh pilot cannot consume an append binding')
     return c.PROTECTED_RECORDS
 
 
 def validate_preflight(preflight,draft,*,binding_sha,qualification_sha,pilot_sha,
-                       worker_sources,transport,remaining_case,campaign_scope,operational_commit):
+                       worker_sources,transport,remaining_case,campaign_scope,operational_commit,
+                       checkpoint_binding=None):
     c=helper('qomp_campaign')
-    c.need(not remaining_case and campaign_scope=='qomp-pilot'
-        and preflight['status']=='PASS_QOMP_FRESH_WORKER_PREFLIGHT_ONLY'
-        and preflight['producer_profile']=='qomp' and preflight['campaign_scope']=='qomp-pilot'
-        and preflight['dataset_mode']=='fresh' and preflight['runtime_unchanged'] is True
+    serial=campaign_scope=='qomp-serial'
+    c.need(remaining_case is serial and campaign_scope in ('qomp-pilot','qomp-serial')
+        and preflight['status']==('PASS_QOMP_SERIAL_WORKER_PREFLIGHT_ONLY' if serial
+                                  else 'PASS_QOMP_FRESH_WORKER_PREFLIGHT_ONLY')
+        and preflight['producer_profile']=='qomp' and preflight['campaign_scope']==campaign_scope
+        and preflight['dataset_mode']==('append' if serial else 'fresh') and preflight['runtime_unchanged'] is True
         and preflight['scientific_build_commit']==qualified().SCIENTIFIC_COMMIT
         and type(operational_commit) is str and re.fullmatch('[0-9a-f]{40}',operational_commit)
         and preflight['operational_commit']==operational_commit
@@ -149,6 +158,17 @@ def validate_preflight(preflight,draft,*,binding_sha,qualification_sha,pilot_sha
     profile=draft['execution_profile']
     c.need(preflight['task_config']==dict(ncores=profile['cores'],
         memory_GiB=profile['science_memory_GiB'],internal_retries=0),'QOMP worker task configuration drift')
+    if serial:
+        c.need(all(preflight[k]==draft[k] for k in ('checkpoint_sha256','bootstrap_context_sha256')),
+               'QOMP worker audited predecessor differs')
+        exp=helper('qomp_expansion')
+        exp.validate_case(draft,checkpoint_binding)
+        seed=exp.audit_policy(checkpoint_binding['qomp_binding']).worker
+        c.need(all(preflight[k]==seed[k] for k in (
+            'harness_path','harness_sha256','qcengine_version','qcfractalcompute_version',
+            'manager_sources_sha256'))
+            and preflight['transport_binding']['ordinary_stack']==seed['transport_binding']['ordinary_stack'],
+            'QOMP SDK/harness/ordinary transport drift from actual accepted remote pilot')
 
 
 def intent_raw(draft,tag):
@@ -263,16 +283,17 @@ def run_phase(phase,args,perform):
     c=helper('qomp_campaign')
     engine=helper('phoenix_installed_checks').qomp_engine()
     engine.qomp_enter()
-    c.need(args.producer=='qomp' and args.campaign_scope=='qomp-pilot'
-           and not args.remaining_case,'QOMP148A is fresh serial pilot only')
+    c.need(args.producer=='qomp' and args.campaign_scope=='qomp-serial'
+           and args.remaining_case,'new operational source is append-only QOMP serial')
     c.need(all(getattr(args,k,None) is None for k in (
-        'bank_context','bank_context_sha256','bank_checkpoint','bank_checkpoint_sha256',
         'owned_checkpoint','checkpoint_sha256','checkpoint_proofs',
         'accepted_audit','accepted_outcome','accepted_pilot','accepted_envelope',
         'wave_plan','wave_plan_sha256','wave_registration','wave_registration_sha256',
         'wave_science_barrier','wave_science_barrier_sha256')),
-        'QOMP148A cannot consume old append/wave bindings')
-    helper('phoenix_installed_checks').allocation()  # Refuse login before runtime hashing.
+        'QOMP serial cannot consume old/wave bindings')
+    helper('phoenix_installed_checks').allocation()  # No runtime/proof hashing on a login node.
+    helper('qomp_expansion').validate_paths(args,phase)
+    helper('qomp_expansion').load_checkpoint(args)
     context(args)
     source=Path(__file__).resolve().parents[2]
     c.need(source==SOURCE and phase in ('worker','science','audit')
@@ -283,6 +304,8 @@ def run_phase(phase,args,perform):
     try:
         runtime_check()
         result=perform(args)
+        publication=(helper('qomp_expansion').prepare_audit_publication(args,result[1])
+                     if phase=='audit' else None)
     except BaseException as exc:
         error=exc
         raise
@@ -296,6 +319,8 @@ def run_phase(phase,args,perform):
                 raise
             error.add_note('QOMP post-seal: '+(type(post).__name__+': '+str(post))[:1024])
     path,report=result
+    if publication is not None:
+        helper('bank_audit').commit_publication(publication,path.parent)
     helper('phoenix_descriptor_bank_cb63305').write_json_once(path,report)
     print(json.dumps(dict(status=report['status'],report=str(path))))
 

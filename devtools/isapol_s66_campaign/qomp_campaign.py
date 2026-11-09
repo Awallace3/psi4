@@ -17,7 +17,7 @@ RECEIPTS = RUNS/'ccasp-native-s66-qomp-runtime146-check001/inputs/receipts'
 VIEW = RECEIPTS.parent/'runtime-view.json'
 BUILD = RUNS/'ccasp-native-s66-qomp-fb11-build002'
 QUALIFICATION = RECEIPTS/'qualification/installed-validation.json'
-CAMPAIGN_ROOT = RUNS/'ccasp-native-s66-qomp-production148-002'
+CAMPAIGN_ROOT = RUNS/'ccasp-native-s66-qomp-production148-003'
 PHASE_ROOTS = {phase:RUNS/('ccasp-native-s66-qomp148-'+phase+'002')
                for phase in ('worker','science','audit')}
 ORIGINALS = CAMPAIGN_ROOT/'inputs/original25'

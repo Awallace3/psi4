@@ -24,9 +24,11 @@ def helper(name):
     return _MODULES[name]
 
 
-def prepare_transaction(case, reproduced_case, compute_tag, *, checkpoint_raw=None,producer='grid400'):
+def prepare_transaction(case,reproduced_case,compute_tag,*,checkpoint_raw=None,producer='grid400',
+                        qomp_binding=None,context_raw=None,proof_blobs=None):
     return helper('bank_transport').RequestScope(case, reproduced_case, compute_tag,
-                                                checkpoint_raw=checkpoint_raw,producer=producer)
+        checkpoint_raw=checkpoint_raw,producer=producer,qomp_binding=qomp_binding,
+        context_raw=context_raw,proof_blobs=proof_blobs)
 
 
 def client_class(scope):

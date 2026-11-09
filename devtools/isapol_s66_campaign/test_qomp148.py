@@ -144,7 +144,7 @@ def test_phase_commands_have_real_wrapper_and_closed_resources(monkeypatch,tmp_p
     with pytest.raises(ValueError):
         c.phase_command(case,source=source,commit='c'*40,phase='worker',
             run=c.RUNS/'ccasp-native-s66-qomp148-worker001',pilot=tmp_path)
-    assert c.CAMPAIGN_ROOT.name=='ccasp-native-s66-qomp-production148-002'
+    assert c.CAMPAIGN_ROOT.name=='ccasp-native-s66-qomp-production148-003'
 
 
 @pytest.mark.parametrize('primary',[None,RuntimeError('child failure'),KeyboardInterrupt(),SystemExit(143)])
@@ -156,6 +156,7 @@ def test_all_seals_precede_publication_and_primary_failure_survives(monkeypatch,
     controls=NS(qomp_enter=lambda:None)
     monkeypatch.setattr(e,'helper',lambda name:
         NS(qomp_engine=lambda:controls,allocation=lambda:{}) if name=='phoenix_installed_checks'
+        else NS(validate_paths=lambda *a:None,load_checkpoint=lambda *a:None) if name=='qomp_expansion'
         else original(name))
     monkeypatch.setattr(e,'context',lambda _: {})
     monkeypatch.setattr(e,'SOURCE',Path(e.__file__).resolve().parents[2])
@@ -171,7 +172,7 @@ def test_all_seals_precede_publication_and_primary_failure_survives(monkeypatch,
     def perform(args):
         if primary is not None: raise primary
         return out,dict(status='TEST_ONLY')
-    args=NS(producer='qomp',campaign_scope='qomp-pilot',remaining_case=False,commit='c'*40,run=tmp_path)
+    args=NS(producer='qomp',campaign_scope='qomp-serial',remaining_case=True,commit='c'*40,run=tmp_path)
     if primary is not None or post_fails:
         with pytest.raises(type(primary) if primary is not None else ValueError) as caught:
             e.run_phase('worker',args,perform)
@@ -352,8 +353,27 @@ def test_worker_preflight_must_bind_current_operational_revision(monkeypatch):
 
 @pytest.mark.parametrize('failure',[None,'child','signal','child_and_cleanup'])
 def test_real_qomp_session_callbacks_factory_and_delivery_unwind(monkeypatch,tmp_path,failure):
+    exercise_session_callbacks(monkeypatch,tmp_path,failure,serial=False)
+
+
+def exercise_session_callbacks(monkeypatch,tmp_path,failure,*,serial):
+    """Shared callback oracle; serial SDK binding is exercised in p4qca tests."""
     c,_,_,_,cases,_=synthetic(monkeypatch)
     draft=next(d for d in cases.values() if d['dataset_mode']=='fresh')
+    binding=None
+    execution=None
+    if serial:
+        core,exp,_,cases,context,checkpoint,proofs,authority,_=load('test_qomp_expansion').synthetic(monkeypatch)
+        exp._MODULES['audited_bank']=core
+        raw=core.encode(checkpoint)
+        binding=dict(context_raw=context,context_sha256=core.digest(context),
+            checkpoint_raw=raw,checkpoint_sha256=core.digest(raw),proof_blobs=proofs,qomp_binding=authority)
+        mid=json.loads(context)['eligible_ids'][1]
+        draft=core.bind_next_case(cases[mid],raw,core.digest(raw),context,core.digest(context),
+                                  proofs,**exp.reducer_options(authority))
+        c=exp.helper('qomp_campaign')
+        execution=load('qomp_execution')
+        execution._MODULES.update(qomp_expansion=exp,qomp_campaign=c)
     session=load('single_record_cb63305')
     runtime=c.helper('phoenix_worker_probe').runtime_input(draft)
     runtime['specification']['protocols']=session.helper('phoenix_pilot').execution_specification({})['protocols']
@@ -403,10 +423,12 @@ def test_real_qomp_session_callbacks_factory_and_delivery_unwind(monkeypatch,tmp
     monkeypatch.setitem(sys.modules,module.__name__,module)
     original=session.helper
     monkeypatch.setattr(session,'helper',lambda name:
-        NS(grid400_manager_client_factory=factory) if name=='dataset_fresh_cb63305' else original(name))
+        NS(grid400_manager_client_factory=factory) if name=='dataset_fresh_cb63305'
+        else execution if name=='qomp_execution' and serial else original(name))
     kwargs=dict(record_id=9999,compute_tag=tag,runtime=runtime,payload=tmp_path,
         save=lambda name,data:saved.setdefault(name,data),worker_shape=(8,20.),
-        producer='qomp',case=draft,campaign_scope='qomp-pilot')
+        producer='qomp',case=draft,campaign_scope='qomp-serial' if serial else 'qomp-pilot',
+        **(dict(checkpoint_binding=binding) if serial else {}))
     previous=signal.getsignal(signal.SIGTERM)
     if failure:
         with pytest.raises(RuntimeError) as caught:

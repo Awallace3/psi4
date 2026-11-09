@@ -28,9 +28,9 @@ def validate_session_config(config, compute_tag, *, worker_shape=(4, 20.), campa
     The historical singleton keeps its exact default. Remaining-bank callers
     must separately bind their case, allocation and worker-preflight receipts.
     """
-    if campaign_scope not in ('default', 'eligible-bank', 'eligible-wave','qomp-pilot'):
+    if campaign_scope not in ('default','eligible-bank','eligible-wave','qomp-pilot','qomp-serial'):
         raise ValueError('closed native session scope required')
-    shapes = (helper('grid400_bank_execution').worker_shapes() if campaign_scope in ('eligible-bank', 'eligible-wave','qomp-pilot')
+    shapes = (helper('grid400_bank_execution').worker_shapes() if campaign_scope in ('eligible-bank','eligible-wave','qomp-pilot','qomp-serial')
               else ((4, 20.), (8, 20.), (12, 40.), (24, 80.), (16, 60.)))
     if (type(worker_shape) is not tuple or len(worker_shape) != 2
             or type(worker_shape[0]) is not int
@@ -50,14 +50,14 @@ def validate_session_config(config, compute_tag, *, worker_shape=(4, 20.), campa
 
 def run_session(config, *, record_id, compute_tag, runtime, payload, save, worker_shape=(4, 20.),
                 producer='cb63305', case=None, campaign_scope='default',
-                wave_binding=None, allocation=None):
+                wave_binding=None, allocation=None,checkpoint_binding=None):
     """Claim once, capture compressed local output, and stop this owned manager."""
     if type(producer) is not str or producer not in ('cb63305', 'ed561666', 'grid400','qomp'):
         raise ValueError('closed singleton producer required')
-    if (campaign_scope not in ('default', 'eligible-bank', 'eligible-wave','qomp-pilot')
+    if (campaign_scope not in ('default','eligible-bank','eligible-wave','qomp-pilot','qomp-serial')
             or campaign_scope in ('eligible-bank', 'eligible-wave') and producer != 'grid400'):
         raise ValueError('eligible bank session requires explicit grid400 producer and scope')
-    if (producer=='qomp') != (campaign_scope=='qomp-pilot'):
+    if (producer=='qomp') != (campaign_scope in ('qomp-pilot','qomp-serial')):
         raise ValueError('explicit QOMP fresh session scope required')
     if producer not in ('grid400','qomp') and worker_shape == (16, 60.):
         raise ValueError('grid400 worker shape requires its explicit fresh producer')
@@ -66,7 +66,10 @@ def run_session(config, *, record_id, compute_tag, runtime, payload, save, worke
         raise ValueError('wave authority requires explicit wave session')
     if producer=='qomp':
         protected=helper('qomp_execution').validate_binding(case,runtime=runtime,
-            compute_tag=compute_tag,worker_shape=worker_shape,record_id=record_id)
+            compute_tag=compute_tag,worker_shape=worker_shape,record_id=record_id,
+            checkpoint_binding=checkpoint_binding)
+    elif checkpoint_binding is not None:
+        raise ValueError('QOMP checkpoint cannot cross a legacy manager session')
     elif campaign_scope in ('eligible-bank', 'eligible-wave'):
         protected = helper('grid400_bank_execution').validate_binding(case,
             runtime=runtime, compute_tag=compute_tag, worker_shape=worker_shape, record_id=record_id,

@@ -11,6 +11,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+from types import SimpleNamespace as NS
 
 PROOF_ROLES = frozenset(('audit', 'outcome', 'case', 'envelope'))
 MAX_PROOF_BYTES = 512*1024**2
@@ -19,7 +20,8 @@ SCIENCE = '1aaa9e0a306373b42a3decc25c7dfa106dbc8ea2'
 
 
 def helper(name):
-    if name not in ('dataset_guard', 'grid400_bank_policy', 'grid400_bank_case', 'phoenix_pilot'):
+    if name not in ('dataset_guard', 'grid400_bank_policy', 'grid400_bank_case', 'phoenix_pilot',
+                    'qomp_expansion'):
         raise ValueError('closed audited-bank helpers required')
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_audited_bank_'+name, path)
@@ -34,6 +36,21 @@ def digest(raw):
 
 def encode(value):
     return json.dumps(value, sort_keys=True, allow_nan=False).encode()
+
+
+def _policy(producer, binding):
+    if producer == 'qomp':
+        return helper('qomp_expansion').audit_policy(binding)
+    if producer != 'grid400' or binding is not None:
+        raise ValueError('closed ordinary-audit producer required')
+    return NS(producer='grid400',science=SCIENCE,
+        policy=helper('grid400_bank_policy'),cases=helper('grid400_bank_case'),
+        fresh_scope='eligible-bank',append_scope='eligible-bank',
+        fresh_status='PASS_SELECTED_FRESH_SINGLETON_EVIDENCE',
+        append_status='PASS_SELECTED_BANK_CASE_SINGLETON_EVIDENCE',
+        tag_prefix='ccasp-native-grid400-bank-',
+        context_schema='native-audited-bank-context/1',
+        checkpoint_schema='native-audited-bank-checkpoint/1')
 
 
 def _sha(value):
@@ -66,20 +83,21 @@ def normalize_specification(specification):
         **helper('phoenix_pilot').execution_specification(specification)))
 
 
-def _case_link(receipts, context, before, after, previous_sha256):
+def _case_link(receipts, context, before, after, previous_sha256, *, producer='grid400',qomp_binding=None):
+    p=_policy(producer,qomp_binding)
     links = _receipts(receipts)
     audit, outcome, case, envelope = (json.loads(receipts[k]) for k in ('audit', 'outcome', 'case', 'envelope'))
-    base, policy = helper('dataset_guard'), helper('grid400_bank_policy')
+    base, policy = helper('dataset_guard'), p.policy
     fresh = before is None
     mode = 'fresh' if fresh else 'append'
     identifier, mid = audit.get('record_id'), case.get('monomer_id')
     job = outcome.get('allocation', {}).get('JobId')
     numeric, artifact = audit.get('numeric', {}), envelope.get('artifacts', {}).get('tensors.npz', {})
-    expected_status = ('PASS_SELECTED_FRESH_SINGLETON_EVIDENCE' if fresh
-                       else 'PASS_SELECTED_BANK_CASE_SINGLETON_EVIDENCE')
+    expected_status = p.fresh_status if fresh else p.append_status
     raw_case = copy.deepcopy(case)
     if not fresh:
         raw_case['dataset_mode'] = 'awaiting-audited-bootstrap'
+        raw_case['campaign_scope'] = p.fresh_scope
         for key in ('dataset_id', 'bootstrap_context_sha256', 'checkpoint_sha256'):
             raw_case.pop(key, None)
     if (mid not in context['eligible_ids']
@@ -87,23 +105,24 @@ def _case_link(receipts, context, before, after, previous_sha256):
             or type(identifier) is not int or identifier <= 0 or identifier in policy.PROTECTED_RECORDS
             or type(job) is not str or re.fullmatch('[1-9][0-9]*', job) is None
             or audit.get('status') != expected_status
-            or any(item.get('producer_profile') != 'grid400' or item.get('dataset_mode') != mode
-                   or item.get('campaign_scope') != 'eligible-bank' for item in (audit, outcome, case))
+            or any(item.get('producer_profile') != producer or item.get('dataset_mode') != mode
+                   or item.get('campaign_scope') != (p.fresh_scope if fresh else p.append_scope)
+                   for item in (audit, outcome, case))
             or any(item.get('dataset_id') != context['dataset_id'] for item in (audit, outcome))
             or audit.get('monomer_id') != mid or outcome.get('monomer_id') != mid
             or outcome.get('record_id') != identifier or audit.get('case_job') != job
             or audit.get('case_outcome_sha256') != links['outcome']
             or audit.get('pilot_sha256') != links['case'] or outcome.get('pilot_sha256') != links['case']
             or audit.get('case_operational_commit') != outcome.get('operational_commit')
-            or audit.get('scientific_build_commit') != SCIENCE
-            or outcome.get('scientific_build_commit') != SCIENCE
+            or audit.get('scientific_build_commit') != p.science
+            or outcome.get('scientific_build_commit') != p.science
             or case.get('producer') != context['producer']
             or case.get('eligibility_sha256') != context['eligibility_sha256']
             or audit.get('runtime_unchanged') is not True or outcome.get('runtime_unchanged') is not True
             or outcome.get('find_existing') is not False or outcome.get('maximum_records') != 1
             or outcome.get('status') != 'DELIVERED_EXPANDED_NATIVE_ARTIFACTS_PENDING_QUALIFICATION'
             or outcome.get('runtime_input_sha256') != case.get('runtime_input_sha256')
-            or outcome.get('compute_tag') != 'ccasp-native-grid400-bank-'+mid+'-'+job
+            or outcome.get('compute_tag') != p.tag_prefix+mid+'-'+job
             or audit.get('file_gate_sha256') != FILE_GATE_SHA256
             or audit.get('roles', {}).get('molecular_qcschema') != 1
             or not audit.get('traces') or any(t.get('status') != 'passed' for t in audit['traces'].values())
@@ -120,6 +139,29 @@ def _case_link(receipts, context, before, after, previous_sha256):
             or outcome.get('tensors_sha256') != artifact['sha256']
             or numeric.get('tensor_sha256') != artifact['sha256']):
         raise ValueError('ordinary audited bank case/provenance/artifact chain differs')
+    if producer == 'qomp':
+        if (context.get('bootstrap_authority_sha256') != p.bootstrap_sha256
+                or context.get('original_carryforward_sha256') != p.carry_sha256
+                or context['eligible_ids'] != p.eligible
+                or context['producer'].get('scientific_commit') != p.science
+                or context['producer'].get('implementation_sha256') != p.implementation
+                or outcome.get('installed_qualification_sha256') != p.qualification_sha256
+                or outcome.get('producer_binding_sha256') != p.qualification_sha256
+                or audit.get('audit_commit') != outcome.get('operational_commit')):
+            raise ValueError('QOMP parent authority, originals or audit operations differ')
+        if fresh and (links != p.manifest['seed_receipts_sha256']
+                or context['dataset_id'] != p.manifest['dataset_id']
+                or identifier != p.manifest['record_id'] or job != p.manifest['science_job']
+                or audit['allocation']['JobId'] != p.manifest['audit_job']
+                or outcome['operational_commit'] != p.manifest['science_operations']
+                or audit['audit_commit'] != p.manifest['audit_operations']
+                or outcome.get('worker_preflight_sha256') != p.manifest['worker_sha256']
+                or outcome.get('operational_sources_sha256') != p.seed_science_sources
+                or outcome.get('installed_qualification_sha256') != p.qualification_sha256
+                or outcome.get('producer_binding_sha256') != p.qualification_sha256
+                or base.digest(after) != p.manifest['snapshot_sha256']
+                or artifact['sha256'] != p.manifest['tensor_sha256']):
+            raise ValueError('actual603 QOMP pilot receipt/accounting chain differs')
     name, spec = case['entry']['name'], context['specification_name']
     if fresh:
         if case.get('dataset_id') is not None or mid != context['eligible_ids'][0]:
@@ -172,28 +214,36 @@ def _tensor(receipts, tensor_raw):
         raise ValueError('actual audited tensor transport bytes differ')
 
 
-def initialize(pool, prepared_cases, receipts, expected_audit_sha256, snapshot, tensor_raw):
+def initialize(pool, prepared_cases, receipts, expected_audit_sha256, snapshot, tensor_raw,
+               *, producer='grid400',qomp_binding=None):
     """Create a new context only from the recorded ordinary fresh audit."""
+    p=_policy(producer,qomp_binding)
+    options=dict(producer=producer,qomp_binding=qomp_binding)
     links = _receipts(receipts)
-    policy, cases, base = (helper(name) for name in ('grid400_bank_policy', 'grid400_bank_case', 'dataset_guard'))
-    eligible = pool.get('eligible_ids', [])
+    policy,cases,base=p.policy,p.cases,helper('dataset_guard')
+    eligible = p.eligible if producer=='qomp' else pool.get('eligible_ids', [])
+    if producer=='qomp' and (pool.get('eligible_ids') != [f'monomer-{i:04d}' for i in range(1,132)]
+            or pool.get('refused_ids')):
+        raise ValueError('complete actual131 pool required for missing106 QOMP cohort')
     audit = json.loads(receipts['audit'])
     identifier = audit.get('dataset_id')
     if (pool.get('status') != 'VERIFIED_DESCRIPTOR_POOL_ELIGIBILITY_ONLY'
             or not eligible or eligible != sorted(set(eligible))
             or set(eligible) & set(pool.get('refused_ids', []))
-            or set(eligible) | set(pool.get('refused_ids', [])) != {
-                f'monomer-{i:04d}' for i in range(1, 132)}
+            or set(eligible) | set(pool.get('refused_ids', [])) != (
+                {f'monomer-{i:04d}' for i in range(1,132)} -
+                (set(p.carry['accepted_ids']) if producer=='qomp' else set()))
             or set(prepared_cases) != set(eligible) or links['audit'] != expected_audit_sha256
             or not _sha(expected_audit_sha256)
             or type(identifier) is not int or identifier <= 0 or identifier in policy.PROTECTED_DATASETS):
         raise ValueError('recorded fresh audit and complete reconstructed eligible membership required')
     first = prepared_cases[eligible[0]]
-    eligibility_sha = digest(encode(dict(eligible_ids=eligible, refused_ids=pool['refused_ids'],
-                                        descriptor_authority=pool['authority'])))
+    eligibility_sha = (digest(encode(dict(authority=pool['authority'],missing_ids=eligible)))
+        if producer=='qomp' else digest(encode(dict(eligible_ids=eligible,refused_ids=pool['refused_ids'],
+                                                   descriptor_authority=pool['authority']))))
     for mid, case in prepared_cases.items():
-        if (case.get('monomer_id') != mid or case.get('producer_profile') != 'grid400'
-                or case.get('campaign_scope') != 'eligible-bank' or case.get('campaign') != policy.CAMPAIGN
+        if (case.get('monomer_id') != mid or case.get('producer_profile') != producer
+                or case.get('campaign_scope') != p.fresh_scope or case.get('campaign') != policy.CAMPAIGN
                 or case.get('dataset_name') != cases.DATASET_NAME
                 or case.get('specification_name') != cases.SPECIFICATION_NAME
                 or case.get('eligibility_sha256') != eligibility_sha
@@ -220,7 +270,7 @@ def initialize(pool, prepared_cases, receipts, expected_audit_sha256, snapshot, 
         raise ValueError('exact new ordinary-audited singleton snapshot required')
     # Reject top-level extras/schema mismatches before constructing an anchor.
     _prefix(snapshot, [first['entry']['name']], [audit['record_id']])
-    context = dict(schema='native-audited-bank-context/1', campaign=policy.CAMPAIGN,
+    context = dict(schema=p.context_schema, campaign=policy.CAMPAIGN,
         dataset_id=identifier, dataset_name=cases.DATASET_NAME, specification_name=cases.SPECIFICATION_NAME,
         producer=first['producer'], execution_specification=normalized,
         eligibility_sha256=first['eligibility_sha256'],
@@ -228,34 +278,40 @@ def initialize(pool, prepared_cases, receipts, expected_audit_sha256, snapshot, 
         prepared_case_sha256={mid: digest(encode(case)) for mid, case in prepared_cases.items()},
         seed_receipts_sha256=links, seed_snapshot_sha256=base.digest(snapshot),
         first_record=audit['record_id'], first_entry=first['entry']['name'])
+    if producer=='qomp':
+        context.update(bootstrap_authority_sha256=p.bootstrap_sha256,
+                       original_carryforward_sha256=p.carry_sha256)
     context_raw = encode(context)
     bound = dict(context, context_sha256=digest(context_raw))
-    _case_link(receipts, bound, None, snapshot, None)
+    _case_link(receipts, bound, None, snapshot, None, **options)
     _tensor(receipts, tensor_raw)
-    checkpoint = dict(schema='native-audited-bank-checkpoint/1', status='READ_ONLY_INITIAL_BASELINE',
+    checkpoint = dict(schema=p.checkpoint_schema, status='READ_ONLY_INITIAL_BASELINE',
         campaign=policy.CAMPAIGN, dataset_id=identifier, eligibility_sha256=first['eligibility_sha256'],
         bootstrap_context_sha256=digest(context_raw), generation=1, previous_checkpoint_sha256=None,
         audited_records=[audit['record_id']], ledger=[], snapshot=copy.deepcopy(snapshot),
         snapshot_sha256=base.digest(snapshot))
     proofs = {sha: receipts[role] for role, sha in links.items()}
     checkpoint_raw = encode(checkpoint)
-    validate_checkpoint(checkpoint_raw, digest(checkpoint_raw), context_raw, digest(context_raw), proofs)
+    validate_checkpoint(checkpoint_raw, digest(checkpoint_raw), context_raw, digest(context_raw), proofs,**options)
     return context_raw, checkpoint
 
 
-def validate_checkpoint(raw, expected_sha256, context_raw, context_sha256, proofs):
+def validate_checkpoint(raw, expected_sha256, context_raw, context_sha256, proofs,
+                        *, producer='grid400',qomp_binding=None):
     """Verify every seed/append receipt against exact final-snapshot prefixes."""
+    p=_policy(producer,qomp_binding)
+    options=dict(producer=producer,qomp_binding=qomp_binding)
     if (type(raw) is not bytes or digest(raw) != expected_sha256
             or type(context_raw) is not bytes or digest(context_raw) != context_sha256):
         raise ValueError('exact recorded context/checkpoint bytes required')
     context, checkpoint, base = json.loads(context_raw), json.loads(raw), helper('dataset_guard')
-    policy = helper('grid400_bank_policy')
+    policy = p.policy
     generation, ledger = checkpoint.get('generation'), checkpoint.get('ledger')
-    if (context.get('schema') != 'native-audited-bank-context/1' or context.get('campaign') != policy.CAMPAIGN
+    if (context.get('schema') != p.context_schema or context.get('campaign') != policy.CAMPAIGN
             or context.get('dataset_id') in policy.PROTECTED_DATASETS
             or type(generation) is not int or not 1 <= generation <= len(context['eligible_ids'])
             or type(ledger) is not list or len(ledger) != generation-1
-            or checkpoint.get('schema') != 'native-audited-bank-checkpoint/1'
+            or checkpoint.get('schema') != p.checkpoint_schema
             or checkpoint.get('campaign') != context['campaign']
             or checkpoint.get('dataset_id') != context['dataset_id']
             or checkpoint.get('eligibility_sha256') != context['eligibility_sha256']
@@ -278,7 +334,7 @@ def validate_checkpoint(raw, expected_sha256, context_raw, context_sha256, proof
     if base.digest(prefix) != context['seed_snapshot_sha256']:
         raise ValueError('ordinary-audited bootstrap snapshot changed')
     seed = {role: proofs[sha] for role, sha in context['seed_receipts_sha256'].items()}
-    _case_link(seed, bound, None, prefix, None)
+    _case_link(seed, bound, None, prefix, None,**options)
     if (checkpoint.get('status') != ('READ_ONLY_INITIAL_BASELINE' if generation == 1 else 'READ_ONLY_AUDITED_ADVANCE')
             or generation == 1 and checkpoint.get('previous_checkpoint_sha256') is not None
             or generation > 1 and checkpoint.get('previous_checkpoint_sha256') != ledger[-1].get('previous_checkpoint_sha256')):
@@ -290,7 +346,7 @@ def validate_checkpoint(raw, expected_sha256, context_raw, context_sha256, proof
             raise ValueError('exact next unique eligible bank member required')
         after = _prefix(checkpoint['snapshot'], entries+[name], records+[identifier])
         receipts = {role: proofs[sha] for role, sha in link['receipts_sha256'].items()}
-        if _case_link(receipts, bound, prefix, after, link['previous_checkpoint_sha256']) != link:
+        if _case_link(receipts,bound,prefix,after,link['previous_checkpoint_sha256'],**options) != link:
             raise ValueError('audited bank ledger changed')
         entries.append(name)
         records.append(identifier)
@@ -303,8 +359,11 @@ def validate_checkpoint(raw, expected_sha256, context_raw, context_sha256, proof
     return checkpoint
 
 
-def bind_next_case(prepared_case, previous_raw, previous_sha256, context_raw, context_sha256, proofs):
-    checkpoint = validate_checkpoint(previous_raw, previous_sha256, context_raw, context_sha256, proofs)
+def bind_next_case(prepared_case, previous_raw, previous_sha256, context_raw, context_sha256, proofs,
+                   *, producer='grid400',qomp_binding=None):
+    p=_policy(producer,qomp_binding)
+    checkpoint = validate_checkpoint(previous_raw,previous_sha256,context_raw,context_sha256,proofs,
+                                      producer=producer,qomp_binding=qomp_binding)
     context = json.loads(context_raw)
     if checkpoint['generation'] >= len(context['eligible_ids']):
         raise ValueError('eligible bank is complete')
@@ -313,13 +372,16 @@ def bind_next_case(prepared_case, previous_raw, previous_sha256, context_raw, co
             or digest(encode(prepared_case)) != context['prepared_case_sha256'][mid]
             or prepared_case.get('dataset_mode') != 'awaiting-audited-bootstrap'):
         raise ValueError('exact reconstructed next eligible bank case required')
-    return dict(copy.deepcopy(prepared_case), dataset_mode='append', dataset_id=context['dataset_id'],
+    return dict(copy.deepcopy(prepared_case),dataset_mode='append',campaign_scope=p.append_scope,
+        dataset_id=context['dataset_id'],
         bootstrap_context_sha256=context_sha256, checkpoint_sha256=previous_sha256)
 
 
 def advance(previous_raw, previous_sha256, context_raw, context_sha256, proofs,
-            *, receipts, expected_audit_sha256, captured, tensor_raw):
-    previous = validate_checkpoint(previous_raw, previous_sha256, context_raw, context_sha256, proofs)
+            *, receipts, expected_audit_sha256, captured, tensor_raw,
+            producer='grid400',qomp_binding=None):
+    options=dict(producer=producer,qomp_binding=qomp_binding)
+    previous = validate_checkpoint(previous_raw,previous_sha256,context_raw,context_sha256,proofs,**options)
     context, base = json.loads(context_raw), helper('dataset_guard')
     links = _receipts(receipts)
     if (links['audit'] != expected_audit_sha256 or not _sha(expected_audit_sha256)
@@ -328,7 +390,7 @@ def advance(previous_raw, previous_sha256, context_raw, context_sha256, proofs,
             or base.digest(captured['before']) != previous['snapshot_sha256']):
         raise ValueError('recorded next audit and exact predecessor captures required')
     bound = dict(context, context_sha256=context_sha256)
-    link = _case_link(receipts, bound, captured['before'], captured['delivered'], previous_sha256)
+    link = _case_link(receipts,bound,captured['before'],captured['delivered'],previous_sha256,**options)
     if link['monomer_id'] != context['eligible_ids'][previous['generation']]:
         raise ValueError('only the immediate eligible successor may advance')
     case = json.loads(receipts['case'])
@@ -353,5 +415,5 @@ def advance(previous_raw, previous_sha256, context_raw, context_sha256, proofs,
         audited_records=previous['audited_records']+[link['record_id']],
         ledger=previous['ledger']+[link], snapshot=copy.deepcopy(captured['delivered']),
         snapshot_sha256=base.digest(captured['delivered']))
-    validate_checkpoint(encode(result), digest(encode(result)), context_raw, context_sha256, updated_proofs)
+    validate_checkpoint(encode(result),digest(encode(result)),context_raw,context_sha256,updated_proofs,**options)
     return result, updated_proofs

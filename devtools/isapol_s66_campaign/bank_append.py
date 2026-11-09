@@ -13,7 +13,7 @@ _MODULES = {}
 
 def helper(name):
     if name not in ('audited_bank', 'bank_store', 'dataset_guard', 'phoenix_pilot',
-                    'grid400_bank_policy'):
+                    'grid400_bank_policy','qomp_execution'):
         raise ValueError('closed audited-bank append helpers required')
     if name not in _MODULES:
         path = Path(__file__).with_name(name+'.py')
@@ -26,14 +26,20 @@ def helper(name):
 
 def append_once(client, scope, case, *, dataset_adapter, prepared_case,
                 checkpoint_raw, checkpoint_sha256, context_raw, context_sha256,
-                proof_blobs, authenticated_owner, save):
+                proof_blobs, authenticated_owner, save,producer='grid400',
+                qomp_binding=None,before_submit=None):
     """Exclusive save callback; an ambiguous write always stops without replay."""
     dataset_adapter._validate(client, scope, case)
+    if (producer not in ('grid400','qomp') or getattr(scope,'producer','grid400')!=producer
+            or producer=='qomp' and not callable(before_submit)
+            or producer=='grid400' and (qomp_binding is not None or before_submit is not None)):
+        raise ValueError('closed append producer/live release admission required')
+    options=dict(producer=producer,qomp_binding=qomp_binding)
     core, base, store = (helper(name) for name in ('audited_bank', 'dataset_guard', 'bank_store'))
     checkpoint = core.validate_checkpoint(
-        checkpoint_raw, checkpoint_sha256, context_raw, context_sha256, proof_blobs)
+        checkpoint_raw,checkpoint_sha256,context_raw,context_sha256,proof_blobs,**options)
     reproduced = core.bind_next_case(prepared_case, checkpoint_raw, checkpoint_sha256,
-                                     context_raw, context_sha256, proof_blobs)
+                                     context_raw,context_sha256,proof_blobs,**options)
     context = json.loads(context_raw)
     identifier, specification_name = context['dataset_id'], context['specification_name']
     if (scope.mode != 'append' or scope.dataset_id != identifier
@@ -58,11 +64,13 @@ def append_once(client, scope, case, *, dataset_adapter, prepared_case,
     managers = list(client.query_managers(status=['active'], limit=200))
     if len(managers) == 200 or any('*' in m.compute_tags or scope.compute_tag in m.compute_tags for m in managers):
         raise ValueError('new bank singleton tag is not isolated from active managers')
+    if producer=='qomp':
+        helper('qomp_execution').manager_isolation(managers,scope.compute_tag)
     save('owned-before-entry.json', before)
     intent = store.reserve_intent(dataset_id=identifier, checkpoint_sha256=checkpoint_sha256,
         snapshot_sha256=checkpoint['snapshot_sha256'], context_sha256=context_sha256,
         case_sha256=scope.case_sha256, eligibility_sha256=case['eligibility_sha256'],
-        monomer_id=case['monomer_id'], compute_tag=scope.compute_tag)
+        monomer_id=case['monomer_id'],compute_tag=scope.compute_tag,producer=producer)
     save('dispatch-intent.json', intent)
     save('entry-insert-attempt.json', dict(dataset_id=identifier, entry=entry.name,
         case_sha256=scope.case_sha256, checkpoint_sha256=checkpoint_sha256, transport_retries=False))
@@ -84,14 +92,18 @@ def append_once(client, scope, case, *, dataset_adapter, prepared_case,
         raise ValueError('bank changed immediately before record submission')
     body = DatasetSubmitBody(entry_names=[entry.name], specification_names=[specification_name],
                              compute_tag=scope.compute_tag, find_existing=False)
+    if producer=='qomp':
+        save('scratch-release-admission.json',before_submit())
     meta = client.make_request('post', f'api/v1/datasets/singlepoint/{identifier}/submit',
                                InsertCountsMetadata, body=body, allow_retries=False)
     if not meta.success or meta.n_inserted != 1 or meta.n_existing != 0:
         raise RuntimeError('record insertion was not exactly one fresh bank record; no retry')
     after_record = snapshot()
     record_id = after_record['associations'][entry.name][specification_name]
-    if (type(record_id) is not int or record_id <= 0
-            or record_id in helper('grid400_bank_policy').PROTECTED_RECORDS):
+    protected=helper('grid400_bank_policy').PROTECTED_RECORDS
+    if producer=='qomp':
+        protected=helper('qomp_execution').helper('qomp_campaign').PROTECTED_RECORDS+tuple(checkpoint['audited_records'])
+    if (type(record_id) is not int or record_id <= 0 or record_id in protected):
         raise RuntimeError('one exact fresh bank record identity required; no retry')
     base.assert_append_delta(before, after_record, entry_name=entry.name, record_id=record_id,
                              specification_name=specification_name)

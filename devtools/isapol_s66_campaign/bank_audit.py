@@ -15,7 +15,8 @@ _MODULES = {}
 
 def helper(name):
     if name not in ('audited_bank', 'dataset_guard', 'bank_store', 'bank_campaign',
-                    'bank_dataset', 'bank_readonly', 'phoenix_pilot_cb63305', 'native_controller'):
+                    'bank_dataset','bank_readonly','phoenix_pilot_cb63305','native_controller',
+                    'qomp_expansion'):
         raise ValueError('closed read-only eligible-bank audit helpers required')
     if name not in _MODULES:
         path = Path(__file__).with_name(name+'.py')
@@ -41,7 +42,7 @@ def captured(data):
         record='owned-after-record.json', delivered='owned-after-delivery.json').items()}
 
 
-def _verify_intent(data, outcome, draft, append_inputs):
+def _verify_intent(data,outcome,draft,append_inputs,*,producer='grid400'):
     core, base = helper('audited_bank'), helper('dataset_guard')
     checkpoint = None if append_inputs is None else json.loads(append_inputs['checkpoint_raw'])
     fields = dict(dataset_id=outcome['dataset_id'] if append_inputs is not None else None,
@@ -50,18 +51,23 @@ def _verify_intent(data, outcome, draft, append_inputs):
         context_sha256=None if checkpoint is None else append_inputs['context_sha256'],
         case_sha256=core.digest(core.encode(draft)), eligibility_sha256=draft['eligibility_sha256'],
         monomer_id=draft['monomer_id'], compute_tag=outcome['compute_tag'])
-    sha = helper('bank_store').verify_intent(_read(data/'dispatch-intent.json'), **fields)
+    sha = helper('bank_store').verify_intent(_read(data/'dispatch-intent.json'),
+        **fields,**(dict(producer=producer) if producer!='grid400' else {}))
     if outcome.get('dispatch_intent_sha256') != sha:
         raise ValueError('bank delivered outcome and immutable dispatch intent differ')
     return sha
 
 
-def validate_preservation(data, outcome, draft, append_inputs, specification):
+def validate_preservation(data,outcome,draft,append_inputs,specification,*,producer='grid400'):
     """Independently reduce all four append snapshots and the immutable intent."""
     core, base = helper('audited_bank'), helper('dataset_guard')
+    options=(helper('qomp_expansion').reducer_options(append_inputs['qomp_binding'])
+             if producer=='qomp' else {})
+    if producer not in ('grid400','qomp'):
+        raise ValueError('closed captured-preservation producer required')
     checkpoint = core.validate_checkpoint(append_inputs['checkpoint_raw'],
         append_inputs['checkpoint_sha256'], append_inputs['context_raw'],
-        append_inputs['context_sha256'], append_inputs['proof_blobs'])
+        append_inputs['context_sha256'],append_inputs['proof_blobs'],**options)
     views = captured(data)
     before, entry, record, delivered = (views[k] for k in ('before', 'entry', 'record', 'delivered'))
     name, identifier, spec = draft['entry']['name'], outcome['record_id'], draft['specification_name']
@@ -92,7 +98,7 @@ def validate_preservation(data, outcome, draft, append_inputs, specification):
             or envelope['artifacts']['tensors.npz']['sha256'] != sha
             or outcome.get('tensors_sha256') != sha or outcome.get('tensor_bytes') != len(tensor)):
         raise ValueError('captured completed bank record/history/envelope/tensors differ')
-    intent = _verify_intent(data, outcome, draft, append_inputs)
+    intent = _verify_intent(data,outcome,draft,append_inputs,producer=producer)
     return dict(status='PASS_CAPTURED_OWNED_DATASET_PRESERVATION',
         checkpoint_sha256=append_inputs['checkpoint_sha256'],
         before_sha256=base.digest(before), after_sha256=base.digest(delivered),
@@ -113,14 +119,19 @@ def validate_initial_capture(data, outcome, draft):
     return snapshot
 
 
-def approved_client(draft, outcome, append_inputs):
+def approved_client(draft,outcome,append_inputs,*,producer='grid400'):
     import yaml
     server = yaml.safe_load(Path(
         '/storage/project/r-cs207-0/awallace43/qca/resources_losii_ac.yml').read_text())['server']
     helper('phoenix_pilot_cb63305').validate_server_config(server)
     adapter = helper('bank_dataset')
-    scope = adapter.prepare_transaction(draft, draft, outcome['compute_tag'],
-        checkpoint_raw=None if append_inputs is None else append_inputs['checkpoint_raw'])
+    if producer not in ('grid400','qomp') or producer=='qomp' and append_inputs is None:
+        raise ValueError('QOMP audit requires its actual audited append binding')
+    extra=(dict(producer='qomp',qomp_binding=append_inputs['qomp_binding'],
+                context_raw=append_inputs['context_raw'],proof_blobs=append_inputs['proof_blobs'])
+           if producer=='qomp' else {})
+    scope = adapter.prepare_transaction(draft,draft,outcome['compute_tag'],
+        checkpoint_raw=None if append_inputs is None else append_inputs['checkpoint_raw'],**extra)
     cls = helper('bank_readonly').readonly_client_class(adapter, scope, outcome['dataset_id'])
     client = cls(server['fractal_uri'], username=server['username'], password=server['password'],
                  verify=server['verify'], show_motd=False)
@@ -130,22 +141,25 @@ def approved_client(draft, outcome, append_inputs):
     return client
 
 
-def passing_report(raw_audit, append_inputs):
+def passing_report(raw_audit,append_inputs,*,producer='grid400'):
     audit = json.loads(raw_audit)
-    expected_status = ('PASS_SELECTED_FRESH_SINGLETON_EVIDENCE' if append_inputs is None
+    expected_status = ('PASS_QOMP_SERIAL_CASE_EVIDENCE' if producer=='qomp' else
+                       'PASS_SELECTED_FRESH_SINGLETON_EVIDENCE' if append_inputs is None
                        else 'PASS_SELECTED_BANK_CASE_SINGLETON_EVIDENCE')
-    if (audit.get('status') != expected_status or audit.get('producer_profile') != 'grid400'
-            or audit.get('campaign_scope') != 'eligible-bank'
+    if (producer not in ('grid400','qomp') or producer=='qomp' and append_inputs is None
+            or audit.get('status') != expected_status or audit.get('producer_profile') != producer
+            or audit.get('campaign_scope') != ('qomp-serial' if producer=='qomp' else 'eligible-bank')
             or audit.get('dataset_mode') != ('fresh' if append_inputs is None else 'append')):
         raise ValueError('only a passing ordinary bank audit may publish an accepted checkpoint')
     return audit
 
 
-def publish(client, *, pool, prepared, raw_audit, data, case_path, draft, append_inputs, output):
+def prepare_publication(client,*,pool,prepared,raw_audit,data,case_path,draft,append_inputs,output,
+                        producer='grid400'):
     """Live double-snapshot confirmation around the pure, already-passing audit."""
-    audit = passing_report(raw_audit, append_inputs)
+    audit = passing_report(raw_audit,append_inputs,producer=producer)
     core, base, store = (helper(name) for name in ('audited_bank', 'dataset_guard', 'bank_store'))
-    receipts = dict(audit=raw_audit, outcome=_raw(data/'pilot-outcome.json'),
+    receipts = dict(audit=raw_audit,outcome=_raw(data/('qomp-outcome.json' if producer=='qomp' else 'pilot-outcome.json')),
                     case=_raw(case_path), envelope=_raw(data/'server-native-envelope.json'))
     tensor = _raw(data/'server-tensors.npz', 16*1024**2)
     snapshot = lambda: base.snapshot_dataset(client, dataset_id=audit['dataset_id'],
@@ -163,19 +177,17 @@ def publish(client, *, pool, prepared, raw_audit, data, case_path, draft, append
         if base.digest(before) != base.digest(views['delivered']):
             raise ValueError('live bank differs from the captured audited append delivery')
         context_raw = append_inputs['context_raw']
+        options=(helper('qomp_expansion').reducer_options(append_inputs['qomp_binding'])
+                 if producer=='qomp' else {})
         checkpoint, _ = core.advance(append_inputs['checkpoint_raw'], append_inputs['checkpoint_sha256'],
             context_raw, append_inputs['context_sha256'], append_inputs['proof_blobs'],
             receipts=receipts, expected_audit_sha256=core.digest(raw_audit),
-            captured=views, tensor_raw=tensor)
+            captured=views,tensor_raw=tensor,**options)
         expected_proofs = checkpoint['ledger'][-1]['receipts_sha256']
     if base.digest(snapshot()) != base.digest(before):
         raise ValueError('live bank changed during ordinary audit checkpoint publication')
-    if store.store_receipts(receipts) != expected_proofs:
-        raise ValueError('stored ordinary audit proof commitments differ')
     checkpoint_raw = core.encode(checkpoint)
     context_path, checkpoint_path = output/'bank-context.json', output/'bank-checkpoint.json'
-    store._write_once(context_path, context_raw)
-    store._write_once(checkpoint_path, checkpoint_raw)
     result = dict(status='PASS_AUDITED_BANK_BOOTSTRAP' if append_inputs is None else 'PASS_AUDITED_BANK_ADVANCE',
         dataset_id=audit['dataset_id'], generation=checkpoint['generation'],
         context_path=str(context_path), context_sha256=core.digest(context_raw),
@@ -184,8 +196,27 @@ def publish(client, *, pool, prepared, raw_audit, data, case_path, draft, append
         eligible_count=len(pool['eligible_ids']), refused_ids=list(pool['refused_ids']),
         whole_bank_complete=not pool['refused_ids'] and checkpoint['generation'] == 131,
         qualification='Recorded ordinary-OS audit proof and live-state agreement; no scientific accuracy claim.')
-    store._write_once(output/'bank-advance.json', core.encode(result))
+    return dict(receipts=receipts,expected_proofs=expected_proofs,
+        context_raw=context_raw,checkpoint_raw=checkpoint_raw,result=result,producer=producer)
+
+
+def commit_publication(publication,output):
+    """No validation/native work here; QOMP caller runs ALL postseals first."""
+    store=helper('bank_store')
+    options=dict(producer='qomp') if publication['producer']=='qomp' else {}
+    if store.store_receipts(publication['receipts'],**options)!=publication['expected_proofs']:
+        raise ValueError('stored ordinary audit proof commitments differ')
+    store._write_once(output/'bank-context.json',publication['context_raw'])
+    store._write_once(output/'bank-checkpoint.json',publication['checkpoint_raw'])
+    result=publication['result']
+    store._write_once(output/'bank-advance.json',helper('audited_bank').encode(result))
     return result
+
+
+def publish(client,*,pool,prepared,raw_audit,data,case_path,draft,append_inputs,output,producer='grid400'):
+    publication=prepare_publication(client,pool=pool,prepared=prepared,raw_audit=raw_audit,data=data,
+        case_path=case_path,draft=draft,append_inputs=append_inputs,output=output,producer=producer)
+    return commit_publication(publication,output)
 
 
 def advance_audit_checkpoint(*, args, raw_audit, data, draft, append_inputs, output, source):

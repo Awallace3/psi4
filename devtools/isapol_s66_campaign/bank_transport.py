@@ -15,7 +15,7 @@ import re
 def helper(name):
     if name not in ('grid400_bank_policy', 'grid400_bank_case', 'dataset_fresh_cb63305',
                     'phoenix_worker_probe', 'dataset_guard', 'phoenix_pilot',
-                    'qomp_bank_policy','qomp_campaign'):
+                    'qomp_bank_policy','qomp_campaign','audited_bank'):
         raise ValueError('closed eligible bank transport helpers required')
     path = Path(__file__).with_name(name+'.py')
     spec = importlib.util.spec_from_file_location('_bank_transport_'+name, path)
@@ -31,7 +31,8 @@ def _encoded(value):
 class RequestScope:
     """Consume mutation attempts before HTTP, including failed/lost responses."""
 
-    def __init__(self, case, reproduced_case, compute_tag, *, checkpoint_raw=None,producer='grid400'):
+    def __init__(self, case, reproduced_case, compute_tag, *, checkpoint_raw=None,producer='grid400',
+                 qomp_binding=None,context_raw=None,proof_blobs=None):
         if producer not in ('grid400','qomp'):
             raise ValueError('closed transaction producer required')
         qomp=producer=='qomp'
@@ -39,12 +40,15 @@ class RequestScope:
         cases=helper('qomp_campaign' if qomp else 'grid400_bank_case')
         policy=cases if qomp else helper('grid400_bank_policy')
         profiles=helper('qomp_bank_policy') if qomp else policy
+        if not qomp and any(v is not None for v in (qomp_binding,context_raw,proof_blobs)):
+            raise ValueError('QOMP checkpoint authority cannot cross the old transaction')
         if (type(case) is not dict or _encoded(case) != _encoded(reproduced_case)
                 or case.get('schema') != 'native-selected-molecular-pilot/1'
                 or case.get('producer_profile') != producer
                 or case.get('status') != 'PREPARED_NOT_REGISTERED_OR_SUBMITTED'
                 or case.get('campaign') != policy.CAMPAIGN
-                or case.get('campaign_scope') != ('qomp-pilot' if qomp else 'eligible-bank')
+                or case.get('campaign_scope') != (('qomp-serial' if case.get('dataset_mode')=='append'
+                                                  else 'qomp-pilot') if qomp else 'eligible-bank')
                 or case.get('dataset_name') != cases.DATASET_NAME
                 or case.get('specification_name') != cases.SPECIFICATION_NAME
                 or case.get('dataset_mode') not in ('fresh', 'append')
@@ -54,8 +58,9 @@ class RequestScope:
                 or re.fullmatch(re.escape((cases.NAMESPACE if qomp else 'ccasp-native-grid400-bank-')+case['monomer_id']+'-')+
                                 '[1-9][0-9]*', compute_tag) is None):
             raise ValueError('entire reconstructed eligible-bank transaction required')
-        if qomp and (case['dataset_mode']!='fresh' or checkpoint_raw is not None):
-            raise ValueError('QOMP148A permits only its fresh first pilot, not append/wave')
+        if qomp and case['dataset_mode']=='fresh' and any(v is not None for v in (
+                checkpoint_raw,qomp_binding,context_raw,proof_blobs)):
+            raise ValueError('QOMP fresh bootstrap cannot adopt an append checkpoint')
         if qomp:
             qualified=cases.helper('qualified_qomp')
             if (case.get('producer',{}).get('scientific_commit')!=qualified.SCIENTIFIC_COMMIT
@@ -96,7 +101,8 @@ class RequestScope:
                     or hashlib.sha256(checkpoint_raw).hexdigest() != case.get('checkpoint_sha256')):
                 raise ValueError('exact verified fresh-bank append checkpoint bytes required')
             checkpoint = json.loads(checkpoint_raw)
-            if (checkpoint.get('schema') != 'native-audited-bank-checkpoint/1'
+            if (checkpoint.get('schema') != ('qomp-audited-bank-checkpoint/1' if qomp
+                                             else 'native-audited-bank-checkpoint/1')
                     or checkpoint.get('status') not in ('READ_ONLY_INITIAL_BASELINE', 'READ_ONLY_AUDITED_ADVANCE')
                     or checkpoint.get('campaign') != policy.CAMPAIGN
                     or checkpoint.get('dataset_id') != identifier
@@ -108,6 +114,11 @@ class RequestScope:
                     or checkpoint.get('snapshot_sha256') != helper('dataset_guard').digest(
                         checkpoint['snapshot'])):
                 raise ValueError('verified bank checkpoint target/eligibility/context differs')
+            if qomp:
+                helper('audited_bank').validate_checkpoint(
+                    checkpoint_raw,case['checkpoint_sha256'],context_raw,
+                    case['bootstrap_context_sha256'],proof_blobs,
+                    producer='qomp',qomp_binding=qomp_binding)
             self.dataset_id = identifier
 
     def bind_created(self, identifier):
