@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import time
 
@@ -12,6 +13,28 @@ from fixed_gauge_cache_probe import CAPS, cache_plan
 
 SCOPE = "FIXED_HF_FULL_FRAGMENT_CACHE_INTEGRATION_NOT_ENERGY_BENCHMARK"
 STATUS = "PASS_FIXED_HF_CACHE_INTEGRATION_ONLY"
+
+
+def require_minimal_basis(selected, expected):
+    if (not isinstance(selected,str) or not isinstance(expected,str) or not expected
+            or selected.casefold() != expected.casefold()):
+        raise ValueError(f"Original minimal basis required: selected={selected!r}, expected={expected!r}")
+
+
+def expected_minimal_basis(source, options):
+    explicit = [v for k,v in options.items() if k.casefold()=="minao_basis"]
+    if len(explicit) > 1:
+        raise ValueError("Ambiguous original minimal-basis option")
+    if explicit:
+        if not isinstance(explicit[0],str) or not explicit[0]:
+            raise ValueError("Explicit original minimal basis must be nonempty")
+        return explicit[0]
+    # The source is already frozen by the controller and bound to the native build.
+    text = (source/"psi4/src/read_options.cc").read_text()
+    matches = re.findall(r'options\.add_str\(\s*"MINAO_BASIS"\s*,\s*"([^"]+)"\s*\)',text)
+    if len(matches) != 1:
+        raise RuntimeError("One original registered minimal-basis default required")
+    return matches[0]
 
 
 def validate_trace(trace):
@@ -55,8 +78,8 @@ def run(runtime, manifest, output, *, doc, raw, fields, primary, rifit, molecule
     if jkfit.nbf() != basis_counts["jkfit"]:
         raise RuntimeError("Frozen JKFIT dimension changed")
     minao_name = core.get_global_option("MINAO_BASIS")
-    if minao_name.lower() != "minao":
-        raise ValueError("Original MINAO localization fixture required")
+    minao_expected = expected_minimal_basis(Path(manifest["source"]),options)
+    require_minimal_basis(minao_name,minao_expected)
     minimal = core.BasisSet.build(molecule,"BASIS",minao_name,puream=1)
     fragments = [list(range(first,last)) for first,last in molecule.get_fragments()]
     if (len(fragments) != 2 or sorted(i for f in fragments for i in f) !=
@@ -85,7 +108,8 @@ def run(runtime, manifest, output, *, doc, raw, fields, primary, rifit, molecule
               "cache_cap_bytes":CAPS[1], "fixed_dimensions":dims,
               "input_scope":"Fixed raw HF matrices/energies/scaling, not saved localized orbitals",
               "rifit_nbf":rifit.nbf(), "jkfit_nbf":jkfit.nbf(),
-              "minimal_basis":{"name":minao_name,"nbf":minimal.nbf()}}
+              "minimal_basis":{"name":minao_name,"nbf":minimal.nbf(),
+                               "original_selection":minao_expected}}
     try:
         # Reuse the already tested boundary observer, never replace science functions.
         sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"cachy"))
@@ -146,8 +170,12 @@ def verify(output, manifest):
     from fragment_gate import FIELDS
     from full_inputs import load_point
     reference = require_reference(manifest)
+    minao_expected = expected_minimal_basis(Path(manifest["source"]),reference["options"])
     point, dimensions = load_point(Path(manifest["inputs"]),manifest["inputs_sha256"],"protein83")
     doc = json.loads((output/"probe-result.json").read_text())
+    require_minimal_basis(doc["minimal_basis"]["name"],minao_expected)
+    if doc["minimal_basis"]["original_selection"] != minao_expected:
+        raise RuntimeError("Original minimal-basis selection seal changed")
     if (doc["status"] != STATUS or doc["scope"] != SCOPE or doc["accepted_speedup_count"] != 0
             or doc["science_pin"] != manifest["science_pin"]
             or doc["reference_result_sha256"] != manifest["reference_result_sha256"]

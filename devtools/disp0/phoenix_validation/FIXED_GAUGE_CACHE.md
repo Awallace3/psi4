@@ -203,3 +203,34 @@ six hover marks, even-sample medians, basis/NBF labels and responsive
 dark/light/mobile/ToC behavior passed browser checks without console errors.
 The existing full report regression also passed, including original driver
 selectors, exact16-stage schema, rainbows and preserved numerical ratios.
+
+###15366266 stopped at an incorrect harness precondition
+
+The allocation failed1:0 after36s without TERM. The worker returned1 with
+no retirement; its owned group was reaped and scratch cleanup completed.
+It stopped **before entering the GPU provider/workflow**, at the new harness
+check`minao_name.lower() != "minao"`. There is no coexistence timing,
+memory rejection or full-field numerical result from this attempt.
+
+That check was my incorrect assumption: frozen`psi4/src/read_options.cc`
+registers`MINAO_BASIS` as **CC-PVTZ-MINAO**, and the original15337409/r0
+output explicitly records loading that basis at line1922. Its output SHA256
+matches the original controller receipt:
+`e055a418630b856cd8750a9fff6f7e30137428f9525f755fa61ac5f169f36d31`.
+
+The guard correction consumes an explicit original option if present,
+otherwise reads the unique registered default from the frozen scientific
+source, and requires the live option to match. It does **not** set another
+minimal basis or change scientific settings. The parent rechecks the selection
+seal. A focused test reproduced the old rejection of CC-PVTZ-MINAO before
+the correction; afterward all163 helper tests and7 observer tests passed.
+Tests also reject the wrong alias, ambiguous original options and missing/
+duplicate registered defaults.
+
+Failed controller SHA256:
+`0b635283a039f61b6bf292378603fa5858e3aa94295c106e66e9476c526e2f1b`.
+Worker stderr SHA256:
+`ec2de8fb1dd7bbda58f72a385a74b50bc07068215c1163c7f1f0224470327f27`.
+The independently completed11.86× blocked-dispersion result is unaffected.
+A corrected manual submission must use a new frozen outer and fresh root;
+the original source/build, failed artifacts and tolerances remain unchanged.

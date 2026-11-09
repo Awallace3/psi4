@@ -1,11 +1,38 @@
 """Offline full-fragment work contracts, not GPU execution evidence."""
 import copy
+from pathlib import Path
+import tempfile
 import unittest
 
-from fixed_hf_cache_integration import validate_work, validate_trace, CAPS, cache_plan
+from fixed_hf_cache_integration import (validate_work, validate_trace, CAPS, cache_plan,
+                                      require_minimal_basis)
+from fixed_hf_cache_integration import expected_minimal_basis
 
 
 class FixedHFIntegrationTests(unittest.TestCase):
+    def test_registered_minimal_basis_is_not_an_assumed_alias(self):
+        require_minimal_basis("CC-PVTZ-MINAO","CC-PVTZ-MINAO")
+        require_minimal_basis("cc-pvtz-minao","CC-PVTZ-MINAO")
+        with self.assertRaises(ValueError):
+            require_minimal_basis("minao","CC-PVTZ-MINAO")
+
+    def test_original_explicit_or_pinned_registered_basis_controls_selection(self):
+        source = Path(__file__).resolve().parents[3]
+        self.assertEqual(expected_minimal_basis(source,{}),"CC-PVTZ-MINAO")
+        self.assertEqual(expected_minimal_basis(source,{"minao_basis":"other"}),"other")
+        self.assertEqual(expected_minimal_basis(source,{"MINAO_BASIS":"other"}),"other")
+        with self.assertRaises(ValueError):
+            expected_minimal_basis(source,{"minao_basis":"one","MINAO_BASIS":"two"})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root/"psi4/src/read_options.cc"
+            path.parent.mkdir(parents=True)
+            for text in ("", 'options.add_str("MINAO_BASIS","a");\n'
+                             'options.add_str("MINAO_BASIS","b");\n'):
+                path.write_text(text)
+                with self.assertRaises(RuntimeError):
+                    expected_minimal_basis(root,{})
+
     def fixture(self):
         dims = {"active":[58,49]}
         plan = cache_plan(2488,58,49,688,698,24,CAPS[1])
