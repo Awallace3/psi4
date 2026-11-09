@@ -97,11 +97,16 @@ def _validate_einsums_dispersion(do_dft, do_disp, fsapt_type, use_einsums):
 
 
 def _automatic_cuda_dispersion(do_dft, do_disp, fsapt_type, use_einsums,
-                               provider_factory, external_potentials=None, block_size=24):
+                               provider_factory, external_potentials=None, block_size=24,
+                               *, factor_cache_bytes=0):
     """Select the explicit cuEST/CUDA continuation, never a CPU factor fallback."""
+    if type(factor_cache_bytes) is not int or factor_cache_bytes < 0:
+        raise ValidationError("CUDA dispersion factor cache budget must be a nonnegative integer.")
     selected = (core.get_global_option("USE_CUEST") and not do_dft and do_disp
                 and not core.get_option("SAPT", "SAPT_DFT_D3_IE")
                 and not core.get_option("SAPT", "SAPT_DFT_D4_IE"))
+    if factor_cache_bytes and not selected:
+        raise ValidationError("A positive CUDA dispersion factor cache budget requires automatic cuEST HF dispersion.")
     if selected and not callable(provider_factory):
         raise ValidationError("USE_CUEST HF dispersion requires an audited cuda_provider_factory.")
     if selected:
@@ -180,6 +185,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     core.prepare_options_for_module("SAPT")
     cuda_provider_factory = kwargs.pop("cuda_provider_factory", None)
     cuda_dispersion_block_size = kwargs.pop("cuda_dispersion_block_size", 24)
+    cuda_dispersion_factor_cache_bytes = kwargs.pop("cuda_dispersion_factor_cache_bytes", 0)
     induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper()
@@ -374,7 +380,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     do_dft = sapt_dft_functional != "HF"
     _automatic_cuda_dispersion(
         do_dft, do_disp, fsapt_type, einsums_available and use_einsums,
-        cuda_provider_factory, kwargs.get("external_potentials"), cuda_dispersion_block_size)
+        cuda_provider_factory, kwargs.get("external_potentials"), cuda_dispersion_block_size,
+        factor_cache_bytes=cuda_dispersion_factor_cache_bytes)
     _validate_einsums_dispersion(do_dft, do_disp, fsapt_type, use_einsums)
     if shift_only and grac_compute == "NONE":
         raise ValidationError("SAPT_DFT_GRAC_SHIFT_ONLY=true contradicts SAPT_DFT_GRAC_COMPUTE=NONE.")
@@ -1037,6 +1044,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         fsapt_induction_data=fsapt_induction_data,
         cuda_provider_factory=cuda_provider_factory,
         cuda_dispersion_block_size=cuda_dispersion_block_size,
+        cuda_dispersion_factor_cache_bytes=cuda_dispersion_factor_cache_bytes,
     )
 
     # Copy data back into globals
@@ -1385,6 +1393,7 @@ def sapt_dft(
     *,
     cuda_provider_factory=None,
     cuda_dispersion_block_size=24,
+    cuda_dispersion_factor_cache_bytes=0,
 ) -> dict:
     """Compute the SAPT(DFT) interaction energy components.
 
@@ -1428,6 +1437,11 @@ def sapt_dft(
         USE_CUEST selects ordinary HF dispersion; no CPU factor fallback.
     cuda_dispersion_block_size : int, optional
         Positive virtual compute-block edge for automatic cuEST HF dispersion.
+    cuda_dispersion_factor_cache_bytes : int, optional
+        Nonnegative byte cap for the packed-S GPU dispersion factor cache.
+        Zero preserves the existing no-cache default. Positive caps require
+        automatic cuEST HF dispersion and remain subject to the provider's
+        device-memory admission; they do not enable a host-factor fallback.
 
     Returns
     -------
@@ -1463,7 +1477,8 @@ def sapt_dft(
     use_cuda_dispersion = _automatic_cuda_dispersion(
         do_dft, do_disp, fsapt_type,
         einsums_available and core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS"),
-        cuda_provider_factory, external_potentials, cuda_dispersion_block_size)
+        cuda_provider_factory, external_potentials, cuda_dispersion_block_size,
+        factor_cache_bytes=cuda_dispersion_factor_cache_bytes)
     _validate_einsums_dispersion(
         do_dft, do_disp, fsapt_type,
         einsums_available and core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS"))
@@ -1644,7 +1659,8 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): GPU F-SAPT")
         cache, fragment_data = jk_terms.fisapt_cuda(
             cache, dimer_wfn, wfn_A, wfn_B, provider_factory=cuda_provider_factory,
-            block_size=cuda_dispersion_block_size, scalars=data)
+            block_size=cuda_dispersion_block_size, scalars=data,
+            factor_cache_bytes=cuda_dispersion_factor_cache_bytes)
         dimer_wfn._sapt_cuda_fisapt_execution = fragment_data.pop("FISAPT execution")
         data.update(fragment_data)
         core.timer_off("SAPT(DFT): GPU F-SAPT")
@@ -1833,7 +1849,8 @@ def sapt_dft(
                 mp2_disp = jk_terms.dispersion0_cuda(
                     cache, dimer_wfn, provider_factory=cuda_provider_factory,
                     nfrozen_A=nfrozen_A, nfrozen_B=nfrozen_B,
-                    block_size=cuda_dispersion_block_size, do_print=True)
+                    block_size=cuda_dispersion_block_size, do_print=True,
+                    factor_cache_bytes=cuda_dispersion_factor_cache_bytes)
                 # Keep structured diagnostics out of scalar QCVariables.
                 dimer_wfn._sapt_cuda_dispersion_execution = mp2_disp.pop("Disp0 execution", {})
             elif core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "EINSUMS":

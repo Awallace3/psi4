@@ -253,3 +253,97 @@ Runtime-config SHA256:
 The only execution change from the previous attempt is the guard's binding
 to the original explicit/registered minimal basis; all scientific functions,
 fixed HF inputs, cache budget, field checks and memory policy are unchanged.
+
+###15372618 passed full fixed-HF coexistence and all23fields
+
+Completed in4min43s, job/batch/step exit0 without TERM. The worker returned0
+with no retirement and was reaped; scratch and native/session cleanup
+completed. The parent independently replayed every sealed field comparison.
+Status:`PASS_FIXED_HF_CACHE_INTEGRATION_ONLY`; accepted energy-speedup count0.
+
+Fresh IAO/IBO localization used the original CC-PVTZ-MINAO basis
+(239functions). Every original field passed atol=rtol1e-9 with label/sign
+permutation only. Maximum entry error was8.053113731421035e-12Eh
+(Elst_AB); occupied-localization errors were at most1.66118e-13.
+Original dispersion scalar errors were2.31499e-15 and3.85976e-17Eh.
+No saved localized orbitals were input to the new workflow.
+
+The full JKFIT/RIFIT/response workflow retained870contractions,
+59RIFIT producer calls and5JKFIT calls with all30S slabs cached.
+Peak explicit device storage was **53,069,953,624bytes (49.425GiB)**,
+exactly the previous small-cache whole-workflow tracked peak. The larger
+cache fits below an earlier peak from other work; this does not measure
+opaque-native peak storage. The existing12GiB native reservation and120GiB
+declared device budget were unchanged; final live bytes/native owners were0.
+
+| Synchronized fixed-HF window | Wall/s |
+|---|---:|
+| Localization (overlap/IAO metrics and both monomers) | 3.7728431139839813 |
+| felst | 48.516762553015724 |
+| fexch | 0.18388543592300266 |
+| find | 146.42336028208956 |
+| fdisp (rotation/preparation + blocked call) | 19.79784615698736 |
+| Other work inside fragment_terms | 18.2059151630383 |
+| Outside fragment_terms, including factory/cleanup | 18.608952159876935 |
+
+The observed workflow is236.90061270503793s; the inclusive fragment call
+is255.50956486491486s. These are **intrusively traced fixed-HF diagnostics**,
+not ordinary energy-call baselines. No ratio to the old untraced383s fragment
+or413s whole energy is accepted or inferred by subtracting observer overhead.
+Induction is the largest observed window and the next performance target;
+its report records402,432strided-batched FP64 GEMM calls, not an attribution
+of all146s to GPU arithmetic or host launch overhead.
+
+Seals beneath`fixed-hf-cache-full-2d4a8f102d-01/job-15372618/`:
+
+| Artifact | SHA256 |
+|---|---|
+| `diagnostic-result.json` | `f3a46e657a5d642be861a63237ecc57bb76417e7ec2f13916ea61a987b69a429` |
+| `r0/probe-result.json` | `7a377602099109b7197a796cfb1bbbbc804ba748a21cdf2d37bcd906da7f6b84` |
+| `r0/fragment-matrices.npz` | `8fdcff27eb47d119cc693049dbe70996f6719aa8cf1c189b1aa639136ae6f3c7` |
+| `r0/full-fragment-execution.json` | `52213412beb285edb708f8a14c66cc5eda571a23df5dd3743cc5580c54628405` |
+
+This establishes the4GiB cache's full-fragment coexistence on this H200
+fixture and strict before/after field parity at fixed raw HF inputs.
+It is not an independent protein CPU oracle or a fix for native SCF
+plan-reconstruction drift; the whole-protein repeat qualification remains failed.
+
+## Normal-driver integration (host contracts, not a new physical result)
+
+The next source candidate exposes an explicit Python keyword,
+`cuda_dispersion_factor_cache_bytes`, through both `_run_sapt_dft` and
+`sapt_dft`. It forwards the same byte budget to `fisapt_cuda` or
+`dispersion0_cuda`; the scientific blocked algorithm and contraction order
+are unchanged. The default remains0, not4GiB. Noninteger/bool/negative
+budgets fail; positive budgets on CPU, DFT, no-dispersion or empirical-only
+routes fail rather than silently ignoring the request.
+
+The diagnostic `fragment_gate.py` now passes that keyword through the
+ordinary energy call and verifies that the fragment wrapper receives it;
+the wrapper no longer injects a cache cap behind the public driver's back.
+Its explicit CLI ceiling is4GiB, with default0 and CPU cap0 unchanged.
+This ceiling is not device-memory admission: the original session limit,
+native reservation and allocation accounting still apply.
+
+This source/gate pair requires a **new coherent build and qualification**.
+Do not run the updated gate against the frozen`e0da305c02` installation,
+overlay source files there, or relabel15357943/15372618 as tests of this new
+driver plumbing. The existing stage campaign still requests64MiB; a future
+larger-cap campaign must record its explicit budget and pass the unchanged
+small physical gate, strict repetitions and independent CPU comparison.
+
+Host validation passed391 core dispersion/driver tests and166 Phoenix
+helper tests. The focused final
+checks passed18 public-driver contracts and6 gate/snapshot contracts,
+including rejection before cache/SCF setup and actual wrapper execution
+inside the CPU-forbidden guards. These are CPU-only interface tests, not
+new GPU numerical or timing evidence.
+Independent read-only review of the public-driver keyword/dispatch changes
+found no concrete defects; that review is not physical qualification.
+
+The served report now includes the full fixed-HF fragment rainbow and all
+seven disjoint windows, receipts, basis/NBF and tracked memory. Browser
+checks passed for both the new integration figure and existing selectors,
+exact16-stage schema and numerical ratios, with no console errors; dark,
+light and420px screenshots were inspected. The mobile axis label was
+shortened without changing data or scope.

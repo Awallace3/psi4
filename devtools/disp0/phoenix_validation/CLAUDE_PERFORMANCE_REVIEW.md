@@ -168,7 +168,12 @@ and unchanged1e-12 pair/scalar checks, complete cleanup and sealed outputs.
 
 This is not a whole-protein speedup: native HF plan reconstruction still
 produces nanohartree-scale drift and the full strict repeat qualification
-failed. Full JKFIT/RIFIT/response/cache coexistence is a separate fixed-HF
-gate,15366266, submitted on H200/embers; no original tolerance or production
-cache default was changed. See [FIXED_GAUGE_CACHE.md](FIXED_GAUGE_CACHE.md)
+failed. The first full-coexistence attempt15366266 stopped before GPU work
+at an incorrect harness MINAO-name check. Corrected H200/embers15372618
+passed all23 original fields with fresh localization (maximum entry error
+8.05312e-12Eh) and unchanged full-workflow tracked peak49.425GiB.
+Its synchronized fixed-HF trace observes find146.423s, felst48.517s and
+fdisp19.798s; it is not an untraced whole-energy baseline or an independent
+CPU oracle. No original tolerance or production cache default was changed.
+See [FIXED_GAUGE_CACHE.md](FIXED_GAUGE_CACHE.md)
 and [PROTEIN83_REPEAT_DIAGNOSIS.md](PROTEIN83_REPEAT_DIAGNOSIS.md).

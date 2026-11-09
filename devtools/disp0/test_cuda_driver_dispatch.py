@@ -79,7 +79,73 @@ class AutomaticCudaDriver(unittest.TestCase):
         self.assertEqual(wave._sapt_cuda_dispersion_execution,{"backend":"fixture-CUDA"})
         self.assertIs(terms.dispersion0_cuda.call_args.kwargs["provider_factory"],factory)
         self.assertEqual(terms.dispersion0_cuda.call_args.kwargs["block_size"],5)
+        self.assertEqual(terms.dispersion0_cuda.call_args.kwargs["factor_cache_bytes"],0)
         mp2.df_mp2_sapt_dispersion.assert_not_called()
+
+    def test_explicit_cache_budget_reaches_scalar_cuda_without_changing_block_size(self):
+        ns,_,_,_,terms,_,wave=self.fixture()
+        ns["sapt_dft"](wave,wave,wave,do_dft=False,sapt_jk=Mock(),print_header=False,
+            cuda_provider_factory=Mock(),cuda_dispersion_block_size=5,
+            cuda_dispersion_factor_cache_bytes=4*1024**3)
+        self.assertEqual(terms.dispersion0_cuda.call_args.kwargs["factor_cache_bytes"],4*1024**3)
+        self.assertEqual(terms.dispersion0_cuda.call_args.kwargs["block_size"],5)
+
+    def test_cache_budget_rejects_invalid_types_even_when_cuda_is_disabled(self):
+        for enabled in (False,True):
+            for budget in (-1,True,False,1.5,"4096",None):
+                with self.subTest(enabled=enabled,budget=budget):
+                    ns,_,_,global_options,terms,_,wave=self.fixture()
+                    global_options["USE_CUEST"]=enabled
+                    with self.assertRaisesRegex(ValidationError,"cache.*nonnegative integer"):
+                        ns["sapt_dft"](wave,wave,wave,do_dft=False,sapt_jk=Mock(),
+                            print_header=False,cuda_provider_factory=Mock(),
+                            cuda_dispersion_factor_cache_bytes=budget)
+                    terms.build_sapt_jk_cache.assert_not_called()
+
+    def test_positive_cache_budget_cannot_be_silently_ignored_on_non_cuda_routes(self):
+        for disabled,do_dft,do_disp,empirical in (
+                (True,False,True,None),(False,True,True,None),
+                (False,False,False,None),(False,False,True,"SAPT_DFT_D3_IE"),
+                (False,False,True,"SAPT_DFT_D4_IE")):
+            with self.subTest(disabled=disabled,do_dft=do_dft,do_disp=do_disp,empirical=empirical):
+                ns,_,options,global_options,terms,_,wave=self.fixture()
+                global_options["USE_CUEST"]=not disabled
+                if empirical:options[("SAPT",empirical)]=True
+                with self.assertRaisesRegex(ValidationError,"cache.*requires.*cuEST HF dispersion"):
+                    ns["sapt_dft"](wave,wave,wave,do_dft=do_dft,do_disp=do_disp,
+                        sapt_jk=Mock(),print_header=False,cuda_provider_factory=Mock(),
+                        cuda_dispersion_factor_cache_bytes=4096)
+                terms.build_sapt_jk_cache.assert_not_called()
+
+    def test_energy_route_rejects_invalid_cache_budget_before_scf(self):
+        ns,_,_,_,_,_,wave=self.fixture()
+        with self.assertRaisesRegex(ValidationError,"cache.*nonnegative integer"):
+            ns["_run_sapt_dft"]("sapt(dft)",molecule=wave.molecule(),
+                cuda_provider_factory=Mock(),cuda_dispersion_factor_cache_bytes=-1)
+        ns["scf_helper"].assert_not_called()
+
+    def test_energy_route_consumes_and_forwards_cache_keyword(self):
+        # Exercise the actual early validation, then verify the later forwarding
+        # binding without emulating a converged SCF or importing Psi4 on the CPU.
+        ns,_,_,_,_,_,wave=self.fixture()
+        validate=ns["_automatic_cuda_dispersion"]
+        def stop_after_validation(*args,**kwargs):
+            validate(*args,**kwargs)
+            raise RuntimeError("Reached validated driver boundary")
+        ns["_automatic_cuda_dispersion"]=Mock(side_effect=stop_after_validation)
+        with self.assertRaisesRegex(RuntimeError,"validated driver boundary"):
+            ns["_run_sapt_dft"]("sapt(dft)",molecule=wave.molecule(),
+                cuda_provider_factory=Mock(),cuda_dispersion_factor_cache_bytes=4096)
+        self.assertEqual(ns["_automatic_cuda_dispersion"].call_args.kwargs["factor_cache_bytes"],4096)
+        ns["scf_helper"].assert_not_called()
+        path=Path(__file__).resolve().parents[2]/"psi4/driver/procrouting/sapt/sapt_proc.py"
+        function=next(n for n in ast.parse(path.read_text()).body
+                      if isinstance(n,ast.FunctionDef) and n.name=="_run_sapt_dft")
+        call=next(n for n in ast.walk(function)
+                  if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=="sapt_dft")
+        argument=next(k.value for k in call.keywords if k.arg=="cuda_dispersion_factor_cache_bytes")
+        self.assertIsInstance(argument,ast.Name)
+        self.assertEqual(argument.id,"cuda_dispersion_factor_cache_bytes")
 
     def test_use_cuest_fragment_driver_selects_shared_gpu_terms_without_cpu_localization(self):
         self.run_fragment_driver()
@@ -109,12 +175,14 @@ class AutomaticCudaDriver(unittest.TestCase):
             "Disp20,u":-.01,"Exch-Disp20,u":.001,
             "FISAPT execution":{"backend":"fixture-shared-session-CUDA"}}))
         actual=ns["sapt_dft"](wave,wave,wave,do_dft=False,sapt_jk=Mock(),print_header=False,
-                              cuda_provider_factory=Mock(),cuda_dispersion_block_size=5)
+                              cuda_provider_factory=Mock(),cuda_dispersion_block_size=5,
+                              cuda_dispersion_factor_cache_bytes=4*1024**3)
         self.assertEqual(actual["Disp20,u"],-.01)
         self.assertEqual(actual["Exch-Disp20,u"],.001)
         self.assertNotIn("FISAPT execution",actual)
         self.assertEqual(wave._sapt_cuda_fisapt_execution,{"backend":"fixture-shared-session-CUDA"})
         terms.fisapt_cuda.assert_called_once()
+        self.assertEqual(terms.fisapt_cuda.call_args.kwargs["factor_cache_bytes"],4*1024**3)
         if scaled:
             self.assertEqual(terms.fisapt_cuda.call_args.kwargs["scalars"]["Exch10"],.1)
             self.assertEqual(terms.fisapt_cuda.call_args.kwargs["scalars"]["Ind20,r"],-.003)

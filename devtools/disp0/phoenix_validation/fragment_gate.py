@@ -41,6 +41,16 @@ FIELDS = ("Qocc0A", "Qocc0B", "Uocc0A", "Uocc0B", "Locc_A", "Locc_B",
 WATER_DIMENSIONS={"atoms":6,"ao":82,"occupied":[5,5],"frozen":[1,1],"active":[4,4]}
 
 
+def validate_factor_cache(arm, budget):
+    """Explicit diagnostic cap, not a default or a device-memory admission."""
+    if type(budget) is not int or not 0 <= budget <= 4*1024**3:
+        raise ValueError("Explicit dispersion cache budget must be an integer between zero and 4 GiB")
+    if arm not in ("gpu", "cpu"):
+        raise ValueError("Explicit CPU/GPU arm required")
+    if arm != "gpu" and budget:
+        raise ValueError("CPU references must not enable a GPU factor cache")
+
+
 def options(gpu, scaled, basis_profile="aug-cc-pvdz"):
     from prepare_inputs import BASIS_PROFILES
     if basis_profile not in BASIS_PROFILES:
@@ -303,10 +313,7 @@ def main():
         if type(args.block_size) is not int or not 1<=args.block_size<=48:
             raise ValueError("Explicit bounded dispersion block required")
         result["dispersion_block_size"]=args.block_size
-        if not 0 <= args.factor_cache_bytes <= 1024**3:
-            raise ValueError("Explicit dispersion cache budget must be between zero and 1 GiB")
-        if args.arm != "gpu" and args.factor_cache_bytes:
-            raise ValueError("CPU references must not enable a GPU factor cache")
+        validate_factor_cache(args.arm, args.factor_cache_bytes)
         result["factor_cache_bytes"]=args.factor_cache_bytes
         result["benchmark"]=args.benchmark
         # RuntimeTensor lookup during Psi4's SAPT imports initializes Einsums;
@@ -447,8 +454,8 @@ def main():
                         for name in ("localization","flocalization","felst","fexch","find","fdisp0"):
                             guard.enter_context(patch.object(terms,name,forbidden))
                         start = time.perf_counter()
-                        if args.factor_cache_bytes:
-                            kwargs["factor_cache_bytes"]=args.factor_cache_bytes
+                        if kwargs.get("factor_cache_bytes") != args.factor_cache_bytes:
+                            raise RuntimeError("Public driver did not forward the explicit factor cache budget")
                         out, data = original(cache,*positional,**kwargs)
                         phases.append({"name":"GPU full fragment continuation",
                                        "seconds":time.perf_counter()-start})
@@ -490,7 +497,8 @@ def main():
             start = time.perf_counter()
             invoke=runtime.guarded_call if runtime else lambda function,*args,**kw:function(*args,**kw)
             energy, wfn = invoke(psi4.energy,"sapt(dft)", molecule=molecule, return_wfn=True,
-                **({"cuda_provider_factory":factory,"cuda_dispersion_block_size":args.block_size}
+                **({"cuda_provider_factory":factory,"cuda_dispersion_block_size":args.block_size,
+                    "cuda_dispersion_factor_cache_bytes":args.factor_cache_bytes}
                    if runtime else {}))
             result["diagnostic_whole_energy_seconds"] = time.perf_counter()-start
             if args.benchmark:
