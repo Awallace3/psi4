@@ -65,3 +65,29 @@ The existing embers H200/8CPU/160GiB/30min scheduler path is reused.
 Success is`PASS_FIXED_GAUGE_CACHE_DIAGNOSTIC`; accepted speedup count
 remains0. No source/native rebuild is needed because scientific functions
 and their existing explicit cache-cap interface are unchanged.
+
+## Submitted H200 diagnostic15357943
+
+All158 host helper tests passed; independent read-only review found no
+concrete launch blockers. These are not physical cache execution evidence.
+
+Frozen outer pin:`d87d61188ea3d5869f07d8b08108fd773e4480d1`,
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-cache-probe-d87d61188e`.
+Science/build remains`e0da305c02`, unchanged from the completed physical
+six-test native-JK and small F-SAPT gates.
+
+Submitted **15357943**; effective read-back route:
+`gts-cs207-chemx / gpu-h200 / embers`,1H200,8CPUs,160GiB,30min,
+initially PENDING for Priority. Test-only15357942 is not the allocation.
+Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/fixed-gauge-cache-d87d61188e-01`.
+Manifest SHA256:
+`00f96f57921d344a4d019dc8c374ed97a7ae218fb58eb159216708129ee90f17`.
+Runtime-config SHA256:
+`dcfada35840335785602df7a92e8b1f67761b5c3dae6dea5690a60559a850760`.
+Official hourly watcher:`b217404f7`.
+
+The separate candidate fixed-density reconstruction control15356916 is
+still a different experiment. No full Protein83 CPU reference/oracle,
+accepted ratio, native-repeat waiver or production cache-default change
+is implied by this submission.
