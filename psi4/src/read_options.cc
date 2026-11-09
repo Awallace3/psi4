@@ -1897,10 +1897,12 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         residual falls below this value, then switch to double precision for the remaining
         iterations. Convergence is only accepted with double-precision exchange. 0 disables. -*/
         options.add_double("SCF_K_FP32_CONVERGENCE", 0.0);
-        /*- MemDF: contract the in-core 3-index integrals with the Cholesky factor of the Coulomb
-        metric (a triangular solve) instead of J^-1/2. Same J and K up to roundoff for a
-        well-conditioned metric, about half the cost; DF_FITTING_CONDITION is not applied. -*/
-        options.add_bool("SCF_DF_METRIC_CHOLESKY", false);
+        /*- How MemDF applies the Coulomb metric to the in-core 3-index integrals. EIGEN forms
+        J^-1/2 from an eigendecomposition, dropping eigenvalues below DF_FITTING_CONDITION times the
+        largest. CHOLESKY uses a triangular solve with the Cholesky factor of J: the same J and K up
+        to roundoff at about half the cost. It falls back to EIGEN when the estimated reciprocal
+        condition number of J is below DF_FITTING_CONDITION or the factorization fails. -*/
+        options.add_str("SCF_DF_METRIC", "EIGEN", "EIGEN CHOLESKY");
         /*- Layout of the in-core DF-K first-transform intermediate. QI is the original (Q x i)
         layout; IQ stores (i x Q) with the occupied count padded to 8, which is faster with MKL on
         AMD Zen2 and slower at large basis sets on Intel Cascade Lake. -*/

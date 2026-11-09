@@ -571,12 +571,29 @@ void DFHelper::prepare_AO_core() {
                 double* Jp = metric_prep_core(1.0);
                 std::copy(Jp, Jp + naux_ * naux_, metp);
             }
+            // 1-norm of J (symmetric: largest absolute column sum), for the condition estimate
+            double anorm = 0.0;
+            for (size_t Q = 0; Q < naux_; Q++) {
+                double s = 0.0;
+                for (size_t P = 0; P < naux_; P++) s += std::fabs(metp[Q * naux_ + P]);
+                anorm = std::max(anorm, s);
+            }
             // column-major upper == row-major lower L
             int info = C_DPOTRF('U', naux_, metp, naux_);
+            double rcond = 0.0;
+            if (info == 0) {
+                std::vector<double> work(3 * naux_);
+                std::vector<int> iwork(naux_);
+                C_DPOCON('U', naux_, metp, naux_, anorm, &rcond, work.data(), iwork.data());
+            }
             timer_off("DFH: metric Cholesky");
-            if (info != 0) {
-                outfile->Printf("    DFHelper: metric Cholesky failed (info %d); using J^-1/2.\n", info);
+            // J^-1/2 drops eigenvalues below condition_ * max; keep Cholesky only where none would be.
+            if (info != 0 || rcond < condition_) {
+                outfile->Printf("    DFHelper: metric Cholesky not used (info %d, rcond %.2E < %.2E); using J^-1/2.\n",
+                                info, rcond, condition_);
                 chol = false;
+            } else if (print_lvl_ > 0) {
+                outfile->Printf("    DFHelper: metric Cholesky, rcond %.2E\n", rcond);
             }
         }
         if (chol) {
