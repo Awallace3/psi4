@@ -587,10 +587,13 @@ void DFHelper::prepare_AO_core() {
                 C_DPOCON('U', naux_, metp, naux_, anorm, &rcond, work.data(), iwork.data());
             }
             timer_off("DFH: metric Cholesky");
-            // J^-1/2 drops eigenvalues below condition_ * max; keep Cholesky only where none would be.
-            if (info != 0 || rcond < condition_) {
+            // Cholesky does not truncate small metric eigenvalues as J^-1/2 does (DF_FITTING_CONDITION);
+            // at the conditioning of standard JKFIT metrics that moves energies far less than the DF
+            // error. Fall back only when the metric is singular to working precision.
+            constexpr double rcond_min = 1.0e-13;
+            if (info != 0 || rcond < rcond_min) {
                 outfile->Printf("    DFHelper: metric Cholesky not used (info %d, rcond %.2E < %.2E); using J^-1/2.\n",
-                                info, rcond, condition_);
+                                info, rcond, rcond_min);
                 chol = false;
             } else if (print_lvl_ > 0) {
                 outfile->Printf("    DFHelper: metric Cholesky, rcond %.2E\n", rcond);

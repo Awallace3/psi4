@@ -1899,9 +1899,10 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("SCF_K_FP32_CONVERGENCE", 0.0);
         /*- How MemDF applies the Coulomb metric to the in-core 3-index integrals. EIGEN forms
         J^-1/2 from an eigendecomposition, dropping eigenvalues below DF_FITTING_CONDITION times the
-        largest. CHOLESKY uses a triangular solve with the Cholesky factor of J: the same J and K up
-        to roundoff at about half the cost. It falls back to EIGEN when the estimated reciprocal
-        condition number of J is below DF_FITTING_CONDITION or the factorization fails. -*/
+        largest. CHOLESKY uses a triangular solve with the Cholesky factor of J at about half the cost.
+        It applies no eigenvalue cutoff, so energies differ from EIGEN by much less than the DF
+        error itself; it falls back to EIGEN when the factorization fails or the metric's
+        estimated reciprocal condition number is below 1e-13. -*/
         options.add_str("SCF_DF_METRIC", "EIGEN", "EIGEN CHOLESKY");
         /*- Layout of the in-core DF-K first-transform intermediate. QI is the original (Q x i)
         layout; IQ stores (i x Q) with the occupied count padded to 8, which is faster with MKL on

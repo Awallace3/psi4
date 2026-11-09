@@ -88,8 +88,8 @@ class PSI_API DFHelper {
     }
     bool K_fp32() const { return K_fp32_; }
     /// In-core symmetric AO tensors with metric power -1/2: contract with the Cholesky factor
-    /// of the metric (triangular solve) instead of J^-1/2. Same J/K up to roundoff; falls back to
-    /// J^-1/2 when the metric's estimated reciprocal condition number is below the fitting condition.
+    /// of the metric (triangular solve) instead of J^-1/2. No eigenvalue cutoff; falls back to
+    /// J^-1/2 when the metric is singular to working precision (estimated rcond < 1e-13).
     void set_metric_cholesky(bool on) { metric_cholesky_ = on; }
     bool metric_cholesky() const { return metric_cholesky_; }
     /// Store the K first-transform intermediate as (i,Q) with nocc padded to 8 instead of (Q,i).
