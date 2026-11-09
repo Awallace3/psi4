@@ -91,3 +91,85 @@ The separate candidate fixed-density reconstruction control15356916 is
 still a different experiment. No full Protein83 CPU reference/oracle,
 accepted ratio, native-repeat waiver or production cache-default change
 is implied by this submission.
+
+## Completed15357943: blocked dispersion11.861× faster
+
+The H200 allocation completed in8min48s; job/batch/step exited0 without
+TERM. The worker returned0, reported no retirement and was reaped; owned
+scratch cleanup and provider/session cleanup completed. The controller
+replayed all four sealed pair/scalar outputs. Status:
+`PASS_FIXED_GAUGE_CACHE_DIAGNOSTIC`, accepted full-speedup count0.
+
+Actual device: NVIDIA H200/sm90, driver615.71.09, cuEST0.2.50 with native
+FP64 and the unchanged relative-MATRIXPOWER/cutoff1e-12 RIFIT policy.
+
+| Cap | Call order | Blocked wall/s | Native producer wall/s | Native batches |
+|---|---|---:|---:|---:|
+| 64MiB | A1 | 224.11257319001015 | 218.63574419985525 | 871 |
+| 4GiB | B1 | 18.994964473997243 | 14.785218328353949 | 59 |
+| 4GiB | B2 | 18.984791721915826 | 14.783711718511768 | 59 |
+| 64MiB | A2 | 226.3733985470608 | 220.24149632884655 | 871 |
+
+Two-sample medians:225.24298586853547s versus18.989878097956534s,
+**11.861212836999384× for the blocked call**. This includes native
+production, packing, contractions, reductions and required audits, not
+vendor-kernel-only timing. Two samples per cap are not a general scaling study.
+
+All870contraction blocks remain. All30S slabs fit, versus one tail:
+cache hits840versus28. Maximum absolute pair-matrix difference from A1
+is8.131516293641283e-20Eh; maximum signed-scalar difference is
+8.673617379884035e-19Eh, comfortably inside the unchanged1e-12 checks.
+No CPU numerical upload occurred inside the blocked calls.
+
+Actual packed-cache storage grew8,522,336→2,974,295,264bytes.
+The first small-cache call peaked at12.1313GiB explicit device storage;
+the **session-lifetime** peak after the large-cache calls was14.8934GiB,
+plus the unchanged12GiB native reservation. Live bytes returned to the
+same12,389,943,696-byte prepared-state baseline after every call.
+Later A2's peak counter is cumulative, not a separate A2 footprint.
+
+Seals beneath`fixed-gauge-cache-d87d61188e-01/job-15357943/`:
+
+| Artifact | SHA256 |
+|---|---|
+| `diagnostic-result.json` | `e817677fefbfbb1964bef9fa10e0def14a34f3863a6c98ede024f0c27b35b749` |
+| `r0/probe-result.json` | `c910f4aa99ba1bb9cf0ee86aef4444b55fe0b34c4a16d14fede2a71c44e5e7be` |
+| `r0/dispersion-pairs.npz` | `2996c90ef34510b9a4bd3d608bf3fb14b94e2ad0ffc88de7802ba67a1830be63` |
+
+**Not yet proved:** coexistence of the larger cache with the full
+JKFIT/RIFIT/response workflow, end-to-end energy speedup, independent
+protein CPU oracle or native SCF repeatability. The frozen full benchmark
+helper also intentionally caps its cache argument at1GiB; this diagnostic
+does not bypass that helper or silently change its production policy.
+The next integration gate should execute the original full fragment
+workflow on fixed saved HF inputs, prove actual memory coexistence and
+compare every original output field before any new whole-energy claim.
+
+## Next: full fixed-HF coexistence gate
+
+The outer-only`cache-coexistence` mode calls the original installed
+`fragment_terms` once with the4GiB cap, both owned auxiliary plans and the
+complete exact-response workflow. It holds raw HF matrices/energies and
+canonical scaling inputs fixed, but **recomputes IAO/IBO localization**;
+saved localized orbitals are comparator output only, not production input.
+No SCF or whole energy call runs.
+
+It compares all23original fields with the captured result using the unchanged
+strict`compare_arrays` criteria: label/sign permutation only, no energy
+rotations or relaxed tolerance. Original dispersion scalar checks, actual
+870contractions/59RIFIT calls/5JKFIT calls, provider/session cleanup and
+the existing declared device budget remain mandatory. The parent replays
+all field comparisons from sealed NPZ files.
+
+The existing source-boundary observer measures localization, felst, fexch,
+find and fdisp with synchronization at boundaries, retaining other-work
+residuals. These are **intrusively instrumented fixed-HF fragment windows**,
+not unprofiled energy baselines; no whole-workflow ratio is calculated by
+subtracting overhead or splicing them into earlier runs. A successful physical
+run establishes actual coexistence on the allocated H200 and reports explicit
+tracked peak plus the unchanged opaque native reservation, not a measured
+opaque-native peak or a general memory model.
+
+This does not change the frozen whole-energy helper's1GiB argument cap,
+qualify Protein83 SCF repeatability, change the production cache default,
+or introduce any accepted CPU/GPU speedup.

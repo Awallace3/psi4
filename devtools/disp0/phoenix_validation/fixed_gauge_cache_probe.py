@@ -99,6 +99,12 @@ def run(runtime, manifest, output):
         np.testing.assert_allclose(u[:nf,nf:],0.,rtol=0,atol=1e-8)
         np.testing.assert_allclose(u[nf:,:nf],0.,rtol=0,atol=1e-8)
         rotations.append(np.ascontiguousarray(u[nf:,nf:]))
+    if manifest.get("mode") == "cache-coexistence":
+        from fixed_hf_cache_integration import run as integrate
+        integrate(runtime,manifest,output,doc=doc,raw=raw,fields=fields,
+                  primary=primary,rifit=rifit,molecule=molecule,
+                  basis_counts=point["spherical_basis_counts"])
+        return
     report = {"status":"STARTED", "scope":SCOPE, "accepted_speedup_count":0,
               "scf_executed":False, "fisapt_executed":False,
               "science_pin":manifest["science_pin"], "pid":os.getpid(),

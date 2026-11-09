@@ -193,7 +193,7 @@ def child(manifest, config, build, output):
         runtime.psi4.set_num_threads(config["threads"])
         run(runtime,manifest,output)
         return
-    if manifest.get("mode")=="cache-profile":
+    if manifest.get("mode") in ("cache-profile","cache-coexistence"):
         from fixed_gauge_cache_probe import run
         runtime.guarded_call(run,runtime,manifest,output)
         return
@@ -294,7 +294,7 @@ def execute(path, worker=False, output=None):
     manifest = json.loads(path.read_text())
     gpu=manifest["kind"]=="gpu"
     native_tests=manifest.get("mode")=="native-tests"
-    cache_profile=manifest.get("mode")=="cache-profile"
+    cache_profile=manifest.get("mode") in ("cache-profile","cache-coexistence")
     if manifest["kind"] not in ("gpu","cpu"):
         raise ValueError("Explicit independent GPU/CPU diagnostic role required")
     if (native_tests or cache_profile) and not gpu:
@@ -372,7 +372,10 @@ def execute(path, worker=False, output=None):
                 raise RuntimeError("Fixed-density diagnostic worker failed")
             doc = json.loads((out/"probe-result.json").read_text())
             if cache_profile:
-                from fixed_gauge_cache_probe import verify
+                if manifest["mode"]=="cache-coexistence":
+                    from fixed_hf_cache_integration import verify
+                else:
+                    from fixed_gauge_cache_probe import verify
                 doc=verify(out,manifest)
                 row.update(result_sha256=digest(out/"probe-result.json"),pid=doc["pid"])
                 report["cache_diagnostic"]=doc
@@ -409,7 +412,7 @@ def execute(path, worker=False, output=None):
             row["pid"] = doc["pid"]
             write(root/"diagnostic-result.json", report)
         if cache_profile:
-            report["status"]="PASS_FIXED_GAUGE_CACHE_DIAGNOSTIC"
+            report["status"]=doc["status"]
         elif native_tests:
             gate=root/"small-gate"
             gate.mkdir()
@@ -458,7 +461,7 @@ def execute(path, worker=False, output=None):
 
 
 def submit(args):
-    cache_profile=getattr(args,"mode","fixed-density")=="cache-profile"
+    cache_profile=getattr(args,"mode","fixed-density") in ("cache-profile","cache-coexistence")
     if cache_profile and args.kind!="gpu":
         raise ValueError("Fixed-gauge cache diagnostic requires H200")
     outer = Path(__file__).resolve().parents[3]
@@ -502,8 +505,11 @@ def submit(args):
                 "inputs_sha256": peer["inputs_sha256"], "account": "gts-cs207-chemx",
                 "qos": "embers", "allocation_wall_seconds": WALL}
     if cache_profile:
-        from fixed_gauge_cache_probe import SCOPE as CACHE_SCOPE
-        manifest.update(mode="cache-profile",scope=CACHE_SCOPE)
+        if args.mode=="cache-coexistence":
+            from fixed_hf_cache_integration import SCOPE as CACHE_SCOPE
+        else:
+            from fixed_gauge_cache_probe import SCOPE as CACHE_SCOPE
+        manifest.update(mode=args.mode,scope=CACHE_SCOPE)
     require_reference(manifest)
     from full_inputs import load_point
     _, dimensions = load_point(Path(manifest["inputs"]), manifest["inputs_sha256"], "protein83")
@@ -565,7 +571,7 @@ def main():
     parser.add_argument("--root", type=Path)
     parser.add_argument("--kind",choices=("gpu","cpu"),default="gpu")
     parser.add_argument("--gpu-control",type=Path)
-    parser.add_argument("--mode",choices=("fixed-density","native-tests","cache-profile"),
+    parser.add_argument("--mode",choices=("fixed-density","native-tests","cache-profile","cache-coexistence"),
                         default="fixed-density")
     args = parser.parse_args()
     if args.execute or args.worker:
