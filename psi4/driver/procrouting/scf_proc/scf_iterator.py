@@ -140,15 +140,6 @@ def scf_initialize(self):
     # The Fock diagonalization keeps its DSYEVD workspace (~2 nso^2) for the whole SCF.
     total_memory -= self.diag_scratch_size()
 
-    # Per-thread XC accumulators (nthreads x nbf^2) are kept for the whole SCF: charge them to the
-    # budget, or fall back to atomic updates when they would take more than 10% of it.
-    if self.V_potential():
-        v_scratch = self.V_potential().V_thread_scratch_size()
-        if v_scratch > 0.1 * total_memory:
-            self.V_potential().set_V_thread_accumulators(False)
-        else:
-            total_memory -= v_scratch
-
     # Figure out how large the DFT collocation matrices are
     vbase = self.V_potential()
     if vbase:

@@ -396,7 +396,6 @@ void HF::finalize() {
         jk_->release_scratch();
     }
     // The potential outlives the SCF (gradients, TDDFT); its SCF-only scratch does not.
-    if (V_potential()) V_potential()->release_scratch();
     std::vector<double>().swap(diag_work_);
     std::vector<int>().swap(diag_iwork_);
 

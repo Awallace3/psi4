@@ -55,6 +55,14 @@
 
 #ifdef _OPENMP
 #include <omp.h>
+#else
+// single-threaded build: the V tile locks are never contended
+typedef int omp_lock_t;
+static inline void omp_init_lock(omp_lock_t*) {}
+static inline void omp_destroy_lock(omp_lock_t*) {}
+static inline void omp_set_lock(omp_lock_t*) {}
+static inline void omp_unset_lock(omp_lock_t*) {}
+static inline int omp_test_lock(omp_lock_t*) { return 1; }
 #endif
 
 #ifdef USING_BrianQC
@@ -1258,12 +1266,6 @@ void RV::initialize() {
 }
 void RV::finalize() { VBase::finalize(); }
 void RV::print_header() const { VBase::print_header(); }
-size_t RV::V_thread_scratch_size() const {
-    // primary_->nbf(), not nbf_: nbf_ is only set once a density arrives (set_D / compute_V),
-    // and the SCF asks for this size before the first iteration.
-    const size_t n = primary_->nbf();
-    return V_thread_accumulators_ ? static_cast<size_t>(num_threads_) * n * n : 0;
-}
 void RV::compute_V(std::vector<SharedMatrix> ret) {
     // => Validate object <=
     timer_on("RV: Form V");
@@ -1324,37 +1326,15 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
     }
 
     auto V_AO = std::make_shared<Matrix>("V AO Temp", nbf_, nbf_);
-    // How each block's local V reaches V_AO:
-    //  ATOMIC  omp atomics into V_AO, ~2 per local (m, n) pair per block (the original path).
-    //  THREAD  per-thread accumulators reduced after the loop. They hold V_thread_scratch_size()
-    //          doubles, kept across calls (the reduction re-zeroes them) and freed by release_scratch();
-    //          the SCF budgets them or switches them off.
-    //  TILES   rows of V_AO split into tiles with one lock each; a block adds its rows tile by tile.
-    //          No atomics and no nbf^2 copies; lock traffic is per (block, tile).
-    // PSI_V_ACCUM=atomic|thread|tiles overrides the choice (benchmarking).
-    enum class Accum { ATOMIC, THREAD, TILES };
-    Accum mode = V_thread_accumulators_ ? Accum::THREAD : Accum::ATOMIC;
-    if (const char* env = std::getenv("PSI_V_ACCUM")) {
-        const std::string e(env);
-        if (e == "atomic") mode = Accum::ATOMIC;
-        else if (e == "thread") mode = Accum::THREAD;
-        else if (e == "tiles") mode = Accum::TILES;
-    }
-    if (mode == Accum::THREAD) {
-        if (V_thread_.size() != num_threads_ || V_thread_[0]->rowdim() != nbf_) {
-            V_thread_.assign(num_threads_, nullptr);
-            // each thread allocates (and first-touches) its own accumulator
-#pragma omp parallel for schedule(static, 1) num_threads(num_threads_)
-            for (size_t t = 0; t < num_threads_; t++) V_thread_[t] = std::make_shared<Matrix>("V Thread", nbf_, nbf_);
-        }
-    } else {
-        V_thread_.clear();
-    }
+    // Each block's local V reaches V_AO through row tiles: the rows of V_AO are split into
+    // min(nbf, 8 * nthreads) tiles with one lock each, and a block adds whole rows tile by tile.
+    // That replaces ~2 omp atomics per local (m, n) pair per block with one lock per
+    // (block, tile), and needs no per-thread nbf^2 copies. (Colouring blocks into conflict-free
+    // sets does not work here: basis-function extents span nearly every block.)
     const int ntile = std::max(1, std::min(nbf_, 8 * static_cast<int>(num_threads_)));
-    std::vector<int> tile_of(mode == Accum::TILES ? nbf_ : 0);
-    for (int m = 0; m < static_cast<int>(tile_of.size()); m++)
-        tile_of[m] = static_cast<int>(static_cast<long>(m) * ntile / nbf_);
-    std::vector<omp_lock_t> tile_locks(mode == Accum::TILES ? ntile : 0);
+    std::vector<int> tile_of(nbf_);
+    for (int m = 0; m < nbf_; m++) tile_of[m] = static_cast<int>(static_cast<long>(m) * ntile / nbf_);
+    std::vector<omp_lock_t> tile_locks(ntile);
     for (auto& l : tile_locks) omp_init_lock(&l);
     std::vector<std::vector<std::pair<int, int>>> tile_order(num_threads_);  // (tile, ml) per thread
 
@@ -1413,106 +1393,61 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         const auto& function_map = block->functions_local_to_global();
         int nlocal = function_map.size();
 
-        if (mode == Accum::TILES) {
-            // group local rows by tile, then add whole rows (lower triangle of V2, mirrored as
-            // in the other paths) under the tile's lock; try free tiles first, block only if none
-            auto& ord = tile_order[rank];
-            ord.clear();
-            for (int ml = 0; ml < nlocal; ml++) ord.emplace_back(tile_of[function_map[ml]], ml);
-            std::sort(ord.begin(), ord.end());
-            std::vector<std::pair<size_t, size_t>> runs;  // [begin, end) in ord, one tile each
-            for (size_t k = 0; k < ord.size();) {
-                size_t e = k;
-                while (e < ord.size() && ord[e].first == ord[k].first) e++;
-                runs.emplace_back(k, e);
-                k = e;
+        // group local rows by tile, then add whole rows (lower triangle of V2, mirrored as
+        // in the other paths) under the tile's lock; try free tiles first, block only if none
+        auto& ord = tile_order[rank];
+        ord.clear();
+        for (int ml = 0; ml < nlocal; ml++) ord.emplace_back(tile_of[function_map[ml]], ml);
+        std::sort(ord.begin(), ord.end());
+        std::vector<std::pair<size_t, size_t>> runs;  // [begin, end) in ord, one tile each
+        for (size_t k = 0; k < ord.size();) {
+            size_t e = k;
+            while (e < ord.size() && ord[e].first == ord[k].first) e++;
+            runs.emplace_back(k, e);
+            k = e;
+        }
+        auto Vp = V_AO->pointer();
+        auto add_run = [&](const std::pair<size_t, size_t>& r) {
+            for (size_t k = r.first; k < r.second; k++) {
+                const int ml = ord[k].second;
+                double* row = Vp[function_map[ml]];
+                for (int nl = 0; nl <= ml; nl++) row[function_map[nl]] += V2p[ml][nl];
+                for (int nl = ml + 1; nl < nlocal; nl++) row[function_map[nl]] += V2p[nl][ml];
             }
-            auto Vp = V_AO->pointer();
-            auto add_run = [&](const std::pair<size_t, size_t>& r) {
-                for (size_t k = r.first; k < r.second; k++) {
-                    const int ml = ord[k].second;
-                    double* row = Vp[function_map[ml]];
-                    for (int nl = 0; nl <= ml; nl++) row[function_map[nl]] += V2p[ml][nl];
-                    for (int nl = ml + 1; nl < nlocal; nl++) row[function_map[nl]] += V2p[nl][ml];
+        };
+        std::vector<char> done(runs.size(), 0);
+        size_t ndone = 0, start = runs.empty() ? 0 : rank % runs.size();
+        while (ndone < runs.size()) {
+            bool progress = false;
+            for (size_t i = 0; i < runs.size(); i++) {
+                const size_t k = (start + i) % runs.size();
+                if (done[k]) continue;
+                omp_lock_t* l = &tile_locks[ord[runs[k].first].first];
+                if (omp_test_lock(l)) {
+                    add_run(runs[k]);
+                    omp_unset_lock(l);
+                    done[k] = 1;
+                    ndone++;
+                    progress = true;
                 }
-            };
-            std::vector<char> done(runs.size(), 0);
-            size_t ndone = 0, start = runs.empty() ? 0 : rank % runs.size();
-            while (ndone < runs.size()) {
-                bool progress = false;
-                for (size_t i = 0; i < runs.size(); i++) {
-                    const size_t k = (start + i) % runs.size();
+            }
+            if (!progress) {
+                for (size_t k = 0; k < runs.size(); k++) {
                     if (done[k]) continue;
                     omp_lock_t* l = &tile_locks[ord[runs[k].first].first];
-                    if (omp_test_lock(l)) {
-                        add_run(runs[k]);
-                        omp_unset_lock(l);
-                        done[k] = 1;
-                        ndone++;
-                        progress = true;
-                    }
+                    omp_set_lock(l);
+                    add_run(runs[k]);
+                    omp_unset_lock(l);
+                    done[k] = 1;
+                    ndone++;
+                    break;
                 }
-                if (!progress) {
-                    for (size_t k = 0; k < runs.size(); k++) {
-                        if (done[k]) continue;
-                        omp_lock_t* l = &tile_locks[ord[runs[k].first].first];
-                        omp_set_lock(l);
-                        add_run(runs[k]);
-                        omp_unset_lock(l);
-                        done[k] = 1;
-                        ndone++;
-                        break;
-                    }
-                }
-            }
-        } else if (mode == Accum::THREAD) {
-            auto Vp = V_thread_[rank]->pointer();
-            for (int ml = 0; ml < nlocal; ml++) {
-                int mg = function_map[ml];
-                for (int nl = 0; nl < ml; nl++) {
-                    int ng = function_map[nl];
-                    Vp[mg][ng] += V2p[ml][nl];
-                    Vp[ng][mg] += V2p[ml][nl];
-                }
-                Vp[mg][mg] += V2p[ml][ml];
-            }
-        } else {
-            auto Vp = V_AO->pointer();
-            for (int ml = 0; ml < nlocal; ml++) {
-                int mg = function_map[ml];
-                for (int nl = 0; nl < ml; nl++) {
-                    int ng = function_map[nl];
-#pragma omp atomic update
-                    Vp[mg][ng] += V2p[ml][nl];
-#pragma omp atomic update
-                    Vp[ng][mg] += V2p[ml][nl];
-                }
-#pragma omp atomic update
-                Vp[mg][mg] += V2p[ml][ml];
             }
         }
         parallel_timer_off("V_xc", rank);
     }
 
     for (auto& l : tile_locks) omp_destroy_lock(&l);
-
-    // Reduce the per-thread accumulators (fixed order: deterministic, unlike the atomics) and
-    // re-zero them in the same pass for the next call.
-    if (mode == Accum::THREAD) {
-        double* Vt = V_AO->pointer()[0];
-        const size_t n2 = static_cast<size_t>(nbf_) * nbf_;
-        std::vector<double*> acc(num_threads_);
-        for (size_t t = 0; t < num_threads_; t++) acc[t] = V_thread_[t]->pointer()[0];
-#pragma omp parallel for schedule(static) num_threads(num_threads_)
-        for (size_t x = 0; x < n2; x++) {
-            double sum = 0.0;
-            for (size_t t = 0; t < num_threads_; t++) {
-                sum += acc[t][x];
-                acc[t][x] = 0.0;
-            }
-            Vt[x] = sum;
-        }
-    }
 
     // Do we need VV10?
     double vv10_e = 0.0;
