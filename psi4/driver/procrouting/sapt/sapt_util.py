@@ -31,6 +31,21 @@ from psi4 import core
 from ...constants import constants
 
 
+def solve_device_sapt_response(wavefunctions, right_hand_sides, maxiter, conv):
+    """Solve independent monomer equations without the Python host-CG callbacks."""
+    if not core.get_global_option("CUEST_DEVICE_CG"):
+        raise RuntimeError("The SAPT device response bridge requires CUEST_DEVICE_CG true.")
+    solutions = []
+    for label, wfn, rhs in zip(("A", "B"), wavefunctions, right_hand_sides):
+        core.print_out(f"\n   SAPT monomer {label}: device-resident CG\n")
+        matrix = rhs if isinstance(rhs, core.Matrix) else core.Matrix.from_array(rhs)
+        result = wfn.cphf_solve([matrix], conv, maxiter, 1)
+        if not wfn.cphf_converged():
+            raise RuntimeError(f"SAPT monomer {label} device CG did not converge in {maxiter} iterations.")
+        solutions.append(result[0])
+    return solutions
+
+
 def print_sapt_var(name, value, short=False, start_spacer="    "):
     """
     Converts the incoming value as hartree to a correctly formatted Psi print format.

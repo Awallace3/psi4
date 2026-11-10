@@ -1,5 +1,6 @@
 list(APPEND sources
   cuhf.cc
+  cuest_cg.cc
   frac.cc
   hf.cc
   mom.cc
@@ -9,6 +10,9 @@ list(APPEND sources
   uhf.cc
   )
 psi4_add_module(lib scf_solver sources)
+if(ENABLE_cuEST AND TARGET CUDA::nvrtc AND TARGET CUDA::cuda_driver)
+    target_compile_definitions(scf_solver PRIVATE PSI4_CUEST_DEVICE_CG)
+endif()
 if (psi4_ENABLE_PRECOMPILE_HEADERS)
     # Skip PCH when OpenOrbitalOptimizer is enabled to avoid conflicts with armadillo
     if(NOT TARGET OpenOrbitalOptimizer::OpenOrbitalOptimizer)

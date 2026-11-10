@@ -79,6 +79,7 @@
 #endif
 #ifdef USING_cuEST
 #include "psi4/libpsipcm/cuestpcm.h"
+#include "psi4/libfock/cuest_diis.h"
 #endif
 
 using namespace psi;
@@ -88,6 +89,24 @@ using namespace pybind11::literals;
 #include <pybind11/functional.h>
 
 void export_wavefunction(py::module& m) {
+#ifdef USING_cuEST
+    py::class_<CuestDIIS, std::shared_ptr<CuestDIIS>>(m, "CuestDIIS")
+        .def(py::init<int, int, bool, bool, bool>())
+        .def("scf_update", &CuestDIIS::scf_update)
+        .def("add_entry", &CuestDIIS::add_entry)
+        .def("extrapolate", &CuestDIIS::extrapolate)
+        .def("error_gram", &CuestDIIS::error_gram)
+        .def("density_fock_gram", &CuestDIIS::density_fock_gram)
+        .def("_error_vectors", &CuestDIIS::error_vectors,
+             "Explicit diagnostic download; never used by the SCF DIIS loop.")
+        .def("stats", &CuestDIIS::stats)
+        .def("size", &CuestDIIS::size)
+        .def("capacity", &CuestDIIS::capacity)
+        .def("last_pivot", &CuestDIIS::last_pivot)
+        .def("_test_fail_allocation_after", &CuestDIIS::test_fail_allocation_after)
+        .def("reset_subspace", &CuestDIIS::reset_subspace)
+        .def("clear", &CuestDIIS::clear);
+#endif
     typedef void (Wavefunction::*take_sharedwfn)(SharedWavefunction);
     py::class_<Wavefunction, std::shared_ptr<Wavefunction>>(m, "Wavefunction", "docstring", py::dynamic_attr())
         .def(py::init<std::shared_ptr<Molecule>, std::shared_ptr<BasisSet>, Options&>())
@@ -350,7 +369,11 @@ void export_wavefunction(py::module& m) {
         .def("cphf_Hx", &scf::HF::cphf_Hx, "CPHF Hessian-vector prodcuts (4 * J - K - K.T).")
         .def("cphf_solve", &scf::HF::cphf_solve, "x_vec"_a, "conv_tol"_a, "max_iter"_a, "print_lvl"_a = 2,
              "Solves the CPHF equations for a given set of x vectors.")
-        .def("cphf_converged", &scf::HF::cphf_converged, "Adds occupied guess alpha orbitals.")
+        .def("cphf_converged", &scf::HF::cphf_converged, "Whether the last coupled-perturbed solve converged.")
+        .def("cphf_nfock_builds", &scf::HF::cphf_nfock_builds,
+             "Number of equation Hessian actions in the last coupled-perturbed solve.")
+        .def("cphf_device_stats", &scf::HF::cphf_device_stats,
+             "Residency counters and timings of the last device CG solve; empty after host CG.")
         .def("guess_Ca", &scf::HF::guess_Ca, "Sets the guess Alpha Orbital Matrix")
         .def("guess_Cb", &scf::HF::guess_Cb, "Sets the guess Beta Orbital Matrix")
         .def_property("reset_occ_", &scf::HF::reset_occ, &scf::HF::set_reset_occ,
@@ -378,6 +401,8 @@ void export_wavefunction(py::module& m) {
         .def("compute_orbital_gradient", &scf::HF::compute_orbital_gradient, "docstring")
         .def("find_occupation", &scf::HF::find_occupation, "docstring")
         .def("diis", &scf::HF::diis, "docstring")
+        .def("_diis_orthogonalizer", &scf::HF::diis_orthogonalizer,
+             "Internal fixed SCF orthogonalizer for device DIIS.")
         .def_property("diis_manager_", &scf::HF::diis_manager, &scf::HF::set_diis_manager, "The DIIS object.")
         .def_property("initialized_diis_manager_", &scf::HF::initialized_diis_manager,
                       &scf::HF::set_initialized_diis_manager, "Has the DIIS object been initialized?")

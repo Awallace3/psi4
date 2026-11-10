@@ -734,6 +734,80 @@ For a compatible bare-K plan borrowed from SAPT, response scales the result
 to the functional's weight without changing the shared plan. An incompatible
 range-separated mixture raises an error rather than using incorrect weights.
 
+Set |globals__cuest_gridk| to true to select **DF-J + Grid-K** instead of
+DF-JK for cuEST builds. This includes the nonsymmetric exchange contractions
+used by SAPT and CPKS. The option defaults to false and requires cuEST's
+Grid-K APIs (included in the 0.2.50 SDK). Grid-K integrates exchange on its
+own GPU grid using the ``DFT_RADIAL_POINTS``, ``DFT_SPHERICAL_POINTS``,
+``DFT_RADIAL_SCHEME``, ``DFT_PRUNING_SCHEME``, and other DFT grid settings.
+It works with either setting of ``CUEST_XC``. The plan is reused until the
+geometry, exchange operator, or grid settings change. Exchange is already
+weighted by the same full- and long-range fractions as DF-K.
+
+|globals__cuest_gridk_workspace_mb| bounds Grid-K's **variable device
+scratch component** in decimal MB, for both ordinary JK and resident
+CPHF/CPKS. The memory-oriented default is 256 MB instead of the former
+hard-coded 8000 MB; set ``CUEST_GRIDK_WORKSPACE_MB 8000`` when reproducing
+older measurements. Smaller workspaces may require more internal tiling
+without changing the grid, precision, screening, or exchange operator.
+Values must be positive; an insufficient budget may be rejected by cuEST.
+The same budget is retained between each workspace query and computation.
+Changing it between solves does not rebuild the persistent integral plan.
+
+This is **not a total GPU-memory cap**: fixed SDK workspace overhead,
+Direct-J's independently queried scratch, plans, molecular grids, AO
+panels and solver/XC arrays remain additional. Ordinary JK reports separate
+J and K workspace queries, their shared maximum, and AO staging.
+Resident CG exposes the same split through ``cphf_device_stats()`` as
+``jk_coulomb_workspace_device_bytes``,
+``jk_exchange_workspace_device_bytes``, and ``jk_workspace_device_bytes``,
+alongside ``jk_variable_workspace_budget_bytes``.
+``jk_explicit_plan_device_bytes`` covers Psi4-owned basis/pair/integral-plan
+workspaces, not opaque SDK caches or the molecular grid.
+``ao_staging_device_bytes``, ``jk_symmetric_density_device_bytes``, and
+``orbital_panel_device_bytes`` report separate resident staging categories.
+These categories are not a measured device peak.
+
+Set |globals__cuest_directj| to true as well for **Direct-J + Grid-K**.
+Coulomb then uses cuEST's integral-direct four-center builder, including
+general signed CPKS densities. No DF integral plan or GPU auxiliary basis
+is constructed for this combination; the existing JK factory still accepts
+an auxiliary basis, which is unused by these kernels. With Grid-K disabled,
+``CUEST_DIRECTJ true`` instead selects Direct-J + DF-K and retains the DF
+plan for exchange. Both options default to false and do not change native
+CPU ``SCF_TYPE DIRECT`` routing. Select the cuEST builder with
+``SCF_TYPE DF`` and ``USE_CUEST true``.
+
+Direct-J preserves the SDK's kernel-selection default (JIT on CUDA 13+
+in cuEST 0.2.50). |globals__cuest_directj_jit| can explicitly select ``ON``
+or ``OFF`` for matched-input comparisons; the default is ``DEFAULT``.
+Changing it invalidates the Direct-J plan. Unsupported JIT requests raise
+an error, not a silent fallback. Pair and density-weighted Schwarz screening
+are controlled by ``INTS_TOLERANCE`` (or the JK cutoff setter).
+Density-dependent screening can set a floor on the true CPKS residual:
+use a tighter integral cutoff than the requested response accuracy, and
+check convergence against a tighter cutoff (zero disables screening).
+Unlike K, J depends only on the symmetric part of the density; this does
+not permit symmetrizing the density supplied to nonsymmetric Grid-K.
+Analytic Coulomb gradients for Direct-J are not implemented and raise an
+error rather than silently using DF-J derivatives.
+
+Direct-J + Grid-K removes the resident DF integral tensor, not every size
+limit in a SAPT calculation. At 10,000 AOs one dense FP64 AO matrix alone
+occupies 800,000,000 bytes; even a single-RHS CG staging tile contains
+several such matrices. The automatic tile's 256 MiB heuristic has a
+minimum of one RHS, so it is not a hard staging cap for large AO bases.
+Occupied/virtual solver vectors, XC fields, SCF diagonalization and
+separate SAPT/dispersion intermediates also require memory. An end-to-end
+10,000-AO calculation therefore needs its own memory audit and measured
+validation; enabling these JK options alone does not establish that limit.
+
+Grid-K is a numerical quadrature approximation, not another density-fitting
+algorithm: converge the grid against the desired energy and CPKS residual
+accuracy. The nonsymmetric kernel preserves general signed response densities;
+it does not replace them by symmetric SCF densities. Analytic exchange
+gradients for this mode are not implemented and raise an error.
+
 Eligible dense one-irrep orbital transforms use FP64 cuBLAS on the shared
 cuEST stream. Multi-factor products retain intermediate matrices on the GPU.
 ``CUEST_GEMM_MIN_DIM`` applies the same largest-link work threshold as the
@@ -741,13 +815,79 @@ SAPT tensor chains (default 256; zero forces eligible nonempty products).
 Small, empty, and symmetry-blocked products retain native BLAS. The timer
 ``cuEST CPSCF: cuBLAS`` identifies executed GPU transforms.
 
-For LDA/GGA CPKS, set ``CUEST_XC false`` **before SCF** to retain the native
-CPU XC response grid and kernel. GPU XC response is not implemented.
+For LDA/GGA CPKS, ``CUEST_XC true`` uses response density and potential
+contractions on the cuEST grid when the linked cuEST provides nonsymmetric
+XC densities. Functional derivatives are evaluated on the device with a
+CUDA-enabled LibXC, and otherwise on the host. Set ``CUEST_XC false``
+**before SCF** to retain the native CPU XC response grid and kernel.
 Native MGGA and VV10 response kernels remain unsupported and raise errors;
 this acceleration does not add CPKS support for M06, r²SCAN, or wB97M-V.
-The iterative solver, XC integration, and inter-build matrices remain on
-the host: this is not a wholly device-resident CPSCF solver, and enabling
-the backend does not guarantee a speedup for small systems.
+By default the iterative solver and inter-build matrices remain on the host;
+enabling the backend alone does not guarantee a speedup for small systems.
+
+Set |globals__cuest_device_cg| to true to select the separate
+**device-resident preconditioned conjugate-gradient solver** for
+``Wavefunction.cphf_solve`` and SAPT monomer response. MO vectors, full Fock
+panels, AO pseudodensities, J/K/XC contractions, vector updates, and dot-product
+results remain on the GPU during iteration. The host schedules kernels and
+reads only residual/status scalars; RHS upload and solution download occur
+outside the iterative loop. UKS alpha/beta response is solved as a coupled
+equation, and a fresh Hessian action certifies the true final residual rather
+than trusting only the recursively updated residual.
+
+This opt-in requires a cuEST build with CUDA NVRTC and driver support,
+``SAVE_JK true``, an initialized cuEST JK object, C1 symmetry, positive
+orbital-gap preconditioning, a positive-definite response Hessian (a stable
+SCF reference), and RHF/RKS or UHF/UKS. A positive orbital gap alone does not
+establish SCF stability; detected nonpositive curvature raises an error.
+DFT additionally requires
+``CUEST_XC true`` selected before SCF and a compatible final LDA/GGA GPU grid.
+Reference XC derivatives are prepared once per solve (on the host when CUDA
+LibXC is unavailable), then retained on the device. MGGA, VV10, fractional
+occupations, UKS GRAC kernels, and external/PCM/DDX/PE response contributions
+are rejected explicitly. Unsupported cases do not silently fall back to the
+host solver. The default remains false.
+
+``Wavefunction.cphf_device_stats()`` reports setup/iteration/total timings,
+operator calls, the final relative residual, and explicit solver transfer
+byte counters. The setup upload counter covers solver vectors and
+orbital/Fock panels, not XC reference preparation or SDK-internal transfers.
+Measure total solve time as well as iteration time: preparation and kernel
+compilation can dominate small problems, so no fixed speedup is guaranteed.
+
+For bottleneck diagnosis, |globals__cuest_response_profile| adds shared-stream
+fences and separates J, K, XC, orbital transforms, and CG updates in
+``timer.dat`` for both solvers. These synchronized timings deliberately
+perturb execution; disable this option for unperturbed speedup measurements.
+|globals__cuest_response_batch_size| limits simultaneous resident densities
+per SDK call. Zero uses the full AO tile; one uses serial SDK calls without
+moving response matrices to the host. This isolates batching efficiency from
+device residency while retaining the same J/K operator.
+
+|globals__cuest_response_tile_size| separately controls the resident AO
+staging tile: zero retains the automatic 256 MiB staging budget and
+eight-RHS cap; values one through eight explicitly bound the tile. A larger
+forced tile may use more memory and is not guaranteed to be faster.
+Only real densities in a partial final tile are submitted to cuEST. UKS
+retains the fixed alpha/beta storage pitch, so padding is skipped separately
+for each spin, not mistaken for another physical RHS. All full/partial
+workspace shapes are queried before iteration. ``cphf_device_stats()``
+reports ``ao_rhs_tile``, ``jk_density_slots_submitted``,
+``jk_padding_slots_avoided``, ``jk_exchange_density_slots_submitted``,
+``jk_coulomb_calls``, and ``jk_exchange_calls`` to audit actual SDK call
+arguments. DF-K with an empty occupied spin submits no exchange density
+for that spin. These counts do not imply a measured speedup.
+
+The response-only |globals__cuest_response_symmetric_k| optimization (default
+true, active only for device-CG Grid-K) uses
+the fact that CPKS consumes :math:`K(D)+K(D)^T`, rather than general
+:math:`K(D)`. With :math:`D_s=(D+D^T)/2`, the cuEST operator-symmetry
+restoration gives
+:math:`K(D)+K(D)^T=2K_{\mathrm{sym}}(D_s)`. The signed symmetric density
+is formed on device for exchange only; J and XC keep their original
+inputs. This avoids the second Grid-K build otherwise required for a
+nonsymmetric density. It does **not** change general JK results or
+substitute a positive-semidefinite DF exchange kernel for a signed response.
 
 
 cuEST SAD routing and SCF lifecycle timings
@@ -755,9 +895,10 @@ cuEST SAD routing and SCF lifecycle timings
 
 In builds with cuEST support, ``USE_CUEST true`` and ``SCF_TYPE DF`` route
 molecular J/K through cuEST. With |globals__cuest_sad| (default true), the
-density-fitted atomic J/K builds used by SAD, SADNO, HUCKEL, and MODHUCKEL
+atomic J/K builds used by SAD, SADNO, HUCKEL, and MODHUCKEL
 guesses also use cuEST, including the internal and OpenOrbitalOptimizer SAD
-solvers. The atomic calculations retain bare HF exchange and their original
+solvers. |globals__cuest_gridk| also selects Grid-K for these cuEST atomic
+builds. The atomic calculations retain bare HF exchange and their original
 occupations and convergence criteria. The SAD fitting basis must be spherical;
 the driver constructs it that way even for Cartesian orbital functions.
 Explicit non-DF |scf__sad_scf_type| settings retain the CPU direct builder.

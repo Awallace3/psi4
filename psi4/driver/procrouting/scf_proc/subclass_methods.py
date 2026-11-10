@@ -21,7 +21,44 @@ def diis_engine_helper(self):
             engines.add(aediis.lower())
     return engines
 
+
+def _cuest_orbital_gradient(self, save_fock, max_diis_vectors, unrestricted):
+    from ..cuest_diis import CuestDIIS, validate_cuest_diis
+    enabled = core.get_global_option("CUEST_DIIS")
+    if not enabled:
+        if self.initialized_diis_manager_ and getattr(self.diis_manager_, "is_cuest_diis", False):
+            raise ValidationError("Cannot change CUEST_DIIS during an SCF; reset the DIIS manager first.")
+        return None
+    validate_cuest_diis(self)
+    if not self.initialized_diis_manager_:
+        self._cuest_diis_stats = {}
+        self.diis_manager_ = CuestDIIS(
+            max_diis_vectors, "cuEST HF DIIS vector", closed_shell=not unrestricted,
+            engines=diis_engine_helper(self), stats=self._cuest_diis_stats)
+        self.initialized_diis_manager_ = True
+    if not getattr(self.diis_manager_, "is_cuest_diis", False):
+        raise ValidationError("Cannot change CUEST_DIIS during an SCF; reset the DIIS manager first.")
+    manager = self.diis_manager_
+    energy = self.compute_E() if save_fock and "ediis" in manager.engines else None
+    focks = [self.Fa(), self.Fb()] if unrestricted else [self.Fa()]
+    densities = [self.Da(), self.Db()] if unrestricted else [self.Da()]
+    return manager.scf_update(focks, densities, self.S(), self._diis_orthogonalizer(),
+                              save=save_fock, rms=core.get_option("SCF", "DIIS_RMS_ERROR"), energy=energy)
+
+
+def _cuest_diis_stats(self):
+    if self.initialized_diis_manager_ and getattr(self.diis_manager_, "is_cuest_diis", False):
+        self.diis_manager_._publish()
+    return dict(getattr(self, "_cuest_diis_stats", {}))
+
+
+core.HF.cuest_diis_stats = _cuest_diis_stats
+
+
 def _RHF_orbital_gradient(self, save_fock: bool, max_diis_vectors: int) -> float:
+    metric = _cuest_orbital_gradient(self, save_fock, max_diis_vectors, False)
+    if metric is not None:
+        return metric
     gradient = self.form_FDSmSDF(self.Fa(), self.Da())
 
     if save_fock:
@@ -46,6 +83,9 @@ def _RHF_orbital_gradient(self, save_fock: bool, max_diis_vectors: int) -> float
         return gradient.absmax()
 
 def _UHF_orbital_gradient(self, save_fock: bool, max_diis_vectors: int) -> float:
+    metric = _cuest_orbital_gradient(self, save_fock, max_diis_vectors, True)
+    if metric is not None:
+        return metric
     gradient_a = self.form_FDSmSDF(self.Fa(), self.Da())
     gradient_b = self.form_FDSmSDF(self.Fb(), self.Db())
 

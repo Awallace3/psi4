@@ -126,19 +126,31 @@ void RHF::common_init() {
 }
 
 void RHF::finalize() {
-    // Form lagrangian
+    timer_on("RHF: Lagrangian");
+    // X = (C_occ epsilon_occ) C_occ^T. Weight columns by the signed
+    // energies, not sqrt(epsilon): occupied orbital energies can be negative.
+    // Zero first because BLAS need not touch an empty occupied block.
+    Lagrangian_->zero();
     for (int h = 0; h < nirrep_; ++h) {
-        for (int m = 0; m < Lagrangian_->rowdim(h); ++m) {
-            for (int n = 0; n < Lagrangian_->coldim(h); ++n) {
-                double sum = 0.0;
-                for (int i = 0; i < nalphapi_[h]; ++i) {
-                    sum += epsilon_a_->get(h, i) * Ca_->get(h, m, i) * Ca_->get(h, n, i);
-                }
-                Lagrangian_->set(h, m, n, sum);
+        const int nso = Lagrangian_->rowdim(h);
+        const int ncol = Lagrangian_->coldim(h);
+        const int nocc = nalphapi_[h];
+        if (!nso || !ncol || !nocc) continue;
+        auto cp = Ca_->pointer(h);
+        auto ep = epsilon_a_->pointer(h);
+        // One irrep's occupied columns only; no full nmo x nmo temporary.
+        std::vector<double> weighted(static_cast<size_t>(nso) * nocc);
+        for (int m = 0; m < nso; ++m) {
+            for (int i = 0; i < nocc; ++i) {
+                weighted[static_cast<size_t>(m) * nocc + i] = ep[i] * cp[m][i];
             }
         }
+        C_DGEMM('N', 'T', nso, ncol, nocc, 1.0, weighted.data(), nocc,
+                cp[0], Ca_->coldim(h), 0.0, Lagrangian_->pointer(h)[0], ncol);
     }
+    timer_off("RHF: Lagrangian");
 
+    timer_on("RHF: Finalize cleanup");
     Dold_.reset();
     G_.reset();
     J_.reset();
@@ -146,6 +158,7 @@ void RHF::finalize() {
     wK_.reset();
 
     HF::finalize();
+    timer_off("RHF: Finalize cleanup");
 }
 
 void RHF::save_density_and_energy() {
@@ -648,6 +661,10 @@ std::vector<SharedMatrix> RHF::twoel_Hx_full(std::vector<SharedMatrix> x_vec, bo
     return ret;
 }
 std::vector<SharedMatrix> RHF::cphf_Hx(std::vector<SharedMatrix> x_vec) {
+#ifdef USING_cuEST
+    CuestResponseProfile profile(options_.get_bool("USE_CUEST") && options_.get_bool("CUEST_RESPONSE_PROFILE"),
+                                 "cuEST response: Hx");
+#endif
     // Compute quantities
     std::vector<SharedMatrix> onel = onel_Hx(x_vec);
     std::vector<SharedMatrix> twoel = twoel_Hx(x_vec, true, "MO");
@@ -660,6 +677,9 @@ std::vector<SharedMatrix> RHF::cphf_Hx(std::vector<SharedMatrix> x_vec) {
 }
 std::vector<SharedMatrix> RHF::cphf_solve(std::vector<SharedMatrix> x_vec, double conv_tol, int max_iter,
                                           int print_lvl) {
+    cphf_device_stats_.clear();
+    if (options_.get_bool("CUEST_DEVICE_CG"))
+        return cphf_solve_device(x_vec, conv_tol, max_iter, print_lvl, false);
     std::time_t start, stop;
     start = std::time(nullptr);
     cphf_converged_ = false;
@@ -804,6 +824,10 @@ std::vector<SharedMatrix> RHF::cphf_solve(std::vector<SharedMatrix> x_vec, doubl
 
         // Calc hessian vector product
         std::vector<SharedMatrix> Ap_vec = cphf_Hx(active_p_vec);
+#ifdef USING_cuEST
+        CuestResponseProfile updates(options_.get_bool("USE_CUEST") && options_.get_bool("CUEST_RESPONSE_PROFILE"),
+                                     "cuEST response: CG updates");
+#endif
 
         max_rms = 0.0;
         mean_rms = 0.0;

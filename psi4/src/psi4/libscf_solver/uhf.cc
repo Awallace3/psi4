@@ -803,6 +803,10 @@ std::vector<SharedMatrix> UHF::twoel_Hx(std::vector<SharedMatrix> x_vec, bool co
     return ret;
 }
 std::vector<SharedMatrix> UHF::cphf_Hx(std::vector<SharedMatrix> x_vec) {
+#ifdef USING_cuEST
+    CuestResponseProfile profile(options_.get_bool("USE_CUEST") && options_.get_bool("CUEST_RESPONSE_PROFILE"),
+                                 "cuEST response: Hx");
+#endif
     // Compute quantities
     auto onel = onel_Hx(x_vec);
     auto twoel = twoel_Hx(x_vec, true, "MO");
@@ -815,6 +819,9 @@ std::vector<SharedMatrix> UHF::cphf_Hx(std::vector<SharedMatrix> x_vec) {
 }
 std::vector<SharedMatrix> UHF::cphf_solve(std::vector<SharedMatrix> x_vec, double conv_tol, int max_iter,
                                           int print_lvl) {
+    cphf_device_stats_.clear();
+    if (options_.get_bool("CUEST_DEVICE_CG"))
+        return cphf_solve_device(x_vec, conv_tol, max_iter, print_lvl, true);
     if ((x_vec.size() % 2) != 0) {
         throw PSIEXCEPTION("UHF::cphf_solve expect incoming vector to alternate A/B");
     }
@@ -1007,6 +1014,10 @@ std::vector<SharedMatrix> UHF::cphf_solve(std::vector<SharedMatrix> x_vec, doubl
 
         // Calc hessian vector product
         std::vector<SharedMatrix> Ap_vec = cphf_Hx(active_p_vec);
+#ifdef USING_cuEST
+        CuestResponseProfile updates(options_.get_bool("USE_CUEST") && options_.get_bool("CUEST_RESPONSE_PROFILE"),
+                                     "cuEST response: CG updates");
+#endif
 
         max_rms = 0.0;
         mean_rms = 0.0;

@@ -219,6 +219,95 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     False forces native FP64; true restores cuEST's default math mode, which permits
     emulation but may select native FP64 for a particular operation. -*/
     options.add_bool("CUEST_MIXED_PRECISION", true);
+    /*- Use numerical grid-based exchange (Grid-K) instead of density-fitted
+    exchange in cuEST J/K builds, including nonsymmetric SAPT and CPHF/CPKS
+    densities. Coulomb remains density-fitted (DF-J + Grid-K). The exchange
+    grid uses the DFT grid options, independently of |globals__cuest_xc|.
+    Grid-K is a quadrature approximation: converge the grid for the desired
+    energy and response accuracy. Requires a cuEST library providing the
+    symmetric and nonsymmetric Grid-K APIs (included in cuEST 0.2.50).
+    Analytic exchange gradients are not implemented for this mode.
+    No effect unless a cuEST J/K builder is selected. -*/
+    options.add_bool("CUEST_GRIDK", false);
+    /*- Use cuEST integral-direct four-center Coulomb (J) instead of DF-J.
+    Combine with |globals__cuest_gridk| for Direct-J + Grid-K, including
+    nonsymmetric CPHF/CPKS response densities. Without Grid-K, exchange
+    remains density-fitted. Direct-J + Grid-K does not construct a DF
+    integral plan or GPU auxiliary basis. The existing JK factory still
+    accepts an auxiliary basis, but it is unused by that combination.
+    Requires cuEST's direct Coulomb API (included in 0.2.50).
+    Uses the SDK JIT default unless |globals__cuest_directj_jit| is set,
+    and |globals__ints_tolerance| screening.
+    Analytic Coulomb gradients are not implemented for this mode.
+    No effect unless a cuEST J/K builder is selected. -*/
+    options.add_bool("CUEST_DIRECTJ", false);
+    /*- Direct-J kernel selection. DEFAULT preserves the linked SDK's choice
+        (JIT on CUDA 13+, ahead-of-time kernels otherwise in cuEST 0.2.50).
+        ON and OFF explicitly select JIT or ahead-of-time kernels for validation
+        and tuning. ON requires a supporting CUDA toolkit/SDK; errors are not
+        silently converted to another mode. Does not enable Direct-J or change
+        its screening/precision. !expert -*/
+    options.add_str("CUEST_DIRECTJ_JIT", "DEFAULT", "DEFAULT ON OFF");
+    /*- Variable Grid-K device scratch budget in decimal MB, shared by ordinary
+        JK builds and device CPHF/CPKS. Must be positive. Smaller values permit
+        more internal tiling and may increase compute cost; they do not change the
+        grid, screening, precision, or exchange operator. This is NOT a total
+        device-memory cap: fixed SDK overhead, Direct-J scratch, plans, AO
+        matrices, and XC/solver buffers are additional. Does not limit DF-K
+        or enable Grid-K. Use 8000 to reproduce the former 8 GB variable budget.
+        The SDK may reject budgets below its minimum required workspace.
+        The default favors bounded memory over a large scratch allocation.
+        !expert -*/
+    options.add_int("CUEST_GRIDK_WORKSPACE_MB", 256);
+    /*- Keep SCF DIIS history and projected error/Gram/extrapolation work on
+        the GPU. Requires USE_CUEST, C1 RHF/RKS or UHF/UKS and INTERNAL orbital
+        optimization, with DIIS_MAX_VECS between 1 and 128. Retains Psi4's conditioned small host coefficient solve
+        and A/EDIIS blending. This does not make the rest of SCF device-resident:
+        current host F/D are uploaded, and extrapolated F is downloaded once.
+        Unsupported requested modes fail rather than silently using host DIIS.
+        !expert -*/
+    options.add_bool("CUEST_DIIS", false);
+    /*- Maximum explicit device-array storage for cuEST DIIS history and workspaces,
+        in decimal MB. Actual allocation follows matrix dimensions and
+        DIIS_MAX_VECS, not this entire limit. Effective history is reduced to
+        fit this limit and 90 percent of currently free device memory; at least
+        two entries (or one if explicitly requested) must fit. This is not a
+        total SCF memory cap; CUDA/cuBLAS internal allocations, JK, XC and
+        diagonalization need extra memory.
+        Requested/effective capacity and allocation are reported. !expert -*/
+    options.add_int("CUEST_DIIS_MAX_MEMORY_MB", 32000);
+    /*- Select the separate device-resident conjugate-gradient CPHF/CPKS solver.
+    Iterates, preconditioning, reductions, AO/MO Hessian products and XC response
+    contractions remain on device. Only setup, final solutions and small convergence
+    summaries cross the bus. Fixed XC reference derivatives are prepared once during
+    setup (host LibXC is supported) and retained on device throughout the iteration.
+    Requires cuEST J/K, CUDA NVRTC, C1 RHF/RKS or UHF/UKS, and for DFT a final cuEST
+    LDA/GGA XC grid built with |globals__cuest_xc| true before SCF. Unsupported
+    symmetry, fractional occupations and external response callbacks raise rather
+    than falling back. Applies to SAPT coupled induction as well. -*/
+    options.add_bool("CUEST_DEVICE_CG", false);
+    /*- Synchronizing cuEST CPHF/CPKS phase profiling, for both host and device CG.
+        Reports J, K, XC, transforms and CG-update wall timers in timer.dat.
+        These diagnostic fences perturb execution; disable for speedup measurements. !expert -*/
+    options.add_bool("CUEST_RESPONSE_PROFILE", false);
+    /*- Maximum simultaneous resident CPHF/CPKS densities per cuEST J/K call.
+        Zero uses the full AO tile; one retains device residency but uses serial
+        SDK calls, for benchmarking batching against the same operator. !expert -*/
+    options.add_int("CUEST_RESPONSE_BATCH_SIZE", 0);
+    /*- Maximum RHS per resident CPHF/CPKS AO tile. Zero retains the automatic
+        256 MiB staging bound and maximum of eight RHS. Values 1 through 8
+        explicitly bound the tile for correctness tests and measured tuning;
+        raising it can increase GPU memory. The final partial tile submits
+        only its real density matrices to cuEST, not zero padding. Independent
+        of |globals__cuest_response_batch_size|, which limits SDK call batches
+        within a tile. !expert -*/
+    options.add_int("CUEST_RESPONSE_TILE_SIZE", 0);
+    /*- For device CPHF/CPKS only, evaluate the required Hermitian exchange sum
+        using symmetric Grid-K on (D + D.T)/2. This retains K(D) + K(D).T
+        without computing the discarded antisymmetric part. Generic JK builds
+        continue to return general nonsymmetric K. Enabled by default for the
+        device solver's Grid-K response contractions. !expert -*/
+    options.add_bool("CUEST_RESPONSE_SYMMETRIC_K", true);
     /*- Tune # of Ozaki Slices in emulated DF K computations (requires CUDA and cuEST libraries) -*/
     options.add_int("CUEST_DFK_SLICES", 5);
     /*- Tune # of Ozaki Moduli in emulated DF K computations (requires CUDA and cuEST libraries) -*/

@@ -241,7 +241,7 @@ class DFTGrid : public MolecularGrid {
     /// The `use_cuest` flag requests a GPU-resident cuEST grid *instead of* the host grid: when
     /// it is set, the CPU-side blocks/points are never built, so `blocks()`, `npoints()`, etc. are
     /// empty and only `cuest_grid()` is usable. It is therefore opt-in per construction site
-    /// (currently only VBase, the sole consumer of `cuest_grid()`) rather than being read from the
+    /// (VBase and the cuEST Grid-K builder) rather than being read from the
     /// global USE_CUEST option: every other DFTGrid client (MBIS and other properties, COSX,
     /// DLPNO, THC, ZORA, ...) integrates on the host and needs a fully post-processed host grid,
     /// even in a run where the SCF itself is cuEST-accelerated.

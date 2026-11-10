@@ -175,6 +175,9 @@ class HF : public Wavefunction {
     // CPHF info
     int cphf_nfock_builds_;
     bool cphf_converged_;
+    std::map<std::string, double> cphf_device_stats_;
+    std::vector<SharedMatrix> cphf_solve_device(const std::vector<SharedMatrix>& rhs, double tolerance,
+                                               int max_iter, int print_lvl, bool unrestricted);
 
     /// Edit matrices if we are doing canonical orthogonalization
     virtual void prepare_canonical_orthogonalization() { return; }
@@ -304,6 +307,7 @@ class HF : public Wavefunction {
     void set_diis_manager(py::object& manager) { diis_manager_ = manager; }
     bool initialized_diis_manager() const { return initialized_diis_manager_; }
     void set_initialized_diis_manager(bool tf) { initialized_diis_manager_ = tf; }
+    SharedMatrix diis_orthogonalizer() const { return X_; }
 
     /// The JK object (or null if it has been deleted)
     std::shared_ptr<JK> jk() const { return jk_; }
@@ -413,6 +417,7 @@ class HF : public Wavefunction {
     // CPHF data
     bool cphf_converged() { return cphf_converged_; }
     int cphf_nfock_builds() { return cphf_nfock_builds_; }
+    std::map<std::string, double> cphf_device_stats() const { return cphf_device_stats_; }
 
     // Return the DFT potenitals
     SharedMatrix Va() { return Va_; }

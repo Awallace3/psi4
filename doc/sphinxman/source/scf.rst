@@ -614,6 +614,47 @@ ADIIS [On by Default]
     the DIIS step, eventually using the pure DIIS step. The closely-related EDIIS procedure
     may be used instead by setting |scf__scf_initial_accelerator|. This is formally identical
     to ADIIS for HF, but the methods will differ for more general DFT.
+Device DIIS [Off by Default]
+    With |globals__use_cuest|, set |globals__cuest_diis| to true to retain
+    SCF Fock/error history and the bulk projected-commutator, Gram and
+    extrapolation operations on the GPU. This follows the device-history
+    pattern illustrated by NVIDIA's `cuEST DIIS example
+    <https://github.com/NVIDIA/CUDALibrarySamples/blob/main/cuEST/cuest_scf_examples/cuest_scf/diis.py>`_,
+    but retains Psi4's conditioned least-squares coefficient solve and
+    existing ADIIS/EDIIS transitions on the host, not an unconditioned inverse.
+    Spin errors are combined as in native UHF. Canonical orthogonalizers
+    with removed overlap eigenvectors retain the same rectangular projection.
+
+    The current SCF driver is **not wholly device resident**: each current
+    Fock/density pair is uploaded, and each extrapolated Fock is downloaded
+    once for subsequent SCF work. Full error/history matrices are not
+    downloaded for DIIS. Fixed overlap/orthogonalizer buffers are reused
+    until the subspace is reset; A/EDIIS uses incremental density--Fock
+    Gram matrices instead of full-history difference-array copies.
+
+    Supported references are C1 RHF/RKS and UHF/UKS with the INTERNAL
+    orbital optimizer, and ``DIIS_MAX_VECS`` from 1 to 128. Unsupported
+    requested modes raise an error rather than silently using host DIIS.
+    Host DIIS remains the default for every reference.
+
+    |globals__cuest_diis_max_memory_mb| limits explicit DIIS device arrays
+    in decimal MB (default 32000), not the entire SCF device footprint.
+    Actual allocation follows the matrix sizes and requested history, not
+    the full limit. The history capacity is reduced to fit this limit
+    and 90 percent of currently free device memory, with at least two
+    entries required unless one was explicitly requested. Requested and
+    effective capacities are printed. Reduced capacity can affect SCF
+    iteration counts. CUDA/cuBLAS caches, JK/XC and diagonalization remain
+    additional; an insufficient budget raises an error, not a CPU fallback.
+    Large bases must account for both fixed transform workspaces and the
+    history: an AO matrix at 10,000 functions alone occupies 800 MB.
+
+    ``wfn.cuest_diis_stats()`` reports explicit device allocations, effective
+    history capacity, matrix/scalar transfer bytes and operation counts.
+    Counters cover this DIIS implementation, not opaque library transfers
+    or the entire SCF. Device history is released after normal finalization
+    and failures, even when an exception retains its wavefunction.
+    Measure whole-SCF as well as ``HF: DIIS`` time; no speedup is guaranteed.
 MOM [Off by Default]
     MOM was developed to combat a particular class of convergence failure:
     occupation flipping. In some cases, midway though the SCF procedure, a partially

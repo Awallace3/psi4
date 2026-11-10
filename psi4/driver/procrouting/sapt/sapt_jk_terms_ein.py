@@ -34,7 +34,7 @@ import numpy as np
 from psi4 import core
 
 from ...p4util import solvers
-from .sapt_util import print_sapt_var
+from .sapt_util import print_sapt_var, solve_device_sapt_response
 import einsums as ein
 
 
@@ -2851,6 +2851,10 @@ def chain_gemm_einsums(
     return returned_tensors
 
 
+# Retain the parent worktree's spelling without breaking existing CPKS callers.
+chain_gemm = chain_gemm_einsums
+
+
 def exchange(cache: dict, jk: core.JK, do_print: bool = True) -> dict:
     r"""Compute the first-order exchange energy :math:`E^{(1)}_{\text{exch}}`.
 
@@ -3546,6 +3550,12 @@ def _sapt_cpscf_solve(
         cache["wfn_B"].set_jk(sapt_jk_B)
     else:
         cache["wfn_B"].set_jk(jk)
+
+    if core.get_global_option("CUEST_DEVICE_CG"):
+        matrices = solve_device_sapt_response(
+            [cache["wfn_A"], cache["wfn_B"]], [rhsA, rhsB], maxiter, conv
+        )
+        return [matrix.np.copy() for matrix in matrices]
 
     def setup_P_X(eps_occ, eps_vir, name="P_X"):
         P_X = ein.utils.tensor_factory(
