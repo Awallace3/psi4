@@ -81,8 +81,34 @@ read-only, pinned cuEST 0.2.50 / CUDA 13.3 / Einsums064 dependencies.
 Route `gts-cs207-chemx / cpu-small / embers`, 8 CPUs / 48 GiB / 3 hours.
 Root:
 `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/sapt0-merged-build-8bbbf411cb-01`.
-Eight benchmark accounting/acceptance host contracts pass. No new timing
-result yet.
+Build 15446271 **completed 0:0 in 10m20s** without TERM. Its `result.json`
+reports `PASS / CPU_BUILD_VALIDATION_ONLY` bound to native source
+`8bbbf411cbf66155926fe85075f204d7b0783799`. CPU RHF smoke is
+`-1.1167143250625702 Eh`; 391 dispersion host tests and 166 Phoenix helper
+tests (one skip) completed successfully in that build. GPU dependencies are
+`PREPARED_NOT_GPU_VALIDATED`, not a GPU pass.
+
+Nine benchmark accounting/acceptance/import-path host contracts pass. Review
+caught a nonexistent `sapt_mp2` import in the GPU-only fallback guard; helper
+`9c663b0d52` patches the actual `sapt_mp2_terms_ein` module and adds a regression.
+This is an outer-harness-only fix; no native rebuild or source overlay.
+
+First H200 pilot **15447098 submitted** for water qualification followed by
+three matched peptide repeats. Route: `gts-cs207-chemx / gpu-h200 / embers`,
+one H200, 160 GiB, two hours, exclusive node. Although each scientific arm
+uses eight threads, exclusive scheduling reserves the full node's CPU pool
+(test-only reported 64 processors); do not label this an eight-CPU allocation.
+Initial controller read-back: `PENDING / Priority`, `StartTime=Unknown`;
+requested TRES are CPU8, memory160G, one H200, with no allocation yet.
+Run root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/sapt0-peptide-9c663b0d52-01`.
+Test-only15447097 is not the submitted allocation. Watcher `b52e09c3e`
+records scheduler transitions; results require artifact qualification.
+
+Helpers are frozen at `9c663b0d52`; original
+input snapshots live under
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/sapt0-suite-inputs-8bbbf411cb-01`.
+No new timing result yet.
 
 Offline spherical shell counts from the exact checked-in basis files:
 
