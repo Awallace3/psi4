@@ -314,3 +314,29 @@ def test_scf_df_metric_cholesky(method):
         psi4.core.clean()
 
     assert compare_values(energies["eigen"], energies["cholesky"], 8, f"{method} CHOLESKY vs EIGEN")
+
+
+def test_scf_df_metric_cholesky_ignored_by_disk_df(tmp_path):
+    """SCF_DF_METRIC CHOLESKY is ignored, with a warning, when the JK is not MemDFJK."""
+
+    psi4.geometry(
+        """
+        0 1
+        O  0.000000  0.000000  0.117790
+        H  0.000000  0.755453 -0.471161
+        H  0.000000 -0.755453 -0.471161
+        symmetry c1
+        """
+    )
+    out = tmp_path / "disk_df.out"
+    psi4.set_output_file(str(out), False)
+    psi4.set_options({"basis": "cc-pvdz", "scf_type": "disk_df", "e_convergence": 10, "d_convergence": 10})
+    e_eig = psi4.energy("hf")
+    psi4.core.clean()
+    psi4.set_options({"scf_df_metric": "cholesky"})
+    e_chol = psi4.energy("hf")
+    psi4.core.clean()
+    psi4.set_output_file("pytest_output.dat", True)  # closes (flushes) disk_df.out
+
+    assert compare_values(e_eig, e_chol, 10, "DiskDFJK ignores SCF_DF_METRIC")
+    assert "SCF_DF_METRIC CHOLESKY is ignored by DiskDFJK" in out.read_text()

@@ -127,6 +127,9 @@ def initialize_jk(self, memory, jk=None):
 
     jk.initialize()
     jk.print_header()
+    if core.get_option("SCF", "SCF_DF_METRIC") == "CHOLESKY" and jk.name() != "MemDFJK":
+        core.print_out(f"  Warning: SCF_DF_METRIC CHOLESKY is ignored by {jk.name()}; "
+                       "it applies only to the in-core MemDFJK.\n\n")
 
 
 def scf_initialize(self):

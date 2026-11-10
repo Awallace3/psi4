@@ -1740,7 +1740,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         the largest. CHOLESKY uses a triangular solve with the Cholesky factor of J at about half the
         cost. It applies no eigenvalue cutoff, so energies differ from EIGEN by much less than the DF
         error itself; it falls back to EIGEN when the factorization fails or the metric's estimated
-        reciprocal condition number is below 1e-13. !expert -*/
+        reciprocal condition number is below 1e-13. Other JK algorithms, including the DiskDFJK
+        that MemDF falls back to when the integrals do not fit in memory, ignore it (with a warning). !expert -*/
         options.add_str("SCF_DF_METRIC", "EIGEN", "EIGEN CHOLESKY");
         /*- FastDF Fitting Metric -*/
         options.add_str("DF_METRIC", "COULOMB", "COULOMB EWALD OVERLAP");
