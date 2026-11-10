@@ -1071,6 +1071,79 @@ no_com"""
             shutil.rmtree(fsapt_dirname)
 
 
+@pytest.mark.fsapt
+@pytest.mark.parametrize("freeze_core", [False, True])
+def test_fsapt_fdisp_blocked_matches_pair(freeze_core, monkeypatch):
+    """
+    The BLOCKED F-SAPT dispersion kernel reproduces the original PAIR loop,
+    Compare both signed components and the partition on the *same* localized
+    wavefunction. Edges 1 and 5 force multiple/short blocks; 500 clips to the
+    available virtual and DF dimensions. Separate localizations need not
+    produce the same partition when occupied orbitals are degenerate.
+    """
+    mol = psi4.geometry(
+        """
+0 1
+C   0.000  0.000  0.000
+H   1.090  0.000  0.000
+C  -0.770  1.330  0.000
+H  -1.860  1.330  0.000
+H  -0.390  1.870  0.890
+H  -0.390  1.870 -0.890
+H  -0.390 -0.540  0.890
+H  -0.390 -0.540 -0.890
+--
+0 1
+O   0.200 -0.300  3.400
+H   0.900 -0.100  4.000
+H  -0.500 -0.700  3.950
+units angstrom
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    original = psi4.core.FISAPT.fdisp
+    objects = []
+
+    def capture(obj):
+        original(obj)
+        objects.append(obj)
+
+    monkeypatch.setattr(psi4.core.FISAPT, "fdisp", capture)
+    psi4.set_options(
+        {
+            "basis": "cc-pvdz",
+            "scf_type": "df",
+            "guess": "sad",
+            "freeze_core": freeze_core,
+            "FISAPT_FSAPT_FILEPATH": "none",
+            "FISAPT_FDISP_ALGORITHM": "PAIR",
+        }
+    )
+    psi4.energy("fisapt0", molecule=mol)
+    assert len(objects) == 1
+    obj = objects[0]
+
+    def snapshot():
+        scalars = obj.scalars()
+        return (scalars["Disp20"], scalars["Exch-Disp20"],
+                np.array(obj.matrices()["Disp_AB"]))
+
+    reference = snapshot()
+    for edge in (1, 5, 500):
+        psi4.set_options({"FISAPT_FDISP_ALGORITHM": "BLOCKED", "FISAPT_FDISP_BLOCK": edge})
+        original(obj)
+        actual = snapshot()
+        # Declare the tolerance before comparison; neither total energy nor
+        # compensating errors in the signed components can satisfy this test.
+        for label, ref, value in zip(("Disp20", "Exch-Disp20", "Disp_AB"), reference, actual):
+            np.testing.assert_allclose(value, ref, rtol=1e-11, atol=1e-12,
+                                       err_msg=f"{label}, block={edge}, frozen={freeze_core}")
+        np.testing.assert_allclose(actual[2].sum(), actual[0] + actual[1],
+                                   rtol=1e-11, atol=1e-12)
+
+
 if __name__ == "__main__":
     test_fsapt_d4()
     # test_fsapt_psivars_dict()

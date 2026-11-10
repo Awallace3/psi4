@@ -345,6 +345,10 @@ if(WIN32)
 endif()
 
     # <<<  install lib/  >>>
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../psi4_runtime_support
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}
+        FILES_MATCHING PATTERN "*.py")
+
 if(NOT ENABLE_CYTHONIZE)
     install(DIRECTORY driver
             DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4
@@ -497,4 +501,3 @@ configure_package_config_file(
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${psi4_INSTALL_CMAKEDIR}/psi4Config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/${psi4_INSTALL_CMAKEDIR}/psi4ConfigVersion.cmake
         DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKECONFIG_INSTALL_DIR})
-

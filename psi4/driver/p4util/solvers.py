@@ -217,9 +217,9 @@ def cg_solver_ein(
     rhs_vec
         The RHS vector in the Ax=b equation.
     hx_function
-        Takes in a list of :py:class:`~einsums.core.RuntimeTensor` objects and a mask of active indices. Returns the Hessian-vector product.
+        Takes in a list of :py:class:`~numpy.ndarray` objects and a mask of active indices. Returns the Hessian-vector product.
     preconditioner
-        Takes in a list of :py:class:`~einsums.core.RuntimeTensor` objects and a mask of active indices. Returns the preconditioned value.
+        Takes in a list of :py:class:`~numpy.ndarray` objects and a mask of active indices. Returns the preconditioned value.
     guess
         Starting vectors. If None, use a preconditioner (rhs) guess
     printer
@@ -242,8 +242,37 @@ def cg_solver_ein(
     This is a generalized cg solver that can also take advantage of solving multiple RHS's simultaneously when
     it is advantageous to do so.
 
+    The CG state vectors (``x``, ``r``, ``z``, ``p``) are held as einsums tensors
+    and every update on them is a single einsums call.  einsums cannot alias
+    memory it does not own, so the two callbacks -- which are psi4/numpy code --
+    are handed numpy views, and their results are copied back in; that is one
+    O(N^2) copy per callback against the Hessian-vector product's JK builds.
+
     """
     import einsums as ein
+
+    _ein_types = (ein.RuntimeTensorD, ein.RuntimeTensorViewD)
+
+    def _tensor(x, name):
+        """``x`` as an einsums tensor; an inactive (``False``) slot is kept as is."""
+        if not isinstance(x, (np.ndarray, *_ein_types)):
+            return x
+        if isinstance(x, _ein_types):
+            return x
+        return ein.array(x, name=name)
+
+    def _tensors(vecs, prefix):
+        return [_tensor(v, f"{prefix}{i}") for i, v in enumerate(vecs)]
+
+    def _clone(x, name):
+        """A fresh einsums tensor holding a copy of ``x``."""
+        if not isinstance(x, (np.ndarray, *_ein_types)):
+            return x
+        return ein.array(np.asarray(x), name=name)
+
+    def _numpy(vecs):
+        """numpy views of the state vectors, for the psi4-side callbacks."""
+        return [np.asarray(v) if isinstance(v, _ein_types) else v for v in vecs]
 
     tstart = time.time()
     if printlvl:
@@ -260,30 +289,32 @@ def cg_solver_ein(
     nrhs = len(rhs_vec)
     active_mask = [True for x in range(nrhs)]
 
+    rhs_t = _tensors(rhs_vec, "rhs")
+
     # Start function
     if guess is None:
-        x_vec = preconditioner(rhs_vec, active_mask)
+        x_vec = _tensors(preconditioner(_numpy(rhs_t), active_mask), "x")
     else:
         if len(guess) != len(rhs_vec):
             raise ValidationError("CG Solver: Guess vector length does not match RHS vector length.")
-        x_vec = [x.clone() for x in guess]
+        x_vec = [_clone(x, f"x{i}") for i, x in enumerate(guess)]
 
-    Ax_vec = hx_function(x_vec, active_mask)
+    Ax_vec = _tensors(hx_function(_numpy(x_vec), active_mask), "Ax")
 
     # Set it up
     r_vec = []  # Residual vectors
     for x in range(nrhs):
-        tmp_r = rhs_vec[x].copy()
-        ein.core.axpy(-1.0, Ax_vec[x], tmp_r)
+        tmp_r = _clone(rhs_t[x], f"r{x}")
+        ein.linalg.axpy(-1.0, Ax_vec[x], tmp_r)
         r_vec.append(tmp_r)
 
-    z_vec = preconditioner(r_vec, active_mask)
-    p_vec = [x.copy() for x in z_vec]
+    z_vec = _tensors(preconditioner(_numpy(r_vec), active_mask), "z")
+    p_vec = [_clone(x, f"p{i}") for i, x in enumerate(z_vec)]
 
     # First RMS
-    grad_dot = [ein.core.dot(x, x) for x in rhs_vec]
+    grad_dot = [ein.linalg.dot(x, x) for x in rhs_t]
 
-    resid = [(ein.core.dot(r_vec[x], r_vec[x]) / grad_dot[x])**0.5 for x in range(nrhs)]
+    resid = [(ein.linalg.dot(r_vec[x], r_vec[x]) / grad_dot[x])**0.5 for x in range(nrhs)]
 
     if printer:
         resid = printer(0, x_vec, r_vec)
@@ -301,22 +332,22 @@ def cg_solver_ein(
 
         # Build old RZ so we can discard vectors
         for x in active:
-            rz_old[x] = ein.core.dot(r_vec[x], z_vec[x])
+            rz_old[x] = ein.linalg.dot(r_vec[x], z_vec[x])
 
         # Build Hx product
-        Ap_vec = hx_function(p_vec, active_mask)
+        Ap_vec = _tensors(hx_function(_numpy(p_vec), active_mask), "Ap")
 
         # Update x and r
         for x in active:
-            alpha[x] = rz_old[x] / ein.core.dot(Ap_vec[x], p_vec[x])
-            if np.isnan(alpha)[0]:
+            alpha[x] = rz_old[x] / ein.linalg.dot(Ap_vec[x], p_vec[x])
+            if np.isnan(alpha[x]):
                 core.print_out("CG: Alpha is NaN for vector %d. Stopping vector." % x)
                 active_mask[x] = False
                 continue
 
-            ein.core.axpy(alpha[x], p_vec[x], x_vec[x])
-            ein.core.axpy(-alpha[x], Ap_vec[x], r_vec[x])
-            resid[x] = (ein.core.dot(r_vec[x], r_vec[x]) / grad_dot[x])**0.5
+            ein.linalg.axpy(alpha[x], p_vec[x], x_vec[x])
+            ein.linalg.axpy(-alpha[x], Ap_vec[x], r_vec[x])
+            resid[x] = (ein.linalg.dot(r_vec[x], r_vec[x]) / grad_dot[x])**0.5
 
         # Print out or compute the resid function
         if printer:
@@ -338,16 +369,17 @@ def cg_solver_ein(
             break
 
         # Update p
-        z_vec = preconditioner(r_vec, active_mask)
+        z_vec = _tensors(preconditioner(_numpy(r_vec), active_mask), "z")
         for x in active:
-            beta = ein.core.dot(r_vec[x], z_vec[x]) / rz_old[x]
-            p_vec[x] = p_vec[x] * beta
-            ein.core.axpy(1.0, z_vec[x], p_vec[x])
+            beta = ein.linalg.dot(r_vec[x], z_vec[x]) / rz_old[x]
+            ein.linalg.scale(beta, p_vec[x])
+            ein.linalg.axpy(1.0, z_vec[x], p_vec[x])
 
     if printlvl:
         core.print_out("   -----------------------------------------------------\n")
 
-    return x_vec, r_vec
+    # Hand the solution back as numpy, as the callers expect.
+    return [np.array(np.asarray(v)) for v in x_vec], [np.array(np.asarray(v)) for v in r_vec]
 
 
 class DIIS:

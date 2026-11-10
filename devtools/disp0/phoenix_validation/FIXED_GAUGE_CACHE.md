@@ -1,0 +1,349 @@
+# Protein83 fixed-gauge cache diagnostic
+
+## Why this experiment
+
+Native fitting-policy correction`e0da305c02` passed six physical JK tests
+and the small H200 gate, but Protein83/SVP producer15337409 still failed
+strict cross-process energy repetition. That failure remains visible;
+neither its413s samples nor this experiment qualify a whole-system speedup.
+
+The first saved result contains a separate measured work bottleneck:
+
+- Device-input blocked dispersion:224.041s.
+- Native producer cumulative wall:219.040s; its nested completion waits
+  account for211.221s. These are inclusive host timers, **not kernel clocks**.
+- R slabs29, S slabs30, contraction blocks870.
+- With64MiB cap, only the short S tail fits:8,522,336bytes,1slab,28hits.
+  Native batches:29R+842S=871.
+- All packed S slabs require
+  `8*(2*2488+2)*698*(58+49)=2,974,295,264bytes` (2.770GiB).
+  A4GiB cap predicts29R+30S=59native batches, still870contractions.
+
+This predicts eliminated work, **not runtime proportional to call count**.
+No automatic cache-budget change or production default is introduced.
+
+## Fixed numerical inputs
+
+The probe consumes SHA-verified`raw-hf.npz` and`fragment-matrices.npz`
+from15337409/r0, plus the frozen Protein83/def2-SVP input manifest. It
+uses captured HF matrices/energies and the active blocks of the captured
+IBO rotations. The rotations are **diagnostic input only**, not a new
+production path or an independent localization oracle.
+
+The original installed`prepare_hf` creates device spaces/corrections.
+The original installed`blocked_device_dispersion` runs four times in one
+owned RIFIT provider/session:64MiB,4GiB,4GiB,64MiB. No source overlay,
+factor download/re-upload, SCF, response, full F-SAPT or CPU fallback runs.
+Changing only cache residency preserves the R-major contraction order.
+
+Every call must:
+
+1. Match the exact predicted native/cache/contraction counts.
+2. Return live device bytes to their pre-call value and respect the
+   original120GiB device limit, including12GiB native reservation.
+3. Avoid host numerical uploads inside the blocked path.
+4. Match every signed scalar and pair matrix against the first call at
+   rtol1e-12/atol1e-12. No SCF-repeat tolerance changes.
+
+All four outputs are saved in`dispersion-pairs.npz`, sealed in the worker
+receipt, and replayed by the controller. Normal provider/session cleanup
+and owned-process reaping remain mandatory. Source/build admission and the
+sealed runtime are unchanged; only the outer diagnostic launcher is newer.
+
+## Limits and launch
+
+This isolates the blocked call, including required native ownership checks,
+packing, integration, contractions, reductions and synchronization. It is
+**not** a vendor-kernel-only speedup, a full F-SAPT timing or a CPU/GPU
+comparison. The standalone RIFIT context also omits full-workflow response
+and JKFIT residency: its measured peak cannot establish their coexistence.
+Any promising result needs a separate full-workflow memory/numerical gate.
+
+Use the existing`scf_repeat_probe.py --mode cache-profile --kind gpu`
+with the exact candidate config, original r0 result/hash and a fresh root.
+The existing embers H200/8CPU/160GiB/30min scheduler path is reused.
+Success is`PASS_FIXED_GAUGE_CACHE_DIAGNOSTIC`; accepted speedup count
+remains0. No source/native rebuild is needed because scientific functions
+and their existing explicit cache-cap interface are unchanged.
+
+## Submitted H200 diagnostic15357943
+
+All158 host helper tests passed; independent read-only review found no
+concrete launch blockers. These are not physical cache execution evidence.
+
+Frozen outer pin:`d87d61188ea3d5869f07d8b08108fd773e4480d1`,
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-cache-probe-d87d61188e`.
+Science/build remains`e0da305c02`, unchanged from the completed physical
+six-test native-JK and small F-SAPT gates.
+
+Submitted **15357943**; effective read-back route:
+`gts-cs207-chemx / gpu-h200 / embers`,1H200,8CPUs,160GiB,30min,
+initially PENDING for Priority. Test-only15357942 is not the allocation.
+Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/fixed-gauge-cache-d87d61188e-01`.
+Manifest SHA256:
+`00f96f57921d344a4d019dc8c374ed97a7ae218fb58eb159216708129ee90f17`.
+Runtime-config SHA256:
+`dcfada35840335785602df7a92e8b1f67761b5c3dae6dea5690a60559a850760`.
+Official hourly watcher:`b217404f7`.
+
+The separate candidate fixed-density reconstruction control15356916 is
+still a different experiment. No full Protein83 CPU reference/oracle,
+accepted ratio, native-repeat waiver or production cache-default change
+is implied by this submission.
+
+## Completed15357943: blocked dispersion11.861× faster
+
+The H200 allocation completed in8min48s; job/batch/step exited0 without
+TERM. The worker returned0, reported no retirement and was reaped; owned
+scratch cleanup and provider/session cleanup completed. The controller
+replayed all four sealed pair/scalar outputs. Status:
+`PASS_FIXED_GAUGE_CACHE_DIAGNOSTIC`, accepted full-speedup count0.
+
+Actual device: NVIDIA H200/sm90, driver615.71.09, cuEST0.2.50 with native
+FP64 and the unchanged relative-MATRIXPOWER/cutoff1e-12 RIFIT policy.
+
+| Cap | Call order | Blocked wall/s | Native producer wall/s | Native batches |
+|---|---|---:|---:|---:|
+| 64MiB | A1 | 224.11257319001015 | 218.63574419985525 | 871 |
+| 4GiB | B1 | 18.994964473997243 | 14.785218328353949 | 59 |
+| 4GiB | B2 | 18.984791721915826 | 14.783711718511768 | 59 |
+| 64MiB | A2 | 226.3733985470608 | 220.24149632884655 | 871 |
+
+Two-sample medians:225.24298586853547s versus18.989878097956534s,
+**11.861212836999384× for the blocked call**. This includes native
+production, packing, contractions, reductions and required audits, not
+vendor-kernel-only timing. Two samples per cap are not a general scaling study.
+
+All870contraction blocks remain. All30S slabs fit, versus one tail:
+cache hits840versus28. Maximum absolute pair-matrix difference from A1
+is8.131516293641283e-20Eh; maximum signed-scalar difference is
+8.673617379884035e-19Eh, comfortably inside the unchanged1e-12 checks.
+No CPU numerical upload occurred inside the blocked calls.
+
+Actual packed-cache storage grew8,522,336→2,974,295,264bytes.
+The first small-cache call peaked at12.1313GiB explicit device storage;
+the **session-lifetime** peak after the large-cache calls was14.8934GiB,
+plus the unchanged12GiB native reservation. Live bytes returned to the
+same12,389,943,696-byte prepared-state baseline after every call.
+Later A2's peak counter is cumulative, not a separate A2 footprint.
+
+Seals beneath`fixed-gauge-cache-d87d61188e-01/job-15357943/`:
+
+| Artifact | SHA256 |
+|---|---|
+| `diagnostic-result.json` | `e817677fefbfbb1964bef9fa10e0def14a34f3863a6c98ede024f0c27b35b749` |
+| `r0/probe-result.json` | `c910f4aa99ba1bb9cf0ee86aef4444b55fe0b34c4a16d14fede2a71c44e5e7be` |
+| `r0/dispersion-pairs.npz` | `2996c90ef34510b9a4bd3d608bf3fb14b94e2ad0ffc88de7802ba67a1830be63` |
+
+**Not yet proved:** coexistence of the larger cache with the full
+JKFIT/RIFIT/response workflow, end-to-end energy speedup, independent
+protein CPU oracle or native SCF repeatability. The frozen full benchmark
+helper also intentionally caps its cache argument at1GiB; this diagnostic
+does not bypass that helper or silently change its production policy.
+The next integration gate should execute the original full fragment
+workflow on fixed saved HF inputs, prove actual memory coexistence and
+compare every original output field before any new whole-energy claim.
+
+## Next: full fixed-HF coexistence gate
+
+The outer-only`cache-coexistence` mode calls the original installed
+`fragment_terms` once with the4GiB cap, both owned auxiliary plans and the
+complete exact-response workflow. It holds raw HF matrices/energies and
+canonical scaling inputs fixed, but **recomputes IAO/IBO localization**;
+saved localized orbitals are comparator output only, not production input.
+No SCF or whole energy call runs.
+
+It compares all23original fields with the captured result using the unchanged
+strict`compare_arrays` criteria: label/sign permutation only, no energy
+rotations or relaxed tolerance. Original dispersion scalar checks, actual
+870contractions/59RIFIT calls/5JKFIT calls, provider/session cleanup and
+the existing declared device budget remain mandatory. The parent replays
+all field comparisons from sealed NPZ files.
+
+The existing source-boundary observer measures localization, felst, fexch,
+find and fdisp with synchronization at boundaries, retaining other-work
+residuals. These are **intrusively instrumented fixed-HF fragment windows**,
+not unprofiled energy baselines; no whole-workflow ratio is calculated by
+subtracting overhead or splicing them into earlier runs. A successful physical
+run establishes actual coexistence on the allocated H200 and reports explicit
+tracked peak plus the unchanged opaque native reservation, not a measured
+opaque-native peak or a general memory model.
+
+This does not change the frozen whole-energy helper's1GiB argument cap,
+qualify Protein83 SCF repeatability, change the production cache default,
+or introduce any accepted CPU/GPU speedup.
+
+### Full coexistence gate submitted15366266
+
+All161 host helper tests and7 source-boundary observer tests passed.
+Independent read-only launch review found no concrete API, ownership,
+provenance, numerical or trace blockers. Physical integration remains pending.
+
+Frozen outer pin:`d8ba38d32eca184648adc2bc507148bb2d453bbb`,
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-cache-full-d8ba38d32e`.
+Science/build remains`e0da305c02`. Submitted **15366266** on the read-back
+route`gts-cs207-chemx / gpu-h200 / embers`,1H200,8CPUs,160GiB,30min,
+initially PENDING for Priority. Test-only15366265 is not the allocation.
+The first scheduler read-back timed out; the idempotent`phoenix2` fallback
+confirmed the same job and route. No duplicate submission or job change.
+
+Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/fixed-hf-cache-full-d8ba38d32e-01`.
+Manifest SHA256:
+`507cc44c438ea23b56f0212520356badefdeba7220a0ba6ed83bc661fb7cc803`.
+Runtime-config SHA256:
+`d3288c346d8d8f2a75884ec2e0b27a398d5778ffa22cec260f0a98fd36b02635`.
+Official hourly watcher:`ba7c081fb`.
+
+The served`~/docs/saptdft/cuest/fsapt.html#protein-cache` now separates
+the11.86× fixed-input dispersion result from qualified peptide CPU/H200
+speedups and the still-failed whole-protein repeat checks. The new chart's
+six hover marks, even-sample medians, basis/NBF labels and responsive
+dark/light/mobile/ToC behavior passed browser checks without console errors.
+The existing full report regression also passed, including original driver
+selectors, exact16-stage schema, rainbows and preserved numerical ratios.
+
+###15366266 stopped at an incorrect harness precondition
+
+The allocation failed1:0 after36s without TERM. The worker returned1 with
+no retirement; its owned group was reaped and scratch cleanup completed.
+It stopped **before entering the GPU provider/workflow**, at the new harness
+check`minao_name.lower() != "minao"`. There is no coexistence timing,
+memory rejection or full-field numerical result from this attempt.
+
+That check was my incorrect assumption: frozen`psi4/src/read_options.cc`
+registers`MINAO_BASIS` as **CC-PVTZ-MINAO**, and the original15337409/r0
+output explicitly records loading that basis at line1922. Its output SHA256
+matches the original controller receipt:
+`e055a418630b856cd8750a9fff6f7e30137428f9525f755fa61ac5f169f36d31`.
+
+The guard correction consumes an explicit original option if present,
+otherwise reads the unique registered default from the frozen scientific
+source, and requires the live option to match. It does **not** set another
+minimal basis or change scientific settings. The parent rechecks the selection
+seal. A focused test reproduced the old rejection of CC-PVTZ-MINAO before
+the correction; afterward all163 helper tests and7 observer tests passed.
+Tests also reject the wrong alias, ambiguous original options and missing/
+duplicate registered defaults.
+
+Failed controller SHA256:
+`0b635283a039f61b6bf292378603fa5858e3aa94295c106e66e9476c526e2f1b`.
+Worker stderr SHA256:
+`ec2de8fb1dd7bbda58f72a385a74b50bc07068215c1163c7f1f0224470327f27`.
+The independently completed11.86× blocked-dispersion result is unaffected.
+A corrected manual submission must use a new frozen outer and fresh root;
+the original source/build, failed artifacts and tolerances remain unchanged.
+
+### Corrected manual submission15372618
+
+Frozen outer pin:`2d4a8f102d9dc382dc831eac9e0d43aac28d4379`,
+`/storage/project/r-cs207-0/awallace43/gits/psi4.disp0-cache-full-2d4a8f102d`.
+Native source/build remains`e0da305c02`. Submitted **15372618**, effective
+read-back route`gts-cs207-chemx / gpu-h200 / embers`,1H200,8CPUs,
+160GiB,30min, initially PENDING for Priority. Test-only15372617 is not
+the allocation. Official hourly watcher:`b21a098bd`.
+
+Root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/fixed-hf-cache-full-2d4a8f102d-01`.
+Manifest SHA256:
+`947469de800f07e19743372522adc728a3cc5b266f995e550a8256e15334f220`.
+Runtime-config SHA256:
+`7f8718a4692bcd5141ec3f41dbfa0f4d2df03bddb14b367bc97bc67cc52163d7`.
+The only execution change from the previous attempt is the guard's binding
+to the original explicit/registered minimal basis; all scientific functions,
+fixed HF inputs, cache budget, field checks and memory policy are unchanged.
+
+###15372618 passed full fixed-HF coexistence and all23fields
+
+Completed in4min43s, job/batch/step exit0 without TERM. The worker returned0
+with no retirement and was reaped; scratch and native/session cleanup
+completed. The parent independently replayed every sealed field comparison.
+Status:`PASS_FIXED_HF_CACHE_INTEGRATION_ONLY`; accepted energy-speedup count0.
+
+Fresh IAO/IBO localization used the original CC-PVTZ-MINAO basis
+(239functions). Every original field passed atol=rtol1e-9 with label/sign
+permutation only. Maximum entry error was8.053113731421035e-12Eh
+(Elst_AB); occupied-localization errors were at most1.66118e-13.
+Original dispersion scalar errors were2.31499e-15 and3.85976e-17Eh.
+No saved localized orbitals were input to the new workflow.
+
+The full JKFIT/RIFIT/response workflow retained870contractions,
+59RIFIT producer calls and5JKFIT calls with all30S slabs cached.
+Peak explicit device storage was **53,069,953,624bytes (49.425GiB)**,
+exactly the previous small-cache whole-workflow tracked peak. The larger
+cache fits below an earlier peak from other work; this does not measure
+opaque-native peak storage. The existing12GiB native reservation and120GiB
+declared device budget were unchanged; final live bytes/native owners were0.
+
+| Synchronized fixed-HF window | Wall/s |
+|---|---:|
+| Localization (overlap/IAO metrics and both monomers) | 3.7728431139839813 |
+| felst | 48.516762553015724 |
+| fexch | 0.18388543592300266 |
+| find | 146.42336028208956 |
+| fdisp (rotation/preparation + blocked call) | 19.79784615698736 |
+| Other work inside fragment_terms | 18.2059151630383 |
+| Outside fragment_terms, including factory/cleanup | 18.608952159876935 |
+
+The observed workflow is236.90061270503793s; the inclusive fragment call
+is255.50956486491486s. These are **intrusively traced fixed-HF diagnostics**,
+not ordinary energy-call baselines. No ratio to the old untraced383s fragment
+or413s whole energy is accepted or inferred by subtracting observer overhead.
+Induction is the largest observed window and the next performance target;
+its report records402,432strided-batched FP64 GEMM calls, not an attribution
+of all146s to GPU arithmetic or host launch overhead.
+
+Seals beneath`fixed-hf-cache-full-2d4a8f102d-01/job-15372618/`:
+
+| Artifact | SHA256 |
+|---|---|
+| `diagnostic-result.json` | `f3a46e657a5d642be861a63237ecc57bb76417e7ec2f13916ea61a987b69a429` |
+| `r0/probe-result.json` | `7a377602099109b7197a796cfb1bbbbc804ba748a21cdf2d37bcd906da7f6b84` |
+| `r0/fragment-matrices.npz` | `8fdcff27eb47d119cc693049dbe70996f6719aa8cf1c189b1aa639136ae6f3c7` |
+| `r0/full-fragment-execution.json` | `52213412beb285edb708f8a14c66cc5eda571a23df5dd3743cc5580c54628405` |
+
+This establishes the4GiB cache's full-fragment coexistence on this H200
+fixture and strict before/after field parity at fixed raw HF inputs.
+It is not an independent protein CPU oracle or a fix for native SCF
+plan-reconstruction drift; the whole-protein repeat qualification remains failed.
+
+## Normal-driver integration (host contracts, not a new physical result)
+
+The next source candidate exposes an explicit Python keyword,
+`cuda_dispersion_factor_cache_bytes`, through both `_run_sapt_dft` and
+`sapt_dft`. It forwards the same byte budget to `fisapt_cuda` or
+`dispersion0_cuda`; the scientific blocked algorithm and contraction order
+are unchanged. The default remains0, not4GiB. Noninteger/bool/negative
+budgets fail; positive budgets on CPU, DFT, no-dispersion or empirical-only
+routes fail rather than silently ignoring the request.
+
+The diagnostic `fragment_gate.py` now passes that keyword through the
+ordinary energy call and verifies that the fragment wrapper receives it;
+the wrapper no longer injects a cache cap behind the public driver's back.
+Its explicit CLI ceiling is4GiB, with default0 and CPU cap0 unchanged.
+This ceiling is not device-memory admission: the original session limit,
+native reservation and allocation accounting still apply.
+
+This source/gate pair requires a **new coherent build and qualification**.
+Do not run the updated gate against the frozen`e0da305c02` installation,
+overlay source files there, or relabel15357943/15372618 as tests of this new
+driver plumbing. The existing stage campaign still requests64MiB; a future
+larger-cap campaign must record its explicit budget and pass the unchanged
+small physical gate, strict repetitions and independent CPU comparison.
+
+Host validation passed391 core dispersion/driver tests and166 Phoenix
+helper tests. The focused final
+checks passed18 public-driver contracts and6 gate/snapshot contracts,
+including rejection before cache/SCF setup and actual wrapper execution
+inside the CPU-forbidden guards. These are CPU-only interface tests, not
+new GPU numerical or timing evidence.
+Independent read-only review of the public-driver keyword/dispatch changes
+found no concrete defects; that review is not physical qualification.
+
+The served report now includes the full fixed-HF fragment rainbow and all
+seven disjoint windows, receipts, basis/NBF and tracked memory. Browser
+checks passed for both the new integration figure and existing selectors,
+exact16-stage schema and numerical ratios, with no console errors; dark,
+light and420px screenshots were inspected. The mobile axis label was
+shortened without changing data or scope.

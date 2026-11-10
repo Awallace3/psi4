@@ -1,0 +1,57 @@
+cmake_minimum_required(VERSION 3.25.2)
+project(disp0_apiary_resource_probe LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    message(FATAL_ERROR "Native compiler must remain GNU; Clang is only Apiary's AST parser")
+endif()
+find_package(Apiary 1...<2 CONFIG REQUIRED)
+if(NOT DEFINED ENV{CONDA_PREFIX} OR NOT EXISTS "$ENV{CONDA_PREFIX}/bin/clang++")
+    message(FATAL_ERROR "Bind CONDA_PREFIX to the dedicated env and install its matching clang++ resource tool")
+endif()
+apiary_detect_toolchain(CXX_STANDARD 20)
+if(NOT EXISTS "${APIARY_RESOURCE_DIR}/include/stddef.h")
+    message(FATAL_ERROR "Apiary Clang builtin stddef.h is missing from ${APIARY_RESOURCE_DIR}")
+endif()
+find_program(APIARY_TOOL NAMES apiary HINTS "$ENV{CONDA_PREFIX}/bin" NO_DEFAULT_PATH REQUIRED)
+get_target_property(annotation_include apiary::annotations INTERFACE_INCLUDE_DIRECTORIES)
+list(GET annotation_include 0 annotation_include)
+execute_process(COMMAND "${CMAKE_CXX_COMPILER}" -print-sysroot
+                OUTPUT_VARIABLE sysroot OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+set(flags ${APIARY_SYSTEM_FLAGS})
+set(resource_for_probe "${APIARY_RESOURCE_DIR}")
+option(DISP0_REPRODUCE_MISSING_RESOURCE "Reproduce the failed builtin-header lookup" OFF)
+if(DISP0_REPRODUCE_MISSING_RESOURCE)
+    set(resource_for_probe "${CMAKE_CURRENT_BINARY_DIR}/missing-resource")
+    list(FIND flags "-resource-dir" resource_index)
+    math(EXPR resource_value "${resource_index} + 1")
+    list(REMOVE_AT flags ${resource_value})
+    list(INSERT flags ${resource_value} "${resource_for_probe}")
+endif()
+# Do not let the workstation/system Clang rescue a missing dedicated resource
+# installation. This is a stricter isolated preflight, not a native C++ flag.
+list(APPEND flags "-nostdinc" "-isystem" "${resource_for_probe}/include"
+                  "-isystem" "${sysroot}/usr/include")
+set(output "${CMAKE_CURRENT_BINARY_DIR}/probe-docs.json")
+file(REMOVE "${output}")
+execute_process(
+    COMMAND "${APIARY_TOOL}" --emit-docs-json --module=disp0_preflight "--output=${output}"
+            --source-include=probe.hpp "${CMAKE_CURRENT_SOURCE_DIR}/probe.hpp"
+            -- -x c++ -std=c++20 "--sysroot=${sysroot}" ${flags} "-I${annotation_include}"
+    RESULT_VARIABLE tool_status OUTPUT_VARIABLE tool_output ERROR_VARIABLE tool_error)
+if(NOT tool_status EQUAL 0)
+    message(FATAL_ERROR "Apiary parse failed (${tool_status}): ${tool_error}")
+endif()
+if(tool_error MATCHES "fatal error:|Error while processing|:[0-9]+:[0-9]+: error:")
+    # Apiary1.0 can exit0 and retain partial declarations after a fatal Clang
+    # diagnostic. Exit status/nonempty JSON alone are not a correctness gate.
+    message(FATAL_ERROR "Apiary emitted Clang errors despite exit0: ${tool_error}")
+endif()
+if(NOT EXISTS "${output}")
+    message(FATAL_ERROR "Apiary produced no AST output: ${tool_error}")
+endif()
+file(READ "${output}" ast)
+if(NOT ast MATCHES "disp0_standard_library_symbol")
+    message(FATAL_ERROR "Apiary silently produced an empty/incomplete AST: ${tool_error}")
+endif()
+message(STATUS "DISP0 Apiary GNU-stdlib/resource/nonempty-AST probe PASS")

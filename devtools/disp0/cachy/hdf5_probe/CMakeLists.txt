@@ -1,0 +1,20 @@
+cmake_minimum_required(VERSION 3.25)
+project(PrivateHDF5Probe LANGUAGES C CXX)
+list(PREPEND CMAKE_MODULE_PATH "${EINSUMS_SOURCE}/cmake")
+find_package(TargetHDF5 REQUIRED)
+get_target_property(_links tgt::hdf5 INTERFACE_LINK_LIBRARIES)
+get_target_property(_includes tgt::hdf5 INTERFACE_INCLUDE_DIRECTORIES)
+file(WRITE "${CMAKE_BINARY_DIR}/selection.txt"
+  "version=${TargetHDF5_VERSION}\nlinks=${_links}\nincludes=${_includes}\n")
+foreach(_link IN LISTS _links)
+  if(TARGET "${_link}")
+    get_target_property(_location "${_link}" LOCATION)
+    file(APPEND "${CMAKE_BINARY_DIR}/selection.txt" "target=${_link}|${_location}\n")
+  endif()
+endforeach()
+add_executable(hdf5_probe main.cc)
+# Match Einsums' private global header prefix while exercising its actual
+# TargetHDF5 discovery module; the negative may still select a foreign library.
+target_include_directories(hdf5_probe BEFORE PRIVATE "${PRIVATE_PREFIX}/include")
+target_link_libraries(hdf5_probe PRIVATE tgt::hdf5 ${CMAKE_DL_LIBS})
+set_target_properties(hdf5_probe PROPERTIES BUILD_RPATH "${PRIVATE_PREFIX}/lib")

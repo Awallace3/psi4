@@ -1427,8 +1427,17 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("SAPT_FDDS_DISP_LEG_LAMBDA", 0.3);
         /*- Minimum rho cutoff for the in the LDA response for FDDS !expert -*/
         options.add_double("SAPT_FDDS_V2_RHO_CUTOFF", 1.e-6);
-        /*- Which MP2 Exch-Disp module to use? !expert -*/
-        options.add_str("SAPT_DFT_MP2_DISP_ALG", "SAPT", "FISAPT SAPT");
+        /*- Which MP2 dispersion/exchange-dispersion module to use? EINSUMS
+        selects the blocked Python Einsums2 SAPT0 implementation for HF,
+        without F-SAPT or S-infinity exchange-dispersion. !expert -*/
+        options.add_str("SAPT_DFT_MP2_DISP_ALG", "SAPT", "FISAPT SAPT EINSUMS");
+        /*- Use eligible CUDA Einsums2 graph contractions with EINSUMS MP2
+        dispersion. Packing, elementwise operations and reductions remain on
+        CPU; small blocks can remain CPU under the library cost model. !expert -*/
+        options.add_bool("SAPT_DFT_EINSUMS_GPU", false);
+        /*- Virtual-orbital compute block edge for EINSUMS MP2 dispersion.
+        Reduced if needed to bound scratch memory. !expert -*/
+        options.add_int("SAPT_DFT_EINSUMS_DISP_BLOCK", 24);
         /*- FSAPT localization through SAPT(DFT)? Set SAPTDFT for PyEinsums
          f-terms or use an FISAPT object (C++ side) for f-terms.
         -*/
@@ -1481,6 +1490,15 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("FISAPT_DO_FSAPT", true);
         /*- Do F-SAPT Dispersion? -*/
         options.add_bool("FISAPT_DO_FSAPT_DISP", true);
+        /*- Algorithm for the F-SAPT dispersion partition. BLOCKED contracts blocks of
+            (r,s) virtual-orbital pairs as single large matrix products; PAIR is the
+            original one-pair-at-a-time loop. The parallel/perpendicular link-orbital
+            term (|fisapt__fisapt_exch_parperp| with SAOn/SIAOn links) always uses PAIR. !expert -*/
+        options.add_str("FISAPT_FDISP_ALGORITHM", "BLOCKED", "BLOCKED PAIR");
+        /*- Edge, in virtual orbitals, of the (r,s) block the BLOCKED F-SAPT dispersion
+            contracts at once. Its five work arrays take 5 * edge^2 * na * nb doubles;
+            the edge is halved as needed to fit in the memory budget. !expert -*/
+        options.add_int("FISAPT_FDISP_BLOCK", 48);
         /*- Filepath (case sensitive) to drop F-SAPT data within input file directory. To avoid files being written, set to 'none'. -*/
         options.add_str_i("FISAPT_FSAPT_FILEPATH", "fsapt/"); 
         /*- Do F-SAPT exchange scaling? (ratio of S^\infty to S^2) -*/

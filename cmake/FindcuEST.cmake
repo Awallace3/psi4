@@ -54,7 +54,8 @@ list(APPEND _cuEST_LIB_SUFFIXES lib lib/13 lib/12)
 
 # Shared
 find_library(cuEST_LIBRARY
-  NAMES cuest
+  # The canonical 0.2.50 archive can be staged without an unversioned symlink.
+  NAMES cuest libcuest.so.0.2.50
   HINTS ${_cuEST_ROOT_HINTS}
   PATH_SUFFIXES ${_cuEST_LIB_SUFFIXES}
 )
@@ -67,16 +68,16 @@ find_library(cuEST_STATIC_LIBRARY
 )
 
 # ---- found? ----
-# Treat the package as found if we have headers and at least one library.
+# Headers alone must not report success without creating an imported target.
+if(cuEST_LIBRARY)
+  set(_cuEST_LINK_LIBRARY "${cuEST_LIBRARY}")
+else()
+  set(_cuEST_LINK_LIBRARY "${cuEST_STATIC_LIBRARY}")
+endif()
 find_package_handle_standard_args(cuEST
-  REQUIRED_VARS cuEST_INCLUDE_DIR
+  REQUIRED_VARS cuEST_INCLUDE_DIR _cuEST_LINK_LIBRARY
   HANDLE_COMPONENTS
 )
-
-set(cuEST_FOUND FALSE)
-if(cuEST_INCLUDE_DIR AND (cuEST_LIBRARY OR cuEST_STATIC_LIBRARY))
-  set(cuEST_FOUND TRUE)
-endif()
 
 mark_as_advanced(cuEST_INCLUDE_DIR cuEST_LIBRARY cuEST_STATIC_LIBRARY)
 
@@ -102,4 +103,3 @@ if(cuEST_FOUND)
     endif()
   endif()
 endif()
-

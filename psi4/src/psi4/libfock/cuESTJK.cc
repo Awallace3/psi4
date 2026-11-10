@@ -977,6 +977,7 @@ void cuESTJK::print_header() const {
         if (do_wK_) 
         outfile->Printf("    Omega:                 %11.3E\n", omega_);
         outfile->Printf("    Pseudoinverse cutoff:  %11.1E\n", condition_);
+        outfile->Printf("    Metric inverse:        MATRIXPOWER (relative cutoff)\n");
         outfile->Printf("    Threshold PQ:          %11.1E\n", pq_threshold_);
         outfile->Printf("    Math mode:             %s\n",
                         math_mode == CUEST_NATIVE_FP64_MATH_MODE ? "Native FP64"
