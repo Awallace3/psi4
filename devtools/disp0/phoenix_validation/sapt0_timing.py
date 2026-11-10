@@ -109,8 +109,17 @@ def prepare(suite, output):
         "suite_source": "small correctness gate, not a timing-suite dimer"})
 
 
-def worker(args):
+def forbid_cpu_dispersion(stack):
+    """Patch the actual Einsums module, not sapt_proc's local `sapt_mp2` alias."""
     from unittest.mock import patch
+    from psi4.driver.procrouting.sapt import sapt_mp2_terms_ein
+    for name in ("df_mp2_sapt_dispersion", "df_mp2_einsums_dispersion",
+                 "df_mp2_fisapt_dispersion"):
+        stack.enter_context(patch.object(
+            sapt_mp2_terms_ein, name, side_effect=RuntimeError("CPU dispersion fallback forbidden")))
+
+
+def worker(args):
     from gpu_runtime import AuditedRuntime, read_config
     config, build = read_config(args.config, args.config_sha256)
     import psi4
@@ -147,11 +156,7 @@ def worker(args):
                       "cuda_dispersion_factor_cache_bytes": 4 * 1024**3}
         with ExitStack() as stack:
             if runtime:
-                from psi4.driver.procrouting.sapt import sapt_mp2
-                for name in ("df_mp2_sapt_dispersion", "df_mp2_einsums_dispersion",
-                             "df_mp2_fisapt_dispersion"):
-                    stack.enter_context(patch.object(
-                        sapt_mp2, name, side_effect=RuntimeError("CPU dispersion fallback forbidden")))
+                forbid_cpu_dispersion(stack)
             before = dict(core.get_timer_records(False))
             started = time.perf_counter()
             energy, wfn = psi4.energy("sapt(dft)", molecule=molecule, return_wfn=True, **kwargs)

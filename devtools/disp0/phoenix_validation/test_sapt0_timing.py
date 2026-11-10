@@ -1,10 +1,43 @@
 """Host accounting/acceptance contracts; no numerical GPU claim."""
 import copy
+from contextlib import ExitStack
+from pathlib import Path
+import sys
+from types import ModuleType
 import unittest
+from unittest.mock import patch
 import sapt0_timing as timing
 
 
 class TimingContracts(unittest.TestCase):
+    def test_gpu_guard_imports_real_module_name_and_restores_fallbacks(self):
+        name = "psi4.driver.procrouting.sapt.sapt_mp2_terms_ein"
+        # Check the package contract without loading a native Psi4 core.
+        source = Path(__file__).resolve().parents[3] / Path(*name.split(".")).with_suffix(".py")
+        self.assertTrue(source.is_file())
+        modules = {}
+        parts = name.split(".")
+        for count in range(1, len(parts) + 1):
+            key = ".".join(parts[:count])
+            modules[key] = ModuleType(key)
+            modules[key].__path__ = []
+            if count > 1:
+                setattr(modules[".".join(parts[:count - 1])], parts[count - 1], modules[key])
+        real_module = modules[name]
+        fallback = lambda: "original"
+        methods = ("df_mp2_sapt_dispersion", "df_mp2_einsums_dispersion",
+                   "df_mp2_fisapt_dispersion")
+        for method in methods:
+            setattr(real_module, method, fallback)
+        with patch.dict(sys.modules, modules):
+            with ExitStack() as stack:
+                timing.forbid_cpu_dispersion(stack)
+                for method in methods:
+                    with self.assertRaisesRegex(RuntimeError, "fallback forbidden"):
+                        getattr(real_module, method)()
+            for method in methods:
+                self.assertIs(getattr(real_module, method), fallback)
+
     def timers(self):
         return {"root;" + name: {"wall_time": seconds, "n_calls": 1}
                 for name, seconds in (
