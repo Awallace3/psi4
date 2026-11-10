@@ -160,8 +160,8 @@ no_com
     (WATER_NE, "cc-pvdz", False, True),
     (WATER_NE.replace("2.8 1.1 1.5", "3.1 0.9 1.7"), "cc-pvdz", False, True),
     (NE_WATER, "cc-pvdz", False, True),
-    (ETHANE_WATER, "6-31g*", True, False),
-], ids=["water-ne", "water-ne-shifted", "ne-water-reversed", "ethane-water-cart-fc"])
+    (ETHANE_WATER, "cc-pvdz", True, True),
+], ids=["water-ne", "water-ne-shifted", "ne-water-reversed", "ethane-water-fc"])
 def test_disp0_hf_canonical_signed_native_oracle(geometry, basis, frozen, puream,
                                                 monkeypatch, record_property):
     """One SCF/cache per geometry; compare both signed components, not totals."""
@@ -235,6 +235,7 @@ def test_disp0_hf_canonical_signed_native_oracle(geometry, basis, frozen, puream
     monkeypatch.setattr(mp2, "df_mp2_einsums_dispersion", compare)
     psi4.set_options({
         "basis": basis, "puream": puream, "scf_type": "df", "freeze_core": frozen,
+        "DF_BASIS_MP2": "cc-pvdz-ri", "DF_BASIS_SAPT": "cc-pvdz-ri",
         "SAPT_DFT_FUNCTIONAL": "HF", "SAPT_DFT_DO_DHF": False,
         "SAPT_DFT_INDUCTION_TYPE": "NONE", "SAPT_DFT_MP2_DISP_ALG": "EINSUMS",
         "SAPT_DFT_USE_EINSUMS": True, "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",

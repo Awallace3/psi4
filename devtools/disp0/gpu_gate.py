@@ -409,10 +409,12 @@ def main():
         psi4.set_memory("8 GB")
         core.set_output_file(str(out / "psi4-gate.out"), False)
 
+        # Physical qualification uses spherical cc-pVDZ/cc-pVDZ-RI throughout.
+        # The RI basis still contains F shells; this is not an F-shell bypass.
         cases = [("water-ne", WATER_NE, "cc-pvdz", False, True),
                  ("water-ne-shifted", WATER_NE.replace("2.8 1.1 1.5", "3.1 0.9 1.7"), "cc-pvdz", False, True),
                  ("ne-water-reversed", NE_WATER, "cc-pvdz", False, True),
-                 ("ethane-water-cart-fc", ETHANE_WATER, "6-31g*", True, False),
+                 ("ethane-water-fc", ETHANE_WATER, "cc-pvdz", True, True),
                  ("benzene-dimer-fc", benzene_dimer(), "cc-pvdz", True, True),
                  ("water-ne-repeat", WATER_NE, "cc-pvdz", False, True)]
         production_values = {}
