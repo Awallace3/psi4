@@ -56,12 +56,7 @@ from ..solvent.efp import get_qm_atoms_opts, modify_Fock_induced, modify_Fock_pe
 
 
 def _release_collocation_cache(self):
-    """Free the DFT collocation cache held by this wavefunction's V_potential.
-
-    The cache is sized from the *whole* memory budget (see scf_initialize), so it
-    must be released as soon as the SCF is done with it -- including when the SCF
-    fails, since a non-converged SCF never reaches finalize_energy().
-    """
+    """Release this wavefunction's grid cache, including on SCF failure."""
     if self.V_potential():
         self.V_potential().clear_collocation_cache()
 
@@ -124,17 +119,9 @@ def _build_jk(wfn, memory):
 
 
 def _resident_doubles():
-    """What this process is actually holding right now, in doubles, or None off Linux.
+    """Return RSS in doubles, or None when unavailable.
 
-    ``memory_committed()`` only knows about the stores that declare themselves -- an
-    in-core (Q|mn), a collocation cache -- and that is less than the process is holding.
-    The rest is the holes glibc leaves behind: a released cache is tens of thousands of
-    small matrices, so ``malloc_trim`` can hand back the free tops of the arenas but not
-    a hole with a live allocation above it.  An SCF that divides up
-    ``setting - committed`` therefore hands out memory the process has already spent;
-    measured at 1.5 GiB by the last SCF of a SAPT(DFT) job, enough to put the peak over
-    the declaration even though every printed grant fit.  VmRSS is what a cgroup kills
-    on, so budget against that when we can read it.
+    RSS includes allocations and allocator overhead absent from the memory ledger.
     """
     try:
         with open("/proc/self/statm") as fh:
@@ -145,38 +132,23 @@ def _resident_doubles():
 
 
 def _scf_memory_reserve(wfn):
-    """Estimate, in doubles, what this SCF will spend *outside* the two budgets it hands out.
+    """Estimate memory outside the JK and collocation grants, in doubles.
 
-    ``scf_initialize`` divides the memory setting between the JK and the DFT collocation
-    cache, but those are not the only two consumers.  The SCF matrices, the grid itself,
-    the per-thread point-function scratch and the JK's own per-call transients are all
-    paid for out of whatever the split happens to leave behind, and none of them is
-    declared to the memory ledger.  That residue is what ``SCF_MEM_SAFETY_FACTOR`` has
-    really been covering, and a fixed fraction of a user-chosen number is the wrong shape
-    for it: the transient term grows as naux*nocc*nbf while the fraction stays put, so
-    the factor is wasteful on small jobs and too small on exactly the large ones where
-    running out of memory is most expensive.
-
-    Every input below is known before a single integral is computed, so this can run
-    before the budget is divided.  The coefficients come from per-stage high-water
-    measurements on eight systems (nanotube and peptide dimers, cc-pVDZ through
-    aug-cc-pVTZ, 4-32 threads); see ~/docs/saptdft-memory.html for the derivations.
+    Reserve for SCF matrices, the grid, and thread-local workspaces before
+    splitting the budget. The empirical coefficients are not hard bounds.
     """
     nbf = wfn.basisset().nbf()
     nthread = core.get_num_threads()
 
-    # Columns of C that the JK is handed: one set of occupieds if the densities are
-    # constrained equal, alpha and beta separately otherwise.
+    # Count both occupied sets only when alpha and beta densities differ.
     nocc = max(1, wfn.nalpha())
     if not wfn.same_a_b_dens():
         nocc += wfn.nbeta()
 
-    # Interpreter, library statics and per-thread scratch that no module declares.  Flat
-    # at 0.21 GiB across every probe, plus ~0.9 MB per thread of OpenMP/BLAS stacks.
+    # Estimated interpreter/library footprint and per-thread stacks.
     base = (0.21 * 1024**3 + 0.9e6 * nthread) / 8
 
-    # The nbf^2 matrices an SCF holds: H, S, X, Fa/Fb, Ca/Cb, Da/Db, Va/Vb and friends,
-    # plus two DIIS vectors (error and target) per subspace entry.
+    # SCF matrices plus error/target pairs for each DIIS entry.
     matrices = float(nbf**2 * (12 + 2 * core.get_option("SCF", "DIIS_MAX_VECS")))
 
     # Grid storage and the point-function scratch.  Both are zero for a grid-less SCF.
@@ -191,21 +163,13 @@ def _scf_memory_reserve(wfn):
         # BlockOPoints: x/y/z/w per point (32 B), plus a local-function map per block
         # (26 B per function held), plus ~4 MB/thread of libxc workspace.
         grid_mem = (32.0 * grid.npoints() + 26.0 * nblocks * max_functions + 4.0e6 * nthread) / 8
-        # PointFunctions basis/point values, per thread.  The fit is for a GGA (phi and
-        # three gradient components); an LDA needs a quarter of it, a meta-GGA 2.5x.
+        # Scale the GGA point-function workspace estimate for LDA and meta-GGA.
         ansatz_scale = {0: 0.25, 1: 1.0, 2: 2.5}.get(vbase.functional().ansatz(), 1.0)
         points_mem = ansatz_scale * nthread * (3.38 * max_points * max_functions +
                                                1.887 * max_functions**2)
 
-    # compute_JK's per-call buffers, but only the part that lands outside the JK's grant.
-    # The large ones -- DFHelper's T1/T2 and DiskDFJK's E_left/E_right/Q_temp, which scale
-    # as naux*nocc*nbf -- are blocked against the grant itself (Qshell_blocks_for_JK_build,
-    # DiskDFJK::max_rows), so charging them here as well counted them twice: the omol25
-    # SAPT(DFT) dHF dimer was told it needed 136 GiB and peaked at 54.9.  What escapes the
-    # grant is the BLAS/libint working set on top of those blocks, plus the per-thread C
-    # buffers.  Over 45 SCFs in five such jobs (24 threads, grants of 27-83 GiB, MemDFJK and
-    # DiskDFJK) the high-water above base + grant + cache + the terms above never exceeded
-    # 0.16 * naux*nocc*nbf; 0.2 keeps that as a margin.
+    # Reserve only work outside the JK grant: BLAS/libint and per-thread buffers.
+    # DFHelper/DiskDFJK already block their large intermediates against that grant.
     scf_type = core.get_global_option("SCF_TYPE").upper()
     naux = 0
     if "DF" in scf_type and "+" not in scf_type:
@@ -250,46 +214,23 @@ def scf_initialize(self):
 
     # Figure out memory distributions
 
-    # Get memory in terms of doubles.  The memory setting describes an empty process, but
-    # an SCF is often started with earlier wavefunctions still alive -- SAPT(DFT) holds the
-    # dimer and both monomers, and a GRAC shift holds the neutral while the cation runs --
-    # whose JK integrals and collocation caches are already spending it.  Divide up what is
-    # actually left instead of handing out the whole setting again.  Our own cache, if this
-    # wavefunction has one from a previous SCF, would otherwise be double-counted against
-    # us; drop it only on a first attempt, which is the only case that rebuilds it below.
+    # Budget in doubles, subtracting stores held by other live wavefunctions.
+    # Drop our own cache only when this attempt will rebuild it.
     if self.attempt_number_ == 1:
         _release_collocation_cache(self)
-    # Return whatever the caches we just dropped were still holding before measuring, so
-    # that recoverable arena space is not mistaken for memory this SCF cannot have.
+    # Trim freed arenas before measuring resident overhead.
     core.release_freed_memory()
     committed_memory = core.memory_committed()
     resident_memory = _resident_doubles()
     unclaimed_memory = max(0.0, (core.get_memory() / 8) - committed_memory)
 
-    # Set aside the undeclared-but-mandatory part before dividing up the rest.  Without
-    # this the JK and the cache are handed a fraction of the whole setting and everything
-    # else -- SCF matrices, grid, JK transients -- has to fit in the rounding error, which
-    # is why a job whose printed JK estimate fits its allocation can still be killed.  The
-    # reserve is capped at half the budget so that an under-declared run degrades into an
-    # out-of-core JK (which DFHelper handles) rather than a zero grant.
+    # Reserve working memory before splitting the remainder between JK and cache.
     reserve_terms = _scf_memory_reserve(self)
-    # The interpreter-and-libraries term is resident before psi4 allocates anything, so it
-    # is not part of what the memory keyword describes -- that keyword has always sized the
-    # big arrays, not the process.  Subtracting it from the budget would silently take a
-    # fifth of a gigabyte away from every job that declares a small one, which is enough to
-    # push a Cholesky or in-core DF JK under the floor it needs to start.  It is still real
-    # memory, so it is still counted against the cache ceiling below and in the advice about
-    # how much this SCF actually needs; it just is not taken out of the split.
+    # Interpreter overhead affects RSS and the cache ceiling, not the array budget.
     process_reserve = reserve_terms["base"]
     reserve_total = sum(reserve_terms.values()) - process_reserve
 
-    # What the process is resident for beyond both the stores that declared themselves and
-    # the interpreter we just reserved for: the holes glibc leaves where a released cache
-    # used to be, the matrices and grids of wavefunctions that are still alive, and anything
-    # else in this process that never announced itself.  It caps the cache below, and when the
-    # declaration is a real budget it is also held back from the split; it is never taken from
-    # a nominal one, where a job that declares a megabyte to force an out-of-core algorithm
-    # would be handed nothing at all.
+    # Account for resident allocations and fragmentation outside the ledger.
     if resident_memory is None:
         overhead_memory = 0.0
     else:
@@ -298,30 +239,16 @@ def scf_initialize(self):
 
     resident_hold = 0.0
     if reserve_total + process_reserve >= unclaimed_memory:
-        # The declaration is smaller than the parts of this SCF that are not negotiable, so
-        # it is not a budget at all -- a test that asks for two megabytes to force a disk
-        # algorithm, say.  Holding a reserve back cannot make such a job fit; it only pushes
-        # the JK under the floor its out-of-core algorithm needs to start.  Hand over the
-        # whole (fictional) budget and let the JK pick the smallest algorithm it has.  The
-        # interpreter counts here even though it is not taken out of a real split: a
-        # declaration that cannot hold the process it runs in is not a budget either, and
-        # without it the 2 MB dft-grad-disk passed this test at two threads and failed at
-        # four, where the reserve took half its grant and DiskDFJK could no longer start.
+        # Preserve nominal tiny budgets used to force disk algorithms.
+        # Withholding a reserve here can prevent the smallest JK block from fitting.
         reserve_memory = 0.0
     else:
         reserve_memory = min(reserve_total, 0.5 * unclaimed_memory)
-        # A real budget also has to cover what is already resident without a ledger entry.
-        # The JK never sees that memory and an out-of-core DiskDFJK fills whatever it is
-        # granted: the SAPT(DFT) monomers in the dimer basis start with 9 GiB of it, which
-        # an oversized JK-transient term used to cover by accident.  Same half cap.
+        # Cap the combined reserve at half the available budget to leave JK room.
         resident_hold = min(overhead_memory, max(0.0, 0.5 * unclaimed_memory - reserve_memory))
 
-    # With an absolute reserve subtracted, the factor is only residual slop, so the 0.75
-    # default is far too conservative; honour it if the user set it, otherwise use 0.95.
-    # When the reserve was not taken, nothing else is held back, and 0.95 hands an
-    # out-of-core DiskDFJK -- which really does fill its grant -- the whole setting: the
-    # SAPT(DFT) dHF dimer got 60.8 GiB of a 64 GiB job and was killed where the 0.75
-    # default had given it 48 GiB and finished.  Keep the default there.
+    # Honor an explicit safety factor. Use 0.95 with a reserve; otherwise retain
+    # the configured default so an out-of-core JK still leaves working headroom.
     if core.has_option_changed("SCF", "SCF_MEM_SAFETY_FACTOR"):
         safety_factor = core.get_option("SCF", "SCF_MEM_SAFETY_FACTOR")
     elif reserve_memory == 0.0 and reserve_total > 0.0:
@@ -351,22 +278,12 @@ def scf_initialize(self):
         jk = _build_jk(self, total_memory)
 
     if initialize_jk_obj:
-        # What this SCF is about to allocate for a JK of its own.  DiskJK, DirectJK and
-        # CompositeJK all return 0 here because they cannot predict their footprint; that
-        # means "unknown", not "nothing", so the remainder is not the cache's to take --
-        # treating it that way is what lets an out-of-core SCF claim a *larger* collocation
-        # cache than the DF one it was meant to be cheaper than.
+        # A zero estimate means unknown, not free memory for the cache.
         jk_size = jk.memory_estimate()
         jk_size_known = jk_size > 0
     else:
-        # A re-used JK's integrals are already counted in committed_memory, but the buffers it
-        # allocates on every build are not.  A MemDFJK on its disk algorithm (SCF_SUBTYPE
-        # OUT_OF_CORE, or AUTO when the AOs do not fit) holds nothing in core and sizes its
-        # (Q|mn) blocks and M/T/C buffers from its whole grant on every build, so treating it
-        # as free hands that grant to the cache a second time: the second SCF of a GRAC pair,
-        # and monomer B after monomer A, then cached the full grid on top of a 70 GiB JK and
-        # were killed in their first iteration.  Charge what the JK may still allocate.  JKs
-        # that cannot predict their footprint report 0 and keep the old treatment.
+        # Reused integrals are already in the ledger; charge the remaining grant
+        # for per-call buffers. Preserve prior handling for unknown JK footprints.
         reused_jk_predictable = jk.memory_estimate() > 0
         if reused_jk_predictable:
             jk_size = max(0, jk.memory() - jk.memory_held())
@@ -386,13 +303,8 @@ def scf_initialize(self):
     if collocation_memory > collocation_size:
         collocation_memory = collocation_size
 
-    # Keep the cache under what is actually left of the declaration once the undeclared
-    # residue is counted.  Everything else in this SCF is sized by the problem; the cache is
-    # the only part that can be asked to take less, and it is what pushed the peak past the
-    # declaration when fragmentation reached a GiB and a half by the last SCF of a SAPT(DFT)
-    # job.  This is a ceiling rather than a subtraction on purpose: a job with headroom to
-    # spare keeps its whole cache, and with no residue to account for the safety factor
-    # already holds the split below this line, so nothing changes.  The JK keeps its budget.
+    # Reduce only the cache when resident overhead exhausts headroom.
+    # Withheld cache memory must not be reassigned to JK.
     cache_ceiling = safety_factor * max(
         0.0, (core.get_memory() / 8) - held_memory - process_reserve - reserve_memory - jk_size)
     withheld_memory = max(0.0, collocation_memory - cache_ceiling)
@@ -401,15 +313,8 @@ def scf_initialize(self):
     # Set constants
     self.iteration_ = 0
     self.memory_jk_ = int(total_memory - collocation_memory - withheld_memory)
-    # When the cache takes everything above the JK's own estimate, the line above is
-    # total_memory - (total_memory - jk_size), which is jk_size only up to the rounding
-    # of two float subtractions -- and int() then truncates, so the JK can be handed one
-    # double less than the size it just asked for.  DFHelper and CDJK both treat that as
-    # "not enough memory to do in-core" and throw, which turns a grant that is exactly
-    # right into a fatal error.  Never hand the JK less than it reported it needs -- but
-    # only when that need fits the budget.  An out-of-core DiskDFJK reports its in-core
-    # size, which can be larger than the whole setting; flooring at it then gave the JK
-    # 108 GiB of a 96 GiB job, which it sized its blocks from and was killed.
+    # Avoid rounding one double below a fitting estimate. Never raise a disk
+    # grant to an in-core estimate larger than the available budget.
     if jk_size_known and 0 < jk_size <= total_memory:
         self.memory_jk_ = max(self.memory_jk_, int(jk_size))
     self.memory_collocation_ = int(collocation_memory)
@@ -440,8 +345,7 @@ def scf_initialize(self):
                 "not taken" if reserve_memory == 0.0 else "capped at half the remaining budget"))
         if initialize_jk_obj:
             core.print_out("    JK allocation                   {:11.3f} [GiB]\n".format(gib(self.memory_jk_)))
-        # A re-used JK keeps the grant it was built with and never sees memory_jk_, so show
-        # what it may still allocate per build, which is what the split above charged for it.
+        # A reused JK retains its original grant; report its unheld portion.
         elif reused_jk_predictable:
             core.print_out("    Re-used JK working budget       {:11.3f} [GiB]  of {:.3f} [GiB] granted\n".format(
                 gib(jk_size), gib(jk.memory())))
@@ -453,11 +357,7 @@ def scf_initialize(self):
                 gib(self.memory_collocation_), gib(collocation_size)))
 
         if jk_size_known:
-            # jk_size is what a JK built here would allocate in core; for a re-used one it is
-            # what it may still allocate beyond the integrals already inside committed_memory.
-            # A new JK whose in-core size does not fit goes out of core and fills only its
-            # grant, so charge the grant: charging the in-core size told the omol25 SAPT(DFT)
-            # dimer it would peak at 145 GiB of 64 when it peaked at 60.
+            # A new out-of-core JK uses its grant, not its larger in-core estimate.
             jk_charged = jk_size
             jk_out_of_core = initialize_jk_obj and jk_size > self.memory_jk_
             if jk_out_of_core:
