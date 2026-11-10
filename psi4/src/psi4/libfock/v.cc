@@ -1393,8 +1393,8 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         const auto& function_map = block->functions_local_to_global();
         int nlocal = function_map.size();
 
-        // group local rows by tile, then add whole rows (lower triangle of V2, mirrored as
-        // in the other paths) under the tile's lock; try free tiles first, block only if none
+        // Group the block's local rows by tile; add_run adds whole rows of the symmetric V2
+        // (lower triangle stored, mirrored as in the other paths) into V_AO.
         auto& ord = tile_order[rank];
         ord.clear();
         for (int ml = 0; ml < nlocal; ml++) ord.emplace_back(tile_of[function_map[ml]], ml);
@@ -1415,34 +1415,30 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
                 for (int nl = ml + 1; nl < nlocal; nl++) row[function_map[nl]] += V2p[nl][ml];
             }
         };
+        // Sweep the tiles with try-locks, starting at a rank-dependent offset so threads spread
+        // out; when a sweep takes none, wait on the first tile still left.
         std::vector<char> done(runs.size(), 0);
-        size_t ndone = 0, start = runs.empty() ? 0 : rank % runs.size();
+        size_t ndone = 0;
+        const size_t start = runs.empty() ? 0 : rank % runs.size();
+        auto take = [&](size_t k, bool wait) {
+            omp_lock_t* l = &tile_locks[ord[runs[k].first].first];
+            if (wait)
+                omp_set_lock(l);
+            else if (!omp_test_lock(l))
+                return false;
+            add_run(runs[k]);
+            omp_unset_lock(l);
+            done[k] = 1;
+            ndone++;
+            return true;
+        };
         while (ndone < runs.size()) {
             bool progress = false;
             for (size_t i = 0; i < runs.size(); i++) {
                 const size_t k = (start + i) % runs.size();
-                if (done[k]) continue;
-                omp_lock_t* l = &tile_locks[ord[runs[k].first].first];
-                if (omp_test_lock(l)) {
-                    add_run(runs[k]);
-                    omp_unset_lock(l);
-                    done[k] = 1;
-                    ndone++;
-                    progress = true;
-                }
+                if (!done[k] && take(k, false)) progress = true;
             }
-            if (!progress) {
-                for (size_t k = 0; k < runs.size(); k++) {
-                    if (done[k]) continue;
-                    omp_lock_t* l = &tile_locks[ord[runs[k].first].first];
-                    omp_set_lock(l);
-                    add_run(runs[k]);
-                    omp_unset_lock(l);
-                    done[k] = 1;
-                    ndone++;
-                    break;
-                }
-            }
+            if (!progress) take(std::find(done.begin(), done.end(), 0) - done.begin(), true);
         }
         parallel_timer_off("V_xc", rank);
     }

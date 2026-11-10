@@ -511,6 +511,15 @@ void DFHelper::prepare_AO_wK() {
     std::vector<std::pair<size_t, size_t>> psteps;
     std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_, 0, psteps);
 }
+// Grow-only scratch: reallocate (freeing the old buffer first) only when a build needs more.
+static double* grow_scratch(std::unique_ptr<double[]>& buf, size_t& size, size_t need) {
+    if (size < need) {
+        buf.reset();
+        buf.reset(new double[need]);
+        size = need;
+    }
+    return buf.get();
+}
 size_t DFHelper::metric_panel_cols() const {
     // Width of the dense (naux x ncol) panels contract_metric_AO_core_symm gathers runs of p into:
     // ~8192 columns (or nbf), but never more than the significant (p, q >= p) columns that exist.
@@ -545,15 +554,12 @@ void DFHelper::prepare_AO_core() {
 
     // determine blocking, leaving room for the metric contraction's panels (and Cholesky copy)
     std::vector<std::pair<size_t, size_t>> psteps;
-    // Under a tight budget give the panels at most half of what the AOs and the metric leave.
+    // Under a tight budget give the two panels at most half of what the AOs and the metric leave.
     panel_cols_cap_ = 0;
-    {
-        const size_t fixed = big_skips_[nbf_] + (hold_met_ ? naux_ * naux_ : 0);
-        const size_t spare = memory_ > fixed ? memory_ - fixed : 0;
-        const size_t panels = AO_core_init_scratch();
-        if (panels > spare / 2) panel_cols_cap_ = std::max<size_t>(1, spare / 2 / (2 * naux_));
-    }
-    const size_t init_scratch = AO_core_init_scratch();
+    const size_t fixed = big_skips_[nbf_] + (hold_met_ ? naux_ * naux_ : 0);
+    const size_t spare = memory_ > fixed ? memory_ - fixed : 0;
+    if (AO_core_init_scratch() > spare / 2) panel_cols_cap_ = std::max<size_t>(1, spare / 4 / naux_);
+    const size_t init_scratch = AO_core_init_scratch();  // with the cap applied
     if (init_scratch >= memory_) throw PSIEXCEPTION("DFHelper: not enough memory for the metric contraction panels.");
     std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_ - init_scratch, 1, psteps);
 
@@ -3203,12 +3209,7 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
     Ktmp_size = std::max(Ktmp_size * nbf_, nthreads_ * naux_);  // max necessary
     Ktmp_size = std::max(Ktmp_size, nbf_ * nbf_); 
     // Scratch persists across builds: a fresh ~GiB buffer per SCF iteration is mostly page faults.
-    if (jk_T1_size_ < Ktmp_size) {
-        jk_T1_.reset();
-        jk_T1_ = std::unique_ptr<double[]>(new double[Ktmp_size]);
-        jk_T1_size_ = Ktmp_size;
-    }
-    double* T1p = jk_T1_.get();
+    double* T1p = grow_scratch(jk_T1_, jk_T1_size_, Ktmp_size);
 
     // if lr_symmetric, we can be more clever with mem usage. T2 is used for both the
     // second tmp in the K build, as well as the completed, pruned J build.
@@ -3222,12 +3223,7 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
     Ktmp_size = std::max(Ktmp_size, nbf_ * nbf_); 
     Ktmp_size = std::max(Ktmp_size, nthreads_ * naux_);
 
-    if (jk_T2_size_ < Ktmp_size) {
-        jk_T2_.reset();
-        jk_T2_ = std::unique_ptr<double[]>(new double[Ktmp_size]);
-        jk_T2_size_ = Ktmp_size;
-    }
-    double* T2p = jk_T2_.get();
+    double* T2p = grow_scratch(jk_T2_, jk_T2_size_, Ktmp_size);
 
     double* Mp;
     if (!AO_core_) {
