@@ -229,11 +229,11 @@ void DFHelper::AO_core(bool set_AO_core=true) {
     // Auxiliary metric
     required_core_size_ += naux_ * naux_;
 
-    // C_buffers (conservative estimate since I do not have max_nocc TODO)
-    required_core_size_ += nthreads_ * nbf_ * nbf_;
-
-    // Tmp buffers
-    required_core_size_ += 3 * nbf_ * nbf_ * Qshell_max_;
+    // Transients on top of the AOs and the metric: the JK build's C_buffers (conservative estimate
+    // since I do not have max_nocc TODO) and tmp buffers, or, while the AOs are built, the metric
+    // contraction's panels. They are never live together.
+    const size_t jk_tmp = nthreads_ * nbf_ * nbf_ + 3 * nbf_ * nbf_ * Qshell_max_;
+    required_core_size_ += std::max(jk_tmp, (direct_iaQ_ ? size_t(0) : AO_core_init_scratch()));
 
     // set AO_core_ if requested
     if (set_AO_core) {
@@ -511,6 +511,31 @@ void DFHelper::prepare_AO_wK() {
     std::vector<std::pair<size_t, size_t>> psteps;
     std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_, 0, psteps);
 }
+// Grow-only scratch: reallocate (freeing the old buffer first) only when a build needs more.
+static double* grow_scratch(std::unique_ptr<double[]>& buf, size_t& size, size_t need) {
+    if (size < need) {
+        buf.reset();
+        buf.reset(new double[need]);
+        size = need;
+    }
+    return buf.get();
+}
+size_t DFHelper::metric_panel_cols() const {
+    // Width of the dense (naux x ncol) panels contract_metric_AO_core_symm gathers runs of p into:
+    // ~8192 columns (or nbf), but never more than the significant (p, q >= p) columns that exist.
+    // A tight budget may cap it (panel_cols_cap_), down to nbf, which any single p fits in.
+    const size_t total = (naux_ && symm_big_skips_.size() == nbf_ + 1) ? symm_big_skips_[nbf_] / naux_ : nbf_;
+    size_t cols = std::max<size_t>(8192, nbf_);
+    if (panel_cols_cap_) cols = std::min(cols, std::max(panel_cols_cap_, nbf_));
+    return std::max<size_t>(1, std::min(cols, total));
+}
+size_t DFHelper::AO_core_init_scratch() const {
+    // two (naux x panel) panels and the significant-q index lists in contract_metric_AO_core_symm,
+    // plus the copy of J the Cholesky route factors when the metric is held in core
+    size_t s = 2 * naux_ * metric_panel_cols() + small_skips_[nbf_];
+    if (metric_cholesky_ && hold_met_ && std::fabs(mpower_ + 0.5) < 1e-13) s += naux_ * naux_;
+    return s;
+}
 void DFHelper::prepare_AO_core() {
     // get each thread an eri object
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
@@ -527,9 +552,16 @@ void DFHelper::prepare_AO_core() {
         if(rank) eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
     }
 
-    // determine blocking
+    // determine blocking, leaving room for the metric contraction's panels (and Cholesky copy)
     std::vector<std::pair<size_t, size_t>> psteps;
-    std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_, 1, psteps);
+    // Under a tight budget give the two panels at most half of what the AOs and the metric leave.
+    panel_cols_cap_ = 0;
+    const size_t fixed = big_skips_[nbf_] + (hold_met_ ? naux_ * naux_ : 0);
+    const size_t spare = memory_ > fixed ? memory_ - fixed : 0;
+    if (AO_core_init_scratch() > spare / 2) panel_cols_cap_ = std::max<size_t>(1, spare / 4 / naux_);
+    const size_t init_scratch = AO_core_init_scratch();  // with the cap applied
+    if (init_scratch >= memory_) throw PSIEXCEPTION("DFHelper: not enough memory for the metric contraction panels.");
+    std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_ - init_scratch, 1, psteps);
 
     // allocate final AO vector
     if (direct_iaQ_) {
@@ -1698,7 +1730,7 @@ void DFHelper::contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* me
     // so instead gather runs of p into a dense (naux x ncol) panel, contract it with a single
     // threaded DGEMM, and scatter the result into both the upper (p, q) and lower (q, p) slots of Ppq.
     size_t startind = symm_big_skips_[begin];
-    const size_t target_cols = std::max<size_t>(8192, nbf_);
+    const size_t target_cols = metric_panel_cols();
 
     std::vector<size_t> col_off;  // panel column offset of each p in the current chunk
     std::vector<std::vector<size_t>> upper(nbf_);  // significant q >= p, in column order
@@ -2274,6 +2306,20 @@ void DFHelper::first_transform_pQq(size_t bsize, size_t bcount, size_t block_siz
     }
 }
 
+// For row p of the in-core AOs: C^T restricted to p's significant m, as an (nocc_pad x sp_size)
+// block whose padding rows are zero. Shared by the double and single-precision (i,Q) K transforms.
+template <typename T>
+static void gather_Ct_pad(T* Ct, const double* Bp, const std::vector<size_t>& schwarz_fun_index, size_t p,
+                          size_t nbf, size_t nocc, size_t nocc_pad, size_t sp_size) {
+    std::fill(Ct, Ct + nocc_pad * sp_size, T(0));
+    for (size_t m = 0, sp_count = 0; m < nbf; m++) {
+        if (schwarz_fun_index[p * nbf + m]) {
+            for (size_t i = 0; i < nocc; i++) Ct[i * sp_size + sp_count] = static_cast<T>(Bp[m * nocc + i]);
+            sp_count++;
+        }
+    }
+}
+
 void DFHelper::first_transform_pQq_K(size_t nocc, size_t nocc_pad, size_t bcount, size_t block_size, double* Mp,
                                      double* Tp, double* Bp, std::vector<std::vector<double>>& C_buffers) {
     // K-build variant of first_transform_pQq: T[p] is stored (i x Q) with i padded to nocc_pad
@@ -2288,15 +2334,8 @@ void DFHelper::first_transform_pQq_K(size_t nocc, size_t nocc_pad, size_t bcount
 #ifdef _OPENMP
         rank = omp_get_thread_num();
 #endif
-        // gather C^T restricted to the significant m of this p: (i x m), zero-padded rows
         double* Ct = C_buffers[rank].data();
-        std::fill(Ct, Ct + nocc_pad * sp_size, 0.0);
-        for (size_t m = 0, sp_count = 0; m < nbf_; m++) {
-            if (schwarz_fun_index_[k * nbf_ + m]) {
-                for (size_t i = 0; i < nocc; i++) Ct[i * sp_size + sp_count] = Bp[m * nocc + i];
-                sp_count++;
-            }
-        }
+        gather_Ct_pad(Ct, Bp, schwarz_fun_index_, k, nbf_, nocc, nocc_pad, sp_size);
 
         // (im)(Qm)^T -> (iQ)
         C_DGEMM('N', 'T', nocc_pad, block_size, sp_size, 1.0, Ct, sp_size, &Mp[jump], sp_size, 0.0,
@@ -3203,20 +3242,13 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
 
     // declare bufs
     std::unique_ptr<double[]> M;   // AOs
-    std::unique_ptr<double[]> T1;  // Ktmp1
-    std::unique_ptr<double[]> T2;  // Ktmp2
 
     // allocate first Ktmp
     size_t Ktmp_size = (!max_nocc ? totsb * 1 : totsb * max_nocc);
     Ktmp_size = std::max(Ktmp_size * nbf_, nthreads_ * naux_);  // max necessary
     Ktmp_size = std::max(Ktmp_size, nbf_ * nbf_); 
     // Scratch persists across builds: a fresh ~GiB buffer per SCF iteration is mostly page faults.
-    if (jk_T1_size_ < Ktmp_size) {
-        jk_T1_.reset();
-        jk_T1_ = std::unique_ptr<double[]>(new double[Ktmp_size]);
-        jk_T1_size_ = Ktmp_size;
-    }
-    double* T1p = jk_T1_.get();
+    double* T1p = grow_scratch(jk_T1_, jk_T1_size_, Ktmp_size);
 
     // if lr_symmetric, we can be more clever with mem usage. T2 is used for both the
     // second tmp in the K build, as well as the completed, pruned J build.
@@ -3230,12 +3262,7 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
     Ktmp_size = std::max(Ktmp_size, nbf_ * nbf_); 
     Ktmp_size = std::max(Ktmp_size, nthreads_ * naux_);
 
-    if (jk_T2_size_ < Ktmp_size) {
-        jk_T2_.reset();
-        jk_T2_ = std::unique_ptr<double[]>(new double[Ktmp_size]);
-        jk_T2_size_ = Ktmp_size;
-    }
-    double* T2p = jk_T2_.get();
+    double* T2p = grow_scratch(jk_T2_, jk_T2_size_, Ktmp_size);
 
     double* Mp;
     if (!AO_core_) {
@@ -3628,13 +3655,7 @@ void DFHelper::compute_K_fp32(std::vector<SharedMatrix> Cleft, std::vector<Share
             rank = omp_get_thread_num();
 #endif
             float* Ct = reinterpret_cast<float*>(C_buffers[rank].data());
-            std::fill(Ct, Ct + nocc_pad * sp_size, 0.0f);
-            for (size_t m = 0, sp_count = 0; m < nbf_; m++) {
-                if (schwarz_fun_index_[k * nbf_ + m]) {
-                    for (size_t i = 0; i < nocc; i++) Ct[i * sp_size + sp_count] = static_cast<float>(Bp[m * nocc + i]);
-                    sp_count++;
-                }
-            }
+            gather_Ct_pad(Ct, Bp, schwarz_fun_index_, k, nbf_, nocc, nocc_pad, sp_size);
             C_SGEMM('N', 'T', nocc_pad, block_size, sp_size, 1.0f, Ct, sp_size, const_cast<float*>(&Mf[jump]),
                     sp_size, 0.0f, &Tf[k * block_size * nocc_pad], block_size);
         }

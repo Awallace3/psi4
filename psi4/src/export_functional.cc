@@ -260,12 +260,6 @@ void export_functional(py::module &m) {
                         return VBase::build_V(basis, func, Process::environment.options, type);
                     })
         .def("initialize", &VBase::initialize, "doctsring")
-        .def("V_thread_scratch_size", &VBase::V_thread_scratch_size,
-             "Doubles held by per-thread V accumulators during compute_V (0 if unused).")
-        .def("set_V_thread_accumulators", &VBase::set_V_thread_accumulators,
-             "Use per-thread V accumulators (True) or atomic updates into one matrix (False).")
-        .def("V_thread_accumulators", &VBase::V_thread_accumulators,
-             "Whether compute_V uses per-thread accumulators.")
         .def("set_grid", &VBase::set_grid, "Rebuild the XC potential on the Initial or Final grid.")
         .def("initial_grid", &VBase::initial_grid, "Whether this potential uses the initial SCF grid.")
         .def("finalize", &VBase::finalize, "doctsring")

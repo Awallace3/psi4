@@ -78,32 +78,37 @@ class PSI_API DFHelper {
     /// defaults to 256,000,000 (2.04GB)
     ///
     void set_memory(size_t doubles) { memory_ = doubles; }
-
-    /// Build K (in-core, non-wK) in single precision until switched off. Meant for early SCF
-    /// iterations: the error (~1e-7 relative) is far below the orbital gradient there. Turning it
-    /// off frees the single-precision tensor. Falls back to double if memory does not allow it.
-    void set_K_fp32(bool on) {
-        K_fp32_ = on;
-        if (!on) Ppq_f_.reset();
-    }
-    bool K_fp32() const { return K_fp32_; }
+    size_t get_memory() { return memory_; }
     /// In-core symmetric AO tensors with metric power -1/2: contract with the Cholesky factor
     /// of the metric (triangular solve) instead of J^-1/2. No eigenvalue cutoff; falls back to
     /// J^-1/2 when the metric is singular to working precision (estimated rcond < 1e-13).
     void set_metric_cholesky(bool on) { metric_cholesky_ = on; }
     bool metric_cholesky() const { return metric_cholesky_; }
-    /// Store the K first-transform intermediate as (i,Q) with nocc padded to 8 instead of (Q,i).
-    /// Faster with MKL on AMD Zen2, slower at large nbf on Intel Skylake/Cascade Lake.
-    void set_K_layout_iQ(bool on) { K_layout_iQ_ = on; }
+    /// Columns per metric-contraction panel in the in-core symmetric AO build
+    size_t metric_panel_cols() const;
+    /// Doubles allocated on top of the AOs and the metric while the in-core AOs are built
+    size_t AO_core_init_scratch() const;
     /// Free the compute_JK scratch that is otherwise kept between builds
     void clear_JK_scratch() {
         jk_T1_.reset();
         jk_T2_.reset();
         jk_T1_size_ = jk_T2_size_ = 0;
     }
-    /// doubles-equivalent held by the single-precision K tensor (0 when not allocated)
+
+    // => Opt-in K fast paths (in-core, non-wK only) <=
+    /// Build K in single precision until switched off. Meant for early SCF iterations: the error
+    /// (~1e-7 relative) is far below the orbital gradient there. Turning it off frees the
+    /// single-precision tensor. Falls back to double if memory does not allow it.
+    void set_K_fp32(bool on) {
+        K_fp32_ = on;
+        if (!on) Ppq_f_.reset();
+    }
+    bool K_fp32() const { return K_fp32_; }
+    /// Doubles-equivalent held by the single-precision K tensor (0 when not allocated)
     size_t K_fp32_memory() const { return Ppq_f_ ? big_skips_[nbf_] / 2 : 0; }
-    size_t get_memory() { return memory_; }
+    /// Store the K first-transform intermediate as (i,Q) with nocc padded to 8 instead of (Q,i).
+    /// Faster with MKL on AMD Zen2, slower at large nbf on Intel Skylake/Cascade Lake.
+    void set_K_layout_iQ(bool on) { K_layout_iQ_ = on; }
 
     ///
     /// Indicates whether to use the in-core or out-of-core
@@ -381,6 +386,9 @@ class PSI_API DFHelper {
     double mpower_ = -0.5;
     double wmpower_ = -1.0;
     bool hold_met_ = false;
+    bool metric_cholesky_ = false;
+    /// upper bound on metric_panel_cols() set by prepare_AO_core under a tight budget (0: none)
+    size_t panel_cols_cap_ = 0;
     bool built_ = false;
     bool transformed_ = false;
     std::pair<size_t, size_t> info_;
@@ -409,7 +417,6 @@ class PSI_API DFHelper {
     /// single-precision copy of Ppq_ for low-precision K builds (see set_K_fp32)
     std::unique_ptr<float[]> Ppq_f_;
     bool K_fp32_ = false;
-    bool metric_cholesky_ = false;
     bool K_layout_iQ_ = false;
     bool prepare_K_fp32();
     void compute_J_symm_fp32(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* T1p, double* T2p,

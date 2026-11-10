@@ -380,6 +380,12 @@ void HF::initialize_gtfock_jk() {
 #endif
 }
 
+size_t HF::diag_scratch_size() const {
+    // Matrix::diagonalize_dsyevd workspace for the largest irrep
+    size_t n = 0;
+    for (int h = 0; h < nirrep_; h++) n = std::max(n, static_cast<size_t>(nsopi_[h]));
+    return Matrix::dsyevd_scratch_size(n);
+}
 void HF::finalize() {
     // Clean memory off, handle diis closeout, etc
 
@@ -389,6 +395,9 @@ void HF::finalize() {
     } else if (jk_) {
         jk_->release_scratch();
     }
+    // The potential outlives the SCF (gradients, TDDFT); its SCF-only scratch does not.
+    std::vector<double>().swap(diag_work_);
+    std::vector<int>().swap(diag_iwork_);
 
     // Clean up after DIIS
     if (initialized_diis_manager_) diis_manager_.attr("delete_diis_file")();
@@ -1360,33 +1369,10 @@ void HF::diagonalize_F(const SharedMatrix& Fm, SharedMatrix& Cm, std::shared_ptr
     // Form F' = X'FX for canonical orthogonalization
     auto diag_F_temp = linalg::triplet(X_, Fm, X_, true, false, false);
 
-    // Form C' = eig(F'). Divide and conquer (DSYEVD) with a queried workspace: ~3x faster than
-    // Matrix::diagonalize's DSYEV with its minimal 3N workspace, once per SCF iteration.
+    // Form C' = eig(F') with DSYEVD; the workspace persists across iterations, is charged by
+    // scf_initialize through diag_scratch_size(), and is freed in finalize().
     auto diag_C_temp = std::make_shared<Matrix>(nmopi_, nmopi_);
-    for (int h = 0; h < diag_F_temp->nirrep(); h++) {
-        const int n = diag_F_temp->rowspi(h);
-        if (!n) continue;
-        double** Fp = diag_F_temp->pointer(h);
-        double** Cp = diag_C_temp->pointer(h);
-        double* ep = epsm->pointer(h);
-        // F' is symmetric, so its row-major storage is also its column-major storage.
-        std::vector<double> a(Fp[0], Fp[0] + static_cast<size_t>(n) * n);
-        double wq;
-        int iwq;
-        int info = C_DSYEVD('V', 'U', n, a.data(), n, ep, &wq, -1, &iwq, -1);
-        std::vector<double> work(static_cast<size_t>(wq));
-        std::vector<int> iwork(iwq);
-        if (!info) info = C_DSYEVD('V', 'U', n, a.data(), n, ep, work.data(), (int)work.size(), iwork.data(),
-                                   (int)iwork.size());
-        if (info) {
-            // fall back to the reference path
-            auto F_h = diag_F_temp->clone();
-            F_h->diagonalize(diag_C_temp, epsm);
-            break;
-        }
-        for (int j = 0; j < n; j++)
-            for (int i = 0; i < n; i++) Cp[i][j] = a[static_cast<size_t>(j) * n + i];
-    }
+    diag_F_temp->diagonalize_dsyevd(*diag_C_temp, *epsm, diag_work_, diag_iwork_);
 
     // Form C = XC'
     Cm->gemm(false, false, 1.0, X_, diag_C_temp, 0.0);

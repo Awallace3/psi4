@@ -151,17 +151,7 @@ class PSI_API VBase {
     void set_grid(const std::string& name);
     bool initial_grid() const { return initial_grid_; }
 
-    /// Doubles held by per-thread V accumulators during compute_V (0 if unused).
-    /// The SCF charges this to its memory budget before splitting JK and collocation memory.
-    virtual size_t V_thread_scratch_size() const { return 0; }
-    /// Use per-thread V accumulators (true) or omp atomics into one matrix (false)
-    void set_V_thread_accumulators(bool on) { V_thread_accumulators_ = on; }
-    bool V_thread_accumulators() const { return V_thread_accumulators_; }
-
     virtual void print_header() const;
-
-   protected:
-    bool V_thread_accumulators_ = true;
 };
 
 // => Derived Classes <= //
@@ -189,7 +179,6 @@ class RV : public VBase {
 
     // compute_V assuming same orbitals for different spin. Computes V_alpha, not spin-summed V.
     void compute_V(std::vector<SharedMatrix> ret) override;
-    size_t V_thread_scratch_size() const override;
     /// Compute the orbital derivative of the KS potential, contract against Dx, and
     /// putting the result in ret. ret[i] is Vx where x = Dx[i]. The "true" vector has
     /// 2^-0.5 Dx[i] for each input spin case and returns **half** the α component of the output.
