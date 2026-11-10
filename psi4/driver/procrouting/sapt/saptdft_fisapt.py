@@ -92,10 +92,6 @@ def setup_fisapt_object(
         )
         wfn.set_basisset("MINAO", minao)
 
-    if core.get_option("FISAPT", "FISAPT_FSAPT_IND_XC_RESPONSE"):
-        from .sapt_fisapt_cpks_find import validate_request
-        validate_request(core)
-        core.prepare_options_for_module("FISAPT")
     fisapt = core.FISAPT(wfn)
 
     # Used to slice arrays later if frozen core is requested
@@ -328,8 +324,8 @@ def setup_fisapt_object(
     pp(scalar_cache)
     fisapt.set_scalar(scalar_cache)
     if core.get_option("FISAPT", "FISAPT_FSAPT_IND_XC_RESPONSE"):
-        from .sapt_fisapt_cpks_find import install
-        install(core, fisapt, wfn_A, wfn_B)
+        # find() solves with these monomers' own Hessians, XC kernel included.
+        fisapt.set_cpks_monomers(wfn_A, wfn_B)
     return fisapt
 
 

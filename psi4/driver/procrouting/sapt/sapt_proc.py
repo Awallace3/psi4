@@ -83,6 +83,31 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         optstash.restore()
 
 
+def _check_fsapt_xc_response(external_potentials) -> None:
+    """Reject settings FISAPT_FSAPT_IND_XC_RESPONSE does not support yet."""
+    def opt(module, key):
+        return core.get_option(module, key)
+
+    def need(ok, what):
+        if not ok:
+            raise ValidationError(f"FISAPT_FSAPT_IND_XC_RESPONSE requires {what}.")
+
+    need(opt("FISAPT", "FISAPT_FSAPT_IND_RESPONSE"), "FISAPT_FSAPT_IND_RESPONSE=true")
+    need(opt("SAPT", "SAPT_DFT_DO_FSAPT") == "FISAPT" and opt("SAPT", "SAPT_DFT_INDUCTION_TYPE") == "CPKS",
+         "SAPT_DFT_DO_FSAPT=FISAPT and SAPT_DFT_INDUCTION_TYPE=CPKS")
+    need(opt("SAPT", "SAPT_DFT_FUNCTIONAL").upper() in ("HF", "SVWN", "PBE"), "an HF, SVWN or PBE functional")
+    need(not opt("SAPT", "SAPT_DFT_DO_DDFT") and opt("SAPT", "SAPT_DFT_GRAC_COMPUTE") == "NONE"
+         and opt("SAPT", "SAPT_DFT_GRAC_SHIFT_A") == 0. and opt("SAPT", "SAPT_DFT_GRAC_SHIFT_B") == 0.
+         and opt("SCF", "LEVEL_SHIFT") == 0., "no deltaDFT, GRAC or level shift")
+    need(opt("FISAPT", "FISAPT_LINK_ASSIGNMENT") == "C" and not opt("FISAPT", "SSAPT0_SCALE")
+         and not opt("FISAPT", "FISAPT_EXCH_PARPERP") and not opt("SAPT", "DO_IND_EXCH_SINF"),
+         "FISAPT_LINK_ASSIGNMENT=C and unscaled S^2 exchange-induction")
+    options = core.get_global_option_list()
+    need(not external_potentials and not any(k in options and opt("SCF", k) for k in ("PCM", "PE", "DDX")),
+         "no external potentials or embedding")
+    need(not ("BRIANQC_ENABLE" in options and core.get_global_option("BRIANQC_ENABLE")), "CPU monomers")
+
+
 def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     """Run the SAPT(DFT) interaction energy calculation.
 
@@ -104,10 +129,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     core.Wavefunction
         The dimer wavefunction with SAPT(DFT) results stored as variables.
     """
-    core.prepare_options_for_module("SAPT")
     if core.get_option("FISAPT", "FISAPT_FSAPT_IND_XC_RESPONSE"):
-        from .sapt_fisapt_cpks_find import validate_request
-        validate_request(core, external_potentials=kwargs.get("external_potentials"))
+        _check_fsapt_xc_response(kwargs.get("external_potentials"))
     core.prepare_options_for_module("SAPT")
     induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
@@ -1350,12 +1373,6 @@ def sapt_dft(
 
     induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
     fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper()
-    if core.get_option("FISAPT", "FISAPT_FSAPT_IND_XC_RESPONSE"):
-        if do_delta_dft:
-            raise ValidationError("XC-coupled find does not admit deltaDFT redistribution")
-        from .sapt_fisapt_cpks_find import validate_request
-        validate_request(core, external_potentials=external_potentials)
-    core.prepare_options_for_module("SAPT")
     if induction_type == "CPHF" and do_dft and "Ind20,r" not in data:
         raise ValidationError(
             "SAPT_DFT_INDUCTION_TYPE=CPHF reuses the SAPT0 induction terms computed by the "

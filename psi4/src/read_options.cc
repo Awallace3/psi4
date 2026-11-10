@@ -1336,14 +1336,12 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("FISAPT_FSAPT_EXCH_SCALE", true);
         /*- Do F-SAPT induction scaling? (ratio of HF induction to F-SAPT induction) -*/
         options.add_bool("FISAPT_FSAPT_IND_SCALE", true);
-        /*- Solve coupled F-SAPT response? Without FISAPT_FSAPT_IND_XC_RESPONSE,
-        this uses the legacy full-exchange operator even on KS orbitals. -*/
+        /*- Do F-SAPT coupled response? Uses the HF-like gap + 4J - K - K^T Hessian
+        unless FISAPT_FSAPT_IND_XC_RESPONSE is set. -*/
         options.add_bool("FISAPT_FSAPT_IND_RESPONSE", false);
-        /*- Include the original monomer XC kernel in native FISAPT source response?
-        Requires FISAPT_FSAPT_IND_RESPONSE=true and SAPT_DFT_DO_FSAPT=FISAPT.
-        CPU reference support is restricted to unshifted HF/SVWN/PBE monomers.
-        False retains the legacy full-exchange operator on the supplied reference,
-        not a functional-exchange kernel with only its XC contribution omitted. -*/
+        /*- Use the monomer SCF response Hessian, XC kernel included, for F-SAPT coupled
+        response in SAPT(DFT)? Requires FISAPT_FSAPT_IND_RESPONSE and SAPT_DFT_DO_FSAPT=FISAPT;
+        currently limited to HF, SVWN and PBE monomers. -*/
         options.add_bool("FISAPT_FSAPT_IND_XC_RESPONSE", false);
         /*- Do sSAPT0 exchange-scaling with F-SAPT -*/
         options.add_bool("SSAPT0_SCALE", false);

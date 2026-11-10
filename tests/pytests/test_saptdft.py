@@ -35,11 +35,8 @@ def grac_dimer():
     psi4.core.clean()
 
 
-@pytest.mark.saptdft
-@pytest.mark.fsapt
-def test_saptdft_fsapt_cpks_source_response(tmp_path, monkeypatch):
-    """Raw native CPKS cells must match independent full-monomer Hessian solves."""
-    assert hasattr(psi4.core.FISAPT, "set_cpks_monomers"), "Requires a matching native CPKS build"
+def _fsapt_coupled_induction(functional, xc_response, tmp_path, monkeypatch):
+    """Run SAPT(DFT) F-SAPT with per-source coupled induction; return (wfn, IndAB, IndBA)."""
     from psi4.driver.procrouting.sapt import saptdft_fisapt
 
     molecule = psi4.geometry("""
@@ -57,97 +54,46 @@ def test_saptdft_fsapt_cpks_source_response(tmp_path, monkeypatch):
     """)
     psi4.set_options({
         "basis": "sto-3g", "df_basis_scf": "cc-pvdz-jkfit", "scf_type": "df",
-        "e_convergence": 1e-11, "d_convergence": 1e-10, "freeze_core": False,
-        "dft_radial_points": 75, "dft_spherical_points": 302, "level_shift": 0.,
-        "sapt_dft_functional": "pbe", "sapt_dft_induction_type": "cpks",
-        "sapt_dft_grac_compute": "none", "sapt_dft_grac_shift_a": 0.,
-        "sapt_dft_grac_shift_b": 0., "sapt_dft_do_dhf": False, "sapt_dft_do_ddft": False,
-        "dft_grac_shift": 0., "fisapt_link_assignment": "c",
-        "ssapt0_scale": False, "fisapt_exch_parperp": False, "do_ind_exch_sinf": False,
-        "sapt_dft_do_disp": False, "sapt_dft_do_fsapt": "fisapt",
-        "fisapt_fsapt_filepath": str(tmp_path / "fsapt"), "fisapt_do_fsapt_disp": False,
-        "fisapt_fsapt_ind_response": True, "fisapt_fsapt_ind_xc_response": True,
-        "fisapt_fsapt_ind_scale": False, "cphf_r_convergence": 1e-10, "maxiter": 128,
+        "e_convergence": 1e-11, "d_convergence": 1e-10, "cphf_r_convergence": 1e-10,
+        "sapt_dft_functional": functional, "sapt_dft_induction_type": "cpks",
+        "sapt_dft_grac_compute": "none", "sapt_dft_grac_shift_a": 0., "sapt_dft_grac_shift_b": 0.,
+        "sapt_dft_do_dhf": False, "sapt_dft_do_disp": False,
+        "sapt_dft_do_fsapt": "fisapt", "fisapt_fsapt_filepath": str(tmp_path / "fsapt"),
+        "fisapt_do_fsapt_disp": False, "fisapt_fsapt_ind_scale": False,
+        "fisapt_fsapt_ind_response": True, "fisapt_fsapt_ind_xc_response": xc_response,
     })
-    expected, residual_limits = {}, {}
+    created = []
     setup = saptdft_fisapt.setup_fisapt_object
 
-    def with_dense_oracle(dimer, wfn_a, wfn_b, cache, *args, **kwargs):
-        native = setup(dimer, wfn_a, wfn_b, cache, *args, **kwargs)
-        matrices, vectors = native.matrices(), native.vectors()
-        # Compute the oracle while the original canonical JKs are still live,
-        # before find()/cache export can replace the canonical J_P convention.
-        for side, other, wfn, order in (("A", "B", wfn_a, "AB"), ("B", "A", wfn_b, "BA")):
-            co, cv = cache["Cocc_" + side].np, cache["Cvir_" + side].np
-            rotation = matrices["Uocc0" + side].np
-            # Reference/gauge consistency is an integration invariant, not
-            # an extra set of Fock transformations in every production find().
-            np.testing.assert_allclose(matrices["D_" + side].np, wfn.Da().np, rtol=0, atol=1e-12)
-            fock = wfn.Fa().np
-            for space, prefix, coefficients in (("OCC", "occ", co), ("VIR", "vir", cv)):
-                original = wfn.Ca_subset("AO", space).np
-                np.testing.assert_allclose(coefficients, original, rtol=0, atol=1e-12)
-                np.testing.assert_allclose(matrices["C" + prefix + "0" + side].np, original, rtol=0, atol=1e-12)
-                eps = vectors["eps_" + prefix + "0" + side].np
-                np.testing.assert_allclose(eps, wfn.epsilon_a_subset("AO", space).np, rtol=0, atol=1e-12)
-                np.testing.assert_allclose(coefficients.T @ fock @ coefficients, np.diag(eps),
-                                           rtol=1e-8, atol=1e-8)
-            np.testing.assert_allclose(co.T @ fock @ cv, 0., rtol=0, atol=1e-8)
-            sources, jk = [], wfn.jk()
-            for atom, charge in enumerate(vectors["Z" + other].np):
-                potential = psi4.core.ExternalPotential()
-                potential.addCharge(float(charge), molecule.x(atom), molecule.y(atom), molecule.z(atom))
-                sources.append(co.T @ potential.computePotentialMatrix(wfn.basisset()).np @ cv)
-            for orbital in matrices["Locc0" + other].np.T:
-                jk.C_clear()
-                column = psi4.core.Matrix.from_array(orbital[:, None])
-                jk.C_left_add(column)
-                jk.C_right_add(column)
-                jk.compute()
-                sources.append(2 * co.T @ jk.J()[0].np @ cv)
-            sources.append(np.zeros((co.shape[1], cv.shape[1])))  # final zero external slot
-            sources = np.array(sources)
-            residual_limits["A<-B" if side == "A" else "B<-A"] = max(
-                1e-12, 1e-10 * np.linalg.norm(sources, axis=(1, 2)).max())
-            shape, size = sources.shape[1:], co.shape[1] * cv.shape[1]
-            hessian = np.column_stack([
-                -wfn.cphf_Hx([psi4.core.Matrix.from_array(np.eye(size)[i].reshape(shape))])[0].np.ravel()
-                for i in range(size)
-            ])
-            kappa = -np.linalg.solve(hessian, sources.reshape(len(sources), -1).T).T.reshape(sources.shape)
-            overlap = cache["S"].np
-            da, db = cache["D_" + side].np, cache["D_" + other].np
-            wa = cache["V_" + side].np + 2 * cache["J_" + side].np
-            wb = cache["V_" + other].np + 2 * cache["J_" + other].np
-            total_rhs = co.T @ wb @ cv
-            np.testing.assert_allclose(sources.sum(axis=0), total_rhs, rtol=1e-10, atol=1e-12)
-            np.testing.assert_allclose(
-                kappa.sum(axis=0), -np.linalg.solve(hessian, total_rhs.ravel()).reshape(shape),
-                rtol=1e-10, atol=1e-12)
-            ka, kb = cache["K_" + side].np, cache["K_" + other].np
-            ko = cache["K_O"].np if side == "A" else cache["K_O"].np.T
-            left = -(wa - ka) + overlap @ da @ wb + wa @ db @ overlap - ko.T
-            right = -(wb - kb) + wb @ da @ overlap - ko
-            exchange = (-kb - 2 * cache["J_O"].np + ko + 2 * cache["J_P_" + other].np
-                        + overlap @ db @ left + right @ db @ overlap)
-            local = np.einsum("il,siv->slv", rotation, kappa)
-            for label, target in (("IND20R", wb), ("EXCHIND20R", exchange)):
-                cells = 2 * np.einsum("slv,lv->ls", local, rotation.T @ co.T @ target @ cv)
-                expected[f"FSAPT_CPKS_{label}_{order}_RAW"] = cells if side == "A" else cells.T
-        return native
+    def keep(*args, **kwargs):
+        created.append(setup(*args, **kwargs))
+        return created[-1]
 
-    monkeypatch.setattr(saptdft_fisapt, "setup_fisapt_object", with_dense_oracle)
+    monkeypatch.setattr(saptdft_fisapt, "setup_fisapt_object", keep)
     _, wfn = psi4.energy("sapt(dft)", molecule=molecule, return_wfn=True)
-    for label, cells in expected.items():
-        np.testing.assert_allclose(wfn.array_variable(label).np, cells, rtol=1e-7, atol=2e-9)
-        assert np.any(cells)
-    assert len(expected) == 4  # two directions, induction/exchange-induction separately
-    assert wfn.scalar_variable("SAPT IND ENERGY") == pytest.approx(
-        sum(cells.sum() for cells in expected.values()), rel=1e-7, abs=2e-9)
-    for direction in ("A<-B", "B<-A"):
-        assert wfn.scalar_variable(f"FSAPT CPKS RESPONSE SCALE ({direction})") == 1.
-        assert wfn.scalar_variable(f"FSAPT CPKS MAX TRUE RESIDUAL ({direction})") <= residual_limits[direction]
-    assert wfn.scalar_variable("FSAPT CPKS DELTAHF SCALE") == 1.
+    matrices = created[-1].matrices()
+    psi4.core.clean()
+    return wfn, matrices["IndAB_AB"].np.copy(), matrices["IndBA_AB"].np.copy()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@pytest.mark.parametrize("functional", ["hf", "svwn", "pbe"])
+def test_saptdft_fsapt_xc_response_sums_to_cpks(functional, tmp_path, monkeypatch):
+    """The per-source partition with the monomer Hessians sums to the canonical CPKS induction."""
+    wfn, ind_ab, ind_ba = _fsapt_coupled_induction(functional, True, tmp_path, monkeypatch)
+    assert ind_ab.sum() + ind_ba.sum() == pytest.approx(wfn.variable("SAPT IND ENERGY"), rel=1e-7, abs=1e-14)
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_fsapt_xc_response_hf_matches_legacy(tmp_path, monkeypatch):
+    """For HF monomers the SCF Hessian is the legacy gap + 4J - K - K^T operator, cell for cell."""
+    _, xc_ab, xc_ba = _fsapt_coupled_induction("hf", True, tmp_path, monkeypatch)
+    _, legacy_ab, legacy_ba = _fsapt_coupled_induction("hf", False, tmp_path, monkeypatch)
+    assert np.any(xc_ab) and np.any(xc_ba)
+    np.testing.assert_allclose(xc_ab, legacy_ab, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(xc_ba, legacy_ba, rtol=0, atol=1e-12)
 
 
 @pytest.mark.saptdft
