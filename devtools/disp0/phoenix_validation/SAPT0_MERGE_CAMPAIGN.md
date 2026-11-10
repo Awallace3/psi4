@@ -29,6 +29,12 @@ frozen core, coupled HF induction, delta-HF enabled, no F-SAPT, no empirical
 dispersion. CPU uses the existing native SAPT dispersion backend; GPU uses
 the public automatic cuEST dispersion continuation and audited provider,
 block edge 32, explicit 4 GiB packed-factor cache. No default cache change.
+The first comparison explicitly retains default-off device CG and device DIIS;
+both arms use the existing response iteration/SCF DIIS policy, with native
+cuEST J/K on the GPU arm. Direct-J/Grid-K and response profiling are off.
+This tests the GPU-enabled driver, not a claim that every operation is
+device-resident. Device CG/DIIS optimizations require a separately labeled
+qualification and comparison.
 
 Run a small water CPU/GPU gate first. Then three **fresh-process** measurements
 per arm/case, alternating CPU/GPU order, on the same allocated H200 host with

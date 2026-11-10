@@ -26,6 +26,14 @@ def main():
     proof = json.loads((build_run / "result.json").read_text())
     if proof["status"] != "PASS":
         raise RuntimeError("Coherent build validation did not pass")
+    submission = json.loads((args.output.parent / "manifest.json").read_text())
+    input_hashes = {n: sha(args.inputs / (n + ".json")) for n in ("water", args.system)}
+    if (input_hashes != submission["input_hashes"]
+            or sha(build_run / "result.json") != submission["build_proof_sha256"]
+            or proof["pin"] != submission["native_pin"]
+            or os.environ["SAPT0_PIN"] != submission["source_pin"]
+            or args.system != submission["system"]):
+        raise RuntimeError("Inputs/build/helper changed since submission")
     original = build_run / "gpu-runtime/runtime-config.json"
     config = json.loads(original.read_text())
     if config["source_pin"] != proof["pin"]:
@@ -43,7 +51,7 @@ def main():
         "original_runtime_sha256": sha(original), "build_proof_sha256": sha(build_run / "result.json"),
         "native_source_pin": proof["pin"], "helper_pin": os.environ["SAPT0_PIN"],
         "runtime_config_sha256": sha(config_path), "system": args.system,
-        "input_hashes": {n: sha(args.inputs / (n + ".json")) for n in ("water", args.system)},
+        "input_hashes": input_hashes,
         "threads_each_arm": 8, "cpu_model": Path("/proc/cpuinfo").read_text(),
         "scheduling": {"job": os.environ["SLURM_JOB_ID"], "qos": os.environ.get("SLURM_JOB_QOS")}})
     # No launch of a larger case if the public CPU/GPU water gate fails.

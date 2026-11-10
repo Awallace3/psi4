@@ -75,6 +75,7 @@ def options(gpu):
         "df_basis_mp2": "aug-cc-pvdz-ri", "df_fitting_condition": 1e-12,
         "use_cuest": gpu, "cuest_mixed_precision": False, "cuest_gemm_min_dim": 0,
         "cuest_gridk": False, "cuest_directj": False,
+        "cuest_device_cg": False, "cuest_diis": False, "cuest_response_profile": False,
         "guess": "sad", "sad_scf_type": "df", "df_scf_guess": False,
         "e_convergence": 1e-10, "d_convergence": 1e-10, "ints_tolerance": 1e-16,
         "maxiter": 100, "freeze_core": True, "orbital_optimizer_package": "INTERNAL",
