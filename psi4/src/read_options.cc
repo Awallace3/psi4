@@ -1211,6 +1211,31 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("SAPT_FDDS_V2_RHO_CUTOFF", 1.e-6);
         /*- Which MP2 Exch-Disp module to use? !expert -*/
         options.add_str("SAPT_DFT_MP2_DISP_ALG", "SAPT", "FISAPT SAPT");
+        /*- DFHelper storage algorithm for the FDDS dispersion three-index
+        transformations.  STORE keeps the AO integrals in the Schwarz-screened
+        sparse layout and folds the fitting metric into them before the MO
+        transform, so no unscreened AO block is ever held and no pre-metric
+        copy of a transformed tensor is ever written.  DIRECT and DIRECT_IAQ
+        are the older paths, which write every transformed tensor twice and,
+        for DIRECT_IAQ, store the AO integrals densely.  LEGACY reproduces the
+        pre-screening choice exactly: DIRECT for the first round of a hybrid
+        functional, DIRECT_IAQ otherwise.  AUTO picks STORE. !expert -*/
+        options.add_str("SAPT_FDDS_DISP_DF_ALGORITHM", "AUTO", "AUTO STORE DIRECT DIRECT_IAQ LEGACY");
+        /*- Transform the hybrid FDDS dispersion second-round integrals one
+        monomer at a time.  QR, X and Y consume monomer A's (aa|R), (ar|R) and
+        (rr|R) and release them before monomer B's are ever read, so doing both
+        monomers in one pass only makes the two sets share scratch -- on a
+        protein-sized dimer (rr|R) and (ss|R) alone are 283 and 322 GiB.  The
+        split costs one extra AO integral build and metric fold. !expert -*/
+        options.add_bool("SAPT_FDDS_DISP_SPLIT_MONOMERS", true);
+        /*- Where the STORE path of FDDS dispersion keeps its Schwarz-screened
+        three-index AO integrals.  INCORE holds them in memory, which is the
+        whole of STORE's memory increase over LEGACY; OUT_OF_CORE writes them to
+        scratch and reads them back per transformation, which keeps memory at the
+        LEGACY level; AUTO holds them in memory when they fit the dispersion
+        budget and writes them to scratch otherwise.  Ignored by DIRECT,
+        DIRECT_IAQ and LEGACY, which do not store the AO integrals. !expert -*/
+        options.add_str("SAPT_FDDS_DISP_AO_STORAGE", "AUTO", "AUTO INCORE OUT_OF_CORE");
         /*- Interior option to clean up printing !expert -*/
         options.add_bool("SAPT_QUIET", false);
     }
