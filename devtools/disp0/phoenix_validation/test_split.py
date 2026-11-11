@@ -115,6 +115,7 @@ class SplitContracts(unittest.TestCase):
              "native_persistent_bytes":12,"optional_files":{"binding":"hash"}}
         cpu={**gpu,"threads":24}
         require_oracle_config(cpu,gpu)
+        require_oracle_config({**cpu,"threads":48},gpu)
         for change in ({"source_pin":"other"},{"host_memory":"128 GiB"},
                        {"native_persistent_bytes":13},{"threads":16},
                        {"optional_files":{"binding":"different"}}):

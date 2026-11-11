@@ -91,8 +91,8 @@ def require_oracle_config(cpu,peer):
     """Different scheduler roles may change threads, never the sealed runtime."""
     if {k:v for k,v in cpu.items() if k!="threads"}!={k:v for k,v in peer.items() if k!="threads"}:
         raise RuntimeError("CPU oracle and GPU runtime closures/resource policies differ")
-    if (cpu["threads"],peer["threads"])!=(24,8):
-        raise RuntimeError("Explicit24-core CPU /8-core GPU-host oracle policy required")
+    if (cpu["threads"],peer["threads"]) not in ((24,8),(48,8)):
+        raise RuntimeError("Explicit24/48-core CPU /8-core GPU-host oracle policy required")
 
 
 def replay_hf(core, cache, wfn, raw):
@@ -290,7 +290,8 @@ def main():
     os.chdir(args.output)
     result = {"status": "STARTED", "scope": "DIAGNOSTIC_NOT_ACCEPTED_TIMING",
               "arm": args.arm, "scaled": args.scaled, "distance_change": args.distance_change,
-              "pid": os.getpid(), "job_id": os.environ.get("SLURM_JOB_ID")}
+              "pid": os.getpid(), "job_id": os.environ.get("SLURM_JOB_ID"),
+              "hostname": os.uname().nodename}
     runtime = None
     phases, captured = [], {}
     deferred_cache = []

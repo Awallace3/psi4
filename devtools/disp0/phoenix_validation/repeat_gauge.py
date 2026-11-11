@@ -106,6 +106,20 @@ def compare_arrays(left,right,raw_left,raw_right,dimensions):
         "rtol":RTOL,"atol":ATOL}
 
 
+def require_distinct_processes(left,right):
+    """PIDs are node-local; retain conservative behavior for legacy receipts."""
+    complete=all(isinstance(doc.get("hostname"),str) and doc["hostname"]
+                 and isinstance(doc.get("job_id"),str) and doc["job_id"].isdecimal()
+                 and type(doc.get("pid")) is int and doc["pid"]>0
+                 for doc in (left,right))
+    if complete:
+        identity=lambda doc:(doc["job_id"],doc["hostname"],doc["pid"])
+        same=identity(left)==identity(right)
+    else:
+        same=left["pid"]==right["pid"]
+    if same:raise RuntimeError("Distinct fresh process identities required")
+
+
 def compare_repeat(left_path,right_path,*,dimensions=None,arm="gpu"):
     expected=WATER_DIMENSIONS if dimensions is None else dimensions
     if arm not in ("cpu","gpu"):raise ValueError("Explicit repeated arm required")
@@ -116,7 +130,7 @@ def compare_repeat(left_path,right_path,*,dimensions=None,arm="gpu"):
         if (document["status"]!="EXECUTED_REQUIRES_INDEPENDENT_COMPARISON"
                 or document["arm"]!=arm):
             raise RuntimeError("Completed fresh same-arm repeat inputs required")
-    if docs[0]["pid"]==docs[1]["pid"]:raise RuntimeError("Distinct fresh process identities required")
+    require_distinct_processes(*docs)
     for key in ("source_pin","runtime_config_sha256","geometry_sha256","scaled","orbital_dimensions"):
         if docs[0][key]!=docs[1][key]:raise RuntimeError("Unmatched GPU repeats: "+key)
     if docs[0]["orbital_dimensions"]!=expected:

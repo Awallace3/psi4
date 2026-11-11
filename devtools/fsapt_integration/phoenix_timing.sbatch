@@ -6,7 +6,8 @@ umask 077
 run="$FSAPT_RUN_ROOT/job-$SLURM_JOB_ID"
 mkdir "$run"
 export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
-export OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 OMP_DYNAMIC=FALSE
+export OMP_NUM_THREADS="${FSAPT_THREADS:-8}" MKL_NUM_THREADS="${FSAPT_THREADS:-8}" \
+  OPENBLAS_NUM_THREADS="${FSAPT_THREADS:-8}" OMP_DYNAMIC=FALSE
 unset PYTHONPATH PYTHONHOME PYTHONOPTIMIZE LD_PRELOAD OMP_PROC_BIND OMP_PLACES
 export LD_LIBRARY_PATH="$(dirname "$(dirname "$FSAPT_PYTHON")")/lib"
 term_received=0
@@ -25,7 +26,7 @@ on_exit() {
 trap on_term TERM INT
 trap on_exit EXIT
 srun --kill-on-bad-exit=1 "$FSAPT_PYTHON" -B \
-    "$FSAPT_SOURCE/devtools/fsapt_integration/phoenix_timing.py" \
+    "${FSAPT_DRIVER:-$FSAPT_SOURCE/devtools/fsapt_integration/phoenix_timing.py}" \
     --manifest "$FSAPT_RUN_ROOT/manifest.json" --output "$run" &
 child=$!
 set +e

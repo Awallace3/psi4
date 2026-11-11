@@ -4,8 +4,18 @@ from pathlib import Path
 import tempfile
 import unittest
 import numpy as np
-from repeat_gauge import compare_arrays as compare,compare_repeat,FULL,PAIRS,WATER_DIMENSIONS
+from repeat_gauge import compare_arrays as compare,compare_repeat,FULL,PAIRS,WATER_DIMENSIONS,require_distinct_processes
 from gpu_runtime import digest
+
+
+class ProcessIdentity(unittest.TestCase):
+    def test_pid_collision_on_different_nodes_or_jobs_is_not_reuse(self):
+        left={"pid":123,"job_id":"1000","hostname":"node-a"}
+        require_distinct_processes(left,{**left,"hostname":"node-b"})
+        require_distinct_processes(left,{**left,"job_id":"1001"})
+        require_distinct_processes(left,{**left,"pid":124})
+        with self.assertRaises(RuntimeError):require_distinct_processes(left,dict(left))
+        with self.assertRaises(RuntimeError):require_distinct_processes({"pid":123},{"pid":123})
 
 
 def dimensions(occupied=(3,3),ao=3,atoms=2,frozen=(1,1)):

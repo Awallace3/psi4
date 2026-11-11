@@ -14,6 +14,8 @@
 - Phoenix build and peptide timing **15472290 passed numerical gates**:
   **7.30×** baseline whole-workflow speedup (240.61 → 32.95 s).
   [Full timing table and limitations](H200_PEPTIDE_TIMINGS.md).
+- [Algorithm diagnosis and selected protein83 follow-up](GPU_ALGORITHM_DIAGNOSIS.md):
+  two clean samples per arm, CPU-only 48-thread references, H200 GPU samples.
 - GPU KS/XC fragment response and larger-system memory/scaling: not qualified.
 
 Production source is pinned at `b025694939`; subsequent commits change only
