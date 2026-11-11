@@ -91,7 +91,7 @@ int gg_order(bool puream) {
 #endif
 }
 
-// The SCF's XC potential when its grid is exactly the one XDM would build (same basis, equal
+// The SCF's XC potential when its grid matches the current DFT options (same basis, equal
 // DFTGrid::spec()), else null. Its grid lives as long as the wavefunction's potential.
 std::shared_ptr<VBase> scf_potential_on_grid(const std::shared_ptr<Wavefunction>& wfn, const BasisSet& basis,
                                              const std::string& spec) {
@@ -428,9 +428,11 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     std::map<std::string, int> int_opts;
     std::map<std::string, std::string> str_opts;
 
-    // Borrow the SCF's grid when it is the one XDM would build. The moments (integrate_on_host) are grid
-    // sums, so the same points, weights and blocks give the same result as a freshly built grid,
-    // without building it again and without a second copy in memory.
+    // XDM uses the current DFT grid options; it does not independently select a grid.
+    // Reuse the SCF's grid when its basis and grid specification match those options.
+    // If options changed after SCF, or there is no XC potential (e.g. HF), build a grid
+    // from the current options instead. Disabling reuse also rebuilds from those options,
+    // so unchanged options give the same points, weights and blocks, not a different grid.
     std::shared_ptr<VBase> scf_V;
     if (options.get_bool("XDM_GRID_REUSE")) {
         scf_V = scf_potential_on_grid(wfn, *primary, DFTGrid::spec_for(options, int_opts, str_opts, {}));

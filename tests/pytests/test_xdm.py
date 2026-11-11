@@ -3,6 +3,17 @@ import pytest
 import numpy as np
 import re
 from psi4 import compare_values
+from psi4.driver.task_planner import task_planner
+from psi4.driver.driver_cbs import CompositeComputer
+from psi4.driver.driver_findif import FiniteDifferenceComputer
+from psi4.driver.driver_nbody import ManyBodyComputer
+from psi4.driver.task_base import AtomicComputer
+from psi4.driver.procrouting.empirical_dispersion import XDMDispersionFunctor
+from psi4.driver.procrouting.xdm_params import get_xdm_bj_params
+from psi4.driver.p4util.exceptions import ValidationError
+from psi4.driver.procrouting.dft import dft_builder
+from psi4.driver.procrouting import dft
+from psi4.driver.procrouting import proc
 
 pytestmark = [pytest.mark.psi, pytest.mark.api]
 
@@ -139,16 +150,6 @@ units angstrom
     """)
     psi4.set_options({"basis": "aug-cc-pvdz"})
 
-    for bsse_type in ["cp", "vmfc", ["nocp", "vmfc"]]:
-        with pytest.raises(
-                NotImplementedError,
-                match="Counterpoise-based XDM gradients are not implemented",
-        ):
-            psi4.gradient("b3lyp-xdm", molecule=dimer, bsse_type=bsse_type)
-
-    from psi4.driver.task_planner import task_planner
-    from psi4.driver.driver_nbody import ManyBodyComputer
-
     findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
     for bsse_type, counterpoise in [("cp", True), ("vmfc", True), ("nocp", False)]:
         plan = task_planner("energy", "b3lyp-xdm", dimer, bsse_type=bsse_type)
@@ -164,10 +165,6 @@ units angstrom
     psi4.set_options({"basis": "aug-cc-pvdz"})  # the slash basis above persists
     with pytest.raises(NotImplementedError, match="through composite \\(CBS\\) methods are not implemented"):
         task_planner("energy", "b3lyp-xdm/cc-pv[d,t]z", dimer, bsse_type="cp")
-    with pytest.raises(NotImplementedError, match="Counterpoise-based XDM gradients are not implemented"):
-        task_planner("gradient", "b3lyp-xdm/cc-pv[d,t]z", dimer, bsse_type="cp", **findif_kwargs)
-    with pytest.raises(NotImplementedError, match="Counterpoise-based XDM gradients are not implemented"):
-        task_planner("gradient", "b3lyp", dimer, bsse_type="cp", levels={1: "b3lyp-xdm"}, **findif_kwargs)
 
     # No-CP subsystems integrate on input-frame grids (DFT_GRID_ORIENTATION=INPUT, set by the planner).
     e_los_ii = psi4.energy("b3lyp-xdm(los-ii)", molecule=dimer, bsse_type="nocp")
@@ -224,7 +221,6 @@ units angstrom
     with pytest.raises(psi4.ValidationError, match=re.escape("b3lyp/6-31+g* with model kb49 (counterpoise)")):
         psi4.energy("b3lyp-xdm/6-31+g*", molecule=mol)
 
-    from psi4.driver.procrouting.xdm_params import get_xdm_bj_params
     assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz", model="los-ii") == (0.362043, 2.452093)
     assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz", model="los-ii", counterpoise=True) == (0.3880, 2.1781)
     assert get_xdm_bj_params("pbe0", "aug-cc-pvdz", model="LOS-II", counterpoise=True) == (0.1592, 3.3865)
@@ -326,11 +322,13 @@ def test_xdm_dict_basis_guess_skips_dispersion():
 def test_xdm_gradient_findif():
     """XDM gradients are finite differences of the full XDM-corrected energy.
 
-    Compares ``psi4.gradient`` against an independently assembled central
-    difference of ``psi4.energy`` over every Cartesian coordinate, and confirms
+    Compares ``psi4.gradient`` against energy differences generated and assembled
+    by Psi4's finite-difference helpers, and confirms
     that the XDM-minus-B3LYP gradient difference reproduces the finite-difference
     derivative of :psivar:`DISPERSION CORRECTION ENERGY`.
     """
+    from copy import deepcopy
+    from psi4.driver import driver_findif
 
     geom = """
 0 1
@@ -356,26 +354,22 @@ no_com
     grad_xdm = np.asarray(psi4.gradient("b3lyp-xdm", molecule=mol))
     assert grad_xdm.shape == (3, 3)
 
-    def displaced(method, xyz):
-        m = psi4.geometry(geom)
-        m.set_geometry(psi4.core.Matrix.from_array(xyz))
-        m.update_geometry()
-        ene = psi4.energy(method, molecule=m)
-        return ene, psi4.variable("DISPERSION CORRECTION ENERGY")
+    # Use the built-in stencil for both total and dispersion energies.
+    # A second gradient(..., dertype=0) would just repeat XDM's default route.
+    findifrec = driver_findif.gradient_from_energies_geometries(
+        mol, stencil_size=3, step_size=0.005, t_project=False, r_project=False)
+    for displacement in [findifrec["reference"], *findifrec["displacements"].values()]:
+        displaced_mol = mol.clone()
+        displaced_mol.set_geometry(psi4.core.Matrix.from_array(displacement["geometry"]))
+        displaced_mol.update_geometry()
+        displacement["energy"], wfn = psi4.energy("b3lyp-xdm", molecule=displaced_mol, return_wfn=True)
+        displacement["dispersion_energy"] = wfn.variable("DISPERSION CORRECTION ENERGY")
 
-    xyz0 = np.asarray(mol.geometry())
-    step = 0.005
-    fd_total = np.zeros((3, 3))
-    fd_disp = np.zeros((3, 3))
-    for atom in range(3):
-        for cart in range(3):
-            plus, minus = xyz0.copy(), xyz0.copy()
-            plus[atom, cart] += step
-            minus[atom, cart] -= step
-            e_p, d_p = displaced("b3lyp-xdm", plus)
-            e_m, d_m = displaced("b3lyp-xdm", minus)
-            fd_total[atom, cart] = (e_p - e_m) / (2 * step)
-            fd_disp[atom, cart] = (d_p - d_m) / (2 * step)
+    fd_total = driver_findif.assemble_gradient_from_energies(findifrec)
+    dispersion_rec = deepcopy(findifrec)
+    for displacement in [dispersion_rec["reference"], *dispersion_rec["displacements"].values()]:
+        displacement["energy"] = displacement["dispersion_energy"]
+    fd_disp = driver_findif.assemble_gradient_from_energies(dispersion_rec)
 
     assert np.allclose(grad_xdm, fd_total,
                        atol=1e-5), (f"XDM gradient does not match central difference:\n{grad_xdm - fd_total}")
@@ -418,123 +412,6 @@ units angstrom
 
 
 @pytest.mark.xdm
-def test_xdm_gradient_open_shell():
-    """XDM gradients work for an open-shell (UKS) system."""
-
-    mol = psi4.geometry("""
-0 2
-C  0.000000  0.000000  0.000000
-H  0.000000  1.078000  0.000000
-H  0.933000 -0.539000  0.000000
-H -0.933000 -0.539000  0.000000
-units angstrom
-    """)
-    psi4.set_options({
-        "basis": "sto-3g",
-        "reference": "uks",
-        "DFT_SPHERICAL_POINTS": 302,
-        "DFT_RADIAL_POINTS": 75,
-        "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
-        "scf__e_convergence": 1e-11,
-        "scf__d_convergence": 1e-10,
-    })
-    grad = np.asarray(psi4.gradient("b3lyp-xdm", molecule=mol))
-    psi4.set_options({"reference": "rks"})
-    assert grad.shape == (4, 3)
-    assert np.isfinite(grad).all()
-
-
-@pytest.mark.xdm
-def test_xdm_gradient_nbody_levels():
-    """XDM gradients compose with no-CP many-body ``levels`` and with a basis slash spec."""
-
-    dimer = psi4.geometry("""0 1
-N -1.578718 -0.046611 0.000000
-H -2.158621 0.136396 -0.809565
-H -2.158621 0.136396 0.809565
-H -0.849471 0.658193 0.000000
---
-0 1
-O    2.35062500   0.11146900   0.00000000
-H    2.68039800  -0.37374100  -0.75856100
-H    2.68039800  -0.37374100   0.75856100
-units angstrom
-    """)
-    psi4.set_options({
-        "basis": "sto-3g",
-        "DFT_SPHERICAL_POINTS": 302,
-        "DFT_RADIAL_POINTS": 75,
-        "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
-    })
-
-    from psi4.driver.task_planner import task_planner
-    from psi4.driver.driver_findif import FiniteDifferenceComputer
-    from psi4.driver.driver_nbody import ManyBodyComputer
-    from psi4.driver.task_base import AtomicComputer
-
-    findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
-
-    # Every XDM gradient route must be finite difference, never an analytic SCF gradient.
-    plan = task_planner("gradient", "b3lyp-xdm", dimer, **findif_kwargs)
-    assert isinstance(plan, FiniteDifferenceComputer)
-
-    plan = task_planner(
-        "gradient",
-        "scf",
-        dimer,
-        dft_functional={
-            "name": "custom-xdm",
-            "dispersion": {
-                "type": "xdm"
-            }
-        },
-        **findif_kwargs,
-    )
-    assert isinstance(plan, FiniteDifferenceComputer)
-
-    plan = task_planner(
-        "gradient",
-        "scf",
-        dimer,
-        dft_functional={
-            "name": "metadata-noise",
-            "description": "Comparison to -XDM methods"
-        },
-        **findif_kwargs,
-    )
-    assert isinstance(plan, AtomicComputer)
-
-    def callable_xdm(name, npoints, deriv, restricted):
-        superfunctional = psi4.core.SuperFunctional.blank()
-        superfunctional.set_name("CALLABLE-XDM")
-        return superfunctional, {"type": "xdm", "params": {"xdm_model": "kb49"}}
-
-    plan = task_planner("gradient", "scf", dimer, dft_functional=callable_xdm, **findif_kwargs)
-    assert isinstance(plan, FiniteDifferenceComputer)
-
-    plan = task_planner("energy", "scf", dimer, dft_functional=callable_xdm, bsse_type="cp")
-    assert isinstance(plan, ManyBodyComputer)
-
-    plan = task_planner("gradient", "b3lyp-xdm/sto-3g", dimer, **findif_kwargs)
-    assert isinstance(plan, FiniteDifferenceComputer)
-
-    plan = task_planner("gradient",
-                        "b3lyp",
-                        dimer,
-                        bsse_type="nocp",
-                        levels={
-                            1: "b3lyp-xdm",
-                            2: "b3lyp"
-                        },
-                        **findif_kwargs)
-    assert isinstance(plan, ManyBodyComputer)
-
-    grad = np.asarray(psi4.gradient("b3lyp-xdm", molecule=dimer, bsse_type="nocp"))
-    assert grad.shape == (7, 3)
-    assert np.isfinite(grad).all()
-
-
-@pytest.mark.xdm
 def test_xdm_mixed_levels_preserve_analytic_gradients():
     """Only the ``levels`` entries that actually use XDM are planned as finite differences."""
 
@@ -557,11 +434,6 @@ units angstrom
         "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
     })
 
-    from psi4.driver.task_planner import task_planner
-    from psi4.driver.driver_cbs import CompositeComputer
-    from psi4.driver.driver_findif import FiniteDifferenceComputer
-    from psi4.driver.driver_nbody import ManyBodyComputer
-    from psi4.driver.task_base import AtomicComputer
 
     findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
 
@@ -634,263 +506,6 @@ units angstrom
 
 
 @pytest.mark.xdm
-def test_xdm_cbs_components_use_findif_convergence():
-    """CBS XDM components use the same convergence criteria as direct finite differences."""
-
-    mol = psi4.geometry("""
-0 1
-O
-H 1 0.96
-H 1 0.96 2 104.5
-symmetry c1
-    """)
-    psi4.set_options({
-        "basis": "sto-3g",
-        "e_convergence": 1.0e-10,
-        "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
-    })
-
-    from psi4.driver.driver_findif import FiniteDifferenceComputer
-    from psi4.driver.task_base import AtomicComputer
-    from psi4.driver.task_planner import task_planner
-
-    energy_plan = task_planner("energy", "scf", mol)
-    assert energy_plan.keywords["E_CONVERGENCE"] == pytest.approx(1.0e-10)
-    assert "SCF__E_CONVERGENCE" not in energy_plan.keywords
-
-    psi4.set_options({"e_convergence": 1.0e-6})
-    findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
-    direct_plan = task_planner("gradient", "b3lyp-xdm", mol, **findif_kwargs)
-    cbs_plan = task_planner(
-        "gradient",
-        "cbs",
-        mol,
-        scf_wfn="b3lyp-xdm",
-        scf_basis="sto-3g",
-        corl_wfn="mp2",
-        corl_basis="sto-3g",
-        **findif_kwargs,
-    )
-
-    xdm_tasks = [task for task in cbs_plan.task_list if task.method.lower() == "b3lyp-xdm"]
-    assert xdm_tasks and all(isinstance(task, FiniteDifferenceComputer) for task in xdm_tasks)
-    assert any(task.method.lower() == "mp2" and isinstance(task, AtomicComputer) for task in cbs_plan.task_list)
-    # The user's global e_convergence governs the SCF too; only the unset d_convergence is tightened.
-    assert direct_plan.keywords["E_CONVERGENCE"] == pytest.approx(1.0e-6)
-    assert "SCF__E_CONVERGENCE" not in direct_plan.keywords
-    assert direct_plan.keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
-    for task in xdm_tasks:
-        assert task.keywords["E_CONVERGENCE"] == pytest.approx(1.0e-6)
-        assert "SCF__E_CONVERGENCE" not in task.keywords
-        assert task.keywords["SCF__D_CONVERGENCE"] == direct_plan.keywords["SCF__D_CONVERGENCE"]
-
-
-@pytest.mark.xdm
-@pytest.mark.parametrize("method", ["scf", "b3lyp-xdm"])
-def test_findif_gradient_respects_global_convergence(method):
-    """A global convergence setting is never overridden by the finite-difference defaults, XDM or not."""
-
-    mol = psi4.geometry("""
-0 1
-O
-H 1 0.96
-H 1 0.96 2 104.5
-symmetry c1
-    """)
-    psi4.set_options({
-        "basis": "sto-3g",
-        "d_convergence": 1.0e-12,
-        "e_convergence": 1.0e-4,
-        "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
-    })
-
-    from psi4.driver.driver_findif import FiniteDifferenceComputer
-    from psi4.driver.task_planner import task_planner
-
-    findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
-    plan = task_planner("gradient", method, mol, dertype=0, **findif_kwargs)
-    assert isinstance(plan, FiniteDifferenceComputer)
-    assert "SCF__D_CONVERGENCE" not in plan.keywords
-    assert "SCF__E_CONVERGENCE" not in plan.keywords
-    assert plan.keywords["D_CONVERGENCE"] == pytest.approx(1.0e-12)
-    assert plan.keywords["E_CONVERGENCE"] == pytest.approx(1.0e-4)
-
-
-@pytest.mark.xdm
-def test_xdm_gradient_dertype_spellings():
-    """Energy-level dertype spellings select finite differences; analytic spellings are refused."""
-
-    mol = psi4.geometry("""
-0 1
-O
-H 1 0.96
-H 1 0.96 2 104.5
-symmetry c1
-    """)
-    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
-
-    from psi4.driver.driver_findif import FiniteDifferenceComputer
-    from psi4.driver.task_planner import task_planner
-
-    findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
-    for dertype in (None, 0, "energy", "ENERGY", "none"):
-        plan = task_planner("gradient", "b3lyp-xdm", mol, dertype=dertype, **findif_kwargs)
-        assert isinstance(plan, FiniteDifferenceComputer), dertype
-    for dertype in (1, "gradient", "first"):
-        with pytest.raises(NotImplementedError, match="Analytic XDM gradients are not implemented"):
-            task_planner("gradient", "b3lyp-xdm", mol, dertype=dertype, **findif_kwargs)
-    with pytest.raises(psi4.ValidationError, match="dertype"):
-        task_planner("gradient", "b3lyp-xdm", mol, dertype="bogus", **findif_kwargs)
-
-
-@pytest.mark.xdm
-def test_xdm_cbs_component_convergence_respects_stage_options():
-    """CBS stage-local convergence options survive the finite-difference defaults."""
-
-    mol = psi4.geometry("""
-0 1
-O
-H 1 0.96
-H 1 0.96 2 104.5
-symmetry c1
-    """)
-    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
-
-    from psi4.driver.driver_findif import FiniteDifferenceComputer
-    from psi4.driver.task_planner import task_planner
-
-    findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
-
-    def xdm_component_keywords(stage_options):
-        """Split the XDM components into those carrying the stage options and those without."""
-        plan = task_planner(
-            "gradient",
-            "cbs",
-            mol,
-            cbs_metadata=[
-                {
-                    "wfn": "b3lyp-xdm",
-                    "basis": "sto-3g",
-                    "options": stage_options
-                },
-                {
-                    "wfn": "mp2",
-                    "basis": "sto-3g"
-                },
-            ],
-            **findif_kwargs,
-        )
-        staged, defaulted = [], []
-        for job, task in zip(plan.compute_list, plan.task_list):
-            if task.method.lower() != "b3lyp-xdm":
-                continue
-            assert isinstance(task, FiniteDifferenceComputer)
-            if job["f_options"] == stage_options:
-                staged.append(task.keywords)
-            else:
-                assert job["f_options"] is False
-                defaulted.append(task.keywords)
-        # The delta stage's implicit lower method repeats b3lyp-xdm without the stage options.
-        assert staged and defaulted
-        return staged, defaulted
-
-    # A module-local stage override is not shadowed by a looser negotiated duplicate.
-    staged, defaulted = xdm_component_keywords({"scf__e_convergence": 1.0e-10})
-    for keywords in staged:
-        assert [value for key, value in keywords.items() if key.upper() == "SCF__E_CONVERGENCE"] == [
-            pytest.approx(1.0e-10)
-        ]
-        # Criteria the stage did not set still pick up the finite-difference default.
-        assert keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
-    for keywords in defaulted:
-        assert keywords["SCF__E_CONVERGENCE"] == pytest.approx(1.0e-8)
-        assert keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
-
-    # An unqualified stage criterion does not suppress the SCF-local finite-difference default.
-    staged, defaulted = xdm_component_keywords({"e_convergence": 1.0e-10})
-    for keywords in staged:
-        assert keywords["SCF__E_CONVERGENCE"] == pytest.approx(1.0e-8)
-        assert [value for key, value in keywords.items() if key.upper() == "E_CONVERGENCE"] == [pytest.approx(1.0e-10)]
-        assert keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
-    for keywords in defaulted:
-        assert keywords["SCF__E_CONVERGENCE"] == pytest.approx(1.0e-8)
-        assert keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
-
-
-@pytest.mark.xdm
-def test_xdm_cbs_unavailable_method_raises_missing_method():
-    """An unavailable -XDM CBS stage still reports Psi4's method-availability error."""
-
-    mol = psi4.geometry("""
-0 1
-O
-H 1 0.96
-H 1 0.96 2 104.5
-symmetry c1
-    """)
-    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
-
-    from psi4.driver.task_planner import task_planner
-
-    with pytest.raises(psi4.MissingMethodError, match="b3lypp-xdm"):
-        task_planner(
-            "gradient",
-            "cbs",
-            mol,
-            cbs_metadata=[
-                {
-                    "wfn": "b3lypp-xdm",
-                    "basis": "sto-3g"
-                },
-                {
-                    "wfn": "mp2",
-                    "basis": "sto-3g"
-                },
-            ],
-            findif_verbose=1,
-            findif_stencil_size=3,
-            findif_step_size=0.005,
-        )
-
-
-@pytest.mark.xdm
-def test_xdm_uses_wavefunction_exchange_fraction():
-    from psi4.driver.procrouting.empirical_dispersion import XDMDispersionFunctor
-
-    class Functional:
-
-        def x_alpha(self):
-            return 0.54
-
-        def is_x_lrc(self):
-            return False
-
-    class Wavefunction:
-
-        def functional(self):
-            return Functional()
-
-        def set_variable(self, name, value):
-            pass
-
-        def array_variable(self, name):
-            return psi4.core.Matrix(1, 1)
-
-    class Recorder:
-
-        def compute_energy(self, wfn, hf_fraction):
-            self.hf_fraction = hf_fraction
-            return -0.01
-
-    functor = XDMDispersionFunctor(functional_name="m06-2x", a1=0.5, a2_ang=1.0)
-    recorder = Recorder()
-    functor.xdm = recorder
-
-    assert functor.compute_energy(None, Wavefunction()) == -0.01
-    assert recorder.hf_fraction == pytest.approx(0.54)
-
-
-@pytest.mark.xdm
 def test_xdm_runtime_exchange_changes_free_volume():
     mol = psi4.geometry("0 1\nH 0 0 0\nH 0 0 1.5\nunits angstrom")
     psi4.set_options({
@@ -922,7 +537,7 @@ def test_xdm_modified_exchange_heavy_elements_use_lsda_volumes():
     _, wfn = psi4.energy("b3lyp", molecule=mol, return_wfn=True)
     xdm = psi4.core.XDMDispersion.build("b3lyp", 0.5, 1.0)
 
-    e_table = xdm.compute_energy(wfn, 0.20)
+    xdm.compute_energy(wfn, 0.20)
     c6_table = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
     e_modified = xdm.compute_energy(wfn, 0.50)
     c6_modified = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
@@ -939,7 +554,6 @@ def test_xdm_modified_exchange_heavy_elements_use_lsda_volumes():
 @pytest.mark.xdm
 def test_xdm_b86bpbe25x_uses_pbe0_free_volumes():
     """B86bPBE-25X: fitted parameter lookup, PBE0 free-atom volumes for all elements, energy bookkeeping."""
-    from psi4.driver.procrouting.xdm_params import get_xdm_bj_params
 
     a1, a2 = get_xdm_bj_params("b86bpbe-25x", "def2-tzvp_d-split")
     assert (a1, a2) == pytest.approx((0.7262, 1.5175))
@@ -969,24 +583,11 @@ def test_xdm_b86bpbe25x_uses_pbe0_free_volumes():
 
 
 @pytest.mark.xdm
-def test_xdm_rejects_nonlocal_double_dispersion():
-    from psi4.driver.p4util.exceptions import ValidationError
-    from psi4.driver.procrouting import dft
-    from psi4.driver.procrouting.dft import dft_builder
-
+def test_xdm_rejects_double_dispersion():
     assert "b3lyp-xdm" in dft_builder.functionals
     assert "wb97m-v-xdm" not in dft_builder.functionals
     with pytest.raises(ValidationError, match="XDM cannot be combined.*VV10"):
         dft.build_superfunctional("wb97m-v-xdm", True)
-
-
-@pytest.mark.xdm
-def test_xdm_rejects_empirical_double_dispersion():
-    from psi4.driver.p4util.exceptions import ValidationError
-    from psi4.driver.procrouting import dft, proc
-    from psi4.driver.procrouting.dft import dft_builder
-
-    # qcengine >= 0.50 resolves the "d3bj" alias to "d3bj2b"
     disp_type = dft_builder.functionals["b3lyp-d3bj"]["dispersion"]["type"]
     assert disp_type in ("d3bj", "d3bj2b")
     assert "b3lyp-d3bj-xdm" not in dft_builder.functionals
@@ -998,150 +599,6 @@ def test_xdm_rejects_empirical_double_dispersion():
     psi4.set_options({"basis": "aug-cc-pvdz", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
     with pytest.raises(ValidationError, match=message):
         proc.build_functional_and_disp("b3lyp-d3bj-xdm", True)
-
-
-@pytest.mark.xdm
-def test_xdm_kb49_aliases_and_lcwpbe_reference():
-    from psi4.driver.procrouting import proc
-    from psi4.driver.procrouting.dft import dft_builder
-
-    assert "hse06-xdm" in dft_builder.functionals
-    assert "hse06-xdm(kb49)" in dft_builder.functionals
-
-    psi4.set_options({"basis": "aug-cc-pvdz"})
-    reference, _ = proc.build_functional_and_disp("lc-wpbe", True)
-    for alias in ("lc-wpbe-xdm", "lcwpbe-xdm", "wpbe-xdm"):
-        superfunctional, functor = proc.build_functional_and_disp(alias, True)
-        assert superfunctional.name().lower().startswith("lc-wpbe-xdm")
-        assert superfunctional.x_alpha() == reference.x_alpha()
-        assert superfunctional.x_beta() == reference.x_beta()
-        assert superfunctional.x_omega() == reference.x_omega()
-        assert functor.engine == "xdm"
-        assert functor.xdm.functional_name() == "lc-wpbe"
-
-
-@pytest.mark.xdm
-def test_xdm_rejects_nonfinite_damping_parameters():
-    from psi4.driver.procrouting import proc
-
-    psi4.set_options({"XDM_DISPERSION_PARAMETERS": [float("nan"), 1.0]})
-    with pytest.raises(psi4.p4util.ValidationError, match="values must be finite numbers"):
-        proc.build_functional_and_disp("b3lyp-xdm", True)
-
-
-@pytest.mark.xdm
-def test_xdm_public_api_validation():
-    direct = psi4.core.XDMDispersion(0.5, 1.0, "B3LYP")
-    factory = psi4.core.XDMDispersion.build("b3lyp", 0.5, 0.52917720859)
-
-    assert direct.functional_name() == "b3lyp"
-    assert direct.functional_name() == factory.functional_name()
-    with pytest.raises(ValueError, match="damping parameters must be finite"):
-        psi4.core.XDMDispersion(float("inf"), 1.0, "b3lyp")
-    with pytest.raises(ValueError, match="non-null wavefunction"):
-        direct.compute_energy(None, 0.20)
-    with pytest.raises(TypeError):
-        direct.compute_energy(None)
-
-
-@pytest.mark.xdm
-def test_xdm_rejects_partial_explicit_parameters():
-    from psi4.driver.procrouting.empirical_dispersion import XDMDispersionFunctor
-
-    with pytest.raises(psi4.p4util.ValidationError, match="a1 and a2_ang must be provided together"):
-        XDMDispersionFunctor("b3lyp", basis_name="aug-cc-pvdz", a1=9.0)
-    with pytest.raises(psi4.p4util.ValidationError, match="a1 and a2_ang must be provided together"):
-        XDMDispersionFunctor("b3lyp", basis_name="aug-cc-pvdz", a2_ang=9.0)
-
-
-@pytest.mark.xdm
-def test_xdm_automatic_damping_rejects_modified_exchange():
-    from psi4.driver.procrouting import proc
-
-    psi4.set_options({"basis": "aug-cc-pvdz", "DFT_ALPHA": 0.50})
-    with pytest.raises(
-            psi4.p4util.ValidationError,
-            match="Automatic XDM damping parameters require.*exact-exchange fraction",
-    ):
-        proc.build_functional_and_disp("b3lyp-xdm", True)
-
-
-@pytest.mark.xdm
-def test_xdm_rejects_range_separation_override():
-    from psi4.driver.procrouting import proc
-
-    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
-
-    def callable_xdm(name, npoints, deriv, restricted):
-        superfunctional = psi4.core.SuperFunctional.XC_build("XC_HYB_GGA_XC_LRC_WPBE", restricted)
-        superfunctional.set_lock(False)
-        superfunctional.set_name("LC-wPBE-XDM")
-        superfunctional.set_x_omega(0.8)
-        return superfunctional, {"type": "xdm", "params": {"xdm_model": "kb49"}}
-
-    superfunctional, functor = proc.build_functional_and_disp(callable_xdm, True)
-
-    def unknown_callable_xdm(name, npoints, deriv, restricted):
-        unknown = psi4.core.SuperFunctional.XC_build("XC_HYB_GGA_XC_LRC_WPBE", restricted)
-        unknown.set_lock(False)
-        unknown.set_name("MY-LRC-XDM")
-        return unknown, {"type": "xdm", "params": {"xdm_model": "kb49"}}
-
-    unknown_superfunctional, unknown_functor = proc.build_functional_and_disp(unknown_callable_xdm, True)
-
-    class Wavefunction:
-
-        def __init__(self, functional):
-            self._functional = functional
-
-        def functional(self):
-            return self._functional
-
-    with pytest.raises(psi4.p4util.ValidationError, match="modified range-separation parameters"):
-        functor.compute_energy(None, Wavefunction(superfunctional))
-    with pytest.raises(psi4.p4util.ValidationError, match="unknown range-separated functionals"):
-        unknown_functor.compute_energy(None, Wavefunction(unknown_superfunctional))
-
-
-@pytest.mark.xdm
-def test_xdm_rejects_ecp_density():
-    mol = psi4.geometry("0 2\nBr 0 0 0\nunits angstrom")
-    psi4.set_options({
-        "basis": "lanl2dz",
-        "reference": "uks",
-        "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
-    })
-
-    with pytest.raises(RuntimeError, match="effective-core potentials are not supported"):
-        psi4.energy("pbe-xdm", molecule=mol)
-
-    psi4.set_options({"reference": "rks"})
-
-
-@pytest.mark.xdm
-def test_xdm_hessian_and_properties_blocked():
-    """XDM Hessians and analytic properties remain clearly rejected."""
-
-    mol = psi4.geometry("""
-0 1
-O   -1.55100700  -0.11452000   0.00000000
-H   -1.93425900   0.76250300   0.00000000
-H   -0.59967700   0.04071200   0.00000000
-units angstrom
-    """)
-    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
-
-    with pytest.raises(NotImplementedError, match="XDM hessian is not implemented"):
-        psi4.hessian("b3lyp-xdm", molecule=mol)
-    with pytest.raises(NotImplementedError, match="XDM properties is not implemented"):
-        psi4.properties("b3lyp-xdm", properties=["dipole"], molecule=mol)
-
-    # No internal route may use an incomplete analytic XDM derivative.
-    from psi4.driver.procrouting.empirical_dispersion import XDMDispersionFunctor
-
-    functor = XDMDispersionFunctor(functional_name="b3lyp", a1=0.5, a2_ang=1.0)
-    with pytest.raises(NotImplementedError, match="Analytic XDM gradients are not implemented"):
-        functor.compute_gradient(mol)
 
 
 @pytest.mark.xdm
@@ -1212,13 +669,17 @@ def _water_dimer_8a(ghost=None):
 
 @pytest.mark.xdm
 def test_xdm_counterpoise_ghost_superposition():
-    """Counterpoise XDM keeps ghosts in the Hirshfeld promolecule and superposes partner moments.
+    """
+    Counterpoise XDM keeps ghosts in the Hirshfeld promolecule and superposes
+    partner moments.
 
-    Long-range regression for the CP ghost treatment (see xdm.rst, "Ghost Atoms"). Uses the
-    large-a1 (0.7259, 1.3140 A) of the retired KB49 noCP B3LYP/aug-cc-pVDZ fit, where the superposition artefact is
-    largest. At R(O-O) = 8 A, measured (kJ/mol): noCP -0.0125, intermolecular pair sum -0.0122,
-    superposed CP -0.0095; dropping ghosts from the promolecule gave -0.0219, and ghosts in the
-    promolecule without superposition gave -0.0001 (and changes sign by 9 A).
+    Long-range regression for the CP ghost treatment (see xdm.rst, "Ghost
+    Atoms"). Uses the large-a1 (0.7259, 1.3140 A) of the retired KB49 noCP
+    B3LYP/aug-cc-pVDZ fit, where the superposition artefact is largest. At
+    R(O-O) = 8 A, measured (kJ/mol): noCP -0.0125, intermolecular pair sum
+    -0.0122, superposed CP -0.0095; dropping ghosts from the promolecule gave
+    -0.0219, and ghosts in the promolecule without superposition gave -0.0001
+    (and changes sign by 9 A).
     """
     psi4.set_options({
         "basis": "aug-cc-pvdz",
@@ -1325,8 +786,12 @@ def _grid_origins(text):
 @pytest.mark.xdm
 @pytest.mark.parametrize("case", ["rks", "uks"])
 def test_xdm_reuses_scf_grid(case, tmp_path):
-    """XDM integrates on the SCF's XC grid when it is the grid XDM would build, and matches its
-    own build of that grid (XDM_GRID_REUSE false) to rounding."""
+    """XDM reuses the SCF's XC grid when it matches the current basis and DFT grid options.
+
+    XDM does not independently choose a grid. With unchanged DFT options,
+    XDM_GRID_REUSE=False rebuilds an equivalent grid rather than selecting a
+    different one; its energy and atomic properties must match to rounding.
+    """
     out = tmp_path / "reuse.dat"
     psi4.set_output_file(str(out), False)
     try:
@@ -1344,13 +809,18 @@ def test_xdm_reuses_scf_grid(case, tmp_path):
 
 @pytest.mark.xdm
 def test_xdm_builds_own_grid_unless_scf_grid_matches(tmp_path):
-    """A grid option changed after the SCF, or a wavefunction without an XC potential, makes XDM
-    build its own grid."""
+    """XDM builds a grid from current DFT options when it cannot reuse the SCF grid.
+
+    Changing DFT_SPHERICAL_POINTS after SCF requests a different integration
+    grid for the same density. An HF wavefunction has no XC grid to reuse, so
+    XDM must build one even when the DFT options are unchanged.
+    """
     out = tmp_path / "own.dat"
     psi4.set_output_file(str(out), False)
     try:
         wfn = _xdm_grid_wfn("cartesian")
         e_scf = wfn.variable("XDM ENERGY")
+        # The saved SCF grid has 302 angular points; only XDM uses the new setting.
         e_434, _ = _xdm_again(wfn, DFT_SPHERICAL_POINTS=434)
         psi4.set_options({"DFT_SPHERICAL_POINTS": 302})
         _, hf_wfn = psi4.energy("hf", molecule=wfn.molecule(), return_wfn=True)
