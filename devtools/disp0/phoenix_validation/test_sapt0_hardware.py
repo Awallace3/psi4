@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from gpu_runtime import AuditedRuntime
 from sapt0_hardware import PROFILES, validate_device
+from submit_sapt0 import route_matches
 
 
 class HardwareContracts(unittest.TestCase):
@@ -25,6 +26,19 @@ class HardwareContracts(unittest.TestCase):
     def test_unknown_family_is_not_a_fallback(self):
         with self.assertRaises(KeyError):
             validate_device("ANY_GPU", "H200", "compute_90", 143771, 1024)
+
+    def test_site_default_partition_does_not_relax_typed_gpu_requirement(self):
+        fields = dict(Account="gts-cs207", QOS="inferno", TimeLimit="02:00:00",
+                      Partition="gpu-rtxpro-blackwell,gpu-v100",
+                      TresPerNode="gres/gpu:rtx_pro_6000_blackwell:1")
+        profile = PROFILES["RTX_PRO_BLACKWELL"]
+        self.assertTrue(route_matches(fields, profile, "gts-cs207", "inferno", 2))
+        for key, value in (("Partition", "gpu-v100"),
+                           ("Partition", "gpu-rtxpro-blackwell,gpu-h100"),
+                           ("TresPerNode", "gres/gpu:1"), ("TimeLimit", "08:00:00"),
+                           ("Account", "gts-cs207-chemx"), ("QOS", "embers")):
+            self.assertFalse(route_matches(dict(fields, **{key: value}), profile,
+                                           "gts-cs207", "inferno", 2))
 
     def test_actual_context_uuid_is_checked_for_blackwell(self):
         runtime = object.__new__(AuditedRuntime)

@@ -10,6 +10,19 @@ from submit import clean_environment
 from sapt0_hardware import PROFILES
 
 
+def route_matches(fields, profile, account, qos, hours):
+    # Phoenix appends its default GPU partition. A typed GRES still prevents
+    # allocation on V100 hardware; do not admit arbitrary alternate partitions.
+    partitions = set(fields.get("Partition", "").split(","))
+    return (
+        fields.get("Account") == account and fields.get("QOS") == qos
+        and profile["partition"] in partitions
+        and partitions <= {profile["partition"], "gpu-v100"}
+        and fields.get("TresPerNode") == "gres/" + profile["gres"]
+        and fields.get("TimeLimit") == f"{hours:02}:00:00"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
@@ -104,9 +117,7 @@ def main():
     if effective.returncode:
         raise RuntimeError("Submitted, but route readback failed; do not resubmit")
     fields = dict(item.split("=", 1) for item in effective.stdout.split() if "=" in item)
-    if (fields.get("Account") != args.account or fields.get("QOS") != args.qos
-            or fields.get("Partition") != profile["partition"]
-            or fields.get("TimeLimit") != f"{args.hours:02}:00:00"):
+    if not route_matches(fields, profile, args.account, args.qos, args.hours):
         raise RuntimeError("Submitted route differs; inspect receipt, do not resubmit")
     print("VERIFIED_ROUTE=" + " ".join(f"{key}={fields.get(key)}" for key in
           ("Account", "QOS", "Partition", "TimeLimit", "JobState", "StartTime")), flush=True)
