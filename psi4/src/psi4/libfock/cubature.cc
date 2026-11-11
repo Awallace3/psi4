@@ -40,13 +40,17 @@
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/matrix.h"
 
-#include <vector>
-#include <string>
-#include <sstream>
+#include <algorithm>
+#include <cassert>
+#include <cctype>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <limits>
-#include <cctype>
-#include <cassert>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -2776,20 +2780,43 @@ class NuclearWeightMgr {
     //// These are the member variables
     enum NuclearSchemes scheme_;
     std::shared_ptr<Molecule> molecule_;
+    int natom_;
+    std::vector<double> ax_;
+    std::vector<double> ay_;
+    std::vector<double> az_;
     double **inv_dist_;
     double **amatrix_;
     ////
 
     inline double distToAtom(MassPoint mp, int A) const {
-        return sqrt((mp.x - molecule_->x(A)) * (mp.x - molecule_->x(A)) +
-                    (mp.y - molecule_->y(A)) * (mp.y - molecule_->y(A)) +
-                    (mp.z - molecule_->z(A)) * (mp.z - molecule_->z(A)));
+        const double dx = mp.x - ax_[A];
+        const double dy = mp.y - ay_[A];
+        const double dz = mp.z - az_[A];
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
     }
 
-    static double BeckeMu(double ri, double rj, double inv_rij);
-    static double SmoothBeckeMu(double ri, double rj, double inv_rij);
-    static double BeckeStepFunction(double x);
-    static double StratmannStepFunction(double mu);
+    static inline double BeckeMu(double ri, double rj, double inv_rij) { return (ri - rj) * inv_rij; }
+    static inline double SmoothBeckeMu(double ri, double rj, double inv_rij) {
+        constexpr double invRCut = 0.2;  // 1.0 / 5.0
+        const double mu = (ri - rj) * std::max(inv_rij, invRCut);
+        return (mu <= -1.0) ? -1.0 : (mu >= 1.0) ? 1.0 : mu;
+    }
+    static inline double BeckeStepFunction(double x) {
+        const double px = 0.5 * x * (3.0 - x * x);
+        const double ppx = 0.5 * px * (3.0 - px * px);
+        const double pppx = 0.5 * ppx * (3.0 - ppx * ppx);
+        return 0.5 * (1.0 - pppx);
+    }
+    static inline double StratmannStepFunction(double mu) {
+        constexpr double a = 0.64;
+        constexpr double inv_a = 1.0 / 0.64;
+        if (mu < -a) return 1.0;
+        if (mu > a) return 0.0;
+        const double x = mu * inv_a;
+        const double x2 = x * x;
+        const double z = x * (35.0 + x2 * (-35.0 + x2 * (21.0 + x2 * -5.0))) * 0.0625;
+        return 0.5 * (1.0 - z);
+    }
 
     // Becke says u = (chi-1)/(chi+1), a = u/(u^2-1), then clip so that |a| <= 1/2.
     // We can save a step and find `a' directly from chi.
@@ -2797,6 +2824,10 @@ class NuclearWeightMgr {
         double a = (1 - chi * chi) / (4 * chi);
         return (a < -0.5) ? -0.5 : (a > 0.5) ? 0.5 : a;
     }
+
+    template <NuclearSchemes Scheme>
+    double computeWeightedImpl(MassPoint mp, double w0, int A, double stratmannCutoff, double weightcut,
+                               double *__restrict__ dist) const;
 
    public:
     static int WhichScheme(const char *schemename);
@@ -2806,6 +2837,8 @@ class NuclearWeightMgr {
     ~NuclearWeightMgr();
     double GetStratmannCutoff(int A) const;
     double computeNuclearWeight(MassPoint mp, int A, double stratmannCutoff) const;
+    double computeWeightedNuclearWeight(MassPoint mp, double w0, int A, double stratmannCutoff, double weightcut,
+                                        double *__restrict__ dist) const;
 };
 
 const char *NuclearWeightMgr::nuclearschemenames[] = {"NAIVE", "BECKE", "TREUTLER", "STRATMANN",
@@ -2813,8 +2846,17 @@ const char *NuclearWeightMgr::nuclearschemenames[] = {"NAIVE", "BECKE", "TREUTLE
 
 NuclearWeightMgr::NuclearWeightMgr(std::shared_ptr<Molecule> mol, int scheme) {
     int natom = mol->natom();
+    natom_ = natom;
     scheme_ = (enum NuclearSchemes)scheme;
     molecule_ = mol;
+    ax_.resize(natom);
+    ay_.resize(natom);
+    az_.resize(natom);
+    for (int A = 0; A < natom; ++A) {
+        ax_[A] = mol->x(A);
+        ay_[A] = mol->y(A);
+        az_[A] = mol->z(A);
+    }
     inv_dist_ = block_matrix(natom, natom);
     amatrix_ = block_matrix(natom, natom);
 
@@ -2857,43 +2899,6 @@ int NuclearWeightMgr::WhichScheme(const char *schemename) {
     throw PSIEXCEPTION("Unrecognized nuclear scheme!");
 }
 
-// See Becke, J. Chem. Phys. 88 (1988) 2547-2553 (standard mu)
-double NuclearWeightMgr::BeckeMu(double ri, double rj, double inv_rij) { return (ri - rj) * inv_rij; }
-
-// smoother Becke (SBECKE) integration after Ochsenfeld J. Chem. Phys. 149, 204111 (2018); doi: 10.1063/1.5049435
-double NuclearWeightMgr::SmoothBeckeMu(double ri, double rj, double inv_rij) {
-    static double RCut = 5.0;
-    static double invRCut = 1.0 / RCut;
-    double mu = (ri - rj) * std::max(inv_rij, invRCut);
-    if (mu <= -1.0) {
-        return -1.0;
-    } else if (mu >= 1.0) {
-        return 1.0;
-    } else {
-        return mu;
-    }
-}
-
-// See Becke, J. Chem. Phys. 88 (1988) 2547-2553
-double NuclearWeightMgr::BeckeStepFunction(double x) {
-    double px = x * (3 - x * x) / 2;
-    double ppx = px * (3 - px * px) / 2;
-    double pppx = ppx * (3 - ppx * ppx) / 2;  // Same as f(x)
-    return (1 - pppx) / 2;
-}
-
-// See R. E. Stratmann, G. E. Scuseria, and M. J. Frisch, Chem. Phys. Letters 257 (1996) 213-223
-// Note that we often plug `nu' into this step function, not `mu.'
-double NuclearWeightMgr::StratmannStepFunction(double mu) {
-    const double a = 0.64;
-    if (mu < -a) return 1;  // We are much closer to atom i than to atom j.
-    if (mu > a) return 0;   // We are very far from atom i.
-    double x = mu / a;
-    double x2 = x * x;
-    double z = x * (35 + x2 * (-35 + x2 * (21 + x2 * -5))) / 16;
-    return (1 - z) / 2;  // We are a medium distance from atom i.
-}
-
 // If the distance between a grid point and its parent atom is less than the number
 // returned by `stratmannCutoff', then the stratmann weighting scheme will assign a
 // weight of 1 to this grid point and we can skip a lot of crazy calculations.
@@ -2901,44 +2906,15 @@ double NuclearWeightMgr::GetStratmannCutoff(int A) const {
     if (scheme_ != STRATMANN) return 0;
     double maxInvDist = 0;
     double maxAMatrixEntry = 0;
-    int natom = molecule_->natom();
+    int natom = natom_;
     for (int B = 0; B < natom; B++) {
         if (B != A && inv_dist_[A][B] > maxInvDist) maxInvDist = inv_dist_[A][B];
         if (B != A && amatrix_[A][B] > maxAMatrixEntry) maxAMatrixEntry = amatrix_[A][B];
     }
+    if (maxInvDist == 0.0) return 0.0;
     // `distToNearestAtom' is the distance to the atom nearest A.
     double distToNearestAtom = 1 / maxInvDist;
 
-    // Section 4 ("Screening Weights") of
-    //    R. E. Stratmann, G. E. Scuseria, and M. J. Frisch, Chem. Phys. Letters 257 (1996) 213-223
-    // provides a simple test we can run to see if the weight is going to come out to one; running
-    // this test lets us sometimes skip the nasty n^2 loop below.
-    //     His test doesn't take `nu' into account. The problematic step is with the reasoning that
-    // even if our reasoning works for the .
-    //
-    // Lemma 1: Let `N' be the atom closest to the parent atom A. Then if
-    //    dist(grid point G, atom A) <= (1-K)/2 * dist(atom A, atom N)
-    // then for *all* atoms B, we have:
-    //    mu(A, B) <= K
-    // So we can bound `mu' by locating our closest atom.
-    //
-    //
-    // Fact: If s == 1 for the nearest non-parent atom, then ...
-    // If we can show that s == 1 for the nearest non-parent atom, then
-    //
-    // The cutoff is that if nu < -0.64, then s == 1
-    //
-    // Solving     nu = mu + aij*(1-mu*mu) == -0.64
-    // gives:
-    //     mu = {1 \pm \sqrt{4a^2-4a\nu+1}  \over  2a}
-    // Now since abs(a) <= 0.5, abs(2a) <= 1, so the denominator
-    // always increases the absolute value of the numerator. Since \mu is
-    // constrained to remain between 1 and -1, the (1 + sqrt(stuff))/2a solution
-    // is always out of reach. (If mu were larger than that,
-    // always
-    //   whe
-    // mu = 1+(-1\pm sqrt(1+4*a*(nu-1)))/(2*a)
-    // If
     double aij = maxAMatrixEntry;
     double mucutoff = (aij == 0)          ? -0.64  // Then nu = mu, so to get nu < -0.64 we need mu < -0.64
                       : (aij >= 1 / 6.56) ? -1     // If aij > 1/6.56 = 1/(4*(1+0.64)), then there's no solution.
@@ -2949,35 +2925,144 @@ double NuclearWeightMgr::GetStratmannCutoff(int A) const {
     return distToNearestAtom * (1 + mucutoff) / 2;
 }
 
-double NuclearWeightMgr::computeNuclearWeight(MassPoint mp, int A, double stratmannCutoff) const {
-    // Stratmann's step function gives us this handy check
-    if (scheme_ == STRATMANN && distToAtom(mp, A) <= stratmannCutoff) return 1;
+template <NuclearWeightMgr::NuclearSchemes Scheme>
+double NuclearWeightMgr::computeWeightedImpl(MassPoint mp, double w0, int A, double stratmannCutoff, double weightcut,
+                                             double *__restrict__ dist) const {
+    const int natom = natom_;
+    if (natom <= 1) return w0;
+    if (w0 == 0.0) return 0.0;
 
-    int natom = molecule_->natom();
-    // Find the distance from point mp to each atom in the molecule.
-    std::vector<double> dist(natom);
-    for (int l = 0; l < natom; l++) dist[l] = distToAtom(mp, l);
-
-    double (*stepFunction)(double) = (scheme_ == STRATMANN) ? StratmannStepFunction : BeckeStepFunction;
-    double (*muFunction)(double, double, double) = (scheme_ == SBECKE) ? SmoothBeckeMu : BeckeMu;
-
-    double numerator = NAN;
-    double denominator = 0;
-    for (int i = 0; i < natom; i++) {
-        double prod = 1;
-        for (int j = 0; j < natom; j++) {
-            if (i == j) continue;
-            // if ( dist[j] >= (dist[i]+RCut) ) continue; // sugested cutoff
-            double mu = muFunction(dist[i], dist[j], inv_dist_[i][j]);
-            double nu = mu + amatrix_[i][j] * (1 - mu * mu);  // Adjust for ratios between atomic radii
-            double s = stepFunction(nu);
-            prod *= s;
-            if (prod == 0) break;  // Under the Stratmann scheme, this should happen often enough to be worth the test.
-        }
-        if (i == A) numerator = prod;  // Meow: If we do `i == A' first, then we can check to see if numerator == 0...
-        denominator += prod;
+    if constexpr (Scheme == STRATMANN) {
+        if (distToAtom(mp, A) <= stratmannCutoff) return w0;
     }
-    return numerator / denominator;
+
+    const double px = mp.x;
+    const double py = mp.y;
+    const double pz = mp.z;
+    const double *__restrict__ ax = ax_.data();
+    const double *__restrict__ ay = ay_.data();
+    const double *__restrict__ az = az_.data();
+
+    for (int l = 0; l < natom; ++l) {
+        const double dx = px - ax[l];
+        const double dy = py - ay[l];
+        const double dz = pz - az[l];
+        dist[l] = std::sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    int imin = 0;
+    double dmin = dist[0];
+    for (int l = 1; l < natom; ++l) {
+        if (dist[l] < dmin) {
+            dmin = dist[l];
+            imin = l;
+        }
+    }
+
+    auto step_pair = [&](int i, int j) -> double {
+        const double rij_inv = inv_dist_[i][j];
+        const double mu = (Scheme == SBECKE) ? SmoothBeckeMu(dist[i], dist[j], rij_inv)
+                                             : BeckeMu(dist[i], dist[j], rij_inv);
+        if constexpr (Scheme == STRATMANN) {
+            return StratmannStepFunction(mu);
+        } else if constexpr (Scheme == NAIVE) {
+            return BeckeStepFunction(mu);
+        } else {
+            const double nu = mu + amatrix_[i][j] * (1.0 - mu * mu);
+            return BeckeStepFunction(nu);
+        }
+    };
+
+    double prod_A = 1.0;
+    double denom = 0.0;
+
+    if (A == imin) {
+        for (int j = 0; j < natom; ++j) {
+            if (j == A) continue;
+            prod_A *= step_pair(A, j);
+            if constexpr (Scheme == STRATMANN) {
+                if (prod_A == 0.0) return 0.0;
+            }
+        }
+        if (prod_A == 0.0) return 0.0;
+        denom = prod_A;
+    } else {
+        double prod_imin = 1.0;
+        for (int j = 0; j < natom; ++j) {
+            if (j == imin) continue;
+            prod_imin *= step_pair(imin, j);
+            if constexpr (Scheme == STRATMANN) {
+                if (prod_imin == 0.0) break;
+            }
+        }
+
+        const double abs_w0 = std::abs(w0);
+        const double prune_prod_bound =
+            (weightcut > 0.0 && prod_imin > 0.0) ? (0.5 * weightcut * prod_imin / abs_w0) : -1.0;
+
+        prod_A = step_pair(A, imin);
+        if (prod_A <= prune_prod_bound) return 0.0;
+        if constexpr (Scheme == STRATMANN) {
+            if (prod_A == 0.0) return 0.0;
+        }
+        for (int j = 0; j < natom; ++j) {
+            if (j == A || j == imin) continue;
+            prod_A *= step_pair(A, j);
+            if (prod_A <= prune_prod_bound) return 0.0;
+            if constexpr (Scheme == STRATMANN) {
+                if (prod_A == 0.0) return 0.0;
+            }
+        }
+        if (prod_A == 0.0) return 0.0;
+        denom = prod_imin + prod_A;
+    }
+
+    for (int i = 0; i < natom; ++i) {
+        if (i == A || i == imin) continue;
+        const double eps_prod = (Scheme == STRATMANN) ? 0.0 : (1.0e-20 * denom);
+        double prod = step_pair(i, imin);
+        if (prod <= eps_prod) {
+            denom += prod;
+            continue;
+        }
+        if (A != imin) {
+            prod *= step_pair(i, A);
+            if (prod <= eps_prod) {
+                denom += prod;
+                continue;
+            }
+        }
+        for (int j = 0; j < natom; ++j) {
+            if (j == i || j == imin || j == A) continue;
+            prod *= step_pair(i, j);
+            if (prod <= eps_prod) break;
+        }
+        denom += prod;
+    }
+
+    return w0 * (prod_A / denom);
+}
+
+double NuclearWeightMgr::computeWeightedNuclearWeight(MassPoint mp, double w0, int A, double stratmannCutoff,
+                                                      double weightcut, double *__restrict__ dist) const {
+    switch (scheme_) {
+        case TREUTLER:
+            return computeWeightedImpl<TREUTLER>(mp, w0, A, stratmannCutoff, weightcut, dist);
+        case BECKE:
+            return computeWeightedImpl<BECKE>(mp, w0, A, stratmannCutoff, weightcut, dist);
+        case STRATMANN:
+            return computeWeightedImpl<STRATMANN>(mp, w0, A, stratmannCutoff, weightcut, dist);
+        case SBECKE:
+            return computeWeightedImpl<SBECKE>(mp, w0, A, stratmannCutoff, weightcut, dist);
+        case NAIVE:
+            return computeWeightedImpl<NAIVE>(mp, w0, A, stratmannCutoff, weightcut, dist);
+    }
+    throw PSIEXCEPTION("Unrecognized weighting scheme!");
+}
+
+double NuclearWeightMgr::computeNuclearWeight(MassPoint mp, int A, double stratmannCutoff) const {
+    std::vector<double> dist(natom_);
+    return computeWeightedNuclearWeight(mp, 1.0, A, stratmannCutoff, -1.0, dist.data());
 }
 
 class OrientationMgr {
@@ -3756,93 +3841,126 @@ void MolecularGrid::buildGridFromOptions(MolecularGridOptions const &opt) {
         }
     }
 
+    const int natom = molecule_->natom();
+    std::unordered_map<int, std::shared_ptr<SphericalGrid>> shared_spheres;
+
 // Iterate over atoms
-#pragma omp parallel for schedule(static)
-    for (int A = 0; A < molecule_->natom(); A++) {
-        int Z = molecule_->true_atomic_number(A);
-        double stratmannCutoff = nuc.GetStratmannCutoff(A);
+#pragma omp parallel
+    {
+        std::vector<double> dist_buf(std::max(1, natom));
+        std::unordered_map<int, std::shared_ptr<SphericalGrid>> local_spheres;
+        local_spheres.reserve(16);
+
+#pragma omp for schedule(dynamic, 1)
+        for (int A = 0; A < natom; A++) {
+            int Z = molecule_->true_atomic_number(A);
+            double stratmannCutoff = nuc.GetStratmannCutoff(A);
 
 #ifdef USING_BrianQC
-        if (brianEnable and brianEnableDFT) {
-            std::shared_ptr<Matrix> rotationMatrix = orientation_->transpose();
-            atomRotations[A] = std::vector<double>(rotationMatrix->get_pointer(0), rotationMatrix->get_pointer(0) + 9);
-        }
+            int currentBlockIndex = -1;
+            if (brianEnable and brianEnableDFT) {
+                std::shared_ptr<Matrix> rotationMatrix = orientation_->transpose();
+                atomRotations[A] =
+                    std::vector<double>(rotationMatrix->get_pointer(0), rotationMatrix->get_pointer(0) + 9);
+            }
 #endif
 
-        if (opt.namedGrid == -1) {  // Not using a named grid
-            std::vector<double> r(opt.nradpts), wr(opt.nradpts);
-            double alpha = GetBSRadius(Z) * opt.bs_radius_alpha;
-            RadialGridMgr::makeRadialGrid(opt.nradpts, RadialGridMgr::MuraKnowlesHack(opt.radscheme, Z), r.data(),
-                                          wr.data(), alpha);
+            if (opt.namedGrid == -1) {  // Not using a named grid
+                std::vector<double> r(opt.nradpts), wr(opt.nradpts);
+                double alpha = GetBSRadius(Z) * opt.bs_radius_alpha;
+                RadialGridMgr::makeRadialGrid(opt.nradpts, RadialGridMgr::MuraKnowlesHack(opt.radscheme, Z), r.data(),
+                                              wr.data(), alpha);
 
-            // RMP: Want this stuff too
-            radial_grids_[A] = RadialGrid::build("Unknown", opt.nradpts, r.data(), wr.data(), alpha, Z);
-            std::vector<std::shared_ptr<SphericalGrid>> spheres;
-            spherical_grids_[A] = spheres;
+                // RMP: Want this stuff too
+                radial_grids_[A] = RadialGrid::build("Unknown", opt.nradpts, r.data(), wr.data(), alpha, Z);
+                auto &spheres = spherical_grids_[A];
+                spheres.clear();
+                spheres.reserve(opt.nradpts);
+                auto &atom_pts = atomic_grids_[A];
+                atom_pts.reserve(static_cast<size_t>(opt.nradpts) * std::min(opt.nangpts, 302));
 
-            for (int i = 0; i < opt.nradpts; i++) {
-                int numAngPts = 0;
-                if (opt.prunetype == "REGION") {
-                    if (opt.prunescheme == "TREUTLER") {
-                        numAngPts = prune.TreutlerShellPruning(i, Z, opt.nradpts);
-                    } else if (opt.prunescheme == "ROBUST") {
-                        numAngPts = prune.ShellPruning(i, Z, opt.nradpts);
+                for (int i = 0; i < opt.nradpts; i++) {
+                    int numAngPts = 0;
+                    if (opt.prunetype == "REGION") {
+                        if (opt.prunescheme == "TREUTLER") {
+                            numAngPts = prune.TreutlerShellPruning(i, Z, opt.nradpts);
+                        } else if (opt.prunescheme == "ROBUST") {
+                            numAngPts = prune.ShellPruning(i, Z, opt.nradpts);
+                        }
+                    } else if (opt.prunetype == "FUNCTION" || opt.prunescheme == "NONE") {
+                        numAngPts = prune.GetPrunedNumAngPts(r[i] / alpha);
                     }
-                } else if (opt.prunetype == "FUNCTION" || opt.prunescheme == "NONE") {
-                    numAngPts = prune.GetPrunedNumAngPts(r[i] / alpha);
-                }
-                assert(numAngPts > 0);
-                const MassPoint *anggrid = LebedevGridMgr::findGridByNPoints(numAngPts);
+                    assert(numAngPts > 0);
+                    const MassPoint *anggrid = LebedevGridMgr::findGridByNPoints(numAngPts);
 
+#ifdef USING_BrianQC
+                    if (brianEnable and brianEnableDFT) {
+                        if (currentBlockIndex == -1 or
+                            atomBlocks[A][currentBlockIndex].angularPoints.size() != numAngPts) {
+                            atomBlocks[A].push_back(BrianBlock());
+                            currentBlockIndex++;
+
+                            for (int j = 0; j < numAngPts; j++) {
+                                // we compensate for an extra factor of 4*pi in Psi4's angular grid generation
+                                atomBlocks[A][currentBlockIndex].angularPoints.push_back(
+                                    {anggrid[j].x, anggrid[j].y, anggrid[j].z, anggrid[j].w / (4.0 * M_PI)});
+                            }
+                        }
+
+                        atomBlocks[A][currentBlockIndex].radialPoints.push_back({r[i], wr[i]});
+                    }
+#endif
+
+                    auto it = local_spheres.find(numAngPts);
+                    std::shared_ptr<SphericalGrid> sg_ptr;
+                    if (it != local_spheres.end()) {
+                        sg_ptr = it->second;
+                    } else {
+#pragma omp critical(psi4_spherical_grid_cache)
+                        {
+                            auto &g = shared_spheres[numAngPts];
+                            if (!g) g = SphericalGrid::build("Unknown", numAngPts, anggrid);
+                            sg_ptr = g;
+                        }
+                        local_spheres.emplace(numAngPts, sg_ptr);
+                    }
+                    spheres.push_back(std::move(sg_ptr));
+
+                    const double ri = r[i];
+                    const double wri = wr[i];
+                    for (int j = 0; j < numAngPts; j++) {
+                        MassPoint mp = {ri * anggrid[j].x, ri * anggrid[j].y, ri * anggrid[j].z, wri * anggrid[j].w};
+                        mp = std_orientation.MoveIntoPosition(mp, A);
+                        mp.w = nuc.computeWeightedNuclearWeight(mp, mp.w, A, stratmannCutoff, weightcut,
+                                                                dist_buf.data());
+
+                        if (std::abs(mp.w) > weightcut) {
+                            atom_pts.push_back(mp);
+                        }
+                        assert(!std::isnan(mp.w));
+                    }
+                }
+            } else {
+                assert(opt.namedGrid == 0 || opt.namedGrid == 1);
 #ifdef USING_BrianQC
                 if (brianEnable and brianEnableDFT) {
-                    if (currentBlockIndex == -1 or atomBlocks[A][currentBlockIndex].angularPoints.size() != numAngPts) {
-                        atomBlocks[A].push_back(BrianBlock());
-                        currentBlockIndex++;
-
-                        for (int j = 0; j < numAngPts; j++) {
-                            // we compensate for an extra factor of 4*pi in Psi4's angular grid generation
-                            atomBlocks[A][currentBlockIndex].angularPoints.push_back(
-                                {anggrid[j].x, anggrid[j].y, anggrid[j].z, anggrid[j].w / (4.0 * M_PI)});
-                        }
-                    }
-
-                    atomBlocks[A][currentBlockIndex].radialPoints.push_back({r[i], wr[i]});
+                    atomBlocks[A] = brianStandardGrids.at(opt.namedGrid).at(Z);
                 }
 #endif
+                int npts = (opt.namedGrid == 0) ? StandardGridMgr::GetSG0size(Z) : StandardGridMgr::GetSG1size(Z);
+                const MassPoint *sg =
+                    (opt.namedGrid == 0) ? StandardGridMgr::GetSG0grid(Z) : StandardGridMgr::GetSG1grid(Z);
+                auto &atom_pts = atomic_grids_[A];
+                atom_pts.reserve(npts);
 
-                // RMP: And this stuff! This whole thing is completely and utterly FUBAR.
-                spherical_grids_[A].push_back(SphericalGrid::build("Unknown", numAngPts, anggrid));
-                for (int j = 0; j < numAngPts; j++) {
-                    MassPoint mp = {r[i] * anggrid[j].x, r[i] * anggrid[j].y, r[i] * anggrid[j].z,
-                                    wr[i] * anggrid[j].w};
-                    mp = std_orientation.MoveIntoPosition(mp, A);
-                    mp.w *= nuc.computeNuclearWeight(mp, A, stratmannCutoff);
-
+                for (int i = 0; i < npts; i++) {
+                    MassPoint mp = std_orientation.MoveIntoPosition(sg[i], A);
+                    mp.w = nuc.computeWeightedNuclearWeight(mp, mp.w, A, stratmannCutoff, weightcut, dist_buf.data());
                     if (std::abs(mp.w) > weightcut) {
-                        atomic_grids_[A].push_back(mp);
+                        atom_pts.push_back(mp);
                     }
                     assert(!std::isnan(mp.w));
                 }
-            }
-        } else {
-            assert(opt.namedGrid == 0 || opt.namedGrid == 1);
-#ifdef USING_BrianQC
-            if (brianEnable and brianEnableDFT) {
-                atomBlocks[A] = brianStandardGrids.at(opt.namedGrid).at(Z);
-            }
-#endif
-            int npts = (opt.namedGrid == 0) ? StandardGridMgr::GetSG0size(Z) : StandardGridMgr::GetSG1size(Z);
-            const MassPoint *sg =
-                (opt.namedGrid == 0) ? StandardGridMgr::GetSG0grid(Z) : StandardGridMgr::GetSG1grid(Z);
-
-            for (int i = 0; i < npts; i++) {
-                MassPoint mp = std_orientation.MoveIntoPosition(sg[i], A);
-                mp.w *= nuc.computeNuclearWeight(mp, A, stratmannCutoff);
-                if (std::abs(mp.w) > weightcut) {
-                    atomic_grids_[A].push_back(mp);
-                }
-                assert(!std::isnan(mp.w));
             }
         }
     }
@@ -3905,24 +4023,28 @@ void MolecularGrid::buildGridFromOptions(MolecularGridOptions const &opt) {
     }
 #endif
 
-    npoints_ = 0;
-    for (const auto &grid_per_atom : atomic_grids_) {
-        npoints_ += grid_per_atom.size();
+    std::vector<int> atom_offsets(atomic_grids_.size() + 1, 0);
+    for (size_t A = 0; A < atomic_grids_.size(); ++A) {
+        atom_offsets[A + 1] = atom_offsets[A] + static_cast<int>(atomic_grids_[A].size());
     }
+    npoints_ = atom_offsets.back();
 
     x_ = new double[npoints_];
     y_ = new double[npoints_];
     z_ = new double[npoints_];
     w_ = new double[npoints_];
 
-    int grid_vector_index = 0;
-    for (const auto &grid_per_atom : atomic_grids_) {  // loop over all atoms
-        for (const auto &Q : grid_per_atom) {          // grid points of a given atom
-            x_[grid_vector_index] = Q.x;
-            y_[grid_vector_index] = Q.y;
-            z_[grid_vector_index] = Q.z;
-            w_[grid_vector_index] = Q.w;
-            ++grid_vector_index;
+#pragma omp parallel for schedule(static)
+    for (int A = 0; A < static_cast<int>(atomic_grids_.size()); ++A) {
+        const auto &grid_per_atom = atomic_grids_[A];
+        const int off = atom_offsets[A];
+        const int n = static_cast<int>(grid_per_atom.size());
+        for (int k = 0; k < n; ++k) {
+            const auto &Q = grid_per_atom[k];
+            x_[off + k] = Q.x;
+            y_[off + k] = Q.y;
+            z_[off + k] = Q.z;
+            w_[off + k] = Q.w;
         }
     }
 }
@@ -4118,26 +4240,39 @@ void BlockOPoints::populate() {
     functions_local_to_global_.clear();
 
     std::shared_ptr<BasisSet> primary = extents_->basis();
-    double *Rp = extents_->shell_extents()->pointer();
+    const double *Rp = extents_->shell_extents()->pointer();
+    const int nshell = primary->nshell();
+    const int npts = static_cast<int>(npoints_);
+    const double xc0 = xc_[0];
+    const double xc1 = xc_[1];
+    const double xc2 = xc_[2];
+    const double R = R_;
 
     // Determine significant shell/functions
-    for (int P = 0; P < primary->nshell(); P++) {
-        // First pass: mean center/max spread of point clould
-        Vector3 v = primary->shell(P).center();
-        double Reff = sqrt((v[0] - xc_[0]) * (v[0] - xc_[0]) + (v[1] - xc_[1]) * (v[1] - xc_[1]) +
-                           (v[2] - xc_[2]) * (v[2] - xc_[2]));
+    for (int P = 0; P < nshell; P++) {
+        // First pass: mean center/max spread of point cloud
+        const GaussianShell &sh = primary->shell(P);
+        const Vector3 &v = sh.center();
+        const double vx = v[0];
+        const double vy = v[1];
+        const double vz = v[2];
+        const double d0 = vx - xc0;
+        const double d1 = vy - xc1;
+        const double d2 = vz - xc2;
+        const double Rsum = R + Rp[P];
 
-        if (Reff > R_ + Rp[P]) continue;
+        if (d0 * d0 + d1 * d1 + d2 * d2 > Rsum * Rsum) continue;
 
         // Second pass: check individual points
-        double Rp2 = Rp[P] * Rp[P];
-        for (int Q = 0; Q < npoints_; Q++) {
-            double R2_candidate =
-                (x_[Q] - v[0]) * (x_[Q] - v[0]) + (y_[Q] - v[1]) * (y_[Q] - v[1]) + (z_[Q] - v[2]) * (z_[Q] - v[2]);
-            if (R2_candidate < Rp2) {
+        const double Rp2 = Rp[P] * Rp[P];
+        for (int Q = 0; Q < npts; Q++) {
+            const double dx = x_[Q] - vx;
+            const double dy = y_[Q] - vy;
+            const double dz = z_[Q] - vz;
+            if (dx * dx + dy * dy + dz * dz < Rp2) {
                 // Sig Shell located!
-                int nP = primary->shell(P).nfunction();
-                int pstart = primary->shell(P).function_index();
+                const int nP = sh.nfunction();
+                const int pstart = sh.function_index();
 
                 shells_local_to_global_.push_back(P);
                 for (int oP = 0; oP < nP; oP++) {
@@ -4397,44 +4532,78 @@ void MolecularGrid::block(int max_points, int min_points, double max_radius) {
 }
 
 void MolecularGrid::remove_distant_points(double Rmax) {
-    if (Rmax == std::numeric_limits<double>::max()) return;
+    if (Rmax == std::numeric_limits<double>::max() || npoints_ == 0) return;
 
-    int npoints2 = npoints_;
-    int offset = 0;
-    int point_index = 0;
-    std::vector<std::vector<MassPoint>> temp_grids(molecule_->natom());
-    for (int atom = 0; atom < atomic_grids_.size(); ++atom) {
-        for (int Q = 0; Q < atomic_grids_[atom].size(); ++Q) {
-            auto P = atomic_grids_[atom][Q];
-            Vector3 v = molecule_->xyz(atom);
-            double R = (P.x - v[0]) * (P.x - v[0]) + (P.y - v[1]) * (P.y - v[1]) + (P.z - v[2]) * (P.z - v[2]);
-            for (int A = 0; A < molecule_->natom(); A++) {
-                if (Q == A) continue;
-                v = molecule_->xyz(A);
-                double R2 = (P.x - v[0]) * (P.x - v[0]) + (P.y - v[1]) * (P.y - v[1]) + (P.z - v[2]) * (P.z - v[2]);
-                if (R > R2) {
-                    R = R2;
+    const int natom = molecule_->natom();
+    std::vector<double> ax(natom), ay(natom), az(natom);
+    for (int A = 0; A < natom; ++A) {
+        ax[A] = molecule_->x(A);
+        ay[A] = molecule_->y(A);
+        az[A] = molecule_->z(A);
+    }
+
+    const double Rmax2 = Rmax * Rmax;
+    const int ngrids = static_cast<int>(atomic_grids_.size());
+    std::vector<std::vector<MassPoint>> temp_grids(ngrids);
+
+#pragma omp parallel for schedule(dynamic, 1)
+    for (int atom = 0; atom < ngrids; ++atom) {
+        const auto &src = atomic_grids_[atom];
+        auto &dst = temp_grids[atom];
+        dst.reserve(src.size());
+        const double atom_x = ax[atom];
+        const double atom_y = ay[atom];
+        const double atom_z = az[atom];
+
+        for (const auto &P : src) {
+            const double dx0 = P.x - atom_x;
+            const double dy0 = P.y - atom_y;
+            const double dz0 = P.z - atom_z;
+            bool keep = (dx0 * dx0 + dy0 * dy0 + dz0 * dz0 <= Rmax2);
+            if (!keep) {
+                for (int A = 0; A < natom; ++A) {
+                    if (A == atom) continue;
+                    const double dx = P.x - ax[A];
+                    const double dy = P.y - ay[A];
+                    const double dz = P.z - az[A];
+                    if (dx * dx + dy * dy + dz * dz <= Rmax2) {
+                        keep = true;
+                        break;
+                    }
                 }
             }
-            if (R > Rmax * Rmax) {
-                npoints2--;
-            } else {
-                temp_grids[atom].push_back(P);
-                x_[offset] = x_[point_index];
-                y_[offset] = y_[point_index];
-                z_[offset] = z_[point_index];
-                w_[offset] = w_[point_index];
-                offset++;
+            if (keep) {
+                dst.push_back(P);
             }
-            ++point_index;
         }
     }
-    npoints_ = npoints2;
-    atomic_grids_ = temp_grids;
-    // free up allocated storage capacity.
-    for (size_t i = 0; i < atomic_grids_.size(); i++){
-        atomic_grids_[i].shrink_to_fit();
+
+    std::vector<int> atom_offsets(ngrids + 1, 0);
+    for (int atom = 0; atom < ngrids; ++atom) {
+        atom_offsets[atom + 1] = atom_offsets[atom] + static_cast<int>(temp_grids[atom].size());
     }
+    const int npoints2 = atom_offsets[ngrids];
+    if (npoints2 == npoints_) {
+        return;
+    }
+
+#pragma omp parallel for schedule(static)
+    for (int atom = 0; atom < ngrids; ++atom) {
+        const auto &dst = temp_grids[atom];
+        const int off = atom_offsets[atom];
+        const int n = static_cast<int>(dst.size());
+        for (int k = 0; k < n; ++k) {
+            const auto &P = dst[k];
+            x_[off + k] = P.x;
+            y_[off + k] = P.y;
+            z_[off + k] = P.z;
+            w_[off + k] = P.w;
+        }
+        temp_grids[atom].shrink_to_fit();
+    }
+
+    npoints_ = npoints2;
+    atomic_grids_ = std::move(temp_grids);
 }
 
 void MolecularGrid::postProcess(std::shared_ptr<BasisExtents> extents, int max_points, int min_points,
@@ -4627,148 +4796,260 @@ void OctreeGridBlocker::block() {
     max_points_ = tol_max_points_;
     max_functions_ = extents_->basis()->nbf();
 
-    double const *x = x_ref_;
-    double const *y = y_ref_;
-    double const *z = z_ref_;
-    double const *w = w_ref_;
-
-    std::vector<std::vector<int>> active_tree(1);
-    std::vector<std::vector<int>> completed_tree(0);
-    std::vector<std::vector<int>> new_leaves(0);
-
-    for (int Q = 0; Q < npoints_; Q++) {
-        active_tree[0].push_back(Q);
+    if (npoints_ <= 0) {
+        x_ = new double[0];
+        y_ = new double[0];
+        z_ = new double[0];
+        w_ = new double[0];
+        blocks_.clear();
+        max_points_ = 0;
+        max_functions_ = 0;
+        collocation_size_ = 0;
+        return;
     }
 
-    // => OLD ALGORITHM <= //
-    // K-PR Tree blocking
+    double const *__restrict__ x = x_ref_;
+    double const *__restrict__ y = y_ref_;
+    double const *__restrict__ z = z_ref_;
+    double const *__restrict__ w = w_ref_;
+
+    struct IndexRange {
+        int begin;
+        int end;
+    };
+    enum ChildFate : uint8_t { FATE_EMPTY = 0, FATE_COMPLETED = 1, FATE_ACTIVE = 2 };
+    struct SplitOutcome {
+        IndexRange left;
+        IndexRange right;
+        uint8_t left_fate;
+        uint8_t right_fate;
+    };
+
+    std::vector<int> idx(npoints_);
+    std::vector<int> tmp(npoints_);
+#pragma omp parallel for schedule(static)
+    for (int Q = 0; Q < npoints_; ++Q) {
+        idx[Q] = Q;
+    }
+
+    std::vector<IndexRange> active_ranges = {{0, npoints_}};
+    std::vector<IndexRange> completed_ranges;
+    std::vector<IndexRange> next_ranges;
+    completed_ranges.reserve(static_cast<size_t>(npoints_) / std::max<size_t>(1, tol_min_points_) + 64);
+    next_ranges.reserve(1024);
+
     std::shared_ptr<PsiOutStream> printer;
     if (bench_) {
         printer = std::make_shared<PsiOutStream>("khtree.dat");
-        // fh_ktree = fopen("ktree.dat","w");
-        // outfile->Printf(fh_ktree,"#  %4s %5s %15s %15s %15s\n", "Dept","ID","X","Y","Z");
     }
     int tree_level = 0;
 
-    double const *dims[3];
-    dims[0] = x;
-    dims[1] = y;
-    dims[2] = z;
+    double const *dims[3] = {x, y, z};
+    const double T2 = tol_max_radius_ * tol_max_radius_;
+    const int min_pts = tol_min_points_;
+    const int max_pts = tol_max_points_;
 
-    double T2 = tol_max_radius_ * tol_max_radius_;
+    auto classify_range = [&](IndexRange r) -> uint8_t {
+        const int n = r.end - r.begin;
+        if (n <= 0) return FATE_EMPTY;
+        if (n > max_pts) return FATE_ACTIVE;
+        if (n <= min_pts) return FATE_COMPLETED;
+
+        double xc0 = 0.0, xc1 = 0.0, xc2 = 0.0;
+        for (int Q = r.begin; Q < r.end; ++Q) {
+            const int p = idx[Q];
+            xc0 += x[p];
+            xc1 += y[p];
+            xc2 += z[p];
+        }
+        const double inv_n = 1.0 / static_cast<double>(n);
+        xc0 *= inv_n;
+        xc1 *= inv_n;
+        xc2 *= inv_n;
+
+        double rc2 = 0.0;
+        for (int Q = r.begin; Q < r.end; ++Q) {
+            const int p = idx[Q];
+            const double dx = x[p] - xc0;
+            const double dy = y[p] - xc1;
+            const double dz = z[p] - xc2;
+            const double d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 > rc2) rc2 = d2;
+        }
+        return (rc2 < T2) ? FATE_COMPLETED : FATE_ACTIVE;
+    };
+
+    auto split_range_serial = [&](IndexRange r, double const *__restrict__ X) -> SplitOutcome {
+        const int b = r.begin;
+        const int e = r.end;
+        const int n = e - b;
+        double xc = 0.0;
+        for (int Q = b; Q < e; ++Q) {
+            xc += X[idx[Q]];
+        }
+        xc /= static_cast<double>(n);
+
+        int nl = 0;
+        int nr = 0;
+        for (int Q = b; Q < e; ++Q) {
+            const int p = idx[Q];
+            if (X[p] < xc) {
+                idx[b + nl++] = p;
+            } else {
+                tmp[b + nr++] = p;
+            }
+        }
+        if (nr > 0) {
+            std::copy_n(&tmp[b], nr, &idx[b + nl]);
+        }
+
+        IndexRange left_r{b, b + nl};
+        IndexRange right_r{b + nl, e};
+        return SplitOutcome{left_r, right_r, classify_range(left_r), classify_range(right_r)};
+    };
+
+    auto split_range_parallel = [&](IndexRange r, double const *__restrict__ X) -> SplitOutcome {
+        const int b = r.begin;
+        const int e = r.end;
+        const int n = e - b;
+
+        double xc = 0.0;
+#pragma omp parallel for reduction(+ : xc) schedule(static)
+        for (int Q = b; Q < e; ++Q) {
+            xc += X[idx[Q]];
+        }
+        xc /= static_cast<double>(n);
+
+        int nchunks = 1;
+#ifdef _OPENMP
+        nchunks = std::max(1, omp_get_max_threads());
+#endif
+        nchunks = std::min(nchunks, std::max(1, n / 4096));
+        if (nchunks <= 1) {
+            int nl = 0, nr = 0;
+            for (int Q = b; Q < e; ++Q) {
+                const int p = idx[Q];
+                if (X[p] < xc) {
+                    idx[b + nl++] = p;
+                } else {
+                    tmp[b + nr++] = p;
+                }
+            }
+            if (nr > 0) std::copy_n(&tmp[b], nr, &idx[b + nl]);
+            IndexRange left_r{b, b + nl};
+            IndexRange right_r{b + nl, e};
+            return SplitOutcome{left_r, right_r, classify_range(left_r), classify_range(right_r)};
+        }
+
+        std::vector<int> lcnt(nchunks, 0), rcnt(nchunks, 0);
+        const int chunk = (n + nchunks - 1) / nchunks;
+
+#pragma omp parallel for num_threads(nchunks) schedule(static, 1)
+        for (int c = 0; c < nchunks; ++c) {
+            const int cb = b + c * chunk;
+            const int ce = std::min(e, cb + chunk);
+            int lc = 0;
+            for (int Q = cb; Q < ce; ++Q) {
+                lc += (X[idx[Q]] < xc) ? 1 : 0;
+            }
+            lcnt[c] = lc;
+            rcnt[c] = (ce - cb) - lc;
+        }
+
+        std::vector<int> loff(nchunks, 0), roff(nchunks, 0);
+        int total_left = 0, total_right = 0;
+        for (int c = 0; c < nchunks; ++c) {
+            loff[c] = total_left;
+            roff[c] = total_right;
+            total_left += lcnt[c];
+            total_right += rcnt[c];
+        }
+
+#pragma omp parallel for num_threads(nchunks) schedule(static, 1)
+        for (int c = 0; c < nchunks; ++c) {
+            const int cb = b + c * chunk;
+            const int ce = std::min(e, cb + chunk);
+            int lp = b + loff[c];
+            int rp = b + total_left + roff[c];
+            for (int Q = cb; Q < ce; ++Q) {
+                const int p = idx[Q];
+                if (X[p] < xc) {
+                    tmp[lp++] = p;
+                } else {
+                    tmp[rp++] = p;
+                }
+            }
+        }
+
+#pragma omp parallel for schedule(static)
+        for (int Q = b; Q < e; ++Q) {
+            idx[Q] = tmp[Q];
+        }
+
+        IndexRange left_r{b, b + total_left};
+        IndexRange right_r{b + total_left, e};
+        return SplitOutcome{left_r, right_r, classify_range(left_r), classify_range(right_r)};
+    };
+
+    std::vector<SplitOutcome> outcomes;
     while (true) {
         bool completed = false;
         for (int k = 0; k < 3; k++) {
-            new_leaves.clear();
-            double const *X = dims[k];
-            for (size_t A = 0; A < active_tree.size(); A++) {
-                // Block to subdivide
-                std::vector<int> block = active_tree[A];
+            next_ranges.clear();
+            double const *__restrict__ X = dims[k];
+            const size_t n_active = active_ranges.size();
+            outcomes.resize(n_active);
 
-                // Determine xcenter of mass
-                double xc = 0.0;
-                for (size_t Q = 0; Q < block.size(); Q++) {
-                    xc += X[block[Q]];
-                }
-                xc /= block.size();
-
-                if (bench_) {
-                    double XC[3];
-                    ::memset((void *)XC, '\0', 3 * sizeof(double));
-                    for (size_t Q = 0; Q < block.size(); Q++) {
-                        XC[0] += x[block[Q]];
-                        XC[1] += y[block[Q]];
-                        XC[2] += z[block[Q]];
+            if (bench_) {
+                for (size_t A = 0; A < n_active; A++) {
+                    const IndexRange r = active_ranges[A];
+                    const int n = r.end - r.begin;
+                    double XC[3] = {0.0, 0.0, 0.0};
+                    for (int Q = r.begin; Q < r.end; ++Q) {
+                        const int p = idx[Q];
+                        XC[0] += x[p];
+                        XC[1] += y[p];
+                        XC[2] += z[p];
                     }
-                    XC[0] /= block.size();
-                    XC[1] /= block.size();
-                    XC[2] /= block.size();
+                    XC[0] /= n;
+                    XC[1] /= n;
+                    XC[2] /= n;
                     printer->Printf("   %4d %5zu %15.6E %15.6E %15.6E\n", tree_level, A, XC[0], XC[1], XC[2]);
+                    outcomes[A] = split_range_serial(r, X);
                 }
-
-                std::vector<int> left;
-                std::vector<int> right;
-                for (size_t Q = 0; Q < block.size(); Q++) {
-                    if (X[block[Q]] < xc) {
-                        left.push_back(block[Q]);
+            } else if (n_active < 4) {
+                for (size_t A = 0; A < n_active; A++) {
+                    const IndexRange r = active_ranges[A];
+                    if (r.end - r.begin >= 16384) {
+                        outcomes[A] = split_range_parallel(r, X);
                     } else {
-                        right.push_back(block[Q]);
-                    }
-                }
-
-                // Left side fate
-                if (left.size() > (size_t)tol_max_points_) {
-                    new_leaves.push_back(left);
-                } else if (left.size() <= (size_t)tol_min_points_) {
-                    completed_tree.push_back(left);
-                } else {
-                    double XC[3];
-                    ::memset((void *)XC, '\0', 3 * sizeof(double));
-                    for (size_t Q = 0; Q < left.size(); Q++) {
-                        XC[0] += x[left[Q]];
-                        XC[1] += y[left[Q]];
-                        XC[2] += z[left[Q]];
-                    }
-                    XC[0] /= left.size();
-                    XC[1] /= left.size();
-                    XC[2] /= left.size();
-
-                    // Determine radius of bounding sphere
-                    double RC2 = 0.0;
-                    for (size_t Q = 0; Q < left.size(); Q++) {
-                        double dx = x[left[Q]] - XC[0];
-                        double dy = y[left[Q]] - XC[1];
-                        double dz = z[left[Q]] - XC[2];
-                        double R2 = dx * dx + dy * dy + dz * dz;
-                        RC2 = (RC2 > R2 ? RC2 : R2);
-                    }
-
-                    // Terminate if necessary
-                    if (RC2 < T2) {
-                        completed_tree.push_back(left);
-                    } else {
-                        new_leaves.push_back(left);
+                        outcomes[A] = split_range_serial(r, X);
                     }
                 }
-
-                // Right side fate
-                if (right.size() > tol_max_points_) {
-                    new_leaves.push_back(right);
-                } else if (right.size() <= tol_min_points_) {
-                    completed_tree.push_back(right);
-                } else {
-                    double XC[3];
-                    ::memset((void *)XC, '\0', 3 * sizeof(double));
-                    for (size_t Q = 0; Q < right.size(); Q++) {
-                        XC[0] += x[right[Q]];
-                        XC[1] += y[right[Q]];
-                        XC[2] += z[right[Q]];
-                    }
-                    XC[0] /= right.size();
-                    XC[1] /= right.size();
-                    XC[2] /= right.size();
-
-                    // Determine radius of bounding sphere
-                    double RC2 = 0.0;
-                    for (size_t Q = 0; Q < right.size(); Q++) {
-                        double dx = x[right[Q]] - XC[0];
-                        double dy = y[right[Q]] - XC[1];
-                        double dz = z[right[Q]] - XC[2];
-                        double R2 = dx * dx + dy * dy + dz * dz;
-                        RC2 = (RC2 > R2 ? RC2 : R2);
-                    }
-
-                    // Terminate if necessary
-                    if (RC2 < T2) {
-                        completed_tree.push_back(right);
-                    } else {
-                        new_leaves.push_back(right);
-                    }
+            } else {
+#pragma omp parallel for schedule(dynamic, 4)
+                for (size_t A = 0; A < n_active; A++) {
+                    outcomes[A] = split_range_serial(active_ranges[A], X);
                 }
             }
-            active_tree = new_leaves;
+
+            for (size_t A = 0; A < n_active; A++) {
+                const auto &out = outcomes[A];
+                if (out.left_fate == FATE_ACTIVE) {
+                    next_ranges.push_back(out.left);
+                } else if (out.left_fate == FATE_COMPLETED) {
+                    completed_ranges.push_back(out.left);
+                }
+                if (out.right_fate == FATE_ACTIVE) {
+                    next_ranges.push_back(out.right);
+                } else if (out.right_fate == FATE_COMPLETED) {
+                    completed_ranges.push_back(out.right);
+                }
+            }
+
+            active_ranges.swap(next_ranges);
             tree_level++;
-            if (!active_tree.size()) {
+            if (active_ranges.empty()) {
                 completed = true;
                 break;
             }
@@ -4776,56 +5057,60 @@ void OctreeGridBlocker::block() {
         if (completed) break;
     }
 
-    // Move stuff over
+    // Move stuff over and construct BlockOPoints in parallel
     x_ = new double[npoints_];
     y_ = new double[npoints_];
     z_ = new double[npoints_];
     w_ = new double[npoints_];
 
-    int index = 0;
-    int unique_block = 0;
+    const size_t n_completed = completed_ranges.size();
+    std::vector<size_t> offsets(n_completed + 1, 0);
+    for (size_t A = 0; A < n_completed; A++) {
+        offsets[A + 1] = offsets[A] + static_cast<size_t>(completed_ranges[A].end - completed_ranges[A].begin);
+    }
+
+    std::vector<std::shared_ptr<BlockOPoints>> built(n_completed);
+#pragma omp parallel for schedule(dynamic, 16)
+    for (size_t A = 0; A < n_completed; A++) {
+        const IndexRange r = completed_ranges[A];
+        const size_t n = static_cast<size_t>(r.end - r.begin);
+        if (!n) continue;
+        const size_t off = offsets[A];
+        for (size_t q = 0; q < n; ++q) {
+            const int delta = idx[r.begin + static_cast<int>(q)];
+            x_[off + q] = x[delta];
+            y_[off + q] = y[delta];
+            z_[off + q] = z[delta];
+            w_[off + q] = w[delta];
+        }
+        built[A] = std::make_shared<BlockOPoints>(A, n, &x_[off], &y_[off], &z_[off], &w_[off], extents_);
+    }
+
     if (bench_) {
         auto mode = std::ostream::app;
         printer = std::make_shared<PsiOutStream>("finished_blocks.dat", mode);
-        // outfile->Printf(fh_blocks, "#  %4s %15s %15s %15s %15s\n", "ID", "X", "Y", "Z", "W");
-    }
-    for (size_t A = 0; A < completed_tree.size(); A++) {
-        std::vector<int> block = completed_tree[A];
-        for (size_t Q = 0; Q < block.size(); Q++) {
-            int delta = block[Q];
-            x_[index] = x[delta];
-            y_[index] = y[delta];
-            z_[index] = z[delta];
-            w_[index] = w[delta];
-            if (bench_)
-                printer->Printf("   %4d %15.6E %15.6E %15.6E %15.6E\n", unique_block, x_[index], y_[index], z_[index],
-                                w_[index]);
-            index++;
+        int unique_block = 0;
+        for (size_t A = 0; A < n_completed; A++) {
+            const size_t n = static_cast<size_t>(completed_ranges[A].end - completed_ranges[A].begin);
+            const size_t off = offsets[A];
+            for (size_t q = 0; q < n; ++q) {
+                printer->Printf("   %4d %15.6E %15.6E %15.6E %15.6E\n", unique_block, x_[off + q], y_[off + q],
+                                z_[off + q], w_[off + q]);
+            }
+            if (n) unique_block++;
         }
-        if (block.size()) unique_block++;
     }
 
     blocks_.clear();
+    blocks_.reserve(n_completed);
     max_points_ = 0;
-    // BlockOPoints construction (significant-shell search) is independent per block: build them
-    // in parallel, then keep the original order.
-    std::vector<size_t> offsets(completed_tree.size() + 1, 0);
-    for (size_t A = 0; A < completed_tree.size(); A++) offsets[A + 1] = offsets[A] + completed_tree[A].size();
-    std::vector<std::shared_ptr<BlockOPoints>> built(completed_tree.size());
-#pragma omp parallel for schedule(dynamic, 16)
-    for (size_t A = 0; A < completed_tree.size(); A++) {
-        const size_t n = completed_tree[A].size();
-        if (!n) continue;
-        const size_t off = offsets[A];
-        built[A] = std::make_shared<BlockOPoints>(A, n, &x_[off], &y_[off], &z_[off], &w_[off], extents_);
-    }
-    for (size_t A = 0; A < completed_tree.size(); A++) {
-        auto& bop = built[A];
-        // BlockOPoints construction performs additional pruning. Need to test if any points remain.
+    for (size_t A = 0; A < n_completed; A++) {
+        auto &bop = built[A];
+        const int n = completed_ranges[A].end - completed_ranges[A].begin;
         if (bop && bop->local_nbf()) {
             blocks_.push_back(bop);
-            if ((size_t)max_points_ < completed_tree[A].size()) {
-                max_points_ = completed_tree[A].size();
+            if (max_points_ < n) {
+                max_points_ = n;
             }
         }
     }
