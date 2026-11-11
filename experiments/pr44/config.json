@@ -1,0 +1,39 @@
+{
+  "base": "8f46e95cba0ea6c6bdb56453eeabb2f7560d62b7",
+  "head": "283ae89a32122ab26686e7f20721bcbf9b0c39d3",
+  "environment": "/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca",
+  "threads": 24,
+  "energy_tolerance_Eh": 1e-8,
+  "cases": [
+    {"system": "peptide", "arm": "base", "memory_gib": 4, "slurm_gib": 8},
+    {"system": "peptide", "arm": "auto", "memory_gib": 4, "slurm_gib": 8},
+    {"system": "peptide", "arm": "disk", "memory_gib": 4, "slurm_gib": 8},
+    {"system": "peptide", "arm": "auto", "memory_gib": 2, "slurm_gib": 4},
+    {"system": "nanotube", "arm": "base", "memory_gib": 16, "slurm_gib": 32},
+    {"system": "nanotube", "arm": "auto", "memory_gib": 16, "slurm_gib": 32},
+    {"system": "nanotube", "arm": "disk", "memory_gib": 16, "slurm_gib": 32},
+    {"system": "nanotube", "arm": "auto", "memory_gib": 8, "slurm_gib": 16}
+  ],
+  "options": {
+    "basis": "6-31+G**",
+    "df_basis_scf": "def2-universal-jkfit",
+    "df_basis_sapt": "def2-svp-ri",
+    "scf_type": "df",
+    "scf_subtype": "auto",
+    "guess": "sad",
+    "sad_scf_type": "df",
+    "df_scf_guess": false,
+    "e_convergence": 1e-8,
+    "d_convergence": 1e-7,
+    "ints_tolerance": 1e-12,
+    "maxiter": 100,
+    "dft_radial_points": 75,
+    "dft_spherical_points": 302,
+    "dft_pruning_scheme": "robust",
+    "sapt_dft_functional": "pbe0",
+    "sapt_dft_grac_compute": "single",
+    "sapt_dft_grac_basis": "6-31+G**",
+    "sapt_dft_do_hybrid": true,
+    "sapt_dft_do_dhf": true
+  }
+}
