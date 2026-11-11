@@ -144,3 +144,36 @@ For subsequent science changes, `cachy_build.sh ROOT PIN PREFIX` supports
 a fresh `ROOT/install-owned-*` prefix so the passing CPU baseline install
 and failed GPU artifacts are preserved. Rebuild/reinstall normally; no Python
 overlay. Freeze a new runtime proof for the new exact science pin.
+
+## Current qualified increment
+
+**`b02569493979602e418c05911430eaf1f406e47a`** passed a fresh coherent build,
+all four native CPU CPKS cases again (19.78 s, zero skips), and the independent
+sealed-runtime CPU smoke. Installation:
+`~/gits/psi4-fsapt-cpks-integration-cachy/install-owned-b025694939`.
+The previous `install/` is preserved.
+
+The real RTX3090 small HF fragment gate now **passes**:
+`runs/hf-fragment-gate-02/gate-result.json`,
+SHA256 `98273240702912c81ba75c22a61279f4972cceb86700d50ec348b9d944dcbc95`.
+All ten fresh CPU/GPU/same-gauge-oracle/repeat cases completed, covering
+unscaled, scaled and displaced water dimers. Maximum signed aggregate CPU/GPU
+difference is `1.3376e-11 Eh`; largest scaled same-gauge induction-cell
+difference is `1.2113e-11 Eh`. Strict repeat and ownership/cleanup gates pass.
+This is **small HF correctness**, not GPU KS response, peptide admission,
+sanitizer qualification, or a speedup.
+
+Runtime config: `runs/sealed-cpu-02/runtime-config.json`,
+SHA256 `00c471d835ab97bdc820268178abe584f8bef7fde0962116b660c9745eee790d`.
+Frozen practical jun-cc-pVDZ manifest: `runs/fsapt-jun-inputs-01/inputs.json`,
+SHA256 `988d3b5c6b80b611c6fecc5b6292d5fde51d8f1be89b0a1bb7a017561f4e337a`.
+
+`cachy_followup.py` reuses this exact gated installation for (a) water
+memcheck/initcheck with fresh-repeat parity or (b) peptide CPU/GPU/same-gauge
+oracle/repeat parity. It requires the matching small release receipt, a
+nonblocking common GPU lease and <=4 CPU / 12 GiB host / no-swap scope.
+Workers are capped at 20 minutes, the whole follow-up at 50 minutes.
+The peptide budget follows the existing 20 GiB device / 12 GiB declared-native
+admission policy and checks free VRAM plus a desktop margin before launch;
+those limits are not measurements of peak consumption. No nanotube/protein
+run or H200 speedup is admitted by this launcher.
