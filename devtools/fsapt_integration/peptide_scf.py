@@ -6,17 +6,26 @@ import json
 import os
 from pathlib import Path
 import time
+import textwrap
 
 INPUT_SHA="988d3b5c6b80b611c6fecc5b6292d5fde51d8f1be89b0a1bb7a017561f4e337a"
 
 
-def timer_summary(records):
-    lines=["\n=== DIMER SCF TIMERS (inclusive host wall seconds; nested, NOT additive) ===",
-           f"{'seconds':>12} {'calls':>7}  timer path"]
-    for label,row in records.items():
-        lines.append(f"{row['wall_time']:12.6f} {int(row['n_calls']):7d}  {label}")
-    lines.append("cuEST compute API timers may measure enqueue time; waits can appear in cudaFree/D2H.\n"
-                 "No extra device synchronization or CUDA warm-up is inserted by these subtimers.\n")
+def timer_summary(records,width=78):
+    """Native timer paths use ';'; show the leaf in a narrow indented tree."""
+    if width<40:raise ValueError("Timer table width must be at least 40")
+    lines=["\n=== DIMER SCF TIMERS ===","Inclusive host wall time; nested, NOT additive.",
+           f"{'seconds':>10} {'calls':>5}  timer"]
+    for path,row in sorted(records.items(),key=lambda item:tuple(item[0].split(";"))):
+        parts=path.split(";")
+        depth=len(parts)-1
+        indent="  "*min(depth,6)+("… " if depth>6 else "")
+        numbers=f"{row['wall_time']:10.6f} {int(row['n_calls']):5d}  "
+        wrapped=textwrap.wrap(parts[-1],width=width-len(numbers)-len(indent)) or [""]
+        lines.append(numbers+indent+wrapped[0])
+        lines.extend(" "*len(numbers)+indent+line for line in wrapped[1:])
+    lines.extend(["Compute API may only enqueue; waits can land in free/D2H.",
+                  "No added CUDA barriers/warm-up. Full paths: *-timers.json."])
     return "\n".join(lines)
 
 
@@ -49,6 +58,7 @@ def main():
     for module in (psi4,psi4.core):
         if not Path(module.__file__).resolve().is_relative_to(prefix):
             raise RuntimeError("Wrong manual Psi4 import: "+module.__file__)
+    psi4.core.set_output_file("stdout",False)
     psi4.set_memory("6 GiB")
     psi4.set_num_threads(args.threads)
     options={"basis":"jun-cc-pvdz","df_basis_scf":"aug-cc-pvdz-jkfit",
@@ -68,8 +78,7 @@ def main():
     try:
         for index in range(args.repeats):
             label="cold" if index==0 else f"warm-{index}"
-            outfile=Path(f"{label}.out")
-            psi4.core.set_output_file(str(outfile),False)
+            print(f"\n=== {label}: peptide dimer SCF ===",flush=True)
             psi4.core.clean_timers()
             sample={"label":label,"status":"RUNNING"}
             report["samples"].append(sample)
@@ -103,8 +112,6 @@ def main():
                 sample["timers"]=psi4.core.get_timer_dict()
                 text=f"\n{label}: {sample['status']}, wall={sample['wall_seconds']:.6f} s\n"
                 text+=timer_summary(sample["timers"])
-                psi4.core.print_out(text)
-                psi4.core.flush_outfile()
                 print(text,flush=True)
                 Path(f"{label}-timers.json").write_text(json.dumps(sample,indent=2)+"\n")
             psi4.core.clean()

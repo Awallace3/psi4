@@ -9,9 +9,13 @@ case "$MODE" in
     paths)
         printf 'SOURCE=%s\nOBJECTS=%s/obj\nINSTALL=%s/install\nRUNS=%s/runs\n' "$SOURCE" "$ROOT" "$ROOT" "$ROOT"
         exit 0;;
-    all|build|run|compare) ;;
-    *) echo "Usage: ./build.sh [all|build|run|compare|paths] [peptide_scf.py arguments]" >&2; exit 2;;
+    all|build|run|compare|reconfigure) ;;
+    *) echo "Usage: ./build.sh [all|build|run|compare|reconfigure|paths] [peptide_scf.py arguments]" >&2; exit 2;;
 esac
+needs_configure() {
+    [[ "$MODE" == reconfigure || ! -f "$ROOT/obj/CMakeCache.txt" ||
+       ! -f "$ROOT/obj/build.ninja" ]]
+}
 JOBS=${FSAPT_BUILD_JOBS:-2}
 case "$JOBS" in 1|2|3|4) ;; *) echo "FSAPT_BUILD_JOBS must be 1–4" >&2; exit 2;; esac
 ENV=$HOME/gits/psi4-disp0-cachy/environment-v2
@@ -46,8 +50,9 @@ if [[ -e "$SOURCE/compile_commands.json" || -L "$SOURCE/compile_commands.json" ]
 else
     ln -s "$COMPILE_DB" "$SOURCE/compile_commands.json"
 fi
-if [[ "$MODE" == all || "$MODE" == build ]]; then
+if [[ "$MODE" == all || "$MODE" == build || "$MODE" == reconfigure ]]; then
     RP="$ROOT/runtime/lib;$ENV/lib"
+    if needs_configure; then
     cmake -S "$SOURCE" -B "$ROOT/obj" -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX="$ROOT/install" -DCMAKE_INSTALL_LIBDIR=lib \
         -DPYMOD_INSTALL_LIBDIR=/python3.13/site-packages \
@@ -63,6 +68,9 @@ if [[ "$MODE" == all || "$MODE" == build ]]; then
         -DcuEST_LIBRARY="$ROOT/runtime/cuest/lib/13/libcuest.so" \
         -DCMAKE_BUILD_RPATH="$RP" -DCMAKE_INSTALL_RPATH="$RP" \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -Dpsi4_CMAKE_UNITY_BUILD_BATCH_SIZE=4
+    else
+        echo "Reusing tmp/obj configuration (./build.sh reconfigure to refresh)"
+    fi
     cmake --build "$ROOT/obj" --parallel "$JOBS"
     test -s "$SOURCE/$COMPILE_DB"
     cmake --install "$ROOT/obj"
@@ -79,7 +87,7 @@ output.write_text(json.dumps({"head":git("rev-parse","HEAD").decode().strip(),
 output.with_suffix(".diff").write_bytes(diff)
 PY
 fi
-[[ "$MODE" != build ]] || exit 0
+[[ "$MODE" != build && "$MODE" != reconfigure ]] || exit 0
 test -f "$ROOT/install/manual-build.json" || { echo "Run ./build.sh build first" >&2; exit 2; }
 LOCK=$HOME/.cache/psi4-cachy
 mkdir -p "$LOCK"
@@ -101,7 +109,7 @@ run_one() {
         export TMPDIR="$PWD/scratch" SCRATCH="$PWD/scratch" PSI_SCRATCH="$PWD/scratch"
         if [[ "$backend" == cpu ]]; then export CUDA_VISIBLE_DEVICES="";
         else export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}; fi
-        python -B "$SOURCE/devtools/fsapt_integration/peptide_scf.py" \
+        python -u -B "$SOURCE/devtools/fsapt_integration/peptide_scf.py" \
             --prefix "$ROOT/install" --inputs "$ROOT/inputs.json" \
             --backend "$backend" --threads "$OMP_NUM_THREADS" "$@"
     ) 2>&1 | tee "$RUN/$backend/console.log"
