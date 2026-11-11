@@ -10,6 +10,15 @@ export PYTHONNOUSERSITE=1
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PATH="$CONDA_PREFIX/bin:/opt/slurm/current/bin:/usr/bin:/bin"
 export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 CMAKE_BUILD_PARALLEL_LEVEL=8
+runtime="$campaign/runtime-pydantic2"
+if [[ ! -x "$runtime/bin/python" ]]; then
+    "$CONDA_PREFIX/bin/python" -m venv --system-site-packages "$runtime"
+fi
+# Private overlay only: p4qca's Pydantic 1/QCElemental 0.30 cannot load the
+# QCElemental 0.50 required by these frozen production sources.
+"$runtime/bin/python" -m pip install 'qcelemental==0.50.4' 'qcengine==0.50.0' 'pydantic==2.13.3' 'optking==0.4.2'
+"$runtime/bin/python" -m pip freeze > "$campaign/runtime-pydantic2-packages.txt"
+"$runtime/bin/python" -c 'import qcelemental, qcengine, pydantic; print(qcelemental.__version__, qcengine.__version__, pydantic.__version__)'
 test -x "$("$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-cc" -print-prog-name=cc1)"
 test -x "$("$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-c++" -print-prog-name=cc1plus)"
 for arm in base head; do
@@ -20,7 +29,7 @@ for arm in base head; do
     test -z "$(git -C "$src" status --porcelain)"
     cmake -S "$src" -B "$build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
-        -DPython_EXECUTABLE="$CONDA_PREFIX/bin/python" \
+        -DPython_EXECUTABLE="$runtime/bin/python" \
         -DCMAKE_C_COMPILER="$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-cc" \
         -DCMAKE_CXX_COMPILER="$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-c++" \
         -DENABLE_XHOST=OFF -DCMAKE_C_FLAGS="-march=x86-64-v3 -mtune=generic" \
@@ -28,9 +37,10 @@ for arm in base head; do
         -DCMAKE_INSTALL_PREFIX="$campaign/install/$arm" \
         -DCMAKE_UNITY_BUILD=ON -DCMAKE_UNITY_BUILD_BATCH_SIZE=8 \
         -DENABLE_Einsums=OFF -DBUILD_TESTING=ON \
-        -DCMAKE_INSIST_FIND_PACKAGE_Libint2=ON -DCMAKE_INSIST_FIND_PACKAGE_Libxc=ON
+        -DCMAKE_INSIST_FIND_PACKAGE_Libint2=ON -DCMAKE_INSIST_FIND_PACKAGE_Libxc=ON \
+        -DCMAKE_INSIST_FIND_PACKAGE_qcelemental=ON -DCMAKE_INSIST_FIND_PACKAGE_qcengine=ON
     cmake --build "$build" --parallel 8
     ctest --test-dir "$build" -R '^sapt-dft(1|2|-fdds-ooc)$' --output-on-failure -j 1
     PYTHONPATH="$build/stage/lib" PSI4_DATADIR="$build/stage/share/psi4" \
-        "$CONDA_PREFIX/bin/python" "$harness/validate_build.py" "$build" "$expected"
+        "$runtime/bin/python" "$harness/validate_build.py" "$build" "$expected"
 done

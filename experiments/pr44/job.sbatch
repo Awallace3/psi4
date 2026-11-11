@@ -42,6 +42,8 @@ if [[ $mode = build ]]; then
     srun bash "$harness/build.sh" "$harness" "$campaign" &
 else
     env=/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca
+    python="$campaign/runtime-pydantic2/bin/python"
+    test -x "$python"
     export PYTHONNOUSERSITE=1 LD_LIBRARY_PATH="$env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     export PATH="$env/bin:/opt/slurm/current/bin:/usr/bin:/bin"
     export OMP_NUM_THREADS=24 MKL_NUM_THREADS=24 OPENBLAS_NUM_THREADS=24
@@ -51,7 +53,7 @@ else
     test -f "$campaign/builds/$arm/validated.json"
     eval "$("$stage/bin/psi4" --psiapi)"
     export PSI4_DATADIR="$stage/share/psi4"
-    srun "$env/bin/python" "$harness/case.py" "$campaign" "$index" "$output" &
+    srun "$python" "$harness/case.py" "$campaign" "$index" "$output" &
 fi
 child=$!
 set +e

@@ -38,7 +38,7 @@ manifest = {
     "config_sha256": hashlib.sha256((harness / "config.json").read_bytes()).hexdigest(),
     "config": config, "campaign": str(root), "harness": str(harness),
 }
-manifest_path = root / "manifest.json"
+manifest_path = root / f"manifest-{commit}.json"
 if manifest_path.exists():
     assert json.loads(manifest_path.read_text()) == manifest
 elif not args.test_only:

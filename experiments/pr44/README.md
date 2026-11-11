@@ -4,6 +4,15 @@ This experiment-only branch does not change either production revision.
 It compares PR43's published head (`8f46e95cba`) with PR44 (`283ae89a32`).
 The later local-only PR43 lifecycle follow-up is not silently mixed in.
 
+Native dependencies and compilers come from `p4qca`. Python runs in a private
+`--system-site-packages` venv under the campaign, with QCElemental 0.50.4,
+QCEngine 0.50.0 and Pydantic 2.13.3 pinned to match the successful local build.
+The shared environment remains unchanged. Initial build job 15496716 compiled
+the base but failed before calculations: staged QCElemental 0.50.4 tried to
+import Pydantic-2 APIs from p4qca's Pydantic 1.10.21. Preserve that failure;
+it is not a numerical failure. Each harness revision gets its own immutable
+manifest while existing job outputs remain under their original job IDs.
+
 ## Scope
 
 The peptide (24 atoms, 260 AOs) and ethene–nanotube (42 atoms, 574 AOs)

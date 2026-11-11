@@ -2,6 +2,7 @@
   "base": "8f46e95cba0ea6c6bdb56453eeabb2f7560d62b7",
   "head": "283ae89a32122ab26686e7f20721bcbf9b0c39d3",
   "environment": "/storage/project/r-cs207-0/awallace43/miniconda/envs/p4qca",
+  "private_python_packages": ["qcelemental==0.50.4", "qcengine==0.50.0", "pydantic==2.13.3", "optking==0.4.2"],
   "threads": 24,
   "energy_tolerance_Eh": 1e-8,
   "cases": [
