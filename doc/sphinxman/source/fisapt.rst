@@ -376,6 +376,32 @@ therefore need not sum to the authoritative scalar dispersion or total
 interaction energy; Psi4 prints a warning when this approximation is used.
 
 
+Coupled KS induction
+""""""""""""""""""""
+
+By default F-SAPT induction uses uncoupled response, scaled to the coupled
+total. ``FISAPT_FSAPT_IND_RESPONSE=true`` solves coupled response for every
+source instead, but with the HF-like ``gap + 4J - K - K^T`` Hessian even on
+KS orbitals. In SAPT(DFT), adding ``FISAPT_FSAPT_IND_XC_RESPONSE=true`` uses
+each monomer's own SCF Hessian (exact-exchange fraction and XC kernel
+included), so the partition sums to the canonical CPKS induction::
+
+    set {
+        sapt_dft_functional          pbe
+        sapt_dft_do_fsapt            fisapt
+        sapt_dft_induction_type      cpks
+        sapt_dft_grac_compute        none
+        fisapt_fsapt_ind_response    true
+        fisapt_fsapt_ind_xc_response true
+    }
+
+This is currently limited to CPU HF, SVWN and PBE monomers without GRAC or
+level shifts, deltaDFT, external potentials or embedding, with
+``FISAPT_LINK_ASSIGNMENT=C`` and unscaled S\ :sup:`2` exchange-induction.
+``USE_CUEST=true`` is rejected for this option; the separate GPU F-SAPT
+response implementation remains HF-only.
+
+
 Order-1 Visualization with PyMol
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

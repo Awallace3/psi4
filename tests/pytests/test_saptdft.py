@@ -32,6 +32,68 @@ def grac_dimer():
     psi4.core.clean()
 
 
+def _fsapt_coupled_induction(functional, xc_response, tmp_path, monkeypatch):
+    """Run SAPT(DFT) F-SAPT with per-source coupled induction; return (wfn, IndAB, IndBA)."""
+    from psi4.driver.procrouting.sapt import saptdft_fisapt
+
+    molecule = psi4.geometry("""
+        0 1
+        H -.37 0 0
+        H .37 0 0
+        --
+        0 1
+        O 0 0 3
+        H .76 0 3.58
+        H -.76 0 3.58
+        symmetry c1
+        no_reorient
+        no_com
+    """)
+    psi4.set_options({
+        "basis": "sto-3g", "df_basis_scf": "cc-pvdz-jkfit", "scf_type": "df",
+        "use_cuest": False, "sapt_dft_use_einsums": False,
+        "e_convergence": 1e-11, "d_convergence": 1e-10, "cphf_r_convergence": 1e-10,
+        "sapt_dft_functional": functional, "sapt_dft_induction_type": "cpks",
+        "sapt_dft_grac_compute": "none", "sapt_dft_grac_shift_a": 0., "sapt_dft_grac_shift_b": 0.,
+        "sapt_dft_do_dhf": False, "sapt_dft_do_disp": False,
+        "sapt_dft_do_fsapt": "fisapt", "fisapt_fsapt_filepath": str(tmp_path / "fsapt"),
+        "fisapt_do_fsapt_disp": False, "fisapt_fsapt_ind_scale": False,
+        "fisapt_fsapt_ind_response": True, "fisapt_fsapt_ind_xc_response": xc_response,
+    })
+    created = []
+    setup = saptdft_fisapt.setup_fisapt_object
+
+    def keep(*args, **kwargs):
+        created.append(setup(*args, **kwargs))
+        return created[-1]
+
+    monkeypatch.setattr(saptdft_fisapt, "setup_fisapt_object", keep)
+    _, wfn = psi4.energy("sapt(dft)", molecule=molecule, return_wfn=True)
+    matrices = created[-1].matrices()
+    psi4.core.clean()
+    return wfn, matrices["IndAB_AB"].np.copy(), matrices["IndBA_AB"].np.copy()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@pytest.mark.parametrize("functional", ["hf", "svwn", "pbe"])
+def test_saptdft_fsapt_xc_response_sums_to_cpks(functional, tmp_path, monkeypatch):
+    """The per-source partition with the monomer Hessians sums to the canonical CPKS induction."""
+    wfn, ind_ab, ind_ba = _fsapt_coupled_induction(functional, True, tmp_path, monkeypatch)
+    assert ind_ab.sum() + ind_ba.sum() == pytest.approx(wfn.variable("SAPT IND ENERGY"), rel=1e-7, abs=1e-14)
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_fsapt_xc_response_hf_matches_legacy(tmp_path, monkeypatch):
+    """For HF monomers the SCF Hessian is the legacy gap + 4J - K - K^T operator, cell for cell."""
+    _, xc_ab, xc_ba = _fsapt_coupled_induction("hf", True, tmp_path, monkeypatch)
+    _, legacy_ab, legacy_ba = _fsapt_coupled_induction("hf", False, tmp_path, monkeypatch)
+    assert np.any(xc_ab) and np.any(xc_ba)
+    np.testing.assert_allclose(xc_ab, legacy_ab, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(xc_ba, legacy_ba, rtol=0, atol=1e-12)
+
+
 @pytest.mark.saptdft
 def test_grac_only_matches_full(grac_dimer):
     energy, full = psi4.energy("sapt(dft)", molecule=grac_dimer, return_wfn=True)

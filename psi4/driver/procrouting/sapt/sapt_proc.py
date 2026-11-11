@@ -161,6 +161,35 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         optstash.restore()
 
 
+def _check_fsapt_xc_response(external_potentials) -> None:
+    """Reject settings FISAPT_FSAPT_IND_XC_RESPONSE does not support yet."""
+    def opt(module, key):
+        return core.get_option(module, key)
+
+    def need(ok, what):
+        if not ok:
+            raise ValidationError(f"FISAPT_FSAPT_IND_XC_RESPONSE requires {what}.")
+
+    need(opt("FISAPT", "FISAPT_FSAPT_IND_RESPONSE"), "FISAPT_FSAPT_IND_RESPONSE=true")
+    need(opt("SAPT", "SAPT_DFT_DO_FSAPT") == "FISAPT" and opt("SAPT", "SAPT_DFT_INDUCTION_TYPE") == "CPKS",
+         "SAPT_DFT_DO_FSAPT=FISAPT and SAPT_DFT_INDUCTION_TYPE=CPKS")
+    need(opt("SAPT", "SAPT_DFT_FUNCTIONAL").upper() in ("HF", "SVWN", "PBE"), "an HF, SVWN or PBE functional")
+    need(not opt("SAPT", "SAPT_DFT_DO_DDFT") and opt("SAPT", "SAPT_DFT_GRAC_COMPUTE") == "NONE"
+         and opt("SAPT", "SAPT_DFT_GRAC_SHIFT_A") == 0. and opt("SAPT", "SAPT_DFT_GRAC_SHIFT_B") == 0.
+         and opt("SCF", "LEVEL_SHIFT") == 0., "no deltaDFT, GRAC or level shift")
+    need(opt("FISAPT", "FISAPT_LINK_ASSIGNMENT") == "C" and not opt("FISAPT", "SSAPT0_SCALE")
+         and not opt("FISAPT", "FISAPT_EXCH_PARPERP") and not opt("SAPT", "DO_IND_EXCH_SINF"),
+         "FISAPT_LINK_ASSIGNMENT=C and unscaled S^2 exchange-induction")
+    options = core.get_global_option_list()
+    has_external = external_potentials is not None and (
+        not isinstance(external_potentials, dict)
+        or any(value is not None for value in external_potentials.values()))
+    need(not has_external and not any(k in options and opt("SCF", k) for k in ("PCM", "PE", "DDX")),
+         "no external potentials or embedding")
+    need(not core.get_global_option("USE_CUEST")
+         and not ("BRIANQC_ENABLE" in options and core.get_global_option("BRIANQC_ENABLE")), "CPU monomers")
+
+
 def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     """Run the SAPT(DFT) interaction energy calculation.
 
@@ -182,6 +211,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     core.Wavefunction
         The dimer wavefunction with SAPT(DFT) results stored as variables.
     """
+    if core.get_option("FISAPT", "FISAPT_FSAPT_IND_XC_RESPONSE"):
+        _check_fsapt_xc_response(kwargs.get("external_potentials"))
     core.prepare_options_for_module("SAPT")
     cuda_provider_factory = kwargs.pop("cuda_provider_factory", None)
     cuda_dispersion_block_size = kwargs.pop("cuda_dispersion_block_size", 24)
@@ -1472,6 +1503,11 @@ def sapt_dft(
     >>> wfnD = psi4.core.Wavefunction.build(sapt_dimer)
     >>> data = psi4.procrouting.sapt.sapt_dft(wfnD, wfnA, wfnB)
     """
+
+    if core.get_option("FISAPT", "FISAPT_FSAPT_IND_XC_RESPONSE"):
+        _check_fsapt_xc_response(external_potentials)
+        if do_delta_dft:
+            raise ValidationError("FISAPT_FSAPT_IND_XC_RESPONSE requires no deltaDFT.")
 
     # Handle the input options
     if data is None:

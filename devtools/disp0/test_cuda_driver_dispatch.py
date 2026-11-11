@@ -14,7 +14,8 @@ class ValidationError(ValueError):
 class AutomaticCudaDriver(unittest.TestCase):
     def fixture(self):
         path=Path(__file__).resolve().parents[2]/"psi4/driver/procrouting/sapt/sapt_proc.py"
-        names={"_validate_einsums_dispersion","_automatic_cuda_dispersion","sapt_dft","_run_sapt_dft"}
+        names={"_validate_einsums_dispersion","_automatic_cuda_dispersion","_check_fsapt_xc_response",
+               "sapt_dft","_run_sapt_dft"}
         tree=ast.Module(body=[n for n in ast.parse(path.read_text()).body
                             if isinstance(n,ast.FunctionDef) and n.name in names],type_ignores=[])
         options={
@@ -33,6 +34,7 @@ class AutomaticCudaDriver(unittest.TestCase):
         core=types.SimpleNamespace(Wavefunction=object,JK=object,
             get_option=lambda module,name:options.get((module,name),False),
             get_global_option=lambda name:global_options.get(name,False),
+            get_global_option_list=lambda:list(global_options),
             prepare_options_for_module=Mock(),has_global_option_changed=lambda name:False,
             set_global_option=Mock(),
             get_active_molecule=lambda:object(),
@@ -60,6 +62,82 @@ class AutomaticCudaDriver(unittest.TestCase):
         wave=types.SimpleNamespace(functional=lambda:functional,basisset=lambda:basis,
                                    molecule=lambda:object(),set_variable=Mock())
         return ns,core,options,global_options,terms,mp2,wave
+
+    def xc_fixture(self):
+        fixture = self.fixture()
+        _, _, options, globals_, _, _, _ = fixture
+        options.update({
+            ("FISAPT", "FISAPT_FSAPT_IND_XC_RESPONSE"): True,
+            ("FISAPT", "FISAPT_FSAPT_IND_RESPONSE"): True,
+            ("FISAPT", "FISAPT_LINK_ASSIGNMENT"): "C",
+            ("SAPT", "SAPT_DFT_DO_FSAPT"): "FISAPT",
+            ("SAPT", "SAPT_DFT_INDUCTION_TYPE"): "CPKS",
+        })
+        globals_["USE_CUEST"] = False
+        return fixture
+
+    def test_cpu_xc_response_admits_only_qualified_functionals(self):
+        ns, _, options, _, _, _, _ = self.xc_fixture()
+        for functional in ("HF", "SVWN", "PBE"):
+            options["SAPT", "SAPT_DFT_FUNCTIONAL"] = functional
+            for external in (None, {}, {"A": None, "B": None, "C": None}):
+                ns["_check_fsapt_xc_response"](external)
+        for functional in ("PBE0", "B3LYP", "WB97X"):
+            options["SAPT", "SAPT_DFT_FUNCTIONAL"] = functional
+            with self.assertRaisesRegex(ValidationError, "HF, SVWN or PBE"):
+                ns["_check_fsapt_xc_response"](None)
+
+    def test_cpu_xc_response_rejects_cuest_at_both_entrypoints_before_work(self):
+        for entry in ("energy", "direct"):
+            ns, _, _, globals_, terms, _, wave = self.xc_fixture()
+            globals_["USE_CUEST"] = True
+            with self.assertRaisesRegex(ValidationError, "CPU monomers"):
+                if entry == "energy":
+                    ns["_run_sapt_dft"]("sapt(dft)", molecule=wave.molecule())
+                else:
+                    ns["sapt_dft"](wave, wave, wave, do_dft=False, cuda_provider_factory=Mock())
+            ns["scf_helper"].assert_not_called()
+            terms.build_sapt_jk_cache.assert_not_called()
+
+    def test_cpu_xc_response_rejects_unsupported_settings(self):
+        for module, key, value in (
+            ("FISAPT", "FISAPT_FSAPT_IND_RESPONSE", False),
+            ("SAPT", "SAPT_DFT_DO_FSAPT", "SAPTDFT"),
+            ("SAPT", "SAPT_DFT_INDUCTION_TYPE", "CPHF"),
+            ("SAPT", "SAPT_DFT_DO_DDFT", True),
+            ("SAPT", "SAPT_DFT_GRAC_COMPUTE", "SINGLE"),
+            ("SAPT", "SAPT_DFT_GRAC_SHIFT_A", .1),
+            ("SAPT", "SAPT_DFT_GRAC_SHIFT_B", .1),
+            ("SCF", "LEVEL_SHIFT", .1),
+            ("FISAPT", "FISAPT_LINK_ASSIGNMENT", "SAO"),
+            ("FISAPT", "SSAPT0_SCALE", True),
+            ("FISAPT", "FISAPT_EXCH_PARPERP", True),
+            ("SAPT", "DO_IND_EXCH_SINF", True),
+        ):
+            with self.subTest(key=key):
+                ns, _, options, _, _, _, _ = self.xc_fixture()
+                options[module, key] = value
+                with self.assertRaises(ValidationError):
+                    ns["_check_fsapt_xc_response"](None)
+        ns, _, options, globals_, _, _, _ = self.xc_fixture()
+        for external in ({"A": np.ones((1, 4))}, np.ones((1, 4))):
+            with self.assertRaisesRegex(ValidationError, "no external"):
+                ns["_check_fsapt_xc_response"](external)
+        for embedding in ("PCM", "PE", "DDX"):
+            globals_[embedding] = True
+            options["SCF", embedding] = True
+            with self.assertRaisesRegex(ValidationError, "embedding"):
+                ns["_check_fsapt_xc_response"](None)
+            options["SCF", embedding] = False
+        globals_["BRIANQC_ENABLE"] = True
+        with self.assertRaisesRegex(ValidationError, "CPU monomers"):
+            ns["_check_fsapt_xc_response"](None)
+
+    def test_cpu_xc_response_rejects_direct_delta_dft_before_work(self):
+        ns, _, _, _, terms, _, wave = self.xc_fixture()
+        with self.assertRaisesRegex(ValidationError, "no deltaDFT"):
+            ns["sapt_dft"](wave, wave, wave, do_delta_dft=True)
+        terms.build_sapt_jk_cache.assert_not_called()
 
     def test_use_cuest_hf_without_factory_fails_before_cache_setup(self):
         ns,_,_,_,terms,mp2,wave=self.fixture()

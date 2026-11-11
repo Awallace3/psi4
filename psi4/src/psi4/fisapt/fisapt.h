@@ -42,6 +42,7 @@ namespace psi {
 class JK;
 class BasisSet;
 class DFHelper;
+namespace scf { class HF; }
 
 namespace fisapt {
 
@@ -55,6 +56,9 @@ class FISAPT {
     size_t doubles_;
     /// Reference wavefunction
     std::shared_ptr<Wavefunction> reference_;
+
+    /// Monomer SCFs whose Hessians drive FISAPT_FSAPT_IND_XC_RESPONSE
+    std::shared_ptr<scf::HF> cpks_A_, cpks_B_;
 
     /// Orbital Basis Set (full molecule)
     std::shared_ptr<BasisSet> primary_;
@@ -143,6 +147,8 @@ class FISAPT {
     void fexch();
     /// Induction
     void find();
+    /// Set the monomers for FISAPT_FSAPT_IND_XC_RESPONSE
+    void set_cpks_monomers(SharedWavefunction A, SharedWavefunction B);
     /// Dispersion
     void fdisp();
     /// Output
@@ -227,6 +233,9 @@ class CPHF_FISAPT {
     int maxiter_;
     // JK Object
     std::shared_ptr<JK> jk_;
+
+    // Monomer SCFs for the full response Hessian; null uses the gap + 4J - K - K^T product
+    std::shared_ptr<scf::HF> monomer_A_, monomer_B_;
 
     // => Monomer A Problem <= //
 

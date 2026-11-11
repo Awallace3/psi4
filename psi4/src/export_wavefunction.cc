@@ -521,6 +521,8 @@ void export_wavefunction(py::module& m) {
         .def("print_trailer", &fisapt::FISAPT::print_trailer, "Print SAPT results.")
         .def("set_vector", &fisapt::FISAPT::set_vector, "Set internal vectors by dictionary")
         .def("set_scalar", &fisapt::FISAPT::set_scalar, "Set internal scalars by dictionary")
+        .def("set_cpks_monomers", &fisapt::FISAPT::set_cpks_monomers,
+             "Use these monomers' response Hessians for FISAPT_FSAPT_IND_XC_RESPONSE.")
         .def("set_matrix", &fisapt::FISAPT::set_matrix, "Set internal matrices by dictionary");
 
     /// IBOLocalizer2 for FISAPT

@@ -33,6 +33,7 @@
 #include <functional>
 #include <set>
 #include "psi4/mcscf/block_matrix.h"
+#include "psi4/libscf_solver/rhf.h"
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -5892,6 +5893,12 @@ void FISAPT::fexch() {
     dfh_->clear_transformations();
 }
 
+void FISAPT::set_cpks_monomers(SharedWavefunction A, SharedWavefunction B) {
+    cpks_A_ = std::dynamic_pointer_cast<scf::RHF>(A);
+    cpks_B_ = std::dynamic_pointer_cast<scf::RHF>(B);
+    if (!cpks_A_ || !cpks_B_) throw PSIEXCEPTION("FISAPT_FSAPT_IND_XC_RESPONSE requires RHF/RKS monomers.");
+}
+
 // Compute fragment-fragment partitioning of induction contribution
 void FISAPT::find() {
     outfile->Printf("  ==> F-SAPT Induction <==\n\n");
@@ -5900,7 +5907,9 @@ void FISAPT::find() {
 
     bool ind_resp = options_.get_bool("FISAPT_FSAPT_IND_RESPONSE");
     bool ind_scale = options_.get_bool("FISAPT_FSAPT_IND_SCALE");
+    bool ind_xc = options_.get_bool("FISAPT_FSAPT_IND_XC_RESPONSE");
     std::string link_assignment = options_.get_str("FISAPT_LINK_ASSIGNMENT");
+    if (ind_xc && !cpks_A_) throw PSIEXCEPTION("FISAPT_FSAPT_IND_XC_RESPONSE requires set_cpks_monomers().");
 
     // => Sizing <= //
 
@@ -6386,6 +6395,7 @@ void FISAPT::find() {
 
     if (ind_resp) {
         outfile->Printf("  COUPLED INDUCTION (You asked for it!):\n\n");
+        if (ind_xc) outfile->Printf("    Response Hessian: monomer SCF (XC kernel included)\n\n");
 
         // ==> Coupled Targets <== //
 
@@ -6418,60 +6428,64 @@ void FISAPT::find() {
         // => JK Object <= //
 
         // TODO: Account for 2-index overhead in memory
-        auto nso = primary_->nbf();
-        auto jk_memory = (long int)doubles_;
-        jk_memory -= 24 * nso * nso;
-        jk_memory -= 4 * na * nso;
-        jk_memory -= 4 * nb * nso;
-        if (jk_memory < 0L) {
-            throw PSIEXCEPTION("Too little static memory for FISAPT::induction");
+        std::shared_ptr<JK> jk;
+        if (!ind_xc) {
+            auto nso = primary_->nbf();
+            auto jk_memory = (long int)doubles_;
+            jk_memory -= 24 * nso * nso;
+            jk_memory -= 4 * na * nso;
+            jk_memory -= 4 * nb * nso;
+            if (jk_memory < 0L) {
+                throw PSIEXCEPTION("Too little static memory for FISAPT::induction");
+            }
+
+            jk = JK::build_JK(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, false, (size_t)jk_memory);
+
+            jk->set_memory((size_t)jk_memory);
+            jk->set_do_J(true);
+            jk->set_do_K(true);
+            jk->initialize();
+            jk->print_header();
         }
-
-        std::shared_ptr<JK> jk =
-            JK::build_JK(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, false, (size_t)jk_memory);
-
-        jk->set_memory((size_t)jk_memory);
-        jk->set_do_J(true);
-        jk->set_do_K(true);
-        jk->initialize();
-        jk->print_header();
 
         // ==> Master Loop over perturbing atoms <== //
 
         int nC = std::max(nA + na1 + 1, nB + nb1 + 1); // add one for external potential
 
+        auto cphf = std::make_shared<CPHF_FISAPT>();
+        cphf->delta_ = options_.get_double("CPHF_R_CONVERGENCE");
+        cphf->maxiter_ = options_.get_int("MAXITER");
+        cphf->jk_ = jk;
+        cphf->w_A_ = wB;  // Reversal of convention
+        cphf->w_B_ = wA;
+        cphf->Cocc_A_ = Cocc_A;
+        cphf->Cvir_A_ = Cvir_A;
+        cphf->Cocc_B_ = Cocc_B;
+        cphf->Cvir_B_ = Cvir_B;
+        cphf->eps_occ_A_ = eps_occ_A;
+        cphf->eps_vir_A_ = eps_vir_A;
+        cphf->eps_occ_B_ = eps_occ_B;
+        cphf->eps_vir_B_ = eps_vir_B;
+        if (ind_xc) {
+            cphf->monomer_A_ = cpks_A_;
+            cphf->monomer_B_ = cpks_B_;
+        }
+
         for (size_t C = 0; C < nC; C++) {
-            if (C < nB + nb1) dfh_->fill_tensor("WBar", wB, {C, C + 1});
-            if (C < nA + na1) dfh_->fill_tensor("WAbs", wB, {C, C + 1});
+            // Sources past one side's range (including the external slot) are zero.
+            wB->zero();
+            wA->zero();
+            if (C < nB + nb1 + 1) dfh_->fill_tensor("WBar", wB, {C, C + 1});
+            if (C < nA + na1 + 1) dfh_->fill_tensor("WAbs", wA, {C, C + 1});
 
             outfile->Printf("    Responses for (A <- Source B = %3zu) and (B <- Source A = %3zu)\n\n",
                             (C < nB + nb1 ? C : nB + nb1), (C < nA + na1 ? C : nA + na1));
 
-            auto cphf = std::make_shared<CPHF_FISAPT>();
-
-            // Effective constructor
-            cphf->delta_ = options_.get_double("CPHF_R_CONVERGENCE");
-            cphf->maxiter_ = options_.get_int("MAXITER");
-            cphf->jk_ = jk;
-
-            cphf->w_A_ = wB;  // Reversal of convention
-            cphf->Cocc_A_ = Cocc_A;
-            cphf->Cvir_A_ = Cvir_A;
-            cphf->eps_occ_A_ = eps_occ_A;
-            cphf->eps_vir_A_ = eps_vir_A;
-
-            cphf->w_B_ = wA;  // Reversal of convention
-            cphf->Cocc_B_ = Cocc_B;
-            cphf->Cvir_B_ = Cvir_B;
-            cphf->eps_occ_B_ = eps_occ_B;
-            cphf->eps_vir_B_ = eps_vir_B;
-
-            // Gogo CPKS
             cphf->compute_cphf();
-
             xA = cphf->x_A_;
             xB = cphf->x_B_;
 
+            // PCG solves H x = w; the induced amplitudes are -x.
             xA->scale(-1.0);
             xB->scale(-1.0);
 
@@ -8014,6 +8028,10 @@ void CPHF_FISAPT::compute_cphf() {
 
     double b2A = sqrt(w_A_->vector_dot(w_A_));
     double b2B = sqrt(w_B_->vector_dot(w_B_));
+    // A zero source (past one side's range, or the external slot) has x = 0.
+    if (b2A == 0.0) r2A = 0.0;
+    if (b2B == 0.0) r2B = 0.0;
+    if (b2A == 0.0 && b2B == 0.0) return;
 
     outfile->Printf("  ==> CPHF Iterations <==\n\n");
 
@@ -8141,6 +8159,16 @@ void CPHF_FISAPT::preconditioner(std::shared_ptr<Matrix> r, std::shared_ptr<Matr
 std::map<std::string, std::shared_ptr<Matrix> > CPHF_FISAPT::product(
     std::map<std::string, std::shared_ptr<Matrix> > b) {
     std::map<std::string, std::shared_ptr<Matrix> > s;
+
+    if (monomer_A_) {
+        // The monomer SCF owns the full Hessian: gaps, J, exact-exchange fraction and XC kernel.
+        for (const auto& item : b) {
+            auto wfn = item.first == "A" ? monomer_A_ : monomer_B_;
+            s[item.first] = wfn->cphf_Hx({item.second})[0];
+            s[item.first]->scale(-1.0);  // cphf_Hx returns -H x
+        }
+        return s;
+    }
 
     bool do_A = b.count("A");
     bool do_B = b.count("B");

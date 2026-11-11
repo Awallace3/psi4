@@ -1505,8 +1505,13 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("FISAPT_FSAPT_EXCH_SCALE", true);
         /*- Do F-SAPT induction scaling? (ratio of HF induction to F-SAPT induction) -*/
         options.add_bool("FISAPT_FSAPT_IND_SCALE", true);
-        /*- Do F-SAPT coupled response? (not recommended) -*/
+        /*- Do F-SAPT coupled response? Uses the HF-like gap + 4J - K - K^T Hessian
+        unless FISAPT_FSAPT_IND_XC_RESPONSE is set. -*/
         options.add_bool("FISAPT_FSAPT_IND_RESPONSE", false);
+        /*- Use the monomer SCF response Hessian, XC kernel included, for F-SAPT coupled
+        response in SAPT(DFT)? Requires FISAPT_FSAPT_IND_RESPONSE and SAPT_DFT_DO_FSAPT=FISAPT;
+        currently limited to CPU HF, SVWN and PBE monomers. -*/
+        options.add_bool("FISAPT_FSAPT_IND_XC_RESPONSE", false);
         /*- Do sSAPT0 exchange-scaling with F-SAPT -*/
         options.add_bool("SSAPT0_SCALE", false);
         /*- Filepath (case sensitive) to drop sSAPT0 exchange-scaling F-SAPT data within input file directory. -*/

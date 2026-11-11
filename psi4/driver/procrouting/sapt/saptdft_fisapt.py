@@ -323,6 +323,9 @@ def setup_fisapt_object(
     }
     pp(scalar_cache)
     fisapt.set_scalar(scalar_cache)
+    if core.get_option("FISAPT", "FISAPT_FSAPT_IND_XC_RESPONSE"):
+        # find() solves with these monomers' own Hessians, XC kernel included.
+        fisapt.set_cpks_monomers(wfn_A, wfn_B)
     return fisapt
 
 
