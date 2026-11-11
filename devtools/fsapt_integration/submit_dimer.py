@@ -35,6 +35,9 @@ def main():
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--inputs", type=Path, required=True)
     parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--mode", choices=("energy", "fixed-jk"), default="energy")
+    parser.add_argument("--reference", type=Path)
+    parser.add_argument("--reference-sha256")
     args = parser.parse_args()
     helper = Path(__file__).resolve().parents[2]
     helper_pin = subprocess.check_output(
@@ -49,6 +52,14 @@ def main():
     inputs = args.inputs.resolve(strict=True)
     if digest(inputs) != INPUT_SHA:
         raise RuntimeError("Wrong frozen input manifest")
+    reference_fields = {}
+    if args.mode == "fixed-jk":
+        if args.reference is None or args.reference_sha256 is None:
+            parser.error("Fixed-JK mode requires a frozen CPU reference and SHA256")
+        from dimer_fixed_jk import reference
+        ref = args.reference.resolve(strict=True)
+        reference(ref, args.reference_sha256)
+        reference_fields = dict(reference=str(ref), reference_sha256=args.reference_sha256)
     if not args.root.is_absolute():
         raise ValueError("Absolute new run directory required")
     root = args.root
@@ -69,13 +80,15 @@ def main():
         save(config_path, config)
         argv = command(helper, directory, backend)
         save(directory / "manifest.json", {
+            **reference_fields, "mode": args.mode,
             "science_source": str(source), "science_pin": base["source_pin"],
             "helper_source": str(helper), "helper_pin": helper_pin,
             "config": str(config_path), "config_sha256": digest(config_path),
             "inputs": str(inputs), "inputs_sha256": INPUT_SHA,
             "backend": backend, "cpu_admission": admission,
             "resources": resources(backend), "command": argv,
-            "scope": "ONE_FRESH_PROCESS_STANDALONE_DIMER_HF_ENERGY",
+            "scope": ("FIXED_CPU_DIMER_COEFFICIENT_JK_REPEATS_NO_SCF"
+                      if args.mode == "fixed-jk" else "ONE_FRESH_PROCESS_STANDALONE_DIMER_HF_ENERGY"),
             "native_source_overlay": False,
             "sanitizers": "OUTSTANDING_LOADER_INCOMPATIBILITY_NO_NEW_KERNELS",
         })

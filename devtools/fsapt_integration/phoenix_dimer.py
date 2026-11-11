@@ -57,17 +57,26 @@ def execute(path, root, worker=False):
     if worker:
         from sealed_bootstrap import bootstrap
         from gpu_runtime import AuditedRuntime
-        from dimer_energy_probe import run
         owner = bootstrap(config, build)
         runtime = AuditedRuntime(config_path, manifest["config_sha256"])
         os.chdir(root)
+        if manifest.get("mode", "energy") == "fixed-jk":
+            from dimer_fixed_jk import run
+            runtime.guarded_call(run, runtime.psi4, Path(manifest["inputs"]),
+                                 root / "energy", manifest["backend"], policy["threads"],
+                                 Path(manifest["reference"]), manifest["reference_sha256"])
+            return
+        from dimer_energy_probe import run
         runtime.guarded_call(run, runtime.psi4, Path(manifest["inputs"]),
                              root / "energy", manifest["backend"], policy["threads"])
         return
     gpu = manifest["backend"] == "gpu"
     groups, scratch_owner = set(), None
     report = dict(status="STARTED", manifest=manifest, manifest_sha256=digest(path),
-                  accepted_speedup_count=0, scope="STANDALONE_HF_NUMERICAL_DIAGNOSTIC")
+                  accepted_speedup_count=0,
+                  scope=("FIXED_INPUT_JK_NUMERICAL_DIAGNOSTIC"
+                         if manifest.get("mode", "energy") == "fixed-jk"
+                         else "STANDALONE_HF_NUMERICAL_DIAGNOSTIC"))
     try:
         raw = subprocess.check_output(
             ["/opt/slurm/current/bin/scontrol", "show", "job", "-o", os.environ["SLURM_JOB_ID"]],
@@ -138,9 +147,12 @@ def execute(path, root, worker=False):
         if (gpu and not (report["native_fp64_header_observed"] and report["cuest_header_observed"])) or (
                 not gpu and report["cuest_header_observed"]):
             raise RuntimeError("Unexpected native backend/math mode")
-        if report.get("energy_status") != "CONVERGED_DIAGNOSTIC_ONLY":
-            raise RuntimeError("Missing converged diagnostic result")
-        report["status"] = "CONVERGED_DIAGNOSTIC_ONLY"
+        expected = ("EXECUTED_FIXED_INPUT_DIAGNOSTIC_ONLY"
+                    if manifest.get("mode", "energy") == "fixed-jk"
+                    else "CONVERGED_DIAGNOSTIC_ONLY")
+        if report.get("energy_status") != expected:
+            raise RuntimeError("Missing complete diagnostic result")
+        report["status"] = expected
     except BaseException as error:
         report.update(status="FAILED", error=f"{type(error).__name__}: {error}")
         raise
