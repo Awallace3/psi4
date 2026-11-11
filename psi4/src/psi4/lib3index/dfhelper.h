@@ -82,11 +82,15 @@ class PSI_API DFHelper {
     /// of the metric (triangular solve) instead of J^-1/2. No eigenvalue cutoff; falls back to
     /// J^-1/2 when the metric is singular to working precision (estimated rcond < 1e-13).
     void set_metric_cholesky(bool on) { metric_cholesky_ = on; }
-    /// Columns per metric-contraction panel in the in-core symmetric AO build
-    size_t metric_panel_cols() const;
+    /// Columns per metric-contraction panel in the in-core symmetric AO build (narrowest: the
+    /// floor a tight budget can cap it to)
+    size_t metric_panel_cols(bool narrowest = false) const;
     /// Doubles allocated on top of the AOs and the metric while the in-core AOs are built
-    size_t AO_core_init_scratch() const;
+    size_t AO_core_init_scratch(bool narrowest = false) const;
+    /// Requested metric (set_metric_cholesky)
     bool metric_cholesky() const { return metric_cholesky_; }
+    /// Whether the in-core build takes the Cholesky route (requested, J^-1/2 power, not wK)
+    bool metric_cholesky_route() const;
     size_t get_memory() { return memory_; }
     /// Free the compute_JK scratch that is otherwise kept between builds
     void clear_JK_scratch() {
@@ -372,7 +376,7 @@ class PSI_API DFHelper {
     double wmpower_ = -1.0;
     bool hold_met_ = false;
     bool metric_cholesky_ = false;
-    /// upper bound on metric_panel_cols() set by prepare_AO_core under a tight budget (0: none)
+    /// upper bound on metric_panel_cols() set by reserve_metric_panels under a tight budget (0: none)
     size_t panel_cols_cap_ = 0;
     bool built_ = false;
     bool transformed_ = false;
@@ -409,6 +413,8 @@ class PSI_API DFHelper {
     // => AO building machinery <=
     void prepare_AO();
     void prepare_AO_core();
+    /// Cap the metric-contraction panels to fit next to `held` doubles; returns their size
+    size_t reserve_metric_panels(size_t held);
     void compute_dense_Qpq_blocking_Q(const size_t start, const size_t stop, double* Mp,
                                       std::vector<std::shared_ptr<TwoBodyAOInt>> eri);
     void compute_sparse_pQq_blocking_Q(const size_t start, const size_t stop, double* Mp,
