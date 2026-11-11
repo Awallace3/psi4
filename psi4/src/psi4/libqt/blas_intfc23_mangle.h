@@ -57,6 +57,7 @@
 #define F_DSYR2 FC_GLOBAL(dsyr2, DSYR2)
 #define F_DSYR2K FC_GLOBAL(dsyr2k, DSYR2K)
 #define F_DSYRK FC_GLOBAL(dsyrk, DSYRK)
+#define F_SSYRK FC_GLOBAL(ssyrk, SSYRK)
 #define F_DTBMV FC_GLOBAL(dtbmv, DTBMV)
 #define F_DTBSV FC_GLOBAL(dtbsv, DTBSV)
 #define F_DTPMV FC_GLOBAL(dtpmv, DTPMV)
@@ -82,6 +83,7 @@
 #define F_DSYR2 dsyr2_
 #define F_DSYR2K dsyr2k_
 #define F_DSYRK dsyrk_
+#define F_SSYRK ssyrk_
 #define F_DTBMV dtbmv_
 #define F_DTBSV dtbsv_
 #define F_DTPMV dtpmv_
@@ -106,6 +108,7 @@
 #define F_DSYR2 dsyr2
 #define F_DSYR2K dsyr2k
 #define F_DSYRK dsyrk
+#define F_SSYRK ssyrk
 #define F_DTBMV dtbmv
 #define F_DTBSV dtbsv
 #define F_DTPMV dtpmv
@@ -130,6 +133,7 @@
 #define F_DSYR2 DSYR2
 #define F_DSYR2K DSYR2K
 #define F_DSYRK DSYRK
+#define F_SSYRK SSYRK
 #define F_DTBMV DTBMV
 #define F_DTBSV DTBSV
 #define F_DTPMV DTPMV
@@ -154,6 +158,7 @@
 #define F_DSYR2 DSYR2_
 #define F_DSYR2K DSYR2K_
 #define F_DSYRK DSYRK_
+#define F_SSYRK SSYRK_
 #define F_DTBMV DTBMV_
 #define F_DTBSV DTBSV_
 #define F_DTPMV DTPMV_

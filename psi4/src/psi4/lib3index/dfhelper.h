@@ -97,6 +97,9 @@ class PSI_API DFHelper {
         jk_T1_.reset();
         jk_T2_.reset();
         jk_T1_size_ = jk_T2_size_ = 0;
+        jk_C_buffers_.clear();
+        jk_C_buffers_.shrink_to_fit();
+        Ppq_f_.reset();
     }
 
     // => Opt-in K fast paths (in-core, non-wK only) <=
@@ -421,6 +424,11 @@ class PSI_API DFHelper {
     /// compute_JK scratch, kept between builds (see compute_JK)
     std::unique_ptr<double[]> jk_T1_, jk_T2_;
     size_t jk_T1_size_ = 0, jk_T2_size_ = 0;
+    std::vector<std::vector<double>> jk_C_buffers_;
+    void ensure_jk_C_buffers(size_t elem_per_thread);
+    /// Compact significant column indices per basis row p: sig_q_[sig_q_row_off_[p] .. sig_q_row_off_[p+1])
+    std::vector<uint32_t> sig_q_;
+    std::vector<size_t> sig_q_row_off_;
     /// single-precision copy of Ppq_ for low-precision K builds (see set_K_fp32)
     std::unique_ptr<float[]> Ppq_f_;
     bool K_fp32_ = false;
@@ -429,7 +437,7 @@ class PSI_API DFHelper {
     void compute_J_symm_fp32(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* T1p, double* T2p,
                              std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size);
     void compute_K_fp32(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright, std::vector<SharedMatrix> K,
-                        double* T1p, double* T2p, size_t bcount, size_t block_size,
+                        double* T1p, double* T2p, const double* Mp, size_t bcount, size_t block_size,
                         std::vector<std::vector<double>>& C_buffers, bool lr_symmetric);
     // Maps x -> (P|Q) ^ x.
     std::map<double, SharedMatrix> metrics_;

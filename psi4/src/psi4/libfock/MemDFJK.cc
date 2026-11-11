@@ -80,7 +80,18 @@ void MemDFJK::preiterations() {
     dfh_->set_method("STORE");
     dfh_->set_fitting_condition(condition_);
     dfh_->set_metric_cholesky(options_.exists("SCF_DF_METRIC") && options_.get_str("SCF_DF_METRIC") == "CHOLESKY");
-    dfh_->set_K_layout_iQ(options_.exists("SCF_DF_K_LAYOUT") && options_.get_str("SCF_DF_K_LAYOUT") == "IQ");
+    bool k_layout_iq = false;
+    if (options_.exists("SCF_DF_K_LAYOUT")) {
+        const std::string k_layout = options_.get_str("SCF_DF_K_LAYOUT");
+        if (k_layout == "IQ") {
+            k_layout_iq = true;
+        } else if (k_layout == "AUTO") {
+#if (defined(__x86_64__) || defined(_M_X64)) && (defined(__GNUC__) || defined(__clang__))
+            k_layout_iq = __builtin_cpu_is("amd");
+#endif
+        }
+    }
+    dfh_->set_K_layout_iQ(k_layout_iq);
     dfh_->set_memory(memory_ - memory_overhead());
     dfh_->set_do_wK(do_wK_);
     dfh_->set_omega(omega_);
