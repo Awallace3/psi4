@@ -296,33 +296,6 @@ def batched_probe(runtime):
                     {"occupied":O,"minimal":M,"atoms":K,"frozen":nf,"power":power,
                      "raw_sweeps_bitwise_equal":3,
                      "maximum_absolute_difference":worst})
-            elst=importlib.import_module("psi4.driver.procrouting.sapt.sapt_fisapt_elst_cuda")
-            # Real-device rejection controls, not CPU-shim evidence. Calling
-            # this admission function requires no native potential/DF provider.
-            charges=np.array([0.,-0.,-.25,1e-200,1.])
-            active=((2,3,4),(2,3,4))
-            mask_controls=[]
-            for label,za,zb,indices,accept in (
-                    ("signed-zero-fractional-tiny",charges,charges,active,True),
-                    ("omitted-nonzero",charges,charges,((2,4),(2,3,4)),False),
-                    ("active-ghost",charges,charges,((0,2,3,4),(2,3,4)),False),
-                    *[(f"nonfinite-{side}-{bad}",
-                       np.array([bad,-0.,-.25,1e-200,1.]) if side=="A" else charges,
-                       np.array([bad,-0.,-.25,1e-200,1.]) if side=="B" else charges,
-                       active,False)
-                      for side in ("A","B") for bad in (np.nan,np.inf,-np.inf)]):
-                with session.scope():
-                    try:
-                        result=elst.validated_active_atoms(
-                            session,session.upload(za),session.upload(zb),indices)
-                    except ValueError:
-                        if accept:raise
-                    else:
-                        if not accept:raise AssertionError("Charge mask accepted "+label)
-                        if result!=(frozenset(active[0]),frozenset(active[1])):
-                            raise AssertionError("Incorrect active atoms "+label)
-                    mask_controls.append({"case":label,"expected_acceptance":accept,"passed":True})
-            record["charge_mask_controls"]=mask_controls
             record["successful_blas_calls"] = dict(session.blas_calls)
             record["successful_kernel_launches"] = dict(session.kernel_launches)
             if session.blas_calls.get("cublasDgemmStridedBatched", 0) < 12:
@@ -333,6 +306,46 @@ def batched_probe(runtime):
         runtime.report["primitive_probe"] = record
     if not session.cleanup_complete or session.live_bytes or session.native_owners:
         raise RuntimeError("Physical primitive control did not clean up")
+    record["charge_mask_controls"]=charge_mask_probe(runtime)
+
+
+def charge_mask_probe(runtime):
+    """Each deliberate rejection retires its session; never reuse a failed one."""
+    elst=importlib.import_module("psi4.driver.procrouting.sapt.sapt_fisapt_elst_cuda")
+    charges=np.array([0.,-0.,-.25,1e-200,1.])
+    active=((2,3,4),(2,3,4))
+    controls=[]
+    for label,za,zb,indices,accept in (
+            ("signed-zero-fractional-tiny",charges,charges,active,True),
+            ("omitted-nonzero",charges,charges,((2,4),(2,3,4)),False),
+            ("active-ghost",charges,charges,((0,2,3,4),(2,3,4)),False),
+            *[(f"nonfinite-{side}-{bad}",
+               np.array([bad,-0.,-.25,1e-200,1.]) if side=="A" else charges,
+               np.array([bad,-0.,-.25,1e-200,1.]) if side=="B" else charges,
+               active,False)
+              for side in ("A","B") for bad in (np.nan,np.inf,-np.inf)]):
+        session=runtime.cuda.CUDASession(
+            cublas_library=runtime.blas["path"],cublas_sha256=runtime.blas["sha256"],
+            memory_limit_bytes=runtime.config["device_memory_limit_bytes"],
+            native_persistent_bytes=runtime.config["native_persistent_bytes"])
+        try:
+            with session:
+                result=elst.validated_active_atoms(
+                    session,session.upload(za),session.upload(zb),indices)
+                if not accept:raise AssertionError("Charge mask accepted "+label)
+                if result!=(frozenset(active[0]),frozenset(active[1])):
+                    raise AssertionError("Incorrect active atoms "+label)
+        except ValueError as error:
+            if accept or str(error)!="Active-atom metadata differs from resident nuclear charges":
+                raise
+        finally:
+            if not session.cleanup_complete or session.live_bytes or session.native_owners:
+                raise RuntimeError("Charge-mask control did not clean up: "+label)
+        if session.kernel_launches.get("fragment_charge_mask_error",0)!=1:
+            raise RuntimeError("Charge-mask control must execute exactly one validation kernel")
+        controls.append({"case":label,"expected_acceptance":accept,"passed":True,
+                         "cleanup_complete":True})
+    return controls
 
 
 def main():
