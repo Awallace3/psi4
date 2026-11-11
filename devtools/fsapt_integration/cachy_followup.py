@@ -41,6 +41,7 @@ def main():
     parser.add_argument("--mode", choices=("peptide", "sanitizers"), required=True)
     parser.add_argument("--attempt", required=True)
     parser.add_argument("--scf-convergence", type=int, choices=(10, 12), default=10)
+    parser.add_argument("--scf-density-convergence", type=int, choices=(10, 12))
     args = parser.parse_args()
     root = args.root.resolve(strict=True)
     if (root != Path.home() / "gits/psi4-fsapt-cpks-integration-cachy"
@@ -87,6 +88,8 @@ def main():
                 if build["provenance_sha256"].get(str(path)) != digest(path):
                     raise RuntimeError("Follow-up bootstrap/helper lacks matching CPU qualification")
             report["scf_convergence"] = args.scf_convergence
+            report["scf_density_convergence"] = (
+                args.scf_convergence if args.scf_density_convergence is None else args.scf_density_convergence)
             config_path = args.config
             if args.mode == "peptide":
                 if args.inputs is None or not args.inputs_sha256:
@@ -117,6 +120,8 @@ def main():
                            "--arm", arm, "--scaled", "--output", str(worker),
                            "--block-size", "24" if args.mode == "peptide" else "5",
                            "--scf-convergence", str(args.scf_convergence)]
+                if args.scf_density_convergence is not None:
+                    payload += ["--scf-density-convergence", str(args.scf_density_convergence)]
                 if args.mode == "peptide":
                     payload += ["--inputs", str(args.inputs), "--inputs-sha256",
                                 args.inputs_sha256, "--system", "peptide"]

@@ -218,3 +218,13 @@ of 10**, with the same installed science, basis/geometry, IBO policy and
 unchanged `1e-9` repeat comparison. `fragment_gate.py --scf-convergence 12`
 records those explicit scientific options. It is an accuracy diagnostic,
 not a production default change or a passed result.
+
+The `E12/D12` diagnostic (`runs/peptide-scf12-01`) did **not** establish
+repeatability: CPU completed, but GPU monomer A SCF exhausted 100 iterations
+before fragment work. Late SCF residuals are about `2e-14`, while energy
+changes fluctuate around `1e-11`–`1e-10 Eh`. Raising MAXITER or pretending
+that SCF converged is not the remedy. This does not refute the original
+density-drift hypothesis: the next isolated test retains `E10` and tightens
+only `D12`, identically in CPU and GPU arms. Comparison tolerances and
+localization policy stay fixed. The helper supports this explicit diagnostic
+through `--scf-density-convergence 12`; production defaults are unchanged.

@@ -51,12 +51,16 @@ def validate_factor_cache(arm, budget):
         raise ValueError("CPU references must not enable a GPU factor cache")
 
 
-def options(gpu, scaled, basis_profile="aug-cc-pvdz", *, scf_convergence=10):
+def options(gpu, scaled, basis_profile="aug-cc-pvdz", *, scf_convergence=10,
+            scf_density_convergence=None):
     from prepare_inputs import BASIS_PROFILES
     if basis_profile not in BASIS_PROFILES:
         raise ValueError("Explicit supported basis profile required")
     if type(scf_convergence) is not int or scf_convergence not in (10, 12):
         raise ValueError("Explicit diagnostic SCF convergence of 10 or 12 required")
+    density_convergence = scf_convergence if scf_density_convergence is None else scf_density_convergence
+    if type(density_convergence) is not int or density_convergence not in (10, 12):
+        raise ValueError("Explicit diagnostic SCF density convergence of 10 or 12 required")
     bases=BASIS_PROFILES[basis_profile]
     # SAPTDFT selects the independent exact Python CPU fragment continuation.
     # FISAPT would silently select the historically different native CPU route.
@@ -68,7 +72,7 @@ def options(gpu, scaled, basis_profile="aug-cc-pvdz", *, scf_convergence=10):
         # attraction errors for diffuse shells. Tighten the *input accuracy*
         # for BOTH diagnostic arms; do not weaken the independent oracle.
         "ints_tolerance": 1e-16,
-        "e_convergence": scf_convergence, "d_convergence": scf_convergence, "freeze_core": True,
+        "e_convergence": scf_convergence, "d_convergence": density_convergence, "freeze_core": True,
         "sapt_dft_functional": "HF", "sapt_dft_do_fsapt": "SAPTDFT",
         "sapt_dft_use_einsums": True, "sapt_dft_mp2_disp_alg": "SAPT",
         "sapt_dft_do_disp": True, "sapt_dft_do_dhf": scaled,
@@ -274,6 +278,8 @@ def main():
                         help="Explicit additional per-call GPU packed-S cache budget")
     parser.add_argument("--scf-convergence", type=int, choices=(10, 12), default=10,
                         help="Matched CPU/GPU SCF accuracy; never changes comparison tolerances")
+    parser.add_argument("--scf-density-convergence", type=int, choices=(10, 12),
+                        help="Optional tighter density criterion without tightening the energy criterion")
     args = parser.parse_args()
     args.config=args.config.resolve(strict=True)
     args.output = args.output.resolve()
@@ -338,7 +344,8 @@ def main():
         psi4.set_memory(config["host_memory"])
         psi4.set_num_threads(config["threads"])
         selected = options(args.arm == "gpu", args.scaled, basis_profile,
-                           scf_convergence=args.scf_convergence)
+                           scf_convergence=args.scf_convergence,
+                           scf_density_convergence=args.scf_density_convergence)
         result["basis_profile"]=basis_profile
         selected["fisapt_fsapt_filepath"] = str(args.output / "fsapt")
         psi4.set_options(selected)

@@ -26,6 +26,14 @@ class BasisProfileTests(unittest.TestCase):
         for invalid in (9, 11, 13, True, "12", 12.):
             with self.assertRaises(ValueError):
                 options(True, True, scf_convergence=invalid)
+            with self.assertRaises(ValueError):
+                options(True, True, scf_density_convergence=invalid)
+        for gpu in (False, True):
+            default = options(gpu, True, "jun-cc-pvdz")
+            density = options(gpu, True, "jun-cc-pvdz", scf_density_convergence=12)
+            self.assertEqual(density.pop("d_convergence"), 12)
+            self.assertEqual(default.pop("d_convergence"), 10)
+            self.assertEqual(default, density)
 
     def fixture(self, root):
         # Independent literal compositions, with no Psi4 execution/import.
