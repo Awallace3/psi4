@@ -51,10 +51,12 @@ def validate_factor_cache(arm, budget):
         raise ValueError("CPU references must not enable a GPU factor cache")
 
 
-def options(gpu, scaled, basis_profile="aug-cc-pvdz"):
+def options(gpu, scaled, basis_profile="aug-cc-pvdz", *, scf_convergence=10):
     from prepare_inputs import BASIS_PROFILES
     if basis_profile not in BASIS_PROFILES:
         raise ValueError("Explicit supported basis profile required")
+    if type(scf_convergence) is not int or scf_convergence not in (10, 12):
+        raise ValueError("Explicit diagnostic SCF convergence of 10 or 12 required")
     bases=BASIS_PROFILES[basis_profile]
     # SAPTDFT selects the independent exact Python CPU fragment continuation.
     # FISAPT would silently select the historically different native CPU route.
@@ -66,7 +68,7 @@ def options(gpu, scaled, basis_profile="aug-cc-pvdz"):
         # attraction errors for diffuse shells. Tighten the *input accuracy*
         # for BOTH diagnostic arms; do not weaken the independent oracle.
         "ints_tolerance": 1e-16,
-        "e_convergence": 10, "d_convergence": 10, "freeze_core": True,
+        "e_convergence": scf_convergence, "d_convergence": scf_convergence, "freeze_core": True,
         "sapt_dft_functional": "HF", "sapt_dft_do_fsapt": "SAPTDFT",
         "sapt_dft_use_einsums": True, "sapt_dft_mp2_disp_alg": "SAPT",
         "sapt_dft_do_disp": True, "sapt_dft_do_dhf": scaled,
@@ -270,6 +272,8 @@ def main():
                         help="Defer diagnostic snapshots until after the energy-call timer")
     parser.add_argument("--factor-cache-bytes",type=int,default=0,
                         help="Explicit additional per-call GPU packed-S cache budget")
+    parser.add_argument("--scf-convergence", type=int, choices=(10, 12), default=10,
+                        help="Matched CPU/GPU SCF accuracy; never changes comparison tolerances")
     args = parser.parse_args()
     args.config=args.config.resolve(strict=True)
     args.output = args.output.resolve()
@@ -333,7 +337,8 @@ def main():
         core.set_output_file(str(args.output / "psi4.out"), False)
         psi4.set_memory(config["host_memory"])
         psi4.set_num_threads(config["threads"])
-        selected = options(args.arm == "gpu", args.scaled, basis_profile)
+        selected = options(args.arm == "gpu", args.scaled, basis_profile,
+                           scf_convergence=args.scf_convergence)
         result["basis_profile"]=basis_profile
         selected["fisapt_fsapt_filepath"] = str(args.output / "fsapt")
         psi4.set_options(selected)

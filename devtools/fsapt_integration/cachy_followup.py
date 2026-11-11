@@ -40,6 +40,7 @@ def main():
     parser.add_argument("--inputs-sha256")
     parser.add_argument("--mode", choices=("peptide", "sanitizers"), required=True)
     parser.add_argument("--attempt", required=True)
+    parser.add_argument("--scf-convergence", type=int, choices=(10, 12), default=10)
     args = parser.parse_args()
     root = args.root.resolve(strict=True)
     if (root != Path.home() / "gits/psi4-fsapt-cpks-integration-cachy"
@@ -77,9 +78,15 @@ def main():
     deadline = time.monotonic() + 3000
     try:
         with lease(root) as fd:
-            base, _ = read_config(args.config, args.config_sha256)
+            base, build = read_config(args.config, args.config_sha256)
             if base["source_pin"] != args.pin:
                 raise RuntimeError("Installed science differs from selected pin")
+            bootstrap = helper / "devtools/disp0/cachy/bootstrap_gate.py"
+            gate = helper / "devtools/disp0/phoenix_validation/fragment_gate.py"
+            for path in (bootstrap, gate):
+                if build["provenance_sha256"].get(str(path)) != digest(path):
+                    raise RuntimeError("Follow-up bootstrap/helper lacks matching CPU qualification")
+            report["scf_convergence"] = args.scf_convergence
             config_path = args.config
             if args.mode == "peptide":
                 if args.inputs is None or not args.inputs_sha256:
@@ -105,10 +112,11 @@ def main():
                 scratch.mkdir()
                 env.update(TMPDIR=str(scratch), SCRATCH=str(scratch), PSI_SCRATCH=str(scratch))
                 payload = [config["dependency_environment"] + "/bin/python", "-B",
-                           str(source / "devtools/disp0/cachy/bootstrap_gate.py"),
+                           str(bootstrap),
                            "--config", str(config_path), "--config-sha256", config_sha,
                            "--arm", arm, "--scaled", "--output", str(worker),
-                           "--block-size", "24" if args.mode == "peptide" else "5"]
+                           "--block-size", "24" if args.mode == "peptide" else "5",
+                           "--scf-convergence", str(args.scf_convergence)]
                 if args.mode == "peptide":
                     payload += ["--inputs", str(args.inputs), "--inputs-sha256",
                                 args.inputs_sha256, "--system", "peptide"]

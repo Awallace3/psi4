@@ -195,3 +195,26 @@ The automatic sanitizer→peptide chain stopped on this failure. A separate
 peptide correctness run was then launched in `runs/peptide-b025694939-01`;
 its result is independent of sanitizer qualification. Phoenix release remains
 blocked on the outstanding correctness/memory gates.
+
+### Practical peptide result and next discriminating test
+
+`runs/peptide-b025694939-01` completed all four workers. Matched CPU/GPU total
+energy difference was `5.0449e-10 Eh`; maximum signed aggregate difference
+was `4.9029e-10 Eh`, and the independent same-gauge oracle passed.
+Nevertheless the overall result is **FAILED**: the strict fresh GPU repeat
+requires localized orbitals to match modulo signs/permutations at `1e-9`.
+Monomer A instead shows continuous rotations up to `3.1422e-8`.
+No continuous energy-matrix rotation or tolerance relaxation was applied.
+
+Saved-input analysis found monomer A's AO density changed by `3.9407e-9`,
+occupied energies by `4.3171e-9`, and metric-weighted occupied-subspace
+residual by `7.4228e-9`. Monomer B's density changed only `7.6512e-12` and
+IBO rotations by `3.2545e-12`. Whole-energy repeat difference was
+`-8.5234e-11 Eh`. This supports upstream SCF input drift as the first
+hypothesis, not proof of a localization-kernel defect.
+
+The next controlled experiment uses **matched E/D SCF convergence 12 instead
+of 10**, with the same installed science, basis/geometry, IBO policy and
+unchanged `1e-9` repeat comparison. `fragment_gate.py --scf-convergence 12`
+records those explicit scientific options. It is an accuracy diagnostic,
+not a production default change or a passed result.

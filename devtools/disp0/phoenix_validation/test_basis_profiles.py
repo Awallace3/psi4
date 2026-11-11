@@ -14,6 +14,19 @@ BASIS_DIRECTORY = Path(__file__).resolve().parents[3]/"psi4/share/psi4/basis"
 
 
 class BasisProfileTests(unittest.TestCase):
+    def test_tighter_scf_policy_changes_only_matched_scf_accuracy(self):
+        for gpu in (False, True):
+            default = options(gpu, True, "jun-cc-pvdz")
+            tighter = options(gpu, True, "jun-cc-pvdz", scf_convergence=12)
+            self.assertEqual(tighter.pop("e_convergence"), 12)
+            self.assertEqual(tighter.pop("d_convergence"), 12)
+            self.assertEqual(default.pop("e_convergence"), 10)
+            self.assertEqual(default.pop("d_convergence"), 10)
+            self.assertEqual(default, tighter)
+        for invalid in (9, 11, 13, True, "12", 12.):
+            with self.assertRaises(ValueError):
+                options(True, True, scf_convergence=invalid)
+
     def fixture(self, root):
         # Independent literal compositions, with no Psi4 execution/import.
         fragments = {
