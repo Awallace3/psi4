@@ -67,7 +67,7 @@
 #include "dftensor.h"
 
 #if defined(__GNUC__) || defined(__clang__)
-extern "C" void mkl_set_num_threads_local(int) __attribute__((weak));
+extern "C" int MKL_Set_Num_Threads_Local(int) __attribute__((weak));
 #endif
 
 namespace psi {
@@ -351,7 +351,7 @@ void DFHelper::prepare_sparsity() {
                 const auto& sh_nu = primary_->l2_shell(NU);
                 size_t nnu = primary_->shell(NU).nfunction();
                 size_t bnu = primary_->shell(NU).function_index();
-                eng.compute2<libint2::Operator::coulomb, libint2::BraKet::xx_xx, 0>(sh_mu, sh_nu, sh_mu, sh_nu);
+                eng.compute(sh_mu, sh_nu, sh_mu, sh_nu);
                 const double* buffer = eng.results()[0];
                 double sh_max = 0.0;
                 if (buffer != nullptr) {
@@ -3653,7 +3653,7 @@ void symm_k_final_accumulate(size_t N, size_t K_inner, const T* T1, double* Kp,
 #endif
         if (static_cast<size_t>(tid) < active_nt) {
 #if defined(__GNUC__) || defined(__clang__)
-            if (mkl_set_num_threads_local) mkl_set_num_threads_local(1);
+            if (MKL_Set_Num_Threads_Local) MKL_Set_Num_Threads_Local(1);
 #endif
             const size_t k0 = (K_inner * static_cast<size_t>(tid)) / active_nt;
             const size_t kn = (K_inner * (static_cast<size_t>(tid) + 1)) / active_nt - k0;
@@ -3676,7 +3676,7 @@ void symm_k_final_accumulate(size_t N, size_t K_inner, const T* T1, double* Kp,
                 }
             }
 #if defined(__GNUC__) || defined(__clang__)
-            if (mkl_set_num_threads_local) mkl_set_num_threads_local(0);
+            if (MKL_Set_Num_Threads_Local) MKL_Set_Num_Threads_Local(0);
 #endif
         }
 #pragma omp barrier
