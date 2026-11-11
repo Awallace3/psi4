@@ -130,7 +130,11 @@ void MemDFJK::print_header() const {
         outfile->Printf("    Schwarz Cutoff:     %11.0E\n", cutoff_);
         outfile->Printf("    Mask sparsity (%%):  %11.4f\n", 100. * dfh_->ao_sparsity());
         outfile->Printf("    Fitting Condition:  %11.0E\n", condition_);
-        outfile->Printf("    Metric:             %11s\n\n", (dfh_->metric_cholesky() ? "CHOLESKY" : "EIGEN"));
+        outfile->Printf("    Metric:             %11s\n\n", (dfh_->metric_cholesky_route() ? "CHOLESKY" : "EIGEN"));
+        if (dfh_->metric_cholesky() && !dfh_->metric_cholesky_route()) {
+            outfile->Printf(
+                "  Warning: SCF_DF_METRIC CHOLESKY is ignored for range-separated (wK) builds; using EIGEN.\n\n");
+        }
 
         outfile->Printf("   => Auxiliary Basis Set <=\n\n");
         auxiliary_->print_by_level("outfile", print_);
