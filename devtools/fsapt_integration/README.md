@@ -177,3 +177,21 @@ The peptide budget follows the existing 20 GiB device / 12 GiB declared-native
 admission policy and checks free VRAM plus a desktop margin before launch;
 those limits are not measurements of peak consumption. No nanotube/protein
 run or H200 speedup is admitted by this launcher.
+
+### Sanitizer compatibility blocker
+
+`runs/sanitizers-b025694939-01` stopped before the first instrumented CUDA API
+call. Compute-sanitizer prepends `/opt/cuda/compute-sanitizer` to
+`LD_LIBRARY_PATH`; the authenticated bootstrap correctly rejects that extra
+loader directory. A no-CUDA Python environment probe reproduced this exact
+mutation; `LD_PRELOAD` remained unset. This is **not** a reported device-memory
+error and **not** a sanitizer pass.
+
+Do not remove the loader check or silently strip the injected path to make a
+test green. Whole-workflow sanitizer support needs a separately audited,
+explicitly hash-pinned diagnostic loader policy (or a clearly scoped standalone
+kernel gate), with the production policy unchanged.
+The automatic sanitizer→peptide chain stopped on this failure. A separate
+peptide correctness run was then launched in `runs/peptide-b025694939-01`;
+its result is independent of sanitizer qualification. Phoenix release remains
+blocked on the outstanding correctness/memory gates.
