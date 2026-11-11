@@ -37,3 +37,14 @@ Use a separate `~/gits/psi4-fsapt-opt-cachy` root.
 
 No candidate Phoenix timing submission until the applicable gates pass.
 Compare speedups only on Phoenix, with CPU references on CPU nodes.
+
+## Build concurrency diagnosis
+
+Initial private-root builds at outer `-j4`, then `-j2`, reached the enforced
+12-GiB cgroup limit and were OOM-killed. The generated Ninja rule launches
+`cmake --build .` inside `psi4-core` without forwarding the outer job limit.
+`test_cachy_build.py` reproduces that missing inheritance with a real, tiny
+Ninja ExternalProject. The build helper now exports
+`CMAKE_BUILD_PARALLEL_LEVEL=$FSAPT_BUILD_JOBS` (default 4, allowed 1–4) in
+addition to the outer flag. Retry with `FSAPT_BUILD_JOBS=2`; do not raise the
+desktop memory limit as a workaround.

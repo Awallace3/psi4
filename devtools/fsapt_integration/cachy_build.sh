@@ -10,6 +10,9 @@ case "$JOBS" in
     1|2|3|4) ;;
     *) echo "FSAPT_BUILD_JOBS must be between 1 and 4" >&2; exit 2 ;;
 esac
+# psi4-core is a Ninja ExternalProject: outer -j alone is not inherited
+# by its separate `cmake --build .` process.
+export CMAKE_BUILD_PARALLEL_LEVEL="$JOBS"
 case "$PREFIX" in
     "$ROOT/install"|"$ROOT"/install-owned-*) ;;
     *) echo "Install prefix must remain inside the private root" >&2; exit 2 ;;
