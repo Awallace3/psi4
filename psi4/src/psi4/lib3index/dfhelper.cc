@@ -569,6 +569,10 @@ void DFHelper::prepare_AO_wK() {
     std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_, 0, psteps);
 }
 void DFHelper::update_core_claim() {
+    if (!Ppq_ && !wPpq_ && !m1Ppq_) {
+        core_claim_.set(0);
+        return;
+    }
     // Read the claim off the buffers themselves rather than off the branch that
     // allocated them: the in-core AO integrals come in three pieces that appear and
     // disappear independently (wK adds wPpq_ and m1Ppq_, and a transform may drop
@@ -1825,7 +1829,15 @@ void DFHelper::release_tensor(std::string name) {
     sizes_.erase(pre_metric);
     sizes_.erase(final_file);
     tsizes_.erase(final_file);
-    transf_.erase(name);
+    if (transf_.erase(name)) {
+        // The cached plan contains transformation names and must be rebuilt
+        // without the released tensor before another transform().
+        order_.clear();
+        bspace_.clear();
+        strides_.clear();
+        ordered_ = false;
+        transformed_ = false;
+    }
     files_.erase(entry);
 }
 
