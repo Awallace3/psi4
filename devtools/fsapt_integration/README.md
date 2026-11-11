@@ -11,6 +11,9 @@
   explicitly labelled numerical timing experiment, not full memory certification.
 - Separate Phoenix sm_90 build submitted as **15471744**, science checkout
   `08984a56e6` (production sources identical to `b025694939`).
+- Phoenix build and peptide timing **15472290 passed numerical gates**:
+  **7.30×** baseline whole-workflow speedup (240.61 → 32.95 s).
+  [Full timing table and limitations](H200_PEPTIDE_TIMINGS.md).
 - GPU KS/XC fragment response and larger-system memory/scaling: not qualified.
 
 Production source is pinned at `b025694939`; subsequent commits change only
