@@ -74,15 +74,15 @@ class PSI_API VBase {
     /// Desired superfunctional kernel
     std::shared_ptr<SuperFunctional> functional_;
     /// Desired superfunctional kernel
-    std::vector<std::shared_ptr<SuperFunctional>> functional_workers_;
+    mutable std::vector<std::shared_ptr<SuperFunctional>> functional_workers_;
     /// Point function computer (densities, gammas, basis values)
-    std::vector<std::shared_ptr<PointFunctions>> point_workers_;
+    mutable std::vector<std::shared_ptr<PointFunctions>> point_workers_;
     /// Integration grid, built by KSPotential
     std::shared_ptr<DFTGrid> grid_;
     /// Quadrature values obtained during integration
     std::map<std::string, double> quad_values_;
     // Caches collocation grids
-    std::unordered_map<size_t, std::map<std::string, SharedMatrix>> cache_map_;
+    mutable std::unordered_map<size_t, std::map<std::string, SharedMatrix>> cache_map_;
     int cache_map_deriv_;
     /// What the cache above is costing the process right now, reported so that an SCF
     /// started while this V is alive is not handed the same memory a second time.
@@ -107,6 +107,8 @@ class PSI_API VBase {
 
     /// Set things up
     void common_init();
+    void ensure_workspaces() const;
+    virtual std::shared_ptr<PointFunctions> make_point_worker() const;
 
    public:
     VBase(std::shared_ptr<SuperFunctional> functional, std::shared_ptr<BasisSet> primary, Options& options);
@@ -118,7 +120,7 @@ class PSI_API VBase {
 
     std::shared_ptr<BasisSet> basis() const { return primary_; }
     std::shared_ptr<SuperFunctional> functional() const { return functional_; }
-    std::vector<std::shared_ptr<PointFunctions>> properties() const { return point_workers_; }
+    std::vector<std::shared_ptr<PointFunctions>> properties() const;
     std::shared_ptr<DFTGrid> grid() const { return grid_; }
     std::shared_ptr<BlockOPoints> get_block(int block);
     size_t nblocks();
@@ -126,14 +128,10 @@ class PSI_API VBase {
 
     // Creates a collocation cache map based on stride
     void build_collocation_cache(size_t memory);
-    void clear_collocation_cache() {
-        const bool had_cache = !cache_map_.empty();
-        cache_map_.clear();
-        cache_map_deriv_ = -1;
-        cache_claim_.set(0);
-        // The cache is many small matrices, so its memory does not come back on free alone.
-        if (had_cache) release_freed_memory();
-    }
+    void clear_collocation_cache();
+    /// Release regenerable scratch; keep the grid, densities and functional.
+    /// Subsequent computations/properties() recreate workers. Not thread-safe.
+    void release_workspaces();
 
     // Set the D matrix, get it back if needed
     void set_D(std::vector<SharedMatrix> Dvec);
@@ -163,6 +161,7 @@ class PSI_API VBase {
 // => Derived Classes <= //
 class SAP : public VBase {
    protected:
+    std::shared_ptr<PointFunctions> make_point_worker() const override;
    public:
     SAP(std::shared_ptr<SuperFunctional> functional, std::shared_ptr<BasisSet> primary, Options& options);
     ~SAP() override;
@@ -176,6 +175,7 @@ class SAP : public VBase {
 
 class RV : public VBase {
    protected:
+    std::shared_ptr<PointFunctions> make_point_worker() const override;
    public:
     RV(std::shared_ptr<SuperFunctional> functional, std::shared_ptr<BasisSet> primary, Options& options);
     ~RV() override;
@@ -204,6 +204,7 @@ class RV : public VBase {
 
 class UV : public VBase {
    protected:
+    std::shared_ptr<PointFunctions> make_point_worker() const override;
    public:
     UV(std::shared_ptr<SuperFunctional> functional, std::shared_ptr<BasisSet> primary, Options& options);
     ~UV() override;

@@ -61,6 +61,12 @@ def _release_collocation_cache(self):
         self.V_potential().clear_collocation_cache()
 
 
+def _release_dft_workspaces(self):
+    """Keep the potential usable, but release scratch between SCFs."""
+    if self.V_potential():
+        self.V_potential().release_workspaces()
+
+
 def scf_compute_energy(self):
     """Base class Wavefunction requires this function. Here it is
     simply a wrapper around initialize(), iterations(), finalize_energy(). It
@@ -75,11 +81,12 @@ def scf_compute_energy(self):
         with p4util.OptionsStateCM(['SCF_TYPE']):
             core.set_global_option('SCF_TYPE', 'DF')
             self.initialize()
+            core.release_freed_memory()
             try:
                 self.iterations()
             except SCFConvergenceError:
                 self.finalize()
-                _release_collocation_cache(self)
+                _release_dft_workspaces(self)
                 raise SCFConvergenceError("""SCF DF preiterations""", self.iteration_, self, 0, 0)
         core.print_out("\n  DF guess converged.\n\n")
 
@@ -89,6 +96,8 @@ def scf_compute_energy(self):
         self.initialize_jk(self.memory_jk_)
     else:
         self.initialize()
+    # Return freed integral/guess scratch before allocating iteration workspaces.
+    core.release_freed_memory()
     self.iteration_energies = []
 
     try:
@@ -99,7 +108,7 @@ def scf_compute_energy(self):
             # energy = 0.0
             # A P::e fn to either throw or protest upon nonconvergence
             # die_if_not_converged()
-            _release_collocation_cache(self)
+            _release_dft_workspaces(self)
             raise e
         else:
             core.print_out("  Energy and/or wave function did not converge, but proceeding anyway.\n\n")
@@ -238,9 +247,9 @@ def scf_initialize(self):
     held_memory = committed_memory + overhead_memory
 
     resident_hold = 0.0
-    if reserve_total + process_reserve >= unclaimed_memory:
+    if committed_memory == 0 and reserve_total + process_reserve >= unclaimed_memory:
         # Preserve nominal tiny budgets used to force disk algorithms.
-        # Withholding a reserve here can prevent the smallest JK block from fitting.
+        # Retained stores must not disable the next SCF's working reserve.
         reserve_memory = 0.0
     else:
         reserve_memory = min(reserve_total, 0.5 * unclaimed_memory)
@@ -403,6 +412,8 @@ def scf_initialize(self):
         mints = core.MintsHelper(self.basisset())
 
         if initialize_jk_obj:
+            # Grid workers are not needed during integral construction.
+            _release_dft_workspaces(self)
             self.initialize_jk(self.memory_jk_, jk=jk)
         if self.V_potential():
             self.V_potential().build_collocation_cache(self.memory_collocation_)
@@ -1004,7 +1015,7 @@ def scf_finalize_energy(self):
 
     # TODO re-enable
     self.finalize()
-    _release_collocation_cache(self)
+    _release_dft_workspaces(self)
 
     core.print_out("\nComputation Completed\n")
     core.del_variable("SCF D NORM")

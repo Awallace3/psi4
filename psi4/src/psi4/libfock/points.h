@@ -135,7 +135,9 @@ class PointFunctions : public BasisFunctions {
     // => Setters <= //
     void set_cache_map(std::unordered_map<size_t, std::map<std::string, SharedMatrix>>* cache_map) {
         cache_map_ = cache_map;
+        reset_basis_values();
     }
+    void reset_basis_values() { current_basis_map_ = &basis_values_; }
 
     // => Computers <= //
     /// Compute needed DFT intermediates, e.g. rho, gamma, at the points in block.
@@ -297,7 +299,7 @@ class UKSFunctions : public PointFunctions {
     void set_pointers(SharedMatrix Da_occ_AO) override;
     void set_pointers(SharedMatrix Da_occ_AO, SharedMatrix Db_occ_AO) override;
     void set_cache_map(std::unordered_map<size_t, std::map<std::string, SharedMatrix>>* cache_map) {
-        cache_map_ = cache_map;
+        PointFunctions::set_cache_map(cache_map);
     }
 
     /// Compute the needed DFT intermediates at the points in the block.

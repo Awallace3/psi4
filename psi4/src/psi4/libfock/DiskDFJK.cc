@@ -472,6 +472,9 @@ void DiskDFJK::preiterations() {
             initialize_wK_disk();
     }
 
+    // Contractions need the first engine's pair maps, not the integration clones.
+    eri_.resize(1);
+    release_freed_memory();
     report_integrals_claim();
 }
 
@@ -888,13 +891,6 @@ void DiskDFJK::initialize_JK_disk() {
         if (max_cols < mn_col_b[block]) max_cols = mn_col_b[block];
     }
 
-    // Primary buffer
-    Qmn_ = std::make_shared<Matrix>("(Q|mn) (Disk Chunk)", naux, max_cols);
-    // Fitting buffer
-    auto Amn = std::make_shared<Matrix>("(Q|mn) (Buffer)", naux, naux);
-    double** Qmnp = Qmn_->pointer();
-    double** Amnp = Amn->pointer();
-
     // ==> Prestripe/Jinv <== //
 
     timer_on("JK: (A|Q)^-1");
@@ -914,6 +910,12 @@ void DiskDFJK::initialize_JK_disk() {
     aio->synchronize();
 
     timer_off("JK: (A|Q)^-1");
+
+    // Do not overlap the disk chunk with metric construction/diagonalization scratch.
+    Qmn_ = std::make_shared<Matrix>("(Q|mn) (Disk Chunk)", naux, max_cols);
+    auto Amn = std::make_shared<Matrix>("(Q|mn) (Buffer)", naux, naux);
+    double** Qmnp = Qmn_->pointer();
+    double** Amnp = Amn->pointer();
 
     // ==> Thread setup <== //
     int nthread = 1;
