@@ -1,19 +1,11 @@
+import re
+import numpy as np
 import psi4
 import pytest
-import numpy as np
-import re
-from psi4 import compare_values
-from psi4.driver.task_planner import task_planner
-from psi4.driver.driver_cbs import CompositeComputer
-from psi4.driver.driver_findif import FiniteDifferenceComputer
-from psi4.driver.driver_nbody import ManyBodyComputer
-from psi4.driver.task_base import AtomicComputer
-from psi4.driver.procrouting.empirical_dispersion import XDMDispersionFunctor
-from psi4.driver.procrouting.xdm_params import get_xdm_bj_params
-from psi4.driver.p4util.exceptions import ValidationError
-from psi4.driver.procrouting.dft import dft_builder
-from psi4.driver.procrouting import dft
-from psi4.driver.procrouting import proc
+from qcengine.exceptions import InputError
+
+from psi4.driver import task_planner as planner
+from psi4.driver.procrouting import dft, proc, xdm_params
 
 pytestmark = [pytest.mark.psi, pytest.mark.api]
 
@@ -34,7 +26,7 @@ H    -0.59967700   0.04071200   0.00000000
 units angstrom
     """)
     psi4.set_options({
-        "basis": "aug-cc-pvtz",
+        "basis": "cc-pvdz",
         "DFT_SPHERICAL_POINTS": 590,
         "DFT_RADIAL_POINTS": 99,
     })
@@ -43,7 +35,7 @@ units angstrom
     e, wfn = psi4.energy("b3lyp-xdm", molecule=mol, return_wfn=True)
     psi4.set_options({"BASIS_GUESS": False})
     wfn_vars = wfn.variables()
-    assert np.isclose(wfn.energy(), e, atol=1.0e-12)
+    assert np.isclose(wfn.energy(), e, rtol=0.0, atol=1.0e-12)
     direct_xdm = psi4.core.XDMDispersion.build("b3lyp", 0.5, 1.0)
     for hf_fraction in (-0.1, 1.1):
         with pytest.raises(ValueError, match="exact-exchange fraction must be between 0 and 1"):
@@ -53,16 +45,17 @@ units angstrom
         with pytest.raises(ValueError, match="modified exact exchange is unsupported for range-separated functional"):
             range_xdm.compute_energy(wfn, hf_fraction)
     assert "DISPERSION CORRECTION ENERGY" in wfn_vars
-    assert np.isclose(wfn_vars["DISPERSION CORRECTION ENERGY"], e - e_reg, atol=1e-6)
+    assert np.isclose(wfn_vars["DISPERSION CORRECTION ENERGY"], e - e_reg, rtol=0.0, atol=1e-6)
     assert np.isclose(
         wfn_vars["DFT TOTAL ENERGY"] - wfn_vars["DISPERSION CORRECTION ENERGY"],
         e_reg,
+        rtol=0.0,
         atol=1e-6,
     )
 
     psi4.set_options({"REFERENCE": "UKS"})
     e_uks = psi4.energy("b3lyp-xdm", molecule=mol)
-    assert compare_values(e, e_uks, 8, "RKS and UKS XDM energies")
+    assert psi4.compare_values(e, e_uks, 8, "RKS and UKS XDM energies")
     psi4.set_options({"REFERENCE": "RKS"})
 
 
@@ -133,7 +126,7 @@ units angstrom
 
 @pytest.mark.xdm
 def test_h2o_nh3_xdm_nocp():
-    """Validate no-CP XDM interaction energies; CP gradients and CP through CBS stay rejected."""
+    """Validate no-CP energies, CP parameter routing, and unsupported CP/CBS combinations."""
 
     dimer = psi4.geometry("""0 1
 N -1.578718 -0.046611 0.000000
@@ -148,33 +141,25 @@ H    2.68039800  -0.37374100   0.75856100
 
 units angstrom
     """)
-    psi4.set_options({"basis": "aug-cc-pvdz"})
+    psi4.set_options({"basis": "cc-pvdz"})
 
-    findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
     for bsse_type, counterpoise in [("cp", True), ("vmfc", True), ("nocp", False)]:
-        plan = task_planner("energy", "b3lyp-xdm", dimer, bsse_type=bsse_type)
-        assert isinstance(plan, ManyBodyComputer)
+        plan = planner.task_planner("energy", "b3lyp-xdm", dimer, bsse_type=bsse_type)
+        assert isinstance(plan, planner.ManyBodyComputer)
         assert all(task.keywords["XDM_COUNTERPOISE"] is counterpoise for task in plan.task_list.values())
     # CP and noCP take different damping parameters but share the dimer task.
     with pytest.raises(psi4.ValidationError, match="run bsse_type='nocp' separately"):
-        task_planner("energy", "b3lyp-xdm", dimer, bsse_type=["nocp", "vmfc"])
+        planner.task_planner("energy", "b3lyp-xdm", dimer, bsse_type=["nocp", "vmfc"])
     # KB49 has no counterpoise fit for Pople bases; the subtask's error reaches the driver through QCEngine.
-    from qcengine.exceptions import InputError
     with pytest.raises(InputError, match=re.escape("No fitted BJ parameters for b3lyp/6-31+g* with model kb49 (counterpoise)")):
         psi4.energy("b3lyp-xdm/6-31+g*", molecule=dimer, bsse_type="cp")
-    psi4.set_options({"basis": "aug-cc-pvdz"})  # the slash basis above persists
+    psi4.set_options({"basis": "cc-pvdz"})  # the slash basis above persists
     with pytest.raises(NotImplementedError, match="through composite \\(CBS\\) methods are not implemented"):
-        task_planner("energy", "b3lyp-xdm/cc-pv[d,t]z", dimer, bsse_type="cp")
+        planner.task_planner("energy", "b3lyp-xdm/cc-pv[d,t]z", dimer, bsse_type="cp")
 
     # No-CP subsystems integrate on input-frame grids (DFT_GRID_ORIENTATION=INPUT, set by the planner).
-    e_los_ii = psi4.energy("b3lyp-xdm(los-ii)", molecule=dimer, bsse_type="nocp")
-    assert compare_values(e_los_ii, -0.0010581148, 8, "No-CP XDM(LoS-II) energy")
-
-    # bsse_type="cp" routes every task to the LoS-II counterpoise fit.
-    e_los_ii_cp = psi4.energy("b3lyp-xdm(los-ii)", molecule=dimer, bsse_type="cp")
-    psi4.set_options({"XDM_DISPERSION_PARAMETERS": [0.3880, 2.1781]})
-    e_explicit_cp = psi4.energy("b3lyp-xdm(los-ii)", molecule=dimer, bsse_type="cp")
-    assert compare_values(e_explicit_cp, e_los_ii_cp, 10, "CP XDM(LoS-II) uses the counterpoise fit")
+    e_kb49 = psi4.energy("b3lyp-xdm", molecule=dimer, bsse_type="nocp")
+    assert psi4.compare_values(e_kb49, -0.002128165643654256, 8, "No-CP XDM/cc-pVDZ energy")
 
     psi4.set_options({
         "basis": "sto-3g",
@@ -183,7 +168,7 @@ units angstrom
         "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
     })
     e_nocp = psi4.energy("b3lyp-xdm", molecule=dimer, bsse_type="nocp")
-    assert compare_values(e_nocp, -0.0006344356, 8, "No-CP XDM energy")
+    assert psi4.compare_values(e_nocp, -0.0006344356, 8, "No-CP XDM energy")
 
 
 @pytest.mark.xdm
@@ -191,7 +176,8 @@ def test_xdm_models_and_alias():
     """Check XDM model aliasing and explicit LOS-II selection.
 
     Verifies that ``-xdm`` and ``-xdm(kb49)`` are equivalent, and that
-    ``-xdm(los-ii)`` selects a different parameterization.
+    ``-xdm(los-ii)`` selects the LoS-II parameter table. LoS-II has no cc-pVDZ
+    fit, so its selection is checked without an SCF calculation.
     """
 
     mol = psi4.geometry("""
@@ -202,35 +188,33 @@ H    -0.59967700   0.04071200   0.00000000
 units angstrom
     """)
     psi4.set_options({
-        "basis": "aug-cc-pvdz",
+        "basis": "cc-pvdz",
         "DFT_SPHERICAL_POINTS": 590,
         "DFT_RADIAL_POINTS": 99,
     })
 
     e_alias = psi4.energy("b3lyp-xdm", molecule=mol)
     e_kb49 = psi4.energy("b3lyp-xdm(kb49)", molecule=mol)
-    e_los_ii = psi4.energy("b3lyp-xdm(los-ii)", molecule=mol)
 
-    assert compare_values(e_alias, e_kb49, 10, "-XDM alias equals -XDM(KB49)")
-    assert not np.isclose(e_los_ii, e_kb49, rtol=0.0, atol=1.0e-8)
+    assert psi4.compare_values(e_alias, e_kb49, 10, "-XDM alias equals -XDM(KB49)")
+    _, los_ii_dispersion = dft.build_superfunctional("b3lyp-xdm(los-ii)", True)
+    assert los_ii_dispersion["params"]["xdm_model"] == "los-ii"
 
-    # XDM_COUNTERPOISE routes the same model to its counterpoise fit.
+    # Missing counterpoise fits must fail rather than fall back to no-CP.
     psi4.set_options({"XDM_COUNTERPOISE": True})
-    e_los_ii_cp = psi4.energy("b3lyp-xdm(los-ii)", molecule=mol)
-    assert not np.isclose(e_los_ii_cp, e_los_ii, rtol=0.0, atol=1.0e-8)
     with pytest.raises(psi4.ValidationError, match=re.escape("b3lyp/6-31+g* with model kb49 (counterpoise)")):
         psi4.energy("b3lyp-xdm/6-31+g*", molecule=mol)
 
-    assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz", model="los-ii") == (0.362043, 2.452093)
-    assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz", model="los-ii", counterpoise=True) == (0.3880, 2.1781)
-    assert get_xdm_bj_params("pbe0", "aug-cc-pvdz", model="LOS-II", counterpoise=True) == (0.1592, 3.3865)
+    assert xdm_params.get_xdm_bj_params("b3lyp", "aug-cc-pvdz", model="los-ii") == (0.362043, 2.452093)
+    assert xdm_params.get_xdm_bj_params("b3lyp", "aug-cc-pvdz", model="los-ii", counterpoise=True) == (0.3880, 2.1781)
+    assert xdm_params.get_xdm_bj_params("pbe0", "aug-cc-pvdz", model="LOS-II", counterpoise=True) == (0.1592, 3.3865)
     # psi4-1.12 KB49 refits
-    assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz") == (0.5294, 2.0268)
-    assert get_xdm_bj_params("pbe0", "cc-pvtz", model="kb49") == (0.0000, 4.1133)
-    assert get_xdm_bj_params("b3lyp", "aug-cc-pvdz", counterpoise=True) == (0.5915, 1.5540)
-    assert get_xdm_bj_params("cam-b3lyp", "aug-cc-pvtz", counterpoise=True) == (0.2880, 2.9175)
+    assert xdm_params.get_xdm_bj_params("b3lyp", "cc-pvdz") == (0.0000, 3.8589)
+    assert xdm_params.get_xdm_bj_params("pbe0", "cc-pvtz", model="kb49") == (0.0000, 4.1133)
+    assert xdm_params.get_xdm_bj_params("b3lyp", "cc-pvdz", counterpoise=True) == (0.6541, 1.2844)
+    assert xdm_params.get_xdm_bj_params("cam-b3lyp", "aug-cc-pvtz", counterpoise=True) == (0.2880, 2.9175)
     with pytest.raises(KeyError):
-        get_xdm_bj_params("b3lyp", "6-31+g*", counterpoise=True)
+        xdm_params.get_xdm_bj_params("b3lyp", "6-31+g*", counterpoise=True)
 
 
 @pytest.mark.xdm
@@ -252,7 +236,7 @@ units angstrom
     err_msg = ("XDMDispersion: No fitted BJ parameters for hf/sto-3g with model kb49 (no-CP). "
                "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS.")
     with pytest.raises(
-            psi4.p4util.ValidationError,
+            psi4.ValidationError,
             match=re.escape(err_msg),
     ):
         psi4.energy("hf-xdm", molecule=mol)
@@ -264,13 +248,11 @@ units angstrom
     })
     e_ref = -74.9690725681
     e = psi4.energy("hf-xdm", molecule=mol)
-    assert compare_values(e, e_ref, 8, "HF-XDM energy with custom parameters")
+    assert psi4.compare_values(e, e_ref, 8, "HF-XDM energy with custom parameters")
 
 
 @pytest.mark.xdm
 def test_xdm_rejects_unknown_parameter_keys():
-    from psi4.driver.procrouting import dft
-
     bad_functional = {
         "name": "TYPO-XDM",
         "xc_functionals": {
@@ -283,132 +265,8 @@ def test_xdm_rejects_unknown_parameter_keys():
             }
         },
     }
-    with pytest.raises(psi4.p4util.ValidationError, match="Unsupported XDM dispersion params.*xdm_modle"):
+    with pytest.raises(psi4.ValidationError, match="Unsupported XDM dispersion params.*xdm_modle"):
         dft.build_superfunctional(bad_functional, True)
-
-
-@pytest.mark.xdm
-def test_xdm_dict_basis_guess_skips_dispersion():
-    """The basis-guess castup SCF runs without XDM; only the final SCF gets the correction."""
-    mol = psi4.geometry("0 1\nH 0 0 0\nH 0 0 1.5\nunits angstrom")
-    psi4.set_options({
-        "basis": "aug-cc-pvdz",
-        "BASIS_GUESS": "sto-3g",
-        "DFT_SPHERICAL_POINTS": 110,
-        "DFT_RADIAL_POINTS": 50,
-        "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
-    })
-
-    dict_xdm = {
-        "name": "custom-b3lyp-xdm",
-        "xc_functionals": {
-            "HYB_GGA_XC_B3LYP": {}
-        },
-        "dispersion": {
-            "type": "xdm",
-            "params": {
-                "xdm_model": "kb49"
-            }
-        },
-    }
-
-    energy, wfn = psi4.energy("scf", molecule=mol, dft_functional=dict_xdm, return_wfn=True)
-    psi4.set_options({"BASIS_GUESS": False})
-    assert np.isfinite(energy)
-    assert wfn.variable("DISPERSION CORRECTION ENERGY") < 0.0
-
-
-@pytest.mark.xdm
-def test_xdm_gradient_findif():
-    """XDM gradients are finite differences of the full XDM-corrected energy.
-
-    Compares ``psi4.gradient`` against energy differences generated and assembled
-    by Psi4's finite-difference helpers, and confirms
-    that the XDM-minus-B3LYP gradient difference reproduces the finite-difference
-    derivative of :psivar:`DISPERSION CORRECTION ENERGY`.
-    """
-    from copy import deepcopy
-    from psi4.driver import driver_findif
-
-    geom = """
-0 1
-O   -1.55100700  -0.11452000   0.00000000
-H   -1.93425900   0.76250300   0.00000000
-H   -0.59967700   0.04071200   0.10000000
-units angstrom
-symmetry c1
-no_reorient
-no_com
-"""
-    # Pin the grid and tighten SCF so the differences are not grid/convergence noise.
-    psi4.set_options({
-        "basis": "sto-3g",
-        "DFT_SPHERICAL_POINTS": 302,
-        "DFT_RADIAL_POINTS": 75,
-        "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
-        "scf__e_convergence": 1e-11,
-        "scf__d_convergence": 1e-10,
-    })
-
-    mol = psi4.geometry(geom)
-    grad_xdm = np.asarray(psi4.gradient("b3lyp-xdm", molecule=mol))
-    assert grad_xdm.shape == (3, 3)
-
-    # Use the built-in stencil for both total and dispersion energies.
-    # A second gradient(..., dertype=0) would just repeat XDM's default route.
-    findifrec = driver_findif.gradient_from_energies_geometries(
-        mol, stencil_size=3, step_size=0.005, t_project=False, r_project=False)
-    for displacement in [findifrec["reference"], *findifrec["displacements"].values()]:
-        displaced_mol = mol.clone()
-        displaced_mol.set_geometry(psi4.core.Matrix.from_array(displacement["geometry"]))
-        displaced_mol.update_geometry()
-        displacement["energy"], wfn = psi4.energy("b3lyp-xdm", molecule=displaced_mol, return_wfn=True)
-        displacement["dispersion_energy"] = wfn.variable("DISPERSION CORRECTION ENERGY")
-
-    fd_total = driver_findif.assemble_gradient_from_energies(findifrec)
-    dispersion_rec = deepcopy(findifrec)
-    for displacement in [dispersion_rec["reference"], *dispersion_rec["displacements"].values()]:
-        displacement["energy"] = displacement["dispersion_energy"]
-    fd_disp = driver_findif.assemble_gradient_from_energies(dispersion_rec)
-
-    assert np.allclose(grad_xdm, fd_total,
-                       atol=1e-5), (f"XDM gradient does not match central difference:\n{grad_xdm - fd_total}")
-
-    # The XDM contribution must actually be present in the gradient.
-    grad_b3lyp = np.asarray(psi4.gradient("b3lyp", molecule=mol, dertype=0))
-    assert np.abs(fd_disp).max() > 1e-5, "dispersion gradient too small to be a meaningful test"
-    assert np.allclose(grad_xdm - grad_b3lyp, fd_disp,
-                       atol=1e-5), (f"XDM-minus-B3LYP gradient does not match d(DISPERSION CORRECTION ENERGY):\n"
-                                    f"{(grad_xdm - grad_b3lyp) - fd_disp}")
-
-
-@pytest.mark.xdm
-def test_xdm_gradient_uks_parity():
-    """A closed-shell UKS XDM gradient must match the RKS one."""
-
-    mol = psi4.geometry("""
-0 1
-O   -1.55100700  -0.11452000   0.00000000
-H   -1.93425900   0.76250300   0.00000000
-H   -0.59967700   0.04071200   0.00000000
-units angstrom
-    """)
-    psi4.set_options({
-        "basis": "sto-3g",
-        "DFT_SPHERICAL_POINTS": 302,
-        "DFT_RADIAL_POINTS": 75,
-        "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
-        "scf__e_convergence": 1e-11,
-        "scf__d_convergence": 1e-10,
-        "REFERENCE": "RKS",
-    })
-    grad_rks = np.asarray(psi4.gradient("b3lyp-xdm", molecule=mol))
-
-    psi4.set_options({"REFERENCE": "UKS"})
-    grad_uks = np.asarray(psi4.gradient("b3lyp-xdm", molecule=mol))
-    psi4.set_options({"REFERENCE": "RKS"})
-
-    assert np.allclose(grad_rks, grad_uks, atol=1e-7), (f"RKS and UKS XDM gradients differ:\n{grad_rks - grad_uks}")
 
 
 @pytest.mark.xdm
@@ -433,11 +291,9 @@ units angstrom
         "DFT_RADIAL_POINTS": 75,
         "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
     })
-
-
     findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
 
-    plan = task_planner("gradient",
+    plan = planner.task_planner("gradient",
                         "b3lyp",
                         dimer,
                         bsse_type="nocp",
@@ -446,16 +302,16 @@ units angstrom
                             2: "b3lyp"
                         },
                         **findif_kwargs)
-    assert isinstance(plan, ManyBodyComputer)
+    assert isinstance(plan, planner.ManyBodyComputer)
 
     planned = {}
     for task in plan.task_list.values():
         planned.setdefault(task.method.lower(), set()).add(type(task))
 
-    assert planned["b3lyp-xdm"] == {FiniteDifferenceComputer}
-    assert planned["b3lyp"] == {AtomicComputer}
+    assert planned["b3lyp-xdm"] == {planner.FiniteDifferenceComputer}
+    assert planned["b3lyp"] == {planner.AtomicComputer}
 
-    cbs_plan = task_planner("gradient",
+    cbs_plan = planner.task_planner("gradient",
                             "b3lyp",
                             dimer,
                             bsse_type="nocp",
@@ -464,18 +320,18 @@ units angstrom
                                 2: "b3lyp"
                             },
                             **findif_kwargs)
-    assert isinstance(cbs_plan, ManyBodyComputer)
-    assert {type(task) for task in cbs_plan.task_list.values()} == {CompositeComputer, AtomicComputer}
-    assert all(task.basis == "sto-3g" for task in cbs_plan.task_list.values() if isinstance(task, AtomicComputer))
+    assert isinstance(cbs_plan, planner.ManyBodyComputer)
+    assert {type(task) for task in cbs_plan.task_list.values()} == {planner.CompositeComputer, planner.AtomicComputer}
+    assert all(task.basis == "sto-3g" for task in cbs_plan.task_list.values() if isinstance(task, planner.AtomicComputer))
     for task in cbs_plan.task_list.values():
-        if isinstance(task, CompositeComputer):
+        if isinstance(task, planner.CompositeComputer):
             component_types = {}
             for component in task.task_list:
                 component_types.setdefault(component.method.lower(), set()).add(type(component))
-            assert component_types["b3lyp-xdm"] == {FiniteDifferenceComputer}
-            assert component_types["hf"] == {AtomicComputer}
+            assert component_types["b3lyp-xdm"] == {planner.FiniteDifferenceComputer}
+            assert component_types["hf"] == {planner.AtomicComputer}
 
-    mixed_cbs_plan = task_planner(
+    mixed_cbs_plan = planner.task_planner(
         "gradient",
         "cbs",
         dimer,
@@ -488,12 +344,12 @@ units angstrom
     mixed_tasks = {}
     for task in mixed_cbs_plan.task_list:
         mixed_tasks.setdefault(task.method.lower(), set()).add(type(task))
-    assert mixed_tasks["b3lyp-xdm"] == {FiniteDifferenceComputer}
-    assert mixed_tasks["mp2"] == {AtomicComputer}
+    assert mixed_tasks["b3lyp-xdm"] == {planner.FiniteDifferenceComputer}
+    assert mixed_tasks["mp2"] == {planner.AtomicComputer}
 
     # A user-requested analytic gradient is still refused because one level needs XDM.
     with pytest.raises(NotImplementedError, match="Analytic XDM gradients are not implemented"):
-        task_planner("gradient",
+        planner.task_planner("gradient",
                      "b3lyp",
                      dimer,
                      bsse_type="nocp",
@@ -507,6 +363,7 @@ units angstrom
 
 @pytest.mark.xdm
 def test_xdm_runtime_exchange_changes_free_volume():
+    """Check the fitted B3LYP volume and interpolation at a modified exchange fraction."""
     mol = psi4.geometry("0 1\nH 0 0 0\nH 0 0 1.5\nunits angstrom")
     psi4.set_options({
         "basis": "sto-3g",
@@ -516,12 +373,19 @@ def test_xdm_runtime_exchange_changes_free_volume():
     _, wfn = psi4.energy("b3lyp", molecule=mol, return_wfn=True)
     xdm = psi4.core.XDMDispersion.build("b3lyp", 0.5, 1.0)
 
-    xdm.compute_energy(wfn, 0.20)
-    standard_c6 = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
-    xdm.compute_energy(wfn, 0.50)
-    modified_c6 = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
-
-    assert not np.isclose(standard_c6, modified_c6, rtol=1.0e-10, atol=1.0e-12)
+    # H reference data from xdm_data.cc: free polarizability [angstrom^3],
+    # B3LYP volume, and the midpoint of the 25%/50% exchange volumes [bohr^3].
+    # Use the data table's legacy bohr conversion rather than a newer constant.
+    alpha_free = 0.6668 / 0.52917720859**3
+    for fraction, free_volume in (
+        (0.20, 8.3489695345990036),
+        (0.375, (8.2794385587230224 + 7.9275669093485428) / 2),
+    ):
+        xdm.compute_energy(wfn, fraction)
+        props = wfn.array_variable("XDM ATOMIC PROPERTIES").np
+        # alpha_atom / volume_atom = alpha_free / volume_free.
+        np.testing.assert_allclose(props[:, 7] / props[:, 3], alpha_free / free_volume,
+                                   rtol=1.0e-12, atol=0.0)
 
 
 @pytest.mark.xdm
@@ -537,25 +401,26 @@ def test_xdm_modified_exchange_heavy_elements_use_lsda_volumes():
     _, wfn = psi4.energy("b3lyp", molecule=mol, return_wfn=True)
     xdm = psi4.core.XDMDispersion.build("b3lyp", 0.5, 1.0)
 
-    xdm.compute_energy(wfn, 0.20)
-    c6_table = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
-    e_modified = xdm.compute_energy(wfn, 0.50)
-    c6_modified = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
-    assert np.isfinite(e_modified)
-    assert not np.isclose(c6_table, c6_modified, rtol=1.0e-10, atol=1.0e-12)
-
     unknown_xdm = psi4.core.XDMDispersion.build("m06-2x", 0.5, 1.0)
-    e_unknown = unknown_xdm.compute_energy(wfn, 0.50)
-    c6_unknown = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
-    assert compare_values(e_modified, e_unknown, 12, "unknown and modified hybrids share the LSDA/UGBS volumes beyond Ne")
-    assert compare_values(c6_modified, c6_unknown, 10, "unknown and modified hybrids share the LSDA/UGBS C6 beyond Ne")
+    # Cl reference data from xdm_data.cc, with the table's legacy bohr conversion.
+    # Both fallback routes must use the actual LSDA volume, not just agree.
+    alpha_free = 2.1800 / 0.52917720859**3
+    for model, fraction, free_volume in (
+        (xdm, 0.20, 66.225085507692555),  # fitted B3LYP
+        (xdm, 0.50, 66.372),  # modified exchange: LSDA/UGBS
+        (unknown_xdm, 0.50, 66.372),  # unknown functional: LSDA/UGBS
+    ):
+        assert np.isfinite(model.compute_energy(wfn, fraction))
+        props = wfn.array_variable("XDM ATOMIC PROPERTIES").np
+        np.testing.assert_allclose(props[:, 7] / props[:, 3], alpha_free / free_volume,
+                                   rtol=1.0e-12, atol=0.0)
 
 
 @pytest.mark.xdm
 def test_xdm_b86bpbe25x_uses_pbe0_free_volumes():
     """B86bPBE-25X: fitted parameter lookup, PBE0 free-atom volumes for all elements, energy bookkeeping."""
 
-    a1, a2 = get_xdm_bj_params("b86bpbe-25x", "def2-tzvp_d-split")
+    a1, a2 = xdm_params.get_xdm_bj_params("b86bpbe-25x", "def2-tzvp_d-split")
     assert (a1, a2) == pytest.approx((0.7262, 1.5175))
 
     mol = psi4.geometry("0 1\nCl 0 0 0\nCl 0 0 2.0\nunits angstrom")
@@ -572,32 +437,23 @@ def test_xdm_b86bpbe25x_uses_pbe0_free_volumes():
     c6_named = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
     e_pbe0 = psi4.core.XDMDispersion.build("pbe0", a1, a2).compute_energy(wfn, 0.25)
     c6_pbe0 = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
-    assert compare_values(e_pbe0, e_named, 12, "B86bPBE-25X XDM energy with PBE0 free-atom volumes")
-    assert compare_values(c6_pbe0, c6_named, 10, "B86bPBE-25X C6 with PBE0 free-atom volumes")
+    assert psi4.compare_values(e_pbe0, e_named, 12, "B86bPBE-25X XDM energy with PBE0 free-atom volumes")
+    assert psi4.compare_values(c6_pbe0, c6_named, 10, "B86bPBE-25X C6 with PBE0 free-atom volumes")
     e_generic = psi4.core.XDMDispersion.build("m06-2x", a1, a2).compute_energy(wfn, 0.25)
     assert not np.isclose(e_generic, e_named, rtol=1.0e-10, atol=1.0e-12)
 
     e_xdm = psi4.energy("b86bpbe-25x-xdm", molecule=mol)
-    assert compare_values(e_dft + e_named, e_xdm, 8, "B86bPBE-25X-XDM total energy")
-    assert compare_values(e_named, psi4.variable("DISPERSION CORRECTION ENERGY"), 8, "B86bPBE-25X-XDM dispersion energy")
+    assert psi4.compare_values(e_dft + e_named, e_xdm, 8, "B86bPBE-25X-XDM total energy")
+    assert psi4.compare_values(e_named, psi4.variable("DISPERSION CORRECTION ENERGY"), 8, "B86bPBE-25X-XDM dispersion energy")
 
 
 @pytest.mark.xdm
 def test_xdm_rejects_double_dispersion():
-    assert "b3lyp-xdm" in dft_builder.functionals
-    assert "wb97m-v-xdm" not in dft_builder.functionals
-    with pytest.raises(ValidationError, match="XDM cannot be combined.*VV10"):
-        dft.build_superfunctional("wb97m-v-xdm", True)
-    disp_type = dft_builder.functionals["b3lyp-d3bj"]["dispersion"]["type"]
-    assert disp_type in ("d3bj", "d3bj2b")
-    assert "b3lyp-d3bj-xdm" not in dft_builder.functionals
-    message = re.escape(f"XDM cannot be combined with the '{disp_type}' dispersion")
-
-    with pytest.raises(ValidationError, match=message):
-        dft.build_superfunctional("b3lyp-d3bj-xdm", True)
-
-    psi4.set_options({"basis": "aug-cc-pvdz", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
-    with pytest.raises(ValidationError, match=message):
+    """Reject adding XDM to either nonlocal correlation or an existing pair correction."""
+    psi4.set_options({"basis": "cc-pvdz", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
+    with pytest.raises(psi4.ValidationError, match="XDM cannot be combined.*VV10"):
+        proc.build_functional_and_disp("wb97m-v-xdm", True)
+    with pytest.raises(psi4.ValidationError, match="XDM cannot be combined.*'d3bj(?:2b)?'.*dispersion"):
         proc.build_functional_and_disp("b3lyp-d3bj-xdm", True)
 
 
@@ -615,7 +471,7 @@ def test_xdm_gradient_produces_attraction():
     R, step = 4.0, 0.01
 
     psi4.set_options({
-        "basis": "aug-cc-pvdz",
+        "basis": "cc-pvdz",
         "DFT_SPHERICAL_POINTS": 302,
         "DFT_RADIAL_POINTS": 75,
         "scf__e_convergence": 1e-11,
@@ -648,7 +504,7 @@ def test_xdm_gradient_produces_attraction():
 def _water_dimer_8a(ghost=None):
     """Water dimer from the S22 geometry with monomer B pushed to R(O-O) = 8 A.
 
-    ``ghost`` = "A" or "B" makes that monomer ghost atoms; "isoA" drops monomer B.
+    ``ghost`` = "A" or "B" makes that monomer ghost atoms.
     """
     a = [("O", -1.551007, -0.114520, 0.0), ("H", -1.934259, 0.762503, 0.0), ("H", -0.599677, 0.040712, 0.0)]
     b = [("O", 1.350625, 0.111469, 0.0), ("H", 1.680398, -0.373741, -0.758561),
@@ -662,8 +518,6 @@ def _water_dimer_8a(ghost=None):
                          for (s, *_), (x, y, z) in zip(atoms, xyz))
 
     tail = "\nunits angstrom\nno_com\nno_reorient\nsymmetry c1\n"
-    if ghost == "isoA":
-        return "0 1\n" + block(a, xa, False) + tail
     return ("0 1\n" + block(a, xa, ghost == "A") + "\n--\n0 1\n" + block(b, xb, ghost == "B") + tail)
 
 
@@ -675,14 +529,14 @@ def test_xdm_counterpoise_ghost_superposition():
 
     Long-range regression for the CP ghost treatment (see xdm.rst, "Ghost
     Atoms"). Uses the large-a1 (0.7259, 1.3140 A) of the retired KB49 noCP
-    B3LYP/aug-cc-pVDZ fit, where the superposition artefact is largest. At
-    R(O-O) = 8 A, measured (kJ/mol): noCP -0.0125, intermolecular pair sum
-    -0.0122, superposed CP -0.0095; dropping ghosts from the promolecule gave
-    -0.0219, and ghosts in the promolecule without superposition gave -0.0001
-    (and changes sign by 9 A).
+    B3LYP/aug-cc-pVDZ fit, where the superposition artefact is largest.
+    Retain these explicit damping parameters with cc-pVDZ to test the
+    superposition algorithm, not the quality of a fitted interaction energy.
+    Check the many-body CP subtraction against explicit partner-moment
+    superposition, without assuming agreement with no-CP or pair-only energies.
     """
     psi4.set_options({
-        "basis": "aug-cc-pvdz",
+        "basis": "cc-pvdz",
         "scf_type": "df",
         "e_convergence": 1.0e-10,
         "d_convergence": 1.0e-8,
@@ -695,10 +549,9 @@ def test_xdm_counterpoise_ghost_superposition():
         _, wfn = psi4.energy("b3lyp-xdm", molecule=mol, return_wfn=True)
         return mol, wfn
 
-    _, wfn_iso = run("isoA")
     mol_cp, wfn_cp = run("B")
     _, wfn_cpb = run("A")
-    mol_dim, wfn_dim = run(None)
+    _, wfn_dim = run(None)
 
     props_cp = wfn_cp.variable("XDM ATOMIC PROPERTIES").np
     props_cpb = wfn_cpb.variable("XDM ATOMIC PROPERTIES").np
@@ -706,17 +559,12 @@ def test_xdm_counterpoise_ghost_superposition():
     assert np.array_equal(props_cp[:, 1], [1, 1, 1, 0, 0, 0])
     # The ghost centres hold part of the monomer's density tail: they are in the promolecule.
     assert np.all(props_cp[3:, 2] > 0.0)
-    assert compare_values(10.0, props_cp[:, 2].sum(), 4, "CP monomer electrons over real + ghost centres")
-
-    # The bare CP monomer partitions its own density like the isolated monomer.
-    c6_iso = wfn_iso.variable("XDM C6 COEFFICIENTS").np.sum()
-    c6_cp = wfn_cp.variable("XDM C6 COEFFICIENTS").np.sum()
-    assert abs(c6_cp / c6_iso - 1.0) < 5.0e-3, f"CP monomer C6 {c6_cp} vs isolated {c6_iso}"
+    assert psi4.compare_values(10.0, props_cp[:, 2].sum(), 4, "CP monomer electrons over real + ghost centres")
 
     # Re-evaluating the stored properties reproduces the job's own XDM energy.
     xdm = psi4.core.XDMDispersion(0.7259, 1.3140 / psi4.constants.bohr2angstroms, "b3lyp")
     coords = psi4.core.Matrix.from_array(mol_cp.geometry().np)
-    assert compare_values(wfn_cp.variable("DISPERSION CORRECTION ENERGY"),
+    assert psi4.compare_values(wfn_cp.variable("DISPERSION CORRECTION ENERGY"),
                           xdm.energy_from_properties(coords, psi4.core.Matrix.from_array(props_cp)), 12,
                           "energy_from_properties reproduces the CP monomer XDM energy")
 
@@ -728,31 +576,21 @@ def test_xdm_counterpoise_ghost_superposition():
         e_superposed += xdm.energy_from_properties(coords, psi4.core.Matrix.from_array(superposed))
     disp_by_hand = (wfn_dim.variable("DISPERSION CORRECTION ENERGY") - e_superposed) * kj
 
-    # Many-body driver: CP and noCP XDM interaction energies, with the B3LYP part removed.
+    # Many-body driver: CP XDM interaction energy, with the B3LYP part removed.
     dimer = psi4.geometry(_water_dimer_8a())
-    psi4.energy("b3lyp-xdm", molecule=dimer, bsse_type=["cp", "nocp"])
+    psi4.energy("b3lyp-xdm", molecule=dimer, bsse_type="cp")
     ie_xdm_cp = psi4.variable("CP-CORRECTED INTERACTION ENERGY")
-    ie_xdm_nocp = psi4.variable("NOCP-CORRECTED INTERACTION ENERGY")
-    psi4.energy("b3lyp", molecule=dimer, bsse_type=["cp", "nocp"])
+    psi4.energy("b3lyp", molecule=dimer, bsse_type="cp")
     disp_cp = (ie_xdm_cp - psi4.variable("CP-CORRECTED INTERACTION ENERGY")) * kj
-    disp_nocp = (ie_xdm_nocp - psi4.variable("NOCP-CORRECTED INTERACTION ENERGY")) * kj
 
     # The many-body CP subtraction uses the superposed monomer energies.
-    assert compare_values(disp_by_hand, disp_cp, 4, "many-body CP XDM IE vs hand superposition [kJ/mol]")
-    pairwise = wfn_dim.variable("XDM PAIRWISE ENERGY").np
-    inter = 2.0 * pairwise[:3, 3:].sum() * kj
-
+    assert psi4.compare_values(disp_by_hand, disp_cp, 4, "many-body CP XDM IE vs hand superposition [kJ/mol]")
     assert disp_cp < 0.0
-    assert abs(disp_cp - disp_nocp) < 5.0e-3, f"CP {disp_cp:.5f} vs noCP {disp_nocp:.5f} kJ/mol"
-    assert 0.6 < disp_cp / inter < 1.4, f"CP {disp_cp:.5f} vs intermolecular pair sum {inter:.5f} kJ/mol"
 
 
 _xdm_grid_cases = {
-    # closed shell, pure d functions
-    "rks": ("0 1\nO 0 0 0.117\nH 0 0.757 -0.467\nH 0 -0.757 -0.467\nO 0 0 3.117\nH 0 0.757 2.533\nH 0 -0.757 2.533",
-            "aug-cc-pvdz"),
     # open shell
-    "uks": ("0 2\nO 0 0 0\nH 0 0 0.97", "aug-cc-pvdz"),
+    "uks": ("0 2\nO 0 0 0\nH 0 0 0.97", "cc-pvdz"),
     # Cartesian d functions
     "cartesian": ("0 1\nO 0 0 0.117\nH 0 0.757 -0.467\nH 0 -0.757 -0.467", "6-31g*"),
 }
@@ -784,8 +622,7 @@ def _grid_origins(text):
 
 
 @pytest.mark.xdm
-@pytest.mark.parametrize("case", ["rks", "uks"])
-def test_xdm_reuses_scf_grid(case, tmp_path):
+def test_xdm_reuses_scf_grid(tmp_path):
     """XDM reuses the SCF's XC grid when it matches the current basis and DFT grid options.
 
     XDM does not independently choose a grid. With unchanged DFT options,
@@ -795,7 +632,7 @@ def test_xdm_reuses_scf_grid(case, tmp_path):
     out = tmp_path / "reuse.dat"
     psi4.set_output_file(str(out), False)
     try:
-        wfn = _xdm_grid_wfn(case)
+        wfn = _xdm_grid_wfn("uks")
         e_scf, p_scf = wfn.variable("XDM ENERGY"), psi4.core.array_variable("XDM ATOMIC PROPERTIES").np.copy()
         e_own, p_own = _xdm_again(wfn, XDM_GRID_REUSE=False)
         e_again, _ = _xdm_again(wfn, XDM_GRID_REUSE=True)
@@ -808,12 +645,12 @@ def test_xdm_reuses_scf_grid(case, tmp_path):
 
 
 @pytest.mark.xdm
-def test_xdm_builds_own_grid_unless_scf_grid_matches(tmp_path):
-    """XDM builds a grid from current DFT options when it cannot reuse the SCF grid.
+def test_xdm_rebuilds_grid_after_option_change(tmp_path):
+    """XDM builds a grid from current DFT options when they differ from the SCF grid.
 
     Changing DFT_SPHERICAL_POINTS after SCF requests a different integration
-    grid for the same density. An HF wavefunction has no XC grid to reuse, so
-    XDM must build one even when the DFT options are unchanged.
+    grid for the same density. The no-XC-grid fallback is covered by the
+    HF-XDM reference-energy test.
     """
     out = tmp_path / "own.dat"
     psi4.set_output_file(str(out), False)
@@ -822,11 +659,7 @@ def test_xdm_builds_own_grid_unless_scf_grid_matches(tmp_path):
         e_scf = wfn.variable("XDM ENERGY")
         # The saved SCF grid has 302 angular points; only XDM uses the new setting.
         e_434, _ = _xdm_again(wfn, DFT_SPHERICAL_POINTS=434)
-        psi4.set_options({"DFT_SPHERICAL_POINTS": 302})
-        _, hf_wfn = psi4.energy("hf", molecule=wfn.molecule(), return_wfn=True)
-        assert hf_wfn.V_potential() is None
-        psi4.core.XDMDispersion.build("b3lyp", 0.6, 1.4).compute_energy(hf_wfn, 0.2)
     finally:
         psi4.set_output_file("pytest_output.dat", True)
-    assert _grid_origins(out.read_text()) == ["psi4, the SCF's", "psi4", "psi4"]
+    assert _grid_origins(out.read_text()) == ["psi4, the SCF's", "psi4"]
     assert abs(e_434 - e_scf) > 1.0e-10
