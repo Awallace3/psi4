@@ -217,6 +217,8 @@ std::string describe_cuda_device(int device_id, const cudaDeviceProp& props) {
 // through ensure_cuest_initialized(), i.e. from the first computation that
 // actually wants cuEST -- never at import time.
 void cuest_init() {
+    psi::cuest_common::SCFProfileTimer total("cuEST startup total");
+    psi::cuest_common::SCFProfileTimer phase("cuEST device discovery");
     if (stream_handle != 0) {
         throw PSIEXCEPTION("Attempting to reinitialize the stream_handle when it hasn't been released\n");
     }
@@ -281,19 +283,23 @@ void cuest_init() {
         // this is where a sick GPU (bad ECC, exclusive-mode contention, driver
         // mismatch) reveals itself -- the pure query calls above can all succeed
         // on hardware that can no longer run anything.
+        phase.next("cuEST CUDA context stream");
         cudaError_t stream_err = cudaStreamCreate(&stream_handle);
         if (stream_err != cudaSuccess) {
             throw PSIEXCEPTION(cuda_failure_message("cudaStreamCreate failed in cuest_init", stream_err,
                                                     describe_cuda_device(device_id, props)));
         }
+        phase.next("cuEST cuBLAS create");
         cublasStatus_t cublas_status = cublasCreate(&cublas_handle);
         if (cublas_status != CUBLAS_STATUS_SUCCESS) {
             throw PSIEXCEPTION("cublasCreate failed in cuest_init");
         }
+        phase.next("cuEST cuSOLVER create");
         cusolverStatus_t cusolver_status = cusolverDnCreate(&cusolver_handle);
         if (cusolver_status != CUSOLVER_STATUS_SUCCESS) {
             throw PSIEXCEPTION("cusolverDnCreate failed in cuest_init");
         }
+        phase.next("cuEST handle parameters");
         cublasSetStream(cublas_handle, stream_handle);
         cusolverDnSetStream(cusolver_handle, stream_handle);
         // Declare & create the cuEST parameters and handle with reasonable defaults. Destroy param promptly.
@@ -320,7 +326,9 @@ void cuest_init() {
             &cusolver_handle,
             sizeof(cusolver_handle)
         ));
+        phase.next("cuEST handle create");
         CHECK_CUEST(cuestCreate(handle_parameters, &cuest_handle));
+        phase.next("cuEST startup cleanup");
         CHECK_CUEST(cuestParametersDestroy(CUEST_HANDLE_PARAMETERS, handle_parameters));
     } catch (...) {
         cuest_cleanup_noexcept();

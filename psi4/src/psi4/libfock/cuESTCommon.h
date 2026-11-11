@@ -40,10 +40,12 @@
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/molecule.h"
 #include "psi4/libpsi4util/exception.h"
+#include "psi4/libqt/qt.h"
 
 #include <cstdlib>
 #include <memory>
 #include <sstream>
+#include <string>
 #include <vector>
 
 extern cuestHandle_t cuest_handle;
@@ -52,6 +54,27 @@ namespace psi {
 namespace cuest_common {
 
 void ensure_cuest_initialized();
+
+// Opt-in host wall timers, with no extra CUDA synchronization or warm-up.
+// Compute may enqueue work: its wait can appear in freeWorkspace or D2H.
+class SCFProfileTimer {
+    const char* label_;
+    bool enabled_;
+public:
+    explicit SCFProfileTimer(const char* label) : label_(label) {
+        const char* value = std::getenv("PSI4_CUEST_SCF_TIMERS");
+        enabled_ = value && std::string(value) == "1";
+        if (enabled_) timer_on(label_);
+    }
+    ~SCFProfileTimer() { if (enabled_) timer_off(label_); }
+    void next(const char* label) {
+        if (enabled_) timer_off(label_);
+        label_ = label;
+        if (enabled_) timer_on(label_);
+    }
+    SCFProfileTimer(const SCFProfileTimer&) = delete;
+    SCFProfileTimer& operator=(const SCFProfileTimer&) = delete;
+};
 
 inline void check_cuest(cuestStatus_t status, const char* func) {
     if (status != CUEST_STATUS_SUCCESS) {
@@ -94,6 +117,7 @@ inline cuestWorkspace_t* allocateWorkspace(const cuestWorkspaceDescriptor_t* wor
 
     /* Allocate the host buffer if the size is non-zero. */
     if (workspace->hostBufferSizeInBytes) {
+        SCFProfileTimer timer("cuEST workspace host malloc");
         void* hostPtr = (void*) malloc(workspace->hostBufferSizeInBytes);
         if (!hostPtr) {
             fprintf(stderr, "Failed to allocate host buffer of %.3f GiB\n",
@@ -106,6 +130,7 @@ inline cuestWorkspace_t* allocateWorkspace(const cuestWorkspaceDescriptor_t* wor
 
     /* Allocate the device buffer if the size is non-zero. */
     if (workspace->deviceBufferSizeInBytes) {
+        SCFProfileTimer timer("cuEST workspace cudaMalloc");
         void* devicePtr = NULL;
         cudaError_t err = cudaMalloc(&devicePtr, workspace->deviceBufferSizeInBytes);
         if (err != cudaSuccess) {
@@ -147,6 +172,7 @@ inline void freeWorkspace(cuestWorkspace_t* workspace)
 
     /* Free the device buffer if it is not NULL. */
     if (workspace->deviceBuffer) {
+        SCFProfileTimer timer("cuEST workspace cudaFree");
         cudaError_t err = cudaFree((void*) workspace->deviceBuffer);
         if (err != cudaSuccess) {
             fprintf(stderr, "cudaFree failed: %s\n", cudaGetErrorString(err));

@@ -1320,8 +1320,11 @@ cuestAOBasis_t BasisSet::cuest_basis()
 
 void BasisSet::cuest_initialize()
 {
+    cuest_common::SCFProfileTimer total("cuEST AO basis total");
+    cuest_common::SCFProfileTimer phase("cuEST AO basis ensure runtime");
     cuest_common::ensure_cuest_initialized();
 
+    phase.next("cuEST AO shells build");
     int natom = molecule_->natom();
 
     cuestAOShellParameters_t shell_params;
@@ -1352,15 +1355,19 @@ void BasisSet::cuest_initialize()
     cuestWorkspaceDescriptor_t* persistentWorkspaceDescriptor = (cuestWorkspaceDescriptor_t*) malloc(sizeof(cuestWorkspaceDescriptor_t));
     cuestWorkspaceDescriptor_t* temporaryWorkspaceDescriptor = (cuestWorkspaceDescriptor_t*) malloc(sizeof(cuestWorkspaceDescriptor_t));
 
+    phase.next("cuEST AO basis workspace query");
     CHECK_CUEST(cuestAOBasisCreateWorkspaceQuery(cuest_handle, static_cast<uint64_t>(natom),
         shells_per_atom.data(), shells_out.data(), basis_params, persistentWorkspaceDescriptor, temporaryWorkspaceDescriptor, nullptr));
 
+    phase.next("cuEST AO basis workspace alloc");
     cuest_basis_ws_ptr_ = cuest_common::allocateWorkspace(persistentWorkspaceDescriptor);
     cuestWorkspace_t* temporaryBasisWorkspace = cuest_common::allocateWorkspace(temporaryWorkspaceDescriptor);
 
+    phase.next("cuEST AO basis create");
     CHECK_CUEST(cuestAOBasisCreate(cuest_handle, static_cast<uint64_t>(natom),
         shells_per_atom.data(), shells_out.data(), basis_params, cuest_basis_ws_ptr_, temporaryBasisWorkspace, &cuest_basis_));
 
+    phase.next("cuEST AO basis cleanup");
     cuest_common::freeWorkspace(temporaryBasisWorkspace);
     cuestParametersDestroy(CUEST_AOBASIS_PARAMETERS, basis_params);
 

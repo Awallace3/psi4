@@ -377,6 +377,7 @@ void cuESTJK::build_cuest_basis(const std::shared_ptr<BasisSet>& basis, cuestAOB
 
 void cuESTJK::preiterations()
 {
+    cuest_common::SCFProfileTimer timer("cuEST JK preiterations");
     try {
         if (cleanup_failed_) throw PSIEXCEPTION("cuESTJK cleanup failed; construct a new JK object.");
         condition_ = options_.get_double("DF_FITTING_CONDITION");
@@ -398,6 +399,8 @@ void cuESTJK::preiterations()
 }
 
 void cuESTJK::build_cuest_plan(const std::string& key) {
+    cuest_common::SCFProfileTimer total("cuEST JK plan total");
+    cuest_common::SCFProfileTimer phase("cuEST JK plan validation");
     gridk_ = options_.get_bool("CUEST_GRIDK");
     directj_ = options_.get_bool("CUEST_DIRECTJ");
     if (gridk_) (void)gridk_workspace_bytes();  // Validate before allocating plans.
@@ -433,33 +436,41 @@ void cuESTJK::build_cuest_plan(const std::string& key) {
                 if (xyz.get(a, k) != aux_xyz.get(a, k))
                     throw PSIEXCEPTION("cuESTJK primary and auxiliary must have the same molecular centers.");
     }
+    phase.next("cuEST JK primary basis");
     build_cuest_basis(primary_, cuest_primary_basis_, cuest_primary_basis_ws_);
+    phase.next("cuEST JK auxiliary basis");
     if (needs_df_plan())
         build_cuest_basis(auxiliary_, cuest_auxiliary_basis_, cuest_auxiliary_basis_ws_);
 
     cuestWorkspaceDescriptor_t persistentWorkspaceDescriptor{}, temporaryWorkspaceDescriptor{};
 
+    phase.next("cuEST JK pair parameters");
     // AO Pair List
     PlanParameters<cuestAOPairListParameters_t> pair_params(CUEST_AOPAIRLIST_PARAMETERS);
 
+    phase.next("cuEST JK pair workspace query");
     CHECK_CUEST(cuestAOPairListCreateWorkspaceQuery(cuest_handle, cuest_primary_basis_,
         static_cast<uint64_t>(natom), xyz.pointer()[0], pq_threshold_, pair_params.get(),
         &persistentWorkspaceDescriptor, &temporaryWorkspaceDescriptor, nullptr));
 
     pair_list_device_bytes_ = persistentWorkspaceDescriptor.deviceBufferSizeInBytes;
 
+    phase.next("cuEST JK pair workspace alloc");
     cuest_pair_list_ws_ptr_ = plan_workspace(persistentWorkspaceDescriptor).release();
     auto temporaryPairListWorkspace = plan_workspace(temporaryWorkspaceDescriptor);
 
+    phase.next("cuEST JK pair create");
     CHECK_CUEST(cuestAOPairListCreate(cuest_handle, cuest_primary_basis_,
         static_cast<uint64_t>(natom), xyz.pointer()[0], pq_threshold_, pair_params.get(),
         cuest_pair_list_ws_ptr_, temporaryPairListWorkspace.get(), &cuest_pair_list_));
+    phase.next("cuEST JK pair cleanup");
     release_plan_scratch(temporaryPairListWorkspace);
     pair_params.close();
 
     // Only retain a DF tensor when J or K actually uses density fitting.
     // In particular, Direct-J + Grid-K must not allocate a hidden DF plan.
     if (needs_df_plan()) {
+        phase.next("cuEST JK DF parameters");
         // DF Int Plan List
         PlanParameters<cuestDFIntPlanParameters_t> dfint_params(CUEST_DFINTPLAN_PARAMETERS);
 
@@ -507,15 +518,18 @@ void cuESTJK::build_cuest_plan(const std::string& key) {
             &lr_exchange_omega,
             sizeof(double)));
 
+        phase.next("cuEST JK DF workspace query");
         CHECK_CUEST(cuestDFIntPlanCreateWorkspaceQuery(cuest_handle,
             cuest_primary_basis_, cuest_auxiliary_basis_, cuest_pair_list_,
             dfint_params.get(), &persistentWorkspaceDescriptor, &temporaryWorkspaceDescriptor, nullptr));
 
         dfint_plan_device_bytes_ = persistentWorkspaceDescriptor.deviceBufferSizeInBytes;
 
+        phase.next("cuEST JK DF workspace alloc");
         cuest_dfint_plan_ws_ptr_ = plan_workspace(persistentWorkspaceDescriptor).release();
         auto temporaryDFIntPlanWorkspace = plan_workspace(temporaryWorkspaceDescriptor);
 
+        phase.next("cuEST JK DF plan create");
         CHECK_CUEST(cuestDFIntPlanCreate(cuest_handle,
             cuest_primary_basis_, cuest_auxiliary_basis_, cuest_pair_list_,
             dfint_params.get(), cuest_dfint_plan_ws_ptr_, temporaryDFIntPlanWorkspace.get(), &cuest_df_plan_));
@@ -524,9 +538,11 @@ void cuESTJK::build_cuest_plan(const std::string& key) {
         if (plan_creations_ != std::numeric_limits<uint64_t>::max()) ++plan_creations_;
         if (print_ >= 3) outfile->Printf("    cuESTJK plan created #%llu\n",
                                        static_cast<unsigned long long>(plan_creations_));
+        phase.next("cuEST JK DF cleanup");
         release_plan_scratch(temporaryDFIntPlanWorkspace);
         dfint_params.close();
 
+        phase.next("cuEST JK compute configuration");
         // Create J/K parameters
         CHECK_CUEST(cuestParametersCreate(CUEST_DFCOULOMBCOMPUTE_PARAMETERS, reinterpret_cast<void**>(&cuest_coulomb_compute_params_)));
         CHECK_CUEST(cuestParametersCreate(CUEST_DFSYMMETRICEXCHANGECOMPUTE_PARAMETERS, reinterpret_cast<void**>(&cuest_exchange_compute_params_)));
