@@ -94,7 +94,11 @@ def kwargs_lower(kwargs: Dict[str, Any]) -> Dict[str, Any]:
             except (AttributeError, KeyError):
                 lvalue = value
 
-        if lkey in ['irrep', 'check_bsse', 'linkage', 'bsse_type']:
+        # These CUDA controls are strictly integer-valued. In particular, a
+        # zero-byte cache budget and block size one must not become bools.
+        # Preserve invalid types too, so the SAPT admission checks reject them.
+        if lkey in ['irrep', 'check_bsse', 'linkage', 'bsse_type',
+                    'cuda_dispersion_block_size', 'cuda_dispersion_factor_cache_bytes']:
             caseless_kwargs[lkey] = lvalue
 
         elif 'dertype' in lkey:

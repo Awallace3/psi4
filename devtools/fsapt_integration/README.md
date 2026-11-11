@@ -121,3 +121,26 @@ The installed science stays pinned there while a separate helper checkout
 prepares sealed-runtime qualification. Reuse the existing
 `qualify_construction_root.py` provenance checks, now explicitly admitting
 this dedicated integration root; do not relax byte/import/runtime checks.
+
+Sealed runtime qualification at the same science pin also passed:
+`runs/sealed-cpu-01/whole-build-proof.json`, native CPU RHF smoke
+`-1.1167593073781577 Eh`. Runtime config SHA256:
+`59fa03f193b2d8b5b1637c98b3653cc61969fbc8d585caf21b3373f6e1b54ccc`.
+The independent small HF GPU gate in `runs/hf-fragment-gate-01` **failed**
+before the GPU energy calculation; its CPU arm completed. The public
+`energy()` keyword normalizer converted an explicitly supplied integer
+zero-byte cache budget to `False`, rejected by the strict CUDA admission.
+A focused regression also reproduced the analogous block-size-one bug.
+Preserve both integer controls in `kwargs_lower`; keep rejecting actual
+booleans, strings and floats rather than relaxing CUDA admission.
+This runtime receipt alone is not a GPU pass.
+
+The existing fragment input freezer now includes explicit `jun-cc-pvdz`
+for peptide/nanotube/protein83, preserving JKFIT/RIFIT separation and
+checked spherical function counts. Protein157 remains a frozen geometry
+only, not admitted by that three-case fragment harness.
+
+For subsequent science changes, `cachy_build.sh ROOT PIN PREFIX` supports
+a fresh `ROOT/install-owned-*` prefix so the passing CPU baseline install
+and failed GPU artifacts are preserved. Rebuild/reinstall normally; no Python
+overlay. Freeze a new runtime proof for the new exact science pin.

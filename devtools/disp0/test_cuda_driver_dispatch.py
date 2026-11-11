@@ -1,6 +1,7 @@
 """CPU-only public SAPT driver dispatch contracts; no Psi4/CUDA execution."""
 import ast
 from pathlib import Path
+import runpy
 import types
 import unittest
 from unittest.mock import Mock
@@ -12,6 +13,40 @@ class ValidationError(ValueError):
 
 
 class AutomaticCudaDriver(unittest.TestCase):
+    def normalize_keywords(self, keywords):
+        directory = Path(__file__).resolve().parents[2] / "psi4/driver/p4util"
+        path = directory / "procutil.py"
+        tree = ast.Module(body=[
+            node for node in ast.parse(path.read_text()).body
+            if isinstance(node, ast.FunctionDef) and node.name == "kwargs_lower"
+        ], type_ignores=[])
+        namespace = {"Dict": dict, "Any": object,
+                     "p4regex": types.SimpleNamespace(**runpy.run_path(str(directory / "p4regex.py")))}
+        exec(compile(tree, str(path), "exec"), namespace)
+        return namespace["kwargs_lower"](keywords)
+
+    def test_public_keyword_normalization_preserves_cuda_integer_controls(self):
+        for size in (1, 5):
+            for budget in (0, 1, 4096):
+                kwargs = self.normalize_keywords({
+                    "CUDA_DISPERSION_BLOCK_SIZE": size,
+                    "CUDA_DISPERSION_FACTOR_CACHE_BYTES": budget,
+                })
+                self.assertIs(type(kwargs["cuda_dispersion_block_size"]), int)
+                self.assertIs(type(kwargs["cuda_dispersion_factor_cache_bytes"]), int)
+                ns, _, _, _, terms, _, wave = self.fixture()
+                ns["sapt_dft"](wave, wave, wave, do_dft=False, sapt_jk=Mock(),
+                               print_header=False, cuda_provider_factory=Mock(), **kwargs)
+                self.assertEqual(terms.dispersion0_cuda.call_args.kwargs["block_size"], size)
+                self.assertEqual(terms.dispersion0_cuda.call_args.kwargs["factor_cache_bytes"], budget)
+        for invalid in (False, True, "0", "1", 0., 1., -1, None):
+            kwargs = self.normalize_keywords({"cuda_dispersion_factor_cache_bytes": invalid})
+            ns, _, _, _, terms, _, wave = self.fixture()
+            with self.assertRaisesRegex(ValidationError, "cache.*nonnegative integer"):
+                ns["sapt_dft"](wave, wave, wave, do_dft=False, **kwargs)
+            terms.build_sapt_jk_cache.assert_not_called()
+        self.assertIs(self.normalize_keywords({"return_wfn": "YES"})["return_wfn"], True)
+
     def fixture(self):
         path=Path(__file__).resolve().parents[2]/"psi4/driver/procrouting/sapt/sapt_proc.py"
         names={"_validate_einsums_dispersion","_automatic_cuda_dispersion","_check_fsapt_xc_response",

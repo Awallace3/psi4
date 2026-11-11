@@ -12,6 +12,8 @@ Z = {"H":1,"C":6,"N":7,"O":8}
 BASIS = {"primary":"aug-cc-pvdz","jkfit":"aug-cc-pvdz-jkfit","rifit":"aug-cc-pvdz-ri"}
 BASIS_PROFILES = {
     "aug-cc-pvdz": BASIS,
+    "jun-cc-pvdz": {"primary": "jun-cc-pvdz", "jkfit": "aug-cc-pvdz-jkfit",
+                    "rifit": "aug-cc-pvdz-ri"},
     "def2-svp": {"primary": "def2-svp", "jkfit": "def2-universal-jkfit",
                  "rifit": "def2-svp-ri"},
     "def2-tzvp": {"primary": "def2-tzvp", "jkfit": "def2-universal-jkfit",
@@ -22,6 +24,8 @@ EXPECTED = {"peptide":(24,356,1308,1042,(20,20)),
             "protein83":(83,1293,4762,3820,(78,68))}
 PROFILE_COUNTS = {
     "aug-cc-pvdz": {system: row[1:4] for system,row in EXPECTED.items()},
+    "jun-cc-pvdz": {"peptide": (250,1308,1042), "nanotube": (548,2748,2240),
+                    "protein83": (922,4762,3820)},
     "def2-svp": {"peptide": (210,1010,676), "nanotube": (444,2238,1472),
                  "protein83": (766,3735,2488)},
     "def2-tzvp": {"peptide": (394,1010,970), "nanotube": (902,2238,2216),

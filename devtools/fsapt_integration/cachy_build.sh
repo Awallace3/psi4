@@ -4,6 +4,12 @@
 set -euo pipefail
 ROOT=${1:?private root}
 PIN=${2:?exact source commit}
+PREFIX=${3:-$ROOT/install}
+case "$PREFIX" in
+    "$ROOT/install"|"$ROOT"/install-owned-*) ;;
+    *) echo "Install prefix must remain inside the private root" >&2; exit 2 ;;
+esac
+test "$(dirname "$PREFIX")" = "$ROOT"
 ENV=$HOME/gits/psi4-disp0-cachy/environment-v2
 test "$(git -C "$ROOT/source" rev-parse HEAD)" = "$PIN"
 test -z "$(git -C "$ROOT/source" status --porcelain)"
@@ -16,7 +22,7 @@ export LD_LIBRARY_PATH="$ROOT/runtime/lib:$ENV/lib"
 export PYTHONNOUSERSITE=1 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4
 RP="$ROOT/runtime/lib;$ENV/lib"
 cmake -S "$ROOT/source" -B "$ROOT/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX="$ROOT/install" -DCMAKE_INSTALL_LIBDIR=lib \
+    -DCMAKE_INSTALL_PREFIX="$PREFIX" -DCMAKE_INSTALL_LIBDIR=lib \
     -DPYMOD_INSTALL_LIBDIR=/python3.13/site-packages \
     -DCMAKE_C_COMPILER="$ENV/bin/x86_64-conda-linux-gnu-cc" \
     -DCMAKE_CXX_COMPILER="$ENV/bin/x86_64-conda-linux-gnu-c++" \
@@ -34,22 +40,24 @@ cmake --build "$ROOT/build" -j 4
 cmake --install "$ROOT/build"
 test "$(git -C "$ROOT/source" rev-parse HEAD)" = "$PIN"
 test -z "$(git -C "$ROOT/source" status --porcelain)"
-printf '%s\n' "$PIN" > "$ROOT/install/BUILT_FROM"
+printf '%s\n' "$PIN" > "$PREFIX/BUILT_FROM"
 echo BUILD_OK
 
-export ROOT PIN
+export ROOT PIN PREFIX
 RUN=$(mktemp -d "$ROOT/runs/cpu-cpks-$PIN-XXXXXX")
 mkdir "$RUN/scratch"
 export TMPDIR="$RUN/scratch" SCRATCH="$RUN/scratch" PSI_SCRATCH="$RUN/scratch"
-eval "$("$ROOT/install/bin/psi4" --psiapi)"
+eval "$("$PREFIX/bin/psi4" --psiapi)"
 python - <<'PY'
 import os
 from pathlib import Path
 import psi4
 root = Path(os.environ["ROOT"])
-assert Path(psi4.__file__).resolve().is_relative_to(root / "install")
-assert Path(psi4.core.__file__).resolve().is_relative_to(root / "install")
-assert (root / "install/BUILT_FROM").read_text().strip() == os.environ["PIN"]
+prefix = Path(os.environ["PREFIX"]).resolve()
+assert prefix.parent == root
+assert Path(psi4.__file__).resolve().is_relative_to(prefix)
+assert Path(psi4.core.__file__).resolve().is_relative_to(prefix)
+assert (prefix / "BUILT_FROM").read_text().strip() == os.environ["PIN"]
 print("TEST_IMPORT", psi4.__file__, psi4.core.__file__, flush=True)
 PY
 # A new working directory prevents timer.dat and F-SAPT outputs overwriting runs.
