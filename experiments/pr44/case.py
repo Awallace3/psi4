@@ -4,12 +4,12 @@ import hashlib
 import importlib.metadata
 import json
 import math
+import multiprocessing
 import os
 from pathlib import Path
 import platform
 import resource
 import subprocess
-import threading
 import time
 import traceback
 
@@ -38,7 +38,7 @@ def cgroup_dir():
     return None, None
 
 
-def monitor(output, scratch, stop):
+def monitor(output, scratch, stop, pid):
     cg, version = cgroup_dir()
     names = (["memory.current", "memory.peak", "memory.max", "memory.events", "memory.stat"]
              if version == 2 else
@@ -48,7 +48,7 @@ def monitor(output, scratch, stop):
         while not stop.is_set():
             sample = {"time": time.time(), "cgroup": str(cg), "cgroup_version": version}
             try:
-                sample["rss_bytes"] = int(Path("/proc/self/statm").read_text().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+                sample["rss_bytes"] = int(Path(f"/proc/{pid}/statm").read_text().split()[1]) * os.sysconf("SC_PAGE_SIZE")
                 sizes = [p.stat() for p in scratch.rglob("*") if p.is_file()]
                 sample["scratch_logical_bytes"] = sum(s.st_size for s in sizes)
                 sample["scratch_allocated_bytes"] = sum(s.st_blocks * 512 for s in sizes)
@@ -126,8 +126,11 @@ def main():
     metadata["naux_sapt"] = psi4.core.BasisSet.build(
         molecule, "DF_BASIS_SAPT", options["df_basis_sapt"], "RIFIT", options["basis"]).nbf()
     dump(args.output / "metadata.json", metadata)
-    stop = threading.Event()
-    sampler = threading.Thread(target=monitor, args=(args.output / "samples.jsonl", scratch, stop), daemon=True)
+    # FDDS's native bindings retain the GIL: a Python thread would miss exactly
+    # the long transform/QR peaks this experiment needs to observe.
+    context = multiprocessing.get_context("spawn")
+    stop = context.Event()
+    sampler = context.Process(target=monitor, args=(args.output / "samples.jsonl", scratch, stop, os.getpid()), daemon=True)
     sampler.start()
     start = time.perf_counter()
     result = {"completed": False, "case": case, "source_commit": expected}
@@ -146,6 +149,10 @@ def main():
         psi4.core.flush_outfile()
         stop.set()
         sampler.join(timeout=5)
+        if sampler.is_alive():
+            sampler.terminate()
+            sampler.join()
+        result["sampler_exitcode"] = sampler.exitcode
         dump(args.output / "result.json", result)
         print(json.dumps(result), flush=True)
     psi4.core.clean()

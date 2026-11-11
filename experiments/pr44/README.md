@@ -30,6 +30,8 @@ Each case records input/config/harness/native hashes, exact source SHA, loaded
 core path, environment packages, actual host/SLURM allocation, wall time,
 process peak RSS, sampled cgroup memory (including page cache), sampled scratch
 high-water size, full Psi4 output, component energies, and exceptions.
+Sampling uses a separate process so native calls holding the GIL cannot pause
+the monitor; its small memory overhead is included in cgroup readings.
 Sampling is not an exact high-water bound. Scratch is local to each allocation.
 
 Compare completed DISP/TOTAL energies with the base at absolute tolerance
