@@ -449,6 +449,8 @@ class PSI_API DFHelper {
     // => AO building machinery <=
     void prepare_AO();
     void prepare_AO_core();
+    /// Minimum AO-block buffer doubles needed for a single p-shell in-core build
+    size_t min_AO_core_block() const;
     /// Cap the metric-contraction panels to fit next to `held` doubles; returns their size
     size_t reserve_metric_panels(size_t held);
     void compute_dense_Qpq_blocking_Q(const size_t start, const size_t stop, double* Mp,

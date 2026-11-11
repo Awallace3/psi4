@@ -236,16 +236,17 @@ void DFHelper::AO_core(bool set_AO_core=true) {
         required_core_size_ = (do_wK_ ? ( wcombine_ ? 2 * big_skips_[nbf_] : 3 * big_skips_[nbf_] ) : big_skips_[nbf_]);
     }
 
-    // Auxiliary metric
-    required_core_size_ += naux_ * naux_;
+    // Auxiliary metric(s): prepare_AO_core holds one naux^2 metric; prepare_AO_wK_core holds two.
+    required_core_size_ += (do_wK_ ? 2 : 1) * naux_ * naux_;
 
     // Transients on top of the AOs and the metric: the JK build's C_buffers (conservative estimate
     // since I do not have max_nocc TODO) and tmp buffers, or, while the AOs are built, the metric
-    // contraction's panels. They are never live together. The panels are charged at their
-    // narrowest width, twice, since reserve_metric_panels gives them at most half of the spare
-    // memory; wider panels are used when they fit. The direct modes never contract panels.
+    // contraction's panels plus at least one p-shell AO block. They are never live together. The
+    // panels are charged at their narrowest width, and the AO-block side is at least that wide too
+    // (for the half-of-spare rule) and at least the largest single p-shell block.
     const size_t jk_tmp = nthreads_ * nbf_ * nbf_ + 3 * nbf_ * nbf_ * Qshell_max_;
-    const size_t panels = (direct_ || direct_iaQ_) ? 0 : 2 * AO_core_init_scratch(true);
+    const size_t s_min = AO_core_init_scratch(true);
+    const size_t panels = (direct_ || direct_iaQ_) ? 0 : s_min + std::max(s_min, min_AO_core_block());
     required_core_size_ += std::max(jk_tmp, panels);
 
     // set AO_core_ if requested
@@ -606,14 +607,34 @@ bool DFHelper::metric_cholesky_route() const {
     // Only the in-core J^-1/2 build (prepare_AO_core) has a Cholesky route; the wK build does not.
     return metric_cholesky_ && !do_wK_ && std::fabs(mpower_ + 0.5) < 1e-13;
 }
+size_t DFHelper::min_AO_core_block() const {
+    if (direct_ || direct_iaQ_) return 0;
+    size_t max_pshell = 0;
+    for (size_t i = 0; i < pshells_; ++i) {
+        const size_t begin = pshell_aggs_[i];
+        const size_t end = pshell_aggs_[i + 1] - 1;
+        max_pshell = std::max(max_pshell, symm_big_skips_[end + 1] - symm_big_skips_[begin]);
+    }
+    return (do_wK_ && wcombine_) ? 2 * max_pshell : max_pshell;
+}
 size_t DFHelper::reserve_metric_panels(size_t held) {
-    // Under a tight budget give the two panels at most half of what the held tensors (AOs,
-    // metrics) leave; the AO blocks get the rest. Returns the doubles reserved for the panels.
+    // Under a tight budget give the metric scratch at most half of what the held tensors (AOs,
+    // metrics) leave, and always leave at least min_AO_core_block() for the largest single
+    // p-shell AO block. Returns the doubles reserved for the metric contraction scratch.
     panel_cols_cap_ = 0;
+    const size_t q_min = min_AO_core_block();
     const size_t spare = memory_ > held ? memory_ - held : 0;
-    if (AO_core_init_scratch() > spare / 2) panel_cols_cap_ = std::max<size_t>(1, spare / 4 / naux_);
-    const size_t s = AO_core_init_scratch();  // with the cap applied
-    if (s >= memory_) throw PSIEXCEPTION("DFHelper: not enough memory for the metric contraction panels.");
+    const size_t max_for_panels = std::min(spare / 2, spare > q_min ? spare - q_min : size_t(0));
+    if (AO_core_init_scratch() > max_for_panels) {
+        const size_t fixed_scratch =
+            small_skips_[nbf_] + (metric_cholesky_route() && hold_met_ ? naux_ * naux_ : 0);
+        const size_t panel_doubles = max_for_panels > fixed_scratch ? max_for_panels - fixed_scratch : 0;
+        panel_cols_cap_ = std::max<size_t>(1, panel_doubles / (2 * naux_));
+    }
+    const size_t s = AO_core_init_scratch();  // with the cap applied (floored at narrowest)
+    if (memory_ < held + q_min || s > memory_ - held - q_min) {
+        throw PSIEXCEPTION("DFHelper: not enough memory for the metric contraction panels.");
+    }
     return s;
 }
 void DFHelper::prepare_AO_core() {
@@ -634,12 +655,14 @@ void DFHelper::prepare_AO_core() {
         }
     }
 
-    // determine blocking, leaving room for the metric contraction's panels (and Cholesky copy);
-    // the direct modes never contract panels
+    // determine blocking, leaving room for the metric contraction's panels (and Cholesky copy)
+    // next to Ppq_ and the naux^2 metric; the direct modes neither contract panels nor block Qpq
     std::vector<std::pair<size_t, size_t>> psteps;
-    const size_t init_scratch =
-        (direct_ || direct_iaQ_) ? 0 : reserve_metric_panels(big_skips_[nbf_] + (hold_met_ ? naux_ * naux_ : 0));
-    std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_ - init_scratch, 1, psteps);
+    std::pair<size_t, size_t> plargest{0, 0};
+    if (!direct_ && !direct_iaQ_) {
+        const size_t init_scratch = reserve_metric_panels(big_skips_[nbf_] + naux_ * naux_);
+        plargest = pshell_blocks_for_AO_build(memory_ - init_scratch, 1, psteps);
+    }
 
     // allocate final AO vector
     if (direct_iaQ_) {
@@ -781,9 +804,9 @@ void DFHelper::prepare_AO_wK_core() {
     }
 
     // use blocking as for prepare_AO_core, leaving room for the metric contraction's panels
-    // next to the held AOs (wPpq, m1Ppq and, unless combined, Ppq) and the two held metrics
+    // next to the held AOs (wPpq, m1Ppq and, unless combined, Ppq) and the two naux^2 metrics
     std::vector<std::pair<size_t, size_t>> psteps;
-    const size_t held = (wcombine_ ? 2 : 3) * big_skips_[nbf_] + (hold_met_ ? 2 * naux_ * naux_ : 0);
+    const size_t held = (wcombine_ ? 2 : 3) * big_skips_[nbf_] + 2 * naux_ * naux_;
     const size_t init_scratch = reserve_metric_panels(held);
     std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_ - init_scratch, 1, psteps);
 
@@ -801,7 +824,7 @@ void DFHelper::prepare_AO_wK_core() {
     double* m1ppq = m1Ppq_.get();
 
     std::unique_ptr<double[]> Qpq(new double[std::get<0>(plargest)]);
-    std::unique_ptr<double[]> Qpq2(new double[std::get<0>(plargest)]);
+    std::unique_ptr<double[]> Qpq2 = wcombine_ ? std::make_unique<double[]>(std::get<0>(plargest)) : nullptr;
     double* M1p = Qpq.get();
     double* M2p = Qpq2.get();
     std::unique_ptr<double[]> metric1;
@@ -875,7 +898,8 @@ void DFHelper::prepare_AO_wK_core() {
 }
 std::pair<size_t, size_t> DFHelper::pshell_blocks_for_AO_build(const size_t mem, size_t symm,
                                                                std::vector<std::pair<size_t, size_t>>& b) {
-    size_t full_3index = (symm ? big_skips_[nbf_] : 0);
+    size_t full_3index = (symm ? (do_wK_ ? (wcombine_ ? 2 : 3) * big_skips_[nbf_] : big_skips_[nbf_]) : 0);
+    size_t symm_metrics = (symm ? (do_wK_ ? 2 : 1) * naux_ * naux_ : 0);
     size_t constraint, end, begin, current, block_size, tmpbs, total, count, largest;
     block_size = tmpbs = total = count = largest = 0;
     for (size_t i = 0; i < pshells_; i++) {
@@ -885,18 +909,8 @@ std::pair<size_t, size_t> DFHelper::pshell_blocks_for_AO_build(const size_t mem,
         tmpbs += end - begin + 1;
 
         if (symm) {
-            // in-core symmetric
-            // get current cost of this block of AOs and add it to the total
-            // the second buffer is accounted for with full AO_core
+            // in-core symmetric: Qpq holds one block (plus Qpq2 when do_wK_ && wcombine_)
             current = symm_big_skips_[end + 1] - symm_big_skips_[begin];
-            if (do_wK_) {
-                if (wcombine_) {
-                    current *= 2; 
-                }
-                else {
-                    current *= 3;
-                } 
-            }
             total += current;
         } else {
             // on-disk
@@ -909,11 +923,13 @@ std::pair<size_t, size_t> DFHelper::pshell_blocks_for_AO_build(const size_t mem,
             total += 2 * current;
         }
 
-        constraint = total;
-        constraint += full_3index;
-        constraint += (hold_met_ ? naux_ * naux_ : total);
+        if (symm) {
+            constraint = full_3index + symm_metrics + ((do_wK_ && wcombine_) ? 2 * total : total);
+        } else {
+            constraint = total + full_3index + (hold_met_ ? naux_ * naux_ : total);
+        }
         if (constraint > mem || i == pshells_ - 1) {
-            if (count == 1 && i != pshells_ - 1) {
+            if (count == 1 && constraint > mem) {
                 std::stringstream error;
                 error << "DFHelper: not enough memory for (p shell) AO blocking!"
                       << " required memory: " << constraint * 8 / (1024 * 1024 * 1024.0) << " [GiB].";
