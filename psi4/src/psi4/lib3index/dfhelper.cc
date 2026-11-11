@@ -27,6 +27,7 @@
  */
 
 #include "dfhelper.h"
+#include "dfhelper_jk_blocking.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -907,59 +908,12 @@ std::pair<size_t, size_t> DFHelper::Qshell_blocks_for_transform(const size_t mem
 }
 std::tuple<size_t, size_t> DFHelper::Qshell_blocks_for_JK_build(std::vector<std::pair<size_t, size_t>>& b,
                                                                 size_t max_nocc, bool lr_symmetric) {
-    // strategy here:
-    // 1. depending on lr_symmetric, T2 can either be the same as T1 or
-    // it can just be used as a Jtmp.
-    // 2. T3 is always used, includes C_buffers
-
-    // K tmps
-    size_t T1 = nbf_ * max_nocc;
-    size_t T2 = (lr_symmetric ? nbf_ * nbf_ : nbf_ * max_nocc);
-
-    // C_buffers
-    size_t T3 = std::max(nthreads_ * nbf_ * nbf_, nthreads_ * nbf_ * max_nocc);
-
-    // total AO buffer size is max if core alg is used, otherwise init to 0
-    size_t total_AO_buffer = (AO_core_ ? big_skips_[nbf_] : 0);
-
-    size_t block_size = 0, largest = 0;
-    for (size_t i = 0, tmpbs = 0, count = 1; i < Qshells_; i++, count++) {
-        // get shell info
-        size_t begin = Qshell_aggs_[i];
-        size_t end = Qshell_aggs_[i + 1] - 1;
-
-        // update AO buffer, block sizes
-        size_t current = (end - begin + 1) * small_skips_[nbf_];
-        total_AO_buffer += (AO_core_ ? 0 : current);
-        tmpbs += end - begin + 1;
-
-        // compute total memory used by aggregate block
-        size_t constraint = total_AO_buffer + T1 * tmpbs + T3;
-        constraint += (lr_symmetric ? T2 : T2 * tmpbs);
-
-        if (constraint > memory_ || i == Qshells_ - 1) {
-            if (count == 1 && i != Qshells_ - 1) {
-                std::stringstream error;
-                error << "DFHelper: not enough memory for JK blocking!";
-                throw PSIEXCEPTION(error.str().c_str());
-            }
-            if (constraint > memory_) {
-                total_AO_buffer -= current;
-                tmpbs -= end - begin + 1;
-                b.push_back(std::make_pair(i - count + 1, i - 1));
-                i--;
-            } else if (i == Qshells_ - 1) {
-                b.push_back(std::make_pair(i - count + 1, i));
-            }
-            if (block_size < tmpbs) {
-                largest = total_AO_buffer;
-                block_size = tmpbs;
-            }
-            count = total_AO_buffer = tmpbs = 0;
-        }
+    try {
+        return detail::dfhelper_jk_blocks(b, Qshell_aggs_, nbf_, nthreads_, max_nocc, lr_symmetric,
+                                         AO_core_, big_skips_[nbf_], small_skips_[nbf_], memory_);
+    } catch (const std::runtime_error& error) {
+        throw PSIEXCEPTION(error.what());
     }
-
-    return std::make_tuple(largest, block_size);
 }
 
 FILE* DFHelper::stream_check(std::string filename, std::string op) {
