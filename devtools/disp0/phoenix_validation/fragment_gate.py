@@ -247,7 +247,8 @@ def batched_probe(runtime):
             # Same device inputs and pair math, different launch granularity.
             # Correctness controls only, outside the public energy timer.
             record["ordered_sweep_controls"]=[]
-            for O,M,K,nf,power in ((20,64,24,5,4),(3,513,513,1,2)):
+            for O,M,K,nf,power in ((20,64,24,5,4),(5,257,257,2,2),(5,257,257,2,4),
+                                  (3,513,513,1,2)):
                 coordinates=np.linalg.qr(rng.normal(size=(M,O)))[0].T.copy()
                 energies=np.linspace(-1.4,-.3,O)
                 atoms=np.arange(M,dtype=np.int64)%K
@@ -258,18 +259,20 @@ def batched_probe(runtime):
                         rotation=session.upload(np.eye(O))
                         gradient=session.empty((1,),zero=True)
                         labels=session.upload_indices(atoms)
-                        if algorithm=="fused":
-                            session.launch("ibo_sweep",1,128,
-                                [O,M,K,power,nf,labels,rows,rotation,gradient])
-                        else:
-                            for first,last in ((0,nf),(nf,O)):
-                                for i in range(first,last):
-                                    for j in range(first,i):
-                                        session.launch("ibo_pair",1,128,
-                                            [O,M,K,power,i,j,labels,rows,rotation,gradient])
-                        raw[algorithm]=[session.download(x) for x in (rows,rotation,gradient)]
+                        raw[algorithm]=[]
+                        for sweep in range(3):
+                            if algorithm=="fused":
+                                session.launch("ibo_sweep",1,128,
+                                    [O,M,K,power,nf,labels,rows,rotation,gradient])
+                            else:
+                                for first,last in ((0,nf),(nf,O)):
+                                    for i in range(first,last):
+                                        for j in range(first,i):
+                                            session.launch("ibo_pair",1,128,
+                                                [O,M,K,power,i,j,labels,rows,rotation,gradient])
+                            raw[algorithm].extend(session.download(x) for x in (rows,rotation,gradient))
                 # Compare bits before permutation or BLAS can conceal a change.
-                for name,a,b in zip(("rows","rotation","gradient"),raw["pairwise"],raw["fused"]):
+                for name,a,b in zip(("rows","rotation","gradient")*3,raw["pairwise"],raw["fused"]):
                     np.testing.assert_array_equal(a.view(np.uint64),b.view(np.uint64),
                         err_msg="Physical ordered sweep raw bits "+name)
                 samples={}
@@ -291,8 +294,35 @@ def batched_probe(runtime):
                     worst=max(worst,float(np.max(np.abs(a-b),initial=0.)))
                 record["ordered_sweep_controls"].append(
                     {"occupied":O,"minimal":M,"atoms":K,"frozen":nf,"power":power,
-                     "raw_one_sweep_bitwise_equal":True,
+                     "raw_sweeps_bitwise_equal":3,
                      "maximum_absolute_difference":worst})
+            elst=importlib.import_module("psi4.driver.procrouting.sapt.sapt_fisapt_elst_cuda")
+            # Real-device rejection controls, not CPU-shim evidence. Calling
+            # this admission function requires no native potential/DF provider.
+            charges=np.array([0.,-0.,-.25,1e-200,1.])
+            active=((2,3,4),(2,3,4))
+            mask_controls=[]
+            for label,za,zb,indices,accept in (
+                    ("signed-zero-fractional-tiny",charges,charges,active,True),
+                    ("omitted-nonzero",charges,charges,((2,4),(2,3,4)),False),
+                    ("active-ghost",charges,charges,((0,2,3,4),(2,3,4)),False),
+                    *[(f"nonfinite-{side}-{bad}",
+                       np.array([bad,-0.,-.25,1e-200,1.]) if side=="A" else charges,
+                       np.array([bad,-0.,-.25,1e-200,1.]) if side=="B" else charges,
+                       active,False)
+                      for side in ("A","B") for bad in (np.nan,np.inf,-np.inf)]):
+                with session.scope():
+                    try:
+                        result=elst.validated_active_atoms(
+                            session,session.upload(za),session.upload(zb),indices)
+                    except ValueError:
+                        if accept:raise
+                    else:
+                        if not accept:raise AssertionError("Charge mask accepted "+label)
+                        if result!=(frozenset(active[0]),frozenset(active[1])):
+                            raise AssertionError("Incorrect active atoms "+label)
+                    mask_controls.append({"case":label,"expected_acceptance":accept,"passed":True})
+            record["charge_mask_controls"]=mask_controls
             record["successful_blas_calls"] = dict(session.blas_calls)
             record["successful_kernel_launches"] = dict(session.kernel_launches)
             if session.blas_calls.get("cublasDgemmStridedBatched", 0) < 12:

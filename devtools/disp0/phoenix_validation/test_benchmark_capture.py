@@ -1,10 +1,11 @@
 """Snapshot deferral contracts without importing/executing a native Psi4 core."""
 import ast
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+import numpy as np
 
 from fragment_gate import FIELDS, validate_factor_cache
 
@@ -36,7 +37,7 @@ class SnapshotContracts(unittest.TestCase):
             "ExitStack":ExitStack,"patch":patch,"original":Mock(side_effect=original),
             "raw_snapshot":Mock(),"capture":Mock(),"phases":[],"result":{},
             "time":SimpleNamespace(perf_counter=Mock(side_effect=(1.,2.))),
-            "args":SimpleNamespace(factor_cache_bytes=4*1024**3)}
+            "args":SimpleNamespace(factor_cache_bytes=4*1024**3,optimization_probe=False)}
         fragment=nested_function("fragment",namespace)
         module="psi4.driver.procrouting.sapt.sapt_fisapt_workflow_cuda"
         with patch.dict("sys.modules",{module:SimpleNamespace(HF_FIELDS=())}):
@@ -50,6 +51,38 @@ class SnapshotContracts(unittest.TestCase):
             self.assertEqual(namespace["original"].call_count,1)
         self.assertTrue(all(getattr(core,k) is not forbidden for k in core_names))
         self.assertTrue(all(getattr(terms,k) is not forbidden for k in term_names))
+
+    def test_optimization_probe_preserves_actual_and_compares_all_elst_fields(self):
+        for mismatch in (None,"qa","qb","matrix","total"):
+            with self.subTest(mismatch=mismatch):
+                fields={key:np.ones((1,)) for key in ("qa","qb","matrix","total")}
+                actual=SimpleNamespace(**fields,work_plan={"point_potential_calls":3})
+                reference=SimpleNamespace(**{key:value.copy() for key,value in fields.items()},
+                                          work_plan={"point_potential_calls":6})
+                if mismatch:
+                    getattr(reference,mismatch)[0]+=1e-5
+                session=SimpleNamespace(scope=Mock(side_effect=nullcontext),
+                                        download=lambda value:value)
+                provider=SimpleNamespace(session=session)
+                original=Mock(side_effect=(actual,reference))
+                report={}
+                probe=nested_function("paired_elst",
+                    {"original_elst":original,"np":np,"result":report})
+                indices=((0,),(1,2))
+                if mismatch:
+                    with self.assertRaises(AssertionError):
+                        probe(provider,active_atoms=indices,jkfit_basis="JKFIT")
+                    self.assertEqual(report,{})
+                else:
+                    self.assertIs(probe(provider,active_atoms=indices,jkfit_basis="JKFIT"),actual)
+                    control=report["optimization_controls"]
+                    self.assertEqual(set(control["felst_maximum_absolute_errors"]),set(fields))
+                    self.assertTrue(all(x==0. for x in control["felst_maximum_absolute_errors"].values()))
+                self.assertEqual(original.call_args_list[0].kwargs,
+                                 {"active_atoms":indices,"jkfit_basis":"JKFIT"})
+                self.assertEqual(original.call_args_list[1].kwargs,
+                                 {"active_atoms":None,"jkfit_basis":"JKFIT"})
+                session.scope.assert_called_once_with()
 
     def test_explicit_cache_cap_does_not_change_cpu_reference_or_accept_unbounded_inputs(self):
         for budget in (0,64*1024**2,4*1024**3):

@@ -5,6 +5,11 @@ set -euo pipefail
 ROOT=${1:?private root}
 PIN=${2:?exact source commit}
 PREFIX=${3:-$ROOT/install}
+JOBS=${FSAPT_BUILD_JOBS:-4}
+case "$JOBS" in
+    1|2|3|4) ;;
+    *) echo "FSAPT_BUILD_JOBS must be between 1 and 4" >&2; exit 2 ;;
+esac
 case "$PREFIX" in
     "$ROOT/install"|"$ROOT"/install-owned-*) ;;
     *) echo "Install prefix must remain inside the private root" >&2; exit 2 ;;
@@ -36,7 +41,7 @@ cmake -S "$ROOT/source" -B "$ROOT/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DcuEST_LIBRARY="$ROOT/runtime/cuest/lib/13/libcuest.so" \
     -DCMAKE_BUILD_RPATH="$RP" -DCMAKE_INSTALL_RPATH="$RP" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -Dpsi4_CMAKE_UNITY_BUILD_BATCH_SIZE=4
-cmake --build "$ROOT/build" -j 4
+cmake --build "$ROOT/build" -j "$JOBS"
 cmake --install "$ROOT/build"
 test "$(git -C "$ROOT/source" rev-parse HEAD)" = "$PIN"
 test -z "$(git -C "$ROOT/source" status --porcelain)"
