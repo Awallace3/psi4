@@ -393,6 +393,9 @@ class PSI_API DFHelper {
     bool metric_cholesky_ = false;
     /// upper bound on metric_panel_cols() set by reserve_metric_panels under a tight budget (0: none)
     size_t panel_cols_cap_ = 0;
+    /// reusable scratch panels for contract_metric_AO_core_symm across psteps chunks
+    std::unique_ptr<double[]> metric_panel_buf_, metric_out_buf_;
+    size_t metric_panel_size_ = 0, metric_out_size_ = 0;
     bool built_ = false;
     bool transformed_ = false;
     std::pair<size_t, size_t> info_;

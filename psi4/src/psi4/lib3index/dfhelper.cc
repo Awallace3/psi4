@@ -41,7 +41,13 @@
 #include <omp.h>
 #endif
 
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <limits>
 #include <memory>
+#include <libint2/engine.h>
+#include <libint2/shell.h>
 #include "psi4/psi4-dec.h"
 #include "psi4/liboptions/liboptions.h"
 #include "psi4/libfock/jk.h"
@@ -314,55 +320,91 @@ void DFHelper::prepare_sparsity() {
     small_skips_.resize(nbf_ + 1);
     big_skips_.resize(nbf_ + 1);
 
-    // => Populate a vector of TwoBodyAOInt to make ERIs, one per screening thread. <=
-    size_t screen_threads = (nthreads_ == 1 ? 1 : 2);  // TODO: Replace screen_threads with nthreads_?
-    auto rifactory = std::make_shared<IntegralFactory>(primary_, primary_, primary_, primary_);
-    std::vector<std::shared_ptr<TwoBodyAOInt>> eri(screen_threads);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
-    if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
-#pragma omp parallel num_threads(screen_threads) if (nbf_ > 1000)
-    {
-        int rank = 0;
-#ifdef _OPENMP
-        rank = omp_get_thread_num();
-#endif
-        if (rank) {
-            eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
-        }
-    }
-
     // => For each shell pair and basis pair, store the max (mn|mn)-type integral for screening. <=
     double max_val = 0.0;
-#pragma omp parallel for num_threads(screen_threads) if (nbf_ > 1000) schedule(guided) reduction(max : max_val)
-    for (size_t MU = 0; MU < pshells_; ++MU) {
-        int rank = 0;
+    const bool use_simint = (Process::environment.options.get_str("INTEGRAL_PACKAGE") == "SIMINT");
+    if (!use_simint) {
+        const int max_am = primary_->max_am();
+        const int max_nprim = primary_->max_nprimitive();
+        std::vector<libint2::Engine> engs;
+        engs.reserve(nthreads_);
+        for (size_t t = 0; t < nthreads_; ++t) {
+            engs.emplace_back(libint2::Operator::coulomb, max_nprim, max_am, 0, 0.0,
+                              libint2::operator_traits<libint2::Operator::coulomb>::default_params(),
+                              libint2::BraKet::xx_xx);
+        }
+#pragma omp parallel for num_threads(nthreads_) schedule(guided) reduction(max : max_val)
+        for (size_t MU = 0; MU < pshells_; ++MU) {
+            int rank = 0;
 #ifdef _OPENMP
-        rank = omp_get_thread_num();
+            rank = omp_get_thread_num();
 #endif
-        const auto& buffers = eri[rank]->buffers();
-        size_t nmu = primary_->shell(MU).nfunction();
-        for (size_t NU = 0; NU <= MU; ++NU) {
-            size_t nnu = primary_->shell(NU).nfunction();
-            eri[rank]->compute_shell(MU, NU, MU, NU);
-            const auto *buffer = buffers[0];
-            // Loop over basis functions inside shell pair
-            for (size_t mu = 0; mu < nmu; ++mu) {
-                size_t omu = primary_->shell(MU).function_index() + mu;
-                for (size_t nu = 0; nu < nnu; ++nu) {
-                    size_t onu = primary_->shell(NU).function_index() + nu;
-
-                    // Find shell and function maximums
-                    if (omu >= onu) {
-                        size_t index = mu * (nnu * nmu * nnu + nnu) + nu * (nmu * nnu + 1);
-                        double val = fabs(buffer[index]);
-                        max_val = std::max(val, max_val);
-                        if (shell_max_vals[MU * pshells_ + NU] <= val) {
-                            shell_max_vals[MU * pshells_ + NU] = val;
-                            shell_max_vals[NU * pshells_ + MU] = val;
+            auto& eng = engs[rank];
+            const auto& sh_mu = primary_->l2_shell(MU);
+            size_t nmu = primary_->shell(MU).nfunction();
+            size_t bmu = primary_->shell(MU).function_index();
+            for (size_t NU = 0; NU <= MU; ++NU) {
+                const auto& sh_nu = primary_->l2_shell(NU);
+                size_t nnu = primary_->shell(NU).nfunction();
+                size_t bnu = primary_->shell(NU).function_index();
+                eng.compute2<libint2::Operator::coulomb, libint2::BraKet::xx_xx, 0>(sh_mu, sh_nu, sh_mu, sh_nu);
+                const double* buffer = eng.results()[0];
+                double sh_max = 0.0;
+                if (buffer != nullptr) {
+                    for (size_t mu = 0; mu < nmu; ++mu) {
+                        size_t omu = bmu + mu;
+                        for (size_t nu = 0; nu < nnu; ++nu) {
+                            size_t onu = bnu + nu;
+                            if (omu >= onu) {
+                                size_t index = mu * (nnu * nmu * nnu + nnu) + nu * (nmu * nnu + 1);
+                                double val = std::fabs(buffer[index]);
+                                sh_max = std::max(sh_max, val);
+                                fun_max_vals[omu * nbf_ + onu] = val;
+                                fun_max_vals[onu * nbf_ + omu] = val;
+                            }
                         }
-                        if (fun_max_vals[omu * nbf_ + onu] <= val) {
-                            fun_max_vals[omu * nbf_ + onu] = val;
-                            fun_max_vals[onu * nbf_ + omu] = val;
+                    }
+                }
+                max_val = std::max(max_val, sh_max);
+                shell_max_vals[MU * pshells_ + NU] = sh_max;
+                shell_max_vals[NU * pshells_ + MU] = sh_max;
+            }
+        }
+    } else {
+        auto rifactory = std::make_shared<IntegralFactory>(primary_, primary_, primary_, primary_);
+        std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
+        eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri(0, false));
+        for (size_t rank = 1; rank < nthreads_; rank++) {
+            eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
+        }
+#pragma omp parallel for num_threads(nthreads_) schedule(guided) reduction(max : max_val)
+        for (size_t MU = 0; MU < pshells_; ++MU) {
+            int rank = 0;
+#ifdef _OPENMP
+            rank = omp_get_thread_num();
+#endif
+            const auto& buffers = eri[rank]->buffers();
+            size_t nmu = primary_->shell(MU).nfunction();
+            for (size_t NU = 0; NU <= MU; ++NU) {
+                size_t nnu = primary_->shell(NU).nfunction();
+                eri[rank]->compute_shell(MU, NU, MU, NU);
+                const auto* buffer = buffers[0];
+                for (size_t mu = 0; mu < nmu; ++mu) {
+                    size_t omu = primary_->shell(MU).function_index() + mu;
+                    for (size_t nu = 0; nu < nnu; ++nu) {
+                        size_t onu = primary_->shell(NU).function_index() + nu;
+                        if (omu >= onu) {
+                            size_t index = mu * (nnu * nmu * nnu + nnu) + nu * (nmu * nnu + 1);
+                            double val = std::fabs(buffer[index]);
+                            max_val = std::max(val, max_val);
+                            if (shell_max_vals[MU * pshells_ + NU] <= val) {
+                                shell_max_vals[MU * pshells_ + NU] = val;
+                                shell_max_vals[NU * pshells_ + MU] = val;
+                            }
+                            if (fun_max_vals[omu * nbf_ + onu] <= val) {
+                                fun_max_vals[omu * nbf_ + onu] = val;
+                                fun_max_vals[onu * nbf_ + omu] = val;
+                            }
                         }
                     }
                 }
@@ -375,18 +417,30 @@ void DFHelper::prepare_sparsity() {
 
     // ==> Is this shell pair significant? <==
     for (size_t i = 0; i < pshells_ * pshells_; i++) schwarz_shell_mask_[i] = (shell_max_vals[i] >= tolerance);
-    
-    // ==> Is this basis function pair significant? Also start storing non-symmetric indexing. <==
-    for (size_t i = 0, count = 0; i < nbf_; i++) {
-        count = 0;
+
+    // ==> Is this basis function pair significant? Also start storing non-symmetric indexing & symmetric counts. <==
+#pragma omp parallel for num_threads(nthreads_) schedule(static) if (nbf_ >= 256)
+    for (size_t i = 0; i < nbf_; i++) {
+        size_t count = 0;
+        size_t symm_size = 0;
+        size_t symm_skip = 0;
+        const double* frow = &fun_max_vals[i * nbf_];
+        size_t* srow = &schwarz_fun_index_[i * nbf_];
         for (size_t j = 0; j < nbf_; j++) {
-            if (fun_max_vals[i * nbf_ + j] >= tolerance) {
+            if (frow[j] >= tolerance) {
                 count++;
-                schwarz_fun_index_[i * nbf_ + j] = count;
-            } else
-                schwarz_fun_index_[i * nbf_ + j] = 0;
+                srow[j] = count;
+                if (j >= i)
+                    symm_size++;
+                else
+                    symm_skip++;
+            } else {
+                srow[j] = 0;
+            }
         }
         small_skips_[i] = count;
+        symm_small_skips_[i] = symm_size;
+        symm_ignored_columns_[i] = symm_skip;
     }
 
     // ==> Non-symmetric indexing. <==
@@ -401,18 +455,6 @@ void DFHelper::prepare_sparsity() {
     small_skips_[nbf_] = coltots;
 
     // ==> Symmetric indexing. <==
-    for (size_t i = 0; i < nbf_; i++) {
-        size_t size = 0;
-        size_t skip = 0;
-        for (size_t j = 0; j < nbf_; j++) {
-            if (schwarz_fun_index_[i * nbf_ + j]) {
-                (j >= i ? size++ : skip++);
-            }
-        }
-        symm_small_skips_[i] = size;
-        symm_ignored_columns_[i] = skip;
-    }
-
     symm_big_skips_[0] = 0;
     for (size_t i = 1; i < nbf_ + 1; i++) {
         symm_big_skips_[i] = symm_big_skips_[i - 1] + symm_small_skips_[i - 1] * naux_;
@@ -427,8 +469,7 @@ void DFHelper::prepare_AO() {
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
-    if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
+    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri(0, false));
     for(int rank = 1; rank < nthreads_; rank++) {
         eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
     }
@@ -499,15 +540,14 @@ void DFHelper::prepare_AO_wK() {
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
-    if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
+    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri(0, false));
 #pragma omp parallel num_threads(nthreads_)
     {
         int rank = 0;
 #ifdef _OPENMP
         rank = omp_get_thread_num();
 #endif
-        eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
+        if (rank) eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
     }
 
     // gather blocking info
@@ -556,19 +596,21 @@ size_t DFHelper::reserve_metric_panels(size_t held) {
     return s;
 }
 void DFHelper::prepare_AO_core() {
-    // get each thread an eri object
-    std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
-    auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
-    std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
-    if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
+    const bool use_simint = (Process::environment.options.get_str("INTEGRAL_PACKAGE") == "SIMINT");
+    std::vector<std::shared_ptr<TwoBodyAOInt>> eri;
+    if (use_simint || direct_ || direct_iaQ_) {
+        std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
+        auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
+        eri.resize(nthreads_);
+        eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri(0, false));
 #pragma omp parallel num_threads(nthreads_)
-    {
-        int rank = 0;
+        {
+            int rank = 0;
 #ifdef _OPENMP
-        rank = omp_get_thread_num();
+            rank = omp_get_thread_num();
 #endif
-        if(rank) eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
+            if (rank) eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
+        }
     }
 
     // determine blocking, leaving room for the metric contraction's panels (and Cholesky copy);
@@ -583,6 +625,15 @@ void DFHelper::prepare_AO_core() {
         Ppq_ = std::unique_ptr<double[]>(new double[naux_ * nbf_ * nbf_]);
     } else {
         Ppq_ = std::unique_ptr<double[]>(new double[big_skips_[nbf_]]);
+        // Parallel first-touch by p-block so NUMA placement matches J and K first-transform loops.
+#pragma omp parallel for schedule(guided) num_threads(nthreads_) if (big_skips_[nbf_] >= 524288)
+        for (size_t p = 0; p < nbf_; ++p) {
+            const size_t b0 = big_skips_[p];
+            const size_t b1 = big_skips_[p + 1];
+            for (size_t idx = b0; idx < b1; idx += 512) {
+                Ppq_[idx] = 0.0;
+            }
+        }
     }
 
     double* ppq = Ppq_.get();
@@ -672,32 +723,39 @@ void DFHelper::prepare_AO_core() {
             contract_metric_AO_core_symm(Mp, ppq, metp, begin, end, chol);
             timer_off("DFH: AO-Met. Contraction");
         }
-        // no more need for metrics
+        // no more need for metrics or metric contraction panels
+        metric_panel_buf_.reset();
+        metric_out_buf_.reset();
+        metric_panel_size_ = metric_out_size_ = 0;
         if (hold_met_) metrics_.clear();
     }
     // outfile->Printf("\n    ==> End AO Blocked Construction <==");
 }
 void DFHelper::prepare_AO_wK_core() {
-    // get each thread an eri object
-    std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
-    auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
-    std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
-    std::vector<std::shared_ptr<TwoBodyAOInt>> weri(nthreads_);
-
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
-    if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
-
-    weri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->erf_eri(omega_));
-    if (!(weri.front()->sieve_initialized())) weri.front()->initialize_sieve();
+    const bool use_simint = (Process::environment.options.get_str("INTEGRAL_PACKAGE") == "SIMINT");
+    std::vector<std::shared_ptr<TwoBodyAOInt>> eri;
+    std::vector<std::shared_ptr<TwoBodyAOInt>> weri;
+    if (use_simint || !wcombine_) {
+        std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
+        auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
+        if (use_simint) {
+            eri.resize(nthreads_);
+            eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri(0, false));
+        }
+        if (!wcombine_) {
+            weri.resize(nthreads_);
+            weri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->erf_eri(omega_, 0, false));
+        }
 #pragma omp parallel num_threads(nthreads_)
-    {
-        int rank = 0;
+        {
+            int rank = 0;
 #ifdef _OPENMP
-        rank = omp_get_thread_num();
+            rank = omp_get_thread_num();
 #endif
-        if (rank) {
-            eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
-            weri[rank] = std::shared_ptr<TwoBodyAOInt>(weri.front()->clone());
+            if (rank) {
+                if (!eri.empty()) eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
+                if (!weri.empty()) weri[rank] = std::shared_ptr<TwoBodyAOInt>(weri.front()->clone());
+            }
         }
     }
 
@@ -788,7 +846,10 @@ void DFHelper::prepare_AO_wK_core() {
 
         }
     }
-    // no more need for metrics
+    // no more need for metrics or metric contraction panels
+    metric_panel_buf_.reset();
+    metric_out_buf_.reset();
+    metric_panel_size_ = metric_out_size_ = 0;
     if (hold_met_) metrics_.clear();
 }
 std::pair<size_t, size_t> DFHelper::pshell_blocks_for_AO_build(const size_t mem, size_t symm,
@@ -1377,65 +1438,160 @@ void DFHelper::compute_sparse_pQq_blocking_p(const size_t start, const size_t st
 void DFHelper::compute_sparse_pQq_blocking_p_symm(const size_t start, const size_t stop, double* Mp,
                                                   std::vector<std::shared_ptr<TwoBodyAOInt>> eri) {
     size_t begin = pshell_aggs_[start];
-    size_t end = pshell_aggs_[stop + 1] - 1;
     size_t startind = symm_big_skips_[begin];
-    //    outfile->Printf("      MU shell: (%zu, %zu)", start, stop);
-    //    outfile->Printf(", nbf_ index: (%zu, %zu), size: %zu\n", begin, end, block_size);
 
-    // prepare eri buffers
-    size_t nthread = nthreads_;
-    if (eri.size() != nthreads_) nthread = eri.size();
+    struct PairSlot {
+        size_t mn_idx;
+        size_t base;
+        size_t stride;
+    };
 
-    std::vector<const double*> buffer(nthread);
+    if (eri.empty()) {
+        const int max_am = std::max(aux_->max_am(), primary_->max_am());
+        const int max_nprim = std::max(aux_->max_nprimitive(), primary_->max_nprimitive());
+        const double ln_prec = -std::numeric_limits<double>::max();
+        const auto& unit_sh = libint2::Shell::unit();
+
+        std::vector<libint2::ShellPair> aux_sp(Qshells_);
+#pragma omp parallel for schedule(static) num_threads(nthreads_) if (Qshells_ >= 64)
+        for (size_t Pshell = 0; Pshell < Qshells_; ++Pshell) {
+            aux_sp[Pshell].init(aux_->l2_shell(Pshell), unit_sh, ln_prec);
+        }
+
+        std::vector<libint2::Engine> engs;
+        engs.reserve(nthreads_);
+        for (size_t t = 0; t < nthreads_; ++t) {
+            engs.emplace_back(libint2::Operator::coulomb, max_nprim, max_am, 0, 0.0,
+                              libint2::operator_traits<libint2::Operator::coulomb>::default_params(),
+                              libint2::BraKet::xs_xx);
+        }
+
+#pragma omp parallel num_threads(nthreads_)
+        {
+            int rank = 0;
+#ifdef _OPENMP
+            rank = omp_get_thread_num();
+#endif
+            auto& eng = engs[rank];
+            libint2::ShellPair ket_sp;
+            std::vector<PairSlot> slots;
+            slots.reserve(256);
+
+#pragma omp for schedule(guided)
+            for (size_t MU = start; MU <= stop; MU++) {
+                const auto& sh_mu = primary_->l2_shell(MU);
+                size_t nummu = primary_->shell(MU).nfunction();
+                size_t bmu = primary_->shell(MU).function_index();
+                for (size_t NU = MU; NU < pshells_; NU++) {
+                    if (!schwarz_shell_mask_[MU * pshells_ + NU]) continue;
+                    const auto& sh_nu = primary_->l2_shell(NU);
+                    size_t numnu = primary_->shell(NU).nfunction();
+                    size_t bnu = primary_->shell(NU).function_index();
+
+                    slots.clear();
+                    for (size_t mu = 0; mu < nummu; mu++) {
+                        size_t omu = bmu + mu;
+                        size_t diag_idx = schwarz_fun_index_[omu * nbf_ + omu];
+                        size_t row_base = symm_big_skips_[omu] - startind;
+                        size_t row_stride = symm_small_skips_[omu];
+                        for (size_t nu = 0; nu < numnu; nu++) {
+                            size_t onu = bnu + nu;
+                            size_t fidx = schwarz_fun_index_[omu * nbf_ + onu];
+                            if (!fidx || omu > onu) continue;
+                            slots.push_back({mu * numnu + nu, row_base + (fidx - diag_idx), row_stride});
+                        }
+                    }
+                    if (slots.empty()) continue;
+
+                    ket_sp.init(sh_mu, sh_nu, ln_prec);
+                    const size_t nmn = nummu * numnu;
+                    const size_t nslots = slots.size();
+
+                    for (size_t Pshell = 0; Pshell < Qshells_; Pshell++) {
+                        const auto& sh_P = aux_->l2_shell(Pshell);
+                        size_t PHI = aux_->shell(Pshell).function_index();
+                        size_t numP = aux_->shell(Pshell).nfunction();
+                        eng.compute2<libint2::Operator::coulomb, libint2::BraKet::xs_xx, 0>(
+                            sh_P, unit_sh, sh_mu, sh_nu, &aux_sp[Pshell], &ket_sp);
+                        const double* buf = eng.results()[0];
+                        if (buf != nullptr) {
+                            for (size_t s = 0; s < nslots; ++s) {
+                                const size_t mn = slots[s].mn_idx;
+                                const size_t stride = slots[s].stride;
+                                size_t dst = slots[s].base + PHI * stride;
+                                for (size_t P = 0; P < numP; P++, dst += stride) {
+                                    Mp[dst] = buf[P * nmn + mn];
+                                }
+                            }
+                        } else {
+                            for (size_t s = 0; s < nslots; ++s) {
+                                const size_t stride = slots[s].stride;
+                                size_t dst = slots[s].base + PHI * stride;
+                                for (size_t P = 0; P < numP; P++, dst += stride) {
+                                    Mp[dst] = 0.0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    size_t nthread = (eri.size() != nthreads_) ? eri.size() : nthreads_;
 #pragma omp parallel num_threads(nthread)
     {
         int rank = 0;
 #ifdef _OPENMP
         rank = omp_get_thread_num();
 #endif
-    }
+        std::vector<PairSlot> slots;
+        slots.reserve(256);
 
-// Block over p in pQq 3-index integrals
-#pragma omp parallel for schedule(guided) num_threads(nthread)
-    for (size_t MU = start; MU <= stop; MU++) {
-        int rank = 0;
-#ifdef _OPENMP
-        rank = omp_get_thread_num();
-#endif
-        size_t nummu = primary_->shell(MU).nfunction();
-        for (size_t NU = MU; NU < pshells_; NU++) {
-            size_t numnu = primary_->shell(NU).nfunction();
-            if (!schwarz_shell_mask_[MU * pshells_ + NU]) {
-                continue;
-            }
+#pragma omp for schedule(guided)
+        for (size_t MU = start; MU <= stop; MU++) {
+            size_t nummu = primary_->shell(MU).nfunction();
+            size_t bmu = primary_->shell(MU).function_index();
+            for (size_t NU = MU; NU < pshells_; NU++) {
+                if (!schwarz_shell_mask_[MU * pshells_ + NU]) continue;
+                size_t numnu = primary_->shell(NU).nfunction();
+                size_t bnu = primary_->shell(NU).function_index();
 
-            // Loop over Auxiliary index
-            for (size_t Pshell = 0; Pshell < Qshells_; Pshell++) {
-                size_t PHI = aux_->shell(Pshell).function_index();
-                size_t numP = aux_->shell(Pshell).nfunction();
-                eri[rank]->compute_shell(Pshell, 0, MU, NU);
-                buffer[rank] = eri[rank]->buffer();
-
+                slots.clear();
                 for (size_t mu = 0; mu < nummu; mu++) {
-                    size_t omu = primary_->shell(MU).function_index() + mu;
+                    size_t omu = bmu + mu;
+                    size_t diag_idx = schwarz_fun_index_[omu * nbf_ + omu];
+                    size_t row_base = symm_big_skips_[omu] - startind;
+                    size_t row_stride = symm_small_skips_[omu];
                     for (size_t nu = 0; nu < numnu; nu++) {
-                        size_t onu = primary_->shell(NU).function_index() + nu;
+                        size_t onu = bnu + nu;
+                        size_t fidx = schwarz_fun_index_[omu * nbf_ + onu];
+                        if (!fidx || omu > onu) continue;
+                        slots.push_back({mu * numnu + nu, row_base + (fidx - diag_idx), row_stride});
+                    }
+                }
+                if (slots.empty()) continue;
 
-                        // Remove sieved integrals or lower triangular
-                        if (!schwarz_fun_index_[omu * nbf_ + onu] || omu > onu) {
-                            continue;
-                        }
-
-                        for (size_t P = 0; P < numP; P++) {
-                            size_t jump = schwarz_fun_index_[omu * nbf_ + onu] - schwarz_fun_index_[omu * nbf_ + omu];
-                            size_t ind1 = symm_big_skips_[omu] - startind + (PHI + P) * symm_small_skips_[omu] + jump;
-                            Mp[ind1] = buffer[rank][P * nummu * numnu + mu * numnu + nu];
+                const size_t nmn = nummu * numnu;
+                const size_t nslots = slots.size();
+                for (size_t Pshell = 0; Pshell < Qshells_; Pshell++) {
+                    size_t PHI = aux_->shell(Pshell).function_index();
+                    size_t numP = aux_->shell(Pshell).nfunction();
+                    eri[rank]->compute_shell(Pshell, 0, MU, NU);
+                    const double* buf = eri[rank]->buffer();
+                    for (size_t s = 0; s < nslots; ++s) {
+                        const size_t mn = slots[s].mn_idx;
+                        const size_t stride = slots[s].stride;
+                        size_t dst = slots[s].base + PHI * stride;
+                        for (size_t P = 0; P < numP; P++, dst += stride) {
+                            Mp[dst] = buf[P * nmn + mn];
                         }
                     }
                 }
             }
         }
-    } // ends MU loop
+    }
 }
 
 void DFHelper::compute_sparse_pQq_blocking_p_symm_abw(const size_t start, const size_t stop, double* just_Mp, double* param_Mp,
@@ -1443,26 +1599,108 @@ void DFHelper::compute_sparse_pQq_blocking_p_symm_abw(const size_t start, const 
                                                   std::vector<std::shared_ptr<TwoBodyAOInt>> weri
 ) {
     size_t begin = pshell_aggs_[start];
-    size_t end = pshell_aggs_[stop + 1] - 1;
     size_t startind = symm_big_skips_[begin];
-    //    outfile->Printf("      MU shell: (%zu, %zu)", start, stop);
-    //    outfile->Printf(", nbf_ index: (%zu, %zu), size: %zu\n", begin, end, block_size);
 
-    // prepare eri buffers
-    size_t nthread = nthreads_;
-    if (eri.size() != nthreads_) nthread = eri.size();
+    struct PairSlot {
+        size_t mn_idx;
+        size_t base;
+        size_t stride;
+    };
 
-    std::vector<const double*> buffer(nthread);
-    std::vector<const double*> wbuffer(nthread);
-#pragma omp parallel num_threads(nthread)
-    {
-        int rank = 0;
+    if (eri.empty()) {
+        const int max_am = std::max(aux_->max_am(), primary_->max_am());
+        const int max_nprim = std::max(aux_->max_nprimitive(), primary_->max_nprimitive());
+        const double ln_prec = -std::numeric_limits<double>::max();
+        const auto& unit_sh = libint2::Shell::unit();
+
+        std::vector<libint2::ShellPair> aux_sp(Qshells_);
+#pragma omp parallel for schedule(static) num_threads(nthreads_) if (Qshells_ >= 64)
+        for (size_t Pshell = 0; Pshell < Qshells_; ++Pshell) {
+            aux_sp[Pshell].init(aux_->l2_shell(Pshell), unit_sh, ln_prec);
+        }
+
+        std::vector<libint2::Engine> c_engs, w_engs;
+        c_engs.reserve(nthreads_);
+        w_engs.reserve(nthreads_);
+        for (size_t t = 0; t < nthreads_; ++t) {
+            c_engs.emplace_back(libint2::Operator::coulomb, max_nprim, max_am, 0, 0.0,
+                                libint2::operator_traits<libint2::Operator::coulomb>::default_params(),
+                                libint2::BraKet::xs_xx);
+            w_engs.emplace_back(libint2::Operator::erf_coulomb, max_nprim, max_am, 0, 0.0, omega_,
+                                libint2::BraKet::xs_xx);
+        }
+
+#pragma omp parallel num_threads(nthreads_)
+        {
+            int rank = 0;
 #ifdef _OPENMP
-        rank = omp_get_thread_num();
+            rank = omp_get_thread_num();
 #endif
+            auto& c_eng = c_engs[rank];
+            auto& w_eng = w_engs[rank];
+            libint2::ShellPair ket_sp;
+            std::vector<PairSlot> slots;
+            slots.reserve(256);
+
+#pragma omp for schedule(guided)
+            for (size_t MU = start; MU <= stop; MU++) {
+                const auto& sh_mu = primary_->l2_shell(MU);
+                size_t nummu = primary_->shell(MU).nfunction();
+                size_t bmu = primary_->shell(MU).function_index();
+                for (size_t NU = MU; NU < pshells_; NU++) {
+                    if (!schwarz_shell_mask_[MU * pshells_ + NU]) continue;
+                    const auto& sh_nu = primary_->l2_shell(NU);
+                    size_t numnu = primary_->shell(NU).nfunction();
+                    size_t bnu = primary_->shell(NU).function_index();
+
+                    slots.clear();
+                    for (size_t mu = 0; mu < nummu; mu++) {
+                        size_t omu = bmu + mu;
+                        size_t diag_idx = schwarz_fun_index_[omu * nbf_ + omu];
+                        size_t row_base = symm_big_skips_[omu] - startind;
+                        size_t row_stride = symm_small_skips_[omu];
+                        for (size_t nu = 0; nu < numnu; nu++) {
+                            size_t onu = bnu + nu;
+                            size_t fidx = schwarz_fun_index_[omu * nbf_ + onu];
+                            if (!fidx || omu > onu) continue;
+                            slots.push_back({mu * numnu + nu, row_base + (fidx - diag_idx), row_stride});
+                        }
+                    }
+                    if (slots.empty()) continue;
+
+                    ket_sp.init(sh_mu, sh_nu, ln_prec);
+                    const size_t nmn = nummu * numnu;
+                    const size_t nslots = slots.size();
+
+                    for (size_t Pshell = 0; Pshell < Qshells_; Pshell++) {
+                        const auto& sh_P = aux_->l2_shell(Pshell);
+                        size_t PHI = aux_->shell(Pshell).function_index();
+                        size_t numP = aux_->shell(Pshell).nfunction();
+                        c_eng.compute2<libint2::Operator::coulomb, libint2::BraKet::xs_xx, 0>(
+                            sh_P, unit_sh, sh_mu, sh_nu, &aux_sp[Pshell], &ket_sp);
+                        w_eng.compute2<libint2::Operator::erf_coulomb, libint2::BraKet::xs_xx, 0>(
+                            sh_P, unit_sh, sh_mu, sh_nu, &aux_sp[Pshell], &ket_sp);
+                        const double* cbuf = c_eng.results()[0];
+                        const double* wbuf = w_eng.results()[0];
+                        for (size_t s = 0; s < nslots; ++s) {
+                            const size_t mn = slots[s].mn_idx;
+                            const size_t stride = slots[s].stride;
+                            size_t dst = slots[s].base + PHI * stride;
+                            for (size_t P = 0; P < numP; P++, dst += stride) {
+                                const double cv = (cbuf != nullptr) ? cbuf[P * nmn + mn] : 0.0;
+                                const double wv = (wbuf != nullptr) ? wbuf[P * nmn + mn] : 0.0;
+                                just_Mp[dst] = cv;
+                                param_Mp[dst] = omega_alpha_ * cv + omega_beta_ * wv;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return;
     }
 
-
+    size_t nthread = (eri.size() != nthreads_) ? eri.size() : nthreads_;
 #pragma omp parallel for schedule(guided) num_threads(nthread)
     for (size_t MU = start; MU <= stop; MU++) {
         int rank = 0;
@@ -1475,37 +1713,30 @@ void DFHelper::compute_sparse_pQq_blocking_p_symm_abw(const size_t start, const 
             if (!schwarz_shell_mask_[MU * pshells_ + NU]) {
                 continue;
             }
-
-            // Loop over Auxiliary index
             for (size_t Pshell = 0; Pshell < Qshells_; Pshell++) {
                 size_t PHI = aux_->shell(Pshell).function_index();
                 size_t numP = aux_->shell(Pshell).nfunction();
                 eri[rank]->compute_shell(Pshell, 0, MU, NU);
                 weri[rank]->compute_shell(Pshell, 0, MU, NU);
-                buffer[rank] = eri[rank]->buffers()[0];
-                wbuffer[rank] = weri[rank]->buffers()[0];
-
+                const double* buf = eri[rank]->buffers()[0];
+                const double* wbuf = weri[rank]->buffers()[0];
                 for (size_t mu = 0; mu < nummu; mu++) {
                     size_t omu = primary_->shell(MU).function_index() + mu;
                     for (size_t nu = 0; nu < numnu; nu++) {
                         size_t onu = primary_->shell(NU).function_index() + nu;
-
-                        // Remove sieved integrals or lower triangular
-                        if (!schwarz_fun_index_[omu * nbf_ + onu] || omu > onu) {
-                            continue;
-                        }
-
+                        if (!schwarz_fun_index_[omu * nbf_ + onu] || omu > onu) continue;
                         for (size_t P = 0; P < numP; P++) {
                             size_t jump = schwarz_fun_index_[omu * nbf_ + onu] - schwarz_fun_index_[omu * nbf_ + omu];
                             size_t ind1 = symm_big_skips_[omu] - startind + (PHI + P) * symm_small_skips_[omu] + jump;
-                            just_Mp[ind1] = buffer[rank][P * nummu * numnu + mu * numnu + nu];
-                            param_Mp[ind1] = omega_alpha_ * buffer[rank][P * nummu * numnu + mu * numnu + nu] + omega_beta_ * wbuffer[rank][P * nummu * numnu + mu * numnu + nu];
+                            just_Mp[ind1] = buf[P * nummu * numnu + mu * numnu + nu];
+                            param_Mp[ind1] = omega_alpha_ * buf[P * nummu * numnu + mu * numnu + nu] +
+                                             omega_beta_ * wbuf[P * nummu * numnu + mu * numnu + nu];
                         }
                     }
                 }
             }
         }
-    } // ends MU loop
+    }
 }
 void DFHelper::grab_AO(const size_t start, const size_t stop, double* Mp) {
     size_t begin = Qshell_aggs_[start];
@@ -1744,21 +1975,40 @@ void DFHelper::contract_metric_AO_core(double* Qpq, double* metp) {
 void DFHelper::contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* metp, size_t begin, size_t end,
                                             bool cholesky) {
     // Qpq holds, for each p in [begin, end], a (naux x mi) block of the significant q >= p.
-    // One small DGEMM per p re-streams the whole (naux x naux) metric from memory for every p,
-    // so instead gather runs of p into a dense (naux x ncol) panel, contract it with a single
-    // threaded DGEMM, and scatter the result into both the upper (p, q) and lower (q, p) slots of Ppq.
+    // Gather runs of p into a dense (naux x ncol) panel, contract it with a single threaded
+    // DTRSM/DGEMM, and scatter the result row-contiguously into both upper (p, q) and lower (q, p)
+    // blocks of Ppq so each thread writes exclusively to its own p/q block.
     size_t startind = symm_big_skips_[begin];
     const size_t target_cols = metric_panel_cols();
 
-    std::vector<size_t> col_off;  // panel column offset of each p in the current chunk
-    std::vector<std::vector<size_t>> upper(nbf_);  // significant q >= p, in column order
-    for (size_t p = begin; p <= end; p++) {
-        upper[p].reserve(symm_small_skips_[p]);
-        for (size_t q = p; q < nbf_; q++)
-            if (schwarz_fun_index_[p * nbf_ + q]) upper[p].push_back(q);
+    std::vector<size_t> col_off;
+    std::vector<uint32_t> q_cnt(nbf_, 0);
+    std::vector<uint32_t> q_off(nbf_ + 1, 0);
+    std::vector<uint32_t> q_cstart(nbf_, 0);
+    std::vector<uint32_t> q_fill(nbf_, 0);
+    std::vector<uint32_t> active_q;
+    active_q.reserve(nbf_);
+    std::vector<uint32_t> lower_src;
+    lower_src.reserve(target_cols);
+
+    // Precompute flat upper-q list for p in [begin, end] once per psteps chunk
+    size_t total_upper = 0;
+    for (size_t p = begin; p <= end; ++p) total_upper += symm_small_skips_[p];
+    std::vector<uint32_t> upper_q(total_upper);
+    std::vector<size_t> upper_p_off(end - begin + 2, 0);
+    for (size_t p = begin; p <= end; ++p) {
+        upper_p_off[p - begin + 1] = upper_p_off[p - begin] + symm_small_skips_[p];
+    }
+#pragma omp parallel for num_threads(nthreads_) schedule(guided) if (end - begin >= 64)
+    for (size_t p = begin; p <= end; ++p) {
+        uint32_t* dst = &upper_q[upper_p_off[p - begin]];
+        size_t pos = 0;
+        const size_t* srow = &schwarz_fun_index_[p * nbf_];
+        for (size_t q = p; q < nbf_; ++q) {
+            if (srow[q]) dst[pos++] = static_cast<uint32_t>(q);
+        }
     }
 
-    std::vector<double> panel, out;
     for (size_t p0 = begin; p0 <= end;) {
         size_t ncol = 0, p1 = p0;
         col_off.clear();
@@ -1771,45 +2021,106 @@ void DFHelper::contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* me
             p0 = p1;
             continue;
         }
-        if (panel.size() < naux_ * ncol) {
-            panel.resize(naux_ * ncol);
-            out.resize(naux_ * ncol);
-        }
+        const size_t need = naux_ * ncol;
+        double* panel_ptr = grow_scratch(metric_panel_buf_, metric_panel_size_, need);
+        double* out_ptr = cholesky ? panel_ptr : grow_scratch(metric_out_buf_, metric_out_size_, need);
 
         timer_on("DFH: AO-Met. gather");
 #pragma omp parallel for num_threads(nthreads_) schedule(static)
         for (size_t Q = 0; Q < naux_; Q++) {
+            double* prow = &panel_ptr[Q * ncol];
             for (size_t p = p0; p < p1; p++) {
                 size_t mi = symm_small_skips_[p];
                 const double* src = &Qpq[symm_big_skips_[p] - startind + Q * mi];
-                std::copy(src, src + mi, &panel[Q * ncol + col_off[p - p0]]);
+                std::copy(src, src + mi, prow + col_off[p - p0]);
             }
         }
         timer_off("DFH: AO-Met. gather");
 
         timer_on("DFH: AO-Met. GEMM");
         if (cholesky) {
-            // panel <- L^-1 panel (row-major lower L)
-            C_DTRSM('L', 'L', 'N', 'N', naux_, ncol, 1.0, metp, naux_, panel.data(), ncol);
-            std::swap(panel, out);
+            // panel <- L^-1 panel in-place (row-major lower L)
+            C_DTRSM('L', 'L', 'N', 'N', naux_, ncol, 1.0, metp, naux_, panel_ptr, ncol);
         } else {
-            C_DGEMM('N', 'N', naux_, ncol, naux_, 1.0, metp, naux_, panel.data(), ncol, 0.0, out.data(), ncol);
+            C_DGEMM('N', 'N', naux_, ncol, naux_, 1.0, metp, naux_, panel_ptr, ncol, 0.0, out_ptr, ncol);
         }
         timer_off("DFH: AO-Met. GEMM");
 
         timer_on("DFH: AO-Met. scatter");
-#pragma omp parallel for num_threads(nthreads_) schedule(static)
-        for (size_t Q = 0; Q < naux_; Q++) {
-            for (size_t p = p0; p < p1; p++) {
-                const double* row = &out[Q * ncol + col_off[p - p0]];
-                const size_t mi = symm_small_skips_[p];
-                std::copy(row, row + mi, &Ppq[big_skips_[p] + Q * small_skips_[p] + symm_ignored_columns_[p]]);
-                const auto& qs = upper[p];
-                for (size_t k = 0; k < mi; k++) {
-                    size_t q = qs[k];
-                    if (q == p) continue;
-                    Ppq[big_skips_[q] + Q * small_skips_[q] + schwarz_fun_index_[q * nbf_ + p] - 1] = row[k];
+        // Build compact CSR of panel source columns per destination q > p (strictly contiguous columns in q's row).
+        active_q.clear();
+        size_t total_lower = 0;
+        for (size_t p = p0; p < p1; ++p) {
+            const uint32_t* qs = &upper_q[upper_p_off[p - begin]];
+            const size_t mi = symm_small_skips_[p];
+            for (size_t k = 0; k < mi; ++k) {
+                const uint32_t q = qs[k];
+                if (q == p) continue;
+                if (q_cnt[q] == 0) {
+                    active_q.push_back(q);
+                    q_cstart[q] = static_cast<uint32_t>(schwarz_fun_index_[(size_t)q * nbf_ + p] - 1);
                 }
+                q_cnt[q]++;
+                total_lower++;
+            }
+        }
+        lower_src.resize(total_lower);
+        size_t running = 0;
+        for (uint32_t q : active_q) {
+            q_off[q] = static_cast<uint32_t>(running);
+            q_fill[q] = static_cast<uint32_t>(running);
+            running += q_cnt[q];
+        }
+        for (size_t p = p0; p < p1; ++p) {
+            const uint32_t* qs = &upper_q[upper_p_off[p - begin]];
+            const size_t mi = symm_small_skips_[p];
+            const uint32_t base_col = static_cast<uint32_t>(col_off[p - p0]);
+            for (size_t k = 0; k < mi; ++k) {
+                const uint32_t q = qs[k];
+                if (q == p) continue;
+                lower_src[q_fill[q]++] = base_col + static_cast<uint32_t>(k);
+            }
+        }
+
+        const size_t np_chunk = p1 - p0;
+        const size_t nq_active = active_q.size();
+#pragma omp parallel num_threads(nthreads_)
+        {
+            // Note: upper writes columns [symm_ignored_columns_[p], small_skips_[p]) for p in [p0, p1),
+            // while lower writes columns [c_start, c_start + cnt) < symm_ignored_columns_[q] for q in active_q.
+            // Even when q in [p0, p1), upper and lower column ranges are disjoint; running with a barrier or
+            // separate non-overlapping cache lines is completely race-free. Run sequentially with barrier to avoid
+            // any cache-line sharing at the symm_ignored_columns_[q] boundary.
+#pragma omp for schedule(dynamic, 2)
+            for (size_t idx = 0; idx < np_chunk; ++idx) {
+                const size_t p = p0 + idx;
+                const size_t mi = symm_small_skips_[p];
+                const size_t si = small_skips_[p];
+                const size_t ign = symm_ignored_columns_[p];
+                const size_t coff = col_off[idx];
+                double* dst_base = &Ppq[big_skips_[p] + ign];
+                for (size_t Q = 0; Q < naux_; ++Q) {
+                    const double* src = &out_ptr[Q * ncol + coff];
+                    std::copy(src, src + mi, dst_base + Q * si);
+                }
+            }
+#pragma omp for schedule(dynamic, 8)
+            for (size_t qi = 0; qi < nq_active; ++qi) {
+                const uint32_t q = active_q[qi];
+                const uint32_t cnt = q_cnt[q];
+                const uint32_t cstart = q_cstart[q];
+                const uint32_t* src_cols = &lower_src[q_off[q]];
+                const size_t sq = small_skips_[q];
+                double* dst_base = &Ppq[big_skips_[q] + cstart];
+                for (size_t Q = 0; Q < naux_; ++Q) {
+                    const double* r = &out_ptr[Q * ncol];
+                    double* dst = dst_base + Q * sq;
+#pragma omp simd
+                    for (uint32_t c = 0; c < cnt; ++c) {
+                        dst[c] = r[src_cols[c]];
+                    }
+                }
+                q_cnt[q] = 0;
             }
         }
         timer_off("DFH: AO-Met. scatter");
@@ -2023,8 +2334,7 @@ void DFHelper::transform() {
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthread);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
-    if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
+    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri(0, false));
 #pragma omp parallel num_threads(nthreads_)
     {
         int rank = 0;
