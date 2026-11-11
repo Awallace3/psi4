@@ -1,16 +1,19 @@
 # Manual cachy dimer SCF investigation
 
-Dedicated mutable root: `~/gits/psi4-scf-dimer-manual`.
-This is **not** the qualified `psi4-fsapt-opt-cachy` installation.
-`source/` is editable; objects live in `obj/`, installed Python/core in `install/`.
-`build.sh` links to `source/devtools/fsapt_integration/manual_scf_build.sh`.
+Worktree: `~/gits/psi4-fsapt-opt-cachy/source`.
+Edit `build.sh` directly at the **repository root**; all generated artifacts
+live under `./tmp/`. This workflow does not overwrite any sibling previously
+qualified installation, but editing/advancing the source means it no longer
+matches the old frozen qualification.
 
 ```bash
-cd ~/gits/psi4-scf-dimer-manual
+cd ~/gits/psi4-fsapt-opt-cachy/source
+nvim build.sh                     # repo-root editing; C++ LSP uses the link below
 ./build.sh                         # build/install, then GPU cold + warm peptide SCFs
 ./build.sh build                   # build only, no GPU calculation
 ./build.sh run --repeats 1         # existing install, fresh-process cold SCF only
 ./build.sh compare --repeats 2     # separate CPU and GPU processes, each cold + warm
+./build.sh paths                   # print resolved paths; no setup/build/GPU work
 PSI4_CUEST_SCF_TIMERS=0 ./build.sh run  # instrumentation-off control
 FSAPT_BUILD_JOBS=2 ./build.sh build    # inherited by nested Ninja, not only outer build
 ```
@@ -22,10 +25,27 @@ Uses SAPT(DFT)'s `scf_helper("SCF")` call and `SAVE_JK`/`DF_INTS_IO=SAVE`
 policy. The `SAPT(DFT):Dimer SCF` timer excludes explicit wavefunction teardown,
 which has its own `Manual wavefunction cleanup` timer.
 `--e-convergence`, `--d-convergence`, `--maxiter`, `--repeats` are editable;
-the test itself is `source/devtools/fsapt_integration/peptide_scf.py`.
-The frozen geometry manifest is `inputs.json` in the root.
+the test itself is `devtools/fsapt_integration/peptide_scf.py`.
+The frozen geometry manifest is `tmp/inputs.json`.
 
-Each invocation creates `runs/scf-<timestamp>-<unique>/{cpu,gpu}/`:
+Layout:
+
+```text
+build.sh
+compile_commands.json -> tmp/obj/psi4-core-prefix/src/psi4-core-build/compile_commands.json
+tmp/
+  obj/             # CMake/Ninja objects, native core in nested psi4-core build
+  install/         # this manual workflow's installation
+  runtime/         # private cuEST/CUDA runtime
+  inputs.json
+  runs/
+```
+
+The compile database becomes available after the first successful native build.
+The script refuses to replace a different existing root compilation database.
+`tmp/` and the database link are local, ignored build artifacts.
+
+Each invocation creates `tmp/runs/scf-<timestamp>-<unique>/{cpu,gpu}/`:
 
 - `cold.out`, `warm-1.out`: Psi4 output, **timer table appended at the bottom**;
 - `cold-timers.json`, `warm-1-timers.json`: complete native timer paths/calls;
@@ -67,6 +87,7 @@ The runner acquires the shared `~/.cache/psi4-cachy/gpu0.lock` nonblockingly
 and respects `gpu0.HOLD` before starting. Do not run another unmanaged GPU
 calculation concurrently. The shared dependency environment is read-only;
 cuEST/CUDA runtime files are private copies. No qualified prefix or queued
-Phoenix checkout is modified. Dirty manual edits are allowed and recorded;
+Phoenix checkout is modified. The older separate manual root is preserved,
+not moved or deleted. Dirty manual edits are allowed and recorded;
 `run` uses the **last installation**, so rebuild after changing C++ or Python.
 RTX 3090 numbers are debugging evidence, not H200 speedup claims.

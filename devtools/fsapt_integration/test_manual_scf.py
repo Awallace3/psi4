@@ -9,6 +9,15 @@ from peptide_scf import timer_summary
 
 
 class ManualSCFContracts(unittest.TestCase):
+    def test_repo_root_paths_are_independent_of_caller_directory(self):
+        source=Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as folder:
+            result=subprocess.run(["bash",str(source/"build.sh"),"paths"],cwd=folder,
+                                  check=True,capture_output=True,text=True,timeout=10)
+        self.assertEqual(dict(line.split("=",1) for line in result.stdout.splitlines()),
+            {"SOURCE":str(source),"OBJECTS":str(source/"tmp/obj"),
+             "INSTALL":str(source/"tmp/install"),"RUNS":str(source/"tmp/runs")})
+
     def test_timer_counts_are_doubles_in_native_api(self):
         text=timer_summary({"SCF/cuEST potential compute API":
                             {"wall_time":.12345,"n_calls":2.0}})
