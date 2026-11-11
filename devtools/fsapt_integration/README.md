@@ -7,11 +7,52 @@
 - Practical peptide, spherical jun-cc-pVDZ: **pass**, including independent
   same-gauge oracle and strict repeat, with matched **E10/D12** SCF inputs.
 - Sanitizers: **blocked before CUDA by loader-policy incompatibility**, not
-  passed. No Phoenix job submitted by this integration effort.
+  passed. The user subsequently requested Phoenix embers timings; this is an
+  explicitly labelled numerical timing experiment, not full memory certification.
+- Separate Phoenix sm_90 build submitted as **15471744**, science checkout
+  `08984a56e6` (production sources identical to `b025694939`).
 - GPU KS/XC fragment response and larger-system memory/scaling: not qualified.
 
 Production source is pinned at `b025694939`; subsequent commits change only
 diagnostic helpers/tests/docs. Production SCF defaults remain unchanged.
+
+## Matched Phoenix step/term timing experiment
+
+`submit_phoenix_timing.py` submits one H200 job on **embers**, behind the CPU
+build with `afterany` and a finalized build/runtime-artifact gate. It neither
+updates nor cancels the existing dispersion/SAPT0 campaign.
+
+- Peptide from the frozen timing-suite manifest, spherical jun-cc-pVDZ,
+  E10/D12, HF F-SAPT including delta-HF, cache budget zero, block size 24.
+- Eight CPU threads for **both** arms on the same H200 host/allocation.
+  Three fresh-process pairs per mode, alternating arm order.
+- Both arms use the same persistent shared scratch, with mount and free-space
+  telemetry. These are practical workflow wall times including I/O/contention,
+  **not storage-independent compute speedups**. This avoids Phoenix's known
+  disappearing private `/tmp` mount; no claim of local-NVMe performance.
+- Untraced baseline pairs measure the complete public energy call, including
+  normal runtime audits/JIT/provider construction/cleanup inside that call.
+- Separate instrumented pairs retain full-precision Psi4 timer snapshots and
+  synchronized GPU source-block windows. No replacement scientific functions.
+  Step ratios are explicitly instrumented host-wall comparisons, not kernel
+  timings or a reconstruction of the untraced baseline.
+- SCF A/B/dimer, canonical JK/elst/exch/ind, delta-HF assembly, fragment
+  localization/elst/exch/ind/disp. Induction excludes its nested delta-HF assembly;
+  dimer SCF is charged once. Fragment dispersion supplies canonical dispersion.
+- GPU term windows exclude later scaling/downloads: these remain measured
+  GPU fragment overhead. CPU/GPU localization uses corresponding workflow
+  stages, not identical algorithms. Residuals are retained, not assigned
+  misleading algorithmic speedups.
+- Small ten-process H200 gate first; signed CPU/GPU terms and energy checks,
+  strict within-arm repeats across all workers, independent same-gauge oracle,
+  and owned scratch cleanup gate every accepted ratio. No missing samples
+  silently dropped. No automatic retries.
+- `timing-result.json` retains all samples, medians/ranges, CPU/GPU speedups,
+  resource/provenance records and the outstanding sanitizer limitation.
+
+Host checks:
+`python -B -m unittest discover -s devtools/fsapt_integration -p 'test_*.py'`.
+These checks are not GPU execution evidence.
 
 ## Source boundaries
 
