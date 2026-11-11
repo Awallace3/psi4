@@ -93,7 +93,9 @@ def fragment_terms(provider, rifit, minimal, matrices, energies, xyz, za, zb, *,
                     power=4,convergence=1e-12,max_iterations=50)
             la,lb=ibos["A"].l,ibos["B"].l
             state=felst_device(provider,potential,la,lb,coords,charges_a,charges_b,
-                               jkfit_basis=provider.auxiliary_basis)
+                               jkfit_basis=provider.auxiliary_basis,
+                               active_atoms=(tuple(np.flatnonzero(za).tolist()),
+                                             tuple(np.flatnonzero(zb).tolist())))
             exch=fexch_device(state,la,lb,raw["Cvir_A"],raw["Cvir_B"],
                 {n:raw[n] for n in ("S","V_A","J_A","V_B","J_B")},natoms=N)
             induction=coupled_find_device(state,potential,
@@ -151,6 +153,7 @@ def fragment_terms(provider, rifit, minimal, matrices, energies, xyz, za, zb, *,
         "Exch-Disp20,u":dispersion["Exch-Disp20,u"],
         "FISAPT execution":{"backend":"CUDA_CUEST_SHARED_IBO_EXPERIMENTAL",
             "same_session":True,"gpu_localization":localization,"response":response,
+            "electrostatics_work_plan":state.work_plan,
             "scaling":scale_reports,
             "jkfit_producer":provider.report(),"rifit_producer":ri_report,
             "dispersion":dispersion["Disp0 execution"],

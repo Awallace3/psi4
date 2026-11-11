@@ -56,13 +56,13 @@ void ibo_objective(long long O, long long M, long long K, long long power,
     if (threadIdx.x==0) stats[0]=pow(values[0],1.0/(double)power);
 }
 
-// EXACT ordered pair/DROT signs from local2.cc. One stream, one block per pair.
-__global__
-void ibo_pair(long long O, long long M, long long K, long long power,
+// One implementation for reference launches and fused ordered sweeps.
+// Every thread in the block must participate, including the final barrier.
+__device__ __forceinline__
+void ibo_pair_update(long long O, long long M, long long K, long long power,
                long long i, long long j, const long long* atoms,
-               double* coordinates, double* rotation_rows, double* gradient2) {
-    __shared__ double aa[128], bb[128];
-    __shared__ double cosine, sine;
+               double* coordinates, double* rotation_rows, double* gradient2,
+               double* aa, double* bb, double& cosine, double& sine) {
     double a=0.0,b=0.0;
     for (long long atom=threadIdx.x; atom<K; atom+=blockDim.x) {
         double x=0.0,y=0.0,z=0.0;
@@ -98,6 +98,39 @@ void ibo_pair(long long O, long long M, long long K, long long power,
         const double xi=rotation_rows[i*O+k],xj=rotation_rows[j*O+k];
         rotation_rows[i*O+k]=cosine*xi+sine*xj;
         rotation_rows[j*O+k]=cosine*xj-sine*xi;
+    }
+    // The next ordered pair can read any row just written by another thread.
+    // A kernel boundary supplied this ordering in the pairwise implementation.
+    __syncthreads();
+}
+
+// Reference: EXACT ordered pair/DROT signs from local2.cc, one block per pair.
+__global__
+void ibo_pair(long long O, long long M, long long K, long long power,
+               long long i, long long j, const long long* atoms,
+               double* coordinates, double* rotation_rows, double* gradient2) {
+    __shared__ double aa[128], bb[128];
+    __shared__ double cosine, sine;
+    ibo_pair_update(O,M,K,power,i,j,atoms,coordinates,rotation_rows,gradient2,
+                    aa,bb,cosine,sine);
+}
+
+// A single resident block executes the SAME frozen-then-active ascending order.
+// No independent-pair approximation, reordering, atomics or additional buffers.
+__global__
+void ibo_sweep(long long O, long long M, long long K, long long power,
+               long long frozen, const long long* atoms,
+               double* coordinates, double* rotation_rows, double* gradient2) {
+    if (blockIdx.x) return;
+    __shared__ double aa[128], bb[128];
+    __shared__ double cosine, sine;
+    for (long long sector=0; sector<2; ++sector) {
+        const long long start=sector==0 ? 0 : frozen;
+        const long long stop=sector==0 ? frozen : O;
+        for (long long i=start; i<stop; ++i)
+            for (long long j=start; j<i; ++j)
+                ibo_pair_update(O,M,K,power,i,j,atoms,coordinates,rotation_rows,gradient2,
+                                aa,bb,cosine,sine);
     }
 }
 
@@ -481,6 +514,23 @@ void scatter_matrix(long long rows, long long cols, long long stride,
 }
 
 // Both sides use the full dimer atom index, including zero-charge ghost slots.
+// Authenticate host scheduling metadata against the actual resident charges.
+// Only this scalar control is downloaded; no electrostatic numerics leave GPU.
+__global__
+void fragment_charge_mask_error(long long N, const double* za, const double* zb,
+                                 const double* active, double* error) {
+    if (blockIdx.x || threadIdx.x) return;
+    double invalid=0.0;
+    const double largest=1.7976931348623157e308;
+    for (long long atom=0; atom<N; ++atom) {
+        const double a=za[atom],b=zb[atom];
+        if (!(a==a && b==b && fabs(a)<=largest && fabs(b)<=largest) ||
+            active[atom]!=(a!=0.0 ? 1.0 : 0.0) ||
+            active[N+atom]!=(b!=0.0 ? 1.0 : 0.0)) invalid=1.0;
+    }
+    error[0]=invalid;
+}
+
 // Distinct coincident charged centers deliberately produce Inf, never a clamp.
 __global__
 void fragment_nuclear(long long N, const double* xyz,

@@ -75,6 +75,7 @@ class Localization(unittest.TestCase):
             "set_identity":[ct.c_longlong]+[ct.c_void_p],
             "ibo_objective":[ct.c_longlong]*4+[ct.c_void_p]*3,
             "ibo_pair":[ct.c_longlong]*6+[ct.c_void_p]*4,
+            "ibo_sweep":[ct.c_longlong]*5+[ct.c_void_p]*4,
             "ibo_sweep_finish":[ct.c_void_p]*3,
             "ibo_fock_diagonal":[ct.c_longlong]+[ct.c_void_p]*3,
             "ibo_permutation":[ct.c_longlong]*2+[ct.c_void_p]*2,
@@ -120,6 +121,54 @@ class Localization(unittest.TestCase):
             expected=np.zeros((5,5));expected[0,1]=expected[1,2]=expected[2,0]=expected[3,3]=expected[4,4]=1.
             np.testing.assert_array_equal(host(permutation),expected)
             self.assertFalse(np.array_equal(expected,expected.T))
+
+    def test_fused_and_pairwise_history_outputs_and_peak_memory(self):
+        for O,M,K,nf in ((4,9,3,0),(4,9,3,2),(3,513,513,1)):
+            b,e,atoms=fixture(172,O=O,M=M,K=K)
+            results={}
+            for algorithm in ("pairwise","fused"):
+                session=MetadataSession(self.lib)
+                calls=[]
+                launch=session.launch
+                def observe(name,grid,threads,args):
+                    calls.append(name)
+                    return launch(name,grid,threads,args)
+                session.launch=observe
+                with session.scope():
+                    db,de=session.upload(b),session.upload(e)
+                    base=session.live_bytes
+                    actual=localization.jacobi_localize_device(session,db,de,atoms,nfrozen=nf,
+                        max_iterations=4,require_converged=False,sweep_algorithm=algorithm)
+                    results[algorithm]=([host(x).copy() for x in (
+                        actual.u,actual.f,actual.q,actual.occupied_iao,actual.permutation)],
+                        actual.history,session.peak_live_bytes-base)
+                    expected=actual.work_plan["pair_kernel_launches_per_sweep"]*actual.iterations
+                    self.assertEqual(calls.count("ibo_sweep" if algorithm=="fused" else "ibo_pair"),expected)
+                    self.assertNotIn("ibo_pair" if algorithm=="fused" else "ibo_sweep",calls)
+            for left,right in zip(results["pairwise"][0],results["fused"][0]):
+                np.testing.assert_array_equal(left,right)
+            self.assertEqual(results["pairwise"][1:],results["fused"][1:])
+
+    def test_zero_pair_sweeps_strict_convergence_and_invalid_algorithm(self):
+        for O,nf in ((1,0),(2,1)):
+            b,e,atoms=fixture(171,O=O,M=5,K=5)
+            session=MetadataSession(self.lib)
+            with session.scope():
+                db,de=session.upload(b),session.upload(e)
+                for algorithm in ("pairwise","fused"):
+                    value=localization.jacobi_localize_device(session,db,de,atoms,nfrozen=nf,
+                        sweep_algorithm=algorithm)
+                    self.assertTrue(value.converged)
+                    self.assertEqual(value.iterations,1)
+                    np.testing.assert_array_equal(host(value.u),np.eye(O))
+                    value=localization.jacobi_localize_device(session,db,de,atoms,nfrozen=nf,
+                        sweep_algorithm=algorithm,convergence=0.,max_iterations=2,
+                        require_converged=False)
+                    self.assertFalse(value.converged)
+                    self.assertEqual(value.iterations,2)
+                for bad in (None,True,"parallel"):
+                    with self.assertRaises(ValueError):
+                        localization.jacobi_localize_device(session,db,de,atoms,sweep_algorithm=bad)
 
     def test_complete_ao_outputs_and_mandatory_convergence(self):
         b=np.zeros((2,4));theta=.27

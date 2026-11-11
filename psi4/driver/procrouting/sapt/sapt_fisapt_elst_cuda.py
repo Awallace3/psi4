@@ -5,6 +5,7 @@ factors and native point-charge potentials must be supplied by owned providers;
 these routines neither generate CPU integrals nor copy factors to the host.
 """
 from dataclasses import dataclass
+import numpy as np
 
 from .sapt_dispersion_cuda_setup import DeviceMath
 
@@ -97,6 +98,32 @@ def nuclear_electronic(session,potential,occupied,output,atom,*,side,natoms):
                            output,natoms,atom,weight=2)
 
 
+def validated_active_atoms(session,za,zb,active_atoms):
+    """Optional scheduling metadata, checked against resident charges on GPU.
+
+    None preserves the reference all-atom path. Explicit indices must list
+    exactly the nonzero charges, including any negative or fractional ones.
+    """
+    N=za.shape[0]
+    if active_atoms is None:
+        return (frozenset(range(N)),frozenset(range(N)))
+    if (type(active_atoms) is not tuple or len(active_atoms)!=2
+            or any(type(indices) is not tuple
+                   or any(type(i) is not int or not 0<=i<N for i in indices)
+                   or tuple(sorted(set(indices)))!=indices for indices in active_atoms)):
+        raise ValueError("Sorted unique bounded atom-index tuples required")
+    mask=np.zeros((2,N),dtype=np.float64)
+    for side,indices in enumerate(active_atoms):
+        mask[side,list(indices)]=1.
+    with session.scope():
+        device_mask=session.upload(mask.reshape(-1))
+        error=session.empty((1,))
+        session.launch("fragment_charge_mask_error",1,1,[N,za,zb,device_mask,error])
+        if float(session.download(error)[0])!=0.:
+            raise ValueError("Active-atom metadata differs from resident nuclear charges")
+    return tuple(frozenset(indices) for indices in active_atoms)
+
+
 @dataclass(frozen=True)
 class FragmentElstDevice:
     """Borrowed device outputs, valid only inside the caller's live CUDA scope.
@@ -112,6 +139,7 @@ class FragmentElstDevice:
     total: object
     locc_a: object
     locc_b: object
+    work_plan: object = None
 
     def require_provider(self,provider):
         if provider is not self.provider:
@@ -122,7 +150,7 @@ class FragmentElstDevice:
         return self
 
 
-def felst_device(provider,potential,locc_a,locc_b,xyz,za,zb,*,jkfit_basis):
+def felst_device(provider,potential,locc_a,locc_b,xyz,za,zb,*,jkfit_basis,active_atoms=None):
     """Native JKFIT/point-potential fragment elst, C-assignment/no externals.
 
     Caller prepares both native providers OUTSIDE temporary scopes, then owns
@@ -147,6 +175,8 @@ def felst_device(provider,potential,locc_a,locc_b,xyz,za,zb,*,jkfit_basis):
             or za.shape!=(xyz.shape[0],) or zb.shape!=za.shape):
         raise ValueError("Full-dimer localized occupied/coordinate/charge layouts required")
     N=xyz.shape[0];A,B=locc_a.shape[1],locc_b.shape[1]
+    active_a,active_b=validated_active_atoms(session,za,zb,active_atoms)
+    potential_calls=0
     output=session.empty((N+A+1,N+B+1),zero=True)
     qa,qb=session.empty((provider.naux,A)),session.empty((provider.naux,B))
     with session.scope():
@@ -158,9 +188,15 @@ def felst_device(provider,potential,locc_a,locc_b,xyz,za,zb,*,jkfit_basis):
         # cuEST uses positive-test-charge integrals; electrons attract nuclei.
         negative_a=m.combine(za,za,-1,0);negative_b=m.combine(zb,zb,-1,0)
         for atom in range(N):
+            if atom not in active_a and atom not in active_b:continue
             with session.scope():
                 point=xyz.view((1,3),offset=24*atom)
-                for side,charge,occupied in (("A",negative_a,locc_b),("B",negative_b,locc_a)):
+                for side,charge,occupied,active in (
+                        ("A",negative_a,locc_b,active_a),("B",negative_b,locc_a,active_b)):
+                    if atom not in active:continue
                     v=potential.compute_device(point,charge.view((1,),offset=8*atom))
+                    potential_calls+=1
                     nuclear_electronic(session,v,occupied,output,atom,side=side,natoms=N)
-    return FragmentElstDevice(provider,qa,qb,output,sum_values(session,output),locc_a,locc_b)
+    return FragmentElstDevice(provider,qa,qb,output,sum_values(session,output),locc_a,locc_b,
+        {"point_potential_calls":potential_calls,"zero_charge_calls_skipped":2*N-potential_calls,
+         "charge_activity_validation":"device-verified" if active_atoms is not None else "all-atom-reference"})

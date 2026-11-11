@@ -42,9 +42,11 @@ def main():
     parser.add_argument("--attempt", required=True)
     parser.add_argument("--scf-convergence", type=int, choices=(10, 12), default=10)
     parser.add_argument("--scf-density-convergence", type=int, choices=(10, 12))
+    parser.add_argument("--optimization-probe", action="store_true")
     args = parser.parse_args()
     root = args.root.resolve(strict=True)
-    if (root != Path.home() / "gits/psi4-fsapt-cpks-integration-cachy"
+    if (root not in {Path.home() / "gits" / name for name in (
+            "psi4-fsapt-cpks-integration-cachy", "psi4-fsapt-opt-cachy")}
             or not args.attempt.replace("-", "").isalnum()):
         raise ValueError("Explicit integration root and fresh simple attempt required")
     source = root / "source"
@@ -127,6 +129,8 @@ def main():
                                 args.inputs_sha256, "--system", "peptide"]
                 if oracle:
                     payload += ["--oracle-from", str(oracle)]
+                if args.optimization_probe and arm=="gpu":
+                    payload += ["--optimization-probe"]
                 if sanitizer:
                     log = output / (sanitizer + ".log")
                     tool = ["/opt/cuda/bin/compute-sanitizer", "--tool", sanitizer,

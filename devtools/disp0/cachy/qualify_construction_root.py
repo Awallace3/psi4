@@ -30,7 +30,7 @@ SEALED = "process-owned-kernel-sealed-snapshots-v1"
 def require_private_root(root, home):
     """Only dedicated owned roots; never qualify in another agent's build."""
     allowed = {home / "gits" / name for name in (
-        "psi4-disp0-perf-cachy", "psi4-fsapt-cpks-integration-cachy")}
+        "psi4-disp0-perf-cachy", "psi4-fsapt-cpks-integration-cachy", "psi4-fsapt-opt-cachy")}
     if root not in allowed:
         raise RuntimeError("Explicit private performance or FSAPT integration root required")
 

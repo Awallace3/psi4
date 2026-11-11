@@ -244,6 +244,55 @@ def batched_probe(runtime):
                 np.testing.assert_allclose(q[:128], 0., atol=1e-14, rtol=0)
                 np.testing.assert_allclose(np.sort(q[400:402],axis=0), [[0.,0.],[1.,1.]],
                                            atol=1e-10,rtol=1e-10)
+            # Same device inputs and pair math, different launch granularity.
+            # Correctness controls only, outside the public energy timer.
+            record["ordered_sweep_controls"]=[]
+            for O,M,K,nf,power in ((20,64,24,5,4),(3,513,513,1,2)):
+                coordinates=np.linalg.qr(rng.normal(size=(M,O)))[0].T.copy()
+                energies=np.linspace(-1.4,-.3,O)
+                atoms=np.arange(M,dtype=np.int64)%K
+                raw={}
+                for algorithm in ("pairwise","fused"):
+                    with session.scope():
+                        rows=session.upload(coordinates)
+                        rotation=session.upload(np.eye(O))
+                        gradient=session.empty((1,),zero=True)
+                        labels=session.upload_indices(atoms)
+                        if algorithm=="fused":
+                            session.launch("ibo_sweep",1,128,
+                                [O,M,K,power,nf,labels,rows,rotation,gradient])
+                        else:
+                            for first,last in ((0,nf),(nf,O)):
+                                for i in range(first,last):
+                                    for j in range(first,i):
+                                        session.launch("ibo_pair",1,128,
+                                            [O,M,K,power,i,j,labels,rows,rotation,gradient])
+                        raw[algorithm]=[session.download(x) for x in (rows,rotation,gradient)]
+                # Compare bits before permutation or BLAS can conceal a change.
+                for name,a,b in zip(("rows","rotation","gradient"),raw["pairwise"],raw["fused"]):
+                    np.testing.assert_array_equal(a.view(np.uint64),b.view(np.uint64),
+                        err_msg="Physical ordered sweep raw bits "+name)
+                samples={}
+                for algorithm in ("pairwise","fused"):
+                    with session.scope():
+                        value=module.jacobi_localize_device(session,session.upload(coordinates),
+                            session.upload(energies),atoms,nfrozen=nf,power=power,
+                            max_iterations=4,require_converged=False,sweep_algorithm=algorithm)
+                        samples[algorithm]={
+                            key:session.download(getattr(value,key)) for key in
+                            ("u","f","q","occupied_iao","permutation")}
+                        samples[algorithm]["history"]=np.array([
+                            [row["objective"],row["gradient"]] for row in value.history])
+                worst=0.
+                for key in samples["pairwise"]:
+                    a,b=samples["pairwise"][key],samples["fused"][key]
+                    np.testing.assert_allclose(b,a,atol=1e-12,rtol=1e-12,
+                                               err_msg="Physical ordered sweep "+key)
+                    worst=max(worst,float(np.max(np.abs(a-b),initial=0.)))
+                record["ordered_sweep_controls"].append(
+                    {"occupied":O,"minimal":M,"atoms":K,"frozen":nf,"power":power,
+                     "raw_one_sweep_bitwise_equal":True,
+                     "maximum_absolute_difference":worst})
             record["successful_blas_calls"] = dict(session.blas_calls)
             record["successful_kernel_launches"] = dict(session.kernel_launches)
             if session.blas_calls.get("cublasDgemmStridedBatched", 0) < 12:
@@ -274,6 +323,8 @@ def main():
     parser.add_argument("--block-size",type=int,default=5)
     parser.add_argument("--benchmark",action="store_true",
                         help="Defer diagnostic snapshots until after the energy-call timer")
+    parser.add_argument("--optimization-probe",action="store_true",
+                        help="GPU-only same-provider optimized/reference elst, never timing")
     parser.add_argument("--factor-cache-bytes",type=int,default=0,
                         help="Explicit additional per-call GPU packed-S cache budget")
     parser.add_argument("--scf-convergence", type=int, choices=(10, 12), default=10,
@@ -297,6 +348,8 @@ def main():
     deferred_cache = []
     deferred_raw = []
     try:
+        if args.optimization_probe and (args.arm!="gpu" or args.benchmark):
+            raise ValueError("Optimization A/B probes require a diagnostic GPU worker, never benchmark timing")
         config, build = read_config(args.config, args.config_sha256)
         oracle_config_sha=args.config_sha256
         if args.oracle_config is not None or args.oracle_config_sha256 is not None:
@@ -462,6 +515,28 @@ def main():
                     raw_snapshot(cache,(
                         *HF_FIELDS, "J_O", "eps_occ_A", "eps_occ_B", "eps_vir_A", "eps_vir_B"))
                     with ExitStack() as guard:
+                        if args.optimization_probe:
+                            workflow=importlib.import_module(
+                                "psi4.driver.procrouting.sapt.sapt_fisapt_workflow_cuda")
+                            original_elst=workflow.felst_device
+                            def paired_elst(*values,**keywords):
+                                actual=original_elst(*values,**keywords)
+                                session=values[0].session
+                                with session.scope():
+                                    reference=original_elst(*values,**{**keywords,"active_atoms":None})
+                                    errors={}
+                                    for name in ("qa","qb","matrix","total"):
+                                        left=session.download(getattr(reference,name))
+                                        right=session.download(getattr(actual,name))
+                                        np.testing.assert_allclose(right,left,atol=1e-12,rtol=1e-12,
+                                            err_msg="Same-provider optimized/reference elst "+name)
+                                        errors[name]=float(np.max(np.abs(right-left),initial=0.))
+                                    result["optimization_controls"]={
+                                        "felst_maximum_absolute_errors":errors,
+                                        "optimized_work":actual.work_plan,
+                                        "reference_work":reference.work_plan}
+                                return actual
+                            guard.enter_context(patch.object(workflow,"felst_device",paired_elst))
                         for name in ("DFHelper", "FISAPT", "MintsHelper", "IBOLocalizer2", "ExternalPotential"):
                             guard.enter_context(patch.object(core,name,forbidden))
                         for name in ("localization","flocalization","felst","fexch","find","fdisp0"):
@@ -590,7 +665,8 @@ def main():
                 if plan["session_cleanup"]["successful_blas_calls"].get("cublasDgemmStridedBatched",0)<=0:
                     raise RuntimeError("Batched response exchange did not execute on device")
                 launches=plan["session_cleanup"]["successful_kernel_launches"]
-                if any(launches.get(name,0)<=0 for name in ("response_finish","ibo_pair")):
+                if any(launches.get(name,0)<=0 for name in (
+                        "response_finish","ibo_sweep","fragment_charge_mask_error")):
                     raise RuntimeError("Coupled response/ordered localization device work missing")
             if args.scaled:
                 for kind in ("exchange","induction"):

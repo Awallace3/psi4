@@ -15,7 +15,8 @@ class QualificationPaths(unittest.TestCase):
         exec(compile(tree, str(path), "exec"), namespace)
         require = namespace["require_private_root"]
         home = Path("/home/example")
-        for name in ("psi4-disp0-perf-cachy", "psi4-fsapt-cpks-integration-cachy"):
+        for name in ("psi4-disp0-perf-cachy", "psi4-fsapt-cpks-integration-cachy",
+                     "psi4-fsapt-opt-cachy"):
             require(home / "gits" / name, home)
         for root in (
             home / "gits/psi4-disp0-cachy",

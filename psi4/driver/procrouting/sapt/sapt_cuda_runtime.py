@@ -416,13 +416,14 @@ class CUDASession:
                          "linear_combination", "reduce_components", "permute_occupied_a",
                          "make_amplitudes", "rotation_error", "reduce_localized_dispersion",
                          "diagonal_factors", "scatter_matrix", "fragment_nuclear", "reduce_values",
+                         "fragment_charge_mask_error",
                          "reduce_fragment_exchange", "make_single_amplitudes", "reduce_induction_source",
                          "matrix_error", "single_gap_error", "trace_factors",
                          "rhf_response_product", "response_dot", "response_precondition",
                          "response_accumulate_exchange", "response_finish",
                          "response_step", "response_direction", "response_metrics",
                          "inverse_sqrt_weights", "scale_eigenvector_rows", "gather_indexed_matrix",
-                         "set_identity", "ibo_objective", "ibo_pair", "ibo_sweep_finish",
+                         "set_identity", "ibo_objective", "ibo_pair", "ibo_sweep", "ibo_sweep_finish",
                          "ibo_fock_diagonal", "ibo_permutation", "ibo_charges", "ibo_population_error"):
                 self.functions[name] = self.rt(native(dr.cuModuleGetFunction,self.module,name.encode()))
         except BaseException as error:

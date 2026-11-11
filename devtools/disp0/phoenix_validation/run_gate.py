@@ -79,6 +79,7 @@ def main():
     parser.add_argument("--config",type=Path,required=True)
     parser.add_argument("--config-sha256",required=True)
     parser.add_argument("--output",type=Path,required=True)
+    parser.add_argument("--optimization-probe",action="store_true")
     args=parser.parse_args()
     args.config=args.config.resolve(strict=True)
     config,build=read_config(args.config,args.config_sha256)
@@ -101,6 +102,7 @@ def main():
               "--config",str(args.config),"--config-sha256",args.config_sha256,
               "--arm",arm,"--distance-change",str(change),"--output",str(output)]
         if scaled:argv.append("--scaled")
+        if args.optimization_probe and arm=="gpu":argv.append("--optimization-probe")
         if oracle:argv.extend(("--oracle-from",str(root/oracle)))
         # Invoke and evaluate only the SHA-verified whole-stage launcher.
         command=["/bin/bash","-c",

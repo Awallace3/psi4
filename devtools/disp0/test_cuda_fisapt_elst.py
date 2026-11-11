@@ -65,6 +65,7 @@ class Electrostatic(unittest.TestCase):
             "diagonal_factors":[ct.c_longlong]*2+[ct.c_void_p]*2,
             "scatter_matrix":[ct.c_longlong]*6+[ct.c_void_p]*2,
             "fragment_nuclear":[ct.c_longlong]+[ct.c_void_p]*4,
+            "fragment_charge_mask_error":[ct.c_longlong]+[ct.c_void_p]*4,
             "reduce_values":[ct.c_longlong]+[ct.c_void_p]*2}
         for name,args in specs.items():
             fn=getattr(cls.lib,name);fn.argtypes=args;fn.restype=None
@@ -180,6 +181,64 @@ class Electrostatic(unittest.TestCase):
                 self.assertTrue(potential.failed);owner._invalidate.assert_called_once()
                 with self.assertRaises(RuntimeError):potential.compute_device(xyz,q)
                 self.assertEqual(native.cuestPotentialCompute.call_count,1)
+
+    def test_device_verified_active_atoms_skip_only_exact_zero_charge_calls(self):
+        data,expected=fixture(41)
+        xyz,za,zb,la,lb,faa,fbb,va,vb=data
+        outputs={};peaks={}
+        for optimize in (False,True):
+            session=Session(self.lib)
+            primary,auxiliary=object(),object()
+            owner=SimpleNamespace(handle=7,plan=8,primary_snapshot=SimpleNamespace(ncenter=len(za)),
+                                  auxiliary_snapshot=SimpleNamespace(owner=auxiliary))
+            provider=SimpleNamespace(session=session,handle=7,plan=8,keepalive=(owner,),
+                nao=la.shape[0],naux=faa.shape[0],primary_basis=primary,auxiliary_basis=auxiliary,
+                validate_basis=Mock(),compute_device=lambda pairs: {
+                    "aa":session.upload(faa),"bb":session.upload(fbb)})
+            requested=[]
+            schedule=[(atom,side) for atom in range(len(za)) for side,charge in (("A",za),("B",zb))
+                      if not optimize or charge[atom]!=0.]
+            def potential(x,q):
+                atom,side=schedule[len(requested)]
+                np.testing.assert_array_equal(host(x),xyz[atom:atom+1])
+                np.testing.assert_array_equal(host(q),-(za if side=="A" else zb)[atom:atom+1])
+                requested.append((atom,side))
+                return session.upload((va if side=="A" else vb)[atom])
+            potentials=SimpleNamespace(session=session,owner=owner,num_charges=1,
+                                       primary_basis=primary,compute_device=potential)
+            active=(tuple(np.flatnonzero(za).tolist()),tuple(np.flatnonzero(zb).tolist()))
+            with session.scope():
+                inputs=[session.upload(value) for value in (la,lb,xyz,za,zb)]
+                base=session.live_bytes
+                state=elst.felst_device(provider,potentials,*inputs,jkfit_basis=auxiliary,
+                                       active_atoms=active if optimize else None)
+                outputs[optimize]=host(state.matrix).copy()
+                peaks[optimize]=session.peak_live_bytes-base
+                self.assertEqual(state.work_plan["point_potential_calls"],len(schedule))
+                self.assertEqual(state.work_plan["zero_charge_calls_skipped"],
+                                 len(za) if optimize else 0)
+                np.testing.assert_allclose(outputs[optimize],expected,rtol=1e-11,atol=1e-12)
+            self.assertEqual(requested,schedule)
+            self.assertEqual(session.live_bytes,0)
+        np.testing.assert_array_equal(outputs[False],outputs[True])
+        self.assertLessEqual(peaks[True],peaks[False])
+
+    def test_activity_metadata_cannot_hide_nonzero_fractional_negative_or_ghost_charges(self):
+        session=Session(self.lib)
+        with session.scope():
+            za=session.upload(np.array([0.,-0.,.25,-2.]))
+            zb=session.upload(np.zeros(4))
+            expected=(frozenset((2,3)),frozenset())
+            self.assertEqual(elst.validated_active_atoms(session,za,zb,((2,3),())),expected)
+            for bad in (((2,),()),((2,3),(0,)),((0,2,3),())):
+                with self.assertRaisesRegex(ValueError,"resident"):
+                    elst.validated_active_atoms(session,za,zb,bad)
+            for bad in (((3,2),()),((2,2,3),()),((True,3),()),((2,4),())):
+                with self.assertRaisesRegex(ValueError,"index"):
+                    elst.validated_active_atoms(session,za,zb,bad)
+            nan=session.upload(np.array([0.,0.,np.nan,0.]))
+            with self.assertRaises(ValueError):
+                elst.validated_active_atoms(session,nan,zb,((2,),()))
 
     def test_point_potential_precision_drift_is_read_only_and_rejected(self):
         potential=point.CuESTPointPotential.__new__(point.CuESTPointPotential)
