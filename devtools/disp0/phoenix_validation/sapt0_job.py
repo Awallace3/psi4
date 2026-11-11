@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 from sapt0_timing import SYSTEMS, save, sha
+from sapt0_hardware import PROFILES
 
 
 def main():
@@ -38,8 +39,13 @@ def main():
     config = json.loads(original.read_text())
     if config["source_pin"] != proof["pin"]:
         raise RuntimeError("Different runtime and build pin")
+    family = submission.get("device_family", "H200")
+    profile = PROFILES[family]
+    if family == "RTX_PRO_BLACKWELL" and args.system != "peptide":
+        raise RuntimeError("Blackwell admission is limited to the water/peptide pilot")
     config.update(scope="MATCHED_CANONICAL_SAPT0_TIMING", threads=8,
-                  host_memory="96 GiB", device_memory_limit_bytes=120 * 1024**3,
+                  device_family=family,
+                  host_memory="96 GiB", device_memory_limit_bytes=profile["budget_gib"] * 1024**3,
                   native_persistent_bytes=12 * 1024**3)
     config_path = args.output / "runtime-config.json"
     save(config_path, config)
@@ -53,7 +59,9 @@ def main():
         "runtime_config_sha256": sha(config_path), "system": args.system,
         "input_hashes": input_hashes,
         "threads_each_arm": 8, "cpu_model": Path("/proc/cpuinfo").read_text(),
-        "scheduling": {"job": os.environ["SLURM_JOB_ID"], "qos": os.environ.get("SLURM_JOB_QOS")}})
+        "scheduling": {"job": os.environ["SLURM_JOB_ID"], "qos": os.environ.get("SLURM_JOB_QOS"),
+                       "account": os.environ.get("SLURM_JOB_ACCOUNT"),
+                       "partition": os.environ.get("SLURM_JOB_PARTITION")}})
     # No launch of a larger case if the public CPU/GPU water gate fails.
     script = Path(__file__).with_name("sapt0_timing.py")
     for system, repeats in (("water", 1), (args.system, 3)):

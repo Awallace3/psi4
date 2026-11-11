@@ -158,12 +158,12 @@ def read_config(path, expected_sha256):
     if digest(path) != expected_sha256:
         raise RuntimeError("Frozen runtime configuration changed")
     value = json.loads(path.read_text())
-    if (value.get("schema"),value.get("device_family"))==(1,"H200"):
+    if value.get("schema") == 1 and value.get("device_family") in ("H200", "RTX_PRO_BLACKWELL"):
         pass
     elif (value.get("schema"),value.get("device_family"))==(2,"RTX3090"):
         require_local_lease(value["local_lease"])
     else:
-        raise RuntimeError("Explicit H200 or leased RTX3090 runtime schema required")
+        raise RuntimeError("Explicit H200, RTX_PRO_BLACKWELL or leased RTX3090 runtime schema required")
     proof = Path(value["build_proof"])
     if digest(proof) != value["build_proof_sha256"]:
         raise RuntimeError("Selected whole-build proof changed")
@@ -413,9 +413,15 @@ class AuditedRuntime:
              "--format=csv,noheader,nounits"], text=True, timeout=20)
         devices = [[v.strip() for v in line.split(",")] for line in hardware.splitlines()]
         device = next((row for row in devices if row[0] == uuid), None)
-        expected_name,expected_arch=("RTX 3090","compute_86") if local else ("H200","compute_90")
-        if device is None or expected_name not in device[1] or session.arch != expected_arch:
+        if device is None:
             raise RuntimeError("Actual CUDA/NVML device is not the requested "+self.config["device_family"])
+        if local:
+            if "RTX 3090" not in device[1] or session.arch != "compute_86":
+                raise RuntimeError("Actual CUDA/NVML device is not the requested RTX3090")
+        else:
+            from sapt0_hardware import validate_device
+            validate_device(self.config["device_family"], device[1], session.arch,
+                            int(device[3]), self.config["device_memory_limit_bytes"])
         return {"uuid": uuid, "name": device[1], "driver": device[2],
                 "memory_MiB": int(device[3]), "pid": os.getpid(),
                 "nvrtc_architecture": session.arch, "ptx_sha256": session.ptx_sha256,

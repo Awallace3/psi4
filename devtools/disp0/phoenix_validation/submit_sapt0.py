@@ -1,4 +1,4 @@
-"""One explicit embers H200 timing job after a successful coherent build."""
+"""One explicit matched timing job after a successful coherent build."""
 import argparse
 import json
 import os
@@ -7,6 +7,7 @@ import subprocess
 
 from sapt0_timing import SYSTEMS, save, sha
 from submit import clean_environment
+from sapt0_hardware import PROFILES
 
 
 def main():
@@ -18,7 +19,17 @@ def main():
     parser.add_argument("--system", choices=SYSTEMS, required=True)
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--hours", type=int, choices=(2, 4, 8), default=2)
+    parser.add_argument("--device-family", choices=PROFILES, default="H200")
+    parser.add_argument("--qos", choices=("embers", "inferno"), default="embers")
+    parser.add_argument("--account", choices=("gts-cs207", "gts-cs207-chemx"),
+                        default="gts-cs207-chemx")
+    parser.add_argument("--inferno-approved", action="store_true")
     args = parser.parse_args()
+    if args.qos == "inferno" and not args.inferno_approved:
+        raise ValueError("Explicit per-job inferno approval required")
+    if args.device_family == "RTX_PRO_BLACKWELL" and args.system != "peptide":
+        raise ValueError("Blackwell admission is limited to the water/peptide pilot")
+    profile = PROFILES[args.device_family]
     source = args.source.resolve(strict=True)
     run = args.run_root
     if not run.is_absolute():
@@ -50,8 +61,8 @@ def main():
     run.mkdir(mode=0o700)
     (run / "logs").mkdir()
     argv = ["sbatch", "--parsable", "--job-name=sapt0-" + args.system,
-            "--account=gts-cs207-chemx", "--partition=gpu-h200", "--qos=embers",
-            "--nodes=1", "--ntasks=1", "--cpus-per-task=8", "--gres=gpu:h200:1",
+            "--account=" + args.account, "--partition=" + profile["partition"], "--qos=" + args.qos,
+            "--nodes=1", "--ntasks=1", "--cpus-per-task=8", "--gres=" + profile["gres"],
             "--mem=160G", f"--time={args.hours:02}:00:00", "--exclusive",
             "--no-requeue", "--signal=TERM@90", "--chdir=" + str(run),
             "--output=" + str(run / "logs/%x-%j.out"),
@@ -60,7 +71,9 @@ def main():
     save(run / "manifest.json", {
         "source_pin": args.pin, "source": str(source), "build_proof": str(proof_path),
         "build_proof_sha256": sha(proof_path), "native_pin": proof["pin"],
-        "input_hashes": input_hashes, "command": argv, "qos": "embers",
+        "input_hashes": input_hashes, "command": argv, "qos": args.qos,
+        "account": args.account, "device_family": args.device_family,
+        "hardware_profile": profile, "inferno_approved": args.inferno_approved,
         "system": args.system, "cpu_threads_each_arm": 8,
         "repeats_each_arm": 3, "gate": "water CPU/GPU first",
         "environment": {k: v for k, v in env.items() if k.startswith("SAPT0_")}})
@@ -84,6 +97,19 @@ def main():
     with (run / "job-id.txt").open("x") as stream:
         stream.write(job + "\n")
     print("SUBMITTED_JOB=" + job, flush=True)
+    effective = subprocess.run(["scontrol", "show", "job", "-o", job],
+                               capture_output=True, text=True, timeout=30)
+    save(run / "effective-route.json", dict(returncode=effective.returncode,
+         stdout=effective.stdout, stderr=effective.stderr))
+    if effective.returncode:
+        raise RuntimeError("Submitted, but route readback failed; do not resubmit")
+    fields = dict(item.split("=", 1) for item in effective.stdout.split() if "=" in item)
+    if (fields.get("Account") != args.account or fields.get("QOS") != args.qos
+            or fields.get("Partition") != profile["partition"]
+            or fields.get("TimeLimit") != f"{args.hours:02}:00:00"):
+        raise RuntimeError("Submitted route differs; inspect receipt, do not resubmit")
+    print("VERIFIED_ROUTE=" + " ".join(f"{key}={fields.get(key)}" for key in
+          ("Account", "QOS", "Partition", "TimeLimit", "JobState", "StartTime")), flush=True)
 
 
 if __name__ == "__main__":

@@ -273,7 +273,8 @@ def run(args):
                            OPENBLAS_NUM_THREADS=str(config["threads"]), PYTHONNOUSERSITE="1",
                            PYTHONDONTWRITEBYTECODE="1", OMP_DYNAMIC="FALSE")
                 command = ["/bin/bash", "-c",
-                    'set -euo pipefail; eval "$("$1" --psiapi)"; exec "$2" -B "$3" "${@:4}"',
+                    'set -eo pipefail; activation=$("$1" --psiapi); eval "$activation"; '
+                    'set -u; exec "$2" -B "$3" "${@:4}"',
                     "sapt0-worker", config["stage"] + "/bin/psi4",
                     config["dependency_environment"] + "/bin/python", str(Path(__file__).resolve()),
                     "worker", "--config", str(args.config), "--config-sha256", args.config_sha256,
