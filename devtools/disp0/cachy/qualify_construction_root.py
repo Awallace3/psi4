@@ -27,6 +27,14 @@ from response_cuda_closure import canonical_sha, COPY_HELPER_SHA
 SEALED = "process-owned-kernel-sealed-snapshots-v1"
 
 
+def require_private_root(root, home):
+    """Only dedicated owned roots; never qualify in another agent's build."""
+    allowed = {home / "gits" / name for name in (
+        "psi4-disp0-perf-cachy", "psi4-fsapt-cpks-integration-cachy")}
+    if root not in allowed:
+        raise RuntimeError("Explicit private performance or FSAPT integration root required")
+
+
 def runtime_support_proof(root,stage):
     package=Path(stage)/"lib/python3.13/site-packages/psi4_runtime_support"
     staged=root/"build/stage/lib/python3.13/site-packages/psi4_runtime_support"
@@ -414,9 +422,9 @@ def main():
     parser.add_argument("--output",type=Path)
     args = parser.parse_args()
     args.root = args.root.resolve(strict=True)
-    if (args.root != Path(pwd.getpwuid(os.getuid()).pw_dir)/"gits/psi4-disp0-perf-cachy"
-            or not args.attempt.replace("-","").isalnum()):
-        raise RuntimeError("Explicit private performance root and fresh attempt required")
+    require_private_root(args.root, Path(pwd.getpwuid(os.getuid()).pw_dir))
+    if not args.attempt.replace("-","").isalnum():
+        raise RuntimeError("Fresh simple attempt name required")
     resource_scope()
     if args.child:
         from gpu_runtime import require_local_lease

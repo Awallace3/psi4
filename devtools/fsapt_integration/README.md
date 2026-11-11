@@ -111,3 +111,13 @@ installed successfully (`BUILD_OK`), but its launcher stopped before Python
 tests: `--psiapi` expanded unset `PYTHONPATH` under `set -u`. Define an empty
 path before activation and use fresh attempt directories on retries.
 No native numerical or GPU pass is claimed from that attempt.
+
+Retry at **`924dd8da21c132a2a3efe57a0931fdbf68dbaf3d` passed**:
+`BUILD_OK`, exact installed Python/core import assertions, and all four
+native CPU CPKS numerical tests (19.62 s, zero skips).
+Receipt: cachy
+`~/gits/psi4-fsapt-cpks-integration-cachy/runs/cpu-cpks-924dd8da21c132a2a3efe57a0931fdbf68dbaf3d-RJJl0n/junit.xml`.
+The installed science stays pinned there while a separate helper checkout
+prepares sealed-runtime qualification. Reuse the existing
+`qualify_construction_root.py` provenance checks, now explicitly admitting
+this dedicated integration root; do not relax byte/import/runtime checks.
