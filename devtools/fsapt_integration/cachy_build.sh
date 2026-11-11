@@ -9,7 +9,9 @@ test "$(git -C "$ROOT/source" rev-parse HEAD)" = "$PIN"
 test -z "$(git -C "$ROOT/source" status --porcelain)"
 export PATH="$ENV/bin:/usr/bin:/bin" CONDA_PREFIX="$ENV" MATH_ROOT="$ENV"
 export CUDA_HOME="$ENV" CUDA_PATH="$ENV"
-unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH PYTHONPATH
+unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH
+# --psiapi emits an expansion of PYTHONPATH; keep it defined under set -u.
+export PYTHONPATH=""
 export LD_LIBRARY_PATH="$ROOT/runtime/lib:$ENV/lib"
 export PYTHONNOUSERSITE=1 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4
 RP="$ROOT/runtime/lib;$ENV/lib"
@@ -36,8 +38,7 @@ printf '%s\n' "$PIN" > "$ROOT/install/BUILT_FROM"
 echo BUILD_OK
 
 export ROOT PIN
-RUN="$ROOT/runs/cpu-cpks-$PIN"
-mkdir "$RUN"
+RUN=$(mktemp -d "$ROOT/runs/cpu-cpks-$PIN-XXXXXX")
 mkdir "$RUN/scratch"
 export TMPDIR="$RUN/scratch" SCRATCH="$RUN/scratch" PSI_SCRATCH="$RUN/scratch"
 eval "$("$ROOT/install/bin/psi4" --psiapi)"

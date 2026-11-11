@@ -104,3 +104,10 @@ Local validation: `python3 -m unittest discover -s devtools/disp0
 -p 'test_cuda*.py' -v` passed **254 tests**, including the new CPU/GPU
 admission boundaries. Python compilation, `bash -n cachy_build.sh` and
 `git diff --check` passed. These are host-only checks.
+
+The additional independent CPU fragment-response contracts passed (3 tests,
+257 host checks total). The isolated cachy build at `a4d0339029` compiled and
+installed successfully (`BUILD_OK`), but its launcher stopped before Python
+tests: `--psiapi` expanded unset `PYTHONPATH` under `set -u`. Define an empty
+path before activation and use fresh attempt directories on retries.
+No native numerical or GPU pass is claimed from that attempt.
