@@ -96,6 +96,12 @@ _XDM_BJ_PARAMS_ANGSTROM: Dict[str, Tuple[float, float]] = {
     # b3pw91/cc-pvdz RMSP: 43.02%, MAE: 0.850 kcal/mol on KB49
     "b3pw91/cc-pvdz": (0.0000, 3.5779),
 
+    # ---- B86BPBE-25X ----
+    # def2-TZVP on H, C, Si and def2-TZVPD on N, O, S, halogens (name the basis "def2-tzvp_d-split" in basis_helper);
+    # free-atom volumes: the PBE0 table (25% exact exchange)
+    # b86bpbe-25x/def2-tzvp_d-split RMSP: 13.38%, MAE: 0.316 kcal/mol on KB49
+    "b86bpbe-25x/def2-tzvp_d-split": (0.7262, 1.5175),
+
     # ---- B86BPBE ----
     # b86bpbe/aug-cc-pvtz RMSP: 14.74%, MAE: 0.386 kcal/mol on KB49
     "b86bpbe/aug-cc-pvtz": (0.7452, 1.3878),

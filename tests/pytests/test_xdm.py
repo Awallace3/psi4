@@ -910,7 +910,9 @@ def test_xdm_runtime_exchange_changes_free_volume():
 
 
 @pytest.mark.xdm
-def test_xdm_modified_exchange_rejects_heavy_elements():
+def test_xdm_modified_exchange_heavy_elements_use_lsda_volumes():
+    """Beyond Ne, a modified or unknown global exact-exchange fraction uses the LSDA/UGBS free-atom
+    volumes (the postg convention) instead of raising."""
     mol = psi4.geometry("0 1\nCl 0 0 0\nCl 0 0 2.0\nunits angstrom")
     psi4.set_options({
         "basis": "sto-3g",
@@ -920,12 +922,50 @@ def test_xdm_modified_exchange_rejects_heavy_elements():
     _, wfn = psi4.energy("b3lyp", molecule=mol, return_wfn=True)
     xdm = psi4.core.XDMDispersion.build("b3lyp", 0.5, 1.0)
 
-    with pytest.raises(ValueError, match="modified HF exchange is unsupported for Z > 10"):
-        xdm.compute_energy(wfn, 0.50)
+    e_table = xdm.compute_energy(wfn, 0.20)
+    c6_table = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
+    e_modified = xdm.compute_energy(wfn, 0.50)
+    c6_modified = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
+    assert np.isfinite(e_modified)
+    assert not np.isclose(c6_table, c6_modified, rtol=1.0e-10, atol=1.0e-12)
 
     unknown_xdm = psi4.core.XDMDispersion.build("m06-2x", 0.5, 1.0)
-    with pytest.raises(ValueError, match="modified HF exchange is unsupported for Z > 10"):
-        unknown_xdm.compute_energy(wfn, 0.54)
+    e_unknown = unknown_xdm.compute_energy(wfn, 0.50)
+    c6_unknown = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
+    assert compare_values(e_modified, e_unknown, 12, "unknown and modified hybrids share the LSDA/UGBS volumes beyond Ne")
+    assert compare_values(c6_modified, c6_unknown, 10, "unknown and modified hybrids share the LSDA/UGBS C6 beyond Ne")
+
+
+@pytest.mark.xdm
+def test_xdm_b86bpbe25x_uses_pbe0_free_volumes():
+    """B86bPBE-25X: fitted parameter lookup, PBE0 free-atom volumes for all elements, energy bookkeeping."""
+    from psi4.driver.procrouting.xdm_params import get_xdm_bj_params
+
+    a1, a2 = get_xdm_bj_params("b86bpbe-25x", "def2-tzvp_d-split")
+    assert (a1, a2) == pytest.approx((0.7262, 1.5175))
+
+    mol = psi4.geometry("0 1\nCl 0 0 0\nCl 0 0 2.0\nunits angstrom")
+    psi4.set_options({
+        "basis": "sto-3g",
+        "DFT_SPHERICAL_POINTS": 110,
+        "DFT_RADIAL_POINTS": 50,
+        "XDM_DISPERSION_PARAMETERS": [a1, a2],
+    })
+    e_dft, wfn = psi4.energy("b86bpbe-25x", molecule=mol, return_wfn=True)
+    assert wfn.functional().x_alpha() == pytest.approx(0.25)
+
+    e_named = psi4.core.XDMDispersion.build("b86bpbe-25x", a1, a2).compute_energy(wfn, 0.25)
+    c6_named = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
+    e_pbe0 = psi4.core.XDMDispersion.build("pbe0", a1, a2).compute_energy(wfn, 0.25)
+    c6_pbe0 = wfn.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
+    assert compare_values(e_pbe0, e_named, 12, "B86bPBE-25X XDM energy with PBE0 free-atom volumes")
+    assert compare_values(c6_pbe0, c6_named, 10, "B86bPBE-25X C6 with PBE0 free-atom volumes")
+    e_generic = psi4.core.XDMDispersion.build("m06-2x", a1, a2).compute_energy(wfn, 0.25)
+    assert not np.isclose(e_generic, e_named, rtol=1.0e-10, atol=1.0e-12)
+
+    e_xdm = psi4.energy("b86bpbe-25x-xdm", molecule=mol)
+    assert compare_values(e_dft + e_named, e_xdm, 8, "B86bPBE-25X-XDM total energy")
+    assert compare_values(e_named, psi4.variable("DISPERSION CORRECTION ENERGY"), 8, "B86bPBE-25X-XDM dispersion energy")
 
 
 @pytest.mark.xdm

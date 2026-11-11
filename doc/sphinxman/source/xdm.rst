@@ -140,7 +140,9 @@ Grimme correction.  For example::
 ``-XDM`` selects the KB49 damping model. Use ``-XDM(KB49)`` explicitly or
 ``-XDM(LOS-II)`` for the LoS-II refit. KB49 has no-CP and counterpoise fits
 for every functional in :ref:`table:xdmfuncs` with aug-cc-pV[DT]Z and
-cc-pV[DT]Z. ``-XDM(LOS-II)`` is defined only for ``b3lyp-xdm(los-ii)`` and
+cc-pV[DT]Z; the exception is ``b86bpbe-25x-xdm``, which has a single no-CP
+fit for a mixed def2 basis (see below :ref:`table:xdmparams`).
+``-XDM(LOS-II)`` is defined only for ``b3lyp-xdm(los-ii)`` and
 ``pbe0-xdm(los-ii)``, with fits for the basis sets in
 :ref:`table:xdmlosiiparams` and :ref:`table:xdmlosiicpparams`. Each model
 keeps separate no-CP and counterpoise fits; the counterpoise set is selected
@@ -154,41 +156,43 @@ PSI variable :psivar:`DISPERSION CORRECTION ENERGY`.
 
 .. table:: Methods available with the -XDM suffix
 
-   +---------------+------------+
-   | Method        | Type       |
-   +===============+============+
-   | B3LYP-XDM     | Hybrid GGA |
-   +---------------+------------+
-   | B3P86-XDM     | Hybrid GGA |
-   +---------------+------------+
-   | B3PW91-XDM    | Hybrid GGA |
-   +---------------+------------+
-   | PBE0-XDM      | Hybrid GGA |
-   +---------------+------------+
-   | BHandHLYP-XDM | Hybrid GGA |
-   +---------------+------------+
-   | CAM-B3LYP-XDM | Range-sep. |
-   +---------------+------------+
-   | HSE06-XDM     | Range-sep. |
-   +---------------+------------+
-   | LC-wPBE-XDM   | Range-sep. |
-   +---------------+------------+
-   | B97-1-XDM     | Hybrid GGA |
-   +---------------+------------+
-   | BLYP-XDM      | GGA        |
-   +---------------+------------+
-   | B86BPBE-XDM   | GGA        |
-   +---------------+------------+
-   | BP86-XDM      | GGA        |
-   +---------------+------------+
-   | PW86PBE-XDM   | GGA        |
-   +---------------+------------+
-   | PBE-XDM       | GGA        |
-   +---------------+------------+
-   | TPSS-XDM      | Meta-GGA   |
-   +---------------+------------+
-   | HF-XDM        | HF         |
-   +---------------+------------+
+   +-----------------+------------+
+   | Method          | Type       |
+   +=================+============+
+   | B3LYP-XDM       | Hybrid GGA |
+   +-----------------+------------+
+   | B3P86-XDM       | Hybrid GGA |
+   +-----------------+------------+
+   | B3PW91-XDM      | Hybrid GGA |
+   +-----------------+------------+
+   | PBE0-XDM        | Hybrid GGA |
+   +-----------------+------------+
+   | BHandHLYP-XDM   | Hybrid GGA |
+   +-----------------+------------+
+   | CAM-B3LYP-XDM   | Range-sep. |
+   +-----------------+------------+
+   | HSE06-XDM       | Range-sep. |
+   +-----------------+------------+
+   | LC-wPBE-XDM     | Range-sep. |
+   +-----------------+------------+
+   | B97-1-XDM       | Hybrid GGA |
+   +-----------------+------------+
+   | B86BPBE-25X-XDM | Hybrid GGA |
+   +-----------------+------------+
+   | BLYP-XDM        | GGA        |
+   +-----------------+------------+
+   | B86BPBE-XDM     | GGA        |
+   +-----------------+------------+
+   | BP86-XDM        | GGA        |
+   +-----------------+------------+
+   | PW86PBE-XDM     | GGA        |
+   +-----------------+------------+
+   | PBE-XDM         | GGA        |
+   +-----------------+------------+
+   | TPSS-XDM        | Meta-GGA   |
+   +-----------------+------------+
+   | HF-XDM          | HF         |
+   +-----------------+------------+
 
 
 Damping Parameters
@@ -231,6 +235,31 @@ recorded next to its entry in ``psi4/driver/procrouting/xdm_params.py``.
    +-------------------------------+--------+-----------+
    | PBE / aug-cc-pVDZ             | 0.2236 | 3.5855    |
    +-------------------------------+--------+-----------+
+   | B86bPBE-25X / def2 split      | 0.7262 | 1.5175    |
+   +-------------------------------+--------+-----------+
+
+B86bPBE-25X is the hybrid of B86bPBE with 25% exact exchange (0.75 B86b + 0.25
+exact exchange, PBE correlation). Its parameters were fitted to KB49 without
+counterpoise correction using def2-TZVP on H, C and Si and def2-TZVPD on N, O,
+S and the halogens (MAE 0.32 kcal/mol, RMSP 13.4%). They are selected
+automatically when such a basis is given the name ``def2-tzvp_d-split``::
+
+   basis def2-tzvp_d-split {
+      assign def2-tzvp
+      assign n  def2-tzvpd
+      assign o  def2-tzvpd
+      assign s  def2-tzvpd
+      assign f  def2-tzvpd
+      assign cl def2-tzvpd
+      assign br def2-tzvpd
+      assign i  def2-tzvpd
+   }
+   energy('b86bpbe-25x-xdm')
+
+B86bPBE-25X has no free-atom volumes of its own; as a 25% global hybrid it
+uses the PBE0 volumes, which coincide with the 25% exact-exchange values for
+H--Ne and cover the elements up to Kr. No counterpoise fit is available for
+this method; with ``bsse_type='cp'`` supply |scf__xdm_dispersion_parameters|.
 
 .. _`table:xdmkb49cpparams`:
 
@@ -306,6 +335,8 @@ example, as individual QCFractal singlepoints), set
 |scf__xdm_counterpoise| yourself.
 
 
+.. _`sec:xdmcustom`:
+
 Custom Parameters
 ~~~~~~~~~~~~~~~~~
 
@@ -319,10 +350,17 @@ keyword.  This option accepts a two-element array ``[a1, a2]`` where
 
 When |scf__xdm_dispersion_parameters| is set, it overrides any automatic
 functional/basis lookup. Automatic lookup requires the fitted functional's
-original exact-exchange fraction. With explicit parameters, modified global
-exact exchange is supported only for systems whose atoms have
-:math:`Z \leq 10`; modified range-separation parameters and unknown
-range-separated functionals are not supported.
+original exact-exchange fraction.
+
+Free-atom volumes for a global hybrid that has no table of its own (any
+functional not listed in :ref:`table:xdmfuncs`, or a listed one run with a
+modified exact-exchange fraction) follow the convention of postg for a
+numeric exact-exchange fraction: for H--Ne the volumes are interpolated
+between the tabulated 0, 25, 50, 75 and 100% exact-exchange values, and for
+heavier elements the LSDA/UGBS free-atom volumes are used. Damping parameters
+fitted for such a functional in postg can therefore be used unchanged. Modified
+range-separation parameters and unknown range-separated functionals are not
+supported.
 
 XDM requires an all-electron density, so calculations using effective-core
 potentials are rejected. XDM also cannot be combined with another empirical

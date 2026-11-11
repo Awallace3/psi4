@@ -261,6 +261,9 @@ double specific_volume_hf_fraction(const std::string& functional) {
     if (functional == "b3lyp") return 0.20;
     if (functional == "b97-1" || functional == "b971") return 0.21;
     if (functional == "pbe0") return 0.25;
+    // B86bPBE-25X: a 25% global hybrid fitted with the PBE0 free-atom volumes (identical to the
+    // 25%-exact-exchange values for H-Ne; functional-consistent volumes for Z > 10).
+    if (functional == "b86bpbe-25x" || functional == "b86bpbe25x") return 0.25;
     if (functional == "bhahlyp" || functional == "bhandhlyp" || functional == "bhandh") return 0.50;
     if (functional == "lcwpbe" || functional == "lc-wpbe" || functional == "lrc-wpbe") return 0.0;
     return -1.0;
@@ -308,6 +311,7 @@ double get_free_volume(int Z, const std::string& functional, double hf_fraction)
         if (functional == "camb3lyp" || functional == "cam-b3lyp") return frevol_camb3lyp[Z];
         if (functional == "pbe") return frevol_pbe[Z];
         if (functional == "pbe0") return frevol_pbe0[Z];
+        if (functional == "b86bpbe-25x" || functional == "b86bpbe25x") return frevol_pbe0[Z];
         if (functional == "lcwpbe" || functional == "lc-wpbe" || functional == "lrc-wpbe") return frevol_lcwpbe[Z];
         if (functional == "pw86pbe" || functional == "pw86") return frevol_pw86[Z];
         if (functional == "b97-1" || functional == "b971") return frevol_b971[Z];
@@ -316,16 +320,11 @@ double get_free_volume(int Z, const std::string& functional, double hf_fraction)
     // Determine the real HF fraction for interpolation
     double rchf = hf_fraction >= 0.0 ? hf_fraction : std::max(0.0, nominal_hf_fraction);
 
-    // For Z > 10 or fallback: use LSDA/UGBS
+    // For Z > 10 without a functional-specific table: the LSDA/UGBS volumes. This is the
+    // convention postg follows for a numeric exact-exchange fraction (fraction-dependent
+    // free-atom volumes exist only for H-Ne), and it is what the fitted damping parameters
+    // of such functionals assume.
     if (Z > 10) {
-        bool modified_known_exchange =
-            nominal_hf_fraction >= 0.0 && std::abs(hf_fraction - nominal_hf_fraction) >= 1.0e-10;
-        bool unknown_nonzero_exchange = nominal_hf_fraction < 0.0 && std::abs(hf_fraction) >= 1.0e-10;
-        if (hf_fraction >= 0.0 && (modified_known_exchange || unknown_nonzero_exchange)) {
-            throw std::invalid_argument(
-                "XDM: modified HF exchange is unsupported for Z > 10 because no "
-                "fraction-dependent free-atom volumes are available.");
-        }
         return frevol0[Z];
     }
 
