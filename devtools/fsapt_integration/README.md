@@ -1,5 +1,18 @@
 # Native CPKS + existing GPU F-SAPT integration
 
+## Latest status
+
+- Native CPU CPKS: HF/SVWN/PBE sum closure and HF legacy matrix parity pass.
+- Small actual-GPU HF fragment gate: pass.
+- Practical peptide, spherical jun-cc-pVDZ: **pass**, including independent
+  same-gauge oracle and strict repeat, with matched **E10/D12** SCF inputs.
+- Sanitizers: **blocked before CUDA by loader-policy incompatibility**, not
+  passed. No Phoenix job submitted by this integration effort.
+- GPU KS/XC fragment response and larger-system memory/scaling: not qualified.
+
+Production source is pinned at `b025694939`; subsequent commits change only
+diagnostic helpers/tests/docs. Production SCF defaults remain unchanged.
+
 ## Source boundaries
 
 - Target baseline: `bb00386a9ae68f211a1a73d21d29fc49f90cbfdd`
@@ -228,3 +241,40 @@ density-drift hypothesis: the next isolated test retains `E10` and tightens
 only `D12`, identically in CPU and GPU arms. Comparison tolerances and
 localization policy stay fixed. The helper supports this explicit diagnostic
 through `--scf-density-convergence 12`; production defaults are unchanged.
+
+### E10/D12 peptide qualification passed
+
+`runs/peptide-e10-d12-01/result.json` reports **PASS_PEPTIDE_CACHY_ONLY**.
+SHA256: `014c937a2f403918fc50998458115efa8e0c36a20a67930c4734e7796c1336bd`.
+Installed science remains `b02569493979602e418c05911430eaf1f406e47a`;
+outer helper is `d4fff5a8ad`. The newly authenticated helper's small water gate
+also passed (`runs/hf-fragment-gate-04`).
+
+All four practical workers completed: CPU, GPU, independent CPU same-gauge
+oracle, fresh GPU repeat. Exact suite geometry and spherical jun-cc-pVDZ
+gave 250 AO functions, with the original JKFIT/RIFIT separation.
+
+| Check | Observed |
+|---|---:|
+| GPU minus CPU total interaction energy | `1.9294e-10 Eh` |
+| Maximum signed aggregate CPU/GPU difference | `4.5851e-10 Eh` |
+| Maximum same-gauge energy-matrix difference | `1.1268e-9 Eh` |
+| Maximum strict repeat-field difference | `3.5949e-10` |
+| Repeat localized AO coefficients, A / B | `1.7465e-11` / `2.6954e-11` |
+
+The existing oracle tolerances and `1e-9` repeat comparison were unchanged.
+Only matched SCF density convergence tightened from D10 to D12; E10 was
+retained to avoid the observed energy-noise floor. This supports upstream
+density convergence as the practical cause of this case's repeat failure;
+it does not establish a universal remedy for nanotube or other geometries.
+
+Both GPU runs reported `2,780,604,928` bytes of **tracked session peak**
+allocation, excluding untracked native/runtime/desktop memory. Process
+maximum RSS was 1,308,828 and 1,325,568 KiB. These are not complete peak-VRAM
+measurements or larger-system memory admission.
+
+The sanitizer loader blocker remains. Before Phoenix: complete an audited
+sanitizer gate and memory accounting, then use a separate sm_90 build and
+architecture parity gate. Carry E10/D12 explicitly and identically in both
+arms of any later matched peptide comparison; do not relabel old E10/D10
+measurements or quote RTX3090 speedups.
