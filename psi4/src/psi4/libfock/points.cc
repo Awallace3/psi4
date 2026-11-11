@@ -193,30 +193,52 @@ void RKSFunctions::compute_points(std::shared_ptr<BlockOPoints> block, bool forc
 
     // Rho_a = 2.0 * D_xy phi_xa phi_ya
     C_DGEMM('N', 'N', npoints, nlocal, nlocal, 2.0, phip[0], coll_funcs, D2p[0], nglobal, 0.0, Tp[0], nglobal);
-    for (int P = 0; P < npoints; P++) {
-        rhoap[P] = C_DDOT(nlocal, phip[P], 1, Tp[P], 1);
-    }
 
-    // => Build GGA quantities <= //
-    // Rho^l_a = D_xy phi_xa phi^l_ya
+    // => Build LSDA + GGA quantities in a single cache-resident pass over Tp[P] <= //
     if (ansatz_ >= 1) {
         double** phixp = basis_value("PHI_X")->pointer();
         double** phiyp = basis_value("PHI_Y")->pointer();
         double** phizp = basis_value("PHI_Z")->pointer();
-        double* rhoaxp = point_value("RHO_AX")->pointer();
-        double* rhoayp = point_value("RHO_AY")->pointer();
-        double* rhoazp = point_value("RHO_AZ")->pointer();
-        double* gammaaap = point_value("GAMMA_AA")->pointer();
+        double* __restrict__ rhoaxp = point_value("RHO_AX")->pointer();
+        double* __restrict__ rhoayp = point_value("RHO_AY")->pointer();
+        double* __restrict__ rhoazp = point_value("RHO_AZ")->pointer();
+        double* __restrict__ gammaaap = point_value("GAMMA_AA")->pointer();
 
         for (int P = 0; P < npoints; P++) {
+            const double* __restrict__ t = Tp[P];
+            const double* __restrict__ p0 = phip[P];
+            const double* __restrict__ px = phixp[P];
+            const double* __restrict__ py = phiyp[P];
+            const double* __restrict__ pz = phizp[P];
+            double s0 = 0.0, sx = 0.0, sy = 0.0, sz = 0.0;
+#pragma omp simd reduction(+ : s0, sx, sy, sz)
+            for (int m = 0; m < nlocal; m++) {
+                const double tm = t[m];
+                s0 += p0[m] * tm;
+                sx += px[m] * tm;
+                sy += py[m] * tm;
+                sz += pz[m] * tm;
+            }
             // 2.0 for Px D P + P D Px
-            double rho_x = 2.0 * C_DDOT(nlocal, phixp[P], 1, Tp[P], 1);
-            double rho_y = 2.0 * C_DDOT(nlocal, phiyp[P], 1, Tp[P], 1);
-            double rho_z = 2.0 * C_DDOT(nlocal, phizp[P], 1, Tp[P], 1);
+            const double rho_x = 2.0 * sx;
+            const double rho_y = 2.0 * sy;
+            const double rho_z = 2.0 * sz;
+            rhoap[P] = s0;
             rhoaxp[P] = rho_x;
             rhoayp[P] = rho_y;
             rhoazp[P] = rho_z;
             gammaaap[P] = rho_x * rho_x + rho_y * rho_y + rho_z * rho_z;
+        }
+    } else {
+        for (int P = 0; P < npoints; P++) {
+            const double* __restrict__ t = Tp[P];
+            const double* __restrict__ p0 = phip[P];
+            double s0 = 0.0;
+#pragma omp simd reduction(+ : s0)
+            for (int m = 0; m < nlocal; m++) {
+                s0 += p0[m] * t[m];
+            }
+            rhoap[P] = s0;
         }
     }
 
@@ -467,38 +489,57 @@ void UKSFunctions::compute_points(std::shared_ptr<BlockOPoints> block, bool forc
     size_t coll_funcs = basis_value("PHI")->ncol();
 
     C_DGEMM('N', 'N', npoints, nlocal, nlocal, 1.0, phip[0], coll_funcs, Da2p[0], nglobal, 0.0, Tap[0], nglobal);
-    for (int P = 0; P < npoints; P++) {
-        rhoap[P] = C_DDOT(nlocal, phip[P], 1, Tap[P], 1);
-    }
-
     C_DGEMM('N', 'N', npoints, nlocal, nlocal, 1.0, phip[0], coll_funcs, Db2p[0], nglobal, 0.0, Tbp[0], nglobal);
-    for (int P = 0; P < npoints; P++) {
-        rhobp[P] = C_DDOT(nlocal, phip[P], 1, Tbp[P], 1);
-    }
 
-    // => Build GGA quantities <= //
+    // => Build LSDA + GGA quantities in a single fused pass <= //
     if (ansatz_ >= 1) {
         double** phixp = basis_value("PHI_X")->pointer();
         double** phiyp = basis_value("PHI_Y")->pointer();
         double** phizp = basis_value("PHI_Z")->pointer();
-        double* rhoaxp = point_value("RHO_AX")->pointer();
-        double* rhoayp = point_value("RHO_AY")->pointer();
-        double* rhoazp = point_value("RHO_AZ")->pointer();
-        double* rhobxp = point_value("RHO_BX")->pointer();
-        double* rhobyp = point_value("RHO_BY")->pointer();
-        double* rhobzp = point_value("RHO_BZ")->pointer();
-        double* gammaaap = point_value("GAMMA_AA")->pointer();
-        double* gammaabp = point_value("GAMMA_AB")->pointer();
-        double* gammabbp = point_value("GAMMA_BB")->pointer();
+        double* __restrict__ rhoaxp = point_value("RHO_AX")->pointer();
+        double* __restrict__ rhoayp = point_value("RHO_AY")->pointer();
+        double* __restrict__ rhoazp = point_value("RHO_AZ")->pointer();
+        double* __restrict__ rhobxp = point_value("RHO_BX")->pointer();
+        double* __restrict__ rhobyp = point_value("RHO_BY")->pointer();
+        double* __restrict__ rhobzp = point_value("RHO_BZ")->pointer();
+        double* __restrict__ gammaaap = point_value("GAMMA_AA")->pointer();
+        double* __restrict__ gammaabp = point_value("GAMMA_AB")->pointer();
+        double* __restrict__ gammabbp = point_value("GAMMA_BB")->pointer();
 
         for (int P = 0; P < npoints; P++) {
-            // 2.0 for Px D P + P D Px
-            double rhoa_x = 2.0 * C_DDOT(nlocal, phixp[P], 1, Tap[P], 1);
-            double rhoa_y = 2.0 * C_DDOT(nlocal, phiyp[P], 1, Tap[P], 1);
-            double rhoa_z = 2.0 * C_DDOT(nlocal, phizp[P], 1, Tap[P], 1);
-            double rhob_x = 2.0 * C_DDOT(nlocal, phixp[P], 1, Tbp[P], 1);
-            double rhob_y = 2.0 * C_DDOT(nlocal, phiyp[P], 1, Tbp[P], 1);
-            double rhob_z = 2.0 * C_DDOT(nlocal, phizp[P], 1, Tbp[P], 1);
+            const double* __restrict__ ta = Tap[P];
+            const double* __restrict__ tb = Tbp[P];
+            const double* __restrict__ p0 = phip[P];
+            const double* __restrict__ px = phixp[P];
+            const double* __restrict__ py = phiyp[P];
+            const double* __restrict__ pz = phizp[P];
+            double sa0 = 0.0, sax = 0.0, say = 0.0, saz = 0.0;
+            double sb0 = 0.0, sbx = 0.0, sby = 0.0, sbz = 0.0;
+#pragma omp simd reduction(+ : sa0, sax, say, saz, sb0, sbx, sby, sbz)
+            for (int m = 0; m < nlocal; m++) {
+                const double tam = ta[m];
+                const double tbm = tb[m];
+                const double p0m = p0[m];
+                const double pxm = px[m];
+                const double pym = py[m];
+                const double pzm = pz[m];
+                sa0 += p0m * tam;
+                sax += pxm * tam;
+                say += pym * tam;
+                saz += pzm * tam;
+                sb0 += p0m * tbm;
+                sbx += pxm * tbm;
+                sby += pym * tbm;
+                sbz += pzm * tbm;
+            }
+            const double rhoa_x = 2.0 * sax;
+            const double rhoa_y = 2.0 * say;
+            const double rhoa_z = 2.0 * saz;
+            const double rhob_x = 2.0 * sbx;
+            const double rhob_y = 2.0 * sby;
+            const double rhob_z = 2.0 * sbz;
+            rhoap[P] = sa0;
+            rhobp[P] = sb0;
             rhoaxp[P] = rhoa_x;
             rhoayp[P] = rhoa_y;
             rhoazp[P] = rhoa_z;
@@ -508,6 +549,21 @@ void UKSFunctions::compute_points(std::shared_ptr<BlockOPoints> block, bool forc
             gammaaap[P] = rhoa_x * rhoa_x + rhoa_y * rhoa_y + rhoa_z * rhoa_z;
             gammaabp[P] = rhoa_x * rhob_x + rhoa_y * rhob_y + rhoa_z * rhob_z;
             gammabbp[P] = rhob_x * rhob_x + rhob_y * rhob_y + rhob_z * rhob_z;
+        }
+    } else {
+        for (int P = 0; P < npoints; P++) {
+            const double* __restrict__ ta = Tap[P];
+            const double* __restrict__ tb = Tbp[P];
+            const double* __restrict__ p0 = phip[P];
+            double sa0 = 0.0, sb0 = 0.0;
+#pragma omp simd reduction(+ : sa0, sb0)
+            for (int m = 0; m < nlocal; m++) {
+                const double p0m = p0[m];
+                sa0 += p0m * ta[m];
+                sb0 += p0m * tb[m];
+            }
+            rhoap[P] = sa0;
+            rhobp[P] = sb0;
         }
     }
 

@@ -62,24 +62,24 @@ inline std::vector<double> rks_quadrature_integrate(std::shared_ptr<BlockOPoints
     auto w = block->w();
 
     // Superfunctional data
-    auto zk = fworker->value("V")->pointer();
-    auto QTp = fworker->value("Q_TMP")->pointer();
+    const double* __restrict__ zk = fworker->value("V")->pointer();
 
     // Points data
-    auto rho_a = pworker->point_value("RHO_A")->pointer();
+    const double* __restrict__ rho_a = pworker->point_value("RHO_A")->pointer();
 
-    // Build quadrature
-    std::vector<double> ret(5);
-    ret[0] = C_DDOT(npoints, w, 1, zk, 1);
+    // Build quadrature in a single SIMD pass
+    double q0 = 0.0, q1 = 0.0, q2 = 0.0, q3 = 0.0, q4 = 0.0;
+#pragma omp simd reduction(+ : q0, q1, q2, q3, q4)
     for (int P = 0; P < npoints; P++) {
-        QTp[P] = w[P] * rho_a[P];
+        const double wp = w[P];
+        const double wr = wp * rho_a[P];
+        q0 += wp * zk[P];
+        q1 += wr;
+        q2 += wr * x[P];
+        q3 += wr * y[P];
+        q4 += wr * z[P];
     }
-    ret[1] = C_DDOT(npoints, w, 1, rho_a, 1);
-    ret[2] = C_DDOT(npoints, QTp, 1, x, 1);
-    ret[3] = C_DDOT(npoints, QTp, 1, y, 1);
-    ret[4] = C_DDOT(npoints, QTp, 1, z, 1);
-
-    return ret;
+    return {q0, q1, q2, q3, q4};
 }
 
 inline void sap_integrator(std::shared_ptr<BlockOPoints> block, const SharedVector& sap_potential,
@@ -143,37 +143,44 @@ inline void rks_integrator(std::shared_ptr<BlockOPoints> block, std::shared_ptr<
     auto max_functions = V->ncol();
     auto V2p = V->pointer();
 
-    // => LSDA contribution <= //
-    //                                         ∂
-    // T := 1/2 einsum("p, p, pn -> pn", w, φ, -- f)
-    //                                         ∂ρ
-    auto v_rho_a = fworker->value("V_RHO_A")->pointer();
-    for (int P = 0; P < npoints; P++) {
-        std::fill(Tp[P], Tp[P] + nlocal, 0.0);
-        C_DAXPY(nlocal, 0.5 * v_rho_a[P] * w[P], phi[P], 1, Tp[P], 1);
-    }
-    // parallel_timer_off("LSDA Phi_tmp", rank);
-
-    // => GGA contribution <= //
+    // => LSDA + GGA contribution (fused single pass over Tp[P]) <= //
+    const double* __restrict__ v_rho_a = fworker->value("V_RHO_A")->pointer();
     if (ansatz >= 1) {
-        //                                        ∂
-        // T += einsum("p, p, xp, xpn -> pnσ", w, -- f, ∇ρ, ∇φ)
-        //                                        ∂Γ
-        // parallel_timer_on("GGA Phi_tmp", rank);
         auto phix = pworker->basis_value("PHI_X")->pointer();
         auto phiy = pworker->basis_value("PHI_Y")->pointer();
         auto phiz = pworker->basis_value("PHI_Z")->pointer();
-        auto rho_ax = pworker->point_value("RHO_AX")->pointer();
-        auto rho_ay = pworker->point_value("RHO_AY")->pointer();
-        auto rho_az = pworker->point_value("RHO_AZ")->pointer();
-        auto v_gamma_aa = fworker->value("V_GAMMA_AA")->pointer();
+        const double* __restrict__ rho_ax = pworker->point_value("RHO_AX")->pointer();
+        const double* __restrict__ rho_ay = pworker->point_value("RHO_AY")->pointer();
+        const double* __restrict__ rho_az = pworker->point_value("RHO_AZ")->pointer();
+        const double* __restrict__ v_gamma_aa = fworker->value("V_GAMMA_AA")->pointer();
 
-        for (int P = 0; P < npoints; P++) {
-            C_DAXPY(nlocal, w[P] * (2.0 * v_gamma_aa[P] * rho_ax[P]), phix[P], 1, Tp[P], 1);
-            C_DAXPY(nlocal, w[P] * (2.0 * v_gamma_aa[P] * rho_ay[P]), phiy[P], 1, Tp[P], 1);
-            C_DAXPY(nlocal, w[P] * (2.0 * v_gamma_aa[P] * rho_az[P]), phiz[P], 1, Tp[P], 1);
+        for (size_t P = 0; P < npoints; P++) {
+            const double wp = w[P];
+            const double c0 = 0.5 * v_rho_a[P] * wp;
+            const double g2 = 2.0 * v_gamma_aa[P] * wp;
+            const double cx = g2 * rho_ax[P];
+            const double cy = g2 * rho_ay[P];
+            const double cz = g2 * rho_az[P];
+            const double* __restrict__ p0 = phi[P];
+            const double* __restrict__ px = phix[P];
+            const double* __restrict__ py = phiy[P];
+            const double* __restrict__ pz = phiz[P];
+            double* __restrict__ t = Tp[P];
+#pragma omp simd
+            for (size_t m = 0; m < nlocal; m++) {
+                t[m] = c0 * p0[m] + cx * px[m] + cy * py[m] + cz * pz[m];
+            }
         }
-        // parallel_timer_off("GGA Phi_tmp", rank);
+    } else {
+        for (size_t P = 0; P < npoints; P++) {
+            const double c0 = 0.5 * v_rho_a[P] * w[P];
+            const double* __restrict__ p0 = phi[P];
+            double* __restrict__ t = Tp[P];
+#pragma omp simd
+            for (size_t m = 0; m < nlocal; m++) {
+                t[m] = c0 * p0[m];
+            }
+        }
     }
 
     // ==> Contract T aginst φ, replacing a point index with  an AO index <==
@@ -181,8 +188,8 @@ inline void rks_integrator(std::shared_ptr<BlockOPoints> block, std::shared_ptr<
             max_functions);
 
     // ==> Add the adjoint to complete the LDA and GGA contributions  <==
-    for (int m = 0; m < nlocal; m++) {
-        for (int n = 0; n <= m; n++) {
+    for (size_t m = 0; m < nlocal; m++) {
+        for (size_t n = 0; n <= m; n++) {
             V2p[m][n] = V2p[n][m] = V2p[m][n] + V2p[n][m];
         }
     }
@@ -193,18 +200,20 @@ inline void rks_integrator(std::shared_ptr<BlockOPoints> block, std::shared_ptr<
         auto phix = pworker->basis_value("PHI_X")->pointer();
         auto phiy = pworker->basis_value("PHI_Y")->pointer();
         auto phiz = pworker->basis_value("PHI_Z")->pointer();
-        auto v_tau_a = fworker->value("V_TAU_A")->pointer();
+        const double* __restrict__ v_tau_a = fworker->value("V_TAU_A")->pointer();
 
-        double** phi_w[3];
-        phi_w[0] = phix;
-        phi_w[1] = phiy;
-        phi_w[2] = phiz;
+        double** phi_w[3] = {phix, phiy, phiz};
 
         for (int i = 0; i < 3; i++) {
             auto phiw = phi_w[i];
-            for (int P = 0; P < npoints; P++) {
-                std::fill(Tp[P], Tp[P] + nlocal, 0.0);
-                C_DAXPY(nlocal, v_tau_a[P] * w[P], phiw[P], 1, Tp[P], 1);
+            for (size_t P = 0; P < npoints; P++) {
+                const double c = v_tau_a[P] * w[P];
+                const double* __restrict__ pw = phiw[P];
+                double* __restrict__ t = Tp[P];
+#pragma omp simd
+                for (size_t m = 0; m < nlocal; m++) {
+                    t[m] = c * pw[m];
+                }
             }
             C_DGEMM('T', 'N', nlocal, nlocal, npoints, 1.0, phiw[0], coll_funcs, Tp[0], max_functions, 1.0, V2p[0],
                     max_functions);

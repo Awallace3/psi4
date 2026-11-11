@@ -526,7 +526,14 @@ def scf_iterate(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
         Ediff = SCFE - SCFE_old
         SCFE_old = SCFE
         Ediff_test = Ediff
-        if e_conv_predicted:
+        use_pred_e = (
+            e_conv_predicted
+            and self.iteration_ >= 3
+            and not ((self.iteration_ == 0) and self.sad_)
+            and not xc_initial
+            and not k_fp32
+        )
+        if use_pred_e:
             # F(D_k) and D_k, before DIIS/SOSCF overwrite them; see the prediction after form_D.
             pred_F = [F.clone() for F in _alpha_beta(self, "F")]
             pred_D = [D.clone() for D in _alpha_beta(self, "D")]
@@ -625,13 +632,16 @@ def scf_iterate(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
         self.form_D()
         core.timer_off("HF: Form D")
 
-        if e_conv_predicted and not ((self.iteration_ == 0) and self.sad_):
+        if use_pred_e:
             # First-order change of the energy to the next iterate, E(D_k+1) - E(D_k) ~ Tr[F_k dD]
-            # (x2 for RHF). Near convergence it bounds the true change (~2x too large), so the
-            # build that would only confirm |Ediff| < E_CONVERGENCE can be skipped.
+            # (x2 for RHF). Since SCFE is still E(D_k), require both |pred| < 0.2 * e_conv and
+            # |Ediff| < 10 * e_conv so |E(D_k) - E*| stays safely well below e_conv while still
+            # skipping the pure confirmation Fock build.
+            eff_e_conv = core.get_option("SCF", "E_CONVERGENCE") if e_conv is None else e_conv
             pred = sum(F.vector_dot(D) - F.vector_dot(D0) for F, D, D0 in zip(pred_F, _alpha_beta(self, "D"), pred_D))
             pred *= 2.0 if isinstance(self, core.RHF) else 1.0  # RHF Fa, Da are per spin
-            Ediff_test = pred if np.isfinite(pred) else Ediff
+            if np.isfinite(pred) and abs(pred) < 0.2 * eff_e_conv and abs(Ediff) < 10.0 * eff_e_conv:
+                Ediff_test = pred
 
         self.set_variable("SCF ITERATION ENERGY", SCFE)
         core.set_variable("SCF D NORM", Dnorm)

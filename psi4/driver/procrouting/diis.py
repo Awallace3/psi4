@@ -178,11 +178,12 @@ class DIIS:
         template_object = self.template[name][item_num]
         if isinstance(template_object, float) or self.storage_policy == StoragePolicy.InCore:
             quantity = self.stored_vectors[entry_num][name][item_num]
-            try:
-                quantity = quantity.clone()
-            except AttributeError:
-                # The quantity must have been a float. No need to clone.
-                pass
+            if force_new:
+                try:
+                    quantity = quantity.clone()
+                except AttributeError:
+                    # The quantity must have been a float. No need to clone.
+                    pass
         elif self.storage_policy == StoragePolicy.OnDisk:
             full_name = self.get_name(name, entry_num, item_num)
             psio = core.IO.shared_object()
@@ -212,8 +213,8 @@ class DIIS:
         except KeyError:
             dot_product = 0
             for item_num in range(len(self.template["error"])):
-                Rix = self.load_quantity("error", i, item_num)
-                Rjx = self.load_quantity("error", j, item_num)
+                Rix = self.load_quantity("error", i, item_num, force_new=False)
+                Rjx = self.load_quantity("error", j, item_num, force_new=False)
                 dot_product += Rix.vector_dot(Rjx)
 
             self.cached_dot_products[key] = dot_product
@@ -318,7 +319,7 @@ class DIIS:
         dF = [[] for x in range(num_entries)]
         for name, array in zip(["densities", "target"], [dD, dF]):
             for item_num in range(len(self.template[name])):
-                latest_entry = self.load_quantity(name, len(self.stored_vectors) - 1, item_num)
+                latest_entry = self.load_quantity(name, len(self.stored_vectors) - 1, item_num, force_new=False)
                 for entry_num in range(num_entries):
                     temp = self.load_quantity(name, entry_num, item_num, force_new=True)
                     temp.subtract(latest_entry)
@@ -327,7 +328,7 @@ class DIIS:
         self.adiis_linear = np.zeros((num_entries))
         latest_fock = []
         for item_num in range(len(self.template["target"])):
-            latest_fock.append(self.load_quantity("target", len(self.stored_vectors) - 1, item_num))
+            latest_fock.append(self.load_quantity("target", len(self.stored_vectors) - 1, item_num, force_new=False))
         for i in range(num_entries):
             self.adiis_linear[i] = sum(d.vector_dot(f) for d, f in zip(dD[i], latest_fock))
 
@@ -368,9 +369,9 @@ class DIIS:
         self.ediis_quadratic = np.zeros((num_entries, num_entries))
         for i in range(num_entries):
             for item_num in range(len(self.template["densities"])):
-                d = self.load_quantity("densities", i, item_num)
+                d = self.load_quantity("densities", i, item_num, force_new=False)
                 for j in range(num_entries):
-                    f = self.load_quantity("target", j, item_num)
+                    f = self.load_quantity("target", j, item_num, force_new=False)
                     self.ediis_quadratic[i][j] += d.vector_dot(f)
 
         diag = np.diag(self.ediis_quadratic)
@@ -432,18 +433,21 @@ class DIIS:
         for j, Tj in enumerate(args):
             Tj.zero()
             for i, ci in enumerate(coeffs):
-                Tij = self.load_quantity("target", i, j)
+                Tij = self.load_quantity("target", i, j, force_new=False)
                 axpy(Tj, ci, Tij)
 
         return performed
 
     def delete_diis_file(self):
         """ Purge all data in the DIIS file. """
+        self.reset_subspace()
         # libpsio deletion
         psio = core.IO.shared_object()
-        if not psio.open_check(psif.PSIF_LIBDIIS):
-            psio.open(psif.PSIF_LIBDIIS, 1) # 1 = PSIO_OPEN_OLD
-        psio.close(psif.PSIF_LIBDIIS, 0) # 0 = DELETE
+        if self.storage_policy == StoragePolicy.OnDisk or self.opened_libdiis or psio.open_check(psif.PSIF_LIBDIIS):
+            if not psio.open_check(psif.PSIF_LIBDIIS):
+                psio.open(psif.PSIF_LIBDIIS, 1) # 1 = PSIO_OPEN_OLD
+            psio.close(psif.PSIF_LIBDIIS, 0) # 0 = DELETE
+            self.opened_libdiis = False
         # ambit deletion
         for filename in self.created_files:
             try:
