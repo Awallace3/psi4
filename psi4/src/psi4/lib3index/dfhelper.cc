@@ -231,11 +231,11 @@ void DFHelper::AO_core(bool set_AO_core=true) {
 
     // Transients on top of the AOs and the metric: the JK build's C_buffers (conservative estimate
     // since I do not have max_nocc TODO) and tmp buffers, or, while the AOs are built, the metric
-    // contraction's panels. They are never live together. The panels are charged at their
-    // narrowest width, twice, since reserve_metric_panels gives them at most half of the spare
-    // memory; wider panels are used when they fit. The direct modes never contract panels.
+    // contraction's panels next to an AO block. They are never live together. The panels are
+    // charged at their narrowest width with the smallest AO block; wider panels and larger blocks
+    // are used when they fit (reserve_metric_panels). The direct modes never contract panels.
     const size_t jk_tmp = nthreads_ * nbf_ * nbf_ + 3 * nbf_ * nbf_ * Qshell_max_;
-    const size_t panels = (direct_ || direct_iaQ_) ? 0 : 2 * AO_core_init_scratch(true);
+    const size_t panels = (direct_ || direct_iaQ_) ? 0 : AO_core_init_scratch(true) + AO_core_min_block();
     required_core_size_ += std::max(jk_tmp, panels);
 
     // set AO_core_ if requested
@@ -545,12 +545,28 @@ bool DFHelper::metric_cholesky_route() const {
     // Only the in-core J^-1/2 build (prepare_AO_core) has a Cholesky route; the wK build does not.
     return metric_cholesky_ && !do_wK_ && std::fabs(mpower_ + 0.5) < 1e-13;
 }
+size_t DFHelper::AO_core_min_block() const {
+    // Smallest buffer pshell_blocks_for_AO_build accepts on top of the AOs and the held metric:
+    // the largest single p shell (times the wK copies), twice when the metric is not held.
+    size_t largest = 0;
+    for (size_t i = 0; i < pshells_; i++)
+        largest = std::max(largest, symm_big_skips_[pshell_aggs_[i + 1]] - symm_big_skips_[pshell_aggs_[i]]);
+    const size_t copies = do_wK_ ? (wcombine_ ? 2 : 3) : 1;
+    return largest * copies * (hold_met_ ? 1 : 2);
+}
 size_t DFHelper::reserve_metric_panels(size_t held) {
-    // Under a tight budget give the two panels at most half of what the held tensors (AOs,
-    // metrics) leave; the AO blocks get the rest. Returns the doubles reserved for the panels.
+    // The panels and the AO blocks share what the held tensors (AOs, metrics) leave: the panels
+    // get at most half, less if the smallest AO block would not fit, but never narrower than nbf
+    // columns. Returns the doubles reserved for the panels.
     panel_cols_cap_ = 0;
     const size_t spare = memory_ > held ? memory_ - held : 0;
-    if (AO_core_init_scratch() > spare / 2) panel_cols_cap_ = std::max<size_t>(1, spare / 4 / naux_);
+    const size_t min_block = AO_core_min_block();
+    size_t budget = spare / 2;
+    if (spare - budget < min_block) budget = spare > min_block ? spare - min_block : 0;
+    if (AO_core_init_scratch() > budget) {
+        const size_t extras = AO_core_init_scratch(true) - 2 * naux_ * metric_panel_cols(true);
+        panel_cols_cap_ = std::max<size_t>(1, (budget > extras ? budget - extras : 0) / 2 / naux_);
+    }
     const size_t s = AO_core_init_scratch();  // with the cap applied
     if (s >= memory_) throw PSIEXCEPTION("DFHelper: not enough memory for the metric contraction panels.");
     return s;
