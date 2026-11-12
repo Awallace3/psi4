@@ -35,9 +35,10 @@ def main():
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--inputs", type=Path, required=True)
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--mode", choices=("energy", "fixed-jk", "trace-energy"), default="energy")
+    parser.add_argument("--mode", choices=("energy", "fixed-jk", "trace-energy", "replay-trace"), default="energy")
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--reference-sha256")
+    parser.add_argument("--trace-sha256")
     args = parser.parse_args()
     helper = Path(__file__).resolve().parents[2]
     helper_pin = subprocess.check_output(
@@ -60,6 +61,14 @@ def main():
         ref = args.reference.resolve(strict=True)
         reference(ref, args.reference_sha256)
         reference_fields = dict(reference=str(ref), reference_sha256=args.reference_sha256)
+    if args.mode == "replay-trace":
+        if args.reference is None or args.reference_sha256 is None or args.trace_sha256 is None:
+            parser.error("Trace replay requires frozen result and trace hashes")
+        from dimer_trace_replay import validate_reference
+        ref = args.reference.resolve(strict=True)
+        validate_reference(ref, args.reference_sha256, args.trace_sha256)
+        reference_fields = dict(reference=str(ref), reference_sha256=args.reference_sha256,
+                                trace_sha256=args.trace_sha256)
     if not args.root.is_absolute():
         raise ValueError("Absolute new run directory required")
     root = args.root
@@ -87,7 +96,9 @@ def main():
             "inputs": str(inputs), "inputs_sha256": INPUT_SHA,
             "backend": backend, "cpu_admission": admission,
             "resources": resources(backend), "command": argv,
-            "scope": ("FIXED_CPU_DIMER_COEFFICIENT_JK_REPEATS_NO_SCF"
+            "scope": ("GPU_TRAJECTORY_MEMDFJK_VS_CUEST_REPLAY_NO_SCF"
+                      if args.mode == "replay-trace" else
+                      "FIXED_CPU_DIMER_COEFFICIENT_JK_REPEATS_NO_SCF"
                       if args.mode == "fixed-jk" else
                       "STANDALONE_DIMER_HF_ENERGY_TRACE_NOT_TIMING" if args.mode == "trace-energy"
                       else "ONE_FRESH_PROCESS_STANDALONE_DIMER_HF_ENERGY"),

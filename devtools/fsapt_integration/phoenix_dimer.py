@@ -60,6 +60,13 @@ def execute(path, root, worker=False):
         owner = bootstrap(config, build)
         runtime = AuditedRuntime(config_path, manifest["config_sha256"])
         os.chdir(root)
+        if manifest.get("mode") == "replay-trace":
+            from dimer_trace_replay import run
+            runtime.guarded_call(run, runtime.psi4, Path(manifest["inputs"]),
+                                 root / "energy", manifest["backend"], policy["threads"],
+                                 Path(manifest["reference"]), manifest["reference_sha256"],
+                                 manifest["trace_sha256"])
+            return
         if manifest.get("mode", "energy") == "fixed-jk":
             from dimer_fixed_jk import run
             runtime.guarded_call(run, runtime.psi4, Path(manifest["inputs"]),
@@ -80,7 +87,9 @@ def execute(path, root, worker=False):
     groups, scratch_owner = set(), None
     report = dict(status="STARTED", manifest=manifest, manifest_sha256=digest(path),
                   accepted_speedup_count=0,
-                  scope=("FIXED_INPUT_JK_NUMERICAL_DIAGNOSTIC"
+                  scope=("GPU_TRAJECTORY_REPLAY_NUMERICAL_DIAGNOSTIC"
+                         if manifest.get("mode") == "replay-trace" else
+                         "FIXED_INPUT_JK_NUMERICAL_DIAGNOSTIC"
                          if manifest.get("mode", "energy") == "fixed-jk"
                          else "STANDALONE_HF_NUMERICAL_DIAGNOSTIC"))
     try:
@@ -157,7 +166,9 @@ def execute(path, root, worker=False):
         if (gpu and not (report["native_fp64_header_observed"] and report["cuest_header_observed"])) or (
                 not gpu and report["cuest_header_observed"]):
             raise RuntimeError("Unexpected native backend/math mode")
-        expected = ("EXECUTED_FIXED_INPUT_DIAGNOSTIC_ONLY"
+        expected = ("EXECUTED_TRACE_REPLAY_DIAGNOSTIC_ONLY"
+                    if manifest.get("mode") == "replay-trace" else
+                    "EXECUTED_FIXED_INPUT_DIAGNOSTIC_ONLY"
                     if manifest.get("mode", "energy") == "fixed-jk"
                     else "CONVERGED_DIAGNOSTIC_ONLY")
         if report.get("energy_status") != expected:

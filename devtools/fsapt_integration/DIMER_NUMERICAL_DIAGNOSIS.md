@@ -281,6 +281,28 @@ energy differences across snapshots; test Coulomb linearity/self-adjointness
 if the mismatch follows J. Do not substitute the existing DiskDFJK control
 for that exact-backend comparison. No fix or SDK-only attribution is claimed.
 
+### Requested replay and SAPT interpretation
+
+The user authorized the trajectory replay. `dimer_trace_replay.py` uses GPU
+trace snapshots **20, 25, 40**, unchanged coefficient bytes in both arms,
+and two new plans: forward order repeated twice, then reverse order repeated
+twice. This tests input-history and plan sensitivity without SCF iteration.
+CPU factory selection receives an explicit **72 GiB grant before building**
+and must return `MemDFJK`; GPU must return `cuESTJK`. Snapshot hashes and
+geometry/basis identities are checked; actual reconstructed densities,
+matrix deltas versus original trace, same-input repeats, direct energy
+contractions, and Coulomb reciprocity defects are recorded. No native build
+changes or source overlays.
+
+The observed 46-iteration convergence does not establish a SAPT effect:
+standalone untraced HF already reproduced the 100-iteration failure, and
+the traced run met a **successive-energy-change** criterion while still
+showing large fluctuations. The runs used different plan initializations,
+nodes, and execution schedules, so tracing has not been causally isolated.
+SAPT startup/reuse effects are possible secondary influences, not necessary
+conditions for this symptom. Preserve both failed and converged outcomes;
+do not retry until a favorable stopping event is obtained.
+
 1. If standalone SCF reproduces the discrepancy, use identical saved dimer
    coefficient bytes for repeated native J/K calls within a plan, across
    rebuilt plans, and across fresh processes.
