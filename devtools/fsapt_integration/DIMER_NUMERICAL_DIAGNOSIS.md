@@ -294,6 +294,23 @@ matrix deltas versus original trace, same-input repeats, direct energy
 contractions, and Coulomb reciprocity defects are recorded. No native build
 changes or source overlays.
 
+Replay submitted with helper pin `aabb1266b6043a98c8bcd502998d4faec8555b81`:
+CPU-only **15521564** (MemDFJK required) and H200 **15521565** (cuESTJK
+required), both `gts-cs207-chemx`/embers. Run root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-fsapt/dimer-replay-aabb1266b6-01`.
+CPU48/1h and GPU-host8/30min limits; no SCF or SAPT calls. All 18 host helper
+tests passed. Both manifests bind the GPU trace/result hashes above.
+CPU **15521564** failed before any JK computation: the intended `memory=`
+argument was ignored by `_core_jk_build` because its overload dispatch
+requires **both `do_wK` and `memory`**. The explicit MemDFJK guard rejected
+DiskDFJK, so no CPU replay numbers were accepted. This is a helper defect,
+not scientific evidence. The regression now executes the actual Python
+factory wrapper extracted from `python_helpers.py`; it reproduced the wrong
+two-argument native call before adding `do_wK=False`. A CPU-only resubmission
+will use a new helper pin/run directory. GPU **15521565** is left untouched:
+the old factory selected cuESTJK and the helper sets its memory before
+initialization; no CPU-backend substitution can occur in that arm.
+
 The observed 46-iteration convergence does not establish a SAPT effect:
 standalone untraced HF already reproduced the 100-iteration failure, and
 the traced run met a **successive-energy-change** criterion while still

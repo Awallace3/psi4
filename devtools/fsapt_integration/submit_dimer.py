@@ -39,7 +39,10 @@ def main():
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--reference-sha256")
     parser.add_argument("--trace-sha256")
+    parser.add_argument("--backends", nargs="+", choices=("cpu", "gpu"), default=("cpu", "gpu"))
     args = parser.parse_args()
+    if len(set(args.backends)) != len(args.backends):
+        parser.error("Select each backend at most once")
     helper = Path(__file__).resolve().parents[2]
     helper_pin = subprocess.check_output(
         ["git", "-C", str(helper), "rev-parse", "HEAD"], text=True).strip()
@@ -79,7 +82,7 @@ def main():
     if not python.is_file():
         raise RuntimeError("Pinned dependency Python missing")
     env_base = {k: v for k, v in os.environ.items() if not k.startswith("SBATCH_")}
-    for backend in ("cpu", "gpu"):
+    for backend in args.backends:
         directory = root / backend
         directory.mkdir()
         (directory / "logs").mkdir()
@@ -113,7 +116,7 @@ def main():
             raise RuntimeError("Route rejected before any submissions")
     submissions = dict(status="SUBMITTING", jobs={})
     save(root / "submissions.json", submissions)
-    for backend in ("cpu", "gpu"):
+    for backend in args.backends:
         directory = root / backend
         env = {**env_base, "FSAPT_SOURCE": str(helper), "FSAPT_PYTHON": str(python),
                "FSAPT_RUN_ROOT": str(directory),

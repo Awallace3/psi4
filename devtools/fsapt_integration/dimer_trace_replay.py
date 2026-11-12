@@ -37,7 +37,8 @@ def build_plan(core, primary, auxiliary, backend):
     if backend not in ("cpu", "gpu"):
         raise ValueError("Explicit backend required")
     memory = int(core.get_memory() * 0.75 / 8)  # doubles; 72 GiB of a 96 GiB setting
-    jk = core.JK.build(primary, auxiliary, jk_type="DF", memory=memory)
+    # Python's overload dispatch requires BOTH do_wK and memory.
+    jk = core.JK.build(primary, auxiliary, jk_type="DF", do_wK=False, memory=memory)
     expected = "MemDFJK" if backend == "cpu" else "cuESTJK"
     if jk.name() != expected:
         raise RuntimeError(f"Expected {expected}, got {jk.name()}")
