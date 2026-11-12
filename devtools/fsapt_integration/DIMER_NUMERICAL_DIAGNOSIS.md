@@ -196,6 +196,91 @@ changes, and saves selected-iteration C/D/S/H/J/K matrices. CPU tracing uses
 the original SCF factory (and must confirm MemDFJK), avoiding the DiskDFJK
 control caveat. Traced durations are not timings.
 
+Trace controls submitted with helper pin
+`a83b4d5f81994d149cf50e743d7fbef39256104a`:
+
+- CPU-only **15503334**, H200 **15503335**, both embers.
+- Run root:
+  `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-fsapt/dimer-trace-a83b4d5f81-01`.
+- Same original native build, CPU48/1h and GPU-host8/30min limits.
+- `energy/energy-trace.json` records the observed native energy boundaries;
+  selected `iteration-*.npz` snapshots are hashed in that trace.
+- 14 host-side helper tests passed before submission.
+
+CPU trace **15503334** completed cleanly (exit 0, no TERM/retirement, cleanup
+complete), with **MemDFJK confirmed at all 25 recorded energy boundaries**.
+It converged in 25 iterations at `-1753.990336246810 Eh`, consistent with the
+untraced CPU result. Traced wall 82.6898 s; allocation 104 s, not performance
+measurements.
+
+- Native returned energy minus extended-precision reconstruction:
+  maximum absolute `3.33356e-12 Eh` over the trace.
+- JK's reconstructed D equals the wavefunction D exactly throughout.
+- At iteration 25, electron count is `292.0`, occupied orthonormality defect
+  `6.28386e-14`, and `D = Cocc Coccᵀ` exactly at the array level.
+- The late CPU energy components do change appreciably while cancelling:
+  iteration 25's one-electron/Coulomb/exchange changes are
+  `8.93479e-10`, `-1.06996e-9`, `1.75404e-10 Eh`, summing to
+  `-1.08000e-12 Eh` using direct difference contractions.
+  Its maximum elementwise D change is `4.35021e-8`, reinforcing that a small
+  DIIS residual is not a literal small successive-density norm.
+- Trace SHA256:
+  `3ee3597ca81f7d201829c53ea5efed1d177cd97329b1870d0ed5756b4b3d2023`.
+- Result SHA256:
+  `d8fdffcacd82f836bfb60255d89033baa713f1ff8cf3254177b456f3d530278a`.
+- Selected snapshots at iterations 20 and 25 were written; their hashes are
+  in `energy-trace.json`. Native method restoration is confirmed.
+
+H200 trace **15503335** completed cleanly and met the stopping criterion in
+**46 iterations**, at `-1753.990336252874 Eh`, about `6.064e-9 Eh` below the
+CPU trace result. This is **not evidence that instrumentation fixed the
+problem**: the preceding iterations still show the same large energy changes.
+Hardware H200/sm90, driver `615.71.09`, node `atl1-1-02-014-9-0`; embers,
+cuESTJK and Native FP64 confirmed. No TERM/retirement; cleanup complete.
+
+- At iteration 40, direct energy-component changes (Eh) were:
+  - Coulomb: `+6.1651277e-9`
+  - one-electron: `-2.0658976e-10`
+  - exchange: `-1.5829445e-11`
+  - total: `+5.9427085e-9`
+- At iteration 44, Coulomb changed by `-1.0461792e-8 Eh`, dominating the
+  total change `-9.7597880e-9 Eh`.
+- The iteration-46 direct total change was `-4.07121e-11 Eh`: it passes E10
+  despite larger fluctuations immediately beforehand. Do not claim a
+  deterministic 100-iteration failure rate from these results.
+- Maximum native returned energy minus extended-precision reconstruction:
+  `3.88056e-12 Eh`. The large fluctuations are present in the matrix energy
+  components, not introduced by the final scalar energy contraction/sum.
+- JK D equals SCF D exactly throughout. H and S do not change. Electron
+  count remains approximately `292.0000000000003–292.0000000000004` in the
+  late iterations; occupied orthonormality defects at sampled iterations
+  20/25/40 are `6.27e-14`, `4.68e-14`, `5.86e-14`. This provides no evidence
+  for loss of orbital normalization as the explanation.
+- Selected snapshots at iterations 20, 25, 40 preserve actual evolving
+  C/D/S/H/J/K inputs and outputs. No extra JK calls; method restored.
+- Trace SHA256:
+  `e99ce19d60d93f7b448eae04f7e3497adac096785e806f28e8238d25a8285b84`.
+- Result SHA256:
+  `5be023f965eba32edec9fe2816fb3d4ec1f95e5c884ceb3bb3a22db63de9c5f6`.
+- Traced diagnostic wall 25.0158 s, allocation 48 s; not a speedup result.
+
+### Current inference and remaining discriminant
+
+The symptom is now localized to **predominantly Coulomb energy changes along
+the evolving GPU SCF trajectory**. It is not reproduced by repeatedly
+evaluating the one tested fixed CPU density, nor explained by final host
+energy summation, mismatched SCF/JK density arrays, or observed normalization
+defects. This does not yet establish whether the error originates in the
+adapter, DF conditioning/inversion, input-dependent finite precision in the
+cuEST Coulomb calculation, or the SCF trajectory.
+
+The next decisive experiment is to replay the **same saved GPU-trajectory
+Cocc/D snapshots** through cuEST and explicitly selected **MemDFJK**, with a
+fixed plan and matching numerical policy. Compare J/K and direct Coulomb
+energy differences across snapshots; test Coulomb linearity/self-adjointness
+if the mismatch follows J. Do not substitute the existing DiskDFJK control
+for that exact-backend comparison. No fix or SDK-only attribution is claimed.
+
 1. If standalone SCF reproduces the discrepancy, use identical saved dimer
    coefficient bytes for repeated native J/K calls within a plan, across
    rebuilt plans, and across fresh processes.
