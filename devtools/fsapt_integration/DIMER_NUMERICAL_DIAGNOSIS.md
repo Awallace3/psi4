@@ -311,6 +311,107 @@ will use a new helper pin/run directory. GPU **15521565** is left untouched:
 the old factory selected cuESTJK and the helper sets its memory before
 initialization; no CPU-backend substitution can occur in that arm.
 
+Corrected CPU-only replay **15521609** submitted on `cpu-gnr`/embers,
+48 threads/1h, helper pin `9904dfcc89fd6aa842b14480941baa5aa09e77a8`.
+New run root:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-fsapt/dimer-replay-9904dfcc89-cpu-01`.
+The real-wrapper regression failed before the fix and all 19 host tests
+passed afterward. Original GPU **15521565** retains its frozen helper/run;
+the relevant helper difference is the explicit factory `do_wK=False` needed
+for CPU MemDF selection, not a change to native numerical code or inputs.
+
+Corrected CPU replay **15521609** completed cleanly (exit 0, no TERM or
+retirement, scratch cleaned), with **MemDFJK** in all 12 calls and the
+72 GiB factory grant confirmed. Every reconstructed density matches its
+original GPU snapshot exactly. Same-input energy-contraction repeat drift,
+including reversed input order and a rebuilt plan, is at most
+`4.40972e-13 Eh`; not all matrices are bitwise identical.
+
+For plan 0's first pass, **CPU replay minus original GPU trace**, at identical
+Cocc/D:
+
+| GPU iteration | Coulomb correction (Eh) | Exchange correction (Eh) | Total JK correction (Eh) |
+|---|---:|---:|---:|
+| 20 | +1.3617492254e-8 | -5.0593756212e-10 | +1.3111554692e-8 |
+| 25 | -1.1757401329e-8 | -5.0600831633e-10 | -1.2263409645e-8 |
+| 40 | +5.7176903362e-10 | -5.0594817431e-10 | +6.5820859305e-11 |
+
+J matrix max differences are about `6.77–7.54e-10`; K differences about
+`4.21e-11`. The CPU Coulomb reciprocity defect is at most `1.390e-12 Eh`
+over the selected pairs/plans.
+
+Adding each direct JK correction to the original GPU trace's reconstructed
+total, while retaining that snapshot's H and nuclear term, gives:
+
+| GPU iteration | Energy with CPU-replayed JK (Eh, approximate) |
+|---|---:|
+| 20 | -1753.99033624681025 |
+| 25 | -1753.99033624681311 |
+| 40 | -1753.99033624681178 |
+
+Their span is approximately **2.864e-12 Eh** (derived from stored scalar
+summaries, not a new SCF). Thus the large original fluctuations disappear
+when the *same GPU trajectory states* are evaluated with CPU J/K. The
+variable discrepancy is predominantly Coulomb, while the exchange offset
+is nearly constant. This is stronger evidence than comparing independently
+converged SCFs; the fresh cuEST replay remains necessary to separate
+input-dependent error from original-plan/history effects.
+
+- CPU replay result SHA256:
+  `c232263784a213e7d1483a8ac03deab4fa44b0b98ae289112f10a17ea5b5b780`.
+- Matrix artifact producer SHA256:
+  `9980e82da3600b110f01f4daf46684bdc0c83f079a8230fc7f3b9e4c7cd5ce5f`.
+- Diagnostic wall 53.898 s, allocation 67 s; not speedup evidence.
+
+Fresh cuEST replay **15521565** also completed cleanly, with Native FP64,
+H200/sm90 and driver `615.71.09` confirmed on `atl1-1-02-012-2-0`.
+All reconstructed densities exactly match the GPU snapshots.
+
+- Same-input repeat drift, after interleaving other snapshots:
+  at most **1.81890e-15 Eh**.
+- Across the two freshly constructed plans:
+  at most **7.08045e-11 Eh**.
+- Coulomb reciprocity defect:
+  at most **1.46549e-13 Eh**.
+- Result SHA256:
+  `b903cb2fc35e4d51ced16c2a3e6ed533bdd7abcffccc2d892ed1797d0f7c7bca`.
+- Matrix artifact producer SHA256:
+  `7c27a217d28b56f5f15bb12c5b465d7d8d94f989dfaf5a1794ff95845ca46b3c`.
+- Diagnostic wall 7.1370 s, allocation 26 s; not speedup evidence.
+
+Using the two arms' direct corrections to the *same original GPU snapshots*,
+plan 0 yields:
+
+| GPU iteration | Fresh cuEST minus MemDFJK JK energy (Eh) | Total with fresh cuEST JK (Eh, approximate) |
+|---|---:|---:|
+| 20 | -2.0271873684e-9 | -1753.99033624883743 |
+| 25 | -2.0246385072e-9 | -1753.99033624883775 |
+| 40 | -2.0259024521e-9 | -1753.99033624883768 |
+
+Fresh cuEST's corrected totals span only **3.155e-13 Eh** in these stored
+summaries. Its offset from MemDFJK is nearly constant (span **2.549e-12 Eh**).
+**Therefore fresh cuEST replay does not reproduce the noisy SCF response.**
+This revises the earlier inference: the large variable error is associated
+with the original SCF plan/configuration or execution context, not merely
+with these densities passed to an arbitrary fresh cuEST plan. The original
+SCF snapshots remain discrepant, and standalone SCF reproduces the symptom,
+so SAPT is not required. Compare SCF versus replay plan settings/state before
+claiming a general SDK Coulomb accuracy defect.
+
+Log comparison found a concrete configuration clue: the original SCF reports
+**10.265 GiB DF-plan storage**, versus **10.096 GiB** for both fresh replay
+plans. Both print MATRIXPOWER/relative `1e-10` and pair threshold `1e-16`.
+Do not yet assume these are otherwise identical plans.
+
+Header-order caveat: the replay helper calls `print_header()` *before*
+`initialize()`. Its first header reports the handle's initial default math
+mode; the second reports Native FP64. Source inspection confirms
+`preiterations()` calls `configure_math_mode()` before plan construction and
+`compute_JK()` reapplies it before every computation, with the recorded
+`CUEST_MIXED_PRECISION=False`. Thus the first pre-initialization header is not
+evidence of mixed-precision evaluation. Future helpers should print/query
+the header after initialization to avoid this ambiguity.
+
 The observed 46-iteration convergence does not establish a SAPT effect:
 standalone untraced HF already reproduced the 100-iteration failure, and
 the traced run met a **successive-energy-change** criterion while still
