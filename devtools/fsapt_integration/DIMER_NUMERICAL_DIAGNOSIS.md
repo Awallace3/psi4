@@ -421,6 +421,171 @@ SAPT startup/reuse effects are possible secondary influences, not necessary
 conditions for this symptom. Preserve both failed and converged outcomes;
 do not retry until a favorable stopping event is obtained.
 
+### Initialization review: remaining discriminating measurements
+
+Source review found no demonstrated missing HF setter: JK defaults
+`do_wK=False`, `omega=0`, `alpha=1`, and `beta=0` agree with the SCF HF
+settings. Explicitly recording these values is useful, but adding redundant
+setters is not an established numerical fix.
+
+The next comparison must capture the **actual original SCF auxiliary basis**,
+not only its requested name: function/shell counts, ordered centers and shells,
+angular momenta/purity, exponents, normalized coefficients, and exact binary
+coordinates. Both paths use the same `cuESTJK::build_cuest_basis` conversion;
+the original SCF auxiliary fingerprint was not saved. Also record unrounded
+workspace bytes and effective DF/pair parameters after initialization.
+The workspace query does not take the host JK memory grant, so that grant
+alone does not explain the observed DF-plan storage difference.
+
+An additional execution-context hypothesis is the shared CUDA library state:
+`cuest_runtime.cc` supplies cuEST with cuBLAS/cuSOLVER handles and a stream
+also used by other Psi4 GPU operations. SCF exercises those operations whereas
+the standalone replay does not. Reapplying the cuEST math mode does not by
+itself establish that every shared cuBLAS setting agrees. If basis and plan
+parameters match, capture cuBLAS math/atomics/pointer modes and stream before
+plan construction and Coulomb evaluation, together with plan-creation counts.
+**No handle-state corruption has been demonstrated.** These are proposed
+measurements, not completed controls or a root-cause attribution.
+
+### SAPT entrypoint versus standalone: source audit
+
+Both routes reach the common `scf_helper` and native RHF iteration machinery.
+The SAPT dimer runs before monomer SCFs and before fragment calculations;
+`SAVE_JK` retains its newly constructed JK, rather than supplying a reused
+monomer JK to the dimer. The protein83 benchmark launches `fragment_gate.py`
+through the sealed bootstrap, not the Python-tracing `timing_worker.py`.
+
+Real preamble differences remain:
+
+- SAPT prepares C1/fixed-frame dimer and ghosted monomer objects before SCF.
+- Standalone explicitly sets SAD/MAXITER=100; the SAPT worker leaves these
+  to defaults/resolution. Global/local option values and changed flags need
+  comparison at the actual SCF boundary.
+- The fragment worker sets the Einsums GPU-disable policy before importing
+  Psi4 and executes `batched_probe(runtime)` GPU controls before `energy()`.
+  The standalone scientific probe does not perform those primitive controls.
+  This does not establish shared-handle corruption or causality.
+- The energy observer performs matrix copies, contractions, allocations and
+  file writes between iterations. Preserving the returned energy and adding
+  zero JK calls does not make it an unperturbed execution-context repeat.
+
+Local `git diff b641cd4254 HEAD` confirmed unchanged `proc.py`, `proc_util.py`,
+`sapt_proc.py`, `scf_iterator.py`, `gpu_runtime.py` and `protein83_timing.py`
+for this audit. `fragment_gate.py` has subsequent additional optimization
+controls; its diff confirms the pre-energy primitive probe and entrypoint
+structure already existed in the frozen benchmark source.
+
+The DF storage discrepancy above is **SCF versus fresh JK replay**, not an
+established **SAPT versus standalone SCF** difference. Neither that discrepancy
+nor one converged traced run establishes an entrypoint-specific bug.
+Compare historical iteration tables first; subsequent controlled repeats
+should separate entrypoint, primitive-probe preamble, and trace instrumentation
+while keeping scientific options, native runtime and hardware fixed.
+
+### Historical trajectory comparison: measured, not inferred from stopping
+
+Parsed the first RHF iteration block (including SAD as iteration 0) from the
+six original `psi4.out` files; stop at the next iteration reset to exclude
+monomer SCFs. Decimal arithmetic on printed energies avoids introducing
+additional subtraction rounding. Raw extracted rows and comparisons:
+`.pi/tasks/01a1c82b-a0ba-7771-b262-9bef9e925c8f-3373270/b4d5c1f60.output`.
+These comparisons use finite-precision printed energies/residuals, not full
+wavefunction equality.
+
+The three original GPU SCF headers were also compared directly
+(`b30026ceb.output` in the same task directory). SAPT, standalone and traced
+standalone all report identical:
+
+- 444 primary shells, 922 spherical / 961 Cartesian functions and the same
+  element-to-basis-file assignments, including aug-cc-pVDZ-JKFIT;
+- SAD guess, enabled DIIS, E10/D12 and integral threshold `1e-16`;
+- Native FP64, MATRIXPOWER relative cutoff `1e-10`, pair threshold `1e-16`;
+- DF plan **10.265 GiB**, explicit JK plans **10.269 GiB**, J/K scratch
+  **7.449 GiB**, and free/total device memory **128.877/139.844 GiB**;
+- overlap reciprocal condition number **5.7063048214e-8**.
+
+Host JK grants differ slightly: SAPT **89.475 GiB**, standalone **89.578 GiB**,
+traced standalone **89.579 GiB**, reflecting different resident host memory.
+The reported device plan sizes do not differ. This strengthens the distinction:
+the smaller **10.096 GiB** plan belongs to fresh fixed-input JK replay, not
+to a different standalone SCF plan. Formatted headers still do not substitute
+for exact basis/plan/state fingerprints.
+
+| Comparison | Common iterations | Maximum absolute energy difference (Eh) |
+|---|---:|---:|
+| CPU SAPT 15474909 vs standalone 15482205 | SAD–25 | 8.64e-12 |
+| CPU SAPT repeat 15474909 vs 15474910 | SAD–25 | 9.78e-12 |
+| GPU SAPT 15474911 vs standalone 15482206 | SAD–46 | 1.936996e-8 |
+| GPU standalone 15482206 vs traced standalone 15503335 | SAD–46 | 2.393017e-8 |
+| GPU SAPT 15474911 vs traced standalone 15503335 | SAD–46 | 1.720400e-8 |
+
+GPU SAPT versus untraced standalone differs by `2.20416e-9 Eh` already at
+SAD and `1.061040e-8 Eh` at iteration 1; its maximum through iteration 100
+is `2.049274e-8 Eh`. Untraced versus traced standalone differs by
+`2.9149e-10 Eh` at SAD and `-1.508534e-8 Eh` at iteration 1.
+The observer skips SAD and first copies matrices only after the native
+iteration-1 energy is computed: later per-iteration copying/I/O cannot alone
+explain a discrepancy already present at these first energies.
+
+**All six runs first cross the printed orbital-gradient threshold `1e-12`
+at iteration 25.** The GPU residual trajectories closely track each other:
+
+| Iteration | SAPT GPU | Standalone GPU | Traced standalone GPU |
+|---|---:|---:|---:|
+| 1 | 1.54790e-3 | 1.54790e-3 | 1.54790e-3 |
+| 10 | 1.32576e-7 | 1.32576e-7 | 1.32576e-7 |
+| 20 | 2.81102e-11 | 2.80881e-11 | 2.80560e-11 |
+| 25 | 7.87925e-13 | 8.46628e-13 | 8.65695e-13 |
+
+Thus the available logs do not show grossly different SCF descent or a
+SAPT-only failure. They show near-identical residual descent with small
+absolute, but E10-significant, energy differences already early in the GPU
+runs. Standalone-versus-standalone differences are comparable to entrypoint
+differences. Different nodes, fresh plans, preambles and tracing remain
+confounded; controlled repeats are still needed to assign a cause. These
+data do not invalidate the 46-iteration endpoint merely because it followed
+fluctuations.
+
+Source-log SHA256 values:
+
+- SAPT GPU: `7a3e568fd3bb52fc7db714c2f4f2efa8ef5273510da95afb1b9f0d845abcd603`
+- SAPT CPU 0: `4a181e97c4087f05effa4fde0d4eab2cdf976c26b344ca67acefb8ad35b3adef`
+- SAPT CPU 1: `b81219db498294b09d84bd8a257f903c5085eb8be4d81f3322f69649c163548d`
+- Standalone GPU: `0ed65c5c56e58148c4b0c7b818e77714cfc76a6896f4fc4fcb111709547a9a8c`
+- Standalone CPU: `7d5601d64e852ac0cc07e05f3585440b40eb0ac2bf996b0a9b092987c07a7d5b`
+- Traced GPU: `ee855e531dbe3f4141826cd6c78e71f447afd5a543ad812980b97ad441cfd9ac`
+
+### Small-system cachy screen (prepared; results pending)
+
+User approved small GPU tests on cachy. `small_dimer_probe.py` and
+`cachy_dimer_screen.py` implement a bounded 16-process screen: HCl dimer and
+timing-suite peptide × CPU/cuEST × public HF/SAPT dimer entrypoints × two
+fresh-process repetitions. Entry order reverses on the second repetition.
+The SAPT arm runs its real preamble, intercepts the first `scf_helper` return,
+and stops before any monomer/fragment work. Both arms have matched explicit
+SAD/MAXITER=100, E10/D12, FP64 and basis settings; neither has primitive GPU
+warmups or an iteration observer. This tests the entrypoint, not the original
+benchmark's complete GPU preamble.
+
+The preserved `install-owned-ba9251b785` installation is read-only. Its SCF
+driver/native sources match the b641 Phoenix baseline in the inspected
+`libscf_solver`, `cuESTJK.cc`, `scf_proc`, and `proc.py` paths. This is still a
+different build, architecture and driver, so a negative result is not an H200
+clearance. Existing qualification-helper hashes were unchanged at preflight.
+The full authenticated runtime checks must also pass at launch.
+
+Dedicated root: `~/gits/psi4-small-dimer-cachy`, with runs beneath the new
+helper worktree's `source/tmp`. No edits/rebuilds to the manual workspace or
+shared environment. The launcher holds the common GPU lease, honors HOLD,
+enforces four CPUs/12 GiB/no swap/128 tasks via an outer cgroup, and bounds
+each owned process and the whole campaign. SCF nonconvergence is retained as
+a diagnostic outcome; infrastructure errors stop the campaign.
+
+Exact primary/auxiliary shell fingerprints and terminal C/D/S/H are recorded
+after SCF. Terminal arrays are not claimed to be a synchronized energy-boundary
+snapshot. A subsequent fixed-input replay must reconstruct D from the saved
+occupied orbitals and distinguish it from the terminal D.
+
 1. If standalone SCF reproduces the discrepancy, use identical saved dimer
    coefficient bytes for repeated native J/K calls within a plan, across
    rebuilt plans, and across fresh processes.
