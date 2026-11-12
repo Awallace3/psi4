@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from small_dimer_probe import basis_receipt, first_dimer_only, trajectory
+from small_dimer_probe import basis_receipt, first_dimer_only, screen_options, trajectory
 
 
 def test_workspace_identity_survives_private_worker_home(monkeypatch, tmp_path):
@@ -81,6 +81,38 @@ def test_scf_failure_propagates_and_patch_restores():
     with pytest.raises(ValueError, match="scientific failure"):
         first_dimer_only(psi4, mol, module)
     assert module.scf_helper is helper
+
+
+def test_gpu_provider_is_forwarded_but_not_executed():
+    mol, wfn = object(), object()
+    module = SimpleNamespace(scf_helper=lambda *a, **kw: wfn)
+    def factory(*args):
+        pytest.fail("Fragment provider must not execute during dimer-only screen")
+    def energy(method, **kwargs):
+        assert kwargs["cuda_provider_factory"] is factory
+        module.scf_helper("SCF", molecule=kwargs["molecule"])
+    assert first_dimer_only(SimpleNamespace(energy=energy), mol, module, factory) is wfn
+
+
+def test_options_and_provider_pass_actual_sapt_dispatch_guard():
+    import ast
+    from pathlib import Path
+    source = Path(__file__).resolve().parents[2] / "psi4/driver/procrouting/sapt/sapt_proc.py"
+    tree = ast.parse(source.read_text())
+    function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                    and n.name == "_automatic_cuda_dispersion")
+    options = screen_options("gpu")
+    core = SimpleNamespace(
+        get_global_option=lambda key: options[key.lower()],
+        get_option=lambda module, key: options.get(key.lower(), False))
+    namespace = dict(core=core, ValidationError=ValueError)
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"), namespace)
+    select = namespace["_automatic_cuda_dispersion"]
+    with pytest.raises(ValueError, match="audited cuda_provider_factory"):
+        select(False, True, "SAPTDFT", True, None)
+    assert select(False, True, "SAPTDFT", True, lambda *a: None)
+    cpu = screen_options("cpu")
+    assert {k for k in options if options[k] != cpu[k]} == {"use_cuest"}
 
 
 def test_basis_receipt_changes_with_normalized_coefficients():

@@ -47,7 +47,7 @@ def trajectory(text):
     return rows
 
 
-def first_dimer_only(psi4, molecule, sapt_module):
+def first_dimer_only(psi4, molecule, sapt_module, provider_factory=None):
     """Run the actual SAPT preamble; never substitute a hand-built SCF helper."""
     class DimerFinished(BaseException):
         pass
@@ -67,7 +67,9 @@ def first_dimer_only(psi4, molecule, sapt_module):
 
     with patch.object(sapt_module, "scf_helper", stop_after_dimer):
         try:
-            psi4.energy("sapt(dft)", molecule=molecule)
+            kwargs = ({"cuda_provider_factory": provider_factory}
+                      if provider_factory is not None else {})
+            psi4.energy("sapt(dft)", molecule=molecule, **kwargs)
         except DimerFinished:
             return captured[0]
     raise RuntimeError("SAPT did not reach its dimer SCF")
@@ -88,7 +90,21 @@ def basis_receipt(basis):
     return payload
 
 
-def run(psi4, inputs_path, output, backend, entrypoint, system, threads=4):
+def screen_options(backend):
+    options = {**scf_options(backend), "freeze_core": True}
+    options.update(df_basis_sapt="aug-cc-pvdz-jkfit", df_basis_mp2="aug-cc-pvdz-ri",
+                   sapt_dft_functional="HF", sapt_dft_do_fsapt="SAPTDFT",
+                   sapt_dft_do_dhf=True, sapt_dft_use_einsums=True,
+                   sapt_dft_mp2_disp_alg="SAPT", sapt_dft_do_disp=True,
+                   sapt_dft_induction_type="CPKS", fisapt_link_assignment="C",
+                   fisapt_fsapt_ind_response=True, fisapt_fsapt_exch_scale=True,
+                   fisapt_fsapt_ind_scale=True, ssapt0_scale=False,
+                   fisapt_exch_parperp=False, fisapt_do_fsapt=True)
+    return options
+
+
+def run(psi4, inputs_path, output, backend, entrypoint, system, threads=4,
+        provider_factory=None):
     import numpy as np
     if entrypoint not in ("energy", "sapt") or system not in ("hcl", "peptide"):
         raise ValueError("Explicit small system and entrypoint required")
@@ -110,11 +126,8 @@ def run(psi4, inputs_path, output, backend, entrypoint, system, threads=4):
     psi4.core.set_output_file(str(output / "psi4.out"), False)
     psi4.set_memory("6 GiB")
     psi4.set_num_threads(threads)
-    options = {**scf_options(backend), "freeze_core": True}
+    options = screen_options(backend)
     # Match scientific options in both arms; only the public entrypoint varies.
-    options.update(df_basis_sapt="aug-cc-pvdz-jkfit", df_basis_mp2="aug-cc-pvdz-ri",
-                   sapt_dft_functional="HF", sapt_dft_do_fsapt="SAPTDFT",
-                   sapt_dft_do_dhf=True, sapt_dft_use_einsums=True)
     psi4.set_options(options)
     mol = psi4.geometry(geometry)
     report = dict(status="STARTED", system=system, entrypoint=entrypoint,
@@ -129,19 +142,27 @@ def run(psi4, inputs_path, output, backend, entrypoint, system, threads=4):
             energy, wfn = psi4.energy("hf", molecule=mol, return_wfn=True)
         else:
             module = importlib.import_module("psi4.driver.procrouting.sapt.sapt_proc")
-            wfn = first_dimer_only(psi4, mol, module)
+            wfn = first_dimer_only(psi4, mol, module, provider_factory)
             energy = wfn.energy()
         report.update(status="CONVERGED_DIAGNOSTIC_ONLY", energy_Eh=float(energy))
     except psi4.SCFConvergenceError as error:
         # Nonconvergence is a preserved diagnostic outcome, not a passing gate.
         report.update(status="SCF_NONCONVERGENCE", error=str(error))
         wfn = error.wfn
+    except BaseException as error:
+        report.update(status="FAILED", error=f"{type(error).__name__}: {error}")
+        raise
     finally:
         psi4.core.flush_outfile()
         log = output / "psi4.out"
         report["log_sha256"] = hashlib.sha256(log.read_bytes()).hexdigest()
-        report["trajectory"] = trajectory(log.read_text())
+        try:
+            report["trajectory"] = trajectory(log.read_text())
+        except RuntimeError as error:
+            report.update(trajectory=[], trajectory_error=str(error))
         (output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
+    if not report["trajectory"]:
+        raise RuntimeError("No complete native SCF trajectory; inspect preserved result")
     if wfn is not None:
         expected = "cuESTJK" if backend == "gpu" else "MemDFJK"
         report["jk_name"] = wfn.jk().name()

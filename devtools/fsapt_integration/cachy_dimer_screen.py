@@ -59,7 +59,10 @@ def main():
         runtime = AuditedRuntime(args.config, args.config_sha256)
         result = runtime.guarded_call(
             run, runtime.psi4, args.inputs, output, args.backend,
-            args.entrypoint, args.system, 4)
+            args.entrypoint, args.system, 4,
+            runtime.provider if args.backend == "gpu" else None)
+        if runtime.report["plans"]:
+            raise RuntimeError("Dimer screen unexpectedly executed a fragment provider")
         result.update(science_pin=config["source_pin"], helper_pin=helper_pin,
                       runtime_config_sha256=args.config_sha256,
                       resource_scope=scope, bootstrap_events=events)
