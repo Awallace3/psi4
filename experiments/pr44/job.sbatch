@@ -48,12 +48,18 @@ else
     export PATH="$env/bin:/opt/slurm/current/bin:/usr/bin:/bin"
     export OMP_NUM_THREADS=24 MKL_NUM_THREADS=24 OPENBLAS_NUM_THREADS=24
     export OMP_DYNAMIC=FALSE MKL_DYNAMIC=FALSE
-    arm=$("$env/bin/python" -c 'import json,sys; c=json.load(open(sys.argv[1]))["cases"][int(sys.argv[2])]; print("base" if c["arm"]=="base" else "head")' "$harness/config.json" "$index")
+    driver=case.py
+    if [[ $mode = replay ]]; then
+        arm=head
+        driver=replay.py
+    else
+        arm=$("$env/bin/python" -c 'import json,sys; c=json.load(open(sys.argv[1]))["cases"][int(sys.argv[2])]; print("base" if c["arm"]=="base" else "head")' "$harness/config.json" "$index")
+    fi
     stage="$campaign/builds/$arm/stage"
     test -f "$campaign/builds/$arm/validated.json"
     eval "$("$stage/bin/psi4" --psiapi)"
     export PSI4_DATADIR="$stage/share/psi4"
-    srun "$python" "$harness/case.py" "$campaign" "$index" "$output" &
+    srun "$python" "$harness/$driver" "$campaign" "$index" "$output" &
 fi
 child=$!
 set +e

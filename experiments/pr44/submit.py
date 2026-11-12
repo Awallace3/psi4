@@ -9,7 +9,7 @@ import subprocess
 
 parser = argparse.ArgumentParser()
 parser.add_argument("campaign", type=Path)
-parser.add_argument("mode", choices=["build", "science"])
+parser.add_argument("mode", choices=["build", "science", "replay"])
 parser.add_argument("--test-only", action="store_true")
 parser.add_argument("--indices", nargs="+", type=int, help="Submit only these science cases when embers slots are limited")
 args = parser.parse_args()
@@ -22,7 +22,7 @@ commit = subprocess.check_output(["git", "-C", str(harness), "rev-parse", "HEAD"
 for arm in ["base", "head"]:
     source = root / "sources" / arm
     assert subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip() == config[arm]
-    if args.mode == "science":
+    if args.mode != "build":
         validated = json.loads((root / "builds" / arm / "validated.json").read_text())
         assert validated["commit"] == config[arm]
         assert (root / "builds" / arm / "stage/bin/psi4").is_file()
@@ -34,6 +34,8 @@ assert all(0 <= i < len(config["cases"]) for i in indices)
 assert args.mode == "science" or args.indices is None
 plan = [("build", 96, "04:00:00")] if args.mode == "build" else [
     (str(i), config["cases"][i]["slurm_gib"], "08:00:00") for i in indices]
+if args.mode == "replay":
+    plan = [("replay", 32, "02:00:00")]
 queue = subprocess.check_output(["squeue", "-h", "-r", "-u", os.environ["USER"], "-o", "%q"], text=True)
 used = sum(q.strip() == "embers" for q in queue.splitlines())
 assert used + len(plan) <= 50, f"embers slots: {used} + {len(plan)} > 50"

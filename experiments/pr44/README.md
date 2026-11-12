@@ -61,3 +61,15 @@ TERM-safe completion markers. Resubmission creates a new job-ID output directory
 Revisit the 80% factor only after inspecting phase peaks and auditing FDDS
 allocations not covered by MemoryClaim (including dense matrices and BLAS
 workspace). Passing these examples alone does not justify raising it.
+
+## Numerical diagnostic
+
+The eight runs completed without OOM, but all three nanotube head variants
+missed the predeclared 1e-8 Eh base/head dispersion tolerance (2.9–9.7e-8 Eh).
+`submit.py CAMPAIGN replay` runs five FDDS evaluations with identical SCF
+caches: STORE twice, LEGACY split/unsplit, and STORE AO disk. This distinguishes
+repeatability from algorithm/lifetime effects without changing production code.
+The driver records the actual FDDS auxiliary basis size: FDDS uses
+`DF_BASIS_MP2` (default heavy-aug-cc-pVDZ-RI here, 2096 functions for nanotube),
+not the explicitly pinned `DF_BASIS_SAPT` counted in the original metadata.
+Those original counts describe their named bases, not FDDS's actual transform.
