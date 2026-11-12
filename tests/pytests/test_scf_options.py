@@ -356,6 +356,7 @@ def test_scf_df_metric_cholesky_wk(tmp_path, method):
         """
     )
     out = tmp_path / f"wk_{method}.out"
+    psi4.core.clean_options()
     psi4.set_output_file(str(out), False)
     psi4.set_options({"basis": "cc-pvdz", "scf_type": "mem_df", "e_convergence": 10, "d_convergence": 10})
     e_eig = psi4.energy(method)
@@ -363,11 +364,12 @@ def test_scf_df_metric_cholesky_wk(tmp_path, method):
     psi4.set_options({"scf_df_metric": "cholesky"})
     e_chol = psi4.energy(method)
     psi4.core.clean()
+    psi4.core.clean_options()
     psi4.set_output_file("pytest_output.dat", True)  # closes (flushes) out
 
     text = out.read_text()
     assert compare_values(e_eig, e_chol, 8, f"{method} wK MemDFJK CHOLESKY vs EIGEN")
-    assert "Metric:                   CHOLESKY" in text
+    assert "Metric:                CHOLESKY" in text
 
 
 @pytest.mark.parametrize("postscf", [False, True])
@@ -404,14 +406,20 @@ def test_wb97mv_grid_switching_and_fast_stack(postscf):
     psi4.set_options(
         {
             **base_opts,
-            "dft_grid_switching": True,
+            "dft_radial_points_initial": 50,
+            "dft_spherical_points_initial": 194,
+            "dft_grid_switch_factor": 10.0,
+            "dft_grid_switch_diis": "shift",
+            "dft_grid_switch_on": "density",
             "scf_df_metric": "cholesky",
             "scf_k_fp32_convergence": 1e-3,
             "scf_e_conv_predicted": True,
         }
     )
-    e_fast = psi4.energy("wb97m-v")
+    e_fast, wfn_fast = psi4.energy("wb97m-v", return_wfn=True)
+    init_iters = int(wfn_fast.variable("SCF DFT INITIAL GRID ITERATIONS"))
     psi4.core.clean()
     psi4.core.clean_options()
 
+    assert init_iters > 0
     assert compare_values(e_ref, e_fast, 7, f"wB97M-V fast stack vs exact (postscf={postscf})")
