@@ -352,6 +352,7 @@ void VBase::initialize() {
         timer_on("V: VV10 Grid");
         std::map<std::string, std::string> opt_map;
         opt_map["DFT_PRUNING_SCHEME"] = "FLAT";
+        opt_map["DFT_GRID_NAME"] = options_.get_str("DFT_VV10_GRID_NAME");
 
         std::map<std::string, int> opt_int_map;
         opt_int_map["DFT_RADIAL_POINTS"] = options_.get_int("DFT_VV10_RADIAL_POINTS");
@@ -881,6 +882,7 @@ void VBase::initialize() {
             {
                 std::map<std::string, std::string> opt_map;
                 opt_map["DFT_PRUNING_SCHEME"] = "FLAT";
+                opt_map["DFT_GRID_NAME"] = options_.get_str("DFT_VV10_GRID_NAME");
                 
                 std::map<std::string, int> opt_int_map;
                 opt_int_map["DFT_RADIAL_POINTS"] = options_.get_int("DFT_VV10_RADIAL_POINTS");
@@ -1259,6 +1261,7 @@ SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
     // => VV10 Grid and Cache <=
     std::map<std::string, std::string> opt_map;
     opt_map["DFT_PRUNING_SCHEME"] = "FLAT";
+    opt_map["DFT_GRID_NAME"] = options_.get_str("DFT_VV10_GRID_NAME");
     // opt_map["DFT_NUCLEAR_SCHEME"] = "BECKE";
 
     std::map<std::string, int> opt_int_map;
