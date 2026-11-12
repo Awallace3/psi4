@@ -35,13 +35,13 @@ def _build_system(basis):
     ["cc-pvdz", "OUT_OF_CORE",  0, "DiskJK"],
 
     # pvdz tests
-    ["cc-pvdz", "MEM_DF",  2563402, "MemDFJK"],  # includes the metric-contraction panels
+    ["cc-pvdz", "MEM_DF",  1599082, "MemDFJK"],  # includes the narrowest metric-contraction panels
     ["cc-pvdz", "DISK_DF", 1286244, "DiskDFJK"],
     ["cc-pvdz", "CD",      2916000, "CDJK"],
     ["cc-pvdz", "PK",      65610000, "PKJK"],
 
     # 5z tests
-    ["cc-pv5z", "MEM_DF",  62875419, "MemDFJK"],  # includes the metric-contraction panels
+    ["cc-pv5z", "MEM_DF",  57020770, "MemDFJK"],
     ["cc-pv5z", "DISK_DF", 26984120, "DiskDFJK"],
 ]) # yapf: disable
 
