@@ -16,7 +16,7 @@ import traceback
 
 HARNESS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HARNESS.parent / "pr44"))
-from case import dump, monitor, setup_scratch, sha
+from case import cgroup_dir, dump, monitor, setup_scratch, sha
 
 
 def git(*args, directory=HARNESS):
@@ -114,6 +114,15 @@ def main():
             sampler.terminate()
             sampler.join()
         result["sampler_exitcode"] = sampler.exitcode
+        cg, version = cgroup_dir()
+        names = (["memory.current", "memory.peak", "memory.max", "memory.events", "memory.stat"]
+                 if version == 2 else
+                 ["memory.usage_in_bytes", "memory.max_usage_in_bytes", "memory.limit_in_bytes",
+                  "memory.failcnt", "memory.stat"])
+        result["final_cgroup"] = {"cgroup": str(cg), "cgroup_version": version}
+        if cg is not None:
+            result["final_cgroup"].update({name: (cg / name).read_text().strip()
+                                          for name in names if (cg / name).exists()})
         dump(args.output / "result.json", result)
         print(json.dumps(result), flush=True)
     assert sampler.exitcode == 0, "Resource sampler failed; do not accept this measurement"

@@ -29,7 +29,7 @@ for arm, receipt in zip(["base", "head"], receipts):
         assert any(field in sample for sample in samples), field
     cgroup_values = []
     events = []
-    for sample in samples:
+    for sample in [*samples, result["final_cgroup"]]:
         for field in ["memory.peak", "memory.max_usage_in_bytes", "memory.current", "memory.usage_in_bytes"]:
             if field in sample:
                 cgroup_values.append(int(sample[field]))

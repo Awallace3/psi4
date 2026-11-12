@@ -11,6 +11,7 @@
 #SBATCH --tmp=2600G
 #SBATCH --time=12:00:00
 #SBATCH --signal=TERM@120
+#SBATCH --no-requeue
 # Absolute stdout/stderr paths are supplied by submit.py.
 set -euo pipefail
 umask 027
