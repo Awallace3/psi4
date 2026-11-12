@@ -460,7 +460,7 @@ class PSI_API DFHelper {
     void compute_sparse_pQq_blocking_p(const size_t start, const size_t stop, double* Mp,
                                        std::vector<std::shared_ptr<TwoBodyAOInt>> eri);
     void compute_sparse_pQq_blocking_p_symm(const size_t start, const size_t stop, double* Mp,
-                                            std::vector<std::shared_ptr<TwoBodyAOInt>> eri);
+                                            std::vector<std::shared_ptr<TwoBodyAOInt>> eri, double omega = 0.0);
     void compute_sparse_pQq_blocking_p_symm_abw(const size_t start, const size_t stop, double* just_Mp, double* param_Mp,
                                         std::vector<std::shared_ptr<TwoBodyAOInt>> eri,
                                         std::vector<std::shared_ptr<TwoBodyAOInt>> weri);
@@ -469,6 +469,8 @@ class PSI_API DFHelper {
 
     void contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* metp, size_t begin, size_t end,
                                       bool cholesky = false);
+    void contract_metric_AO_wK_cholesky_symm(double* Qpq, double* Ppq, double* m1Ppq, double* metp, size_t begin,
+                                             size_t end);
     void grab_AO(const size_t start, const size_t stop, double* Mp);
 
     // => wK AO building machinery <=

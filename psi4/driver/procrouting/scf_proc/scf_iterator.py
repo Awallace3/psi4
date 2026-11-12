@@ -276,12 +276,14 @@ def _alpha_beta(self, name):
     return [a] if isinstance(self, core.RHF) else [a, getattr(self, name + "b")()]
 
 
-def _xc_grid_switch(self, shift_diis):
+def _xc_grid_switch(self, shift_diis, restore_vv10=False):
     """Rebuild V (and its collocation cache) on the final XC grid.
 
     With shift_diis, first return V on the initial grid at the current density: the next build
     forms V on the final grid at that same density, and _xc_grid_shift_diis moves the stored DIIS
-    Focks by the difference instead of discarding them.
+    Focks by the difference instead of discarding them. When restore_vv10 is True, nonlocal VV10
+    was deferred on the coarse grid and is re-enabled right before building the final grid so
+    dV = (V_xc_fine + V_vv10) - V_xc_coarse shifts the DIIS subspace onto the full functional.
     """
     core.timer_on("SCF: Switch XC grid")
     vbase = self.V_potential()
@@ -293,6 +295,10 @@ def _xc_grid_switch(self, shift_diis):
             V.zero()
         vbase.set_D(Ds)
         vbase.compute_V(V_initial)
+    if restore_vv10:
+        self.functional().set_lock(False)
+        self.functional().set_do_vv10(True)
+        self.functional().set_lock(True)
     vbase.set_grid("Final")
     # The collocation cache was sized for the initial grid; size it for the final one within the
     # budget scf_initialize set, less any single-precision K tensor allocated since.
@@ -320,6 +326,17 @@ def _xc_grid_shift_diis(self, V_initial):
 
 
 def scf_iterate(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
+    need_vv10 = bool(self.V_potential() and self.V_potential().initial_grid() and self.functional().needs_vv10())
+    try:
+        return _scf_iterate_impl(self, e_conv=e_conv, d_conv=d_conv, xc_final_min_iterations=xc_final_min_iterations)
+    finally:
+        if need_vv10 and not self.functional().needs_vv10():
+            self.functional().set_lock(False)
+            self.functional().set_do_vv10(True)
+            self.functional().set_lock(True)
+
+
+def _scf_iterate_impl(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
 
     is_dfjk = core.get_global_option('SCF_TYPE').endswith('DF')
     verbose = core.get_option('SCF', "PRINT")
@@ -352,7 +369,8 @@ def scf_iterate(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
     k_fp32_conv = core.get_option("SCF", "SCF_K_FP32_CONVERGENCE")
     e_conv_predicted = core.get_option("SCF", "SCF_E_CONV_PREDICTED")
     k_fp32 = False
-    if (k_fp32_conv > 0 and isinstance(self.jk(), core.MemDFJK) and self.functional().is_x_hybrid()):
+    if (k_fp32_conv > 0 and isinstance(self.jk(), core.MemDFJK) and
+            (self.functional().is_x_hybrid() or self.functional().is_x_lrc())):
         self.jk().dfh().set_K_fp32(True)
         k_fp32 = True
     ooo_scf = core.get_option("SCF", "ORBITAL_OPTIMIZER_PACKAGE") in ["OOO", "OPENORBITALOPTIMIZER"]
@@ -424,6 +442,16 @@ def scf_iterate(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
 
     # has early_screening changed from True to False?
     early_screening_disabled = False
+
+    # Defer nonlocal VV10 dispersion during coarse initial-grid iterations when self-consistent VV10
+    # is active: _xc_grid_switch re-enables VV10 onto the Final grid and shifts DIIS Focks by
+    # (V_xc_fine + V_vv10) - V_xc_coarse, followed by >= 2 full self-consistent final iterations.
+    vv10_deferred = bool(xc_switching and self.functional().needs_vv10())
+    eff_xc_final_min_iterations = max(xc_final_min_iterations, 2 if vv10_deferred else 1)
+    if vv10_deferred:
+        self.functional().set_lock(False)
+        self.functional().set_do_vv10(False)
+        self.functional().set_lock(True)
 
     # SCF iterations!
     SCFE_old = 0.0
@@ -532,6 +560,7 @@ def scf_iterate(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
             and not ((self.iteration_ == 0) and self.sad_)
             and not xc_initial
             and not k_fp32
+            and (not vv10_deferred or xc_final_iterations >= 1)
         )
         if use_pred_e:
             # F(D_k) and D_k, before DIIS/SOSCF overwrite them; see the prediction after form_D.
@@ -669,7 +698,7 @@ def scf_iterate(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
             else:
                 xc_final_iterations += 1
             self.set_variable("SCF DFT INITIAL GRID ITERATIONS", xc_initial_iterations)
-            self._xc_grid_ready_for_finalize = (not xc_initial and xc_final_iterations >= xc_final_min_iterations)
+            self._xc_grid_ready_for_finalize = (not xc_initial and xc_final_iterations >= eff_xc_final_min_iterations)
 
         if k_fp32:
             k_fp32 = self.jk().dfh().K_fp32()  # off if the single-precision tensor did not fit
@@ -714,7 +743,7 @@ def scf_iterate(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
             if xc_switch_now:
                 shift_diis = (self.initialized_diis_manager_ and len(self.diis_manager_.stored_vectors) > 0
                               and core.get_option("SCF", "DFT_GRID_SWITCH_DIIS") == "SHIFT")
-                xc_pending_diis_shift = _xc_grid_switch(self, shift_diis)
+                xc_pending_diis_shift = _xc_grid_switch(self, shift_diis, restore_vv10=vv10_deferred)
                 xc_initial = False
                 if self.initialized_diis_manager_ and not shift_diis:
                     self.diis_manager_.reset_subspace()
@@ -733,7 +762,7 @@ def scf_iterate(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
 
         # Call any postiteration callbacks
         if (not ((self.iteration_ == 0) and self.sad_) and
-                (not xc_switching or xc_final_iterations >= xc_final_min_iterations) and not k_fp32 and
+                (not xc_switching or xc_final_iterations >= eff_xc_final_min_iterations) and not k_fp32 and
                 _converged(Ediff_test, Dnorm, e_conv=e_conv, d_conv=d_conv)):
 
             if early_screening:

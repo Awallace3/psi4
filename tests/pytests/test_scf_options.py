@@ -342,8 +342,9 @@ def test_scf_df_metric_cholesky_ignored_by_disk_df(tmp_path):
     assert "SCF_DF_METRIC CHOLESKY is ignored by DiskDFJK" in out.read_text()
 
 
-def test_scf_df_metric_cholesky_ignored_by_wk(tmp_path):
-    """MemDFJK with range-separated exchange (wK) has no Cholesky route: EIGEN is used, with a warning."""
+@pytest.mark.parametrize("method", ["wb97x", "wb97m-v"])
+def test_scf_df_metric_cholesky_wk(tmp_path, method):
+    """MemDFJK with range-separated exchange (wK, !wcombine) uses fused Cholesky L^-1 / L^-T solves."""
 
     psi4.geometry(
         """
@@ -354,17 +355,63 @@ def test_scf_df_metric_cholesky_ignored_by_wk(tmp_path):
         symmetry c1
         """
     )
-    out = tmp_path / "wk.out"
+    out = tmp_path / f"wk_{method}.out"
     psi4.set_output_file(str(out), False)
     psi4.set_options({"basis": "cc-pvdz", "scf_type": "mem_df", "e_convergence": 10, "d_convergence": 10})
-    e_eig = psi4.energy("wb97x")
+    e_eig = psi4.energy(method)
     psi4.core.clean()
     psi4.set_options({"scf_df_metric": "cholesky"})
-    e_chol = psi4.energy("wb97x")
+    e_chol = psi4.energy(method)
     psi4.core.clean()
-    psi4.set_output_file("pytest_output.dat", True)  # closes (flushes) wk.out
+    psi4.set_output_file("pytest_output.dat", True)  # closes (flushes) out
 
     text = out.read_text()
-    assert compare_values(e_eig, e_chol, 10, "wK MemDFJK ignores SCF_DF_METRIC")
-    assert "SCF_DF_METRIC CHOLESKY is ignored for range-separated (wK) builds" in text
-    assert "Metric:                   CHOLESKY" not in text
+    assert compare_values(e_eig, e_chol, 8, f"{method} wK MemDFJK CHOLESKY vs EIGEN")
+    assert "Metric:                   CHOLESKY" in text
+
+
+@pytest.mark.parametrize("postscf", [False, True])
+def test_wb97mv_grid_switching_and_fast_stack(postscf):
+    """wB97M-V with coarse-deferred VV10 grid switching, Cholesky wK, FP32 K/wK, and pred-E matches exact SCF."""
+
+    psi4.geometry(
+        """
+        0 1
+        O  0.000000  0.000000  0.117790
+        H  0.000000  0.755453 -0.471161
+        H  0.000000 -0.755453 -0.471161
+        --
+        0 1
+        O  0.000000  0.000000  3.050000
+        H  0.000000  0.755453  3.638951
+        H  0.000000 -0.755453  3.638951
+        symmetry c1
+        """
+    )
+    base_opts = {
+        "basis": "def2-svp",
+        "scf_type": "mem_df",
+        "e_convergence": 1e-8,
+        "d_convergence": 1e-8,
+        "dft_vv10_postscf": postscf,
+    }
+    psi4.core.clean_options()
+    psi4.set_options(base_opts)
+    e_ref = psi4.energy("wb97m-v")
+    psi4.core.clean()
+
+    psi4.core.clean_options()
+    psi4.set_options(
+        {
+            **base_opts,
+            "dft_grid_switching": True,
+            "scf_df_metric": "cholesky",
+            "scf_k_fp32_convergence": 1e-3,
+            "scf_e_conv_predicted": True,
+        }
+    )
+    e_fast = psi4.energy("wb97m-v")
+    psi4.core.clean()
+    psi4.core.clean_options()
+
+    assert compare_values(e_ref, e_fast, 7, f"wB97M-V fast stack vs exact (postscf={postscf})")

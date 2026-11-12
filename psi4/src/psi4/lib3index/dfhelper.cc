@@ -598,14 +598,15 @@ size_t DFHelper::metric_panel_cols(bool narrowest) const {
 }
 size_t DFHelper::AO_core_init_scratch(bool narrowest) const {
     // two (naux x panel) panels and the significant-q index lists in contract_metric_AO_core_symm,
-    // plus the copy of J the Cholesky route factors when the metric is held in core
+    // plus the copy of J the Cholesky route factors when prepare_AO_core holds only one naux^2 metric
     size_t s = 2 * naux_ * metric_panel_cols(narrowest) + small_skips_[nbf_];
-    if (metric_cholesky_route() && hold_met_) s += naux_ * naux_;
+    if (metric_cholesky_route() && hold_met_ && !do_wK_) s += naux_ * naux_;
     return s;
 }
 bool DFHelper::metric_cholesky_route() const {
-    // Only the in-core J^-1/2 build (prepare_AO_core) has a Cholesky route; the wK build does not.
-    return metric_cholesky_ && !do_wK_ && std::fabs(mpower_ + 0.5) < 1e-13;
+    if (!metric_cholesky_ || std::fabs(mpower_ + 0.5) >= 1e-13) return false;
+    if (!do_wK_) return true;
+    return !wcombine_ && std::fabs(wmpower_ + 1.0) < 1e-13;
 }
 size_t DFHelper::min_AO_core_block() const {
     if (direct_ || direct_iaQ_) return 0;
@@ -627,7 +628,7 @@ size_t DFHelper::reserve_metric_panels(size_t held) {
     const size_t max_for_panels = std::min(spare / 2, spare > q_min ? spare - q_min : size_t(0));
     if (AO_core_init_scratch() > max_for_panels) {
         const size_t fixed_scratch =
-            small_skips_[nbf_] + (metric_cholesky_route() && hold_met_ ? naux_ * naux_ : 0);
+            small_skips_[nbf_] + (metric_cholesky_route() && hold_met_ && !do_wK_ ? naux_ * naux_ : 0);
         const size_t panel_doubles = max_for_panels > fixed_scratch ? max_for_panels - fixed_scratch : 0;
         panel_cols_cap_ = std::max<size_t>(1, panel_doubles / (2 * naux_));
     }
@@ -779,13 +780,11 @@ void DFHelper::prepare_AO_wK_core() {
     const bool use_simint = (Process::environment.options.get_str("INTEGRAL_PACKAGE") == "SIMINT");
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri;
     std::vector<std::shared_ptr<TwoBodyAOInt>> weri;
-    if (use_simint || !wcombine_) {
+    if (use_simint) {
         std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
         auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
-        if (use_simint) {
-            eri.resize(nthreads_);
-            eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri(0, false));
-        }
+        eri.resize(nthreads_);
+        eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri(0, false));
         if (!wcombine_) {
             weri.resize(nthreads_);
             weri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->erf_eri(omega_, 0, false));
@@ -812,15 +811,22 @@ void DFHelper::prepare_AO_wK_core() {
 
     wPpq_ = std::make_unique<double[]>(big_skips_[nbf_]);
     m1Ppq_ = std::make_unique<double[]>(big_skips_[nbf_]);
-
     if (!wcombine_) Ppq_ = std::make_unique<double[]>(big_skips_[nbf_]);
 
+    // Parallel first-touch by p-block across NUMA nodes so J, K, and wK stream interleaved pages
+#pragma omp parallel for schedule(guided) num_threads(nthreads_) if (big_skips_[nbf_] >= 524288)
+    for (size_t p = 0; p < nbf_; ++p) {
+        const size_t b0 = big_skips_[p];
+        const size_t b1 = big_skips_[p + 1];
+        for (size_t idx = b0; idx < b1; idx += 512) {
+            wPpq_[idx] = 0.0;
+            m1Ppq_[idx] = 0.0;
+            if (!wcombine_) Ppq_[idx] = 0.0;
+        }
+    }
 
     double* wppq = wPpq_.get();
-    double* ppq = nullptr;
-
-    if (!wcombine_) ppq = Ppq_.get();
-
+    double* ppq = !wcombine_ ? Ppq_.get() : nullptr;
     double* m1ppq = m1Ppq_.get();
 
     std::unique_ptr<double[]> Qpq(new double[std::get<0>(plargest)]);
@@ -832,18 +838,63 @@ void DFHelper::prepare_AO_wK_core() {
     std::unique_ptr<double[]> metric;
     double* metp = nullptr;
 
-    if (!hold_met_) {
-        metric1 = std::make_unique<double[]>(naux_ * naux_);
-        met1p = metric1.get();
-        std::string filename = return_metfile(wmpower_);
-        get_tensor_(std::get<0>(files_[filename]), met1p, 0, naux_ - 1, 0, naux_ - 1);
+    // Cholesky route for !wcombine_ (J = L L^T): B = L^-1 (Q|mn) for J/K and M1 = L^-T B = J^-1 (Q|mn) for wK,
+    // replacing two O(naux^3) eigensolves and two dense DGEMMs with one DPOTRF, one gather, and two DTRSMs.
+    bool chol = metric_cholesky_route();
+    if (chol) {
+        timer_on("DFH: metric Cholesky");
         metric = std::make_unique<double[]>(naux_ * naux_);
         metp = metric.get();
-        filename = return_metfile(mpower_);
-        get_tensor_(std::get<0>(files_[filename]), metp, 0, naux_ - 1, 0, naux_ - 1);
-    } else {
-        met1p = metric_prep_core(wmpower_);
-        metp = metric_prep_core(mpower_);
+        if (!hold_met_) {
+            std::string filename = return_metfile(1.0);
+            get_tensor_(std::get<0>(files_[filename]), metp, 0, naux_ - 1, 0, naux_ - 1);
+        } else {
+            double* Jp = metric_prep_core(1.0);
+            std::copy(Jp, Jp + naux_ * naux_, metp);
+        }
+        double anorm = 0.0;
+        for (size_t Q = 0; Q < naux_; Q++) {
+            double s = 0.0;
+            for (size_t P = 0; P < naux_; P++) s += std::fabs(metp[Q * naux_ + P]);
+            anorm = std::max(anorm, s);
+        }
+        int info = C_DPOTRF('U', naux_, metp, naux_);
+        double rcond = 0.0;
+        if (info == 0) {
+            std::vector<double> work(3 * naux_);
+            std::vector<int> iwork(naux_);
+            C_DPOCON('U', naux_, metp, naux_, anorm, &rcond, work.data(), iwork.data());
+        }
+        timer_off("DFH: metric Cholesky");
+        constexpr double rcond_min = 1.0e-13;
+        if (info != 0 || rcond < rcond_min) {
+            outfile->Printf("    DFHelper: metric Cholesky not used (info %d, rcond %.2E < %.2E); using EIGEN.\n",
+                            info, rcond, rcond_min);
+            metric.reset();
+            metp = nullptr;
+            chol = false;
+        } else {
+            if (hold_met_) metrics_.clear();
+            if (print_lvl_ > 0) {
+                outfile->Printf("    DFHelper: metric Cholesky (wK), rcond %.2E\n", rcond);
+            }
+        }
+    }
+
+    if (!chol) {
+        if (!hold_met_) {
+            metric1 = std::make_unique<double[]>(naux_ * naux_);
+            met1p = metric1.get();
+            std::string filename = return_metfile(wmpower_);
+            get_tensor_(std::get<0>(files_[filename]), met1p, 0, naux_ - 1, 0, naux_ - 1);
+            metric = std::make_unique<double[]>(naux_ * naux_);
+            metp = metric.get();
+            filename = return_metfile(mpower_);
+            get_tensor_(std::get<0>(files_[filename]), metp, 0, naux_ - 1, 0, naux_ - 1);
+        } else {
+            met1p = metric_prep_core(wmpower_);
+            metp = metric_prep_core(mpower_);
+        }
     }
 
     for (size_t i = 0; i < psteps.size(); i++) {
@@ -852,10 +903,10 @@ void DFHelper::prepare_AO_wK_core() {
         size_t begin = pshell_aggs_[start];
         size_t end = pshell_aggs_[stop + 1] - 1;
 
-        if ( wcombine_ ) {
+        if (wcombine_) {
             // computes (Q|mn) and (Q|w|mn)
             timer_on("DFH: AO Construction");
-            compute_sparse_pQq_blocking_p_symm_abw(start,stop, M1p, M2p, eri, weri);
+            compute_sparse_pQq_blocking_p_symm_abw(start, stop, M1p, M2p, eri, weri);
             timer_off("DFH: AO Construction");
             // computes  [J^{-1.0}](Q|mn)
             timer_on("DFH: AO-Met. Contraction");
@@ -864,30 +915,29 @@ void DFHelper::prepare_AO_wK_core() {
 
             copy_upper_lower_wAO_core_symm(M2p, wppq, begin, end);
         } else {
-
             timer_on("DFH: AO Construction");
-            compute_sparse_pQq_blocking_p_symm(start, stop, M1p, eri);
+            compute_sparse_pQq_blocking_p_symm(start, stop, M1p, eri, 0.0);
             timer_off("DFH: AO Construction");
 
-            // contract full metric inverse computes  [J^{-1.0}](Q|mn)
             timer_on("DFH: AO-Met. Contraction");
-            contract_metric_AO_core_symm(M1p, m1ppq, met1p, begin, end);
+            if (chol) {
+                contract_metric_AO_wK_cholesky_symm(M1p, ppq, m1ppq, metp, begin, end);
+            } else {
+                // contract full metric inverse computes  [J^{-1.0}](Q|mn)
+                contract_metric_AO_core_symm(M1p, m1ppq, met1p, begin, end);
+                // contract half metric inverse computes [J^{-1/2}](Q|mn)
+                contract_metric_AO_core_symm(M1p, ppq, metp, begin, end);
+            }
             timer_off("DFH: AO-Met. Contraction");
-    
-            // contract half metric inverse
-            timer_on("DFH: AO-Met. Contraction");
-            contract_metric_AO_core_symm(M1p, ppq, metp, begin, end);
-            timer_off("DFH: AO-Met. Contraction");
-    
-            // compute (A|w|mn)
+
+            // compute (A|w|mn) directly via thread-local libint2::Engine(erf_coulomb) when !use_simint
             timer_on("DFH: wAO Construction");
-            compute_sparse_pQq_blocking_p_symm(start, stop, M1p, weri);
+            compute_sparse_pQq_blocking_p_symm(start, stop, M1p, weri, omega_);
             timer_off("DFH: wAO Construction");
-    
+
             timer_on("DFH: wAO Copy");
             copy_upper_lower_wAO_core_symm(M1p, wppq, begin, end);
             timer_off("DFH: wAO Copy");
-
         }
     }
     // no more need for metrics or metric contraction panels
@@ -1473,7 +1523,7 @@ void DFHelper::compute_sparse_pQq_blocking_p(const size_t start, const size_t st
     }
 }
 void DFHelper::compute_sparse_pQq_blocking_p_symm(const size_t start, const size_t stop, double* Mp,
-                                                  std::vector<std::shared_ptr<TwoBodyAOInt>> eri) {
+                                                  std::vector<std::shared_ptr<TwoBodyAOInt>> eri, double omega) {
     size_t begin = pshell_aggs_[start];
     size_t startind = symm_big_skips_[begin];
 
@@ -1484,6 +1534,7 @@ void DFHelper::compute_sparse_pQq_blocking_p_symm(const size_t start, const size
     };
 
     if (eri.empty()) {
+        const bool is_erf = (omega != 0.0);
         const int max_am = std::max(aux_->max_am(), primary_->max_am());
         const int max_nprim = std::max(aux_->max_nprimitive(), primary_->max_nprimitive());
         const double ln_prec = -std::numeric_limits<double>::max();
@@ -1498,9 +1549,14 @@ void DFHelper::compute_sparse_pQq_blocking_p_symm(const size_t start, const size
         std::vector<libint2::Engine> engs;
         engs.reserve(nthreads_);
         for (size_t t = 0; t < nthreads_; ++t) {
-            engs.emplace_back(libint2::Operator::coulomb, max_nprim, max_am, 0, 0.0,
-                              libint2::operator_traits<libint2::Operator::coulomb>::default_params(),
-                              libint2::BraKet::xs_xx);
+            if (is_erf) {
+                engs.emplace_back(libint2::Operator::erf_coulomb, max_nprim, max_am, 0, 0.0, omega,
+                                  libint2::BraKet::xs_xx);
+            } else {
+                engs.emplace_back(libint2::Operator::coulomb, max_nprim, max_am, 0, 0.0,
+                                  libint2::operator_traits<libint2::Operator::coulomb>::default_params(),
+                                  libint2::BraKet::xs_xx);
+            }
         }
 
 #pragma omp parallel num_threads(nthreads_)
@@ -1548,8 +1604,13 @@ void DFHelper::compute_sparse_pQq_blocking_p_symm(const size_t start, const size
                         const auto& sh_P = aux_->l2_shell(Pshell);
                         size_t PHI = aux_->shell(Pshell).function_index();
                         size_t numP = aux_->shell(Pshell).nfunction();
-                        eng.compute2<libint2::Operator::coulomb, libint2::BraKet::xs_xx, 0>(
-                            sh_P, unit_sh, sh_mu, sh_nu, &aux_sp[Pshell], &ket_sp);
+                        if (is_erf) {
+                            eng.compute2<libint2::Operator::erf_coulomb, libint2::BraKet::xs_xx, 0>(
+                                sh_P, unit_sh, sh_mu, sh_nu, &aux_sp[Pshell], &ket_sp);
+                        } else {
+                            eng.compute2<libint2::Operator::coulomb, libint2::BraKet::xs_xx, 0>(
+                                sh_P, unit_sh, sh_mu, sh_nu, &aux_sp[Pshell], &ket_sp);
+                        }
                         const double* buf = eng.results()[0];
                         if (buf != nullptr) {
                             for (size_t s = 0; s < nslots; ++s) {
@@ -2164,28 +2225,250 @@ void DFHelper::contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* me
         p0 = p1;
     }
 }
-void DFHelper::copy_upper_lower_wAO_core_symm(double* Qpq, double* Ppq, size_t begin, size_t end) {
-    // copy out of symm
+void DFHelper::contract_metric_AO_wK_cholesky_symm(double* Qpq, double* Ppq, double* m1Ppq, double* metp, size_t begin,
+                                                   size_t end) {
+    // Fused Cholesky dual-metric contraction for !wcombine_ range-separated builds:
+    //   1) Gather sparse Qpq panel once
+    //   2) Solve L * B = Qpq in-place -> scatter B into Ppq (for J and short-range K)
+    //   3) Solve L^T * M1 = B in-place -> scatter M1 = (L L^T)^-1 Qpq = J^-1 Qpq into m1Ppq (for wK)
     size_t startind = symm_big_skips_[begin];
-    for (size_t j = begin; j <= end; j++) {
-        size_t mi = symm_small_skips_[j];
-        size_t si = small_skips_[j];
-        size_t jump = symm_ignored_columns_[j];
-        size_t skip1 = big_skips_[j];
-        size_t skip2 = symm_big_skips_[j] - startind;
-        for (size_t j2 = 0; j2 < naux_; j2++) {
-            C_DCOPY(mi, &Qpq[skip2 + mi * j2], 1, &Ppq[skip1 + jump + si * j2], 1);
+    const size_t target_cols = metric_panel_cols();
+
+    std::vector<size_t> col_off;
+    std::vector<uint32_t> q_cnt(nbf_, 0);
+    std::vector<uint32_t> q_off(nbf_ + 1, 0);
+    std::vector<uint32_t> q_cstart(nbf_, 0);
+    std::vector<uint32_t> q_fill(nbf_, 0);
+    std::vector<uint32_t> active_q;
+    active_q.reserve(nbf_);
+    std::vector<uint32_t> lower_src;
+    lower_src.reserve(target_cols);
+
+    size_t total_upper = 0;
+    for (size_t p = begin; p <= end; ++p) total_upper += symm_small_skips_[p];
+    std::vector<uint32_t> upper_q(total_upper);
+    std::vector<size_t> upper_p_off(end - begin + 2, 0);
+    for (size_t p = begin; p <= end; ++p) {
+        upper_p_off[p - begin + 1] = upper_p_off[p - begin] + symm_small_skips_[p];
+    }
+#pragma omp parallel for num_threads(nthreads_) schedule(guided) if (end - begin >= 64)
+    for (size_t p = begin; p <= end; ++p) {
+        uint32_t* dst = &upper_q[upper_p_off[p - begin]];
+        size_t pos = 0;
+        const size_t* srow = &schwarz_fun_index_[p * nbf_];
+        for (size_t q = p; q < nbf_; ++q) {
+            if (srow[q]) dst[pos++] = static_cast<uint32_t>(q);
         }
     }
-// copy upper-to-lower
+
+    auto scatter_panel = [&](const double* out_ptr, double* dst_tensor, size_t p0, size_t p1, size_t ncol,
+                             bool clear_q_cnt) {
+        const size_t np_chunk = p1 - p0;
+        const size_t nq_active = active_q.size();
+#pragma omp parallel num_threads(nthreads_)
+        {
+#pragma omp for schedule(dynamic, 2)
+            for (size_t idx = 0; idx < np_chunk; ++idx) {
+                const size_t p = p0 + idx;
+                const size_t mi = symm_small_skips_[p];
+                const size_t si = small_skips_[p];
+                const size_t ign = symm_ignored_columns_[p];
+                const size_t coff = col_off[idx];
+                double* dst_base = &dst_tensor[big_skips_[p] + ign];
+                for (size_t Q = 0; Q < naux_; ++Q) {
+                    const double* src = &out_ptr[Q * ncol + coff];
+                    std::copy(src, src + mi, dst_base + Q * si);
+                }
+            }
+#pragma omp for schedule(dynamic, 8)
+            for (size_t qi = 0; qi < nq_active; ++qi) {
+                const uint32_t q = active_q[qi];
+                const uint32_t cnt = q_cnt[q];
+                const uint32_t cstart = q_cstart[q];
+                const uint32_t* src_cols = &lower_src[q_off[q]];
+                const size_t sq = small_skips_[q];
+                double* dst_base = &dst_tensor[big_skips_[q] + cstart];
+                for (size_t Q = 0; Q < naux_; ++Q) {
+                    const double* r = &out_ptr[Q * ncol];
+                    double* dst = dst_base + Q * sq;
+#pragma omp simd
+                    for (uint32_t c = 0; c < cnt; ++c) {
+                        dst[c] = r[src_cols[c]];
+                    }
+                }
+                if (clear_q_cnt) q_cnt[q] = 0;
+            }
+        }
+    };
+
+    for (size_t p0 = begin; p0 <= end;) {
+        size_t ncol = 0, p1 = p0;
+        col_off.clear();
+        while (p1 <= end && (ncol == 0 || ncol + symm_small_skips_[p1] <= target_cols)) {
+            col_off.push_back(ncol);
+            ncol += symm_small_skips_[p1];
+            p1++;
+        }
+        if (ncol == 0) {
+            p0 = p1;
+            continue;
+        }
+        const size_t need = naux_ * ncol;
+        double* panel_ptr = grow_scratch(metric_panel_buf_, metric_panel_size_, need);
+
+        timer_on("DFH: AO-Met. gather");
 #pragma omp parallel for num_threads(nthreads_) schedule(static)
-    for (size_t omu = begin; omu <= end; omu++) {
         for (size_t Q = 0; Q < naux_; Q++) {
-            for (size_t onu = omu + 1; onu < nbf_; onu++) {
-                if (schwarz_fun_index_[omu * nbf_ + onu]) {
-                    size_t ind1 = big_skips_[onu] + Q * small_skips_[onu] + schwarz_fun_index_[onu * nbf_ + omu] - 1;
-                    size_t ind2 = big_skips_[omu] + Q * small_skips_[omu] + schwarz_fun_index_[omu * nbf_ + onu] - 1;
-                    Ppq[ind1] = Ppq[ind2];
+            double* prow = &panel_ptr[Q * ncol];
+            for (size_t p = p0; p < p1; p++) {
+                size_t mi = symm_small_skips_[p];
+                const double* src = &Qpq[symm_big_skips_[p] - startind + Q * mi];
+                std::copy(src, src + mi, prow + col_off[p - p0]);
+            }
+        }
+        timer_off("DFH: AO-Met. gather");
+
+        // Build CSR lower-scatter map once for both B and M1 scatters
+        timer_on("DFH: AO-Met. scatter");
+        active_q.clear();
+        size_t total_lower = 0;
+        for (size_t p = p0; p < p1; ++p) {
+            const uint32_t* qs = &upper_q[upper_p_off[p - begin]];
+            const size_t mi = symm_small_skips_[p];
+            for (size_t k = 0; k < mi; ++k) {
+                const uint32_t q = qs[k];
+                if (q == p) continue;
+                if (q_cnt[q] == 0) {
+                    active_q.push_back(q);
+                    q_cstart[q] = static_cast<uint32_t>(schwarz_fun_index_[(size_t)q * nbf_ + p] - 1);
+                }
+                q_cnt[q]++;
+                total_lower++;
+            }
+        }
+        lower_src.resize(total_lower);
+        size_t running = 0;
+        for (uint32_t q : active_q) {
+            q_off[q] = static_cast<uint32_t>(running);
+            q_fill[q] = static_cast<uint32_t>(running);
+            running += q_cnt[q];
+        }
+        for (size_t p = p0; p < p1; ++p) {
+            const uint32_t* qs = &upper_q[upper_p_off[p - begin]];
+            const size_t mi = symm_small_skips_[p];
+            const uint32_t base_col = static_cast<uint32_t>(col_off[p - p0]);
+            for (size_t k = 0; k < mi; ++k) {
+                const uint32_t q = qs[k];
+                if (q == p) continue;
+                lower_src[q_fill[q]++] = base_col + static_cast<uint32_t>(k);
+            }
+        }
+        timer_off("DFH: AO-Met. scatter");
+
+        // Step 1: B = L^-1 * Qpq -> Ppq
+        timer_on("DFH: AO-Met. GEMM");
+        C_DTRSM('L', 'L', 'N', 'N', naux_, ncol, 1.0, metp, naux_, panel_ptr, ncol);
+        timer_off("DFH: AO-Met. GEMM");
+
+        timer_on("DFH: AO-Met. scatter");
+        scatter_panel(panel_ptr, Ppq, p0, p1, ncol, false);
+        timer_off("DFH: AO-Met. scatter");
+
+        // Step 2: M1 = L^-T * B = J^-1 * Qpq -> m1Ppq
+        timer_on("DFH: AO-Met. GEMM");
+        C_DTRSM('L', 'L', 'T', 'N', naux_, ncol, 1.0, metp, naux_, panel_ptr, ncol);
+        timer_off("DFH: AO-Met. GEMM");
+
+        timer_on("DFH: AO-Met. scatter");
+        scatter_panel(panel_ptr, m1Ppq, p0, p1, ncol, true);
+        timer_off("DFH: AO-Met. scatter");
+
+        p0 = p1;
+    }
+}
+
+void DFHelper::copy_upper_lower_wAO_core_symm(double* Qpq, double* Ppq, size_t begin, size_t end) {
+    // Parallel upper copy + conflict-free CSR lower scatter partitioned by destination row q
+    const size_t startind = symm_big_skips_[begin];
+    const size_t np = end - begin + 1;
+
+    struct LowerEntry {
+        size_t qpq_off;
+        uint32_t mi;
+        uint32_t dst_col;
+    };
+
+    std::vector<uint32_t> q_cnt(nbf_, 0);
+    std::vector<uint32_t> active_q;
+    active_q.reserve(nbf_);
+    size_t total_lower = 0;
+
+    for (size_t p = begin; p <= end; ++p) {
+        const size_t* srow = &schwarz_fun_index_[p * nbf_];
+        for (size_t q = p + 1; q < nbf_; ++q) {
+            if (!srow[q]) continue;
+            if (q_cnt[q] == 0) active_q.push_back(static_cast<uint32_t>(q));
+            q_cnt[q]++;
+            total_lower++;
+        }
+    }
+
+    std::vector<size_t> q_off(nbf_ + 1, 0);
+    std::vector<size_t> q_fill(nbf_, 0);
+    size_t running = 0;
+    for (uint32_t q : active_q) {
+        q_off[q] = running;
+        q_fill[q] = running;
+        running += q_cnt[q];
+    }
+
+    std::vector<LowerEntry> lower_entries(total_lower);
+    for (size_t p = begin; p <= end; ++p) {
+        const size_t mi = symm_small_skips_[p];
+        const size_t p_base = symm_big_skips_[p] - startind;
+        const size_t* srow = &schwarz_fun_index_[p * nbf_];
+        const size_t diag_idx = srow[p];
+        for (size_t q = p + 1; q < nbf_; ++q) {
+            const size_t fidx = srow[q];
+            if (!fidx) continue;
+            const size_t k = fidx - diag_idx;
+            const uint32_t dcol = static_cast<uint32_t>(schwarz_fun_index_[q * nbf_ + p] - 1);
+            lower_entries[q_fill[q]++] = {p_base + k, static_cast<uint32_t>(mi), dcol};
+        }
+    }
+
+    const size_t nq_active = active_q.size();
+#pragma omp parallel num_threads(nthreads_)
+    {
+#pragma omp for schedule(dynamic, 2)
+        for (size_t idx = 0; idx < np; ++idx) {
+            const size_t j = begin + idx;
+            const size_t mi = symm_small_skips_[j];
+            const size_t si = small_skips_[j];
+            const size_t jump = symm_ignored_columns_[j];
+            const size_t skip1 = big_skips_[j] + jump;
+            const size_t skip2 = symm_big_skips_[j] - startind;
+            for (size_t Q = 0; Q < naux_; ++Q) {
+                std::copy(&Qpq[skip2 + mi * Q], &Qpq[skip2 + mi * Q + mi], &Ppq[skip1 + si * Q]);
+            }
+        }
+#pragma omp for schedule(dynamic, 8)
+        for (size_t qi = 0; qi < nq_active; ++qi) {
+            const uint32_t q = active_q[qi];
+            const uint32_t cnt = q_cnt[q];
+            const LowerEntry* entries = &lower_entries[q_off[q]];
+            const size_t sq = small_skips_[q];
+            double* dst_base = &Ppq[big_skips_[q]];
+            constexpr size_t QB = 64;
+            for (size_t q0 = 0; q0 < naux_; q0 += QB) {
+                const size_t q1 = std::min(q0 + QB, naux_);
+                for (uint32_t c = 0; c < cnt; ++c) {
+                    const size_t src_off = entries[c].qpq_off;
+                    const size_t src_mi = entries[c].mi;
+                    const size_t dcol = entries[c].dst_col;
+                    for (size_t Q = q0; Q < q1; ++Q) {
+                        dst_base[Q * sq + dcol] = Qpq[src_off + Q * src_mi];
+                    }
                 }
             }
         }
@@ -4247,6 +4530,7 @@ void DFHelper::compute_K_fp32(std::vector<SharedMatrix> Cleft, std::vector<Share
 }
 void DFHelper::compute_wK(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright,
                           std::vector<SharedMatrix> wK, size_t max_nocc, bool do_J, bool do_K, bool do_wK) {
+    if (K_layout_iQ_ || K_fp32_) max_nocc = (max_nocc + 7) / 8 * 8;
     std::vector<std::pair<size_t, size_t>> Qsteps;
     std::tuple<size_t, size_t> info = Qshell_blocks_for_JK_build(Qsteps, max_nocc, false);
     size_t totsb = std::get<1>(info);
@@ -4261,26 +4545,112 @@ void DFHelper::compute_wK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
     double* T1p = grow_scratch(jk_T1_, jk_T1_size_, Ktmp_size);
     double* T2p = grow_scratch(jk_T2_, jk_T2_size_, Ktmp_size);
 
+    const bool use_fp32 = K_fp32_ && AO_core_ && !wcombine_ && !direct_iaQ_;
+    const bool use_iq = K_layout_iQ_ && !wcombine_ && !direct_iaQ_;
+
     for (size_t bind = 0, bcount = 0; bind < Qsteps.size(); bind++) {
         size_t start = std::get<0>(Qsteps[bind]);
         size_t stop = std::get<1>(Qsteps[bind]);
         size_t begin = Qshell_aggs_[start];
         size_t end = Qshell_aggs_[stop + 1] - 1;
         size_t block_size = end - begin + 1;
-        for (size_t i = 0; i < wK.size(); i++) {
-            size_t nocc = Cleft[i]->colspi()[0];
-            if (!nocc) {
-                continue;
+
+        if (use_fp32) {
+            auto transform_f32 = [&](size_t nocc, size_t nocc_pad, const double* Mp_src, const double* Bp, float* Tf) {
+                const size_t k_stride = block_size * nocc_pad;
+#pragma omp parallel for schedule(guided) num_threads(nthreads_)
+                for (size_t k = 0; k < nbf_; k++) {
+                    const size_t sp_size = small_skips_[k];
+                    if (sp_size == 0) {
+                        std::fill_n(&Tf[k * k_stride], k_stride, 0.0f);
+                        continue;
+                    }
+                    const size_t jump = big_skips_[k] + bcount * sp_size;
+                    int rank = 0;
+#ifdef _OPENMP
+                    rank = omp_get_thread_num();
+#endif
+                    float* Cbuf_f = reinterpret_cast<float*>(C_buffers[rank].data());
+                    const uint32_t* sig_m = &sig_q_[sig_q_row_off_[k]];
+                    if (use_iq) {
+                        gather_Ct_pad(Cbuf_f, Bp, sig_m, nocc, nocc_pad, sp_size);
+                        float* Mtile = Cbuf_f + nocc_pad * sp_size;
+                        const size_t max_tile_floats = C_buffers[rank].size() * 2 - nocc_pad * sp_size;
+                        const size_t qb_max = std::max<size_t>(1, std::min<size_t>(256, max_tile_floats / sp_size));
+                        for (size_t q0 = 0; q0 < block_size; q0 += qb_max) {
+                            const size_t qb = std::min(qb_max, block_size - q0);
+                            const double* msrc = &Mp_src[jump + q0 * sp_size];
+                            const size_t nel = qb * sp_size;
+#pragma omp simd
+                            for (size_t x = 0; x < nel; ++x) Mtile[x] = static_cast<float>(msrc[x]);
+                            C_SGEMM('N', 'T', nocc_pad, qb, sp_size, 1.0f, Cbuf_f, sp_size, Mtile, sp_size, 0.0f,
+                                    &Tf[k * k_stride + q0], block_size);
+                        }
+                    } else {
+                        for (size_t c = 0; c < sp_size; ++c) {
+                            const double* src = &Bp[static_cast<size_t>(sig_m[c]) * nocc];
+                            float* dst = &Cbuf_f[c * nocc];
+#pragma omp simd
+                            for (size_t o = 0; o < nocc; ++o) dst[o] = static_cast<float>(src[o]);
+                        }
+                        float* Mtile = Cbuf_f + nocc * sp_size;
+                        const size_t max_tile_floats = C_buffers[rank].size() * 2 - nocc * sp_size;
+                        const size_t qb_max = std::max<size_t>(1, std::min<size_t>(256, max_tile_floats / sp_size));
+                        for (size_t q0 = 0; q0 < block_size; q0 += qb_max) {
+                            const size_t qb = std::min(qb_max, block_size - q0);
+                            const double* msrc = &Mp_src[jump + q0 * sp_size];
+                            const size_t nel = qb * sp_size;
+#pragma omp simd
+                            for (size_t x = 0; x < nel; ++x) Mtile[x] = static_cast<float>(msrc[x]);
+                            C_SGEMM('N', 'N', qb, nocc, sp_size, 1.0f, Mtile, sp_size, Cbuf_f, nocc, 0.0f,
+                                    &Tf[(k * block_size + q0) * nocc], nocc);
+                        }
+                    }
+                }
+            };
+
+            for (size_t i = 0; i < wK.size(); i++) {
+                size_t nocc = Cleft[i]->colspi()[0];
+                if (!nocc) continue;
+                const size_t nocc_pad = use_iq ? (nocc + 7) / 8 * 8 : nocc;
+                const size_t K_inner = nocc_pad * block_size;
+                float* T1f = reinterpret_cast<float*>(T1p);
+                float* T2f = reinterpret_cast<float*>(T2p);
+
+                transform_f32(nocc, nocc_pad, M1p, Cleft[i]->pointer()[0], T1f);
+                transform_f32(nocc, nocc_pad, wMp, Cright[i]->pointer()[0], T2f);
+
+                // Reuse C_buffers[0] (>= nbf^2 doubles = 2*nbf^2 floats) for zero-allocation SGEMM output
+                float* wKf = reinterpret_cast<float*>(C_buffers[0].data());
+                C_SGEMM('N', 'T', nbf_, nbf_, K_inner, 1.0f, T1f, K_inner, T2f, K_inner, 0.0f, wKf, nbf_);
+                double* wKp = wK[i]->pointer()[0];
+#pragma omp parallel for simd num_threads(nthreads_) schedule(static)
+                for (size_t x = 0; x < nbf_ * nbf_; ++x) {
+                    wKp[x] += static_cast<double>(wKf[x]);
+                }
             }
-            double* Clp = Cleft[i]->pointer()[0];
-            double* Crp = Cright[i]->pointer()[0];
-            double* wKp = wK[i]->pointer()[0];
+        } else {
+            for (size_t i = 0; i < wK.size(); i++) {
+                size_t nocc = Cleft[i]->colspi()[0];
+                if (!nocc) {
+                    continue;
+                }
+                const size_t nocc_pad = use_iq ? (nocc + 7) / 8 * 8 : nocc;
+                const size_t K_inner = nocc_pad * block_size;
+                double* Clp = Cleft[i]->pointer()[0];
+                double* Crp = Cright[i]->pointer()[0];
+                double* wKp = wK[i]->pointer()[0];
 
-            first_transform_pQq(nocc, bcount, block_size, M1p, T1p, Clp, C_buffers);
-            first_transform_pQq(nocc, bcount, block_size, wMp, T2p, Crp, C_buffers);
+                if (use_iq) {
+                    first_transform_pQq_K(nocc, nocc_pad, bcount, block_size, M1p, T1p, Clp, C_buffers);
+                    first_transform_pQq_K(nocc, nocc_pad, bcount, block_size, wMp, T2p, Crp, C_buffers);
+                } else {
+                    first_transform_pQq(nocc, bcount, block_size, M1p, T1p, Clp, C_buffers);
+                    first_transform_pQq(nocc, bcount, block_size, wMp, T2p, Crp, C_buffers);
+                }
 
-            C_DGEMM('N', 'T', nbf_, nbf_, nocc * block_size, 1.0, T1p, nocc * block_size, T2p, nocc * block_size, 1.0,
-                    wKp, nbf_);
+                C_DGEMM('N', 'T', nbf_, nbf_, K_inner, 1.0, T1p, K_inner, T2p, K_inner, 1.0, wKp, nbf_);
+            }
         }
         bcount += block_size;
     }

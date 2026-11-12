@@ -146,7 +146,7 @@ void MemDFJK::print_header() const {
         outfile->Printf("    Metric:             %11s\n\n", (dfh_->metric_cholesky_route() ? "CHOLESKY" : "EIGEN"));
         if (dfh_->metric_cholesky() && !dfh_->metric_cholesky_route()) {
             outfile->Printf(
-                "  Warning: SCF_DF_METRIC CHOLESKY is ignored for range-separated (wK) builds; using EIGEN.\n\n");
+                "  Warning: SCF_DF_METRIC CHOLESKY is ignored for combined-wK or custom metric powers; using EIGEN.\n\n");
         }
 
         outfile->Printf("   => Auxiliary Basis Set <=\n\n");
