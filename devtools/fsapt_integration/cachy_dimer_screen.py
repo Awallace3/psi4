@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import pwd
 import sys
 import time
 
@@ -11,6 +12,12 @@ def worker_alias(parent, label):
     directory = parent / label
     directory.mkdir(mode=0o700)
     return directory
+
+
+def dedicated_root():
+    # Scientific workers deliberately have a private HOME. Workspace identity
+    # belongs to the account, not to that per-process configuration sandbox.
+    return Path(pwd.getpwuid(os.getuid()).pw_dir) / "gits/psi4-small-dimer-cachy"
 
 
 def main():
@@ -27,7 +34,7 @@ def main():
     parser.add_argument("--system", choices=("hcl", "peptide"))
     args = parser.parse_args()
     root = args.root.resolve(strict=True)
-    if root != Path.home() / "gits/psi4-small-dimer-cachy":
+    if root != dedicated_root():
         raise RuntimeError("Dedicated small-dimer workspace required")
     source = args.runtime_source.resolve(strict=True)
     sys.path[:0] = [str(source / "devtools/disp0/cachy"),

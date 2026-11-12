@@ -5,6 +5,14 @@ import pytest
 from small_dimer_probe import basis_receipt, first_dimer_only, trajectory
 
 
+def test_workspace_identity_survives_private_worker_home(monkeypatch, tmp_path):
+    from cachy_dimer_screen import dedicated_root
+    expected = dedicated_root()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert dedicated_root() == expected
+    assert not dedicated_root().is_relative_to(tmp_path)
+
+
 def test_worker_alias_passes_real_sealed_loader_check(tmp_path):
     import importlib.util
     from pathlib import Path
