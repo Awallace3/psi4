@@ -11,6 +11,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("campaign", type=Path)
 parser.add_argument("mode", choices=["build", "science"])
 parser.add_argument("--test-only", action="store_true")
+parser.add_argument("--indices", nargs="+", type=int, help="Submit only these science cases when embers slots are limited")
 args = parser.parse_args()
 root = args.campaign.resolve()
 harness = Path(__file__).resolve().parent
@@ -27,8 +28,12 @@ for arm in ["base", "head"]:
         assert (root / "builds" / arm / "stage/bin/psi4").is_file()
 logs = root / "logs"
 logs.mkdir(exist_ok=True)
+indices = list(range(len(config["cases"]))) if args.indices is None else args.indices
+assert len(set(indices)) == len(indices)
+assert all(0 <= i < len(config["cases"]) for i in indices)
+assert args.mode == "science" or args.indices is None
 plan = [("build", 96, "04:00:00")] if args.mode == "build" else [
-    (str(i), case["slurm_gib"], "08:00:00") for i, case in enumerate(config["cases"])]
+    (str(i), config["cases"][i]["slurm_gib"], "08:00:00") for i in indices]
 queue = subprocess.check_output(["squeue", "-h", "-r", "-u", os.environ["USER"], "-o", "%q"], text=True)
 used = sum(q.strip() == "embers" for q in queue.splitlines())
 assert used + len(plan) <= 50, f"embers slots: {used} + {len(plan)} > 50"
