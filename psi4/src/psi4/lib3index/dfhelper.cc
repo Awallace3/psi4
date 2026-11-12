@@ -28,6 +28,7 @@
 
 #include "dfhelper.h"
 #include "dfhelper_jk_blocking.h"
+#include "psi4/libpsi4util/pr44_memory_probe.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -189,6 +190,7 @@ void DFHelper::filename_maker(std::string name, size_t Q, size_t p, size_t q, si
 }
 
 void DFHelper::initialize() {
+    pr44_probe::Scope probe("DFH/initialize/" + method_);
     if (debug_) {
         outfile->Printf("Entering DFHelper::initialize\n");
     }
@@ -581,6 +583,7 @@ void DFHelper::update_core_claim() {
     core_claim_.set(held);
 }
 void DFHelper::prepare_AO_core() {
+    pr44_probe::Scope probe("DFH/prepare-AO-core/" + method_);
     // get each thread an eri object
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
@@ -620,6 +623,10 @@ void DFHelper::prepare_AO_core() {
     }
     std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(ao_budget, 1, psteps);
 
+    pr44_probe::record("DFH/prepare-AO-core/" + method_, "plan",
+        {{"budget_bytes", 8 * memory_},
+         {"staging_budget_bytes", 8 * ao_budget}, {"staging_block_bytes", 8 * std::get<0>(plargest)},
+         {"AO_bytes", 8 * (direct_iaQ_ ? naux_ * nbf_ * nbf_ : big_skips_[nbf_])}});
     // allocate final AO vector
     if (direct_iaQ_) {
         Ppq_ = std::unique_ptr<double[]>(new double[naux_ * nbf_ * nbf_]);
@@ -1830,6 +1837,7 @@ void DFHelper::release_tensor(std::string name) {
 }
 
 void DFHelper::release_AO() {
+    pr44_probe::Scope probe("DFH/release-AO/" + method_);
     Ppq_.reset();
     wPpq_.reset();
     m1Ppq_.reset();
@@ -1933,6 +1941,7 @@ void DFHelper::print_order() {
 }
 
 void DFHelper::transform() {
+    pr44_probe::Scope probe("DFH/transform/" + method_);
     if (debug_) {
         outfile->Printf("Entering DFHelper::transform\n");
     }
@@ -1977,6 +1986,13 @@ void DFHelper::transform() {
     std::vector<std::pair<size_t, size_t>> Qsteps;
     std::pair<size_t, size_t> Qlargest = Qshell_blocks_for_transform(memory_, wtmp, wfinal, Qsteps);
     size_t max_block = std::get<1>(Qlargest);
+    pr44_probe::record("DFH/transform/" + method_, "plan",
+        {{"budget_bytes", 8 * memory_}, {"max_block", max_block}, {"wtmp", wtmp}, {"wfinal", wfinal},
+         {"AO_core", static_cast<size_t>(AO_core_)},
+         {"AO_bytes", 8 * (direct_iaQ_ ? naux_ * nbf_ * nbf_ : big_skips_[nbf_])},
+         {"T_bytes", 8 * max_block * nbf_ * wtmp}, {"F_bytes", 8 * max_block * wfinal},
+         {"N_bytes", MO_core_ ? 0 : 8 * max_block * wfinal},
+         {"C_bytes", 8 * nthreads_ * nbf_ * wtmp}});
 
     // prepare eri and C buffers per thread
     size_t nthread = nthreads_;

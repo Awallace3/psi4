@@ -40,6 +40,7 @@
 #include "psi4/libpsi4util/process.h"
 #include "psi4/lib3index/dfhelper.h"
 #include "psi4/libpsi4util/memory_ledger.h"
+#include "psi4/libpsi4util/pr44_memory_probe.h"
 
 #include <iomanip>
 
@@ -200,6 +201,7 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
 
     // ==> Form 3-index object <==
 
+    pr44_probe::Scope constructor_probe("FDDS/constructor-transforms");
     // Build C Stack
     std::vector<SharedMatrix> Cstack_vec;
     Cstack_vec.push_back(matrix_cache_["Cocc_A"]);
@@ -309,6 +311,7 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
     bool split_monomers = is_hybrid_ && options.get_bool("SAPT_FDDS_DISP_SPLIT_MONOMERS");
 
     auto round2_transform = [&](const std::vector<std::string>& monomers, bool rebuild_ao) {
+        pr44_probe::Scope probe("FDDS/round2-transform/" + monomers.front());
         // Clear spaces to re-order spaces and transformations in DFHelper
         // Clear transformations to avoid overwriting pqQ tensors
         dfh_->clear_spaces();
@@ -851,6 +854,7 @@ std::map<std::string, SharedMatrix> FDDS_Dispersion::form_aux_matrices(std::stri
 }
 
 void FDDS_Dispersion::form_X(std::string monomer) {
+    pr44_probe::Scope probe("FDDS/X/" + monomer);
 
     // => Configuration <= //
 
@@ -909,6 +913,10 @@ void FDDS_Dispersion::form_X(std::string monomer) {
 
     // => Tensor Slices <= //
 
+    pr44_probe::record("FDDS/X/" + monomer, "plan",
+        {{"budget_doubles", doubles}, {"claimed_doubles", MemoryClaim::committed()},
+         {"nocc", nocc}, {"nvir", nvir}, {"naux", naux}, {"maxo", maxo},
+         {"slice_bytes", 8 * (6 * maxo * nvir * naux + nvir * nvir)}});
     auto arR = std::make_shared<Matrix>("arR", maxo * nvir, naux); // ([a]r'|R)
     auto aprR = std::make_shared<Matrix>("aprR", maxo * nvir, naux); // ([a']r|R)
     auto arQ = std::make_shared<Matrix>("arQ", maxo * nvir, naux); // ([a']r'|Q)
@@ -982,6 +990,7 @@ void FDDS_Dispersion::form_X(std::string monomer) {
 }
 
 void FDDS_Dispersion::form_Y(std::string monomer) {
+    pr44_probe::Scope probe("FDDS/Y/" + monomer);
 
     // => Configuration <= //
 
@@ -1047,6 +1056,11 @@ void FDDS_Dispersion::form_Y(std::string monomer) {
 
     // => Tensor Slices <= //
 
+    pr44_probe::record("FDDS/Y/" + monomer, "plan",
+        {{"budget_doubles", doubles}, {"claimed_doubles", MemoryClaim::committed()},
+         {"nocc", nocc}, {"nvir", nvir}, {"naux", naux}, {"maxo", maxo}, {"maxv", maxv},
+         {"slice_bytes", 8 * (naux * (maxo * nocc + maxv * nvir + 2 * maxv * nocc
+                                     + 2 * maxo * nvir) + nvir * nocc)}});
     auto aaR = std::make_shared<Matrix>("aaR", maxo * nocc, naux); // ([a]a'|R)
     auto rrR = std::make_shared<Matrix>("rrR", maxv * nvir, naux); // ([r']r|R)
     auto raQ = std::make_shared<Matrix>("raQ", maxv * nocc, naux); // ([r']a'|Q)
@@ -1121,6 +1135,7 @@ void FDDS_Dispersion::form_Y(std::string monomer) {
 }
 
 SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
+    pr44_probe::Scope probe("FDDS/QR/" + monomer);
 
     // => Configuration <= //
 
@@ -1159,7 +1174,10 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
     // => Meomry Check <= //
 
     size_t doubles = available_doubles();
-    size_t req_mem = 2 * nov * naux + naux * naux + naux; 
+    size_t req_mem = 2 * nov * naux + naux * naux + naux;
+    pr44_probe::record("FDDS/QR/" + monomer, "plan",
+        {{"budget_doubles", doubles}, {"claimed_doubles", MemoryClaim::committed()},
+         {"requested_bytes", 8 * req_mem}});
     if (doubles < req_mem)
         throw PSIEXCEPTION(too_little_memory("FDDS_Dispersion::QR()", "2 * nocc * nvir * naux + naux^2 + naux",
                                              req_mem, doubles));
