@@ -35,7 +35,7 @@ def main():
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--inputs", type=Path, required=True)
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--mode", choices=("energy", "fixed-jk"), default="energy")
+    parser.add_argument("--mode", choices=("energy", "fixed-jk", "trace-energy"), default="energy")
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--reference-sha256")
     args = parser.parse_args()
@@ -88,7 +88,9 @@ def main():
             "backend": backend, "cpu_admission": admission,
             "resources": resources(backend), "command": argv,
             "scope": ("FIXED_CPU_DIMER_COEFFICIENT_JK_REPEATS_NO_SCF"
-                      if args.mode == "fixed-jk" else "ONE_FRESH_PROCESS_STANDALONE_DIMER_HF_ENERGY"),
+                      if args.mode == "fixed-jk" else
+                      "STANDALONE_DIMER_HF_ENERGY_TRACE_NOT_TIMING" if args.mode == "trace-energy"
+                      else "ONE_FRESH_PROCESS_STANDALONE_DIMER_HF_ENERGY"),
             "native_source_overlay": False,
             "sanitizers": "OUTSTANDING_LOADER_INCOMPATIBILITY_NO_NEW_KERNELS",
         })

@@ -67,6 +67,12 @@ def execute(path, root, worker=False):
                                  Path(manifest["reference"]), manifest["reference_sha256"])
             return
         from dimer_energy_probe import run
+        if manifest.get("mode") == "trace-energy":
+            from dimer_scf_trace import trace_energy
+            with trace_energy(runtime.psi4, root / "energy", manifest["backend"]):
+                runtime.guarded_call(run, runtime.psi4, Path(manifest["inputs"]),
+                                     root / "energy", manifest["backend"], policy["threads"])
+            return
         runtime.guarded_call(run, runtime.psi4, Path(manifest["inputs"]),
                              root / "energy", manifest["backend"], policy["threads"])
         return
@@ -139,6 +145,10 @@ def execute(path, root, worker=False):
         if result.is_file():
             report["energy_result_sha256"] = digest(result)
             report["energy_status"] = json.loads(result.read_text())["status"]
+        if manifest.get("mode") == "trace-energy":
+            trace = root / "energy/energy-trace.json"
+            if trace.is_file():
+                report["energy_trace_sha256"] = digest(trace)
         log = root / "energy/psi4.out"
         text = log.read_text() if log.is_file() else ""
         report.update(native_headers(text))

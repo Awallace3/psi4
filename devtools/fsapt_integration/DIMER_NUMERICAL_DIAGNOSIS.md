@@ -117,6 +117,85 @@ density or coefficient arrays.
 
 ## Next discriminating controls (not yet run)
 
+`dimer_fixed_jk.py` implements the first control, using the existing native
+`scf_repeat_probe.sample_plan`: four computations per plan, three plans in
+one process, separately on CPU-only and H200 allocations. It checks the CPU
+snapshot hash, exact geometry/bases, occupied orthonormality, and `D = CCᵀ`.
+It records actual reconstructed-density differences, J/K matrices, symmetry
+defects, and direct difference contractions accumulated in host extended
+precision. Completion means the diagnostic executed, not that parity passed.
+
+Submitted fixed-input controls (native build unchanged):
+
+- Helper pin: `1f5d1cfe2e277c5eae14bf3b00bb0c88262a6cdd`.
+- CPU-only **15485611**, H200 **15485612**; both embers, with the same
+  CPU48/1h and GPU-host8/30min resource limits as the energy controls.
+- Run root:
+  `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-fsapt/dimer-fixed-jk-1f5d1cfe2e-01`.
+- Both bind CPU job 15482205's result/snapshot hashes. The shared launcher
+  retains the directory name `energy/`, but this mode runs **no SCF**.
+- Both fixed-input controls completed; results below.
+
+CPU fixed-input job **15485611** completed (allocation/batch/step exit 0, no
+TERM/retirement, owned scratch cleaned). All **12 J and K matrices were
+bitwise identical**, including across the three plan constructions; actual
+reconstructed D also matched both its first value and saved CPU D exactly.
+Symmetry defects and direct difference energy contractions were zero.
+Diagnostic wall: 86.861 s; allocation: 110 s.
+
+**Backend caveat:** this reused helper selected **DiskDFJK**, not the original
+SCF's MemDFJK. It calls `JK.build(..., jk_type="DF")` without a factory memory
+argument, then grants memory with `set_memory` *after* backend selection.
+The SCF factory instead passes `memory=` into `JK.build`. This result is a
+valid DiskDFJK repeatability control, **not an exact original-CPU-backend
+comparison**. Use an explicit factory memory grant and assert `MemDFJK` before
+attributing a cross-backend bias to cuEST.
+
+- CPU result SHA256:
+  `c4f05dff7ac2b7bf3317bdee50f557274044fe2d45d9b38e775c5378ff7f5d3e`.
+- CPU matrix artifact producer SHA256:
+  `145cc1a0cc6669560016b45c663866247700e66f9a2486fe0385faa82cacc725`.
+
+H200 fixed-input job **15485612** completed (exit 0, no TERM/retirement,
+owned scratch cleaned). Actual H200/sm90, driver `615.71.09`, node
+`atl1-1-02-014-2-0`; cuESTJK and Native FP64 headers confirmed.
+
+- **Within each plan:** J is bitwise identical. K varies by at most
+  `2.554e-15` elementwise; absolute direct JK energy-contraction change is
+  below `9.814e-16 Eh` relative to each plan's first call.
+- **Across new plans:** maximum absolute energy offset from plan 0 is
+  `2.118511e-10 Eh`, composed of `2.134952e-10 Eh` from J and
+  `-1.644160e-12 Eh` from K. Plan 2's offset is `2.503068e-11 Eh`.
+  Maximum J/K element changes from plan 0 are `1.717382e-11` and
+  `7.651657e-13`, respectively.
+- Actual reconstructed D is identical across all calls and exactly matches
+  the saved CPU D. J symmetry defect is about `1.7755e-13`; K is symmetric.
+- Diagnostic wall 7.2049 s, allocation 37 s; not accepted speedup evidence.
+- Result SHA256:
+  `0e68b4838c95af1fdd4b3df7c53a9a878584297e7caf16dce06f74af79c45118`.
+- Matrix artifact producer SHA256:
+  `0932da015e49bbe333da1b9387139d8ff19114abca444f50858af772a729b339`.
+
+**Interpretation:** repeated J/K evaluation at this identical input does not
+reproduce the `~1e-8 Eh` SCF fluctuations. The plan-construction variability
+is real and exceeds E10 in one comparison, but SCF normally retains its
+plan; it does not by itself explain iteration-to-iteration changes.
+This control does not rule out sensitivity to changing inputs, different
+SCF buffer histories, or other GPU paths.
+
+`USE_CUEST` also dispatches `HF::diagonalize_F` transforms and
+`HF::form_FDSmSDF` to cuBLAS in `libscf_solver/hf.cc`. Those files match the
+frozen b641 native source. Thus the remaining investigation must not equate
+the entire GPU SCF path with the cuEST J/K SDK.
+
+Next prepared control: `trace-energy` snapshots the native `HF.compute_E`
+boundary while still invoking exactly one public `energy("hf")`. It preserves
+native calls/returns and options, performs no extra J/K evaluations, records
+extended-precision energy-component changes, actual D/JK-D and electron-count
+changes, and saves selected-iteration C/D/S/H/J/K matrices. CPU tracing uses
+the original SCF factory (and must confirm MemDFJK), avoiding the DiskDFJK
+control caveat. Traced durations are not timings.
+
 1. If standalone SCF reproduces the discrepancy, use identical saved dimer
    coefficient bytes for repeated native J/K calls within a plan, across
    rebuilt plans, and across fresh processes.
