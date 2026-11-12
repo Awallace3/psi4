@@ -7,6 +7,12 @@ import sys
 import time
 
 
+def worker_alias(parent, label):
+    directory = parent / label
+    directory.mkdir(mode=0o700)
+    return directory
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
@@ -68,7 +74,7 @@ def main():
         with lease(root) as fd:
             base, build = read_config(args.config, args.config_sha256)
             aliases = output / "aliases"
-            aliases.mkdir()
+            aliases.mkdir(mode=0o700)
             config_path = output / "runtime-config.json"
             save(config_path, {**base, "threads": 4, "host_memory": "6 GiB",
                                "sealed_alias_parent": str(aliases)})
@@ -83,8 +89,7 @@ def main():
                     for repeat, order in enumerate((("energy", "sapt"), ("sapt", "energy"))):
                         for entrypoint in order:
                             label = f"{system}-{backend}-{entrypoint}-{repeat}"
-                            alias = aliases / label
-                            alias.mkdir()
+                            alias = worker_alias(aliases, label)
                             scratch = output / (label + "-scratch")
                             scratch.mkdir()
                             env = environment(config, gpu=backend == "gpu",

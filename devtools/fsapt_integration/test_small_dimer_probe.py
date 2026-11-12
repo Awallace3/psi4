@@ -5,6 +5,26 @@ import pytest
 from small_dimer_probe import basis_receipt, first_dimer_only, trajectory
 
 
+def test_worker_alias_passes_real_sealed_loader_check(tmp_path):
+    import importlib.util
+    from pathlib import Path
+    from cachy_dimer_screen import worker_alias
+    source = Path(__file__).resolve().parents[1] / "disp0/phoenix_validation/gpu_runtime.py"
+    spec = importlib.util.spec_from_file_location("checked_gpu_runtime", source)
+    runtime = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime)
+    parent = tmp_path / "aliases"
+    parent.mkdir(mode=0o700)
+    config = dict(schema=2, identity_contract="process-owned-kernel-sealed-snapshots-v1",
+                  sealed_alias_parent=str(parent), dependency_environment="/qualified/env",
+                  startup_library_path="/qualified/env/lib")
+    child = worker_alias(parent, "cpu-energy")
+    assert runtime.sealed_startup_path(config, child) == "/qualified/env/lib"
+    child.chmod(0o755)
+    with pytest.raises(RuntimeError, match="Private per-worker"):
+        runtime.sealed_startup_path(config, child)
+
+
 def test_native_trajectory_and_second_scf_rejection():
     text = """
    @DF-RHF iter SAD: -1.75106606335984e3 -1.75107e+03 0.00000e+00
