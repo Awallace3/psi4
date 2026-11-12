@@ -13,6 +13,10 @@ import Pydantic-2 APIs from p4qca's Pydantic 1.10.21. Preserve that failure;
 it is not a numerical failure. Each harness revision gets its own immutable
 manifest while existing job outputs remain under their original job IDs.
 
+Pilot 15509332 stopped before calculation at the scratch equality assertion.
+The payload now selects and binds all three scratch variables inside the srun
+step, before importing Psi4, and records incoming paths for diagnosis.
+
 ## Scope
 
 The peptide (24 atoms, 260 AOs) and ethene–nanotube (42 atoms, 574 AOs)

@@ -28,6 +28,19 @@ def dump(path, value):
     temporary.replace(path)
 
 
+def setup_scratch(index):
+    """Select scratch inside the step: srun may reset TMPDIR or its mount."""
+    incoming = {name: os.environ.get(name) for name in ["TMPDIR", "SCRATCH", "PSI_SCRATCH"]}
+    base = Path(os.environ.get("TMPDIR") or "/scratch")
+    if not base.is_dir():
+        base = Path("/scratch")
+    scratch = (base / f'pr44-{os.environ["SLURM_JOB_ID"]}-case-{index}').resolve()
+    scratch.mkdir(parents=True, exist_ok=False)
+    for name in incoming:
+        os.environ[name] = str(scratch)
+    return scratch, incoming
+
+
 def cgroup_dir():
     for line in Path("/proc/self/cgroup").read_text().splitlines():
         _, controllers, relative = line.split(":", 2)
@@ -80,14 +93,16 @@ def main():
     actual = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
     assert actual == expected, (actual, expected)
     assert not subprocess.check_output(["git", "-C", str(source), "diff", "HEAD"])
+    scratch, incoming_scratch = setup_scratch(args.index)
+    print(json.dumps({"incoming_scratch": incoming_scratch, "step_scratch": str(scratch)}), flush=True)
     import psi4
     assert Path(psi4.core.__file__).resolve().is_relative_to(stage.resolve()), psi4.core.__file__
     build = json.loads((args.campaign / "builds" / arm / "validated.json").read_text())
     assert build["commit"] == expected
     native_hash = sha(psi4.core.__file__)
     assert native_hash == build["core_sha256"]
-    scratch = Path(os.environ["PSI_SCRATCH"]).resolve()
     assert scratch.is_dir() and str(scratch) == os.environ["TMPDIR"] == os.environ["SCRATCH"]
+    psi4.core.IOManager.shared_object().set_default_path(str(scratch) + "/")
     geometry_path = harness / f'{case["system"]}.xyz'
     lines = geometry_path.read_text().splitlines()
     atoms = lines[2:]
@@ -106,7 +121,7 @@ def main():
         "config_sha256": sha(harness / "config.json"), "input_sha256": sha(geometry_path),
         "driver_sha256": sha(__file__), "host": platform.node(), "python": platform.python_version(),
         "harness_commit": subprocess.check_output(["git", "-C", str(harness), "rev-parse", "HEAD"], text=True).strip(),
-        "threads": config["threads"], "scratch": str(scratch),
+        "threads": config["threads"], "scratch": str(scratch), "incoming_scratch": incoming_scratch,
         "slurm": {k: v for k, v in os.environ.items() if k.startswith("SLURM_")},
         "packages": sorted(f'{d.metadata["Name"]}=={d.version}' for d in importlib.metadata.distributions()),
     }
