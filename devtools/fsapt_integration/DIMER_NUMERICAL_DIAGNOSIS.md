@@ -423,10 +423,12 @@ do not retry until a favorable stopping event is obtained.
 
 ### Initialization review: remaining discriminating measurements
 
-Source review found no demonstrated missing HF setter: JK defaults
-`do_wK=False`, `omega=0`, `alpha=1`, and `beta=0` agree with the SCF HF
-settings. Explicitly recording these values is useful, but adding redundant
-setters is not an established numerical fix.
+Initial source review inferred that JK defaults `do_wK=False`, `omega=0`,
+`alpha=1`, and `beta=0` matched HF. **That inference was wrong for beta**:
+the subsequent live peptide SCF receipt below records **beta=1**, assigned
+from the functional by SCF initialization. Earlier replay explicitly set
+beta=0. A direct unused-beta A/B is now required; do not treat the earlier
+SCF/fresh-replay comparisons as configuration-matched.
 
 The next comparison must capture the **actual original SCF auxiliary basis**,
 not only its requested name: function/shell counts, ordered centers and shells,
@@ -642,6 +644,43 @@ repeat-to-repeat differences are comparable to entrypoint differences, while
 CPU controls agree much more closely. Next isolate the SCF-owned versus fresh
 JK plan at identical occupied-orbital bytes, using these actual SCF basis
 objects; do not infer an SDK defect from free-running SCF trajectories alone.
+
+### Retained peptide plan: live beta mismatch identified
+
+The GPU producer in `source/tmp/plans-02/retained` completed its SCF and
+16 post-SCF fixed-orbital JK calls. The campaign subsequently stopped in
+the independent CPU process because a host `C @ C.T` reconstruction was
+incorrectly required to be bitwise identical. Preserve the producer; resume
+only CPU/GPU replay, recording host roundoff rather than relaxing energy
+criteria. No native code was changed.
+
+Producer result SHA256:
+`3bbf56aa5734541d050c6e76610377b5ef282d71920cca344442b791e220fcbc`.
+Fixed-input SHA256:
+`32812f827acb8bd27fd7bca9386aea97af8b5864efef586322e2c05e51942c5b`.
+
+- Actual SCF JK settings, both after initialization and after energy return:
+  **alpha=1, beta=1, omega=0**, wcombine=false, wK disabled in the native
+  header; memory=694521315 doubles.
+- Effective/global options and changed flags matched across those two
+  boundaries, with module SCF, CSAM screening, fitting cutoff1e-10,
+  integral tolerance1e-16, Native FP64, slices5/moduli8, no DirectJ/GridK.
+- No retained-plan recreation was logged during the comparisons.
+- Retained and fresh same-basis-object plans all reported **0.316 GiB**.
+- Identical-C repeated calls showed Coulomb-dominated variation: retained
+  first block max `8.73252e-11 Eh` from its first call; fresh plan0 max
+  `2.54507e-10 Eh`; K contraction differences were only about `1e-16 Eh`
+  within a plan. Actual JK D versus the common host D differed by at most
+  `5.55112e-17` in every recorded call.
+- Rebuilt final-orbital commutator RMS was approximately `1.1–1.24e-13`.
+  The final orbitals' D differs from the last evaluated SCF D by
+  `1.26800e-11`; those are saved separately, not conflated.
+
+The old protein83 replay's explicit beta=0 is therefore a concrete
+configuration difference to test, despite omega=0 and wK disabled.
+Independent GPU replay now interleaves actual-beta/zero-beta/actual-beta/
+zero-beta plans on the exact saved C bytes, changing no other plan setter.
+This is an investigation, not an established SDK diagnosis or production fix.
 
 1. If standalone SCF reproduces the discrepancy, use identical saved dimer
    coefficient bytes for repeated native J/K calls within a plan, across

@@ -20,13 +20,16 @@ def dedicated_root():
     return Path(pwd.getpwuid(os.getuid()).pw_dir) / "gits/psi4-small-dimer-cachy"
 
 
-def case_specs(mode):
+def case_specs(mode, replay_only=False):
     if mode == "plans":
-        return [("retained", "peptide", "gpu", "energy"),
-                ("cpu-replay", "peptide", "cpu", "energy"),
-                ("gpu-replay", "peptide", "gpu", "energy")]
+        cases = [("retained", "peptide", "gpu", "energy"),
+                 ("cpu-replay", "peptide", "cpu", "energy"),
+                 ("gpu-replay", "peptide", "gpu", "energy")]
+        return cases[1:] if replay_only else cases
     if mode != "screen":
         raise ValueError("Explicit diagnostic mode required")
+    if replay_only:
+        raise ValueError("Replay continuation requires plans mode")
     return [(f"{system}-{backend}-{entrypoint}-{repeat}", system, backend, entrypoint)
             for system in ("hcl", "peptide") for backend in ("cpu", "gpu")
             for repeat, order in enumerate((("energy", "sapt"), ("sapt", "energy")))
@@ -49,6 +52,10 @@ def main():
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--reference-sha256")
     args = parser.parse_args()
+    if bool(args.reference) != bool(args.reference_sha256):
+        parser.error("Reference and its hash must be supplied together")
+    if args.reference and args.mode != "plans":
+        parser.error("Reference is only valid for plans mode")
     root = args.root.resolve(strict=True)
     if root != dedicated_root():
         raise RuntimeError("Dedicated small-dimer workspace required")
@@ -115,7 +122,12 @@ def main():
                           runtime_config_sha256=config_sha)
             # Interleave entrypoints and reverse repeat order; each is a fresh
             # interpreter, never reusing a previous calculation's JK or scratch.
-            for label, system, backend, entrypoint in case_specs(args.mode):
+            if args.reference:
+                if digest(args.reference) != args.reference_sha256:
+                    raise RuntimeError("Completed producer changed before continuation")
+                report.update(reference=str(args.reference), reference_sha256=args.reference_sha256)
+            for label, system, backend, entrypoint in case_specs(
+                    args.mode, replay_only=args.reference is not None):
                 alias = worker_alias(aliases, label)
                 scratch = output / (label + "-scratch")
                 scratch.mkdir()
@@ -134,8 +146,9 @@ def main():
                         "--backend", backend, "--entrypoint", entrypoint,
                         "--system", system, "--mode", args.mode]
                 if args.mode == "plans" and label != "retained":
-                    reference = output / "retained/result.json"
-                    checksum = report["workers"][0]["result_sha256"]
+                    reference = args.reference or output / "retained/result.json"
+                    checksum = (args.reference_sha256 if args.reference
+                                else report["workers"][0]["result_sha256"])
                     if digest(reference) != checksum:
                         raise RuntimeError("Retained-plan result changed before replay")
                     argv += ["--reference", str(reference), "--reference-sha256", checksum]

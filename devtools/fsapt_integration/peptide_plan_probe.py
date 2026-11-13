@@ -12,6 +12,18 @@ from phoenix_timing import digest, save
 STATUS = "EXECUTED_PLAN_REPLAY_DIAGNOSTIC_ONLY"
 
 
+def density_reconstruction(co, stored):
+    """C bytes are fixed; a separate BLAS multiplication need not be bitwise."""
+    import numpy as np
+    reconstructed = co @ co.T
+    np.testing.assert_allclose(stored, reconstructed, atol=1e-13, rtol=0)
+    difference = reconstructed - stored
+    return dict(max_abs=float(np.max(np.abs(difference))),
+                rms=float(np.sqrt(np.mean(difference**2))),
+                unequal_elements=int(np.count_nonzero(difference)),
+                bitwise_equal=stored.tobytes() == reconstructed.tobytes())
+
+
 @contextmanager
 def capture_orthogonalizer(core, captured):
     """One copy after iterations, before HF::finalize releases X."""
@@ -70,6 +82,17 @@ def fresh_plan(core, primary, auxiliary, state, backend):
     return jk
 
 
+def replay_variants(state, backend):
+    if backend == "cpu":
+        return [dict(state), dict(state)]
+    if backend != "gpu" or state["omega"] != 0 or state["alpha"] != 1:
+        raise ValueError("Unused-beta control requires explicit zero-omega HF GPU replay")
+    # Native HF actually supplied beta=1 even with do_wK=False and omega=0.
+    # Interleave the actual setting with beta=0: do not silently normalize it.
+    return [dict(state), {**state, "beta": 0.0},
+            dict(state), {**state, "beta": 0.0}]
+
+
 def rebuilt_state(d, h, s, x, j, k, nuclear):
     import numpy as np
     fock = h + 2 * j - k
@@ -98,6 +121,7 @@ def fixed_samples(core, jk, co, d, label, arrays, rows, baseline=None, context=N
             first = (j, k)
         key = f"{label}_{call}"
         arrays["J_" + key], arrays["K_" + key] = j, k
+        arrays["D_" + key] = actual_d
         rows.append(dict(label=key, state=jk_state(jk),
                          D_max_abs=float(np.max(np.abs(actual_d - d))),
                          coulomb_Eh=float(2 * contraction(d, j)),
@@ -221,7 +245,7 @@ def run(psi4, inputs, output, backend, reference=None, reference_sha=None):
         h, x = [np.array(data[k], copy=True) for k in ("H", "X")]
     if not all(np.isfinite(x).all() for x in (co, d, s, j0, k0)):
         raise RuntimeError("Nonfinite fixed input")
-    np.testing.assert_array_equal(d, co @ co.T)
+    density_check = density_reconstruction(co, d)
     np.testing.assert_allclose(co.T @ s @ co, np.eye(co.shape[1]), atol=1e-10, rtol=1e-10)
     output.mkdir(parents=True, exist_ok=False)
     psi4.core.set_output_file(str(output / "psi4.out"), False)
@@ -239,17 +263,20 @@ def run(psi4, inputs, output, backend, reference=None, reference_sha=None):
     rows, arrays = [], {}
     report = dict(status="RUNNING", backend=backend, scf_executed=False,
                   reference_sha256=reference_sha, input_sha256=proof["input_sha256"],
-                  samples=rows, jk_name="cuESTJK" if backend == "gpu" else "MemDFJK")
+                  host_density_reconstruction=density_check,
+                  samples=rows, jk_name="cuESTJK" if backend == "gpu" else "MemDFJK",
+                  variants=replay_variants(proof["state"], backend))
     try:
-        for plan in range(2):
-            jk = fresh_plan(psi4.core, primary, auxiliary, proof["state"], backend)
+        for plan, state in enumerate(report["variants"]):
+            jk = fresh_plan(psi4.core, primary, auxiliary, state, backend)
             initialized = False
             try:
-                psi4.core.print_out(f"\nFIXED_JK independent {backend} plan {plan}\n")
+                label = f"beta{state['beta']:g}_plan{plan}"
+                psi4.core.print_out(f"\nFIXED_JK independent {backend} {label}\n")
                 jk.initialize()
                 initialized = True
                 jk.print_header()
-                fixed_samples(psi4.core, jk, co, d, f"fresh{plan}", arrays, rows,
+                fixed_samples(psi4.core, jk, co, d, label, arrays, rows,
                               (j0, k0), (h, s, x, proof["nuclear_Eh"]))
             finally:
                 if initialized:

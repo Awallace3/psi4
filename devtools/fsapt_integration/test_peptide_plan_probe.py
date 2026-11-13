@@ -6,7 +6,31 @@ import pytest
 
 from cachy_dimer_screen import case_specs
 from peptide_plan_probe import (
-    capture_orthogonalizer, fixed_samples, fresh_plan, option_receipt, rebuilt_state)
+    capture_orthogonalizer, density_reconstruction, fixed_samples, fresh_plan,
+    option_receipt, rebuilt_state, replay_variants)
+
+
+def test_unused_beta_ab_changes_only_beta_and_interleaves_actual_setting():
+    state = dict(alpha=1., beta=1., omega=0., memory_doubles=123, wcombine=False)
+    variants = replay_variants(state, "gpu")
+    assert [v["beta"] for v in variants] == [1., 0., 1., 0.]
+    assert all({k for k in state if state[k] != v[k]} <= {"beta"} for v in variants)
+    assert state["beta"] == 1.
+    assert replay_variants(state, "cpu") == [state, state]
+    with pytest.raises(ValueError):
+        replay_variants({**state, "omega": .3}, "gpu")
+
+
+def test_density_check_records_roundoff_but_rejects_changed_inputs():
+    co = np.array([[.5], [.25]])
+    d = co @ co.T
+    d[0, 0] = np.nextafter(d[0, 0], np.inf)
+    result = density_reconstruction(co, d)
+    assert result["unequal_elements"] == 1
+    assert 0 < result["max_abs"] < 1e-13
+    d[0, 0] += 1e-6
+    with pytest.raises(AssertionError):
+        density_reconstruction(co, d)
 
 
 def test_orthogonalizer_copied_before_native_finalize_and_method_restored():
@@ -68,6 +92,9 @@ def test_plan_campaign_orders_producer_before_pinned_replays():
         ("gpu-replay", "peptide", "gpu", "energy")]
     assert len(case_specs("screen")) == 16
     assert len({s[0] for s in case_specs("screen")}) == 16
+    assert case_specs("plans", replay_only=True) == case_specs("plans")[1:]
+    with pytest.raises(ValueError):
+        case_specs("screen", replay_only=True)
 
 
 def test_fresh_plan_preserves_exposed_scf_parameters_and_factory_memory():
@@ -130,7 +157,7 @@ def test_fixed_samples_do_not_invoke_scf_and_compare_identical_density():
     arrays, rows = {}, []
     baseline = fixed_samples(core, jk, co, d, "retained", arrays, rows)
     assert jk.calls == 4
-    assert len(arrays) == 8 and len(rows) == 4
+    assert len(arrays) == 12 and len(rows) == 4
     assert all(r["D_max_abs"] == 0 for r in rows)
     assert all(r["vs_same_plan_first"]["closed_shell_JK_delta_Eh"] == 0 for r in rows)
     shifted = (baseline[0] + 1e-6, baseline[1])
