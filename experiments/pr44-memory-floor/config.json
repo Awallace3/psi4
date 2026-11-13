@@ -1,0 +1,19 @@
+{
+  "build_campaign": "/storage/scratch1/3/awallace43/psi4-pr44-protein157-memory-v1",
+  "native_commit": "70e01e2bafc828831ea1bda31588694e85b20c26",
+  "core_sha256": "83a4dc1bdeee05a82bd6b866549ea11906893648f1caff92e2ce8b1328fd76e3",
+  "checkpoint": "/storage/scratch1/3/awallace43/psi4-pr44-protein157-memory-v1/results/800/15547644",
+  "checkpoint_sha256": "6d7a0834a7438253f5a93d24017e3d25974dc4024a8a1f4ed5053f8f237181ab",
+  "account": "gts-cs207-chemx",
+  "qos": "embers",
+  "partition": "cpu-gnr",
+  "threads": 192,
+  "slurm_gib": 1400,
+  "tmp_gib": 2600,
+  "walltime": "08:00:00",
+  "cases": [
+    {"id": "full-400", "mode": "full", "memory_gb": 400},
+    {"id": "replay-200", "mode": "replay", "memory_gb": 200},
+    {"id": "replay-100", "mode": "replay", "memory_gb": 100}
+  ]
+}
