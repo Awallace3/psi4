@@ -104,7 +104,7 @@ def screen_options(backend):
 
 
 def run(psi4, inputs_path, output, backend, entrypoint, system, threads=4,
-        provider_factory=None):
+        provider_factory=None, post_scf=None):
     import numpy as np
     if entrypoint not in ("energy", "sapt") or system not in ("hcl", "peptide"):
         raise ValueError("Explicit small system and entrypoint required")
@@ -180,5 +180,9 @@ def run(psi4, inputs_path, output, backend, entrypoint, system, threads=4,
         report["endpoint_note"] = (
             "Cocc and D are terminal objects, not guaranteed to be from the "
             "same energy-evaluation boundary; reconstruct D from Cocc for replay.")
+        if post_scf is not None:
+            report["fixed_jk"] = post_scf(psi4, wfn, output)
+    psi4.core.flush_outfile()
+    report["log_sha256"] = hashlib.sha256((output / "psi4.out").read_bytes()).hexdigest()
     (output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
     return report

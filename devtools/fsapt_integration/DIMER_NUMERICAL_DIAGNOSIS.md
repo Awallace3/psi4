@@ -555,7 +555,7 @@ Source-log SHA256 values:
 - Standalone CPU: `7d5601d64e852ac0cc07e05f3585440b40eb0ac2bf996b0a9b092987c07a7d5b`
 - Traced GPU: `ee855e531dbe3f4141826cd6c78e71f447afd5a543ad812980b97ad441cfd9ac`
 
-### Small-system cachy screen (prepared; results pending)
+### Small-system cachy screen
 
 User approved small GPU tests on cachy. `small_dimer_probe.py` and
 `cachy_dimer_screen.py` implement a bounded 16-process screen: HCl dimer and
@@ -585,6 +585,63 @@ Exact primary/auxiliary shell fingerprints and terminal C/D/S/H are recorded
 after SCF. Terminal arrays are not claimed to be a synchronized energy-boundary
 snapshot. A subsequent fixed-input replay must reconstruct D from the saved
 occupied orbitals and distinguish it from the terminal D.
+
+Completed screen: `~/gits/psi4-small-dimer-cachy/source/tmp/screen-04`.
+Helper pin `1e9723549a3b382c69d89598386c0e37c0fd0d71`, preserved science pin
+`ba9251b785043df16dfa60acf64a7ddcbfca0ea9`. All 16 workers converged, with
+CPU MemDFJK / GPU Native FP64 cuEST execution confirmed. Master result SHA256:
+`9e20460302ed487d8ff7a0d2ddcd17f532e2fe2100f107377077f48453150e4e`.
+Analysis verified each worker-result/log hash and matching helper/science/config
+pins. Host contract suite: 15 passed. No fragment provider was executed.
+
+Attempts 01–03 remain preserved: 01 rejected nonprivate alias-directory
+permissions; 02 rejected a workspace check that incorrectly depended on
+sandboxed HOME; 03 completed four HCl CPU cases and one HCl GPU case, then
+rejected the GPU SAPT preamble's missing audited provider before its SCF.
+Those are harness failures, not SCF failures. The corrected screen supplies
+the real provider without invoking it, matches the full relevant SAPT option
+set, and preserves original errors rather than masking them with missing-log
+parsing errors.
+
+| System / arm | Standalone iterations (two processes) | SAPT dimer iterations (two processes) |
+|---|---:|---:|
+| HCl CPU | 15, 15 | 15, 15 |
+| HCl GPU | 15, 15 | 15, 15 |
+| Peptide CPU | 22, 22 | 22, 22 |
+| Peptide GPU | 26, 25 | 23, 22 |
+
+At aligned iterations:
+
+| Comparison | HCl max absolute energy difference (Eh) | Peptide max absolute energy difference (Eh) |
+|---|---:|---:|
+| CPU standalone repeat | 1.82e-12 | 1.30e-12 |
+| CPU SAPT repeat | 1.26e-12 | 1.08e-12 |
+| GPU standalone repeat | 1.808e-11 | 6.1470e-10 |
+| GPU SAPT repeat | 1.875e-11 | 5.2200e-10 |
+| GPU standalone vs SAPT, first repeats | 1.922e-11 | 5.3484e-10 |
+
+Peptide GPU terminal energies are about **1.12–1.22e-9 Eh above CPU**.
+At iteration 22 all four peptide GPU residuals are approximately `6e-13`;
+some energy changes still exceed E10, resulting in different stopping
+iterations. This is a small-system numerical symptom, not proof of false
+convergence or a common root cause with protein83.
+
+Primary and auxiliary basis fingerprints (including exact coordinates and
+normalized coefficients) are identical across all eight arms/repeats for
+each system:
+
+- HCl: 54 AO / 320 auxiliary; primary
+  `37a84c7b3921d967314e92c747f0efde1b488d53fae66632b2aa10c22cf171e2`,
+  auxiliary `89f6b42a9f37fed2adb575a51e89f72af999739dc31b8c8a30f801a73795acd6`.
+- Peptide: 250 AO / 1308 auxiliary; primary
+  `f0c7d919f9ed1cfee34bdc9bff753ee7e1fa21f62f3f1c16100b12ebc8bc16b7`,
+  auxiliary `6baa176244fdddf40804b36b915273465f881f8fe97da176a62fe6799f7a55a5`.
+
+The peptide is therefore a useful smaller diagnostic case. Its GPU
+repeat-to-repeat differences are comparable to entrypoint differences, while
+CPU controls agree much more closely. Next isolate the SCF-owned versus fresh
+JK plan at identical occupied-orbital bytes, using these actual SCF basis
+objects; do not infer an SDK defect from free-running SCF trajectories alone.
 
 1. If standalone SCF reproduces the discrepancy, use identical saved dimer
    coefficient bytes for repeated native J/K calls within a plan, across

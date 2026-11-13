@@ -20,6 +20,19 @@ def dedicated_root():
     return Path(pwd.getpwuid(os.getuid()).pw_dir) / "gits/psi4-small-dimer-cachy"
 
 
+def case_specs(mode):
+    if mode == "plans":
+        return [("retained", "peptide", "gpu", "energy"),
+                ("cpu-replay", "peptide", "cpu", "energy"),
+                ("gpu-replay", "peptide", "gpu", "energy")]
+    if mode != "screen":
+        raise ValueError("Explicit diagnostic mode required")
+    return [(f"{system}-{backend}-{entrypoint}-{repeat}", system, backend, entrypoint)
+            for system in ("hcl", "peptide") for backend in ("cpu", "gpu")
+            for repeat, order in enumerate((("energy", "sapt"), ("sapt", "energy")))
+            for entrypoint in order]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
@@ -32,6 +45,9 @@ def main():
     parser.add_argument("--backend", choices=("cpu", "gpu"))
     parser.add_argument("--entrypoint", choices=("energy", "sapt"))
     parser.add_argument("--system", choices=("hcl", "peptide"))
+    parser.add_argument("--mode", choices=("screen", "plans"), default="screen")
+    parser.add_argument("--reference", type=Path)
+    parser.add_argument("--reference-sha256")
     args = parser.parse_args()
     root = args.root.resolve(strict=True)
     if root != dedicated_root():
@@ -53,14 +69,19 @@ def main():
     if args.worker:
         from bootstrap_gate import bootstrap
         from gpu_runtime import AuditedRuntime
-        from small_dimer_probe import run
         config, build = read_config(args.config, args.config_sha256)
         owners, events = bootstrap(config, build)
         runtime = AuditedRuntime(args.config, args.config_sha256)
-        result = runtime.guarded_call(
-            run, runtime.psi4, args.inputs, output, args.backend,
-            args.entrypoint, args.system, 4,
-            runtime.provider if args.backend == "gpu" else None)
+        if args.mode == "plans":
+            from peptide_plan_probe import run
+            result = runtime.guarded_call(run, runtime.psi4, args.inputs, output,
+                                          args.backend, args.reference, args.reference_sha256)
+        else:
+            from small_dimer_probe import run
+            result = runtime.guarded_call(
+                run, runtime.psi4, args.inputs, output, args.backend,
+                args.entrypoint, args.system, 4,
+                runtime.provider if args.backend == "gpu" else None)
         if runtime.report["plans"]:
             raise RuntimeError("Dimer screen unexpectedly executed a fragment provider")
         result.update(science_pin=config["source_pin"], helper_pin=helper_pin,
@@ -76,7 +97,7 @@ def main():
     if digest(args.inputs) != INPUT_SHA:
         raise RuntimeError("Frozen input manifest required")
     output.mkdir(parents=True, exist_ok=False)
-    report = dict(status="STARTED", helper_pin=helper_pin, resource_scope=scope,
+    report = dict(status="STARTED", mode=args.mode, helper_pin=helper_pin, resource_scope=scope,
                   workers=[], scope="SMALL_SCF_NUMERICAL_SCREEN_NOT_TIMING",
                   accepted_speedups=0)
     deadline = time.monotonic() + 2400
@@ -94,62 +115,62 @@ def main():
                           runtime_config_sha256=config_sha)
             # Interleave entrypoints and reverse repeat order; each is a fresh
             # interpreter, never reusing a previous calculation's JK or scratch.
-            for system in ("hcl", "peptide"):
-                for backend in ("cpu", "gpu"):
-                    for repeat, order in enumerate((("energy", "sapt"), ("sapt", "energy"))):
-                        for entrypoint in order:
-                            label = f"{system}-{backend}-{entrypoint}-{repeat}"
-                            alias = worker_alias(aliases, label)
-                            scratch = output / (label + "-scratch")
-                            scratch.mkdir()
-                            env = environment(config, gpu=backend == "gpu",
-                                              sealed_alias_directory=alias)
-                            env.update(TMPDIR=str(scratch), SCRATCH=str(scratch),
-                                       PSI_SCRATCH=str(scratch))
-                            argv = ["/bin/bash", "-c",
-                                    'set -euo pipefail; export PYTHONPATH="${PYTHONPATH-}"; '
-                                    'eval "$("$1" --psiapi)"; shift; exec "$@"',
-                                    "small-dimer", config["stage"] + "/bin/psi4",
-                                    config["dependency_environment"] + "/bin/python", "-B",
-                                    str(Path(__file__).resolve()), "--root", str(root),
-                                    "--runtime-source", str(source), "--config", str(config_path),
-                                    "--config-sha256", config_sha, "--inputs", str(args.inputs),
-                                    "--output", str(output / label), "--worker",
-                                    "--backend", backend, "--entrypoint", entrypoint,
-                                    "--system", system]
-                            row = dict(label=label, argv=argv)
-                            report["workers"].append(row)
-                            if backend == "gpu":
-                                row["device_before"] = device_state(
-                                    config["local_lease"]["expected_uuid"])
-                                admit_device(row["device_before"], config)
-                            save(output / "screen-result.json", report)
-                            seconds = min(600, deadline - time.monotonic())
-                            if seconds < 60:
-                                raise TimeoutError("Small-screen time budget exhausted")
-                            print("START", label, flush=True)
-                            with (output / (label + ".stdout")).open("x") as out, (
-                                    output / (label + ".stderr")).open("x") as err:
-                                code = execute(argv, env, out, err, seconds, fd,
-                                               config["local_lease"], cwd=scratch)
-                            row["returncode"] = code
-                            if code:
-                                raise RuntimeError("Infrastructure/worker failure: " + label)
-                            result_path = output / label / "result.json"
-                            result = json.loads(result_path.read_text())
-                            row.update(result_sha256=digest(result_path),
-                                       scientific_status=result["status"])
-                            if result["status"] not in (
-                                    "CONVERGED_DIAGNOSTIC_ONLY", "SCF_NONCONVERGENCE"):
-                                raise RuntimeError("Incomplete scientific outcome")
-                            text = (output / label / "psi4.out").read_text()
-                            if backend == "gpu" and (
-                                    "Math mode: Native FP64" not in " ".join(text.split())
-                                    or result["jk_name"] != "cuESTJK"):
-                                raise RuntimeError("Native FP64 cuEST execution not confirmed")
-                            print("DONE", label, result["status"], flush=True)
-                            # Preserve per-worker scratch for investigation.
-                            save(output / "screen-result.json", report)
+            for label, system, backend, entrypoint in case_specs(args.mode):
+                alias = worker_alias(aliases, label)
+                scratch = output / (label + "-scratch")
+                scratch.mkdir()
+                env = environment(config, gpu=backend == "gpu",
+                                  sealed_alias_directory=alias)
+                env.update(TMPDIR=str(scratch), SCRATCH=str(scratch), PSI_SCRATCH=str(scratch))
+                argv = ["/bin/bash", "-c",
+                        'set -euo pipefail; export PYTHONPATH="${PYTHONPATH-}"; '
+                        'eval "$("$1" --psiapi)"; shift; exec "$@"',
+                        "small-dimer", config["stage"] + "/bin/psi4",
+                        config["dependency_environment"] + "/bin/python", "-B",
+                        str(Path(__file__).resolve()), "--root", str(root),
+                        "--runtime-source", str(source), "--config", str(config_path),
+                        "--config-sha256", config_sha, "--inputs", str(args.inputs),
+                        "--output", str(output / label), "--worker",
+                        "--backend", backend, "--entrypoint", entrypoint,
+                        "--system", system, "--mode", args.mode]
+                if args.mode == "plans" and label != "retained":
+                    reference = output / "retained/result.json"
+                    checksum = report["workers"][0]["result_sha256"]
+                    if digest(reference) != checksum:
+                        raise RuntimeError("Retained-plan result changed before replay")
+                    argv += ["--reference", str(reference), "--reference-sha256", checksum]
+                row = dict(label=label, argv=argv)
+                report["workers"].append(row)
+                if backend == "gpu":
+                    row["device_before"] = device_state(config["local_lease"]["expected_uuid"])
+                    admit_device(row["device_before"], config)
+                save(output / "screen-result.json", report)
+                seconds = min(600, deadline - time.monotonic())
+                if seconds < 60:
+                    raise TimeoutError("Small-screen time budget exhausted")
+                print("START", label, flush=True)
+                with (output / (label + ".stdout")).open("x") as out, (
+                        output / (label + ".stderr")).open("x") as err:
+                    code = execute(argv, env, out, err, seconds, fd,
+                                   config["local_lease"], cwd=scratch)
+                row["returncode"] = code
+                if code:
+                    raise RuntimeError("Infrastructure/worker failure: " + label)
+                result_path = output / label / "result.json"
+                result = json.loads(result_path.read_text())
+                row.update(result_sha256=digest(result_path), scientific_status=result["status"])
+                allowed = (("EXECUTED_PLAN_REPLAY_DIAGNOSTIC_ONLY",) if args.mode == "plans"
+                           else ("CONVERGED_DIAGNOSTIC_ONLY", "SCF_NONCONVERGENCE"))
+                if result["status"] not in allowed:
+                    raise RuntimeError("Incomplete scientific outcome")
+                text = (output / label / "psi4.out").read_text()
+                if backend == "gpu" and (
+                        "Math mode: Native FP64" not in " ".join(text.split())
+                        or result["jk_name"] != "cuESTJK"):
+                    raise RuntimeError("Native FP64 cuEST execution not confirmed")
+                print("DONE", label, result["status"], flush=True)
+                # Preserve per-worker scratch for investigation.
+                save(output / "screen-result.json", report)
             report["status"] = "EXECUTED_DIAGNOSTIC_ONLY_NOT_PARITY_GATE"
     except BaseException as error:
         report.update(status="FAILED", error=f"{type(error).__name__}: {error}")
