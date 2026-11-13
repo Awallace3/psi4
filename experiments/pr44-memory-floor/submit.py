@@ -9,11 +9,15 @@ import subprocess
 parser = argparse.ArgumentParser()
 parser.add_argument("campaign", type=Path)
 parser.add_argument("--test-only", action="store_true")
+parser.add_argument("--approved-inferno", action="store_true",
+                    help="Only after explicit user approval for this exact round")
 args = parser.parse_args()
 here = Path(__file__).resolve().parent
 root = here.parents[1]
 config = json.loads((here / "config.json").read_text())
-assert config["qos"] == "embers"
+assert config["qos"] in ["embers", "inferno"]
+if config["qos"] == "inferno" and not args.test_only:
+    assert args.approved_inferno, "Fresh user approval required for this inferno round"
 commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
 assert not subprocess.check_output(["git", "-C", str(root), "status", "--porcelain"])
 assert not subprocess.check_output(["git", "-C", str(root), "diff", config["native_commit"], "HEAD", "--", "psi4/"])
@@ -25,7 +29,8 @@ checkpoint = Path(config["checkpoint"])
 assert (checkpoint / "fdds-cache.npz").is_file()
 assert json.loads((checkpoint / "fdds-cache.json").read_text())["sha256"] == config["checkpoint_sha256"]
 queue = subprocess.check_output(["squeue", "-h", "-r", "-u", os.environ["USER"], "-o", "%q"], text=True)
-assert sum(q.strip() == "embers" for q in queue.splitlines()) + len(config["cases"]) <= 50
+if config["qos"] == "embers":
+    assert sum(q.strip() == "embers" for q in queue.splitlines()) + len(config["cases"]) <= 50
 campaign = args.campaign.resolve()
 (campaign / "logs").mkdir(parents=True, exist_ok=True)
 receipt = campaign / "submissions.json"
@@ -43,6 +48,7 @@ for case in config["cases"]:
     commands.append(cmd)
 manifest = {
     "harness_commit": commit, "campaign": str(campaign), "config": config,
+    "approved_inferno": args.approved_inferno,
     "file_sha256": {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
                     for p in [here / "config.json", here / "job.sbatch", here / "submit.py",
                               here.parent / "pr44-memory/run.py", here.parent / "pr44/case.py"]},

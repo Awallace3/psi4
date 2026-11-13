@@ -1,5 +1,22 @@
 # Protein157 memory-floor bracketing
 
+## Current round: explicitly approved inferno pair
+
+The three first-round embers jobs were preempted, not OOM-killed:
+full400GB sampled383.56GiB RSS; replay200GB228.37GiB; replay100GB133.81GiB.
+None completed. User explicitly approved **two full runs at100GB and85GB**,
+gts-cs207/inferno,192threads,1400GiB Slurm/2600GiB scratch,16h limits.
+Account quote$128.84available and$23.13/job worst-case; recheck before sbatch.
+Use a **new output campaign**, `--approved-inferno`, and verify effective QoS.
+Command-line sbatch account/QoS/time override the script's safe embers defaults.
+This does not authorize further paid retries or the later cgroup-limit tests.
+
+85GB is just above the source projection admission gate83.3963GB at192threads
+and auxiliary maxshell7. This is a declaration threshold, not an RSS bound.
+Full checkpoints/results are required; strict numerical parity stays separate.
+
+## Historical first round (harness b7e391df51)
+
 User asks how low peak RSS can go before OOM. The previous800GB full calculation
 completed at685.72GiB RSS but failed strict1e-8Eh parity. Neither that setting
 nor Slurm1400GiB was a demonstrated minimum.
