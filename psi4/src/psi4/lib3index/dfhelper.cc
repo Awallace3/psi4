@@ -244,7 +244,15 @@ void DFHelper::AO_core(bool set_AO_core=true) {
     // contraction's panels plus at least one p-shell AO block. They are never live together. The
     // panels are charged at their narrowest width, and the AO-block side is at least that wide too
     // (for the half-of-spare rule) and at least the largest single p-shell block.
-    const size_t jk_tmp = nthreads_ * nbf_ * nbf_ + 3 * nbf_ * nbf_ * Qshell_max_;
+    // Retain the historical conservative bound, but also cover padding and
+    // allocation floors. For tiny bases an IQ/FP32 occupied row padded to eight
+    // can be much larger than nbf; nthreads*naux can dominate the J scratch too.
+    const size_t padded_nocc = (nbf_ + 7) / 8 * 8;
+    const size_t q_shell_max = static_cast<size_t>(Qshell_max_);
+    const size_t tmp_floor = std::max({nbf_ * nbf_, nthreads_ * naux_,
+                                      nbf_ * padded_nocc * q_shell_max});
+    const size_t jk_tmp = std::max(nthreads_ * nbf_ * nbf_ + 3 * nbf_ * nbf_ * q_shell_max,
+                                  nthreads_ * nbf_ * padded_nocc + 2 * tmp_floor);
     const size_t s_min = AO_core_init_scratch(true);
     const size_t panels = (direct_ || direct_iaQ_) ? 0 : s_min + std::max(s_min, min_AO_core_block());
     required_core_size_ += std::max(jk_tmp, panels);
@@ -640,10 +648,13 @@ size_t DFHelper::reserve_metric_panels(size_t held) {
 }
 void DFHelper::prepare_AO_core() {
     const bool use_simint = (Process::environment.options.get_str("INTEGRAL_PACKAGE") == "SIMINT");
+    // Integral engines retain a raw factory pointer for spherical transforms.
+    // Keep the factory alive through all of the AO construction below.
+    std::shared_ptr<IntegralFactory> rifactory;
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri;
     if (use_simint || direct_ || direct_iaQ_) {
         std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
-        auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
+        rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
         eri.resize(nthreads_);
         eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri(0, false));
 #pragma omp parallel num_threads(nthreads_)
@@ -778,17 +789,17 @@ void DFHelper::prepare_AO_core() {
 }
 void DFHelper::prepare_AO_wK_core() {
     const bool use_simint = (Process::environment.options.get_str("INTEGRAL_PACKAGE") == "SIMINT");
+    std::shared_ptr<IntegralFactory> rifactory;  // outlive the engines' spherical transforms
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri;
     std::vector<std::shared_ptr<TwoBodyAOInt>> weri;
     if (use_simint) {
         std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
-        auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
+        rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
         eri.resize(nthreads_);
         eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri(0, false));
-        if (!wcombine_) {
-            weri.resize(nthreads_);
-            weri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->erf_eri(omega_, 0, false));
-        }
+        // Both separate and combined wK builds need the erf engine in the SIMINT fallback.
+        weri.resize(nthreads_);
+        weri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->erf_eri(omega_, 0, false));
 #pragma omp parallel num_threads(nthreads_)
         {
             int rank = 0;
@@ -916,7 +927,7 @@ void DFHelper::prepare_AO_wK_core() {
             copy_upper_lower_wAO_core_symm(M2p, wppq, begin, end);
         } else {
             timer_on("DFH: AO Construction");
-            compute_sparse_pQq_blocking_p_symm(start, stop, M1p, eri, 0.0);
+            compute_sparse_pQq_blocking_p_symm(start, stop, M1p, eri);
             timer_off("DFH: AO Construction");
 
             timer_on("DFH: AO-Met. Contraction");
@@ -1055,59 +1066,57 @@ std::pair<size_t, size_t> DFHelper::Qshell_blocks_for_transform(const size_t mem
 }
 std::tuple<size_t, size_t> DFHelper::Qshell_blocks_for_JK_build(std::vector<std::pair<size_t, size_t>>& b,
                                                                 size_t max_nocc, bool lr_symmetric) {
-    // strategy here:
-    // 1. depending on lr_symmetric, T2 can either be the same as T1 or
-    // it can just be used as a Jtmp.
-    // 2. T3 is always used, includes C_buffers
-
-    // K tmps
-    size_t T1 = nbf_ * max_nocc;
-    size_t T2 = (lr_symmetric ? nbf_ * nbf_ : nbf_ * max_nocc);
-
-    // C_buffers
-    size_t T3 = std::max(nthreads_ * nbf_ * nbf_, nthreads_ * nbf_ * max_nocc);
-
-    // total AO buffer size is max if core alg is used, otherwise init to 0
-    size_t total_AO_buffer = (AO_core_ ? big_skips_[nbf_] : 0);
-
-    size_t block_size = 0, largest = 0;
-    for (size_t i = 0, tmpbs = 0, count = 1; i < Qshells_; i++, count++) {
-        // get shell info
-        size_t begin = Qshell_aggs_[i];
-        size_t end = Qshell_aggs_[i + 1] - 1;
-
-        // update AO buffer, block sizes
-        size_t current = (end - begin + 1) * small_skips_[nbf_];
-        total_AO_buffer += (AO_core_ ? 0 : current);
-        tmpbs += end - begin + 1;
-
-        // compute total memory used by aggregate block
-        size_t constraint = total_AO_buffer + T1 * tmpbs + T3;
-        constraint += (lr_symmetric ? T2 : T2 * tmpbs);
-
-        if (constraint > memory_ || i == Qshells_ - 1) {
-            if (count == 1 && i != Qshells_ - 1) {
-                std::stringstream error;
-                error << "DFHelper: not enough memory for JK blocking!";
-                throw PSIEXCEPTION(error.str().c_str());
-            }
-            if (constraint > memory_) {
-                total_AO_buffer -= current;
-                tmpbs -= end - begin + 1;
-                b.push_back(std::make_pair(i - count + 1, i - 1));
-                i--;
-            } else if (i == Qshells_ - 1) {
-                b.push_back(std::make_pair(i - count + 1, i));
-            }
-            if (block_size < tmpbs) {
-                largest = total_AO_buffer;
-                block_size = tmpbs;
-            }
-            count = total_AO_buffer = tmpbs = 0;
+    // Charge retained high-water marks, all resident tensors (three for separate wK),
+    // and the same scratch floors as the actual allocations. The resident charge
+    // applies to every block, not just the first one.
+    const size_t floor = std::max(nbf_ * nbf_, nthreads_ * naux_);
+    const size_t c_need = nbf_ * std::max(max_nocc, nbf_);
+    const size_t core_size = JK_core_memory();
+    auto footprint = [&](size_t nq) {
+        const size_t tmp = std::max(floor, nbf_ * std::max<size_t>(max_nocc, 1) * nq);
+        size_t size = core_size + std::max(jk_T1_size_, tmp) +
+                      std::max(jk_T2_size_, lr_symmetric ? floor : tmp);
+        for (size_t r = 0; r < nthreads_; ++r) {
+            size += r < jk_C_buffers_.size() ? std::max(c_need, jk_C_buffers_[r].capacity()) : c_need;
+        }
+        if (!AO_core_) size += nq * small_skips_[nbf_];
+        return size;
+    };
+    size_t largest_shell = 0;
+    for (size_t i = 0; i < Qshells_; ++i) {
+        largest_shell = std::max(largest_shell, Qshell_aggs_[i + 1] - Qshell_aggs_[i]);
+    }
+    if (footprint(largest_shell) > memory_) {
+        // A changed occupation/symmetry or memory allowance can make old scratch
+        // too large. No raw scratch pointers have been taken yet, so replan fresh.
+        clear_JK_scratch();
+        if (footprint(largest_shell) > memory_) {
+            throw PSIEXCEPTION("DFHelper: not enough memory for JK blocking!");
         }
     }
 
-    return std::make_tuple(largest, block_size);
+    b.clear();
+    size_t start = 0, nq = 0, block_size = 0;
+    for (size_t i = 0; i < Qshells_; ++i) {
+        const size_t shell_size = Qshell_aggs_[i + 1] - Qshell_aggs_[i];
+        if (nq && footprint(nq + shell_size) > memory_) {
+            b.emplace_back(start, i - 1);
+            block_size = std::max(block_size, nq);
+            start = i;
+            nq = 0;
+        }
+        nq += shell_size;
+    }
+    if (nq) {
+        b.emplace_back(start, Qshells_ - 1);
+        block_size = std::max(block_size, nq);
+    }
+    // Prefer the selected contraction blocks to the optional mirror. Evict it
+    // before growing any scratch, and let prepare_K_fp32 use only genuine spare.
+    const size_t held = footprint(block_size);
+    if (held > memory_ || K_fp32_memory() > memory_ - held) Ppq_f_.reset();
+
+    return std::make_tuple(AO_core_ ? big_skips_[nbf_] : block_size * small_skips_[nbf_], block_size);
 }
 
 FILE* DFHelper::stream_check(std::string filename, std::string op) {
@@ -1523,7 +1532,8 @@ void DFHelper::compute_sparse_pQq_blocking_p(const size_t start, const size_t st
     }
 }
 void DFHelper::compute_sparse_pQq_blocking_p_symm(const size_t start, const size_t stop, double* Mp,
-                                                  std::vector<std::shared_ptr<TwoBodyAOInt>> eri, double omega) {
+                                                  std::vector<std::shared_ptr<TwoBodyAOInt>> eri,
+                                                  std::optional<double> omega) {
     size_t begin = pshell_aggs_[start];
     size_t startind = symm_big_skips_[begin];
 
@@ -1534,7 +1544,8 @@ void DFHelper::compute_sparse_pQq_blocking_p_symm(const size_t start, const size
     };
 
     if (eri.empty()) {
-        const bool is_erf = (omega != 0.0);
+        // No omega means Coulomb; an explicitly supplied zero still means erf-Coulomb.
+        const bool is_erf = omega.has_value();
         const int max_am = std::max(aux_->max_am(), primary_->max_am());
         const int max_nprim = std::max(aux_->max_nprimitive(), primary_->max_nprimitive());
         const double ln_prec = -std::numeric_limits<double>::max();
@@ -1550,7 +1561,7 @@ void DFHelper::compute_sparse_pQq_blocking_p_symm(const size_t start, const size
         engs.reserve(nthreads_);
         for (size_t t = 0; t < nthreads_; ++t) {
             if (is_erf) {
-                engs.emplace_back(libint2::Operator::erf_coulomb, max_nprim, max_am, 0, 0.0, omega,
+                engs.emplace_back(libint2::Operator::erf_coulomb, max_nprim, max_am, 0, 0.0, *omega,
                                   libint2::BraKet::xs_xx);
             } else {
                 engs.emplace_back(libint2::Operator::coulomb, max_nprim, max_am, 0, 0.0,
@@ -3881,6 +3892,9 @@ void DFHelper::ensure_jk_C_buffers(size_t elem_per_thread) {
             rank = omp_get_thread_num();
 #endif
             if (jk_C_buffers_[rank].size() < elem_per_thread) {
+                // As with grow_scratch, release before allocating and avoid
+                // vector's geometric capacity growth exceeding the planned size.
+                std::vector<double>().swap(jk_C_buffers_[rank]);
                 jk_C_buffers_[rank].resize(elem_per_thread);
             }
         }
@@ -4013,7 +4027,10 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
     // (i,Q) K intermediates hold nocc padded to a multiple of 8 (see first_transform_pQq_K).
     if (K_layout_iQ_ || K_fp32_) max_nocc = (max_nocc + 7) / 8 * 8;
     std::vector<std::pair<size_t, size_t>> Qsteps;
-    std::tuple<size_t, size_t> info = Qshell_blocks_for_JK_build(Qsteps, max_nocc, lr_symmetric);
+    // Separate wK needs two transform buffers later in this same build. Reserve
+    // both now so it cannot grow T2 underneath an admitted FP32 AO mirror.
+    const bool one_transform = lr_symmetric && !do_wK_;
+    std::tuple<size_t, size_t> info = Qshell_blocks_for_JK_build(Qsteps, max_nocc, one_transform);
     size_t tots = std::get<0>(info);
     size_t totsb = std::get<1>(info);
 
@@ -4035,7 +4052,7 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
 
     // if lr_symmetric, we can be more clever with mem usage. T2 is used for both the
     // second tmp in the K build, as well as the completed, pruned J build.
-    if (lr_symmetric) {
+    if (one_transform) {
         Ktmp_size = nbf_ * nbf_;  // size for pruned J build
     } else {
         Ktmp_size = std::max(nbf_ * nbf_, Ktmp_size);  // max necessary
@@ -4408,17 +4425,44 @@ void DFHelper::compute_K(std::vector<SharedMatrix> Cleft, std::vector<SharedMatr
         timer_off("DFH: K final GEMM");
     }
 }
+size_t DFHelper::JK_scratch_memory() const {
+    size_t size = jk_T1_size_ + jk_T2_size_;
+    for (const auto& buffer : jk_C_buffers_) size += buffer.capacity();
+    return size;
+}
+size_t DFHelper::JK_core_memory() const {
+    const size_t n = big_skips_[nbf_];
+    size_t metric_size = 0;
+    // metric_prep_core can index one allocation by both 1.0 and its inverse
+    // power. Those aliases survive out-of-core builds with hold_met enabled.
+    for (auto it = metrics_.begin(); it != metrics_.end(); ++it) {
+        bool alias = false;
+        for (auto prev = metrics_.begin(); prev != it; ++prev) {
+            if (prev->second == it->second) {
+                alias = true;
+                break;
+            }
+        }
+        if (!alias) metric_size += naux_ * naux_;
+    }
+    return (Ppq_ ? n : 0) + (m1Ppq_ ? n : 0) + (wPpq_ ? n : 0) +
+           metric_size + metric_panel_size_ + metric_out_size_;
+}
 bool DFHelper::prepare_K_fp32() {
-    if (Ppq_f_) return true;
     if (!AO_core_ || wcombine_ || direct_iaQ_ || !Ppq_) {
+        Ppq_f_.reset();
         K_fp32_ = false;
         return false;
     }
     const size_t n = big_skips_[nbf_];
-    if (memory_ < required_core_size_ + n / 2) {
+    const size_t held = JK_core_memory() + JK_scratch_memory();
+    const size_t extra = n / 2 + n % 2;
+    if (held > memory_ || extra > memory_ - held) {
         // Zero-extra-memory fp32 mode: keep Ppq_ in double and downcast tiles in L2 cache during K_fp32.
+        Ppq_f_.reset();
         return true;
     }
+    if (Ppq_f_) return true;
     timer_on("DFH: K fp32 tensor");
     Ppq_f_ = std::unique_ptr<float[]>(new float[n]);
     float* f = Ppq_f_.get();
@@ -4519,9 +4563,10 @@ void DFHelper::compute_K_fp32(std::vector<SharedMatrix> Cleft, std::vector<Share
         if (lr_symmetric) {
             symm_k_final_accumulate<float>(nbf_, K_inner, T1f, Kp, C_buffers, nthreads_);
         } else {
-            // Non-symmetric K: reuse T2f or row-tile into C_buffers[0]
-            std::vector<float> Kf(nbf_ * nbf_);
-            C_SGEMM('N', 'T', nbf_, nbf_, K_inner, 1.0f, T1f, K_inner, T2f, K_inner, 0.0f, Kf.data(), nbf_);
+            // The coefficient buffers are idle after the transforms and hold
+            // at least nbf^2 doubles. Do not allocate unbudgeted GEMM output.
+            float* Kf = reinterpret_cast<float*>(C_buffers[0].data());
+            C_SGEMM('N', 'T', nbf_, nbf_, K_inner, 1.0f, T1f, K_inner, T2f, K_inner, 0.0f, Kf, nbf_);
 #pragma omp parallel for simd num_threads(nthreads_) schedule(static)
             for (size_t x = 0; x < nbf_ * nbf_; x++) Kp[x] += Kf[x];
         }

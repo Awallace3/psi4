@@ -35,6 +35,7 @@
 
 #include <map>
 #include <list>
+#include <optional>
 #include <vector>
 #include <tuple>
 #include <string>
@@ -102,17 +103,19 @@ class PSI_API DFHelper {
         Ppq_f_.reset();
     }
 
-    // => Opt-in K fast paths (in-core, non-wK only) <=
+    // => Opt-in K fast paths (in-core, noncombined wK supported) <=
     /// Build K in single precision until switched off. Meant for early SCF iterations: the error
     /// (~1e-7 relative) is far below the orbital gradient there. Turning it off frees the
-    /// single-precision tensor. Falls back to double if memory does not allow it.
+    /// single-precision tensor. Uses tiled downcasting when the tensor does not fit.
     void set_K_fp32(bool on) {
         K_fp32_ = on;
         if (!on) Ppq_f_.reset();
     }
     bool K_fp32() const { return K_fp32_; }
     /// Doubles-equivalent held by the single-precision K tensor (0 when not allocated)
-    size_t K_fp32_memory() const { return Ppq_f_ ? big_skips_[nbf_] / 2 : 0; }
+    size_t K_fp32_memory() const { return Ppq_f_ ? big_skips_[nbf_] / 2 + big_skips_[nbf_] % 2 : 0; }
+    /// Doubles held in the reusable JK temporaries and per-thread coefficient buffers.
+    size_t JK_scratch_memory() const;
     /// Store the K first-transform intermediate as (i,Q) with nocc padded to 8 instead of (Q,i).
     /// Faster with MKL on AMD Zen2, slower at large nbf on Intel Skylake/Cascade Lake.
     void set_K_layout_iQ(bool on) { K_layout_iQ_ = on; }
@@ -433,6 +436,8 @@ class PSI_API DFHelper {
     std::unique_ptr<float[]> Ppq_f_;
     bool K_fp32_ = false;
     bool K_layout_iQ_ = false;
+    /// Resident AO tensors and metrics, excluding the optional FP32 copy and JK scratch.
+    size_t JK_core_memory() const;
     bool prepare_K_fp32();
     void compute_J_symm_fp32(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* T1p, double* T2p,
                              std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size);
@@ -460,7 +465,8 @@ class PSI_API DFHelper {
     void compute_sparse_pQq_blocking_p(const size_t start, const size_t stop, double* Mp,
                                        std::vector<std::shared_ptr<TwoBodyAOInt>> eri);
     void compute_sparse_pQq_blocking_p_symm(const size_t start, const size_t stop, double* Mp,
-                                            std::vector<std::shared_ptr<TwoBodyAOInt>> eri, double omega = 0.0);
+                                            std::vector<std::shared_ptr<TwoBodyAOInt>> eri,
+                                            std::optional<double> omega = std::nullopt);
     void compute_sparse_pQq_blocking_p_symm_abw(const size_t start, const size_t stop, double* just_Mp, double* param_Mp,
                                         std::vector<std::shared_ptr<TwoBodyAOInt>> eri,
                                         std::vector<std::shared_ptr<TwoBodyAOInt>> weri);

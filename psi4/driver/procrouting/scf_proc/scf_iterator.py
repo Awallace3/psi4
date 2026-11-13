@@ -174,11 +174,12 @@ def scf_initialize(self):
     else:
         collocation_memory = total_memory * 0.1
 
-    # Memory collocation may use for any grid; an XC grid switch re-sizes the cache from this.
-    self._collocation_budget = int(collocation_memory)
     if collocation_memory > collocation_size:
         collocation_memory = collocation_size
 
+    # Any unused initial-grid allowance goes to JK below. Growing the cache
+    # later requires explicitly transferring that allowance back from JK.
+    self._collocation_budget = int(collocation_memory)
     # Set constants
     self.iteration_ = 0
     self.memory_jk_ = int(total_memory - collocation_memory)
@@ -300,12 +301,28 @@ def _xc_grid_switch(self, shift_diis, restore_vv10=False):
         self.functional().set_do_vv10(True)
         self.functional().set_lock(True)
     vbase.set_grid("Final")
-    # The collocation cache was sized for the initial grid; size it for the final one within the
-    # budget scf_initialize set, less any single-precision K tensor allocated since.
+    # Grow the cache only by transferring spare JK allowance, never by assigning
+    # the same memory to both. MemDFJK can replan its contraction blocks under a
+    # reduced budget; other backends keep their original partition.
     final_size = vbase.grid().collocation_size() * {1: 4, 2: 10}.get(vbase.functional().ansatz(), 1)
     budget = getattr(self, "_collocation_budget", self.memory_collocation_)
-    if isinstance(self.jk(), core.MemDFJK):
-        budget -= self.jk().dfh().K_fp32_memory()
+    jk = self.jk()
+    if final_size > budget and isinstance(jk, core.MemDFJK):
+        dfh = jk.dfh()
+        # The helper's allowance excludes JK overhead. Subtract the transfer
+        # from both existing allowances to preserve that offset, and retain the
+        # conservative in-core minimum even when the current scratch is small.
+        spare = max(0, min(dfh.get_memory(), self.memory_jk_) - jk.memory_estimate())
+        transfer = int(min(final_size - budget, spare))
+        if transfer:
+            # Retained high-water scratch / FP32 mirrors may exceed the new
+            # allowance. Release them BEFORE the cache uses their memory.
+            jk.release_scratch()
+            dfh.set_memory(dfh.get_memory() - transfer)
+            self.memory_jk_ -= transfer
+            jk.set_memory(self.memory_jk_)
+            budget += transfer
+            self._collocation_budget = budget
     self.memory_collocation_ = int(max(0, min(budget, final_size)))
     vbase.build_collocation_cache(self.memory_collocation_)
     core.timer_off("SCF: Switch XC grid")
