@@ -50,6 +50,8 @@ if [[ "$mode" == payload ]]; then
             -DBLAS_TYPE=MKL -DLAPACK_TYPE=MKL > "$root/configure-$arm.log" 2>&1
         cmake --build "$root/build-$arm" -j 24 > "$root/build-$arm.log" 2>&1
         # Verify each staged executable's Python setup, not an environment release.
+        # --psiapi appends $PYTHONPATH; define it for nounset shells.
+        export PYTHONPATH=""
         eval "$("$root/build-$arm/stage/bin/psi4" --psiapi)"
         "$env/bin/python" -c 'import psi4; print(psi4.__file__, psi4.__version__)'
     done
