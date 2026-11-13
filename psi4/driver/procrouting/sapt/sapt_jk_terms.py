@@ -34,7 +34,7 @@ from psi4 import core
 
 from ...p4util import solvers
 from ...p4util.exceptions import *
-from .sapt_util import print_sapt_var
+from .sapt_util import _without_vv10_response, print_sapt_var
 from pprint import pprint as pp
 
 
@@ -822,6 +822,7 @@ def induction(
     return ret
 
 
+@_without_vv10_response
 def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     """
     Solve the SAPT CPHF (or CPKS) equations.
@@ -833,14 +834,6 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     else:
         cache["wfn_B"].set_jk(jk)
 
-    # Disable VV10 for CPKS solve — VV10 Vx contribution is not implemented in C++
-    # and the nonlocal correlation kernel is neglected in SAPT(DFT) response.
-    vv10_A = cache["wfn_A"].functional().needs_vv10()
-    vv10_B = cache["wfn_B"].functional().needs_vv10()
-    if vv10_A:
-        cache["wfn_A"].functional().set_do_vv10(False)
-    if vv10_B:
-        cache["wfn_B"].functional().set_do_vv10(False)
     # Make a preconditioner function
     P_A = core.Matrix(cache["eps_occ_A"].shape[0], cache["eps_vir_A"].shape[0])
     P_A.np[:] = cache["eps_occ_A"].np.reshape(-1, 1) - cache["eps_vir_A"].np
@@ -932,11 +925,5 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
         printer=pfunc,
     )
     core.print_out("   " + ("-" * sep_size) + "\n")
-
-    # Re-enable VV10 if it was disabled
-    if vv10_A:
-        cache["wfn_A"].functional().set_do_vv10(True)
-    if vv10_B:
-        cache["wfn_B"].functional().set_do_vv10(True)
 
     return vecs
