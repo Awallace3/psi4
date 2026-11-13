@@ -26,6 +26,9 @@ def case_specs(mode, replay_only=False):
                  ("cpu-replay", "peptide", "cpu", "energy"),
                  ("gpu-replay", "peptide", "gpu", "energy")]
         return cases[1:] if replay_only else cases
+    if mode == "beta-scf" and not replay_only:
+        return [(label, "peptide", "gpu", "energy")
+                for label in ("beta1-0", "beta0-0", "beta0-1", "beta1-1")]
     if mode != "screen":
         raise ValueError("Explicit diagnostic mode required")
     if replay_only:
@@ -48,7 +51,8 @@ def main():
     parser.add_argument("--backend", choices=("cpu", "gpu"))
     parser.add_argument("--entrypoint", choices=("energy", "sapt"))
     parser.add_argument("--system", choices=("hcl", "peptide"))
-    parser.add_argument("--mode", choices=("screen", "plans"), default="screen")
+    parser.add_argument("--mode", choices=("screen", "plans", "beta-scf"), default="screen")
+    parser.add_argument("--beta", type=int, choices=(0, 1))
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--reference-sha256")
     args = parser.parse_args()
@@ -56,6 +60,8 @@ def main():
         parser.error("Reference and its hash must be supplied together")
     if args.reference and args.mode != "plans":
         parser.error("Reference is only valid for plans mode")
+    if args.worker and args.mode == "beta-scf" and args.beta is None:
+        parser.error("Beta-SCF worker requires an explicit beta value")
     root = args.root.resolve(strict=True)
     if root != dedicated_root():
         raise RuntimeError("Dedicated small-dimer workspace required")
@@ -79,7 +85,10 @@ def main():
         config, build = read_config(args.config, args.config_sha256)
         owners, events = bootstrap(config, build)
         runtime = AuditedRuntime(args.config, args.config_sha256)
-        if args.mode == "plans":
+        if args.mode == "beta-scf":
+            from peptide_plan_probe import beta_scf_run
+            result = runtime.guarded_call(beta_scf_run, runtime.psi4, args.inputs, output, args.beta)
+        elif args.mode == "plans":
             from peptide_plan_probe import run
             result = runtime.guarded_call(run, runtime.psi4, args.inputs, output,
                                           args.backend, args.reference, args.reference_sha256)
@@ -145,6 +154,8 @@ def main():
                         "--output", str(output / label), "--worker",
                         "--backend", backend, "--entrypoint", entrypoint,
                         "--system", system, "--mode", args.mode]
+                if args.mode == "beta-scf":
+                    argv += ["--beta", label.split("-", 1)[0].removeprefix("beta")]
                 if args.mode == "plans" and label != "retained":
                     reference = args.reference or output / "retained/result.json"
                     checksum = (args.reference_sha256 if args.reference

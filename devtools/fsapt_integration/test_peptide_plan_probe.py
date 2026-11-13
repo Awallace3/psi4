@@ -7,7 +7,39 @@ import pytest
 from cachy_dimer_screen import case_specs
 from peptide_plan_probe import (
     capture_orthogonalizer, density_reconstruction, fixed_samples, fresh_plan,
-    option_receipt, rebuilt_state, replay_variants)
+    hf_beta_control, option_receipt, rebuilt_state, replay_variants)
+
+
+def test_beta_control_sets_only_unused_coefficient_before_real_initialization():
+    class JK:
+        def __init__(self):
+            self.beta = 1.
+            self.seen = []
+        def initialize(self):
+            self.seen.append(self.beta)
+        def name(self):
+            return "cuESTJK"
+        def memory(self):
+            return 100
+        def get_omega(self):
+            return 0.
+        def get_omega_alpha(self):
+            return 1.
+        def get_omega_beta(self):
+            return self.beta
+        def get_wcombine(self):
+            return False
+        def set_omega_beta(self, value):
+            self.beta = value
+    original = JK.initialize
+    records, jk = [], JK()
+    with hf_beta_control(SimpleNamespace(JK=JK), 0, records):
+        jk.initialize()
+    assert jk.seen == [0.]
+    assert records[0]["before"]["beta"] == 1.
+    assert records[0]["after"]["beta"] == 0.
+    assert JK.initialize is original
+    assert [s[0] for s in case_specs("beta-scf")] == ["beta1-0", "beta0-0", "beta0-1", "beta1-1"]
 
 
 def test_unused_beta_ab_changes_only_beta_and_interleaves_actual_setting():

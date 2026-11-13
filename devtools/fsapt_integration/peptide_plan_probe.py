@@ -12,6 +12,43 @@ from phoenix_timing import digest, save
 STATUS = "EXECUTED_PLAN_REPLAY_DIAGNOSTIC_ONLY"
 
 
+@contextmanager
+def hf_beta_control(core, beta, records):
+    """Diagnostic-only: change the unused beta immediately before native init."""
+    if beta not in (0, 1):
+        raise ValueError("Explicit beta A/B value required")
+    original = core.JK.initialize
+    def initialize(jk, *args, **kwargs):
+        if jk.name() != "cuESTJK":
+            return original(jk, *args, **kwargs)
+        before = jk_state(jk)
+        if before["omega"] != 0 or before["alpha"] != 1:
+            raise RuntimeError("Zero-omega HF-only initialization control")
+        jk.set_omega_beta(float(beta))
+        result = original(jk, *args, **kwargs)
+        records.append(dict(before=before, after=jk_state(jk)))
+        return result
+    with patch.object(core.JK, "initialize", initialize):
+        yield
+
+
+def beta_scf_run(psi4, inputs, output, beta):
+    from small_dimer_probe import run as scf_run
+    captured, records = {}, []
+    def post_scf(psi4, wfn, output):
+        return retained_and_fresh(psi4, wfn, output, captured.get("X"))
+    with hf_beta_control(psi4.core, beta, records), capture_orthogonalizer(psi4.core, captured):
+        report = scf_run(psi4, inputs, output, "gpu", "energy", "peptide", post_scf=post_scf)
+    if not records or any(row["after"]["beta"] != beta for row in records):
+        raise RuntimeError("Requested beta initialization was not observed")
+    if report["fixed_jk"]["state"]["beta"] != beta:
+        raise RuntimeError("SCF did not retain the requested beta setting")
+    report.update(beta_control=beta, beta_initializations=records,
+                  scope="DIAGNOSTIC_ONLY_UNUSED_BETA_OVERRIDE_BEFORE_NATIVE_INITIALIZATION")
+    save(output / "result.json", report)
+    return report
+
+
 def density_reconstruction(co, stored):
     """C bytes are fixed; a separate BLAS multiplication need not be bitwise."""
     import numpy as np
