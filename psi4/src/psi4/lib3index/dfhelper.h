@@ -35,6 +35,7 @@
 
 #include <map>
 #include <list>
+#include <optional>
 #include <vector>
 #include <tuple>
 #include <string>
@@ -79,6 +80,45 @@ class PSI_API DFHelper {
     ///
     void set_memory(size_t doubles) { memory_ = doubles; }
     size_t get_memory() { return memory_; }
+    /// In-core symmetric AO tensors with metric power -1/2: contract with the Cholesky factor
+    /// of the metric (triangular solve) instead of J^-1/2. No eigenvalue cutoff; falls back to
+    /// J^-1/2 when the metric is singular to working precision (estimated rcond < 1e-13).
+    void set_metric_cholesky(bool on) { metric_cholesky_ = on; }
+    /// Columns per metric-contraction panel in the in-core symmetric AO build (narrowest: the
+    /// floor a tight budget can cap it to)
+    size_t metric_panel_cols(bool narrowest = false) const;
+    /// Doubles allocated on top of the AOs and the metric while the in-core AOs are built
+    size_t AO_core_init_scratch(bool narrowest = false) const;
+    /// Requested metric (set_metric_cholesky)
+    bool metric_cholesky() const { return metric_cholesky_; }
+    /// Whether the in-core build takes the Cholesky route (requested, J^-1/2 power, not wK)
+    bool metric_cholesky_route() const;
+    /// Free the compute_JK scratch that is otherwise kept between builds
+    void clear_JK_scratch() {
+        jk_T1_.reset();
+        jk_T2_.reset();
+        jk_T1_size_ = jk_T2_size_ = 0;
+        jk_C_buffers_.clear();
+        jk_C_buffers_.shrink_to_fit();
+        Ppq_f_.reset();
+    }
+
+    // => Opt-in K fast paths (in-core, noncombined wK supported) <=
+    /// Build K in single precision until switched off. Meant for early SCF iterations: the error
+    /// (~1e-7 relative) is far below the orbital gradient there. Turning it off frees the
+    /// single-precision tensor. Uses tiled downcasting when the tensor does not fit.
+    void set_K_fp32(bool on) {
+        K_fp32_ = on;
+        if (!on) Ppq_f_.reset();
+    }
+    bool K_fp32() const { return K_fp32_; }
+    /// Doubles-equivalent held by the single-precision K tensor (0 when not allocated)
+    size_t K_fp32_memory() const { return Ppq_f_ ? big_skips_[nbf_] / 2 + big_skips_[nbf_] % 2 : 0; }
+    /// Doubles held in the reusable JK temporaries and per-thread coefficient buffers.
+    size_t JK_scratch_memory() const;
+    /// Store the K first-transform intermediate as (i,Q) with nocc padded to 8 instead of (Q,i).
+    /// Faster with MKL on AMD Zen2, slower at large nbf on Intel Skylake/Cascade Lake.
+    void set_K_layout_iQ(bool on) { K_layout_iQ_ = on; }
 
     ///
     /// Indicates whether to use the in-core or out-of-core
@@ -356,6 +396,12 @@ class PSI_API DFHelper {
     double mpower_ = -0.5;
     double wmpower_ = -1.0;
     bool hold_met_ = false;
+    bool metric_cholesky_ = false;
+    /// upper bound on metric_panel_cols() set by reserve_metric_panels under a tight budget (0: none)
+    size_t panel_cols_cap_ = 0;
+    /// reusable scratch panels for contract_metric_AO_core_symm across psteps chunks
+    std::unique_ptr<double[]> metric_panel_buf_, metric_out_buf_;
+    size_t metric_panel_size_ = 0, metric_out_size_ = 0;
     bool built_ = false;
     bool transformed_ = false;
     std::pair<size_t, size_t> info_;
@@ -378,6 +424,26 @@ class PSI_API DFHelper {
     // => in-core machinery <=
     void AO_core(bool set_AO_core);
     std::unique_ptr<double[]> Ppq_;
+    /// compute_JK scratch, kept between builds (see compute_JK)
+    std::unique_ptr<double[]> jk_T1_, jk_T2_;
+    size_t jk_T1_size_ = 0, jk_T2_size_ = 0;
+    std::vector<std::vector<double>> jk_C_buffers_;
+    void ensure_jk_C_buffers(size_t elem_per_thread);
+    /// Compact significant column indices per basis row p: sig_q_[sig_q_row_off_[p] .. sig_q_row_off_[p+1])
+    std::vector<uint32_t> sig_q_;
+    std::vector<size_t> sig_q_row_off_;
+    /// single-precision copy of Ppq_ for low-precision K builds (see set_K_fp32)
+    std::unique_ptr<float[]> Ppq_f_;
+    bool K_fp32_ = false;
+    bool K_layout_iQ_ = false;
+    /// Resident AO tensors and metrics, excluding the optional FP32 copy and JK scratch.
+    size_t JK_core_memory() const;
+    bool prepare_K_fp32();
+    void compute_J_symm_fp32(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* T1p, double* T2p,
+                             std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size);
+    void compute_K_fp32(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright, std::vector<SharedMatrix> K,
+                        double* T1p, double* T2p, const double* Mp, size_t bcount, size_t block_size,
+                        std::vector<std::vector<double>>& C_buffers, bool lr_symmetric);
     // Maps x -> (P|Q) ^ x.
     std::map<double, SharedMatrix> metrics_;
 
@@ -388,6 +454,10 @@ class PSI_API DFHelper {
     // => AO building machinery <=
     void prepare_AO();
     void prepare_AO_core();
+    /// Minimum AO-block buffer doubles needed for a single p-shell in-core build
+    size_t min_AO_core_block() const;
+    /// Cap the metric-contraction panels to fit next to `held` doubles; returns their size
+    size_t reserve_metric_panels(size_t held);
     void compute_dense_Qpq_blocking_Q(const size_t start, const size_t stop, double* Mp,
                                       std::vector<std::shared_ptr<TwoBodyAOInt>> eri);
     void compute_sparse_pQq_blocking_Q(const size_t start, const size_t stop, double* Mp,
@@ -395,14 +465,18 @@ class PSI_API DFHelper {
     void compute_sparse_pQq_blocking_p(const size_t start, const size_t stop, double* Mp,
                                        std::vector<std::shared_ptr<TwoBodyAOInt>> eri);
     void compute_sparse_pQq_blocking_p_symm(const size_t start, const size_t stop, double* Mp,
-                                            std::vector<std::shared_ptr<TwoBodyAOInt>> eri);
+                                            std::vector<std::shared_ptr<TwoBodyAOInt>> eri,
+                                            std::optional<double> omega = std::nullopt);
     void compute_sparse_pQq_blocking_p_symm_abw(const size_t start, const size_t stop, double* just_Mp, double* param_Mp,
                                         std::vector<std::shared_ptr<TwoBodyAOInt>> eri,
                                         std::vector<std::shared_ptr<TwoBodyAOInt>> weri);
 
 
 
-    void contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* metp, size_t begin, size_t end);
+    void contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* metp, size_t begin, size_t end,
+                                      bool cholesky = false);
+    void contract_metric_AO_wK_cholesky_symm(double* Qpq, double* Ppq, double* m1Ppq, double* metp, size_t begin,
+                                             size_t end);
     void grab_AO(const size_t start, const size_t stop, double* Mp);
 
     // => wK AO building machinery <=
@@ -412,6 +486,8 @@ class PSI_API DFHelper {
     void copy_upper_lower_wAO_core_symm(double* Qpq, double* Ppq, size_t begin, size_t end);
 
     // first integral transforms
+    void first_transform_pQq_K(size_t nocc, size_t nocc_pad, size_t bcount, size_t block_size, double* Mp, double* Tp,
+                               double* Bp, std::vector<std::vector<double>>& C_buffers);
     void first_transform_pQq(size_t bsize, size_t bcount, size_t block_size, double* Mp, double* Tp, double* Bp,
                              std::vector<std::vector<double>>& C_buffers);
 

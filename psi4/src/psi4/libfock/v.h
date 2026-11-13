@@ -78,6 +78,8 @@ class PSI_API VBase {
     std::vector<std::shared_ptr<PointFunctions>> point_workers_;
     /// Integration grid, built by KSPotential
     std::shared_ptr<DFTGrid> grid_;
+    /// Only SCF potentials opt into the initial grid; response grids stay final.
+    bool initial_grid_ = false;
     /// Quadrature values obtained during integration
     std::map<std::string, double> quad_values_;
     // Caches collocation grids
@@ -93,6 +95,10 @@ class PSI_API VBase {
 
     // GRAC data
     bool grac_initialized_;
+
+    // Cached nonlocal VV10 grid and point workers (geometry/basis invariant across SCF iterations)
+    std::shared_ptr<DFTGrid> vv10_nlgrid_;
+    std::vector<std::shared_ptr<PointFunctions>> vv10_point_workers_;
 
     // VV10 dispersion, return vv10_nlc energy
     void prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
@@ -145,6 +151,9 @@ class PSI_API VBase {
 
     virtual void initialize();
     virtual void finalize();
+    /// Rebuild the grid and workers on the "Initial" (coarse SCF) or "Final" grid.
+    void set_grid(const std::string& name);
+    bool initial_grid() const { return initial_grid_; }
 
     virtual void print_header() const;
 };

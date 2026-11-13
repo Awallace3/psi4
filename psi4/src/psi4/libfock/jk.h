@@ -396,6 +396,9 @@ class PSI_API JK {
     // TODO: investigate if JK::memory_estimate and all of its derived variants could be made const
     // Probably requires refactoring DFHelper and MemDFJK first.
     virtual size_t memory_estimate() = 0;
+    /// Free scratch kept between compute() calls, leaving the integrals. HF::finalize calls this
+    /// when the JK outlives its SCF (SAVE_JK), so a held JK holds only what memory_estimate() covers.
+    virtual void release_scratch() {}
 
     // => Knobs <= //
 
@@ -1177,6 +1180,8 @@ class PSI_API MemDFJK : public JK {
      * @param auxiliary auxiliary basis set for this system.
      */
     MemDFJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary, Options& options);
+    /// Free the DFHelper compute_JK scratch (sized within this JK's memory budget)
+    void release_scratch() override;
 
     /// Destructor
     ~MemDFJK() override;

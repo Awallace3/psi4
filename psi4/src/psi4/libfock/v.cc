@@ -55,6 +55,14 @@
 
 #ifdef _OPENMP
 #include <omp.h>
+#else
+// single-threaded build: the V tile locks are never contended
+typedef int omp_lock_t;
+static inline void omp_init_lock(omp_lock_t*) {}
+static inline void omp_destroy_lock(omp_lock_t*) {}
+static inline void omp_set_lock(omp_lock_t*) {}
+static inline void omp_unset_lock(omp_lock_t*) {}
+static inline int omp_test_lock(omp_lock_t*) { return 1; }
 #endif
 
 #ifdef USING_BrianQC
@@ -173,9 +181,47 @@ void VBase::set_D(std::vector<SharedMatrix> Dvec) {
         }
     }
 }
+void VBase::set_grid(const std::string& name) {
+    if (name != "Initial" && name != "Final") {
+        throw PSIEXCEPTION("DFT grid must be Initial or Final.");
+    }
+    const bool initial = name == "Initial";
+    if (initial) {
+        const int radial = options_.get_int("DFT_RADIAL_POINTS_INITIAL");
+        const int angular = options_.get_int("DFT_SPHERICAL_POINTS_INITIAL");
+        if (radial <= 0 || angular <= 0) {
+            throw PSIEXCEPTION("Set both DFT_RADIAL_POINTS_INITIAL and DFT_SPHERICAL_POINTS_INITIAL positive.");
+        }
+        if (options_.get_str("DFT_GRID_NAME").empty() &&
+            (radial > options_.get_int("DFT_RADIAL_POINTS") || angular > options_.get_int("DFT_SPHERICAL_POINTS") ||
+             (radial == options_.get_int("DFT_RADIAL_POINTS") &&
+              angular == options_.get_int("DFT_SPHERICAL_POINTS")))) {
+            throw PSIEXCEPTION("The initial DFT grid must be smaller than the final grid.");
+        }
+    }
+    if (grid_ && initial_grid_ == initial) return;
+    finalize();
+    cache_map_.clear();
+    point_workers_.clear();
+    functional_workers_.clear();
+    quad_values_.clear();
+    initial_grid_ = initial;
+    const bool had_grac = grac_initialized_;
+    grac_initialized_ = false;
+    initialize();  // virtual: RV/UV resize their point workers as well
+    if (had_grac) set_grac_shift(functional_->grac_shift());
+}
 void VBase::initialize() {
     timer_on("V: Grid");
-    grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, options_);
+    if (initial_grid_) {
+        std::map<std::string, int> ints = {
+            {"DFT_RADIAL_POINTS", options_.get_int("DFT_RADIAL_POINTS_INITIAL")},
+            {"DFT_SPHERICAL_POINTS", options_.get_int("DFT_SPHERICAL_POINTS_INITIAL")}};
+        std::map<std::string, std::string> strings = {{"DFT_GRID_NAME", ""}};
+        grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, ints, strings, options_);
+    } else {
+        grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, options_);
+    }
     timer_off("V: Grid");
 
     for (size_t i = 0; i < num_threads_; i++) {
@@ -733,7 +779,11 @@ void VBase::print_header() const {
 }
 std::shared_ptr<BlockOPoints> VBase::get_block(int block) { return grid_->blocks()[block]; }
 size_t VBase::nblocks() { return grid_->blocks().size(); }
-void VBase::finalize() { grid_.reset(); }
+void VBase::finalize() {
+    grid_.reset();
+    vv10_nlgrid_.reset();
+    vv10_point_workers_.clear();
+}
 void VBase::build_collocation_cache(size_t memory) {
     // Figure out many blocks to skip
 
@@ -817,34 +867,37 @@ void VBase::prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
     // Densities should be set by the calling functional
     int rank = 0;
 
-    // Build local points workers as they max_points/max_funcs may differ
+    // Build or reuse local points workers as max_points/max_funcs may differ from XC grid
     const int max_points = nlgrid.max_points();
     const int max_functions = nlgrid.max_functions();
 
-    for (size_t i = 0; i < num_threads_; i++) {
-        // Need a points worker per thread, only need RKS-like terms
-        auto point_tmp = std::make_shared<RKSFunctions>(primary_, max_points, max_functions);
-        point_tmp->set_ansatz(ansatz);
-        point_tmp->set_pointers(D);
-        nl_point_workers.push_back(point_tmp);
+    if (nl_point_workers.size() != static_cast<size_t>(num_threads_)) {
+        nl_point_workers.clear();
+        nl_point_workers.reserve(num_threads_);
+        for (size_t i = 0; i < static_cast<size_t>(num_threads_); i++) {
+            auto point_tmp = std::make_shared<RKSFunctions>(primary_, max_points, max_functions);
+            point_tmp->set_ansatz(ansatz);
+            point_tmp->set_pointers(D);
+            nl_point_workers.push_back(point_tmp);
+        }
+    } else {
+        for (size_t i = 0; i < static_cast<size_t>(num_threads_); i++) {
+            nl_point_workers[i]->set_ansatz(ansatz);
+            nl_point_workers[i]->set_pointers(D);
+        }
     }
 
     // => Make the return and "interior" cache <=
-    std::vector<std::map<std::string, SharedVector>> vv10_tmp_cache;
-    vv10_tmp_cache.resize(nlgrid.blocks().size());
+    std::vector<std::map<std::string, SharedVector>> vv10_tmp_cache(nlgrid.blocks().size());
 
 #pragma omp parallel for private(rank) schedule(guided) num_threads(num_threads_)
     for (size_t Q = 0; Q < nlgrid.blocks().size(); Q++) {
-// Get thread info
 #ifdef _OPENMP
         rank = omp_get_thread_num();
 #endif
-
-        // Get workers and compute data
         std::shared_ptr<SuperFunctional> fworker = functional_workers_[rank];
         std::shared_ptr<PointFunctions> pworker = nl_point_workers[rank];
         std::shared_ptr<BlockOPoints> block = nlgrid.blocks()[Q];
-        // printf("Block %zu\n", Q);
 
         pworker->compute_points(block);
         vv10_tmp_cache[Q] =
@@ -853,11 +906,9 @@ void VBase::prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
 
     // Stitch the cache together to make a single contiguous cache
     size_t total_size = 0;
-    for (auto cache : vv10_tmp_cache) {
-        total_size += cache["W"]->dimpi()[0];
+    for (const auto& cache : vv10_tmp_cache) {
+        total_size += cache.at("W")->dimpi()[0];
     }
-
-    // printf("VV10 NL Total size %zu\n", total_size);
 
     // Leave this as a vector of maps in case we ever revisit the on-the fly manipulation
     vv10_cache.resize(1);
@@ -868,6 +919,7 @@ void VBase::prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
     vv10_cache[0]["RHO"] = std::make_shared<Vector>("RHO Grid points", total_size);
     vv10_cache[0]["W0"] = std::make_shared<Vector>("W0 Grid points", total_size);
     vv10_cache[0]["KAPPA"] = std::make_shared<Vector>("KAPPA Grid points", total_size);
+    vv10_cache[0]["PREF"] = std::make_shared<Vector>("PREF Grid points", total_size);
 
     double* w_vecp = vv10_cache[0]["W"]->pointer();
     double* x_vecp = vv10_cache[0]["X"]->pointer();
@@ -876,76 +928,96 @@ void VBase::prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
     double* rho_vecp = vv10_cache[0]["RHO"]->pointer();
     double* w0_vecp = vv10_cache[0]["W0"]->pointer();
     double* kappa_vecp = vv10_cache[0]["KAPPA"]->pointer();
+    double* pref_vecp = vv10_cache[0]["PREF"]->pointer();
 
     size_t offset = 0;
-    for (auto cache : vv10_tmp_cache) {
-        size_t csize = cache["W"]->dimpi()[0];
-        C_DCOPY(csize, cache["W"]->pointer(), 1, (w_vecp + offset), 1);
-        C_DCOPY(csize, cache["X"]->pointer(), 1, (x_vecp + offset), 1);
-        C_DCOPY(csize, cache["Y"]->pointer(), 1, (y_vecp + offset), 1);
-        C_DCOPY(csize, cache["Z"]->pointer(), 1, (z_vecp + offset), 1);
-        C_DCOPY(csize, cache["RHO"]->pointer(), 1, (rho_vecp + offset), 1);
-        C_DCOPY(csize, cache["W0"]->pointer(), 1, (w0_vecp + offset), 1);
-        C_DCOPY(csize, cache["KAPPA"]->pointer(), 1, (kappa_vecp + offset), 1);
-
+    for (const auto& cache : vv10_tmp_cache) {
+        size_t csize = cache.at("W")->dimpi()[0];
+        if (csize == 0) continue;
+        C_DCOPY(csize, cache.at("W")->pointer(), 1, (w_vecp + offset), 1);
+        C_DCOPY(csize, cache.at("X")->pointer(), 1, (x_vecp + offset), 1);
+        C_DCOPY(csize, cache.at("Y")->pointer(), 1, (y_vecp + offset), 1);
+        C_DCOPY(csize, cache.at("Z")->pointer(), 1, (z_vecp + offset), 1);
+        C_DCOPY(csize, cache.at("RHO")->pointer(), 1, (rho_vecp + offset), 1);
+        C_DCOPY(csize, cache.at("W0")->pointer(), 1, (w0_vecp + offset), 1);
+        C_DCOPY(csize, cache.at("KAPPA")->pointer(), 1, (kappa_vecp + offset), 1);
         offset += csize;
+    }
+#pragma omp simd
+    for (size_t j = 0; j < total_size; ++j) {
+        pref_vecp[j] = -1.5 * w_vecp[j] * rho_vecp[j];
     }
 }
 double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
     timer_on("V: VV10");
     timer_on("Setup");
 
-    // => VV10 Grid and Cache <=
-    std::map<std::string, std::string> opt_map;
-    opt_map["DFT_PRUNING_SCHEME"] = "FLAT";
+    // => Reuse geometry/basis-invariant VV10 Grid and PointWorkers across SCF iterations <=
+    if (!vv10_nlgrid_) {
+        std::map<std::string, std::string> opt_map;
+        opt_map["DFT_PRUNING_SCHEME"] = "FLAT";
 
-    std::map<std::string, int> opt_int_map;
-    opt_int_map["DFT_RADIAL_POINTS"] = options_.get_int("DFT_VV10_RADIAL_POINTS");
-    opt_int_map["DFT_SPHERICAL_POINTS"] = options_.get_int("DFT_VV10_SPHERICAL_POINTS");
+        std::map<std::string, int> opt_int_map;
+        opt_int_map["DFT_RADIAL_POINTS"] = options_.get_int("DFT_VV10_RADIAL_POINTS");
+        opt_int_map["DFT_SPHERICAL_POINTS"] = options_.get_int("DFT_VV10_SPHERICAL_POINTS");
 
-    DFTGrid nlgrid = DFTGrid(primary_->molecule(), primary_, opt_int_map, opt_map, options_);
+        vv10_nlgrid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, opt_int_map, opt_map, options_);
+        vv10_point_workers_.clear();
+    }
+    DFTGrid& nlgrid = *vv10_nlgrid_;
+    if (!functional_workers_.empty() && nlgrid.max_points() > functional_workers_[0]->max_points()) {
+        for (auto& fw : functional_workers_) {
+            fw->set_lock(false);
+            fw->set_max_points(nlgrid.max_points());
+            fw->allocate();
+            fw->set_lock(true);
+        }
+    }
+
     std::vector<std::map<std::string, SharedVector>> vv10_cache;
-    std::vector<std::shared_ptr<PointFunctions>> nl_point_workers;
-    prepare_vv10_cache(nlgrid, D, vv10_cache, nl_point_workers);
+    prepare_vv10_cache(nlgrid, D, vv10_cache, vv10_point_workers_);
 
     timer_off("Setup");
 
     // => Setup info <=
     int rank = 0;
     const int max_functions = nlgrid.max_functions();
+    const size_t nblocks = nlgrid.blocks().size();
     double** Vp = ret->pointer();
 
-    // VV10 temps
-    std::vector<double> vv10_exc(num_threads_);
+    // Deterministic per-block energy array and zero-atomic row-tile locks for Vp
+    std::vector<double> vv10_exc_blk(nblocks, 0.0);
 
-    // Build local points workers as they max_points/max_funcs may differ
+    constexpr int tile_sz = 64;
+    const int ntiles = std::max(1, (nbf_ + tile_sz - 1) / tile_sz);
+    std::vector<int> tile_of(nbf_);
+    for (int mu = 0; mu < nbf_; ++mu) tile_of[mu] = mu / tile_sz;
+    std::vector<omp_lock_t> tile_locks(ntiles);
+    for (auto& l : tile_locks) omp_init_lock(&l);
+
     std::vector<SharedMatrix> V_local;
-    for (size_t i = 0; i < num_threads_; i++) {
+    V_local.reserve(num_threads_);
+    for (size_t i = 0; i < static_cast<size_t>(num_threads_); i++) {
         V_local.push_back(std::make_shared<Matrix>("V Temp", max_functions, max_functions));
     }
+    std::vector<std::vector<std::pair<int, int>>> tile_order(num_threads_);
+    std::vector<std::vector<std::pair<size_t, size_t>>> tile_runs(num_threads_);
+    std::vector<std::vector<char>> tile_done(num_threads_);
 
-// => Compute the kernel <=
-// -11.948063
+    // => Compute the kernel <=
 #pragma omp parallel for private(rank) schedule(guided) num_threads(num_threads_)
-    for (size_t Q = 0; Q < nlgrid.blocks().size(); Q++) {
-// Get thread info
+    for (size_t Q = 0; Q < nblocks; Q++) {
 #ifdef _OPENMP
         rank = omp_get_thread_num();
 #endif
-
-        // Get per rank-workers
         std::shared_ptr<BlockOPoints> block = nlgrid.blocks()[Q];
         std::shared_ptr<SuperFunctional> fworker = functional_workers_[rank];
-        std::shared_ptr<PointFunctions> pworker = nl_point_workers[rank];
+        std::shared_ptr<PointFunctions> pworker = vv10_point_workers_[rank];
 
-        // Compute Rho, Phi, etc
         pworker->compute_points(block);
 
-        // Updates the vals map and returns the energy
-        std::map<std::string, SharedVector> vals = fworker->values();
-
         parallel_timer_on("Kernel", rank);
-        vv10_exc[rank] += fworker->compute_vv10_kernel(pworker->point_values(), vv10_cache, block);
+        vv10_exc_blk[Q] = fworker->compute_vv10_kernel(pworker->point_values(), vv10_cache, block);
         parallel_timer_off("Kernel", rank);
 
         parallel_timer_on("VV10 Fock", rank);
@@ -953,27 +1025,66 @@ double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
         // => LSDA and GGA contribution (symmetrized) <= //
         dft_integrators::rks_integrator(block, fworker, pworker, V_local[rank], 1);
 
-        // => Unpacking <= //
+        // => Row-tile unpacking without per-element atomic contention <= //
         const std::vector<int>& function_map = block->functions_local_to_global();
-        int nlocal = function_map.size();
+        const int nlocal = static_cast<int>(function_map.size());
         double** V2p = V_local[rank]->pointer();
+        const int* __restrict__ fmap = function_map.data();
 
-        for (int ml = 0; ml < nlocal; ml++) {
-            int mg = function_map[ml];
-            for (int nl = 0; nl < ml; nl++) {
-                int ng = function_map[nl];
-#pragma omp atomic update
-                Vp[mg][ng] += V2p[ml][nl];
-#pragma omp atomic update
-                Vp[ng][mg] += V2p[ml][nl];
+        auto& ord = tile_order[rank];
+        ord.clear();
+        for (int ml = 0; ml < nlocal; ml++) ord.emplace_back(tile_of[fmap[ml]], ml);
+        std::sort(ord.begin(), ord.end());
+        auto& runs = tile_runs[rank];
+        runs.clear();
+        for (size_t k = 0; k < ord.size();) {
+            size_t e = k;
+            while (e < ord.size() && ord[e].first == ord[k].first) e++;
+            runs.emplace_back(k, e);
+            k = e;
+        }
+        auto add_run = [&](const std::pair<size_t, size_t>& r) {
+            for (size_t k = r.first; k < r.second; k++) {
+                const int ml = ord[k].second;
+                double* __restrict__ row = Vp[fmap[ml]];
+                const double* __restrict__ v2row = V2p[ml];
+                for (int nl = 0; nl <= ml; nl++) row[fmap[nl]] += v2row[nl];
+                for (int nl = ml + 1; nl < nlocal; nl++) row[fmap[nl]] += V2p[nl][ml];
             }
-#pragma omp atomic update
-            Vp[mg][mg] += V2p[ml][ml];
+        };
+        auto& done = tile_done[rank];
+        done.assign(runs.size(), 0);
+        size_t ndone = 0;
+        const size_t start = runs.empty() ? 0 : static_cast<size_t>(rank) % runs.size();
+        auto take = [&](size_t k, bool wait) {
+            omp_lock_t* l = &tile_locks[ord[runs[k].first].first];
+            if (wait)
+                omp_set_lock(l);
+            else if (!omp_test_lock(l))
+                return false;
+            add_run(runs[k]);
+            omp_unset_lock(l);
+            done[k] = 1;
+            ndone++;
+            return true;
+        };
+        while (ndone < runs.size()) {
+            bool progress = false;
+            for (size_t i = 0; i < runs.size(); i++) {
+                const size_t k = (start + i) % runs.size();
+                if (!done[k] && take(k, false)) progress = true;
+            }
+            if (!progress) take(std::find(done.begin(), done.end(), 0) - done.begin(), true);
         }
         parallel_timer_off("VV10 Fock", rank);
     }
 
-    double vv10_e = std::accumulate(vv10_exc.begin(), vv10_exc.end(), 0.0);
+    for (auto& l : tile_locks) omp_destroy_lock(&l);
+
+    double vv10_e = 0.0;
+    for (size_t Q = 0; Q < nblocks; ++Q) {
+        vv10_e += vv10_exc_blk[Q];
+    }
     timer_off("V: VV10");
     return vv10_e;
 }
@@ -1318,7 +1429,19 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
     }
 
     auto V_AO = std::make_shared<Matrix>("V AO Temp", nbf_, nbf_);
-    auto Vp = V_AO->pointer();
+    // Each block's local V reaches V_AO through row tiles: the rows of V_AO are split into
+    // min(nbf, 8 * nthreads) tiles with one lock each, and a block adds whole rows tile by tile.
+    // That replaces ~2 omp atomics per local (m, n) pair per block with one lock per
+    // (block, tile), and needs no per-thread nbf^2 copies. (Colouring blocks into conflict-free
+    // sets does not work here: basis-function extents span nearly every block.)
+    const int ntile = std::max(1, std::min(nbf_, 8 * static_cast<int>(num_threads_)));
+    std::vector<int> tile_of(nbf_);
+    for (int m = 0; m < nbf_; m++) tile_of[m] = static_cast<int>(static_cast<long>(m) * ntile / nbf_);
+    std::vector<omp_lock_t> tile_locks(ntile);
+    for (auto& l : tile_locks) omp_init_lock(&l);
+    std::vector<std::vector<std::pair<int, int>>> tile_order(num_threads_);       // (tile, ml) per thread
+    std::vector<std::vector<std::pair<size_t, size_t>>> tile_runs(num_threads_);  // [begin, end) per thread
+    std::vector<std::vector<char>> tile_done(num_threads_);                       // done flags per thread
 
     std::vector<double> functionalq(num_threads_);
     std::vector<double> rhoaq(num_threads_);
@@ -1375,20 +1498,61 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         const auto& function_map = block->functions_local_to_global();
         int nlocal = function_map.size();
 
-        for (int ml = 0; ml < nlocal; ml++) {
-            int mg = function_map[ml];
-            for (int nl = 0; nl < ml; nl++) {
-                int ng = function_map[nl];
-#pragma omp atomic update
-                Vp[mg][ng] += V2p[ml][nl];
-#pragma omp atomic update
-                Vp[ng][mg] += V2p[ml][nl];
+        // Group the block's local rows by tile; add_run adds whole rows of the symmetric V2
+        // (lower triangle stored, mirrored as in the other paths) into V_AO.
+        const int* __restrict__ fmap = function_map.data();
+        auto& ord = tile_order[rank];
+        ord.clear();
+        for (int ml = 0; ml < nlocal; ml++) ord.emplace_back(tile_of[fmap[ml]], ml);
+        std::sort(ord.begin(), ord.end());
+        auto& runs = tile_runs[rank];
+        runs.clear();
+        for (size_t k = 0; k < ord.size();) {
+            size_t e = k;
+            while (e < ord.size() && ord[e].first == ord[k].first) e++;
+            runs.emplace_back(k, e);
+            k = e;
+        }
+        auto Vp = V_AO->pointer();
+        auto add_run = [&](const std::pair<size_t, size_t>& r) {
+            for (size_t k = r.first; k < r.second; k++) {
+                const int ml = ord[k].second;
+                double* __restrict__ row = Vp[fmap[ml]];
+                const double* __restrict__ v2row = V2p[ml];
+                for (int nl = 0; nl <= ml; nl++) row[fmap[nl]] += v2row[nl];
+                for (int nl = ml + 1; nl < nlocal; nl++) row[fmap[nl]] += V2p[nl][ml];
             }
-#pragma omp atomic update
-            Vp[mg][mg] += V2p[ml][ml];
+        };
+        // Sweep the tiles with try-locks, starting at a rank-dependent offset so threads spread
+        // out; when a sweep takes none, wait on the first tile still left.
+        auto& done = tile_done[rank];
+        done.assign(runs.size(), 0);
+        size_t ndone = 0;
+        const size_t start = runs.empty() ? 0 : rank % runs.size();
+        auto take = [&](size_t k, bool wait) {
+            omp_lock_t* l = &tile_locks[ord[runs[k].first].first];
+            if (wait)
+                omp_set_lock(l);
+            else if (!omp_test_lock(l))
+                return false;
+            add_run(runs[k]);
+            omp_unset_lock(l);
+            done[k] = 1;
+            ndone++;
+            return true;
+        };
+        while (ndone < runs.size()) {
+            bool progress = false;
+            for (size_t i = 0; i < runs.size(); i++) {
+                const size_t k = (start + i) % runs.size();
+                if (!done[k] && take(k, false)) progress = true;
+            }
+            if (!progress) take(std::find(done.begin(), done.end(), 0) - done.begin(), true);
         }
         parallel_timer_off("V_xc", rank);
     }
+
+    for (auto& l : tile_locks) omp_destroy_lock(&l);
 
     // Do we need VV10?
     double vv10_e = 0.0;
@@ -2661,6 +2825,14 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
     auto Vb_AO = std::make_shared<Matrix>("Vb Temp", nbf_, nbf_);
     auto Vap = Va_AO->pointer();
     auto Vbp = Vb_AO->pointer();
+    const int ntile = std::max(1, std::min(nbf_, 8 * static_cast<int>(num_threads_)));
+    std::vector<int> tile_of(nbf_);
+    for (int m = 0; m < nbf_; m++) tile_of[m] = static_cast<int>(static_cast<long>(m) * ntile / nbf_);
+    std::vector<omp_lock_t> tile_locks(ntile);
+    for (auto& l : tile_locks) omp_init_lock(&l);
+    std::vector<std::vector<std::pair<int, int>>> tile_order(num_threads_);
+    std::vector<std::vector<std::pair<size_t, size_t>>> tile_runs(num_threads_);
+    std::vector<std::vector<char>> tile_done(num_threads_);
 
     std::vector<double> functionalq(num_threads_);
     std::vector<double> rhoaq(num_threads_);
@@ -2726,70 +2898,92 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
         auto coll_funcs = pworker->basis_value("PHI")->ncol();
 
         // ==> Compute quadrature values <== //
-        functionalq[rank] += C_DDOT(npoints, w, 1, zk, 1);
-        for (int P = 0; P < npoints; P++) {
-            QTap[P] = w[P] * rho_a[P];
-            QTbp[P] = w[P] * rho_b[P];
+        double fq = 0.0, qa = 0.0, qax = 0.0, qay = 0.0, qaz = 0.0, qb = 0.0, qbx = 0.0, qby = 0.0, qbz = 0.0;
+#pragma omp simd reduction(+ : fq, qa, qax, qay, qaz, qb, qbx, qby, qbz)
+        for (size_t P = 0; P < npoints; P++) {
+            const double wp = w[P];
+            const double wra = wp * rho_a[P];
+            const double wrb = wp * rho_b[P];
+            fq += wp * zk[P];
+            qa += wra;
+            qax += wra * x[P];
+            qay += wra * y[P];
+            qaz += wra * z[P];
+            qb += wrb;
+            qbx += wrb * x[P];
+            qby += wrb * y[P];
+            qbz += wrb * z[P];
         }
-        rhoaq[rank] += C_DDOT(npoints, w, 1, rho_a, 1);
-        rhoaxq[rank] += C_DDOT(npoints, QTap, 1, x, 1);
-        rhoayq[rank] += C_DDOT(npoints, QTap, 1, y, 1);
-        rhoazq[rank] += C_DDOT(npoints, QTap, 1, z, 1);
-        rhobq[rank] += C_DDOT(npoints, w, 1, rho_b, 1);
-        rhobxq[rank] += C_DDOT(npoints, QTbp, 1, x, 1);
-        rhobyq[rank] += C_DDOT(npoints, QTbp, 1, y, 1);
-        rhobzq[rank] += C_DDOT(npoints, QTbp, 1, z, 1);
+        functionalq[rank] += fq;
+        rhoaq[rank] += qa;
+        rhoaxq[rank] += qax;
+        rhoayq[rank] += qay;
+        rhoazq[rank] += qaz;
+        rhobq[rank] += qb;
+        rhobxq[rank] += qbx;
+        rhobyq[rank] += qby;
+        rhobzq[rank] += qbz;
 
-        // ==> LSDA contribution <== //
-        //                                               ∂
-        // Ta, Tb := 1/2 einsum("p, p, pn -> pnσ", w, φ, -- f)[σ = α, β]
-        //                                               ∂ρ
-        // timer_on("V: LSDA");
-        for (int P = 0; P < npoints; P++) {
-            std::fill(Tap[P], Tap[P] + nlocal, 0.0);
-            std::fill(Tbp[P], Tbp[P] + nlocal, 0.0);
-            C_DAXPY(nlocal, 0.5 * v_rho_a[P] * w[P], phi[P], 1, Tap[P], 1);
-            C_DAXPY(nlocal, 0.5 * v_rho_b[P] * w[P], phi[P], 1, Tbp[P], 1);
-        }
-        // timer_off("V: LSDA");
-
-        // ==> GGA contribution <== //
+        // ==> LSDA + GGA contribution (fused single pass) <== //
         if (ansatz >= 1) {
-            //                                                                      ∂
-            // Ta, Tb += einsum("p, στ, pστ, xpτ, xpn -> pnσ", w, (σ == τ) ? 2 : 1, -- f, ∇ρ, ∇φ)[σ = α, β]
-            //                                                                      ∂γ
-            // timer_on("V: GGA");
             auto phix = pworker->basis_value("PHI_X")->pointer();
             auto phiy = pworker->basis_value("PHI_Y")->pointer();
             auto phiz = pworker->basis_value("PHI_Z")->pointer();
-            auto rho_ax = pworker->point_value("RHO_AX")->pointer();
-            auto rho_ay = pworker->point_value("RHO_AY")->pointer();
-            auto rho_az = pworker->point_value("RHO_AZ")->pointer();
-            auto rho_bx = pworker->point_value("RHO_BX")->pointer();
-            auto rho_by = pworker->point_value("RHO_BY")->pointer();
-            auto rho_bz = pworker->point_value("RHO_BZ")->pointer();
-            auto v_gamma_aa = vals["V_GAMMA_AA"]->pointer();
-            auto v_gamma_ab = vals["V_GAMMA_AB"]->pointer();
-            auto v_gamma_bb = vals["V_GAMMA_BB"]->pointer();
+            const double* __restrict__ rho_ax = pworker->point_value("RHO_AX")->pointer();
+            const double* __restrict__ rho_ay = pworker->point_value("RHO_AY")->pointer();
+            const double* __restrict__ rho_az = pworker->point_value("RHO_AZ")->pointer();
+            const double* __restrict__ rho_bx = pworker->point_value("RHO_BX")->pointer();
+            const double* __restrict__ rho_by = pworker->point_value("RHO_BY")->pointer();
+            const double* __restrict__ rho_bz = pworker->point_value("RHO_BZ")->pointer();
+            const double* __restrict__ v_gamma_aa = vals["V_GAMMA_AA"]->pointer();
+            const double* __restrict__ v_gamma_ab = vals["V_GAMMA_AB"]->pointer();
+            const double* __restrict__ v_gamma_bb = vals["V_GAMMA_BB"]->pointer();
 
-            for (int P = 0; P < npoints; P++) {
-                C_DAXPY(nlocal, w[P] * (2.0 * v_gamma_aa[P] * rho_ax[P] + v_gamma_ab[P] * rho_bx[P]), phix[P], 1,
-                        Tap[P], 1);
-                C_DAXPY(nlocal, w[P] * (2.0 * v_gamma_aa[P] * rho_ay[P] + v_gamma_ab[P] * rho_by[P]), phiy[P], 1,
-                        Tap[P], 1);
-                C_DAXPY(nlocal, w[P] * (2.0 * v_gamma_aa[P] * rho_az[P] + v_gamma_ab[P] * rho_bz[P]), phiz[P], 1,
-                        Tap[P], 1);
-                C_DAXPY(nlocal, w[P] * (2.0 * v_gamma_bb[P] * rho_bx[P] + v_gamma_ab[P] * rho_ax[P]), phix[P], 1,
-                        Tbp[P], 1);
-                C_DAXPY(nlocal, w[P] * (2.0 * v_gamma_bb[P] * rho_by[P] + v_gamma_ab[P] * rho_ay[P]), phiy[P], 1,
-                        Tbp[P], 1);
-                C_DAXPY(nlocal, w[P] * (2.0 * v_gamma_bb[P] * rho_bz[P] + v_gamma_ab[P] * rho_az[P]), phiz[P], 1,
-                        Tbp[P], 1);
+            for (size_t P = 0; P < npoints; P++) {
+                const double wp = w[P];
+                const double ca0 = 0.5 * v_rho_a[P] * wp;
+                const double cb0 = 0.5 * v_rho_b[P] * wp;
+                const double gaa = 2.0 * v_gamma_aa[P];
+                const double gab = v_gamma_ab[P];
+                const double gbb = 2.0 * v_gamma_bb[P];
+                const double cax = wp * (gaa * rho_ax[P] + gab * rho_bx[P]);
+                const double cay = wp * (gaa * rho_ay[P] + gab * rho_by[P]);
+                const double caz = wp * (gaa * rho_az[P] + gab * rho_bz[P]);
+                const double cbx = wp * (gbb * rho_bx[P] + gab * rho_ax[P]);
+                const double cby = wp * (gbb * rho_by[P] + gab * rho_ay[P]);
+                const double cbz = wp * (gbb * rho_bz[P] + gab * rho_az[P]);
+                const double* __restrict__ p0 = phi[P];
+                const double* __restrict__ px = phix[P];
+                const double* __restrict__ py = phiy[P];
+                const double* __restrict__ pz = phiz[P];
+                double* __restrict__ ta = Tap[P];
+                double* __restrict__ tb = Tbp[P];
+#pragma omp simd
+                for (size_t m = 0; m < nlocal; m++) {
+                    const double p0m = p0[m];
+                    const double pxm = px[m];
+                    const double pym = py[m];
+                    const double pzm = pz[m];
+                    ta[m] = ca0 * p0m + cax * pxm + cay * pym + caz * pzm;
+                    tb[m] = cb0 * p0m + cbx * pxm + cby * pym + cbz * pzm;
+                }
             }
-            // timer_off("V: GGA");
+        } else {
+            for (size_t P = 0; P < npoints; P++) {
+                const double ca0 = 0.5 * v_rho_a[P] * w[P];
+                const double cb0 = 0.5 * v_rho_b[P] * w[P];
+                const double* __restrict__ p0 = phi[P];
+                double* __restrict__ ta = Tap[P];
+                double* __restrict__ tb = Tbp[P];
+#pragma omp simd
+                for (size_t m = 0; m < nlocal; m++) {
+                    const double p0m = p0[m];
+                    ta[m] = ca0 * p0m;
+                    tb[m] = cb0 * p0m;
+                }
+            }
         }
 
-        // timer_on("V: LSDA");
         // ==> Contract Ta and Tba aginst φ, replacing a point index with  an AO index <==
         C_DGEMM('T', 'N', nlocal, nlocal, npoints, 1.0, phi[0], coll_funcs, Tap[0], max_functions, 0.0, Va2p[0],
                 max_functions);
@@ -2797,74 +2991,108 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
                 max_functions);
 
         // ==> Add the adjoint to complete the LDA and GGA contributions  <==
-        for (int m = 0; m < nlocal; m++) {
-            for (int n = 0; n <= m; n++) {
+        for (size_t m = 0; m < nlocal; m++) {
+            for (size_t n = 0; n <= m; n++) {
                 Va2p[m][n] = Va2p[n][m] = Va2p[m][n] + Va2p[n][m];
                 Vb2p[m][n] = Vb2p[n][m] = Vb2p[m][n] + Vb2p[n][m];
             }
         }
-        // timer_off("V: LSDA");
 
         // ==> Meta contribution <== //
         if (ansatz >= 2) {
-            // timer_on("V: Meta");
             auto phix = pworker->basis_value("PHI_X")->pointer();
             auto phiy = pworker->basis_value("PHI_Y")->pointer();
             auto phiz = pworker->basis_value("PHI_Z")->pointer();
             auto v_tau_a = vals["V_TAU_A"]->pointer();
             auto v_tau_b = vals["V_TAU_B"]->pointer();
 
-            double** phi[3];
-            phi[0] = phix;
-            phi[1] = phiy;
-            phi[2] = phiz;
-
-            double* v_tau[2];
-            v_tau[0] = v_tau_a;
-            v_tau[1] = v_tau_b;
-
-            double** V_val[2];
-            V_val[0] = Va2p;
-            V_val[1] = Vb2p;
+            double** phi_m[3] = {phix, phiy, phiz};
+            double* v_tau[2] = {v_tau_a, v_tau_b};
+            double** V_val[2] = {Va2p, Vb2p};
 
             for (int s = 0; s < 2; s++) {
                 double** V2p = V_val[s];
-                double* v_taup = v_tau[s];
+                const double* __restrict__ v_taup = v_tau[s];
                 for (int i = 0; i < 3; i++) {
-                    double** phiw = phi[i];
-                    for (int P = 0; P < npoints; P++) {
-                        std::fill(Tap[P], Tap[P] + nlocal, 0.0);
-                        C_DAXPY(nlocal, v_taup[P] * w[P], phiw[P], 1, Tap[P], 1);
+                    double** phiw = phi_m[i];
+                    for (size_t P = 0; P < npoints; P++) {
+                        const double c = v_taup[P] * w[P];
+                        const double* __restrict__ pw = phiw[P];
+                        double* __restrict__ ta = Tap[P];
+#pragma omp simd
+                        for (size_t m = 0; m < nlocal; m++) {
+                            ta[m] = c * pw[m];
+                        }
                     }
                     C_DGEMM('T', 'N', nlocal, nlocal, npoints, 1.0, phiw[0], coll_funcs, Tap[0], max_functions, 1.0,
                             V2p[0], max_functions);
                 }
             }
-
-            // timer_off("V: Meta");
         }
 
-        // ==> Unpacking <== //
-        for (int ml = 0; ml < nlocal; ml++) {
-            int mg = function_map[ml];
-            for (int nl = 0; nl < ml; nl++) {
-                int ng = function_map[nl];
-#pragma omp atomic update
-                Vap[mg][ng] += Va2p[ml][nl];
-#pragma omp atomic update
-                Vap[ng][mg] += Va2p[ml][nl];
-#pragma omp atomic update
-                Vbp[mg][ng] += Vb2p[ml][nl];
-#pragma omp atomic update
-                Vbp[ng][mg] += Vb2p[ml][nl];
+        // ==> Unpacking via row-tile locks <== //
+        const int* __restrict__ fmap = function_map.data();
+        const int nl_int = static_cast<int>(nlocal);
+        auto& ord = tile_order[rank];
+        ord.clear();
+        for (int ml = 0; ml < nl_int; ml++) ord.emplace_back(tile_of[fmap[ml]], ml);
+        std::sort(ord.begin(), ord.end());
+        auto& runs = tile_runs[rank];
+        runs.clear();
+        for (size_t k = 0; k < ord.size();) {
+            size_t e = k;
+            while (e < ord.size() && ord[e].first == ord[k].first) e++;
+            runs.emplace_back(k, e);
+            k = e;
+        }
+        auto add_run = [&](const std::pair<size_t, size_t>& r) {
+            for (size_t k = r.first; k < r.second; k++) {
+                const int ml = ord[k].second;
+                const int mg = fmap[ml];
+                double* __restrict__ rva = Vap[mg];
+                double* __restrict__ rvb = Vbp[mg];
+                const double* __restrict__ va2row = Va2p[ml];
+                const double* __restrict__ vb2row = Vb2p[ml];
+                for (int nl = 0; nl <= ml; nl++) {
+                    const int ng = fmap[nl];
+                    rva[ng] += va2row[nl];
+                    rvb[ng] += vb2row[nl];
+                }
+                for (int nl = ml + 1; nl < nl_int; nl++) {
+                    const int ng = fmap[nl];
+                    rva[ng] += Va2p[nl][ml];
+                    rvb[ng] += Vb2p[nl][ml];
+                }
             }
-#pragma omp atomic update
-            Vap[mg][mg] += Va2p[ml][ml];
-#pragma omp atomic update
-            Vbp[mg][mg] += Vb2p[ml][ml];
+        };
+        auto& done = tile_done[rank];
+        done.assign(runs.size(), 0);
+        size_t ndone = 0;
+        const size_t start = runs.empty() ? 0 : rank % runs.size();
+        auto take = [&](size_t k, bool wait) {
+            omp_lock_t* l = &tile_locks[ord[runs[k].first].first];
+            if (wait)
+                omp_set_lock(l);
+            else if (!omp_test_lock(l))
+                return false;
+            add_run(runs[k]);
+            omp_unset_lock(l);
+            done[k] = 1;
+            ndone++;
+            return true;
+        };
+        while (ndone < runs.size()) {
+            bool progress = false;
+            for (size_t i = 0; i < runs.size(); i++) {
+                const size_t k = (start + i) % runs.size();
+                if (!done[k] && take(k, false)) progress = true;
+            }
+            if (!progress) take(std::find(done.begin(), done.end(), 0) - done.begin(), true);
         }
         parallel_timer_off("V_xc", rank);
     }
+
+    for (auto& l : tile_locks) omp_destroy_lock(&l);
 
     // Do we need VV10?
     double vv10_e = 0.0;

@@ -145,11 +145,17 @@ void C_DTRSM(char side, char uplo, char transa, char diag, int m, int n, double 
 PSI_API
 void C_DGEMM(char transa, char transb, int m, int n, int k, double alpha, double* a, int lda, double* b, int ldb,
              double beta, double* c, int ldc);
+PSI_API
+void C_SGEMM(char transa, char transb, int m, int n, int k, float alpha, float* a, int lda, float* b, int ldb,
+             float beta, float* c, int ldc);
 void C_DSYMM(char side, char uplo, int m, int n, double alpha, double* a, int lda, double* b, int ldb, double beta,
              double* c, int ldc);
 void C_DTRMM(char side, char uplo, char transa, char diag, int m, int n, double alpha, double* a, int lda, double* b,
              int ldb);
+PSI_API
 void C_DSYRK(char uplo, char trans, int n, int k, double alpha, double* a, int lda, double beta, double* c, int ldc);
+PSI_API
+void C_SSYRK(char uplo, char trans, int n, int k, float alpha, float* a, int lda, float beta, float* c, int ldc);
 void C_DSYR2K(char uplo, char trans, int n, int k, double alpha, double* a, int lda, double* b, int ldb, double beta,
               double* c, int ldc);
 PSI_API

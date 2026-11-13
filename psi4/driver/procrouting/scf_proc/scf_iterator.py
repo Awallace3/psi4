@@ -85,7 +85,8 @@ def scf_compute_energy(self):
     try:
         self.iterations()
     except SCFConvergenceError as e:
-        if core.get_option("SCF", "FAIL_ON_MAXITER"):
+        if (core.get_option("SCF", "FAIL_ON_MAXITER") or not getattr(self, "_xc_grid_ready_for_finalize", True)
+                or getattr(self, "_xc_grid_switching", False)):
             core.print_out("  Failed to converge.\n")
             # energy = 0.0
             # A P::e fn to either throw or protest upon nonconvergence
@@ -127,6 +128,9 @@ def initialize_jk(self, memory, jk=None):
 
     jk.initialize()
     jk.print_header()
+    if core.get_option("SCF", "SCF_DF_METRIC") == "CHOLESKY" and jk.name() != "MemDFJK":
+        core.print_out(f"  Warning: SCF_DF_METRIC CHOLESKY is ignored by {jk.name()}; "
+                       "it applies only to the in-core MemDFJK.\n\n")
 
 
 def scf_initialize(self):
@@ -136,6 +140,9 @@ def scf_initialize(self):
 
     # Get memory in terms of doubles
     total_memory = (core.get_memory() / 8) * core.get_global_option("SCF_MEM_SAFETY_FACTOR")
+
+    # The Fock diagonalization keeps its DSYEVD workspace (~3 nso^2) for the whole SCF.
+    total_memory -= self.diag_scratch_size()
 
     # Figure out how large the DFT collocation matrices are
     vbase = self.V_potential()
@@ -170,6 +177,9 @@ def scf_initialize(self):
     if collocation_memory > collocation_size:
         collocation_memory = collocation_size
 
+    # Any unused initial-grid allowance goes to JK below. Growing the cache
+    # later requires explicitly transferring that allowance back from JK.
+    self._collocation_budget = int(collocation_memory)
     # Set constants
     self.iteration_ = 0
     self.memory_jk_ = int(total_memory - collocation_memory)
@@ -261,7 +271,89 @@ def scf_initialize(self):
                    ("   " if is_dfjk else "", "RMS" if diis_rms else "MAX"))
 
 
-def scf_iterate(self, e_conv=None, d_conv=None):
+def _alpha_beta(self, name):
+    """[Xa] for RHF, [Xa, Xb] otherwise, for name X in "D", "F", "V"."""
+    a = getattr(self, name + "a")()
+    return [a] if isinstance(self, core.RHF) else [a, getattr(self, name + "b")()]
+
+
+def _xc_grid_switch(self, shift_diis, restore_vv10=False):
+    """Rebuild V (and its collocation cache) on the final XC grid.
+
+    With shift_diis, first return V on the initial grid at the current density: the next build
+    forms V on the final grid at that same density, and _xc_grid_shift_diis moves the stored DIIS
+    Focks by the difference instead of discarding them. When restore_vv10 is True, nonlocal VV10
+    was deferred on the coarse grid and is re-enabled right before building the final grid so
+    dV = (V_xc_fine + V_vv10) - V_xc_coarse shifts the DIIS subspace onto the full functional.
+    """
+    core.timer_on("SCF: Switch XC grid")
+    vbase = self.V_potential()
+    V_initial = None
+    if shift_diis:
+        Ds = _alpha_beta(self, "D")
+        V_initial = [D.clone() for D in Ds]
+        for V in V_initial:
+            V.zero()
+        vbase.set_D(Ds)
+        vbase.compute_V(V_initial)
+    if restore_vv10:
+        self.functional().set_lock(False)
+        self.functional().set_do_vv10(True)
+        self.functional().set_lock(True)
+    vbase.set_grid("Final")
+    # Grow the cache only by transferring spare JK allowance, never by assigning
+    # the same memory to both. MemDFJK can replan its contraction blocks under a
+    # reduced budget; other backends keep their original partition.
+    final_size = vbase.grid().collocation_size() * {1: 4, 2: 10}.get(vbase.functional().ansatz(), 1)
+    budget = getattr(self, "_collocation_budget", self.memory_collocation_)
+    jk = self.jk()
+    if final_size > budget and isinstance(jk, core.MemDFJK):
+        dfh = jk.dfh()
+        # The helper's allowance excludes JK overhead. Subtract the transfer
+        # from both existing allowances to preserve that offset, and retain the
+        # conservative in-core minimum even when the current scratch is small.
+        spare = max(0, min(dfh.get_memory(), self.memory_jk_) - jk.memory_estimate())
+        transfer = int(min(final_size - budget, spare))
+        if transfer:
+            # Retained high-water scratch / FP32 mirrors may exceed the new
+            # allowance. Release them BEFORE the cache uses their memory.
+            jk.release_scratch()
+            dfh.set_memory(dfh.get_memory() - transfer)
+            self.memory_jk_ -= transfer
+            jk.set_memory(self.memory_jk_)
+            budget += transfer
+            self._collocation_budget = budget
+    self.memory_collocation_ = int(max(0, min(budget, final_size)))
+    vbase.build_collocation_cache(self.memory_collocation_)
+    core.timer_off("SCF: Switch XC grid")
+    return V_initial
+
+
+def _xc_grid_shift_diis(self, V_initial):
+    """After the first final-grid build, add V_final - V_initial to every stored DIIS Fock (and error)."""
+    core.timer_on("SCF: Shift DIIS to final XC grid")
+    dV = [V.clone() for V in _alpha_beta(self, "V")]
+    for d, Vi in zip(dV, V_initial):
+        d.subtract(Vi)
+    deltas = {"target": dV}
+    if "error" in self.diis_manager_.template:
+        deltas["error"] = [self.form_FDSmSDF(d, D) for d, D in zip(dV, _alpha_beta(self, "D"))]
+    self.diis_manager_.shift_entries(deltas)
+    core.timer_off("SCF: Shift DIIS to final XC grid")
+
+
+def scf_iterate(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
+    need_vv10 = bool(self.V_potential() and self.V_potential().initial_grid() and self.functional().needs_vv10())
+    try:
+        return _scf_iterate_impl(self, e_conv=e_conv, d_conv=d_conv, xc_final_min_iterations=xc_final_min_iterations)
+    finally:
+        if need_vv10 and not self.functional().needs_vv10():
+            self.functional().set_lock(False)
+            self.functional().set_do_vv10(True)
+            self.functional().set_lock(True)
+
+
+def _scf_iterate_impl(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
 
     is_dfjk = core.get_global_option('SCF_TYPE').endswith('DF')
     verbose = core.get_option('SCF', "PRINT")
@@ -276,6 +368,28 @@ def scf_iterate(self, e_conv=None, d_conv=None):
     frac_enabled = _validate_frac()
     efp_enabled = hasattr(self.molecule(), 'EFP')
     cosx_enabled = "COSX" in core.get_option('SCF', 'SCF_TYPE')
+    xc_initial = bool(self.V_potential() and self.V_potential().initial_grid())
+    xc_switching = xc_initial
+    self._xc_grid_switching = xc_switching
+    self._xc_grid_ready_for_finalize = not xc_initial
+    if xc_switching and (isinstance(xc_final_min_iterations, bool) or
+                         not isinstance(xc_final_min_iterations, (int, np.integer)) or xc_final_min_iterations < 1):
+        raise ValidationError("Minimum final XC-grid iterations must be a positive integer.")
+    xc_switch_factor = core.get_option("SCF", "DFT_GRID_SWITCH_FACTOR")
+    if xc_switching and (not np.isfinite(xc_switch_factor) or xc_switch_factor <= 0):
+        raise ValidationError("DFT_GRID_SWITCH_FACTOR must be finite and positive.")
+    xc_e_conv = (core.get_option("SCF", "E_CONVERGENCE") if e_conv is None else e_conv) * xc_switch_factor
+    xc_d_conv = (core.get_option("SCF", "D_CONVERGENCE") if d_conv is None else d_conv) * xc_switch_factor
+    xc_initial_iterations = xc_final_iterations = 0
+    xc_switch_on_density = core.get_option("SCF", "DFT_GRID_SWITCH_ON") == "DENSITY"
+    xc_pending_diis_shift = None  # initial-grid V at the switch density, consumed by the next form_G
+    k_fp32_conv = core.get_option("SCF", "SCF_K_FP32_CONVERGENCE")
+    e_conv_predicted = core.get_option("SCF", "SCF_E_CONV_PREDICTED")
+    k_fp32 = False
+    if (k_fp32_conv > 0 and isinstance(self.jk(), core.MemDFJK) and
+            (self.functional().is_x_hybrid() or self.functional().is_x_lrc())):
+        self.jk().dfh().set_K_fp32(True)
+        k_fp32 = True
     ooo_scf = core.get_option("SCF", "ORBITAL_OPTIMIZER_PACKAGE") in ["OOO", "OPENORBITALOPTIMIZER"]
     if ooo_scf:
         pcm_enabled = core.get_option('SCF', 'PCM')
@@ -286,11 +400,11 @@ def scf_iterate(self, e_conv=None, d_conv=None):
         guessmix_enabled = core.get_option("SCF", "GUESS_MIX")
         if (reference in ["ROHF", "CUHF"] or soscf_enabled or self.MOM_excited_ or frac_enabled or
             efp_enabled or pcm_enabled or ddx_enabled or pe_enabled or autograc_enabled or
-            level_shift_enabled or guessmix_enabled):
+            level_shift_enabled or guessmix_enabled or xc_switching):
             core.print_out(f"    Note: OpenOrbitalOptimizer not compatible with at least one of the following. Falling back to orbital_optimizer_package=internal\n")
             core.print_out(f"          {reference=}, soscf={soscf_enabled}, mom={self.MOM_excited_}, frac={frac_enabled}, efp={efp_enabled},\n")
             core.print_out(f"          pcm={pcm_enabled}, ddx={ddx_enabled}, pe={pe_enabled}, autograc={autograc_enabled}, level_shift={level_shift_enabled},\n")
-            core.print_out(f"          guess_mix={guessmix_enabled}\n")
+            core.print_out(f"          guess_mix={guessmix_enabled}, xc_grid_switching={xc_switching}\n")
         else:
             # SAD needs some special work since the guess doesn't actually make the orbitals in Psi4
             if self.sad_ and self.iteration_ <= 0:
@@ -346,6 +460,16 @@ def scf_iterate(self, e_conv=None, d_conv=None):
     # has early_screening changed from True to False?
     early_screening_disabled = False
 
+    # Defer nonlocal VV10 dispersion during coarse initial-grid iterations when self-consistent VV10
+    # is active: _xc_grid_switch re-enables VV10 onto the Final grid and shifts DIIS Focks by
+    # (V_xc_fine + V_vv10) - V_xc_coarse, followed by >= 2 full self-consistent final iterations.
+    vv10_deferred = bool(xc_switching and self.functional().needs_vv10())
+    eff_xc_final_min_iterations = max(xc_final_min_iterations, 2 if vv10_deferred else 1)
+    if vv10_deferred:
+        self.functional().set_lock(False)
+        self.functional().set_do_vv10(False)
+        self.functional().set_lock(True)
+
     # SCF iterations!
     SCFE_old = 0.0
     Dnorm = 0.0
@@ -376,6 +500,10 @@ def scf_iterate(self, e_conv=None, d_conv=None):
         core.timer_on("HF: Form G")
         self.form_G()
         core.timer_off("HF: Form G")
+
+        if xc_pending_diis_shift is not None:
+            _xc_grid_shift_diis(self, xc_pending_diis_shift)
+            xc_pending_diis_shift = None
 
         # Check if special J/K construction algorithms were used
         incfock_performed = hasattr(self.jk(), "do_incfock_iter") and self.jk().do_incfock_iter()
@@ -442,6 +570,19 @@ def scf_iterate(self, e_conv=None, d_conv=None):
 
         Ediff = SCFE - SCFE_old
         SCFE_old = SCFE
+        Ediff_test = Ediff
+        use_pred_e = (
+            e_conv_predicted
+            and self.iteration_ >= 3
+            and not ((self.iteration_ == 0) and self.sad_)
+            and not xc_initial
+            and not k_fp32
+            and (not vv10_deferred or xc_final_iterations >= 1)
+        )
+        if use_pred_e:
+            # F(D_k) and D_k, before DIIS/SOSCF overwrite them; see the prediction after form_D.
+            pred_F = [F.clone() for F in _alpha_beta(self, "F")]
+            pred_D = [D.clone() for D in _alpha_beta(self, "D")]
 
         status = []
 
@@ -537,6 +678,17 @@ def scf_iterate(self, e_conv=None, d_conv=None):
         self.form_D()
         core.timer_off("HF: Form D")
 
+        if use_pred_e:
+            # First-order change of the energy to the next iterate, E(D_k+1) - E(D_k) ~ Tr[F_k dD]
+            # (x2 for RHF). Since SCFE is still E(D_k), require both |pred| < 0.2 * e_conv and
+            # |Ediff| < 10 * e_conv so |E(D_k) - E*| stays safely well below e_conv while still
+            # skipping the pure confirmation Fock build.
+            eff_e_conv = core.get_option("SCF", "E_CONVERGENCE") if e_conv is None else e_conv
+            pred = sum(F.vector_dot(D) - F.vector_dot(D0) for F, D, D0 in zip(pred_F, _alpha_beta(self, "D"), pred_D))
+            pred *= 2.0 if isinstance(self, core.RHF) else 1.0  # RHF Fa, Da are per spin
+            if np.isfinite(pred) and abs(pred) < 0.2 * eff_e_conv and abs(Ediff) < 10.0 * eff_e_conv:
+                Ediff_test = pred
+
         self.set_variable("SCF ITERATION ENERGY", SCFE)
         core.set_variable("SCF D NORM", Dnorm)
 
@@ -556,6 +708,20 @@ def scf_iterate(self, e_conv=None, d_conv=None):
             self.Da().print_out()
             self.Db().print_out()
 
+        if xc_switching:
+            status.append("XC-INITIAL" if xc_initial else "XC-FINAL")
+            if xc_initial:
+                xc_initial_iterations += 1
+            else:
+                xc_final_iterations += 1
+            self.set_variable("SCF DFT INITIAL GRID ITERATIONS", xc_initial_iterations)
+            self._xc_grid_ready_for_finalize = (not xc_initial and xc_final_iterations >= eff_xc_final_min_iterations)
+
+        if k_fp32:
+            k_fp32 = self.jk().dfh().K_fp32()  # off if the single-precision tensor did not fit
+            if k_fp32:
+                status.append("K-FP32")
+
         # Print out the iteration
         core.print_out(
             "   @%s%s iter %3s: %20.14f   %12.5e   %-11.5e %s\n" %
@@ -574,11 +740,47 @@ def scf_iterate(self, e_conv=None, d_conv=None):
         # have we completed our post-early screening SCF iterations?
         if early_screening_disabled:
             scf_iter_post_screening += 1
-            if scf_iter_post_screening >= scf_maxiter_post_screening and scf_maxiter_post_screening > 0:
+            if (scf_iter_post_screening >= scf_maxiter_post_screening and scf_maxiter_post_screening > 0
+                    and not xc_switching):
                 break
 
+        k_switched = False
+        if k_fp32:
+            if not ((self.iteration_ == 0) and self.sad_) and Dnorm < k_fp32_conv:
+                self.jk().dfh().set_K_fp32(False)
+                k_fp32 = False
+                k_switched = True
+                core.print_out("  Switching exchange to double precision.\n\n")
+
+        # Never accept coarse-grid convergence, even if it jumps below the final
+        # tolerances. The next iteration must form G/V on the final grid.
+        if xc_initial and not ((self.iteration_ == 0) and self.sad_):
+            xc_switch_now = (Dnorm < xc_d_conv if xc_switch_on_density else
+                             _converged(Ediff, Dnorm, e_conv=xc_e_conv, d_conv=xc_d_conv))
+            if xc_switch_now:
+                shift_diis = (self.initialized_diis_manager_ and len(self.diis_manager_.stored_vectors) > 0
+                              and core.get_option("SCF", "DFT_GRID_SWITCH_DIIS") == "SHIFT")
+                xc_pending_diis_shift = _xc_grid_switch(self, shift_diis, restore_vv10=vv10_deferred)
+                xc_initial = False
+                if self.initialized_diis_manager_ and not shift_diis:
+                    self.diis_manager_.reset_subspace()
+                if hasattr(self.jk(), "clear_D_prev"):
+                    self.jk().clear_D_prev()
+                core.print_out("  Near convergence on initial XC grid; continuing on final XC grid.\n\n")
+            if self.iteration_ >= core.get_option('SCF', 'MAXITER'):
+                raise SCFConvergenceError("SCF iterations (XC grid switching)", self.iteration_, self, Ediff, Dnorm)
+            continue
+
+        # Never accept convergence on the iteration that built single-precision K.
+        if k_switched:
+            if self.iteration_ >= core.get_option('SCF', 'MAXITER'):
+                raise SCFConvergenceError("SCF iterations (single-precision K)", self.iteration_, self, Ediff, Dnorm)
+            continue
+
         # Call any postiteration callbacks
-        if not ((self.iteration_ == 0) and self.sad_) and _converged(Ediff, Dnorm, e_conv=e_conv, d_conv=d_conv):
+        if (not ((self.iteration_ == 0) and self.sad_) and
+                (not xc_switching or xc_final_iterations >= eff_xc_final_min_iterations) and not k_fp32 and
+                _converged(Ediff_test, Dnorm, e_conv=e_conv, d_conv=d_conv)):
 
             if early_screening:
 
@@ -591,13 +793,15 @@ def scf_iterate(self, e_conv=None, d_conv=None):
                 # cosx uses the largest grid for its final SCF iteration(s)
                 if cosx_enabled:
                     self.jk().set_COSX_grid("Final")
+                    if xc_switching and self.initialized_diis_manager_:
+                        self.diis_manager_.reset_subspace()
 
                 # clear any cached matrices associated with incremental fock construction
                 # the change in the screening spoils the linearity in the density matrix
                 if hasattr(self.jk(), 'clear_D_prev'):
                     self.jk().clear_D_prev()
 
-                if scf_maxiter_post_screening == 0:
+                if scf_maxiter_post_screening == 0 and not xc_switching:
                     break
                 else:
                     core.print_out("  Energy and wave function converged with early screening.\n")

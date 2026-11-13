@@ -65,6 +65,10 @@ void MemDFJK::common_init() { dfh_ = std::make_shared<DFHelper>(primary_, auxili
 size_t MemDFJK::memory_estimate() {
     dfh_->set_nthreads(omp_nthread_);
     dfh_->set_schwarz_cutoff(cutoff_);
+    dfh_->set_do_wK(do_wK_);
+    dfh_->set_wcombine(do_wK_ ? wcombine_ : false);
+    // the Cholesky metric route needs one more naux^2 while the AOs are built
+    dfh_->set_metric_cholesky(options_.exists("SCF_DF_METRIC") && options_.get_str("SCF_DF_METRIC") == "CHOLESKY");
     return dfh_->get_core_size();
 }
 
@@ -77,6 +81,19 @@ void MemDFJK::preiterations() {
     dfh_->set_schwarz_cutoff(cutoff_);
     dfh_->set_method("STORE");
     dfh_->set_fitting_condition(condition_);
+    dfh_->set_metric_cholesky(options_.exists("SCF_DF_METRIC") && options_.get_str("SCF_DF_METRIC") == "CHOLESKY");
+    bool k_layout_iq = false;
+    if (options_.exists("SCF_DF_K_LAYOUT")) {
+        const std::string k_layout = options_.get_str("SCF_DF_K_LAYOUT");
+        if (k_layout == "IQ") {
+            k_layout_iq = true;
+        } else if (k_layout == "AUTO") {
+#if (defined(__x86_64__) || defined(_M_X64)) && (defined(__GNUC__) || defined(__clang__))
+            k_layout_iq = __builtin_cpu_is("amd");
+#endif
+        }
+    }
+    dfh_->set_K_layout_iQ(k_layout_iq);
     dfh_->set_memory(memory_ - memory_overhead());
     dfh_->set_do_wK(do_wK_);
     dfh_->set_omega(omega_);
@@ -109,7 +126,8 @@ void MemDFJK::compute_JK() {
         }
     }
 }
-void MemDFJK::postiterations() {}
+void MemDFJK::postiterations() { release_scratch(); }
+void MemDFJK::release_scratch() { dfh_->clear_JK_scratch(); }
 void MemDFJK::print_header() const {
     // dfh_->print_header();
     if (print_) {
@@ -124,7 +142,12 @@ void MemDFJK::print_header() const {
         outfile->Printf("    Algorithm:          %11s\n", (dfh_->get_AO_core() ? "Core" : "Disk"));
         outfile->Printf("    Schwarz Cutoff:     %11.0E\n", cutoff_);
         outfile->Printf("    Mask sparsity (%%):  %11.4f\n", 100. * dfh_->ao_sparsity());
-        outfile->Printf("    Fitting Condition:  %11.0E\n\n", condition_);
+        outfile->Printf("    Fitting Condition:  %11.0E\n", condition_);
+        outfile->Printf("    Metric:             %11s\n\n", (dfh_->metric_cholesky_route() ? "CHOLESKY" : "EIGEN"));
+        if (dfh_->metric_cholesky() && !dfh_->metric_cholesky_route()) {
+            outfile->Printf(
+                "  Warning: SCF_DF_METRIC CHOLESKY is ignored for combined-wK or custom metric powers; using EIGEN.\n\n");
+        }
 
         outfile->Printf("   => Auxiliary Basis Set <=\n\n");
         auxiliary_->print_by_level("outfile", print_);

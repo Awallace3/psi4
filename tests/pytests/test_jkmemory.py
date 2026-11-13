@@ -35,13 +35,13 @@ def _build_system(basis):
     ["cc-pvdz", "OUT_OF_CORE",  0, "DiskJK"],
 
     # pvdz tests
-    ["cc-pvdz", "MEM_DF",  1590520, "MemDFJK"],
+    ["cc-pvdz", "MEM_DF",  1617844, "MemDFJK"],  # includes narrowest metric-contraction panels
     ["cc-pvdz", "DISK_DF", 1286244, "DiskDFJK"],
     ["cc-pvdz", "CD",      2916000, "CDJK"],
     ["cc-pvdz", "PK",      65610000, "PKJK"],
 
     # 5z tests
-    ["cc-pv5z", "MEM_DF",  57020770, "MemDFJK"],
+    ["cc-pv5z", "MEM_DF",  57020770, "MemDFJK"],  # jk_tmp dominates narrowest panels
     ["cc-pv5z", "DISK_DF", 26984120, "DiskDFJK"],
 ]) # yapf: disable
 
@@ -52,4 +52,8 @@ def test_jk_memory_estimate(basis, jk_type, estimate, name):
 
     assert compare(name, jk.name(), f"{jk_type} algorithm name")
     assert compare_integers(estimate, jk.memory_estimate(), "{} memory estimate".format(jk_type))
+    if jk_type == "MEM_DF":
+        jk.set_memory(estimate)
+        jk.initialize()
+        psi4.core.clean()
 

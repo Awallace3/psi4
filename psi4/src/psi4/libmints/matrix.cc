@@ -55,6 +55,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <algorithm>
 #include <cctype>
@@ -1757,6 +1758,65 @@ void Matrix::diagonalize(Matrix &eigvectors, Vector &eigvalues, diagonalize_orde
 void Matrix::diagonalize(SharedMatrix &eigvectors, std::shared_ptr<Vector> &eigvalues,
                          diagonalize_order nMatz /* = ascending*/) {
     diagonalize(*eigvectors, *eigvalues, nMatz);
+}
+
+size_t Matrix::dsyevd_scratch_size(size_t n) {
+    // copy of the block (n^2) + DSYEVD lwork (1 + 6n + 2n^2) + liwork (3 + 5n ints, in doubles)
+    return n * n + 1 + 6 * n + 2 * n * n + (3 + 5 * n + 1) / 2;
+}
+
+void Matrix::diagonalize_dsyevd(Matrix &eigvectors, Vector &eigvalues, std::vector<double> &work,
+                                std::vector<int> &iwork) {
+    if (symmetry_) {
+        throw PSIEXCEPTION("Matrix::diagonalize_dsyevd: Matrix is non-totally symmetric.");
+    }
+    for (int h = 0; h < nirrep_; ++h) {
+        const int n = rowspi_[h];
+        if (!n) continue;
+        if (n != colspi_[h]) throw PSIEXCEPTION("Matrix::diagonalize_dsyevd: non-square irrep!");
+        if (eigvectors.rowspi(h) != n || eigvectors.colspi(h) != n || eigvalues.dimpi()[h] != n)
+            throw PSIEXCEPTION("Matrix::diagonalize_dsyevd: eigvectors/eigvalues do not match this matrix.");
+        const size_t nn = static_cast<size_t>(n) * n;
+        double *ep = eigvalues.pointer(h);
+
+        // Workspace query (does not touch A).
+        double wq;
+        int iwq;
+        double adummy = 0.0;
+        int info = C_DSYEVD('V', 'L', n, &adummy, n, ep, &wq, -1, &iwq, -1);
+        if (!info) {
+            const size_t lwork = static_cast<size_t>(wq);
+            if (work.size() < nn + lwork) work.resize(nn + lwork);
+            if (iwork.size() < static_cast<size_t>(iwq)) iwork.resize(iwq);
+            // The row-major block read as column-major is its transpose, so 'L' sees the same
+            // triangle that diagonalize() (DSYEV on the explicit transpose, 'U') sees.
+            double *a = work.data();
+            std::memcpy(a, matrix_[h][0], nn * sizeof(double));
+            info = C_DSYEVD('V', 'L', n, a, n, ep, a + nn, static_cast<int>(work.size() - nn), iwork.data(),
+                            static_cast<int>(iwork.size()));
+            if (!info) {
+                // eigenvectors are the columns of the column-major a
+                double **Cp = eigvectors.matrix_[h];
+                for (int i = 0; i < n; i++)
+                    for (int j = 0; j < n; j++) Cp[i][j] = a[static_cast<size_t>(j) * n + i];
+            }
+        }
+        if (info) {
+            info = DSYEV_ascending(n, matrix_[h], ep, eigvectors.matrix_[h]);
+            if (info != 0) throw PSIEXCEPTION("Matrix::diagonalize_dsyevd: DSYEVD and DSYEV failed!");
+        }
+    }
+}
+
+void Matrix::diagonalize_dsyevd(SharedMatrix &eigvectors, std::shared_ptr<Vector> &eigvalues,
+                                std::vector<double> &work, std::vector<int> &iwork) {
+    diagonalize_dsyevd(*eigvectors, *eigvalues, work, iwork);
+}
+
+void Matrix::diagonalize_dsyevd(Matrix &eigvectors, Vector &eigvalues) {
+    std::vector<double> work;
+    std::vector<int> iwork;
+    diagonalize_dsyevd(eigvectors, eigvalues, work, iwork);
 }
 
 std::tuple<SharedMatrix, SharedVector, SharedMatrix> Matrix::svd_temps() {

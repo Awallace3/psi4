@@ -46,6 +46,7 @@ namespace {
 extern "C" {
 extern void F_DGBMV(char*, int*, int*, int*, int*, double*, double*, int*, double*, int*, double*, double*, int*);
 extern void F_DGEMM(char*, char*, int*, int*, int*, double*, double*, int*, double*, int*, double*, double*, int*);
+extern void F_SGEMM(char*, char*, int*, int*, int*, float*, float*, int*, float*, int*, float*, float*, int*);
 extern void F_DGEMV(char*, int*, int*, double*, double*, int*, double*, int*, double*, double*, int*);
 extern void F_DGER(int*, int*, double*, double*, int*, double*, int*, double*, int*);
 extern void F_DSBMV(char*, int*, int*, double*, double*, int*, double*, int*, double*, double*, int*);
@@ -58,6 +59,7 @@ extern void F_DSYR(char*, int*, double*, double*, int*, double*, int*);
 extern void F_DSYR2(char*, int*, double*, double*, int*, double*, int*, double*, int*);
 extern void F_DSYR2K(char*, char*, int*, int*, double*, double*, int*, double*, int*, double*, double*, int*);
 extern void F_DSYRK(char*, char*, int*, int*, double*, double*, int*, double*, double*, int*);
+extern void F_SSYRK(char*, char*, int*, int*, float*, float*, int*, float*, float*, int*);
 extern void F_DTBMV(char*, char*, char*, int*, int*, double*, int*, double*, int*);
 extern void F_DTBSV(char*, char*, char*, int*, int*, double*, int*, double*, int*);
 extern void F_DTPMV(char*, char*, char*, int*, double*, double*, int*);
@@ -328,6 +330,13 @@ PSI_API void C_DGEMM(char transa, char transb, int m, int n, int k, double alpha
                      int ldb, double beta, double* c, int ldc) {
     if (m == 0 || n == 0 || k == 0) return;
     ::F_DGEMM(&transb, &transa, &n, &m, &k, &alpha, b, &ldb, a, &lda, &beta, c, &ldc);
+}
+
+/// Single-precision C_DGEMM (row-major convention, same argument order).
+PSI_API void C_SGEMM(char transa, char transb, int m, int n, int k, float alpha, float* a, int lda, float* b,
+                     int ldb, float beta, float* c, int ldc) {
+    if (m == 0 || n == 0 || k == 0) return;
+    ::F_SGEMM(&transb, &transa, &n, &m, &k, &alpha, b, &ldb, a, &lda, &beta, c, &ldc);
 }
 
 /**
@@ -1650,6 +1659,24 @@ void C_DSYRK(char uplo, char trans, int n, int k, double alpha, double* a, int l
         throw std::invalid_argument("C_DSYRK trans argument is invalid.");
 
     ::F_DSYRK(&uplo, &trans, &n, &k, &alpha, a, &lda, &beta, c, &ldc);
+}
+
+PSI_API void C_SSYRK(char uplo, char trans, int n, int k, float alpha, float* a, int lda, float beta, float* c, int ldc) {
+    if (n == 0 || k == 0) return;
+    if (uplo == 'U' || uplo == 'u')
+        uplo = 'L';
+    else if (uplo == 'L' || uplo == 'l')
+        uplo = 'U';
+    else
+        throw std::invalid_argument("C_SSYRK uplo argument is invalid.");
+    if (trans == 'N' || trans == 'n')
+        trans = 'T';
+    else if (trans == 'T' || trans == 't')
+        trans = 'N';
+    else
+        throw std::invalid_argument("C_SSYRK trans argument is invalid.");
+
+    ::F_SSYRK(&uplo, &trans, &n, &k, &alpha, a, &lda, &beta, c, &ldc);
 }
 
 /**

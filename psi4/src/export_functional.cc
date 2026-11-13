@@ -260,6 +260,8 @@ void export_functional(py::module &m) {
                         return VBase::build_V(basis, func, Process::environment.options, type);
                     })
         .def("initialize", &VBase::initialize, "doctsring")
+        .def("set_grid", &VBase::set_grid, "Rebuild the XC potential on the Initial or Final grid.")
+        .def("initial_grid", &VBase::initial_grid, "Whether this potential uses the initial SCF grid.")
         .def("finalize", &VBase::finalize, "doctsring")
         .def("basis", &VBase::basis, "Returns the internal basis set.")
         .def("functional", &VBase::functional, "Returns the interal superfunctional.")
