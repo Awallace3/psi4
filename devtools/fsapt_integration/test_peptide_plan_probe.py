@@ -5,7 +5,28 @@ import numpy as np
 import pytest
 
 from cachy_dimer_screen import case_specs
-from peptide_plan_probe import fixed_samples, fresh_plan, option_receipt, rebuilt_state
+from peptide_plan_probe import (
+    capture_orthogonalizer, fixed_samples, fresh_plan, option_receipt, rebuilt_state)
+
+
+def test_orthogonalizer_copied_before_native_finalize_and_method_restored():
+    class HF:
+        def __init__(self):
+            self.x = np.eye(2)
+        def _diis_orthogonalizer(self):
+            return SimpleNamespace(np=self.x)
+        def finalize_energy(self):
+            self.x[:] = 0
+            self.x = None
+            return -1.0
+    original = HF.finalize_energy
+    captured = {}
+    wfn = HF()
+    with capture_orthogonalizer(SimpleNamespace(HF=HF), captured):
+        assert wfn.finalize_energy() == -1.0
+    np.testing.assert_array_equal(captured["X"], np.eye(2))
+    assert wfn.x is None
+    assert HF.finalize_energy is original
 
 
 def test_rebuilt_fock_checks_stationarity_not_retained_diis_fock():

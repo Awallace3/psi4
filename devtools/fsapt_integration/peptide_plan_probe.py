@@ -1,5 +1,6 @@
 """Identical-orbital retained/fresh JK comparison, after (never during) SCF."""
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +10,21 @@ from small_dimer_probe import INPUT_SHA, basis_receipt
 from phoenix_timing import digest, save
 
 STATUS = "EXECUTED_PLAN_REPLAY_DIAGNOSTIC_ONLY"
+
+
+@contextmanager
+def capture_orthogonalizer(core, captured):
+    """One copy after iterations, before HF::finalize releases X."""
+    original = core.HF.finalize_energy
+    def wrapped(wfn, *args, **kwargs):
+        import numpy as np
+        x = wfn._diis_orthogonalizer()
+        if x is None:
+            raise RuntimeError("SCF orthogonalizer missing before finalization")
+        captured["X"] = np.array(x.np, copy=True)
+        return original(wfn, *args, **kwargs)
+    with patch.object(core.HF, "finalize_energy", wrapped):
+        yield
 
 
 def option_receipt(core):
@@ -94,7 +110,7 @@ def fixed_samples(core, jk, co, d, label, arrays, rows, baseline=None, context=N
     return first
 
 
-def retained_and_fresh(psi4, wfn, output):
+def retained_and_fresh(psi4, wfn, output, orthogonalizer=None):
     import numpy as np
     primary, auxiliary = wfn.basisset(), wfn.get_basisset("DF_BASIS_SCF")
     original = wfn.jk()
@@ -105,7 +121,12 @@ def retained_and_fresh(psi4, wfn, output):
     co = np.array(wfn.Ca_subset("AO", "OCC").np, copy=True)
     d = co @ co.T
     s, h = [np.array(m.np, copy=True) for m in (wfn.S(), wfn.H())]
-    x = np.array(wfn._diis_orthogonalizer().np, copy=True)
+    if orthogonalizer is None:
+        available = wfn._diis_orthogonalizer()
+        if available is None:
+            raise RuntimeError("No captured SCF orthogonalizer for fixed-state residual")
+        orthogonalizer = available.np
+    x = np.array(orthogonalizer, copy=True)
     nuclear = float(wfn.molecule().nuclear_repulsion_energy())
     context = (h, s, x, nuclear)
     np.testing.assert_allclose(co.T @ s @ co, np.eye(co.shape[1]), atol=1e-10, rtol=1e-10)
@@ -168,15 +189,19 @@ def run(psi4, inputs, output, backend, reference=None, reference_sha=None):
             raise ValueError("Retained-plan producer must be GPU")
         from small_dimer_probe import run as scf_run
         initializations = []
+        captured = {}
         original_init = psi4.core.HF.initialize_jk
         def observed_init(wfn, *args, **kwargs):
             value = original_init(wfn, *args, **kwargs)
             initializations.append(dict(options=option_receipt(psi4.core),
                                         state=jk_state(wfn.jk()), nbf=wfn.basisset().nbf()))
             return value
-        with patch.object(psi4.core.HF, "initialize_jk", observed_init):
+        def post_scf(psi4, wfn, output):
+            return retained_and_fresh(psi4, wfn, output, captured.get("X"))
+        with patch.object(psi4.core.HF, "initialize_jk", observed_init), \
+                capture_orthogonalizer(psi4.core, captured):
             report = scf_run(psi4, inputs, output, backend, "energy", "peptide",
-                             post_scf=retained_and_fresh)
+                             post_scf=post_scf)
         report["initializations"] = initializations
         report["initialization_observer"] = "Post-initialize scalar receipts only; no iteration observer"
         report.update(scf_status=report["status"], status=STATUS)
