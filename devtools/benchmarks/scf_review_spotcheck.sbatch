@@ -90,6 +90,16 @@ on_exit() {
 }
 trap on_term TERM
 trap on_exit EXIT
+# Source checkout on compute avoids login/SSH timeouts on Lustre metadata.
+# Paths are new, run-owned worktrees; never repoint an existing checkout.
+if [[ ! -e "$after" ]]; then
+    git -C "$HOME/gits/psi4" worktree add --detach "$after" "$commit"
+fi
+if [[ ! -e "$before" ]]; then
+    git -C "$HOME/gits/psi4" worktree add --detach "$before" f21cb6880866c61fc80900af6a0a75642ada12c9
+fi
+test "$(git -C "$after" rev-parse HEAD)" = "$commit"
+test "$(git -C "$before" rev-parse HEAD)" = f21cb6880866c61fc80900af6a0a75642ada12c9
 srun --cpu-bind=none bash "$batch" payload "$root" "$after" "$before" "$commit" &
 child=$!
 set +e

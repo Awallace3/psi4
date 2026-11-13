@@ -40,7 +40,7 @@ def inputs(args):
         ("nanotube_b3lyp_fast", "b3lyp", 64),
         ("nanotube_hf_fast", "hf", 64),
         ("nanotube_wb97mv_fast", "wb97m-v", 64),
-        ("nanotube_wb97mv_tight", "wb97m-v", 46),
+        ("nanotube_wb97mv_tight", "wb97m-v", 58),
     ]:
         options = dict(base)
         if method != "hf":
