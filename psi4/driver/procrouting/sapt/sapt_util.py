@@ -26,9 +26,30 @@
 # @END LICENSE
 #
 
+from functools import wraps
+
 from psi4 import core
 
 from ...constants import constants
+
+
+def _without_vv10_response(solve):
+    """Disable the unsupported VV10 response kernel, restoring state on every exit."""
+    @wraps(solve)
+    def wrapped(cache, *args, **kwargs):
+        # Snapshot both states before changing either: the functionals may alias.
+        functionals = [cache[f"wfn_{monomer}"].functional() for monomer in ("A", "B")]
+        states = [functional.needs_vv10() for functional in functionals]
+        try:
+            for functional, enabled in zip(functionals, states):
+                if enabled:
+                    functional.set_do_vv10(False)
+            return solve(cache, *args, **kwargs)
+        finally:
+            for functional, enabled in zip(functionals, states):
+                functional.set_do_vv10(enabled)
+
+    return wrapped
 
 
 def print_sapt_var(name, value, short=False, start_spacer="    "):

@@ -657,7 +657,9 @@ std::map<std::string, SharedMatrix> FDDS_Dispersion::form_aux_matrices(std::stri
 
     size_t doubles = Process::environment.get_memory() * 0.8 / sizeof(double);
     const size_t fixed = 2 * nocc * nvir + 6 * naux * naux;
-    const size_t per_occ = 7 * nvir * naux;
+    // Seven full-range slices plus five additional slices for LR exchange.
+    const size_t nslices = is_lrc_ ? 12 : 7;
+    const size_t per_occ = nslices * nvir * naux;
     long long int rem = doubles - (long long int)fixed;
     if (rem < 0)
         throw PSIEXCEPTION(too_little_memory("FDDS_Dispersion::form_aux_matrices()",
@@ -668,7 +670,8 @@ std::map<std::string, SharedMatrix> FDDS_Dispersion::form_aux_matrices(std::stri
     if (maxo < 1)
         throw PSIEXCEPTION(too_little_memory("FDDS_Dispersion::form_aux_matrices()",
                                              "the fixed storage plus one occupied block, "
-                                             "2 * nocc * nvir + 6 * naux^2 + 7 * nvir * naux",
+                                             "2 * nocc * nvir + 6 * naux^2 + " +
+                                                 std::to_string(nslices) + " * nvir * naux",
                                              fixed + per_occ, doubles));
 
     // => Scalars <= //

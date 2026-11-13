@@ -1903,7 +1903,9 @@ void DFHelper::transform() {
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthread);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    // Out-of-core DIRECT/DIRECT_iaQ builds AO blocks here rather than in
+    // prepare_AO_core(). Match its operator and the fitting metric.
+    eri[0] = std::shared_ptr<TwoBodyAOInt>(use_omega_eri_ ? rifactory->erf_eri(omega_) : rifactory->eri());
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
 #pragma omp parallel num_threads(nthreads_)
     {

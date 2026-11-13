@@ -34,7 +34,7 @@ import numpy as np
 from psi4 import core
 
 from ...p4util import solvers
-from .sapt_util import print_sapt_var
+from .sapt_util import _without_vv10_response, print_sapt_var
 import einsums as ein
 
 
@@ -3541,6 +3541,7 @@ def induction(
     return ret
 
 
+@_without_vv10_response
 def _sapt_cpscf_solve(
     cache: dict,
     jk: core.JK,
@@ -3597,15 +3598,6 @@ def _sapt_cpscf_solve(
         cache["wfn_B"].set_jk(sapt_jk_B)
     else:
         cache["wfn_B"].set_jk(jk)
-
-    # Disable VV10 for CPKS solve — VV10 Vx contribution is not implemented in C++
-    # and the nonlocal correlation kernel is neglected in SAPT(DFT) response.
-    vv10_A = cache["wfn_A"].functional().needs_vv10()
-    vv10_B = cache["wfn_B"].functional().needs_vv10()
-    if vv10_A:
-        cache["wfn_A"].functional().set_do_vv10(False)
-    if vv10_B:
-        cache["wfn_B"].functional().set_do_vv10(False)
 
     def setup_P_X(eps_occ, eps_vir, name="P_X"):
         P_X = ein.utils.tensor_factory(
@@ -3718,11 +3710,5 @@ def _sapt_cpscf_solve(
         printer=pfunc,
     )
     core.print_out("   " + ("-" * sep_size) + "\n")
-
-    # Re-enable VV10 if it was disabled
-    if vv10_A:
-        cache["wfn_A"].functional().set_do_vv10(True)
-    if vv10_B:
-        cache["wfn_B"].functional().set_do_vv10(True)
 
     return vecs
