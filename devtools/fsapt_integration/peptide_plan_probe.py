@@ -32,13 +32,14 @@ def hf_beta_control(core, beta, records):
         yield
 
 
-def beta_scf_run(psi4, inputs, output, beta):
+def beta_scf_run(psi4, inputs, output, beta, entrypoint="energy", provider_factory=None):
     from small_dimer_probe import run as scf_run
     captured, records = {}, []
     def post_scf(psi4, wfn, output):
         return retained_and_fresh(psi4, wfn, output, captured.get("X"))
     with hf_beta_control(psi4.core, beta, records), capture_orthogonalizer(psi4.core, captured):
-        report = scf_run(psi4, inputs, output, "gpu", "energy", "peptide", post_scf=post_scf)
+        report = scf_run(psi4, inputs, output, "gpu", entrypoint, "peptide",
+                        provider_factory=provider_factory, post_scf=post_scf)
     if not records or any(row["after"]["beta"] != beta for row in records):
         raise RuntimeError("Requested beta initialization was not observed")
     if report["fixed_jk"]["state"]["beta"] != beta:

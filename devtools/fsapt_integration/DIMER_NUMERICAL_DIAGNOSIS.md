@@ -682,6 +682,94 @@ Independent GPU replay now interleaves actual-beta/zero-beta/actual-beta/
 zero-beta plans on the exact saved C bytes, changing no other plan setter.
 This is an investigation, not an established SDK diagnosis or production fix.
 
+### Controlled zero-omega beta replay
+
+Completed continuation: `source/tmp/plans-02-replay-01`, under the dedicated
+cachy root above. Helper pin `6ab32e92cc847cfe7d8107e4fe73e8eb2d44a932`;
+science install unchanged. Master result SHA256:
+`5c19e7caf776f45ff9c7e41c241e4a113457c715257c08127470c5b423c11cee`.
+The CPU and GPU workers use the completed retained producer's identical
+occupied-orbital bytes and exact primary/auxiliary basis fingerprints.
+GPU plans interleave beta1/beta0/beta1/beta0, with four calls per plan.
+All other exposed plan setters are held fixed: alpha1, omega0, wK disabled,
+Native FP64. This is a diagnostic, not a production change or timing result.
+
+| Plan | Max absolute repeated JK energy change from its first call (Eh) | J bitwise stable within plan |
+|---|---:|---|
+| CPU MemDFJK, plan0 | 1.40360e-14 | Not used as a bitwise gate |
+| CPU MemDFJK, plan1 | 3.56246e-14 | Not used as a bitwise gate |
+| GPU beta1, plan0 | 1.89171e-10 | No |
+| GPU beta0, plan1 | 1.61903e-16 | Yes |
+| GPU beta1, plan2 | 2.74322e-10 | No |
+| GPU beta0, plan3 | 2.15603e-16 | Yes |
+
+The reported variation is the direct contraction
+`2 Tr(D delta_J) - Tr(D delta_K)` on the common saved D, rather than
+subtracting two large total energies. The beta1 variation is Coulomb
+dominated. Beta0 removes the observed within-plan J jitter, but **does not
+establish CPU parity**: its stable offset is approximately
+**1.17848–1.18404e-9 Eh above CPU**, with a roughly 5.55e-12 difference
+between its two freshly constructed plans. Native plan memory changes from
+0.316 GiB to 0.303 GiB.
+
+At this beta1-SCF endpoint, the independently reconstructed commutator RMS
+is about 1.1–1.2e-13 for beta1, 4.51–4.54e-12 for beta0, and 4.91e-12 for
+CPU. Therefore the next control is **full SCF with beta chosen before native
+initialization**, allowing each variant to relax its own density. It must
+not be inferred from a fixed endpoint that the convergence issue is solved.
+The diagnostic leaves the production adapter unchanged.
+
+CPU result/matrix SHA256:
+`f769c1873521cd827228591fef120dcfa5cc5b638082b8e2127b829ca1d552d6` /
+`b783e5e608c65e8da7a2e1f97207986d474a0d90cc975d5abbfe66ef5f37e257`.
+GPU result/matrix SHA256:
+`f634b269161a3a2cdfab5f9e432e2f9b3bd5f1afd054315bac0938209b918714` /
+`5975b6efe5422d33dbb451bdce37ac204aa4f72b0e7f395e1f59d291c19baa24`.
+Hash-verified per-call native D arrays are **bitwise identical across all
+24 CPU/GPU calls**, including both beta settings and fresh plans. Their
+maximum within-role and cross-role difference is exactly zero. Each native
+D differs from the common host-constructed saved D by at most 5.55112e-17;
+that fixed roundoff difference does not explain the changing J outputs.
+
+### Full standalone SCF beta control
+
+Completed `source/tmp/beta-scf-01`, helper
+`47e8a3c834d11d3548bd92e84173f9daafac124f`, same preserved science install.
+Master SHA256:
+`9b0c681f063020df6432802e377c7c4d10c74bccba19d28327c8427216fc40b6`.
+Four fresh processes ran in beta1/beta0/beta0/beta1 order, unchanged E10/D12.
+The diagnostic intercepts JK initialization, verifies alpha1/omega0, and sets
+only beta immediately before native initialization. There is no per-iteration
+observer. Actual memory grants (automatically estimated by SCF) are recorded;
+the earlier fixed-input replay, unlike this fresh-process SCF comparison,
+held the exact JK memory grant fixed.
+
+| Beta | Iterations, two runs | Max aligned repeat energy difference (Eh) | Max absolute SCF energy change at iterations >=15 (Eh) |
+|---|---|---:|---:|
+| 1 | 26, 23 | 6.46651e-10 | 3.75849e-10 |
+| 0 | 22, 22 | 2.33058e-12 | 1.36424e-12 |
+
+All four legitimately met the original convergence criteria. Beta0 matches
+the earlier CPU iteration count, and its final energies are
+`-494.07407982240863` and `-494.07407982240755` Eh. Its independently rebuilt
+last-evaluated commutator RMS is about 5.94e-13; final-orbital RMS is about
+2.54e-13. Repeated post-SCF J is bitwise stable for beta0 but not beta1,
+including fresh plans and the revisited original plan. No retained plan
+recreation was logged. **The roughly 1.18e-9 Eh offset above CPU remains.**
+
+Result SHA256s (run order):
+`a5df8d84a038b2a234167ea9a4ed0e1ecaa0d56e1f5031a4be2515667f3d09aa`,
+`c05fb1bc3d8b56b5ad13698dcf2a075c19a41311e389d4c8c3348daa7e3eb547`,
+`43e6fbab423d9b768aa4213882017393cd5007157696e3d0a5ebf76c2e25d1e5`,
+`3654b2282b559d67b5c0bf3f556195b918228d30c42ce27a76f169426cc71d60`.
+
+These observations support a zero-omega plan-selection issue, not a
+SAPT-only failure. Matched standalone/SAPT-dimer beta controls are the next
+test, followed by H200/protein83 validation before claiming the large-system
+failure is resolved. No native production fix or sanitizer pass is claimed.
+
+### Further attribution and vendor report requirements
+
 1. If standalone SCF reproduces the discrepancy, use identical saved dimer
    coefficient bytes for repeated native J/K calls within a plan, across
    rebuilt plans, and across fresh processes.

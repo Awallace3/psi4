@@ -42,6 +42,18 @@ def test_beta_control_sets_only_unused_coefficient_before_real_initialization():
     assert [s[0] for s in case_specs("beta-scf")] == ["beta1-0", "beta0-0", "beta0-1", "beta1-1"]
 
 
+def test_beta_entrypoint_screen_balances_order_and_repeats():
+    cases = case_specs("beta-entrypoints")
+    assert [row[0] for row in cases] == [
+        "beta1-energy-0", "beta1-sapt-0", "beta0-energy-0", "beta0-sapt-0",
+        "beta0-sapt-1", "beta0-energy-1", "beta1-sapt-1", "beta1-energy-1"]
+    assert all(system == "peptide" and backend == "gpu"
+               and label.split("-")[1] == entrypoint
+               for label, system, backend, entrypoint in cases)
+    with pytest.raises(ValueError):
+        case_specs("beta-entrypoints", replay_only=True)
+
+
 def test_unused_beta_ab_changes_only_beta_and_interleaves_actual_setting():
     state = dict(alpha=1., beta=1., omega=0., memory_doubles=123, wcombine=False)
     variants = replay_variants(state, "gpu")
