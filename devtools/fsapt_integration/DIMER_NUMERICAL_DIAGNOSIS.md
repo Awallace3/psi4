@@ -768,7 +768,63 @@ SAPT-only failure. Matched standalone/SAPT-dimer beta controls are the next
 test, followed by H200/protein83 validation before claiming the large-system
 failure is resolved. No native production fix or sanitizer pass is claimed.
 
+### Matched standalone/SAPT dimer beta control
+
+Completed `source/tmp/beta-entrypoints-01`, helper
+`baa841d4968bd877224893913db82f3beb58f883`, unchanged preserved science.
+Master SHA256:
+`a48213e62573c43af3deebd36571452bcc2a872038a284dfcad72ac432b65ca6`.
+Eight fresh processes reverse entrypoint/beta order on the second repeat.
+All result/log/matrix hashes were verified, along with identical geometry,
+basis fingerprints and requested options. SAPT stops after its first dimer
+SCF; no fragment provider executes. Host contracts: 27 passed.
+
+| Setting | Standalone iterations | SAPT dimer iterations | Largest aligned energy difference among all four trajectories (Eh) |
+|---|---|---|---:|
+| beta1 | 23, 24 | 29, 23 | 5.96231e-10 |
+| beta0 | 22, 22 | 22, 22 | 2.18847e-11 |
+
+Beta0 removes the observed convergence-count discrepancy on this peptide.
+It does **not** produce bitwise-identical trajectories: SAPT-repeat variation
+alone reaches 2.10321e-11, comparable to the worst cross-entrypoint difference.
+Across beta0 arms final energies span 2.17710e-11 Eh; the approximately
+1.18e-9 Eh CPU offset remains. There is no demonstrated systematic SAPT-only
+effect in these controls.
+
+Every beta0 arm has bitwise-stable repeated J within its retained/fresh plans;
+the largest within-block JK energy variation is 6.34973e-16 Eh (from K).
+Every beta1 arm has varying J, up to 3.21418e-10 Eh in the same measurement.
+Native D is bitwise identical across each worker's post-SCF repeated calls,
+and no retained plan recreation occurs. This strengthens the beta-dependent
+plan finding but does not establish the implementation-level cause.
+
+The inspected SDK `density_fitted_integral_plan_api.h` documents that
+`cuestDFCoulombCompute` always uses the full-range Coulomb operator,
+independently of the exchange operator specification. The Coulomb API also
+documents that output elements are overwritten, so lack of caller-side
+output zeroing is not by itself an API-contract violation. Its separate
+JIT/ffloat precision settings require further examination: the adapter's
+printed global Native FP64 mode is not sufficient documentation of those
+per-operation settings. Follow-up inspection of `cuest_parameter_types.h`
+(SHA256 `ce1b4313eab84d3027d0ad5202ca17e49baf41573f9c700c9089c6535051d882`)
+explicitly documents `CUEST_NATIVE_FP64_MATH_MODE` as **"Native FP64 compute
+is used everywhere."** Thus there is no evidence here of unintended ffloat
+execution; explicit per-operation OFF remains a possible diagnostic, not an
+established explanation.
+
 ### Further attribution and vendor report requirements
+
+H200 follow-up helper: `dimer_beta_probe.py`, selected by
+`submit_dimer.py --mode beta-energy --beta 0|1 --backends gpu`.
+It retains the existing protein83 native stage and public HF energy call,
+records the single pre-initialization beta override and native trajectory,
+and preserves failure evidence without retrying or relaxing E10/D12.
+Host helper/launcher contracts: **37 passed**.
+Plan: two fresh jobs per beta, each one H200/8 host threads/160 GiB/30 minutes,
+account `gts-cs207-chemx`, explicit `embers`. Existing CPU-only references
+remain available; no CPU benchmark is moved onto a GPU node.
+The Phoenix preflight found **50/50 embers submission slots occupied**.
+No follow-up jobs were submitted and no existing jobs were altered.
 
 1. If standalone SCF reproduces the discrepancy, use identical saved dimer
    coefficient bytes for repeated native J/K calls within a plan, across

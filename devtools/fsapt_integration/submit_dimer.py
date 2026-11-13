@@ -35,7 +35,9 @@ def main():
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--inputs", type=Path, required=True)
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--mode", choices=("energy", "fixed-jk", "trace-energy", "replay-trace"), default="energy")
+    parser.add_argument("--mode", choices=("energy", "fixed-jk", "trace-energy", "replay-trace",
+                                          "beta-energy"), default="energy")
+    parser.add_argument("--beta", type=int, choices=(0, 1))
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--reference-sha256")
     parser.add_argument("--trace-sha256")
@@ -43,6 +45,11 @@ def main():
     args = parser.parse_args()
     if len(set(args.backends)) != len(args.backends):
         parser.error("Select each backend at most once")
+    if args.mode == "beta-energy":
+        if args.beta is None or args.backends != ["gpu"]:
+            parser.error("Beta-energy requires --beta 0|1 and --backends gpu")
+    elif args.beta is not None:
+        parser.error("--beta only applies to beta-energy")
     helper = Path(__file__).resolve().parents[2]
     helper_pin = subprocess.check_output(
         ["git", "-C", str(helper), "rev-parse", "HEAD"], text=True).strip()
@@ -56,7 +63,7 @@ def main():
     inputs = args.inputs.resolve(strict=True)
     if digest(inputs) != INPUT_SHA:
         raise RuntimeError("Wrong frozen input manifest")
-    reference_fields = {}
+    reference_fields = {"beta": args.beta} if args.mode == "beta-energy" else {}
     if args.mode == "fixed-jk":
         if args.reference is None or args.reference_sha256 is None:
             parser.error("Fixed-JK mode requires a frozen CPU reference and SHA256")
@@ -99,7 +106,9 @@ def main():
             "inputs": str(inputs), "inputs_sha256": INPUT_SHA,
             "backend": backend, "cpu_admission": admission,
             "resources": resources(backend), "command": argv,
-            "scope": ("GPU_TRAJECTORY_MEMDFJK_VS_CUEST_REPLAY_NO_SCF"
+            "scope": ("PROTEIN83_ZERO_OMEGA_BETA_ONLY_SCF_CONTROL"
+                      if args.mode == "beta-energy" else
+                      "GPU_TRAJECTORY_MEMDFJK_VS_CUEST_REPLAY_NO_SCF"
                       if args.mode == "replay-trace" else
                       "FIXED_CPU_DIMER_COEFFICIENT_JK_REPEATS_NO_SCF"
                       if args.mode == "fixed-jk" else

@@ -60,6 +60,12 @@ def execute(path, root, worker=False):
         owner = bootstrap(config, build)
         runtime = AuditedRuntime(config_path, manifest["config_sha256"])
         os.chdir(root)
+        if manifest.get("mode") == "beta-energy":
+            from dimer_beta_probe import run
+            runtime.guarded_call(run, runtime.psi4, Path(manifest["inputs"]),
+                                 root / "energy", manifest["backend"], policy["threads"],
+                                 manifest["beta"])
+            return
         if manifest.get("mode") == "replay-trace":
             from dimer_trace_replay import run
             runtime.guarded_call(run, runtime.psi4, Path(manifest["inputs"]),
