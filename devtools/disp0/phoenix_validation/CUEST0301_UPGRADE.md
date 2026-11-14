@@ -94,6 +94,17 @@ compiler count is also bounded.
 Phoenix setup belongs in the small **embers** CPU job
 `install_cuest0301.sbatch`, not a long login-node solve/install. All 50 embers
 slots were occupied at initial staging. No new inferno use is authorized.
+After headroom reached 47/50, installation job **15619965** was accepted:
+`gts-cs207-chemx / cpu-small / embers`, 2 CPUs, 8 GiB, 30 minutes.
+Effective QoS and resources were read back with `scontrol`; initial state
+was PENDING/Priority. `15619964` in the test-only output is not the submitted
+job. No installation success is implied by this submission.
+Job **15619965 subsequently completed in 47 seconds** with job/batch/step
+exit 0. `status.txt` records `term_received=0`; `package/receipt.json`
+reports `PASS_PACKAGE_INSTALL_ONLY` and the same pinned package/native
+hashes as Cachy. Thus the requested 0.3.0.1 SDK is installed on **both**
+machines, while `qualified_for_sapt0` remains false. Phoenix receipts were
+retrieved to `/home/awallace43/data/cuest0301-phoenix-sdk/`.
 Cachy's short GPU correctness check was explicitly authorized after the
 rebuild; the desktop has only approximately 19 GiB free at initial setup,
 so check space before allocating a full new build.
