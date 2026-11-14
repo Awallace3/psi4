@@ -267,8 +267,17 @@ class CPHF_FISAPT {
     // Active vir orbital eigenvalues of B
     std::shared_ptr<Vector> eps_vir_B_;
 
-    // Form the s = Ab product for the provided vectors b (may or may not need more iterations)
-    std::map<std::string, std::shared_ptr<Matrix>> product(std::map<std::string, std::shared_ptr<Matrix>> b);
+    // => Batched problems (compute_cphf_batch) <= //
+
+    // Perturbations applied to A and B, one per source; any number, zero matrices allowed
+    std::vector<std::shared_ptr<Matrix>> w_A_batch_, w_B_batch_;
+    // Responses, same order as the perturbations
+    std::vector<std::shared_ptr<Matrix>> x_A_batch_, x_B_batch_;
+
+    // Form s = H b for every vector in bA (monomer A) and bB (monomer B) with one JK
+    // (and one XC-kernel grid pass) per monomer
+    void product(const std::vector<std::shared_ptr<Matrix>>& bA, const std::vector<std::shared_ptr<Matrix>>& bB,
+                 std::vector<std::shared_ptr<Matrix>>& sA, std::vector<std::shared_ptr<Matrix>>& sB);
     // Apply the denominator from r into z
     void preconditioner(std::shared_ptr<Matrix> r, std::shared_ptr<Matrix> z, std::shared_ptr<Vector> o,
                         std::shared_ptr<Vector> v);
@@ -277,7 +286,10 @@ class CPHF_FISAPT {
     CPHF_FISAPT();
     virtual ~CPHF_FISAPT();
 
+    // Solve w_A_ / w_B_ into x_A_ / x_B_
     void compute_cphf();
+    // Solve every w_*_batch_ into x_*_batch_; each source runs its own PCG, products are shared
+    void compute_cphf_batch();
 };
 
 }  // Namespace fisapt
