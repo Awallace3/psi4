@@ -309,16 +309,27 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     if not do_dft:
         do_mon_grac_shift_A = do_mon_grac_shift_B = False
 
+    if do_fsapt and (sapt_dft_D4_IE or sapt_dft_D3_IE):
+        dispersion_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
+        if do_delta_dft or dispersion_type != "intermolecular":
+            core.print_out(
+                "\n    Warning: the empirical F-SAPT dispersion breakdown uses the "
+                "intermolecular atom-pair contributions from the dimer calculation. "
+                "For supermolecular and delta-DFT D3/D4 methods, this qualitative "
+                "breakdown does not in general sum to the scalar dispersion or total "
+                "interaction energy; the reported scalar energies remain authoritative.\n\n"
+            )
+
     # CPHF needs the HF segment for the SAPT0 induction terms, even without delta HF.
     run_hf_segment = do_delta_hf or (induction_type == "CPHF" and do_dft)
     hf_segment_label = "delta HF" if do_delta_hf else "SAPT0 induction"
 
-    # SAPT(DFT) FDDS dispersion has no fragment partition, so F-SAPT is
-    # limited to SAPT(HF), whose dispersion FISAPT partitions directly.
-    if do_fsapt and do_dft:
+    # Because SAPT(DFT) FDDS Dispersion doesn't have FSAPT support currently,
+    # catch this case when FISAPT is requested with SAPT_DFT_DO_DISP false
+    if do_fsapt and do_disp and sapt_dft_functional != "HF":
         raise ValidationError(
-            "FSAPT(DFT) currently only supported with SAPT_DFT_FUNCTIONAL=HF; "
-            "FDDS dispersion has no F-SAPT partition."
+            "FSAPT(DFT) currently only supported with empirical dispersion methods "
+            "(like SAPT(DFT)-D4(I)) or with SAPT_DFT_FUNCTIONAL=HF."
         )
 
     raw_external_potentials = kwargs.pop("external_potentials", None)
@@ -1693,7 +1704,7 @@ def sapt_dft(
         core.timer_off("SAPT(DFT):disp")
 
     # Now do F-SAPT on dispersion if requested
-    if do_fsapt:
+    if do_fsapt and do_disp:
         core.timer_on("SAPT(DFT): F-SAPT Dispersion")
         FISAPT_obj.fdisp()
         core.timer_off("SAPT(DFT): F-SAPT Dispersion")
@@ -1704,6 +1715,21 @@ def sapt_dft(
         matrices = FISAPT_obj.matrices()
         for k, v in matrices.items():
             cache[k] = v
+    elif do_fsapt:
+        matrices = FISAPT_obj.matrices()
+        for k, v in matrices.items():
+            cache[k] = v
+        FISAPT_obj.fdrop(external_potentials)
+
+    sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
+    sapt_dft_D3_IE = core.get_option("SAPT", "SAPT_DFT_D3_IE")
+    if do_fsapt and (
+        sapt_dft_D4_IE or sapt_dft_D3_IE
+    ):
+        cache["FSAPT_EMPIRICAL_DISP"] = core.Matrix.from_array(
+            data["FSAPT_EMPIRICAL_DISP"]
+        )
+
     # Print out final data
     core.print_out("\n")
     core.print_out(
@@ -1737,7 +1763,13 @@ def sapt_dft(
         _set_fsapt_var("FSAPT_EXCH_AB", cache["Exch_AB"])
         _set_fsapt_var("FSAPT_INDAB_AB", cache["IndAB_AB"])
         _set_fsapt_var("FSAPT_INDBA_AB", cache["IndBA_AB"])
-        _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
+        if sapt_dft_D4_IE or sapt_dft_D3_IE:
+            disp_ab = cache["Elst_AB"].clone()
+            disp_ab.zero()
+            _set_fsapt_var("FSAPT_DISP_AB", disp_ab)
+            _set_fsapt_var("FSAPT_EMPIRICAL_DISP", cache["FSAPT_EMPIRICAL_DISP"])
+        else:
+            _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
     return data
 
 

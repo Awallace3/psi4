@@ -334,17 +334,20 @@ filepath as in::
 FSAPT(DFT)
 ^^^^^^^^^^
 
-F-SAPT analysis can also be performed on SAPT(DFT) calculations. The workflow
-is the same as for ``fisapt0``: run the interaction-energy method with
-``return_wfn=True`` and pass that wavefunction to
-:func:`~psi4.driver.fsapt_analysis`.
+F-SAPT analysis can also be performed on SAPT(DFT) calculations, including
+SAPT(DFT)-D3 and SAPT(DFT)-D4 variants. The workflow is the same as for
+``fisapt0``: run the interaction-energy method with ``return_wfn=True`` and
+pass that wavefunction to :func:`~psi4.driver.fsapt_analysis`.
 
 To enable this in SAPT(DFT), set |sapt__sapt_dft_do_fsapt| to ``FISAPT``,
 which uses the FISAPT code for the decomposition. The SAPT(DFT) FDDS
-dispersion has no fragment partition, so F-SAPT is currently available only
-for SAPT(HF), that is ``SAPT_DFT_FUNCTIONAL HF``, whose dispersion FISAPT
-partitions directly. F-SAPT needs an induction partition, so
-|sapt__sapt_dft_induction_type| ``NONE`` is rejected.
+dispersion has no fragment partition, so F-SAPT requires either SAPT(HF)
+(``SAPT_DFT_FUNCTIONAL HF``), whose dispersion FISAPT partitions directly, or
+one of the empirical-dispersion methods (``sapt(dft)-d3/d4(i/s)``,
+``dft-d3/d4(sapt)``). F-SAPT needs an induction partition, so
+|sapt__sapt_dft_induction_type| ``NONE`` is rejected; with ``CPHF`` the
+fragment induction is the partition of the SAPT0 induction that the scalar
+total uses.
 
 Typical usage is::
 
@@ -352,11 +355,13 @@ Typical usage is::
         basis                 aug-cc-pvdz
         scf_type              df
         freeze_core           true
-        sapt_dft_functional   hf
+        sapt_dft_functional   pbe0
+        sapt_dft_grac_shift_a 0.1165
+        sapt_dft_grac_shift_b 0.1272
         sapt_dft_do_fsapt     FISAPT
     }
 
-    e, wfn = energy('sapt(dft)', return_wfn=True)
+    e, wfn = energy('sapt(dft)-d4(i)', return_wfn=True)
     fsapt = psi4.fsapt_analysis(
         source=wfn,
         fragments_a={"FragA": [1, 2, 3]},
@@ -364,6 +369,15 @@ Typical usage is::
         links5050=True,
         print_output=False,
     )
+
+For empirical SAPT(DFT)-D3/D4 runs, the FSAPT table separates conventional
+SAPT dispersion and empirical pairwise dispersion. In
+:func:`~psi4.driver.fsapt_analysis` output, ``EDisp`` contains the empirical
+D3/D4 partition and can be nonzero even when ``Disp`` is zero. For
+supermolecular and :math:`\Delta`-DFT variants, this qualitative partition uses
+only the intermolecular atom-pair contributions from the dimer calculation and
+therefore need not sum to the authoritative scalar dispersion or total
+interaction energy; Psi4 prints a warning when this approximation is used.
 
 
 Order-1 Visualization with PyMol
