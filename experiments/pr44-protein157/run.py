@@ -16,7 +16,9 @@ import traceback
 
 HARNESS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HARNESS.parent / "pr44"))
+sys.path.insert(0, str(HARNESS.parent / "pr44-memory"))
 from case import cgroup_dir, dump, monitor, setup_scratch, sha
+from references import compare
 
 
 def git(*args, directory=HARNESS):
@@ -28,8 +30,16 @@ def main():
     parser.add_argument("arm", choices=["base", "head"])
     parser.add_argument("output", type=Path)
     parser.add_argument("harness_commit")
+    parser.add_argument("--memory-gb", type=int)
+    parser.add_argument("--fix-disk-jk-namespace", action="store_true")
+    parser.add_argument("--energy-tolerance", type=float, default=1e-7)
     args = parser.parse_args()
     config = json.loads((HARNESS / "config.json").read_text())
+    if args.memory_gb is not None:
+        assert 1 <= args.memory_gb <= 1200
+        config["memory_bytes"] = args.memory_gb * 10**9
+    assert math.isfinite(args.energy_tolerance) and args.energy_tolerance > 0
+    config["energy_tolerance_Eh"] = args.energy_tolerance
     assert git("rev-parse", "HEAD") == args.harness_commit
     assert not git("status", "--porcelain")
     build_root = Path(config["build_campaign"])
@@ -47,6 +57,10 @@ def main():
     native_hash = sha(psi4.core.__file__)
     assert validated["commit"] == config[args.arm]
     assert native_hash == validated["core_sha256"]
+    namespace_workaround = None
+    if args.fix_disk_jk_namespace:
+        from namespace_workaround import install
+        namespace_workaround = install()
     psi4.core.IOManager.shared_object().set_default_path(str(scratch) + "/")
     geometry_path = HARNESS / "protein157.xyz"
     lines = geometry_path.read_text().splitlines()
@@ -61,6 +75,7 @@ def main():
                        sapt_fdds_disp_split_monomers=True)
     metadata = {
         "arm": args.arm, "source_commit": config[args.arm], "harness_commit": args.harness_commit,
+        "namespace_workaround": namespace_workaround,
         "core": psi4.core.__file__, "core_sha256": native_hash,
         "config": config, "options": options, "config_sha256": sha(HARNESS / "config.json"),
         "geometry_sha256": sha(geometry_path), "driver_sha256": sha(__file__),
@@ -76,13 +91,18 @@ def main():
     psi4.set_num_threads(config["threads"])
     psi4.set_memory(config["memory_bytes"])
     psi4.set_options(options)
+    metadata["scf_subtype"] = psi4.core.get_global_option("SCF_SUBTYPE")
+    metadata["scf_subtype_explicitly_changed"] = psi4.core.has_global_option_changed("SCF_SUBTYPE")
+    assert metadata["scf_subtype"] == "AUTO" and metadata["scf_subtype_explicitly_changed"]
     molecule = psi4.geometry(geometry)
     molecule.update_geometry()
     metadata["nbf"] = psi4.core.BasisSet.build(molecule, "ORBITAL", options["basis"]).nbf()
     for field, option, fit in [("naux_scf", "df_basis_scf", "JKFIT"),
                                ("naux_fdds", "df_basis_mp2", "RIFIT")]:
-        metadata[field] = psi4.core.BasisSet.build(
-            molecule, option.upper(), options[option], fit, options["basis"]).nbf()
+        basis = psi4.core.BasisSet.build(molecule, option.upper(), options[option], fit, options["basis"])
+        metadata[field] = basis.nbf()
+        metadata[field + "_max_nprimitive"] = basis.max_nprimitive()
+        metadata[field + "_max_function_per_shell"] = basis.max_function_per_shell()
     for field in ["nbf", "naux_scf", "naux_fdds"]:
         assert metadata[field] == config[field], (field, metadata[field])
     dump(args.output / "metadata.json", metadata)
@@ -94,13 +114,17 @@ def main():
                               daemon=True)
     sampler.start()
     start = time.perf_counter()
-    result = {"completed": False, "arm": args.arm, "source_commit": config[args.arm]}
+    result = {"completed": False, "arm": args.arm, "source_commit": config[args.arm],
+              "harness_commit": args.harness_commit, "mode": "full",
+              "memory_bytes": config["memory_bytes"], "namespace_workaround": namespace_workaround}
     try:
         energy = psi4.energy("sapt(dft)", molecule=molecule)
         values = {k: psi4.variable(k) for k in [
             "SAPT ELST ENERGY", "SAPT EXCH ENERGY", "SAPT IND ENERGY", "SAPT DISP ENERGY", "SAPT TOTAL ENERGY"]}
         assert all(math.isfinite(v) for v in [energy, *values.values()])
-        result.update(completed=True, energy_Eh=energy, variables=values)
+        comparisons = compare(values, args.energy_tolerance)
+        result.update(completed=True, energy_Eh=energy, variables=values,
+                      energy_comparison=comparisons, parity_passed=comparisons["passed"])
     except BaseException:
         result["exception"] = traceback.format_exc()
         raise
@@ -127,6 +151,7 @@ def main():
         print(json.dumps(result), flush=True)
     assert sampler.exitcode == 0, "Resource sampler failed; do not accept this measurement"
     assert (args.output / "samples.jsonl").stat().st_size > 0
+    assert result["parity_passed"], "Energy comparison failed; resource artifacts preserved"
     psi4.core.clean()
 
 

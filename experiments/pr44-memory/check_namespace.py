@@ -3,6 +3,7 @@
 Without MODE, run red/green/reference in fresh processes and compare components.
 """
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -23,6 +24,8 @@ def main():
         (output / "comparison.json").write_text(json.dumps(delta, indent=2) + "\n")
         assert all(abs(v) < 1e-8 for v in delta.values()), delta
         print(delta)
+        if os.environ.get("PR44_AUDIT_PROTEIN") == "1":
+            audit_protein(output)
         return
 
     mode = sys.argv[2]
@@ -30,6 +33,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="pr44-disk-jk-") as scratch:
         os.environ["PSI_SCRATCH"] = scratch
         import psi4
+        with open(psi4.core.__file__, "rb") as handle:
+            core_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+        expected_hash = os.environ.get("PR44_EXPECTED_CORE_SHA256")
+        if expected_hash:
+            assert core_hash == expected_hash, (psi4.core.__file__, core_hash)
+        expected_stage = os.environ.get("PR44_EXPECTED_STAGE")
+        if expected_stage:
+            assert Path(psi4.core.__file__).resolve().is_relative_to(Path(expected_stage).resolve())
 
         workaround = None
         if mode == "namespace":
@@ -61,7 +72,8 @@ symmetry c1
             "sapt_dft_grac_shift_b": 0.136, "sapt_dft_functional": "pbe0",
             "sapt_dft_do_hybrid": True, "sapt_dft_do_dhf": True,
         })
-        result = {"completed": False, "core": psi4.core.__file__, "workaround": workaround}
+        result = {"completed": False, "core": psi4.core.__file__,
+                  "core_sha256": core_hash, "workaround": workaround}
         try:
             result["energy"] = psi4.energy("sapt(dft)", molecule=molecule)
             assert mode != "broken", "Expected failure not reproduced"
@@ -77,6 +89,33 @@ symmetry c1
             psi4.core.flush_outfile()
             (output / f"{mode}.json").write_text(json.dumps(result, indent=2) + "\n")
         psi4.core.clean()
+
+
+def audit_protein(output):
+    """Cheap old-binary check of the *actual* full-run options and basis sizes."""
+    import psi4
+    here = Path(__file__).resolve().parent.parent / "pr44-protein157"
+    config = json.loads((here / "config.json").read_text())
+    psi4.set_options(config["options"])
+    atoms = (here / "protein157.xyz").read_text().splitlines()[2:]
+    split = config["fragment_a_atoms"]
+    molecule = psi4.geometry(
+        "0 1\n" + "\n".join(atoms[:split]) + "\n--\n0 1\n" + "\n".join(atoms[split:])
+        + "\nunits angstrom\nsymmetry c1\nno_reorient\nno_com\n")
+    primary = psi4.core.BasisSet.build(molecule, "ORBITAL", config["options"]["basis"])
+    auxiliary = psi4.core.BasisSet.build(
+        molecule, "DF_BASIS_MP2", config["options"]["df_basis_mp2"], "RIFIT", config["options"]["basis"])
+    result = {
+        "scf_subtype": psi4.core.get_global_option("SCF_SUBTYPE"),
+        "scf_subtype_explicitly_changed": psi4.core.has_global_option_changed("SCF_SUBTYPE"),
+        "nbf": primary.nbf(), "naux": auxiliary.nbf(),
+        "max_nprimitive": auxiliary.max_nprimitive(),
+        "max_function_per_shell": auxiliary.max_function_per_shell(),
+    }
+    assert result["scf_subtype"] == "AUTO" and result["scf_subtype_explicitly_changed"]
+    assert result["nbf"] == 2491 and result["naux"] == 7384
+    (output / "protein-options.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result), flush=True)
 
 
 if __name__ == "__main__":
