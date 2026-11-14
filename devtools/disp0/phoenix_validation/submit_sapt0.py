@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 
-from sapt0_timing import SYSTEMS, save, sha
+from sapt0_timing import ACCEPTANCE, SYSTEMS, save, sha
 from submit import clean_environment
 from sapt0_hardware import PROFILES
 
@@ -89,6 +89,7 @@ def main():
         "hardware_profile": profile, "inferno_approved": args.inferno_approved,
         "system": args.system, "cpu_threads_each_arm": 8,
         "repeats_each_arm": 3, "gate": "water CPU/GPU first",
+        "acceptance": dict(ACCEPTANCE),
         "environment": {k: v for k, v in env.items() if k.startswith("SAPT0_")}})
     test = subprocess.run([argv[0], "--test-only", *argv[1:]], env=env, capture_output=True,
                           text=True, timeout=60)

@@ -27,6 +27,12 @@ TERMS = ("elst", "exch", "ind", "disp", "delta_hf")
 TIMER = {k: "SAPT(DFT):" + k for k in TERMS[:4]}
 ASSEMBLY = "SAPT(DFT):delta HF assembly"
 DIMER = "SAPT(DFT):Dimer SCF"
+# User-approved after the original Blackwell water comparison. Preserve strict
+# repeatability separately; this changes acceptance, not the scientific method.
+ACCEPTANCE = {
+    "cpu_gpu_absolute_Eh": 1e-7, "cpu_gpu_relative": 1e-8,
+    "repeat_absolute_Eh": 1e-9, "repeat_relative": 1e-9,
+}
 
 
 def sha(path):
@@ -232,11 +238,15 @@ def compare(records):
         reference = value(first)
         errors[key] = max(abs(value(r) - reference) for r in gpu)
         for row in gpu:
-            if not math.isclose(value(row), reference, rel_tol=1e-8, abs_tol=2e-8):
+            if not math.isclose(value(row), reference,
+                                rel_tol=ACCEPTANCE["cpu_gpu_relative"],
+                                abs_tol=ACCEPTANCE["cpu_gpu_absolute_Eh"]):
                 raise ValueError("CPU/GPU signed component mismatch: " + key)
         for arm in (cpu, gpu):
             for row in arm:
-                if not math.isclose(value(row), value(arm[0]), rel_tol=1e-9, abs_tol=1e-9):
+                if not math.isclose(value(row), value(arm[0]),
+                                    rel_tol=ACCEPTANCE["repeat_relative"],
+                                    abs_tol=ACCEPTANCE["repeat_absolute_Eh"]):
                     raise ValueError("Fresh-process repetition mismatch: " + key)
     summary = {}
     for term in (*TERMS, "shared_setup_other", "total"):
@@ -246,7 +256,8 @@ def compare(records):
         c, g = statistics.median(times["cpu"]), statistics.median(times["gpu"])
         summary[term] = {"samples_seconds": times, "cpu_median_seconds": c,
                          "gpu_median_seconds": g, "cpu_over_gpu": c / g if g > 0 else None}
-    return {"status": "PASS_MATCHED_SAPT0", "signed_max_error_Eh": errors, "timing": summary,
+    return {"status": "PASS_MATCHED_SAPT0", "acceptance": dict(ACCEPTANCE),
+            "signed_max_error_Eh": errors, "timing": summary,
             "repeats_per_arm": len(cpu), "scope": "canonical SAPT0+delta-HF; not F-SAPT"}
 
 
@@ -259,6 +270,7 @@ def run(args):
     args.output.mkdir()
     records, children = [], []
     result = {"status": "FAILED", "case": str(args.case), "children": children,
+              "acceptance": dict(ACCEPTANCE),
               "helper_sha256": sha(__file__), "cold_fresh_processes": True}
     try:
         for repeat in range(args.repeats):

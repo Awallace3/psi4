@@ -102,6 +102,22 @@ class TimingContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "signed component"):
             timing.compare(rows)
 
+    def test_user_approved_absolute_tolerance_is_recorded_and_enforced(self):
+        for difference, passes in ((-2.8768579269679295e-8, True),
+                                   (9e-8, True), (1.1e-7, False)):
+            rows = self.records()
+            for row in rows:
+                if row["arm"] == "gpu":
+                    row["raw_Eh"]["Exch-Disp20,u"] += difference
+                    row["total_Eh"] += difference
+            if passes:
+                result = timing.compare(rows)
+                self.assertEqual(result["acceptance"]["cpu_gpu_absolute_Eh"], 1e-7)
+                self.assertEqual(result["acceptance"]["repeat_absolute_Eh"], 1e-9)
+            else:
+                with self.assertRaisesRegex(ValueError, "signed component"):
+                    timing.compare(rows)
+
     def test_repetition_drift_rejects_even_within_cross_arm_tolerance(self):
         rows = self.records()
         rows[-1]["raw_Eh"]["Elst10,r"] += 1e-8

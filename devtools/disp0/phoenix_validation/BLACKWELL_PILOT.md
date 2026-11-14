@@ -61,3 +61,30 @@ term energies/timers and `water/comparison.json`, then `peptide/comparison.json`
 
 The route-check fix and this receipt are later local helper history. Do not
 advance the detached remote source used by the queued job.
+
+## Water result and user-approved acceptance revision
+
+Job 15497866 ran for 1m47s on Nov 13, 2026, on
+`atl1-1-02-014-23-0`. The current-PID receipt verified RTX PRO 6000 Blackwell
+Server Edition, compute_120, 97887 MiB and driver 615.71.09. Both individual
+water calculations completed, but the comparison failed on exchange-dispersion:
+CPU 0.0005493400518173673 Eh, GPU 0.0005493112832380976 Eh,
+difference -2.8768579269679295e-8 Eh. Other raw components differed by at most
+1.8420820424580597e-11 Eh. The original failed comparison is unchanged, and
+peptide never started.
+
+The user subsequently accepted **1e-7 Eh absolute CPU/GPU agreement** and
+requested a new GPU campaign job. New manifests and comparison receipts record
+that threshold, retain relative tolerance 1e-8, and retain the separate
+within-arm repeatability tolerance 1e-9 absolute/relative. Scientific options,
+hardware budget, signed checks and raw timing definitions are unchanged.
+The new submission uses a fresh immutable helper checkout and run directory,
+two hours on Blackwell, water first and three peptide pairs.
+The initial embers plan was blocked by 50/50 occupied submit slots. The user
+explicitly approved this separate rerun on `gts-cs207 / inferno`, at a corrected
+maximum estimate of **$7.35**. Actual accounting for 15497866 shows the exclusive
+node allocated eight GPUs and billing=136256, not requested billing=17032.
+The original $0.92 estimate understated exclusive-node billing by a factor of
+eight. Keep exclusive isolation for matched timings; no other jobs are changed.
+At approval, account availability was $102.51 and project storage 54.3% used.
+All 182 host helper tests passed, including the revised tolerance boundary test.
