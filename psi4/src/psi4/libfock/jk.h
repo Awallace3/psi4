@@ -396,6 +396,9 @@ class PSI_API JK {
     // TODO: investigate if JK::memory_estimate and all of its derived variants could be made const
     // Probably requires refactoring DFHelper and MemDFJK first.
     virtual size_t memory_estimate() = 0;
+    /// Free scratch kept between compute() calls, leaving the integrals. HF::finalize calls this
+    /// when the JK outlives its SCF (SAVE_JK), so a held JK holds only what memory_estimate() covers.
+    virtual void release_scratch() {}
 
     // => Knobs <= //
 
@@ -429,7 +432,13 @@ class PSI_API JK {
      *        integral generation objects (BLAS/LAPACK can still
      *        run with their original maximum number)
      */
-    void set_omp_nthread(int omp_nthread) { omp_nthread_ = omp_nthread; }
+    void set_omp_nthread(int omp_nthread) {
+#ifdef _OPENMP
+        omp_nthread_ = omp_nthread > 0 ? omp_nthread : 1;
+#else
+        omp_nthread_ = 1;
+#endif
+    }
     int get_omp_nthread() const { return omp_nthread_; }
 
     /// Print flag (defaults to 1)
@@ -1177,6 +1186,8 @@ class PSI_API MemDFJK : public JK {
      * @param auxiliary auxiliary basis set for this system.
      */
     MemDFJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary, Options& options);
+    /// Free the DFHelper compute_JK scratch (sized within this JK's memory budget)
+    void release_scratch() override;
 
     /// Destructor
     ~MemDFJK() override;
@@ -1349,4 +1360,3 @@ class PSI_API CompositeJK : public JK {
 }
 
 #endif
-

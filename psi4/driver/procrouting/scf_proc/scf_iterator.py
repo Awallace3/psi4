@@ -137,6 +137,14 @@ def scf_initialize(self):
     # Get memory in terms of doubles
     total_memory = (core.get_memory() / 8) * core.get_global_option("SCF_MEM_SAFETY_FACTOR")
 
+    # The Fock diagonalization keeps its DSYEVD workspace (~3 nso^2) for the whole SCF.
+    total_memory -= self.diag_scratch_size()
+    if total_memory <= 0:
+        raise ValidationError(
+            "Insufficient SCF memory for the Fock diagonalization workspace. "
+            "Increase the memory allocated to Psi4."
+        )
+
     # Figure out how large the DFT collocation matrices are
     vbase = self.V_potential()
     if vbase:
@@ -157,6 +165,26 @@ def scf_initialize(self):
         initialize_jk_obj = True
         jk = _build_jk(self, total_memory)
     jk_size = jk.memory_estimate()
+
+    # Reserve DIIS before distributing the rest. Accelerator extrapolation can
+    # keep multiple subspace-sized copies alive, even with on-disk history.
+    # Leave large subspaces on disk rather than reducing JK below its minimum.
+    self._diis_memory_budget = 0
+    if hasattr(self, "nsopi"):
+        from .subclass_methods import _scf_diis_memory_required, _scf_diis_disk_scratch
+        diis_required = _scf_diis_memory_required(self, core.get_option("SCF", "DIIS_MAX_VECS"))
+        if diis_required <= min(0.05 * total_memory, 0.25 * max(0, total_memory - jk_size)):
+            self._diis_memory_budget = int(diis_required)
+        else:
+            self._diis_memory_budget = _scf_diis_disk_scratch(self)
+            if self._diis_memory_budget >= total_memory:
+                raise ValidationError("Insufficient SCF memory for DIIS extrapolation scratch.")
+        total_memory -= self._diis_memory_budget
+        if initialize_jk_obj and total_memory < jk_size:
+            # Reserving streamed DIIS scratch can cross the MemDF/DiskDF
+            # boundary. Select the backend using the allowance it will get.
+            jk = _build_jk(self, total_memory)
+            jk_size = jk.memory_estimate()
 
     # Give remaining to collocation
     if total_memory > jk_size:

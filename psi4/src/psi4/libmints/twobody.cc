@@ -115,7 +115,22 @@ TwoBodyAOInt::TwoBodyAOInt(const TwoBodyAOInt &rhs) : TwoBodyAOInt(rhs.integral_
     shell_pairs_reverse_ = rhs.shell_pairs_reverse_;
     shell_to_shell_ = rhs.shell_to_shell_;
     function_to_function_ = rhs.function_to_function_;
-    sieve_impl_ = rhs.sieve_impl_;
+    sieve_initialized_ = rhs.sieve_initialized_;
+    switch (screening_type_) {
+        case ScreeningType::CSAM:
+            sieve_impl_ = [this](int M, int N, int R, int S) { return this->shell_significant_csam(M, N, R, S); };
+            break;
+        case ScreeningType::Schwarz:
+            sieve_impl_ = [this](int M, int N, int R, int S) { return this->shell_significant_schwarz(M, N, R, S); };
+            break;
+        case ScreeningType::Density:
+            sieve_impl_ = [this](int M, int N, int R, int S) { return this->shell_significant_density(M, N, R, S); };
+            break;
+        case ScreeningType::None:
+        default:
+            sieve_impl_ = [this](int M, int N, int R, int S) { return this->shell_significant_none(M, N, R, S); };
+            break;
+    }
 }
 
 TwoBodyAOInt::~TwoBodyAOInt() {}

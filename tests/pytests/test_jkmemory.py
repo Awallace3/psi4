@@ -35,6 +35,8 @@ def _build_system(basis):
     ["cc-pvdz", "OUT_OF_CORE",  0, "DiskJK"],
 
     # pvdz tests
+    # AO 1,098,720 + metric 313,600 + JK tmp 178,200; minimum metric panels
+    # plus one AO block now fit inside the same temporary allowance.
     ["cc-pvdz", "MEM_DF",  1590520, "MemDFJK"],
     ["cc-pvdz", "DISK_DF", 1286244, "DiskDFJK"],
     ["cc-pvdz", "CD",      2916000, "CDJK"],
@@ -52,4 +54,3 @@ def test_jk_memory_estimate(basis, jk_type, estimate, name):
 
     assert compare(name, jk.name(), f"{jk_type} algorithm name")
     assert compare_integers(estimate, jk.memory_estimate(), "{} memory estimate".format(jk_type))
-

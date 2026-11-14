@@ -100,6 +100,8 @@ class Libint2TwoElectronInt : public TwoBodyAOInt {
 
     //! Setup metadata and screening info
     void common_init();
+    void ensure_shell_pairs();
+    void create_sieve_pair_info(const std::shared_ptr<BasisSet> bs, PairList &shell_pairs, bool is_bra) override;
 
    public:
     //! Constructor. Use an IntegralFactory to create this object.

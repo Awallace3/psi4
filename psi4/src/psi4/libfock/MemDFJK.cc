@@ -65,6 +65,8 @@ void MemDFJK::common_init() { dfh_ = std::make_shared<DFHelper>(primary_, auxili
 size_t MemDFJK::memory_estimate() {
     dfh_->set_nthreads(omp_nthread_);
     dfh_->set_schwarz_cutoff(cutoff_);
+    dfh_->set_do_wK(do_wK_);
+    dfh_->set_wcombine(do_wK_ ? wcombine_ : false);
     return dfh_->get_core_size();
 }
 
@@ -109,7 +111,8 @@ void MemDFJK::compute_JK() {
         }
     }
 }
-void MemDFJK::postiterations() {}
+void MemDFJK::postiterations() { release_scratch(); }
+void MemDFJK::release_scratch() { dfh_->clear_JK_scratch(); }
 void MemDFJK::print_header() const {
     // dfh_->print_header();
     if (print_) {
@@ -124,7 +127,8 @@ void MemDFJK::print_header() const {
         outfile->Printf("    Algorithm:          %11s\n", (dfh_->get_AO_core() ? "Core" : "Disk"));
         outfile->Printf("    Schwarz Cutoff:     %11.0E\n", cutoff_);
         outfile->Printf("    Mask sparsity (%%):  %11.4f\n", 100. * dfh_->ao_sparsity());
-        outfile->Printf("    Fitting Condition:  %11.0E\n\n", condition_);
+        outfile->Printf("    Fitting Condition:  %11.0E\n", condition_);
+        outfile->Printf("    Metric:             %11s\n\n", "EIGEN");
 
         outfile->Printf("   => Auxiliary Basis Set <=\n\n");
         auxiliary_->print_by_level("outfile", print_);
