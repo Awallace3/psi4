@@ -1011,6 +1011,30 @@ def test_saptdft_none_delta_hf_matches_cphf_total_induction():
 
 
 @pytest.mark.saptdft
+@pytest.mark.parametrize(
+    "options, message",
+    [
+        ({"sapt_dft_induction_type": "NONE", "sapt_dft_do_fsapt": "FISAPT"}, "F-SAPT requires induction"),
+    ],
+)
+def test_saptdft_induction_option_checks(monkeypatch, options, message):
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    psi4.set_options(options)
+    monkeypatch.setattr(
+        sapt_proc.proc_util,
+        "prepare_sapt_molecule",
+        lambda *args, **kwargs: pytest.fail("validation occurred after molecule preparation"),
+    )
+    with pytest.raises(psi4.ValidationError, match=message):
+        psi4.energy("sapt(dft)", molecule=mol)
+
+
+@pytest.mark.saptdft
 @pytest.mark.medlong
 def test_saptdft_inf():
     # implement this test
@@ -1108,6 +1132,47 @@ def test_saptdft_sapt_dft_api_requires_hf_segment_data(induction_type, message):
     with pytest.raises(psi4.ValidationError, match=message):
         sapt_proc.sapt_dft(wfn, wfn, wfn, delta_hf=True)
 
+
+@pytest.mark.saptdft
+def test_saptdft_sapt_dft_api_requires_cphf_fsapt_data():
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "sapt_dft_induction_type": "CPHF",
+            "sapt_dft_do_fsapt": "FISAPT",
+        }
+    )
+    wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
+    with pytest.raises(psi4.ValidationError, match="requires HF-backed fragment induction data"):
+        sapt_proc.sapt_dft(wfn, wfn, wfn, data={"Ind20,r": 0.0})
+
+
+
+@pytest.mark.saptdft
+def test_saptdft_fsapt_rejects_fdds_dispersion():
+    # FDDS dispersion has no fragment partition, so F-SAPT on a DFT functional
+    # must stop before any SCF instead of returning an unpartitioned term.
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    psi4.set_options({
+        "basis": "sto-3g",
+        "sapt_dft_functional": "pbe0",
+        "sapt_dft_grac_shift_a": 0.2,
+        "sapt_dft_grac_shift_b": 0.2,
+        "sapt_dft_do_fsapt": "FISAPT",
+    })
+    with pytest.raises(psi4.ValidationError, match=r"FSAPT\(DFT\) currently only supported with"):
+        psi4.energy("sapt(dft)", molecule=mol)
 
 if __name__ == "__main__":
     psi4.set_memory("32 GB")
