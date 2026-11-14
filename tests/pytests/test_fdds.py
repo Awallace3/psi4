@@ -56,6 +56,19 @@ def test_fdds_storage_mode_parity(fdds_input, omega, algorithm, split_monomers):
     """
     primary, auxiliary, matrices, vectors = fdds_input
     is_lrc = omega != 0.0
+    # A common reference also checks the new STORE/split path against the
+    # published in-core DIRECT/DIRECT_iaQ implementation.
+    psi4.set_options({
+        "scf_subtype": "INCORE",
+        "sapt_fdds_disp_df_algorithm": "LEGACY",
+        "sapt_fdds_disp_split_monomers": False,
+    })
+    obj = psi4.core.FDDS_Dispersion(primary, auxiliary, matrices, vectors, True, is_lrc, omega)
+    reference = {
+        (monomer, frequency): _aux_matrices(obj, monomer, frequency, is_lrc)
+        for monomer in ("A", "B") for frequency in (0.0, 0.3)
+    }
+    del obj
     psi4.set_options({
         "sapt_fdds_disp_df_algorithm": algorithm,
         "sapt_fdds_disp_split_monomers": split_monomers,
@@ -69,12 +82,13 @@ def test_fdds_storage_mode_parity(fdds_input, omega, algorithm, split_monomers):
             for monomer in ("A", "B") for frequency in (0.0, 0.3)
         }
         del obj
-    for case, reference in results["INCORE"].items():
-        for key, value in reference.items():
-            np.testing.assert_allclose(
-                results["OUT_OF_CORE"][case][key], value, rtol=1.e-9, atol=1.e-10,
-                err_msg=f"omega={omega}, {case}, {key}",
-            )
+    for mode, cases in results.items():
+        for case, expected in reference.items():
+            for key, value in expected.items():
+                np.testing.assert_allclose(
+                    cases[case][key], value, rtol=1.e-9, atol=1.e-10,
+                    err_msg=f"{algorithm}, split={split_monomers}, {mode}, omega={omega}, {case}, {key}",
+                )
 
 
 @pytest.mark.parametrize("is_lrc", [False, True])
