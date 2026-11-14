@@ -457,6 +457,10 @@ void DFHelper::prepare_AO() {
     AO_filename_maker(2);
     std::string putf = AO_names_[1];
     std::string op = "ab";
+    // initialize() can rebuild this file with a different fitting metric.
+    // Append mode ignores fseek: remove the old data before writing it again.
+    file_streams_.erase(putf);
+    std::remove(putf.c_str());
 
     // Contract metric according to previously calculated scheme
     size_t count = 0;
@@ -970,7 +974,7 @@ void DFHelper::put_tensor(std::string file, double* Mp, const size_t start1, con
             throw PSIEXCEPTION(error.str().c_str());
         }
     } else {
-        for (size_t i = start1; i < stop1; i++) {
+        for (size_t i = 0; i < a0 - 1; i++) {
             // write
             size_t s = fwrite(&Mp[i * a1], sizeof(double), a1, fp);
             if (!s) {
@@ -1578,6 +1582,7 @@ void DFHelper::contract_metric_Qpq(std::string file, double* metp, double* Mp, d
         timer_off("DFH: Total Workflow");
         put_tensor(putf, Fp, begin, end, 0, r * Q - 1, op);
     }
+    if (release_pre_metric_tensors_) file_streams_.erase(getf);
 }
 
 void DFHelper::contract_metric(std::string file, double* metp, double* Mp, double* Fp, const size_t total_mem) {
@@ -1635,6 +1640,7 @@ void DFHelper::contract_metric(std::string file, double* metp, double* Mp, doubl
             put_tensor(putf, Fp, 0, a0 - 1, begin * a2, (end + 1) * a2 - 1, op);
         }
     }
+    if (release_pre_metric_tensors_) file_streams_.erase(getf);
 }
 
 void DFHelper::contract_metric_AO_core(double* Qpq, double* metp) {
@@ -1768,6 +1774,39 @@ void DFHelper::clear_transformations() {
     transf_core_.clear();
 }
 
+void DFHelper::release_tensor(std::string name) {
+    transf_core_.erase(name);
+    auto entry = files_.find(name);
+    if (entry == files_.end()) return;
+    const std::string& pre_metric = std::get<0>(entry->second);
+    const std::string& final_file = std::get<1>(entry->second);
+    file_streams_.erase(pre_metric);
+    file_streams_.erase(final_file);
+    sizes_.erase(pre_metric);
+    sizes_.erase(final_file);
+    tsizes_.erase(final_file);
+    if (transf_.erase(name)) {
+        order_.clear();
+        bspace_.clear();
+        strides_.clear();
+        ordered_ = false;
+        transformed_ = false;
+    }
+    files_.erase(entry);
+}
+
+void DFHelper::release_AO() {
+    Ppq_.reset();
+    wPpq_.reset();
+    m1Ppq_.reset();
+    // Keep the names: prepare_AO() writes back to AO_names_[1] on reinitialize.
+    for (const auto& name : AO_names_) {
+        file_streams_.erase(name);
+        sizes_.erase(name);
+    }
+    built_ = false;
+}
+
 void DFHelper::clear_all() {
     // invokes destructors, eliminating all files.
     file_streams_.clear();
@@ -1854,6 +1893,9 @@ void DFHelper::transform() {
         outfile->Printf("Entering DFHelper::transform\n");
     }
 
+    if (!built_) {
+        throw PSIEXCEPTION("DFHelper:transform: the AO integrals are gone, call initialize() first.");
+    }
     timer_on("DFH: transform()");
     // outfile->Printf("\n     ==> DFHelper:--Begin Transformations <==\n\n");
 
@@ -1863,6 +1905,11 @@ void DFHelper::transform() {
 
     // get optimal path and info
     if (!ordered_) info_ = identify_order();
+    // Repeated transforms must not append behind stale pre-metric data.
+    for (const auto& name : order_) {
+        auto entry = files_.find(name);
+        if (entry != files_.end()) file_streams_.erase(std::get<0>(entry->second));
+    }
     size_t wtmp = std::get<0>(info_);
     size_t wfinal = std::get<1>(info_);
 

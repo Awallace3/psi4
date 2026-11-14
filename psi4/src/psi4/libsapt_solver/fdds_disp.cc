@@ -39,7 +39,6 @@
 #include "psi4/liboptions/liboptions.h"
 #include "psi4/libpsi4util/process.h"
 #include "psi4/lib3index/dfhelper.h"
-#include "psi4/libpsi4util/memory_ledger.h"
 
 #include <iomanip>
 
@@ -78,31 +77,20 @@ std::string memory_size(double bytes) {
  */
 std::string too_little_memory(const std::string& where, const std::string& what, size_t needed, size_t doubles,
                               bool thread_scaled = false) {
-    const double held = (double)MemoryClaim::committed() * sizeof(double);
     std::stringstream message;
     message << "Too little memory for " << where << ": " << what << " needs "
             << memory_size((double)needed * sizeof(double)) << ", but only "
             << memory_size((double)doubles * sizeof(double)) << " is available to it (80% of the "
-            << memory_size((double)Process::environment.get_memory()) << " memory setting, less "
-            << memory_size(held) << " held by live integral and grid caches)." << std::endl;
+            << memory_size((double)Process::environment.get_memory()) << " memory setting)." << std::endl;
     message << "       Raise the memory setting to at least "
-            << memory_size((double)needed * sizeof(double) / 0.8 + held);
+            << memory_size((double)needed * sizeof(double) / 0.8);
     message << (thread_scaled ? ", or run with fewer threads." : ".");
     return message.str();
 }
 
-/*! \brief Doubles this module may allocate, net of memory already held elsewhere.
- *
- * These buffers are allocated while the monomer SCF stores are still resident -- DFT collocation
- * caches and in-core DF integrals, which outlive the SCF that built them -- so budgeting against
- * the raw memory setting counts that memory twice and overruns the setting.
- * `MemoryClaim::committed()` is what those stores report holding, so take 80% of what is left
- * after subtracting it rather than 80% of the setting.
- */
+/*! \brief FDDS workspace budget in doubles (80% of the global memory setting). */
 size_t available_doubles() {
-    const size_t total = Process::environment.get_memory() / sizeof(double);
-    const size_t held = MemoryClaim::committed();
-    return (size_t)(0.8 * (double)(total > held ? total - held : 0));
+    return Process::environment.get_memory() * 0.8 / sizeof(double);
 }
 
 }  // namespace
@@ -259,9 +247,7 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
         dfh_->set_subalgo(ao_storage);
     }
     dfh_->set_nthreads(nthread);
-    // Power zero: this round wants the bare three-index integrals, and DFHelper
-    // now recognises that as "no metric" rather than building and contracting an
-    // identity.
+    // Power zero: this round wants the bare three-index integrals.
     dfh_->set_metric_pow(0.0);
     dfh_->initialize();
     dfh_->print_header();
