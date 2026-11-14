@@ -1562,6 +1562,11 @@ def sapt_dft(
                 for key in ("IndAB_AB", "IndBA_AB", "sIndAB_AB", "sIndBA_AB")
                 if key in hf_matrices
             }
+            # The orbital rows/columns above follow the HF localized orbitals, whose
+            # order and atomic populations differ from the KS ones in Qocc0A/B.
+            # Keep the HF populations so fsapt.py assigns them with their own Q.
+            induction_matrices["IndQocc0A"] = hf_matrices["Qocc0A"].clone()
+            induction_matrices["IndQocc0B"] = hf_matrices["Qocc0B"].clone()
             del hf_FISAPT_obj
             core.timer_off("SAPT(DFT): F-SAPT Induction")
 
@@ -1770,6 +1775,9 @@ def sapt_dft(
 
         _set_fsapt_var("FSAPT_QA", cache["Qocc0A"])
         _set_fsapt_var("FSAPT_QB", cache["Qocc0B"])
+        if "IndQocc0A" in cache:
+            _set_fsapt_var("FSAPT_IND_QA", cache["IndQocc0A"])
+            _set_fsapt_var("FSAPT_IND_QB", cache["IndQocc0B"])
         _set_fsapt_var("FSAPT_ELST_AB", cache["Elst_AB"])
         _set_fsapt_var(
             "FSAPT_AB_SIZE", np.array(cache["Elst_AB"].np.shape).reshape(1, -1)

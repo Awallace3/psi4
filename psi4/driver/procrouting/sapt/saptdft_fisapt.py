@@ -376,6 +376,17 @@ def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars):
     fisapt.set_vector(vector_cache)
     fisapt.fdrop()
     fisapt.save_variables_to_wfn(wfn, sapt_type='SAPT(DFT)')
+    # CPHF induction partitions on HF orbitals; drop their populations as
+    # QA_ind/QB_ind (FSAPT_IND_QA/QB) so fsapt.py assigns IndAB/IndBA with them.
+    if "IndQocc0A" in cache:
+        filepath = core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH")
+        for mono in "AB":
+            q = cache[f"IndQocc0{mono}"].clone()
+            q.name = f"Q{mono}_ind"
+            if filepath.lower() != "none":
+                fisapt_proc._drop(q, filepath)
+            core.set_variable(f"FSAPT_IND_Q{mono}", q)
+            wfn.set_variable(f"FSAPT_IND_Q{mono}", q)
     # Now drop empirical D3/D4 dispersion if computed and expose the
     # same variable through both global and returned-wavefunction APIs.
     if core.get_option("SAPT", "SAPT_DFT_D4_IE") or core.get_option("SAPT", "SAPT_DFT_D3_IE"):

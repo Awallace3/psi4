@@ -622,9 +622,12 @@ HF segment,
 total ``CPHF`` induction, but no ``Ind20`` or directional breakdown is
 available.
 
-F-SAPT requires the SAPT(DFT) fragment induction and therefore works only with
-``CPKS``; both ``CPHF`` and ``NONE`` are rejected when |sapt__sapt_dft_do_fsapt|
-is enabled.
+With |sapt__sapt_dft_do_fsapt|, ``CPKS`` partitions the SAPT(DFT) induction.
+``CPHF`` partitions the SAPT0 induction on the HF localized orbitals, while
+electrostatics and exchange use the KS ones; the HF orbital populations are
+stored next to the KS ones as ``QA_ind.dat``/``QB_ind.dat`` (variables
+``FSAPT_IND_QA``/``FSAPT_IND_QB``), and the F-SAPT analysis assigns the
+induction to fragments with them. ``NONE`` is rejected with F-SAPT.
 
 SAPT(DFT)-D3 and SAPT(DFT)-D4 variants
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

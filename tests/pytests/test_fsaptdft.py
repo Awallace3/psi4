@@ -108,6 +108,9 @@ no_com
     }
 
     induction_partitions = {}
+    fragment_induction = {}
+    atoms_a = {f"a{i}": [i] for i in (1, 2, 3)}
+    atoms_b = {f"b{i}": [i] for i in (4, 5, 6)}
     for functional in ("hf", "pbe0"):
         psi4.core.clean()
         psi4.core.clean_variables()
@@ -122,6 +125,13 @@ no_com
                 "EXCH": "FSAPT_EXCH_AB",
             }.items()
         }
+        for label in ("FSAPT_QA", "FSAPT_QB", "FSAPT_IND_QA", "FSAPT_IND_QB"):
+            if wfn.has_variable(label):
+                induction_partitions[functional][label] = np.asarray(wfn.variable(label)).copy()
+        cells = psi4.fsapt_analysis(wfn, dict(atoms_a), dict(atoms_b), print_output=False)
+        fragment_induction[functional] = {
+            (fa, fb): ab + ba for fa, fb, ab, ba in zip(cells["Frag1"], cells["Frag2"], cells["IndAB"], cells["IndBA"])
+        }
 
     for direction in ("A<-B", "A->B"):
         hf_partition = induction_partitions["hf"][direction]
@@ -135,6 +145,17 @@ no_com
             err_msg=f"CPHF F-SAPT induction partition ({direction})",
         )
 
+    # The CPHF rows/columns follow the HF localized orbitals, so their populations
+    # travel with them; FSAPT_QA/QB stay the KS ones used for Elst and Exch.
+    assert "FSAPT_IND_QA" not in induction_partitions["hf"]
+    for mono in "AB":
+        np.testing.assert_allclose(induction_partitions["pbe0"][f"FSAPT_IND_Q{mono}"],
+                                   induction_partitions["hf"][f"FSAPT_Q{mono}"], rtol=0.0, atol=1.0e-10)
+    # Fragment (here: atom) cells equal the HF ones, whatever the KS orbital order.
+    assert fragment_induction["pbe0"].keys() == fragment_induction["hf"].keys()
+    for key, value in fragment_induction["hf"].items():
+        assert fragment_induction["pbe0"][key] == pytest.approx(value, abs=1.0e-7), key
+
     assert not np.allclose(
         induction_partitions["pbe0"]["ELST"],
         induction_partitions["hf"]["ELST"],
@@ -147,6 +168,63 @@ no_com
         rtol=0.0,
         atol=1.0e-10,
     )
+
+
+@pytest.mark.fsapt
+@uusing("pandas")
+def test_fsapt_analysis_induction_q_follows_induction_orbitals(tmp_path):
+    """IndAB/IndBA are partitioned with QA_ind/QB_ind when their orbitals differ from QA/QB's.
+
+    SAPT_DFT_INDUCTION_TYPE=CPHF hands over HF-orbital induction matrices next
+    to KS-orbital Elst/Exch. Mimic that from a fisapt0 run: shuffle the orbital
+    order of QA/QB (the "KS" populations) and keep the original as QA_ind/QB_ind.
+    Every cell must equal the unshuffled analysis.
+    """
+    import shutil
+    import pandas as pd
+
+    molecule = psi4.geometry(
+        """
+0 1
+O  -0.702196054  -0.056060256   0.009942262
+H  -1.022193224   0.846775782  -0.011488714
+H   0.257521062   0.042121496   0.005218999
+--
+0 1
+O   2.268880784   0.026340101   0.000508029
+H   2.645502399  -0.412039965   0.766632411
+H   2.641145101  -0.449872874  -0.744894473
+units angstrom
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    ref = tmp_path / "ref"
+    psi4.set_options({"basis": "cc-pvdz", "scf_type": "df", "fisapt_fsapt_filepath": str(ref),
+                      "fisapt_do_fsapt_disp": False})
+    psi4.energy("fisapt0", molecule=molecule)
+
+    shuffled = tmp_path / "shuffled"
+    shutil.copytree(ref, shuffled)
+    for mono in "AB":
+        q = np.loadtxt(ref / f"Q{mono}.dat")
+        np.savetxt(shuffled / f"Q{mono}.dat", q[:, ::-1], fmt="%24.16E")
+        shutil.copy(ref / f"Q{mono}.dat", shuffled / f"Q{mono}_ind.dat")
+
+    frags_a = {"O1": [1], "H2": [2], "H3": [3]}
+    frags_b = {"O4": [4], "H5": [5], "H6": [6]}
+    expected = pd.DataFrame(psi4.fsapt_analysis(str(ref), dict(frags_a), dict(frags_b), print_output=False))
+    got = pd.DataFrame(psi4.fsapt_analysis(str(shuffled), dict(frags_a), dict(frags_b), print_output=False))
+    for col in ("IndAB", "IndBA"):
+        np.testing.assert_allclose(got[col], expected[col], rtol=0.0, atol=1.0e-10, err_msg=col)
+    np.testing.assert_allclose(got.Total, got.Elst + got.Exch + got.IndAB + got.IndBA + got.Disp, rtol=0.0, atol=1.0e-10)
+    assert (got.IndAB + got.IndBA).abs().max() > 1.0e-3
+
+    os.remove(shuffled / "QA_ind.dat")
+    os.remove(shuffled / "QB_ind.dat")
+    wrong = pd.DataFrame(psi4.fsapt_analysis(str(shuffled), dict(frags_a), dict(frags_b), print_output=False))
+    assert not np.allclose(wrong.IndAB + wrong.IndBA, expected.IndAB + expected.IndBA, rtol=0.0, atol=1.0e-4)
 
 
 @pytest.mark.saptdft
