@@ -93,6 +93,23 @@ def test_memdf_zero_omega_wk(threads):
     jk.finalize()
 
 
+@pytest.mark.parametrize("fp32", [False, True])
+def test_memdf_requested_vs_actual_team(fp32):
+    """Also run with OMP_THREAD_LIMIT=1: requested teams may be reduced."""
+    primary, aux = _bases()
+    coefficients = np.random.default_rng(37).normal(size=(primary.nbf(), 16)) / primary.nbf()
+    results = []
+    for threads in (1, 4):
+        jk = _jk(primary, aux, threads=threads)
+        jk.set_memory(10_000_000)
+        jk.initialize()
+        jk.dfh().set_K_fp32(fp32)
+        results.append(_compute(jk, coefficients))
+        jk.finalize()
+    for expected, actual in zip(*results):
+        np.testing.assert_allclose(actual, expected, atol=2e-6 if fp32 else 1e-10, rtol=0)
+
+
 @pytest.mark.parametrize("roomy", [False, True])
 def test_memdf_fp32_cache_budget(roomy):
     """A float AO cache must fit beside retained and upcoming JK scratch."""

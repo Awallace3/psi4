@@ -314,6 +314,27 @@ class DIIS:
 
     def adiis_populate(self):
         """ Fills linear and quadratic coefficients in ADIIS energy estimate. """
+        if self.storage_policy == StoragePolicy.OnDisk:
+            # Keep disk-backed histories genuinely bounded: retaining dD/dF
+            # for every entry would silently recreate an in-core subspace.
+            num_entries = len(self.stored_vectors)
+            self.adiis_linear = np.zeros(num_entries)
+            self.adiis_quadratic = np.zeros((num_entries, num_entries))
+            for item in range(len(self.template["densities"])):
+                latest_d = self.load_quantity("densities", num_entries - 1, item, force_new=False)
+                latest_f = self.load_quantity("target", num_entries - 1, item, force_new=False)
+                for i in range(num_entries):
+                    delta_d = self.load_quantity("densities", i, item)
+                    delta_d.subtract(latest_d)
+                    self.adiis_linear[i] += delta_d.vector_dot(latest_f)
+                    for j in range(num_entries):
+                        delta_f = self.load_quantity("target", j, item)
+                        delta_f.subtract(latest_f)
+                        self.adiis_quadratic[i, j] += delta_d.vector_dot(delta_f)
+            if self.closed_shell:
+                self.adiis_linear *= 2
+                self.adiis_quadratic *= 2
+            return
         # We are currently assuming that all of dD and dF fit in-core.
         # These quantities are N^2, so this should be fine in most cases.
 

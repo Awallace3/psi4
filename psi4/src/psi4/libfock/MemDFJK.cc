@@ -88,7 +88,9 @@ void MemDFJK::preiterations() {
         if (k_layout == "IQ") {
             k_layout_iq = true;
         } else if (k_layout == "AUTO") {
-#if (defined(__x86_64__) || defined(_M_X64)) && (defined(__GNUC__) || defined(__clang__))
+#if defined(__x86_64__) && !defined(_MSC_VER) && (defined(__GNUC__) || defined(__clang__))
+            // clang-cl accepts GNU-style syntax but uses the MSVC runtime,
+            // which need not supply the GNU CPU-dispatch helper symbols.
             k_layout_iq = __builtin_cpu_is("amd");
 #endif
         }

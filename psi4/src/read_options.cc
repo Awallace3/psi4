@@ -1907,7 +1907,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         iterations. Convergence is only accepted with double-precision exchange. 0 disables. -*/
         options.add_double("SCF_K_FP32_CONVERGENCE", 0.0);
         /*- Layout of the in-core DF-K first-transform intermediate. AUTO selects IQ on AMD x86
-        CPUs and QI elsewhere; QI is the original (Q x i) layout; IQ stores (i x Q) with the
+        CPUs with a GNU-compatible compiler runtime, and QI elsewhere (including clang-cl).
+        QI is the original (Q x i) layout; IQ stores (i x Q) with the
         occupied count padded to 8, which is faster on AMD Zen CPUs and slower at large basis sets
         on Intel Cascade Lake. -*/
         options.add_str("SCF_DF_K_LAYOUT", "AUTO", "AUTO QI IQ");

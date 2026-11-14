@@ -659,12 +659,8 @@ void DFHelper::prepare_AO_core() {
         rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
         eri.resize(nthreads_);
         eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri(0, false));
-#pragma omp parallel num_threads(nthreads_)
-        {
-            int rank = 0;
-#ifdef _OPENMP
-            rank = omp_get_thread_num();
-#endif
+#pragma omp parallel for num_threads(nthreads_) schedule(static)
+        for (size_t rank = 0; rank < nthreads_; ++rank) {
             if (rank) eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
         }
     }
@@ -3886,12 +3882,8 @@ void DFHelper::ensure_jk_C_buffers(size_t elem_per_thread) {
         }
     }
     if (need_grow) {
-#pragma omp parallel num_threads(nthreads_)
-        {
-            int rank = 0;
-#ifdef _OPENMP
-            rank = omp_get_thread_num();
-#endif
+#pragma omp parallel for num_threads(nthreads_) schedule(static)
+        for (size_t rank = 0; rank < nthreads_; ++rank) {
             if (jk_C_buffers_[rank].size() < elem_per_thread) {
                 // As with grow_scratch, release before allocating and avoid
                 // vector's geometric capacity growth exceeding the planned size.
@@ -3964,15 +3956,17 @@ void symm_k_final_accumulate(size_t N, size_t K_inner, const T* T1, double* Kp,
 #pragma omp parallel num_threads(nthreads)
     {
         int tid = 0;
+        size_t team_active = 1;
 #ifdef _OPENMP
         tid = omp_get_thread_num();
+        team_active = std::min(active_nt, static_cast<size_t>(omp_get_num_threads()));
 #endif
-        if (static_cast<size_t>(tid) < active_nt) {
+        if (static_cast<size_t>(tid) < team_active) {
 #ifdef USING_LAPACK_MKL
             const int previous_mkl_threads = mkl_set_num_threads_local(1);
 #endif
-            const size_t k0 = (K_inner * static_cast<size_t>(tid)) / active_nt;
-            const size_t kn = (K_inner * (static_cast<size_t>(tid) + 1)) / active_nt - k0;
+            const size_t k0 = (K_inner * static_cast<size_t>(tid)) / team_active;
+            const size_t kn = (K_inner * (static_cast<size_t>(tid) + 1)) / team_active - k0;
             T* Cb = C_buffers[tid].template data_as<T>();
             if (N <= 512) {
                 run_syrk(static_cast<int>(N), static_cast<int>(kn), T1 + k0, static_cast<int>(K_inner), Cb,
@@ -4004,7 +3998,7 @@ void symm_k_final_accumulate(size_t N, size_t K_inner, const T* T1, double* Kp,
             for (size_t j = i; j < N; ++j) {
                 dst[j] += static_cast<double>(s0[j]);
             }
-            for (size_t t = 1; t < active_nt; ++t) {
+            for (size_t t = 1; t < team_active; ++t) {
                 const T* st = C_buffers[t].template data_as<T>() + i * N;
 #pragma omp simd
                 for (size_t j = i; j < N; ++j) {

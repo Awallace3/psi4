@@ -175,11 +175,20 @@ def scf_initialize(self):
     # Leave large subspaces on disk rather than reducing JK below its minimum.
     self._diis_memory_budget = 0
     if hasattr(self, "nsopi"):
-        from .subclass_methods import _scf_diis_memory_required
+        from .subclass_methods import _scf_diis_memory_required, _scf_diis_disk_scratch
         diis_required = _scf_diis_memory_required(self, core.get_option("SCF", "DIIS_MAX_VECS"))
         if diis_required <= min(0.05 * total_memory, 0.25 * max(0, total_memory - jk_size)):
             self._diis_memory_budget = int(diis_required)
-            total_memory -= self._diis_memory_budget
+        else:
+            self._diis_memory_budget = _scf_diis_disk_scratch(self)
+            if self._diis_memory_budget >= total_memory:
+                raise ValidationError("Insufficient SCF memory for DIIS extrapolation scratch.")
+        total_memory -= self._diis_memory_budget
+        if initialize_jk_obj and total_memory < jk_size:
+            # Reserving streamed DIIS scratch can cross the MemDF/DiskDF
+            # boundary. Select the backend using the allowance it will get.
+            jk = _build_jk(self, total_memory)
+            jk_size = jk.memory_estimate()
 
     # Give remaining to collocation
     if total_memory > jk_size:

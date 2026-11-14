@@ -47,6 +47,12 @@ def _scf_diis_storage_policy(self, max_diis_vectors: int, sample_matrices) -> St
     return StoragePolicy.OnDisk
 
 
+def _scf_diis_disk_scratch(self):
+    """Bound streamed ADIIS/dot-product temporaries, independent of history length."""
+    spins = 1 if isinstance(self, core.RHF) else 2
+    return 8 * spins * sum(int(n) ** 2 for n in self.nsopi().to_tuple())
+
+
 def _retain_grid_shift_densities(self):
     return (getattr(self, "_xc_grid_switching", False) and
             core.get_option("SCF", "DFT_GRID_SWITCH_DIIS") == "SHIFT")

@@ -17,8 +17,8 @@ def test_predicted_energy_contracts_density_difference():
     old = psi4.core.Matrix.from_array(np.eye(2))
     new = old.clone()
     new.np[1, 1] += 1e-8
-    assert f.vector_dot(new) - f.vector_dot(old) == 0.0
     expected = new.np[1, 1] - old.np[1, 1]
+    assert abs((f.vector_dot(new) - f.vector_dot(old)) - expected) > 0.5 * expected
     assert scf_iterator._density_energy_change([f], [new], [old], False) == expected
     assert scf_iterator._density_energy_change([f], [new], [old], True) == 2 * expected
 
@@ -44,10 +44,33 @@ def test_diis_reservation_precedes_jk_partition(monkeypatch, accelerator, availa
     scf_iterator.scf_initialize(wfn)
     required = subclass_methods._scf_diis_memory_required(wfn, 8)
     assert wfn.memory_jk_ + wfn.memory_collocation_ + wfn._diis_memory_budget == available
-    assert wfn._diis_memory_budget == (required if available == 100000 else 0)
+    assert wfn._diis_memory_budget == (
+        required if available == 100000 else subclass_methods._scf_diis_disk_scratch(wfn)
+    )
     sample = [psi4.core.Matrix(1, 1)] * 6
     policy = subclass_methods._scf_diis_storage_policy(wfn, 8, sample)
     assert policy == (StoragePolicy.InCore if available == 100000 else StoragePolicy.OnDisk)
+
+
+def test_diis_reservation_reselects_tight_memory_backend(monkeypatch):
+    get_option = psi4.core.get_global_option
+    monkeypatch.setattr(psi4.core, "get_memory", lambda: 910 * 8)
+    monkeypatch.setattr(psi4.core, "get_global_option",
+                        lambda key: 1.0 if key == "SCF_MEM_SAFETY_FACTOR" else get_option(key))
+    calls = []
+    def build(wfn, memory):
+        calls.append(memory)
+        return SimpleNamespace(memory_estimate=lambda: 900 if memory >= 900 else 500)
+    monkeypatch.setattr(scf_iterator, "_build_jk", build)
+    wfn = SimpleNamespace(
+        diag_scratch_size=lambda: 0, nsopi=lambda: psi4.core.Dimension([1]),
+        V_potential=lambda: None, jk=lambda: None, get_print=lambda: False,
+        molecule=lambda: SimpleNamespace(), attempt_number_=2,
+        form_D=lambda: None, compute_initial_E=lambda: 0.0, set_energies=lambda *args: None,
+    )
+    scf_iterator.scf_initialize(wfn)
+    assert calls == [910, 894]
+    assert wfn.memory_jk_ + wfn._diis_memory_budget == 910
 
 
 @pytest.mark.parametrize("storage", [StoragePolicy.InCore, StoragePolicy.OnDisk])
@@ -87,6 +110,27 @@ def test_grid_shift_rebases_each_density(monkeypatch, storage, ediis):
     manager.delete_diis_file()
 
 
+def test_streamed_adiis_matches_incore():
+    rng = np.random.default_rng(898)
+    managers = [
+        DIIS(5, "streamed ADIIS", storage_policy=storage, engines={"diis", "adiis"})
+        for storage in (StoragePolicy.InCore, StoragePolicy.OnDisk)
+    ]
+    try:
+        for _ in range(5):
+            entry = {key: [psi4.core.Matrix.from_array(rng.normal(size=(3, 3)))]
+                     for key in ("target", "error", "densities")}
+            for manager in managers:
+                manager.add_entry(entry)
+        for manager in managers:
+            manager.adiis_populate()
+        np.testing.assert_allclose(managers[0].adiis_linear, managers[1].adiis_linear, atol=1e-13)
+        np.testing.assert_allclose(managers[0].adiis_quadratic, managers[1].adiis_quadratic, atol=1e-13)
+    finally:
+        for manager in managers:
+            manager.delete_diis_file()
+
+
 def test_vv10_restored_after_iteration_exception(monkeypatch):
     state = {"vv10": True}
     functional = SimpleNamespace(
@@ -107,7 +151,7 @@ def test_vv10_restored_after_iteration_exception(monkeypatch):
 
 
 @pytest.mark.parametrize("reference", ["rhf", "uhf"])
-def test_ooo_fp32_falls_back_to_internal(reference, tmp_path):
+def test_ooo_fp32_falls_back_to_internal(reference, tmp_path, monkeypatch):
     psi4.geometry("H 0 0 0\nH 0 0 0.9\nsymmetry c1\n")
     psi4.set_options({
         "reference": reference, "basis": "cc-pvdz", "scf_type": "mem_df",
@@ -116,7 +160,15 @@ def test_ooo_fp32_falls_back_to_internal(reference, tmp_path):
     energy, exact = psi4.energy("hf", return_wfn=True)
     density = exact.Da().np.copy()
     psi4.core.clean()
-    psi4.set_options({"orbital_optimizer_package": "OOO", "scf_k_fp32_convergence": 1e-3})
+    psi4.set_options({"scf_k_fp32_convergence": 1e-3})
+    # The compatibility policy must be testable even in builds where the
+    # optional OOO library (and therefore its option value) is unavailable.
+    original = psi4.core.get_option
+    def get_option(module, option):
+        if module.upper() == "SCF" and option.upper() == "ORBITAL_OPTIMIZER_PACKAGE":
+            return "OOO"
+        return original(module, option)
+    monkeypatch.setattr(psi4.core, "get_option", get_option)
     out = tmp_path / "ooo-fallback.out"
     psi4.set_output_file(str(out), False)
     try:
@@ -175,6 +227,32 @@ def test_grid_switch_isolated_observables(policy, accelerator):
     np.testing.assert_allclose(actual, exact, atol=1e-9, rtol=0)
     np.testing.assert_allclose(wfn.Da().np, density, atol=2e-8, rtol=0)
     np.testing.assert_allclose(wfn.Fa().np, fock, atol=2e-8, rtol=0)
+
+
+@pytest.mark.parametrize("fp32", [False, True])
+def test_final_grid_and_precision_before_accepting_convergence(monkeypatch, fp32):
+    psi4.geometry("H 0 0 0\nH 0 0 0.9\nsymmetry c1\n")
+    psi4.set_options({
+        "basis": "cc-pvdz", "scf_type": "mem_df", "save_jk": True,
+        "e_convergence": 1e-9, "d_convergence": 1e-9,
+        "dft_radial_points": 50, "dft_spherical_points": 110,
+        "dft_radial_points_initial": 20, "dft_spherical_points_initial": 50,
+        "scf_k_fp32_convergence": 1000.0 if fp32 else 0.0,
+    })
+    exact, _ = psi4.energy("b3lyp", return_wfn=True)
+    psi4.core.clean()
+    original = scf_iterator._xc_grid_switch
+    switches = []
+    def switch(wfn, shift_diis, restore_vv10=False):
+        switches.append(wfn.iteration_)
+        return original(wfn, shift_diis, restore_vv10=restore_vv10)
+    monkeypatch.setattr(scf_iterator, "_xc_grid_switch", switch)
+    actual, wfn = psi4.energy("b3lyp", return_wfn=True)
+    assert len(switches) == 1
+    assert wfn.iteration_ > switches[0]
+    assert wfn._xc_grid_ready_for_finalize
+    assert not wfn.jk().dfh().K_fp32()
+    np.testing.assert_allclose(actual, exact, atol=1e-8, rtol=0)
 
 
 @pytest.mark.parametrize("reference", ["rhf", "uhf"])

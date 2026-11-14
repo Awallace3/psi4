@@ -130,14 +130,21 @@ def test_xc_threaded_matrices_and_gradients(method):
     try:
         for threads in (1, 2, 4):
             psi4.set_num_threads(threads)
-            gradient, wfn = psi4.gradient(method, return_wfn=True)
-            results.append((wfn.energy(), wfn.Da().np.copy(), wfn.Fa().np.copy(), gradient.np.copy()))
+            energy, wfn = psi4.energy(method, return_wfn=True)
+            density, fock = wfn.Da().np.copy(), wfn.Fa().np.copy()
+            # VV10 may use finite-difference gradients on this branch. That
+            # driver's returned shell wavefunction has no SCF density/Fock.
+            gradient = psi4.gradient(method)
+            results.append((energy, density, fock, gradient.np.copy()))
             psi4.core.clean()
     finally:
         psi4.set_num_threads(old_threads)
     for actual in results[1:]:
-        for ref, value in zip(results[0], actual):
-            np.testing.assert_allclose(value, ref, atol=2e-8, rtol=0)
+        for item, (ref, value) in enumerate(zip(results[0], actual)):
+            # VV10 uses 0.005-Bohr finite differences here; SCF energy noise is
+            # divided by that displacement. Keep matrix/energy checks tighter.
+            tolerance = 5e-7 if method == "wb97m-v" and item == 3 else 2e-8
+            np.testing.assert_allclose(value, ref, atol=tolerance, rtol=0)
 
 
 @pytest.mark.parametrize("exponent", ["1.0", "1.0000001"])
@@ -171,7 +178,8 @@ def test_cholesky_singular_metric_fallback(tmp_path, exponent):
         np.testing.assert_allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
 
-def test_cholesky_matrix_equivalence(tmp_path):
+@pytest.mark.parametrize("wk", [False, True])
+def test_cholesky_matrix_equivalence(tmp_path, wk):
     """Also run under the LAPACK interposer to force each fallback separately."""
     primary, aux = _bases()
     coefficients = np.random.default_rng(897).normal(size=(primary.nbf(), 5)) / primary.nbf()
@@ -182,15 +190,19 @@ def test_cholesky_matrix_equivalence(tmp_path):
         for metric in ("eigen", "cholesky"):
             psi4.set_options({"scf_type": "mem_df", "scf_df_metric": metric})
             jk = psi4.core.JK.build_JK(primary, aux)
+            jk.set_do_wK(wk)
+            jk.set_wcombine(False)
+            jk.set_omega(0.3)
             jk.set_memory(2_000_000)
             jk.initialize()
             jk.C_left_add(psi4.core.Matrix.from_array(coefficients))
             jk.compute()
-            results.append((jk.J()[0].np.copy(), jk.K()[0].np.copy()))
+            results.append([jk.J()[0].np.copy(), jk.K()[0].np.copy()] +
+                           ([jk.wK()[0].np.copy()] if wk else []))
             jk.finalize()
     finally:
         psi4.set_output_file("pytest_output.dat", True)
-    if os.environ.get("PSI_TEST_DPOTRF_FAIL") or os.environ.get("PSI_TEST_DPOCON_SMALL_RCOND"):
+    if not wk and (os.environ.get("PSI_TEST_DPOTRF_FAIL") or os.environ.get("PSI_TEST_DPOCON_SMALL_RCOND")):
         assert "metric Cholesky not used" in out.read_text()
     for expected, actual in zip(*results):
         np.testing.assert_allclose(actual, expected, atol=1e-9, rtol=1e-9)

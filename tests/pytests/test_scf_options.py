@@ -373,7 +373,7 @@ def test_scf_df_metric_cholesky_wk(tmp_path, method):
 
 
 @pytest.mark.parametrize("postscf", [False, True])
-def test_wb97mv_grid_switching_and_fast_stack(postscf):
+def test_wb97mv_grid_switching_and_fast_stack(postscf, monkeypatch):
     """wB97M-V with coarse-deferred VV10 grid switching, Cholesky wK, FP32 K/wK, and pred-E matches exact SCF."""
 
     psi4.geometry(
@@ -388,6 +388,8 @@ def test_wb97mv_grid_switching_and_fast_stack(postscf):
         H  0.000000  0.755453  3.638951
         H  0.000000 -0.755453  3.638951
         symmetry c1
+        no_reorient
+        no_com
         """
     )
     base_opts = {
@@ -398,12 +400,45 @@ def test_wb97mv_grid_switching_and_fast_stack(postscf):
         "dft_vv10_postscf": postscf,
         "save_jk": True,
     }
+    def vv10_force_component():
+        # VV10 analytic gradients are not available on every supported build.
+        # Compare a dispersion-sensitive interfragment force component without
+        # requiring dozens of finite-difference SCFs for the full dimer gradient.
+        mol = psi4.core.get_active_molecule()
+        geometry = mol.geometry().np.copy()
+        step = 1e-3
+        energies = []
+        try:
+            for sign in (-1, 1):
+                displaced = geometry.copy()
+                displaced[3, 2] += sign * step
+                mol.set_geometry(psi4.core.Matrix.from_array(displaced))
+                mol.update_geometry()
+                psi4.core.clean()
+                energies.append(psi4.energy("wb97m-v", molecule=mol))
+        finally:
+            mol.set_geometry(psi4.core.Matrix.from_array(geometry))
+            mol.update_geometry()
+        return (energies[1] - energies[0]) / (2 * step)
+
     psi4.core.clean_options()
     psi4.set_options(base_opts)
     e_ref, wfn_ref = psi4.energy("wb97m-v", return_wfn=True)
     d_ref, f_ref = wfn_ref.Da().np.copy(), wfn_ref.Fa().np.copy()
-    g_ref = psi4.gradient("wb97m-v", ref_wfn=wfn_ref).np.copy()
+    g_ref = vv10_force_component()
     psi4.core.clean()
+
+    from psi4.driver.procrouting.scf_proc import scf_iterator
+    original_switch = scf_iterator._xc_grid_switch
+    switches = []
+    def record_switch(wfn, shift_diis, restore_vv10=False):
+        assert not wfn.functional().needs_vv10()
+        assert restore_vv10 == (not postscf)
+        switches.append(wfn.iteration_)
+        result = original_switch(wfn, shift_diis, restore_vv10=restore_vv10)
+        assert wfn.functional().needs_vv10() == (not postscf)
+        return result
+    monkeypatch.setattr(scf_iterator, "_xc_grid_switch", record_switch)
 
     psi4.core.clean_options()
     psi4.set_options(
@@ -422,9 +457,11 @@ def test_wb97mv_grid_switching_and_fast_stack(postscf):
     e_fast, wfn_fast = psi4.energy("wb97m-v", return_wfn=True)
     init_iters = int(wfn_fast.variable("SCF DFT INITIAL GRID ITERATIONS"))
     assert wfn_fast._xc_grid_ready_for_finalize
+    assert len(switches) == 1
+    assert wfn_fast.iteration_ - switches[0] >= (1 if postscf else 2)
     assert not wfn_fast.jk().dfh().K_fp32()
     d_fast, f_fast = wfn_fast.Da().np.copy(), wfn_fast.Fa().np.copy()
-    g_fast = psi4.gradient("wb97m-v", ref_wfn=wfn_fast).np.copy()
+    g_fast = vv10_force_component()
     psi4.core.clean()
     psi4.core.clean_options()
 
