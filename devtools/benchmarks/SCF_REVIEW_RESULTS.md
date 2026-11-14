@@ -1,6 +1,7 @@
 # SCF pre-PR validation results
 
-**Local validation passed. Native cross-platform CI remains externally blocked.**
+**Local validation passed. Native cross-platform CI is enabled; runtime results
+remain pending while CI dependency setup is corrected.**
 
 Source worktrees are `scf-dft-pr` (branch `scf-dft-pr-v2`) and `scf-dft-opt`.
 Original branch tips, indexes, and pre-existing work were preserved. No PR was
@@ -76,10 +77,18 @@ rewrite an already installed library.
 
 ## Remaining external validation
 
-The fork's permissions endpoint reports Actions enabled, but workflow dispatch
-returns HTTP 422: **“Actions has been disabled for this repository.”** Enabling
-the already-active workflow did not resolve it. Native Windows/macOS/ARM64
-runtime results therefore remain pending, not passed.
+The owner re-enabled fork Actions and both six-lane native matrices started:
+
+- Narrow: https://github.com/Awallace3/psi4/actions/runs/43620402421
+- Opt: https://github.com/Awallace3/psi4/actions/runs/43620404573
+
+Those initial runs failed during environment/configuration setup, before SCF
+compilation or tests: Libint 2.14 split development headers/CMake targets into
+`libint-cxx-devel`, and optional MKL-dependent addons conflicted with the new
+OpenBLAS lane. The workflow now requests the development package explicitly and
+keeps that lane addon-free (including skipping optional addon installation and
+tests); the other ecosystem lanes retain their addon coverage.
+Native Windows/macOS/ARM64 runtime results remain pending, not passed.
 
 The default runner excludes the 20 large methyl-oxirane TDDFT cases;
 `--extended` includes them. Earlier stopped/timed-out runs are superseded by the

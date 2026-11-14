@@ -50,6 +50,7 @@ jobs:
             mkl-version: ""
             platform: linux-64
             lapack-args: "--lapack openblas"
+            extra-disable: "addons"
             compiler-args: "--compiler byo"
             openmp: "off"
             pytest-marker-expr: "addon and not (medlong or long)"
@@ -219,7 +220,7 @@ jobs:
           env \
           --name p4build \
           --python ${{ matrix.cfg.python-version }} \
-          --disable docs \
+          --disable docs ${{ matrix.cfg.extra-disable }} \
           --offline-conda ${{ matrix.cfg.lapack-args }}
         echo "::group::View Env Spec File for Conda (from advisor)"
         printf "\n<<<  env_p4build.yaml  >>>\n"
@@ -227,7 +228,11 @@ jobs:
         echo "::endgroup::"
         #
         if [[ "${{ runner.os }}" == "Linux" ]]; then
-          :
+          if [[ "${{ matrix.cfg.openmp }}" == "off" ]]; then
+            # The advisor otherwise requests OpenBLAS's OpenMP variant.
+            # Keep this compiler lane independent of any OpenMP runtime.
+            sed -i 's/openblas=\*=openmp\*/openblas=*=pthreads*/g' env_p4build.yaml
+          fi
         fi
         if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.cfg.python-version }}" == "3.14" ]]; then
           :
@@ -253,6 +258,9 @@ jobs:
           # sed -i "s;#- dpcpp_linux-64;- clangdev ${{ matrix.cfg.llvm-version }};g" env_p4build.yaml
         fi
         echo "  - pygments" >> env_p4build.yaml
+        # Libint >=2.14 separates the runtime library from its headers and
+        # CMake/C++ targets. Psi4 is a source build, so runtime-only is not enough.
+        echo "  - libint-cxx-devel" >> env_p4build.yaml
         echo "::group::View Env Spec File for Conda (Edited)"
         printf "\n<<<  env_p4build.yaml  >>>\n"
         cat env_p4build.yaml
@@ -274,6 +282,21 @@ jobs:
       run: |
         conda info
         conda list
+
+    - name: Verify Libint development files
+      run: |
+        python - <<'PY'
+        import os
+        from pathlib import Path
+        import sys
+        prefix = Path(os.environ["CONDA_PREFIX"])
+        root = prefix / "Library" if sys.platform == "win32" else prefix
+        for relative in ("include/libint2.hpp", "include/libint2/engine.h",
+                         "lib/cmake/libint2/libint2-config.cmake"):
+            path = root / relative
+            assert path.is_file(), f"Missing Libint development file: {path}"
+            print(path)
+        PY
 
     - name: Special Config - Force testing OpenOrbitalOptimizer
       if: matrix.cfg.python-version == 3.14 && (matrix.cfg.label == 'Conda Clang (M-Silicon)')
@@ -412,7 +435,7 @@ jobs:
 
       # Mac tests latest-release and Linux tests upstream main for QCFractal
     - name: Special Config - Download MolSSI/QCFractal Repo
-      if: runner.os != 'Windows'
+      if: runner.os != 'Windows' && matrix.cfg.extra-disable != 'addons'
       uses: actions/checkout@v6
       with:
         repository: MolSSI/QCFractal
@@ -421,7 +444,7 @@ jobs:
         fetch-depth: 0
 
     - name: Install All QCArchive packages
-      if: runner.os != 'Windows'
+      if: runner.os != 'Windows' && matrix.cfg.extra-disable != 'addons'
       working-directory: ./qca
       run: |
           pip install -e ./qcportal -e ./qcfractalcompute -e ./qcfractal[services,geoip,snowflake]
@@ -509,15 +532,17 @@ jobs:
 
       # Win runs out of memory on the geometric mp2(conv) tests, so run them with less parallelism
     - name: Test Addons with Pytest (geomeTRIC)
+      if: matrix.cfg.extra-disable != 'addons'
       working-directory: ./objdir
       run: PYTHONPATH=stage/lib pytest --addon-report=addon-report.json --addon-report-label="${{ runner.os }} / ${{ matrix.cfg.label }} / Python ${{ matrix.cfg.python-version }}" --cache-clear -v -rws --durations=50 --durations-min=40 --strict-markers --color yes -n 2 -m "geometric" stage/lib/psi4/tests/
 
     - name: Test Addons with Pytest
+      if: matrix.cfg.extra-disable != 'addons'
       working-directory: ./objdir
       run: PYTHONPATH=stage/lib pytest --addon-report=addon-report.json --addon-report-label="${{ runner.os }} / ${{ matrix.cfg.label }} / Python ${{ matrix.cfg.python-version }}" --cache-clear -v -rws --durations=50 --durations-min=40 --strict-markers --color yes -n auto -m "${{ matrix.cfg.pytest-marker-expr }} and not geometric" -k "${{ matrix.cfg.pytest-name-expr }}" stage/lib/psi4/tests/
 
     - name: Publish addon test report
-      if: always()
+      if: always() && matrix.cfg.extra-disable != 'addons'
       working-directory: ./objdir
       run: |
         if [[ -f addon-report.md ]]; then
@@ -535,7 +560,7 @@ jobs:
         fi
 
     - name: Upload addon test report
-      if: always()
+      if: always() && matrix.cfg.extra-disable != 'addons'
       uses: actions/upload-artifact@v4
       with:
         name: addon-report-${{ runner.os }}-py${{ matrix.cfg.python-version }}-${{ strategy.job-index }}
