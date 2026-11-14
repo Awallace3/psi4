@@ -25,6 +25,10 @@ evidence for either branch.
 - The bit-based character-table constructor initializes all metadata/pointers,
   as its string-based counterpart already did. Copying its uninitialized group
   enum was another UBSan failure reached during SCF setup.
+- Source-built Gau2Grid receives a C11 allocation-size patch: its GCC/PGI
+  `aligned_alloc` wrapper rounded neither small grid buffers nor other
+  non-multiple sizes. The packaged Gau2Grid 2.0.8 triggered ASan on
+  `aligned_alloc(64, 24)`. Existing binary packages are not modified by this patch.
 
 Additional opt-branch safeguards:
 
@@ -152,6 +156,28 @@ separately. Leak detection is disabled for the Python/dependency process, not
 address/undefined-behavior diagnostics. Keep pytest capture disabled (`-s`):
 a fail-fast sanitizer can otherwise exit before pytest exposes its captured
 diagnostic.
+
+If a prebuilt Gau2Grid 2.0.8 package fails C11 alignment checks, build a private
+copy instead of suppressing ASan allocator checks:
+
+```bash
+git clone --depth 1 --branch v2.0.8 https://github.com/dgasmith/gau2grid.git "$GG_SOURCE"
+cmake -DGAU2GRID_SOURCE_DIR="$GG_SOURCE" \
+    -P "$SOURCE/external/upstream/gau2grid/patch-alignment.cmake"
+cmake -S "$GG_SOURCE" -B "$GG_BUILD" -G Ninja \
+    -DCMAKE_INSTALL_PREFIX="$GG_PREFIX" -DCMAKE_INSTALL_LIBDIR=lib \
+    -DMAX_AM=2 -DENABLE_XHOST=OFF -DBUILD_SHARED_LIBS=ON \
+    -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+    -DCMAKE_C_FLAGS_RELEASE="-O1 -g1 -DNDEBUG"
+cmake --build "$GG_BUILD" -j 6
+cmake --install "$GG_BUILD"
+export LD_PRELOAD="$(c++ -print-file-name=libasan.so):$GG_PREFIX/lib/libgg.so.2"
+```
+
+The focused sanitizer suite uses at most d functions (`MAX_AM=2`); increase this
+for other bases. The private dependency has the same public ABI/version and
+is itself instrumented. Record its loaded path; do not describe this as a
+successful sanitizer run against an unchanged defective binary package.
 
 Use `ENABLE_XHOST=OFF` for generic builds. AVX2 may be executed only on a capable
 CPU; AVX-512 translation units can be compile-checked locally but require
