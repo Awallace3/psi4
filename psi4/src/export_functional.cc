@@ -273,6 +273,8 @@ void export_functional(py::module &m) {
         .def("build_collocation_cache", &VBase::build_collocation_cache,
              "Constructs a collocation cache to prevent recomputation.")
         .def("clear_collocation_cache", &VBase::clear_collocation_cache, "Clears the collocation cache.")
+        .def("release_workspaces", &VBase::release_workspaces,
+             "Releases regenerable scratch while retaining the grid and density; workers are restored on use.")
         .def("set_D", &VBase::set_D, "Sets the internal density.")
         .def("Dao", &VBase::set_D, "Returns internal AO density.")
         .def("compute_V", &VBase::compute_V, "doctsring")

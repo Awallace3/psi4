@@ -85,8 +85,10 @@ class Libint2TwoElectronInt : public TwoBodyAOInt {
     //! Libint2 engine
     std::vector<libint2::Engine> engines_;
 
-    /// The engine to used to set up the Schwarz screening
-    libint2::Engine schwarz_engine_;
+    /// Clones reconstruct screening scratch only if their sieve is rebuilt.
+    std::unique_ptr<libint2::Engine> schwarz_engine_;
+    std::function<std::unique_ptr<libint2::Engine>()> schwarz_engine_factory_;
+    void init_schwarz_engine(std::function<std::unique_ptr<libint2::Engine>()> factory);
 
     //! Shell pair information
     ShellPairData pairs12_, pairs34_;

@@ -32,6 +32,7 @@
 #include "psi4/psi4-dec.h"
 #include <psi4/libmints/typedefs.h>
 #include "psi4/libpsi4util/exception.h"
+#include "psi4/libpsi4util/memory_ledger.h"
 
 #include <map>
 #include <list>
@@ -90,6 +91,9 @@ class PSI_API DFHelper {
 
     /// Returns the number of doubles in the *screened* AO integrals
     size_t get_AO_size() { return big_skips_[nbf_]; }
+
+    /// Returns the in-core AO integrals currently held, in doubles, as reported to the memory ledger
+    size_t get_AO_held() const { return core_claim_.held(); }
 
     /// Returns the size of the in-core version in doubles
     size_t get_core_size() {
@@ -357,6 +361,9 @@ class PSI_API DFHelper {
     // => memory in doubles <=
     size_t memory_ = 256000000;
     size_t required_core_size_;
+    // What the in-core AO integrals above are costing the process right now, so that an
+    // SCF started while this object is alive can see that the memory is already spent.
+    MemoryClaim core_claim_;
 
     // => internal holders <=
     std::string method_ = "STORE";
@@ -407,6 +414,8 @@ class PSI_API DFHelper {
     // => AO building machinery <=
     void prepare_AO();
     void prepare_AO_core();
+    /// Re-report the in-core AO integrals to the process memory ledger from the buffers that exist now
+    void update_core_claim();
     void compute_dense_Qpq_blocking_Q(const size_t start, const size_t stop, double* Mp,
                                       std::vector<std::shared_ptr<TwoBodyAOInt>> eri);
     void compute_sparse_pQq_blocking_Q(const size_t start, const size_t stop, double* Mp,
@@ -486,6 +495,20 @@ class PSI_API DFHelper {
 
     // => Coulomb metric handling <=
     std::vector<std::pair<double, std::string>> metric_keys_;
+    // A metric power of zero is the identity, not merely something cheap:
+    // Matrix::power() only applies its condition cutoff for negative powers,
+    // so every eigenvalue maps to 1.0 and J^0 = V V^T = 1.  Callers that ask
+    // for it want the bare three-index integrals, so the metric is never
+    // built and never contracted.
+    bool metric_is_identity() const { return mpower_ < 1e-13 && mpower_ > -1e-13; }
+    // DIRECT parks its transformed blocks in a pre-metric file and folds the
+    // metric in a second, name-by-name disk pass.  With an identity metric
+    // there is nothing to fold, so the blocks go straight to the final file
+    // and the pass is skipped: that is one fewer full copy of every
+    // transformed tensor on disk, and two fewer passes over it.  DIRECT_iaQ
+    // cannot take the shortcut because its pre-metric file is (Q,p,q) and the
+    // metric pass is also what transposes it into the requested layout.
+    bool needs_metric_pass() const { return direct_iaQ_ || (direct_ && !metric_is_identity()); }
     // Create J and write it to disk.
     void prepare_metric();
     // Create J and cache it in metrics_.

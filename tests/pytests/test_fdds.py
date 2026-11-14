@@ -130,12 +130,13 @@ def test_fdds_aux_memory_blocking(fdds_input, is_lrc):
     # 80% of the global byte setting / sizeof(double) = byte setting / 10.
     # Nine slices fit the old (incorrect) seven-slice LRC budget, not twelve.
     too_small = fixed + (9 if is_lrc else 6) * nvir * naux
-    psi4.core.set_memory_bytes(10 * too_small, True)
+    resident_bytes = 8 * psi4.core.memory_committed()
+    psi4.core.set_memory_bytes(resident_bytes + 10 * too_small, True)
     with pytest.raises(RuntimeError, match=r"Too little memory for FDDS_Dispersion::form_aux_matrices"):
         obj.form_aux_matrices("A", 0.3, 0.25, 0.75 if is_lrc else 0.0)
 
     for block in (1, 2):
-        psi4.core.set_memory_bytes(10 * (fixed + block * per_occ + 1), True)
+        psi4.core.set_memory_bytes(resident_bytes + 10 * (fixed + block * per_occ + 1), True)
         for monomer in ("A", "B"):
             actual = _aux_matrices(obj, monomer, 0.3, is_lrc)
             for key, value in reference[monomer].items():

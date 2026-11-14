@@ -10,6 +10,8 @@ pytestmark = [pytest.mark.psi, pytest.mark.api]
 
 @pytest.fixture(scope="module", params=["spherical", "cartesian"])
 def build_system(request):
+    # Module fixtures run before the function-scoped option reset.
+    psi4.core.clean_options()
     mol = psi4.geometry("""
     O
     H 1 1.00
