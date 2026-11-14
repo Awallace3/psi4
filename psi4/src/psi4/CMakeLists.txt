@@ -104,7 +104,45 @@ int main() {
     auto query = &cuestXCNonsymmetricDensityComputeWorkspaceQuery;
     return (compute && query && type) ? 0 : 1;
 }" PSI4_CUEST_HAS_NONSYMMETRIC_XC)
+  # Header guards alone cannot identify these optional preview APIs: cuEST
+  # 0.3 retains the headers but changes Grid-K construction and Direct-J
+  # screening. Keep DF-JK available; reject optional modes until their actual
+  # API is supported, rather than guessing argument or threshold semantics.
+  check_cxx_source_compiles("
+#include <cuest.h>
+#include <type_traits>
+using Create = cuestStatus_t (*)(cuestHandle_t, cuestAOBasis_t,
+    cuestAOPairList_t, cuestMolecularGrid_t, cuestGridKIntPlanParameters_t,
+    cuestWorkspace_t*, cuestWorkspace_t*, cuestGridKIntPlan_t*);
+using Query = cuestStatus_t (*)(cuestHandle_t, cuestAOBasis_t,
+    cuestAOPairList_t, cuestMolecularGrid_t, cuestGridKIntPlanParameters_t,
+    cuestWorkspaceDescriptor_t*, cuestWorkspaceDescriptor_t*, cuestGridKIntPlan_t*);
+static_assert(std::is_same<decltype(&cuestGridKIntPlanCreate), Create>::value, \"Grid-K create API\");
+static_assert(std::is_same<decltype(&cuestGridKIntPlanCreateWorkspaceQuery), Query>::value, \"Grid-K query API\");
+int main() { return 0; }
+" PSI4_CUEST_HAS_PREVIEW_GRIDK)
+  check_cxx_source_compiles("
+#include <cuest.h>
+int main() {
+    auto create = &cuestDirectIntPlanCreate;
+    auto compute = &cuestDirectCoulombCompute;
+    auto query = &cuestDirectCoulombComputeWorkspaceQuery;
+    const auto threshold = CUEST_DIRECTCOULOMBCOMPUTE_PARAMETERS_SCHWARZ_THRESHOLD;
+    const auto jit = CUEST_DIRECTCOULOMBCOMPUTE_PARAMETERS_JIT_USAGE_MODE;
+    return (create && compute && query && threshold >= 0 && jit >= 0) ? 0 : 1;
+}
+" PSI4_CUEST_HAS_PREVIEW_DIRECTJ)
   unset(CMAKE_REQUIRED_LIBRARIES)
+  foreach(_mode GRIDK DIRECTJ)
+    if(PSI4_CUEST_HAS_PREVIEW_${_mode})
+      target_compile_definitions(psi4_optional_deps INTERFACE PSI_CUEST_HAS_${_mode})
+      # These switches control cuESTJK class members, including for plugins.
+      target_compile_definitions(core INTERFACE PSI_CUEST_HAS_${_mode})
+      message(STATUS "cuEST ${_mode} preview API supported")
+    else()
+      message(STATUS "cuEST ${_mode} API unsupported: optional mode disabled; DF-JK remains available")
+    endif()
+  endforeach()
   if(PSI4_CUEST_HAS_NONSYMMETRIC_XC)
     target_compile_definitions(psi4_optional_deps INTERFACE PSI4_CUEST_NONSYMMETRIC_XC)
     message(STATUS "cuEST nonsymmetric XC density found: GPU XC response kernel enabled")

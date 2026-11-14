@@ -403,13 +403,13 @@ void cuESTJK::build_cuest_plan(const std::string& key) {
     if (gridk_) (void)gridk_workspace_bytes();  // Validate before allocating plans.
 #ifndef PSI_CUEST_HAS_GRIDK
     if (gridk_)
-        throw PSIEXCEPTION("CUEST_GRIDK requires cuEST symmetric and nonsymmetric Grid-K APIs; "
-                           "rebuild Psi4 with a supporting cuEST SDK (e.g. 0.2.50).");
+        throw PSIEXCEPTION("CUEST_GRIDK requires the Grid-K preview API supported by this implementation; "
+                          "the configured SDK's API is incompatible. DF-JK remains available.");
 #endif
 #ifndef PSI_CUEST_HAS_DIRECTJ
     if (directj_)
-        throw PSIEXCEPTION("CUEST_DIRECTJ requires cuEST direct Coulomb APIs; "
-                           "rebuild Psi4 with a supporting cuEST SDK (e.g. 0.2.50).");
+        throw PSIEXCEPTION("CUEST_DIRECTJ requires the Direct-J preview API supported by this implementation; "
+                          "the configured SDK's API is incompatible. DF-JK remains available.");
 #endif
     if (needs_df_plan() && !auxiliary_->has_puream())
         throw PSIEXCEPTION("cuESTJK requires a spherical-harmonic auxiliary basis for density fitting.");

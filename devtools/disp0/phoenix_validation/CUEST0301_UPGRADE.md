@@ -72,6 +72,25 @@ new SDK in the strict Python admission route and does not constitute a
 canonical campaign build (in particular, it does not enable Einsums).
 Its purpose is to expose native API/build incompatibilities before migration.
 
+The first native attempt (`d401d17499`) failed at `cuESTJK.cc`: the optional
+preview Direct-J threshold enum no longer exists, and Grid-K now takes an
+OE integral plan plus a variable workspace descriptor instead of the old
+basis/pair-list argument group. These interfaces are outside the 25-function
+DFMO probe. The remote wrapper also hid the real build result by assigning
+zsh's read-only `status`; inspect the saved build log, and use Bash explicitly
+for subsequent wrappers.
+
+The compatibility fix probes the **actual optional API** in CMake and exports
+the resulting feature definitions to both Psi4 modules and plugin consumers.
+It retains the old optional implementations on compatible SDKs. On 0.3.0.1,
+Grid-K and Direct-J are explicitly unavailable until ported and numerically
+qualified; selecting them must throw, not fall back. The requested SAPT0
+campaign already disables both and uses DF-JK. This is **not** a port or
+qualification of the new optional methods.
+New native build attempts use pin-specific directories, retain the failed
+attempt, and set `CMAKE_BUILD_PARALLEL_LEVEL=2` so the nested superbuild's
+compiler count is also bounded.
+
 Phoenix setup belongs in the small **embers** CPU job
 `install_cuest0301.sbatch`, not a long login-node solve/install. All 50 embers
 slots were occupied at initial staging. No new inferno use is authorized.

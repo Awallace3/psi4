@@ -7,8 +7,8 @@ source_root=$(realpath "${2:?frozen source}")
 pin=${3:?full commit}
 env_root=$HOME/gits/psi4-disp0-cachy/environment-v2
 sdk=$root/sdk
-build=$root/build-native-0301
-stage=$root/install-native-0301
+build=$root/build-native-0301-${pin:0:10}
+stage=$root/install-native-0301-${pin:0:10}
 [[ $(git -C "$source_root" rev-parse HEAD) == "$pin" ]]
 [[ -z $(git -C "$source_root" status --porcelain --untracked-files=no) ]]
 [[ ! -e "$build" && ! -e "$stage" ]]
@@ -18,6 +18,8 @@ export PATH="$env_root/bin:/usr/bin:/bin"
 export CONDA_PREFIX="$env_root" MATH_ROOT="$env_root"
 export CUDA_HOME="$env_root" CUDA_PATH="$env_root" PYTHONNOUSERSITE=1
 export LD_LIBRARY_PATH="$sdk/lib:$env_root/lib"
+# The outer superbuild invokes another Ninja build; constrain that child too.
+export CMAKE_BUILD_PARALLEL_LEVEL=2
 unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH LIBRARY_PATH GCC_ROOT
 export TMPDIR="$root/runs/native-build-scratch"
 mkdir -p "$TMPDIR"
