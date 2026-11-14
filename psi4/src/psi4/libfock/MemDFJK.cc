@@ -65,8 +65,8 @@ void MemDFJK::common_init() { dfh_ = std::make_shared<DFHelper>(primary_, auxili
 size_t MemDFJK::memory_estimate() {
     dfh_->set_nthreads(omp_nthread_);
     dfh_->set_schwarz_cutoff(cutoff_);
-    // the Cholesky metric route needs one more naux^2 while the AOs are built
-    dfh_->set_metric_cholesky(options_.exists("SCF_DF_METRIC") && options_.get_str("SCF_DF_METRIC") == "CHOLESKY");
+    dfh_->set_do_wK(do_wK_);
+    dfh_->set_wcombine(do_wK_ ? wcombine_ : false);
     return dfh_->get_core_size();
 }
 
@@ -79,7 +79,6 @@ void MemDFJK::preiterations() {
     dfh_->set_schwarz_cutoff(cutoff_);
     dfh_->set_method("STORE");
     dfh_->set_fitting_condition(condition_);
-    dfh_->set_metric_cholesky(options_.exists("SCF_DF_METRIC") && options_.get_str("SCF_DF_METRIC") == "CHOLESKY");
     dfh_->set_memory(memory_ - memory_overhead());
     dfh_->set_do_wK(do_wK_);
     dfh_->set_omega(omega_);
@@ -129,11 +128,7 @@ void MemDFJK::print_header() const {
         outfile->Printf("    Schwarz Cutoff:     %11.0E\n", cutoff_);
         outfile->Printf("    Mask sparsity (%%):  %11.4f\n", 100. * dfh_->ao_sparsity());
         outfile->Printf("    Fitting Condition:  %11.0E\n", condition_);
-        outfile->Printf("    Metric:             %11s\n\n", (dfh_->metric_cholesky_route() ? "CHOLESKY" : "EIGEN"));
-        if (dfh_->metric_cholesky() && !dfh_->metric_cholesky_route()) {
-            outfile->Printf(
-                "  Warning: SCF_DF_METRIC CHOLESKY is ignored for range-separated (wK) builds; using EIGEN.\n\n");
-        }
+        outfile->Printf("    Metric:             %11s\n\n", "EIGEN");
 
         outfile->Printf("   => Auxiliary Basis Set <=\n\n");
         auxiliary_->print_by_level("outfile", print_);

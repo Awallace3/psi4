@@ -21,15 +21,42 @@ def diis_engine_helper(self):
             engines.add(aediis.lower())
     return engines
 
+def _scf_diis_memory_required(self, max_diis_vectors, sample_matrices=None):
+    """Conservative doubles for history plus extrapolation/accelerator copies."""
+    if max_diis_vectors <= 0:
+        return 0
+    if sample_matrices is None:
+        # Conservative target, residual, and accelerator density per spin.
+        spins = 1 if isinstance(self, core.RHF) else 2
+        per_entry_elems = 3 * spins * sum(int(n) ** 2 for n in self.nsopi().to_tuple())
+    else:
+        per_entry_elems = sum(
+            sum(int(r) * int(c) for r, c in zip(m.rowdim().to_tuple(), m.coldim().to_tuple()))
+            for m in sample_matrices
+        )
+    copies = 3 if core.get_option("SCF", "SCF_INITIAL_ACCELERATOR") != "NONE" else 1
+    return copies * (int(max_diis_vectors) + 2) * per_entry_elems
+
+
+def _scf_diis_storage_policy(self, max_diis_vectors: int, sample_matrices) -> StoragePolicy:
+    required = _scf_diis_memory_required(self, max_diis_vectors, sample_matrices)
+    # scf_initialize explicitly removed this allowance from JK/grid budgets.
+    # A minimum JK estimate is not evidence of unallocated memory.
+    if required <= getattr(self, "_diis_memory_budget", 0):
+        return StoragePolicy.InCore
+    return StoragePolicy.OnDisk
+
+
+def _scf_diis_disk_scratch(self):
+    """Bound streamed ADIIS/dot-product temporaries, independent of history length."""
+    spins = 1 if isinstance(self, core.RHF) else 2
+    return 8 * spins * sum(int(n) ** 2 for n in self.nsopi().to_tuple())
+
+
 def _RHF_orbital_gradient(self, save_fock: bool, max_diis_vectors: int) -> float:
     gradient = self.form_FDSmSDF(self.Fa(), self.Da())
 
     if save_fock:
-        if not self.initialized_diis_manager_:
-            storage_policy = StoragePolicy.InCore if self.scf_type() == "DIRECT" else StoragePolicy.OnDisk
-            self.diis_manager_ = DIIS(max_diis_vectors, "HF DIIS vector", RemovalPolicy.LargestError, storage_policy, engines=diis_engine_helper(self))
-            self.initialized_diis_manager_ = True
-
         entry = {"target": [self.Fa()]}
         if core.get_option('SCF', 'DIIS'):
             entry["error"] = [gradient]
@@ -38,6 +65,13 @@ def _RHF_orbital_gradient(self, save_fock: bool, max_diis_vectors: int) -> float
             entry["densities"] = [self.Da()]
             if aediis == "EDIIS":
                 entry["energy"] = [self.compute_E()]
+
+        if not self.initialized_diis_manager_:
+            mats = [m for vals in entry.values() for m in vals if isinstance(m, core.Matrix)]
+            storage_policy = _scf_diis_storage_policy(self, max_diis_vectors, mats)
+            self.diis_manager_ = DIIS(max_diis_vectors, "HF DIIS vector", RemovalPolicy.LargestError, storage_policy, engines=diis_engine_helper(self))
+            self.initialized_diis_manager_ = True
+
         self.diis_manager_.add_entry(entry)
 
     if self.options().get_bool("DIIS_RMS_ERROR"):
@@ -50,11 +84,6 @@ def _UHF_orbital_gradient(self, save_fock: bool, max_diis_vectors: int) -> float
     gradient_b = self.form_FDSmSDF(self.Fb(), self.Db())
 
     if save_fock:
-        if not self.initialized_diis_manager_:
-            self.diis_manager_ = DIIS(max_diis_vectors, "HF DIIS vector", RemovalPolicy.LargestError,
-                                                          StoragePolicy.OnDisk, False, engines=diis_engine_helper(self))
-            self.initialized_diis_manager_ = True
-
         entry = {"target": [self.Fa(), self.Fb()]}
         if core.get_option('SCF', 'DIIS'):
             entry["error"] = [gradient_a, gradient_b]
@@ -63,6 +92,14 @@ def _UHF_orbital_gradient(self, save_fock: bool, max_diis_vectors: int) -> float
             entry["densities"] = [self.Da(), self.Db()]
             if aediis == "EDIIS":
                 entry["energy"] = [self.compute_E()]
+
+        if not self.initialized_diis_manager_:
+            mats = [m for vals in entry.values() for m in vals if isinstance(m, core.Matrix)]
+            storage_policy = _scf_diis_storage_policy(self, max_diis_vectors, mats)
+            self.diis_manager_ = DIIS(max_diis_vectors, "HF DIIS vector", RemovalPolicy.LargestError,
+                                                          storage_policy, False, engines=diis_engine_helper(self))
+            self.initialized_diis_manager_ = True
+
         self.diis_manager_.add_entry(entry)
 
     if self.options().get_bool("DIIS_RMS_ERROR"):
@@ -98,7 +135,8 @@ def _ROHF_orbital_gradient(self, save_fock: bool, max_diis_vectors: int) -> floa
 
     if save_fock:
         if not self.initialized_diis_manager_:
-            self.diis_manager_ = DIIS(max_diis_vectors, "HF DIIS vector", RemovalPolicy.LargestError, StoragePolicy.OnDisk, engines=diis_engine_helper(self))
+            storage_policy = _scf_diis_storage_policy(self, max_diis_vectors, [gradient, self.soFeff()])
+            self.diis_manager_ = DIIS(max_diis_vectors, "HF DIIS vector", RemovalPolicy.LargestError, storage_policy, engines=diis_engine_helper(self))
             self.diis_manager_.set_error_vector_size(gradient)
             self.diis_manager_.set_vector_size(self.soFeff())
             self.initialized_diis_manager_ = True

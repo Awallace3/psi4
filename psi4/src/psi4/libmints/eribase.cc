@@ -34,6 +34,11 @@
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libpsi4util/PsiOutStream.h"
+#include "psi4/libpsi4util/process.h"
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #include <libint2/shell.h>
 #include <libint2/engine.h>
@@ -134,54 +139,216 @@ void Libint2TwoElectronInt::common_init() {
     setup_sieve();
     // Reset the engine type back to the general case needed
     create_blocks();
-    const auto max_engine_precision = std::numeric_limits<double>::epsilon() * screening_threshold_;
-
-    size_t npairs = shell_pairs_bra_.size();
-    pairs12_.resize(npairs);
-    // #pragma omp parallel for
-    for (int pair = 0; pair < npairs; ++pair) {
-        auto s1 = shell_pairs_bra_[pair].first;
-        auto s2 = shell_pairs_bra_[pair].second;
-        pairs12_[pair] = std::make_shared<libint2::ShellPair>(basis1()->l2_shell(s1), basis2()->l2_shell(s2),
-                                                              std::log(max_engine_precision));
-    }
-    npairs = shell_pairs_ket_.size();
-    pairs34_.resize(npairs);
-    // #pragma omp parallel for
-    for (int pair = 0; pair < npairs; ++pair) {
-        auto s3 = shell_pairs_ket_[pair].first;
-        auto s4 = shell_pairs_ket_[pair].second;
-        pairs34_[pair] = std::make_shared<libint2::ShellPair>(basis3()->l2_shell(s3), basis4()->l2_shell(s4),
-                                                              std::log(max_engine_precision));
+    if (use_shell_pairs_) {
+        ensure_shell_pairs();
     }
 }
 
 Libint2TwoElectronInt::~Libint2TwoElectronInt() {}
 
+void Libint2TwoElectronInt::ensure_shell_pairs() {
+    const auto ln_max_engine_precision =
+        std::log(std::numeric_limits<double>::epsilon() * screening_threshold_);
+#ifdef _OPENMP
+    const int nthreads = omp_in_parallel() ? 1 : Process::environment.get_n_threads();
+#endif
+    size_t npairs = shell_pairs_bra_.size();
+    pairs12_.resize(npairs);
+#pragma omp parallel for schedule(guided) num_threads(nthreads) if (npairs > 64)
+    for (size_t pair = 0; pair < npairs; ++pair) {
+        auto s1 = shell_pairs_bra_[pair].first;
+        auto s2 = shell_pairs_bra_[pair].second;
+        pairs12_[pair] = std::make_shared<libint2::ShellPair>(basis1()->l2_shell(s1), basis2()->l2_shell(s2),
+                                                              ln_max_engine_precision);
+    }
+    npairs = shell_pairs_ket_.size();
+    pairs34_.resize(npairs);
+#pragma omp parallel for schedule(guided) num_threads(nthreads) if (npairs > 64)
+    for (size_t pair = 0; pair < npairs; ++pair) {
+        auto s3 = shell_pairs_ket_[pair].first;
+        auto s4 = shell_pairs_ket_[pair].second;
+        pairs34_[pair] = std::make_shared<libint2::ShellPair>(basis3()->l2_shell(s3), basis4()->l2_shell(s4),
+                                                              ln_max_engine_precision);
+    }
+}
+
+void Libint2TwoElectronInt::create_sieve_pair_info(const std::shared_ptr<BasisSet> bs, PairList &shell_pairs,
+                                                   bool is_bra) {
+    nshell_ = bs->nshell();
+    nbf_ = bs->nbf();
+
+    function_pair_values_.assign((size_t)nbf_ * nbf_, 0.0);
+    shell_pair_values_.assign((size_t)nshell_ * nshell_, 0.0);
+    double max_val = 0.0;
+
+    int nthreads = 1;
+#ifdef _OPENMP
+    if (!omp_in_parallel()) nthreads = Process::environment.get_n_threads();
+#endif
+    if (nshell_ < 32) nthreads = 1;
+
+    std::vector<libint2::Engine> engs;
+    engs.reserve(nthreads);
+    for (int t = 0; t < nthreads; ++t) engs.emplace_back(schwarz_engine_);
+
+#pragma omp parallel for schedule(guided) num_threads(nthreads) reduction(max : max_val)
+    for (int P = 0; P < nshell_; P++) {
+        int tid = 0;
+#ifdef _OPENMP
+        if (nthreads > 1) tid = omp_get_thread_num();
+#endif
+        auto &eng = engs[tid];
+        const auto &shP = bs->l2_shell(P);
+        int nP = bs->shell(P).nfunction();
+        int oP = bs->shell(P).function_index();
+        for (int Q = 0; Q <= P; Q++) {
+            const auto &shQ = bs->l2_shell(Q);
+            int nQ = bs->shell(Q).nfunction();
+            int oQ = bs->shell(Q).function_index();
+            eng.compute(shP, shQ, shP, shQ);
+            const double *buffer = eng.results()[0];
+            double shell_max_val = 0.0;
+            if (buffer != nullptr) {
+                for (int p = 0; p < nP; p++) {
+                    for (int q = 0; q < nQ; q++) {
+                        shell_max_val =
+                            std::max(shell_max_val, std::abs(buffer[p * (nQ * nP * nQ + nQ) + q * (nP * nQ + 1)]));
+                    }
+                }
+            }
+            max_val = std::max(max_val, shell_max_val);
+            shell_pair_values_[(size_t)P * nshell_ + Q] = shell_pair_values_[(size_t)Q * nshell_ + P] = shell_max_val;
+            for (int p = 0; p < nP; p++) {
+                for (int q = 0; q < nQ; q++) {
+                    function_pair_values_[(size_t)(p + oP) * nbf_ + (q + oQ)] =
+                        function_pair_values_[(size_t)(q + oQ) * nbf_ + (p + oP)] = shell_max_val;
+                }
+            }
+        }
+    }
+    max_integral_ = max_val;
+
+    screening_threshold_squared_ = screening_threshold_ * screening_threshold_;
+    double screening_threshold_squared_over_max =
+        (max_integral_ > 0.0) ? (screening_threshold_squared_ / max_integral_) : 0.0;
+
+    shell_pairs.clear();
+    function_pairs_.clear();
+    shell_pairs_reverse_.resize(nshell_ * (nshell_ + 1L) / 2L);
+    function_pairs_reverse_.resize(nbf_ * (nbf_ + 1L) / 2L);
+
+    long int offset = 0L;
+    size_t munu = 0L;
+    for (int mu = 0; mu < nbf_; mu++) {
+        for (int nu = 0; nu <= mu; nu++, munu++) {
+            if (function_pair_values_[(size_t)mu * nbf_ + nu] >= screening_threshold_squared_over_max) {
+                function_pairs_.push_back(std::make_pair(mu, nu));
+                function_pairs_reverse_[munu] = offset;
+                offset++;
+            } else {
+                function_pairs_reverse_[munu] = -1L;
+            }
+        }
+    }
+
+    shell_to_shell_.clear();
+    function_to_function_.clear();
+    shell_to_shell_.resize(nshell_);
+    function_to_function_.resize(nbf_);
+
+    for (int MU = 0; MU < nshell_; MU++) {
+        for (int NU = 0; NU < nshell_; NU++) {
+            if (shell_pair_values_[(size_t)MU * nshell_ + NU] >= screening_threshold_squared_over_max) {
+                shell_to_shell_[MU].push_back(NU);
+            }
+        }
+    }
+
+    shell_pairs.clear();
+    std::fill_n(shell_pairs_reverse_.begin(), nshell_ * (nshell_ + 1L) / 2L, -1);
+
+    offset = 0L;
+    size_t MUNU = 0L;
+    for (int MU = 0; MU < nshell_; MU++) {
+        for (int NU = 0; NU <= MU; NU++, MUNU++) {
+            if (shell_pair_values_[(size_t)MU * nshell_ + NU] >= screening_threshold_squared_over_max) {
+                shell_pairs.push_back(std::make_pair(MU, NU));
+                shell_pairs_reverse_[MUNU] = offset;
+                offset++;
+            }
+        }
+    }
+
+    for (int mu = 0; mu < nbf_; mu++) {
+        for (int nu = 0; nu < nbf_; nu++) {
+            if (function_pair_values_[(size_t)mu * nbf_ + nu] >= screening_threshold_squared_over_max) {
+                function_to_function_[mu].push_back(nu);
+            }
+        }
+    }
+
+    if (screening_type_ == ScreeningType::CSAM) {
+        function_sqrt_.assign(nbf_, 0.0);
+        shell_pair_exchange_values_.assign((size_t)nshell_ * nshell_, 0.0);
+#pragma omp parallel for schedule(guided) num_threads(nthreads)
+        for (int P = 0; P < nshell_; P++) {
+            int tid = 0;
+#ifdef _OPENMP
+            if (nthreads > 1) tid = omp_get_thread_num();
+#endif
+            auto &eng = engs[tid];
+            const auto &shP = bs->l2_shell(P);
+            int nP = bs->shell(P).nfunction();
+            int oP = bs->shell(P).function_index();
+            eng.compute(shP, shP, shP, shP);
+            const double *buffer = eng.results()[0];
+            if (buffer != nullptr) {
+                for (int p = 0; p < nP; ++p) {
+                    function_sqrt_[oP + p] = std::sqrt(std::abs(buffer[p * (nP * nP * nP + nP) + p * (nP * nP + 1)]));
+                }
+            }
+        }
+#pragma omp parallel for schedule(guided) num_threads(nthreads)
+        for (int P = 0; P < nshell_; P++) {
+            int tid = 0;
+#ifdef _OPENMP
+            if (nthreads > 1) tid = omp_get_thread_num();
+#endif
+            auto &eng = engs[tid];
+            const auto &shP = bs->l2_shell(P);
+            int nP = bs->shell(P).nfunction();
+            int oP = bs->shell(P).function_index();
+            for (int Q = P; Q >= 0; Q--) {
+                const auto &shQ = bs->l2_shell(Q);
+                int nQ = bs->shell(Q).nfunction();
+                int oQ = bs->shell(Q).function_index();
+                eng.compute(shP, shP, shQ, shQ);
+                const double *buffer = eng.results()[0];
+                double exch_max = 0.0;
+                if (buffer != nullptr) {
+                    for (int p = 0; p < nP; p++) {
+                        for (int q = 0; q < nQ; q++) {
+                            double denom = function_sqrt_[p + oP] * function_sqrt_[q + oQ];
+                            if (denom > 0.0) {
+                                exch_max = std::max(exch_max,
+                                                    std::abs(buffer[p * nQ * nQ * (nP + 1) + q * (nQ + 1)]) / denom);
+                            }
+                        }
+                    }
+                }
+                shell_pair_exchange_values_[(size_t)P * nshell_ + Q] =
+                    shell_pair_exchange_values_[(size_t)Q * nshell_ + P] = exch_max;
+            }
+        }
+    }
+}
+
 void Libint2TwoElectronInt::initialize_sieve() {
     create_sieve_pair_info_manager();
 
     create_blocks();
-    const auto max_engine_precision = std::numeric_limits<double>::epsilon() * screening_threshold_;
-
-    // Reset the engine type back to the general case needed
-    size_t npairs = shell_pairs_bra_.size();
-    pairs12_.resize(npairs);
-//#pragma omp parallel for
-    for (int pair = 0; pair < npairs; ++pair) {
-        auto s1 = shell_pairs_bra_[pair].first;
-        auto s2 = shell_pairs_bra_[pair].second;
-        pairs12_[pair] = std::make_shared<libint2::ShellPair>(basis1()->l2_shell(s1), basis2()->l2_shell(s2),
-                                                              std::log(max_engine_precision));
-    }
-    npairs = shell_pairs_ket_.size();
-    pairs34_.resize(npairs);
-//#pragma omp parallel for
-    for (int pair = 0; pair < npairs; ++pair) {
-        auto s3 = shell_pairs_ket_[pair].first;
-        auto s4 = shell_pairs_ket_[pair].second;
-        pairs34_[pair] = std::make_shared<libint2::ShellPair>(basis3()->l2_shell(s3), basis4()->l2_shell(s4),
-                                                              std::log(max_engine_precision));
+    if (use_shell_pairs_) {
+        ensure_shell_pairs();
     }
 }
 
@@ -333,6 +500,9 @@ void Libint2TwoElectronInt::compute_shell_blocks(int shellpair12, int shellpair3
 
     size_t ntot = 0;
 
+    if (pairs12_.empty() && (!shell_pairs_bra_.empty() || !shell_pairs_ket_.empty())) {
+        ensure_shell_pairs();
+    }
     const auto *sp12 = pairs12_[shellpair12].get();
     const auto *sp34 = pairs34_[shellpair34].get();
     libint2_wrapper0(sh1, sh2, sh3, sh4, sp12, sp34);

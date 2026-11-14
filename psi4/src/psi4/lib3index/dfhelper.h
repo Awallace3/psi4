@@ -32,9 +32,11 @@
 #include "psi4/psi4-dec.h"
 #include <psi4/libmints/typedefs.h>
 #include "psi4/libpsi4util/exception.h"
+#include "dfhelper_scratch.h"
 
 #include <map>
 #include <list>
+#include <optional>
 #include <vector>
 #include <tuple>
 #include <string>
@@ -69,7 +71,13 @@ class PSI_API DFHelper {
     /// @param nthreads specifies number of threads to use
     /// oversubcription is possible
     ///
-    void set_nthreads(size_t nthreads) { nthreads_ = nthreads; }
+    void set_nthreads(size_t nthreads) {
+#ifdef _OPENMP
+        nthreads_ = nthreads ? nthreads : 1;
+#else
+        nthreads_ = 1;
+#endif
+    }
     size_t get_nthreads() { return nthreads_; }
 
     ///
@@ -78,27 +86,23 @@ class PSI_API DFHelper {
     /// defaults to 256,000,000 (2.04GB)
     ///
     void set_memory(size_t doubles) { memory_ = doubles; }
-    /// In-core symmetric AO tensors with metric power -1/2: contract with the Cholesky factor
-    /// of the metric (triangular solve) instead of J^-1/2. No eigenvalue cutoff; falls back to
-    /// J^-1/2 when the metric is singular to working precision (estimated rcond < 1e-13).
-    void set_metric_cholesky(bool on) { metric_cholesky_ = on; }
+    size_t get_memory() { return memory_; }
     /// Columns per metric-contraction panel in the in-core symmetric AO build (narrowest: the
     /// floor a tight budget can cap it to)
     size_t metric_panel_cols(bool narrowest = false) const;
     /// Doubles allocated on top of the AOs and the metric while the in-core AOs are built
     size_t AO_core_init_scratch(bool narrowest = false) const;
-    /// Requested metric (set_metric_cholesky)
-    bool metric_cholesky() const { return metric_cholesky_; }
-    /// Whether the in-core build takes the Cholesky route (requested, J^-1/2 power, not wK)
-    bool metric_cholesky_route() const;
-    size_t get_memory() { return memory_; }
     /// Free the compute_JK scratch that is otherwise kept between builds
     void clear_JK_scratch() {
         jk_T1_.reset();
         jk_T2_.reset();
         jk_T1_size_ = jk_T2_size_ = 0;
+        jk_C_buffers_.clear();
+        jk_C_buffers_.shrink_to_fit();
     }
 
+    /// Doubles held in the reusable JK temporaries and per-thread coefficient buffers.
+    size_t JK_scratch_memory() const;
     ///
     /// Indicates whether to use the in-core or out-of-core
     //  subalgorithm available in MemDFJK, or to let
@@ -375,9 +379,11 @@ class PSI_API DFHelper {
     double mpower_ = -0.5;
     double wmpower_ = -1.0;
     bool hold_met_ = false;
-    bool metric_cholesky_ = false;
     /// upper bound on metric_panel_cols() set by reserve_metric_panels under a tight budget (0: none)
     size_t panel_cols_cap_ = 0;
+    /// reusable scratch panels for contract_metric_AO_core_symm across psteps chunks
+    DFHelperScratch metric_panel_buf_, metric_out_buf_;
+    size_t metric_panel_size_ = 0, metric_out_size_ = 0;
     bool built_ = false;
     bool transformed_ = false;
     std::pair<size_t, size_t> info_;
@@ -401,8 +407,15 @@ class PSI_API DFHelper {
     void AO_core(bool set_AO_core);
     std::unique_ptr<double[]> Ppq_;
     /// compute_JK scratch, kept between builds (see compute_JK)
-    std::unique_ptr<double[]> jk_T1_, jk_T2_;
+    DFHelperScratch jk_T1_, jk_T2_;
     size_t jk_T1_size_ = 0, jk_T2_size_ = 0;
+    std::vector<DFHelperScratch> jk_C_buffers_;
+    void ensure_jk_C_buffers(size_t elem_per_thread);
+    /// Compact significant column indices per basis row p: sig_q_[sig_q_row_off_[p] .. sig_q_row_off_[p+1])
+    std::vector<uint32_t> sig_q_;
+    std::vector<size_t> sig_q_row_off_;
+    /// Resident AO tensors, metrics and metric panels, excluding JK scratch.
+    size_t JK_core_memory() const;
     // Maps x -> (P|Q) ^ x.
     std::map<double, SharedMatrix> metrics_;
 
@@ -413,8 +426,8 @@ class PSI_API DFHelper {
     // => AO building machinery <=
     void prepare_AO();
     void prepare_AO_core();
-    /// Smallest p-shell AO block buffer the in-core symmetric build can use (doubles)
-    size_t AO_core_min_block() const;
+    /// Minimum AO-block buffer doubles needed for a single p-shell in-core build
+    size_t min_AO_core_block() const;
     /// Cap the metric-contraction panels to fit next to `held` doubles; returns their size
     size_t reserve_metric_panels(size_t held);
     void compute_dense_Qpq_blocking_Q(const size_t start, const size_t stop, double* Mp,
@@ -424,15 +437,15 @@ class PSI_API DFHelper {
     void compute_sparse_pQq_blocking_p(const size_t start, const size_t stop, double* Mp,
                                        std::vector<std::shared_ptr<TwoBodyAOInt>> eri);
     void compute_sparse_pQq_blocking_p_symm(const size_t start, const size_t stop, double* Mp,
-                                            std::vector<std::shared_ptr<TwoBodyAOInt>> eri);
+                                            std::vector<std::shared_ptr<TwoBodyAOInt>> eri,
+                                            std::optional<double> omega = std::nullopt);
     void compute_sparse_pQq_blocking_p_symm_abw(const size_t start, const size_t stop, double* just_Mp, double* param_Mp,
                                         std::vector<std::shared_ptr<TwoBodyAOInt>> eri,
                                         std::vector<std::shared_ptr<TwoBodyAOInt>> weri);
 
 
 
-    void contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* metp, size_t begin, size_t end,
-                                      bool cholesky = false);
+    void contract_metric_AO_core_symm(double* Qpq, double* Ppq, double* metp, size_t begin, size_t end);
     void grab_AO(const size_t start, const size_t stop, double* Mp);
 
     // => wK AO building machinery <=
@@ -443,7 +456,7 @@ class PSI_API DFHelper {
 
     // first integral transforms
     void first_transform_pQq(size_t bsize, size_t bcount, size_t block_size, double* Mp, double* Tp, double* Bp,
-                             std::vector<std::vector<double>>& C_buffers);
+                             std::vector<DFHelperScratch>& C_buffers);
 
     // => index vectors for screened AOs <=
     // ==> Skips for non-symmetric "densities" <==
@@ -607,13 +620,13 @@ class PSI_API DFHelper {
     // @param T1p : Temporary matrix
     // @param T2p : Temporary matrix
     void compute_J(const std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p,
-                   std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size);
+                   std::vector<DFHelperScratch>& D_buffers, size_t bcount, size_t block_size);
     void compute_J_symm(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p,
-                        std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size);
-    void compute_J_combined(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p, std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size);
+                        std::vector<DFHelperScratch>& D_buffers, size_t bcount, size_t block_size);
+    void compute_J_combined(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p, std::vector<DFHelperScratch>& D_buffers, size_t bcount, size_t block_size);
     void compute_K(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright, std::vector<SharedMatrix> K,
                    double* Tp, double* Jtmp, double* Mp, size_t bcount, size_t block_size,
-                   std::vector<std::vector<double>>& C_buffers, bool lr_symmetric);
+                   std::vector<DFHelperScratch>& C_buffers, bool lr_symmetric);
     // returns tuple(largest AO buffer size, largest Q block size)
     std::tuple<size_t, size_t> Qshell_blocks_for_JK_build(std::vector<std::pair<size_t, size_t>>& b, size_t max_nocc,
                                                           bool lr_symmetric);
