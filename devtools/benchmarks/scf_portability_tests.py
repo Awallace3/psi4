@@ -16,7 +16,11 @@ def main():
     parser.add_argument("--openmp", choices=("on", "off"), default="on")
     parser.add_argument("--extended", action="store_true",
                         help="Include the large methyl-oxirane TDDFT cases (slow on one thread).")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="Independent pytest processes; each starts with one OpenMP/BLAS thread.")
     args = parser.parse_args()
+    if args.workers < 1:
+        parser.error("--workers must be positive")
     machine = platform.machine().lower()
     expected = {"x64": {"x86_64", "amd64"}, "arm64": {"arm64", "aarch64"}}
     if machine not in expected[args.architecture]:
@@ -50,6 +54,7 @@ def main():
         core_sha256=hashlib.sha256(Path(psi4.core.__file__).read_bytes()).hexdigest(),
         run_id=os.environ.get("GITHUB_RUN_ID"), runner_arch=os.environ.get("RUNNER_ARCH"),
         requested_openmp=args.openmp, threads=psi4.core.get_num_threads(),
+        pytest_workers=args.workers,
     )
     Path("scf-portability-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     print(json.dumps(provenance, indent=2), flush=True)
@@ -62,6 +67,7 @@ def main():
     return pytest.main([
         *(str(path) for path in tests if path.exists()),
         *([] if args.extended else ["-k", "not METHYLOXIRANE"]),
+        *([] if args.workers == 1 else ["-n", str(args.workers)]),
         "-v", "-ra", "--durations=20", "--junitxml=scf-portability.xml",
     ])
 
