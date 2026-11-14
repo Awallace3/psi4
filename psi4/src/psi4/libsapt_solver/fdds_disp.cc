@@ -39,6 +39,7 @@
 #include "psi4/liboptions/liboptions.h"
 #include "psi4/libpsi4util/process.h"
 #include "psi4/lib3index/dfhelper.h"
+#include "psi4/libpsi4util/memory_ledger.h"
 
 #include <iomanip>
 
@@ -77,20 +78,24 @@ std::string memory_size(double bytes) {
  */
 std::string too_little_memory(const std::string& where, const std::string& what, size_t needed, size_t doubles,
                               bool thread_scaled = false) {
+    const double held = (double)MemoryClaim::committed() * sizeof(double);
     std::stringstream message;
     message << "Too little memory for " << where << ": " << what << " needs "
             << memory_size((double)needed * sizeof(double)) << ", but only "
             << memory_size((double)doubles * sizeof(double)) << " is available to it (80% of the "
-            << memory_size((double)Process::environment.get_memory()) << " memory setting)." << std::endl;
+            << memory_size((double)Process::environment.get_memory()) << " memory setting, less "
+            << memory_size(held) << " held by live integral and grid caches)." << std::endl;
     message << "       Raise the memory setting to at least "
-            << memory_size((double)needed * sizeof(double) / 0.8);
+            << memory_size((double)needed * sizeof(double) / 0.8 + held);
     message << (thread_scaled ? ", or run with fewer threads." : ".");
     return message.str();
 }
 
-/*! \brief FDDS workspace budget in doubles (80% of the global memory setting). */
+/*! \brief FDDS workspace budget after subtracting resident integral/grid stores. */
 size_t available_doubles() {
-    return Process::environment.get_memory() * 0.8 / sizeof(double);
+    const size_t total = Process::environment.get_memory() / sizeof(double);
+    const size_t held = MemoryClaim::committed();
+    return (size_t)(0.8 * (double)(total > held ? total - held : 0));
 }
 
 }  // namespace

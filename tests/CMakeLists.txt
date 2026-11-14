@@ -116,6 +116,7 @@ add_subdirectory(psi4numpy)
 add_subdirectory(cookbook)
 add_subdirectory(python)
 add_subdirectory(json)
+add_subdirectory(dfhelper-jk-blocking)
 
 # C++ unit tests built inside the psi4-core ExternalProject. Skipped on Windows,
 # where their curated link lines do not resolve under lld-link (see

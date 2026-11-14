@@ -82,13 +82,19 @@ Libint2TwoElectronInt::Libint2TwoElectronInt(const IntegralFactory *integral, in
 
 Libint2TwoElectronInt::Libint2TwoElectronInt(const Libint2TwoElectronInt &rhs)
     : TwoBodyAOInt(rhs),
-      schwarz_engine_(rhs.schwarz_engine_),
+      schwarz_engine_factory_(rhs.schwarz_engine_factory_),
       braket_(rhs.braket_),
       use_shell_pairs_(rhs.use_shell_pairs_) {
     pairs12_ = rhs.pairs12_;
     pairs34_ = rhs.pairs34_;
     zero_vec_ = rhs.zero_vec_;
     for (const auto &e : rhs.engines_) engines_.emplace_back(e);
+}
+
+void Libint2TwoElectronInt::init_schwarz_engine(
+    std::function<std::unique_ptr<libint2::Engine>()> factory) {
+    schwarz_engine_factory_ = std::move(factory);
+    schwarz_engine_ = schwarz_engine_factory_();
 }
 
 void Libint2TwoElectronInt::common_init() {
@@ -199,10 +205,11 @@ size_t Libint2TwoElectronInt::compute_shell_for_sieve(const std::shared_ptr<Basi
     const auto &sh3 = bs->l2_shell(s3);
     const auto &sh4 = bs->l2_shell(s4);
 
-    schwarz_engine_.compute(sh1, sh2, sh3, sh4);
+    if (!schwarz_engine_) schwarz_engine_ = schwarz_engine_factory_();
+    schwarz_engine_->compute(sh1, sh2, sh3, sh4);
 
     size_t ntot = sh1.size() * sh2.size() * sh3.size() * sh4.size();
-    buffers_[0] = target_full_ = const_cast<double *>(schwarz_engine_.results()[0]);
+    buffers_[0] = target_full_ = const_cast<double *>(schwarz_engine_->results()[0]);
     if (target_full_ == nullptr) {
         // The caller will try to read the buffer if there isn't a check on the number of ints computed
         // so we point to a valid array of zeros here to prevent memory bugs in the calling routine.
