@@ -51,7 +51,8 @@ void PSIO::close(size_t unit, int keep) {
     if (this_unit->vol.stream == -1) psio_error(unit, PSIO_ERROR_RECLOSE);
 
     /* Dump all DPD cached entries for this file.  */
-    global_dpd_->file4_cache_del_filenum(unit);
+    // Pure SCF/DIIS uses PSIO without ever initializing a DPD instance.
+    if (global_dpd_) global_dpd_->file4_cache_del_filenum(unit);
 
     /* Dump the current TOC back out to disk */
     tocwrite(unit);

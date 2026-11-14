@@ -12,6 +12,18 @@ from psi4.driver.p4util.exceptions import ValidationError
 pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick]
 
 
+@pytest.mark.parametrize("name", ["c1", "d2h"])
+def test_character_table_bits_constructor_copy(name):
+    """PointGroup returns a copied bit-constructed table; metadata must be initialized."""
+    group = psi4.core.PointGroup(name)
+    reference = psi4.core.CharacterTable(name)
+    for _ in range(3):
+        table = group.char_table()
+        assert table.order() == reference.order()
+        for irrep in range(table.order()):
+            assert table.gamma(irrep).symbol() == reference.gamma(irrep).symbol()
+
+
 @pytest.mark.parametrize("remaining", [-1, 0])
 def test_diagonalization_memory_exhausted(monkeypatch, remaining):
     """Reject impossible budgets before constructing a JK or a grid cache."""

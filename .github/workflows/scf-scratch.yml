@@ -1,5 +1,13 @@
 name: SCF scratch portability
 on:
+  push:
+    branches:
+      - 'review/scf-dft-portability-opt-*'
+    paths:
+      - 'psi4/src/psi4/lib3index/**'
+      - 'psi4/include/psi4/restrict.h'
+      - 'devtools/benchmarks/scf_scratch_portability.cc'
+      - '.github/workflows/scf-scratch.yml'
   pull_request:
     paths:
       - 'psi4/src/psi4/lib3index/**'

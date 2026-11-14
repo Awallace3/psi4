@@ -311,6 +311,10 @@ jobs:
     - name: Compile & Install Psi4
       run: cmake --build objdir --config Release --target install
 
+    - name: Standalone PSIO and IWL non-DPD regressions
+      working-directory: ./objdir
+      run: ctest -C Release -R 'lib(psio|iwl)-roundtrip' --output-on-failure
+
     - name: SCF review portability regressions
       if: hashFiles('devtools/benchmarks/scf_portability_tests.py') != ''
       timeout-minutes: 180
@@ -324,7 +328,7 @@ jobs:
       run: |
         export PYTHONPATH="$PWD/stage/lib"
         export PATH="$PWD/stage/bin:$PATH"
-        python ../devtools/benchmarks/scf_portability_tests.py --architecture "${{ matrix.cfg.expected-arch }}" --openmp "${{ matrix.cfg.openmp || 'on' }}"
+        python ../devtools/benchmarks/scf_portability_tests.py --architecture "${{ matrix.cfg.expected-arch }}" --openmp "${{ matrix.cfg.openmp || 'on' }}" --workers 2
 
     - name: SCF LAPACK workspace and fallback regressions (L)
       if: runner.os == 'Linux' && hashFiles('devtools/benchmarks/scf_lapack_tests.py') != ''

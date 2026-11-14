@@ -186,8 +186,9 @@ CharacterTable::CharacterTable(const std::string& cpg)
     common_init();
 }
 
-CharacterTable::CharacterTable(unsigned char bits) : bits_(bits) {
-    symb = PointGroup::bits_to_basic_name(bits);
+CharacterTable::CharacterTable(unsigned char bits)
+    : nt(0), pg(PointGroups::C1), nirrep_(0), gamma_(nullptr), symop(nullptr), _inv(nullptr),
+      symb(PointGroup::bits_to_basic_name(bits)), bits_(bits) {
     common_init();
 }
 

@@ -395,10 +395,16 @@ def test_wb97mv_grid_switching_and_fast_stack(postscf, monkeypatch):
     base_opts = {
         "basis": "def2-svp",
         "scf_type": "mem_df",
-        "e_convergence": 1e-8,
-        "d_convergence": 1e-8,
+        "e_convergence": 1e-10,
+        "d_convergence": 1e-10,
         "dft_vv10_postscf": postscf,
         "save_jk": True,
+        # Compare identical final grids, but keep this state-transition/force
+        # regression small enough for every compiler/OS matrix entry.
+        "dft_radial_points": 50,
+        "dft_spherical_points": 110,
+        "dft_vv10_radial_points": 20,
+        "dft_vv10_spherical_points": 50,
     }
     def vv10_force_component():
         # VV10 analytic gradients are not available on every supported build.
@@ -444,8 +450,8 @@ def test_wb97mv_grid_switching_and_fast_stack(postscf, monkeypatch):
     psi4.set_options(
         {
             **base_opts,
-            "dft_radial_points_initial": 50,
-            "dft_spherical_points_initial": 194,
+            "dft_radial_points_initial": 20,
+            "dft_spherical_points_initial": 50,
             "dft_grid_switch_factor": 10.0,
             "dft_grid_switch_diis": "shift",
             "dft_grid_switch_on": "density",

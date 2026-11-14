@@ -19,6 +19,12 @@ evidence for either branch.
   constructing JK or collocation caches.
 - OpenMP-disabled builds clamp explicitly requested JK/helper thread counts to
   one, so serial code does not reduce uninitialized per-thread buffers.
+- PSIO close skips DPD-cache flushing when no DPD instance exists. Pure SCF and
+  disk DIIS do not initialize DPD; calling its member through a null pointer was
+  undefined behavior exposed by the full UBSan run.
+- The bit-based character-table constructor initializes all metadata/pointers,
+  as its string-based counterpart already did. Copying its uninitialized group
+  enum was another UBSan failure reached during SCF setup.
 
 Additional opt-branch safeguards:
 
@@ -60,7 +66,7 @@ From the build directory, with its staged extension on `PYTHONPATH`:
 export PYTHONPATH="$PWD/stage/lib" PYTHONSAFEPATH=1
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 python /path/to/source/devtools/benchmarks/scf_portability_tests.py \
-    --architecture x64
+    --architecture x64 --workers 2
 # For an OpenMP-disabled build, append --openmp off.
 # For native ARM64, use --architecture arm64.
 ```
@@ -115,6 +121,37 @@ and `TYSAN_OPTIONS=halt_on_error=1`. Trivial placement-array-new is not reliably
 recognized by its shadow tracking; TypeSanitizer builds explicitly clear shadow
 types through its documented memset interceptor when beginning a new array
 lifetime. Normal builds do not zero or copy the storage.
+
+For a full GCC ASan/UBSan core build, use a separate build directory and the same
+dependency prefix/compiler as the optimized build:
+
+```bash
+cmake -S "$SOURCE" -B "$SANITIZER_BUILD" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_FLAGS_RELEASE="-O0 -g0 -DNDEBUG" \
+    -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+    -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined" \
+    -DENABLE_XHOST=OFF -DENABLE_simint=OFF
+cmake --build "$SANITIZER_BUILD" -j 6
+export PYTHONPATH="$SANITIZER_BUILD/stage/lib" PYTHONSAFEPATH=1
+export LD_PRELOAD="$(c++ -print-file-name=libasan.so)"
+export ASAN_OPTIONS=detect_leaks=0:halt_on_error=1
+export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+python -m pytest -q -s \
+    "$SOURCE/tests/pytests/test_scf_optimization.py" \
+    "$SOURCE/tests/pytests/test_scf_switching.py" \
+    "$SOURCE/tests/pytests/test_scf_portability.py" \
+    -k "not xc_threaded and not cholesky_diffuse and not grid_switch_isolated"
+```
+
+Use the matching GCC compiler for `-print-file-name=libasan.so`. The local
+validation additionally enabled SIMINT against an already built library.
+`-O0` keeps sanitizer build costs manageable; optimized correctness is checked
+separately. Leak detection is disabled for the Python/dependency process, not
+address/undefined-behavior diagnostics. Keep pytest capture disabled (`-s`):
+a fail-fast sanitizer can otherwise exit before pytest exposes its captured
+diagnostic.
 
 Use `ENABLE_XHOST=OFF` for generic builds. AVX2 may be executed only on a capable
 CPU; AVX-512 translation units can be compile-checked locally but require
