@@ -21,6 +21,8 @@ If the shared50-slot embers limit blocks the smoke, do not cancel unrelated
 jobs. `--smoke --qos inferno --approved-inferno` permits the same2core8GiB15min
 smoke **only with separate explicit approval and a fresh credit check**.
 The two-full-run approval does not authorize this extra paid allocation.
+If a fresh quote changes the inferno account, obtain approval for the new
+account before using `--account gts-cs207-chemx`; never silently substitute it.
 
 Source audit: old DFHelper defaults to INCORE **only when SCF_SUBTYPE is unset**,
 with a dense round-2 admission requirement of471.945GB for this system.

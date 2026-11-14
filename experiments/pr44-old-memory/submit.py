@@ -16,6 +16,8 @@ parser.add_argument("--smoke", action="store_true")
 parser.add_argument("--memory-gb", type=int, nargs="+")
 parser.add_argument("--slurm-gib", type=int, default=1400)
 parser.add_argument("--qos", choices=["embers", "inferno"], default="embers")
+parser.add_argument("--account", choices=["gts-cs207", "gts-cs207-chemx"],
+                    help="Inferno account from the fresh quote and explicit user approval")
 parser.add_argument("--time", default="08:00:00")
 parser.add_argument("--test-only", action="store_true")
 parser.add_argument("--approved-inferno", action="store_true")
@@ -37,7 +39,9 @@ limit_seconds = 3600 * hours + 60 * minutes + seconds
 assert 0 < limit_seconds <= (16 if args.qos == "inferno" else 8) * 3600, "Walltime exceeds round ceiling"
 if args.qos == "inferno" and not args.test_only:
     assert args.approved_inferno, "Fresh user approval required for this exact round"
-account = "gts-cs207" if args.qos == "inferno" else "gts-cs207-chemx"
+account = args.account or ("gts-cs207" if args.qos == "inferno" else "gts-cs207-chemx")
+if args.qos == "embers":
+    assert account == "gts-cs207-chemx"
 here = Path(__file__).resolve().parent
 root = here.parents[1]
 commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
