@@ -90,6 +90,28 @@ qualification of the new optional methods.
 New native build attempts use pin-specific directories, retain the failed
 attempt, and set `CMAKE_BUILD_PARALLEL_LEVEL=2` so the nested superbuild's
 compiler count is also bounded.
+The rebuilt native stage **passed** at source
+`de2091edeb2708f8888c2a07346f5aabe55dd091`:
+`/home/amwalla3/gits/psi4-cuest0301-cachy/install-native-0301-de2091edeb`.
+The saved log ends `PASS_NATIVE_BUILD_ONLY`. A separate, approved water-dimer
+CPU/cuEST SCF smoke check passed from helper `a8802cb219`, with strict
+stage/core/pin/native mapping checks and an asserted `cuESTJK` GPU backend.
+Receipt: `~/gits/psi4-cuest0301-cachy/runs/scf0301-02/comparison.json`.
+The first launcher attempt stopped before calculation because the generated
+`--psiapi` snippet referenced unset `PYTHONPATH` under nounset. Explicitly
+initializing `PYTHONPATH=""` before evaluating that snippet fixed the launch.
+
+Water dimer, spherical jun-cc-pVDZ, aug-cc-pVDZ-JKFIT, 56 AO, two threads:
+
+| Arm | Asserted backend | HF energy / Eh |
+|---|---|---:|
+| CPU | MemDFJK | -152.07559959563437 |
+| GPU | cuESTJK | -152.07559959532398 |
+
+Difference: **3.1039348868944217e-10 Eh**, passing the 1e-7 Eh absolute
+criterion. Both processes mapped the exact new native hash. This
+`PASS_SCF_ONLY` receipt does **not** admit the dispersion provider or qualify
+the complete SAPT0 campaign, and no speedup is inferred from this desktop run.
 
 Phoenix setup belongs in the small **embers** CPU job
 `install_cuest0301.sbatch`, not a long login-node solve/install. All 50 embers
