@@ -14,6 +14,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--architecture", required=True, choices=("x64", "arm64"))
     parser.add_argument("--openmp", choices=("on", "off"), default="on")
+    parser.add_argument("--extended", action="store_true",
+                        help="Include the large methyl-oxirane TDDFT cases (slow on one thread).")
     args = parser.parse_args()
     machine = platform.machine().lower()
     expected = {"x64": {"x86_64", "amd64"}, "arm64": {"arm64", "aarch64"}}
@@ -59,6 +61,7 @@ def main():
     tests = [source / "tests/pytests" / name for name in names]
     return pytest.main([
         *(str(path) for path in tests if path.exists()),
+        *([] if args.extended else ["-k", "not METHYLOXIRANE"]),
         "-v", "-ra", "--durations=20", "--junitxml=scf-portability.xml",
     ])
 

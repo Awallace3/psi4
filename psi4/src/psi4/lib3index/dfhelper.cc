@@ -3205,12 +3205,8 @@ void DFHelper::ensure_jk_C_buffers(size_t elem_per_thread) {
         }
     }
     if (need_grow) {
-#pragma omp parallel num_threads(nthreads_)
-        {
-            int rank = 0;
-#ifdef _OPENMP
-            rank = omp_get_thread_num();
-#endif
+#pragma omp parallel for num_threads(nthreads_) schedule(static)
+        for (size_t rank = 0; rank < nthreads_; ++rank) {
             if (jk_C_buffers_[rank].size() < elem_per_thread) {
                 // As with grow_scratch, release before allocating and avoid
                 // vector's geometric capacity growth exceeding the planned size.

@@ -334,6 +334,20 @@ jobs:
         cc -shared -fPIC ../devtools/benchmarks/scf_lapack_probe.c -ldl -o "$PWD/lapack-probe.so"
         python ../devtools/benchmarks/scf_lapack_tests.py --probe "$PWD/lapack-probe.so"
 
+    - name: SCF reduced OpenMP team regression
+      if: hashFiles('tests/pytests/test_scf_optimization.py') != ''
+      working-directory: ./objdir
+      env:
+        OMP_THREAD_LIMIT: 1
+        OMP_NUM_THREADS: 1
+        OMP_DYNAMIC: "TRUE"
+        MKL_NUM_THREADS: 1
+        OPENBLAS_NUM_THREADS: 1
+      run: |
+        export PYTHONPATH="$PWD/stage/lib" PYTHONSAFEPATH=1
+        python -m pytest ../tests/pytests/test_scf_optimization.py -q \
+          -k requested_vs_actual_team --junitxml=scf-reduced-team.xml
+
     - name: Upload SCF portability evidence
       if: always() && hashFiles('devtools/benchmarks/scf_portability_tests.py') != ''
       uses: actions/upload-artifact@v4
@@ -343,6 +357,7 @@ jobs:
           objdir/scf-portability.xml
           objdir/scf-portability-provenance.json
           objdir/scf-lapack-*.xml
+          objdir/scf-reduced-team.xml
           objdir/CMakeCache.txt
           objdir/psi4-core-prefix/src/psi4-core-build/CMakeCache.txt
           env_p4build.yaml
@@ -427,6 +442,7 @@ jobs:
         fi
 
     - name: Test OpenMP
+      if: matrix.cfg.openmp != 'off'
       working-directory: ./install/lib
       run: python -c "from psi4 import core; core.set_num_threads(42); assert core.get_num_threads() == 42"
 

@@ -37,7 +37,9 @@ Additional opt-branch safeguards:
   previous thread-local setting, not a hard-coded global default.
 - In-core DIIS requires an explicit reservation removed from the JK/grid
   partition, including accelerator/extrapolation copies. Large unreserved
-  histories remain on disk.
+  histories remain on disk, with a separately reserved bounded scratch allowance.
+  Disk-backed ADIIS streams density/Fock differences instead of retaining a
+  second complete subspace in RAM.
 - Grid SHIFT computes residual corrections using each historical density.
   EDIIS resets because historical coarse-grid energies cannot be consistently
   shifted. Pure DIIS retains densities when SHIFT is requested.
@@ -46,6 +48,9 @@ Additional opt-branch safeguards:
   exit, including exceptions. Deferred VV10 is restored after exceptions.
 - Predicted energy changes contract `F` with `D_new - D_old`, not the
   difference of two extensive energy-like totals.
+- Symmetric K partitions/reduces over the actual OpenMP team, not the requested
+  team. Coefficient-buffer initialization covers all logical buffers even when
+  OpenMP reduces a team.
 
 ## Native regression suite
 
@@ -67,6 +72,8 @@ check, DSYEVD triangle/degeneracy checks, threaded XC matrices/gradients, and
 existing JK, matrix, grid-blocking and TDDFT regressions. The opt-only switching
 tests check DIIS policies/rebasing, cancellation-sensitive predicted energies,
 OOO fallback, MAXITER safeguards, and isolated/full-stack observables.
+The default response subset excludes the large single-threaded methyl-oxirane
+TDDFT cases; pass `--extended` to include them.
 
 ## Deterministic LAPACK fault injection (Linux)
 
