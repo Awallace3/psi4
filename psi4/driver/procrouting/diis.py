@@ -117,7 +117,7 @@ class DIIS:
         # their quantities are N^2, so we assume the savings are negligible.
         self.cached_dot_products = dict()
 
-    def shift_entries(self, deltas: dict):
+    def shift_entries(self, deltas: dict, error_builder=None):
         """ Add ``deltas[name][item]`` to that item of every stored entry.
 
         Used when an SCF switches to a more accurate Fock build mid-run: shifting the
@@ -125,7 +125,10 @@ class DIIS:
         the subspace consistent with the new level instead of discarding it.
         """
         for entry_num, entry in enumerate(self.stored_vectors):
-            for name, items in deltas.items():
+            entry_deltas = dict(deltas)
+            if error_builder is not None:
+                entry_deltas["error"] = error_builder(entry_num)
+            for name, items in entry_deltas.items():
                 for item_num, delta in enumerate(items):
                     if delta is None:
                         continue
@@ -454,4 +457,3 @@ class DIIS:
                 os.remove(filename)
             except FileNotFoundError:
                 pass
-

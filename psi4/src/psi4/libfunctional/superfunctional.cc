@@ -27,6 +27,7 @@
  */
 
 #include "psi4/psi4-dec.h"
+#include "psi4/restrict.h"
 #include "psi4/libqt/qt.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libpsi4util/PsiOutStream.h"
@@ -940,14 +941,14 @@ double SuperFunctional::compute_vv10_kernel(const std::map<std::string, SharedVe
     const double vv10_beta = vv10_beta_;
 
     // Get left points
-    const double* __restrict__ l_x = block->x();
-    const double* __restrict__ l_y = block->y();
-    const double* __restrict__ l_z = block->z();
-    const double* __restrict__ l_w = block->w();
-    const double* __restrict__ l_rho = vals.find("RHO_A")->second->pointer();
-    const double* __restrict__ l_gamma = vals.find("GAMMA_AA")->second->pointer();
-    const double* __restrict__ l_W0 = vv_values_["W0"]->pointer();
-    const double* __restrict__ l_kappa = vv_values_["KAPPA"]->pointer();
+    const double* PSI_RESTRICT l_x = block->x();
+    const double* PSI_RESTRICT l_y = block->y();
+    const double* PSI_RESTRICT l_z = block->z();
+    const double* PSI_RESTRICT l_w = block->w();
+    const double* PSI_RESTRICT l_rho = vals.find("RHO_A")->second->pointer();
+    const double* PSI_RESTRICT l_gamma = vals.find("GAMMA_AA")->second->pointer();
+    const double* PSI_RESTRICT l_W0 = vv_values_["W0"]->pointer();
+    const double* PSI_RESTRICT l_kappa = vv_values_["KAPPA"]->pointer();
 
     std::vector<uint32_t> act_i;
     act_i.reserve(l_npoints);
@@ -981,22 +982,22 @@ double SuperFunctional::compute_vv10_kernel(const std::map<std::string, SharedVe
     constexpr size_t JB = 512;
 
     for (const auto& r_block : vv10_cache) {
-        const double* __restrict__ r_x = r_block.at("X")->pointer();
-        const double* __restrict__ r_y = r_block.at("Y")->pointer();
-        const double* __restrict__ r_z = r_block.at("Z")->pointer();
-        const double* __restrict__ r_W0 = r_block.at("W0")->pointer();
-        const double* __restrict__ r_kappa = r_block.at("KAPPA")->pointer();
+        const double* PSI_RESTRICT r_x = r_block.at("X")->pointer();
+        const double* PSI_RESTRICT r_y = r_block.at("Y")->pointer();
+        const double* PSI_RESTRICT r_z = r_block.at("Z")->pointer();
+        const double* PSI_RESTRICT r_W0 = r_block.at("W0")->pointer();
+        const double* PSI_RESTRICT r_kappa = r_block.at("KAPPA")->pointer();
         const size_t r_npoints = r_block.at("KAPPA")->dimpi()[0];
         if (r_npoints == 0) continue;
 
-        const double* __restrict__ r_pref = nullptr;
+        const double* PSI_RESTRICT r_pref = nullptr;
         std::vector<double> r_pref_local;
         auto it_pref = r_block.find("PREF");
         if (it_pref != r_block.end()) {
             r_pref = it_pref->second->pointer();
         } else {
-            const double* __restrict__ r_w = r_block.at("W")->pointer();
-            const double* __restrict__ r_rho = r_block.at("RHO")->pointer();
+            const double* PSI_RESTRICT r_w = r_block.at("W")->pointer();
+            const double* PSI_RESTRICT r_rho = r_block.at("RHO")->pointer();
             r_pref_local.resize(r_npoints);
 #pragma omp simd
             for (size_t j = 0; j < r_npoints; ++j) {

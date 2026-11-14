@@ -66,8 +66,10 @@
 
 #include "dftensor.h"
 
-#if defined(__GNUC__) || defined(__clang__)
-extern "C" int MKL_Set_Num_Threads_Local(int) __attribute__((weak));
+// Use the configured provider and its official ABI, not compiler-specific weak
+// symbols (which are not portable to Windows or macOS).
+#ifdef USING_LAPACK_MKL
+#include <mkl_service.h>
 #endif
 
 namespace psi {
@@ -244,7 +246,15 @@ void DFHelper::AO_core(bool set_AO_core=true) {
     // contraction's panels plus at least one p-shell AO block. They are never live together. The
     // panels are charged at their narrowest width, and the AO-block side is at least that wide too
     // (for the half-of-spare rule) and at least the largest single p-shell block.
-    const size_t jk_tmp = nthreads_ * nbf_ * nbf_ + 3 * nbf_ * nbf_ * Qshell_max_;
+    // Retain the historical conservative bound, but also cover padding and
+    // allocation floors. For tiny bases an IQ/FP32 occupied row padded to eight
+    // can be much larger than nbf; nthreads*naux can dominate the J scratch too.
+    const size_t padded_nocc = (nbf_ + 7) / 8 * 8;
+    const size_t q_shell_max = static_cast<size_t>(Qshell_max_);
+    const size_t tmp_floor = std::max({nbf_ * nbf_, nthreads_ * naux_,
+                                      nbf_ * padded_nocc * q_shell_max});
+    const size_t jk_tmp = std::max(nthreads_ * nbf_ * nbf_ + 3 * nbf_ * nbf_ * q_shell_max,
+                                  nthreads_ * nbf_ * padded_nocc + 2 * tmp_floor);
     const size_t s_min = AO_core_init_scratch(true);
     const size_t panels = (direct_ || direct_iaQ_) ? 0 : s_min + std::max(s_min, min_AO_core_block());
     required_core_size_ += std::max(jk_tmp, panels);
@@ -577,11 +587,11 @@ void DFHelper::prepare_AO_wK() {
     std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_, 0, psteps);
 }
 // Grow-only scratch: reallocate (freeing the old buffer first) only when a build needs more.
-static double* grow_scratch(std::unique_ptr<double[]>& buf, size_t& size, size_t need) {
+static double* grow_scratch(DFHelperScratch& buf, size_t& size, size_t need) {
     if (size < need) {
         buf.reset();
         size = 0;  // stays consistent if the allocation below throws
-        buf.reset(new double[need]);
+        buf.resize(need);
         size = need;
     }
     return buf.get();
@@ -640,10 +650,13 @@ size_t DFHelper::reserve_metric_panels(size_t held) {
 }
 void DFHelper::prepare_AO_core() {
     const bool use_simint = (Process::environment.options.get_str("INTEGRAL_PACKAGE") == "SIMINT");
+    // Integral engines retain a raw factory pointer for spherical transforms.
+    // Keep the factory alive through all of the AO construction below.
+    std::shared_ptr<IntegralFactory> rifactory;
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri;
     if (use_simint || direct_ || direct_iaQ_) {
         std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
-        auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
+        rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
         eri.resize(nthreads_);
         eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri(0, false));
 #pragma omp parallel num_threads(nthreads_)
@@ -778,17 +791,17 @@ void DFHelper::prepare_AO_core() {
 }
 void DFHelper::prepare_AO_wK_core() {
     const bool use_simint = (Process::environment.options.get_str("INTEGRAL_PACKAGE") == "SIMINT");
+    std::shared_ptr<IntegralFactory> rifactory;  // outlive the engines' spherical transforms
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri;
     std::vector<std::shared_ptr<TwoBodyAOInt>> weri;
     if (use_simint) {
         std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
-        auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
+        rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
         eri.resize(nthreads_);
         eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri(0, false));
-        if (!wcombine_) {
-            weri.resize(nthreads_);
-            weri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->erf_eri(omega_, 0, false));
-        }
+        // Both separate and combined wK builds need the erf engine in the SIMINT fallback.
+        weri.resize(nthreads_);
+        weri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->erf_eri(omega_, 0, false));
 #pragma omp parallel num_threads(nthreads_)
         {
             int rank = 0;
@@ -916,7 +929,7 @@ void DFHelper::prepare_AO_wK_core() {
             copy_upper_lower_wAO_core_symm(M2p, wppq, begin, end);
         } else {
             timer_on("DFH: AO Construction");
-            compute_sparse_pQq_blocking_p_symm(start, stop, M1p, eri, 0.0);
+            compute_sparse_pQq_blocking_p_symm(start, stop, M1p, eri);
             timer_off("DFH: AO Construction");
 
             timer_on("DFH: AO-Met. Contraction");
@@ -1055,59 +1068,57 @@ std::pair<size_t, size_t> DFHelper::Qshell_blocks_for_transform(const size_t mem
 }
 std::tuple<size_t, size_t> DFHelper::Qshell_blocks_for_JK_build(std::vector<std::pair<size_t, size_t>>& b,
                                                                 size_t max_nocc, bool lr_symmetric) {
-    // strategy here:
-    // 1. depending on lr_symmetric, T2 can either be the same as T1 or
-    // it can just be used as a Jtmp.
-    // 2. T3 is always used, includes C_buffers
-
-    // K tmps
-    size_t T1 = nbf_ * max_nocc;
-    size_t T2 = (lr_symmetric ? nbf_ * nbf_ : nbf_ * max_nocc);
-
-    // C_buffers
-    size_t T3 = std::max(nthreads_ * nbf_ * nbf_, nthreads_ * nbf_ * max_nocc);
-
-    // total AO buffer size is max if core alg is used, otherwise init to 0
-    size_t total_AO_buffer = (AO_core_ ? big_skips_[nbf_] : 0);
-
-    size_t block_size = 0, largest = 0;
-    for (size_t i = 0, tmpbs = 0, count = 1; i < Qshells_; i++, count++) {
-        // get shell info
-        size_t begin = Qshell_aggs_[i];
-        size_t end = Qshell_aggs_[i + 1] - 1;
-
-        // update AO buffer, block sizes
-        size_t current = (end - begin + 1) * small_skips_[nbf_];
-        total_AO_buffer += (AO_core_ ? 0 : current);
-        tmpbs += end - begin + 1;
-
-        // compute total memory used by aggregate block
-        size_t constraint = total_AO_buffer + T1 * tmpbs + T3;
-        constraint += (lr_symmetric ? T2 : T2 * tmpbs);
-
-        if (constraint > memory_ || i == Qshells_ - 1) {
-            if (count == 1 && i != Qshells_ - 1) {
-                std::stringstream error;
-                error << "DFHelper: not enough memory for JK blocking!";
-                throw PSIEXCEPTION(error.str().c_str());
-            }
-            if (constraint > memory_) {
-                total_AO_buffer -= current;
-                tmpbs -= end - begin + 1;
-                b.push_back(std::make_pair(i - count + 1, i - 1));
-                i--;
-            } else if (i == Qshells_ - 1) {
-                b.push_back(std::make_pair(i - count + 1, i));
-            }
-            if (block_size < tmpbs) {
-                largest = total_AO_buffer;
-                block_size = tmpbs;
-            }
-            count = total_AO_buffer = tmpbs = 0;
+    // Charge retained high-water marks, all resident tensors (three for separate wK),
+    // and the same scratch floors as the actual allocations. The resident charge
+    // applies to every block, not just the first one.
+    const size_t floor = std::max(nbf_ * nbf_, nthreads_ * naux_);
+    const size_t c_need = nbf_ * std::max(max_nocc, nbf_);
+    const size_t core_size = JK_core_memory();
+    auto footprint = [&](size_t nq) {
+        const size_t tmp = std::max(floor, nbf_ * std::max<size_t>(max_nocc, 1) * nq);
+        size_t size = core_size + std::max(jk_T1_size_, tmp) +
+                      std::max(jk_T2_size_, lr_symmetric ? floor : tmp);
+        for (size_t r = 0; r < nthreads_; ++r) {
+            size += r < jk_C_buffers_.size() ? std::max(c_need, jk_C_buffers_[r].capacity()) : c_need;
+        }
+        if (!AO_core_) size += nq * small_skips_[nbf_];
+        return size;
+    };
+    size_t largest_shell = 0;
+    for (size_t i = 0; i < Qshells_; ++i) {
+        largest_shell = std::max(largest_shell, Qshell_aggs_[i + 1] - Qshell_aggs_[i]);
+    }
+    if (footprint(largest_shell) > memory_) {
+        // A changed occupation/symmetry or memory allowance can make old scratch
+        // too large. No raw scratch pointers have been taken yet, so replan fresh.
+        clear_JK_scratch();
+        if (footprint(largest_shell) > memory_) {
+            throw PSIEXCEPTION("DFHelper: not enough memory for JK blocking!");
         }
     }
 
-    return std::make_tuple(largest, block_size);
+    b.clear();
+    size_t start = 0, nq = 0, block_size = 0;
+    for (size_t i = 0; i < Qshells_; ++i) {
+        const size_t shell_size = Qshell_aggs_[i + 1] - Qshell_aggs_[i];
+        if (nq && footprint(nq + shell_size) > memory_) {
+            b.emplace_back(start, i - 1);
+            block_size = std::max(block_size, nq);
+            start = i;
+            nq = 0;
+        }
+        nq += shell_size;
+    }
+    if (nq) {
+        b.emplace_back(start, Qshells_ - 1);
+        block_size = std::max(block_size, nq);
+    }
+    // Prefer the selected contraction blocks to the optional mirror. Evict it
+    // before growing any scratch, and let prepare_K_fp32 use only genuine spare.
+    const size_t held = footprint(block_size);
+    if (held > memory_ || K_fp32_memory() > memory_ - held) Ppq_f_.reset();
+
+    return std::make_tuple(AO_core_ ? big_skips_[nbf_] : block_size * small_skips_[nbf_], block_size);
 }
 
 FILE* DFHelper::stream_check(std::string filename, std::string op) {
@@ -1523,7 +1534,8 @@ void DFHelper::compute_sparse_pQq_blocking_p(const size_t start, const size_t st
     }
 }
 void DFHelper::compute_sparse_pQq_blocking_p_symm(const size_t start, const size_t stop, double* Mp,
-                                                  std::vector<std::shared_ptr<TwoBodyAOInt>> eri, double omega) {
+                                                  std::vector<std::shared_ptr<TwoBodyAOInt>> eri,
+                                                  std::optional<double> omega) {
     size_t begin = pshell_aggs_[start];
     size_t startind = symm_big_skips_[begin];
 
@@ -1534,7 +1546,8 @@ void DFHelper::compute_sparse_pQq_blocking_p_symm(const size_t start, const size
     };
 
     if (eri.empty()) {
-        const bool is_erf = (omega != 0.0);
+        // No omega means Coulomb; an explicitly supplied zero still means erf-Coulomb.
+        const bool is_erf = omega.has_value();
         const int max_am = std::max(aux_->max_am(), primary_->max_am());
         const int max_nprim = std::max(aux_->max_nprimitive(), primary_->max_nprimitive());
         const double ln_prec = -std::numeric_limits<double>::max();
@@ -1550,7 +1563,7 @@ void DFHelper::compute_sparse_pQq_blocking_p_symm(const size_t start, const size
         engs.reserve(nthreads_);
         for (size_t t = 0; t < nthreads_; ++t) {
             if (is_erf) {
-                engs.emplace_back(libint2::Operator::erf_coulomb, max_nprim, max_am, 0, 0.0, omega,
+                engs.emplace_back(libint2::Operator::erf_coulomb, max_nprim, max_am, 0, 0.0, *omega,
                                   libint2::BraKet::xs_xx);
             } else {
                 engs.emplace_back(libint2::Operator::coulomb, max_nprim, max_am, 0, 0.0,
@@ -2650,7 +2663,7 @@ void DFHelper::transform() {
 
     // prepare eri and C buffers per thread
     size_t nthread = nthreads_;
-    std::vector<std::vector<double>> C_buffers(nthreads_);
+    std::vector<DFHelperScratch> C_buffers(nthreads_);
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthread);
@@ -2661,8 +2674,7 @@ void DFHelper::transform() {
 #ifdef _OPENMP
         rank = omp_get_thread_num();
 #endif
-        std::vector<double> Cp(nbf_ * wtmp);
-        C_buffers[rank] = Cp;
+        C_buffers[rank].resize(nbf_ * wtmp);
         if (rank) {
             eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
         }
@@ -2929,7 +2941,7 @@ void DFHelper::transform() {
 }
 
 void DFHelper::first_transform_pQq(size_t bsize, size_t bcount, size_t block_size, double* Mp, double* Tp, double* Bp,
-                                   std::vector<std::vector<double>>& C_buffers) {
+                                   std::vector<DFHelperScratch>& C_buffers) {
 // perform first contraction on pQq, thread over p.
 #pragma omp parallel for schedule(guided) num_threads(nthreads_)
     for (size_t k = 0; k < nbf_; k++) {
@@ -2980,7 +2992,7 @@ static void gather_Ct_pad(T* Ct, const double* Bp, const uint32_t* sig_m, size_t
 }
 
 void DFHelper::first_transform_pQq_K(size_t nocc, size_t nocc_pad, size_t bcount, size_t block_size, double* Mp,
-                                     double* Tp, double* Bp, std::vector<std::vector<double>>& C_buffers) {
+                                     double* Tp, double* Bp, std::vector<DFHelperScratch>& C_buffers) {
     // K-build variant of first_transform_pQq: T[p] is stored (i x Q) with i padded to nocc_pad
     // (zero rows). The K contraction only needs both factors in the same layout, and this
     // orientation with a multiple-of-8 row count runs ~3x faster in MKL on AMD Zen CPUs.
@@ -3881,6 +3893,8 @@ void DFHelper::ensure_jk_C_buffers(size_t elem_per_thread) {
             rank = omp_get_thread_num();
 #endif
             if (jk_C_buffers_[rank].size() < elem_per_thread) {
+                // As with grow_scratch, release before allocating and avoid
+                // vector's geometric capacity growth exceeding the planned size.
                 jk_C_buffers_[rank].resize(elem_per_thread);
             }
         }
@@ -3890,9 +3904,12 @@ void DFHelper::ensure_jk_C_buffers(size_t elem_per_thread) {
 namespace {
 template <typename T>
 void symm_k_final_accumulate(size_t N, size_t K_inner, const T* T1, double* Kp,
-                             std::vector<std::vector<double>>& C_buffers, size_t nthreads) {
+                             std::vector<DFHelperScratch>& C_buffers, size_t nthreads) {
     if (N == 0 || K_inner == 0) return;
     const size_t active_nt = std::min(nthreads, std::max<size_t>(1, K_inner / 64));
+    // Reduction threads read every active buffer. Start their scalar array
+    // lifetimes serially, including buffers unused by the first transform.
+    for (size_t t = 0; t < active_nt; ++t) C_buffers[t].template data_as<T>();
 
     auto run_syrk = [](int n, int k, const T* a, int lda, T* c, int ldc) {
         if constexpr (sizeof(T) == 8) {
@@ -3916,7 +3933,7 @@ void symm_k_final_accumulate(size_t N, size_t K_inner, const T* T1, double* Kp,
     };
 
     if (active_nt == 1) {
-        T* Cb = reinterpret_cast<T*>(C_buffers[0].data());
+        T* Cb = C_buffers[0].template data_as<T>();
         if (N <= 512) {
             run_syrk(static_cast<int>(N), static_cast<int>(K_inner), T1, static_cast<int>(K_inner), Cb,
                      static_cast<int>(N));
@@ -3951,12 +3968,12 @@ void symm_k_final_accumulate(size_t N, size_t K_inner, const T* T1, double* Kp,
         tid = omp_get_thread_num();
 #endif
         if (static_cast<size_t>(tid) < active_nt) {
-#if defined(__GNUC__) || defined(__clang__)
-            if (MKL_Set_Num_Threads_Local) MKL_Set_Num_Threads_Local(1);
+#ifdef USING_LAPACK_MKL
+            const int previous_mkl_threads = mkl_set_num_threads_local(1);
 #endif
             const size_t k0 = (K_inner * static_cast<size_t>(tid)) / active_nt;
             const size_t kn = (K_inner * (static_cast<size_t>(tid) + 1)) / active_nt - k0;
-            T* Cb = reinterpret_cast<T*>(C_buffers[tid].data());
+            T* Cb = C_buffers[tid].template data_as<T>();
             if (N <= 512) {
                 run_syrk(static_cast<int>(N), static_cast<int>(kn), T1 + k0, static_cast<int>(K_inner), Cb,
                          static_cast<int>(N));
@@ -3974,21 +3991,21 @@ void symm_k_final_accumulate(size_t N, size_t K_inner, const T* T1, double* Kp,
                     }
                 }
             }
-#if defined(__GNUC__) || defined(__clang__)
-            if (MKL_Set_Num_Threads_Local) MKL_Set_Num_Threads_Local(0);
+#ifdef USING_LAPACK_MKL
+            mkl_set_num_threads_local(previous_mkl_threads);
 #endif
         }
 #pragma omp barrier
 #pragma omp for schedule(dynamic, 16)
         for (size_t i = 0; i < N; ++i) {
             double* dst = Kp + i * N;
-            const T* s0 = reinterpret_cast<const T*>(C_buffers[0].data()) + i * N;
+            const T* s0 = C_buffers[0].template data_as<T>() + i * N;
 #pragma omp simd
             for (size_t j = i; j < N; ++j) {
                 dst[j] += static_cast<double>(s0[j]);
             }
             for (size_t t = 1; t < active_nt; ++t) {
-                const T* st = reinterpret_cast<const T*>(C_buffers[t].data()) + i * N;
+                const T* st = C_buffers[t].template data_as<T>() + i * N;
 #pragma omp simd
                 for (size_t j = i; j < N; ++j) {
                     dst[j] += static_cast<double>(st[j]);
@@ -4013,7 +4030,10 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
     // (i,Q) K intermediates hold nocc padded to a multiple of 8 (see first_transform_pQq_K).
     if (K_layout_iQ_ || K_fp32_) max_nocc = (max_nocc + 7) / 8 * 8;
     std::vector<std::pair<size_t, size_t>> Qsteps;
-    std::tuple<size_t, size_t> info = Qshell_blocks_for_JK_build(Qsteps, max_nocc, lr_symmetric);
+    // Separate wK needs two transform buffers later in this same build. Reserve
+    // both now so it cannot grow T2 underneath an admitted FP32 AO mirror.
+    const bool one_transform = lr_symmetric && !do_wK_;
+    std::tuple<size_t, size_t> info = Qshell_blocks_for_JK_build(Qsteps, max_nocc, one_transform);
     size_t tots = std::get<0>(info);
     size_t totsb = std::get<1>(info);
 
@@ -4035,7 +4055,7 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
 
     // if lr_symmetric, we can be more clever with mem usage. T2 is used for both the
     // second tmp in the K build, as well as the completed, pruned J build.
-    if (lr_symmetric) {
+    if (one_transform) {
         Ktmp_size = nbf_ * nbf_;  // size for pruned J build
     } else {
         Ktmp_size = std::max(nbf_ * nbf_, Ktmp_size);  // max necessary
@@ -4079,6 +4099,10 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
             grab_AO(start, stop, Mp);
         }
         timer_off("DFH: Grabbing AOs");
+        // A preceding FP32 block ended the double arrays' lifetimes. Reacquire
+        // typed pointers before the J contraction writes double scratch.
+        T1p = jk_T1_.data();
+        T2p = jk_T2_.data();
         if (do_J) {
             timer_on("DFH: compute_J");
             if (wcombine_ && do_wK_) {
@@ -4109,7 +4133,7 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
     }
 }
 void DFHelper::compute_J_symm(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p,
-                              double* T2p, std::vector<std::vector<double>>& D_buffers, size_t bcount,
+                              double* T2p, std::vector<DFHelperScratch>& D_buffers, size_t bcount,
                               size_t block_size) {
     for (size_t i = 0; i < J.size(); i++) {
         double* Dp = D[i]->pointer()[0];
@@ -4171,7 +4195,7 @@ void DFHelper::compute_J_symm(std::vector<SharedMatrix> D, std::vector<SharedMat
     }
 }
 void DFHelper::compute_J_symm_fp32(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* T1p, double* T2p,
-                                   std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size) {
+                                   std::vector<DFHelperScratch>& D_buffers, size_t bcount, size_t block_size) {
     // compute_J_symm reading the single-precision tensor; products and sums stay in double.
     const float* Mf = Ppq_f_.get();
     for (size_t i = 0; i < J.size(); i++) {
@@ -4246,7 +4270,7 @@ void DFHelper::fill(double* b, size_t count, double value) {
     }
 }
 void DFHelper::compute_J(const std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p,
-                         std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size) {
+                         std::vector<DFHelperScratch>& D_buffers, size_t bcount, size_t block_size) {
     for (size_t i = 0; i < J.size(); i++) {
         auto Dp = D[i]->pointer()[0];
         auto Jp = J[i]->pointer()[0];
@@ -4300,7 +4324,7 @@ void DFHelper::compute_J(const std::vector<SharedMatrix> D, std::vector<SharedMa
         }
     }
 }
-void DFHelper::compute_J_combined(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p, std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size) {
+void DFHelper::compute_J_combined(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p, std::vector<DFHelperScratch>& D_buffers, size_t bcount, size_t block_size) {
     double* coul_metp;
     std::unique_ptr<double[]> metric;
 
@@ -4365,7 +4389,7 @@ void DFHelper::compute_J_combined(std::vector<SharedMatrix> D, std::vector<Share
 }
 void DFHelper::compute_K(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright, std::vector<SharedMatrix> K,
                          double* T1p, double* T2p, double* Mp, size_t bcount, size_t block_size,
-                         std::vector<std::vector<double>>& C_buffers, bool lr_symmetric) {
+                         std::vector<DFHelperScratch>& C_buffers, bool lr_symmetric) {
     for (size_t i = 0; i < K.size(); i++) {
         size_t nocc = Cleft[i]->colspi()[0];
         if (!nocc) {
@@ -4408,17 +4432,44 @@ void DFHelper::compute_K(std::vector<SharedMatrix> Cleft, std::vector<SharedMatr
         timer_off("DFH: K final GEMM");
     }
 }
+size_t DFHelper::JK_scratch_memory() const {
+    size_t size = jk_T1_size_ + jk_T2_size_;
+    for (const auto& buffer : jk_C_buffers_) size += buffer.capacity();
+    return size;
+}
+size_t DFHelper::JK_core_memory() const {
+    const size_t n = direct_iaQ_ ? naux_ * nbf_ * nbf_ : big_skips_[nbf_];
+    size_t metric_size = 0;
+    // metric_prep_core can index one allocation by both 1.0 and its inverse
+    // power. Those aliases survive out-of-core builds with hold_met enabled.
+    for (auto it = metrics_.begin(); it != metrics_.end(); ++it) {
+        bool alias = false;
+        for (auto prev = metrics_.begin(); prev != it; ++prev) {
+            if (prev->second == it->second) {
+                alias = true;
+                break;
+            }
+        }
+        if (!alias) metric_size += naux_ * naux_;
+    }
+    return (Ppq_ ? n : 0) + (m1Ppq_ ? n : 0) + (wPpq_ ? n : 0) +
+           metric_size + metric_panel_size_ + metric_out_size_;
+}
 bool DFHelper::prepare_K_fp32() {
-    if (Ppq_f_) return true;
     if (!AO_core_ || wcombine_ || direct_iaQ_ || !Ppq_) {
+        Ppq_f_.reset();
         K_fp32_ = false;
         return false;
     }
     const size_t n = big_skips_[nbf_];
-    if (memory_ < required_core_size_ + n / 2) {
+    const size_t held = JK_core_memory() + JK_scratch_memory();
+    const size_t extra = n / 2 + n % 2;
+    if (held > memory_ || extra > memory_ - held) {
         // Zero-extra-memory fp32 mode: keep Ppq_ in double and downcast tiles in L2 cache during K_fp32.
+        Ppq_f_.reset();
         return true;
     }
+    if (Ppq_f_) return true;
     timer_on("DFH: K fp32 tensor");
     Ppq_f_ = std::unique_ptr<float[]>(new float[n]);
     float* f = Ppq_f_.get();
@@ -4430,7 +4481,7 @@ bool DFHelper::prepare_K_fp32() {
 }
 void DFHelper::compute_K_fp32(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright,
                               std::vector<SharedMatrix> K, double* T1p, double* T2p, const double* Mp, size_t bcount,
-                              size_t block_size, std::vector<std::vector<double>>& C_buffers, bool lr_symmetric) {
+                              size_t block_size, std::vector<DFHelperScratch>& C_buffers, bool lr_symmetric) {
     // Respects the active K_layout_iQ_ orientation (IQ on AMD, QI on Intel), uses Ppq_f_ when available
     // or L2-tiled on-the-fly downcast of Mp when memory is tight (0 extra RAM), and contracts symmetric K
     // with K-sliced SSYRK + SGEMM directly into Kp without allocating an nbf^2 Kf matrix.
@@ -4451,7 +4502,7 @@ void DFHelper::compute_K_fp32(std::vector<SharedMatrix> Cleft, std::vector<Share
 #ifdef _OPENMP
             rank = omp_get_thread_num();
 #endif
-            float* Cbuf_f = reinterpret_cast<float*>(C_buffers[rank].data());
+            float* Cbuf_f = C_buffers[rank].float_data();
             const uint32_t* sig_m = &sig_q_[sig_q_row_off_[k]];
 
             if (use_iq) {
@@ -4506,8 +4557,8 @@ void DFHelper::compute_K_fp32(std::vector<SharedMatrix> Cleft, std::vector<Share
         if (!nocc) continue;
         const size_t nocc_pad = use_iq ? (nocc + 7) / 8 * 8 : nocc;
         const size_t K_inner = nocc_pad * block_size;
-        float* T1f = reinterpret_cast<float*>(T1p);
-        float* T2f = lr_symmetric ? T1f : reinterpret_cast<float*>(T2p);
+        float* T1f = jk_T1_.float_data();
+        float* T2f = lr_symmetric ? T1f : jk_T2_.float_data();
 
         timer_on("DFH: K first transform");
         transform(nocc, nocc_pad, Cleft[i]->pointer()[0], T1f);
@@ -4519,9 +4570,10 @@ void DFHelper::compute_K_fp32(std::vector<SharedMatrix> Cleft, std::vector<Share
         if (lr_symmetric) {
             symm_k_final_accumulate<float>(nbf_, K_inner, T1f, Kp, C_buffers, nthreads_);
         } else {
-            // Non-symmetric K: reuse T2f or row-tile into C_buffers[0]
-            std::vector<float> Kf(nbf_ * nbf_);
-            C_SGEMM('N', 'T', nbf_, nbf_, K_inner, 1.0f, T1f, K_inner, T2f, K_inner, 0.0f, Kf.data(), nbf_);
+            // The coefficient buffers are idle after the transforms and hold
+            // at least nbf^2 doubles. Do not allocate unbudgeted GEMM output.
+            float* Kf = C_buffers[0].float_data();
+            C_SGEMM('N', 'T', nbf_, nbf_, K_inner, 1.0f, T1f, K_inner, T2f, K_inner, 0.0f, Kf, nbf_);
 #pragma omp parallel for simd num_threads(nthreads_) schedule(static)
             for (size_t x = 0; x < nbf_ * nbf_; x++) Kp[x] += Kf[x];
         }
@@ -4570,7 +4622,7 @@ void DFHelper::compute_wK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
 #ifdef _OPENMP
                     rank = omp_get_thread_num();
 #endif
-                    float* Cbuf_f = reinterpret_cast<float*>(C_buffers[rank].data());
+                    float* Cbuf_f = C_buffers[rank].float_data();
                     const uint32_t* sig_m = &sig_q_[sig_q_row_off_[k]];
                     if (use_iq) {
                         gather_Ct_pad(Cbuf_f, Bp, sig_m, nocc, nocc_pad, sp_size);
@@ -4614,14 +4666,14 @@ void DFHelper::compute_wK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
                 if (!nocc) continue;
                 const size_t nocc_pad = use_iq ? (nocc + 7) / 8 * 8 : nocc;
                 const size_t K_inner = nocc_pad * block_size;
-                float* T1f = reinterpret_cast<float*>(T1p);
-                float* T2f = reinterpret_cast<float*>(T2p);
+                float* T1f = jk_T1_.float_data();
+                float* T2f = jk_T2_.float_data();
 
                 transform_f32(nocc, nocc_pad, M1p, Cleft[i]->pointer()[0], T1f);
                 transform_f32(nocc, nocc_pad, wMp, Cright[i]->pointer()[0], T2f);
 
                 // Reuse C_buffers[0] (>= nbf^2 doubles = 2*nbf^2 floats) for zero-allocation SGEMM output
-                float* wKf = reinterpret_cast<float*>(C_buffers[0].data());
+                float* wKf = C_buffers[0].float_data();
                 C_SGEMM('N', 'T', nbf_, nbf_, K_inner, 1.0f, T1f, K_inner, T2f, K_inner, 0.0f, wKf, nbf_);
                 double* wKp = wK[i]->pointer()[0];
 #pragma omp parallel for simd num_threads(nthreads_) schedule(static)

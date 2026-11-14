@@ -1894,8 +1894,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         at least one additional iteration after switching. -*/
         options.add_double("DFT_GRID_SWITCH_FACTOR", 10.0);
         /*- How the DIIS subspace crosses the XC grid switch. SHIFT adds V_final(D) - V_initial(D)
-        at the switch density to every stored Fock matrix and error vector (one extra
-        initial-grid V build); RESET discards the subspace. -*/
+        at the switch density to every stored Fock matrix, with residual corrections evaluated
+        at each stored density (one extra initial-grid V build). EDIIS history is reset because
+        its stored energies cannot be shifted consistently. RESET discards any subspace. -*/
         options.add_str("DFT_GRID_SWITCH_DIIS", "SHIFT", "SHIFT RESET");
         /*- What triggers the XC grid switch: both the energy change and the density residual
         below their scaled tolerances (ENERGY_AND_DENSITY), or the density residual alone

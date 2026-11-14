@@ -32,9 +32,11 @@
 #include "psi4/psi4-dec.h"
 #include <psi4/libmints/typedefs.h>
 #include "psi4/libpsi4util/exception.h"
+#include "dfhelper_scratch.h"
 
 #include <map>
 #include <list>
+#include <optional>
 #include <vector>
 #include <tuple>
 #include <string>
@@ -69,7 +71,13 @@ class PSI_API DFHelper {
     /// @param nthreads specifies number of threads to use
     /// oversubcription is possible
     ///
-    void set_nthreads(size_t nthreads) { nthreads_ = nthreads; }
+    void set_nthreads(size_t nthreads) {
+#ifdef _OPENMP
+        nthreads_ = nthreads ? nthreads : 1;
+#else
+        nthreads_ = 1;
+#endif
+    }
     size_t get_nthreads() { return nthreads_; }
 
     ///
@@ -102,17 +110,19 @@ class PSI_API DFHelper {
         Ppq_f_.reset();
     }
 
-    // => Opt-in K fast paths (in-core, non-wK only) <=
+    // => Opt-in K fast paths (in-core, noncombined wK supported) <=
     /// Build K in single precision until switched off. Meant for early SCF iterations: the error
     /// (~1e-7 relative) is far below the orbital gradient there. Turning it off frees the
-    /// single-precision tensor. Falls back to double if memory does not allow it.
+    /// single-precision tensor. Uses tiled downcasting when the tensor does not fit.
     void set_K_fp32(bool on) {
         K_fp32_ = on;
         if (!on) Ppq_f_.reset();
     }
     bool K_fp32() const { return K_fp32_; }
     /// Doubles-equivalent held by the single-precision K tensor (0 when not allocated)
-    size_t K_fp32_memory() const { return Ppq_f_ ? big_skips_[nbf_] / 2 : 0; }
+    size_t K_fp32_memory() const { return Ppq_f_ ? big_skips_[nbf_] / 2 + big_skips_[nbf_] % 2 : 0; }
+    /// Doubles held in the reusable JK temporaries and per-thread coefficient buffers.
+    size_t JK_scratch_memory() const;
     /// Store the K first-transform intermediate as (i,Q) with nocc padded to 8 instead of (Q,i).
     /// Faster with MKL on AMD Zen2, slower at large nbf on Intel Skylake/Cascade Lake.
     void set_K_layout_iQ(bool on) { K_layout_iQ_ = on; }
@@ -397,7 +407,7 @@ class PSI_API DFHelper {
     /// upper bound on metric_panel_cols() set by reserve_metric_panels under a tight budget (0: none)
     size_t panel_cols_cap_ = 0;
     /// reusable scratch panels for contract_metric_AO_core_symm across psteps chunks
-    std::unique_ptr<double[]> metric_panel_buf_, metric_out_buf_;
+    DFHelperScratch metric_panel_buf_, metric_out_buf_;
     size_t metric_panel_size_ = 0, metric_out_size_ = 0;
     bool built_ = false;
     bool transformed_ = false;
@@ -422,9 +432,9 @@ class PSI_API DFHelper {
     void AO_core(bool set_AO_core);
     std::unique_ptr<double[]> Ppq_;
     /// compute_JK scratch, kept between builds (see compute_JK)
-    std::unique_ptr<double[]> jk_T1_, jk_T2_;
+    DFHelperScratch jk_T1_, jk_T2_;
     size_t jk_T1_size_ = 0, jk_T2_size_ = 0;
-    std::vector<std::vector<double>> jk_C_buffers_;
+    std::vector<DFHelperScratch> jk_C_buffers_;
     void ensure_jk_C_buffers(size_t elem_per_thread);
     /// Compact significant column indices per basis row p: sig_q_[sig_q_row_off_[p] .. sig_q_row_off_[p+1])
     std::vector<uint32_t> sig_q_;
@@ -433,12 +443,14 @@ class PSI_API DFHelper {
     std::unique_ptr<float[]> Ppq_f_;
     bool K_fp32_ = false;
     bool K_layout_iQ_ = false;
+    /// Resident AO tensors and metrics, excluding the optional FP32 copy and JK scratch.
+    size_t JK_core_memory() const;
     bool prepare_K_fp32();
     void compute_J_symm_fp32(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* T1p, double* T2p,
-                             std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size);
+                             std::vector<DFHelperScratch>& D_buffers, size_t bcount, size_t block_size);
     void compute_K_fp32(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright, std::vector<SharedMatrix> K,
                         double* T1p, double* T2p, const double* Mp, size_t bcount, size_t block_size,
-                        std::vector<std::vector<double>>& C_buffers, bool lr_symmetric);
+                        std::vector<DFHelperScratch>& C_buffers, bool lr_symmetric);
     // Maps x -> (P|Q) ^ x.
     std::map<double, SharedMatrix> metrics_;
 
@@ -460,7 +472,8 @@ class PSI_API DFHelper {
     void compute_sparse_pQq_blocking_p(const size_t start, const size_t stop, double* Mp,
                                        std::vector<std::shared_ptr<TwoBodyAOInt>> eri);
     void compute_sparse_pQq_blocking_p_symm(const size_t start, const size_t stop, double* Mp,
-                                            std::vector<std::shared_ptr<TwoBodyAOInt>> eri, double omega = 0.0);
+                                            std::vector<std::shared_ptr<TwoBodyAOInt>> eri,
+                                            std::optional<double> omega = std::nullopt);
     void compute_sparse_pQq_blocking_p_symm_abw(const size_t start, const size_t stop, double* just_Mp, double* param_Mp,
                                         std::vector<std::shared_ptr<TwoBodyAOInt>> eri,
                                         std::vector<std::shared_ptr<TwoBodyAOInt>> weri);
@@ -481,9 +494,9 @@ class PSI_API DFHelper {
 
     // first integral transforms
     void first_transform_pQq_K(size_t nocc, size_t nocc_pad, size_t bcount, size_t block_size, double* Mp, double* Tp,
-                               double* Bp, std::vector<std::vector<double>>& C_buffers);
+                               double* Bp, std::vector<DFHelperScratch>& C_buffers);
     void first_transform_pQq(size_t bsize, size_t bcount, size_t block_size, double* Mp, double* Tp, double* Bp,
-                             std::vector<std::vector<double>>& C_buffers);
+                             std::vector<DFHelperScratch>& C_buffers);
 
     // => index vectors for screened AOs <=
     // ==> Skips for non-symmetric "densities" <==
@@ -647,13 +660,13 @@ class PSI_API DFHelper {
     // @param T1p : Temporary matrix
     // @param T2p : Temporary matrix
     void compute_J(const std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p,
-                   std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size);
+                   std::vector<DFHelperScratch>& D_buffers, size_t bcount, size_t block_size);
     void compute_J_symm(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p,
-                        std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size);
-    void compute_J_combined(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p, std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size);
+                        std::vector<DFHelperScratch>& D_buffers, size_t bcount, size_t block_size);
+    void compute_J_combined(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p, std::vector<DFHelperScratch>& D_buffers, size_t bcount, size_t block_size);
     void compute_K(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright, std::vector<SharedMatrix> K,
                    double* Tp, double* Jtmp, double* Mp, size_t bcount, size_t block_size,
-                   std::vector<std::vector<double>>& C_buffers, bool lr_symmetric);
+                   std::vector<DFHelperScratch>& C_buffers, bool lr_symmetric);
     // returns tuple(largest AO buffer size, largest Q block size)
     std::tuple<size_t, size_t> Qshell_blocks_for_JK_build(std::vector<std::pair<size_t, size_t>>& b, size_t max_nocc,
                                                           bool lr_symmetric);

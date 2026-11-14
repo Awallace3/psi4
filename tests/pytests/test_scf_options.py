@@ -396,10 +396,13 @@ def test_wb97mv_grid_switching_and_fast_stack(postscf):
         "e_convergence": 1e-8,
         "d_convergence": 1e-8,
         "dft_vv10_postscf": postscf,
+        "save_jk": True,
     }
     psi4.core.clean_options()
     psi4.set_options(base_opts)
-    e_ref = psi4.energy("wb97m-v")
+    e_ref, wfn_ref = psi4.energy("wb97m-v", return_wfn=True)
+    d_ref, f_ref = wfn_ref.Da().np.copy(), wfn_ref.Fa().np.copy()
+    g_ref = psi4.gradient("wb97m-v", ref_wfn=wfn_ref).np.copy()
     psi4.core.clean()
 
     psi4.core.clean_options()
@@ -418,8 +421,15 @@ def test_wb97mv_grid_switching_and_fast_stack(postscf):
     )
     e_fast, wfn_fast = psi4.energy("wb97m-v", return_wfn=True)
     init_iters = int(wfn_fast.variable("SCF DFT INITIAL GRID ITERATIONS"))
+    assert wfn_fast._xc_grid_ready_for_finalize
+    assert not wfn_fast.jk().dfh().K_fp32()
+    d_fast, f_fast = wfn_fast.Da().np.copy(), wfn_fast.Fa().np.copy()
+    g_fast = psi4.gradient("wb97m-v", ref_wfn=wfn_fast).np.copy()
     psi4.core.clean()
     psi4.core.clean_options()
 
     assert init_iters > 0
     assert compare_values(e_ref, e_fast, 7, f"wB97M-V fast stack vs exact (postscf={postscf})")
+    np.testing.assert_allclose(d_fast, d_ref, atol=2e-6, rtol=0)
+    np.testing.assert_allclose(f_fast, f_ref, atol=2e-6, rtol=0)
+    np.testing.assert_allclose(g_fast, g_ref, atol=2e-6, rtol=0)
