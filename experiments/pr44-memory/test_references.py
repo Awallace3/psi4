@@ -2,6 +2,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 
@@ -12,6 +13,22 @@ from compare_results import assess
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_submit_rejects_unapproved_or_excessive_runs(self):
+        submit = HERE.parent / "pr44-old-memory/submit.py"
+        for arguments, message in [
+            (["--memory-gb", "100", "--qos", "inferno", "--time", "17:00:00", "--test-only"],
+             "Walltime exceeds round ceiling"),
+            (["--memory-gb", "100", "--time", "08:00:01", "--test-only"],
+             "Walltime exceeds round ceiling"),
+            (["--smoke", "--qos", "inferno"], "Fresh user approval required"),
+        ]:
+            with self.subTest(arguments=arguments), tempfile.TemporaryDirectory() as temp:
+                result = subprocess.run([sys.executable, str(submit), temp, *arguments],
+                                        capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertFalse((Path(temp) / "submissions.json").exists())
+
     def test_both_original_runs_pass(self):
         for values in REFERENCES.values():
             self.assertTrue(compare(values)["passed"])

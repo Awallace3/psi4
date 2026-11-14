@@ -17,6 +17,11 @@ submit.py CAMPAIGN --memory-gb BUDGET1 BUDGET2 --qos inferno --time 16:00:00 --t
 approval for new-code jobs15602505/15602506 does not cover these old-code runs.
 Do not submit speculative decades of budgets before reviewing source gates.
 
+If the shared50-slot embers limit blocks the smoke, do not cancel unrelated
+jobs. `--smoke --qos inferno --approved-inferno` permits the same2core8GiB15min
+smoke **only with separate explicit approval and a fresh credit check**.
+The two-full-run approval does not authorize this extra paid allocation.
+
 Source audit: old DFHelper defaults to INCORE **only when SCF_SUBTYPE is unset**,
 with a dense round-2 admission requirement of471.945GB for this system.
 Our original comparison config already explicitly sets `SCF_SUBTYPE=AUTO`,

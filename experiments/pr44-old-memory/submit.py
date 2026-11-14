@@ -22,7 +22,7 @@ parser.add_argument("--approved-inferno", action="store_true")
 args = parser.parse_args()
 assert 1 <= args.slurm_gib <= 1400
 if args.smoke:
-    assert not args.memory_gb and args.qos == "embers"
+    assert not args.memory_gb
     budgets, threads, memory, walltime = [0], 2, 8, "00:15:00"
 else:
     assert args.memory_gb and len(args.memory_gb) <= 2
