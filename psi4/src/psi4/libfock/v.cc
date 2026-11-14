@@ -1877,11 +1877,12 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
             auto Dxp = Dx_vec[dindex]->pointer();
 
             // ===> Build Rotated Densities <=== //
+            // Store Dk + Dk^T: T = φ Dk + φ Dk^T needs one GEMM instead of two.
             for (int ml = 0; ml < nlocal; ml++) {
                 int mg = function_map[ml];
                 for (int nl = 0; nl < nlocal; nl++) {
                     int ng = function_map[nl];
-                    Dx_localp[ml][nl] = Dxp[mg][ng];
+                    Dx_localp[ml][nl] = Dxp[mg][ng] + Dxp[ng][mg];
                 }
             }
 
@@ -1890,8 +1891,6 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
             // T := einsum("pm, mn -> pn", φ, add_trans(Dk, (1, 0, 2)))
             parallel_timer_on("Derivative Properties", rank);
             C_DGEMM('N', 'N', npoints, nlocal, nlocal, 1.0, phi[0], coll_funcs, Dx_localp[0], max_functions, 0.0, Tp[0],
-                    max_functions);
-            C_DGEMM('N', 'T', npoints, nlocal, nlocal, 1.0, phi[0], coll_funcs, Dx_localp[0], max_functions, 1.0, Tp[0],
                     max_functions);
 
             // ρk = einsum("mn, pm, pn -> pσ", Dk, φ, φ)

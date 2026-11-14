@@ -33,6 +33,7 @@
 #include <functional>
 #include <set>
 #include "psi4/mcscf/block_matrix.h"
+#include "psi4/libscf_solver/rhf.h"
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -44,6 +45,7 @@
 #include "psi4/libcubeprop/csg.h"
 #include "psi4/libdiis/diismanager.h"
 #include "psi4/libfock/jk.h"
+#include "psi4/libfunctional/superfunctional.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/extern.h"
 #include "psi4/libmints/factory.h"
@@ -5891,6 +5893,12 @@ void FISAPT::fexch() {
     dfh_->clear_transformations();
 }
 
+void FISAPT::set_cpks_monomers(SharedWavefunction A, SharedWavefunction B) {
+    cpks_A_ = std::dynamic_pointer_cast<scf::RHF>(A);
+    cpks_B_ = std::dynamic_pointer_cast<scf::RHF>(B);
+    if (!cpks_A_ || !cpks_B_) throw PSIEXCEPTION("F-SAPT coupled KS induction requires RHF/RKS monomers.");
+}
+
 // Compute fragment-fragment partitioning of induction contribution
 void FISAPT::find() {
     outfile->Printf("  ==> F-SAPT Induction <==\n\n");
@@ -5899,6 +5907,8 @@ void FISAPT::find() {
 
     bool ind_resp = options_.get_bool("FISAPT_FSAPT_IND_RESPONSE");
     bool ind_scale = options_.get_bool("FISAPT_FSAPT_IND_SCALE");
+    // Set by SAPT(DFT): solve with the monomer SCF Hessians instead of gap + 4J - K - K^T.
+    bool ind_xc = cpks_A_ != nullptr;
     std::string link_assignment = options_.get_str("FISAPT_LINK_ASSIGNMENT");
 
     // => Sizing <= //
@@ -6385,6 +6395,7 @@ void FISAPT::find() {
 
     if (ind_resp) {
         outfile->Printf("  COUPLED INDUCTION (You asked for it!):\n\n");
+        if (ind_xc) outfile->Printf("    Response Hessian: monomer SCF (XC kernel included)\n\n");
 
         // ==> Coupled Targets <== //
 
@@ -6414,99 +6425,125 @@ void FISAPT::find() {
         double Indr_AB = 0.0;
         double Indr_BA = 0.0;
 
+        // => Source batching <= //
+
+        // All sources share one Hessian per monomer, so they are solved together and each
+        // H*p product (JK, and for KS the XC-kernel grid pass) covers the whole batch.
+        // Per source and monomer a product holds about 8 nso^2 doubles (D, J, K, K^T, Vx,
+        // C_right, temporaries); the batch may use a tenth of the memory budget.
+        int nC = std::max(nA + na1 + 1, nB + nb1 + 1); // add one for external potential
+        size_t nso_batch = primary_->nbf();
+        size_t per_source = 2 * 8 * nso_batch * nso_batch;
+        size_t nbatch = std::max<size_t>(1, std::min<size_t>((size_t)nC, (size_t)(0.1 * doubles_) / per_source));
+        if (options_.get_int("FISAPT_FSAPT_IND_BATCH") > 0)
+            nbatch = std::min<size_t>((size_t)nC, (size_t)options_.get_int("FISAPT_FSAPT_IND_BATCH"));
+        outfile->Printf("    Sources per batch: %zu of %d (%.1f MiB of product buffers)\n\n", nbatch, nC,
+                        nbatch * per_source * 8.0 / 1048576.0);
+
         // => JK Object <= //
 
         // TODO: Account for 2-index overhead in memory
-        auto nso = primary_->nbf();
-        auto jk_memory = (long int)doubles_;
-        jk_memory -= 24 * nso * nso;
-        jk_memory -= 4 * na * nso;
-        jk_memory -= 4 * nb * nso;
-        if (jk_memory < 0L) {
-            throw PSIEXCEPTION("Too little static memory for FISAPT::induction");
+        std::shared_ptr<JK> jk;
+        if (!ind_xc) {
+            auto nso = primary_->nbf();
+            auto jk_memory = (long int)doubles_;
+            jk_memory -= (long int)(nbatch * per_source);
+            jk_memory -= 24 * nso * nso;
+            jk_memory -= 4 * na * nso;
+            jk_memory -= 4 * nb * nso;
+            if (jk_memory < 0L) {
+                throw PSIEXCEPTION("Too little static memory for FISAPT::induction");
+            }
+
+            jk = JK::build_JK(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, false, (size_t)jk_memory);
+
+            jk->set_memory((size_t)jk_memory);
+            jk->set_do_J(true);
+            jk->set_do_K(true);
+            jk->initialize();
+            jk->print_header();
         }
-
-        std::shared_ptr<JK> jk =
-            JK::build_JK(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, false, (size_t)jk_memory);
-
-        jk->set_memory((size_t)jk_memory);
-        jk->set_do_J(true);
-        jk->set_do_K(true);
-        jk->initialize();
-        jk->print_header();
 
         // ==> Master Loop over perturbing atoms <== //
 
-        int nC = std::max(nA + na1 + 1, nB + nb1 + 1); // add one for external potential
+        auto cphf = std::make_shared<CPHF_FISAPT>();
+        cphf->delta_ = options_.get_double("CPHF_R_CONVERGENCE");
+        cphf->maxiter_ = options_.get_int("MAXITER");
+        cphf->jk_ = jk;
+        cphf->w_A_ = wB;  // Reversal of convention
+        cphf->w_B_ = wA;
+        cphf->Cocc_A_ = Cocc_A;
+        cphf->Cvir_A_ = Cvir_A;
+        cphf->Cocc_B_ = Cocc_B;
+        cphf->Cvir_B_ = Cvir_B;
+        cphf->eps_occ_A_ = eps_occ_A;
+        cphf->eps_vir_A_ = eps_vir_A;
+        cphf->eps_occ_B_ = eps_occ_B;
+        cphf->eps_vir_B_ = eps_vir_B;
+        if (ind_xc) {
+            cphf->monomer_A_ = cpks_A_;
+            cphf->monomer_B_ = cpks_B_;
+        }
 
-        for (size_t C = 0; C < nC; C++) {
-            if (C < nB + nb1) dfh_->fill_tensor("WBar", wB, {C, C + 1});
-            if (C < nA + na1) dfh_->fill_tensor("WAbs", wB, {C, C + 1});
-
-            outfile->Printf("    Responses for (A <- Source B = %3zu) and (B <- Source A = %3zu)\n\n",
-                            (C < nB + nb1 ? C : nB + nb1), (C < nA + na1 ? C : nA + na1));
-
-            auto cphf = std::make_shared<CPHF_FISAPT>();
-
-            // Effective constructor
-            cphf->delta_ = options_.get_double("CPHF_R_CONVERGENCE");
-            cphf->maxiter_ = options_.get_int("MAXITER");
-            cphf->jk_ = jk;
-
-            cphf->w_A_ = wB;  // Reversal of convention
-            cphf->Cocc_A_ = Cocc_A;
-            cphf->Cvir_A_ = Cvir_A;
-            cphf->eps_occ_A_ = eps_occ_A;
-            cphf->eps_vir_A_ = eps_vir_A;
-
-            cphf->w_B_ = wA;  // Reversal of convention
-            cphf->Cocc_B_ = Cocc_B;
-            cphf->Cvir_B_ = Cvir_B;
-            cphf->eps_occ_B_ = eps_occ_B;
-            cphf->eps_vir_B_ = eps_vir_B;
-
-            // Gogo CPKS
-            cphf->compute_cphf();
-
-            xA = cphf->x_A_;
-            xB = cphf->x_B_;
-
-            xA->scale(-1.0);
-            xB->scale(-1.0);
-
-            if (C < nB + nb1 + 1) {
-                // Backtransform the amplitude to LO
-                std::shared_ptr<Matrix> x2A = linalg::doublet(Uocc_A, xA, true, false);
-                double** x2Ap = x2A->pointer();
-
-                // Zip up the Ind20 contributions
-                for (int a = 0; a < na; a++) {
-                    double Jval = 2.0 * C_DDOT(nr, x2Ap[a], 1, wBTp[a], 1);
-                    double Kval = 2.0 * C_DDOT(nr, x2Ap[a], 1, uBTp[a], 1);
-                    Ind20r_AB_termsp[a][C] = Jval;
-                    Ind20r_AB += Jval;
-                    ExchInd20r_AB_termsp[a][C] = Kval;
-                    ExchInd20r_AB += Kval;
-                    Indr_AB_termsp[a][C] = Jval + Kval;
-                    Indr_AB += Jval + Kval;
-                }
+        for (size_t C0 = 0; C0 < (size_t)nC; C0 += nbatch) {
+            size_t C1 = std::min((size_t)nC, C0 + nbatch);
+            // Sources past one side's range (including the external slot) are zero.
+            cphf->w_A_batch_.clear();
+            cphf->w_B_batch_.clear();
+            for (size_t C = C0; C < C1; C++) {
+                auto wBc = std::make_shared<Matrix>("wB", na, nr);
+                auto wAc = std::make_shared<Matrix>("wA", nb, ns);
+                if (C < nB + nb1 + 1) dfh_->fill_tensor("WBar", wBc, {C, C + 1});
+                if (C < nA + na1 + 1) dfh_->fill_tensor("WAbs", wAc, {C, C + 1});
+                cphf->w_A_batch_.push_back(wBc);  // Reversal of convention
+                cphf->w_B_batch_.push_back(wAc);
             }
 
-            if (C < nA + na1 + 1) {
-                // Backtransform the amplitude to LO
-                std::shared_ptr<Matrix> x2B = linalg::doublet(Uocc_B, xB, true, false);
-                double** x2Bp = x2B->pointer();
+            outfile->Printf("    Responses for sources %3zu-%3zu (A <- B, B <- A)\n\n", C0, C1 - 1);
 
-                // Zip up the Ind20 contributions
-                for (int b = 0; b < nb; b++) {
-                    double Jval = 2.0 * C_DDOT(ns, x2Bp[b], 1, wATp[b], 1);
-                    double Kval = 2.0 * C_DDOT(ns, x2Bp[b], 1, uATp[b], 1);
-                    Ind20r_BA_termsp[C][b] = Jval;
-                    Ind20r_BA += Jval;
-                    ExchInd20r_BA_termsp[C][b] = Kval;
-                    ExchInd20r_BA += Kval;
-                    Indr_BA_termsp[C][b] = Jval + Kval;
-                    Indr_BA += Jval + Kval;
+            cphf->compute_cphf_batch();
+
+            for (size_t C = C0; C < C1; C++) {
+                xA = cphf->x_A_batch_[C - C0];
+                xB = cphf->x_B_batch_[C - C0];
+                // PCG solves H x = w; the induced amplitudes are -x.
+                xA->scale(-1.0);
+                xB->scale(-1.0);
+
+                if (C < nB + nb1 + 1) {
+                    // Backtransform the amplitude to LO
+                    std::shared_ptr<Matrix> x2A = linalg::doublet(Uocc_A, xA, true, false);
+                    double** x2Ap = x2A->pointer();
+
+                    // Zip up the Ind20 contributions
+                    for (int a = 0; a < na; a++) {
+                        double Jval = 2.0 * C_DDOT(nr, x2Ap[a], 1, wBTp[a], 1);
+                        double Kval = 2.0 * C_DDOT(nr, x2Ap[a], 1, uBTp[a], 1);
+                        Ind20r_AB_termsp[a][C] = Jval;
+                        Ind20r_AB += Jval;
+                        ExchInd20r_AB_termsp[a][C] = Kval;
+                        ExchInd20r_AB += Kval;
+                        Indr_AB_termsp[a][C] = Jval + Kval;
+                        Indr_AB += Jval + Kval;
+                    }
+                }
+
+                if (C < nA + na1 + 1) {
+                    // Backtransform the amplitude to LO
+                    std::shared_ptr<Matrix> x2B = linalg::doublet(Uocc_B, xB, true, false);
+                    double** x2Bp = x2B->pointer();
+
+                    // Zip up the Ind20 contributions
+                    for (int b = 0; b < nb; b++) {
+                        double Jval = 2.0 * C_DDOT(ns, x2Bp[b], 1, wATp[b], 1);
+                        double Kval = 2.0 * C_DDOT(ns, x2Bp[b], 1, uATp[b], 1);
+                        Ind20r_BA_termsp[C][b] = Jval;
+                        Ind20r_BA += Jval;
+                        ExchInd20r_BA_termsp[C][b] = Kval;
+                        ExchInd20r_BA += Kval;
+                        Indr_BA_termsp[C][b] = Jval + Kval;
+                        Indr_BA += Jval + Kval;
+                    }
                 }
             }
         }
@@ -6525,6 +6562,17 @@ void FISAPT::find() {
         // fflush(outfile);
 
         Ind = Ind20r + ExchInd20r;
+        if (ind_xc) {
+            // The sources must sum to the SAPT(DFT) coupled induction. A mismatch means this solve
+            // used a different kernel than the canonical one (e.g. kernel options toggled only
+            // around the canonical solve), and the fragments would partition some other quantity.
+            double ref = scalars_["Ind20,r"] + scalars_["Exch-Ind20,r"];
+            if (std::fabs(Ind - ref) > std::max(1.0e-5 * std::fabs(ref), 1.0e-9)) {
+                throw PSIEXCEPTION("F-SAPT coupled KS induction (" + std::to_string(Ind) +
+                                   " Eh) does not sum to the SAPT(DFT) induction (" + std::to_string(ref) +
+                                   " Eh); the response kernels differ.");
+            }
+        }
         Ind_AB_terms = Indr_AB_terms;
         Ind_BA_terms = Indr_BA_terms;
     }
@@ -7977,143 +8025,120 @@ void FISAPTSCF::print_orbitals(const std::string& header, int start, std::shared
 CPHF_FISAPT::CPHF_FISAPT() {}
 CPHF_FISAPT::~CPHF_FISAPT() {}
 void CPHF_FISAPT::compute_cphf() {
-    // Allocate
-    x_A_ = std::shared_ptr<Matrix>(w_A_->clone());
-    x_B_ = std::shared_ptr<Matrix>(w_B_->clone());
-    x_A_->zero();
-    x_B_->zero();
+    w_A_batch_ = {w_A_};
+    w_B_batch_ = {w_B_};
+    compute_cphf_batch();
+    x_A_ = x_A_batch_[0];
+    x_B_ = x_B_batch_[0];
+}
 
-    std::shared_ptr<Matrix> r_A(w_A_->clone());
-    std::shared_ptr<Matrix> z_A(w_A_->clone());
-    std::shared_ptr<Matrix> p_A(w_A_->clone());
-    std::shared_ptr<Matrix> r_B(w_B_->clone());
-    std::shared_ptr<Matrix> z_B(w_B_->clone());
-    std::shared_ptr<Matrix> p_B(w_B_->clone());
+void CPHF_FISAPT::compute_cphf_batch() {
+    // Preconditioned CG, run independently for every (monomer, source) pair. Only the H*p
+    // products are shared: product() hands all active vectors of a monomer to one JK (and
+    // XC-kernel) call, so the 3-index and grid work is paid once per iteration, not per source.
+    struct Problem {
+        std::shared_ptr<Matrix> x, r, z, p;
+        double b2, res, zr_old;
+    };
+    auto setup = [&](const std::vector<std::shared_ptr<Matrix>>& w, std::shared_ptr<Vector> eo,
+                     std::shared_ptr<Vector> ev, std::vector<std::shared_ptr<Matrix>>& x) {
+        std::vector<Problem> probs;
+        x.clear();
+        for (const auto& wk : w) {
+            Problem pr;
+            pr.x = std::shared_ptr<Matrix>(wk->clone());
+            pr.x->zero();
+            pr.r = std::shared_ptr<Matrix>(wk->clone());
+            pr.z = std::shared_ptr<Matrix>(wk->clone());
+            pr.p = std::shared_ptr<Matrix>(wk->clone());
+            preconditioner(pr.r, pr.z, eo, ev);
+            pr.p->copy(pr.z);
+            pr.zr_old = pr.z->vector_dot(pr.r);
+            pr.b2 = sqrt(wk->vector_dot(wk));
+            // A zero source (past one side's range, or the external slot) has x = 0.
+            pr.res = (pr.b2 == 0.0 ? 0.0 : 1.0);
+            x.push_back(pr.x);
+            probs.push_back(pr);
+        }
+        return probs;
+    };
+    std::vector<Problem> PA = setup(w_A_batch_, eps_occ_A_, eps_vir_A_, x_A_batch_);
+    std::vector<Problem> PB = setup(w_B_batch_, eps_occ_B_, eps_vir_B_, x_B_batch_);
 
-    // Initialize (x_0 = 0)
-    r_A->copy(w_A_);
-    r_B->copy(w_B_);
-
-    preconditioner(r_A, z_A, eps_occ_A_, eps_vir_A_);
-    preconditioner(r_B, z_B, eps_occ_B_, eps_vir_B_);
-
-    // Uncoupled value
-    // outfile->Printf("(A<-B): %24.16E\n", -2.0 * z_A->vector_dot(w_A_));
-    // outfile->Printf("(B<-A): %24.16E\n", -2.0 * z_B->vector_dot(w_B_));
-
-    p_A->copy(z_A);
-    p_B->copy(z_B);
-
-    double zr_old_A = z_A->vector_dot(r_A);
-    double zr_old_B = z_B->vector_dot(r_B);
-
-    double r2A = 1.0;
-    double r2B = 1.0;
-
-    double b2A = sqrt(w_A_->vector_dot(w_A_));
-    double b2B = sqrt(w_B_->vector_dot(w_B_));
+    auto active = [&](const std::vector<Problem>& P) {
+        std::vector<size_t> idx;
+        for (size_t k = 0; k < P.size(); k++)
+            if (P[k].res > delta_) idx.push_back(k);
+        return idx;
+    };
+    if (active(PA).empty() && active(PB).empty()) return;
 
     outfile->Printf("  ==> CPHF Iterations <==\n\n");
-
     outfile->Printf("    Maxiter     = %11d\n", maxiter_);
     outfile->Printf("    Convergence = %11.3E\n", delta_);
+    outfile->Printf("    Sources     = %11zu\n", std::max(PA.size(), PB.size()));
     outfile->Printf("\n");
 
-    std::time_t start;
-    std::time_t stop;
+    std::time_t start = std::time(nullptr);
 
-    start = std::time(nullptr);
+    outfile->Printf("    ---------------------------------------------------------\n");
+    outfile->Printf("    %-4s %11s  %11s  %6s %6s %10s\n", "Iter", "Monomer A", "Monomer B", "act A", "act B", "Time [s]");
+    outfile->Printf("    ---------------------------------------------------------\n");
 
-    outfile->Printf("    -----------------------------------------\n");
-    outfile->Printf("    %-4s %11s  %11s  %10s\n", "Iter", "Monomer A", "Monomer B", "Time [s]");
-    outfile->Printf("    -----------------------------------------\n");
-    // fflush(outfile);
+    auto step = [&](std::vector<Problem>& P, const std::vector<size_t>& idx, const std::vector<std::shared_ptr<Matrix>>& S,
+                    const char* label) {
+        double worst = 0.0;
+        for (size_t n = 0; n < idx.size(); n++) {
+            Problem& pr = P[idx[n]];
+            double alpha = pr.r->vector_dot(pr.z) / pr.p->vector_dot(S[n]);
+            if (alpha < 0.0) throw PSIEXCEPTION(std::string("Monomer ") + label + ": A Matrix is not SPD");
+            size_t len = (size_t)pr.x->nrow() * pr.x->ncol();
+            C_DAXPY(len, alpha, pr.p->pointer()[0], 1, pr.x->pointer()[0], 1);
+            C_DAXPY(len, -alpha, S[n]->pointer()[0], 1, pr.r->pointer()[0], 1);
+            pr.res = sqrt(pr.r->vector_dot(pr.r)) / pr.b2;
+            worst = std::max(worst, pr.res);
+        }
+        return worst;
+    };
+    auto update = [&](std::vector<Problem>& P, const std::vector<size_t>& idx, std::shared_ptr<Vector> eo,
+                      std::shared_ptr<Vector> ev) {
+        for (size_t k : idx) {
+            Problem& pr = P[k];
+            if (pr.res <= delta_) continue;
+            preconditioner(pr.r, pr.z, eo, ev);
+            double zr_new = pr.z->vector_dot(pr.r);
+            double beta = zr_new / pr.zr_old;
+            pr.zr_old = zr_new;
+            size_t len = (size_t)pr.p->nrow() * pr.p->ncol();
+            C_DSCAL(len, beta, pr.p->pointer()[0], 1);
+            C_DAXPY(len, 1.0, pr.z->pointer()[0], 1, pr.p->pointer()[0], 1);
+        }
+    };
 
     int iter;
     for (iter = 0; iter < maxiter_; iter++) {
-        std::map<std::string, std::shared_ptr<Matrix> > b;
-        if (r2A > delta_) {
-            b["A"] = p_A;
-        }
-        if (r2B > delta_) {
-            b["B"] = p_B;
-        }
+        std::vector<size_t> iA = active(PA), iB = active(PB);
+        std::vector<std::shared_ptr<Matrix>> bA, bB, sA, sB;
+        for (size_t k : iA) bA.push_back(PA[k].p);
+        for (size_t k : iB) bB.push_back(PB[k].p);
 
-        std::map<std::string, std::shared_ptr<Matrix> > s = product(b);
+        product(bA, bB, sA, sB);
 
-        if (r2A > delta_) {
-            std::shared_ptr<Matrix> s_A = s["A"];
-            double alpha = r_A->vector_dot(z_A) / p_A->vector_dot(s_A);
-            if (alpha < 0.0) {
-                throw PSIEXCEPTION("Monomer A: A Matrix is not SPD");
-            }
-            size_t no = x_A_->nrow();
-            size_t nv = x_A_->ncol();
-            double** xp = x_A_->pointer();
-            double** rp = r_A->pointer();
-            double** pp = p_A->pointer();
-            double** sp = s_A->pointer();
-            C_DAXPY(no * nv, alpha, pp[0], 1, xp[0], 1);
-            C_DAXPY(no * nv, -alpha, sp[0], 1, rp[0], 1);
-            r2A = sqrt(C_DDOT(no * nv, rp[0], 1, rp[0], 1)) / b2A;
-        }
+        double rA = step(PA, iA, sA, "A");
+        double rB = step(PB, iB, sB, "B");
 
-        if (r2B > delta_) {
-            std::shared_ptr<Matrix> s_B = s["B"];
-            double alpha = r_B->vector_dot(z_B) / p_B->vector_dot(s_B);
-            if (alpha < 0.0) {
-                throw PSIEXCEPTION("Monomer B: A Matrix is not SPD");
-            }
-            int no = x_B_->nrow();
-            int nv = x_B_->ncol();
-            double** xp = x_B_->pointer();
-            double** rp = r_B->pointer();
-            double** pp = p_B->pointer();
-            double** sp = s_B->pointer();
-            C_DAXPY(no * nv, alpha, pp[0], 1, xp[0], 1);
-            C_DAXPY(no * nv, -alpha, sp[0], 1, rp[0], 1);
-            r2B = sqrt(C_DDOT(no * nv, rp[0], 1, rp[0], 1)) / b2B;
-        }
+        std::time_t stop = std::time(nullptr);
+        outfile->Printf("    %-4d %11.3E%1s %11.3E%1s %6zu %6zu %10ld\n", iter + 1, rA, (rA <= delta_ ? "*" : " "), rB,
+                        (rB <= delta_ ? "*" : " "), iA.size(), iB.size(), stop - start);
 
-        stop = std::time(nullptr);
-        outfile->Printf("    %-4d %11.3E%1s %11.3E%1s %10ld\n", iter + 1, r2A, (r2A < delta_ ? "*" : " "), r2B,
-                        (r2B < delta_ ? "*" : " "), stop - start);
-        // fflush(outfile);
+        if (active(PA).empty() && active(PB).empty()) break;
 
-        if (r2A <= delta_ && r2B <= delta_) {
-            break;
-        }
-
-        if (r2A > delta_) {
-            preconditioner(r_A, z_A, eps_occ_A_, eps_vir_A_);
-            double zr_new = z_A->vector_dot(r_A);
-            double beta = zr_new / zr_old_A;
-            zr_old_A = zr_new;
-            int no = x_A_->nrow();
-            int nv = x_A_->ncol();
-            double** pp = p_A->pointer();
-            double** zp = z_A->pointer();
-            C_DSCAL(no * nv, beta, pp[0], 1);
-            C_DAXPY(no * nv, 1.0, zp[0], 1, pp[0], 1);
-        }
-
-        if (r2B > delta_) {
-            preconditioner(r_B, z_B, eps_occ_B_, eps_vir_B_);
-            double zr_new = z_B->vector_dot(r_B);
-            double beta = zr_new / zr_old_B;
-            zr_old_B = zr_new;
-            int no = x_B_->nrow();
-            int nv = x_B_->ncol();
-            double** pp = p_B->pointer();
-            double** zp = z_B->pointer();
-            C_DSCAL(no * nv, beta, pp[0], 1);
-            C_DAXPY(no * nv, 1.0, zp[0], 1, pp[0], 1);
-        }
+        update(PA, iA, eps_occ_A_, eps_vir_A_);
+        update(PB, iB, eps_occ_B_, eps_vir_B_);
     }
 
-    outfile->Printf("    -----------------------------------------\n");
+    outfile->Printf("    ---------------------------------------------------------\n");
     outfile->Printf("\n");
-    // fflush(outfile);
 
     if (iter == maxiter_) throw PSIEXCEPTION("CPHF did not converge.");
 }
@@ -8136,84 +8161,78 @@ void CPHF_FISAPT::preconditioner(std::shared_ptr<Matrix> r, std::shared_ptr<Matr
     }
 }
 
-std::map<std::string, std::shared_ptr<Matrix> > CPHF_FISAPT::product(
-    std::map<std::string, std::shared_ptr<Matrix> > b) {
-    std::map<std::string, std::shared_ptr<Matrix> > s;
+void CPHF_FISAPT::product(const std::vector<std::shared_ptr<Matrix>>& bA,
+                          const std::vector<std::shared_ptr<Matrix>>& bB, std::vector<std::shared_ptr<Matrix>>& sA,
+                          std::vector<std::shared_ptr<Matrix>>& sB) {
+    sA.clear();
+    sB.clear();
 
-    bool do_A = b.count("A");
-    bool do_B = b.count("B");
+    if (monomer_A_) {
+        // The monomer SCF owns the full Hessian: gaps, J, exact-exchange fraction and XC kernel.
+        // cphf_Hx takes the whole list: one JK call and one grid pass for all vectors.
+        // SAPT(DFT) hands the monomers a JK with K on for the exchange terms; a pure functional's
+        // Hessian never reads K, so switch it off for the products (about a fifth of the PBE cost).
+        auto Hx = [](const std::shared_ptr<scf::HF>& wfn, const std::vector<SharedMatrix>& b) {
+            if (b.empty()) return std::vector<SharedMatrix>();
+            auto jk = wfn->jk();
+            const bool do_K = jk->get_do_K();
+            const bool skip_K = do_K && !wfn->functional()->is_x_hybrid();
+            if (skip_K) jk->set_do_K(false);
+            std::vector<SharedMatrix> s;
+            try {
+                s = wfn->cphf_Hx(b);
+            } catch (...) {
+                if (skip_K) jk->set_do_K(true);
+                throw;
+            }
+            if (skip_K) jk->set_do_K(true);
+            return s;
+        };
+        sA = Hx(monomer_A_, bA);
+        sB = Hx(monomer_B_, bB);
+        for (auto& m : sA) m->scale(-1.0);  // cphf_Hx returns -H x
+        for (auto& m : sB) m->scale(-1.0);
+        return;
+    }
 
     std::vector<SharedMatrix>& Cl = jk_->C_left();
     std::vector<SharedMatrix>& Cr = jk_->C_right();
     Cl.clear();
     Cr.clear();
-
-    if (do_A) {
+    for (const auto& b : bA) {
         Cl.push_back(Cocc_A_);
-        auto T = linalg::doublet(Cvir_A_, b["A"], false, true);
-        Cr.push_back(T);
+        Cr.push_back(linalg::doublet(Cvir_A_, b, false, true));
     }
-
-    if (do_B) {
+    for (const auto& b : bB) {
         Cl.push_back(Cocc_B_);
-        auto T = linalg::doublet(Cvir_B_, b["B"], false, true);
-        Cr.push_back(T);
+        Cr.push_back(linalg::doublet(Cvir_B_, b, false, true));
     }
+    if (Cl.empty()) return;
 
     jk_->compute();
 
     const std::vector<SharedMatrix>& J = jk_->J();
     const std::vector<SharedMatrix>& K = jk_->K();
 
-    int indA = 0;
-    int indB = (do_A ? 1 : 0);
-
-    if (do_A) {
-        std::shared_ptr<Matrix> Jv = J[indA];
-        std::shared_ptr<Matrix> Kv = K[indA];
+    auto finish = [](std::shared_ptr<Matrix> Jv, std::shared_ptr<Matrix> Kv, const std::shared_ptr<Matrix>& b,
+                     const std::shared_ptr<Matrix>& Cocc, const std::shared_ptr<Matrix>& Cvir,
+                     const std::shared_ptr<Vector>& eo, const std::shared_ptr<Vector>& ev) {
         Jv->scale(4.0);
         Jv->subtract(Kv);
         Jv->subtract(Kv->transpose());
-
-        int no = b["A"]->nrow();
-        int nv = b["A"]->ncol();
-        int nso = Cvir_A_->nrow();
-        s["A"] = linalg::triplet(Cocc_A_, Jv, Cvir_A_, true, false, false);
-        auto Sp = s["A"]->pointer();
-
-        auto bp = b["A"]->pointer();
-        auto op = eps_occ_A_->pointer();
-        auto vp = eps_vir_A_->pointer();
-        for (int i = 0; i < no; i++) {
-            for (int a = 0; a < nv; a++) {
-                Sp[i][a] += bp[i][a] * (vp[a] - op[i]);
-            }
-        }
-    }
-
-    if (do_B) {
-        std::shared_ptr<Matrix> Jv = J[indB];
-        std::shared_ptr<Matrix> Kv = K[indB];
-        Jv->scale(4.0);
-        Jv->subtract(Kv);
-        Jv->subtract(Kv->transpose());
-
-        int no = b["B"]->nrow();
-        int nv = b["B"]->ncol();
-        s["B"] = linalg::triplet(Cocc_B_, Jv, Cvir_B_, true, false, false);
-        auto Sp = s["B"]->pointer();
-
-        auto bp = b["B"]->pointer();
-        auto op = eps_occ_B_->pointer();
-        auto vp = eps_vir_B_->pointer();
-        for (int i = 0; i < no; i++) {
-            for (int a = 0; a < nv; a++) {
-                Sp[i][a] += bp[i][a] * (vp[a] - op[i]);
-            }
-        }
-    }
-
-    return s;
+        auto S = linalg::triplet(Cocc, Jv, Cvir, true, false, false);
+        auto Sp = S->pointer();
+        auto bp = b->pointer();
+        auto op = eo->pointer();
+        auto vp = ev->pointer();
+        for (int i = 0; i < b->nrow(); i++)
+            for (int a = 0; a < b->ncol(); a++) Sp[i][a] += bp[i][a] * (vp[a] - op[i]);
+        return S;
+    };
+    for (size_t n = 0; n < bA.size(); n++)
+        sA.push_back(finish(J[n], K[n], bA[n], Cocc_A_, Cvir_A_, eps_occ_A_, eps_vir_A_));
+    for (size_t n = 0; n < bB.size(); n++)
+        sB.push_back(finish(J[bA.size() + n], K[bA.size() + n], bB[n], Cocc_B_, Cvir_B_, eps_occ_B_, eps_vir_B_));
 }
 
 // method for updating/setting matrices_, if key exists, update it, else create it

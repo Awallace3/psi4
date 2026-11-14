@@ -1336,8 +1336,14 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("FISAPT_FSAPT_EXCH_SCALE", true);
         /*- Do F-SAPT induction scaling? (ratio of HF induction to F-SAPT induction) -*/
         options.add_bool("FISAPT_FSAPT_IND_SCALE", true);
-        /*- Do F-SAPT coupled response? (not recommended) -*/
+        /*- Do F-SAPT coupled response? In SAPT(DFT) with SAPT_DFT_INDUCTION_TYPE=CPKS this
+        uses each monomer's SCF Hessian (exact exchange and XC kernel included), so the
+        fragments sum to the SAPT(DFT) induction. -*/
         options.add_bool("FISAPT_FSAPT_IND_RESPONSE", false);
+        /*- Number of F-SAPT coupled-induction sources solved together. Each batch shares one
+        Hessian product (JK and, for KS, XC kernel) per iteration. 0 picks the largest batch
+        whose product buffers fit in a tenth of the memory; 1 solves one source at a time. -*/
+        options.add_int("FISAPT_FSAPT_IND_BATCH", 0);
         /*- Do sSAPT0 exchange-scaling with F-SAPT -*/
         options.add_bool("SSAPT0_SCALE", false);
         /*- Filepath (case sensitive) to drop sSAPT0 exchange-scaling F-SAPT data within input file directory. -*/

@@ -83,6 +83,38 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         optstash.restore()
 
 
+def _fsapt_coupled_ks_induction() -> bool:
+    """Whether F-SAPT solves coupled per-source induction on the SAPT(DFT) KS orbitals."""
+    return (core.get_option("FISAPT", "FISAPT_FSAPT_IND_RESPONSE")
+            and core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() == "FISAPT"
+            and core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper() == "CPKS")
+
+
+def _check_fsapt_coupled_ks_induction(external_potentials) -> None:
+    """Reject settings the monomer-Hessian F-SAPT coupled induction does not support yet.
+
+    On KS orbitals only the monomers' own SCF Hessian (``cphf_Hx``: exact-exchange fraction, LRC
+    exchange and XC kernel, on GRAC-shifted orbitals when GRAC is on) gives the response the SAPT(DFT)
+    induction total is built from, so the sources sum to that total. The HF-like gap + 4J - K - K^T
+    product has no such meaning there, so unsupported settings are an error rather than a fallback.
+    """
+    def opt(module, key):
+        return core.get_option(module, key)
+
+    def need(ok, what):
+        if not ok:
+            raise ValidationError(f"FISAPT_FSAPT_IND_RESPONSE in SAPT(DFT) requires {what}.")
+
+    need(not opt("SAPT", "SAPT_DFT_DO_DDFT") and opt("SCF", "LEVEL_SHIFT") == 0., "no deltaDFT or level shift")
+    need(opt("FISAPT", "FISAPT_LINK_ASSIGNMENT") == "C" and not opt("FISAPT", "SSAPT0_SCALE")
+         and not opt("FISAPT", "FISAPT_EXCH_PARPERP") and not opt("SAPT", "DO_IND_EXCH_SINF"),
+         "FISAPT_LINK_ASSIGNMENT=C and unscaled S^2 exchange-induction")
+    options = core.get_global_option_list()
+    need(not external_potentials and not any(k in options and opt("SCF", k) for k in ("PCM", "PE", "DDX")),
+         "no external potentials or embedding")
+    need(not ("BRIANQC_ENABLE" in options and core.get_global_option("BRIANQC_ENABLE")), "CPU monomers")
+
+
 def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     """Run the SAPT(DFT) interaction energy calculation.
 
@@ -104,6 +136,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     core.Wavefunction
         The dimer wavefunction with SAPT(DFT) results stored as variables.
     """
+    if _fsapt_coupled_ks_induction():
+        _check_fsapt_coupled_ks_induction(kwargs.get("external_potentials"))
     core.prepare_options_for_module("SAPT")
     induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
@@ -1528,6 +1562,11 @@ def sapt_dft(
                 for key in ("IndAB_AB", "IndBA_AB", "sIndAB_AB", "sIndBA_AB")
                 if key in hf_matrices
             }
+            # The orbital rows/columns above follow the HF localized orbitals, whose
+            # order and atomic populations differ from the KS ones in Qocc0A/B.
+            # Keep the HF populations so fsapt.py assigns them with their own Q.
+            induction_matrices["IndQocc0A"] = hf_matrices["Qocc0A"].clone()
+            induction_matrices["IndQocc0B"] = hf_matrices["Qocc0B"].clone()
             del hf_FISAPT_obj
             core.timer_off("SAPT(DFT): F-SAPT Induction")
 
@@ -1551,6 +1590,10 @@ def sapt_dft(
         core.timer_off("SAPT(DFT): F-SAPT Exchange")
         core.timer_on("SAPT(DFT): F-SAPT Induction")
         if induction_matrices is None:
+            if _fsapt_coupled_ks_induction():
+                _check_fsapt_coupled_ks_induction(external_potentials)
+                # find() solves with these monomers' own Hessians, XC kernel included.
+                FISAPT_obj.set_cpks_monomers(wfn_A, wfn_B)
             FISAPT_obj.find()
         else:
             FISAPT_obj.set_matrix(induction_matrices)
@@ -1732,6 +1775,9 @@ def sapt_dft(
 
         _set_fsapt_var("FSAPT_QA", cache["Qocc0A"])
         _set_fsapt_var("FSAPT_QB", cache["Qocc0B"])
+        if "IndQocc0A" in cache:
+            _set_fsapt_var("FSAPT_IND_QA", cache["IndQocc0A"])
+            _set_fsapt_var("FSAPT_IND_QB", cache["IndQocc0B"])
         _set_fsapt_var("FSAPT_ELST_AB", cache["Elst_AB"])
         _set_fsapt_var(
             "FSAPT_AB_SIZE", np.array(cache["Elst_AB"].np.shape).reshape(1, -1)
@@ -1739,13 +1785,15 @@ def sapt_dft(
         _set_fsapt_var("FSAPT_EXCH_AB", cache["Exch_AB"])
         _set_fsapt_var("FSAPT_INDAB_AB", cache["IndAB_AB"])
         _set_fsapt_var("FSAPT_INDBA_AB", cache["IndBA_AB"])
-        if sapt_dft_D4_IE or sapt_dft_D3_IE:
+        # No FSAPT dispersion (empirical, or SAPT_DFT_DO_DISP off): zero Disp_AB, as the file path does.
+        if "Disp_AB" in cache and not (sapt_dft_D4_IE or sapt_dft_D3_IE):
+            _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
+        else:
             disp_ab = cache["Elst_AB"].clone()
             disp_ab.zero()
             _set_fsapt_var("FSAPT_DISP_AB", disp_ab)
+        if sapt_dft_D4_IE or sapt_dft_D3_IE:
             _set_fsapt_var("FSAPT_EMPIRICAL_DISP", cache["FSAPT_EMPIRICAL_DISP"])
-        else:
-            _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
     return data
 
 

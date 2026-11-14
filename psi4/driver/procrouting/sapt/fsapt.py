@@ -523,6 +523,9 @@ def extract_osapt_data_from_fsapt_vars(fsapt_vars, print_output=True):
     Qs = {}
     Qs["A"] = fsapt_vars.get("FSAPT_QA")
     Qs["B"] = fsapt_vars.get("FSAPT_QB")
+    if fsapt_vars.get("FSAPT_IND_QA") is not None:
+        Qs["A_ind"] = fsapt_vars.get("FSAPT_IND_QA")
+        Qs["B_ind"] = fsapt_vars.get("FSAPT_IND_QB")
     return vals, Qs
 
 
@@ -576,6 +579,9 @@ def extract_osapt_data_from_wfn(wfn, print_output=True):
     Qs = {}
     Qs["A"] = wfn.variable("FSAPT_QA").to_array()
     Qs["B"] = wfn.variable("FSAPT_QB").to_array()
+    if wfn.has_variable("FSAPT_IND_QA"):
+        Qs["A_ind"] = wfn.variable("FSAPT_IND_QA").to_array()
+        Qs["B_ind"] = wfn.variable("FSAPT_IND_QB").to_array()
 
     external_potentials = {}
     if wfn.has_variable("FSAPT_EXTERN_POTENTIAL_A"):
@@ -909,6 +915,73 @@ def collapse_links(order2, frags, Qs, orbital_ws, links5050):
     return vals
 
 
+def _user_fragments(fragkeys, frags):
+    """Copy of the user fragment definitions, taken before partition_fragments adds links."""
+    return ({M: list(fragkeys[M]) for M in "AB"},
+            {M: {k: list(v) for k, v in frags[M].items()} for M in "AB"})
+
+
+def apply_induction_q(order2, order2r, frags, total_ws, osapt, Zs, Qs, user_frags, completeness, links5050):
+    """Partition IndAB/IndBA with the induction orbitals' own populations.
+
+    SAPT(DFT) with SAPT_DFT_INDUCTION_TYPE=CPHF takes its induction matrices
+    from HF localized orbitals, while Elst and Exch use the KS ones. The
+    orbital rows and columns of IndAB/IndBA therefore follow the HF orbitals,
+    and are assigned to fragments with the HF populations (Qs["A_ind"],
+    Qs["B_ind"]). Weights beyond the orbital block (SIAO link, external
+    potential) are not orbital-dependent and are reused. Total is updated.
+    No-op when no induction populations are present.
+    """
+    if "A_ind" not in Qs:
+        return
+    fragkeys_user, frags_user = user_frags
+    ws, frags_ind, orb_ind = {}, {}, {}
+    for M in "AB":
+        keys, fr, _, orb, tot = partition_fragments(
+            list(fragkeys_user[M]), {k: list(v) for k, v in frags_user[M].items()},
+            Zs[M], Qs[M + "_ind"], completeness)
+        n = len(tot[keys[0]])
+        width = len(next(iter(total_ws[M].values())))
+        ws[M] = {}
+        for key, w in total_ws[M].items():
+            if key[:4] == "Link":
+                continue
+            ws[M][key] = tot[key] + list(w[n:]) if key in tot else list(w)
+        for key in keys:
+            if key[:4] == "Link":
+                ws[M][key] = tot[key] + [0.0] * (width - n)
+        frags_ind[M] = dict(fr)
+        for key in frags[M]:
+            if key[:4] != "Link" and key not in frags_ind[M]:
+                frags_ind[M][key] = frags[M][key]
+        orb_ind[M] = orb
+    ind = extract_order2_fsapt(osapt, ws["A"], ws["B"], frags_ind)
+    indr = collapse_links(ind, frags_ind, {"A": Qs["A_ind"], "B": Qs["B_ind"]}, orb_ind, links5050)
+
+    # Full table: Link-n keys are numbered per partition, so match them by atom pair.
+    link_map = {}
+    for M in "AB":
+        pairs = {tuple(sorted(frags_ind[M][k])): k for k in frags_ind[M] if k[:4] == "Link"}
+        primary = {tuple(sorted(frags[M][k])): k for k in frags[M] if k[:4] == "Link"}
+        if set(pairs) != set(primary):
+            raise Exception(
+                "The induction orbitals (SAPT_DFT_INDUCTION_TYPE=CPHF) cut a different set of bonds "
+                "between fragments than the KS orbitals, so the full analysis cannot share link "
+                "keys. Avoid cutting conjugated or resonant bonds in the fragment definitions.")
+        link_map[M] = {primary[p]: pairs[p] for p in primary}
+
+    def _swap(table, source, keymap):
+        for keyA in table["Total"]:
+            for keyB in table["Total"][keyA]:
+                iA, iB = keymap["A"].get(keyA, keyA), keymap["B"].get(keyB, keyB)
+                for key in ("IndAB", "IndBA"):
+                    table["Total"][keyA][keyB] += source[key][iA][iB] - table[key][keyA][keyB]
+                    table[key][keyA][keyB] = source[key][iA][iB]
+
+    _swap(order2, ind, link_map)
+    _swap(order2r, indr, {"A": {}, "B": {}})
+
+
 def print_order2(
     order2,
     fragkeys,
@@ -1223,6 +1296,7 @@ def compute_fsapt_qcvars(
         fragkeys["B"].append("Other")
         frags["B"]["Other"] = other_fragment_B
 
+    user_frags = _user_fragments(fragkeys, frags)
     holder1 = partition_fragments(
         fragkeys["A"], frags["A"], Zs["A"], Qs["A"], completeness
     )
@@ -1372,6 +1446,7 @@ def compute_fsapt_qcvars(
 
     order2 = extract_order2_fsapt(osapt, total_ws["A"], total_ws["B"], frags)
     order2r = collapse_links(order2, frags, Qs, orbital_ws, links5050)
+    apply_induction_q(order2, order2r, frags, total_ws, osapt, Zs, Qs, user_frags, completeness, links5050)
 
     # Compute closest contact distances for each fragment pair (reduced keys)
     closest_contacts = {}
@@ -1443,7 +1518,11 @@ def compute_fsapt(dirname, links5050, completeness=0.85, print_output=True):
     Qs = {}
     Qs["A"] = read_block("%s/QA.dat" % dirname)
     Qs["B"] = read_block("%s/QB.dat" % dirname)
+    if os.path.exists("%s/QA_ind.dat" % dirname):
+        Qs["A_ind"] = read_block("%s/QA_ind.dat" % dirname)
+        Qs["B_ind"] = read_block("%s/QB_ind.dat" % dirname)
 
+    user_frags = _user_fragments(fragkeys, frags)
     holder1 = partition_fragments(
         fragkeys["A"], frags["A"], Zs["A"], Qs["A"], completeness
     )
@@ -1602,6 +1681,7 @@ def compute_fsapt(dirname, links5050, completeness=0.85, print_output=True):
 
     order2 = extract_order2_fsapt(osapt, total_ws["A"], total_ws["B"], frags)
     order2r = collapse_links(order2, frags, Qs, orbital_ws, links5050)
+    apply_induction_q(order2, order2r, frags, total_ws, osapt, Zs, Qs, user_frags, completeness, links5050)
 
     # Compute closest contact distances for each fragment pair (reduced keys)
     closest_contacts = {}
@@ -1877,7 +1957,7 @@ def run_fsapt_analysis(
                 if "fsapt" not in key.lower() or key.lower() in ["fsapt_ab_size"]:
                     continue
                 v = np.array(value)
-                if key in ["fsapt_qa", "fsapt_qb"]:
+                if key in ["fsapt_qa", "fsapt_qb", "fsapt_ind_qa", "fsapt_ind_qb"]:
                     v = v.reshape(len(Z), -1)
                 elif key in ["fsapt_empirical_disp"]:
                     # need NA * NB from molecule

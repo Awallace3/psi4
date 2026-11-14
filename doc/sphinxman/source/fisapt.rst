@@ -372,6 +372,30 @@ only the intermolecular atom-pair contributions from the dimer calculation and
 therefore need not sum to the authoritative scalar dispersion or total
 interaction energy; Psi4 prints a warning when this approximation is used.
 
+Coupled KS induction
+""""""""""""""""""""
+
+By default F-SAPT induction uses uncoupled response, scaled to the coupled
+total. ``FISAPT_FSAPT_IND_RESPONSE=true`` solves coupled response for every
+source instead. In FISAPT0 the Hessian is the HF ``gap + 4J - K - K^T``. In
+SAPT(DFT) with ``SAPT_DFT_INDUCTION_TYPE=CPKS`` it is each monomer's own SCF
+Hessian (exact-exchange fraction, long-range exchange and XC kernel, on the
+GRAC-shifted orbitals when GRAC is on), the same operator the SAPT(DFT)
+induction itself is solved with, so the partition sums to it; the HF product
+is never applied to KS orbitals::
+
+    set {
+        sapt_dft_functional          pbe0
+        sapt_dft_grac_compute        iterative
+        sapt_dft_do_fsapt            fisapt
+        sapt_dft_induction_type      cpks
+        fisapt_fsapt_ind_response    true
+    }
+
+In SAPT(DFT) this is currently limited to RHF/RKS monomers without level
+shifts, deltaDFT, external potentials or embedding, with
+``FISAPT_LINK_ASSIGNMENT=C`` and unscaled S\ :sup:`2` exchange-induction.
+
 
 Order-1 Visualization with PyMol
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
