@@ -82,3 +82,97 @@ The build's existing CPU sealed-admission check must pass before GPU submission.
 The frozen H200 job 15447098 is not modified by this work. It still selects the
 legacy fresh-byte benchmark policy, so it is not evidence of the fixed path.
 No new GPU success or speedup is claimed until the allocated A/B completes.
+
+## Verified first fix: Blackwell job 15611462
+
+Build **15603125** completed in 11m09s, with 391 core tests and the CPU
+sealed-admission proof passing. Exact build/helper pin:
+`324a332974574c216a096428c9460f3d257f5e88`.
+The matching GPU allocation **15611462** completed in 30m15s on embers with
+exit 0 and no TERM. Water, both sets of three peptide pairs, profiles, warm
+diagnostics, and `runtime-ab.json` all passed. This is a same-node/GPU A/B,
+not a comparison assembled from unlike hardware.
+
+Remote output:
+`/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-disp0/sapt0-perf-blackwell-324a332974-01/job-15611462/`
+
+Retrieved evidence:
+`/home/awallace43/data/sapt0-blackwell-15611462/`.
+
+| Metric | Fresh-byte control | Sealed candidate | Old/new |
+|---|---:|---:|---:|
+| Median GPU dispersion | 232.6136 s | 6.7227 s | 34.601x |
+| Median GPU energy | 247.1586 s | 21.3225 s | 11.591x |
+| Median whole GPU subprocess | 250.9617 s | 28.0973 s | 8.932x |
+
+The improvement is not merely a shifted timing boundary. The candidate's
+whole subprocess includes early sealed preparation, which took 2.247 s in
+GPU repeat 0. Its owner full-hash count/bytes stayed **20 / 2706990506**
+before and after energy; live checks grew from 83 to 21895 and mapped checks
+from 20 to 4601. Seals/mapping checks were retained, not disabled.
+
+| Candidate term (three-repeat median) | CPU (s) | GPU (s) | CPU/GPU |
+|---|---:|---:|---:|
+| elst | 0.0007999 | 0.0013233 | 0.604x |
+| exch | 0.130693 | 0.053359 | 2.449x |
+| ind | 2.118232 | 0.780531 | 2.714x |
+| disp | 3.785626 | 6.722744 | 0.563x |
+| delta_hf | 2.615267 | 10.729010 | 0.244x |
+| total | 10.887706 | 21.322510 | 0.511x |
+
+Do not compare this cold delta-HF window directly with the earlier 2.54 s
+Blackwell pilot: the matched A/B explicitly disables persistent CUDA disk
+caching for both contracts. The warm diagnostic's delta-HF drops to 1.360 s,
+but warm dispersion remains 6.620 s. Warm total is 10.888 s; it is a single
+diagnostic, not a three-repeat speedup.
+
+Candidate largest raw CPU/GPU peptide discrepancy is 2.719e-9 Eh; total
+error is 1.148e-10 Eh. The stricter old/new GPU agreement also passed.
+Work remains 468 shells, 16 DFMO batches and 64 dispersion blocks.
+
+### Remaining bottlenecks, not yet fixed
+
+GPU repeat 0: plan build 1.920 s (shell admission 1.687 s), blocked dispersion
+0.620 s (DFMO identity 0.052 s). The separate profiled sample reports two SDK
+`verify_files` calls totaling 2.803 s, including 2.718 s in `canonical_headers`,
+and one NVRTC `_compile` at 1.382 s. Profiled inclusive windows overlap and
+include instrumentation overhead; do not sum them as disjoint device stages.
+
+The catastrophic regression is fixed, but cold peptide GPU dispersion is
+still 1.78x slower than CPU. Next work targets repeated SDK archive parsing,
+per-session compilation and mapping-parser overhead while keeping the same
+proof and numerical contracts. No further performance claim is made here.
+
+## Follow-up candidates under host validation
+
+1. `canonical_headers` now reuses only immutable, content-derived header
+   metadata. Every call still hashes the complete archive first and validates
+   its expected SHA/size; `verify_files` still rechecks every installed header,
+   inventory, native identity and binding source. No pathname/mtime admission
+   is cached. This removes duplicate decompression, not the first parse or
+   full-byte archive checks. The regression was red with two decompressions
+   for two identical admissions and checks caller-mutation isolation plus
+   same-size changed archive/header rejection.
+2. Sealed mapping parsing memoizes repeated lexical inode/device/name fields
+   only inside one newly read snapshot. It returns every segment, including
+   unrelated files and non-executable segments. No map snapshot or successful
+   identity verdict is reused across checks. Its regression was red with five
+   conversions of one inode per snapshot and requires fresh parsing next time.
+3. Submission now rejects a sealed helper checkout not authenticated by its
+   exact build proof and checks runtime-support source compatibility as well.
+
+These candidates change identity/runtime-support Python, so they require a
+new coherent build and numerical/performance run. The verified 324a332974
+build and 15611462 evidence remain unchanged. NVRTC compilation has not yet
+been cached or removed; its cold cost remains explicitly measured.
+
+Host validation passed **393 core/identity tests, 194 Phoenix helper tests,
+and 46 Cachy helper tests**. The mapping parser produced identical full-row
+output in a synthetic 530-row host fixture: median time for 200 snapshots
+fell from 0.3045 s to 0.1878 s (1.62x). This is a parser microbenchmark,
+not GPU speedup evidence. New whole-build and GPU qualification are next.
+
+The user selected **wait for free embers slots**, not paid validation.
+At that decision all 50 slots were occupied; the monthly account was already
+over-reserved. No inferno build or GPU follow-up is authorized. Recheck capacity
+when a currently running embers job ends; do not cancel or alter other jobs.

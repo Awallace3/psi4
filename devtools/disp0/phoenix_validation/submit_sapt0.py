@@ -70,11 +70,17 @@ def main():
     proof = json.loads(proof_path.read_text())
     if proof["status"] != "PASS":
         raise RuntimeError("Build qualification missing")
+    if args.identity_contract == CONTRACT:
+        if proof["pin"] != args.pin or Path(proof["source"]).resolve() != source:
+            raise RuntimeError("Sealed workers require the exact proof-authenticated helper checkout")
+        for path, checksum in proof["provenance_sha256"].items():
+            if sha(path) != checksum:
+                raise RuntimeError("Proof-authenticated helper changed before submission: " + path)
     admission_sha = (require_cpu_admission(build_run, proof["pin"])
                      if args.identity_contract == CONTRACT else None)
     # Helper-only evolution is allowed; scientific code must match the native build.
     subprocess.run(["git", "-C", str(source), "diff", "--exit-code", proof["pin"],
-                    args.pin, "--", "psi4/"], check=True)
+                    args.pin, "--", "psi4/", "psi4_runtime_support/"], check=True)
     input_hashes = {name: sha(inputs / (name + ".json")) for name in ("water", args.system)}
     env = clean_environment(os.environ)
     env.update(SAPT0_SOURCE=str(source), SAPT0_PIN=args.pin, SAPT0_BUILD_ROOT=str(build_root),

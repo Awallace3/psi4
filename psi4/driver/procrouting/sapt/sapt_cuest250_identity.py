@@ -39,6 +39,10 @@ CUDA_PREFIXES = ("libcudart", "libcublas", "libcusolver", "libcusparse", "libnvJ
 CUDA13_SONAME_STEMS = ("libcudart", "libcublas", "libcublasLt", "libnvrtc",
                       "libnvrtc-builtins", "libnvJitLink")
 
+# Cache derived immutable metadata, NEVER a file/mapping/ABI admission result.
+# Every lookup below still requires a fresh full-archive byte proof.
+_HEADER_METADATA = {}
+
 
 def require(condition, message):
     if not condition:
@@ -90,21 +94,33 @@ def check_cuda13_name(path):
 
 
 def canonical_headers(archive):
-    """Derive the complete header manifest from exact canonical archive bytes."""
+    """Freshly prove archive bytes; avoid reinflating identical proven content."""
     archive = Path(archive).resolve(strict=True)
     require(archive.stat().st_size == ARCHIVE_BYTES and file_digest(archive) == ARCHIVE_SHA256,
             "cuEST SDK archive is not canonical0.2.50 (0.2.2/implicit upgrades rejected)")
-    records = {}
-    with tarfile.open(archive, "r|gz") as stream:
-        for member in stream:
-            if member.isfile() and member.name.startswith("cuest_PID/include/"):
-                relative = member.name.removeprefix("cuest_PID/")
-                require(".." not in Path(relative).parts, "Unsafe SDK archive path")
-                records[relative] = {"bytes":member.size, "sha256":digest(stream.extractfile(member))}
+    key = (ARCHIVE_SHA256, HEADER_COUNT, HEADER_JSON_SHA256, HEADER_NUL_SHA256)
+    cached = _HEADER_METADATA.get(key)
+    if cached is None:
+        records = {}
+        with tarfile.open(archive, "r|gz") as stream:
+            for member in stream:
+                if member.isfile() and member.name.startswith("cuest_PID/include/"):
+                    relative = member.name.removeprefix("cuest_PID/")
+                    require(".." not in Path(relative).parts, "Unsafe SDK archive path")
+                    records[relative] = {"bytes":member.size, "sha256":digest(stream.extractfile(member))}
+    else:
+        # New nested dictionaries prevent a caller mutating the cached proof.
+        records = {name: {"bytes": size, "sha256": checksum} for name, size, checksum in cached}
     require(all(records.get(path, {}).get("sha256") == sha for path, sha in REQUIRED_HEADERS.items()),
             "Canonical cuEST required header signatures differ")
     require(len(records)==HEADER_COUNT and header_digests(records)==(HEADER_JSON_SHA256,HEADER_NUL_SHA256),
             "Canonical whole59-header tree/serialization identity differs")
+    if cached is None:
+        # Immutable values permit harmless duplicate concurrent parses. Avoid
+        # holding a process-global lock across archive I/O (including fork).
+        value = tuple((name, row["bytes"], row["sha256"]) for name, row in sorted(records.items()))
+        _HEADER_METADATA.clear()  # One bounded canonical SDK content identity.
+        _HEADER_METADATA[key] = value
     return records
 
 
