@@ -38,9 +38,18 @@ def fdds_input():
         psi4.set_num_threads(old_threads)
 
 
-def _aux_matrices(obj, monomer, frequency, is_lrc):
-    return {k: v.np.copy() for k, v in obj.form_aux_matrices(
+def _aux_matrices(obj, monomer, frequency, is_lrc, auxiliary_basis=False):
+    result = {k: v.np.copy() for k, v in obj.form_aux_matrices(
         monomer, frequency, 0.25, 0.75 if is_lrc else 0.0).items()}
+    if auxiliary_basis:
+        # These three matrices carry one right-hand QR-coordinate index.
+        # QR signs (and the null-space completion) can change with roundoff
+        # across integral algorithms. Multiplying by R maps Q back to the
+        # common auxiliary basis, since (ar|P) = Q R, without a pseudoinverse.
+        R = (obj.R_A() if monomer == "A" else obj.R_B()).np
+        for key in ("K1LD", "K2LD", "K21L"):
+            result[key] = result[key] @ R
+    return result
 
 
 @pytest.mark.parametrize("omega", [0.0, 0.1, 0.4])
@@ -76,7 +85,7 @@ def test_fdds_storage_mode_parity(fdds_input, omega, algorithm, split_monomers, 
     })
     obj = psi4.core.FDDS_Dispersion(primary, auxiliary, matrices, vectors, True, is_lrc, omega)
     reference = {
-        (monomer, frequency): _aux_matrices(obj, monomer, frequency, is_lrc)
+        (monomer, frequency): _aux_matrices(obj, monomer, frequency, is_lrc, auxiliary_basis=True)
         for monomer in ("A", "B") for frequency in (0.0, 0.3)
     }
     del obj
@@ -89,7 +98,7 @@ def test_fdds_storage_mode_parity(fdds_input, omega, algorithm, split_monomers, 
         psi4.set_options({"scf_subtype": mode})
         obj = psi4.core.FDDS_Dispersion(primary, auxiliary, matrices, vectors, True, is_lrc, omega)
         results[mode] = {
-            (monomer, frequency): _aux_matrices(obj, monomer, frequency, is_lrc)
+            (monomer, frequency): _aux_matrices(obj, monomer, frequency, is_lrc, auxiliary_basis=True)
             for monomer in ("A", "B") for frequency in (0.0, 0.3)
         }
         del obj
