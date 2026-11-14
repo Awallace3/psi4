@@ -46,7 +46,8 @@ def _aux_matrices(obj, monomer, frequency, is_lrc):
 @pytest.mark.parametrize("omega", [0.0, 0.1, 0.4])
 @pytest.mark.parametrize("algorithm", ["STORE", "LEGACY", "DIRECT_IAQ"])
 @pytest.mark.parametrize("split_monomers", [False, True])
-def test_fdds_storage_mode_parity(fdds_input, omega, algorithm, split_monomers):
+@pytest.mark.parametrize("asymmetric", [False, True])
+def test_fdds_storage_mode_parity(fdds_input, omega, algorithm, split_monomers, asymmetric):
     """Finite-range exchange must not become Coulomb exchange out of core.
 
     Comparing every auxiliary response matrix catches the wrong three-index
@@ -55,6 +56,16 @@ def test_fdds_storage_mode_parity(fdds_input, omega, algorithm, split_monomers):
     full-range/LR exchange products.
     """
     primary, auxiliary, matrices, vectors = fdds_input
+    if asymmetric:
+        # Move one B occupied orbital into its virtual space. This is a
+        # frozen-orbital algebra probe, not a self-consistent ion calculation.
+        # Different monomer shapes also exercise wide versus tall QR factors.
+        matrices["Cocc_B"] = psi4.core.Matrix.from_array(matrices["Cocc_A"].np[:, :-1])
+        matrices["Cvir_B"] = psi4.core.Matrix.from_array(np.column_stack(
+            (matrices["Cocc_A"].np[:, -1:], matrices["Cvir_A"].np)))
+        vectors["eps_occ_B"] = psi4.core.Vector.from_array(vectors["eps_occ_A"].np[:-1])
+        vectors["eps_vir_B"] = psi4.core.Vector.from_array(np.concatenate(
+            (vectors["eps_occ_A"].np[-1:], vectors["eps_vir_A"].np)))
     is_lrc = omega != 0.0
     # A common reference also checks the new STORE/split path against the
     # published in-core DIRECT/DIRECT_iaQ implementation.
