@@ -1208,8 +1208,25 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_str("SAPT_DFT_INDUCTION_TYPE", "CPKS", "CPKS CPHF NONE");
         /*- Enables the hybrid xc kernel in dispersion? !expert -*/
         options.add_bool("SAPT_DFT_DO_HYBRID", true);
+        /*- Include the long-range exact exchange (x_beta wK) of a range-separated
+        functional in the coupled induction (CPKS) response kernel? False drops only
+        that term and keeps the functional's own short-range xc kernel and any global
+        x_alpha K. Intended for reproducing response codes without a range-separated
+        kernel. !expert -*/
+        options.add_bool("SAPT_DFT_IND_LR_EXCH_KERNEL", true);
+        /*- Include the long-range exact exchange of a range-separated functional in
+        the FDDS dispersion kernel? False uses (1 - x_alpha) full-range ALDA exchange
+        plus x_alpha K, with no erfc-attenuated LDA and no wK; for LC-wPBE (x_alpha = 0)
+        this is the pure ALDA kernel of Cencek & Szalewicz, JCP 139, 024104 (2013).
+        !expert -*/
+        options.add_bool("SAPT_DFT_DISP_LR_EXCH_KERNEL", true);
         /*- Compute the Delta-DFT correction? -*/
         options.add_bool("SAPT_DFT_DO_DDFT", false);
+        /*- Compute the analytic nuclear gradient of the delta DFT dimer energy right after the
+        dimer DFT SCF, and store it as the matrix variable SAPT(DFT) DFT DIMER GRADIENT on the
+        globals and the dimer wavefunction. Requires SAPT_DFT_DO_DDFT; functionals with VV10 are
+        rejected because Psi4 has no analytic VV10 gradient. !expert -*/
+        options.add_bool("SAPT_DFT_DDFT_GRADIENT", false);
         /*- Do SAPT(DFT) Dispersion? Might turn off if using Delte-DFT correction and SAPT_DFT_D4_IE -*/
         options.add_bool("SAPT_DFT_DO_DISP", true);
         /*- Compute -D3 dispersion in SAPT(DFT) for SAPT(DFT)-D3? !expert -*/
@@ -1938,6 +1955,17 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_str("DFT_GRAC_X_FUNC", "XC_GGA_X_LB");
         /*- The gradient regularized asymptotic correction functional corr form. !expert -*/
         options.add_str("DFT_GRAC_C_FUNC", "XC_LDA_C_VWN");
+        /*- Include the switching-function gradient term of the GRAC potential matrix elements (Eq. 17 of
+        Cencek and Szalewicz, J. Chem. Phys. 139, 024104 (2013)). The gradient-dependent switch makes
+        the damped GGA term carry an extra
+        :math:`-2\,\partial F/\partial\gamma\,\nabla\rho\cdot\nabla f` that needs the density Hessian.
+        Off by default, which reproduces the historical Psi4 (and pre-2.9.0 ORCA) potential. !expert -*/
+        options.add_bool("DFT_GRAC_DENSITY_HESSIAN", false);
+        /*- How the GRAC asymptotic potential is spliced in. ``ASYMPTOTIC`` switches to LB94 exchange
+        (scaled by the missing long-range exact exchange) plus VWN correlation. ``STRETCH`` keeps the
+        bulk potential everywhere and only removes the shift where the switch is on, the Sec. IV splice
+        of Cencek and Szalewicz for range-separated hybrids with 100% long-range exact exchange. !expert -*/
+        options.add_str("DFT_GRAC_SPLICE", "ASYMPTOTIC", "ASYMPTOTIC STRETCH");
         /*- Number of spherical points (A :ref:`Lebedev Points <table:lebedevorder>` number). -*/
         options.add_int("DFT_SPHERICAL_POINTS", 302);
         /*- Number of radial points. -*/

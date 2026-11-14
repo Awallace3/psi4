@@ -53,6 +53,20 @@ from ..solvent.efp import get_qm_atoms_opts, modify_Fock_induced, modify_Fock_pe
 #    self.iterations(e_conv=1.e-5, d_conv=1.e-4)
 
 
+def _release_diis_file(self):
+    """Delete this wavefunction's on-disk DIIS subspace when the SCF fails.
+
+    finalize() normally deletes PSIF_LIBDIIS, but a non-converged SCF never reaches it, so
+    the file stays on disk. The next SCF in the same process reopens it and writes entries
+    with the same names; if its matrices are larger, PSIO refuses to grow an entry into
+    its neighbour and dies with PSIO_ERROR 18 (Incorrect block end address).
+    """
+    if self.initialized_diis_manager_:
+        self.diis_manager_.delete_diis_file()
+        self.diis_manager_ = None
+        self.initialized_diis_manager_ = False
+
+
 def scf_compute_energy(self):
     """Base class Wavefunction requires this function. Here it is
     simply a wrapper around initialize(), iterations(), finalize_energy(). It
@@ -90,6 +104,7 @@ def scf_compute_energy(self):
             # energy = 0.0
             # A P::e fn to either throw or protest upon nonconvergence
             # die_if_not_converged()
+            _release_diis_file(self)
             raise e
         else:
             core.print_out("  Energy and/or wave function did not converge, but proceeding anyway.\n\n")
