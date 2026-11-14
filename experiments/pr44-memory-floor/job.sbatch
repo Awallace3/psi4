@@ -21,6 +21,7 @@ memory=$5
 commit=$6
 build_campaign=$7
 checkpoint=$8
+namespace_fix=${9:-0}
 output="$campaign/results/$case_id/$SLURM_JOB_ID"
 mkdir -p "$output"
 cd "$output"
@@ -49,6 +50,12 @@ extra=()
 if [[ $mode = replay ]]; then
     extra=(--replay-cache "$checkpoint")
 elif [[ $mode != full ]]; then
+    exit 2
+fi
+if [[ $namespace_fix = 1 ]]; then
+    [[ $mode = full ]] || exit 2
+    extra+=(--fix-disk-jk-namespace)
+elif [[ $namespace_fix != 0 ]]; then
     exit 2
 fi
 srun "$python" "$root/experiments/pr44-memory/run.py" \

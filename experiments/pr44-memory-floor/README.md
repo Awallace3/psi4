@@ -1,6 +1,27 @@
 # Protein157 memory-floor bracketing
 
-## Current round: explicitly approved inferno pair
+## Corrected round — approved, pending regression/preflight
+
+The prior inferno full100/full85 jobs15594463/15594464 both failed before FDDS
+at delta-HF monomer A with DiskDFJK PSIO_ERROR13, not OOM. The driver renames
+unit97 but does not update the default namespace, so disk JK reopens the
+wrong file. In-core JK masks this.
+
+Current config opts into an **experiment-only** correction of three delta-HF
+namespace transitions. `pr44-memory/namespace_workaround.py` clones the Python
+driver within the process; it edits neither staged files nor native code.
+Metadata/results record original and patched source hashes. These corrected
+runs must not be represented as measurements of the unmodified PR.
+`pr44-memory/check_namespace.py OUTPUT` provides a small forced-disk red/green
+test and a MEM_DF reference comparison in three isolated processes.
+
+User explicitly approved two corrected full100/full85 retries, conditional on
+passing local regression and submission preflight:16h each, gts-cs207,
+maximum$23.13/job, otherwise unchanged resources. Quote$123.62available;
+recheck before submission. Use a new campaign directory; do not overwrite v2.
+No automatic retries; approval covers only this pair.
+
+## Historical inferno pair (harness89d32aa56b)
 
 The three first-round embers jobs were preempted, not OOM-killed:
 full400GB sampled383.56GiB RSS; replay200GB228.37GiB; replay100GB133.81GiB.

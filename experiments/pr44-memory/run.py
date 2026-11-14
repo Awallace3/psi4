@@ -27,7 +27,10 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("commit")
     parser.add_argument("--replay-cache", type=Path, help="Replay only FDDS from this completed run's checkpoint")
+    parser.add_argument("--fix-disk-jk-namespace", action="store_true",
+                        help="Experiment-only delta-HF file97 namespace correction (recorded in metadata)")
     args = parser.parse_args()
+    assert not (args.replay_cache and args.fix_disk_jk_namespace), "Replay does not execute SCF"
     assert 1 <= args.memory_gb <= 1200
     root = HERE.parent.parent
     assert subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip() == args.commit
@@ -50,6 +53,10 @@ def main():
     assert sha(psi4.core.__file__) == validated["core_sha256"]
     assert int(os.environ["SLURM_CPUS_PER_TASK"]) == 192
     assert os.environ.get("PR44_MEMORY_TRACE") == "1"
+    namespace_workaround = None
+    if args.fix_disk_jk_namespace:
+        from namespace_workaround import install
+        namespace_workaround = install()
     psi4.core.IOManager.shared_object().set_default_path(str(scratch) + "/")
     psi4.core.set_output_file(str(args.output / "psi4.out"), False)
     psi4.set_num_threads(192)
@@ -70,6 +77,7 @@ def main():
     metadata = {
         "source_commit": NATIVE_COMMIT, "harness_commit": args.commit, "production_parent": config["head"],
         "mode": "replay" if args.replay_cache else "full",
+        "namespace_workaround": namespace_workaround,
         "core": psi4.core.__file__, "core_sha256": validated["core_sha256"],
         "driver_sha256": sha(__file__), "config_sha256": sha(config_path),
         "geometry_sha256": sha(xyz), "config": config, "options": options,
@@ -107,7 +115,8 @@ def main():
     sampler.start()
     start = time.perf_counter()
     result = {"completed": False, "memory_gb": args.memory_gb, "source_commit": NATIVE_COMMIT,
-              "harness_commit": args.commit, "mode": metadata["mode"]}
+              "harness_commit": args.commit, "mode": metadata["mode"],
+              "namespace_workaround": namespace_workaround}
     try:
         if args.replay_cache:
             previous = args.replay_cache

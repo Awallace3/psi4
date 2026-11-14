@@ -43,7 +43,8 @@ for case in config["cases"]:
            f"--tmp={config['tmp_gib']}G", f"--time={config['walltime']}",
            f"--output={campaign}/logs/%x-%j.out", f"--error={campaign}/logs/%x-%j.err",
            str(here / "job.sbatch"), str(root), str(campaign), case["id"], case["mode"],
-           str(case["memory_gb"]), commit, config["build_campaign"], config["checkpoint"]]
+           str(case["memory_gb"]), commit, config["build_campaign"], config["checkpoint"],
+           "1" if config.get("fix_disk_jk_namespace", False) else "0"]
     subprocess.run([cmd[0], "--test-only", *cmd[1:]], check=True)
     commands.append(cmd)
 manifest = {
@@ -51,7 +52,10 @@ manifest = {
     "approved_inferno": args.approved_inferno,
     "file_sha256": {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
                     for p in [here / "config.json", here / "job.sbatch", here / "submit.py",
-                              here.parent / "pr44-memory/run.py", here.parent / "pr44/case.py"]},
+                              here.parent / "pr44-memory/run.py",
+                              here.parent / "pr44-memory/namespace_workaround.py",
+                              here.parent / "pr44-memory/check_namespace.py",
+                              here.parent / "pr44/case.py"]},
 }
 if args.test_only:
     print(json.dumps(manifest, indent=2))

@@ -11,8 +11,9 @@
   "slurm_gib": 1400,
   "tmp_gib": 2600,
   "walltime": "16:00:00",
+  "fix_disk_jk_namespace": true,
   "cases": [
-    {"id": "full-100", "mode": "full", "memory_gb": 100},
-    {"id": "full-85", "mode": "full", "memory_gb": 85}
+    {"id": "full-100-namespace", "mode": "full", "memory_gb": 100},
+    {"id": "full-85-namespace", "mode": "full", "memory_gb": 85}
   ]
 }
