@@ -16,6 +16,7 @@ import traceback
 
 HERE = Path(__file__).resolve().parent
 NATIVE_COMMIT = "70e01e2bafc828831ea1bda31588694e85b20c26"
+sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "pr44"))
 from case import cgroup_dir, dump, monitor, setup_scratch, sha
 
