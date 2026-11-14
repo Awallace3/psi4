@@ -49,6 +49,29 @@ The compact receipts and headers were retrieved to
 `/home/awallace43/data/cuest0301-cachy-sdk/` for ABI comparison.
 No Psi4/GPU qualification has run against the new SDK yet.
 
+The compile-only `devtools/disp0/cuest0301_abi_probe.cc` **passed locally**
+against these copied headers. It covers all 25 bound function calling
+signatures, enum/scalar widths, workspace sizes/offsets, basis query constants,
+and DF plan/DFMO policy constants. Pointer pointee types and constness are
+deliberately erased to match the ctypes boundary; this is not a layout or
+numerical test of arrays. Direct inspection of the remaining constructor
+headers found compatible declarations, caller-normalized shell coefficients,
+and the expected persistent workspace/parent-handle lifetime requirements.
+
+Version 0.3 adds explicitly selectable DFMO operator weighting and DF-plan
+fixed-point emulation. For the existing full-Coulomb policy, configure/read
+back cache weighting FULL (plan attribute 7/value 0), DFMO weighting FULL
+(DFMO attribute 0/value 0), and disable fixed-point fitting emulation
+(plan attribute 8/value 1) for the native-FP64 baseline. Do not silently
+benchmark a different arithmetic policy just because the SDK defaults changed.
+
+`devtools/disp0/cachy/build_cuest0301.sh` prepares a separate **native-only**
+compile/link stage against the new SDK with two compiler workers, sm86,
+portable CPU flags and explicit new-library paths. It does not enable the
+new SDK in the strict Python admission route and does not constitute a
+canonical campaign build (in particular, it does not enable Einsums).
+Its purpose is to expose native API/build incompatibilities before migration.
+
 Phoenix setup belongs in the small **embers** CPU job
 `install_cuest0301.sbatch`, not a long login-node solve/install. All 50 embers
 slots were occupied at initial staging. No new inferno use is authorized.
