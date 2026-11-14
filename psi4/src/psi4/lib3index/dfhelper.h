@@ -117,6 +117,9 @@ class PSI_API DFHelper {
     /// up memory for storing intermediates during metric contraction.
     void set_release_core_AO_before_metric(bool release) { release_core_AO_before_metric_ = release; }
 
+    /// Release pre-metric scratch after contracting a one-shot transformation.
+    void set_release_pre_metric_tensors(bool release) { release_pre_metric_tensors_ = release; }
+
     ///
     /// Sets the MO integrals to in-core. (Defaults to FALSE)
     /// @param core True to indicate in-core
@@ -319,6 +322,12 @@ class PSI_API DFHelper {
     /// clears spaces and transformations
     void clear_all();
 
+    /// Drop one transformed tensor, its scratch files, and its cached plan entry.
+    void release_tensor(std::string name);
+
+    /// Release AO integrals. Call initialize() before transforming again.
+    void release_AO();
+
     /// get sizes, shapes of tensors
     size_t get_space_size(std::string key);
     size_t get_tensor_size(std::string key);
@@ -350,6 +359,7 @@ class PSI_API DFHelper {
     bool AO_core_ = true;
     bool MO_core_ = false;
     bool release_core_AO_before_metric_ = false;
+    bool release_pre_metric_tensors_ = false;
     size_t nthreads_ = 1;
     double cutoff_ = 1e-12;
     double condition_ = 1e-12;
