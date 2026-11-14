@@ -8,6 +8,7 @@ import subprocess
 from sapt0_timing import ACCEPTANCE, SYSTEMS, save, sha
 from submit import clean_environment
 from sapt0_hardware import PROFILES
+from sealed_h200 import CONTRACT, require_cpu_admission
 
 
 def route_matches(fields, profile, account, qos, hours):
@@ -37,9 +38,15 @@ def main():
     parser.add_argument("--account", choices=("gts-cs207", "gts-cs207-chemx"),
                         default="gts-cs207-chemx")
     parser.add_argument("--inferno-approved", action="store_true")
+    parser.add_argument("--identity-contract", choices=("fresh-bytes-v1", CONTRACT),
+                        default=CONTRACT)
+    parser.add_argument("--runtime-ab", action="store_true",
+                        help="Also measure the unchanged fresh-byte path on this same node")
     args = parser.parse_args()
     if args.qos == "inferno" and not args.inferno_approved:
         raise ValueError("Explicit per-job inferno approval required")
+    if args.runtime_ab and args.identity_contract != CONTRACT:
+        raise ValueError("A/B requires the sealed candidate and explicit fresh-byte control")
     if args.device_family == "RTX_PRO_BLACKWELL" and args.system != "peptide":
         raise ValueError("Blackwell admission is limited to the water/peptide pilot")
     profile = PROFILES[args.device_family]
@@ -63,6 +70,8 @@ def main():
     proof = json.loads(proof_path.read_text())
     if proof["status"] != "PASS":
         raise RuntimeError("Build qualification missing")
+    admission_sha = (require_cpu_admission(build_run, proof["pin"])
+                     if args.identity_contract == CONTRACT else None)
     # Helper-only evolution is allowed; scientific code must match the native build.
     subprocess.run(["git", "-C", str(source), "diff", "--exit-code", proof["pin"],
                     args.pin, "--", "psi4/"], check=True)
@@ -87,6 +96,10 @@ def main():
         "input_hashes": input_hashes, "command": argv, "qos": args.qos,
         "account": args.account, "device_family": args.device_family,
         "hardware_profile": profile, "inferno_approved": args.inferno_approved,
+        "identity_contract": args.identity_contract,
+        "runtime_ab": args.runtime_ab,
+        "cpu_sealed_admission_sha256": admission_sha,
+        "diagnostics": ["cold_cprofile", "warm_energy"] if args.identity_contract == CONTRACT else [],
         "system": args.system, "cpu_threads_each_arm": 8,
         "repeats_each_arm": 3, "gate": "water CPU/GPU first",
         "acceptance": dict(ACCEPTANCE),

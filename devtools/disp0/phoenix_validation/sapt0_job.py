@@ -8,6 +8,7 @@ import sys
 
 from sapt0_timing import SYSTEMS, save, sha
 from sapt0_hardware import PROFILES
+from sealed_h200 import CONTRACT, configuration, require_cpu_admission
 
 
 def main():
@@ -39,6 +40,14 @@ def main():
     config = json.loads(original.read_text())
     if config["source_pin"] != proof["pin"]:
         raise RuntimeError("Different runtime and build pin")
+    sealed = submission.get("identity_contract", "fresh-bytes-v1") == CONTRACT
+    if sealed:
+        admission_sha = require_cpu_admission(build_run, proof["pin"])
+        if admission_sha != submission["cpu_sealed_admission_sha256"]:
+            raise RuntimeError("CPU sealed admission changed since submission")
+        # Bind early loader helpers to this coherent build, never an overlay
+        # or a stale proof from another helper checkout.
+        config = configuration(config, proof, args.output)
     family = submission.get("device_family", "H200")
     profile = PROFILES[family]
     if family == "RTX_PRO_BLACKWELL" and args.system != "peptide":
@@ -70,7 +79,24 @@ def main():
                    "--case", str(args.inputs / (system + ".json")),
                    "--output", str(args.output / system), "--repeats", str(repeats),
                    "--timeout", "3600"]
+        if sealed and system != "water":
+            command.append("--diagnostics")
         subprocess.run(command, check=True)
+    if submission.get("runtime_ab", False):
+        if not sealed:
+            raise RuntimeError("Runtime A/B requires a sealed candidate")
+        control = dict(config, identity_contract="fresh-bytes-v1")
+        control_path = args.output / "fresh-byte-control.json"
+        save(control_path, control)
+        subprocess.run([
+            sys.executable, "-B", str(script), "run",
+            "--config", str(control_path), "--config-sha256", sha(control_path),
+            "--case", str(args.inputs / (args.system + ".json")),
+            "--output", str(args.output / (args.system + "-fresh-control")),
+            "--repeats", "3", "--timeout", "3600", "--diagnostics"], check=True)
+        from sapt0_profile import compare_contracts
+        save(args.output / "runtime-ab.json", compare_contracts(
+            args.output / (args.system + "-fresh-control"), args.output / args.system))
 
 
 if __name__ == "__main__":

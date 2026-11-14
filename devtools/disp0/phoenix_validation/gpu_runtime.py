@@ -136,7 +136,8 @@ def require_runtime_support(build):
 def sealed_startup_path(config, directory):
     """Diagnostic aliases are private and NEVER part of the loader namespace."""
     if ((config.get("schema") != 2
-         and (config.get("schema"),config.get("device_family")) != (1,"H200"))
+         and not (config.get("schema") == 1 and config.get("device_family")
+                  in ("H200", "RTX_PRO_BLACKWELL")))
             or config.get("identity_contract") != "process-owned-kernel-sealed-snapshots-v1"):
         raise ValueError("Explicit sealed-snapshot configuration required")
     directory = Path(directory)

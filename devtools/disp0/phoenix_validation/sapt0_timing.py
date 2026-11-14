@@ -6,6 +6,7 @@ for audits/JIT. GPU runtime admission is outside the energy timer; provider
 construction, JIT, native audits and cleanup inside energy remain charged.
 """
 import argparse
+import cProfile
 from contextlib import ExitStack
 import hashlib
 import importlib.util
@@ -14,6 +15,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import pstats
 import statistics
 import subprocess
 import sys
@@ -125,9 +127,19 @@ def forbid_cpu_dispersion(stack):
             sapt_mp2_terms_ein, name, side_effect=RuntimeError("CPU dispersion fallback forbidden")))
 
 
+def invoke_energy(psi4, molecule, runtime, kwargs):
+    if runtime is not None:
+        return runtime.guarded_call(
+            psi4.energy, "sapt(dft)", molecule=molecule, return_wfn=True, **kwargs)
+    return psi4.energy("sapt(dft)", molecule=molecule, return_wfn=True)
+
+
 def worker(args):
     from gpu_runtime import AuditedRuntime, read_config
     config, build = read_config(args.config, args.config_sha256)
+    if config.get("identity_contract", "fresh-bytes-v1") == "fresh-bytes-v1":
+        from sealed_bootstrap import import_fresh_control
+        import_fresh_control(config)
     import psi4
     from psi4 import core
     if not Path(core.__file__).resolve().is_relative_to(Path(config["stage"]).resolve()):
@@ -142,6 +154,7 @@ def worker(args):
               "host": platform.node(), "job_id": os.environ.get("SLURM_JOB_ID"),
               "runtime_config_sha256": args.config_sha256}
     runtime = None
+    profiler = cProfile.Profile() if getattr(args, "profile", False) else None
     try:
         core.set_output_file(str(args.output / "psi4.out"), False)
         psi4.set_num_threads(config["threads"])
@@ -163,9 +176,32 @@ def worker(args):
         with ExitStack() as stack:
             if runtime:
                 forbid_cpu_dispersion(stack)
+            def call_energy():
+                return invoke_energy(psi4, molecule, runtime, kwargs)
+
+            if getattr(args, "warmup", False):
+                warm_before = dict(core.get_timer_records(False))
+                warm_started = time.perf_counter()
+                warm_energy, warm_wfn = call_energy()
+                warm_elapsed = time.perf_counter() - warm_started
+                result["warmup"] = {
+                    "total_Eh": float(warm_energy),
+                    "raw_Eh": {name: float(warm_wfn.variable(name)) for name in RAW},
+                    "seconds": term_times(warm_before, dict(core.get_timer_records(False)), warm_elapsed),
+                    "dispersion_execution": getattr(warm_wfn, "_sapt_cuda_dispersion_execution", None)}
+            result["runtime_plan_start"] = len(runtime.report["plans"]) if runtime else 0
+            owner = getattr(runtime, "identity_owner", None)
+            if owner is not None:
+                result["immutable_before_energy"] = owner.report()
             before = dict(core.get_timer_records(False))
             started = time.perf_counter()
-            energy, wfn = psi4.energy("sapt(dft)", molecule=molecule, return_wfn=True, **kwargs)
+            if profiler:
+                profiler.enable()
+            try:
+                energy, wfn = call_energy()
+            finally:
+                if profiler:
+                    profiler.disable()
             elapsed = time.perf_counter() - started
             after = dict(core.get_timer_records(False))
         result["seconds"] = term_times(before, after, elapsed)
@@ -180,6 +216,11 @@ def worker(args):
         if abs(sum(result["term_Eh"].values()) - energy) > 1e-10:
             raise ValueError("Disjoint SAPT0 energy terms do not reconstruct total")
         result["total_Eh"] = energy
+        if "warmup" in result:
+            for name in RAW:
+                if not math.isclose(result["raw_Eh"][name], result["warmup"]["raw_Eh"][name],
+                                    rel_tol=1e-9, abs_tol=1e-9):
+                    raise ValueError("Warm-process signed component drift: " + name)
         result["nbf"] = wfn.basisset().nbf()
         if result["nbf"] != EXPECTED_NBF[case["system"]]:
             raise ValueError("Unexpected spherical jun-cc-pVDZ AO count")
@@ -197,14 +238,32 @@ def worker(args):
             if result["runtime_after"]["native_math_mode"] != 1:
                 raise RuntimeError("Native FP64 was not retained")
             runtime.verify_optional_modules()
+            if owner is not None:
+                after_identity = owner.report()
+                before_identity = result["immutable_before_energy"]
+                for key in ("full_hash_calls", "full_hash_bytes"):
+                    if after_identity[key] != before_identity[key]:
+                        raise RuntimeError("Repeated native full-byte proof inside energy: " + key)
+                result["immutable_after_energy"] = after_identity
         elif any(result["runtime_after"][key] for key in
                  ("initialized", "has_cuest", "has_cublas", "has_cusolver", "has_stream")):
             raise RuntimeError("CPU arm initialized a GPU")
         result["status"] = "PASS"
     except BaseException as error:
+        result["status"] = "FAILED"
         result["error"] = f"{type(error).__name__}: {error}"
         raise
     finally:
+        if profiler:
+            profiler.dump_stats(str(args.output / "profile.pstats"))
+            stats = pstats.Stats(profiler)
+            rows = [{"file": key[0], "line": key[1], "function": key[2],
+                     "primitive_calls": value[0], "calls": value[1],
+                     "self_seconds": value[2], "inclusive_seconds": value[3]}
+                    for key, value in stats.stats.items()]
+            save(args.output / "profile.json", {
+                "scope": "Host cProfile; overlapping inclusive windows, not GPU kernel time",
+                "functions": sorted(rows, key=lambda row: row["inclusive_seconds"], reverse=True)})
         if runtime:
             result["runtime"] = runtime.report
         core.close_outfile()
@@ -262,48 +321,98 @@ def compare(records):
 
 
 def run(args):
-    from gpu_runtime import read_config
+    from gpu_runtime import read_config, retirement_channel
     from run_gate import environment
+    from sealed_h200 import CONTRACT
     config, build = read_config(args.config, args.config_sha256)
-    if config.get("identity_contract", "fresh-bytes-v1") != "fresh-bytes-v1":
-        raise ValueError("This first campaign requires the existing fresh-byte runtime")
+    contract = config.get("identity_contract", "fresh-bytes-v1")
+    if contract not in ("fresh-bytes-v1", CONTRACT):
+        raise ValueError("Unsupported canonical SAPT0 runtime contract")
+    sealed = contract == CONTRACT
     args.output.mkdir()
     records, children = [], []
     result = {"status": "FAILED", "case": str(args.case), "children": children,
               "acceptance": dict(ACCEPTANCE),
               "helper_sha256": sha(__file__), "cold_fresh_processes": True}
     try:
-        for repeat in range(args.repeats):
-            for arm in (("cpu", "gpu") if repeat % 2 == 0 else ("gpu", "cpu")):
-                label = f"{arm}-{repeat}"
+        batches = [[(arm, f"{arm}-{repeat}", []) for arm in
+                    (("cpu", "gpu") if repeat % 2 == 0 else ("gpu", "cpu"))]
+                   for repeat in range(args.repeats)]
+        if getattr(args, "diagnostics", False):
+            batches.append([("gpu", "gpu-profile", ["--profile"]),
+                            ("gpu", "gpu-warm", ["--warmup"])])
+        diagnostics = []
+        for batch in batches:
+            for arm, label, extra in batch:
                 child = args.output / label
                 scratch = Path(os.environ["TMPDIR"]) / (args.output.name + "-" + label)
                 scratch.mkdir()
-                env = environment(config, gpu=arm == "gpu")
+                aliases = None
+                if sealed:
+                    aliases = Path(config["sealed_alias_parent"]) / (args.output.name + "-" + label)
+                    aliases.mkdir(mode=0o700)
+                env = environment(config, gpu=arm == "gpu", sealed_alias_directory=aliases)
+                if not sealed:
+                    home = scratch / "home"
+                    home.mkdir(mode=0o700)
+                    env["HOME"] = str(home)
                 env.update(TMPDIR=str(scratch), SCRATCH=str(scratch), PSI_SCRATCH=str(scratch),
                            OMP_NUM_THREADS=str(config["threads"]), MKL_NUM_THREADS=str(config["threads"]),
                            OPENBLAS_NUM_THREADS=str(config["threads"]), PYTHONNOUSERSITE="1",
-                           PYTHONDONTWRITEBYTECODE="1", OMP_DYNAMIC="FALSE")
+                           PYTHONDONTWRITEBYTECODE="1", OMP_DYNAMIC="FALSE",
+                           CUDA_CACHE_DISABLE="1", EINSUMS_PACKED_GEMM_BATCH_PROMOTION="1")
+                script = Path(__file__).with_name("sealed_bootstrap.py") if sealed else Path(__file__).resolve()
                 command = ["/bin/bash", "-c",
                     'set -eo pipefail; activation=$("$1" --psiapi); eval "$activation"; '
                     'set -u; exec "$2" -B "$3" "${@:4}"',
                     "sapt0-worker", config["stage"] + "/bin/psi4",
-                    config["dependency_environment"] + "/bin/python", str(Path(__file__).resolve()),
-                    "worker", "--config", str(args.config), "--config-sha256", args.config_sha256,
-                    "--case", str(args.case), "--output", str(child), "--arm", arm]
+                    config["dependency_environment"] + "/bin/python", str(script),
+                    "--sapt0" if sealed else "worker",
+                    "--config", str(args.config), "--config-sha256", args.config_sha256,
+                    "--case", str(args.case), "--output", str(child), "--arm", arm, *extra]
                 with (args.output / (label + ".stdout")).open("x") as out, (
                         args.output / (label + ".stderr")).open("x") as err:
-                    completed = subprocess.run(command, env=env, cwd=scratch, stdout=out, stderr=err,
-                                               timeout=args.timeout)
+                    with retirement_channel(env) as channel:
+                        child_started = time.perf_counter()
+                        completed = subprocess.run(command, env=env, cwd=scratch, stdout=out, stderr=err,
+                                                   timeout=args.timeout, pass_fds=channel.pass_fds)
+                        child_elapsed = time.perf_counter() - child_started
+                        reason = channel.reason()
                 children.append({"label": label, "returncode": completed.returncode,
-                                 "command": command, "scratch": str(scratch)})
+                                 "command": command, "scratch": str(scratch),
+                                 "arm": arm, "diagnostic": bool(extra),
+                                 "subprocess_seconds": child_elapsed,
+                                 "retirement_reason": reason})
+                if reason is not None:
+                    raise RuntimeError("Worker runtime retired: " + str(reason))
                 if completed.returncode:
                     raise RuntimeError("Worker failed: " + label)
                 receipt = child / "result.json"
                 children[-1]["result_sha256"] = sha(receipt)
-                records.append(json.loads(receipt.read_text()))
+                row = json.loads(receipt.read_text())
+                (diagnostics if extra else records).append(row)
         result.update(compare(records))
+        result["whole_process_seconds"] = {
+            arm: [child["subprocess_seconds"] for child in children
+                  if child["arm"] == arm and not child["diagnostic"]]
+            for arm in ("cpu", "gpu")}
+        result["whole_process_scope"] = "Includes bootstrap, admission, energy, serialization and process exit"
+        if diagnostics:
+            baseline = next(row for row in records if row["arm"] == "gpu")
+            for row in diagnostics:
+                if row["status"] != "PASS":
+                    raise ValueError("Failed diagnostic")
+                for name in (*RAW, "total"):
+                    value = lambda item: item["total_Eh"] if name == "total" else item["raw_Eh"][name]
+                    if not math.isclose(value(row), value(baseline), rel_tol=1e-9, abs_tol=1e-9):
+                        raise ValueError("Diagnostic signed drift: " + name)
+            result["diagnostics"] = {
+                "profile": "gpu-profile/profile.pstats",
+                "warm_seconds": diagnostics[-1]["seconds"],
+                "warmup_seconds": diagnostics[-1]["warmup"]["seconds"],
+                "scope": "Excluded from baseline medians; warm means second full energy in one process"}
     except BaseException as error:
+        result["status"] = "FAILED"
         result["error"] = f"{type(error).__name__}: {error}"
         raise
     finally:
@@ -324,9 +433,12 @@ def main():
         p.add_argument("--output", type=Path, required=True)
         if name == "worker":
             p.add_argument("--arm", choices=("cpu", "gpu"), required=True)
+            p.add_argument("--profile", action="store_true")
+            p.add_argument("--warmup", action="store_true")
         else:
             p.add_argument("--repeats", type=int, choices=(1, 3), default=3)
             p.add_argument("--timeout", type=int, default=3600)
+            p.add_argument("--diagnostics", action="store_true")
     args = parser.parse_args()
     if args.mode == "prepare":
         prepare(args.suite, args.output)
