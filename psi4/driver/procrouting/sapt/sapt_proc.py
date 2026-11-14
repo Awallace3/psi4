@@ -1785,13 +1785,15 @@ def sapt_dft(
         _set_fsapt_var("FSAPT_EXCH_AB", cache["Exch_AB"])
         _set_fsapt_var("FSAPT_INDAB_AB", cache["IndAB_AB"])
         _set_fsapt_var("FSAPT_INDBA_AB", cache["IndBA_AB"])
-        if sapt_dft_D4_IE or sapt_dft_D3_IE:
+        # No FSAPT dispersion (empirical, or SAPT_DFT_DO_DISP off): zero Disp_AB, as the file path does.
+        if "Disp_AB" in cache and not (sapt_dft_D4_IE or sapt_dft_D3_IE):
+            _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
+        else:
             disp_ab = cache["Elst_AB"].clone()
             disp_ab.zero()
             _set_fsapt_var("FSAPT_DISP_AB", disp_ab)
+        if sapt_dft_D4_IE or sapt_dft_D3_IE:
             _set_fsapt_var("FSAPT_EMPIRICAL_DISP", cache["FSAPT_EMPIRICAL_DISP"])
-        else:
-            _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
     return data
 
 

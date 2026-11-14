@@ -170,6 +170,48 @@ no_com
     )
 
 
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@uusing("pandas")
+@pytest.mark.parametrize("to_file", [False, True])
+def test_fsaptdft_without_dispersion(to_file, tmp_path):
+    """SAPT_DFT_DO_DISP false: F-SAPT gets a zero dispersion matrix whether it is dropped
+    to files or kept in FSAPT_* variables, and the fragments sum to SAPT TOTAL."""
+    molecule = psi4.geometry(
+        """
+0 1
+O  -0.702196054  -0.056060256   0.009942262
+H  -1.022193224   0.846775782  -0.011488714
+H   0.257521062   0.042121496   0.005218999
+--
+0 1
+O   2.268880784   0.026340101   0.000508029
+H   2.645502399  -0.412039965   0.766632411
+H   2.641145101  -0.449872874  -0.744894473
+units angstrom
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    psi4.set_options({
+        "basis": "cc-pvdz",
+        "scf_type": "df",
+        "sapt_dft_grac_shift_a": 0.1307,
+        "sapt_dft_grac_shift_b": 0.1307,
+        "sapt_dft_functional": "pbe0",
+        "sapt_dft_do_disp": False,
+        "sapt_dft_do_fsapt": "FISAPT",
+        "fisapt_fsapt_filepath": str(tmp_path / "fsapt") if to_file else "none",
+    })
+    _, wfn = psi4.energy("sapt(dft)", molecule=molecule, return_wfn=True)
+
+    assert not np.any(np.asarray(wfn.variable("FSAPT_DISP_AB")))
+    cells = psi4.fsapt_analysis(wfn, {"a": [1, 2, 3]}, {"b": [4, 5, 6]}, print_output=False)
+    assert cells["Disp"][0] == 0.0
+    assert cells["Total"][0] == pytest.approx(psi4.variable("SAPT TOTAL ENERGY") * hartree_to_kcalmol, abs=1.0e-7)
+
+
 @pytest.mark.fsapt
 @uusing("pandas")
 def test_fsapt_analysis_induction_q_follows_induction_orbitals(tmp_path):

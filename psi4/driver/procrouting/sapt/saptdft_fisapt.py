@@ -376,6 +376,16 @@ def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars):
     fisapt.set_vector(vector_cache)
     fisapt.fdrop()
     fisapt.save_variables_to_wfn(wfn, sapt_type='SAPT(DFT)')
+    # Without SAPT dispersion, F-SAPT still gets a (zero) Disp_AB, as in fisapt_proc and the variable path.
+    if not core.get_option("SAPT", "SAPT_DFT_DO_DISP"):
+        disp_ab = cache["Elst_AB"].clone()
+        disp_ab.zero()
+        disp_ab.name = "Disp"
+        filepath = core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH")
+        if filepath.lower() != "none":
+            fisapt_proc._drop(disp_ab, filepath)
+        core.set_variable("FSAPT_DISP_AB", disp_ab)
+        wfn.set_variable("FSAPT_DISP_AB", disp_ab)
     # CPHF induction partitions on HF orbitals; drop their populations as
     # QA_ind/QB_ind (FSAPT_IND_QA/QB) so fsapt.py assigns IndAB/IndBA with them.
     if "IndQocc0A" in cache:
