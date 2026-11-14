@@ -377,21 +377,22 @@ Coupled KS induction
 
 By default F-SAPT induction uses uncoupled response, scaled to the coupled
 total. ``FISAPT_FSAPT_IND_RESPONSE=true`` solves coupled response for every
-source instead, but with the HF-like ``gap + 4J - K - K^T`` Hessian even on
-KS orbitals. In SAPT(DFT), adding ``FISAPT_FSAPT_IND_XC_RESPONSE=true`` uses
-each monomer's own SCF Hessian (exact-exchange fraction and XC kernel
-included), so the partition sums to the canonical CPKS induction::
+source instead. In FISAPT0 the Hessian is the HF ``gap + 4J - K - K^T``. In
+SAPT(DFT) with ``SAPT_DFT_INDUCTION_TYPE=CPKS`` it is each monomer's own SCF
+Hessian (exact-exchange fraction, long-range exchange and XC kernel, on the
+GRAC-shifted orbitals when GRAC is on), the same operator the SAPT(DFT)
+induction itself is solved with, so the partition sums to it; the HF product
+is never applied to KS orbitals::
 
     set {
-        sapt_dft_functional          pbe
+        sapt_dft_functional          pbe0
+        sapt_dft_grac_compute        iterative
         sapt_dft_do_fsapt            fisapt
         sapt_dft_induction_type      cpks
-        sapt_dft_grac_compute        none
         fisapt_fsapt_ind_response    true
-        fisapt_fsapt_ind_xc_response true
     }
 
-This is currently limited to HF, SVWN and PBE monomers without GRAC or level
+In SAPT(DFT) this is currently limited to RHF/RKS monomers without level
 shifts, deltaDFT, external potentials or embedding, with
 ``FISAPT_LINK_ASSIGNMENT=C`` and unscaled S\ :sup:`2` exchange-induction.
 

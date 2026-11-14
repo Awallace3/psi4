@@ -57,7 +57,7 @@ class FISAPT {
     /// Reference wavefunction
     std::shared_ptr<Wavefunction> reference_;
 
-    /// Monomer SCFs whose Hessians drive FISAPT_FSAPT_IND_XC_RESPONSE
+    /// Monomer SCFs whose Hessians drive coupled F-SAPT induction (SAPT(DFT)); null for the HF product
     std::shared_ptr<scf::HF> cpks_A_, cpks_B_;
 
     /// Orbital Basis Set (full molecule)
@@ -147,7 +147,7 @@ class FISAPT {
     void fexch();
     /// Induction
     void find();
-    /// Set the monomers for FISAPT_FSAPT_IND_XC_RESPONSE
+    /// Solve coupled F-SAPT induction with these monomers' SCF Hessians
     void set_cpks_monomers(SharedWavefunction A, SharedWavefunction B);
     /// Dispersion
     void fdisp();

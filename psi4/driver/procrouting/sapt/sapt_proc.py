@@ -83,22 +83,29 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         optstash.restore()
 
 
-def _check_fsapt_xc_response(external_potentials) -> None:
-    """Reject settings FISAPT_FSAPT_IND_XC_RESPONSE does not support yet."""
+def _fsapt_coupled_ks_induction() -> bool:
+    """Whether F-SAPT solves coupled per-source induction on the SAPT(DFT) KS orbitals."""
+    return (core.get_option("FISAPT", "FISAPT_FSAPT_IND_RESPONSE")
+            and core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() == "FISAPT"
+            and core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper() == "CPKS")
+
+
+def _check_fsapt_coupled_ks_induction(external_potentials) -> None:
+    """Reject settings the monomer-Hessian F-SAPT coupled induction does not support yet.
+
+    On KS orbitals only the monomers' own SCF Hessian (``cphf_Hx``: exact-exchange fraction, LRC
+    exchange and XC kernel, on GRAC-shifted orbitals when GRAC is on) gives the response the SAPT(DFT)
+    induction total is built from, so the sources sum to that total. The HF-like gap + 4J - K - K^T
+    product has no such meaning there, so unsupported settings are an error rather than a fallback.
+    """
     def opt(module, key):
         return core.get_option(module, key)
 
     def need(ok, what):
         if not ok:
-            raise ValidationError(f"FISAPT_FSAPT_IND_XC_RESPONSE requires {what}.")
+            raise ValidationError(f"FISAPT_FSAPT_IND_RESPONSE in SAPT(DFT) requires {what}.")
 
-    need(opt("FISAPT", "FISAPT_FSAPT_IND_RESPONSE"), "FISAPT_FSAPT_IND_RESPONSE=true")
-    need(opt("SAPT", "SAPT_DFT_DO_FSAPT") == "FISAPT" and opt("SAPT", "SAPT_DFT_INDUCTION_TYPE") == "CPKS",
-         "SAPT_DFT_DO_FSAPT=FISAPT and SAPT_DFT_INDUCTION_TYPE=CPKS")
-    need(opt("SAPT", "SAPT_DFT_FUNCTIONAL").upper() in ("HF", "SVWN", "PBE"), "an HF, SVWN or PBE functional")
-    need(not opt("SAPT", "SAPT_DFT_DO_DDFT") and opt("SAPT", "SAPT_DFT_GRAC_COMPUTE") == "NONE"
-         and opt("SAPT", "SAPT_DFT_GRAC_SHIFT_A") == 0. and opt("SAPT", "SAPT_DFT_GRAC_SHIFT_B") == 0.
-         and opt("SCF", "LEVEL_SHIFT") == 0., "no deltaDFT, GRAC or level shift")
+    need(not opt("SAPT", "SAPT_DFT_DO_DDFT") and opt("SCF", "LEVEL_SHIFT") == 0., "no deltaDFT or level shift")
     need(opt("FISAPT", "FISAPT_LINK_ASSIGNMENT") == "C" and not opt("FISAPT", "SSAPT0_SCALE")
          and not opt("FISAPT", "FISAPT_EXCH_PARPERP") and not opt("SAPT", "DO_IND_EXCH_SINF"),
          "FISAPT_LINK_ASSIGNMENT=C and unscaled S^2 exchange-induction")
@@ -129,8 +136,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     core.Wavefunction
         The dimer wavefunction with SAPT(DFT) results stored as variables.
     """
-    if core.get_option("FISAPT", "FISAPT_FSAPT_IND_XC_RESPONSE"):
-        _check_fsapt_xc_response(kwargs.get("external_potentials"))
+    if _fsapt_coupled_ks_induction():
+        _check_fsapt_coupled_ks_induction(kwargs.get("external_potentials"))
     core.prepare_options_for_module("SAPT")
     induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
@@ -1578,6 +1585,10 @@ def sapt_dft(
         core.timer_off("SAPT(DFT): F-SAPT Exchange")
         core.timer_on("SAPT(DFT): F-SAPT Induction")
         if induction_matrices is None:
+            if _fsapt_coupled_ks_induction():
+                _check_fsapt_coupled_ks_induction(external_potentials)
+                # find() solves with these monomers' own Hessians, XC kernel included.
+                FISAPT_obj.set_cpks_monomers(wfn_A, wfn_B)
             FISAPT_obj.find()
         else:
             FISAPT_obj.set_matrix(induction_matrices)

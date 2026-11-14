@@ -5895,7 +5895,7 @@ void FISAPT::fexch() {
 void FISAPT::set_cpks_monomers(SharedWavefunction A, SharedWavefunction B) {
     cpks_A_ = std::dynamic_pointer_cast<scf::RHF>(A);
     cpks_B_ = std::dynamic_pointer_cast<scf::RHF>(B);
-    if (!cpks_A_ || !cpks_B_) throw PSIEXCEPTION("FISAPT_FSAPT_IND_XC_RESPONSE requires RHF/RKS monomers.");
+    if (!cpks_A_ || !cpks_B_) throw PSIEXCEPTION("F-SAPT coupled KS induction requires RHF/RKS monomers.");
 }
 
 // Compute fragment-fragment partitioning of induction contribution
@@ -5906,9 +5906,9 @@ void FISAPT::find() {
 
     bool ind_resp = options_.get_bool("FISAPT_FSAPT_IND_RESPONSE");
     bool ind_scale = options_.get_bool("FISAPT_FSAPT_IND_SCALE");
-    bool ind_xc = options_.get_bool("FISAPT_FSAPT_IND_XC_RESPONSE");
+    // Set by SAPT(DFT): solve with the monomer SCF Hessians instead of gap + 4J - K - K^T.
+    bool ind_xc = cpks_A_ != nullptr;
     std::string link_assignment = options_.get_str("FISAPT_LINK_ASSIGNMENT");
-    if (ind_xc && !cpks_A_) throw PSIEXCEPTION("FISAPT_FSAPT_IND_XC_RESPONSE requires set_cpks_monomers().");
 
     // => Sizing <= //
 
@@ -6539,6 +6539,17 @@ void FISAPT::find() {
         // fflush(outfile);
 
         Ind = Ind20r + ExchInd20r;
+        if (ind_xc) {
+            // The sources must sum to the SAPT(DFT) coupled induction. A mismatch means this solve
+            // used a different kernel than the canonical one (e.g. kernel options toggled only
+            // around the canonical solve), and the fragments would partition some other quantity.
+            double ref = scalars_["Ind20,r"] + scalars_["Exch-Ind20,r"];
+            if (std::fabs(Ind - ref) > std::max(1.0e-5 * std::fabs(ref), 1.0e-9)) {
+                throw PSIEXCEPTION("F-SAPT coupled KS induction (" + std::to_string(Ind) +
+                                   " Eh) does not sum to the SAPT(DFT) induction (" + std::to_string(ref) +
+                                   " Eh); the response kernels differ.");
+            }
+        }
         Ind_AB_terms = Indr_AB_terms;
         Ind_BA_terms = Indr_BA_terms;
     }
