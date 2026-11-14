@@ -1905,11 +1905,6 @@ void DFHelper::transform() {
 
     // get optimal path and info
     if (!ordered_) info_ = identify_order();
-    // Repeated transforms must not append behind stale pre-metric data.
-    for (const auto& name : order_) {
-        auto entry = files_.find(name);
-        if (entry != files_.end()) file_streams_.erase(std::get<0>(entry->second));
-    }
     size_t wtmp = std::get<0>(info_);
     size_t wfinal = std::get<1>(info_);
 
