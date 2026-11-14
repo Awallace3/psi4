@@ -21,23 +21,41 @@ def diis_engine_helper(self):
             engines.add(aediis.lower())
     return engines
 
-def _scf_diis_storage_policy(self, max_diis_vectors: int, sample_matrices) -> StoragePolicy:
-    if self.scf_type() == "DIRECT":
-        return StoragePolicy.InCore
+def _scf_diis_memory_required(self, max_diis_vectors, sample_matrices=None):
+    """Conservative doubles for history plus extrapolation/accelerator copies."""
     if max_diis_vectors <= 0:
-        return StoragePolicy.InCore
-    per_entry_elems = sum(
-        sum(int(r) * int(c) for r, c in zip(m.rowdim().to_tuple(), m.coldim().to_tuple()))
-        for m in sample_matrices
-    )
-    subspace_bytes = int(max_diis_vectors) * per_entry_elems * 8
-    mem_bytes = core.get_memory()
-    jk = self.jk() if hasattr(self, "jk") else None
-    jk_bytes = (int(jk.memory_estimate()) * 8) if jk is not None else 0
-    free_bytes = max(0, mem_bytes - jk_bytes)
-    if subspace_bytes <= min(int(0.05 * mem_bytes), int(0.25 * free_bytes)):
+        return 0
+    if sample_matrices is None:
+        # target, residual, and (accelerator or grid-shift) density per spin.
+        spins = 1 if isinstance(self, core.RHF) else 2
+        per_entry_elems = 3 * spins * sum(int(n) ** 2 for n in self.nsopi().to_tuple())
+    else:
+        per_entry_elems = sum(
+            sum(int(r) * int(c) for r, c in zip(m.rowdim().to_tuple(), m.coldim().to_tuple()))
+            for m in sample_matrices
+        )
+    copies = 3 if core.get_option("SCF", "SCF_INITIAL_ACCELERATOR") != "NONE" else 1
+    return copies * (int(max_diis_vectors) + 2) * per_entry_elems
+
+
+def _scf_diis_storage_policy(self, max_diis_vectors: int, sample_matrices) -> StoragePolicy:
+    required = _scf_diis_memory_required(self, max_diis_vectors, sample_matrices)
+    # scf_initialize explicitly removed this allowance from JK/grid budgets.
+    # A minimum JK estimate is not evidence of unallocated memory.
+    if required <= getattr(self, "_diis_memory_budget", 0):
         return StoragePolicy.InCore
     return StoragePolicy.OnDisk
+
+
+def _scf_diis_disk_scratch(self):
+    """Bound streamed ADIIS/dot-product temporaries, independent of history length."""
+    spins = 1 if isinstance(self, core.RHF) else 2
+    return 8 * spins * sum(int(n) ** 2 for n in self.nsopi().to_tuple())
+
+
+def _retain_grid_shift_densities(self):
+    return (getattr(self, "_xc_grid_switching", False) and
+            core.get_option("SCF", "DFT_GRID_SWITCH_DIIS") == "SHIFT")
 
 
 def _RHF_orbital_gradient(self, save_fock: bool, max_diis_vectors: int) -> float:
@@ -48,7 +66,7 @@ def _RHF_orbital_gradient(self, save_fock: bool, max_diis_vectors: int) -> float
         if core.get_option('SCF', 'DIIS'):
             entry["error"] = [gradient]
         aediis = core.get_option('SCF', 'SCF_INITIAL_ACCELERATOR')
-        if aediis != "NONE":
+        if aediis != "NONE" or _retain_grid_shift_densities(self):
             entry["densities"] = [self.Da()]
             if aediis == "EDIIS":
                 entry["energy"] = [self.compute_E()]
@@ -75,7 +93,7 @@ def _UHF_orbital_gradient(self, save_fock: bool, max_diis_vectors: int) -> float
         if core.get_option('SCF', 'DIIS'):
             entry["error"] = [gradient_a, gradient_b]
         aediis = core.get_option('SCF', 'SCF_INITIAL_ACCELERATOR')
-        if aediis != "NONE":
+        if aediis != "NONE" or _retain_grid_shift_densities(self):
             entry["densities"] = [self.Da(), self.Db()]
             if aediis == "EDIIS":
                 entry["energy"] = [self.compute_E()]

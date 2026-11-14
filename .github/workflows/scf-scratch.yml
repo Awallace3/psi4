@@ -1,0 +1,57 @@
+name: SCF scratch portability
+on:
+  push:
+    branches:
+      - 'review/scf-dft-portability-opt-*'
+    paths:
+      - 'psi4/src/psi4/lib3index/**'
+      - 'psi4/include/psi4/restrict.h'
+      - 'devtools/benchmarks/scf_scratch_portability.cc'
+      - '.github/workflows/scf-scratch.yml'
+  pull_request:
+    paths:
+      - 'psi4/src/psi4/lib3index/**'
+      - 'psi4/include/psi4/restrict.h'
+      - 'devtools/benchmarks/scf_scratch_portability.cc'
+      - '.github/workflows/scf-scratch.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  scratch:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            compiler: g++
+            flags: '-O3 -fstrict-aliasing'
+          - os: ubuntu-latest
+            compiler: clang++
+            flags: '-O3 -DPSI_NO_RESTRICT'
+          - os: ubuntu-latest
+            compiler: clang++
+            flags: '-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer'
+          - os: ubuntu-24.04-arm
+            compiler: g++
+            flags: '-O3 -fstrict-aliasing'
+          - os: macos-latest
+            compiler: clang++
+            flags: '-O3 -fstrict-aliasing'
+          - os: windows-latest
+            compiler: clang++
+            flags: '-O3 -fstrict-aliasing'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Prepare Windows compiler environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Compile and execute typed scratch regression
+        shell: bash
+        run: |
+          ${{ matrix.compiler }} -std=c++17 ${{ matrix.flags }} \
+            devtools/benchmarks/scf_scratch_portability.cc -o scratch-test.exe
+          ./scratch-test.exe

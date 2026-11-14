@@ -35,7 +35,9 @@ def _build_system(basis):
     ["cc-pvdz", "OUT_OF_CORE",  0, "DiskJK"],
 
     # pvdz tests
-    ["cc-pvdz", "MEM_DF",  1617844, "MemDFJK"],  # includes narrowest metric-contraction panels
+    # AO 1,098,720 + metric 313,600 + JK tmp 178,200; minimum metric panels
+    # plus one AO block fit inside the same temporary allowance.
+    ["cc-pvdz", "MEM_DF",  1590520, "MemDFJK"],
     ["cc-pvdz", "DISK_DF", 1286244, "DiskDFJK"],
     ["cc-pvdz", "CD",      2916000, "CDJK"],
     ["cc-pvdz", "PK",      65610000, "PKJK"],
@@ -56,4 +58,3 @@ def test_jk_memory_estimate(basis, jk_type, estimate, name):
         jk.set_memory(estimate)
         jk.initialize()
         psi4.core.clean()
-

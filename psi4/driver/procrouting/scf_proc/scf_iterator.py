@@ -143,6 +143,11 @@ def scf_initialize(self):
 
     # The Fock diagonalization keeps its DSYEVD workspace (~3 nso^2) for the whole SCF.
     total_memory -= self.diag_scratch_size()
+    if total_memory <= 0:
+        raise ValidationError(
+            "Insufficient SCF memory for the Fock diagonalization workspace. "
+            "Increase the memory allocated to Psi4."
+        )
 
     # Figure out how large the DFT collocation matrices are
     vbase = self.V_potential()
@@ -165,6 +170,26 @@ def scf_initialize(self):
         jk = _build_jk(self, total_memory)
     jk_size = jk.memory_estimate()
 
+    # Reserve DIIS before distributing the rest. Accelerator extrapolation can
+    # keep multiple subspace-sized copies alive, even with on-disk history.
+    # Leave large subspaces on disk rather than reducing JK below its minimum.
+    self._diis_memory_budget = 0
+    if hasattr(self, "nsopi"):
+        from .subclass_methods import _scf_diis_memory_required, _scf_diis_disk_scratch
+        diis_required = _scf_diis_memory_required(self, core.get_option("SCF", "DIIS_MAX_VECS"))
+        if diis_required <= min(0.05 * total_memory, 0.25 * max(0, total_memory - jk_size)):
+            self._diis_memory_budget = int(diis_required)
+        else:
+            self._diis_memory_budget = _scf_diis_disk_scratch(self)
+            if self._diis_memory_budget >= total_memory:
+                raise ValidationError("Insufficient SCF memory for DIIS extrapolation scratch.")
+        total_memory -= self._diis_memory_budget
+        if initialize_jk_obj and total_memory < jk_size:
+            # Reserving streamed DIIS scratch can cross the MemDF/DiskDF
+            # boundary. Select the backend using the allowance it will get.
+            jk = _build_jk(self, total_memory)
+            jk_size = jk.memory_estimate()
+
     # Give remaining to collocation
     if total_memory > jk_size:
         collocation_memory = total_memory - jk_size
@@ -174,11 +199,12 @@ def scf_initialize(self):
     else:
         collocation_memory = total_memory * 0.1
 
-    # Memory collocation may use for any grid; an XC grid switch re-sizes the cache from this.
-    self._collocation_budget = int(collocation_memory)
     if collocation_memory > collocation_size:
         collocation_memory = collocation_size
 
+    # Any unused initial-grid allowance goes to JK below. Growing the cache
+    # later requires explicitly transferring that allowance back from JK.
+    self._collocation_budget = int(collocation_memory)
     # Set constants
     self.iteration_ = 0
     self.memory_jk_ = int(total_memory - collocation_memory)
@@ -276,6 +302,16 @@ def _alpha_beta(self, name):
     return [a] if isinstance(self, core.RHF) else [a, getattr(self, name + "b")()]
 
 
+def _density_energy_change(focks, densities, previous, restricted):
+    """Contract density differences, avoiding cancellation of extensive totals."""
+    change = 0.0
+    for fock, density, old in zip(focks, densities, previous):
+        delta = density.clone()
+        delta.subtract(old)
+        change += fock.vector_dot(delta)
+    return (2.0 if restricted else 1.0) * change
+
+
 def _xc_grid_switch(self, shift_diis, restore_vv10=False):
     """Rebuild V (and its collocation cache) on the final XC grid.
 
@@ -300,12 +336,28 @@ def _xc_grid_switch(self, shift_diis, restore_vv10=False):
         self.functional().set_do_vv10(True)
         self.functional().set_lock(True)
     vbase.set_grid("Final")
-    # The collocation cache was sized for the initial grid; size it for the final one within the
-    # budget scf_initialize set, less any single-precision K tensor allocated since.
+    # Grow the cache only by transferring spare JK allowance, never by assigning
+    # the same memory to both. MemDFJK can replan its contraction blocks under a
+    # reduced budget; other backends keep their original partition.
     final_size = vbase.grid().collocation_size() * {1: 4, 2: 10}.get(vbase.functional().ansatz(), 1)
     budget = getattr(self, "_collocation_budget", self.memory_collocation_)
-    if isinstance(self.jk(), core.MemDFJK):
-        budget -= self.jk().dfh().K_fp32_memory()
+    jk = self.jk()
+    if final_size > budget and isinstance(jk, core.MemDFJK):
+        dfh = jk.dfh()
+        # The helper's allowance excludes JK overhead. Subtract the transfer
+        # from both existing allowances to preserve that offset, and retain the
+        # conservative in-core minimum even when the current scratch is small.
+        spare = max(0, min(dfh.get_memory(), self.memory_jk_) - jk.memory_estimate())
+        transfer = int(min(final_size - budget, spare))
+        if transfer:
+            # Retained high-water scratch / FP32 mirrors may exceed the new
+            # allowance. Release them BEFORE the cache uses their memory.
+            jk.release_scratch()
+            dfh.set_memory(dfh.get_memory() - transfer)
+            self.memory_jk_ -= transfer
+            jk.set_memory(self.memory_jk_)
+            budget += transfer
+            self._collocation_budget = budget
     self.memory_collocation_ = int(max(0, min(budget, final_size)))
     vbase.build_collocation_cache(self.memory_collocation_)
     core.timer_off("SCF: Switch XC grid")
@@ -318,10 +370,21 @@ def _xc_grid_shift_diis(self, V_initial):
     dV = [V.clone() for V in _alpha_beta(self, "V")]
     for d, Vi in zip(dV, V_initial):
         d.subtract(Vi)
-    deltas = {"target": dV}
-    if "error" in self.diis_manager_.template:
-        deltas["error"] = [self.form_FDSmSDF(d, D) for d, D in zip(dV, _alpha_beta(self, "D"))]
-    self.diis_manager_.shift_entries(deltas)
+    manager = self.diis_manager_
+    if "energy" in manager.template or "densities" not in manager.template:
+        # EDIIS energies cannot be consistently rebased by a constant potential
+        # correction. Older/custom subspaces may lack historical densities.
+        manager.reset_subspace()
+    else:
+        def error_builder(entry_num):
+            return [
+                self.form_FDSmSDF(d, manager.load_quantity("densities", entry_num, spin, force_new=False))
+                for spin, d in enumerate(dV)
+            ]
+        manager.shift_entries(
+            {"target": dV},
+            error_builder=error_builder if "error" in manager.template else None,
+        )
     core.timer_off("SCF: Shift DIIS to final XC grid")
 
 
@@ -334,6 +397,8 @@ def scf_iterate(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
             self.functional().set_lock(False)
             self.functional().set_do_vv10(True)
             self.functional().set_lock(True)
+        if hasattr(self, "jk") and isinstance(self.jk(), core.MemDFJK):
+            self.jk().dfh().set_K_fp32(False)
 
 
 def _scf_iterate_impl(self, e_conv=None, d_conv=None, xc_final_min_iterations=1):
@@ -367,8 +432,12 @@ def _scf_iterate_impl(self, e_conv=None, d_conv=None, xc_final_min_iterations=1)
     xc_switch_on_density = core.get_option("SCF", "DFT_GRID_SWITCH_ON") == "DENSITY"
     xc_pending_diis_shift = None  # initial-grid V at the switch density, consumed by the next form_G
     k_fp32_conv = core.get_option("SCF", "SCF_K_FP32_CONVERGENCE")
+    if not np.isfinite(k_fp32_conv) or k_fp32_conv < 0:
+        raise ValidationError("SCF_K_FP32_CONVERGENCE must be finite and nonnegative.")
     e_conv_predicted = core.get_option("SCF", "SCF_E_CONV_PREDICTED")
     k_fp32 = False
+    if isinstance(self.jk(), core.MemDFJK):
+        self.jk().dfh().set_K_fp32(False)
     if (k_fp32_conv > 0 and isinstance(self.jk(), core.MemDFJK) and
             (self.functional().is_x_hybrid() or self.functional().is_x_lrc())):
         self.jk().dfh().set_K_fp32(True)
@@ -383,11 +452,11 @@ def _scf_iterate_impl(self, e_conv=None, d_conv=None, xc_final_min_iterations=1)
         guessmix_enabled = core.get_option("SCF", "GUESS_MIX")
         if (reference in ["ROHF", "CUHF"] or soscf_enabled or self.MOM_excited_ or frac_enabled or
             efp_enabled or pcm_enabled or ddx_enabled or pe_enabled or autograc_enabled or
-            level_shift_enabled or guessmix_enabled or xc_switching):
+            level_shift_enabled or guessmix_enabled or xc_switching or k_fp32):
             core.print_out(f"    Note: OpenOrbitalOptimizer not compatible with at least one of the following. Falling back to orbital_optimizer_package=internal\n")
             core.print_out(f"          {reference=}, soscf={soscf_enabled}, mom={self.MOM_excited_}, frac={frac_enabled}, efp={efp_enabled},\n")
             core.print_out(f"          pcm={pcm_enabled}, ddx={ddx_enabled}, pe={pe_enabled}, autograc={autograc_enabled}, level_shift={level_shift_enabled},\n")
-            core.print_out(f"          guess_mix={guessmix_enabled}, xc_grid_switching={xc_switching}\n")
+            core.print_out(f"          guess_mix={guessmix_enabled}, xc_grid_switching={xc_switching}, k_fp32={k_fp32}\n")
         else:
             # SAD needs some special work since the guess doesn't actually make the orbitals in Psi4
             if self.sad_ and self.iteration_ <= 0:
@@ -667,8 +736,7 @@ def _scf_iterate_impl(self, e_conv=None, d_conv=None, xc_final_min_iterations=1)
             # |Ediff| < 10 * e_conv so |E(D_k) - E*| stays safely well below e_conv while still
             # skipping the pure confirmation Fock build.
             eff_e_conv = core.get_option("SCF", "E_CONVERGENCE") if e_conv is None else e_conv
-            pred = sum(F.vector_dot(D) - F.vector_dot(D0) for F, D, D0 in zip(pred_F, _alpha_beta(self, "D"), pred_D))
-            pred *= 2.0 if isinstance(self, core.RHF) else 1.0  # RHF Fa, Da are per spin
+            pred = _density_energy_change(pred_F, _alpha_beta(self, "D"), pred_D, isinstance(self, core.RHF))
             if np.isfinite(pred) and abs(pred) < 0.2 * eff_e_conv and abs(Ediff) < 10.0 * eff_e_conv:
                 Ediff_test = pred
 
@@ -742,6 +810,8 @@ def _scf_iterate_impl(self, e_conv=None, d_conv=None, xc_final_min_iterations=1)
                              _converged(Ediff, Dnorm, e_conv=xc_e_conv, d_conv=xc_d_conv))
             if xc_switch_now:
                 shift_diis = (self.initialized_diis_manager_ and len(self.diis_manager_.stored_vectors) > 0
+                              and "energy" not in self.diis_manager_.template
+                              and "densities" in self.diis_manager_.template
                               and core.get_option("SCF", "DFT_GRID_SWITCH_DIIS") == "SHIFT")
                 xc_pending_diis_shift = _xc_grid_switch(self, shift_diis, restore_vv10=vv10_deferred)
                 xc_initial = False

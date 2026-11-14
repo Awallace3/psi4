@@ -39,6 +39,16 @@
 #include <string>
 
 #include "psi4/libpsi4util/PsiOutStream.h"
+#ifdef _WIN32
+// A standalone host supplies only one DPD member, not a complete DLL export.
+#pragma push_macro("PSI_API")
+#undef PSI_API
+#define PSI_API
+#endif
+#include "psi4/libdpd/dpd.h"
+#ifdef _WIN32
+#pragma pop_macro("PSI_API")
+#endif
 
 namespace psi {
 
@@ -50,31 +60,10 @@ char *psi_file_prefix = strdup("iwl_test");
 // triggers (printflag = 0 everywhere). The symbol still has to exist.
 std::shared_ptr<PsiOutStream> outfile;
 
-// libpsio's PSIO::close calls global_dpd_->file4_cache_del_filenum during
-// every file close. In a non-DPD context the cache walk is a no-op anyway,
-// but dereferencing a null global_dpd_ is UB. Provide a minimal DPD class
-// with the one referenced method as a no-op, plus a non-null instance to
-// dispatch through.
-//
-// This is an ODR violation: close.cc is compiled against the real psi::DPD from
-// libdpd/dpd.h, while this TU defines a different psi::DPD. It holds together
-// only because the call is non-virtual and the mangled name matches. The
-// parameter type must therefore be spelled exactly as in dpd.h -- `size_t`, not
-// `unsigned long`. They coincide on LP64 and nowhere else; on Windows x64
-// `size_t` is `unsigned __int64` while `unsigned long` is 32 bits, and the
-// mismatch is an undefined symbol at link time rather than a diagnostic.
-class DPD {
- public:
-    void file4_cache_del_filenum(std::size_t);
-};
-
-void DPD::file4_cache_del_filenum(std::size_t) {}
-
-namespace {
-DPD stub_dpd_instance;
-}
-
-DPD *global_dpd_ = &stub_dpd_instance;
+// Non-DPD hosting must not dispatch through a null DPD pointer. Use the real
+// declaration and make an accidental cache call fail even without sanitizers.
+DPD *global_dpd_ = nullptr;
+void DPD::file4_cache_del_filenum(std::size_t) { std::abort(); }
 
 // libciomr's DSYEV_ascending lands in the same unity translation unit as the
 // print helpers libpsio pulls in, so the linker drags its reference to libqt's

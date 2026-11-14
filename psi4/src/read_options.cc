@@ -1894,8 +1894,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         at least one additional iteration after switching. -*/
         options.add_double("DFT_GRID_SWITCH_FACTOR", 10.0);
         /*- How the DIIS subspace crosses the XC grid switch. SHIFT adds V_final(D) - V_initial(D)
-        at the switch density to every stored Fock matrix and error vector (one extra
-        initial-grid V build); RESET discards the subspace. -*/
+        at the switch density to every stored Fock matrix, with residual corrections evaluated
+        at each stored density (one extra initial-grid V build). EDIIS history is reset because
+        its stored energies cannot be shifted consistently. RESET discards any subspace. -*/
         options.add_str("DFT_GRID_SWITCH_DIIS", "SHIFT", "SHIFT RESET");
         /*- What triggers the XC grid switch: both the energy change and the density residual
         below their scaled tolerances (ENERGY_AND_DENSITY), or the density residual alone
@@ -1906,7 +1907,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         iterations. Convergence is only accepted with double-precision exchange. 0 disables. -*/
         options.add_double("SCF_K_FP32_CONVERGENCE", 0.0);
         /*- Layout of the in-core DF-K first-transform intermediate. AUTO selects IQ on AMD x86
-        CPUs and QI elsewhere; QI is the original (Q x i) layout; IQ stores (i x Q) with the
+        CPUs with a GNU-compatible compiler runtime, and QI elsewhere (including clang-cl).
+        QI is the original (Q x i) layout; IQ stores (i x Q) with the
         occupied count padded to 8, which is faster on AMD Zen CPUs and slower at large basis sets
         on Intel Cascade Lake. -*/
         options.add_str("SCF_DF_K_LAYOUT", "AUTO", "AUTO QI IQ");

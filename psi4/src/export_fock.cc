@@ -167,6 +167,7 @@ void export_fock(py::module &m) {
         .def("set_K_fp32", &DFHelper::set_K_fp32, "Build K in single precision (in-core only) until switched off.")
         .def("K_fp32", &DFHelper::K_fp32, "Whether K is built in single precision.")
         .def("K_fp32_memory", &DFHelper::K_fp32_memory, "Doubles-equivalent held by the single-precision K tensor.")
+        .def("JK_scratch_memory", &DFHelper::JK_scratch_memory, "Doubles held by reusable JK scratch buffers.")
         .def("get_memory", &DFHelper::get_memory)
         .def("set_method", &DFHelper::set_method)
         .def("get_method", &DFHelper::get_method)

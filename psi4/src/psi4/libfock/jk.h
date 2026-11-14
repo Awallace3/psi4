@@ -432,7 +432,13 @@ class PSI_API JK {
      *        integral generation objects (BLAS/LAPACK can still
      *        run with their original maximum number)
      */
-    void set_omp_nthread(int omp_nthread) { omp_nthread_ = omp_nthread; }
+    void set_omp_nthread(int omp_nthread) {
+#ifdef _OPENMP
+        omp_nthread_ = omp_nthread > 0 ? omp_nthread : 1;
+#else
+        omp_nthread_ = 1;
+#endif
+    }
     int get_omp_nthread() const { return omp_nthread_; }
 
     /// Print flag (defaults to 1)
@@ -1354,4 +1360,3 @@ class PSI_API CompositeJK : public JK {
 }
 
 #endif
-
