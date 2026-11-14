@@ -1,95 +1,91 @@
 # SCF pre-PR validation results
 
-Status: **in progress; not yet a complete PR-readiness sign-off**.
+**Local validation passed. Native cross-platform CI remains externally blocked.**
 
 Source worktrees are `scf-dft-pr` (branch `scf-dft-pr-v2`) and `scf-dft-opt`.
-Their original branch tips and pre-existing edits were preserved. Temporary
-validation snapshots were pushed to:
+Original branch tips, indexes, and pre-existing work were preserved. No PR was
+opened. Temporary validation branches:
 
 - `review/scf-dft-portability-pr-20261113-v1`
 - `review/scf-dft-portability-opt-20261113-v1`
 
-## Verified so far
+## Final results
 
-- The pre-fix insufficient-memory regression failed; the corrected budget checks
-  passed on the rebuilt narrow branch.
-- A vendor-workspace interposer made the old DSYEVD implementation request
-  **290 work entries versus 81 reserved**. The corrected implementation passed
-  minimum-workspace enforcement.
-- Four injected LAPACK scenarios passed on the narrow build: larger vendor
-  optimum, DSYEVD failure after input-copy corruption, failed Cholesky
-  factorization, and low reciprocal condition number.
-- The optimized switching/DIIS suite passed **30 tests**, including explicit
-  memory reservation, disk-streamed ADIIS, historical-density residual rebasing,
-  EDIIS reset, cancellation-sensitive predicted energies, OOO/FP32 fallback,
-  precision/grid MAXITER safeguards, and isolated numerical equivalence.
-- The final optimized review-regression suite passed **193 tests** covering the
-  shared portability checks, DF/FP32 memory paths, and Python switching safeguards.
-- The complete default optimized GCC/MKL/OpenMP portability selection passed
-  **998 tests** in one run (four independent pytest workers).
-- Clang 22/OpenBLAS/no-OpenMP/no-restrict passed the **same 998 cases**; the
-  successful JUnit case-ID sets were compared exactly. Its 8 injected LAPACK
-  tests also passed.
-- The post-fix reduced-team regression passed **both FP64 and FP32 cases** under
-  `OMP_THREAD_LIMIT=1` and `OMP_DYNAMIC=TRUE`.
-- The updated optimized LAPACK injection passed **8 tests across 4 scenarios**,
-  including Coulomb and range-separated exchange metric builds.
-- The standalone typed-scratch regression passed GCC 13 and Clang 22 at `-O3`
-  with strict aliasing, with restrict hints disabled, and under ASan/UBSan.
-  The separate experimental TypeSanitizer run also passed after teaching its
-  shadow tracking about trivial placement-new array lifetime transitions.
-- Restrict-macro syntax checks passed Clang ARM64 Linux, Windows/MSVC, and macOS
-  targets, both enabled and disabled. The AVX-512 VV10 translation unit compiled
-  successfully; AVX-512 code has not been executed on this AVX2-only machine.
-- The Clang 22 optimized OpenBLAS/no-OpenMP/no-restrict build succeeded; stale
-  MKL linkage from the original build-cache configuration was removed before
-  the provider comparison.
-  `ldd` confirms OpenBLAS and no MKL/OpenMP dependency in the resulting extension.
-- The narrow broad suite reached **807 passing tests with no failures** before
-  its 30-minute job limit. The response-tail run passed 20 tests and the updated
-  metric run passed 2. An exact case-ID audit establishes successful coverage of
-  **all 825 cases in the current default selection** across those runs (removing
-  duplicates and the obsolete unparameterized metric case). This is split-run
-  coverage, not a claim that the timed-out process finished successfully.
+| Build/check | Result |
+|---|---:|
+| Narrow branch, GCC 14 / MKL / OpenMP | 827 passed |
+| Opt branch, GCC 14 / MKL / OpenMP / restrict enabled | 1,000 passed |
+| Opt branch, Clang 22 / OpenBLAS / no OpenMP / no restrict | 1,000 passed |
+| Full opt ASan/UBSan build, focused runtime suite | 183 passed, 12 deselected |
+| Injected LAPACK workspace/failure tests, each numerical build | 8 passed |
+| Reduced OpenMP team, symmetric FP64 and FP32 K | 2 passed |
+| Standalone PSIO/IWL round trips | Both passed on all four local builds |
 
-## Additional reproduced defect
+The two opt numerical builds ran identical JUnit case-ID sets. The OpenBLAS
+extension was checked with `ldd`: it has no MKL/OpenMP dependency. Normal
+numerical builds used the installed dependencies. The sanitizer dependency
+qualification below is important.
 
-`OMP_THREAD_LIMIT=1` with a larger requested team reproduced a crash in the
-optimized symmetric K contraction. It partitioned by the requested team and
-reduced buffers for workers that did not exist. The code now allocates all
-logical coefficient buffers and partitions/reduces using the actual team size.
-Both post-fix reduced-team cases now pass.
+Additional checks passed:
 
-## Remaining validation
+- Standalone typed scratch: GCC 13 and Clang 22 at `-O3` with strict aliasing,
+  with restrict disabled, and under ASan/UBSan.
+- Separate experimental TypeSanitizer test, with explicit shadow reset for
+  trivial placement-new array lifetime transitions.
+- ARM64 Linux, Windows/MSVC, and macOS restrict-macro syntax, enabled/disabled.
+- AVX-512 VV10 translation-unit compilation. AVX-512 execution was not tested
+  on this AVX2-only host. No QEMU execution was used.
+- Python syntax, workflow YAML, and `git diff --check`.
 
-- Repeat broad numerical runs after the sanitizer-discovered PSIO guard below.
-- Full Psi4 ASan/UBSan build and focused runtime suite.
-- Native macOS/Windows/ARM64 runtime matrix.
+## Reproduced failures and corrections
 
-The full ASan/UBSan build completed. Its runtime suite exposed an existing null
-DPD member call in `PSIO::close()` during disk-DIIS cleanup. The standalone
-disk-DIIS test reproduced UBSan's `member call on null pointer of type DPD`.
-Both branches now guard that cache-flush call when no DPD instance exists;
-the focused sanitizer run and broad numerical runs are being repeated.
-The PSIO and IWL standalone round-trip executables now use a real null DPD host
-and abort on an accidental cache call, replacing their fake-class/non-null stub.
-Both executables passed on GCC/MKL, Clang/OpenBLAS, the full ASan/UBSan build,
-and the narrow build.
-The subsequent UBSan pass found an uninitialized group enum in the bit-based
-`CharacterTable` constructor when its result was copied. Both branches now
-initialize every member consistently with the string constructor; direct C1/D2h
-copy regressions were added. Final test counts will include those two new cases.
+- Insufficient post-diagonalization memory reached allocation setup; it now
+  raises an early descriptive error.
+- An injected legal vendor workspace optimum made the old DSYEVD implementation
+  request **290 work entries versus 81 reserved**. Budget and allocation now use
+  the same minimum; forced DSYEVD failure restores the input and reuses scratch.
+- Reducing an OpenMP team below its requested size crashed symmetric K. Buffer
+  initialization and contraction/reduction now respect actual worker creation.
+- UBSan found `PSIO::close()` calling a DPD member through a null pointer during
+  disk-DIIS cleanup. Both branches guard that call. Standalone tests use the real
+  class declaration and fail on any accidental cache call.
+- UBSan found an uninitialized group enum copied from the bit-based
+  `CharacterTable` constructor. Its members are now consistently initialized,
+  with direct C1/D2h copy regressions.
 
-Native CI is **externally blocked**, not passed: the fork's permissions endpoint
-reports Actions enabled, but explicit workflow dispatch returns HTTP 422,
-“Actions has been disabled for this repository.” Enabling the already-active
-workflow did not resolve this. No PR was opened.
+Memory accounting, scratch lifecycle, Cholesky conditioning/fallback, diffuse
+bases, matrix/gradient equivalence, ROHF level shifting, DIIS rebasing/reservation,
+OOO fallback, precision/grid transitions, MAXITER boundaries, and predicted
+convergence are covered by the successful suites. See `SCF_PORTABILITY.md` for
+the implementation checklist and reproduction commands.
 
-The default portability runner excludes only the large single-threaded
-methyl-oxirane TDDFT cases; `--extended` includes them. Earlier extended runs were
-stopped rather than treating their partial coverage as complete evidence.
+## Gau2Grid qualification
 
-Test artifacts are under `/fastscratch/awallace43/scf-review-portability/` and
-the corresponding `scf-dft-*-build` directories. Each portability run writes
-JUnit XML and source/core provenance. Reproduction commands and the configured
-matrix are documented in `SCF_PORTABILITY.md`.
+The installed Gau2Grid 2.0.8 GCC allocator calls `aligned_alloc(64, 24)` on small
+grid buffers, violating C11's size-multiple requirement. ASan correctly rejected
+it. Both branches now patch the GCC/PGI allocation templates when building the
+pinned source fallback.
+
+The successful sanitizer run used a **private, corrected and instrumented
+Gau2Grid 2.0.8** (source commit
+`786d445ab97744e137bb3d8c04f9c259ec88b5a2`, maximum angular momentum 2). Its loaded
+library path was asserted. The installed environment was not modified and
+allocator diagnostics were not suppressed. Existing binary packages require a
+corrected build to pass this sanitizer check; the source-build patch cannot
+rewrite an already installed library.
+
+## Remaining external validation
+
+The fork's permissions endpoint reports Actions enabled, but workflow dispatch
+returns HTTP 422: **“Actions has been disabled for this repository.”** Enabling
+the already-active workflow did not resolve it. Native Windows/macOS/ARM64
+runtime results therefore remain pending, not passed.
+
+The default runner excludes the 20 large methyl-oxirane TDDFT cases;
+`--extended` includes them. Earlier stopped/timed-out runs are superseded by the
+completed final runs above. Test timings are not performance benchmarks.
+
+JUnit/provenance artifacts are in the corresponding
+`/fastscratch/awallace43/scf-dft-*-build/` directories and
+`/fastscratch/awallace43/scf-review-portability/`. The sanitizer result is
+`scf-review-portability/sanitizers-final/sanitizers.xml`.
