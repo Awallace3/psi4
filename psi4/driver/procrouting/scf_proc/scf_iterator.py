@@ -142,6 +142,11 @@ def scf_initialize(self):
 
     # The Fock diagonalization keeps its DSYEVD workspace (~3 nso^2) for the whole SCF.
     total_memory -= self.diag_scratch_size()
+    if total_memory <= 0:
+        raise ValidationError(
+            "Insufficient SCF memory for the Fock diagonalization workspace. "
+            "Increase the memory allocated to Psi4."
+        )
 
     # Figure out how large the DFT collocation matrices are
     vbase = self.V_potential()

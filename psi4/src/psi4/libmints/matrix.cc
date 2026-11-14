@@ -56,6 +56,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <fstream>
 #include <algorithm>
 #include <cctype>
@@ -1761,8 +1762,12 @@ void Matrix::diagonalize(SharedMatrix &eigvectors, std::shared_ptr<Vector> &eigv
 }
 
 size_t Matrix::dsyevd_scratch_size(size_t n) {
-    // copy of the block (n^2) + DSYEVD lwork (1 + 6n + 2n^2) + liwork (3 + 5n ints, in doubles)
-    return n * n + 1 + 6 * n + 2 * n * n + (3 + 5 * n + 1) / 2;
+    if (!n) return 0;
+    // Use the documented minimum, not a vendor-dependent optimal query, both
+    // here and in diagonalize_dsyevd. Account for actual integer byte widths.
+    const size_t lwork = n == 1 ? 1 : 1 + 6 * n + 2 * n * n;
+    const size_t liwork = n == 1 ? 1 : 3 + 5 * n;
+    return n * n + lwork + (liwork * sizeof(int) + sizeof(double) - 1) / sizeof(double);
 }
 
 void Matrix::diagonalize_dsyevd(Matrix &eigvectors, Vector &eigvalues, std::vector<double> &work,
@@ -1779,32 +1784,44 @@ void Matrix::diagonalize_dsyevd(Matrix &eigvectors, Vector &eigvalues, std::vect
         const size_t nn = static_cast<size_t>(n) * n;
         double *ep = eigvalues.pointer(h);
 
-        // Workspace query (does not touch A).
-        double wq;
-        int iwq;
-        double adummy = 0.0;
-        int info = C_DSYEVD('V', 'L', n, &adummy, n, ep, &wq, -1, &iwq, -1);
-        if (!info) {
-            const size_t lwork = static_cast<size_t>(wq);
-            if (work.size() < nn + lwork) work.resize(nn + lwork);
-            if (iwork.size() < static_cast<size_t>(iwq)) iwork.resize(iwq);
-            // The row-major block read as column-major is its transpose, so 'L' sees the same
-            // triangle that diagonalize() (DSYEV on the explicit transpose, 'U') sees.
-            double *a = work.data();
-            std::memcpy(a, matrix_[h][0], nn * sizeof(double));
-            info = C_DSYEVD('V', 'L', n, a, n, ep, a + nn, static_cast<int>(work.size() - nn), iwork.data(),
-                            static_cast<int>(iwork.size()));
-            if (!info) {
-                // eigenvectors are the columns of the column-major a
-                double **Cp = eigvectors.matrix_[h];
-                for (int i = 0; i < n; i++)
-                    for (int j = 0; j < n; j++) Cp[i][j] = a[static_cast<size_t>(j) * n + i];
-            }
+        const size_t lwork = n == 1 ? 1 : 1 + 6 * static_cast<size_t>(n) + 2 * nn;
+        const size_t liwork = n == 1 ? 1 : 3 + 5 * static_cast<size_t>(n);
+        if (lwork > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+            liwork > static_cast<size_t>(std::numeric_limits<int>::max()))
+            throw PSIEXCEPTION("Matrix::diagonalize_dsyevd: workspace exceeds LAPACK integer range.");
+        // Free before growing, and do not retain vector's geometric excess
+        // capacity: SCF reserves exactly dsyevd_scratch_size(largest_irrep).
+        if (work.size() < nn + lwork) {
+            std::vector<double>().swap(work);
+            work.resize(nn + lwork);
         }
+        if (iwork.size() < liwork) {
+            std::vector<int>().swap(iwork);
+            iwork.resize(liwork);
+        }
+        // Row-major A read as column-major is A^T: 'L' sees the same triangle
+        // as diagonalize() (DSYEV on the explicit transpose, 'U').
+        double* a = work.data();
+        std::memcpy(a, matrix_[h][0], nn * sizeof(double));
+        int info = C_DSYEVD('V', 'L', n, a, n, ep, a + nn, static_cast<int>(lwork), iwork.data(),
+                           static_cast<int>(liwork));
         if (info) {
-            info = DSYEV_ascending(n, matrix_[h], ep, eigvectors.matrix_[h]);
+            // Retry from the pristine input, reusing the already budgeted
+            // storage. DSYEV_ascending would allocate another matrix/workspace.
+            std::memcpy(a, matrix_[h][0], nn * sizeof(double));
+            if (n == 1) {
+                ep[0] = a[0];
+                a[0] = 1.0;
+                info = 0;
+            } else {
+                info = C_DSYEV('V', 'L', n, a, n, ep, a + nn, static_cast<int>(lwork));
+            }
             if (info != 0) throw PSIEXCEPTION("Matrix::diagonalize_dsyevd: DSYEVD and DSYEV failed!");
         }
+        // Eigenvectors are columns of the column-major a.
+        double** Cp = eigvectors.matrix_[h];
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) Cp[i][j] = a[static_cast<size_t>(j) * n + i];
     }
 }
 

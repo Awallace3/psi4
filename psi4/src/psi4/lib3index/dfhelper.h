@@ -69,7 +69,13 @@ class PSI_API DFHelper {
     /// @param nthreads specifies number of threads to use
     /// oversubcription is possible
     ///
-    void set_nthreads(size_t nthreads) { nthreads_ = nthreads; }
+    void set_nthreads(size_t nthreads) {
+#ifdef _OPENMP
+        nthreads_ = nthreads ? nthreads : 1;
+#else
+        nthreads_ = 1;
+#endif
+    }
     size_t get_nthreads() { return nthreads_; }
 
     ///
@@ -97,7 +103,11 @@ class PSI_API DFHelper {
         jk_T1_.reset();
         jk_T2_.reset();
         jk_T1_size_ = jk_T2_size_ = 0;
+        jk_C_buffers_.clear();
+        jk_C_buffers_.shrink_to_fit();
     }
+    /// Doubles held in reusable JK temporaries, including coefficient buffers.
+    size_t JK_scratch_memory() const;
 
     ///
     /// Indicates whether to use the in-core or out-of-core
@@ -403,6 +413,9 @@ class PSI_API DFHelper {
     /// compute_JK scratch, kept between builds (see compute_JK)
     std::unique_ptr<double[]> jk_T1_, jk_T2_;
     size_t jk_T1_size_ = 0, jk_T2_size_ = 0;
+    std::vector<std::vector<double>> jk_C_buffers_;
+    void ensure_jk_C_buffers(size_t elem_per_thread);
+    size_t JK_core_memory() const;
     // Maps x -> (P|Q) ^ x.
     std::map<double, SharedMatrix> metrics_;
 

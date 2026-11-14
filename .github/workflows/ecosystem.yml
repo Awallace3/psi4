@@ -1,10 +1,14 @@
 name: Eco
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - master
       - '1.*.x'
+      - 'review/scf-dft-portability-*'
+      - 'scf-dft-opt'
+      - 'scf-dft-pr-v2'
   pull_request:
   merge_group:
 
@@ -18,12 +22,16 @@ concurrency:
 jobs:
 
   ecosystem:
+    timeout-minutes: 360
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     strategy:
       fail-fast: false
       matrix:
         cfg:
 
           - label: "Conda GNU (L)"
+            expected-arch: x64
             runs-on: ubuntu-latest
             python-version: "3.14"
             mkl-version: ""
@@ -35,7 +43,27 @@ jobs:
               -D ENABLE_v2rdm_casscf=ON
               -D CMAKE_DISABLE_FIND_PACKAGE_v2rdm_casscf=ON
 
+          - label: "Clang OpenBLAS, no OpenMP/no restrict (L)"
+            expected-arch: x64
+            runs-on: ubuntu-latest
+            python-version: "3.13"
+            mkl-version: ""
+            platform: linux-64
+            lapack-args: "--lapack openblas"
+            compiler-args: "--compiler byo"
+            openmp: "off"
+            pytest-marker-expr: "addon and not (medlong or long)"
+            pytest-name-expr: "not pe_ecp"
+            cmargs: >
+              -D CMAKE_VERBOSE_MAKEFILE=OFF
+              -D ENABLE_OPENMP=OFF
+              -D ENABLE_XHOST=OFF
+              -D CMAKE_C_COMPILER=/usr/bin/clang
+              -D CMAKE_CXX_COMPILER=/usr/bin/clang++
+              -D CMAKE_CXX_FLAGS="-DPSI_NO_RESTRICT"
+
           - label: "Conda Clang (M-Intel)"
+            expected-arch: x64
             runs-on: macos-15-intel
             python-version: "3.14"
             mkl-version: ""
@@ -63,6 +91,7 @@ jobs:
             # * -Wl,-w suppresses 9k warnings of mismatched visibility btwn L2 & psi4
 
           - label: "Conda Clang (M-Silicon)"
+            expected-arch: arm64
             runs-on: macos-latest
             python-version: "3.15"
             mkl-version: ""
@@ -78,6 +107,7 @@ jobs:
               -D CMAKE_SHARED_LINKER_FLAGS="-Wl,-w"
 
           - label: "Conda Clang (M-Silicon)"
+            expected-arch: arm64
             runs-on: macos-latest
             python-version: "3.11"
             mkl-version: ""
@@ -93,6 +123,7 @@ jobs:
               -D CMAKE_SHARED_LINKER_FLAGS="-Wl,-w"
 
           - label: "LLVM clang-cl (W)"
+            expected-arch: x64
             runs-on: windows-latest
             python-version: "3.12"
             mkl-version: ""
@@ -131,6 +162,13 @@ jobs:
       uses: actions/checkout@v6
       with:
         fetch-depth: 0
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    - name: Fetch upstream release tags for fork version detection
+      if: github.repository == 'Awallace3/psi4'
+      run: |
+        git fetch --no-recurse-submodules https://github.com/psi4/psi4.git "refs/tags/v1.*:refs/tags/v1.*"
+        git describe --tags
 
       # see CMAKE_OSX_SYSROOT and CMAKE_Fortran_FLAGS for use
       # mac_ver line returns, e.g., "10.15" for Catalina & "11.6" for Big Sur. but phracker doesn't support all minor, so some logic to hardcode.
@@ -182,7 +220,7 @@ jobs:
           --name p4build \
           --python ${{ matrix.cfg.python-version }} \
           --disable docs \
-          --offline-conda
+          --offline-conda ${{ matrix.cfg.lapack-args }}
         echo "::group::View Env Spec File for Conda (from advisor)"
         printf "\n<<<  env_p4build.yaml  >>>\n"
         cat env_p4build.yaml
@@ -253,7 +291,7 @@ jobs:
         conda/psi4-path-advisor.py \
           cache \
           --objdir objdir \
-          --insist
+          --insist ${{ matrix.cfg.compiler-args }}
         echo "::group::View Cache File for CMake"
         printf "\n<<<  cache_p4build@objdir.cmake  >>>\n"
         pygmentize -g -O style=friendly,linenos=1 cache_p4build@objdir.cmake
@@ -272,6 +310,44 @@ jobs:
 
     - name: Compile & Install Psi4
       run: cmake --build objdir --config Release --target install
+
+    - name: SCF review portability regressions
+      if: hashFiles('devtools/benchmarks/scf_portability_tests.py') != ''
+      timeout-minutes: 180
+      working-directory: ./objdir
+      env:
+        OMP_NUM_THREADS: 1
+        MKL_NUM_THREADS: 1
+        OPENBLAS_NUM_THREADS: 1
+        OMP_DYNAMIC: "FALSE"
+        MKL_DYNAMIC: "FALSE"
+      run: |
+        export PYTHONPATH="$PWD/stage/lib"
+        export PATH="$PWD/stage/bin:$PATH"
+        python ../devtools/benchmarks/scf_portability_tests.py --architecture "${{ matrix.cfg.expected-arch }}" --openmp "${{ matrix.cfg.openmp || 'on' }}"
+
+    - name: SCF LAPACK workspace and fallback regressions (L)
+      if: runner.os == 'Linux' && hashFiles('devtools/benchmarks/scf_lapack_tests.py') != ''
+      working-directory: ./objdir
+      run: |
+        export PYTHONPATH="$PWD/stage/lib" PYTHONSAFEPATH=1
+        cc -shared -fPIC ../devtools/benchmarks/scf_lapack_probe.c -ldl -o "$PWD/lapack-probe.so"
+        python ../devtools/benchmarks/scf_lapack_tests.py --probe "$PWD/lapack-probe.so"
+
+    - name: Upload SCF portability evidence
+      if: always() && hashFiles('devtools/benchmarks/scf_portability_tests.py') != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: scf-portability-${{ runner.os }}-py${{ matrix.cfg.python-version }}-${{ strategy.job-index }}
+        path: |
+          objdir/scf-portability.xml
+          objdir/scf-portability-provenance.json
+          objdir/scf-lapack-*.xml
+          objdir/CMakeCache.txt
+          objdir/psi4-core-prefix/src/psi4-core-build/CMakeCache.txt
+          env_p4build.yaml
+          cache_p4build@objdir.cmake
+        if-no-files-found: warn
 
     - name: Linked dependencies, ldd (L)
       if: runner.os == 'Linux'

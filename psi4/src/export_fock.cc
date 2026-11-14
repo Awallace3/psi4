@@ -165,6 +165,7 @@ void export_fock(py::module &m) {
         .def(py::init<std::shared_ptr<BasisSet>, std::shared_ptr<BasisSet> >())
         .def("set_memory", &DFHelper::set_memory)
         .def("get_memory", &DFHelper::get_memory)
+        .def("JK_scratch_memory", &DFHelper::JK_scratch_memory)
         .def("set_method", &DFHelper::set_method)
         .def("get_method", &DFHelper::get_method)
         .def("set_subalgo", &DFHelper::set_subalgo)

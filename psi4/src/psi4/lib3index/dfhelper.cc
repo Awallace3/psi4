@@ -234,7 +234,10 @@ void DFHelper::AO_core(bool set_AO_core=true) {
     // contraction's panels next to an AO block. They are never live together. The panels are
     // charged at their narrowest width with the smallest AO block; wider panels and larger blocks
     // are used when they fit (reserve_metric_panels). The direct modes never contract panels.
-    const size_t jk_tmp = nthreads_ * nbf_ * nbf_ + 3 * nbf_ * nbf_ * Qshell_max_;
+    const size_t scratch_floor = std::max(nbf_ * nbf_, nthreads_ * naux_);
+    const size_t jk_tmp = std::max(nthreads_ * nbf_ * nbf_ +
+                                      3 * nbf_ * nbf_ * static_cast<size_t>(Qshell_max_),
+                                  nthreads_ * nbf_ * nbf_ + 2 * scratch_floor);
     const size_t panels = (direct_ || direct_iaQ_) ? 0 : AO_core_init_scratch(true) + AO_core_min_block();
     required_core_size_ += std::max(jk_tmp, panels);
 
@@ -923,59 +926,53 @@ std::pair<size_t, size_t> DFHelper::Qshell_blocks_for_transform(const size_t mem
 }
 std::tuple<size_t, size_t> DFHelper::Qshell_blocks_for_JK_build(std::vector<std::pair<size_t, size_t>>& b,
                                                                 size_t max_nocc, bool lr_symmetric) {
-    // strategy here:
-    // 1. depending on lr_symmetric, T2 can either be the same as T1 or
-    // it can just be used as a Jtmp.
-    // 2. T3 is always used, includes C_buffers
-
-    // K tmps
-    size_t T1 = nbf_ * max_nocc;
-    size_t T2 = (lr_symmetric ? nbf_ * nbf_ : nbf_ * max_nocc);
-
-    // C_buffers
-    size_t T3 = std::max(nthreads_ * nbf_ * nbf_, nthreads_ * nbf_ * max_nocc);
-
-    // total AO buffer size is max if core alg is used, otherwise init to 0
-    size_t total_AO_buffer = (AO_core_ ? big_skips_[nbf_] : 0);
-
-    size_t block_size = 0, largest = 0;
-    for (size_t i = 0, tmpbs = 0, count = 1; i < Qshells_; i++, count++) {
-        // get shell info
-        size_t begin = Qshell_aggs_[i];
-        size_t end = Qshell_aggs_[i + 1] - 1;
-
-        // update AO buffer, block sizes
-        size_t current = (end - begin + 1) * small_skips_[nbf_];
-        total_AO_buffer += (AO_core_ ? 0 : current);
-        tmpbs += end - begin + 1;
-
-        // compute total memory used by aggregate block
-        size_t constraint = total_AO_buffer + T1 * tmpbs + T3;
-        constraint += (lr_symmetric ? T2 : T2 * tmpbs);
-
-        if (constraint > memory_ || i == Qshells_ - 1) {
-            if (count == 1 && i != Qshells_ - 1) {
-                std::stringstream error;
-                error << "DFHelper: not enough memory for JK blocking!";
-                throw PSIEXCEPTION(error.str().c_str());
-            }
-            if (constraint > memory_) {
-                total_AO_buffer -= current;
-                tmpbs -= end - begin + 1;
-                b.push_back(std::make_pair(i - count + 1, i - 1));
-                i--;
-            } else if (i == Qshells_ - 1) {
-                b.push_back(std::make_pair(i - count + 1, i));
-            }
-            if (block_size < tmpbs) {
-                largest = total_AO_buffer;
-                block_size = tmpbs;
-            }
-            count = total_AO_buffer = tmpbs = 0;
+    // Charge retained high-water marks, all resident tensors (three for separate wK),
+    // and the same scratch floors as the actual allocations. The resident charge
+    // applies to every block, not just the first one.
+    const size_t floor = std::max(nbf_ * nbf_, nthreads_ * naux_);
+    const size_t c_need = nbf_ * std::max(max_nocc, nbf_);
+    const size_t core_size = JK_core_memory();
+    auto footprint = [&](size_t nq) {
+        const size_t tmp = std::max(floor, nbf_ * std::max<size_t>(max_nocc, 1) * nq);
+        size_t size = core_size + std::max(jk_T1_size_, tmp) +
+                      std::max(jk_T2_size_, lr_symmetric ? floor : tmp);
+        for (size_t r = 0; r < nthreads_; ++r) {
+            size += r < jk_C_buffers_.size() ? std::max(c_need, jk_C_buffers_[r].capacity()) : c_need;
+        }
+        if (!AO_core_) size += nq * small_skips_[nbf_];
+        return size;
+    };
+    size_t largest_shell = 0;
+    for (size_t i = 0; i < Qshells_; ++i) {
+        largest_shell = std::max(largest_shell, Qshell_aggs_[i + 1] - Qshell_aggs_[i]);
+    }
+    if (footprint(largest_shell) > memory_) {
+        // A changed occupation/symmetry or memory allowance can make old scratch
+        // too large. No raw scratch pointers have been taken yet, so replan fresh.
+        clear_JK_scratch();
+        if (footprint(largest_shell) > memory_) {
+            throw PSIEXCEPTION("DFHelper: not enough memory for JK blocking!");
         }
     }
 
-    return std::make_tuple(largest, block_size);
+    b.clear();
+    size_t start = 0, nq = 0, block_size = 0;
+    for (size_t i = 0; i < Qshells_; ++i) {
+        const size_t shell_size = Qshell_aggs_[i + 1] - Qshell_aggs_[i];
+        if (nq && footprint(nq + shell_size) > memory_) {
+            b.emplace_back(start, i - 1);
+            block_size = std::max(block_size, nq);
+            start = i;
+            nq = 0;
+        }
+        nq += shell_size;
+    }
+    if (nq) {
+        b.emplace_back(start, Qshells_ - 1);
+        block_size = std::max(block_size, nq);
+    }
+
+    return std::make_tuple(AO_core_ ? big_skips_[nbf_] : block_size * small_skips_[nbf_], block_size);
 }
 
 FILE* DFHelper::stream_check(std::string filename, std::string op) {
@@ -3196,6 +3193,57 @@ void DFHelper::build_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMatri
         outfile->Printf("Exiting DFHelper::build_JK\n");
     }
 }
+void DFHelper::ensure_jk_C_buffers(size_t elem_per_thread) {
+    if (jk_C_buffers_.size() != nthreads_) {
+        jk_C_buffers_.resize(nthreads_);
+    }
+    bool need_grow = false;
+    for (size_t r = 0; r < nthreads_; ++r) {
+        if (jk_C_buffers_[r].size() < elem_per_thread) {
+            need_grow = true;
+            break;
+        }
+    }
+    if (need_grow) {
+#pragma omp parallel num_threads(nthreads_)
+        {
+            int rank = 0;
+#ifdef _OPENMP
+            rank = omp_get_thread_num();
+#endif
+            if (jk_C_buffers_[rank].size() < elem_per_thread) {
+                // As with grow_scratch, release before allocating and avoid
+                // vector's geometric capacity growth exceeding the planned size.
+                std::vector<double>().swap(jk_C_buffers_[rank]);
+                jk_C_buffers_[rank].resize(elem_per_thread);
+            }
+        }
+    }
+}
+
+size_t DFHelper::JK_scratch_memory() const {
+    size_t size = jk_T1_size_ + jk_T2_size_;
+    for (const auto& buffer : jk_C_buffers_) size += buffer.capacity();
+    return size;
+}
+size_t DFHelper::JK_core_memory() const {
+    const size_t n = direct_iaQ_ ? naux_ * nbf_ * nbf_ : big_skips_[nbf_];
+    size_t metric_size = 0;
+    // metric_prep_core can index one allocation by both 1.0 and its inverse
+    // power. Those aliases survive out-of-core builds with hold_met enabled.
+    for (auto it = metrics_.begin(); it != metrics_.end(); ++it) {
+        bool alias = false;
+        for (auto prev = metrics_.begin(); prev != it; ++prev) {
+            if (prev->second == it->second) {
+                alias = true;
+                break;
+            }
+        }
+        if (!alias) metric_size += naux_ * naux_;
+    }
+    return (Ppq_ ? n : 0) + (m1Ppq_ ? n : 0) + (wPpq_ ? n : 0) +
+           metric_size;
+}
 void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright,
                           std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, std::vector<SharedMatrix> K,
                           size_t max_nocc, bool do_J, bool do_K, bool do_wK, bool lr_symmetric) {
@@ -3216,24 +3264,16 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
     // Each element of Qsteps specifies the endpoints of a batch of auxiliary shells.
     // We'll treat all (PN|Q) for Q in this batch at once.
     std::vector<std::pair<size_t, size_t>> Qsteps;
-    std::tuple<size_t, size_t> info = Qshell_blocks_for_JK_build(Qsteps, max_nocc, lr_symmetric);
+    const bool one_transform = lr_symmetric && !do_wK_;
+    std::tuple<size_t, size_t> info = Qshell_blocks_for_JK_build(Qsteps, max_nocc, one_transform);
     size_t tots = std::get<0>(info);
     size_t totsb = std::get<1>(info);
 
     // prep stream, blocking
     if (!direct_ && !AO_core_) stream_check(AO_names_[1], "rb");
 
-    std::vector<std::vector<double>> C_buffers(nthreads_);
-
-// prepare C buffers
-#pragma omp parallel num_threads(nthreads_)
-    {
-        int rank = 0;
-#ifdef _OPENMP
-        rank = omp_get_thread_num();
-#endif
-        C_buffers[rank] = std::vector<double>(nbf_ * std::max(max_nocc, nbf_));
-    }
+    ensure_jk_C_buffers(nbf_ * std::max(max_nocc, nbf_));
+    auto& C_buffers = jk_C_buffers_;
 
     // declare bufs
     std::unique_ptr<double[]> M;   // AOs
@@ -3247,7 +3287,7 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
 
     // if lr_symmetric, we can be more clever with mem usage. T2 is used for both the
     // second tmp in the K build, as well as the completed, pruned J build.
-    if (lr_symmetric) {
+    if (one_transform) {
         Ktmp_size = nbf_ * nbf_;  // size for pruned J build
     } else {
         Ktmp_size = std::max(nbf_ * nbf_, Ktmp_size);  // max necessary
@@ -3536,28 +3576,15 @@ void DFHelper::compute_wK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
 
     double* wMp = wPpq_.get();
     double* M1p = m1Ppq_.get();
-    std::vector<std::vector<double>> C_buffers(nthreads_);
-// prepare C buffers
-#pragma omp parallel num_threads(nthreads_)
-    {
-        int rank = 0;
-#ifdef _OPENMP
-        rank = omp_get_thread_num();
-#endif
-        C_buffers[rank] = std::vector<double>(nbf_ * std::max(max_nocc, nbf_));
-    }
-
-    // declare bufs
-    std::unique_ptr<double[]> T1;  // Ktmp1
-    std::unique_ptr<double[]> T2;  // Ktmp2
+    ensure_jk_C_buffers(nbf_ * std::max(max_nocc, nbf_));
+    auto& C_buffers = jk_C_buffers_;
 
     // allocate first Ktmp
     size_t Ktmp_size = (!max_nocc ? totsb * 1 : totsb * max_nocc);
     Ktmp_size = std::max(Ktmp_size * nbf_, nthreads_ * naux_);  // max necessary
-    T1 = std::make_unique<double[]>(Ktmp_size);
-    double* T1p = T1.get();
-    T2 = std::make_unique<double[]>(Ktmp_size);
-    double* T2p = T2.get();
+    Ktmp_size = std::max(Ktmp_size, nbf_ * nbf_);
+    double* T1p = grow_scratch(jk_T1_, jk_T1_size_, Ktmp_size);
+    double* T2p = grow_scratch(jk_T2_, jk_T2_size_, Ktmp_size);
 
     /* The rest of the file would usually be in compute_K */
     /* */
