@@ -50,11 +50,12 @@ interaction between two moieties within the embedding field of a third body
 (I-SAPT). F-SAPT is designed to provide additional insight into the chemical
 origins of a noncovalent interaction, while I-SAPT allows for one to perform
 a SAPT analysis for intramolecular interactions. F-SAPT and I-SAPT can be
-deployed together in this module, yielding "F/I-SAPT." All F/I-SAPT computations
-in |PSIfour| use density-fitted SAPT0 as the underlying SAPT methodology. Interested
-users should consult the manual page for Ed Hohenstein's :ref:`SAPT0 <sec:sapt>` code
-and the SAPT literature to understand the specifics of SAPT0 before beginning
-with F/I-SAPT0.
+deployed together in this module, yielding "F/I-SAPT." Historically, F/I-SAPT
+in |PSIfour| has used density-fitted SAPT0 as the underlying SAPT methodology.
+That remains the default, and users should consult :ref:`SAPT0 <sec:sapt>` and
+the SAPT literature before beginning with F/I-SAPT0. In addition, F-SAPT
+decomposition is now available for selected SAPT(DFT) workflows (see
+:ref:`sec:fsaptdft` below).
 
 F-SAPT is detailed over two papers: [Parrish:2014:044115]_ on our much-earlier
 "atomic" SAPT (A-SAPT) and [Parrish:2014:4417]_ on the finished "functional
@@ -328,6 +329,42 @@ filepath as in::
         source="./fsapt",
     )
 
+.. _`sec:fsaptdft`:
+
+FSAPT(DFT)
+^^^^^^^^^^
+
+F-SAPT analysis can also be performed on SAPT(DFT) calculations. The workflow
+is the same as for ``fisapt0``: run the interaction-energy method with
+``return_wfn=True`` and pass that wavefunction to
+:func:`~psi4.driver.fsapt_analysis`.
+
+To enable this in SAPT(DFT), set |sapt__sapt_dft_do_fsapt| to ``FISAPT``,
+which uses the FISAPT code for the decomposition. The SAPT(DFT) FDDS
+dispersion has no fragment partition, so F-SAPT is currently available only
+for SAPT(HF), that is ``SAPT_DFT_FUNCTIONAL HF``, whose dispersion FISAPT
+partitions directly. F-SAPT needs an induction partition, so
+|sapt__sapt_dft_induction_type| ``NONE`` is rejected.
+
+Typical usage is::
+
+    set {
+        basis                 aug-cc-pvdz
+        scf_type              df
+        freeze_core           true
+        sapt_dft_functional   hf
+        sapt_dft_do_fsapt     FISAPT
+    }
+
+    e, wfn = energy('sapt(dft)', return_wfn=True)
+    fsapt = psi4.fsapt_analysis(
+        source=wfn,
+        fragments_a={"FragA": [1, 2, 3]},
+        fragments_b={"FragB": [4, 5, 6]},
+        links5050=True,
+        print_output=False,
+    )
+
 
 Order-1 Visualization with PyMol
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -589,4 +626,3 @@ Additional Notes
   differences should be very minor for up to and including second-row elements,
   after which point one needs to use the |sapt__df_basis_elst| option in Ed's code to
   provide an accurate result. 
-

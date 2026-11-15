@@ -1,0 +1,389 @@
+import pytest
+import psi4
+from qcelemental import constants
+from psi4 import compare_values
+from psi4 import core
+import numpy as np
+from pprint import pprint as pp
+
+hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
+pytestmark = [pytest.mark.psi, pytest.mark.api]
+
+
+@pytest.mark.saptdft
+def test_fsaptdft_timer():
+    """Ensure the SAPT(DFT) F-SAPT run records its top-level timer."""
+
+    mol = psi4.geometry(
+        """
+0 1
+8   -0.702196054   -0.056060256   0.009942262
+1   -1.022193224   0.846775782   -0.011488714
+1   0.257521062   0.042121496   0.005218999
+--
+0 1
+8   2.268880784   0.026340101   0.000508029
+1   2.645502399   -0.412039965   0.766632411
+1   2.641145101   -0.449872874   -0.744894473
+units angstrom
+            """
+    )
+    np.set_printoptions(precision=10, suppress=True)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "SAPT_DFT_FUNCTIONAL": "HF",
+            "SAPT_DFT_DO_DHF": True,
+            "SAPT_DFT_DO_HYBRID": False,
+            "FISAPT_FSAPT_FILEPATH": "none",
+            "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+            "SAPT_DFT_DO_FSAPT": "FISAPT",
+            "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
+        }
+    )
+    psi4.core.clean_timers()
+    _ = psi4.energy("sapt(dft)", molecule=mol)
+    compute_time_saptdft_fi = next(
+        record
+        for record in psi4.core.get_timer_records().values()
+        if record["timer_name"] == "SAPT(DFT) Energy"
+    )
+    print(f"compute_time_fi: {compute_time_saptdft_fi['wall_time']:.2f}s\n")
+    assert compute_time_saptdft_fi["n_calls"] >= 1
+    assert compute_time_saptdft_fi["wall_time"] >= 0.0
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@pytest.mark.saptdft
+def test_fsapthf_disp0_fisapt0_psivars():
+    """
+    Validate HF SAPT(DFT)+FISAPT energies and fragment terms vs references.
+
+    NOTE: test use this larger molecular system for differently sized monA and
+    monB fragments to ensure code operates correctly.
+    """
+
+    mol = psi4.geometry(
+        """
+0 1
+C   11.54100       27.68600       13.69600
+H   12.45900       27.15000       13.44600
+C   10.79000       27.96500       12.40600
+H   10.55700       27.01400       11.92400
+H   9.879000       28.51400       12.64300
+H   11.44300       28.56800       11.76200
+H   10.90337       27.06487       14.34224
+H   11.78789       28.62476       14.21347
+--
+0 1
+C   10.60200       24.81800       6.466000
+O   10.95600       23.84000       7.103000
+N   10.17800       25.94300       7.070000
+C   10.09100       26.25600       8.476000
+C   9.372000       27.59000       8.640000
+C   11.44600       26.35600       9.091000
+C   9.333000       25.25000       9.282000
+H   9.874000       26.68900       6.497000
+H   9.908000       28.37100       8.093000
+H   8.364000       27.46400       8.233000
+H   9.317000       27.84600       9.706000
+H   9.807000       24.28200       9.160000
+H   9.371000       25.57400       10.32900
+H   8.328000       25.26700       8.900000
+H   11.28800       26.57600       10.14400
+H   11.97000       27.14900       8.585000
+H   11.93200       25.39300       8.957000
+H   10.61998       24.85900       5.366911
+units angstrom
+
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    # Reference energies from FISAPT0/sto-3g
+    data = {
+        "Disp": [
+            -0.003994502630897984,
+            -0.0674134405493367,
+            -0.013547073146612729,
+            -0.41154085645677463,
+            -0.07140794318023469,
+            -0.42508792960338737,
+            -0.017541575777510712,
+            -0.47895429700611136,
+            -0.49649587278362206,
+        ],
+        "EDisp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "Elst": [
+            0.7173658716748221,
+            -0.2055651208882452,
+            -0.8178788521844282,
+            -0.9342087776241712,
+            0.5118007507865769,
+            -1.7520876298085994,
+            -0.10051298050960611,
+            -1.1397738985124164,
+            -1.2402868790220225,
+        ],
+        "Exch": [
+            0.000135454393737376,
+            0.04719682210839049,
+            0.03161592765410519,
+            3.8965970121551616,
+            0.04733227650212787,
+            3.9282129398092667,
+            0.031751382047842565,
+            3.943793834263552,
+            3.9755452163113945,
+        ],
+        "Frag1": [
+            "Methyl1_A",
+            "Methyl1_A",
+            "Methyl2_A",
+            "Methyl2_A",
+            "Methyl1_A",
+            "Methyl2_A",
+            "All",
+            "All",
+            "All",
+        ],
+        "Frag2": [
+            "Peptide_B",
+            "T-Butyl_B",
+            "Peptide_B",
+            "T-Butyl_B",
+            "All",
+            "All",
+            "Peptide_B",
+            "T-Butyl_B",
+            "All",
+        ],
+        "IndAB": [
+            -0.007097098257764316,
+            -0.015628832176699036,
+            -0.02607145661295123,
+            -0.17470490188100032,
+            -0.022725930434463353,
+            -0.20077635849395156,
+            -0.033168554870715544,
+            -0.19033373405769935,
+            -0.22350228892841492,
+        ],
+        "IndBA": [
+            0.0003539943187897063,
+            0.014741295723273411,
+            -0.0017520923518852605,
+            -0.0807135744181731,
+            0.015095290042063118,
+            -0.08246566677005836,
+            -0.0013980980330955543,
+            -0.06597227869489969,
+            -0.06737037672799524,
+        ],
+        "Total": [
+            0.706763719498241,
+            -0.22666927578227103,
+            -0.8276335466433693,
+            2.2954289017738034,
+            0.48009444371597,
+            1.4677953551304341,
+            -0.12086982714512828,
+            2.0687596259915324,
+            1.9478897988464041,
+        ],
+    }
+
+    ref_data = data
+    keys = ["Enuc", "Eelst", "Eexch", "Eind", "Edisp", "Etot"]
+    Eref = {
+        "Edisp": -0.0007912165332931369,
+        "Eelst": -0.0019765265492708295,
+        "Eexch": 0.006335438658802855,
+        "Eind": -0.0004635353239533062,
+        "Enuc": 474.74808217020274,
+        "Etot": 0.003104160252285582,
+    }
+    print("SAPT_DFT_DO_FSAPT = FISAPT0 now testing")
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "guess": "sad",
+            "FISAPT_FSAPT_FILEPATH": "none",
+            "SAPT_DFT_FUNCTIONAL": "HF",
+            "SAPT_DFT_DO_DHF": True,
+            "SAPT_DFT_DO_HYBRID": False,
+            "SAPT_DFT_DO_FSAPT": "FISAPT",
+            "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+            # Normally on
+            "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
+        }
+    )
+    _, wfn = psi4.energy("sapt(dft)", molecule=mol, return_wfn=True)
+    Epsi = {
+        "Enuc": mol.nuclear_repulsion_energy(),
+        "Eelst": core.variable("SAPT ELST ENERGY"),
+        "Eexch": core.variable("SAPT EXCH ENERGY"),
+        "Eind": core.variable("SAPT IND ENERGY"),
+        "Edisp": core.variable("SAPT DISP ENERGY"),
+        "Etot": core.variable("SAPT TOTAL ENERGY"),
+    }
+    pp(Epsi)
+    for key in keys:
+        compare_values(Eref[key], Epsi[key], 5, key)
+    fsapt_data = psi4.fsapt_analysis(
+        source=wfn,
+        fragments_a={
+            "Methyl1_A": [1, 2, 7, 8],
+            "Methyl2_A": [3, 4, 5, 6],
+        },
+        fragments_b={
+            "Peptide_B": [9, 10, 11, 16, 26],
+            "T-Butyl_B": [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+        },
+        links5050=True,
+        print_output=False,
+    )
+    for label_key in ["Frag1", "Frag2"]:
+        assert list(fsapt_data[label_key]) == ref_data[label_key]
+    for col in ["Elst", "Exch", "IndAB", "IndBA", "Disp", "EDisp", "Total"]:
+        for i in range(len(ref_data[col])):
+            compare_values(
+                ref_data[col][i],
+                fsapt_data[col][i],
+                4,
+                f"{ref_data['Frag1'][i]} {ref_data['Frag2'][i]} {col}",
+            )
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_fsaptdft_fisapt0():
+    """Confirm fisapt0 and HF SAPT(DFT) produce matching SAPT energy components."""
+    mol = psi4.geometry(
+        """
+0 1
+C   11.54100       27.68600       13.69600
+H   12.45900       27.15000       13.44600
+C   10.79000       27.96500       12.40600
+H   10.55700       27.01400       11.92400
+H   9.879000       28.51400       12.64300
+H   11.44300       28.56800       11.76200
+H   10.90337       27.06487       14.34224
+H   11.78789       28.62476       14.21347
+--
+0 1
+C   10.60200       24.81800       6.466000
+O   10.95600       23.84000       7.103000
+N   10.17800       25.94300       7.070000
+C   10.09100       26.25600       8.476000
+C   9.372000       27.59000       8.640000
+C   11.44600       26.35600       9.091000
+C   9.333000       25.25000       9.282000
+H   9.874000       26.68900       6.497000
+H   9.908000       28.37100       8.093000
+H   8.364000       27.46400       8.233000
+H   9.317000       27.84600       9.706000
+H   9.807000       24.28200       9.160000
+H   9.371000       25.57400       10.32900
+H   8.328000       25.26700       8.900000
+H   11.28800       26.57600       10.14400
+H   11.97000       27.14900       8.585000
+H   11.93200       25.39300       8.957000
+H   10.61998       24.85900       5.366911
+units angstrom
+
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+
+    # Run standard FISAPT0
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "guess": "sad",
+            "freeze_core": "true",
+            "FISAPT_FSAPT_FILEPATH": "none",
+            "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
+        }
+    )
+    psi4.energy("fisapt0", molecule=mol)
+
+    # Collect FISAPT0 energies
+    fisapt0_energies = {
+        "Enuc": mol.nuclear_repulsion_energy(),
+        "Eelst": core.variable("SAPT ELST ENERGY"),
+        "Eexch": core.variable("SAPT EXCH ENERGY"),
+        "Eind": core.variable("SAPT IND ENERGY"),
+        "Edisp": core.variable("SAPT DISP ENERGY"),
+        "Etot": core.variable("SAPT TOTAL ENERGY"),
+    }
+    print("FISAPT0 energies:")
+    pp(fisapt0_energies)
+
+    # Clear variables for next calculation
+    psi4.core.clean()
+    psi4.core.clean_variables()
+
+    # Run SAPT(DFT) with FISAPT option (HF functional to match SAPT0)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "guess": "sad",
+            "freeze_core": "true",
+            "FISAPT_FSAPT_FILEPATH": "none",
+            "SAPT_DFT_FUNCTIONAL": "HF",
+            "SAPT_DFT_DO_DHF": True,
+            "SAPT_DFT_DO_HYBRID": False,
+            "SAPT_DFT_DO_FSAPT": "FISAPT",
+            "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+            "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
+        }
+    )
+    _, wfn = psi4.energy("sapt(dft)", molecule=mol, return_wfn=True)
+
+    # Collect SAPT(DFT) energies
+    saptdft_energies = {
+        "Enuc": mol.nuclear_repulsion_energy(),
+        "Eelst": core.variable("SAPT ELST ENERGY"),
+        "Eexch": core.variable("SAPT EXCH ENERGY"),
+        "Eind": core.variable("SAPT IND ENERGY"),
+        "Edisp": core.variable("SAPT DISP ENERGY"),
+        "Etot": core.variable("SAPT TOTAL ENERGY"),
+    }
+    print("SAPT(DFT) with FISAPT energies:")
+    pp(saptdft_energies)
+
+    # Compare total energies (5 decimal places = ~0.01 kcal/mol precision)
+    keys = ["Enuc", "Eelst", "Eexch", "Eind", "Edisp", "Etot"]
+    for key in keys:
+        compare_values(
+            fisapt0_energies[key],
+            saptdft_energies[key],
+            5,
+            f"Total {key}",
+        )
+
+
+if __name__ == "__main__":
+    psi4.set_memory("220 GB")
+    # psi4.set_num_threads(24)
+    psi4.set_num_threads(12)
+    # test_fsaptdft_timer()
+    # test_fsaptdftd4_psivars_pbe0_frozen_core()
+    # test_fsapthf_disp0_fisapt0_psivars()
+    pytest.main([
+        __file__,
+        "-v",
+        "-s",
+        "-k=test_saptdft_auto_grac",
+        "--disable-warnings",
+        # "--maxfail=1",
+    ])
