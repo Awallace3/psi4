@@ -174,6 +174,7 @@ option_with_print(ENABLE_AUTO_BLAS "Enables CMake to auto-detect BLAS" ON)
 option_with_print(ENABLE_AUTO_LAPACK "Enables CMake to auto-detect LAPACK" ON)
 option_with_print(ENABLE_PLUGIN_TESTING "Test the plugin templates build and run" OFF)
 option_with_print(ENABLE_CYTHONIZE "Compile each python file rather than plaintext (requires cython) !experimental!" OFF)
+option_with_print(ENABLE_PYTHON_STUBS "Generate .pyi type stubs for the compiled psi4.core module, for editor completion (requires pybind11-stubgen)" OFF)
 # sadly, it seems FORCE_PEDANTIC runs into issues with GauXC when option_with_flag is used
 # option_with_print + setting -pedantic-errors in psi4/CMakeLists.txt seems to fix this
 option_with_print(FORCE_PEDANTIC "Forces code to comply with the language standard." OFF)
@@ -383,6 +384,31 @@ ExternalProject_Add(psi4-core
               -DOpenMP_CXX_LIB_NAMES:STRING=${OpenMP_CXX_LIB_NAMES}
    USES_TERMINAL_BUILD 1
    BUILD_ALWAYS 1)
+
+# <<<  Type stubs for the compiled module  >>>
+# Editors and Python language servers cannot introspect the pybind11 extension,
+# so psi4.core has no completion or docstrings without a .pyi interface. Write
+# one next to the staged extension, where it is found by any tool that already
+# resolves the staged psi4 package, and where the install rule below picks it up.
+if(ENABLE_PYTHON_STUBS)
+    execute_process(COMMAND ${Python_EXECUTABLE} -c "import pybind11_stubgen"
+                    RESULT_VARIABLE _pybind11_stubgen_missing
+                    OUTPUT_QUIET ERROR_QUIET)
+    if(_pybind11_stubgen_missing)
+        message(FATAL_ERROR "ENABLE_PYTHON_STUBS requires pybind11-stubgen. Install it with:\n"
+                            "    ${Python_EXECUTABLE} -m pip install pybind11-stubgen")
+    endif()
+
+    set(_psi4_stub_pymod_dir ${STAGED_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR})
+    add_custom_target(psi4-core-stubs ALL
+        COMMAND ${Python_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/devtools/scripts/generate_psi4_core_stubs.py
+                --stage-lib ${_psi4_stub_pymod_dir}
+                --output-dir ${_psi4_stub_pymod_dir}
+        COMMENT "Generating psi4.core type stubs"
+        VERBATIM)
+    add_dependencies(psi4-core-stubs psi4-core)
+endif()
 
 add_subdirectory(external/downstream)
 add_subdirectory(doc)
