@@ -268,6 +268,13 @@ class CPHF_FISAPT {
 
 }  // Namespace fisapt
 
+double sapt_nuclear_external_potential_matrix(
+    std::shared_ptr<Wavefunction> reference_,
+    // std::shared_ptr<Matrix> Enucsp_matrix,
+    std::map<std::string, std::shared_ptr<Matrix>>& matrices_,
+    Options& options_
+);
+
 }  // Namespace psi
 
 #endif

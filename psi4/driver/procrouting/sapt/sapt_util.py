@@ -43,7 +43,7 @@ def print_sapt_var(name, value, short=False, start_spacer="    "):
         return start_spacer + "%-28s % 15.8f [mEh] % 15.8f [kcal/mol] % 15.8f [kJ/mol]" % vals
 
 
-def print_sapt_hf_summary(data, name, short=False, delta_hf=False):
+def print_sapt_hf_summary(data, name, dimer_wfn, short=False, delta_hf=False):
 
     ret = "   Partial %s Results, to compute Delta HF (dHF)\n" % name
     ret += "  " + "-" * 105 + "\n"
@@ -110,6 +110,7 @@ def print_sapt_hf_summary(data, name, short=False, delta_hf=False):
         ret += print_sapt_var("  Exch-Disp20", data["Exch-Disp20,u"]) + "\n"
         ret += "\n"
         core.set_variable("SAPT DISP ENERGY", disp)
+        dimer_wfn.set_variable("SAPT DISP ENERGY", disp)
 
         # Total energy
         total = data["Elst10,r"] + data["Exch10"] + ind + disp
@@ -117,6 +118,9 @@ def print_sapt_hf_summary(data, name, short=False, delta_hf=False):
         core.set_variable("SAPT0 TOTAL ENERGY", total)
         core.set_variable("SAPT TOTAL ENERGY", total)
         core.set_variable("CURRENT ENERGY", total)
+        dimer_wfn.set_variable("SAPT0 TOTAL ENERGY", total)
+        dimer_wfn.set_variable("SAPT TOTAL ENERGY", total)
+        dimer_wfn.set_variable("CURRENT ENERGY", total)
 
         ret += "  " + "-" * 105 + "\n"
         return ret
@@ -127,11 +131,15 @@ def print_sapt_dft_summary(data, name, dimer_wfn, do_dft=True, short=False):
     ret += "  " + "-" * 105 + "\n"
 
     # Elst
-    ret += print_sapt_var("Electrostatics", data["Elst10,r"]) + "\n"
+    extern_extern_IE = data.get('extern_extern_IE', 0)
+    ret += print_sapt_var("Electrostatics", data["Elst10,r"] + extern_extern_IE) + "\n"
     ret += print_sapt_var("  Elst1,r", data["Elst10,r"]) + "\n"
+    if extern_extern_IE != 0:
+        ret += print_sapt_var("  Elst (extern-extern)", data["extern_extern_IE"]) + "\n"
     ret += "\n"
-    core.set_variable("SAPT ELST ENERGY", data["Elst10,r"])
-    dimer_wfn.set_variable("SAPT ELST ENERGY", data["Elst10,r"])
+    elst = data["Elst10,r"] + extern_extern_IE
+    core.set_variable("SAPT ELST ENERGY", elst)
+    dimer_wfn.set_variable("SAPT ELST ENERGY", elst)
 
     # Exchange
     ret += print_sapt_var("Exchange", data["Exch10"]) + "\n"
@@ -161,6 +169,7 @@ def print_sapt_dft_summary(data, name, dimer_wfn, do_dft=True, short=False):
 
     ret += "\n"
     core.set_variable("SAPT IND ENERGY", ind)
+    dimer_wfn.set_variable("SAPT IND ENERGY", ind)
 
     # Dispersion
     if do_dft:
@@ -171,20 +180,18 @@ def print_sapt_dft_summary(data, name, dimer_wfn, do_dft=True, short=False):
         if core.get_option("SAPT", "SAPT_DFT_EXCH_DISP_SCALE_SCHEME") != "NONE":
             ret += print_sapt_var("  Est. Exch-Disp2,r", data["Exch-Disp20,r"]) + "\n"
         ret += print_sapt_var("  Exch-Disp2,u", data["Exch-Disp20,u"]) + "\n"
-        ret += "\n"
-        core.set_variable("SAPT DISP ENERGY", disp)
-        dimer_wfn.set_variable("SAPT DISP ENERGY", disp)
     else:
         disp = data["Disp20,u"] + data["Exch-Disp20,u"]
         ret += print_sapt_var("Dispersion", disp) + "\n"
         ret += print_sapt_var("  Disp20", data["Disp20,u"]) + "\n"
         ret += print_sapt_var("  Exch-Disp20", data["Exch-Disp20,u"]) + "\n"
-        ret += "\n"
-        core.set_variable("SAPT DISP ENERGY", disp)
-        dimer_wfn.set_variable("SAPT DISP ENERGY", disp)
-    
+
+    ret += "\n"
+    core.set_variable("SAPT DISP ENERGY", disp)
+    dimer_wfn.set_variable("SAPT DISP ENERGY", disp)
+
     # Total energy
-    total = data["Elst10,r"] + data["Exch10"] + ind + disp
+    total = data["Elst10,r"] + extern_extern_IE + data["Exch10"] + ind + disp
     ret += print_sapt_var("Total %-17s" % name, total, start_spacer="    ") + "\n"
     core.set_variable("SAPT(DFT) TOTAL ENERGY", total)
     core.set_variable("SAPT TOTAL ENERGY", total)
