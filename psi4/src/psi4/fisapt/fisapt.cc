@@ -187,7 +187,6 @@ void FISAPT::partition() {
     auto QF = std::make_shared<Matrix>("QF", 3, na);
     double** QFp = QF->pointer();
     double** Qp = matrices_["Qocc"]->pointer();
-
     for (int ind = 0; ind < indA.size(); ind++) {
         for (int a = 0; a < na; a++) {
             QFp[0][a] += Qp[indA[ind]][a];
@@ -290,7 +289,6 @@ void FISAPT::partition() {
     } else {
         throw PSIEXCEPTION("FISAPT: Unrecognized FISAPT_LINK_SELECTION option.");
     }
-
     outfile->Printf("    Total Link Bonds = %zu\n\n", link_orbs.size());
 
     if (link_orbs.size()) {
@@ -473,6 +471,7 @@ void FISAPT::partition() {
         QBvals.push_back(std::pair<double, int>(QFp[1][a], a));
     }
     std::sort(QBvals.begin(), QBvals.end(), std::greater<std::pair<double, int> >());
+
     for (int ind = 0; ind < RB2; ind++) {
         int a = QBvals[ind].second;
         orbsB.push_back(a);
@@ -507,9 +506,6 @@ void FISAPT::partition() {
     matrices_["LoccC"]->set_name("LoccC");
     matrices_["LoccL"]->set_name("LoccL");
 
-    // matrices_["LoccA"]->print();
-    // matrices_["LoccB"]->print();
-    // matrices_["LoccC"]->print();
 
     // => Summary <= //
 
@@ -558,6 +554,7 @@ void FISAPT::kinetic() {
     matrices_["T"] = std::make_shared<Matrix>("T", nm, nm);
     Tint->compute(matrices_["T"]);
 }
+
 
 void FISAPT::nuclear() {
     outfile->Printf("  ==> Nuclear Integrals <==\n\n");
@@ -1116,9 +1113,6 @@ void FISAPT::unify() {
         vectors_["ZA"] = ZA;
         vectors_["ZB"] = ZB;
         vectors_["ZC"] = ZC;
-        vectors_["ZA"]->print();
-        vectors_["ZB"]->print();
-        vectors_["ZC"]->print();
         for (int i = 0; i < nlink; i++) {
           link_orbs.push_back(0);
           for (int k = 0; k < nm; k++) {
@@ -2260,16 +2254,13 @@ void FISAPT::elst() {
     for (int k = 0; k < Elst10_terms.size(); k++) {
         Elst10 += Elst10_terms[k];
     }
-    // for (int k = 0; k < Elst10_terms.size(); k++) {
-    //    outfile->Printf("    Elst10,r (%1d)        = %18.12lf [Eh]\n",k+1,Elst10_terms[k]);
-    //}
 
     scalars_["Elst10,r"] = Elst10;
     outfile->Printf("    Elst10,r            = %18.12lf [Eh]\n", Elst10);
 
     // External potential interactions
     if (reference_->has_potential_variable("A") && reference_->has_potential_variable("B")) {
-        // Add the interaction between the external potenitals in A and B
+        // Add the interaction between the external potentials in A and B
         // Multiply by 2 to get the full A-B + B-A interaction energy
         scalars_["Extern-Extern"] = matrices_["extern_extern_IE"]->get(0, 1)*2.0; 
         outfile->Printf("    Extern-Extern       = %18.12lf [Eh]\n", scalars_["Extern-Extern"]);
@@ -4156,7 +4147,7 @@ std::shared_ptr<Matrix> FISAPT::build_exch_ind_pot_avg(std::map<std::string, std
 // Compute total dispersion contribution
 // This definition is NOT appropriate for the SAOn/SIAOn ISAPT variants, but it is not called in an ISAPT workflow (FISAPT::fdisp is).
 void FISAPT::disp(std::map<std::string, SharedMatrix> matrix_cache, std::map<std::string, SharedVector> vector_cache,
-                  bool do_print) {
+              bool do_print) {
     if (do_print) {
         outfile->Printf("  ==> Dispersion <==\n\n");
     }
@@ -5258,6 +5249,9 @@ void FISAPT::flocalize() {
         int nf = matrices_["Cfocc0A"]->colspi()[0];
         int na = matrices_["Caocc0A"]->colspi()[0];
         int nm = nf + na;
+        outfile->Printf("    Number of frozen core orbitals: %d\n", nf);
+        outfile->Printf("    Number of active occupied orbitals: %d\n", na);
+        outfile->Printf("    Total number of occupied orbitals: %d\n\n", nm);
 
         std::vector<int> ranges;
         ranges.push_back(0);
@@ -6187,6 +6181,7 @@ void FISAPT::find() {
 
         K_O->transpose_this();
     }
+
     double** wATp = wAT->pointer();
     double** uATp = uAT->pointer();
     double** wBTp = wBT->pointer();
@@ -6523,9 +6518,14 @@ void FISAPT::find() {
 
     if (ind_scale) {
         double dHF = 0.0;
-        if (scalars_["HF"] != 0.0) {
+        // When coming from SAPT(DFT), we want a dHF from SAPT0 terms, so check it this scalar, 'SAPT0 dHF' exists, and if not, compute, but log that we're doing so.
+        if (scalars_.find("SAPT0 dHF") != scalars_.end()) {
+            dHF = scalars_["SAPT0 dHF"];
+            outfile->Printf("    Using SAPT0 dHF for induction scaling: %11.3E [Eh]\n", dHF);
+        } else if (scalars_["HF"] != 0.0) {
             dHF = scalars_["HF"] - scalars_["Elst10,r"] - scalars_["Exch10"] - scalars_["Ind20,r"] -
                   scalars_["Exch-Ind20,r"];
+            outfile->Printf("    No provided dHF correction found; using (HF - Elst10,r - Exch10 - Ind20,r - Exch-Ind20,r) for induction scaling: %11.3E [Eh]\n", dHF);
         }
         double IndHF = scalars_["Ind20,r"] + scalars_["Exch-Ind20,r"] + dHF;
         double IndSAPT0 = scalars_["Ind20,r"] + scalars_["Exch-Ind20,r"];
@@ -7972,6 +7972,36 @@ std::map<std::string, std::shared_ptr<Matrix> > CPHF_FISAPT::product(
     }
 
     return s;
+}
+
+// method for updating/setting matrices_, if key exists, update it, else create it
+void FISAPT::set_matrix(std::map<std::string, std::shared_ptr<Matrix>> update_matrices) {
+    for (const auto& pair : update_matrices) {
+        const std::string& key = pair.first;
+        const std::shared_ptr<Matrix>& matrix = pair.second;
+        // outfile->Printf(" Setting matrix %s\n", key.c_str());
+        matrices_[key] = matrix;
+    }
+}
+
+// method for updating/setting vector_, if key exists, update it, else create it
+void FISAPT::set_vector(std::map<std::string, std::shared_ptr<Vector>> update_vector) {
+    for (const auto& pair : update_vector) {
+        const std::string& key = pair.first;
+        const std::shared_ptr<Vector>& vec = pair.second;
+        // outfile->Printf(" Setting vector %s\n", key.c_str());
+        vectors_[key] = vec;
+    }
+}
+
+// method for updating/setting scalars_, if key exists, update it, else create it
+void FISAPT::set_scalar(std::map<std::string, double> update_scalars) {
+    for (const auto& pair : update_scalars) {
+        const std::string& key = pair.first;
+        const double& val = pair.second;
+        // outfile->Printf(" Setting scalar %s\n", key.c_str());
+        scalars_[key] = val;
+    }
 }
 
 }  // Namespace fisapt
