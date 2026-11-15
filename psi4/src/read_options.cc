@@ -1189,6 +1189,11 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_str("SAPT_DFT_GRAC_BASIS", "AUTO");
         /*- Compute the Delta-HF correction? -*/
         options.add_bool("SAPT_DFT_DO_DHF", true);
+        /*- Induction treatment for SAPT(DFT). ``CPKS`` computes DFT response,
+        ``CPHF`` reuses the SAPT0 induction terms computed from HF orbitals
+        (adding the Delta-HF correction only when |sapt__sapt_dft_do_dhf| is
+        true), and ``NONE`` omits second-order induction. -*/
+        options.add_str("SAPT_DFT_INDUCTION_TYPE", "CPKS", "CPKS CPHF NONE");
         /*- Enables the hybrid xc kernel in dispersion? !expert -*/
         options.add_bool("SAPT_DFT_DO_HYBRID", true);
         /*- Scheme for approximating exchange-dispersion for SAPT-DFT.

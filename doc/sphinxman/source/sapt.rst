@@ -546,14 +546,35 @@ estimated by scaling from the uncoupled value either by a fitted fixed value
 ratio of coupled and uncoupled dispersion energy (suggested by
 [Podeszwa:2006:400]_ ). This can be controlled by keyword
 |sapt__sapt_dft_exch_disp_scale_scheme|, with ``FIXED`` using the
-Hesselmann/Xie approach (|PSIfours| default prior to Nov 2022), ``DISP`` using
-the Podeszwa approach (|PSIfours| default after Nov 2022), or ``NONE`` for not
-scaling and using the uncoupled exchange-dispersion energy directly.
+Hesselmann/Xie approach (the current default, with the Xie factor of 0.770 versus |PSIfours| default prior to Nov 2022),
+``DISP`` using the Podeszwa approach (|PSIfours| default after Nov 2022), or ``NONE`` for not scaling and using the
+uncoupled exchange-dispersion energy directly.
 
 .. warning:: Since Nov 2022, the defaults of options |sapt__sapt_dft_exch_disp_scale_scheme| and |sapt__sapt_dft_exch_disp_fixed_scale|
              have been changed. Before, the former defaulted to ``FIXED`` with Hesselmann value of 0.686 for the latter. Now, the former defaults to ``DISP`` and should you instead select ``FIXED``, the default for the latter is the Xie value of 0.770. This might cause
              an older version of |PSIfour| to produce a different value of
              exchange-dispersion energy from the latest version.
+
+Induction treatments
+~~~~~~~~~~~~~~~~~~~~
+
+|sapt__sapt_dft_induction_type| controls the induction calculation. The default,
+``CPKS``, evaluates the SAPT(DFT) response. ``CPHF`` skips that response and uses
+the SAPT0 induction terms computed from the HF orbitals instead; the final table
+identifies their SAPT0 source. This approximation is effective because SAPT0
+captures nearly all induction effects, with statistically negligible shifts
+relative to CPKS induction. With |sapt__sapt_dft_do_dhf| enabled, ``CPHF`` also
+reuses the :math:`\Delta`-HF correction from that segment; with it disabled, only
+the SAPT0 :math:`E_{ind,resp}^{(2)}` and :math:`E_{exch-ind,resp}^{(2)}` terms are
+reported and no :math:`\Delta`-HF correction is computed or stored.
+
+``NONE`` omits the second-order induction breakdown. Without
+:math:`\Delta`-HF, induction is zero. With :math:`\Delta`-HF, its total
+induction is defined from the SAPT0 electrostatics and exchange computed in the
+HF segment,
+:math:`E_{ind}=E_{int}^{HF}-E_{elst}^{SAPT0}-E_{exch}^{SAPT0}`. This equals the
+total ``CPHF`` induction, but no ``Ind20`` or directional breakdown is
+available.
 
 External potentials
 ~~~~~~~~~~~~~~~~~~~
@@ -591,6 +612,7 @@ Basic Keywords for SAPT(DFT)
 .. include:: autodir_options_c/sapt__sapt_dft_grac_shift_a.rst
 .. include:: autodir_options_c/sapt__sapt_dft_grac_shift_b.rst
 .. include:: autodir_options_c/sapt__sapt_dft_do_dhf.rst
+.. include:: autodir_options_c/sapt__sapt_dft_induction_type.rst
 .. include:: autodir_options_c/sapt__sapt_dft_exch_disp_scale_scheme.rst
 .. include:: autodir_options_c/sapt__sapt_dft_grac_compute.rst
 
