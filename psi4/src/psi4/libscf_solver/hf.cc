@@ -380,13 +380,24 @@ void HF::initialize_gtfock_jk() {
 #endif
 }
 
+size_t HF::diag_scratch_size() const {
+    // Matrix::diagonalize_dsyevd workspace for the largest irrep
+    size_t n = 0;
+    for (int h = 0; h < nirrep_; h++) n = std::max(n, static_cast<size_t>(nsopi_[h]));
+    return Matrix::dsyevd_scratch_size(n);
+}
 void HF::finalize() {
     // Clean memory off, handle diis closeout, etc
 
     // This will be the only one
     if (!options_.get_bool("SAVE_JK")) {
         jk_.reset();
+    } else if (jk_) {
+        jk_->release_scratch();
     }
+    // The potential outlives the SCF (gradients, TDDFT); its SCF-only scratch does not.
+    std::vector<double>().swap(diag_work_);
+    std::vector<int>().swap(diag_iwork_);
 
     // Clean up after DIIS
     if (initialized_diis_manager_) diis_manager_.attr("delete_diis_file")();
@@ -1358,9 +1369,10 @@ void HF::diagonalize_F(const SharedMatrix& Fm, SharedMatrix& Cm, std::shared_ptr
     // Form F' = X'FX for canonical orthogonalization
     auto diag_F_temp = linalg::triplet(X_, Fm, X_, true, false, false);
 
-    // Form C' = eig(F')
+    // Form C' = eig(F') with DSYEVD; the workspace persists across iterations, is charged by
+    // scf_initialize through diag_scratch_size(), and is freed in finalize().
     auto diag_C_temp = std::make_shared<Matrix>(nmopi_, nmopi_);
-    diag_F_temp->diagonalize(diag_C_temp, epsm);
+    diag_F_temp->diagonalize_dsyevd(*diag_C_temp, *epsm, diag_work_, diag_iwork_);
 
     // Form C = XC'
     Cm->gemm(false, false, 1.0, X_, diag_C_temp, 0.0);

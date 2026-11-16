@@ -32,11 +32,22 @@
 // without dragging in libdpd or the python bindings TU.
 
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
 
 #include "psi4/libpsi4util/PsiOutStream.h"
+#ifdef _WIN32
+// A standalone host supplies only one DPD member, not a complete DLL export.
+#pragma push_macro("PSI_API")
+#undef PSI_API
+#define PSI_API
+#endif
+#include "psi4/libdpd/dpd.h"
+#ifdef _WIN32
+#pragma pop_macro("PSI_API")
+#endif
 
 namespace psi {
 
@@ -50,26 +61,10 @@ std::shared_ptr<PsiOutStream> outfile;
 // matches the real declaration in libqt/qt.h (returns int).
 int C_DSYEV(char, char, int, double *, int, double *, double *, int) { return 0; }
 
-// PSIO::close calls global_dpd_->file4_cache_del_filenum on every file close.
-// In a non-DPD context the cache is empty, so a minimal DPD with a no-op method
-// and a non-null instance keeps the call well-defined without linking libdpd.
-//
-// This is an ODR violation: close.cc is compiled against the real psi::DPD from
-// libdpd/dpd.h, while this TU defines a different psi::DPD. It is well-defined
-// enough in practice only because the call is non-virtual and the mangled name
-// matches. The parameter type must therefore be spelled exactly as in dpd.h --
-// `size_t`, not `unsigned long`. They coincide on LP64 but not on Windows x64
-// (where size_t is unsigned __int64 and unsigned long is 32-bit) nor on ILP32,
-// and a mismatch there is an undefined symbol at link time, not a diagnostic.
-class DPD {
-   public:
-    void file4_cache_del_filenum(std::size_t);
-};
-void DPD::file4_cache_del_filenum(std::size_t) {}
-
-namespace {
-DPD stub_dpd_instance;
-}
-DPD *global_dpd_ = &stub_dpd_instance;
+// Exercise real non-DPD hosting, as in SCF/DIIS. Use the actual declaration
+// rather than an incompatible fake DPD class. Any attempted cache call must
+// fail the round-trip test, including in ordinary non-sanitized builds.
+DPD *global_dpd_ = nullptr;
+void DPD::file4_cache_del_filenum(std::size_t) { std::abort(); }
 
 }  // namespace psi

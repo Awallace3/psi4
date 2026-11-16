@@ -152,7 +152,7 @@ class PSI_API TwoBodyAOInt {
 
     void setup_sieve();
     void create_sieve_pair_info_manager();
-    void create_sieve_pair_info(const std::shared_ptr<BasisSet> bs, PairList &shell_pairs, bool is_bra);
+    virtual void create_sieve_pair_info(const std::shared_ptr<BasisSet> bs, PairList &shell_pairs, bool is_bra);
 
     /// Implements CSAM screening of a shell quartet
     bool shell_significant_csam(int M, int N, int R, int S);

@@ -219,6 +219,9 @@ class HF : public Wavefunction {
 
     /** Transformation, diagonalization, and backtransform of Fock matrix */
     virtual void diagonalize_F(const SharedMatrix& F, SharedMatrix& C, std::shared_ptr<Vector>& eps);
+    /// DSYEVD workspace kept across diagonalize_F calls; freed in finalize()
+    std::vector<double> diag_work_;
+    std::vector<int> diag_iwork_;
 
     /** Form Fia (for DIIS) **/
     virtual SharedMatrix form_Fia(SharedMatrix Fso, SharedMatrix Cso, const Dimension& noccpi);
@@ -227,6 +230,8 @@ class HF : public Wavefunction {
     virtual void format_guess();
 
    public:
+    /// Doubles held between iterations by diagonalize_F's DSYEVD workspace (freed in finalize)
+    size_t diag_scratch_size() const;
     HF(SharedWavefunction ref_wfn, std::shared_ptr<SuperFunctional> funct, Options& options,
        std::shared_ptr<PSIO> psio);
 

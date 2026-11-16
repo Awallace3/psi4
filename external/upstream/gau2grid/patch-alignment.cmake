@@ -1,0 +1,16 @@
+# Gau2Grid's GCC/PGI C11 allocator must receive an alignment-multiple size.
+# SPDX-License-Identifier: BSD-3-Clause
+set(_pragma "${GAU2GRID_SOURCE_DIR}/gau2grid/c_pragma.py")
+file(READ "${_pragma}" _source)
+set(_old "aligned_alloc(alignment, size)")
+set(_new "aligned_alloc((alignment), (((size) + (alignment) - 1) / (alignment)) * (alignment))")
+string(FIND "${_source}" "${_old}" _found)
+if(_found EQUAL -1)
+    string(FIND "${_source}" "${_new}" _already_patched)
+    if(_already_patched EQUAL -1)
+        message(FATAL_ERROR "Unexpected Gau2Grid allocator template; review its alignment handling.")
+    endif()
+else()
+    string(REPLACE "${_old}" "${_new}" _source "${_source}")
+    file(WRITE "${_pragma}" "${_source}")
+endif()

@@ -20,6 +20,8 @@ else()
         DEPENDS pybind11_external
         URL https://github.com/dgasmith/gau2grid/archive/c2d78e0.tar.gz  # v2.0.7+  # edit in codedeps
         UPDATE_COMMAND ""
+        PATCH_COMMAND ${CMAKE_COMMAND} -DGAU2GRID_SOURCE_DIR=<SOURCE_DIR>
+                      -P ${CMAKE_CURRENT_LIST_DIR}/patch-alignment.cmake
         CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${STAGED_INSTALL_PREFIX}
                    -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
                    -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}

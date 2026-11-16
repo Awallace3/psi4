@@ -892,6 +892,24 @@ class PSI_API Matrix : public std::enable_shared_from_this<Matrix> {
     /// @}
 
     /// @{
+    /// Same result contract as diagonalize(eigvectors, eigvalues, ascending), computed with LAPACK's
+    /// divide-and-conquer DSYEVD and a queried workspace instead of DSYEV with a minimal one
+    /// (~2x faster for N in the hundreds to thousands, at ~3N^2 scratch doubles).
+    /// This matrix is left unchanged. work/iwork are caller-owned and only ever grow, so a caller
+    /// that diagonalizes every iteration (SCF) can keep them; dsyevd_scratch_size() gives their size
+    /// in doubles for accounting. An irrep for which DSYEVD fails is redone with DSYEV.
+    /// Eigenvector phases may differ from diagonalize().
+    void diagonalize_dsyevd(Matrix& eigvectors, Vector& eigvalues, std::vector<double>& work,
+                            std::vector<int>& iwork);
+    void diagonalize_dsyevd(SharedMatrix& eigvectors, std::shared_ptr<Vector>& eigvalues, std::vector<double>& work,
+                            std::vector<int>& iwork);
+    /// As above with a workspace that lives only for this call.
+    void diagonalize_dsyevd(Matrix& eigvectors, Vector& eigvalues);
+    /// Scratch (in doubles; the int workspace is rounded up) diagonalize_dsyevd needs for an n x n block.
+    static size_t dsyevd_scratch_size(size_t n);
+    /// @}
+
+    /// @{
     /// General SVD, such that A = USV. U, S, and V must be allocated by the caller.
     void svd(SharedMatrix& U, SharedVector& S, SharedMatrix& V);
     /// @}
