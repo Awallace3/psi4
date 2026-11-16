@@ -16,6 +16,242 @@ pytestmark = [pytest.mark.psi, pytest.mark.api]
 _ispy314 = sys.version_info >= (3, 14)
 
 
+@pytest.fixture
+def grac_dimer():
+    psi4.core.clean_options()
+    psi4.core.clean_variables()
+    mol = psi4.geometry(_sapt_testing_mols["neutral_water_dimer"])
+    psi4.set_options({
+        "basis": "sto-3g",
+        "sapt_dft_grac_compute": "single",
+        "sapt_dft_functional": "pbe0",
+        "e_convergence": 1e-10,
+        "d_convergence": 1e-10,
+    })
+    yield mol
+    psi4.core.clean_options()
+    psi4.core.clean_variables()
+    psi4.core.clean()
+
+
+@pytest.mark.saptdft
+def test_grac_only_matches_full(grac_dimer):
+    energy, full = psi4.energy("sapt(dft)", molecule=grac_dimer, return_wfn=True)
+    full_vars = full.variables()
+    assert full_vars["SAPT DFT GRAC SHIFT ONLY"] == 0.0
+    for key, value in full_vars.items():
+        if key.startswith("SAPT DFT GRAC"):
+            assert psi4.core.variable(key) == value
+    psi4.core.clean_variables()
+    psi4.set_options({"sapt_dft_grac_shift_only": True})
+    zero, only = psi4.energy("sapt(dft)", molecule=grac_dimer, return_wfn=True)
+    assert zero == 0.0
+    assert only.molecule().natom() == grac_dimer.natom()
+    for variables in (psi4.core.variables(), only.variables()):
+        assert variables["CURRENT ENERGY"] == 0.0
+        assert variables["SAPT DFT GRAC SHIFT ONLY"] == 1.0
+        assert "SAPT TOTAL ENERGY" not in variables
+        assert "SAPT ELST ENERGY" not in variables
+        for label in ("A", "B"):
+            for quantity in ("SHIFT", "MONOMER ENERGY", "IONIZED MONOMER ENERGY", "HOMO", "IP"):
+                key = f"SAPT DFT GRAC {quantity} {label}"
+                assert variables[key] == pytest.approx(full_vars[key], abs=1e-10, rel=0)
+
+
+@pytest.mark.saptdft
+def test_grac_cached_shifts_reproduce_energy(grac_dimer, monkeypatch):
+    # Minimal/small bases have fewer occupied-virtual pairs than auxiliary
+    # functions in FDDS, triggering DORGQR errors. Use a larger basis for replay;
+    # the independent full/shift-only QCVariable comparison stays STO-3G.
+    psi4.set_options({"basis": "aug-cc-pvdz"})
+    energy, full = psi4.energy("sapt(dft)", molecule=grac_dimer, return_wfn=True)
+    full_vars = full.variables()
+    psi4.core.clean_variables()
+    psi4.set_options({
+        "sapt_dft_grac_shift_only": False,
+        "sapt_dft_grac_shift_a": full_vars["SAPT DFT GRAC SHIFT A"],
+        "sapt_dft_grac_shift_b": full_vars["SAPT DFT GRAC SHIFT B"],
+    })
+    def forbidden(*args, **kwargs):
+        pytest.fail("Supplied shifts must not be recomputed")
+    monkeypatch.setattr(sapt_proc, "compute_GRAC_shift", forbidden)
+    cached = psi4.energy("sapt(dft)", molecule=grac_dimer)
+    assert cached == pytest.approx(energy, abs=1e-10, rel=0)
+    assert not psi4.core.has_variable("SAPT DFT GRAC HOMO A")
+
+
+@pytest.mark.saptdft
+def test_grac_only_supplied_shift(grac_dimer):
+    psi4.set_options({"sapt_dft_grac_shift_only": True, "sapt_dft_grac_shift_a": 0.12})
+    _, wfn = psi4.energy("sapt(dft)", molecule=grac_dimer, return_wfn=True)
+    for variables in (psi4.core.variables(), wfn.variables()):
+        assert variables["SAPT DFT GRAC SHIFT A"] == 0.12
+        assert "SAPT DFT GRAC SHIFT B" in variables
+        assert "SAPT DFT GRAC HOMO A" not in variables
+        assert "SAPT DFT GRAC HOMO B" in variables
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize("options,match", [
+    ({"sapt_dft_grac_compute": "none"}, "contradicts"),
+    ({"sapt_dft_functional": "hf"}, "non-HF"),
+    ({"reference": "uhf"}, "restricted"),
+])
+def test_grac_only_rejects_before_scf(grac_dimer, monkeypatch, options, match):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Invalid input must be rejected before SCF")
+    monkeypatch.setattr(sapt_proc, "run_scf", forbidden)
+    psi4.set_options({"sapt_dft_grac_shift_only": True, **options})
+    with pytest.raises(psi4.ValidationError, match=match):
+        psi4.energy("sapt(dft)", molecule=grac_dimer)
+
+
+@pytest.mark.saptdft
+def test_grac_only_skips_interaction_work(grac_dimer, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("GRAC-only must not enter SCF or interaction work with supplied shifts")
+    for name in ("run_scf", "scf_helper", "sapt_dft"):
+        monkeypatch.setattr(sapt_proc, name, forbidden)
+    psi4.set_options({
+        "sapt_dft_grac_shift_only": True,
+        "sapt_dft_grac_shift_a": 0.12,
+        "sapt_dft_grac_shift_b": 0.13,
+    })
+    assert psi4.energy("sapt(dft)", molecule=grac_dimer) == 0.0
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize("mode,row", [
+    ("points", [0.1, 1.0, 2.0, 3.0]),
+    ("diffuse", [0.1, 1.0, 2.0, 3.0, 0.5]),
+])
+def test_grac_field_union(mode, row):
+    distinct = row.copy()
+    distinct[-1] = np.nextafter(distinct[-1], np.inf)
+    combine = sapt_proc.construct_external_potential_in_field_C
+    # Rows are never dropped: two equal rows are two equal charges, and the
+    # dimer field has to stay the sum of the monomer fields.
+    assert combine([{mode: [row, row]}, {mode: [row.copy(), distinct]}]) == {
+        mode: [row, row, row, distinct]}
+    assert combine([{"matrix": [[1., 2.], [2., 3.]]}] * 2) == {
+        "matrix": [[2., 4.], [4., 6.]]}
+    with pytest.raises(psi4.ValidationError, match="identical dimensions"):
+        combine([{"matrix": [[1.]]}, {"matrix": np.eye(2)}])
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize("mode,row", [
+    ("points", [0.1, 1.0, 2.0, 3.0]),
+    ("diffuse", [0.1, 1.0, 2.0, 3.0, 0.5]),
+])
+def test_drop_rows_carried_by(mode, row):
+    distinct = row.copy()
+    distinct[-1] = np.nextafter(distinct[-1], np.inf)
+    drop = sapt_proc.drop_rows_carried_by
+    # A copy of a C row is trimmed from A; a near-miss is a different charge.
+    assert drop({mode: [row.copy(), distinct]}, {mode: [row]}) == {mode: [distinct]}
+    assert drop({mode: [distinct]}, {mode: [row]}) == {mode: [distinct]}
+    # No reference field means nothing to trim against.
+    assert drop({mode: [row]}, None) == {mode: [row]}
+    assert drop(None, {mode: [row]}) is None
+    # Matrix operators are opaque and pass through.
+    assert drop({"matrix": [[1.]]}, {"matrix": [[1.]]}) == {"matrix": [[1.]]}
+
+
+@pytest.mark.saptdft
+@pytest.mark.extern
+def test_grac_only_external_potential(grac_dimer):
+    psi4.set_options({"sapt_dft_grac_shift_only": True})
+    potential = {"A": {"points": [[0.1, 0., 4., 0.]]}}
+    _, vacuum = psi4.energy("sapt(dft)", molecule=grac_dimer,
+                           external_potentials=potential, return_wfn=True)
+    psi4.core.clean_variables()
+    psi4.set_options({"sapt_dft_grac_use_ext_pot": True})
+    _, embedded = psi4.energy("sapt(dft)", molecule=grac_dimer,
+                             external_potentials=potential, return_wfn=True)
+    assert abs(vacuum.variable("SAPT DFT GRAC SHIFT A") -
+               embedded.variable("SAPT DFT GRAC SHIFT A")) > 1e-8
+    assert vacuum.variable("SAPT DFT GRAC SHIFT B") == pytest.approx(
+        embedded.variable("SAPT DFT GRAC SHIFT B"), abs=1e-10, rel=0)
+    # C must never enter either monomer's ionization calculation, including
+    # when the same charge is copied into A so that it does reach the shift.
+    copied = {"A": potential["A"],
+              "C": {"points": potential["A"]["points"] + [[-0.2, 0., -4., 0.]]}}
+    _, with_c = psi4.energy("sapt(dft)", molecule=grac_dimer,
+                           external_potentials=copied, return_wfn=True)
+    for label in ("A", "B"):
+        key = f"SAPT DFT GRAC SHIFT {label}"
+        assert with_c.variable(key) == pytest.approx(embedded.variable(key), abs=1e-10, rel=0)
+    # Two equal rows are two charges, so doubling A really does move the shift.
+    psi4.core.clean_variables()
+    doubled = {"A": {"points": potential["A"]["points"] * 2}}
+    _, twice = psi4.energy("sapt(dft)", molecule=grac_dimer,
+                          external_potentials=doubled, return_wfn=True)
+    assert abs(twice.variable("SAPT DFT GRAC SHIFT A") -
+               embedded.variable("SAPT DFT GRAC SHIFT A")) > 1e-8
+
+
+@pytest.mark.saptdft
+@pytest.mark.extern
+def test_dimer_field_is_sum_of_monomer_fields(grac_dimer):
+    # The dimer field must carry every monomer charge, including one written
+    # into both A and B, or the embedding fails to cancel in the decomposition.
+    shared = [0.1, 0., 4., 0.]
+    potential = {"A": {"points": [shared, [0.2, 1., 4., 0.]]},
+                 "B": {"points": [shared, [-0.2, -1., 4., 0.]]}}
+    psi4.set_options({"sapt_dft_grac_shift_a": 0.1, "sapt_dft_grac_shift_b": 0.1})
+    _, dimer_wfn = psi4.energy("sapt(dft)", molecule=grac_dimer,
+                              external_potentials=potential, return_wfn=True)
+    charges = dimer_wfn.potential_variable("C").getCharges()
+    assert len(charges) == 4
+
+
+@pytest.mark.saptdft
+def test_grac_error_restores_options(grac_dimer, monkeypatch):
+    psi4.set_options({"sapt_dft_grac_basis": "6-31g"})
+    names = ["REFERENCE", "SAVE_JK", "MAXITER", "LEVEL_SHIFT",
+             "LEVEL_SHIFT_CUTOFF", "SCF_INITIAL_ACCELERATOR", "ORBITAL_OPTIMIZER_PACKAGE"]
+    before = {key: (psi4.core.get_option("SCF", key),
+                    psi4.core.has_local_option_changed("SCF", key)) for key in names}
+    basis = psi4.core.get_global_option("BASIS")
+    def fail(*args, **kwargs):
+        raise ValueError("injected SCF failure")
+    monkeypatch.setattr(sapt_proc, "run_scf", fail)
+    with pytest.raises(ValueError, match="injected"):
+        sapt_proc.compute_GRAC_shift(grac_dimer.extract_subsets(1), "SINGLE", "A")
+    assert psi4.core.get_global_option("BASIS") == basis
+    assert before == {key: (psi4.core.get_option("SCF", key),
+                           psi4.core.has_local_option_changed("SCF", key)) for key in names}
+
+
+@pytest.mark.saptdft
+@pytest.mark.skipif(_ispy314, reason="Py314+QCSk1")
+def test_grac_only_schema_wfn_variables(grac_dimer):
+    result = psi4.schema_wrapper.run_qcschema({
+        "schema_name": "qcschema_input",
+        "schema_version": 1,
+        "molecule": grac_dimer.to_schema(dtype=2),
+        "driver": "energy",
+        "model": {"method": "sapt(dft)", "basis": "sto-3g"},
+        "keywords": {
+            "sapt_dft_grac_shift_only": True,
+            "sapt_dft_grac_compute": "single",
+            "sapt_dft_functional": "pbe0",
+        },
+        "extras": {"wfn_qcvars_only": True},
+    })
+    assert result.success
+    # Exercise JSON serialization, not only the in-process wavefunction.
+    import json
+    serialized = json.loads(result.json())
+    assert serialized["return_result"] == 0.0
+    variables = serialized["extras"]["qcvars"]
+    assert float(variables["SAPT DFT GRAC SHIFT ONLY"]) == 1.0
+    assert "SAPT TOTAL ENERGY" not in variables
+    for label in ("A", "B"):
+        for quantity in ("SHIFT", "MONOMER ENERGY", "IONIZED MONOMER ENERGY", "HOMO", "IP"):
+            assert f"SAPT DFT GRAC {quantity} {label}" in variables
+
 _sapt_testing_mols = {
     "neutral_water_dimer": """
 0 1
@@ -1107,6 +1343,94 @@ def test_saptdft_sapt_dft_api_requires_hf_segment_data(induction_type, message):
     wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
     with pytest.raises(psi4.ValidationError, match=message):
         sapt_proc.sapt_dft(wfn, wfn, wfn, delta_hf=True)
+
+
+def _record_monomer_grac_shifts(monkeypatch):
+    """Record DFT_GRAC_SHIFT as each SAPT(DFT) monomer DFT SCF starts."""
+    seen = {}
+    scf_helper = sapt_proc.scf_helper
+
+    def recording_scf_helper(name, *args, **kwargs):
+        banner = kwargs.get("banner", "")
+        if banner.startswith("SAPT(DFT): DFT Monomer"):
+            seen[banner[-1]] = psi4.core.get_option("SCF", "DFT_GRAC_SHIFT")
+        return scf_helper(name, *args, **kwargs)
+
+    monkeypatch.setattr(sapt_proc, "scf_helper", recording_scf_helper)
+    return seen
+
+
+@pytest.mark.saptdft
+def test_grac_disabled_sentinel_is_not_applied(grac_dimer, monkeypatch, tmp_path):
+    # -1 turns GRAC off for both monomers: the sentinel must never reach the
+    # monomer SCF as DFT_GRAC_SHIFT, and the run must equal an unshifted one.
+    psi4.set_options({"sapt_dft_grac_compute": "none", "sapt_dft_do_dhf": False})
+    # STO-3G dispersion is not reproducible run to run (rank-deficient
+    # DORGQR), so compare the terms that do not involve it.
+    terms = ("SAPT ELST ENERGY", "SAPT EXCH ENERGY", "SAPT IND ENERGY")
+    psi4.set_options({"sapt_dft_grac_shift_a": 0.0, "sapt_dft_grac_shift_b": 0.0})
+    psi4.energy("sapt(dft)", molecule=grac_dimer)
+    unshifted = {term: psi4.variable(term) for term in terms}
+
+    psi4.core.clean_variables()
+    seen = _record_monomer_grac_shifts(monkeypatch)
+    outfile = tmp_path / "grac_disabled.dat"
+    psi4.set_output_file(str(outfile), False)
+    psi4.set_options({"sapt_dft_grac_shift_a": -1, "sapt_dft_grac_shift_b": -1})
+    _, wfn = psi4.energy("sapt(dft)", molecule=grac_dimer, return_wfn=True)
+
+    assert seen == {"A": 0.0, "B": 0.0}
+    for term in terms:
+        assert compare_values(unshifted[term], wfn.variable(term), 9, f"GRAC -1 equals unshifted: {term}")
+    for label in ("A", "B"):
+        assert psi4.variable(f"SAPT DFT GRAC SHIFT {label}") == 0.0
+        assert wfn.variable(f"SAPT DFT GRAC SHIFT {label}") == 0.0
+    # The driver must leave no shift behind for a later DFT SCF.
+    assert psi4.core.get_option("SCF", "DFT_GRAC_SHIFT") == 0.0
+    psi4.core.flush_outfile()
+    output = outfile.read_text()
+    assert "Monomer B GRAC disabled by SAPT_DFT_GRAC_SHIFT_B <= -1" in output
+    assert "Monomer A GRAC disabled by SAPT_DFT_GRAC_SHIFT_A <= -1" in output
+
+
+@pytest.mark.saptdft
+def test_grac_disabled_sentinel_is_per_monomer(grac_dimer, monkeypatch):
+    # Disable A while B is computed: only B goes through compute_GRAC_shift,
+    # and only B's shift reaches its monomer SCF.
+    computed = []
+
+    def fake_compute_grac_shift(molecule, tier, label, results=None, **kwargs):
+        computed.append(label)
+        for quantity in ("MONOMER ENERGY", "IONIZED MONOMER ENERGY", "HOMO", "IP"):
+            results[f"SAPT DFT GRAC {quantity} {label}"] = 0.0
+        return 0.125
+
+    monkeypatch.setattr(sapt_proc, "compute_GRAC_shift", fake_compute_grac_shift)
+    seen = _record_monomer_grac_shifts(monkeypatch)
+    psi4.set_options({"sapt_dft_grac_shift_a": -1.5, "sapt_dft_do_dhf": False})
+    psi4.energy("sapt(dft)", molecule=grac_dimer)
+
+    assert computed == ["B"]
+    assert seen == {"A": 0.0, "B": 0.125}
+    assert psi4.variable("SAPT DFT GRAC SHIFT A") == 0.0
+    assert psi4.variable("SAPT DFT GRAC SHIFT B") == 0.125
+
+
+@pytest.mark.saptdft
+def test_grac_disabled_sentinel_with_shift_only(grac_dimer, monkeypatch):
+    monkeypatch.setattr(
+        sapt_proc,
+        "compute_GRAC_shift",
+        lambda *args, **kwargs: pytest.fail("a disabled monomer must not compute GRAC"),
+    )
+    psi4.set_options({
+        "sapt_dft_grac_shift_only": True,
+        "sapt_dft_grac_shift_a": -1,
+        "sapt_dft_grac_shift_b": -1,
+    })
+    _, wfn = psi4.energy("sapt(dft)", molecule=grac_dimer, return_wfn=True)
+    assert wfn.variable("SAPT DFT GRAC SHIFT A") == 0.0
+    assert wfn.variable("SAPT DFT GRAC SHIFT B") == 0.0
 
 
 if __name__ == "__main__":

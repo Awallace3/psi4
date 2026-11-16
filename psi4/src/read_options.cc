@@ -1167,11 +1167,17 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
 
         /*- Monomer A GRAC shift in Hartree. To automatically compute prior to
         SAPT(DFT), do NOT set this option but set |sapt__sapt_dft_grac_compute|
-        to "SINGLE" or "ITERATIVE" as described below. -*/
+        to "SINGLE" or "ITERATIVE" as described below. Set to ``-1`` (any value
+        <= -1) to run monomer A without a GRAC correction; the sentinel is
+        never passed to |scf__dft_grac_shift|, so the monomer DFT runs
+        unshifted and the reported shift is zero. -*/
         options.add_double("SAPT_DFT_GRAC_SHIFT_A", 0.0);
         /*- Monomer B GRAC shift in Hartree. To automatically compute prior to
         SAPT(DFT), do NOT set this option but set |sapt__sapt_dft_grac_compute|
-        to "SINGLE" or "ITERATIVE" as described below. -*/
+        to "SINGLE" or "ITERATIVE" as described below. Set to ``-1`` (any value
+        <= -1) to run monomer B without a GRAC correction; the sentinel is
+        never passed to |scf__dft_grac_shift|, so the monomer DFT runs
+        unshifted and the reported shift is zero. -*/
         options.add_double("SAPT_DFT_GRAC_SHIFT_B", 0.0);
         /*- SAPT_DFT_GRAC_COMPUTE will enable automatically computing GRAC
          shifts prior to running SAPT(DFT). Note that the user must not specify
@@ -1182,6 +1188,17 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
          the neutral/cation calculations. "ITERATIVE" will try 3 times to
          converge the cation before failing the SAPT(DFT) computation. -*/
         options.add_str("SAPT_DFT_GRAC_COMPUTE", "NONE", "NONE SINGLE ITERATIVE");
+    /*- Compute or echo monomer GRAC shifts and stop before SAPT energies.
+    Requires SINGLE or ITERATIVE and a non-HF functional. The returned dimer
+    wavefunction has CURRENT ENERGY zero, not an interaction energy. -*/
+    options.add_bool("SAPT_DFT_GRAC_SHIFT_ONLY", false);
+    /*- Include only each monomer's own A/B external potential in its GRAC
+    SCFs; C is always excluded. Charges needed in both the shift and the
+    environment may be repeated in A/B and C: a point/diffuse row exactly
+    equal to a C row is trimmed from A/B before that monomer's SCF, so it is
+    not counted twice. Rows shared between A and B are never trimmed, since
+    the dimer field must stay the sum of the monomer fields. -*/
+    options.add_bool("SAPT_DFT_GRAC_USE_EXT_POT", false);
         /*- To ensure that the GRAC shift is computed with a sufficiently large
           basis set, the user can specify a larger basis set for the GRAC
           calculation, which can be different from the basis set used for the
