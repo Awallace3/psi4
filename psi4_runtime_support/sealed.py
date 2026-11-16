@@ -359,23 +359,36 @@ class _SealedRuntime:
         snapshots = {(r["kernel_path"], *r["identity"]): r["path"]
                      for r in self._files.values()}
         rows = []
+        # Repeated segments share lexical inode/device/name fields. Memoize
+        # only within this freshly read snapshot; never reuse a mapping proof.
+        identities = {}
+        translated = {}
         for line in text.splitlines():
             fields = line.split(maxsplit=5)
             if len(fields) != 6 or not fields[5].startswith("/"):
                 continue
             lo, hi = (int(value, 16) for value in fields[0].split("-"))
-            inode = int(fields[4])
-            device = tuple(int(value, 16) for value in fields[3].split(":"))
-            name = fields[5]
-            logical = snapshots.get((name, inode, device))
-            if logical is not None:
-                name = logical
-            elif name.endswith(" (deleted)"):
-                if ".so" in name:
-                    self._fail("Foreign/deleted binary is not a sealed snapshot")
+            tokens = (fields[4], fields[3])
+            if tokens not in identities:
+                identities[tokens] = (int(fields[4]),
+                                      tuple(int(value, 16) for value in fields[3].split(":")))
+            inode, device = identities[tokens]
+            key = (fields[5], inode, device)
+            if key not in translated:
+                name = fields[5]
+                logical = snapshots.get(key)
+                if logical is not None:
+                    name = logical
+                elif name.endswith(" (deleted)"):
+                    if ".so" in name:
+                        self._fail("Foreign/deleted binary is not a sealed snapshot")
+                    name = None
+                elif _mapped_basename(name).startswith(CUDA_PREFIXES):
+                    self._fail("Unsealed/foreign mapped CUDA or cuEST library")
+                translated[key] = name
+            name = translated[key]
+            if name is None:
                 continue
-            elif _mapped_basename(name).startswith(CUDA_PREFIXES):
-                self._fail("Unsealed/foreign mapped CUDA or cuEST library")
             rows.append((lo, hi, name, inode, device))
         self.check_live()
         return rows

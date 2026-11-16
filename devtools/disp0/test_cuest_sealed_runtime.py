@@ -53,6 +53,33 @@ def admit(selected=pins):
 
 
 class SealedRuntime(unittest.TestCase):
+    def test_mapping_identity_parsing_is_memoized_only_within_each_fresh_snapshot(self):
+        self.run_case(r'''
+owner=admit();owner.preload([str(path)])
+record=owner._files[str(path)]
+inode,device=record["identity"]
+token=f"{device[0]:x}:{device[1]:x}"
+text="\n".join(f"{4096+i*256:x}-{4097+i*256:x} r--p 0 {token} {inode} {record['kernel_path']}"
+               for i in range(5))
+text+="\n9000-9001 r-xp 0 ff:fe 123 /usr/lib/ordinary.so"
+text+="\n9100-9101 r--p 0 ff:fe 123 /usr/lib/ordinary.so"
+calls=[]
+def integer(value,base=10):
+    calls.append((value,base))
+    return int(value,base)
+with patch.object(sealed,"int",side_effect=integer,create=True):
+    rows=owner.mapped_rows(text)
+    assert calls.count((str(inode),10))==1, calls
+    assert calls.count(("123",10))==1, calls
+    again=owner.mapped_rows(text)
+    assert calls.count((str(inode),10))==2, calls
+    assert calls.count(("123",10))==2, calls
+expected=[(4096+i*256,4097+i*256,str(path),inode,device) for i in range(5)]
+expected.extend(((0x9000,0x9001,"/usr/lib/ordinary.so",123,(255,254)),
+                 (0x9100,0x9101,"/usr/lib/ordinary.so",123,(255,254))))
+assert rows==again==expected
+''')
+
     def test_kernel_basename_preserves_posix_path_name_without_normal_case_path_objects(self):
         from psi4_runtime_support.sealed import _mapped_basename
         paths=("/usr/lib/libc.so.6","/memfd:psi4-sealed-libcuest.so.0 (deleted)",

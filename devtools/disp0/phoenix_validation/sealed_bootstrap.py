@@ -9,6 +9,29 @@ import sys
 from gpu_runtime import AuditedRuntime, read_config, require_cuda_manifest, verify_qualified_imports
 
 
+def import_fresh_control(config):
+    """Match the sealed arm's E2 policy without changing fresh-byte admission."""
+    if config.get("identity_contract", "fresh-bytes-v1") != "fresh-bytes-v1":
+        raise RuntimeError("Fresh control cannot replace sealed bootstrap")
+    if "psi4" in sys.modules or "einsums" in sys.modules:
+        raise RuntimeError("Fresh-control policy must precede scientific imports")
+    folder = Path(__file__).resolve().parents[1] / "cachy"
+    sys.path.insert(0, str(folder))
+    try:
+        from bootstrap_gate import ConfigureEinsums
+    finally:
+        sys.path.pop(0)
+    observer = ConfigureEinsums(config)
+    sys.meta_path.insert(0, observer)
+    try:
+        importlib.import_module("psi4")
+        importlib.import_module("einsums")
+        if not observer.configured:
+            raise RuntimeError("Matched E2 policy was not configured")
+    finally:
+        sys.meta_path.remove(observer)
+
+
 def cpu_admission(config, config_path, checksum, output):
     """Exercise the GPU adapter's file/binding admission, without a CUDA session."""
     if os.environ.get("CUDA_VISIBLE_DEVICES") != "" or os.environ.get("SLURM_JOB_GPUS"):
@@ -43,7 +66,7 @@ def cpu_admission(config, config_path, checksum, output):
 
 
 def bootstrap(config, build):
-    if ((config["schema"], config["device_family"]) != (1, "H200")
+    if (config["schema"] != 1 or config["device_family"] not in ("H200", "RTX_PRO_BLACKWELL")
             or config.get("identity_contract") !=
             "process-owned-kernel-sealed-snapshots-v1"):
         raise RuntimeError("Explicit Phoenix sealed configuration required")
@@ -83,18 +106,20 @@ def main():
     parser.add_argument("--config-sha256", required=True)
     parser.add_argument("--runtime-admission-only", action="store_true")
     parser.add_argument("--admission-output", type=Path)
+    parser.add_argument("--sapt0", action="store_true",
+                        help="Run the canonical SAPT0 worker after authenticated bootstrap")
     args, remaining = parser.parse_known_args()
     config, build = read_config(args.config, args.config_sha256)
     owner = bootstrap(config, build)  # Retain through scientific cleanup.
     if args.runtime_admission_only:
-        if args.admission_output is None or remaining:
+        if args.admission_output is None or remaining or args.sapt0:
             parser.error("CPU admission requires its own output and no scientific arguments")
         cpu_admission(config, args.config, args.config_sha256, args.admission_output)
         return
     if args.admission_output is not None:
         parser.error("Admission output requires the CPU-only admission mode")
-    script = Path(__file__).resolve().with_name("fragment_gate.py")
-    sys.argv = [str(script), "--config", str(args.config),
+    script = Path(__file__).resolve().with_name("sapt0_timing.py" if args.sapt0 else "fragment_gate.py")
+    sys.argv = [str(script), *(["worker"] if args.sapt0 else []), "--config", str(args.config),
                 "--config-sha256", args.config_sha256, *remaining]
     runpy.run_path(str(script), run_name="__main__")
 

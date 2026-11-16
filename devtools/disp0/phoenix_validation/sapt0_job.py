@@ -7,6 +7,8 @@ import subprocess
 import sys
 
 from sapt0_timing import SYSTEMS, save, sha
+from sapt0_hardware import PROFILES
+from sealed_h200 import CONTRACT, configuration, require_cpu_admission
 
 
 def main():
@@ -38,8 +40,21 @@ def main():
     config = json.loads(original.read_text())
     if config["source_pin"] != proof["pin"]:
         raise RuntimeError("Different runtime and build pin")
+    sealed = submission.get("identity_contract", "fresh-bytes-v1") == CONTRACT
+    if sealed:
+        admission_sha = require_cpu_admission(build_run, proof["pin"])
+        if admission_sha != submission["cpu_sealed_admission_sha256"]:
+            raise RuntimeError("CPU sealed admission changed since submission")
+        # Bind early loader helpers to this coherent build, never an overlay
+        # or a stale proof from another helper checkout.
+        config = configuration(config, proof, args.output)
+    family = submission.get("device_family", "H200")
+    profile = PROFILES[family]
+    if family == "RTX_PRO_BLACKWELL" and args.system != "peptide":
+        raise RuntimeError("Blackwell admission is limited to the water/peptide pilot")
     config.update(scope="MATCHED_CANONICAL_SAPT0_TIMING", threads=8,
-                  host_memory="96 GiB", device_memory_limit_bytes=120 * 1024**3,
+                  device_family=family,
+                  host_memory="96 GiB", device_memory_limit_bytes=profile["budget_gib"] * 1024**3,
                   native_persistent_bytes=12 * 1024**3)
     config_path = args.output / "runtime-config.json"
     save(config_path, config)
@@ -53,7 +68,9 @@ def main():
         "runtime_config_sha256": sha(config_path), "system": args.system,
         "input_hashes": input_hashes,
         "threads_each_arm": 8, "cpu_model": Path("/proc/cpuinfo").read_text(),
-        "scheduling": {"job": os.environ["SLURM_JOB_ID"], "qos": os.environ.get("SLURM_JOB_QOS")}})
+        "scheduling": {"job": os.environ["SLURM_JOB_ID"], "qos": os.environ.get("SLURM_JOB_QOS"),
+                       "account": os.environ.get("SLURM_JOB_ACCOUNT"),
+                       "partition": os.environ.get("SLURM_JOB_PARTITION")}})
     # No launch of a larger case if the public CPU/GPU water gate fails.
     script = Path(__file__).with_name("sapt0_timing.py")
     for system, repeats in (("water", 1), (args.system, 3)):
@@ -62,7 +79,24 @@ def main():
                    "--case", str(args.inputs / (system + ".json")),
                    "--output", str(args.output / system), "--repeats", str(repeats),
                    "--timeout", "3600"]
+        if sealed and system != "water":
+            command.append("--diagnostics")
         subprocess.run(command, check=True)
+    if submission.get("runtime_ab", False):
+        if not sealed:
+            raise RuntimeError("Runtime A/B requires a sealed candidate")
+        control = dict(config, identity_contract="fresh-bytes-v1")
+        control_path = args.output / "fresh-byte-control.json"
+        save(control_path, control)
+        subprocess.run([
+            sys.executable, "-B", str(script), "run",
+            "--config", str(control_path), "--config-sha256", sha(control_path),
+            "--case", str(args.inputs / (args.system + ".json")),
+            "--output", str(args.output / (args.system + "-fresh-control")),
+            "--repeats", "3", "--timeout", "3600", "--diagnostics"], check=True)
+        from sapt0_profile import compare_contracts
+        save(args.output / "runtime-ab.json", compare_contracts(
+            args.output / (args.system + "-fresh-control"), args.output / args.system))
 
 
 if __name__ == "__main__":

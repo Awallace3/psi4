@@ -1,12 +1,14 @@
 """Synthetic CPU-only identity negatives; no SDK load/native/device execution."""
 import ctypes as ct
 import importlib
+import io
 import json
 import mmap
 import os
 from pathlib import Path
 import sys
 import tempfile
+import tarfile
 import threading
 import types
 import unittest
@@ -20,6 +22,54 @@ identity=importlib.import_module(f"{PACKAGE}.sapt_cuest250_identity")
 
 
 class Identity(unittest.TestCase):
+    def test_repeated_sdk_admission_reuses_only_content_proven_header_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = root/"sdk"
+            payloads = {"include/cuest.h": b"canonical fixture", "include/cuest/extra.h": b"extra"}
+            for name, data in payloads.items():
+                path = sdk/name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+            native = sdk/"lib/13/libcuest.so.0.2.50"
+            native.parent.mkdir(parents=True)
+            native.write_bytes(b"fixture native")
+            archive = root/"sdk.tar.gz"
+            with tarfile.open(archive, "w:gz") as stream:
+                for name, data in payloads.items():
+                    member = tarfile.TarInfo("cuest_PID/"+name)
+                    member.size = len(data)
+                    stream.addfile(member, io.BytesIO(data))
+            records = {name: {"bytes": len(data), "sha256": identity.file_digest(sdk/name)}
+                       for name, data in payloads.items()}
+            tree, nul = identity.header_digests(records)
+            with patch.multiple(identity, ARCHIVE_BYTES=archive.stat().st_size,
+                                ARCHIVE_SHA256=identity.file_digest(archive),
+                                HEADER_COUNT=len(records), HEADER_JSON_SHA256=tree,
+                                HEADER_NUL_SHA256=nul,
+                                REQUIRED_HEADERS={name: row["sha256"] for name, row in records.items()},
+                                NATIVE_SHA256=identity.file_digest(native)), \
+                    patch.object(identity.tarfile, "open", wraps=tarfile.open) as decompress, \
+                    patch.object(identity, "file_digest", wraps=identity.file_digest) as hashes:
+                first = identity.verify_files(sdk, archive)
+                first["header_files"]["cuest_PID/include/cuest.h"]["sha256"] = "modified by caller"
+                second = identity.verify_files(sdk, archive)
+                self.assertEqual(decompress.call_count, 1, "Same proven archive must not inflate twice")
+                self.assertEqual(second["header_files"]["cuest_PID/include/cuest.h"]["sha256"],
+                                 records["include/cuest.h"]["sha256"])
+                for path in (archive, sdk/"include/cuest.h", sdk/"include/cuest/extra.h", native):
+                    self.assertEqual(sum(Path(call.args[0]) == path for call in hashes.call_args_list), 2)
+                # A same-size header mutation still rejects after a cached parse.
+                (sdk/"include/cuest.h").write_bytes(b"x" * len(payloads["include/cuest.h"]))
+                with self.assertRaisesRegex(RuntimeError, "Wrong cuEST"):
+                    identity.verify_files(sdk, archive)
+                # A same-size archive mutation must reject before consulting its metadata cache.
+                data = bytearray(archive.read_bytes())
+                data[-1] ^= 1
+                archive.write_bytes(data)
+                with self.assertRaisesRegex(RuntimeError, "not canonical"):
+                    identity.canonical_headers(archive)
+
     def test_mapping_resolution_memo_is_snapshot_local_and_preserves_every_segment(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)

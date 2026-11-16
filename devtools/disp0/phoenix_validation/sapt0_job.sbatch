@@ -6,6 +6,8 @@ umask 077
   "${SAPT0_INPUTS:?}" "${SAPT0_SYSTEM:?}" "${SAPT0_PYTHON:?}" "${SLURM_JOB_ID:?}"
 [[ "$(git -C "$SAPT0_SOURCE" rev-parse HEAD)" == "$SAPT0_PIN" ]]
 [[ -z "$(git -C "$SAPT0_SOURCE" status --porcelain)" ]]
+printf 'Job: %s\nQOS: %s\nPartition: %s\n' \
+    "$SLURM_JOB_ID" "${SLURM_JOB_QOS:-unknown}" "${SLURM_JOB_PARTITION:-unknown}"
 run="$SAPT0_RUN_ROOT/job-$SLURM_JOB_ID"
 mkdir "$run"
 export TMPDIR="/storage/scratch1/3/awallace43/sapt0-$SLURM_JOB_ID"
