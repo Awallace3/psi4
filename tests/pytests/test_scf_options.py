@@ -288,3 +288,50 @@ def test_sad_frac_occ_atomic_natural_occupations(atom, geom, expected_spin_elect
 # 0  O:   4.00000000   4.00000000   8.00000000
 # 1  H:   0.50000000   0.50000000   1.00000000
 # 2  H:   0.50000000   0.50000000   1.00000000
+
+
+@pytest.mark.quick
+def test_failed_scf_releases_diis_file():
+    """A non-converged SCF must not leave PSIF_LIBDIIS behind for the next, larger SCF.
+
+    Before the fix, the second SCF wrote its DIIS vectors into the stale file and died with
+    PSIO_ERROR 18 (Incorrect block end address).
+    """
+    from psi4.driver.psifiles import PSIF_LIBDIIS
+
+    water = psi4.geometry("""
+        0 1
+        O 0 0 0
+        H 0 0.76 0.59
+        H 0 -0.76 0.59
+        symmetry c1
+        no_reorient
+        no_com
+        """)
+    psi4.set_options({
+        "basis": "def2-svp",
+        "scf_type": "df",
+        "maxiter": 4,
+        "fail_on_maxiter": True,
+        "scf_initial_accelerator": "none",
+        "diis_start": 1,
+    })
+    with pytest.raises(psi4.SCFConvergenceError):
+        psi4.energy("pbe0", molecule=water)
+    assert not psi4.core.IO.shared_object().open_check(PSIF_LIBDIIS)
+
+    dimer = psi4.geometry("""
+        0 1
+        O 0 0 0
+        H 0 0.76 0.59
+        H 0 -0.76 0.59
+        O 0 0 3.0
+        H 0 0.76 3.59
+        H 0 -0.76 3.59
+        symmetry c1
+        no_reorient
+        no_com
+        """)
+    psi4.set_options({"maxiter": 100})
+    E = psi4.energy("pbe0", molecule=dimer)
+    assert compare_values(-152.5595243530, E, 6, "dimer SCF after a failed SCF")
