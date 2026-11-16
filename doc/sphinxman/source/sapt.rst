@@ -555,6 +555,36 @@ scaling and using the uncoupled exchange-dispersion energy directly.
              an older version of |PSIfour| to produce a different value of
              exchange-dispersion energy from the latest version.
 
+External potentials
+~~~~~~~~~~~~~~~~~~~
+
+SAPT(DFT) (including SAPT(HF), ``SAPT_DFT_FUNCTIONAL HF``) accepts the same
+``external_potentials`` argument as SCF, keyed by fragment::
+
+    e = energy('sapt(dft)', external_potentials={
+        "A": [[-0.834, 1.0, 0.0, 0.0]],   # [charge, x, y, z]
+        "B": [[ 0.417, 0.0, 2.0, 0.0]],
+        "C": np.array([[0.5, 0.0, 0.0, 4.0], [-0.5, 0.0, 0.0, -4.0]]),
+    })
+
+Each value takes any form accepted by the SCF ``external_potentials`` keyword
+(point charges, diffuse charges, or a matrix). The fragment determines where a
+potential acts:
+
+* ``A`` belongs to monomer A. It is present in monomer A's SCFs and in the
+  dimer SCF, and its interaction with monomer B (nuclei and electrons) is part
+  of the A–B interaction energy.
+* ``B`` likewise belongs to monomer B.
+* ``C`` is an environment. It is present in every dimer and monomer SCF, so it
+  polarizes both monomers, but it is not itself an interacting partner.
+
+The dimer SCF sees the union C+A+B, monomer A sees C+A, and monomer B sees C+B,
+so the dimer field is always the sum of the monomer fields. When both A and B
+are given, the interaction between the A and B charges is included in the
+electrostatics and printed as ``Elst (extern-extern)``. Charges and
+coordinates are in atomic units, in the input frame of the molecule, exactly as
+for SCF (see :ref:`sec:scfqmmm`).
+
 Basic Keywords for SAPT(DFT) 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
