@@ -36,7 +36,6 @@
 #include "psi4/libfunctional/superfunctional.h"
 #include "psi4/libqt/qt.h"
 #include "psi4/psi4-dec.h"
-#include "psi4/restrict.h"
 
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/matrix.h"
@@ -63,10 +62,10 @@ inline std::vector<double> rks_quadrature_integrate(std::shared_ptr<BlockOPoints
     auto w = block->w();
 
     // Superfunctional data
-    const double* PSI_RESTRICT zk = fworker->value("V")->pointer();
+    const double* zk = fworker->value("V")->pointer();
 
     // Points data
-    const double* PSI_RESTRICT rho_a = pworker->point_value("RHO_A")->pointer();
+    const double* rho_a = pworker->point_value("RHO_A")->pointer();
 
     // Build quadrature in a single SIMD pass
     double q0 = 0.0, q1 = 0.0, q2 = 0.0, q3 = 0.0, q4 = 0.0;
@@ -145,15 +144,15 @@ inline void rks_integrator(std::shared_ptr<BlockOPoints> block, std::shared_ptr<
     auto V2p = V->pointer();
 
     // => LSDA + GGA contribution (fused single pass over Tp[P]) <= //
-    const double* PSI_RESTRICT v_rho_a = fworker->value("V_RHO_A")->pointer();
+    const double* v_rho_a = fworker->value("V_RHO_A")->pointer();
     if (ansatz >= 1) {
         auto phix = pworker->basis_value("PHI_X")->pointer();
         auto phiy = pworker->basis_value("PHI_Y")->pointer();
         auto phiz = pworker->basis_value("PHI_Z")->pointer();
-        const double* PSI_RESTRICT rho_ax = pworker->point_value("RHO_AX")->pointer();
-        const double* PSI_RESTRICT rho_ay = pworker->point_value("RHO_AY")->pointer();
-        const double* PSI_RESTRICT rho_az = pworker->point_value("RHO_AZ")->pointer();
-        const double* PSI_RESTRICT v_gamma_aa = fworker->value("V_GAMMA_AA")->pointer();
+        const double* rho_ax = pworker->point_value("RHO_AX")->pointer();
+        const double* rho_ay = pworker->point_value("RHO_AY")->pointer();
+        const double* rho_az = pworker->point_value("RHO_AZ")->pointer();
+        const double* v_gamma_aa = fworker->value("V_GAMMA_AA")->pointer();
 
         for (size_t P = 0; P < npoints; P++) {
             const double wp = w[P];
@@ -162,11 +161,11 @@ inline void rks_integrator(std::shared_ptr<BlockOPoints> block, std::shared_ptr<
             const double cx = g2 * rho_ax[P];
             const double cy = g2 * rho_ay[P];
             const double cz = g2 * rho_az[P];
-            const double* PSI_RESTRICT p0 = phi[P];
-            const double* PSI_RESTRICT px = phix[P];
-            const double* PSI_RESTRICT py = phiy[P];
-            const double* PSI_RESTRICT pz = phiz[P];
-            double* PSI_RESTRICT t = Tp[P];
+            const double* p0 = phi[P];
+            const double* px = phix[P];
+            const double* py = phiy[P];
+            const double* pz = phiz[P];
+            double* t = Tp[P];
 #pragma omp simd
             for (size_t m = 0; m < nlocal; m++) {
                 t[m] = c0 * p0[m] + cx * px[m] + cy * py[m] + cz * pz[m];
@@ -175,8 +174,8 @@ inline void rks_integrator(std::shared_ptr<BlockOPoints> block, std::shared_ptr<
     } else {
         for (size_t P = 0; P < npoints; P++) {
             const double c0 = 0.5 * v_rho_a[P] * w[P];
-            const double* PSI_RESTRICT p0 = phi[P];
-            double* PSI_RESTRICT t = Tp[P];
+            const double* p0 = phi[P];
+            double* t = Tp[P];
 #pragma omp simd
             for (size_t m = 0; m < nlocal; m++) {
                 t[m] = c0 * p0[m];
@@ -201,7 +200,7 @@ inline void rks_integrator(std::shared_ptr<BlockOPoints> block, std::shared_ptr<
         auto phix = pworker->basis_value("PHI_X")->pointer();
         auto phiy = pworker->basis_value("PHI_Y")->pointer();
         auto phiz = pworker->basis_value("PHI_Z")->pointer();
-        const double* PSI_RESTRICT v_tau_a = fworker->value("V_TAU_A")->pointer();
+        const double* v_tau_a = fworker->value("V_TAU_A")->pointer();
 
         double** phi_w[3] = {phix, phiy, phiz};
 
@@ -209,8 +208,8 @@ inline void rks_integrator(std::shared_ptr<BlockOPoints> block, std::shared_ptr<
             auto phiw = phi_w[i];
             for (size_t P = 0; P < npoints; P++) {
                 const double c = v_tau_a[P] * w[P];
-                const double* PSI_RESTRICT pw = phiw[P];
-                double* PSI_RESTRICT t = Tp[P];
+                const double* pw = phiw[P];
+                double* t = Tp[P];
 #pragma omp simd
                 for (size_t m = 0; m < nlocal; m++) {
                     t[m] = c * pw[m];

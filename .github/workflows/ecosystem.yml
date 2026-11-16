@@ -43,7 +43,7 @@ jobs:
               -D ENABLE_v2rdm_casscf=ON
               -D CMAKE_DISABLE_FIND_PACKAGE_v2rdm_casscf=ON
 
-          - label: "Clang OpenBLAS, no OpenMP/no restrict (L)"
+          - label: "Clang OpenBLAS, no OpenMP (L)"
             expected-arch: x64
             runs-on: ubuntu-latest
             python-version: "3.13"
@@ -61,7 +61,6 @@ jobs:
               -D ENABLE_XHOST=OFF
               -D CMAKE_C_COMPILER=/usr/bin/clang
               -D CMAKE_CXX_COMPILER=/usr/bin/clang++
-              -D CMAKE_CXX_FLAGS="-DPSI_NO_RESTRICT"
 
           - label: "Conda Clang (M-Intel)"
             expected-arch: x64
