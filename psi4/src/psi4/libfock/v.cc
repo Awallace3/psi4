@@ -96,7 +96,9 @@ VBase::VBase(std::shared_ptr<SuperFunctional> functional, std::shared_ptr<BasisS
     : options_(options), primary_(primary), functional_(functional) {
     common_init();
 }
-VBase::~VBase() {}
+VBase::~VBase() {
+    for (const auto& worker : point_workers_) worker->set_cache_map(nullptr);
+}
 void VBase::common_init() {
     print_ = options_.get_int("PRINT");
     debug_ = options_.get_int("DEBUG");
@@ -174,14 +176,12 @@ void VBase::set_D(std::vector<SharedMatrix> Dvec) {
     }
 }
 void VBase::initialize() {
+    release_workspaces();
     timer_on("V: Grid");
     grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, options_);
     timer_off("V: Grid");
 
-    for (size_t i = 0; i < num_threads_; i++) {
-        // Need a functional worker per thread
-        functional_workers_.push_back(functional_->build_worker());
-    }
+    ensure_workspaces();
     
 #ifdef USING_BrianQC
     if (brianEnable and brianEnableDFT)
@@ -682,6 +682,7 @@ std::vector<SharedMatrix> VBase::compute_fock_derivatives() {
     throw PSIEXCEPTION("VBase: compute_fock_derivatives not implemented for this Vx instance.");
 }
 void VBase::set_grac_shift(double grac_shift) {
+    ensure_workspaces();
     // Well this is a flaw in my plan
     if (!grac_initialized_) {
         double grac_alpha = options_.get_double("DFT_GRAC_ALPHA");
@@ -753,39 +754,133 @@ void VBase::print_header() const {
 }
 std::shared_ptr<BlockOPoints> VBase::get_block(int block) { return grid_->blocks()[block]; }
 size_t VBase::nblocks() { return grid_->blocks().size(); }
-void VBase::finalize() { grid_.reset(); }
-void VBase::build_collocation_cache(size_t memory) {
-    // Figure out many blocks to skip
+void VBase::finalize() {
+    release_workspaces();
+    grid_.reset();
+    // The grid is a block list, i.e. many small allocations, so the same arena retention that
+    // hides a released collocation cache hides this too.
+    release_freed_memory();
+}
+std::shared_ptr<PointFunctions> VBase::make_point_worker() const {
+    throw PSIEXCEPTION("VBase: no point-worker implementation");
+}
+void VBase::ensure_workspaces() const {
+    if (!grid_) throw PSIEXCEPTION("VBase: initialize the grid before using workers");
+    if (point_workers_.size() == num_threads_ && functional_workers_.size() == num_threads_) return;
 
-    size_t collocation_size = grid_->collocation_size();
-    if (functional_->ansatz() == 1) {
-        collocation_size *= 4;  // For gradients
+    std::vector<std::shared_ptr<PointFunctions>> points;
+    std::vector<std::shared_ptr<SuperFunctional>> functionals;
+    for (size_t i = 0; i < num_threads_; ++i) {
+        auto point = make_point_worker();
+        point->set_cache_map(&cache_map_);
+        points.push_back(point);
+        functionals.push_back(functional_->build_worker());
     }
-    if (functional_->ansatz() == 2) {
-        collocation_size *= 10;  // For gradients and Hessians
-    }
-
-    // Figure out stride as closest whole number to amount we need
-    size_t stride = (size_t)(std::ceil(collocation_size / (double)memory));
-
-    // More memory than needed
-    if (stride == 0) {
-        stride = 1;
-    }
+    point_workers_.swap(points);
+    functional_workers_.swap(functionals);
+}
+std::vector<std::shared_ptr<PointFunctions>> VBase::properties() const {
+    ensure_workspaces();
+    return point_workers_;
+}
+void VBase::clear_collocation_cache() {
+    const bool had_cache = !cache_map_.empty();
+    for (const auto& worker : point_workers_) worker->reset_basis_values();
     cache_map_.clear();
+    cache_map_deriv_ = -1;
+    cache_claim_.set(0);
+    if (had_cache) release_freed_memory();
+}
+void VBase::release_workspaces() {
+    const bool had_workspaces = !point_workers_.empty() || !functional_workers_.empty();
+    // Exported workers may outlive this potential or its cache.
+    for (const auto& worker : point_workers_) worker->set_cache_map(nullptr);
+    point_workers_.clear();
+    functional_workers_.clear();
+    clear_collocation_cache();
+    if (had_workspaces) release_freed_memory();
+}
+void VBase::build_collocation_cache(size_t memory) {
+    clear_collocation_cache();
+    if (memory == 0) {
+        return;
+    }
+    ensure_workspaces();
 
-    // Effectively zero blocks saved.
-    if (stride > grid_->blocks().size()) {
+    const auto& blocks = grid_->blocks();
+    const size_t nblock = blocks.size();
+    if (nblock == 0) {
         return;
     }
 
+    // Components actually stored per block (PHI, PHI_X, ... according to the points
+    // worker's derivative level), so the cost model below is the exact allocation rather
+    // than an ansatz-derived guess.
+    const size_t ncomp = point_workers_[0]->basis_values().size();
+    if (ncomp == 0) {
+        return;
+    }
+
+    auto block_cost = [&](size_t Q) { return ncomp * blocks[Q]->npoints() * blocks[Q]->local_nbf(); };
+
+    // Blocks span nearly two orders of magnitude in cost, so the cache has to be filled
+    // by cost and not by counting blocks.  Walk the grid in order and take blocks at a
+    // constant rate f = memory / total_cost with a fractional accumulator: that spreads
+    // the cached blocks uniformly for any real f, where the 1-in-stride sieve this
+    // replaces could only realize f = 1, 1/2, 1/3, ... and so threw away everything
+    // between two reachable fractions (a 12.94 GiB grant used to cache 6.46 GiB and
+    // discard the remaining 6.49 GiB).
+    size_t total_cost = 0;
+    for (size_t Q = 0; Q < nblock; Q++) {
+        total_cost += block_cost(Q);
+    }
+    const double rate = std::min(1.0, (double)memory / (double)total_cost);
+
+    std::vector<size_t> selected;
+    std::vector<size_t> deferred;
+    selected.reserve((size_t)(rate * nblock) + 1);
+    size_t claimed = 0;
+    double accumulator = 0.0;
+    for (size_t Q = 0; Q < nblock; Q++) {
+        accumulator += rate;
+        if (accumulator < 1.0) {
+            deferred.push_back(Q);
+            continue;
+        }
+        accumulator -= 1.0;
+        const size_t cost = block_cost(Q);
+        if (claimed + cost <= memory) {
+            selected.push_back(Q);
+            claimed += cost;
+        } else {
+            deferred.push_back(Q);
+        }
+    }
+
+    // The rate is set by the mean block cost, so a run of cheaper-than-average blocks
+    // leaves memory unspent.  Give the remainder to the blocks that were passed over.
+    for (size_t Q : deferred) {
+        const size_t cost = block_cost(Q);
+        if (claimed + cost > memory) {
+            continue;
+        }
+        selected.push_back(Q);
+        claimed += cost;
+    }
+
+    if (selected.empty()) {
+        return;
+    }
+    std::sort(selected.begin(), selected.end());
+
     cache_map_deriv_ = point_workers_[0]->deriv();
     auto saved_size_rank = std::vector<size_t>(num_threads_, 0);
-    auto ncomputed_rank = std::vector<size_t>(num_threads_, 0);
 
-// Loop over the blocks
-#pragma omp parallel for schedule(guided) num_threads(num_threads_)
-    for (size_t Q = 0; Q < grid_->blocks().size(); Q += stride) {
+// Loop over the selected blocks.  Per-block cost varies by an order of magnitude and the
+// selection no longer has the periodic structure that made guided scheduling unbalanced,
+// so hand the blocks out dynamically.
+#pragma omp parallel for schedule(dynamic) num_threads(num_threads_)
+    for (size_t iblock = 0; iblock < selected.size(); iblock++) {
         // Get thread info
         int rank = 0;
 #ifdef _OPENMP
@@ -793,7 +888,7 @@ void VBase::build_collocation_cache(size_t memory) {
 #endif
 
         // Compute a collocation block
-        std::shared_ptr<BlockOPoints> block = grid_->blocks()[Q];
+        std::shared_ptr<BlockOPoints> block = blocks[selected[iblock]];
         std::shared_ptr<PointFunctions> pworker = point_workers_[rank];
         pworker->compute_functions(block);
 
@@ -817,16 +912,16 @@ void VBase::build_collocation_cache(size_t memory) {
 
             saved_size_rank[rank] += nrows * ncols;
         }
-        ncomputed_rank[rank]++;
 #pragma omp critical
         cache_map_[block->index()] = collocation_map;
     }
 
-    size_t saved_size = std::accumulate(saved_size_rank.begin(), saved_size_rank.end(), 0.0);
-    size_t ncomputed = std::accumulate(ncomputed_rank.begin(), ncomputed_rank.end(), 0.0);
+    size_t saved_size = std::accumulate(saved_size_rank.begin(), saved_size_rank.end(), (size_t)0);
+
+    cache_claim_.set(saved_size);
 
     double gib_saved = 8.0 * (double)saved_size / 1024.0 / 1024.0 / 1024.0;
-    double fraction = (double)ncomputed / grid_->blocks().size() * 100;
+    double fraction = (double)selected.size() / nblock * 100;
     if (print_) {
         outfile->Printf("  Cached %.1lf%% of DFT collocation blocks in %.3lf [GiB].\n\n", fraction, gib_saved);
     }
@@ -912,6 +1007,7 @@ void VBase::prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
     }
 }
 double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
+    ensure_workspaces();
     timer_on("V: VV10");
     timer_on("Setup");
 
@@ -998,6 +1094,7 @@ double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
     return vv10_e;
 }
 SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
+    ensure_workspaces();
     /* Not yet finished, missing several components*/
     throw PSIEXCEPTION("V: Cannot compute VV10 gradient contribution.");
 
@@ -1116,16 +1213,6 @@ SAP::SAP(std::shared_ptr<SuperFunctional> functional, std::shared_ptr<BasisSet> 
 SAP::~SAP() {}
 void SAP::initialize() {
     VBase::initialize();
-    int max_points = grid_->max_points();
-    int max_functions = grid_->max_functions();
-    for (size_t i = 0; i < num_threads_; i++) {
-        // Need a points worker per thread
-        auto point_tmp = std::make_shared<SAPFunctions>(primary_, max_points, max_functions);
-        // This is like LDA
-        point_tmp->set_ansatz(0);
-        point_tmp->set_cache_map(&cache_map_);
-        point_workers_.push_back(point_tmp);
-    }
 
     // Initialize symmetry
     auto integral = std::make_shared<IntegralFactory>(primary_);
@@ -1134,6 +1221,11 @@ void SAP::initialize() {
     USO2AO_ = AO2USO_->transpose();
     nbf_ = AO2USO_->rowspi()[0];
 }
+std::shared_ptr<PointFunctions> SAP::make_point_worker() const {
+    auto worker = std::make_shared<SAPFunctions>(primary_, grid_->max_points(), grid_->max_functions());
+    worker->set_ansatz(0);
+    return worker;
+}
 void SAP::finalize() { VBase::finalize(); }
 void SAP::print_header() const {
     outfile->Printf("  ==> SAP guess <==\n\n");
@@ -1141,6 +1233,7 @@ void SAP::print_header() const {
     if (print_ > 2) grid_->print_details("outfile", print_);
 }
 void SAP::compute_V(std::vector<SharedMatrix> ret) {
+    ensure_workspaces();
     timer_on("SAP: Form V");
 
     if (ret.size() != 1) {
@@ -1266,19 +1359,17 @@ RV::RV(std::shared_ptr<SuperFunctional> functional, std::shared_ptr<BasisSet> pr
 RV::~RV() {}
 void RV::initialize() {
     VBase::initialize();
-    int max_points = grid_->max_points();
-    int max_functions = grid_->max_functions();
-    for (size_t i = 0; i < num_threads_; i++) {
-        // Need a points worker per thread
-        auto point_tmp = std::make_shared<RKSFunctions>(primary_, max_points, max_functions);
-        point_tmp->set_ansatz(functional_->ansatz());
-        point_tmp->set_cache_map(&cache_map_);
-        point_workers_.push_back(point_tmp);
-    }
+}
+std::shared_ptr<PointFunctions> RV::make_point_worker() const {
+    auto worker = std::make_shared<RKSFunctions>(primary_, grid_->max_points(), grid_->max_functions());
+    worker->set_ansatz(functional_->ansatz());
+    if (D_AO_.size() == 1) worker->set_pointers(D_AO_[0]);
+    return worker;
 }
 void RV::finalize() { VBase::finalize(); }
 void RV::print_header() const { VBase::print_header(); }
 void RV::compute_V(std::vector<SharedMatrix> ret) {
+    ensure_workspaces();
     // => Validate object <=
     timer_on("RV: Form V");
     
@@ -1456,6 +1547,7 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
 }
 
 std::vector<SharedMatrix> RV::compute_fock_derivatives() {
+    ensure_workspaces();
     timer_on("RV: Form Fx");
 
     int natoms = primary_->molecule()->natom();
@@ -1696,6 +1788,7 @@ std::vector<SharedMatrix> RV::compute_fock_derivatives() {
 }
 
 void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret, bool singlet) {
+    ensure_workspaces();
     timer_on("RV: Form Vx");
 
     // => Validate object / inputs <=
@@ -2070,6 +2163,7 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
     timer_off("RV: Form Vx");
 }
 SharedMatrix RV::compute_gradient() {
+    ensure_workspaces();
     // => Validation <= //
     if ((D_AO_.size() != 1)) throw PSIEXCEPTION("V: RKS should have only one D Matrix");
 
@@ -2196,6 +2290,7 @@ SharedMatrix RV::compute_gradient() {
 }
 
 SharedMatrix RV::compute_hessian() {
+    ensure_workspaces();
     // => Validation <=
     if (functional_->is_gga() || functional_->is_meta())
         throw PSIEXCEPTION("Hessians for GGA and meta GGA functionals are not yet implemented.");
@@ -2685,19 +2780,17 @@ UV::UV(std::shared_ptr<SuperFunctional> functional, std::shared_ptr<BasisSet> pr
 UV::~UV() {}
 void UV::initialize() {
     VBase::initialize();
-    int max_points = grid_->max_points();
-    int max_functions = grid_->max_functions();
-    for (size_t i = 0; i < num_threads_; i++) {
-        // Need a points worker per thread
-        std::shared_ptr<PointFunctions> point_tmp = std::make_shared<UKSFunctions>(primary_, max_points, max_functions);
-        point_tmp->set_ansatz(functional_->ansatz());
-        point_tmp->set_cache_map(&cache_map_);
-        point_workers_.push_back(point_tmp);
-    }
+}
+std::shared_ptr<PointFunctions> UV::make_point_worker() const {
+    auto worker = std::make_shared<UKSFunctions>(primary_, grid_->max_points(), grid_->max_functions());
+    worker->set_ansatz(functional_->ansatz());
+    if (D_AO_.size() == 2) worker->set_pointers(D_AO_[0], D_AO_[1]);
+    return worker;
 }
 void UV::finalize() { VBase::finalize(); }
 void UV::print_header() const { VBase::print_header(); }
 void UV::compute_V(std::vector<SharedMatrix> ret) {
+    ensure_workspaces();
     // => Validate object <=
     timer_on("UV: Form V");
     if ((D_AO_.size() != 2) || (ret.size() != 2)) {
@@ -3024,6 +3117,7 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
     timer_off("UV: Form V");
 }
 std::vector<SharedMatrix> UV::compute_fock_derivatives() {
+    ensure_workspaces();
     timer_on("UV: Form Fx");
 
     int natoms = primary_->molecule()->natom();
@@ -3333,6 +3427,7 @@ std::vector<SharedMatrix> UV::compute_fock_derivatives() {
     return Vx;
 }
 void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret) {
+    ensure_workspaces();
     timer_on("UV: Form Vx");
 
     // => Validate object / inputs <=
@@ -3846,6 +3941,7 @@ void UV::compute_Vx(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix> ret)
     timer_off("UV: Form Vx");
 }
 SharedMatrix UV::compute_gradient() {
+    ensure_workspaces();
     // => Validation <= //
     if ((D_AO_.size() != 2)) throw PSIEXCEPTION("V: UKS should have two D Matrices");
 
@@ -4205,6 +4301,7 @@ SharedMatrix UV::compute_gradient() {
     return G;
 }
 SharedMatrix UV::compute_hessian() {
+    ensure_workspaces();
     // => Validation <=
     if (functional_->is_gga() || functional_->is_meta())
         throw PSIEXCEPTION("Hessians for GGA and meta GGA functionals are not yet implemented.");
