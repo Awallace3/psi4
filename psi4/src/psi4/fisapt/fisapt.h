@@ -42,6 +42,7 @@ namespace psi {
 class JK;
 class BasisSet;
 class DFHelper;
+namespace scf { class HF; }
 
 namespace fisapt {
 
@@ -55,6 +56,9 @@ class FISAPT {
     size_t doubles_;
     /// Reference wavefunction
     std::shared_ptr<Wavefunction> reference_;
+
+    /// Monomer SCFs whose Hessians drive coupled F-SAPT induction (SAPT(DFT)); null for the HF product
+    std::shared_ptr<scf::HF> cpks_A_, cpks_B_;
 
     /// Orbital Basis Set (full molecule)
     std::shared_ptr<BasisSet> primary_;
@@ -143,6 +147,8 @@ class FISAPT {
     void fexch();
     /// Induction
     void find();
+    /// Solve coupled F-SAPT induction with these monomers' SCF Hessians
+    void set_cpks_monomers(SharedWavefunction A, SharedWavefunction B);
     /// Dispersion
     void fdisp();
     /// Output
@@ -228,6 +234,9 @@ class CPHF_FISAPT {
     // JK Object
     std::shared_ptr<JK> jk_;
 
+    // Monomer SCFs for the full response Hessian; null uses the gap + 4J - K - K^T product
+    std::shared_ptr<scf::HF> monomer_A_, monomer_B_;
+
     // => Monomer A Problem <= //
 
     // Perturbation applied to A
@@ -258,8 +267,17 @@ class CPHF_FISAPT {
     // Active vir orbital eigenvalues of B
     std::shared_ptr<Vector> eps_vir_B_;
 
-    // Form the s = Ab product for the provided vectors b (may or may not need more iterations)
-    std::map<std::string, std::shared_ptr<Matrix>> product(std::map<std::string, std::shared_ptr<Matrix>> b);
+    // => Batched problems (compute_cphf_batch) <= //
+
+    // Perturbations applied to A and B, one per source; any number, zero matrices allowed
+    std::vector<std::shared_ptr<Matrix>> w_A_batch_, w_B_batch_;
+    // Responses, same order as the perturbations
+    std::vector<std::shared_ptr<Matrix>> x_A_batch_, x_B_batch_;
+
+    // Form s = H b for every vector in bA (monomer A) and bB (monomer B) with one JK
+    // (and one XC-kernel grid pass) per monomer
+    void product(const std::vector<std::shared_ptr<Matrix>>& bA, const std::vector<std::shared_ptr<Matrix>>& bB,
+                 std::vector<std::shared_ptr<Matrix>>& sA, std::vector<std::shared_ptr<Matrix>>& sB);
     // Apply the denominator from r into z
     void preconditioner(std::shared_ptr<Matrix> r, std::shared_ptr<Matrix> z, std::shared_ptr<Vector> o,
                         std::shared_ptr<Vector> v);
@@ -268,7 +286,10 @@ class CPHF_FISAPT {
     CPHF_FISAPT();
     virtual ~CPHF_FISAPT();
 
+    // Solve w_A_ / w_B_ into x_A_ / x_B_
     void compute_cphf();
+    // Solve every w_*_batch_ into x_*_batch_; each source runs its own PCG, products are shared
+    void compute_cphf_batch();
 };
 
 }  // Namespace fisapt
