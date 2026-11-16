@@ -1192,7 +1192,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         /*- Induction treatment for SAPT(DFT). ``CPKS`` computes DFT response,
         ``CPHF`` reuses the SAPT0 induction terms computed from HF orbitals
         (adding the Delta-HF correction only when |sapt__sapt_dft_do_dhf| is
-        true), and ``NONE`` omits second-order induction. -*/
+        true), and ``NONE`` omits second-order induction. ``NONE`` is
+        unavailable with F-SAPT. -*/
         options.add_str("SAPT_DFT_INDUCTION_TYPE", "CPKS", "CPKS CPHF NONE");
         /*- Enables the hybrid xc kernel in dispersion? !expert -*/
         options.add_bool("SAPT_DFT_DO_HYBRID", true);
@@ -1216,6 +1217,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("SAPT_FDDS_V2_RHO_CUTOFF", 1.e-6);
         /*- Which MP2 Exch-Disp module to use? !expert -*/
         options.add_str("SAPT_DFT_MP2_DISP_ALG", "SAPT", "FISAPT SAPT");
+        /*- Run F-SAPT partitioning on SAPT(DFT)? ``FISAPT`` computes the
+         fragment terms with an FISAPT object (C++ side). -*/
+        options.add_str("SAPT_DFT_DO_FSAPT", "NONE", "NONE FISAPT");
         /*- Interior option to clean up printing !expert -*/
         options.add_bool("SAPT_QUIET", false);
     }
@@ -1270,7 +1274,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("FISAPT_FSAPT_EXCH_SCALE", true);
         /*- Do F-SAPT induction scaling? (ratio of HF induction to F-SAPT induction) -*/
         options.add_bool("FISAPT_FSAPT_IND_SCALE", true);
-        /*- Do F-SAPT coupled response? (not recommended) -*/
+        /*- Do F-SAPT coupled response? (not recommended). Not implemented for SAPT(DFT) F-SAPT (|sapt__sapt_dft_do_fsapt|), which raises an error before any computation. -*/
         options.add_bool("FISAPT_FSAPT_IND_RESPONSE", false);
         /*- Do sSAPT0 exchange-scaling with F-SAPT -*/
         options.add_bool("SSAPT0_SCALE", false);

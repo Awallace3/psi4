@@ -576,6 +576,9 @@ HF segment,
 total ``CPHF`` induction, but no ``Ind20`` or directional breakdown is
 available.
 
+F-SAPT (|sapt__sapt_dft_do_fsapt|, see :ref:`sec:fsaptdft`) partitions the
+induction, so ``NONE`` is rejected when it is enabled.
+
 External potentials
 ~~~~~~~~~~~~~~~~~~~
 
@@ -623,6 +626,7 @@ Advanced Keywords for SAPT(DFT)
 .. include:: autodir_options_c/sapt__sapt_dft_do_hybrid.rst
 .. include:: autodir_options_c/sapt__sapt_dft_exch_disp_fixed_scale.rst
 .. include:: autodir_options_c/sapt__sapt_dft_mp2_disp_alg.rst
+.. include:: autodir_options_c/sapt__sapt_dft_do_fsapt.rst
 .. include:: autodir_options_c/sapt__sapt_quiet.rst
 
 
