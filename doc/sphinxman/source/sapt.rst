@@ -534,7 +534,78 @@ keywords |sapt__sapt_dft_grac_shift_a| and |sapt__sapt_dft_grac_shift_b|,
 which should be equal to the difference of the actual ionization
 potential and the corresponding Kohn-Sham HOMO energy. However,
 |PSIfour| can automatically compute a GRAC shift for monomers A and B
-if |sapt__sapt_dft_grac_compute| is set to ``SINGLE`` or ``ITERATIVE``. 
+if |sapt__sapt_dft_grac_compute| is set to ``SINGLE`` or ``ITERATIVE``.
+
+GRAC shifts without an interaction-energy calculation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set |sapt__sapt_dft_grac_shift_only| to ``true`` to compute the shifts
+and stop before dimer HF, monomer HF/DFT, dispersion, or F-SAPT.
+Continue to request ``energy('sapt(dft)')`` (or a SAPT(DFT) alias) on
+the same dimer. Select ``SINGLE`` or ``ITERATIVE`` convergence; ``NONE``
+and an ``HF`` functional are incompatible with this mode.
+Only restricted references are supported.
+
+The returned wavefunction describes the dimer, with ``CURRENT ENERGY``
+equal to zero as a placeholder, **not** an interaction energy.
+No SAPT energy variables are produced. ``SAPT DFT GRAC SHIFT ONLY`` is
+1.0 for this mode and 0.0 for a full calculation.
+Both ``SAPT DFT GRAC SHIFT A`` and ``B`` are available globally and on
+the wavefunction, including in QCSchema ``extras["qcvars"]``.
+Computed shifts also publish ``SAPT DFT GRAC MONOMER ENERGY A/B``,
+``IONIZED MONOMER ENERGY A/B``, ``HOMO A/B``, and ``IP A/B`` under the
+same ``SAPT DFT GRAC`` prefix, in Hartree.
+Ionization removes one electron (charge +1, even for an anionic monomer);
+the shift equals the ionized-minus-given energy plus the given HOMO.
+Explicitly supplied shifts are echoed without recomputation; their
+intermediate variables are absent.
+
+This permits a two-stage workflow: compute shifts in a small-memory job,
+then supply them through |sapt__sapt_dft_grac_shift_a| and
+|sapt__sapt_dft_grac_shift_b| in the full calculation.
+The caller must check that monomer geometry, functional, GRAC basis,
+convergence tier, and external-potential settings match before reusing shifts.
+With GRAC basis ``AUTO``, this includes the orbital basis.
+Psi4 provides no persistent cache or dataset orchestration.
+
+By default the GRAC SCFs use no external potential.
+|sapt__sapt_dft_grac_use_ext_pot| includes only A in monomer A's shift
+and B in monomer B's shift, never C. With nonempty C a warning explains
+that the consuming monomer DFT still sees C+A or C+B.
+Charges needed in a shift may be copied into A/B as well as C. A copy that
+is exactly equal to a C row is trimmed from A/B before that monomer's SCF,
+so the consuming monomer is not charged twice, while the shift still sees
+it. Rows shared between A and B are never trimmed, since A and B partition
+the field the dimer sees, and two equal rows anywhere else mean two equal
+charges. Matrix operators are summed, never trimmed.
+When reusing shifts with this option, the A/B payload must also match.
+Strong embedding fields may yield unphysical IPs; this option does not
+validate the physical appropriateness of including MM charges in ionization.
+
+Running a monomer without GRAC
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To run SAPT(DFT) with a monomer's functional left uncorrected, set its shift
+to ``-1``::
+
+    set sapt_dft_grac_shift_a -1
+    set sapt_dft_grac_shift_b -1
+
+Any value at or below ``-1`` is treated as this request rather than as a shift.
+A real GRAC shift is the ionization potential plus the HOMO energy and is
+accepted only within :math:`-1 < \Delta < 1` E\ :sub:`h`, so the sentinel cannot be
+mistaken for a computed value. The sentinel is never passed to
+|scf__dft_grac_shift|: that monomer's DFT runs unshifted, its shift is
+reported as zero in ``SAPT DFT GRAC SHIFT A``/``B``, and the output states
+that GRAC was disabled. Like an explicit shift, it suppresses the automatic
+computation of |sapt__sapt_dft_grac_compute| for that monomer and satisfies
+the requirement that both shifts be given when
+|sapt__sapt_dft_grac_compute| is ``NONE``. The two monomers are independent,
+so one may be disabled while the other is supplied or computed.
+
+Disabling GRAC is useful for testing or for functionals that already have
+the correct asymptotic behavior; SAPT(DFT) results without an asymptotic
+correction are generally less accurate.
 
 
 The dispersion term needs to be computed with orbital response for good
@@ -576,6 +647,9 @@ HF segment,
 total ``CPHF`` induction, but no ``Ind20`` or directional breakdown is
 available.
 
+F-SAPT (|sapt__sapt_dft_do_fsapt|, see :ref:`sec:fsaptdft`) partitions the
+induction, so ``NONE`` is rejected when it is enabled.
+
 External potentials
 ~~~~~~~~~~~~~~~~~~~
 
@@ -606,6 +680,74 @@ electrostatics and printed as ``Elst (extern-extern)``. Charges and
 coordinates are in atomic units, in the input frame of the molecule, exactly as
 for SCF (see :ref:`sec:scfqmmm`).
 
+SAPT(DFT)-D3 and SAPT(DFT)-D4 variants
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In addition to the baseline ``energy('sapt(dft)')`` driver, |PSIfour| supports
+SAPT(DFT) variants where the SAPT(DFT) dispersion term is replaced by semi-empirical
+-D3 or -D4 interaction-energy models. Available method names are::
+
+    energy('sapt(dft)-d3(i)')
+    energy('sapt(dft)-d3(s)')
+    energy('sapt(dft)-d4(i)')
+    energy('sapt(dft)-d4(s)')
+    energy('dft-d3(sapt)')
+    energy('dft-d4(sapt)')
+
+where ``(i)`` denotes an intermolecular pairwise dispersion treatment using
+the corresponding ``(i)`` damping-parameter record, while ``(s)`` denotes a
+supermolecular treatment using the corresponding ``(s)`` record. The four
+``sapt(dft)-d3/d4(i/s)`` variants currently support
+``SAPT_DFT_FUNCTIONAL`` values HF, PBE0, and B3LYP. The
+``dft-d3(sapt)`` and ``dft-d4(sapt)`` methods instead support any functional
+with damping parameters available from their respective dispersion engine.
+
+When a semi-empirical variant is used, the total SAPT(DFT) decomposition is
+still reported through standard SAPT variables (electrostatics, exchange,
+induction, dispersion, and total), and the corresponding -D3/-D4 interaction
+energy contribution is included in the printed SAPT(DFT) summary and stored in
+the dispersion QCVariable.
+
+
+Approximate SAPT Decomposition of DFT-D Methods
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``dft-d3(sapt)`` and ``dft-d4(sapt)`` enable the :math:`\Delta`-DFT correction
+together with -D3BJATM/-D4BJATM dispersion using Grimme damping function
+parameters as a way to decompose a supermolecular DFT-D3/-D4 interaction energy
+into SAPT(DFT) components. This total interaction energy is theoretically
+equivalent to the DFT-D3/-D4 interaction energy and is different than the other
+`SAPT(DFT)-D` variants. These approaches work for any functional with damping
+function parameters available in `simple-dftd3` or `dftd4` Python packages.
+These DFT-D3/-D4 methods save additional scalar quantities such as ``DFT DIMER
+ENERGY``, ``DFT MONOMER A ENERGY``, ``DFT MONOMER B ENERGY``, and ``SAPT(DFT)
+DELTA DFT``.
+
+The stored scalar ``SAPT(DFT) DELTA DFT`` corresponds to the supermolecular DFT
+correction
+
+.. math::
+
+   \delta_{DFT}^{(2)} = E_{int}^{DFT} - \left(E_{elst,DFT}^{(1)} + E_{exch,DFT}^{(1)} + E_{ind,resp,DFT}^{(2)} + E_{exch-ind,resp,DFT}^{(2)}\right)
+
+and the reported component total for ``dft-d3(sapt)`` and ``dft-d4(sapt)`` is
+
+.. math::
+
+   \begin{aligned}
+   E_{int}^{DFT-D} &= E_{elst} + E_{exch} + E_{ind} + E_{disp} \\
+                   &= \left(E_{elst,DFT}^{(1)} + E_{exch,DFT}^{(1)} + E_{ind,resp,DFT}^{(2)} + E_{exch-ind,resp,DFT}^{(2)} + \delta_{HF}^{(2)}\right) \\
+                   &\quad + \left(\delta_{DFT}^{(2)} - \delta_{HF}^{(2)} + E_{int}^{D}\right)
+   \end{aligned}
+
+where :math:`E_{int}^{D}` is the corresponding -D3/-D4 interaction energy. The
+:math:`\Delta`-HF term is subtracted from the :math:`\Delta`-DFT term to avoid
+double counting of induction effects present in both of these terms. Overall,
+Psi4 keeps the SAPT-like electrostatics, exchange, and induction terms, then
+assigns the remaining supermolecular DFT-D correction to dispersion so that the
+summed components reproduce the supermolecular DFT-D interaction energy. 
+
+
 Basic Keywords for SAPT(DFT) 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -615,14 +757,20 @@ Basic Keywords for SAPT(DFT)
 .. include:: autodir_options_c/sapt__sapt_dft_induction_type.rst
 .. include:: autodir_options_c/sapt__sapt_dft_exch_disp_scale_scheme.rst
 .. include:: autodir_options_c/sapt__sapt_dft_grac_compute.rst
+.. include:: autodir_options_c/sapt__sapt_dft_grac_shift_only.rst
+.. include:: autodir_options_c/sapt__sapt_dft_do_ddft.rst
+.. include:: autodir_options_c/sapt__sapt_dft_do_disp.rst
 
 Advanced Keywords for SAPT(DFT)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. include:: autodir_options_c/sapt__sapt_dft_functional.rst
+.. include:: autodir_options_c/sapt__sapt_dft_grac_basis.rst
+.. include:: autodir_options_c/sapt__sapt_dft_grac_use_ext_pot.rst
 .. include:: autodir_options_c/sapt__sapt_dft_do_hybrid.rst
 .. include:: autodir_options_c/sapt__sapt_dft_exch_disp_fixed_scale.rst
 .. include:: autodir_options_c/sapt__sapt_dft_mp2_disp_alg.rst
+.. include:: autodir_options_c/sapt__sapt_dft_do_fsapt.rst
 .. include:: autodir_options_c/sapt__sapt_quiet.rst
 
 
@@ -1073,8 +1221,19 @@ function parameter adjustments with respect to basis set, the parameters are
 quite transferable at least between cc-pVDZ to aug-cc-pVTZ (see Fig S1 and S2
 from [Wallace:2024:114115]_ for more information). However, recommended usage
 is with the following levels of theory: SAPT0-D3/jun-cc-pVDZ,
-SAPT0-D3/aug-cc-pVDZ, and SAPT0-D4/aug-cc-pVDZ. A simple water dimer
-computation using SAPT0-D may look like::
+SAPT0-D3/aug-cc-pVDZ, and SAPT0-D4/aug-cc-pVDZ.
+
+.. warning:: Since March 2026, the default SAPT0-D4 treatment has changed from
+   the supermolecular ``sapt0-d4(s)`` variant to the intermolecular
+   ``sapt0-d4(i)`` variant because the supermolecular -D4 model can show
+   unphysical long-range behavior. To reproduce the former default explicitly,
+   pass ``(s)`` after the -D4 method, for example ``energy('sapt0-d4(s)')`` or
+   ``energy('sapt0-d4bjeeqtwo(s)')``. More information on the differences
+   between the supermolecular and intermolecular -D4 models can be found in
+   [Wallace:2024:114115]_, or above in the section ``SAPT(DFT)-D3 and
+   SAPT(DFT)-D4 variants``.
+
+A simple water dimer computation using SAPT0-D may look like::
 
     molecule water_dimer {
          0 1
