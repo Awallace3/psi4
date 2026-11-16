@@ -37,6 +37,20 @@ evidence for either branch.
   non-multiple sizes. The packaged Gau2Grid 2.0.8 triggered ASan on
   `aligned_alloc(64, 24)`. Existing binary packages are not modified by this patch.
 
+The new SCF pointer no-alias annotations and their compiler compatibility
+header have been removed. Paired AMD/GCC 14.3 `-O3` tests did not establish a
+compelling benefit: B3LYP potential builds showed approximately 0.1% higher
+runtime, and fixed-density VV10 builds showed a median paired improvement of
+0.72% on a shared host. The inner VV10 kernel object was byte-identical with
+the annotations enabled and disabled. This does not rule out benefits on
+other compilers or targets; ordinary pointers avoid the extra aliasing promises
+and compiler-specific plumbing.
+
+Fresh GCC `-O3` builds after removal passed the threaded LSDA/GGA/meta-GGA/VV10
+matrix/gradient and grid-blocking checks: 19 tests on the exact tier, 9 on the
+optional tier (10 exact-grid determinism checks intentionally skipped there).
+The standalone optional scratch test also passed optimized and ASan/UBSan runs.
+
 Additional opt-branch safeguards:
 
 - FP32 scratch uses byte-backed storage with explicit placement-new array
@@ -44,11 +58,6 @@ Additional opt-branch safeguards:
   switch reuses the allocation without copying, and pointers are reacquired
   before the next double contraction. Shared reduction buffers' type transitions
   happen before the parallel region.
-- `PSI_RESTRICT` selects the compiler spelling, or no hint on unsupported
-  compilers. Define `PSI_NO_RESTRICT` for optimized reference builds. This does
-  not remove the need to audit buffer ownership: read-only VV10 arrays may
-  overlap, while each modified XC/scratch output must be independent of its
-  inputs.
 - MKL thread control uses the configured provider's official service header,
   without weak-symbol assumptions on Windows/macOS. Each worker restores its
   previous thread-local setting, not a hard-coded global default.
@@ -110,7 +119,7 @@ linked into production.
 
 `.github/workflows/ecosystem.yml` runs staged regressions on GNU/Linux,
 Clang/Intel macOS, native Apple ARM64, and Windows clang-cl. An additional Linux
-Clang/OpenBLAS variant disables OpenMP and restrict hints. Source checkout is
+Clang/OpenBLAS variant disables OpenMP. Source checkout is
 pinned to the tested PR snapshot. These are configured checks, not proof that a
 particular remote run passed.
 

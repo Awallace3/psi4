@@ -37,7 +37,6 @@
 #include "psi4/libfunctional/superfunctional.h"
 #include "psi4/libqt/qt.h"
 #include "psi4/psi4-dec.h"
-#include "psi4/restrict.h"
 
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/integral.h"
@@ -1030,7 +1029,7 @@ double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
         const std::vector<int>& function_map = block->functions_local_to_global();
         const int nlocal = static_cast<int>(function_map.size());
         double** V2p = V_local[rank]->pointer();
-        const int* PSI_RESTRICT fmap = function_map.data();
+        const int* fmap = function_map.data();
 
         auto& ord = tile_order[rank];
         ord.clear();
@@ -1047,8 +1046,8 @@ double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
         auto add_run = [&](const std::pair<size_t, size_t>& r) {
             for (size_t k = r.first; k < r.second; k++) {
                 const int ml = ord[k].second;
-                double* PSI_RESTRICT row = Vp[fmap[ml]];
-                const double* PSI_RESTRICT v2row = V2p[ml];
+                double* row = Vp[fmap[ml]];
+                const double* v2row = V2p[ml];
                 for (int nl = 0; nl <= ml; nl++) row[fmap[nl]] += v2row[nl];
                 for (int nl = ml + 1; nl < nlocal; nl++) row[fmap[nl]] += V2p[nl][ml];
             }
@@ -1501,7 +1500,7 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
 
         // Group the block's local rows by tile; add_run adds whole rows of the symmetric V2
         // (lower triangle stored, mirrored as in the other paths) into V_AO.
-        const int* PSI_RESTRICT fmap = function_map.data();
+        const int* fmap = function_map.data();
         auto& ord = tile_order[rank];
         ord.clear();
         for (int ml = 0; ml < nlocal; ml++) ord.emplace_back(tile_of[fmap[ml]], ml);
@@ -1518,8 +1517,8 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         auto add_run = [&](const std::pair<size_t, size_t>& r) {
             for (size_t k = r.first; k < r.second; k++) {
                 const int ml = ord[k].second;
-                double* PSI_RESTRICT row = Vp[fmap[ml]];
-                const double* PSI_RESTRICT v2row = V2p[ml];
+                double* row = Vp[fmap[ml]];
+                const double* v2row = V2p[ml];
                 for (int nl = 0; nl <= ml; nl++) row[fmap[nl]] += v2row[nl];
                 for (int nl = ml + 1; nl < nlocal; nl++) row[fmap[nl]] += V2p[nl][ml];
             }
@@ -2930,15 +2929,15 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
             auto phix = pworker->basis_value("PHI_X")->pointer();
             auto phiy = pworker->basis_value("PHI_Y")->pointer();
             auto phiz = pworker->basis_value("PHI_Z")->pointer();
-            const double* PSI_RESTRICT rho_ax = pworker->point_value("RHO_AX")->pointer();
-            const double* PSI_RESTRICT rho_ay = pworker->point_value("RHO_AY")->pointer();
-            const double* PSI_RESTRICT rho_az = pworker->point_value("RHO_AZ")->pointer();
-            const double* PSI_RESTRICT rho_bx = pworker->point_value("RHO_BX")->pointer();
-            const double* PSI_RESTRICT rho_by = pworker->point_value("RHO_BY")->pointer();
-            const double* PSI_RESTRICT rho_bz = pworker->point_value("RHO_BZ")->pointer();
-            const double* PSI_RESTRICT v_gamma_aa = vals["V_GAMMA_AA"]->pointer();
-            const double* PSI_RESTRICT v_gamma_ab = vals["V_GAMMA_AB"]->pointer();
-            const double* PSI_RESTRICT v_gamma_bb = vals["V_GAMMA_BB"]->pointer();
+            const double* rho_ax = pworker->point_value("RHO_AX")->pointer();
+            const double* rho_ay = pworker->point_value("RHO_AY")->pointer();
+            const double* rho_az = pworker->point_value("RHO_AZ")->pointer();
+            const double* rho_bx = pworker->point_value("RHO_BX")->pointer();
+            const double* rho_by = pworker->point_value("RHO_BY")->pointer();
+            const double* rho_bz = pworker->point_value("RHO_BZ")->pointer();
+            const double* v_gamma_aa = vals["V_GAMMA_AA"]->pointer();
+            const double* v_gamma_ab = vals["V_GAMMA_AB"]->pointer();
+            const double* v_gamma_bb = vals["V_GAMMA_BB"]->pointer();
 
             for (size_t P = 0; P < npoints; P++) {
                 const double wp = w[P];
@@ -2953,12 +2952,12 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
                 const double cbx = wp * (gbb * rho_bx[P] + gab * rho_ax[P]);
                 const double cby = wp * (gbb * rho_by[P] + gab * rho_ay[P]);
                 const double cbz = wp * (gbb * rho_bz[P] + gab * rho_az[P]);
-                const double* PSI_RESTRICT p0 = phi[P];
-                const double* PSI_RESTRICT px = phix[P];
-                const double* PSI_RESTRICT py = phiy[P];
-                const double* PSI_RESTRICT pz = phiz[P];
-                double* PSI_RESTRICT ta = Tap[P];
-                double* PSI_RESTRICT tb = Tbp[P];
+                const double* p0 = phi[P];
+                const double* px = phix[P];
+                const double* py = phiy[P];
+                const double* pz = phiz[P];
+                double* ta = Tap[P];
+                double* tb = Tbp[P];
 #pragma omp simd
                 for (size_t m = 0; m < nlocal; m++) {
                     const double p0m = p0[m];
@@ -2973,9 +2972,9 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
             for (size_t P = 0; P < npoints; P++) {
                 const double ca0 = 0.5 * v_rho_a[P] * w[P];
                 const double cb0 = 0.5 * v_rho_b[P] * w[P];
-                const double* PSI_RESTRICT p0 = phi[P];
-                double* PSI_RESTRICT ta = Tap[P];
-                double* PSI_RESTRICT tb = Tbp[P];
+                const double* p0 = phi[P];
+                double* ta = Tap[P];
+                double* tb = Tbp[P];
 #pragma omp simd
                 for (size_t m = 0; m < nlocal; m++) {
                     const double p0m = p0[m];
@@ -3013,13 +3012,13 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
 
             for (int s = 0; s < 2; s++) {
                 double** V2p = V_val[s];
-                const double* PSI_RESTRICT v_taup = v_tau[s];
+                const double* v_taup = v_tau[s];
                 for (int i = 0; i < 3; i++) {
                     double** phiw = phi_m[i];
                     for (size_t P = 0; P < npoints; P++) {
                         const double c = v_taup[P] * w[P];
-                        const double* PSI_RESTRICT pw = phiw[P];
-                        double* PSI_RESTRICT ta = Tap[P];
+                        const double* pw = phiw[P];
+                        double* ta = Tap[P];
 #pragma omp simd
                         for (size_t m = 0; m < nlocal; m++) {
                             ta[m] = c * pw[m];
@@ -3032,7 +3031,7 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
         }
 
         // ==> Unpacking via row-tile locks <== //
-        const int* PSI_RESTRICT fmap = function_map.data();
+        const int* fmap = function_map.data();
         const int nl_int = static_cast<int>(nlocal);
         auto& ord = tile_order[rank];
         ord.clear();
@@ -3050,10 +3049,10 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
             for (size_t k = r.first; k < r.second; k++) {
                 const int ml = ord[k].second;
                 const int mg = fmap[ml];
-                double* PSI_RESTRICT rva = Vap[mg];
-                double* PSI_RESTRICT rvb = Vbp[mg];
-                const double* PSI_RESTRICT va2row = Va2p[ml];
-                const double* PSI_RESTRICT vb2row = Vb2p[ml];
+                double* rva = Vap[mg];
+                double* rvb = Vbp[mg];
+                const double* va2row = Va2p[ml];
+                const double* vb2row = Vb2p[ml];
                 for (int nl = 0; nl <= ml; nl++) {
                     const int ng = fmap[nl];
                     rva[ng] += va2row[nl];

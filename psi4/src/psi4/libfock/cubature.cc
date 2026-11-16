@@ -28,7 +28,6 @@
 
 #include "cubature.h"
 #include "gridblocker.h"
-#include "psi4/restrict.h"
 
 #include "psi4/libciomr/libciomr.h"
 #include "psi4/libqt/qt.h"
@@ -2828,7 +2827,7 @@ class NuclearWeightMgr {
 
     template <NuclearSchemes Scheme>
     double computeWeightedImpl(MassPoint mp, double w0, int A, double stratmannCutoff, double weightcut,
-                               double *PSI_RESTRICT dist) const;
+                               double *dist) const;
 
    public:
     static int WhichScheme(const char *schemename);
@@ -2839,7 +2838,7 @@ class NuclearWeightMgr {
     double GetStratmannCutoff(int A) const;
     double computeNuclearWeight(MassPoint mp, int A, double stratmannCutoff) const;
     double computeWeightedNuclearWeight(MassPoint mp, double w0, int A, double stratmannCutoff, double weightcut,
-                                        double *PSI_RESTRICT dist) const;
+                                        double *dist) const;
 };
 
 const char *NuclearWeightMgr::nuclearschemenames[] = {"NAIVE", "BECKE", "TREUTLER", "STRATMANN",
@@ -2928,7 +2927,7 @@ double NuclearWeightMgr::GetStratmannCutoff(int A) const {
 
 template <NuclearWeightMgr::NuclearSchemes Scheme>
 double NuclearWeightMgr::computeWeightedImpl(MassPoint mp, double w0, int A, double stratmannCutoff, double weightcut,
-                                             double *PSI_RESTRICT dist) const {
+                                             double *dist) const {
     const int natom = natom_;
     if (natom <= 1) return w0;
     if (w0 == 0.0) return 0.0;
@@ -2940,9 +2939,9 @@ double NuclearWeightMgr::computeWeightedImpl(MassPoint mp, double w0, int A, dou
     const double px = mp.x;
     const double py = mp.y;
     const double pz = mp.z;
-    const double *PSI_RESTRICT ax = ax_.data();
-    const double *PSI_RESTRICT ay = ay_.data();
-    const double *PSI_RESTRICT az = az_.data();
+    const double *ax = ax_.data();
+    const double *ay = ay_.data();
+    const double *az = az_.data();
 
     for (int l = 0; l < natom; ++l) {
         const double dx = px - ax[l];
@@ -3045,7 +3044,7 @@ double NuclearWeightMgr::computeWeightedImpl(MassPoint mp, double w0, int A, dou
 }
 
 double NuclearWeightMgr::computeWeightedNuclearWeight(MassPoint mp, double w0, int A, double stratmannCutoff,
-                                                      double weightcut, double *PSI_RESTRICT dist) const {
+                                                      double weightcut, double *dist) const {
     switch (scheme_) {
         case TREUTLER:
             return computeWeightedImpl<TREUTLER>(mp, w0, A, stratmannCutoff, weightcut, dist);
@@ -4809,10 +4808,10 @@ void OctreeGridBlocker::block() {
         return;
     }
 
-    double const *PSI_RESTRICT x = x_ref_;
-    double const *PSI_RESTRICT y = y_ref_;
-    double const *PSI_RESTRICT z = z_ref_;
-    double const *PSI_RESTRICT w = w_ref_;
+    double const *x = x_ref_;
+    double const *y = y_ref_;
+    double const *z = z_ref_;
+    double const *w = w_ref_;
 
     struct IndexRange {
         int begin;
@@ -4880,7 +4879,7 @@ void OctreeGridBlocker::block() {
         return (rc2 < T2) ? FATE_COMPLETED : FATE_ACTIVE;
     };
 
-    auto split_range_serial = [&](IndexRange r, double const *PSI_RESTRICT X) -> SplitOutcome {
+    auto split_range_serial = [&](IndexRange r, double const *X) -> SplitOutcome {
         const int b = r.begin;
         const int e = r.end;
         const int n = e - b;
@@ -4909,7 +4908,7 @@ void OctreeGridBlocker::block() {
         return SplitOutcome{left_r, right_r, classify_range(left_r), classify_range(right_r)};
     };
 
-    auto split_range_parallel = [&](IndexRange r, double const *PSI_RESTRICT X) -> SplitOutcome {
+    auto split_range_parallel = [&](IndexRange r, double const *X) -> SplitOutcome {
         const int b = r.begin;
         const int e = r.end;
         const int n = e - b;
@@ -4997,7 +4996,7 @@ void OctreeGridBlocker::block() {
         bool completed = false;
         for (int k = 0; k < 3; k++) {
             next_ranges.clear();
-            double const *PSI_RESTRICT X = dims[k];
+            double const *X = dims[k];
             const size_t n_active = active_ranges.size();
             outcomes.resize(n_active);
 

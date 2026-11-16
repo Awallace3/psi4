@@ -199,17 +199,17 @@ void RKSFunctions::compute_points(std::shared_ptr<BlockOPoints> block, bool forc
         double** phixp = basis_value("PHI_X")->pointer();
         double** phiyp = basis_value("PHI_Y")->pointer();
         double** phizp = basis_value("PHI_Z")->pointer();
-        double* __restrict__ rhoaxp = point_value("RHO_AX")->pointer();
-        double* __restrict__ rhoayp = point_value("RHO_AY")->pointer();
-        double* __restrict__ rhoazp = point_value("RHO_AZ")->pointer();
-        double* __restrict__ gammaaap = point_value("GAMMA_AA")->pointer();
+        double* rhoaxp = point_value("RHO_AX")->pointer();
+        double* rhoayp = point_value("RHO_AY")->pointer();
+        double* rhoazp = point_value("RHO_AZ")->pointer();
+        double* gammaaap = point_value("GAMMA_AA")->pointer();
 
         for (int P = 0; P < npoints; P++) {
-            const double* __restrict__ t = Tp[P];
-            const double* __restrict__ p0 = phip[P];
-            const double* __restrict__ px = phixp[P];
-            const double* __restrict__ py = phiyp[P];
-            const double* __restrict__ pz = phizp[P];
+            const double* t = Tp[P];
+            const double* p0 = phip[P];
+            const double* px = phixp[P];
+            const double* py = phiyp[P];
+            const double* pz = phizp[P];
             double s0 = 0.0, sx = 0.0, sy = 0.0, sz = 0.0;
 #pragma omp simd reduction(+ : s0, sx, sy, sz)
             for (int m = 0; m < nlocal; m++) {
@@ -231,8 +231,8 @@ void RKSFunctions::compute_points(std::shared_ptr<BlockOPoints> block, bool forc
         }
     } else {
         for (int P = 0; P < npoints; P++) {
-            const double* __restrict__ t = Tp[P];
-            const double* __restrict__ p0 = phip[P];
+            const double* t = Tp[P];
+            const double* p0 = phip[P];
             double s0 = 0.0;
 #pragma omp simd reduction(+ : s0)
             for (int m = 0; m < nlocal; m++) {
@@ -496,23 +496,23 @@ void UKSFunctions::compute_points(std::shared_ptr<BlockOPoints> block, bool forc
         double** phixp = basis_value("PHI_X")->pointer();
         double** phiyp = basis_value("PHI_Y")->pointer();
         double** phizp = basis_value("PHI_Z")->pointer();
-        double* __restrict__ rhoaxp = point_value("RHO_AX")->pointer();
-        double* __restrict__ rhoayp = point_value("RHO_AY")->pointer();
-        double* __restrict__ rhoazp = point_value("RHO_AZ")->pointer();
-        double* __restrict__ rhobxp = point_value("RHO_BX")->pointer();
-        double* __restrict__ rhobyp = point_value("RHO_BY")->pointer();
-        double* __restrict__ rhobzp = point_value("RHO_BZ")->pointer();
-        double* __restrict__ gammaaap = point_value("GAMMA_AA")->pointer();
-        double* __restrict__ gammaabp = point_value("GAMMA_AB")->pointer();
-        double* __restrict__ gammabbp = point_value("GAMMA_BB")->pointer();
+        double* rhoaxp = point_value("RHO_AX")->pointer();
+        double* rhoayp = point_value("RHO_AY")->pointer();
+        double* rhoazp = point_value("RHO_AZ")->pointer();
+        double* rhobxp = point_value("RHO_BX")->pointer();
+        double* rhobyp = point_value("RHO_BY")->pointer();
+        double* rhobzp = point_value("RHO_BZ")->pointer();
+        double* gammaaap = point_value("GAMMA_AA")->pointer();
+        double* gammaabp = point_value("GAMMA_AB")->pointer();
+        double* gammabbp = point_value("GAMMA_BB")->pointer();
 
         for (int P = 0; P < npoints; P++) {
-            const double* __restrict__ ta = Tap[P];
-            const double* __restrict__ tb = Tbp[P];
-            const double* __restrict__ p0 = phip[P];
-            const double* __restrict__ px = phixp[P];
-            const double* __restrict__ py = phiyp[P];
-            const double* __restrict__ pz = phizp[P];
+            const double* ta = Tap[P];
+            const double* tb = Tbp[P];
+            const double* p0 = phip[P];
+            const double* px = phixp[P];
+            const double* py = phiyp[P];
+            const double* pz = phizp[P];
             double sa0 = 0.0, sax = 0.0, say = 0.0, saz = 0.0;
             double sb0 = 0.0, sbx = 0.0, sby = 0.0, sbz = 0.0;
 #pragma omp simd reduction(+ : sa0, sax, say, saz, sb0, sbx, sby, sbz)
@@ -552,9 +552,9 @@ void UKSFunctions::compute_points(std::shared_ptr<BlockOPoints> block, bool forc
         }
     } else {
         for (int P = 0; P < npoints; P++) {
-            const double* __restrict__ ta = Tap[P];
-            const double* __restrict__ tb = Tbp[P];
-            const double* __restrict__ p0 = phip[P];
+            const double* ta = Tap[P];
+            const double* tb = Tbp[P];
+            const double* p0 = phip[P];
             double sa0 = 0.0, sb0 = 0.0;
 #pragma omp simd reduction(+ : sa0, sb0)
             for (int m = 0; m < nlocal; m++) {

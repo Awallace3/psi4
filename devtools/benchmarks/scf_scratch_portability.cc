@@ -1,13 +1,12 @@
 // Standalone optimized/sanitized test; needs no Psi4 or BLAS installation.
 #include "../../psi4/src/psi4/lib3index/dfhelper_scratch.h"
-#include "../../psi4/include/psi4/restrict.h"
 
 #include <cassert>
 #include <cstdint>
 #include <utility>
 #include <vector>
 
-static void scale(float* PSI_RESTRICT out, const float* PSI_RESTRICT in, size_t n) {
+static void scale(float* out, const float* in, size_t n) {
     for (size_t i = 0; i < n; ++i) out[i] = 2.0f * in[i];
 }
 

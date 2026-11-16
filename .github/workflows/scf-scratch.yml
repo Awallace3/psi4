@@ -5,13 +5,11 @@ on:
       - 'review/scf-dft-portability-opt-*'
     paths:
       - 'psi4/src/psi4/lib3index/**'
-      - 'psi4/include/psi4/restrict.h'
       - 'devtools/benchmarks/scf_scratch_portability.cc'
       - '.github/workflows/scf-scratch.yml'
   pull_request:
     paths:
       - 'psi4/src/psi4/lib3index/**'
-      - 'psi4/include/psi4/restrict.h'
       - 'devtools/benchmarks/scf_scratch_portability.cc'
       - '.github/workflows/scf-scratch.yml'
   workflow_dispatch:
@@ -28,7 +26,7 @@ jobs:
             flags: '-O3 -fstrict-aliasing'
           - os: ubuntu-latest
             compiler: clang++
-            flags: '-O3 -DPSI_NO_RESTRICT'
+            flags: '-O3 -fstrict-aliasing'
           - os: ubuntu-latest
             compiler: clang++
             flags: '-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer'
