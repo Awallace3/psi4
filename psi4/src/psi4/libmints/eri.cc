@@ -40,6 +40,15 @@ using namespace psi;
 /////////
 
 //// Libint2 implementation
+template <typename Params>
+static std::function<std::unique_ptr<libint2::Engine>()> schwarz_factory(
+    libint2::Operator op, int max_nprim, int max_am, double precision, Params params) {
+    return [op, max_nprim, max_am, precision, params]() {
+        return std::make_unique<libint2::Engine>(op, max_nprim, max_am, 0, precision,
+                                               params, libint2::BraKet::xx_xx);
+    };
+}
+
 Libint2ERI::Libint2ERI(const IntegralFactory *integral, double screening_threshold, int deriv, bool use_shell_pairs,
                        bool needs_exchange)
     : Libint2TwoElectronInt(integral, deriv, screening_threshold, use_shell_pairs, needs_exchange) {
@@ -75,9 +84,9 @@ Libint2ERI::Libint2ERI(const IntegralFactory *integral, double screening_thresho
     }
     // set max_am for primary basis to be sieved, not all basis1234
     max_am = bra_same_ ? basis1()->max_am() : ket_same_ ? basis3()->max_am() : 0;
-    schwarz_engine_ =
-        libint2::Engine(libint2::Operator::coulomb, max_nprim, max_am, 0, max_precision,
-                        libint2::operator_traits<libint2::Operator::coulomb>::default_params(), libint2::BraKet::xx_xx);
+    init_schwarz_engine(schwarz_factory(
+        libint2::Operator::coulomb, max_nprim, max_am, max_precision,
+        libint2::operator_traits<libint2::Operator::coulomb>::default_params()));
     common_init();
     timer_off("Libint2ERI::Libint2ERI");
 }
@@ -178,8 +187,7 @@ Libint2ErfERI::Libint2ErfERI(double omega, const IntegralFactory *integral, doub
         engines_.emplace_back(libint2::Operator::erf_coulomb, max_nprim, max_am, der, max_precision, omega, braket_);
     }
     max_am = bra_same_ ? basis1()->max_am() : ket_same_ ? basis3()->max_am() : 0;
-    schwarz_engine_ = libint2::Engine(libint2::Operator::erf_coulomb, max_nprim, max_am, 0, max_precision, omega,
-                                      libint2::BraKet::xx_xx);
+    init_schwarz_engine(schwarz_factory(libint2::Operator::erf_coulomb, max_nprim, max_am, max_precision, omega));
     common_init();
     timer_off("Libint2ErfERI::Libint2ErfERI");
 }
@@ -292,8 +300,7 @@ Libint2ErfComplementERI::Libint2ErfComplementERI(double omega, const IntegralFac
         engines_.emplace_back(libint2::Operator::erfc_coulomb, max_nprim, max_am, der, max_precision, omega, braket_);
     }
     max_am = bra_same_ ? basis1()->max_am() : ket_same_ ? basis3()->max_am() : 0;
-    schwarz_engine_ = libint2::Engine(libint2::Operator::erfc_coulomb, max_nprim, max_am, 0, max_precision, omega,
-                                      libint2::BraKet::xx_xx);
+    init_schwarz_engine(schwarz_factory(libint2::Operator::erfc_coulomb, max_nprim, max_am, max_precision, omega));
     common_init();
     timer_off("Libint2ErfComplementERI::Libint2ErfComplementERI");
 }
@@ -409,8 +416,7 @@ Libint2YukawaERI::Libint2YukawaERI(double zeta, const IntegralFactory *integral,
     }
     // set max_am for primary basis to be sieved, not all basis1234
     max_am = bra_same_ ? basis1()->max_am() : ket_same_ ? basis3()->max_am() : 0;
-    schwarz_engine_ =
-        libint2::Engine(libint2::Operator::yukawa, max_nprim, max_am, 0, max_precision, zeta, libint2::BraKet::xx_xx);
+    init_schwarz_engine(schwarz_factory(libint2::Operator::yukawa, max_nprim, max_am, max_precision, zeta));
     common_init();
     timer_on("Libint2YukawaERI::Libint2YukawaERI");
 }
@@ -512,8 +518,7 @@ Libint2F12::Libint2F12(std::vector<std::pair<double, double>> exp_coeff, const I
         engines_.emplace_back(libint2::Operator::cgtg, max_nprim, max_am, der, max_precision, exp_coeff, braket_);
     }
     max_am = bra_same_ ? basis1()->max_am() : ket_same_ ? basis3()->max_am() : 0;
-    schwarz_engine_ = libint2::Engine(libint2::Operator::cgtg, max_nprim, max_am, 0, max_precision, exp_coeff,
-                                      libint2::BraKet::xx_xx);
+    init_schwarz_engine(schwarz_factory(libint2::Operator::cgtg, max_nprim, max_am, max_precision, exp_coeff));
     common_init();
     timer_off("Libint2F12::Libint2F12");
 }
@@ -616,8 +621,7 @@ Libint2F12G12::Libint2F12G12(std::vector<std::pair<double, double>> exp_coeff, c
                               braket_);
     }
     max_am = bra_same_ ? basis1()->max_am() : ket_same_ ? basis3()->max_am() : 0;
-    schwarz_engine_ = libint2::Engine(libint2::Operator::cgtg_x_coulomb, max_nprim, max_am, 0, max_precision, exp_coeff,
-                                      libint2::BraKet::xx_xx);
+    init_schwarz_engine(schwarz_factory(libint2::Operator::cgtg_x_coulomb, max_nprim, max_am, max_precision, exp_coeff));
     common_init();
     timer_off("Libint2F12G12::Libint2F12G12");
 }
@@ -732,8 +736,7 @@ Libint2F12DoubleCommutator::Libint2F12DoubleCommutator(std::vector<std::pair<dou
         engines_.emplace_back(libint2::Operator::delcgtg2, max_nprim, max_am, der, max_precision, exp_coeff, braket_);
     }
     max_am = bra_same_ ? basis1()->max_am() : ket_same_ ? basis3()->max_am() : 0;
-    schwarz_engine_ = libint2::Engine(libint2::Operator::delcgtg2, max_nprim, max_am, 0, max_precision, exp_coeff,
-                                      libint2::BraKet::xx_xx);
+    init_schwarz_engine(schwarz_factory(libint2::Operator::delcgtg2, max_nprim, max_am, max_precision, exp_coeff));
     common_init();
     timer_off("Libint2F12DoubleCommutator::Libint2F12DoubleCommutator");
 }
