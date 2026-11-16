@@ -53,8 +53,10 @@ def _aux_matrices(obj, monomer, frequency, is_lrc, auxiliary_basis=False):
 
 
 @pytest.mark.parametrize("omega", [0.0, 0.1, 0.4])
+@pytest.mark.parametrize("algorithm", ["STORE", "LEGACY", "DIRECT_IAQ"])
+@pytest.mark.parametrize("split_monomers", [False, True])
 @pytest.mark.parametrize("asymmetric", [False, True])
-def test_fdds_storage_mode_parity(fdds_input, omega, asymmetric):
+def test_fdds_storage_mode_parity(fdds_input, omega, algorithm, split_monomers, asymmetric):
     """Finite-range exchange must not become Coulomb exchange out of core.
 
     Comparing every auxiliary response matrix catches the wrong three-index
@@ -74,14 +76,23 @@ def test_fdds_storage_mode_parity(fdds_input, omega, asymmetric):
         vectors["eps_vir_B"] = psi4.core.Vector.from_array(np.concatenate(
             (vectors["eps_occ_A"].np[-1:], vectors["eps_vir_A"].np)))
     is_lrc = omega != 0.0
-    # The in-core DIRECT/DIRECT_iaQ build is the common reference.
-    psi4.set_options({"scf_subtype": "INCORE"})
+    # A common reference also checks the new STORE/split path against the
+    # published in-core DIRECT/DIRECT_iaQ implementation.
+    psi4.set_options({
+        "scf_subtype": "INCORE",
+        "sapt_fdds_disp_df_algorithm": "LEGACY",
+        "sapt_fdds_disp_split_monomers": False,
+    })
     obj = psi4.core.FDDS_Dispersion(primary, auxiliary, matrices, vectors, True, is_lrc, omega)
     reference = {
         (monomer, frequency): _aux_matrices(obj, monomer, frequency, is_lrc, auxiliary_basis=True)
         for monomer in ("A", "B") for frequency in (0.0, 0.3)
     }
     del obj
+    psi4.set_options({
+        "sapt_fdds_disp_df_algorithm": algorithm,
+        "sapt_fdds_disp_split_monomers": split_monomers,
+    })
     results = {}
     for mode in ("INCORE", "OUT_OF_CORE"):
         psi4.set_options({"scf_subtype": mode})
@@ -96,7 +107,7 @@ def test_fdds_storage_mode_parity(fdds_input, omega, asymmetric):
             for key, value in expected.items():
                 np.testing.assert_allclose(
                     cases[case][key], value, rtol=1.e-9, atol=1.e-10,
-                    err_msg=f"{mode}, omega={omega}, {case}, {key}",
+                    err_msg=f"{algorithm}, split={split_monomers}, {mode}, omega={omega}, {case}, {key}",
                 )
 
 
@@ -119,12 +130,13 @@ def test_fdds_aux_memory_blocking(fdds_input, is_lrc):
     # 80% of the global byte setting / sizeof(double) = byte setting / 10.
     # Nine slices fit the old (incorrect) seven-slice LRC budget, not twelve.
     too_small = fixed + (9 if is_lrc else 6) * nvir * naux
-    psi4.core.set_memory_bytes(10 * too_small, True)
-    with pytest.raises(RuntimeError, match=r"Too little static memory for FDDS_Dispersion::form_aux_matrices"):
+    resident_bytes = 8 * psi4.core.memory_committed()
+    psi4.core.set_memory_bytes(resident_bytes + 10 * too_small, True)
+    with pytest.raises(RuntimeError, match=r"Too little memory for FDDS_Dispersion::form_aux_matrices"):
         obj.form_aux_matrices("A", 0.3, 0.25, 0.75 if is_lrc else 0.0)
 
     for block in (1, 2):
-        psi4.core.set_memory_bytes(10 * (fixed + block * per_occ + 1), True)
+        psi4.core.set_memory_bytes(resident_bytes + 10 * (fixed + block * per_occ + 1), True)
         for monomer in ("A", "B"):
             actual = _aux_matrices(obj, monomer, 0.3, is_lrc)
             for key, value in reference[monomer].items():
