@@ -56,6 +56,37 @@ units angstrom
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt
+def test_fsaptdft_coupled_induction_not_implemented():
+    """Coupled F-SAPT induction is refused before any SCF runs."""
+
+    mol = psi4.geometry(
+        """
+0 1
+He 0.0 0.0 0.0
+--
+0 1
+He 0.0 0.0 3.0
+units angstrom
+            """
+    )
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "SAPT_DFT_GRAC_SHIFT_A": 0.1,
+            "SAPT_DFT_GRAC_SHIFT_B": 0.1,
+            "FISAPT_FSAPT_FILEPATH": "none",
+            "SAPT_DFT_DO_FSAPT": "FISAPT",
+            "FISAPT_FSAPT_IND_RESPONSE": True,
+        }
+    )
+    psi4.core.clean_variables()
+    with pytest.raises(NotImplementedError, match="will be added in future work"):
+        psi4.energy("sapt(dft)", molecule=mol)
+    assert not psi4.core.has_scalar_variable("SCF TOTAL ENERGY")
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
 @pytest.mark.saptdft
 def test_fsapthf_disp0_fisapt0_psivars():
     """

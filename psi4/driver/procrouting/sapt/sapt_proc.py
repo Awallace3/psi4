@@ -105,6 +105,13 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     do_fsapt = fsapt_type != "NONE"
     if induction_type == "NONE" and do_fsapt:
         raise ValidationError("F-SAPT requires induction; SAPT_DFT_INDUCTION_TYPE=NONE is unavailable.")
+    if do_fsapt and core.get_option("FISAPT", "FISAPT_FSAPT_IND_RESPONSE"):
+        # FISAPT's coupled loop solves the HF orbital Hessian, which is wrong for KS orbitals.
+        raise NotImplementedError(
+            "Coupled F-SAPT induction (FISAPT_FSAPT_IND_RESPONSE=true) is not implemented for SAPT(DFT) "
+            "yet and will be added in future work. Leave FISAPT_FSAPT_IND_RESPONSE off for uncoupled, "
+            "scaled F-SAPT induction."
+        )
     jk_terms = sapt_jk_terms
 
     # Alter default algorithm
