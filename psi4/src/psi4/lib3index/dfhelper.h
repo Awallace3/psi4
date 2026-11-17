@@ -69,7 +69,13 @@ class PSI_API DFHelper {
     /// @param nthreads specifies number of threads to use
     /// oversubcription is possible
     ///
-    void set_nthreads(size_t nthreads) { nthreads_ = nthreads; }
+    void set_nthreads(size_t nthreads) {
+#ifdef _OPENMP
+        nthreads_ = nthreads ? nthreads : 1;
+#else
+        nthreads_ = 1;
+#endif
+    }
     size_t get_nthreads() { return nthreads_; }
 
     ///
@@ -79,6 +85,8 @@ class PSI_API DFHelper {
     ///
     void set_memory(size_t doubles) { memory_ = doubles; }
     size_t get_memory() { return memory_; }
+    size_t JK_scratch_memory() const;
+    void clear_JK_scratch();
 
     ///
     /// Indicates whether to use the in-core or out-of-core
@@ -378,6 +386,28 @@ class PSI_API DFHelper {
     // => in-core machinery <=
     void AO_core(bool set_AO_core);
     std::unique_ptr<double[]> Ppq_;
+    // Grow only on demand. Release before growth so replanning can honor the JK budget.
+    class ScratchBuffer {
+        std::unique_ptr<double[]> data_;
+        size_t size_ = 0;
+       public:
+        size_t size() const { return size_; }
+        double* data() { return data_.get(); }
+        double* reserve(size_t n) {
+            if (n > size_) {
+                data_.reset();
+                size_ = 0;
+                data_.reset(new double[n]);
+                size_ = n;
+            }
+            return data();
+        }
+    };
+    ScratchBuffer jk_T1_, jk_T2_;
+    std::vector<ScratchBuffer> jk_C_buffers_;
+    void ensure_jk_C_buffers(size_t elem_per_thread);
+    size_t JK_core_memory() const;
+
     // Maps x -> (P|Q) ^ x.
     std::map<double, SharedMatrix> metrics_;
 
@@ -413,7 +443,7 @@ class PSI_API DFHelper {
 
     // first integral transforms
     void first_transform_pQq(size_t bsize, size_t bcount, size_t block_size, double* Mp, double* Tp, double* Bp,
-                             std::vector<std::vector<double>>& C_buffers);
+                             std::vector<ScratchBuffer>& C_buffers);
 
     // => index vectors for screened AOs <=
     // ==> Skips for non-symmetric "densities" <==
@@ -577,13 +607,13 @@ class PSI_API DFHelper {
     // @param T1p : Temporary matrix
     // @param T2p : Temporary matrix
     void compute_J(const std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p,
-                   std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size);
+                   std::vector<ScratchBuffer>& D_buffers, size_t bcount, size_t block_size);
     void compute_J_symm(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p,
-                        std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size);
-    void compute_J_combined(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p, std::vector<std::vector<double>>& D_buffers, size_t bcount, size_t block_size);
+                        std::vector<ScratchBuffer>& D_buffers, size_t bcount, size_t block_size);
+    void compute_J_combined(std::vector<SharedMatrix> D, std::vector<SharedMatrix> J, double* Mp, double* T1p, double* T2p, std::vector<ScratchBuffer>& D_buffers, size_t bcount, size_t block_size);
     void compute_K(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright, std::vector<SharedMatrix> K,
                    double* Tp, double* Jtmp, double* Mp, size_t bcount, size_t block_size,
-                   std::vector<std::vector<double>>& C_buffers, bool lr_symmetric);
+                   std::vector<ScratchBuffer>& C_buffers, bool lr_symmetric);
     // returns tuple(largest AO buffer size, largest Q block size)
     std::tuple<size_t, size_t> Qshell_blocks_for_JK_build(std::vector<std::pair<size_t, size_t>>& b, size_t max_nocc,
                                                           bool lr_symmetric);
