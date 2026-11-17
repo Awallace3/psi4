@@ -34,6 +34,7 @@
 #include <set>
 #include "psi4/mcscf/block_matrix.h"
 #include "psi4/libscf_solver/rhf.h"
+#include "psi4/libscf_solver/cpscf_gemm.h"
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -5416,6 +5417,50 @@ void FISAPT::flocalize() {
 }
 
 namespace {
+bool use_orbital_jk(Options& options, size_t nao, size_t na, size_t nb, size_t naux, size_t memory) {
+    auto algorithm = options.get_str("FISAPT_FSAPT_INTEGRAL_ALGORITHM");
+    bool available = false;
+#ifdef USING_cuEST
+    available = options.get_bool("USE_CUEST") && options.get_str("FISAPT_LINK_ASSIGNMENT") == "C" &&
+                !options.get_bool("CUEST_DIRECTJ") && !options.get_bool("CUEST_GRIDK");
+#endif
+    if (algorithm == "CUEST_JK" && !available)
+        throw PSIEXCEPTION("FISAPT CUEST_JK requires DF Coulomb and exchange on cuEST with C link assignment.");
+    return available && (algorithm == "CUEST_JK" ||
+                         (algorithm == "AUTO" && na * (nao - na) + nb * (nao - nb) > memory / naux));
+}
+
+std::shared_ptr<JK> orbital_jk_plan(const std::shared_ptr<BasisSet>& primary, const std::shared_ptr<BasisSet>& auxiliary,
+                                    Options& options, size_t memory, bool exchange) {
+    auto jk = JK::build_JK(primary, auxiliary, options, std::string("DISK_DF"));
+    jk->set_memory(memory);
+    jk->set_do_J(!exchange);
+    jk->set_do_K(exchange);
+    jk->initialize();
+    return jk;
+}
+
+// J[L_i L_i^T] gives the orbital Coulomb potential. With right coefficients,
+// K[L_i R_i^T] gives the mixed exchange operator for this single orbital pair.
+void visit_orbital_jk(JK& jk, const SharedMatrix& left, const SharedMatrix& right,
+                      const std::function<void(int, SharedMatrix)>& consume) {
+    jk.C_left().clear();
+    jk.C_right().clear();
+    auto column = std::make_shared<Matrix>("Left orbital", left->nrow(), 1);
+    jk.C_left().push_back(column);
+    SharedMatrix rcolumn;
+    if (right) {
+        rcolumn = std::make_shared<Matrix>("Right orbital", right->nrow(), 1);
+        jk.C_right().push_back(rcolumn);
+    }
+    for (int i = 0; i < left->ncol(); ++i) {
+        C_DCOPY(left->nrow(), &left->pointer()[0][i], left->ncol(), column->pointer()[0], 1);
+        if (right) C_DCOPY(right->nrow(), &right->pointer()[0][i], right->ncol(), rcolumn->pointer()[0], 1);
+        jk.compute();
+        consume(i, right ? jk.K().front() : jk.J().front());
+    }
+}
+
 // Reuse the one-electron plan while visiting the nuclei of both fragments.
 std::function<void(SharedMatrix, double, size_t)> nuclear_potential(const std::shared_ptr<BasisSet>& basis,
                                                                    Options& options) {
@@ -5559,31 +5604,49 @@ void FISAPT::felst() {
     dfh_->set_memory(doubles_);
     dfh_->set_method("DIRECT_iaQ");
     dfh_->set_nthreads(nT);
-    dfh_->initialize();
-    dfh_->print_header();
-
-    dfh_->add_space("a", L0A);
-    dfh_->add_space("b", L0B);
-
-    dfh_->add_transformation("Aaa", "a", "a");
-    dfh_->add_transformation("Abb", "b", "b");
-
-    dfh_->transform();
-
     size_t nQ = dfh_->get_naux();
-    auto QaC = std::make_shared<Matrix>("QaC", na, nQ);
-    double** QaCp = QaC->pointer();
-    for (size_t a = 0; a < na; a++) {
-        dfh_->fill_tensor("Aaa", QaCp[a], {a, a + 1}, {a, a + 1});
-    }
+    SharedMatrix Elst10_3;
+    if (use_orbital_jk(options_, nn, na, nb, nQ, doubles_)) {
+        outfile->Printf("    F-SAPT electrostatics: cuEST localized-orbital Coulomb potentials\n");
+        Elst10_3 = std::make_shared<Matrix>("Orbital Coulomb interactions", na, nb);
+        bool from_a = na <= nb;
+        const auto& target = from_a ? L0B : L0A;
+        auto jk = orbital_jk_plan(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_, false);
+        visit_orbital_jk(*jk, from_a ? L0A : L0B, nullptr, [&](int i, SharedMatrix j) {
+            auto jl = scf::cpscf::doublet(options_, j, target, false, false);
+            for (int k = 0; k < target->ncol(); ++k) {
+                double e = C_DDOT(nn, &target->pointer()[0][k], target->ncol(), &jl->pointer()[0][k], target->ncol());
+                Elst10_3->set(from_a ? i : k, from_a ? k : i, e);
+            }
+        });
+        jk->finalize();
+    } else {
+        dfh_->initialize();
+        dfh_->print_header();
+        dfh_->add_space("a", L0A);
+        dfh_->add_space("b", L0B);
 
-    auto QbC = std::make_shared<Matrix>("QbC", nb, nQ);
-    double** QbCp = QbC->pointer();
-    for (size_t b = 0; b < nb; b++) {
-        dfh_->fill_tensor("Abb", QbCp[b], {b, b + 1}, {b, b + 1});
-    }
+        dfh_->add_transformation("Aaa", "a", "a");
+        dfh_->add_transformation("Abb", "b", "b");
 
-    std::shared_ptr<Matrix> Elst10_3 = linalg::doublet(QaC, QbC, false, true);
+        dfh_->transform();
+
+        auto QaC = std::make_shared<Matrix>("QaC", na, nQ);
+        double** QaCp = QaC->pointer();
+        for (size_t a = 0; a < na; a++) {
+            dfh_->fill_tensor("Aaa", QaCp[a], {a, a + 1}, {a, a + 1});
+        }
+
+        auto QbC = std::make_shared<Matrix>("QbC", nb, nQ);
+        double** QbCp = QbC->pointer();
+        for (size_t b = 0; b < nb; b++) {
+            dfh_->fill_tensor("Abb", QbCp[b], {b, b + 1}, {b, b + 1});
+        }
+
+        Elst10_3 = linalg::doublet(QaC, QbC, false, true);
+        matrices_["Vlocc0A"] = QaC;
+        matrices_["Vlocc0B"] = QbC;
+    }
     double** Elst10_3p = Elst10_3->pointer();
     for (int a = 0; a < na; a++) {
         for (int b = 0; b < nb; b++) {
@@ -5592,9 +5655,6 @@ void FISAPT::felst() {
             Ep[a + nA][b + nB] += E;
         }
     }
-
-    matrices_["Vlocc0A"] = QaC;
-    matrices_["Vlocc0B"] = QbC;
 
     // => Nuclear Part (PITA) <= //
     auto build_potential = nuclear_potential(primary_, options_);
@@ -5607,7 +5667,7 @@ void FISAPT::felst() {
         if (ZAp[A] == 0.0) continue;
         build_potential(Vtemp2, ZAp[A], A);
         std::shared_ptr<Matrix> Vbb =
-            linalg::triplet(L0B, Vtemp2, L0B, true, false, false);
+            scf::cpscf::triplet(options_, L0B, Vtemp2, L0B, true, false, false);
         double** Vbbp = Vbb->pointer();
         for (int b = 0; b < nb; b++) {
             double E = 2.0 * Vbbp[b][b];
@@ -5634,7 +5694,7 @@ void FISAPT::felst() {
         if (ZBp[B] == 0.0) continue;
         build_potential(Vtemp2, ZBp[B], B);
         std::shared_ptr<Matrix> Vaa =
-            linalg::triplet(L0A, Vtemp2, L0A, true, false, false);
+            scf::cpscf::triplet(options_, L0A, Vtemp2, L0A, true, false, false);
         double** Vaap = Vaa->pointer();
         for (int a = 0; a < na; a++) {
             double E = 2.0 * Vaap[a][a];
@@ -5793,27 +5853,48 @@ void FISAPT::fexch() {
     // E_exch2->print();
 
     size_t nQ = dfh_->get_naux();
-    // Contract the virtual overlaps into the MO coefficients before the DF transform:
-    // Bab(a,b,Q) = sum_r (a r|Q) Sbr(b,r). By AO-pair symmetry the reverse
-    // factor can also be transformed in (a,b,Q) order and read a row at a time.
-    dfh_->add_space("a", LoccA);
-    dfh_->add_space("b", LoccB);
-    dfh_->add_space("b_proj", linalg::doublet(CvirA, Sbr, false, true));
-    dfh_->add_space("a_proj", linalg::doublet(CvirB, Sas, false, true));
-    dfh_->add_transformation("Bab", "a", "b_proj");
-    dfh_->add_transformation("Bba", "a_proj", "b");
-    dfh_->transform();
-    auto forward = std::make_shared<Matrix>("Bab row", nb, nQ);
-    auto reverse = std::make_shared<Matrix>("Bba row", nb, nQ);
-
     auto E_exch3 = std::make_shared<Matrix>("E_exch [a <x-x> b]", na, nb);
     double** E_exch3p = E_exch3->pointer();
 
-    for (size_t a = 0; a < na; a++) {
-        dfh_->fill_tensor("Bab", forward, {a, a + 1});
-        dfh_->fill_tensor("Bba", reverse, {a, a + 1});
-        for (size_t b = 0; b < nb; b++) {
-            E_exch3p[a][b] -= 2.0 * C_DDOT(nQ, forward->pointer()[b], 1, reverse->pointer()[b], 1);
+    auto b_proj = scf::cpscf::doublet(options_, CvirA, Sbr, false, true);
+    auto a_proj = scf::cpscf::doublet(options_, CvirB, Sas, false, true);
+    if (!dfh_->is_initialized()) {
+        // b_proj^T K[a a_proj^T] b = sum_Q (a b_proj|Q)(a_proj b|Q).
+        // Exchange the roles of the pairs when B has fewer occupied orbitals.
+        outfile->Printf("    F-SAPT exchange: cuEST localized-orbital exchange potentials\n");
+        bool from_a = na <= nb;
+        const auto& target_l = from_a ? b_proj : LoccA;
+        const auto& target_r = from_a ? LoccB : a_proj;
+        auto jk = orbital_jk_plan(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_, true);
+        visit_orbital_jk(*jk, from_a ? LoccA : b_proj, from_a ? a_proj : LoccB, [&](int i, SharedMatrix k) {
+            auto kr = scf::cpscf::doublet(options_, k, target_r, false, false);
+            for (int j = 0; j < target_l->ncol(); ++j) {
+                double value = C_DDOT(target_l->nrow(), &target_l->pointer()[0][j], target_l->ncol(),
+                                      &kr->pointer()[0][j], kr->ncol());
+                E_exch3p[from_a ? i : j][from_a ? j : i] = -2.0 * value;
+            }
+        });
+        jk->finalize();
+    } else {
+        // Contract the virtual overlaps into the MO coefficients before the DF transform:
+        // Bab(a,b,Q) = sum_r (a r|Q) Sbr(b,r). By AO-pair symmetry the reverse
+        // factor can also be transformed in (a,b,Q) order and read a row at a time.
+        dfh_->add_space("a", LoccA);
+        dfh_->add_space("b", LoccB);
+        dfh_->add_space("b_proj", b_proj);
+        dfh_->add_space("a_proj", a_proj);
+        dfh_->add_transformation("Bab", "a", "b_proj");
+        dfh_->add_transformation("Bba", "a_proj", "b");
+        dfh_->transform();
+        auto forward = std::make_shared<Matrix>("Bab row", nb, nQ);
+        auto reverse = std::make_shared<Matrix>("Bba row", nb, nQ);
+
+        for (size_t a = 0; a < na; a++) {
+            dfh_->fill_tensor("Bab", forward, {a, a + 1});
+            dfh_->fill_tensor("Bba", reverse, {a, a + 1});
+            for (size_t b = 0; b < nb; b++) {
+                E_exch3p[a][b] -= 2.0 * C_DDOT(nQ, forward->pointer()[b], 1, reverse->pointer()[b], 1);
+            }
         }
     }
 
@@ -5954,7 +6035,7 @@ void FISAPT::find() {
                 SharedMatrix term = zero;
                 if (double charge = charges->get(i)) {
                     build_potential(ao, charge, i);
-                    term = linalg::triplet(occ, ao, vir, true, false, false);
+                    term = scf::cpscf::triplet(options_, occ, ao, vir, true, false, false);
                 }
                 dfh_->write_disk_tensor(tensor, term, {i, i + 1});
             }
@@ -5963,54 +6044,58 @@ void FISAPT::find() {
         write_nuclear_terms("WBar", nB, vectors_["ZB"], Cocc_A, Cvir_A);
     }
 
-    // ==> DFHelper Setup (JKFIT Type, in Full Basis) <== //
+    if (!dfh_->is_initialized()) {
+        outfile->Printf("    F-SAPT induction: cuEST localized-orbital Coulomb potentials\n");
+        auto jk = orbital_jk_plan(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_, false);
+        auto write_sources = [&](const char* tensor, size_t offset, const SharedMatrix& source,
+                                 const SharedMatrix& occ, const SharedMatrix& vir) {
+            visit_orbital_jk(*jk, source, nullptr, [&](int i, SharedMatrix j) {
+                auto esp = scf::cpscf::triplet(options_, occ, j, vir, true, false, false);
+                esp->scale(2.0);
+                dfh_->write_disk_tensor(tensor, esp, {offset + i, offset + i + 1});
+            });
+        };
+        write_sources("WAbs", nA, Locc_A, Cocc_B, Cvir_B);
+        write_sources("WBar", nB, Locc_B, Cocc_A, Cvir_A);
+        jk->finalize();
+    } else {
+        dfh_->add_space("a", Cocc_A);
+        dfh_->add_space("r", Cvir_A);
+        dfh_->add_space("b", Cocc_B);
+        dfh_->add_space("s", Cvir_B);
+        dfh_->add_transformation("Aar", "a", "r");
+        dfh_->add_transformation("Abs", "b", "s");
 
-    std::vector<std::shared_ptr<Matrix> > Cs;
-    Cs.push_back(Cocc_A);
-    Cs.push_back(Cvir_A);
-    Cs.push_back(Cocc_B);
-    Cs.push_back(Cvir_B);
+        dfh_->transform();
 
-    size_t max_MO = 0;
-    for (auto& mat : Cs) max_MO = std::max(max_MO, (size_t)mat->ncol());
+        // => Electronic Part (Massive PITA) <= //
 
-    dfh_->add_space("a", Cs[0]);
-    dfh_->add_space("r", Cs[1]);
-    dfh_->add_space("b", Cs[2]);
-    dfh_->add_space("s", Cs[3]);
+        double** RaCp = matrices_["Vlocc0A"]->pointer();
+        double** RbDp = matrices_["Vlocc0B"]->pointer();
+        // for SAOn/SIAOn, the above two matrices contain the link orbital contribution
 
-    dfh_->add_transformation("Aar", "a", "r");
-    dfh_->add_transformation("Abs", "b", "s");
-
-    dfh_->transform();
-
-    // => Electronic Part (Massive PITA) <= //
-
-    double** RaCp = matrices_["Vlocc0A"]->pointer();
-    double** RbDp = matrices_["Vlocc0B"]->pointer();
-    // for SAOn/SIAOn, the above two matrices contain the link orbital contribution
-
-    auto TsQ = std::make_shared<Matrix>("TsQ", ns, nQ);
-    auto T1As = std::make_shared<Matrix>("T1As", na1, ns);
-    double** TsQp = TsQ->pointer();
-    double** T1Asp = T1As->pointer();
-    for (size_t b = 0; b < nb; b++) {
-        dfh_->fill_tensor("Abs", TsQ, {b, b + 1});
-        C_DGEMM('N', 'T', na1, ns, nQ, 2.0, RaCp[0], nQ, TsQp[0], nQ, 0.0, T1Asp[0], ns);
-        for (size_t a = 0; a < na1; a++) {
-            dfh_->write_disk_tensor("WAbs", T1Asp[a], {nA + a, nA + a + 1}, {b, b + 1});
+        auto TsQ = std::make_shared<Matrix>("TsQ", ns, nQ);
+        auto T1As = std::make_shared<Matrix>("T1As", na1, ns);
+        double** TsQp = TsQ->pointer();
+        double** T1Asp = T1As->pointer();
+        for (size_t b = 0; b < nb; b++) {
+            dfh_->fill_tensor("Abs", TsQ, {b, b + 1});
+            C_DGEMM('N', 'T', na1, ns, nQ, 2.0, RaCp[0], nQ, TsQp[0], nQ, 0.0, T1Asp[0], ns);
+            for (size_t a = 0; a < na1; a++) {
+                dfh_->write_disk_tensor("WAbs", T1Asp[a], {nA + a, nA + a + 1}, {b, b + 1});
+            }
         }
-    }
 
-    auto TrQ = std::make_shared<Matrix>("TrQ", nr, nQ);
-    auto T1Br = std::make_shared<Matrix>("T1Br", nb1, nr);
-    double** TrQp = TrQ->pointer();
-    double** T1Brp = T1Br->pointer();
-    for (size_t a = 0; a < na; a++) {
-        dfh_->fill_tensor("Aar", TrQ, {a, a + 1});
-        C_DGEMM('N', 'T', nb1, nr, nQ, 2.0, RbDp[0], nQ, TrQp[0], nQ, 0.0, T1Brp[0], nr);
-        for (size_t b = 0; b < nb1; b++) {
-            dfh_->write_disk_tensor("WBar", T1Brp[b], {nB + b, nB + b + 1}, {a, a + 1});
+        auto TrQ = std::make_shared<Matrix>("TrQ", nr, nQ);
+        auto T1Br = std::make_shared<Matrix>("T1Br", nb1, nr);
+        double** TrQp = TrQ->pointer();
+        double** T1Brp = T1Br->pointer();
+        for (size_t a = 0; a < na; a++) {
+            dfh_->fill_tensor("Aar", TrQ, {a, a + 1});
+            C_DGEMM('N', 'T', nb1, nr, nQ, 2.0, RbDp[0], nQ, TrQp[0], nQ, 0.0, T1Brp[0], nr);
+            for (size_t b = 0; b < nb1; b++) {
+                dfh_->write_disk_tensor("WBar", T1Brp[b], {nB + b, nB + b + 1}, {a, a + 1});
+            }
         }
     }
 

@@ -5,7 +5,7 @@ from psi4 import compare_values
 from psi4 import core
 import numpy as np
 from pprint import pprint as pp
-from addons import uusing
+from addons import using, uusing
 import os
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
@@ -16,7 +16,8 @@ pytestmark = [pytest.mark.psi, pytest.mark.api]
 @pytest.mark.fsapt
 @uusing("dftd4")
 @pytest.mark.parametrize("functional", ["HF", "PBE0"])
-def test_fsapt_d4i_external_fragment(functional):
+@pytest.mark.parametrize("use_gpu", [False, pytest.param(True, marks=using("cuest"))])
+def test_fsapt_d4i_external_fragment(functional, use_gpu):
     mol = psi4.geometry("""
         0 1
         O -0.702196054 -0.056060256  0.009942262
@@ -33,7 +34,8 @@ def test_fsapt_d4i_external_fragment(functional):
         no_com
     """)
     psi4.set_options({
-        "basis": "cc-pvdz", "scf_type": "df", "freeze_core": True,
+        "basis": "cc-pvdz", "scf_type": "df", "freeze_core": True, "use_cuest": use_gpu,
+        "fisapt_fsapt_integral_algorithm": "CUEST_JK" if use_gpu else "DF",
         "sapt_dft_functional": functional, "sapt_dft_do_dhf": True,
         "sapt_dft_grac_compute": "ITERATIVE" if functional == "PBE0" else "NONE",
         "sapt_dft_do_fsapt": "FISAPT", "sapt_dft_use_einsums": False,
@@ -52,6 +54,13 @@ def test_fsapt_d4i_external_fragment(functional):
         "IND": ind_ab.sum() + ind_ba.sum(), "DISP": wfn.variable("FSAPT_EMPIRICAL_DISP").np.sum(),
     }.items():
         assert total == pytest.approx(wfn.variable(f"SAPT {term} ENERGY"), abs=1.e-8, rel=0)
+
+    if use_gpu:
+        psi4.set_options({"fisapt_fsapt_integral_algorithm": "DF"})
+        _, reference = psi4.energy("sapt(dft)-d4(i)", molecule=mol, external_potentials=charges, return_wfn=True)
+        for term in ("ELST_AB", "EXCH_AB", "INDAB_AB", "INDBA_AB"):
+            key = "FSAPT_" + term
+            np.testing.assert_allclose(wfn.variable(key).np, reference.variable(key).np, atol=2.e-7, rtol=0)
 
 
 @pytest.mark.saptdft
