@@ -364,6 +364,11 @@ class PSI_API DFHelper {
     double mpower_ = -0.5;
     double wmpower_ = -1.0;
     bool hold_met_ = false;
+    size_t panel_cols_cap_ = 0;
+    size_t metric_panel_cols(bool narrowest = false) const;
+    size_t AO_core_init_scratch(bool narrowest = false) const;
+    size_t min_AO_core_block() const;
+    size_t reserve_metric_panels(size_t held);
     bool built_ = false;
     bool transformed_ = false;
     std::pair<size_t, size_t> info_;
