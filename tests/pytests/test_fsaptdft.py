@@ -13,6 +13,48 @@ pytestmark = [pytest.mark.psi, pytest.mark.api]
 
 
 @pytest.mark.saptdft
+@pytest.mark.fsapt
+@uusing("dftd4")
+@pytest.mark.parametrize("functional", ["HF", "PBE0"])
+def test_fsapt_d4i_external_fragment(functional):
+    mol = psi4.geometry("""
+        0 1
+        O -0.702196054 -0.056060256  0.009942262
+        H -1.022193224  0.846775782 -0.011488714
+        H  0.257521062  0.042121496 -0.005218999
+        --
+        0 1
+        O  2.268880784  0.026340101 -0.000508029
+        H  2.645502399 -0.412039965  0.766632411
+        H  2.641145101 -0.449872874 -0.744894473
+        symmetry c1
+        units angstrom
+        no_reorient
+        no_com
+    """)
+    psi4.set_options({
+        "basis": "cc-pvdz", "scf_type": "df", "freeze_core": True,
+        "sapt_dft_functional": functional, "sapt_dft_do_dhf": True,
+        "sapt_dft_grac_compute": "ITERATIVE" if functional == "PBE0" else "NONE",
+        "sapt_dft_do_fsapt": "FISAPT", "sapt_dft_use_einsums": False,
+        "fisapt_fsapt_filepath": "none", "orbital_optimizer_package": "internal",
+    })
+    charges = {"B": [[0.1, 8, 1, 1], [-0.1, 8, -1, 0]]}
+    _, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=mol, external_potentials=charges, return_wfn=True)
+    elst = np.asarray(wfn.variable("FSAPT_ELST_AB"))
+    ind_ab = np.asarray(wfn.variable("FSAPT_INDAB_AB"))
+    ind_ba = np.asarray(wfn.variable("FSAPT_INDBA_AB"))
+    np.testing.assert_allclose(wfn.variable("FSAPT_EXTERN_POTENTIAL_B").np, np.asarray(charges["B"])[:, 1:])
+    assert np.max(np.abs(elst[:, -1])) > 1.e-5
+    assert np.max(np.abs(ind_ab[:, -1])) > 1.e-8
+    for term, total in {
+        "ELST": elst.sum(), "EXCH": wfn.variable("FSAPT_EXCH_AB").np.sum(),
+        "IND": ind_ab.sum() + ind_ba.sum(), "DISP": wfn.variable("FSAPT_EMPIRICAL_DISP").np.sum(),
+    }.items():
+        assert total == pytest.approx(wfn.variable(f"SAPT {term} ENERGY"), abs=1.e-8, rel=0)
+
+
+@pytest.mark.saptdft
 @uusing("pandas")
 def test_fsaptdft_timer():
     """Ensure SAPT(DFT) timer CSV output contains expected timing columns."""

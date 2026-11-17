@@ -5415,6 +5415,29 @@ void FISAPT::flocalize() {
     }
 }
 
+namespace {
+// Reuse the one-electron plan while visiting the nuclei of both fragments.
+std::function<void(SharedMatrix, double, size_t)> nuclear_potential(const std::shared_ptr<BasisSet>& basis,
+                                                                   Options& options) {
+    auto mol = basis->molecule();
+#ifdef USING_cuEST
+    if (options.get_bool("USE_CUEST")) {
+        auto mints = std::make_shared<MintsHelper>(basis, options, 0);
+        return [mol, mints](SharedMatrix target, double charge, size_t i) {
+            mints->form_V_cuest_charges(target, {{charge, mol->x(i), mol->y(i), mol->z(i)}});
+        };
+    }
+#endif
+    auto factory = std::make_shared<IntegralFactory>(basis);
+    std::shared_ptr<PotentialInt> potential(static_cast<PotentialInt*>(factory->ao_potential().release()));
+    return [mol, factory, potential](SharedMatrix target, double charge, size_t i) {
+        target->zero();
+        potential->set_charge_field({{charge, {mol->x(i), mol->y(i), mol->z(i)}}});
+        potential->compute(target);
+    };
+}
+}  // namespace
+
 // Compute fragment-fragment partitioning of electrostatic contribution
 void FISAPT::felst() {
     outfile->Printf("  ==> F-SAPT Electrostatics <==\n\n");
@@ -5574,8 +5597,7 @@ void FISAPT::felst() {
     matrices_["Vlocc0B"] = QbC;
 
     // => Nuclear Part (PITA) <= //
-    auto Vfact2 = std::make_shared<IntegralFactory>(primary_);
-    std::shared_ptr<PotentialInt> Vint2(static_cast<PotentialInt*>(Vfact2->ao_potential().release()));
+    auto build_potential = nuclear_potential(primary_, options_);
     auto Vtemp2 = std::make_shared<Matrix>("Vtemp2", nn, nn);
 
 
@@ -5583,9 +5605,7 @@ void FISAPT::felst() {
 
     for (int A = 0; A < nA; A++) {
         if (ZAp[A] == 0.0) continue;
-        Vtemp2->zero();
-        Vint2->set_charge_field({{ZAp[A], {mol->x(A), mol->y(A), mol->z(A)}}});
-        Vint2->compute(Vtemp2);
+        build_potential(Vtemp2, ZAp[A], A);
         std::shared_ptr<Matrix> Vbb =
             linalg::triplet(L0B, Vtemp2, L0B, true, false, false);
         double** Vbbp = Vbb->pointer();
@@ -5612,9 +5632,7 @@ void FISAPT::felst() {
 
     for (int B = 0; B < nB; B++) {
         if (ZBp[B] == 0.0) continue;
-        Vtemp2->zero();
-        Vint2->set_charge_field({{ZBp[B], {mol->x(B), mol->y(B), mol->z(B)}}});
-        Vint2->compute(Vtemp2);
+        build_potential(Vtemp2, ZBp[B], B);
         std::shared_ptr<Matrix> Vaa =
             linalg::triplet(L0A, Vtemp2, L0A, true, false, false);
         double** Vaap = Vaa->pointer();
@@ -5720,32 +5738,6 @@ void FISAPT::fexch() {
     std::shared_ptr<Matrix> CvirA = matrices_["Cvir0A"];
     std::shared_ptr<Matrix> CvirB = matrices_["Cvir0B"];
 
-    // ==> DF ERI Setup (JKFIT Type, in Full Basis) <== //
-
-    int nT = 1;
-#ifdef _OPENMP
-    nT = Process::environment.get_n_threads();
-#endif
-
-    std::vector<std::shared_ptr<Matrix> > Cs;
-    Cs.push_back(LoccA);
-    Cs.push_back(CvirA);
-    Cs.push_back(LoccB);
-    Cs.push_back(CvirB);
-
-    size_t max_MO = 0;
-    for (auto& mat : Cs) max_MO = std::max(max_MO, (size_t)mat->ncol());
-
-    dfh_->add_space("a", Cs[0]);
-    dfh_->add_space("r", Cs[1]);
-    dfh_->add_space("b", Cs[2]);
-    dfh_->add_space("s", Cs[3]);
-
-    dfh_->add_transformation("Aar", "a", "r");
-    dfh_->add_transformation("Abs", "b", "s");
-
-    dfh_->transform();
-
     // ==> Electrostatic Potentials <== //
 
     std::shared_ptr<Matrix> W_A(J_A->clone());
@@ -5801,39 +5793,27 @@ void FISAPT::fexch() {
     // E_exch2->print();
 
     size_t nQ = dfh_->get_naux();
-    auto TrQ = std::make_shared<Matrix>("TrQ", nr, nQ);
-    double** TrQp = TrQ->pointer();
-    auto TsQ = std::make_shared<Matrix>("TsQ", ns, nQ);
-    double** TsQp = TsQ->pointer();
-    auto TbQ = std::make_shared<Matrix>("TbQ", nb, nQ);
-    double** TbQp = TbQ->pointer();
-    auto TaQ = std::make_shared<Matrix>("TaQ", na, nQ);
-    double** TaQp = TaQ->pointer();
-
-    dfh_->add_disk_tensor("Bab", std::make_tuple(na, nb, nQ));
-
-    for (size_t a = 0; a < na; a++) {
-        dfh_->fill_tensor("Aar", TrQ, {a, a + 1});
-        C_DGEMM('N', 'N', nb, nQ, nr, 1.0, Sbrp[0], nr, TrQp[0], nQ, 0.0, TbQp[0], nQ);
-        dfh_->write_disk_tensor("Bab", TbQ, {a, a + 1});
-    }
-
-    dfh_->add_disk_tensor("Bba", std::make_tuple(nb, na, nQ));
-
-    for (size_t b = 0; b < nb; b++) {
-        dfh_->fill_tensor("Abs", TsQ, {b, b + 1});
-        C_DGEMM('N', 'N', na, nQ, ns, 1.0, Sasp[0], ns, TsQp[0], nQ, 0.0, TaQp[0], nQ);
-        dfh_->write_disk_tensor("Bba", TaQ, {b, b + 1});
-    }
+    // Contract the virtual overlaps into the MO coefficients before the DF transform:
+    // Bab(a,b,Q) = sum_r (a r|Q) Sbr(b,r). By AO-pair symmetry the reverse
+    // factor can also be transformed in (a,b,Q) order and read a row at a time.
+    dfh_->add_space("a", LoccA);
+    dfh_->add_space("b", LoccB);
+    dfh_->add_space("b_proj", linalg::doublet(CvirA, Sbr, false, true));
+    dfh_->add_space("a_proj", linalg::doublet(CvirB, Sas, false, true));
+    dfh_->add_transformation("Bab", "a", "b_proj");
+    dfh_->add_transformation("Bba", "a_proj", "b");
+    dfh_->transform();
+    auto forward = std::make_shared<Matrix>("Bab row", nb, nQ);
+    auto reverse = std::make_shared<Matrix>("Bba row", nb, nQ);
 
     auto E_exch3 = std::make_shared<Matrix>("E_exch [a <x-x> b]", na, nb);
     double** E_exch3p = E_exch3->pointer();
 
     for (size_t a = 0; a < na; a++) {
-        dfh_->fill_tensor("Bab", TbQ, {a, a + 1});
+        dfh_->fill_tensor("Bab", forward, {a, a + 1});
+        dfh_->fill_tensor("Bba", reverse, {a, a + 1});
         for (size_t b = 0; b < nb; b++) {
-            dfh_->fill_tensor("Bba", TaQ, {b, b + 1}, {a, a + 1});
-            E_exch3p[a][b] -= 2.0 * C_DDOT(nQ, TbQp[b], 1, TaQp[0], 1);
+            E_exch3p[a][b] -= 2.0 * C_DDOT(nQ, forward->pointer()[b], 1, reverse->pointer()[b], 1);
         }
     }
 
@@ -5964,26 +5944,23 @@ void FISAPT::find() {
 
     // => Nuclear Part (PITA) <= //
 
-    auto Vfact2 = std::make_shared<IntegralFactory>(primary_);
-    std::shared_ptr<PotentialInt> Vint2(static_cast<PotentialInt*>(Vfact2->ao_potential().release()));
-    auto Vtemp2 = std::make_shared<Matrix>("Vtemp2", nn, nn);
-
-    double* ZAp = vectors_["ZA"]->pointer();
-    for (size_t A = 0; A < nA; A++) {
-        Vtemp2->zero();
-        Vint2->set_charge_field({{ZAp[A], {mol->x(A), mol->y(A), mol->z(A)}}});
-        Vint2->compute(Vtemp2);
-        std::shared_ptr<Matrix> Vbs = linalg::triplet(Cocc_B, Vtemp2, Cvir_B, true, false, false);
-        dfh_->write_disk_tensor("WAbs", Vbs, {A, A + 1});
-    }
-
-    double* ZBp = vectors_["ZB"]->pointer();
-    for (size_t B = 0; B < nB; B++) {
-        Vtemp2->zero();
-        Vint2->set_charge_field({{ZBp[B], {mol->x(B), mol->y(B), mol->z(B)}}});
-        Vint2->compute(Vtemp2);
-        std::shared_ptr<Matrix> Var = linalg::triplet(Cocc_A, Vtemp2, Cvir_A, true, false, false);
-        dfh_->write_disk_tensor("WBar", Var, {B, B + 1});
+    {
+        auto build_potential = nuclear_potential(primary_, options_);
+        auto ao = std::make_shared<Matrix>("Nuclear potential", nn, nn);
+        auto write_nuclear_terms = [&](const char* tensor, size_t ncenter, const SharedVector& charges,
+                                       const SharedMatrix& occ, const SharedMatrix& vir) {
+            auto zero = std::make_shared<Matrix>("Zero potential", occ->ncol(), vir->ncol());
+            for (size_t i = 0; i < ncenter; ++i) {
+                SharedMatrix term = zero;
+                if (double charge = charges->get(i)) {
+                    build_potential(ao, charge, i);
+                    term = linalg::triplet(occ, ao, vir, true, false, false);
+                }
+                dfh_->write_disk_tensor(tensor, term, {i, i + 1});
+            }
+        };
+        write_nuclear_terms("WAbs", nA, vectors_["ZA"], Cocc_B, Cvir_B);
+        write_nuclear_terms("WBar", nB, vectors_["ZB"], Cocc_A, Cvir_A);
     }
 
     // ==> DFHelper Setup (JKFIT Type, in Full Basis) <== //

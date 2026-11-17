@@ -66,7 +66,9 @@ def main():
     native = args.runtime.resolve() / "lib/libcuest.so.0.3.0"
     mapped = {Path(line.split()[-1]).resolve() for line in Path("/proc/self/maps").read_text().splitlines()
               if "/libcuest.so" in line}
-    if mapped != {native} or hashlib.file_digest(native.open("rb"), "sha256").hexdigest() != (
+    with native.open("rb") as handle:
+        native_sha256 = hashlib.file_digest(handle, "sha256").hexdigest()
+    if mapped != {native} or native_sha256 != (
             "cb810a15dff2d0c9c0c83cb56336bf80d77a74ace53f6e4d30921726679fc221"):
         raise RuntimeError(f"Unexpected cuEST runtime {mapped}")
     cudart = ctypes.CDLL("libcudart.so.13")
@@ -77,6 +79,11 @@ def main():
     start = time.perf_counter()
     energy, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=mol, return_wfn=True, **kwargs)
     elapsed = time.perf_counter() - start
+    psi4.core.flush_outfile()
+    with (args.output / "psi4.out").open() as handle:
+        device_jk = any("cuESTJK: GPU-Accelerated" in line for line in handle)
+    if device_jk != use_gpu:
+        raise RuntimeError(f"Requested {args.arm} arm but cuESTJK dispatch was {device_jk}")
     timers = psi4.core.get_timer_records(False)
     terms = {key: float(wfn.variable(f"SAPT {key} ENERGY")) for key in ("ELST", "EXCH", "IND", "DISP")}
     sums = {}
@@ -90,7 +97,7 @@ def main():
                                                if row["timer_name"].startswith(("SAPT(", "F-SAPT"))},
                   options=options, geometry_sha256=hashlib.sha256(geometry.encode()).hexdigest(),
                   external_potentials=kwargs.get("external_potentials"), nbf=wfn.basisset().nbf(),
-                  psi4_core=psi4.core.__file__, cuest=str(native), cuda_runtime=version.value)
+                  psi4_core=psi4.core.__file__, cuest=str(native), cuest_sha256=native_sha256, device_jk=device_jk, cuda_runtime=version.value)
     (args.output / "result.json").write_text(json.dumps(result, allow_nan=False, indent=2) + "\n")
 
 
