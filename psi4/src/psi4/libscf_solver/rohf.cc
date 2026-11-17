@@ -375,7 +375,7 @@ void ROHF::form_F() {
 
 void ROHF::diagonalize_orbitals(double shift) {
     if (shift == 0.0) {
-        soFeff_->diagonalize(Ct_, epsilon_a_);
+        diagonalize_scf_matrix(soFeff_, Ct_, epsilon_a_);
     } else {
         // Implementation of the shifting scheme from M.F. Guest &
         // V. R. Saunders (1974), "On methods for converging open-shell
@@ -403,7 +403,7 @@ void ROHF::diagonalize_orbitals(double shift) {
 
         // Add in the Fock itself and diagonalize
         shifted_F->add(soFeff_);
-        shifted_F->diagonalize(Ct_, epsilon_a_);
+        diagonalize_scf_matrix(shifted_F, Ct_, epsilon_a_);
     }
     // Form C = XC'
     Ca_->gemm(false, false, 1.0, X_, Ct_, 0.0);

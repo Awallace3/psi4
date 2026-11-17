@@ -892,6 +892,18 @@ class PSI_API Matrix : public std::enable_shared_from_this<Matrix> {
     /// @}
 
     /// @{
+    /// Ascending symmetric eigendecomposition using caller-owned LAPACK workspace.
+    /// The input is preserved. On DSYEVD failure, retry the affected irrep with DSYEV.
+    void diagonalize_dsyevd(Matrix& eigvectors, Vector& eigvalues, std::vector<double>& work,
+                            std::vector<int>& iwork);
+    /// As above with a workspace that lives only for this call.
+    void diagonalize_dsyevd(Matrix& eigvectors, Vector& eigvalues);
+    /// Scratch (in doubles; the int workspace is rounded up) diagonalize_dsyevd needs for an n x n block.
+    /// Returns zero when the LAPACK integer interface cannot represent the workspace.
+    static size_t dsyevd_scratch_size(size_t n);
+    /// @}
+
+    /// @{
     /// General SVD, such that A = USV. U, S, and V must be allocated by the caller.
     void svd(SharedMatrix& U, SharedVector& S, SharedMatrix& V);
     /// @}

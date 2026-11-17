@@ -382,7 +382,28 @@ void HF::initialize_gtfock_jk() {
 #endif
 }
 
+size_t HF::reserve_diagonalization_workspace(size_t available) {
+    size_t n = 0;
+    for (int h = 0; h < nirrep_; ++h) n = std::max(n, static_cast<size_t>(nsopi_[h]));
+    const size_t needed = Matrix::dsyevd_scratch_size(n);
+    use_dsyevd_ = needed && needed <= available;
+    if (!use_dsyevd_) {
+        std::vector<double>().swap(diag_work_);
+        std::vector<int>().swap(diag_iwork_);
+    }
+    return use_dsyevd_ ? needed : 0;
+}
+
+void HF::diagonalize_scf_matrix(const SharedMatrix& fock, SharedMatrix& orbitals, std::shared_ptr<Vector>& eps) {
+    if (use_dsyevd_) {
+        fock->diagonalize_dsyevd(*orbitals, *eps, diag_work_, diag_iwork_);
+    } else {
+        fock->diagonalize(orbitals, eps);
+    }
+}
+
 void HF::finalize() {
+    reserve_diagonalization_workspace(0);
     // Clean memory off, handle diis closeout, etc
 
     // This will be the only one
@@ -1376,7 +1397,7 @@ void HF::diagonalize_F(const SharedMatrix& Fm, SharedMatrix& Cm, std::shared_ptr
 
     // Form C' = eig(F')
     auto diag_C_temp = std::make_shared<Matrix>(nmopi_, nmopi_);
-    diag_F_temp->diagonalize(diag_C_temp, epsm);
+    diagonalize_scf_matrix(diag_F_temp, diag_C_temp, epsm);
 
     // Form C = XC'
     Cm->gemm(false, false, 1.0, X_, diag_C_temp, 0.0);

@@ -350,6 +350,8 @@ void export_wavefunction(py::module& m) {
         .def("form_initial_F", &scf::HF::form_initial_F, "Forms the initial F matrix.")
         .def("form_H", &scf::HF::form_H, "Forms the core Hamiltonian")
         .def("form_Shalf", &scf::HF::form_Shalf, "Forms the S^1/2 matrix")
+        .def("reserve_diagonalization_workspace", &scf::HF::reserve_diagonalization_workspace,
+             "Reserve up to the supplied number of doubles for the Fock eigensolver.")
         .def("form_FDSmSDF", &scf::HF::form_FDSmSDF, "Forms the residual of SCF theory")
         .def("guess", &scf::HF::guess, "Forms the guess (guarantees C, D, and E)")
         .def("initialize_gtfock_jk", &scf::HF::initialize_gtfock_jk, "Sets up a GTFock JK object")
