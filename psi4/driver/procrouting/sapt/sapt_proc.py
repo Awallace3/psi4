@@ -2043,6 +2043,14 @@ def sapt_dft(
             _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
         if use_cuda_dispersion and core.get_option("FISAPT","FISAPT_FSAPT_FILEPATH").upper()!="NONE":
             jk_terms.fisapt_cuda_drop(cache,dimer_wfn)
+    if do_fsapt and external_potentials:
+        # The fragment analysis uses these centers to include the external
+        # row/column in its functional-group totals. Coordinates are in bohr.
+        for side, field in external_potentials.items():
+            if field:
+                centers = [row[1:4] for kind in ("points", "diffuse") for row in field.get(kind, [])]
+                if centers:
+                    dimer_wfn.set_variable(f"FSAPT_EXTERN_POTENTIAL_{side}", np.asarray(centers))
     return data
 
 

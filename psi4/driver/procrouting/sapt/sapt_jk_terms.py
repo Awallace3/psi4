@@ -112,9 +112,13 @@ def build_sapt_jk_cache(
         if external_potentials.get("A") is not None:
             ext_A = wfn_A.external_pot().computePotentialMatrix(wfn_A.basisset())
             cache["V_A"].add(ext_A)
+            if do_fsapt:
+                cache["VA_extern"] = ext_A
         if external_potentials.get("B") is not None:
             ext_B = wfn_B.external_pot().computePotentialMatrix(wfn_B.basisset())
             cache["V_B"].add(ext_B)
+            if do_fsapt:
+                cache["VB_extern"] = ext_B
 
     # Anything else we might need
     cache["S"] = wfn_A.S().clone()

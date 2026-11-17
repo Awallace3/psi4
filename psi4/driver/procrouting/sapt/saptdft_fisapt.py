@@ -132,6 +132,18 @@ def setup_fisapt_object(
     ]
     for key in other_keys:
         matrix_cache[key] = to_matrix(cache[key])
+    # The SCF uses the combined field. FISAPT also needs each monomer's
+    # operator and fragment label to fill the external row/column.
+    for side, monomer in (("A", wfn_A), ("B", wfn_B)):
+        key = f"V{side}_extern"
+        if key in cache:
+            wfn.set_potential_variable(side, monomer.external_pot())
+            matrix_cache[key] = cache[key]
+    if "VA_extern" in cache and "VB_extern" in cache:
+        pair_energy = core.Matrix("extern_extern_IE", 3, 3)
+        pair_energy.np[0, 1] = pair_energy.np[1, 0] = 0.5 * cache["extern_extern_IE"]
+        matrix_cache["extern_extern_IE"] = pair_energy
+
     # J_P_A and J_P_B have flipped terminology in FISAPT...
     matrix_cache["J_P_A"] = to_matrix(cache["J_P_B"])
     matrix_cache["J_P_B"] = to_matrix(cache["J_P_A"])
