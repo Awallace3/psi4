@@ -176,6 +176,10 @@ def scf_initialize(self):
     if collocation_memory > collocation_size:
         collocation_memory = collocation_size
 
+    # Keep the selected JK backend and collocation budget viable on tight-memory jobs.
+    spare = max(0, int(total_memory - jk_size - collocation_memory))
+    total_memory -= self.reserve_diagonalization_workspace(spare)
+
     # Set constants
     self.iteration_ = 0
     self.memory_jk_ = int(total_memory - collocation_memory)

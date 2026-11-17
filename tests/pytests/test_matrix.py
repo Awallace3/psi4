@@ -335,3 +335,31 @@ def test_transpose():
             transposed_mat.set(0, k, j, i)
             i += 1
     assert psi4.compare_matrices(mat.transpose(), transposed_mat)
+
+
+def test_diagonalize_dsyevd():
+    """diagonalize_dsyevd matches diagonalize (eigenvalues; eigenvectors up to phase) and leaves the matrix intact."""
+    rng = np.random.default_rng(7)
+    dim = Dimension([0, 5, 37, 120])
+    A = Matrix("A", dim, dim)
+    for h, n in enumerate(dim.to_tuple()):
+        if n:
+            a = rng.standard_normal((n, n))
+            A.nph[h][:] = a + a.T
+    A0 = A.clone()
+
+    C, e = Matrix("C", dim, dim), psi4.core.Vector("e", dim)
+    A.diagonalize_dsyevd(C, e)
+    Cr, er = Matrix("Cr", dim, dim), psi4.core.Vector("er", dim)
+    A.clone().diagonalize(Cr, er)
+
+    for h, n in enumerate(dim.to_tuple()):
+        if not n:
+            continue
+        a, c, w = A0.nph[h], C.nph[h], e.nph[h]
+        assert np.array_equal(A.nph[h], a)
+        assert np.allclose(w, er.nph[h], atol=1e-12, rtol=0)
+        assert np.all(np.diff(w) >= 0)
+        assert np.allclose(c.T @ c, np.eye(n), atol=1e-12, rtol=0)
+        assert np.allclose(a @ c, c * w, atol=1e-11, rtol=0)
+        assert np.allclose(np.abs(c), np.abs(Cr.nph[h]), atol=1e-9, rtol=0)
