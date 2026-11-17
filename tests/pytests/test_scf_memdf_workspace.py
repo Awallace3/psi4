@@ -3,7 +3,6 @@ import numpy as np
 import pytest
 
 import psi4
-from addons import uusing
 
 pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick]
 
@@ -23,7 +22,6 @@ def _bases():
 
 
 def _jk(primary, aux, *, algorithm="mem_df", package="libint2", omega=None, threads=1, subtype="INCORE"):
-    psi4.set_options({"scf_df_k_layout": "QI"})
     psi4.set_options({
         "scf_type": algorithm, "scf_subtype": subtype, "integral_package": package,
     })
