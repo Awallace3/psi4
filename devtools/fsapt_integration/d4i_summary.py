@@ -41,6 +41,7 @@ def summarize(path):
                arm="gpu" if opt["use_cuest"] else "cpu", fsapt=frag, nbf=d["nbf"],
                total_s=d["wall_seconds"], group_analysis_s=d.get("group_seconds"), total_Eh=d["energy_hartree"],
                fragment_algorithm=opt.get("fisapt_fsapt_integral_algorithm") if frag else None,
+               reused_scalar_plan=d.get("reused_scalar_plan"), fragment_plan_creations=d.get("fragment_plan_creations"),
                integral_direct=opt.get("cuest_df_integral_direct", False),
                einsums=opt["sapt_dft_use_einsums"], geometry_sha256=d["geometry_sha256"],
                mm_sites=sum(len(sites) for sites in field.values()),

@@ -105,10 +105,20 @@ def main():
     elapsed = time.perf_counter() - start
     psi4.core.flush_outfile()
     with (args.output / "psi4.out").open() as handle:
-        device_jk = any("cuESTJK: GPU-Accelerated" in line for line in handle)
+        device_jk = False
+        reused_scalar_plan = False
+        for line in handle:
+            if "cuESTJK: GPU-Accelerated" in line:
+                device_jk = True
+            if "F-SAPT reusing scalar cuEST DF integrals" in line:
+                reused_scalar_plan = True
     if device_jk != use_gpu:
         raise RuntimeError(f"Requested {args.arm} arm but cuESTJK dispatch was {device_jk}")
     timers = psi4.core.get_timer_records(False)
+    plan_timers = [r for r in timers.values() if r["timer_name"] == "cuEST JK DF plan create"]
+    fragment_plan_creations = (sum(r["n_calls"] for r in plan_timers
+                                   if any("F-SAPT " in section for section in r["timer_path"]))
+                               if plan_timers and args.fsapt else None)
     terms = {key: float(wfn.variable(f"SAPT {key} ENERGY")) for key in ("ELST", "EXCH", "IND", "DISP")}
     sums = {}
     if args.fsapt:
@@ -125,7 +135,8 @@ def main():
         grouped = psi4.fsapt_analysis(source=wfn, fragments_a=groups["A"], fragments_b=groups["B"], print_output=False)
         group_seconds = time.perf_counter() - start_groups
         (args.output / "groups-kcal-mol.json").write_text(json.dumps(grouped, allow_nan=False) + "\n")
-    result = dict(group_seconds=group_seconds, energy_hartree=energy, scalar_hartree=terms, fragment_sums_hartree=sums,
+    result = dict(reused_scalar_plan=reused_scalar_plan, fragment_plan_creations=fragment_plan_creations,
+                  group_seconds=group_seconds, energy_hartree=energy, scalar_hartree=terms, fragment_sums_hartree=sums,
                   wall_seconds=elapsed, timers={key: row for key, row in timers.items()
                                                if row["timer_name"].startswith(("SAPT(", "F-SAPT"))},
                   options=options, host=socket.gethostname(), threads=args.threads, memory=args.memory,

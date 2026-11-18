@@ -1514,9 +1514,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         integrals for exchange and orbital Coulomb potentials for the other terms.
         CUEST_DFMO_DIRECT recomputes the three-index integrals for these fragment
         builds. SCF and scalar SAPT retain their configured DF plans.
-        AUTO uses CUEST_DFMO for C
-        link assignment with USE_CUEST when the estimated occupied-virtual DF
-        storage exceeds the FISAPT memory budget. -*/
+        With C link assignment, AUTO uses CUEST_DFMO when empirical SAPT can
+        reuse its cached scalar DF integrals or the occupied-virtual DF storage
+        exceeds the FISAPT memory budget on cuEST. -*/
         options.add_str("FISAPT_FSAPT_INTEGRAL_ALGORITHM", "AUTO", "AUTO DF CUEST_JK CUEST_DFMO CUEST_DFMO_DIRECT");
         /*- Do F-SAPT induction scaling? (ratio of HF induction to F-SAPT induction) -*/
         options.add_bool("FISAPT_FSAPT_IND_SCALE", true);
