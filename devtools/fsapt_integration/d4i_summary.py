@@ -1,6 +1,7 @@
 """Print comparable per-term wall seconds and fragment closure from d4i_timing.py results."""
 import argparse
 import csv
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -35,13 +36,17 @@ def summarize(path):
     d = json.loads(path.read_text())
     opt = d["options"]
     frag = bool(d["fragment_sums_hartree"])
+    field = d["external_potentials"] or {}
     row = dict(case=path.parent.name, functional=opt["sapt_dft_functional"],
                arm="gpu" if opt["use_cuest"] else "cpu", fsapt=frag, nbf=d["nbf"],
                total_s=d["wall_seconds"], total_Eh=d["energy_hartree"],
                fragment_algorithm=opt.get("fisapt_fsapt_integral_algorithm") if frag else None,
                integral_direct=opt.get("cuest_df_integral_direct", False),
                einsums=opt["sapt_dft_use_einsums"], geometry_sha256=d["geometry_sha256"],
-               mm_sites=sum(len(sites) for sites in (d["external_potentials"] or {}).values()),
+               mm_sites=sum(len(sites) for sites in field.values()),
+               field_sha256=hashlib.sha256(json.dumps(field, sort_keys=True).encode()).hexdigest(),
+               host=d.get("host"), threads=d.get("threads"), memory=d.get("memory"),
+               libxc="|".join(d.get("libxc") or []),
                psi4_core=d["psi4_core"], cuda_runtime=d["cuda_runtime"], cuest_sha256=d["cuest_sha256"])
     timers = {v["timer_name"]: v["wall_time"] for v in d["timers"].values()}
     for label, timer in TIMERS.items():
