@@ -90,3 +90,20 @@ For the real reduced HF pocket the stored component matrices have shape (205, 20
 For embedded water the public grouping call took 0.00087 s for HF and 0.00105 s for PBE0 in separate CPU smoke tests. The MM group received exactly zero empirical dispersion in both. The fresh-energy wall timer excludes this optional post-processing.
 
 At the 2026-11-17 checkpoint the GPU jobs were pending. The corrected grouped GPU recipe is `gpu-grouped.sbatch`. It puts each build's staged Python packages first, measures the embedded CDK2 pilot before protein83, captures the residue table and continues to independent cases when a case fails. The companion five-minute CPU recipe `production-smoke.sbatch` checks the production worker and timer export. Both request the free embers QoS. Admission retries record the real allocation IDs in `gpu-grouped.jobid` and `production-smoke.jobid` once the scheduler accepts them. The local campaign collector writes completed measurements to `.pi/d4i-nov17/phoenix-live/term-times.csv`. The full CDK2 ligand ranking and the matched Phoenix GPU throughput remain unqualified.
+
+## Fragment-only integral-direct plans on H200
+
+The Phoenix GPU qualification target is one H200. Job 15803479 ran on an L40S and stopped in the fragment Coulomb plan on the 101-atom embedded CDK2 system for both HF and PBE0. Earlier H200 job 15799433 also stopped in HF fragment electrostatics on protein157, requesting 106.0 GiB with 58.7 GiB free. That run used the older localized-orbital J/K implementation.
+
+Set `FISAPT_FSAPT_INTEGRAL_ALGORITHM = CUEST_DFMO_DIRECT` to recompute three-index integrals inside the fragment builders. This mode uses the existing orbital Coulomb contractions for electrostatics and induction and the tiled DFMO contraction for exchange. SCF, GRAC and scalar SAPT use their independently configured plans. D4(I) uses the existing atom-pair evaluation. The new mode can trade elapsed time for device memory. [Implementation](https://github.com/Awallace3/psi4/commit/b293025ff0acfde1b18027695704c6407ff4ec09)
+
+| CDK2 geometry | Cached DF plan creation, GiB | Integral-direct DF plan creation, GiB |
+|---|---:|---:|
+| 101 atoms, 995 AOs | 15.75 | 0.92 |
+| 555 atoms, 5,209 AOs | 686.99 | 24.47 |
+
+Each entry sums the persistent and simultaneous temporary device workspace returned by cuEST 0.3.0.1 on the RTX 3090. The reduced-pocket measurement queried a J-only plan with mixed precision permitted. The full-pocket measurement used the earlier J/K probe. Peak device memory for an energy call also includes orbitals, other live objects and SDK scratch for subsequent contractions.
+
+Both embedded-water HF and PBE0 fragment-matrix comparisons with host DF passed on the cachy debug build. On a separate 210-AO peptide HF calculation, the largest absolute differences between cached and integral-direct fragment entries were 3.68e-9 hartree in electrostatics, 6.36e-11 in exchange and 9.88e-9 across the two directions of induction. Empirical dispersion was identical.
+
+Phoenix job 15814715 measures the previous production and candidate controls on H200. Build 15814787 uses the fragment-only implementation. Job 15814798 requests an H200 for the cached/direct comparison on reduced CDK2 and protein157 with HF and PBE0. The comparison records sampled device memory for each fresh energy call, term times and scalar closure. For CDK2 it also compares every signed residue-group energy with a 0.001 kcal/mol tolerance. Runs and scripts are in the Phoenix campaign directory listed under Reproduction.
