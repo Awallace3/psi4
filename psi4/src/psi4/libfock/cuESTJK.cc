@@ -315,7 +315,7 @@ std::string cuESTJK::current_plan_key() const {
     key_value(key, do_J_);
     key_value(key, do_K_);
     key_value(key, do_wK_);
-    key_value(key, options_.get_bool("CUEST_DF_INTEGRAL_DIRECT"));
+    key_value(key, integral_direct());
     key_value(key, options_.get_bool("CUEST_MIXED_PRECISION"));
     key_value(key, options_.get_int("CUEST_DFK_SLICES"));
     key_value(key, options_.get_int("CUEST_DFK_MODULI"));
@@ -477,7 +477,7 @@ void cuESTJK::build_cuest_plan(const std::string& key) {
         // DF Int Plan List
         PlanParameters<cuestDFIntPlanParameters_t> dfint_params(CUEST_DFINTPLAN_PARAMETERS);
 
-        if (options_.get_bool("CUEST_DF_INTEGRAL_DIRECT")) {
+        if (integral_direct()) {
 #if CUEST_VERSION >= 300
             if (options_.get_bool("CUEST_DEVICE_CG") || gridk_ || directj_)
                 throw PSIEXCEPTION("CUEST_DF_INTEGRAL_DIRECT requires DF-JK and host-driven response.");
@@ -540,6 +540,11 @@ void cuESTJK::build_cuest_plan(const std::string& key) {
 
         dfint_plan_device_bytes_ = persistentWorkspaceDescriptor.deviceBufferSizeInBytes;
 
+        if (print_ >= 3 || force_integral_direct_) {
+            outfile->Printf("    cuEST DF plan (%s): persistent %zu bytes, creation scratch %zu bytes\n",
+                            integral_direct() ? "integral-direct" : "cached", dfint_plan_device_bytes_,
+                            static_cast<size_t>(temporaryWorkspaceDescriptor.deviceBufferSizeInBytes));
+        }
         phase.next("cuEST JK DF workspace alloc");
         cuest_dfint_plan_ws_ptr_ = plan_workspace(persistentWorkspaceDescriptor).release();
         auto temporaryDFIntPlanWorkspace = plan_workspace(temporaryWorkspaceDescriptor);
@@ -1080,6 +1085,15 @@ bool cuESTJK::destroy_cuest_objects() noexcept {
     return !cleanup_failed_;
 }
 
+bool cuESTJK::integral_direct() const {
+    return force_integral_direct_ || options_.get_bool("CUEST_DF_INTEGRAL_DIRECT");
+}
+
+void cuESTJK::enable_integral_direct() {
+    force_integral_direct_ = true;
+    rebuild_cuest_plan();
+}
+
 void cuESTJK::rebuild_cuest_plan() {
     // Before initialize() the plan does not exist yet and preiterations() will
     // pick the new fractions up on its own.
@@ -1147,7 +1161,7 @@ void cuESTJK::print_header() const {
                         options_.get_bool("CUEST_DIRECTJ")
                             ? (options_.get_bool("CUEST_GRIDK") ? "Direct-J + Grid-K" : "Direct-J + DF-K")
                             : (options_.get_bool("CUEST_GRIDK") ? "DF-J + Grid-K" : "Density-Fitted J/K"));
-        if (options_.get_bool("CUEST_DF_INTEGRAL_DIRECT")) outfile->Printf("    Integral-direct DF-J and tiled DFMO exchange\n");
+        if (integral_direct()) outfile->Printf("    Integral-direct DF-J and tiled DFMO exchange\n");
         outfile->Printf("    J tasked:              %11s\n", (do_J_ ? "Yes" : "No"));
         outfile->Printf("    K tasked:              %11s\n", (do_K_ ? "Yes" : "No"));
         outfile->Printf("    wK tasked:             %11s\n", (do_wK_ ? "Yes" : "No"));
@@ -1237,8 +1251,8 @@ void cuESTJK::compute_JK() {
         max_device = std::max(max_device, j_temp_desc.deviceBufferSizeInBytes);
     }
  
-    const bool integral_direct = options_.get_bool("CUEST_DF_INTEGRAL_DIRECT");
-    if (do_K_ && !integral_direct) {
+    const bool direct_df = integral_direct();
+    if (do_K_ && !direct_df) {
         for (size_t N = 0; N < D_ao_.size(); N++) {
             int nocc = C_left_ao_[N]->ncol();
             if (nocc == 0) continue;
@@ -1347,7 +1361,7 @@ void cuESTJK::compute_JK() {
                 auto tk1 = clock::now();
  
                 CuestResponseProfile profile(options_.get_bool("CUEST_RESPONSE_PROFILE"), "cuEST response: K");
-                if (integral_direct) {
+                if (direct_df) {
                     compute_integral_direct_k(nocc, d_C, d_C_right, d_K);
                 } else if (lr_symmetric_) {
                     CHECK_CUEST(cuestDFSymmetricExchangeCompute(

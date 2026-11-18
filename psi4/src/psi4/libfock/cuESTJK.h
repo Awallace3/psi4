@@ -63,6 +63,8 @@ class PSI_API cuESTJK : public JK {
     uint64_t dfk_moduli_;
 
     bool initialized_;
+    bool force_integral_direct_ = false;
+    bool integral_direct() const;
     // One live plan only. The key contains values, never pointer identity.
     std::string plan_key_;
     // cuEST receives Molecule geometry, not independent BasisSet::move_atom
@@ -157,6 +159,8 @@ class PSI_API cuESTJK : public JK {
     cuESTJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary, Options& options);
     ~cuESTJK() noexcept override;
 
+    /// Request an integral-direct DF plan on this builder only.
+    void enable_integral_direct();
     void set_condition(double condition) { condition_ = condition; }
     // An explicit setter takes precedence over the live INTS_TOLERANCE option.
     void set_cutoff(double cutoff) override;

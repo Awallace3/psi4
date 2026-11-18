@@ -17,7 +17,8 @@ pytestmark = [pytest.mark.psi, pytest.mark.api]
 @uusing("dftd4")
 @pytest.mark.parametrize("functional", ["HF", "PBE0"])
 @pytest.mark.parametrize("integrals", ["DF", pytest.param("CUEST_JK", marks=using("cuest")),
-                                      pytest.param("CUEST_DFMO", marks=using("cuest"))])
+                                      pytest.param("CUEST_DFMO", marks=using("cuest")),
+                                      pytest.param("CUEST_DFMO_DIRECT", marks=using("cuest"))])
 def test_fsapt_d4i_external_fragment(functional, integrals):
     use_gpu = integrals != "DF"
     mol = psi4.geometry("""
@@ -44,7 +45,12 @@ def test_fsapt_d4i_external_fragment(functional, integrals):
         "fisapt_fsapt_filepath": "none", "orbital_optimizer_package": "internal",
     })
     charges = {"B": [[0.1, 8, 1, 1], [-0.1, 8, -1, 0]]}
-    _, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=mol, external_potentials=charges, return_wfn=True)
+    try:
+        _, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=mol, external_potentials=charges, return_wfn=True)
+    except RuntimeError as err:
+        if integrals == "CUEST_DFMO_DIRECT" and "requires cuEST 0.3 or later" in str(err):
+            pytest.skip(str(err))
+        raise
     elst = np.asarray(wfn.variable("FSAPT_ELST_AB"))
     ind_ab = np.asarray(wfn.variable("FSAPT_INDAB_AB"))
     ind_ba = np.asarray(wfn.variable("FSAPT_INDBA_AB"))

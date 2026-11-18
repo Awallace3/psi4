@@ -35,7 +35,7 @@ def main():
     parser.add_argument("--arm", required=True, choices=["cpu", "gpu"])
     parser.add_argument("--fsapt", action="store_true")
     parser.add_argument("--groups", type=Path, help="JSON with A and B mappings of group names to 1-based dimer atom indices")
-    parser.add_argument("--fragment-integrals", choices=["AUTO", "DF", "CUEST_JK", "CUEST_DFMO"],
+    parser.add_argument("--fragment-integrals", choices=["AUTO", "DF", "CUEST_JK", "CUEST_DFMO", "CUEST_DFMO_DIRECT"],
                         help="Override the native F-SAPT fragment integral algorithm")
     parser.add_argument("--integral-direct", action="store_true", help="Use the cuEST integral-direct DF plan for SCF and SAPT")
     parser.add_argument("--coupled", action="store_true", help="Request per-source fragment response")

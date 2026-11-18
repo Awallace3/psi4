@@ -5427,9 +5427,10 @@ bool use_orbital_jk(Options& options, size_t nao, size_t na, size_t nb, size_t n
     available = options.get_bool("USE_CUEST") && options.get_str("FISAPT_LINK_ASSIGNMENT") == "C" &&
                 !options.get_bool("CUEST_DIRECTJ") && !options.get_bool("CUEST_GRIDK");
 #endif
-    if ((algorithm == "CUEST_JK" || algorithm == "CUEST_DFMO") && !available)
+    const bool explicit_gpu = algorithm == "CUEST_JK" || algorithm == "CUEST_DFMO" || algorithm == "CUEST_DFMO_DIRECT";
+    if (explicit_gpu && !available)
         throw PSIEXCEPTION("FISAPT CUEST_JK requires DF Coulomb and exchange on cuEST with C link assignment.");
-    return available && (algorithm == "CUEST_JK" || algorithm == "CUEST_DFMO" ||
+    return available && (explicit_gpu ||
                          (algorithm == "AUTO" && na * (nao - na) + nb * (nao - nb) > memory / naux));
 }
 
@@ -5437,6 +5438,13 @@ std::shared_ptr<JK> orbital_jk_plan(const std::shared_ptr<BasisSet>& primary, co
                                     Options& options, size_t memory, bool exchange) {
     auto jk = JK::build_JK(primary, auxiliary, options, std::string("DISK_DF"));
     jk->set_memory(memory);
+#ifdef USING_cuEST
+    if (options.get_str("FISAPT_FSAPT_INTEGRAL_ALGORITHM") == "CUEST_DFMO_DIRECT") {
+        auto gpu = std::dynamic_pointer_cast<cuESTJK>(jk);
+        if (!gpu) throw PSIEXCEPTION("F-SAPT integral-direct DFMO requires cuEST JK.");
+        gpu->enable_integral_direct();
+    }
+#endif
     jk->set_do_J(!exchange);
     jk->set_do_K(exchange);
     jk->initialize();

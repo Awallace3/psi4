@@ -1512,10 +1512,12 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         exchange, and induction. DF transforms MO tensors. CUEST_JK builds Coulomb
         and exchange operators one localized orbital at a time. CUEST_DFMO uses tiled cuEST DFMO
         integrals for exchange and orbital Coulomb potentials for the other terms.
+        CUEST_DFMO_DIRECT recomputes the three-index integrals for these fragment
+        builds. SCF and scalar SAPT retain their configured DF plans.
         AUTO uses CUEST_DFMO for C
         link assignment with USE_CUEST when the estimated occupied-virtual DF
         storage exceeds the FISAPT memory budget. -*/
-        options.add_str("FISAPT_FSAPT_INTEGRAL_ALGORITHM", "AUTO", "AUTO DF CUEST_JK CUEST_DFMO");
+        options.add_str("FISAPT_FSAPT_INTEGRAL_ALGORITHM", "AUTO", "AUTO DF CUEST_JK CUEST_DFMO CUEST_DFMO_DIRECT");
         /*- Do F-SAPT induction scaling? (ratio of HF induction to F-SAPT induction) -*/
         options.add_bool("FISAPT_FSAPT_IND_SCALE", true);
         /*- Do F-SAPT coupled response? Uses the HF-like gap + 4J - K - K^T Hessian
