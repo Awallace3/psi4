@@ -106,4 +106,15 @@ Each entry sums the persistent and simultaneous temporary device workspace retur
 
 Both embedded-water HF and PBE0 fragment-matrix comparisons with host DF passed on the cachy debug build. On a separate 210-AO peptide HF calculation, the largest absolute differences between cached and integral-direct fragment entries were 3.68e-9 hartree in electrostatics, 6.36e-11 in exchange and 9.88e-9 across the two directions of induction. Empirical dispersion was identical.
 
+The same 210-AO peptide was run in fresh processes three times per mode on the RTX 3090. The table reports the median of each run's highest sampled process VRAM, in MiB. A 30 ms NVIDIA process sampler was matched by PID and host timestamp to the entry and return of each native fragment call. Short-lived allocations can fall between samples.
+
+| Scope | Cached DFMO, MiB | Fragment-only integral-direct DFMO, MiB |
+|---|---:|---:|
+| Fragment electrostatics | 720 | 336 |
+| Fragment exchange | 834 | 864 |
+| Fragment induction | 720 | 336 |
+| Whole energy call | 1,290 | 1,410 |
+
+Electrostatics and induction each used 384 MiB less device memory in every direct run. For exchange the cached samples spanned 720–930 MiB, with 864 MiB in all three direct runs. Both whole-call medians occurred outside the three measured fragment calls. H200 measurements on the larger embedded QM regions are needed to establish whole-call savings.
+
 Phoenix job 15814715 measures the previous production and candidate controls on H200. Build 15814787 uses the fragment-only implementation. Job 15814798 requests an H200 for the cached/direct comparison on reduced CDK2 and protein157 with HF and PBE0. The comparison records sampled device memory for each fresh energy call, term times and scalar closure. For CDK2 it also compares every signed residue-group energy with a 0.001 kcal/mol tolerance. Runs and scripts are in the Phoenix campaign directory listed under Reproduction.
