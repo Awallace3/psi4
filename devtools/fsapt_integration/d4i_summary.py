@@ -39,7 +39,7 @@ def summarize(path):
     field = d["external_potentials"] or {}
     row = dict(case=path.parent.name, functional=opt["sapt_dft_functional"],
                arm="gpu" if opt["use_cuest"] else "cpu", fsapt=frag, nbf=d["nbf"],
-               total_s=d["wall_seconds"], total_Eh=d["energy_hartree"],
+               total_s=d["wall_seconds"], group_analysis_s=d.get("group_seconds"), total_Eh=d["energy_hartree"],
                fragment_algorithm=opt.get("fisapt_fsapt_integral_algorithm") if frag else None,
                integral_direct=opt.get("cuest_df_integral_direct", False),
                einsums=opt["sapt_dft_use_einsums"], geometry_sha256=d["geometry_sha256"],

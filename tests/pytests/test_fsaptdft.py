@@ -66,6 +66,53 @@ def test_fsapt_d4i_external_fragment(functional, integrals):
 
 
 @pytest.mark.saptdft
+@pytest.mark.fsapt
+@uusing("dftd4")
+def test_fsapt_d4i_external_groups_from_wfn_and_flat_qcvars():
+    from qcelemental.models import v1
+
+    mol = psi4.geometry("""
+        0 1
+        O 0 0 0
+        H 0 0 0.96
+        H 0.93 0 -0.24
+        --
+        0 1
+        H 3.1 0 0
+        H 3.84 0 0
+        symmetry c1
+        no_reorient
+        no_com
+    """)
+    psi4.set_options({"basis": "cc-pvdz", "scf_type": "df", "use_cuest": False,
+                      "sapt_dft_functional": "HF", "sapt_dft_do_fsapt": "FISAPT",
+                      "fisapt_fsapt_filepath": "none", "sapt_dft_use_einsums": False})
+    energy, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=mol, return_wfn=True,
+                              external_potentials={"B": [[0.1, 8, 1, 0], [-0.1, 9, 2, 0]]})
+    elst = wfn.variable("FSAPT_ELST_AB").np
+    assert elst.shape[0] != elst.shape[1]
+    groups = dict(fragments_a={"Water": [1, 2, 3]}, fragments_b={"Hydrogen": [4, 5]},
+                  print_output=False)
+    grouped = psi4.fsapt_analysis(source=wfn, **groups)
+    fields = {key.lower(): value.np.ravel().tolist() for key, value in wfn.array_variables().items()
+              if key.startswith("FSAPT_")}
+    record = v1.AtomicResult(molecule=mol.to_schema(dtype=2), driver="energy",
+                             model={"method": "sapt(dft)-d4(i)", "basis": "cc-pvdz"}, properties={},
+                             provenance={"creator": "Psi4", "version": psi4.__version__, "routine": "energy"},
+                             return_result=energy, success=True, extras={"extra_properties": fields})
+    stored = psi4.fsapt_analysis(source=record, **groups)
+    pairs = list(zip(grouped["Frag1"], grouped["Frag2"]))
+    external = pairs.index(("Water", "Extern-B"))
+    total = pairs.index(("All", "All"))
+    assert grouped["EDisp"][external] == 0.0
+    assert grouped["Elst"][external] == pytest.approx(elst[:, -1].sum() * constants.hartree2kcalmol, abs=1e-6)
+    assert grouped["Total"][total] == pytest.approx(energy * constants.hartree2kcalmol, abs=1e-5)
+    assert list(zip(stored["Frag1"], stored["Frag2"])) == pairs
+    for key in ("Elst", "Exch", "IndAB", "IndBA", "EDisp", "Total"):
+        np.testing.assert_allclose(stored[key], grouped[key], atol=1e-9, rtol=0)
+
+
+@pytest.mark.saptdft
 @uusing("pandas")
 def test_fsaptdft_timer():
     """Ensure SAPT(DFT) timer CSV output contains expected timing columns."""

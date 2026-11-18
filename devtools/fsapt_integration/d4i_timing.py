@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--functional", required=True, choices=["HF", "PBE0"])
     parser.add_argument("--arm", required=True, choices=["cpu", "gpu"])
     parser.add_argument("--fsapt", action="store_true")
+    parser.add_argument("--groups", type=Path, help="JSON with A and B mappings of group names to 1-based dimer atom indices")
     parser.add_argument("--fragment-integrals", choices=["AUTO", "DF", "CUEST_JK", "CUEST_DFMO"],
                         help="Override the native F-SAPT fragment integral algorithm")
     parser.add_argument("--integral-direct", action="store_true", help="Use the cuEST integral-direct DF plan for SCF and SAPT")
@@ -46,6 +47,8 @@ def main():
     parser.add_argument("--runtime", type=Path, required=True, help="Pinned cuEST and CUDA 13.5 prefix")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.groups and not args.fsapt:
+        parser.error("--groups needs --fsapt")
     if args.coupled and not args.fsapt:
         parser.error("--coupled needs --fsapt")
     if not Path(psi4.core.__file__).resolve().is_relative_to(args.stage.resolve()):
@@ -111,9 +114,18 @@ def main():
     if args.fsapt:
         matrices = {key: np.asarray(wfn.variable("FSAPT_" + key))
                     for key in ("ELST_AB", "EXCH_AB", "INDAB_AB", "INDBA_AB", "EMPIRICAL_DISP")}
-        np.savez(args.output / "fragments.npz", **matrices)
+        # Keep the populations needed to regroup the same energy by residue later.
+        populations = {key: np.asarray(wfn.variable("FSAPT_" + key)) for key in ("QA", "QB")}
+        np.savez(args.output / "fragments.npz", **matrices, **populations)
         sums = {key: float(matrix.sum()) for key, matrix in matrices.items()}
-    result = dict(energy_hartree=energy, scalar_hartree=terms, fragment_sums_hartree=sums,
+    group_seconds = None
+    if args.groups:
+        groups = json.loads(args.groups.read_text())
+        start_groups = time.perf_counter()
+        grouped = psi4.fsapt_analysis(source=wfn, fragments_a=groups["A"], fragments_b=groups["B"], print_output=False)
+        group_seconds = time.perf_counter() - start_groups
+        (args.output / "groups-kcal-mol.json").write_text(json.dumps(grouped, allow_nan=False) + "\n")
+    result = dict(group_seconds=group_seconds, energy_hartree=energy, scalar_hartree=terms, fragment_sums_hartree=sums,
                   wall_seconds=elapsed, timers={key: row for key, row in timers.items()
                                                if row["timer_name"].startswith(("SAPT(", "F-SAPT"))},
                   options=options, host=socket.gethostname(), threads=args.threads, memory=args.memory,
