@@ -16,8 +16,10 @@ pytestmark = [pytest.mark.psi, pytest.mark.api]
 @pytest.mark.fsapt
 @uusing("dftd4")
 @pytest.mark.parametrize("functional", ["HF", "PBE0"])
-@pytest.mark.parametrize("use_gpu", [False, pytest.param(True, marks=using("cuest"))])
-def test_fsapt_d4i_external_fragment(functional, use_gpu):
+@pytest.mark.parametrize("integrals", ["DF", pytest.param("CUEST_JK", marks=using("cuest")),
+                                      pytest.param("CUEST_DFMO", marks=using("cuest"))])
+def test_fsapt_d4i_external_fragment(functional, integrals):
+    use_gpu = integrals != "DF"
     mol = psi4.geometry("""
         0 1
         O -0.702196054 -0.056060256  0.009942262
@@ -35,7 +37,7 @@ def test_fsapt_d4i_external_fragment(functional, use_gpu):
     """)
     psi4.set_options({
         "basis": "cc-pvdz", "scf_type": "df", "freeze_core": True, "use_cuest": use_gpu,
-        "fisapt_fsapt_integral_algorithm": "CUEST_JK" if use_gpu else "DF",
+        "fisapt_fsapt_integral_algorithm": integrals,
         "sapt_dft_functional": functional, "sapt_dft_do_dhf": True,
         "sapt_dft_grac_compute": "ITERATIVE" if functional == "PBE0" else "NONE",
         "sapt_dft_do_fsapt": "FISAPT", "sapt_dft_use_einsums": False,

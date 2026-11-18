@@ -180,6 +180,10 @@ class PSI_API cuESTJK : public JK {
     bool has_initialized_plan() const { return initialized_; }
     void print_header() const override;
 
+    /// For each (a,b), dot the two fitted orbital-pair factors over the auxiliary index.
+    SharedMatrix df_pair_dots(const SharedMatrix& left1, const SharedMatrix& right1,
+                              const SharedMatrix& left2, const SharedMatrix& right2);
+
     cuestDFIntPlan_t cuest_df_plan() { return cuest_df_plan_; }
 };
 

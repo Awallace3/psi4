@@ -43,9 +43,11 @@
 #include "psi4/libpsi4util/PsiOutStream.h"
 #include "psi4/libpsi4util/process.h"
 #include "psi4/liboptions/liboptions.h"
+#include "psi4/libqt/qt.h"
 #include "psi4/libpsi4util/exception.h"
 #include "psi4/psi4-dec.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -815,6 +817,77 @@ void cuESTJK::compute_gridk_JK() {
                         std::chrono::duration<double, std::milli>(clock::now() - start).count());
 }
 #endif
+
+SharedMatrix cuESTJK::df_pair_dots(const SharedMatrix& left1, const SharedMatrix& right1,
+                                   const SharedMatrix& left2, const SharedMatrix& right2) {
+    const size_t nao = primary_->nbf(), nq = auxiliary_->nbf();
+    const size_t na = left1->ncol(), nb = right1->ncol();
+    if (!cuest_df_plan_ || omega_alpha_ != 1.0 || omega_beta_ != 0.0)
+        throw PSIEXCEPTION("DF orbital-pair dots require an initialized full Coulomb plan.");
+    for (const auto& c : {left1, right1, left2, right2})
+        if (c->nirrep() != 1 || c->nrow() != nao) throw PSIEXCEPTION("Invalid DFMO orbital coefficients.");
+    if (left2->ncol() != na || right2->ncol() != nb)
+        throw PSIEXCEPTION("DFMO pair factors must have the same shape.");
+    auto result = std::make_shared<Matrix>("DF orbital-pair dots", na, nb);
+    if (!na || !nb) return result;
+
+    configure_math_mode();
+    size_t free = 0, total = 0;
+    if (!cuest_common::device_memory(&free, &total)) throw PSIEXCEPTION("Cannot size the DFMO exchange tile.");
+    const size_t budget = std::min({size_t(1) << 30, free / 8, memory_ * sizeof(double) / 4});
+    const size_t pairs = std::max<size_t>(1, budget / (2 * nq * sizeof(double)));
+    const size_t bblock = std::min(nb, pairs);
+    const size_t ablock = std::min(na, pairs / bblock);
+    cuestWorkspaceDescriptor_t buffers{}, variable{};
+    buffers.deviceBufferSizeInBytes = sizeof(double) * (2 * (ablock + bblock) * nao + (2 * nq + 1) * ablock * bblock);
+    auto storage = plan_workspace(buffers);
+    auto dl = reinterpret_cast<double*>(storage->deviceBuffer);
+    auto dr = dl + 2 * ablock * nao;
+    auto factors = dr + 2 * bblock * nao;
+    auto dots = factors + 2 * nq * ablock * bblock;
+    variable.deviceBufferSizeInBytes = std::min(size_t(2) << 30, free / 4);
+
+    auto check = [](cudaError_t status) {
+        if (status != cudaSuccess) throw PSIEXCEPTION(std::string("DFMO exchange: ") + cudaGetErrorString(status));
+    };
+    std::vector<double> packed(2 * nao * std::max(ablock, bblock));
+    auto upload = [&](const SharedMatrix& first, const SharedMatrix& second, size_t offset, size_t count, double* target) {
+        size_t row = 0;
+        for (const auto& c : {first, second})
+            for (size_t i = offset; i < offset + count; ++i, ++row)
+                C_DCOPY(nao, &c->pointer()[0][i], c->ncol(), &packed[row * nao], 1);
+        check(cudaMemcpy(target, packed.data(), row * nao * sizeof(double), cudaMemcpyHostToDevice));
+    };
+
+    PlanParameters<cuestDFMOIntegralsComputeParameters_t> params(CUEST_DFMOINTEGRALSCOMPUTE_PARAMETERS);
+    const double one = 1.0, zero = 0.0;
+    for (size_t a = 0; a < na; a += ablock) {
+        const uint64_t nl[2] = {std::min(ablock, na - a), std::min(ablock, na - a)};
+        upload(left1, left2, a, nl[0], dl);
+        for (size_t b = 0; b < nb; b += bblock) {
+            const uint64_t nr[2] = {std::min(bblock, nb - b), std::min(bblock, nb - b)};
+            upload(right1, right2, b, nr[0], dr);
+            cuestWorkspaceDescriptor_t temp{};
+            CHECK_CUEST(cuestDFMOIntegralsComputeWorkspaceQuery(cuest_handle, cuest_df_plan_, params.get(), &variable,
+                                                                &temp, 2, nl, nr, dl, dr, factors));
+            auto scratch = plan_workspace(temp);
+            CHECK_CUEST(cuestDFMOIntegralsCompute(cuest_handle, cuest_df_plan_, params.get(), &variable,
+                                                  scratch.get(), 2, nl, nr, dl, dr, factors));
+            check(cudaDeviceSynchronize());
+            // Both tensors have layout [Q,a,b]. Each batch reads one strided Q vector
+            // from each factor. Only the resulting [a,b] dots cross back to the host.
+            const int stride = static_cast<int>(nl[0] * nr[0]);
+            if (cublasDgemmStridedBatched(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, 1, 1, nq, &one, factors,
+                                          stride, 1, factors + nq * stride, stride, 1, &zero, dots, 1, 1,
+                                          stride) != CUBLAS_STATUS_SUCCESS)
+                throw PSIEXCEPTION("cuBLAS DFMO orbital-pair reduction failed.");
+            check(cudaDeviceSynchronize());
+            check(cudaMemcpy2D(&result->pointer()[a][b], nb * sizeof(double), dots, nr[0] * sizeof(double),
+                               nr[0] * sizeof(double), nl[0], cudaMemcpyDeviceToHost));
+        }
+    }
+    return result;
+}
 
 void cuESTJK::configure_math_mode() {
     // The handle outlives individual JK objects. Always set both directions:

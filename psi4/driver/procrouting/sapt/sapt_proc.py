@@ -1798,6 +1798,15 @@ def sapt_dft(
             cache["J_P_A"] = hf_cache["J_P_A"]
             cache["J_P_B"] = hf_cache["J_P_B"]
 
+        # With empirical dispersion and uncoupled fragment response, the scalar
+        # Hessian has finished using its cuEST plan. Release its device storage
+        # before building the fragment integral plan.
+        if (cleanup_jk and not do_disp and core.get_global_option("USE_CUEST")
+                and not core.get_option("FISAPT", "FISAPT_FSAPT_IND_RESPONSE")):
+            sapt_jk.finalize()
+            core.release_freed_memory()
+            cleanup_jk = False
+
         # Create single FISAPT object with do_flocalize=True to handle IBO localization internally.
         core.timer_on("SAPT(DFT): F-SAPT Setup + Localization (IBO)")
         FISAPT_obj = saptdft_fisapt.setup_fisapt_object(

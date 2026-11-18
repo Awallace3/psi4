@@ -33,7 +33,7 @@ def main():
     parser.add_argument("--functional", required=True, choices=["HF", "PBE0"])
     parser.add_argument("--arm", required=True, choices=["cpu", "gpu"])
     parser.add_argument("--fsapt", action="store_true")
-    parser.add_argument("--fragment-integrals", choices=["AUTO", "DF", "CUEST_JK"],
+    parser.add_argument("--fragment-integrals", choices=["AUTO", "DF", "CUEST_JK", "CUEST_DFMO"],
                         help="Override the native F-SAPT fragment integral algorithm")
     parser.add_argument("--coupled", action="store_true", help="Request per-source fragment response")
     parser.add_argument("--threads", type=int, required=True)

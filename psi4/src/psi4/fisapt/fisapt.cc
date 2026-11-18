@@ -46,6 +46,9 @@
 #include "psi4/libcubeprop/csg.h"
 #include "psi4/libdiis/diismanager.h"
 #include "psi4/libfock/jk.h"
+#ifdef USING_cuEST
+#include "psi4/libfock/cuESTJK.h"
+#endif
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/extern.h"
 #include "psi4/libmints/factory.h"
@@ -5424,9 +5427,9 @@ bool use_orbital_jk(Options& options, size_t nao, size_t na, size_t nb, size_t n
     available = options.get_bool("USE_CUEST") && options.get_str("FISAPT_LINK_ASSIGNMENT") == "C" &&
                 !options.get_bool("CUEST_DIRECTJ") && !options.get_bool("CUEST_GRIDK");
 #endif
-    if (algorithm == "CUEST_JK" && !available)
+    if ((algorithm == "CUEST_JK" || algorithm == "CUEST_DFMO") && !available)
         throw PSIEXCEPTION("FISAPT CUEST_JK requires DF Coulomb and exchange on cuEST with C link assignment.");
-    return available && (algorithm == "CUEST_JK" ||
+    return available && (algorithm == "CUEST_JK" || algorithm == "CUEST_DFMO" ||
                          (algorithm == "AUTO" && na * (nao - na) + nb * (nao - nb) > memory / naux));
 }
 
@@ -5858,6 +5861,18 @@ void FISAPT::fexch() {
 
     auto b_proj = scf::cpscf::doublet(options_, CvirA, Sbr, false, true);
     auto a_proj = scf::cpscf::doublet(options_, CvirB, Sas, false, true);
+#ifdef USING_cuEST
+    if (!dfh_->is_initialized() && options_.get_str("FISAPT_FSAPT_INTEGRAL_ALGORITHM") != "CUEST_JK") {
+        outfile->Printf("    F-SAPT exchange: tiled cuEST DFMO orbital-pair dots\n");
+        auto jk = orbital_jk_plan(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_, false);
+        auto gpu = std::dynamic_pointer_cast<cuESTJK>(jk);
+        if (!gpu) throw PSIEXCEPTION("F-SAPT DFMO exchange requires a cuEST JK object.");
+        E_exch3 = gpu->df_pair_dots(LoccA, b_proj, a_proj, LoccB);
+        E_exch3->scale(-2.0);
+        E_exch3p = E_exch3->pointer();
+        jk->finalize();
+    } else
+#endif
     if (!dfh_->is_initialized()) {
         // b_proj^T K[a a_proj^T] b = sum_Q (a b_proj|Q)(a_proj b|Q).
         // Exchange the roles of the pairs when B has fewer occupied orbitals.
