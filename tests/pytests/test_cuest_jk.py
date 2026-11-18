@@ -111,6 +111,27 @@ def _random_coeffs(nbf, ncol, seed):
 @uusing("cuest")
 @uusing("cuda_cc8")
 @pytest.mark.cuest
+@pytest.mark.parametrize("asymmetric,alpha", [(False, 1.0), (True, 1.0), (False, 0.25), (True, 0.25)])
+def test_cuest_integral_direct_df_jk(asymmetric, alpha):
+    """Test the full AO matrices, including the orientation and hybrid scaling of K."""
+    primary, aux = _basis_sets()
+    pairs = [(_random_coeffs(primary.nbf(), 5, 101),
+              _random_coeffs(primary.nbf(), 5, 202) if asymmetric else None)]
+    _, ref_j, ref_k = _run_jk(False, primary, aux, pairs)
+    psi4.set_options({"cuest_df_integral_direct": True})
+    try:
+        _, j, k = _run_jk(True, primary, aux, pairs, alpha_before=alpha)
+    except RuntimeError as exc:
+        if "CUEST_DF_INTEGRAL_DIRECT requires cuEST 0.3 or later" in str(exc):
+            pytest.skip(str(exc))
+        raise
+    np.testing.assert_allclose(j[0], ref_j[0], rtol=0, atol=1e-8)
+    np.testing.assert_allclose(k[0], alpha * ref_k[0], rtol=0, atol=1e-8)
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
 @pytest.mark.parametrize("condition", [1.e-2, 1.e-4])
 @pytest.mark.parametrize("asymmetric", [False, True])
 def test_cuest_df_fitting_condition_matches_cpu(condition, asymmetric):

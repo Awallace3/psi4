@@ -219,6 +219,11 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     False forces native FP64; true restores cuEST's default math mode, which permits
     emulation but may select native FP64 for a particular operation. -*/
     options.add_bool("CUEST_MIXED_PRECISION", true);
+    /*- Use an integral-direct density-fitting plan for energy calculations on cuEST 0.3+.
+        Recompute fitted integrals in occupied tiles for symmetric and nonsymmetric
+        exchange. Saves device memory when the screened three-index AO cache would
+        exceed the device capacity. Requires host-driven CPHF/CPKS. -*/
+    options.add_bool("CUEST_DF_INTEGRAL_DIRECT", false);
     /*- Use numerical grid-based exchange (Grid-K) instead of density-fitted
     exchange in cuEST J/K builds, including nonsymmetric SAPT and CPHF/CPKS
     densities. Coulomb remains density-fitted (DF-J + Grid-K). The exchange

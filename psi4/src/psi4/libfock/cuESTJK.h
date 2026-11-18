@@ -140,6 +140,7 @@ class PSI_API cuESTJK : public JK {
     bool destroy_cuest_objects() noexcept;
     std::string current_plan_key() const;
     void build_cuest_plan(const std::string& key);
+    void compute_integral_direct_k(size_t nocc, const double* left, const double* right, double* exchange);
     bool needs_df_plan() const { return (do_J_ && !directj_) || ((do_K_ || do_wK_) && !gridk_); }
     void query_coulomb_workspace(cuestWorkspaceDescriptor_t* desc, const double* density, double* coulomb);
     void compute_coulomb(cuestWorkspace_t* scratch, const double* density, double* coulomb);

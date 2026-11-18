@@ -3,6 +3,7 @@ import argparse
 import ctypes
 import hashlib
 import json
+import socket
 from pathlib import Path
 import time
 
@@ -35,6 +36,7 @@ def main():
     parser.add_argument("--fsapt", action="store_true")
     parser.add_argument("--fragment-integrals", choices=["AUTO", "DF", "CUEST_JK", "CUEST_DFMO"],
                         help="Override the native F-SAPT fragment integral algorithm")
+    parser.add_argument("--integral-direct", action="store_true", help="Use the cuEST integral-direct DF plan for SCF and SAPT")
     parser.add_argument("--coupled", action="store_true", help="Request per-source fragment response")
     parser.add_argument("--threads", type=int, required=True)
     parser.add_argument("--memory", required=True)
@@ -61,6 +63,10 @@ def main():
                    fisapt_fsapt_filepath="none", fisapt_fsapt_ind_response=args.coupled,
                    sapt_dft_use_einsums=False, orbital_optimizer_package="internal",
                    use_cuest=use_gpu, cuest_mixed_precision=True)
+    if args.integral_direct:
+        if not use_gpu:
+            parser.error("--integral-direct needs --arm gpu")
+        options["cuest_df_integral_direct"] = True
     if args.fragment_integrals:
         options["fisapt_fsapt_integral_algorithm"] = args.fragment_integrals
     if args.coupled and args.functional == "PBE0":
@@ -110,7 +116,8 @@ def main():
     result = dict(energy_hartree=energy, scalar_hartree=terms, fragment_sums_hartree=sums,
                   wall_seconds=elapsed, timers={key: row for key, row in timers.items()
                                                if row["timer_name"].startswith(("SAPT(", "F-SAPT"))},
-                  options=options, geometry_sha256=hashlib.sha256(geometry.encode()).hexdigest(),
+                  options=options, host=socket.gethostname(), threads=args.threads, memory=args.memory,
+                  geometry_sha256=hashlib.sha256(geometry.encode()).hexdigest(),
                   external_potentials=kwargs.get("external_potentials"), nbf=wfn.basisset().nbf(),
                   psi4_core=psi4.core.__file__, libxc=libxc, cuest=str(native), cuest_sha256=native_sha256, device_jk=device_jk, cuda_runtime=version.value)
     (args.output / "result.json").write_text(json.dumps(result, allow_nan=False, indent=2) + "\n")

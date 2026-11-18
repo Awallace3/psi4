@@ -37,13 +37,21 @@ def summarize(path):
     frag = bool(d["fragment_sums_hartree"])
     row = dict(case=path.parent.name, functional=opt["sapt_dft_functional"],
                arm="gpu" if opt["use_cuest"] else "cpu", fsapt=frag, nbf=d["nbf"],
-               total_s=d["wall_seconds"], total_Eh=d["energy_hartree"])
+               total_s=d["wall_seconds"], total_Eh=d["energy_hartree"],
+               fragment_algorithm=opt.get("fisapt_fsapt_integral_algorithm") if frag else None,
+               integral_direct=opt.get("cuest_df_integral_direct", False),
+               einsums=opt["sapt_dft_use_einsums"], geometry_sha256=d["geometry_sha256"],
+               mm_sites=sum(len(sites) for sites in (d["external_potentials"] or {}).values()),
+               psi4_core=d["psi4_core"], cuda_runtime=d["cuda_runtime"], cuest_sha256=d["cuest_sha256"])
     timers = {v["timer_name"]: v["wall_time"] for v in d["timers"].values()}
     for label, timer in TIMERS.items():
         if (label.startswith(("ks_", "grac_")) or label.endswith("_for_dhf")) and row["functional"] == "HF":
             row[label + "_s"] = None
         elif label in ("ibo_setup", "felst", "fexch", "find") and not frag:
             row[label + "_s"] = None
+        elif label == "fdisp_d4_pairs_nested":
+            # Earlier production revisions timed the inclusive D4 operation only.
+            row[label + "_s"] = timers.get(timer)
         else:
             row[label + "_s"] = timers[timer]
     sums = d["fragment_sums_hartree"]
