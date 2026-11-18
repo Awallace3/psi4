@@ -19,8 +19,13 @@ pytestmark = [pytest.mark.psi, pytest.mark.api]
 @pytest.mark.parametrize("integrals", ["DF", pytest.param("AUTO", marks=using("cuest")),
                                       pytest.param("CUEST_JK", marks=using("cuest")),
                                       pytest.param("CUEST_DFMO", marks=using("cuest")),
-                                      pytest.param("CUEST_DFMO_DIRECT", marks=using("cuest"))])
+                                      pytest.param("CUEST_DFMO_DIRECT", marks=using("cuest")),
+                                      pytest.param("CUEST_DFMO_UNSCREENED", marks=using("cuest"))])
 def test_fsapt_d4i_external_fragment(functional, integrals, monkeypatch):
+    explicit_unscreened = integrals == "CUEST_DFMO_UNSCREENED"
+    if explicit_unscreened:
+        integrals = "CUEST_DFMO"
+        core.set_local_option("FISAPT", "INTS_TOLERANCE", 0.0)
     use_gpu = integrals != "DF"
     mol = psi4.geometry("""
         0 1
@@ -63,7 +68,7 @@ def test_fsapt_d4i_external_fragment(functional, integrals, monkeypatch):
             pytest.skip(str(err))
         raise
     if use_gpu:
-        cached = integrals != "CUEST_DFMO_DIRECT"
+        cached = integrals != "CUEST_DFMO_DIRECT" and not explicit_unscreened
         assert accepted == [cached]
         creations = [r for r in core.get_timer_records().values() if r["timer_name"] == "cuEST JK DF plan create"]
         assert creations

@@ -1185,7 +1185,10 @@ bool cuESTJK::matches_fragment_plan(const std::shared_ptr<BasisSet>& primary,
         omega_alpha_ != 1.0 || omega_beta_ != 0.0 || current_plan_key() != plan_key_)
         return false;
     const double threshold = options_.get_str("SCREENING") == "NONE" ? 0.0 : options_.get_double("INTS_TOLERANCE");
-    if (pq_threshold_ != threshold) return false;
+    // FISAPT historically defaults to unscreened separate integrals. For an
+    // inherited plan, use the scalar screening unless explicitly overridden.
+    if ((options_["INTS_TOLERANCE"].has_changed() || options_.get_str("SCREENING") == "NONE") &&
+        pq_threshold_ != threshold) return false;
     // A ghost label changes nuclear attraction, but not the two-electron integrals.
     // Compare the ordered shells and centers actually submitted to cuEST.
     std::string source, target;
