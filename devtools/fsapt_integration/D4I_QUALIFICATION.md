@@ -19,7 +19,7 @@ The timing ledger gives inclusive wall seconds for a fresh energy call per row, 
 
 ## Observed fragment costs
 
-The RTX 3090 measurements are debugging observations with two host threads, CUDA 13.5 and host LibXC. Absolute Phoenix throughput requires a matched allocation and CUDA LibXC. The CPU reference uses eight Phoenix CPU cores. Its cuEST-enabled binary ran the host DF arm with USE_CUEST disabled.
+The RTX 3090 measurements are debugging observations with two host threads, CUDA 13.5 and host LibXC. Absolute Phoenix throughput requires a matched allocation and CUDA LibXC. The CPU reference in job 15799432 uses eight Phoenix CPU cores. The two water-grouped samples are CPU smoke tests on cachy. Its cuEST-enabled binary ran the host DF arm with USE_CUEST disabled.
 
 | System and functional | Fragment integral path | Total s | FElst s | FExch s | FInd s | Max closure, hartree |
 |---|---|---:|---:|---:|---:|---:|
@@ -42,7 +42,7 @@ The 16 prepared CDK2 complexes contain 555–566 QM atoms, 5,187–5,300 spheric
 | Exchange projected factors, Bab and Bba | 30.2–41.0 GiB | Fit and reduce in GPU tiles |
 | Induction potential slabs, WAbs and WBar | 23.8–27.2 GiB | Still disk-backed |
 
-A cuEST 0.3.0.1 workspace query for the full CDK2 ligand 0000 geometry (5,209 AOs, 25,509 auxiliary functions) returned 394,265,141,248 persistent and 343,383,764,992 temporary device bytes for the cached DF integral plan. These overlap during creation. The integral-direct plan returned 5,453,289,984 and 20,824,834,304 bytes respectively. This query used the molecular coordinates, shell lists and screening from Psi4's JK builder and stopped before allocation. It measures plan creation only.
+A cuEST 0.3.0.1 workspace query for the full CDK2 ligand 0000 geometry (5,209 AOs, 25,509 auxiliary functions) returned 394,265,141,248 persistent and 343,383,764,992 temporary device bytes for the cached DF integral plan. These overlap during creation. The integral-direct plan returned 5,453,289,984 and 20,824,834,304 bytes respectively. This query used the molecular coordinates, shell lists and screening from Psi4's JK builder and stopped before allocation. It measures plan creation only. For ligand 0000 each occupied column contributes 0.990 GiB of fitted factors per side of the exchange contraction. The tiled path recomputes these in blocks, so a single-column probe cannot establish whole-SCF throughput.
 
 ## Reproduction
 
@@ -54,7 +54,7 @@ The timing-suite geometries come from `~/data/timing_test_suite/geometries/syste
 
 `CUEST_DF_INTEGRAL_DIRECT = true` selects the low-memory cuEST plan explicitly. The SDK's symmetric exchange workspace query rejected a direct plan with `CUEST_STATUS_INVALID_PLAN`. Psi4 therefore obtains fitted factors with cuEST DFMO and contracts them in occupied tiles for symmetric and nonsymmetric K. The variable exchange workspace on the cached path also uses the available device memory. The default remains the cached plan. The fragment option `FISAPT_FSAPT_INTEGRAL_ALGORITHM = CUEST_DFMO` can be selected independently.
 
-Four AO-matrix regressions compared J and K with CPU DF for symmetric and nonsymmetric densities, at exchange fractions 1 and 0.25. All four passed with a maximum permitted absolute error of 1e-8 hartree. Direct-plan HF and PBE0 embedded-water energy calls agreed with independent cached-plan calculations within 2e-9 hartree in total energy and 1.5e-8 hartree per fragment entry. The six embedded fragment regression cases covering CPU DF and GPU orbital J/K and tiled DFMO also passed.
+Four AO-matrix regressions compared J and K with CPU DF for symmetric and nonsymmetric densities, at exchange fractions 1 and 0.25. All four passed with a maximum permitted absolute error of 1e-8 hartree. A diagnostic build with two occupied columns per tile also passed all four tests using five columns, exercising two full tiles and a final one-column tile. Direct-plan HF and PBE0 embedded-water energy calls agreed with independent cached-plan calculations within 2e-9 hartree in total energy and 1.5e-8 hartree per fragment entry. The six embedded fragment regression cases covering CPU DF and GPU orbital J/K and tiled DFMO also passed.
 
 The first reduced CDK2 PBE0 attempt completed the HF and DFT reference work and reached coupled induction, where the cached implementation requested 7.478 GiB with 7.081 GiB free on the shared RTX 3090. A retry with adaptive exchange scratch was terminated during SCF and produced no energy. Neither attempt supplies a PBE0 CDK2 timing. The full-pocket single-occupied J/K probe, full SCF, and ligand-ranking throughput require separate measurements.
 
@@ -72,9 +72,19 @@ A portable Git bundle for the exact production reference is stored at `productio
 |---|---|
 | 15799432 | Eight-core CPU controls on embedded water, peptide and protein83. The one-hour allocation timed out in the last protein83 PBE0 fragment case. The other eleven fresh energy calls produced result files. |
 | 15801202 | Dedicated latest-candidate protein83 PBE0 CPU fragment rerun with sixteen threads and node-local scratch. The earlier process was observed in Lustre I/O wait. |
-| 15800725 | Isolated Release builds of the candidate and the exact production source with the same pinned SDK and CUDA. |
-| 15800764 | Free GPU comparison on water, protein83 and the embedded CDK2 pilot, the full-pocket single-column J/K probe, then protein157. The production plain comparison runs on protein83. |
-| 15800861 | CPU controls for both methods on the real reduced CDK2 pocket and an embedded-water production import/energy check. |
+| 15800725 | Completed both isolated Release builds in 26 min 22 s. Verified the candidate and reference imports with their staged QCEElemental 0.50.4 and QCEngine 0.50.0. The reference also imports its staged Einsums backend. |
+| 15800764 | Earlier free GPU comparison. Its candidate environment imports successfully. Its production phase places the older environment QCEElemental first and would fail before CDK2. |
+| 15800861 | CPU controls for both methods on the real reduced CDK2 pocket. Its optional production phase uses the earlier import order. |
+| 15801531 | Reduced CDK2 HF with the corrected residue grouping, orbital population export and node-local scratch. |
 | 15799433 | Free GPU control for the earlier localized-orbital J/K implementation, including peptide and protein157. |
 
 GPU jobs write one-second utilization and memory samples, per-case Psi4 logs, result JSON, fragment matrices and scalar/fragment checks under `job-<id>` in the run directory. The submitted GPU comparison checks scalar agreement and fragment closure with a 1e-6 hartree absolute limit. CUDA LibXC and the cuEST JK banner are checked by the worker. The per-term timers measure blocks containing both host and device work.
+
+
+## Residue grouping and the MM column
+
+The public group analysis now treats MM sites as zero-dispersion sites and preserves their electrostatic and induction contributions. The B-side external weight vector follows the column count of the energy matrix. The same input group dictionary can be reused across ligands. A regression with rectangular component matrices verified the public wavefunction result and the flattened, lowercase QCSchema result, including the grouped total and the MM contribution. The timing worker accepts `--groups` and saves the table in kcal/mol, times group analysis separately and records the two orbital population matrices for later regrouping. [Grouping implementation](https://github.com/Awallace3/psi4/commit/c077b9130959406f67a0ee3796b3543cb544c446)
+
+For the real reduced HF pocket the stored component matrices have shape (205, 207). Summing the MM column over ligand A gives −0.0115980910 hartree electrostatic and −0.0138678371 hartree induction. Exchange and empirical dispersion against the MM sites are zero. These values come directly from the fragment matrices. The per-residue input for job 15801531 was matched element-by-element and coordinate-by-coordinate to the 101 atoms in the capped QM PDB. It assigns one ligand group, four protein residue groups and two explicit cap groups. The file is `groups/cdk2_0000_c2-groups.json` in the Phoenix run directory.
+
+For embedded water the public grouping call took 0.00087 s for HF and 0.00105 s for PBE0 in separate CPU smoke tests. The MM group received exactly zero empirical dispersion in both. The fresh-energy wall timer excludes this optional post-processing.
