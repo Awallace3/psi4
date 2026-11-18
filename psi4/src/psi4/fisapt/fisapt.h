@@ -40,6 +40,7 @@
 namespace psi {
 
 class JK;
+class cuESTJK;
 class BasisSet;
 class DFHelper;
 namespace scf { class HF; }
@@ -66,6 +67,9 @@ class FISAPT {
 
     /// Global JK object
     std::shared_ptr<JK> jk_;
+
+    /// Scalar SAPT owns finalization. Fragment tasks only borrow its fitted integrals.
+    std::shared_ptr<cuESTJK> fragment_plan_;
 
     /// Map of scalars
     std::map<std::string, double> scalars_;
@@ -141,6 +145,7 @@ class FISAPT {
 
     /// Localize
     void flocalize();
+    bool reuse_sapt_jk(std::shared_ptr<JK> jk);
     /// Electrostatics
     void felst();
     /// Exchange

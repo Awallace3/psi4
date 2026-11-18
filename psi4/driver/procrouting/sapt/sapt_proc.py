@@ -1798,15 +1798,6 @@ def sapt_dft(
             cache["J_P_A"] = hf_cache["J_P_A"]
             cache["J_P_B"] = hf_cache["J_P_B"]
 
-        # With empirical dispersion and uncoupled fragment response, the scalar
-        # Hessian has finished using its cuEST plan. Release its device storage
-        # before building the fragment integral plan.
-        if (cleanup_jk and not do_disp and core.get_global_option("USE_CUEST")
-                and not core.get_option("FISAPT", "FISAPT_FSAPT_IND_RESPONSE")):
-            sapt_jk.finalize()
-            core.release_freed_memory()
-            cleanup_jk = False
-
         # Create single FISAPT object with do_flocalize=True to handle IBO localization internally.
         core.timer_on("SAPT(DFT): F-SAPT Setup + Localization (IBO)")
         FISAPT_obj = saptdft_fisapt.setup_fisapt_object(
@@ -1814,18 +1805,28 @@ def sapt_dft(
         )
         core.timer_off("SAPT(DFT): F-SAPT Setup + Localization (IBO)")
 
-        core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
-        FISAPT_obj.felst()
-        core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
-        core.timer_on("SAPT(DFT): F-SAPT Exchange")
-        FISAPT_obj.fexch()
-        core.timer_off("SAPT(DFT): F-SAPT Exchange")
-        core.timer_on("SAPT(DFT): F-SAPT Induction")
-        if induction_matrices is None:
-            FISAPT_obj.find()
-        else:
-            FISAPT_obj.set_matrix(induction_matrices)
-        core.timer_off("SAPT(DFT): F-SAPT Induction")
+        empirical_fragments = (not do_disp and core.get_global_option("USE_CUEST")
+                               and not core.get_option("FISAPT", "FISAPT_FSAPT_IND_RESPONSE"))
+        reuse_jk = empirical_fragments and FISAPT_obj.reuse_sapt_jk(sapt_jk)
+        if empirical_fragments and cleanup_jk and not reuse_jk:
+            sapt_jk.finalize()
+            core.release_freed_memory()
+            cleanup_jk = False
+        try:
+            with p4util.timer("SAPT(DFT): F-SAPT Electrostatics"):
+                FISAPT_obj.felst()
+            with p4util.timer("SAPT(DFT): F-SAPT Exchange"):
+                FISAPT_obj.fexch()
+            with p4util.timer("SAPT(DFT): F-SAPT Induction"):
+                if induction_matrices is None:
+                    FISAPT_obj.find()
+                else:
+                    FISAPT_obj.set_matrix(induction_matrices)
+        finally:
+            if reuse_jk and cleanup_jk:
+                sapt_jk.finalize()
+                core.release_freed_memory()
+                cleanup_jk = False
         matrices = FISAPT_obj.matrices()
         for k, v in matrices.items():
             cache[k] = v

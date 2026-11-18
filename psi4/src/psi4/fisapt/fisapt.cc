@@ -5451,6 +5451,20 @@ std::shared_ptr<JK> orbital_jk_plan(const std::shared_ptr<BasisSet>& primary, co
     return jk;
 }
 
+void with_orbital_jk(const std::shared_ptr<cuESTJK>& cached, const std::shared_ptr<BasisSet>& primary,
+                     const std::shared_ptr<BasisSet>& auxiliary, Options& options, size_t memory,
+                     bool exchange, const std::function<void(JK&)>& visit) {
+#ifdef USING_cuEST
+    if (cached) {
+        cached->with_fragment_task(exchange, visit);
+        return;
+    }
+#endif
+    auto jk = orbital_jk_plan(primary, auxiliary, options, memory, exchange);
+    visit(*jk);
+    jk->finalize();
+}
+
 // J[L_i L_i^T] gives the orbital Coulomb potential. With right coefficients,
 // K[L_i R_i^T] gives the mixed exchange operator for this single orbital pair.
 void visit_orbital_jk(JK& jk, const SharedMatrix& left, const SharedMatrix& right,
@@ -5493,6 +5507,21 @@ std::function<void(SharedMatrix, double, size_t)> nuclear_potential(const std::s
     };
 }
 }  // namespace
+
+bool FISAPT::reuse_sapt_jk(std::shared_ptr<JK> jk) {
+    fragment_plan_.reset();
+#ifdef USING_cuEST
+    const auto algorithm = options_.get_str("FISAPT_FSAPT_INTEGRAL_ALGORITHM");
+    auto plan = std::dynamic_pointer_cast<cuESTJK>(jk);
+    if (plan && options_.get_str("FISAPT_LINK_ASSIGNMENT") == "C" &&
+        (algorithm == "AUTO" || algorithm == "CUEST_JK" || algorithm == "CUEST_DFMO") &&
+        plan->matches_fragment_plan(primary_, reference_->get_basisset("DF_BASIS_SCF"))) {
+        fragment_plan_ = std::move(plan);
+        outfile->Printf("    F-SAPT reusing scalar cuEST DF integrals for electrostatics, exchange and induction.\n");
+    }
+#endif
+    return static_cast<bool>(fragment_plan_);
+}
 
 // Compute fragment-fragment partitioning of electrostatic contribution
 void FISAPT::felst() {
@@ -5617,20 +5646,21 @@ void FISAPT::felst() {
     dfh_->set_nthreads(nT);
     size_t nQ = dfh_->get_naux();
     SharedMatrix Elst10_3;
-    if (use_orbital_jk(options_, nn, na, nb, nQ, doubles_)) {
+    if (fragment_plan_ || use_orbital_jk(options_, nn, na, nb, nQ, doubles_)) {
         outfile->Printf("    F-SAPT electrostatics: cuEST localized-orbital Coulomb potentials\n");
         Elst10_3 = std::make_shared<Matrix>("Orbital Coulomb interactions", na, nb);
         bool from_a = na <= nb;
         const auto& target = from_a ? L0B : L0A;
-        auto jk = orbital_jk_plan(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_, false);
-        visit_orbital_jk(*jk, from_a ? L0A : L0B, nullptr, [&](int i, SharedMatrix j) {
-            auto jl = scf::cpscf::doublet(options_, j, target, false, false);
-            for (int k = 0; k < target->ncol(); ++k) {
-                double e = C_DDOT(nn, &target->pointer()[0][k], target->ncol(), &jl->pointer()[0][k], target->ncol());
-                Elst10_3->set(from_a ? i : k, from_a ? k : i, e);
-            }
+        with_orbital_jk(fragment_plan_, primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_,
+                        false, [&](JK& jk) {
+            visit_orbital_jk(jk, from_a ? L0A : L0B, nullptr, [&](int i, SharedMatrix j) {
+                auto jl = scf::cpscf::doublet(options_, j, target, false, false);
+                for (int k = 0; k < target->ncol(); ++k) {
+                    double e = C_DDOT(nn, &target->pointer()[0][k], target->ncol(), &jl->pointer()[0][k], target->ncol());
+                    Elst10_3->set(from_a ? i : k, from_a ? k : i, e);
+                }
+            });
         });
-        jk->finalize();
     } else {
         dfh_->initialize();
         dfh_->print_header();
@@ -5872,13 +5902,14 @@ void FISAPT::fexch() {
 #ifdef USING_cuEST
     if (!dfh_->is_initialized() && options_.get_str("FISAPT_FSAPT_INTEGRAL_ALGORITHM") != "CUEST_JK") {
         outfile->Printf("    F-SAPT exchange: tiled cuEST DFMO orbital-pair dots\n");
-        auto jk = orbital_jk_plan(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_, false);
-        auto gpu = std::dynamic_pointer_cast<cuESTJK>(jk);
+        auto gpu = fragment_plan_;
+        if (!gpu) gpu = std::dynamic_pointer_cast<cuESTJK>(
+            orbital_jk_plan(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_, false));
         if (!gpu) throw PSIEXCEPTION("F-SAPT DFMO exchange requires a cuEST JK object.");
         E_exch3 = gpu->df_pair_dots(LoccA, b_proj, a_proj, LoccB);
         E_exch3->scale(-2.0);
         E_exch3p = E_exch3->pointer();
-        jk->finalize();
+        if (!fragment_plan_) gpu->finalize();
     } else
 #endif
     if (!dfh_->is_initialized()) {
@@ -5888,16 +5919,17 @@ void FISAPT::fexch() {
         bool from_a = na <= nb;
         const auto& target_l = from_a ? b_proj : LoccA;
         const auto& target_r = from_a ? LoccB : a_proj;
-        auto jk = orbital_jk_plan(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_, true);
-        visit_orbital_jk(*jk, from_a ? LoccA : b_proj, from_a ? a_proj : LoccB, [&](int i, SharedMatrix k) {
-            auto kr = scf::cpscf::doublet(options_, k, target_r, false, false);
-            for (int j = 0; j < target_l->ncol(); ++j) {
-                double value = C_DDOT(target_l->nrow(), &target_l->pointer()[0][j], target_l->ncol(),
-                                      &kr->pointer()[0][j], kr->ncol());
-                E_exch3p[from_a ? i : j][from_a ? j : i] = -2.0 * value;
-            }
+        with_orbital_jk(fragment_plan_, primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_,
+                        true, [&](JK& jk) {
+            visit_orbital_jk(jk, from_a ? LoccA : b_proj, from_a ? a_proj : LoccB, [&](int i, SharedMatrix k) {
+                auto kr = scf::cpscf::doublet(options_, k, target_r, false, false);
+                for (int j = 0; j < target_l->ncol(); ++j) {
+                    double value = C_DDOT(target_l->nrow(), &target_l->pointer()[0][j], target_l->ncol(),
+                                          &kr->pointer()[0][j], kr->ncol());
+                    E_exch3p[from_a ? i : j][from_a ? j : i] = -2.0 * value;
+                }
+            });
         });
-        jk->finalize();
     } else {
         // Contract the virtual overlaps into the MO coefficients before the DF transform:
         // Bab(a,b,Q) = sum_r (a r|Q) Sbr(b,r). By AO-pair symmetry the reverse
@@ -6069,18 +6101,19 @@ void FISAPT::find() {
 
     if (!dfh_->is_initialized()) {
         outfile->Printf("    F-SAPT induction: cuEST localized-orbital Coulomb potentials\n");
-        auto jk = orbital_jk_plan(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_, false);
-        auto write_sources = [&](const char* tensor, size_t offset, const SharedMatrix& source,
-                                 const SharedMatrix& occ, const SharedMatrix& vir) {
-            visit_orbital_jk(*jk, source, nullptr, [&](int i, SharedMatrix j) {
-                auto esp = scf::cpscf::triplet(options_, occ, j, vir, true, false, false);
-                esp->scale(2.0);
-                dfh_->write_disk_tensor(tensor, esp, {offset + i, offset + i + 1});
-            });
-        };
-        write_sources("WAbs", nA, Locc_A, Cocc_B, Cvir_B);
-        write_sources("WBar", nB, Locc_B, Cocc_A, Cvir_A);
-        jk->finalize();
+        with_orbital_jk(fragment_plan_, primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_,
+                        false, [&](JK& jk) {
+            auto write_sources = [&](const char* tensor, size_t offset, const SharedMatrix& source,
+                                     const SharedMatrix& occ, const SharedMatrix& vir) {
+                visit_orbital_jk(jk, source, nullptr, [&](int i, SharedMatrix j) {
+                    auto esp = scf::cpscf::triplet(options_, occ, j, vir, true, false, false);
+                    esp->scale(2.0);
+                    dfh_->write_disk_tensor(tensor, esp, {offset + i, offset + i + 1});
+                });
+            };
+            write_sources("WAbs", nA, Locc_A, Cocc_B, Cvir_B);
+            write_sources("WBar", nB, Locc_B, Cocc_A, Cvir_A);
+        });
     } else {
         dfh_->add_space("a", Cocc_A);
         dfh_->add_space("r", Cvir_A);

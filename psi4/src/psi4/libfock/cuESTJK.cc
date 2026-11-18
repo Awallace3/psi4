@@ -192,7 +192,7 @@ std::string molecular_frame_key(const std::shared_ptr<BasisSet>& primary,
     return key;
 }
 
-void basis_key(std::string& key, const std::shared_ptr<BasisSet>& basis) {
+void basis_key(std::string& key, const std::shared_ptr<BasisSet>& basis, bool include_charges = true) {
     const auto mol = basis->molecule();
     key_value(key, mol->natom());
     key_value(key, basis->nbf());
@@ -200,8 +200,10 @@ void basis_key(std::string& key, const std::shared_ptr<BasisSet>& basis) {
     key_value(key, basis->has_puream());
     const auto xyz = mol->geometry();
     for (int a = 0; a < mol->natom(); ++a) {
-        key_double(key, mol->Z(a));  // includes the current ghost mask
-        key_value(key, mol->true_atomic_number(a));
+        if (include_charges) {
+            key_double(key, mol->Z(a));
+            key_value(key, mol->true_atomic_number(a));
+        }
         for (int k = 0; k < 3; ++k) key_double(key, xyz.get(a, k));
         key_value(key, basis->nshell_on_center(a));
         for (int q = 0; q < basis->nshell_on_center(a); ++q) {
@@ -1177,6 +1179,44 @@ void cuESTJK::print_header() const {
     }
 }
 
+bool cuESTJK::matches_fragment_plan(const std::shared_ptr<BasisSet>& primary,
+                                    const std::shared_ptr<BasisSet>& auxiliary) const {
+    if (!initialized_ || !cuest_df_plan_ || gridk_ || directj_ || integral_direct() ||
+        omega_alpha_ != 1.0 || omega_beta_ != 0.0 || current_plan_key() != plan_key_)
+        return false;
+    const double threshold = options_.get_str("SCREENING") == "NONE" ? 0.0 : options_.get_double("INTS_TOLERANCE");
+    if (pq_threshold_ != threshold) return false;
+    // A ghost label changes nuclear attraction, but not the two-electron integrals.
+    // Compare the ordered shells and centers actually submitted to cuEST.
+    std::string source, target;
+    basis_key(source, primary_, false);
+    basis_key(source, auxiliary_, false);
+    basis_key(target, primary, false);
+    basis_key(target, auxiliary, false);
+    return source == target && shell_centers_key(primary, auxiliary) == shell_centers_;
+}
+
+void cuESTJK::with_fragment_task(bool exchange, const std::function<void(JK&)>& visit) {
+    if (!initialized_ || !cuest_df_plan_ || current_plan_key() != plan_key_ ||
+        integral_direct() || gridk_ || directj_ || omega_alpha_ != 1.0 || omega_beta_ != 0.0)
+        throw PSIEXCEPTION("The cached scalar DF plan changed before the F-SAPT orbital build.");
+    configure_math_mode();
+    // Each visit has its own coefficients, densities and results. In particular it
+    // cannot overwrite a JK matrix retained by scalar SAPT or change its task flags.
+    class OrbitalTask final : public cuESTJK {
+        cuESTJK& plan_;
+        void compute_JK() override { compute_df_jk(plan_); }
+      public:
+        OrbitalTask(cuESTJK& plan, bool exchange)
+            : cuESTJK(plan.primary_, plan.auxiliary_, plan.options_), plan_(plan) {
+            set_do_J(!exchange);
+            set_do_K(exchange);
+        }
+    };
+    OrbitalTask task(*this, exchange);
+    visit(task);
+}
+
 void cuESTJK::compute_JK() {
     if (!initialized_) {
         throw PSIEXCEPTION("cuESTJK plan is not initialized. Call initialize() after "
@@ -1199,6 +1239,10 @@ void cuESTJK::compute_JK() {
     }
 #endif
 
+    compute_df_jk(*this);
+}
+
+void cuESTJK::compute_df_jk(cuESTJK& plan) {
     using clock = std::chrono::high_resolution_clock;
     auto t_total_start = clock::now();
  
@@ -1246,7 +1290,7 @@ void cuESTJK::compute_JK() {
     size_t max_host = 0, max_device = 0;
  
     if (do_J_) {
-        query_coulomb_workspace(&j_temp_desc, d_D, d_J);
+        plan.query_coulomb_workspace(&j_temp_desc, d_D, d_J);
         max_host = std::max(max_host, j_temp_desc.hostBufferSizeInBytes);
         max_device = std::max(max_device, j_temp_desc.deviceBufferSizeInBytes);
     }
@@ -1260,8 +1304,8 @@ void cuESTJK::compute_JK() {
             if (lr_symmetric_) {
                 CHECK_CUEST(cuestDFSymmetricExchangeComputeWorkspaceQuery(
                     cuest_handle,
-                    cuest_df_plan_,
-                    cuest_exchange_compute_params_,
+                    plan.cuest_df_plan_,
+                    plan.cuest_exchange_compute_params_,
                     &variable,
                     &k_temp_desc,
                     static_cast<uint64_t>(nocc),
@@ -1270,8 +1314,8 @@ void cuESTJK::compute_JK() {
             } else {
                 CHECK_CUEST(cuestDFNonsymmetricExchangeComputeWorkspaceQuery(
                     cuest_handle,
-                    cuest_df_plan_,
-                    cuest_nonsym_exchange_compute_params_,
+                    plan.cuest_df_plan_,
+                    plan.cuest_nonsym_exchange_compute_params_,
                     &variable,
                     &k_temp_desc,
                     1,
@@ -1313,7 +1357,7 @@ void cuESTJK::compute_JK() {
             auto tc0 = clock::now();
             cudaMemcpy(d_D, D_ao_[N]->get_pointer(), nbf2_bytes, cudaMemcpyHostToDevice);
             auto tc1 = clock::now();
-            compute_coulomb(temporaryJKWorkspace.get(), d_D, d_J);
+            plan.compute_coulomb(temporaryJKWorkspace.get(), d_D, d_J);
             cudaDeviceSynchronize();
             auto tc2 = clock::now();
             cudaMemcpy(J_ao_[N]->get_pointer(), d_J, nbf2_bytes, cudaMemcpyDeviceToHost);
@@ -1366,8 +1410,8 @@ void cuESTJK::compute_JK() {
                 } else if (lr_symmetric_) {
                     CHECK_CUEST(cuestDFSymmetricExchangeCompute(
                         cuest_handle,
-                        cuest_df_plan_,
-                        cuest_exchange_compute_params_,
+                        plan.cuest_df_plan_,
+                        plan.cuest_exchange_compute_params_,
                         &variable,
                         temporaryJKWorkspace.get(),
                         static_cast<uint64_t>(nocc),
@@ -1376,8 +1420,8 @@ void cuESTJK::compute_JK() {
                 } else {
                     CHECK_CUEST(cuestDFNonsymmetricExchangeCompute(
                         cuest_handle,
-                        cuest_df_plan_,
-                        cuest_nonsym_exchange_compute_params_,
+                        plan.cuest_df_plan_,
+                        plan.cuest_nonsym_exchange_compute_params_,
                         &variable,
                         temporaryJKWorkspace.get(),
                         1,

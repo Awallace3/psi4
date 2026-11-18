@@ -16,10 +16,11 @@ pytestmark = [pytest.mark.psi, pytest.mark.api]
 @pytest.mark.fsapt
 @uusing("dftd4")
 @pytest.mark.parametrize("functional", ["HF", "PBE0"])
-@pytest.mark.parametrize("integrals", ["DF", pytest.param("CUEST_JK", marks=using("cuest")),
+@pytest.mark.parametrize("integrals", ["DF", pytest.param("AUTO", marks=using("cuest")),
+                                      pytest.param("CUEST_JK", marks=using("cuest")),
                                       pytest.param("CUEST_DFMO", marks=using("cuest")),
                                       pytest.param("CUEST_DFMO_DIRECT", marks=using("cuest"))])
-def test_fsapt_d4i_external_fragment(functional, integrals):
+def test_fsapt_d4i_external_fragment(functional, integrals, monkeypatch):
     use_gpu = integrals != "DF"
     mol = psi4.geometry("""
         0 1
@@ -45,12 +46,30 @@ def test_fsapt_d4i_external_fragment(functional, integrals):
         "fisapt_fsapt_filepath": "none", "orbital_optimizer_package": "internal",
     })
     charges = {"B": [[0.1, 8, 1, 1], [-0.1, 8, -1, 0]]}
+    accepted = []
+    reuse = core.FISAPT.reuse_sapt_jk
+
+    def record_reuse(fisapt, jk):
+        accepted.append(reuse(fisapt, jk))
+        return accepted[-1]
+
+    monkeypatch.setattr(core.FISAPT, "reuse_sapt_jk", record_reuse)
+    monkeypatch.setenv("PSI4_CUEST_SCF_TIMERS", "1")
+    core.clean_timers()
     try:
         _, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=mol, external_potentials=charges, return_wfn=True)
     except RuntimeError as err:
         if integrals == "CUEST_DFMO_DIRECT" and "requires cuEST 0.3 or later" in str(err):
             pytest.skip(str(err))
         raise
+    if use_gpu:
+        cached = integrals != "CUEST_DFMO_DIRECT"
+        assert accepted == [cached]
+        creations = [r for r in core.get_timer_records().values() if r["timer_name"] == "cuEST JK DF plan create"]
+        assert creations
+        fragment_creations = sum(r["n_calls"] for r in creations
+                                 if any("F-SAPT " in part for part in r["timer_path"]))
+        assert fragment_creations == (0 if cached else 3)
     elst = np.asarray(wfn.variable("FSAPT_ELST_AB"))
     ind_ab = np.asarray(wfn.variable("FSAPT_INDAB_AB"))
     ind_ba = np.asarray(wfn.variable("FSAPT_INDBA_AB"))

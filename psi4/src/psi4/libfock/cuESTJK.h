@@ -36,6 +36,7 @@
 
 #ifdef USING_cuEST
 #include <cuest.h>
+#include <functional>
 // PSI_CUEST_HAS_GRIDK / PSI_CUEST_HAS_DIRECTJ come from compiled CMake API
 // probes and are exported with core for plugin ABI consistency. Header
 // presence is insufficient: the 0.2.50 preview and 0.3 release differ.
@@ -135,6 +136,7 @@ class PSI_API cuESTJK : public JK {
     bool C1() const override { return true; }
     void preiterations() override;
     void compute_JK() override;
+    void compute_df_jk(cuESTJK& plan);
     void postiterations() override;
 
     void build_cuest_basis(const std::shared_ptr<BasisSet>& basis, cuestAOBasis_t& result,
@@ -185,6 +187,9 @@ class PSI_API cuESTJK : public JK {
     bool has_initialized_plan() const { return initialized_; }
     void print_header() const override;
 
+    bool matches_fragment_plan(const std::shared_ptr<BasisSet>& primary,
+                               const std::shared_ptr<BasisSet>& auxiliary) const;
+    void with_fragment_task(bool exchange, const std::function<void(JK&)>& visit);
     /// For each (a,b), dot the two fitted orbital-pair factors over the auxiliary index.
     SharedMatrix df_pair_dots(const SharedMatrix& left1, const SharedMatrix& right1,
                               const SharedMatrix& left2, const SharedMatrix& right2);
