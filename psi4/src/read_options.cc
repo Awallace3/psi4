@@ -2879,9 +2879,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("MP2_SS_SCALE", 1.0 / 3.0);
         /*- \% of memory for DF-MP2 three-index buffers -*/
         options.add_double("DFMP2_MEM_FACTOR", 0.9);
-        /*- Schwarz screening threshold for FISAPT integral builds. When empirical F-SAPT
-        reuses cached scalar cuEST integrals it inherits their screening by default.
-        Set this option explicitly to require a particular fragment threshold. -*/
+        /*- Schwarz screening threshold. Mininum absolute value below which TEI are neglected. -*/
         options.add_double("INTS_TOLERANCE", 0.0);
         /*- Minimum error in the 2-norm of the P(2) matrix for corrections to Lia and P. -*/
         options.add_double("DFMP2_P2_TOLERANCE", 0.0);

@@ -118,3 +118,30 @@ The same 210-AO peptide was run in fresh processes three times per mode on the R
 Electrostatics and induction each used 384 MiB less device memory in every direct run. For exchange the cached samples spanned 720–930 MiB, with 864 MiB in all three direct runs. Both whole-call medians occurred outside the three measured fragment calls. H200 measurements on the larger embedded QM regions are needed to establish whole-call savings.
 
 Phoenix job 15814715 measures the previous production and candidate controls on H200. Build 15814787 uses the fragment-only implementation. Job 15814798 requests an H200 for the cached/direct comparison on reduced CDK2 and protein157 with HF and PBE0. The comparison records sampled device memory for each fresh energy call, term times and scalar closure. For CDK2 it also compares every signed residue-group energy with a 0.001 kcal/mol tolerance. Runs and scripts are in the Phoenix campaign directory listed under Reproduction.
+
+## Reusing scalar DF integrals for empirical F-SAPT
+
+On the cached cuEST path, the J/K builder used for scalar SAPT induction already holds the screened density-fitting integrals needed for the localized fragment Coulomb and exchange contractions. The fragment code used to create a fresh builder for each of FElst, FExch and FInd. The active options also changed at that boundary. In an HF embedded-water run the live scalar plan used a shell-pair threshold of `1e-12`, while FISAPT supplied its module default of zero to a fresh builder. Zero disables this shell-pair screening.
+
+The following cuEST 0.3.0.1 workspace queries used the same 101-atom CDK2 geometry, 995 orbital functions, 4,915 JK-fitting functions, J-only task, RTX 3090 and CUDA 13.5. Only the cutoff changed. The temporary and persistent allocations coexist during plan creation.
+
+| Shell-pair threshold | Persistent GiB | Temporary GiB | Total GiB during creation |
+|---|---:|---:|---:|
+| Scalar threshold, `1e-12` | 7.88 | 7.87 | 15.75 |
+| Earlier fragment default, `0` | 18.45 | 35.54 | 53.99 |
+
+The zero-cutoff query returned exactly 38,158,675,968 temporary bytes, the failed CDK2 allocation recorded by Phoenix job 15803479. That job's L40S had 44.47 GiB of total device memory. Releasing all other allocations would still leave it below 53.99 GiB.
+
+With `AUTO`, compatible fragment tasks borrow the live scalar plan and fitted integrals. Electrostatics and induction evaluate localized orbital Coulomb sources, exchange uses tiled DFMO contractions, and D4(I) keeps its atom-pair partition. Fragment tasks own their coefficient and result buffers. The driver releases the borrowed plan after the last fragment J/K use. An explicit global or FISAPT integral tolerance must match for reuse. An explicitly requested separate fragment integral-direct calculation still builds its own plans. [Implementation](https://github.com/Awallace3/psi4/commit/decab0ab58acf5bea9b30cd5af7719cc3f79959d)
+
+All twelve embedded-water regressions passed on the RTX 3090 with cuEST 0.3.0.1 and CUDA 13.5. For each functional the three cached modes (`AUTO`, `CUEST_JK`, `CUEST_DFMO`) created zero native DF plans in the fragment timers. Separate fragment-only integral-direct and explicitly unscreened cached builds each created three. The tests also compare individual fragment matrices against host DF and check all four component sums.
+
+On CDK2 ligand 0000 with the 101-atom pocket and 8,977 MM sites, HF finished in 212.53 s on cachy using two host threads. FElst took 3.88 s, FExch 6.90 s and FInd 10.86 s, with 2.84 s for setup and localization. The output confirmed reuse and counted zero native fragment plan creations. The largest component closure error was 2.71e-10 hartree. The whole interaction differed by 4.86e-8 hartree from Phoenix CPU job 15800861. Across all labeled ligand–residue, cap, MM and summed rows, the largest total-energy difference versus CPU job 15801531 was 0.0000303 kcal/mol.
+
+PBE0 on the same 101-atom pocket also reused the scalar plan and counted zero new native fragment plans. The whole calculation took 618.89 s. FElst took 3.89 s, FExch 5.48 s, FInd 11.00 s and fragment setup 2.78 s. The largest component closure error was 3.15e-10 hartree. Scalar CPKS took 158.46 s, the extra HF induction took 87.99 s, and GRAC took 52.78 s on A and 86.51 s on B. These are RTX 3090 timings with host LibXC.
+
+For PBE0 the total interaction differed from the earlier plain Phoenix GPU call on the same input by −4.39e-8 hartree. The difference from the CPU scalar reference was −3.52e-6 hartree (−0.00221 kcal/mol), predominantly scalar exchange. For HF the corresponding differences were +5.48e-9 and +4.85e-8 hartree. The old plain GPU control and the new candidate ran on different hardware. The completed physics comparisons use energies; same-hardware timing ratios require the matched job.
+
+The HF group comparison above uses independently localized wavefunctions. Comparing the two raw HF matrices by orbital index gave a maximum electrostatic difference of 0.00628 hartree at a ligand orbital–protein nucleus entry, outside the orbital–orbital DF contraction. Thus sub-millikcal agreement is established at the reported residue-group level for this HF case. Phoenix CPU job 15826017 generates the independent PBE0 residue-group reference.
+
+Phoenix H200 job 15825734 uses `decab0ab58` from Release build 15825650 and requires a physical H200 at runtime. It compares scalar and fragment HF/PBE0 on water, the embedded CDK2 pocket and protein157. Each fresh call records component timings and sampled device memory. The cached fragment cases check plan reuse, compare their scalar energies with the matched plain calls and check fragment closure. The separate fragment-only integral-direct experiment is job 15814798.
