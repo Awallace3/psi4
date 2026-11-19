@@ -82,7 +82,8 @@ includes the response of the VV10 kernel to the density; the response of
 the NL grid points and partition weights to nuclear displacement is
 neglected. The resulting finite-grid error depends on the molecule and grid;
 this is not an exact derivative of the moving-grid energy. The gradient assumes a self-consistent
-VV10 treatment, so do not combine it with |scf__dft_vv10_postscf|. Analytic
+VV10 treatment; |scf__dft_vv10_postscf| is therefore rejected by the VV10
+gradient evaluator. Analytic
 Hessians and TDDFT are not available for VV10 functionals.
 
 Optional dimer gradient in DFT-VV10(SAPT)

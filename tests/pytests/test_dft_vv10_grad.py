@@ -21,6 +21,25 @@ _NH2 = """
 """
 
 
+@pytest.mark.parametrize("func,ref_key,geom", [
+    ("BLYP-NL", "rks", _HCN),
+    ("BLYP-NL", "uks", _NH2),
+    ("wB97M-V", "rks", _HCN),
+])
+def test_vv10_gradient_rejects_postscf(func, ref_key, geom):
+    """The public DFT route must not bypass the SAPT-only post-SCF guard."""
+    psi4.set_num_threads(1)
+    mol = psi4.geometry(geom)
+    psi4.set_options({
+        "basis": "sto-3g",
+        "reference": ref_key,
+        "scf_type": "df",
+        "dft_vv10_postscf": True,
+    })
+    with pytest.raises(RuntimeError, match="require self-consistent VV10"):
+        psi4.gradient(func, molecule=mol, dertype=1)
+
+
 @pytest.mark.findif
 @pytest.mark.slow
 @pytest.mark.parametrize("func,ref_key,geom,nl_grid,digits", [

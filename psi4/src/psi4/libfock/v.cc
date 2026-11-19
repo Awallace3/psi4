@@ -998,6 +998,14 @@ double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
     return vv10_e;
 }
 SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
+    // The density-response expression assumes a variational VV10 density.
+    // Guard here as well as in SAPT so standalone/core gradient callers cannot
+    // silently use it on a post-SCF (nonstationary) VV10 energy.
+    if (options_.get_bool("DFT_VV10_POSTSCF")) {
+        throw PSIEXCEPTION("V: VV10 analytic gradients require self-consistent VV10; "
+                           "DFT_VV10_POSTSCF is not supported.");
+    }
+
     timer_on("V: VV10");
     timer_on("Setup");
 
