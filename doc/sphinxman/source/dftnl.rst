@@ -80,7 +80,23 @@ Analytic nuclear gradients are available for DFT-NL with RKS and UKS
 references, including meta-GGA hosts such as wB97M-V. The gradient
 includes the response of the VV10 kernel to the density; the response of
 the NL grid points and partition weights to nuclear displacement is
-neglected; on the default NL grid this changes gradient components by
-roughly :math:`10^{-5}` [E_h/a_0]. The gradient assumes a self-consistent
+neglected. The resulting finite-grid error depends on the molecule and grid;
+this is not an exact derivative of the moving-grid energy. The gradient assumes a self-consistent
 VV10 treatment, so do not combine it with |scf__dft_vv10_postscf|. Analytic
 Hessians and TDDFT are not available for VV10 functionals.
+
+Optional dimer gradient in DFT-VV10(SAPT)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With |sapt__sapt_dft_ddft_gradient| enabled, ``energy('dft-vv10(sapt)')``
+also stores ``SAPT(DFT) DFT DIMER GRADIENT`` on the returned wavefunction
+and in the global QCVariables. This is the unshifted, supermolecular DFT
+dimer gradient, in hartree/bohr; a force is its negative. It is **not** the
+gradient of the CP-corrected interaction energy, a SAPT component, or the
+delta-DFT correction. No monomer or ghost-center gradient is subtracted.
+For VV10 it has the same density-response-only approximation described above.
+Post-SCF VV10 is rejected for this option.
+
+The option is off by default, does not change the energy decomposition, and
+requires |sapt__sapt_dft_do_ddft| with a non-HF functional.
+``DFT-VV10(SAPT)`` already enables that dimer SCF.
