@@ -33,7 +33,9 @@
 #include <psi4/libmints/typedefs.h>
 #include "psi4/libpsi4util/exception.h"
 
+#include <cstdint>
 #include <map>
+#include <optional>
 #include <list>
 #include <vector>
 #include <tuple>
@@ -395,7 +397,8 @@ class PSI_API DFHelper {
     void compute_sparse_pQq_blocking_p(const size_t start, const size_t stop, double* Mp,
                                        std::vector<std::shared_ptr<TwoBodyAOInt>> eri);
     void compute_sparse_pQq_blocking_p_symm(const size_t start, const size_t stop, double* Mp,
-                                            std::vector<std::shared_ptr<TwoBodyAOInt>> eri);
+                                            std::vector<std::shared_ptr<TwoBodyAOInt>> eri,
+                                            std::optional<double> omega = std::nullopt);
     void compute_sparse_pQq_blocking_p_symm_abw(const size_t start, const size_t stop, double* just_Mp, double* param_Mp,
                                         std::vector<std::shared_ptr<TwoBodyAOInt>> eri,
                                         std::vector<std::shared_ptr<TwoBodyAOInt>> weri);
@@ -409,6 +412,7 @@ class PSI_API DFHelper {
     void prepare_AO_wK_core();
     void prepare_AO_wK();
 
+    void mirror_AO_rows(double* Ppq, size_t begin, size_t stop);
     void copy_upper_lower_wAO_core_symm(double* Qpq, double* Ppq, size_t begin, size_t end);
 
     // first integral transforms
@@ -463,7 +467,9 @@ class PSI_API DFHelper {
     std::vector<bool> schwarz_shell_mask_;
     // What is the index of ij in significant basis function interactions for i? 0 = not significant. 2 means 1 before, 3 means 2 before, ect. Size nbf_ ** 2.
     // Ordering is based on the natural ordering of basis functions, not ordering of significance.
-    std::vector<size_t> schwarz_fun_index_;
+    // BasisSet::nbf() is an int. Both a column and its one-based rank fit in uint32_t.
+    std::vector<uint32_t> schwarz_fun_index_;
+    std::vector<uint32_t> significant_columns_;
 
     // => Coulomb metric handling <=
     std::vector<std::pair<double, std::string>> metric_keys_;
