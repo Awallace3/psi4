@@ -2360,6 +2360,89 @@ symmetry c1
     assert abs(n["DISP20"] - d["DISP20"]) > 1e-3 * abs(d["DISP20"])
 
 
+@pytest.mark.saptdft
+@pytest.mark.parametrize("functional,method,shift", [
+    ("pbe0", "sapt(dft)", 0.1307),
+    ("wb97m-v", "dft-vv10(sapt)", 0.038),
+])
+def test_saptdft_ddft_gradient(functional, method, shift):
+    """
+    The optional supermolecular dimer gradient matches standalone DFT and
+    does not alter any SAPT energy. This is a routing check, not an independent
+    VV10 derivative oracle (see test_dft_vv10_grad.py for finite differences).
+    """
+    molecule = psi4.geometry(
+        _sapt_testing_mols["neutral_water_dimer"]
+        + """
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    options = {
+        "basis": "cc-pvdz",
+        "scf_type": "df",
+        "e_convergence": 1e-10,
+        "d_convergence": 1e-10,
+    }
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options(options)
+    reference = psi4.gradient(functional, molecule=molecule, dertype=1)
+
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options(
+        {
+            **options,
+            "sapt_dft_functional": functional,
+            "sapt_dft_grac_shift_a": shift,
+            "sapt_dft_grac_shift_b": shift,
+            "sapt_dft_do_ddft": True,
+            "sapt_dft_ddft_gradient": True,
+        }
+    )
+    energy, wfn = psi4.energy(method, molecule=molecule, return_wfn=True)
+    grad = wfn.variable("SAPT(DFT) DFT DIMER GRADIENT")
+    assert compare_values(reference, grad, 6, "supermolecular DFT dimer gradient")
+    assert compare_values(grad, psi4.core.variable("SAPT(DFT) DFT DIMER GRADIENT"), 12, "core gradient")
+    components = {key: psi4.core.variable(key) for key in (
+        "SAPT ELST ENERGY", "SAPT EXCH ENERGY", "SAPT IND ENERGY", "SAPT DISP ENERGY"
+    )}
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options({"sapt_dft_ddft_gradient": False})
+    plain_energy, plain_wfn = psi4.energy(method, molecule=molecule, return_wfn=True)
+    assert compare_values(energy, plain_energy, 9, "dimer gradient leaves total energy unchanged")
+    for key, value in components.items():
+        assert compare_values(value, psi4.core.variable(key), 9, key)
+    assert not plain_wfn.has_variable("SAPT(DFT) DFT DIMER GRADIENT")
+    assert not psi4.core.has_variable("SAPT(DFT) DFT DIMER GRADIENT")
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize("functional,method,extra,match", [
+    ("wb97m-v", "dft-vv10(sapt)", {"dft_vv10_postscf": True}, "requires self-consistent VV10"),
+    ("pbe0", "sapt(dft)", {"sapt_dft_do_ddft": False}, "requires the delta DFT dimer SCF"),
+    ("hf", "sapt(dft)", {"sapt_dft_do_ddft": True}, "requires the delta DFT dimer SCF"),
+])
+def test_saptdft_ddft_gradient_invalid(functional, method, extra, match):
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.geometry(_sapt_testing_mols["neutral_water_dimer"])
+    psi4.set_options(
+        {
+            "basis": "cc-pvdz",
+            "sapt_dft_functional": functional,
+            "sapt_dft_grac_shift_a": 0.136,
+            "sapt_dft_grac_shift_b": 0.136,
+            "sapt_dft_ddft_gradient": True,
+            **extra,
+        }
+    )
+    with pytest.raises(psi4.ValidationError, match=match):
+        psi4.energy(method)
+
 if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(12)

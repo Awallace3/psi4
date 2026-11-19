@@ -72,3 +72,32 @@ post-SCF time savings
 
 Substantial time-savings for energy calculations are available by evaluating the VV10 kernel only at the converged electron density, i.e. in a post-SCF fashion.
 The deviations from the fully self-consistent treatment are usually minimal. To activate this set |scf__dft_vv10_postscf| to `true`.
+
+Analytic gradients
+~~~~~~~~~~~~~~~~~~
+
+Analytic nuclear gradients are available for DFT-NL with RKS and UKS
+references, including meta-GGA hosts such as wB97M-V. The gradient
+includes the response of the VV10 kernel to the density; the response of
+the NL grid points and partition weights to nuclear displacement is
+neglected. The resulting finite-grid error depends on the molecule and grid;
+this is not an exact derivative of the moving-grid energy. The gradient assumes a self-consistent
+VV10 treatment; |scf__dft_vv10_postscf| is therefore rejected by the VV10
+gradient evaluator. Analytic
+Hessians and TDDFT are not available for VV10 functionals.
+
+Optional dimer gradient in DFT-VV10(SAPT)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With |sapt__sapt_dft_ddft_gradient| enabled, ``energy('dft-vv10(sapt)')``
+also stores ``SAPT(DFT) DFT DIMER GRADIENT`` on the returned wavefunction
+and in the global QCVariables. This is the unshifted, supermolecular DFT
+dimer gradient, in hartree/bohr; a force is its negative. It is **not** the
+gradient of the CP-corrected interaction energy, a SAPT component, or the
+delta-DFT correction. No monomer or ghost-center gradient is subtracted.
+For VV10 it has the same density-response-only approximation described above.
+Post-SCF VV10 is rejected for this option.
+
+The option is off by default, does not change the energy decomposition, and
+requires |sapt__sapt_dft_do_ddft| with a non-HF functional.
+``DFT-VV10(SAPT)`` already enables that dimer SCF.

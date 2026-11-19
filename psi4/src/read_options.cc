@@ -1228,6 +1228,12 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("SAPT_DFT_DISP_LR_EXCH_KERNEL", true);
         /*- Compute the Delta-DFT correction? -*/
         options.add_bool("SAPT_DFT_DO_DDFT", false);
+        /*- Compute the unshifted supermolecular DFT dimer nuclear gradient after the
+        delta-DFT dimer SCF, storing SAPT(DFT) DFT DIMER GRADIENT on the globals and
+        dimer wavefunction. This is NOT a SAPT interaction or delta-DFT correction gradient.
+        Requires SAPT_DFT_DO_DDFT and a non-HF functional. VV10 includes density response
+        only, omitting NL grid motion; DFT_VV10_POSTSCF is unsupported. !expert -*/
+        options.add_bool("SAPT_DFT_DDFT_GRADIENT", false);
         /*- Do SAPT(DFT) Dispersion? Might turn off if using Delte-DFT correction and SAPT_DFT_D4_IE -*/
         options.add_bool("SAPT_DFT_DO_DISP", true);
         /*- Compute -D3 dispersion in SAPT(DFT) for SAPT(DFT)-D3? !expert -*/
