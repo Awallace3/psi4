@@ -335,6 +335,8 @@ std::shared_ptr<Matrix> IBOLocalizer2::reorder_orbitals(std::shared_ptr<Matrix> 
         for (int i = start; i < stop; i++) {
             fvals.push_back(std::pair<double, int>(Fp[i][i], i));
         }
+        // Orbitals swapped by a dimer symmetry tie on F_ii, so threaded round-off can permute
+        // them between runs. Orbital-indexed outputs reorder; atom/fragment sums are unaffected.
         std::sort(fvals.begin(), fvals.end());
         for (int i = start; i < stop; i++) {
             Up[i][fvals[i - start].second] = 1.0;
