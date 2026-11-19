@@ -34,7 +34,7 @@ from psi4 import core
 
 from ...p4util import solvers
 from ...p4util.exceptions import *
-from .sapt_util import print_sapt_var
+from .sapt_util import _without_vv10_response, print_sapt_var
 from pprint import pprint as pp
 
 
@@ -90,7 +90,6 @@ def build_sapt_jk_cache(
         cache["eps_aocc"] = wfn_dimer.epsilon_a_subset("AO", "ACTIVE_OCC")
         cache["eps_avir"] = wfn_dimer.epsilon_a_subset("AO", "ACTIVE_VIR")
         cache["eps_fvir"] = wfn_dimer.epsilon_a_subset("AO", "FROZEN_VIR")
-
 
     # Build the densities as HF takes an extra "step"
     cache["D_A"] = core.doublet(cache["Cocc_A"], cache["Cocc_A"], False, True)
@@ -823,6 +822,7 @@ def induction(
     return ret
 
 
+@_without_vv10_response
 def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     """
     Solve the SAPT CPHF (or CPKS) equations.
