@@ -13,9 +13,12 @@ The timing ledger gives inclusive wall seconds for a fresh energy call per row, 
 | Scalar elst / exch | Electrostatics contracts cached densities and potentials on the host. Exchange combines cuEST JK intermediates and host matrix work. |
 | Scalar ind | Host-driven response iteration with cuEST JK for the Hessian action and XC response for PBE0. The HF response used for PBE0 delta-HF has separate timers. |
 | Scalar disp / fdisp | CPU D4 atom-pair evaluation and intermolecular pair extraction. Both methods skip the quantum dispersion solver. |
+| Fragment setup / IBO localization | Host basis setup, overlap integrals, matrix algebra and orbital rotations in the FISAPT path. |
 | felst | GPU one-electron nuclear potentials and localized-orbital Coulomb builds on the cuEST fragment path. Host projections and matrix assembly remain. |
 | fexch | The tiled DFMO path transforms pairs of localized occupied and projected orbitals and reduces their auxiliary-index products on device. Other exchange contributions include host linear algebra. |
 | find | Nuclear potentials and orbital J sources use cuEST. Projection, disk-backed perturbations, uncoupled response and rescaling still contribute. |
+
+For the 101-atom CDK2 comparison, the Phoenix CPU runs used 16 host threads and the RTX 3090 runs used two. Scalar electrostatics, D4(I) including fragment pair extraction, and fragment setup with IBO localization all executed on the host in both runs. Their elapsed times contribute to the end-to-end speedup. Ratios for those individual rows measure host-to-host timing variation. The cuEST Coulomb build that supplies scalar electrostatics is timed separately under J/K build.
 
 ## Observed fragment costs
 
@@ -145,3 +148,26 @@ For PBE0 the total interaction differed from the earlier plain Phoenix GPU call 
 The HF group comparison above uses independently localized wavefunctions. Comparing the two raw HF matrices by orbital index gave a maximum electrostatic difference of 0.00628 hartree at a ligand orbital–protein nucleus entry, outside the orbital–orbital DF contraction. Thus sub-millikcal agreement is established at the reported residue-group level for this HF case. Phoenix CPU job 15826017 generates the independent PBE0 residue-group reference.
 
 Phoenix H200 job 15825734 uses `decab0ab58` from Release build 15825650 and requires a physical H200 at runtime. It compares scalar and fragment HF/PBE0 on water, the embedded CDK2 pocket and protein157. Each fresh call records component timings and sampled device memory. The cached fragment cases check plan reuse, compare their scalar energies with the matched plain calls and check fragment closure. The separate fragment-only integral-direct experiment is job 15814798.
+
+### Completed H200 qualification, 20 November 2026
+
+Phoenix job **15825734** and its batch step exited 0:0, wrote the completion marker and produced all 12 expected results. Both earlier comparison batches (15814715 and 15814798) exited 1:0 without a marker. Their successful subcases remain usable as individual measurements. The older separate cached fragment path exhausted H200 memory on protein157. Separate fragment integral-direct completed that case with a board peak above 110 GiB. The production candidate uses the scalar screened cached plan with AUTO and created zero additional fragment plans in all six fragment calls.
+
+| Input | Functional | Plain H200 s | Fragment H200 s | Fragment CPU s | CPU / H200 | Peak board GiB, plain and fragment |
+|---|---|---:|---:|---:|---:|---:|
+| CDK2 0000, 101 atoms, 995 AO | HF | 25.32 | 31.92 | 677.47 | 21.22 | 16.78 |
+| CDK2 0000, 101 atoms, 995 AO | PBE0 | 65.91 | 107.46 | 1638.12 | 15.24 | 22.20 |
+| protein157, 1478 AO | HF | 51.63 | 69.10 | — | — | 41.29 |
+| protein157, 1478 AO | PBE0 | 171.62 | 188.03 | — | — | 42.23 |
+
+Times are single energy calls in seconds. The independent grouped CDK2 CPU references used 16 threads (15801531 and 15826017), the H200 used eight host threads and one GPU. Both used 55 GB of Psi4 host memory. Board memory was sampled every 200 ms. In the CDK2 PBE0 plain and fragment calls, ligand GRAC used 14 numbered neutral and 21 cation iterations in each. The cation took approximately 6 and 42 seconds, respectively, before fragment work began. The measured wall difference includes that variation. D4(I) pair energies, scalar electrostatics, localization/setup and post-energy group analysis are host timers.
+
+For the two CDK2 fragment runs, component closure was below 3.1e-10 hartree. The largest CPU/H200 difference in a signed group Total was 0.00001424 kcal/mol for HF and 0.002876 kcal/mol for PBE0 (ligand–Glu83). These are the accepted CDK2 reference numerics. Check signed component closure on every production run and preserve the independently localized group outputs. The 101-atom example is one ligand at a 2 Å ligand-specific cutoff.
+
+[SPARCLE-QC input exporter](cdk2_inputs.py) · [Phoenix runner](cdk2_h200.sbatch) · [CDK2 run guide and H200 memory envelope](https://cos-4a16505.tail7d58ac.ts.net/docs/spec/fsaptdft-qmmm.html)
+
+### Sizing the shared CDK2 pocket
+
+The [native workspace ledger](CDK2_DF_MEMORY.csv) records persistent and temporary device bytes for J+K plan creation per actual geometry, screened at 1e-12 with cc-pVDZ/cc-pVDZ-JKFIT and mixed precision. These are allocation queries, not sampled full-call peaks. Across the two calibration systems above the larger observed PBE0 peak-to-workspace ratio was 1.41. For planning we round that up to 1.42 and reserve 20 GiB of the 139.84 GiB device. A plan budget of about 84.4 GiB satisfies that allowance. The ledger includes geometry hashes and distinguishes ligand-specific and shared-template pockets.
+
+All 16 shared 2.275 Å pockets have the same 130 protein/cap atom identities and 8,923 B-owned MM sites. Their complete dimers span 175–186 atoms (1,622–1,735 AO). Plan creation needs 49.87–59.26 GiB. Their estimated peaks are 70.82–84.15 GiB, largest for cdk2_0014. At 2.3 Å the shared dimers span 219–230 atoms and peak estimates reach 129.82 GiB. At 2.5 Å even the plan alone reaches 132.04 GiB. The 2.275 Å pocket is the largest of the shared radii tested across all ligands that satisfies the chosen budget. Confirm full-call peaks and component closure for cdk2_0014 before scaling either arm. The estimate addresses hardware fit. Pocket convergence for the ranking is a separate comparison.
