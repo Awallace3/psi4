@@ -276,27 +276,33 @@ def _build_cuda_manifest(lib_dir, env_lib_dir):
 
 
 def run_psi4_gate(cuest_root, cuest_archive, runtime_lib, env_lib):
-    import psi4
-    from psi4 import core
-    from psi4.driver.procrouting.sapt import sapt_dispersion_cuda as disp_mod
-    from psi4.driver.procrouting.sapt.sapt_cuda_runtime import CUDASession
-    from psi4.driver.procrouting.sapt.sapt_cuest_dfmo_cuda import CuESTDFMOProvider, POLICY
-    from psi4.driver.procrouting.sapt.sapt_cuest_factory_abi import admit_factory_api
-    from psi4.driver.procrouting.sapt.sapt_cuest_plan_owner import DiagnosticPlanOwner
-
-    cublas_path = _find_cublas(runtime_lib)
-    cublas_sha = _file_sha256(cublas_path)
-    # Build manifest whose cuda_root covers all mapped CUDA libs in runtime_lib.
-    from psi4.driver.procrouting.sapt.sapt_cuest250_identity import CUDA_PREFIXES
+    import tempfile
     rlib = Path(runtime_lib).resolve(strict=True)
+    native = (Path(cuest_root).resolve(strict=True) / "lib/13/libcuest.so.0.2.50").resolve(strict=True)
+    cublas_path = _find_cublas(rlib)
+    cublas_sha = _file_sha256(cublas_path)
+
+    # Prepare the exact production sealed runtime BEFORE importing psi4/einsums
+    # (required on btrfs subvolumes where stat().st_dev != /proc/self/maps superblock dev).
+    sealed_names = (
+        "libcudart.so.13", "libcublasLt.so.13", "libcublas.so.13",
+        "libnvJitLink.so.13", "libnvfatbin.so.13",
+        "libnvrtc-builtins.so.13.3", "libnvrtc.so.13",
+        "libcusparse.so.12", "libcusolver.so.12",
+        "libcufft.so.12", "libcurand.so.10",
+    )
     components = []
-    seen = set()
-    for p in sorted(rlib.iterdir()):
-        if p.is_file() and any(p.name.startswith(pref + ".so") for pref in CUDA_PREFIXES):
-            real = str(p.resolve(strict=True))
-            if real not in seen:
-                seen.add(real)
-                components.append({"path": real, "sha256": _file_sha256(real)})
+    pins = {str(native): _file_sha256(native)}
+    preload_paths = []
+    for name in sealed_names:
+        cand = rlib / name
+        if cand.is_file():
+            real = str(cand.resolve(strict=True))
+            sha = _file_sha256(real)
+            components.append({"path": real, "sha256": sha})
+            pins[real] = sha
+            preload_paths.append(real)
+    preload_paths.append(str(native))
     manifest = {
         "cuda_root": str(rlib),
         "components": components,
@@ -306,6 +312,25 @@ def run_psi4_gate(cuest_root, cuest_archive, runtime_lib, env_lib):
     manifest_sha = hashlib.sha256(
         json.dumps(manifest, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     ).hexdigest()
+
+    alias_dir = Path(tempfile.mkdtemp(prefix="disp0-sealed-aliases-")).resolve(strict=True)
+    os.chmod(alias_dir, 0o700)
+    import psi4_runtime_support
+    owner = psi4_runtime_support.prepare_sealed_runtime(
+        pins, alias_directory=alias_dir, dedicated_worker=True)
+    owner.preload(preload_paths)
+
+    import psi4
+    from psi4 import core
+    from psi4.driver.procrouting.sapt import sapt_dispersion_cuda as disp_mod
+    from psi4.driver.procrouting.sapt import sapt_fisapt_workflow_cuda as wf_mod
+    from psi4.driver.procrouting.sapt.sapt_cuda_runtime import CUDASession
+    from psi4.driver.procrouting.sapt.sapt_cuest_dfmo_cuda import CuESTDFMOProvider, POLICY
+    from psi4.driver.procrouting.sapt.sapt_cuest_factory_abi import admit_factory_api
+    from psi4.driver.procrouting.sapt.sapt_cuest_owned_runtime import admit_sealed_runtime
+    from psi4.driver.procrouting.sapt.sapt_cuest_plan_owner import DiagnosticPlanOwner
+
+    admit_sealed_runtime(pins, alias_directory=alias_dir, dedicated_worker=True)
 
     @contextmanager
     def provider_factory(primary, auxiliary):
@@ -421,14 +446,36 @@ def run_psi4_gate(cuest_root, cuest_archive, runtime_lib, env_lib):
 
         # Baseline GPU blocked control (algorithm="blocked")
         orig_bdd = disp_mod.blocked_device_dispersion
+        captured_blk = []
+        captured_fac = []
+
         def _force_blocked(*a, **kw):
             kw["algorithm"] = "blocked"
-            return orig_bdd(*a, **kw)
+            out = orig_bdd(*a, **kw)
+            captured_blk.append(out)
+            return out
+
+        def _capture_fac(*a, **kw):
+            out = orig_bdd(*a, **kw)
+            # Also compare against algorithm="blocked" on the EXACT same device spaces/rotations!
+            blk_same = orig_bdd(*a, **{**kw, "algorithm": "blocked"})
+            same_pair_err = float(max(
+                np.max(np.abs(out["Disp20 occupied pairs"] - blk_same["Disp20 occupied pairs"])),
+                np.max(np.abs(out["Exch-Disp20 occupied pairs"] - blk_same["Exch-Disp20 occupied pairs"])),
+            ))
+            same_scalar_err = float(max(
+                abs(out["Disp20,u"] - blk_same["Disp20,u"]),
+                abs(out["Exch-Disp20,u"] - blk_same["Exch-Disp20,u"]),
+            ))
+            assert same_pair_err < 1e-11 and same_scalar_err < 1e-11, (same_pair_err, same_scalar_err)
+            captured_fac.append((out, same_pair_err, same_scalar_err))
+            return out
 
         psi4.core.clean_options()
         psi4.core.clean()
         psi4.set_options(base_opts(True, fsapt_mode=fsapt_mode, basis=basis, jk=jk, ri=ri))
-        with patch.object(disp_mod, "blocked_device_dispersion", _force_blocked):
+        with patch.object(disp_mod, "blocked_device_dispersion", _force_blocked), \
+             patch.object(wf_mod, "blocked_device_dispersion", _force_blocked):
             t0 = time.perf_counter()
             e_blk, wfn_blk = psi4.energy(
                 "sapt(dft)", molecule=mol, return_wfn=True,
@@ -438,38 +485,48 @@ def run_psi4_gate(cuest_root, cuest_archive, runtime_lib, env_lib):
             t_blk = time.perf_counter() - t0
         blk_disp = float(wfn_blk.variable("Disp20,u"))
         blk_exch = float(wfn_blk.variable("Exch-Disp20,u"))
+        assert len(captured_blk) == 1
+        assert captured_blk[0]["Disp0 execution"]["factor_cache"]["policy"] == "PER_CALL_PACKED_S_SLABS_R_MAJOR"
 
         for cache_bytes in caches:
+            captured_fac.clear()
             psi4.core.clean_options()
             psi4.core.clean()
             psi4.set_options(base_opts(True, fsapt_mode=fsapt_mode, basis=basis, jk=jk, ri=ri))
-            t0 = time.perf_counter()
-            e_fac, wfn_fac = psi4.energy(
-                "sapt(dft)", molecule=mol, return_wfn=True,
-                cuda_provider_factory=provider_factory,
-                cuda_dispersion_factor_cache_bytes=cache_bytes,
-            )
-            t_fac = time.perf_counter() - t0
+            with patch.object(disp_mod, "blocked_device_dispersion", _capture_fac), \
+                 patch.object(wf_mod, "blocked_device_dispersion", _capture_fac):
+                t0 = time.perf_counter()
+                e_fac, wfn_fac = psi4.energy(
+                    "sapt(dft)", molecule=mol, return_wfn=True,
+                    cuda_provider_factory=provider_factory,
+                    cuda_dispersion_factor_cache_bytes=cache_bytes,
+                )
+                t_fac = time.perf_counter() - t0
+            assert len(captured_fac) == 1
+            fac_out, same_pair_err, same_scalar_err = captured_fac[0]
             fac_disp = float(wfn_fac.variable("Disp20,u"))
             fac_exch = float(wfn_fac.variable("Exch-Disp20,u"))
-            exec_info = getattr(wfn_fac, "_sapt_cuda_dispersion_execution", None)
-            if exec_info is None and hasattr(wfn_fac, "_sapt_cuda_fisapt_execution"):
-                exec_info = wfn_fac._sapt_cuda_fisapt_execution["dispersion"]
+            exec_info = fac_out["Disp0 execution"]
+            assert exec_info["factor_cache"]["policy"] == "ALGEBRAIC_OCCUPIED_FIRST_FACTORIZED"
+            assert exec_info["factor_cache"]["budget_bytes"] == cache_bytes
 
             err_cpu = max(abs(fac_disp - cpu_disp), abs(fac_exch - cpu_exch))
             err_blk = max(abs(fac_disp - blk_disp), abs(fac_exch - blk_exch))
             assert err_cpu < 1e-8, (name, fsapt_mode, cache_bytes, err_cpu, fac_disp, cpu_disp, fac_exch, cpu_exch)
-            assert err_blk < 1e-11, (name, fsapt_mode, cache_bytes, err_blk, fac_disp, blk_disp, fac_exch, blk_exch)
+            assert err_blk < 1e-9, (name, fsapt_mode, cache_bytes, err_blk, fac_disp, blk_disp, fac_exch, blk_exch)
             row = {
                 "case": name, "fsapt_mode": fsapt_mode, "basis": basis,
                 "cuda_dispersion_factor_cache_bytes": cache_bytes,
                 "Disp20,u_Eh": fac_disp, "Exch-Disp20,u_Eh": fac_exch,
                 "err_vs_cpu_Eh": err_cpu, "err_vs_blocked_gpu_Eh": err_blk,
+                "same_wfn_pair_err_vs_blocked_Eh": same_pair_err,
+                "same_wfn_scalar_err_vs_blocked_Eh": same_scalar_err,
                 "debug_wall_fac_s": t_fac, "debug_wall_blk_s": t_blk,
-                "dfmo_calls": exec_info.get("dfmo_calls") if exec_info else None,
-                "policy": exec_info["factor_cache"]["policy"] if exec_info else None,
-                "tiles": exec_info.get("compute_tile_extents") if exec_info else None,
-                "stage_seconds": exec_info.get("stage_seconds") if exec_info else None,
+                "dfmo_calls": exec_info.get("dfmo_calls"),
+                "policy": exec_info["factor_cache"]["policy"],
+                "tiles": exec_info.get("compute_tile_extents"),
+                "slabs": exec_info.get("dfmo_slab_extents"),
+                "stage_seconds": exec_info.get("stage_seconds"),
             }
             results["cases"].append(row)
             print("CASE_OK", json.dumps(row), flush=True)
