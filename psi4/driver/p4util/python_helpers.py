@@ -494,7 +494,8 @@ def _core_jk_build(
         core.set_global_option("SCF_TYPE", jk_type)
 
     if aux is None:
-        if core.get_global_option("SCF_TYPE") == "DF":
+        scf_type = core.get_global_option("SCF_TYPE").upper()
+        if scf_type in ("DF", "MEM_DF", "DISK_DF") or "DFDIRJ" in scf_type:
             aux = core.BasisSet.build(orbital_basis.molecule(), "DF_BASIS_SCF", core.get_option("SCF", "DF_BASIS_SCF"),
                                       "JKFIT", orbital_basis.name(), orbital_basis.has_puream())
         else:

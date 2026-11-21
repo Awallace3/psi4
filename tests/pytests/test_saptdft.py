@@ -2395,6 +2395,230 @@ def test_saptdft_ddft_gradient_rejects_vv10():
     with pytest.raises(psi4.ValidationError, match="no analytic VV10 gradient"):
         psi4.energy("dft-vv10(sapt)")
 
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize("functional", ["wb97x", "wb97", "lc-wpbe", "pbe"])
+@pytest.mark.parametrize("do_dhf", [False, True])
+def test_saptdft_jk_rebuild_across_scf_types(functional, do_dhf):
+    """SAPT(DFT) must succeed across DF, MEM_DF, DISK_DF, and PK even when the
+    monomer SCF JK cannot be reused (alpha=0 LRC functionals wb97/lc-wpbe and
+    pure GGA pbe rebuild JK to get full 1/r12 K). DF, MEM_DF, and DISK_DF must
+    agree to tight precision.
+    """
+    mol_str = _sapt_testing_mols["neutral_water_dimer"] + "\nsymmetry c1\nno_reorient\nno_com\n"
+    results = {}
+    for scf_type in ("DF", "MEM_DF", "DISK_DF", "PK"):
+        psi4.core.clean()
+        psi4.core.clean_options()
+        psi4.core.clean_variables()
+        mol = psi4.geometry(mol_str)
+        psi4.set_options({
+            "basis": "cc-pvdz",
+            "scf_type": scf_type,
+            "sapt_dft_functional": functional,
+            "sapt_dft_grac_shift_a": 0.04,
+            "sapt_dft_grac_shift_b": 0.04,
+            "sapt_dft_do_dhf": do_dhf,
+            "sapt_dft_do_disp": False,
+            "e_convergence": 1e-10,
+            "d_convergence": 1e-9,
+        })
+        psi4.energy("sapt(dft)", molecule=mol)
+        results[scf_type] = {
+            k: psi4.variable(k)
+            for k in ("SAPT ELST ENERGY", "SAPT EXCH ENERGY", "SAPT IND ENERGY", "SAPT TOTAL ENERGY")
+        }
+
+    # DF, MEM_DF, and DISK_DF must agree closely on every component.
+    for scf_type in ("MEM_DF", "DISK_DF"):
+        for k, ref in results["DF"].items():
+            assert compare_values(ref, results[scf_type][k], 8, f"{functional} do_dhf={do_dhf} {scf_type} {k}")
+
+    # PK uses exact 4-center integrals so differs only by small DF error (~2e-5 Eh on (H2O)2/cc-pVDZ).
+    assert abs(results["PK"]["SAPT EXCH ENERGY"] - results["DF"]["SAPT EXCH ENERGY"]) < 5.0e-5
+
+
+@pytest.mark.saptdft
+def test_saptdft_jk_rebuild_selects_memdfjk_and_handles_mismatched_omega():
+    """Verify:
+    1) Under SCF_TYPE=DF with sufficient memory, rebuilding sapt_jk selects
+       MemDFJK rather than unconditionally falling back to DiskDFJK.
+    2) core.JK.build(..., aux=None) works for DF, MEM_DF, and DISK_DF.
+    3) Direct sapt_dft(..., sapt_jk=None) and mismatched monomer omega succeed
+       under explicit MEM_DF and DISK_DF.
+    """
+    mol_str = """
+    0 1
+    He 0.0 0.0 0.0
+    --
+    0 1
+    Ne 0.0 0.0 3.0
+    units angstrom
+    symmetry c1
+    no_reorient
+    no_com
+    """
+    # 1 & 2: Check core.JK.build with aux=None across DF / MEM_DF / DISK_DF
+    psi4.core.clean()
+    psi4.core.clean_options()
+    mol = psi4.geometry(mol_str)
+    psi4.set_options({"basis": "cc-pvdz"})
+    prim = psi4.core.BasisSet.build(mol, "ORBITAL", "cc-pvdz")
+    for jk_type, expected_name in [("DF", "MemDFJK"), ("MEM_DF", "MemDFJK"), ("DISK_DF", "DiskDFJK")]:
+        jk = psi4.core.JK.build(prim, jk_type=jk_type, do_wK=True, memory=int(5e7))
+        assert jk.name() == expected_name
+        jk.set_do_J(True)
+        jk.set_do_K(True)
+        jk.set_do_wK(True)
+        jk.set_omega(0.3)
+        jk.set_wcombine(False)
+        jk.initialize()
+        jk.finalize()
+
+    # Capture rebuilt JK object name inside sapt_dft under SCF_TYPE=DF for alpha=0 functional
+    psi4.core.clean()
+    psi4.core.clean_options()
+    psi4.core.clean_variables()
+    mol = psi4.geometry(mol_str)
+    psi4.set_options({
+        "basis": "cc-pvdz",
+        "scf_type": "DF",
+        "sapt_dft_functional": "lc-wpbe",
+        "sapt_dft_grac_shift_a": 0.0,
+        "sapt_dft_grac_shift_b": 0.0,
+        "sapt_dft_do_dhf": False,
+        "sapt_dft_do_disp": False,
+    })
+    built_names = []
+    real_build = psi4.core.JK.build
+
+    def _spy_build(*args, **kwargs):
+        jk = real_build(*args, **kwargs)
+        built_names.append(jk.name())
+        return jk
+
+    old_build = psi4.core.JK.build
+    try:
+        psi4.core.JK.build = _spy_build
+        psi4.energy("sapt(dft)", molecule=mol)
+    finally:
+        psi4.core.JK.build = old_build
+    assert len(built_names) >= 2 and all(n == "MemDFJK" for n in built_names), built_names
+
+    # 3: Direct sapt_dft(..., sapt_jk=None) with mismatched monomer omega under MEM_DF and DISK_DF
+    exch_by_type = {}
+    for scf_type in ("DF", "MEM_DF", "DISK_DF"):
+        psi4.core.clean()
+        psi4.core.clean_options()
+        psi4.core.clean_variables()
+        dimer = psi4.geometry(mol_str)
+        sapt_dimer, monA, monB = psi4.driver.proc_util.prepare_sapt_molecule(dimer, "dimer")
+        psi4.set_options({"basis": "cc-pvdz", "scf_type": scf_type, "e_convergence": 1e-10, "d_convergence": 1e-9})
+        psi4.set_options({"dft_omega": 0.3})
+        _, wfnA = psi4.energy("wb97", molecule=monA, return_wfn=True)
+        psi4.set_options({"dft_omega": 0.4})
+        _, wfnB = psi4.energy("wb97", molecule=monB, return_wfn=True)
+        wfnD = psi4.core.Wavefunction.build(sapt_dimer)
+        data = sapt_proc.sapt_dft(wfnD, wfnA, wfnB, sapt_jk=None, do_disp=False)
+        exch_by_type[scf_type] = data["Exch10"]
+    assert compare_values(exch_by_type["DF"], exch_by_type["MEM_DF"], 9, "mismatched omega MEM_DF Exch10")
+    assert compare_values(exch_by_type["DF"], exch_by_type["DISK_DF"], 9, "mismatched omega DISK_DF Exch10")
+
+
+@pytest.mark.saptdft
+def test_saptdft_exch10_invariance_to_do_wk_and_exact_lowdin():
+    """First-order SAPT(DFT) exchange-repulsion is an expectation value of the
+    exact full 1/r12 operator: Exch10 and Exch10(S^2) must be invariant to
+    do_wK=True vs False across JK algorithms and match the exact 4-index Lowdin
+    biorthogonal expectation value <V A>/<A> - Elst10.
+    """
+    from psi4.driver.procrouting.sapt import sapt_jk_terms
+
+    psi4.core.clean()
+    psi4.core.clean_options()
+    psi4.core.clean_variables()
+    mol = psi4.geometry(_sapt_testing_mols["neutral_water_dimer"] + "\nsymmetry c1\nno_reorient\nno_com\n")
+    sapt_dimer, monA, monB = psi4.driver.proc_util.prepare_sapt_molecule(mol, "dimer")
+    psi4.set_options({
+        "basis": "cc-pvdz",
+        "scf_type": "PK",
+        "e_convergence": 1e-11,
+        "d_convergence": 1e-10,
+    })
+    _, wfnA = psi4.energy("wb97x", molecule=monA, return_wfn=True)
+    _, wfnB = psi4.energy("wb97x", molecule=monB, return_wfn=True)
+    wfnD = psi4.core.Wavefunction.build(sapt_dimer)
+    prim = wfnD.basisset()
+
+    # 1: Invariance to do_wK toggle across PK, DIRECT, MEM_DF, DISK_DF on fixed orbitals
+    for jk_type in ("PK", "DIRECT", "MEM_DF", "DISK_DF"):
+        vals = {}
+        for do_wK in (False, True):
+            jk = psi4.core.JK.build(prim, jk_type=jk_type, do_wK=do_wK, memory=int(5e7))
+            jk.set_do_J(True)
+            jk.set_do_K(True)
+            if do_wK:
+                jk.set_do_wK(True)
+                jk.set_omega(0.3)
+            jk.set_wcombine(False)
+            jk.initialize()
+            cache = sapt_jk_terms.build_sapt_jk_cache(wfnD, wfnA, wfnB, jk, True)
+            vals[do_wK] = sapt_jk_terms.exchange(cache, jk, True)
+            jk.finalize()
+        for key in ("Exch10", "Exch10(S^2)"):
+            assert abs(vals[True][key] - vals[False][key]) < 1.0e-13, (
+                f"{jk_type} {key} changed with do_wK: {vals[True][key]} vs {vals[False][key]}"
+            )
+
+    # 2: Exact 4-index full-1/r12 Lowdin biorthogonal check on PK orbitals
+    # monA and monB carry ghost atoms for the partner, so ao_potential() is the
+    # monomer nuclear attraction matrix in the full dimer AO basis.
+    mints = psi4.core.MintsHelper(prim)
+    S_ao = mints.ao_overlap().np
+    eri = mints.ao_eri().np
+    V_A = psi4.core.MintsHelper(wfnA.basisset()).ao_potential().np
+    V_B = psi4.core.MintsHelper(wfnB.basisset()).ao_potential().np
+
+    Ca = wfnA.Ca_subset("AO", "OCC").np
+    Cb = wfnB.Ca_subset("AO", "OCC").np
+    na, nb = Ca.shape[1], Cb.shape[1]
+    C = np.hstack([Ca, Cb])
+    S_mo = C.T @ S_ao @ C
+    T = np.linalg.inv(S_mo) - np.eye(na + nb)
+    Taa, Tab = T[:na, :na], T[:na, na:]
+    Tba, Tbb = T[na:, :na], T[na:, na:]
+
+    Da = Ca @ Ca.T
+    Db = Cb @ Cb.T
+    Pa_tr = Da + Ca @ Taa @ Ca.T + Ca @ Tab @ Cb.T
+    Pb_tr = Db + Cb @ Tbb @ Cb.T + Cb @ Tba @ Ca.T
+
+    def _J(P):
+        return np.einsum("pqrs,rs->pq", eri, P, optimize=True)
+
+    def _K(P):
+        return np.einsum("prqs,rs->pq", eri, P, optimize=True)
+
+    exch_exact = (
+        2.0 * np.sum((Pa_tr - Da) * V_B)
+        + 2.0 * np.sum((Pb_tr - Db) * V_A)
+        + 4.0 * (np.sum(Pa_tr * _J(Pb_tr)) - np.sum(Da * _J(Db)))
+        - 2.0 * np.sum(Pa_tr * _K(Pb_tr.T))
+    )
+
+    jk_pk = psi4.core.JK.build(prim, jk_type="PK", do_wK=True, memory=int(5e7))
+    jk_pk.set_do_J(True)
+    jk_pk.set_do_K(True)
+    jk_pk.set_do_wK(True)
+    jk_pk.set_omega(wfnA.functional().x_omega())
+    jk_pk.set_wcombine(False)
+    jk_pk.initialize()
+    cache_pk = sapt_jk_terms.build_sapt_jk_cache(wfnD, wfnA, wfnB, jk_pk, True)
+    exch_psi4 = sapt_jk_terms.exchange(cache_pk, jk_pk, True)["Exch10"]
+    jk_pk.finalize()
+
+    assert abs(exch_psi4 - exch_exact) < 1.0e-11, f"Exch10 mismatch: {exch_psi4} vs {exch_exact}"
+
 if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(12)

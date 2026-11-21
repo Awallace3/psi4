@@ -1603,10 +1603,27 @@ def sapt_dft(
     omega_B = wfn_B.functional().x_omega() if lrc_B else 0.0
 
     def _build_sapt_jk(omega):
-        jk_new = core.JK.build(dimer_wfn.basisset())
+        primary = dimer_wfn.basisset()
+        scf_type = core.get_global_option("SCF_TYPE").upper()
+        aux = None
+        if scf_type in ("DF", "MEM_DF", "DISK_DF") or "DFDIRJ" in scf_type:
+            aux = core.BasisSet.build(
+                primary.molecule(),
+                "DF_BASIS_SCF",
+                core.get_option("SCF", "DF_BASIS_SCF"),
+                "JKFIT",
+                primary.name(),
+                primary.has_puream(),
+            )
+        safety_factor = core.get_option("SCF", "SCF_MEM_SAFETY_FACTOR")
+        unclaimed = max(0, int(core.get_memory() // 8) - core.memory_committed())
+        jk_memory = max(1, int(safety_factor * unclaimed))
+        do_wK = bool(omega)
+        jk_new = core.JK.build(primary, aux=aux, do_wK=do_wK, memory=jk_memory)
+        jk_new.set_memory(jk_memory)
         jk_new.set_do_J(True)
         jk_new.set_do_K(True)
-        if omega:
+        if do_wK:
             jk_new.set_do_wK(True)
             jk_new.set_omega(omega)
         # SAPT reads J(), K() and wK() separately; wcombine folds x_alpha*K +
@@ -1638,6 +1655,9 @@ def sapt_dft(
             reason = "lacks K" if not has_K else "lacks wK at omega = %.4f" % omega_A
             core.print_out("\n   => Rebuilding SAPT JK object <= \n\n")
             core.print_out("      Reason: reused JK %s\n\n" % reason)
+            if cleanup_jk:
+                sapt_jk.finalize()
+                core.release_freed_memory()
             sapt_jk = _build_sapt_jk(omega_A)
             wfn_A.set_jk(sapt_jk)
             wfn_B.set_jk(sapt_jk)
@@ -1650,10 +1670,12 @@ def sapt_dft(
 
     # Monomer B needs its own JK whenever its omega differs from the one sapt_jk
     # was built with -- including the case where A is not range separated at all.
+    built_sapt_jk_B = False
     if lrc_B and omega_B != omega_A and sapt_jk_B is None:
         core.print_out("   => Monomer B: Building SAPT JK object <= \n\n")
         core.print_out("      Reason: MonomerA Omega != MonomerB Omega\n\n")
         sapt_jk_B = _build_sapt_jk(omega_B)
+        built_sapt_jk_B = True
 
     # Build SAPT cache
     jk_terms = sapt_jk_terms
@@ -1809,6 +1831,8 @@ def sapt_dft(
     if cleanup_jk:
         core.print_out("\n   => Finalizing SAPT JK object to free memory <= \n\n")
         sapt_jk.finalize()
+        if built_sapt_jk_B and sapt_jk_B is not None:
+            sapt_jk_B.finalize()
         core.release_freed_memory()
 
     if do_disp:
