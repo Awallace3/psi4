@@ -203,6 +203,41 @@ class TestCuEST0301Profile(unittest.TestCase):
         finally:
             sys.path.remove(str(pv))
 
+    def test_sealed_elf_accepts_origin_dot_and_rejects_parent_or_absolute_rpath(self):
+        import subprocess
+        repo_root = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(repo_root))
+        try:
+            from psi4_runtime_support._elf import loader_metadata
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                src = root / "stub.c"
+                src.write_text("int stub_fn(void) { return 0; }\n")
+                for rpath, should_pass in (
+                    ("$ORIGIN", True),
+                    ("$ORIGIN/.", True),
+                    ("$ORIGIN/..", False),
+                    (str(root), False),
+                ):
+                    so = root / f"lib_{abs(hash(rpath))}.so"
+                    subprocess.run(
+                        ["/usr/bin/cc", "-shared", "-fPIC", str(src),
+                         "-Wl,--disable-new-dtags", f"-Wl,-rpath,{rpath}", "-o", str(so)],
+                        check=True,
+                    )
+                    fd = os.open(so, os.O_RDONLY)
+                    try:
+                        if should_pass:
+                            meta = loader_metadata(fd, so.stat().st_size)
+                            self.assertIsInstance(meta["needed"], tuple)
+                        else:
+                            with self.assertRaisesRegex(ValueError, "descriptor-local ORIGIN"):
+                                loader_metadata(fd, so.stat().st_size)
+                    finally:
+                        os.close(fd)
+        finally:
+            sys.path.remove(str(repo_root))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -72,12 +72,16 @@ def loader_metadata(fd, size):
         if end < 0:
             raise ValueError("Unterminated ELF dependency string")
         value = strings[index:end].decode("ascii")
-        if not value or "/" in value or value in (".","..") or not search and "$" in value:
+        if search:
+            if value not in ("$ORIGIN","${ORIGIN}","$ORIGIN/.","${ORIGIN}/."):
+                raise ValueError("ELF search paths outside descriptor-local ORIGIN are unsupported")
+            return value
+        if not value or "/" in value or value in (".","..") or "$" in value:
             raise ValueError("ELF dependencies must use explicit bare SONAMEs")
         return value
 
-    search = tuple(name(table[tag],search=True) for tag in (15,29) if tag in table)
-    if any(value not in ("$ORIGIN","${ORIGIN}") for value in search):
-        raise ValueError("ELF search paths outside descriptor-local ORIGIN are unsupported")
+    for tag in (15,29):
+        if tag in table:
+            name(table[tag],search=True)
     return {"needed":tuple(name(index) for index in needed),
             "soname":name(table[14]) if 14 in table else None}
