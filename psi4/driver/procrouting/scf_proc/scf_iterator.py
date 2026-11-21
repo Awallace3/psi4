@@ -326,6 +326,12 @@ def scf_iterate(self, e_conv=None, d_conv=None):
     # Second-order package, consulted only once SOSCF turns second-order iterations on.
     otr_soscf = otr_proc.selected(self, soscf_enabled, potentials)
 
+    predict_energy = (core.get_option("SCF", "SCF_E_CONV_PREDICTED")
+                      and reference in ("RHF", "RKS", "UHF", "UKS")
+                      and not (soscf_enabled or ooo_scf or frac_enabled or self.MOM_excited_
+                               or damping_enabled or any(potentials.values())))
+    energy_threshold = core.get_option("SCF", "E_CONVERGENCE") if e_conv is None else e_conv
+
     # Record what actually drove the SCF, so demotions/altered defaults are detectable other than print format
     _LABELS = {"internal": "Internal", "openorbitaloptimizer": "OpenOrbitalOptimizer",
                "opentrustregion": "OpenTrustRegion"}
@@ -524,6 +530,13 @@ def scf_iterate(self, e_conv=None, d_conv=None):
 
         Ediff = SCFE - SCFE_old
         SCFE_old = SCFE
+        predict_step = (predict_energy and self.iteration_ >= 3 and not early_screening
+                        and abs(Ediff) < 10 * energy_threshold)
+        if predict_step:
+            # DIIS can overwrite the current Fock before form_D produces the next density.
+            spins = [(self.Fa().clone(), self.Da().clone())]
+            if not isinstance(self, core.RHF):
+                spins.append((self.Fb().clone(), self.Db().clone()))
 
         status = []
 
@@ -707,8 +720,20 @@ def scf_iterate(self, e_conv=None, d_conv=None):
             if scf_iter_post_screening >= scf_maxiter_post_screening and scf_maxiter_post_screening > 0:
                 break
 
-        # Call any postiteration callbacks
-        if not ((self.iteration_ == 0) and self.sad_) and _converged(Ediff, Dnorm, e_conv=e_conv, d_conv=d_conv):
+        energy_change = Ediff
+        if predict_step:
+            # old_density is a private copy. Form D_old - D_new in place.
+            new_densities = [self.Da()] if len(spins) == 1 else [self.Da(), self.Db()]
+            prediction = 0.0
+            for (fock, old_density), density in zip(spins, new_densities):
+                old_density.subtract(density)
+                prediction -= fock.vector_dot(old_density)
+            if len(spins) == 1:
+                prediction *= 2.0
+            if abs(prediction) < 0.2 * energy_threshold:
+                energy_change = prediction
+
+        if not ((self.iteration_ == 0) and self.sad_) and _converged(energy_change, Dnorm, e_conv=e_conv, d_conv=d_conv):
 
             if early_screening:
 
