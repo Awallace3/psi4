@@ -88,6 +88,11 @@ class DeviceMath:
         return out
 
 
+class _HFSpaces(dict):
+    """Twelve prepared AO spaces carrying borrowed device references for HF factorization."""
+    __slots__ = ("_hf_factorization",)
+
+
 def prepare_hf(session, matrices, energies, *, frozen_a=0, frozen_b=0):
     """Upload raw HF inputs and form all twelve spaces/eight corrections on GPU.
 
@@ -133,7 +138,7 @@ def prepare_hf(session, matrices, energies, *, frozen_a=0, frozen_b=0):
     DAS,DBS = m.product(DA,S),m.product(DB,S)
     DBr,DAs = m.product(DBS,r),m.product(DAS,s)
     at,bt = m.window(a,transpose=True),m.window(b,transpose=True)
-    spaces = {
+    spaces = _HFSpaces({
         "a":a,"b":b,"r":r,"s":s,
         "r1":m.combine(DBr,r,1,-1),
         "s1":m.combine(DAs,s,1,-1),
@@ -143,6 +148,11 @@ def prepare_hf(session, matrices, energies, *, frozen_a=0, frozen_b=0):
         "s3":m.combine(DAs,m.product(DBS,DAs),2,-2),
         "a4":m.combine(m.product(DAS,DBS,a),a,-2,0),
         "b4":m.combine(m.product(DBS,DAS,b),b,-2,0),
+    })
+    spaces._hf_factorization = {
+        "Cocc_A": d["Cocc_A"], "Cocc_B": d["Cocc_B"],
+        "S": S, "D_A": DA, "D_B": DB,
+        "frozen_a": frozen_a, "frozen_b": frozen_b,
     }
     def p(*values):
         return m.product(*values)

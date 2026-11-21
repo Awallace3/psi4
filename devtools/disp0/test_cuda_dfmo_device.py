@@ -21,6 +21,7 @@ class DeviceSession(transport.Session):
     retain_native_owner = runtime.CUDASession.retain_native_owner
     release_native_owner = runtime.CUDASession.release_native_owner
     gemm = SetupSession.gemm
+    gemm_batched = SetupSession.gemm_batched
 
     def __init__(self):
         super().__init__()

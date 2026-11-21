@@ -75,9 +75,10 @@ class CPUSession:
         finally:
             for allocation in self.allocations[start:]:allocation.free()
             del self.allocations[start:]
-    def gemm_at_b(self,left,right):
-        result=self.empty((left.shape[1],right.shape[1]))
-        host(result)[...]=host(left).T@host(right);self.gemms+=1
+    def gemm_at_b(self,left,right,*,alpha=1.0,beta=0.0,out=None):
+        result=self.empty((left.shape[1],right.shape[1])) if out is None else out
+        prod=alpha*(host(left).T@host(right))
+        host(result)[...]=(prod if beta==0.0 else beta*host(result)+prod);self.gemms+=1
         return result
     def launch(self,name,grid,threads,arguments):
         # GPU grid/threads are deliberately NOT simulated. Bodies execute on

@@ -137,12 +137,15 @@ class DiagnosticPlanOwner:
             raise RuntimeError("Diagnostic native plan construction is incomplete")
         return self._raw(self._plan).value
 
-    def _new_native(self, label, create, destroy, keepalive=()):
+    def _new_native(self, label, create, destroy, keepalive=(), *, audit_identity=True):
         # Aggregate shell calls by role rather than growing one row per shell.
         phase = label.split(" shell",1)[0]+" shells" if " shell" in label else label
-        with self.timings.measure(phase+".admission"):
+        if audit_identity:
+            with self.timings.measure(phase+".admission"):
+                self._check_construction()
+                self.api.assert_identity()
+        else:
             self._check_construction()
-            self.api.assert_identity()
         resource = _Resource(label,handle=ct.c_void_p(),keepalive=tuple(keepalive))
         resource.destroy = lambda:destroy(resource.handle)
         self.resources.append(resource)  # Retain the output slot BEFORE the call.
@@ -223,6 +226,12 @@ class DiagnosticPlanOwner:
 
     def _basis(self, snapshot, shell_parameters, basis_parameters):
         native,context = self.api.native,self._raw(self._context)
+        # Fresh map/symbol admission precedes the shell batch and runs again
+        # immediately afterward inside _workspace_object; each shell call still
+        # verifies live session/owner/device/pid/scope state in O(1).
+        with self.timings.measure(f"{snapshot.role} shells.admission"):
+            self._check_construction()
+            self.api.assert_identity()
         shells = []
         for shell in snapshot.shells:
             exps = np.asarray(shell.exponents,dtype=np.float64)
@@ -234,7 +243,8 @@ class DiagnosticPlanOwner:
                     context,int(s.pure),s.am,len(s.exponents),
                     e.ctypes.data_as(abi.PD),c.ctypes.data_as(abi.PD),
                     self._raw(shell_parameters),out),
-                native.cuestAOShellDestroy,(exps,coefficients)))
+                native.cuestAOShellDestroy,(exps,coefficients),
+                audit_identity=False))
         counts = (ct.c_uint64*snapshot.ncenter)(*snapshot.shells_per_center)
         handles = (ct.c_void_p*len(shells))(*(self._raw(s).value for s in shells))
         args = (context,snapshot.ncenter,counts,handles,self._raw(basis_parameters))

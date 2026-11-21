@@ -11,7 +11,15 @@ from pathlib import Path
 
 import numpy as np
 
-from .sapt_dispersion_cuda_kernels import CUDA_SOURCE
+from .sapt_dispersion_cuda_kernels import (
+    CORE_CUDA_SOURCE, CORE_KERNEL_NAMES, CUDA_SOURCE,
+    EXTRA_CUDA_SOURCE, EXTRA_KERNEL_NAMES,
+)
+
+# Immutable content-derived in-process PTX cache, never written to disk and
+# never caching CUDA module/context handles or skipping NVRTC version/identity checks.
+_NVRTC_PTX_CACHE = {}
+_EXTRA_KERNEL_SET = frozenset(EXTRA_KERNEL_NAMES)
 
 
 def _identity_guard(session):
@@ -78,6 +86,28 @@ def cleanup(primary, actions):
                 target.add_note(f"CUDA cleanup also failed: {type(error).__name__}: {error}")
         if primary is None:
             raise target
+
+
+def _validate_gemm_out(session, out, shape, left, right):
+    if out is None:
+        return session.empty(shape)
+    if (not isinstance(out, DeviceArray) or out.shape != shape
+            or out.dtype != np.float64 or out.order != "C"
+            or out.allocation.session is not session):
+        raise ValueError("GEMM output needs an owned C-order FP64 extent")
+    _argument_pointer(session, out)
+    for value in (left, right):
+        if (out.allocation is value.allocation
+                and out.offset < value.offset + value.nbytes
+                and value.offset < out.offset + out.nbytes):
+            raise ValueError("GEMM output cannot overlap an input")
+    return out
+
+
+def _validate_gemm_scalar(value, label):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"GEMM {label} must be a finite real scalar")
+    return ct.c_double(float(value))
 
 
 class DeviceArray:
@@ -153,7 +183,7 @@ class CUDASession:
         self.limit, self.native_bytes = memory_limit_bytes, native_persistent_bytes
         self.failed = self.closed = False
         self.cleanup_complete = False
-        self.stream = self.handle = self.module = None
+        self.stream = self.handle = self.module = self._extra_module = None
         self.functions = {}
         self.blas_calls = {}
         self.kernel_launches = {}
@@ -383,7 +413,7 @@ class CUDASession:
             raise RuntimeError(f"{name} failed: {status}")
         self.blas_calls[name] = self.blas_calls.get(name,0)+1
 
-    def _compile(self):
+    def _compile_unit(self, source, unit_name, kernel_names):
         nv, dr = self.nvrtc, self.driver
         def native(function, *args):
             _identity_guard(self)
@@ -391,49 +421,63 @@ class CUDASession:
         major, minor = self.rt(native(nv.nvrtcVersion))
         if (major, minor) != (13, 3):
             raise RuntimeError("NVRTC differs from explicitly selected CUDA13.3")
-        program = self.rt(native(nv.nvrtcCreateProgram,
-            CUDA_SOURCE.encode(), b"sapt0_blocks.cu", 0, None, None))
-        primary = None
+        options = [b"--std=c++14", b"--fmad=false", f"--gpu-architecture={self.arch}".encode()]
+        self.options = options
+        source_bytes = source.encode()
+        cache_key = (hashlib.sha256(source_bytes).hexdigest(), (major, minor), tuple(options))
+        cached = _NVRTC_PTX_CACHE.get(cache_key)
+        if cached is None:
+            program = self.rt(native(nv.nvrtcCreateProgram,
+                source_bytes, unit_name, 0, None, None))
+            primary = None
+            try:
+                status = native(nv.nvrtcCompileProgram, program, len(options), options)
+                if int(status[0]) != 0:
+                    length = self.rt(native(nv.nvrtcGetProgramLogSize, program))
+                    if length > 1024**2:
+                        raise RuntimeError("NVRTC error log exceeds bounded capture")
+                    log = bytearray(length)
+                    self.rt(native(nv.nvrtcGetProgramLog, program, log))
+                    raise RuntimeError("NVRTC compilation failed: " + bytes(log).decode(errors="replace"))
+                size = self.rt(native(nv.nvrtcGetPTXSize, program))
+                if not 0 < size <= 16 * 1024**2:
+                    raise RuntimeError("Invalid/oversized NVRTC PTX")
+                ptx = bytearray(size)
+                self.rt(native(nv.nvrtcGetPTX, program, ptx))
+                ptx_bytes = bytes(ptx)
+                ptx_sha256 = hashlib.sha256(ptx_bytes).hexdigest()
+                if len(_NVRTC_PTX_CACHE) >= 16:
+                    _NVRTC_PTX_CACHE.clear()
+                _NVRTC_PTX_CACHE[cache_key] = (ptx_bytes, ptx_sha256)
+            except BaseException as error:
+                primary = error
+                raise
+            finally:
+                cleanup(primary, [lambda: self.rt(native(nv.nvrtcDestroyProgram, program))])
+        else:
+            ptx_bytes, ptx_sha256 = cached
+        module = self.rt(native(dr.cuModuleLoadData, ptx_bytes))
         try:
-            self.options = [b"--std=c++14", b"--fmad=false", f"--gpu-architecture={self.arch}".encode()]
-            status = native(nv.nvrtcCompileProgram,program,len(self.options),self.options)
-            if int(status[0]) != 0:
-                length = self.rt(native(nv.nvrtcGetProgramLogSize,program))
-                if length > 1024**2:
-                    raise RuntimeError("NVRTC error log exceeds bounded capture")
-                log = bytearray(length)
-                self.rt(native(nv.nvrtcGetProgramLog,program,log))
-                raise RuntimeError("NVRTC compilation failed: " + bytes(log).decode(errors="replace"))
-            size = self.rt(native(nv.nvrtcGetPTXSize,program))
-            if not 0 < size <= 16 * 1024**2:
-                raise RuntimeError("Invalid/oversized NVRTC PTX")
-            ptx = bytearray(size)
-            self.rt(native(nv.nvrtcGetPTX,program,ptx))
-            self.ptx_sha256 = hashlib.sha256(ptx).hexdigest()
-            self.module = self.rt(native(dr.cuModuleLoadData,bytes(ptx)))
-            for name in ("pack_factors", "reduce_dispersion", "matrix_window",
-                         "fragment_scale_factor", "apply_fragment_scale",
-                         "linear_combination", "reduce_components", "permute_occupied_a",
-                         "make_amplitudes", "rotation_error", "reduce_localized_dispersion",
-                         "diagonal_factors", "scatter_matrix", "fragment_nuclear", "reduce_values",
-                         "fragment_charge_mask_error",
-                         "reduce_fragment_exchange", "make_single_amplitudes", "reduce_induction_source",
-                         "matrix_error", "single_gap_error", "trace_factors",
-                         "rhf_response_product", "response_dot", "response_precondition",
-                         "response_accumulate_exchange", "response_finish",
-                         "response_step", "response_direction", "response_metrics",
-                         "inverse_sqrt_weights", "scale_eigenvector_rows", "gather_indexed_matrix",
-                         "set_identity", "ibo_objective", "ibo_pair", "ibo_sweep", "ibo_sweep_finish",
-                         "ibo_fock_diagonal", "ibo_permutation", "ibo_charges", "ibo_population_error"):
-                self.functions[name] = self.rt(native(dr.cuModuleGetFunction,self.module,name.encode()))
+            for name in kernel_names:
+                self.functions[name] = self.rt(native(dr.cuModuleGetFunction, module, name.encode()))
         except BaseException as error:
-            primary = error
+            cleanup(error, [lambda: self.rt(native(dr.cuModuleUnload, module))])
             raise
-        finally:
-            cleanup(primary, [lambda: self.rt(native(nv.nvrtcDestroyProgram,program))])
+        return module, ptx_sha256
+
+    def _compile(self):
+        self.module, self.ptx_sha256 = self._compile_unit(
+            CORE_CUDA_SOURCE, b"sapt0_blocks.cu", CORE_KERNEL_NAMES)
+
+    def _compile_extra(self):
+        if getattr(self, "_extra_module", None) is None:
+            self._extra_module, self.extra_ptx_sha256 = self._compile_unit(
+                EXTRA_CUDA_SOURCE, b"sapt0_fisapt.cu", EXTRA_KERNEL_NAMES)
 
     def launch(self, name, grid, threads, arguments):
         self.check()
+        if name not in self.functions and name in _EXTRA_KERNEL_SET:
+            self._compile_extra()
         owned=getattr(self,"identity_owner",None) is not None
         try:
             if owned:
@@ -473,7 +517,7 @@ class CUDASession:
                 _identity_guard(self)
             raise
 
-    def gemm_at_b(self, left, right):
+    def gemm_at_b(self, left, right, *, alpha=1.0, beta=0.0, out=None):
         """C-order[K,M]^T @ C-order[K,N], using column-major cuBLAS N×M."""
         self.check()
         if (len(left.shape) != 2 or len(right.shape) != 2
@@ -484,38 +528,46 @@ class CUDASession:
         kr, n = right.shape
         if k != kr or max(k, m, n) > 2**31-1 or left.order != "C" or right.order != "C":
             raise ValueError("Unsupported GEMM extent/layout")
-        out = self.empty((m, n))
-        alpha, beta = ct.c_double(1.0), ct.c_double(0.0)
+        alpha_c = _validate_gemm_scalar(alpha, "alpha")
+        beta_c = _validate_gemm_scalar(beta, "beta")
+        out = _validate_gemm_out(self, out, (m, n), left, right)
         self._blas("cublasDgemm_v2", self.handle, 0, 1, n, m, k,
-                   ct.byref(alpha), _argument_pointer(self,right), n, _argument_pointer(self,left), m,
-                   ct.byref(beta), _argument_pointer(self,out), n)
+                   ct.byref(alpha_c), _argument_pointer(self,right), n, _argument_pointer(self,left), m,
+                   ct.byref(beta_c), _argument_pointer(self,out), n)
         return out
 
-    def gemm(self, left, right):
-        """C-order[M,K] @ C-order[K,N], native FP64 and no host intermediates."""
+    def gemm(self, left, right, *, transpose_left=False, transpose_right=False,
+             alpha=1.0, beta=0.0, out=None):
+        """C-order op(left) @ op(right), native FP64 and no host intermediates."""
         self.check()
+        if type(transpose_left) is not bool or type(transpose_right) is not bool:
+            raise ValueError("GEMM transpose descriptors must be booleans")
         if (len(left.shape) != 2 or len(right.shape) != 2
                 or left.dtype != np.float64 or right.dtype != np.float64
                 or left.allocation.session is not self or right.allocation.session is not self):
             raise ValueError("GEMM needs FP64 arrays owned by this CUDA session")
-        m, k = left.shape
-        kr, n = right.shape
-        if k != kr or max(k,m,n) > 2**31-1 or left.order != "C" or right.order != "C":
+        lr, lc = left.shape
+        rr, rc = right.shape
+        m, k = (lc, lr) if transpose_left else (lr, lc)
+        kr, n = (rc, rr) if transpose_right else (rr, rc)
+        if k != kr or max(k, m, n, lc, rc) > 2**31-1 or left.order != "C" or right.order != "C":
             raise ValueError("Unsupported GEMM extent/layout")
-        out = self.empty((m,n))
-        alpha, beta = ct.c_double(1.0), ct.c_double(0.0)
-        self._blas("cublasDgemm_v2", self.handle, 0, 0, n, m, k,
-                   ct.byref(alpha), _argument_pointer(self,right), n, _argument_pointer(self,left), k,
-                   ct.byref(beta), _argument_pointer(self,out), n)
+        alpha_c = _validate_gemm_scalar(alpha, "alpha")
+        beta_c = _validate_gemm_scalar(beta, "beta")
+        out = _validate_gemm_out(self, out, (m, n), left, right)
+        self._blas("cublasDgemm_v2", self.handle, int(transpose_right), int(transpose_left), n, m, k,
+                   ct.byref(alpha_c), _argument_pointer(self,right), rc, _argument_pointer(self,left), lc,
+                   ct.byref(beta_c), _argument_pointer(self,out), n)
         return out
 
     def gemm_batched(self, left, right, *, transpose_left=False, transpose_right=False,
-                     out=None):
-        """FP64 C-order batched GEMM, with an optional rank-two broadcast.
+                     alpha=1.0, beta=0.0, out=None, left_cols=None, right_cols=None):
+        """FP64 C-order batched GEMM, with optional rank-two broadcast and column slices.
 
         Three-dimensional operands have one contiguous matrix per batch.
-        Rank-two operands broadcast with native cuBLAS stride zero. Transposes
-        are descriptors, never host/device matrix copies. Output is [B,M,N].
+        Rank-two operands broadcast with native cuBLAS stride zero. Optional
+        ``left_cols=(start, count)`` / ``right_cols=(start, count)`` slice the
+        last axis in place using the parent row stride as leading dimension.
         An optional nonaliasing output view enables bounded stream-ordered
         workspace reuse; beta=0 overwrites every output, including tail batches.
         """
@@ -532,15 +584,27 @@ class CUDASession:
         if lb is not None and rb is not None and lb != rb:
             raise ValueError("Batched GEMM batch extents differ")
         batches = lb if lb is not None else rb if rb is not None else 1
-        lr, lc = left.shape[-2:]
-        rr, rc = right.shape[-2:]
+        lr, ld_l = left.shape[-2:]
+        rr, ld_r = right.shape[-2:]
+        def _col_slice(cols, parent_width):
+            if cols is None:
+                return 0, parent_width
+            if (not isinstance(cols, (tuple, list)) or len(cols) != 2
+                    or any(type(x) is not int for x in cols)
+                    or cols[0] < 0 or cols[1] < 1 or cols[0] + cols[1] > parent_width):
+                raise ValueError("Invalid batched GEMM column slice")
+            return cols[0], cols[1]
+        lc0, lc = _col_slice(left_cols, ld_l)
+        rc0, rc = _col_slice(right_cols, ld_r)
         m, k = (lc, lr) if transpose_left else (lr, lc)
         kr, n = (rc, rr) if transpose_right else (rr, rc)
-        if k != kr or min(batches, m, n, k) < 1 or max(batches, m, n, k, lc, rc) > 2**31-1:
+        if k != kr or min(batches, m, n, k) < 1 or max(batches, m, n, k, ld_l, ld_r) > 2**31-1:
             raise ValueError("Unsupported batched GEMM extents")
-        ls, rs, cs = (lr*lc if lb is not None else 0), (rr*rc if rb is not None else 0), m*n
+        ls, rs, cs = (lr*ld_l if lb is not None else 0), (rr*ld_r if rb is not None else 0), m*n
         if max(ls, rs, cs)*batches > 2**63-1:
             raise ValueError("Batched GEMM stride exceeds the native ABI")
+        alpha_c = _validate_gemm_scalar(alpha, "alpha")
+        beta_c = _validate_gemm_scalar(beta, "beta")
         shape = (batches, m, n)
         if out is None:
             out = self.empty(shape)
@@ -555,13 +619,12 @@ class CUDASession:
                         and out.offset < value.offset + value.nbytes
                         and value.offset < out.offset + out.nbytes):
                     raise ValueError("Batched GEMM output cannot overlap an input")
-        alpha, beta = ct.c_double(1.0), ct.c_double(0.0)
         # C-order C.T = op(right).T @ op(left).T: reverse operands/dimensions.
         self._blas("cublasDgemmStridedBatched", self.handle,
                    int(transpose_right), int(transpose_left), n, m, k,
-                   ct.byref(alpha), _argument_pointer(self,right), rc, rs,
-                   _argument_pointer(self,left), lc, ls,
-                   ct.byref(beta), _argument_pointer(self,out), n, cs, batches)
+                   ct.byref(alpha_c), _argument_pointer(self,right) + 8*rc0, ld_r, rs,
+                   _argument_pointer(self,left) + 8*lc0, ld_l, ls,
+                   ct.byref(beta_c), _argument_pointer(self,out), n, cs, batches)
         return out
 
     def close(self):
@@ -593,6 +656,13 @@ class CUDASession:
                 self.handle=None
                 _identity_guard(self)
             actions.append(destroy_handle)
+        if getattr(self, "_extra_module", None) is not None:
+            def destroy_extra_module():
+                _identity_guard(self)
+                self.rt(self.driver.cuModuleUnload(self._extra_module))
+                self._extra_module=None
+                _identity_guard(self)
+            actions.append(destroy_extra_module)
         if self.module is not None:
             def destroy_module():
                 _identity_guard(self)

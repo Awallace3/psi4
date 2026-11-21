@@ -11,22 +11,31 @@ setup = importlib.import_module(PACKAGE+".sapt_dispersion_cuda_setup")
 
 
 class Session(CPUSession):
-    def gemm(self, left, right):
-        result = self.empty((left.shape[0],right.shape[1]))
-        host(result)[...] = host(left) @ host(right)
+    def gemm(self, left, right, *, transpose_left=False, transpose_right=False,
+             alpha=1.0, beta=0.0, out=None):
+        a = host(left).T if transpose_left else host(left)
+        b = host(right).T if transpose_right else host(right)
+        result = self.empty((a.shape[0], b.shape[1])) if out is None else out
+        prod = alpha * (a @ b)
+        host(result)[...] = prod if beta == 0.0 else beta * host(result) + prod
         self.gemms += 1
         return result
 
-    def gemm_batched(self,left,right,*,transpose_left=False,transpose_right=False,out=None):
-        a,b=host(left),host(right)
-        if transpose_left:a=np.swapaxes(a,-1,-2)
-        if transpose_right:b=np.swapaxes(b,-1,-2)
-        value=a@b
-        if value.ndim==2:value=value[None,:,:]
-        result=self.empty(value.shape) if out is None else out
-        if result.shape!=value.shape:raise AssertionError("Wrong fixture GEMM output extent")
-        host(result)[...]=value
-        self.gemms+=1
+    def gemm_batched(self, left, right, *, transpose_left=False, transpose_right=False,
+                     alpha=1.0, beta=0.0, out=None, left_cols=None, right_cols=None):
+        a, b = host(left), host(right)
+        if left_cols is not None:
+            a = a[..., left_cols[0]:left_cols[0]+left_cols[1]]
+        if right_cols is not None:
+            b = b[..., right_cols[0]:right_cols[0]+right_cols[1]]
+        if transpose_left: a = np.swapaxes(a, -1, -2)
+        if transpose_right: b = np.swapaxes(b, -1, -2)
+        value = alpha * (a @ b)
+        if value.ndim == 2: value = value[None, :, :]
+        result = self.empty(value.shape) if out is None else out
+        if result.shape != value.shape: raise AssertionError("Wrong fixture GEMM output extent")
+        host(result)[...] = value if beta == 0.0 else beta * host(result) + value
+        self.gemms += 1
         return result
 
 

@@ -265,7 +265,7 @@ class CuESTDFMOProvider:
             self.failed = True
             raise
 
-    def compute_device(self, pairs):
+    def compute_device(self, pairs, *, variable_bytes=None):
         """DFMO from this session's device AO coefficients, with no host staging.
 
         Only metadata/descriptors and native host workspace live on the host.
@@ -273,13 +273,19 @@ class CuESTDFMOProvider:
         native parameter teardown after a failed call. No execution retry.
         """
         with self.device_timings.measure("call_total"):
-            return self._compute_device(pairs)
+            return self._compute_device(pairs, variable_bytes=variable_bytes)
 
-    def _compute_device(self, pairs):
+    def _compute_device(self, pairs, *, variable_bytes=None):
         from .sapt_dispersion_cuda_setup import DeviceMath
         if (self.closed or self.failed or self.pid != os.getpid() or not self._device_owner
                 or self._device_parameters is None or self._device_ambiguous):
             raise RuntimeError("Device DFMO requires a prepared live owned parameter object")
+        if variable_bytes is None:
+            var_bytes = self.variable_bytes
+        else:
+            if isinstance(variable_bytes, bool) or not isinstance(variable_bytes, int) or variable_bytes < 0:
+                raise ValueError("DFMO variable_bytes override must be a nonnegative integer")
+            var_bytes = variable_bytes
         self.session.check()
         if not pairs or len(pairs) > 10 or self.order != "C":
             raise ValueError("Device DFMO requires1..10 C-order output pairs")
@@ -312,7 +318,7 @@ class CuESTDFMOProvider:
                 pending["packed"] = (cl,cr)
                 nl_values = (ct.c_uint64*len(nl))(*nl)
                 nr_values = (ct.c_uint64*len(nr))(*nr)
-                variable,temporary = _Descriptor(0,self.variable_bytes),_Descriptor()
+                variable,temporary = _Descriptor(0,var_bytes),_Descriptor()
                 pending["descriptors"] = (nl_values,nr_values,variable,temporary)
                 with self.device_timings.measure("pre_query_synchronize"):
                     self.session.synchronize_device()
