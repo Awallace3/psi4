@@ -152,10 +152,28 @@ def _cpu_prepare_ref(d, fa, fb):
     return spaces, corr
 
 
+def _load_sapt_pkg():
+    """Import psi4/driver/procrouting/sapt without requiring compiled psi4.core."""
+    import importlib
+    import types
+    sapt_dir = Path(__file__).resolve().parents[3] / "psi4/driver/procrouting/sapt"
+    pkg_name = "_disp0_gpu_sapt"
+    if pkg_name not in sys.modules:
+        pkg = types.ModuleType(pkg_name)
+        pkg.__path__ = [str(sapt_dir)]
+        sys.modules[pkg_name] = pkg
+    return (
+        importlib.import_module(pkg_name + ".sapt_cuda_runtime"),
+        importlib.import_module(pkg_name + ".sapt_dispersion_cuda"),
+        importlib.import_module(pkg_name + ".sapt_dispersion_cuda_setup"),
+    )
+
+
 def run_sanitizer_gate(lib_dir):
-    from psi4.driver.procrouting.sapt.sapt_cuda_runtime import CUDASession
-    from psi4.driver.procrouting.sapt.sapt_dispersion_cuda import blocked_device_dispersion
-    from psi4.driver.procrouting.sapt.sapt_dispersion_cuda_setup import prepare_hf
+    rt_mod, disp_mod, setup_mod = _load_sapt_pkg()
+    CUDASession = rt_mod.CUDASession
+    blocked_device_dispersion = disp_mod.blocked_device_dispersion
+    prepare_hf = setup_mod.prepare_hf
 
     cublas_path = _find_cublas(lib_dir)
     cublas_sha = _file_sha256(cublas_path)
