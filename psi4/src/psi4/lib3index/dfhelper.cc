@@ -3359,16 +3359,24 @@ void DFHelper::compute_K(std::vector<SharedMatrix> Cleft, std::vector<SharedMatr
         // compute first tmp
         first_transform_pQq(nocc, bcount, block_size, Mp, T1p, Clp, C_buffers);
 
-        // compute second tmp
+        const size_t inner = nocc * block_size;
         if (lr_symmetric) {
-            T2p = T1p;
+            // The completed first transform leaves an nbf by nbf gather buffer available.
+            double* triangle = C_buffers.front().data();
+            C_DSYRK('U', 'N', nbf_, inner, 1.0, T1p, inner, 0.0, triangle, nbf_);
+#pragma omp parallel for num_threads(nthreads_) schedule(static)
+            for (size_t mu = 0; mu < nbf_; ++mu) {
+                Kp[mu * nbf_ + mu] += triangle[mu * nbf_ + mu];
+                for (size_t nu = mu + 1; nu < nbf_; ++nu) {
+                    const double value = triangle[mu * nbf_ + nu];
+                    Kp[mu * nbf_ + nu] += value;
+                    Kp[nu * nbf_ + mu] += value;
+                }
+            }
         } else {
             first_transform_pQq(nocc, bcount, block_size, Mp, T2p, Crp, C_buffers);
+            C_DGEMM('N', 'T', nbf_, nbf_, inner, 1.0, T1p, inner, T2p, inner, 1.0, Kp, nbf_);
         }
-
-        // compute K
-        C_DGEMM('N', 'T', nbf_, nbf_, nocc * block_size, 1.0, T1p, nocc * block_size, T2p, nocc * block_size, 1.0, Kp,
-                nbf_);
     }
 }
 void DFHelper::compute_wK(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright,
