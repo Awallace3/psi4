@@ -1948,6 +1948,11 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_int("DFT_SPHERICAL_POINTS", 302);
         /*- Number of radial points. -*/
         options.add_int("DFT_RADIAL_POINTS", 75);
+        /*- For conventional RHF/UHF or RKS/UKS iterations, allow a first-order
+        prediction of the energy change to satisfy the energy stopping test.
+        Requires the ordinary density threshold, a measured energy change below
+        ten times E_CONVERGENCE and a predicted change below one fifth of it. -*/
+        options.add_bool("SCF_E_CONV_PREDICTED", false);
         /*- Spherical Scheme. -*/
         options.add_str("DFT_SPHERICAL_SCHEME", "LEBEDEV", "LEBEDEV");
         /*- Radial Scheme. -*/
