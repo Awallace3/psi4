@@ -75,6 +75,9 @@ class FDDS_Dispersion {
      SharedMatrix QR_impl(std::shared_ptr<DFHelper> dfh, std::string monomer);
      void form_X_impl(std::shared_ptr<DFHelper> exch_dfh, std::shared_ptr<DFHelper> prod_dfh, std::string monomer);
      void form_Y_impl(std::shared_ptr<DFHelper> exch_dfh, std::shared_ptr<DFHelper> prod_dfh, std::string monomer);
+     void combine_XY_impl(std::shared_ptr<DFHelper> exch_dfh, const std::string& monomer);
+     void form_YPQ_impl(std::shared_ptr<DFHelper> exch_dfh, const std::string& monomer);
+     void form_NPQ_from_YPQ_impl(std::shared_ptr<DFHelper> exch_dfh, const std::string& monomer);
      // Free the full-range product tensors X/Y read, once every pass is done.
      void release_X_products(const std::string& monomer);
      void release_Y_products(const std::string& monomer);
@@ -114,11 +117,11 @@ class FDDS_Dispersion {
      * @param  monomer Monomer "A" or "B"
      * @param  omega   Time dependent value
      * @return         Dictionary of PQ matrics 
-     * @return ret["amp"]  PQ uncoupled amplitude
-     * @return ret["K1LD"]  K1(lambda * d) = (P|ar) LDar (ar|X+Y|Q)
-     * @return ret["K2LD"]  K2(lambda * d) = (P|ar) LDar (ar|X-Y|Q)
-     * @return ret["K2L"]  K2(lambda) = (P|ar) Lar (ar|X-Y|Q)
-     * @return ret["K21L"]  K21(lambda) = (P|X-Y|ar) Lar (ar|X+Y|Q)
+     * @return ret["amp"]  PQ uncoupled amplitude: B^T L D B
+     * @return ret["K1LD"]  K1(lambda * d) = B^T L D (Y+X) Q
+     * @return ret["K2LD"]  K2(lambda * d) = B^T L (Y-X) D Q
+     * @return ret["K2L"]  K2(lambda) = B^T L (Y-X) B
+     * @return ret["K21L"]  K21(lambda) = B^T L (Y-X) (Y+X) Q
      */
      std::map<std::string, SharedMatrix> form_aux_matrices(std::string monomer, double omega, double x_alpha = 1.0,
                                                            double x_beta = 0.0);

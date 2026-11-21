@@ -11,14 +11,14 @@ Eref_nh = {"SAPT ELST ENERGY":  -0.10190449, #TEST
 Eref_h_disp = {"SAPT ELST ENERGY":  -0.10197194, #TEST
                "SAPT EXCH ENERGY":   0.36569827, #TEST
                "SAPT IND ENERGY":    0.00349368, #TEST
-               "SAPT DISP ENERGY":  -0.26658500, #TEST
-               "CURRENT ENERGY":     0.00063501} #TEST
+               "SAPT DISP ENERGY":  -0.26796989, #TEST
+               "CURRENT ENERGY":    -0.00073329} #TEST
 
 Eref_h_fixed = {"SAPT ELST ENERGY":  -0.10197194, #TEST
                 "SAPT EXCH ENERGY":   0.36569827, #TEST
                 "SAPT IND ENERGY":    0.00349368, #TEST
-                "SAPT DISP ENERGY":  -0.26605283, #TEST
-                "CURRENT ENERGY":     0.00116718} #TEST
+                "SAPT DISP ENERGY":  -0.26751336, #TEST
+                "CURRENT ENERGY":    -0.00027677} #TEST
 
 
 molecule dimer {
