@@ -517,6 +517,17 @@ void cuESTJK::build_cuest_plan(const std::string& key) {
             CUEST_DFINTPLAN_PARAMETERS_LRC_EXCHANGE_OMEGA,
             &lr_exchange_omega,
             sizeof(double)));
+#ifdef PSI_CUEST_HAS_DF_EMULATION_MODE
+        if (!options_.get_bool("CUEST_MIXED_PRECISION")) {
+            const auto emulation_mode = CUEST_EMULATION_USAGE_MODE_OFF;
+            CHECK_CUEST(cuestParametersConfigure(
+                CUEST_DFINTPLAN_PARAMETERS,
+                dfint_params.get(),
+                CUEST_DFINTPLAN_PARAMETERS_DETAIL_THREE_INDEX_FITTING_FIXEDPOINT_EMULATION_USAGE_MODE,
+                &emulation_mode,
+                sizeof(emulation_mode)));
+        }
+#endif
 
         phase.next("cuEST JK DF workspace query");
         CHECK_CUEST(cuestDFIntPlanCreateWorkspaceQuery(cuest_handle,

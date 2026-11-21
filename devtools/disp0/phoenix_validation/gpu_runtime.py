@@ -254,6 +254,23 @@ def verify_qualified_imports(config,build):
         verify_modules((name,),root,inventory)
 
 
+CUEST_0250_RELPATH = "lib/13/libcuest.so.0.2.50"
+CUEST_0250_SHA256 = "65c9e559201ee589cb742b919cc1c5d80c45aa480b64aede17ac96aff9e4963c"
+CUEST_0301_RELPATH = "lib/libcuest.so.0.3.0"
+CUEST_0301_SHA256 = "cb810a15dff2d0c9c0c83cb56336bf80d77a74ace53f6e4d30921726679fc221"
+
+
+def cuest_native_spec(config, *, identity=None):
+    """Resolve pinned native cuEST path and SHA256 for 0.3.0.1 or legacy 0.2.50."""
+    sdk = Path(config["cuest_root"])
+    if config.get("cuest_sdk_version") == "0.3.0.1" or (
+            "cuest_archive" in config and config["cuest_archive"] is None):
+        sha = getattr(identity, "NATIVE_0301_SHA256", CUEST_0301_SHA256)
+        return str((sdk / CUEST_0301_RELPATH).resolve(strict=True)), sha
+    sha = getattr(identity, "NATIVE_SHA256", CUEST_0250_SHA256)
+    return str((sdk / CUEST_0250_RELPATH).resolve(strict=True)), sha
+
+
 def activate_identity_contract(config, manifest, cuda, abi):
     """Explicit worker opt-in; legacy stages keep their fresh-byte behavior."""
     contract=config.get("identity_contract","fresh-bytes-v1")
@@ -272,8 +289,8 @@ def activate_identity_contract(config, manifest, cuda, abi):
         if module.current_owned_runtime() is not None:
             raise RuntimeError("Cannot downgrade an owned runtime within one worker")
         return None
-    native=str((Path(config["cuest_root"])/"lib/13/libcuest.so.0.2.50").resolve(strict=True))
-    pins={native:abi.identity.NATIVE_SHA256}
+    native, native_sha = cuest_native_spec(config, identity=abi.identity)
+    pins={native:native_sha}
     for row in manifest["components"]:
         path=str(Path(row["path"]).resolve(strict=True))
         if path in pins:raise RuntimeError("Duplicate owned immutable library locator")
@@ -287,10 +304,13 @@ def activate_identity_contract(config, manifest, cuda, abi):
                                             dedicated_worker=True)
     else:
         owner=module.admit_owned_runtime(pins,dedicated_worker=True)
-    library,_=cuda.library(native,abi.identity.NATIVE_SHA256,owner=owner)
+    library,_=cuda.library(native,native_sha,owner=owner)
     # File leases are not a substitute for the existing symbol/root/ABI gates.
     # No native context/version-probing handle is created by this admission.
-    abi.audit_factory_maps(library,{"native_path":native},manifest,owner=owner)
+    proof = {"native_path": native}
+    if Path(native).name == "libcuest.so.0.3.0":
+        proof["sdk_version"] = "0.3.0.1"
+    abi.audit_factory_maps(library,proof,manifest,owner=owner)
     return owner
 
 
@@ -443,9 +463,10 @@ class AuditedRuntime:
                 memory_limit_bytes=config["device_memory_limit_bytes"],
                 native_persistent_bytes=config["native_persistent_bytes"]) as session:
                 record["device"] = self.device_identity(session)
+                archive = None if config.get("cuest_archive") is None else Path(config["cuest_archive"])
                 api = self.abi.admit_factory_api(
                 session=session, sdk_root=Path(config["cuest_root"]),
-                archive=Path(config["cuest_archive"]), cuda_manifest=self.manifest,
+                archive=archive, cuda_manifest=self.manifest,
                 cuda_manifest_sha256=config["cuda_manifest_sha256"])
                 owner = self.plans.DiagnosticPlanOwner(
                 api, primary, auxiliary, coefficient_candidate="UNVALIDATED_PSI4_COEF",
@@ -453,7 +474,7 @@ class AuditedRuntime:
                 with owner:
                     provider = self.dfmo.CuESTDFMOProvider(
                         session=session, sdk_root=Path(config["cuest_root"]),
-                        archive=Path(config["cuest_archive"]), cuda_manifest=self.manifest,
+                        archive=archive, cuda_manifest=self.manifest,
                         cuda_manifest_sha256=config["cuda_manifest_sha256"],
                         handle=owner.handle, plan=owner.plan, handle_pid=owner.pid,
                         primary_basis=primary, auxiliary_basis=auxiliary, keepalive=(owner,),

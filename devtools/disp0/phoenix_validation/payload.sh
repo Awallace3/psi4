@@ -36,7 +36,14 @@ cd "$run"
 "$python" -B "$helper/validate.py" --prepare
 export CUDA_HOME="$run/cuda13" CUDA_PATH="$run/cuda13"
 export PATH="$env/bin:$CUDA_HOME/bin:/opt/slurm/current/bin:/usr/bin:/bin"
-export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$DISP0_CUEST_ROOT/lib/13:$env/lib"
+if [[ -f "$DISP0_CUEST_ROOT/lib/libcuest.so.0.3.0" ]]; then
+    cuest_libdir="$DISP0_CUEST_ROOT/lib"
+    cuest_lib="$cuest_libdir/libcuest.so.0.3.0"
+else
+    cuest_libdir="$DISP0_CUEST_ROOT/lib/13"
+    cuest_lib="$cuest_libdir/libcuest.so.0.2.50"
+fi
+export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$cuest_libdir:$env/lib"
 cc="$env/bin/x86_64-conda-linux-gnu-cc"
 cxx="$env/bin/x86_64-conda-linux-gnu-c++"
 [[ "$("$cxx" -dumpfullversion)" == 14.3.0 ]]
@@ -48,6 +55,10 @@ done
 "$cxx" -I"$CUDA_HOME/include" "$source_root/devtools/disp0/cuda_header_abi.cc" \
     -L"$CUDA_HOME/lib64" -Wl,-rpath,"$CUDA_HOME/lib64" -lcudart -o "$run/header-abi"
 "$run/header-abi" | tee "$run/header-abi.txt"
+if [[ -f "$DISP0_CUEST_ROOT/lib/libcuest.so.0.3.0" ]]; then
+    "$cxx" -std=c++17 -Wall -Wextra -Werror -fsyntax-only \
+        -I"$DISP0_CUEST_ROOT/include" "$source_root/devtools/disp0/cuest0301_abi_probe.cc"
+fi
 cmake -S "$source_root" -B "$run/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$run/install" \
     -DCMAKE_PREFIX_PATH="$env;$CUDA_HOME" \
@@ -60,16 +71,17 @@ cmake -S "$source_root" -B "$run/build" -G Ninja \
     -DLibxc_DIR="$env/lib/cmake/Libxc" -DLibint2_DIR="$env/lib/cmake/libint2" \
     -DCMAKE_INSIST_FIND_PACKAGE_Libxc=ON -DCMAKE_INSIST_FIND_PACKAGE_Libint2=ON \
     -DENABLE_cuEST=ON -DCMAKE_INSIST_FIND_PACKAGE_cuEST=ON \
-    -DcuEST_ROOT="$DISP0_CUEST_ROOT" -DCUDAToolkit_ROOT="$CUDA_HOME" \
+    -DcuEST_ROOT="$DISP0_CUEST_ROOT" -DcuEST_INCLUDE_DIR="$DISP0_CUEST_ROOT/include" \
+    -DcuEST_LIBRARY="$cuest_lib" -DCUDAToolkit_ROOT="$CUDA_HOME" \
     -DCMAKE_CUDA_COMPILER="$CUDA_HOME/bin/nvcc" -DCMAKE_CUDA_HOST_COMPILER="$cxx" \
     -DCMAKE_CUDA_ARCHITECTURES=90 \
-    -DCMAKE_INSTALL_RPATH="$CUDA_HOME/lib64;$DISP0_CUEST_ROOT/lib/13;$env/lib" \
+    -DCMAKE_INSTALL_RPATH="$CUDA_HOME/lib64;$cuest_libdir;$env/lib" \
     -DENABLE_Einsums=OFF -DENABLE_OpenOrbitalOptimizer=OFF \
     -DENABLE_PCMSolver=OFF -DENABLE_dkh=OFF -DENABLE_gdma=OFF \
     -DENABLE_libefp=OFF -DENABLE_ambit=OFF -DENABLE_ecpint=OFF \
     2>&1 | tee "$run/configure.log"
 cmake --build "$run/build" --parallel 6 2>&1 | tee "$run/build.log"
-export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$DISP0_E2_PREFIX/lib:$DISP0_CUEST_ROOT/lib/13:$env/lib"
+export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$DISP0_E2_PREFIX/lib:$cuest_libdir:$env/lib"
 export PYTHONPATH="$DISP0_E2_PREFIX/lib"
 test -x "$run/build/stage/bin/psi4"
 eval "$("$run/build/stage/bin/psi4" --psiapi)"

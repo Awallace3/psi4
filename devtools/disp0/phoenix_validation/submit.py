@@ -47,11 +47,22 @@ def main():
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--qos", choices=("embers", "inferno"), default="embers")
     parser.add_argument("--account", choices=("gts-cs207", "gts-cs207-chemx"))
+    parser.add_argument("--cuest-sdk", choices=("0.3.0.1", "0.2.50"), default="0.3.0.1")
     parser.add_argument("--prepare-gpu-runtime", action="store_true")
     args = parser.parse_args()
     if args.qos == "inferno" and args.account is None:
         raise RuntimeError("Inferno needs an explicitly selected account and user approval")
     account = args.account or "gts-cs207-chemx"
+    cuest_root = (
+        P / "software/cuest-0.3.0.1-conda-cuda13"
+        if args.cuest_sdk == "0.3.0.1"
+        else P / "software/cuest-0.2.50-a06e8148"
+    )
+    cuest_lib = (
+        cuest_root / "lib/libcuest.so.0.3.0"
+        if args.cuest_sdk == "0.3.0.1"
+        else cuest_root / "lib/13/libcuest.so.0.2.50"
+    )
     source, run = args.source.resolve(strict=True), args.run_root
     if not run.is_absolute():
         raise RuntimeError("Run root must be absolute")
@@ -65,7 +76,7 @@ def main():
             raise RuntimeError("Missing pinned job helper: " + str(path))
     for path in (OLD / "environment/bin/python", OLD / "einsums-stage/lib/einsums",
                  OLD / "cuda13/bin/nvcc",
-                 P / "software/cuest-0.2.50-a06e8148/include/cuest.h"):
+                 cuest_root / "include/cuest.h", cuest_lib):
         if not path.exists():
             raise RuntimeError("Missing read-only dependency: " + str(path))
     validate_sdk_shape(source, OLD / "cuda13")
@@ -76,7 +87,8 @@ def main():
                DISP0_DEPENDENCIES=str(OLD / "environment"),
                DISP0_E2_PREFIX=str(OLD / "einsums-stage"),
                DISP0_CUDA_SOURCE=str(OLD / "cuda13"),
-               DISP0_CUEST_ROOT=str(P / "software/cuest-0.2.50-a06e8148"))
+               DISP0_CUEST_ROOT=str(cuest_root),
+               DISP0_CUEST_SDK=args.cuest_sdk)
     env["DISP0_PREPARE_GPU_RUNTIME"] = "1" if args.prepare_gpu_runtime else "0"
     argv = command(source, run, qos=args.qos, account=account)
     manifest = {"scope": "Fresh native cuEST-enabled Psi4 build and CPU validation only",

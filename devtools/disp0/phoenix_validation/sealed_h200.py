@@ -12,7 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from gpu_runtime import digest, read_config, require_cuda_manifest, retirement_channel
+from gpu_runtime import cuest_native_spec, digest, read_config, require_cuda_manifest, retirement_channel
 from owned_process import termination_signals
 from submit_split import save_new, source_pin
 
@@ -46,11 +46,10 @@ def configuration(base, build, root):
         raise RuntimeError("Exact whole Phoenix CPU build required")
     rows = require_cuda_manifest(base)["components"]
     paths = [str(Path(row["path"]).resolve(strict=True)) for row in rows]
-    native = str((Path(base["cuest_root"])/
-                  "lib/13/libcuest.so.0.2.50").resolve(strict=True))
+    native, _ = cuest_native_spec(base)
     paths.append(native)
     preloads = []
-    for name in PRELOAD:
+    for name in (*PRELOAD[:-1], Path(native).name):
         matches = [p for p in paths if Path(p).name == name
                    or Path(p).name.startswith(name+".")]
         if len(matches) != 1:

@@ -278,7 +278,11 @@ def _build_cuda_manifest(lib_dir, env_lib_dir):
 def run_psi4_gate(cuest_root, cuest_archive, runtime_lib, env_lib):
     import tempfile
     rlib = Path(runtime_lib).resolve(strict=True)
-    native = (Path(cuest_root).resolve(strict=True) / "lib/13/libcuest.so.0.2.50").resolve(strict=True)
+    croot = Path(cuest_root).resolve(strict=True)
+    if cuest_archive is None:
+        native = (croot / "lib/libcuest.so.0.3.0").resolve(strict=True)
+    else:
+        native = (croot / "lib/13/libcuest.so.0.2.50").resolve(strict=True)
     cublas_path = _find_cublas(rlib)
     cublas_sha = _file_sha256(cublas_path)
 
@@ -596,7 +600,8 @@ def main():
     if args.mode == "sanitizer":
         run_sanitizer_gate(args.runtime_lib)
     else:
-        run_psi4_gate(str(args.cuest_root), str(args.cuest_archive),
+        run_psi4_gate(str(args.cuest_root),
+                      None if args.cuest_archive is None else str(args.cuest_archive),
                       str(args.runtime_lib), str(args.env_lib or args.runtime_lib))
 
 

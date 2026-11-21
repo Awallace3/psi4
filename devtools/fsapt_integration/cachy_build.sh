@@ -26,9 +26,17 @@ export CUDA_HOME="$ENV" CUDA_PATH="$ENV"
 unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH
 # --psiapi emits an expansion of PYTHONPATH; keep it defined under set -u.
 export PYTHONPATH=""
-export LD_LIBRARY_PATH="$ROOT/runtime/lib:$ENV/lib"
+CUEST_ROOT=${CUEST_SDK_ROOT:-$ROOT/runtime/cuest}
+if [[ -f "$CUEST_ROOT/lib/libcuest.so.0.3.0" ]]; then
+    CUEST_LIBDIR="$CUEST_ROOT/lib"
+    CUEST_LIB="$CUEST_LIBDIR/libcuest.so.0.3.0"
+else
+    CUEST_LIBDIR="$CUEST_ROOT/lib/13"
+    CUEST_LIB="$CUEST_LIBDIR/libcuest.so"
+fi
+export LD_LIBRARY_PATH="$ROOT/runtime/lib:$CUEST_LIBDIR:$ENV/lib"
 export PYTHONNOUSERSITE=1 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4
-RP="$ROOT/runtime/lib;$ENV/lib"
+RP="$ROOT/runtime/lib;$CUEST_LIBDIR;$ENV/lib"
 cmake -S "$ROOT/source" -B "$ROOT/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" -DCMAKE_INSTALL_LIBDIR=lib \
     -DPYMOD_INSTALL_LIBDIR=/python3.13/site-packages \
@@ -40,8 +48,8 @@ cmake -S "$ROOT/source" -B "$ROOT/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CUDA_HOST_COMPILER="$ENV/bin/x86_64-conda-linux-gnu-c++" \
     -DBLAS_TYPE=MKL -DLAPACK_TYPE=MKL -DCMAKE_INSIST_FIND_PACKAGE_Libxc=ON \
     -DLibxc_DIR="$ENV/lib/cmake/Libxc" -DENABLE_cuEST=ON \
-    -DcuEST_ROOT="$ROOT/runtime/cuest" -DcuEST_INCLUDE_DIR="$ROOT/runtime/cuest/include" \
-    -DcuEST_LIBRARY="$ROOT/runtime/cuest/lib/13/libcuest.so" \
+    -DcuEST_ROOT="$CUEST_ROOT" -DcuEST_INCLUDE_DIR="$CUEST_ROOT/include" \
+    -DcuEST_LIBRARY="$CUEST_LIB" \
     -DCMAKE_BUILD_RPATH="$RP" -DCMAKE_INSTALL_RPATH="$RP" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -Dpsi4_CMAKE_UNITY_BUILD_BATCH_SIZE=4
 cmake --build "$ROOT/build" -j "$JOBS"

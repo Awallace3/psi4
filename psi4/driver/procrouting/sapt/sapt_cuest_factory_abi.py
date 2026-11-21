@@ -49,6 +49,11 @@ DF_PLAN_FIELDS = (
     (5, "lrc_omega", ct.c_double, 0.0),
     (6, "three_index_integral_direct", ct.c_int32, 0),
 )
+# Explicit 0.3.0.1 full-Coulomb cache weighting (0) and native FP64 (emulation OFF = 1).
+DF_PLAN_0301_EXTRA_FIELDS = (
+    (7, "cache_operator_weighting", ct.c_int, 0),
+    (8, "three_index_fitting_emulation_mode", ct.c_int, 1),
+)
 
 
 def configure_factory_abi(native):
@@ -156,7 +161,10 @@ class _FactoryAPI:
         Metric/rank/eigenvalue behavior and native factor layout still require
         numerical admission. Direct-three-index1 is intentionally not enabled.
         """
-        return self._roundtrips(5,parameters,DF_PLAN_FIELDS)
+        fields = DF_PLAN_FIELDS + (
+            DF_PLAN_0301_EXTRA_FIELDS if self.proof.get("sdk_version") == "0.3.0.1" else ()
+        )
+        return self._roundtrips(5,parameters,fields)
 
     def set_owned_context_fp64(self, handle, *, handle_pid):
         """Configure an explicitly owned live context, never an admission probe."""
@@ -183,7 +191,7 @@ class _FactoryAPI:
         return self.maps
 
 
-def admit_factory_api(*, session, sdk_root, archive, cuda_manifest, cuda_manifest_sha256):
+def admit_factory_api(*, session, sdk_root, archive=None, cuda_manifest, cuda_manifest_sha256):
     """File/map capability admission ONLY, using an already explicit CUDA session.
 
     No context, parameter, shell, basis or plan is constructed here, nor is any
@@ -198,7 +206,7 @@ def admit_factory_api(*, session, sdk_root, archive, cuda_manifest, cuda_manifes
     owner = getattr(session,"identity_owner",None)
     options = {"owner":owner} if owner is not None else {}
     proof = identity.verify_files(sdk_root,archive,**options)
-    native, _ = library(proof["native_path"],identity.NATIVE_SHA256,**options)
+    native, _ = library(proof["native_path"],identity.expected_native_sha256(proof),**options)
     maps = audit_factory_maps(native,proof,manifest,**options)
     if maps["cuda_mapped_sha256"].get(session.blas_path) != session.blas_sha256:
         raise RuntimeError("Factory and CUDA session use different cuBLAS closure")

@@ -288,7 +288,9 @@ class DiagnosticPlanOwner:
                 "context",lambda out:native.cuestCreate(self._raw(hp),out),native.cuestDestroy)
             with self.timings.measure("context_identity_and_fp64"):
                 self.api.assert_identity()  # Include any lazy constructor-loaded libraries.
-                self.version = abi.identity.native_version(native,self._raw(self._context).value)
+                self.version = abi.identity.native_version(
+                    native,self._raw(self._context).value,
+                    expected=abi.identity.expected_sdk_version(self.api.proof))
                 self.math_mode = self.api.set_owned_context_fp64(self._raw(self._context).value,handle_pid=self.pid)
             sp,bp = self._parameters(1),self._parameters(2)
             with self.timings.measure("primary_basis_total"):

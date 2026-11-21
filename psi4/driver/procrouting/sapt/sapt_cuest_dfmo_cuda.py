@@ -34,7 +34,7 @@ POLICY = {"operator":"coulomb", "exchange_fraction":1.0, "lrc_exchange_fraction"
 
 
 class CuESTDFMOProvider:
-    def __init__(self, *, session, sdk_root, archive, cuda_manifest, cuda_manifest_sha256,
+    def __init__(self, *, session, sdk_root, archive=None, cuda_manifest, cuda_manifest_sha256,
                  handle, plan, handle_pid,
                  primary_basis, auxiliary_basis, keepalive, plan_policy,
                  output_order, variable_bytes=256*1024**2):
@@ -58,11 +58,11 @@ class CuESTDFMOProvider:
         owner = getattr(session,"identity_owner",None)
         options = {"owner":owner} if owner is not None else {}
         self.proof = identity.verify_files(sdk_root,archive,**options)
-        # verify_files already admitted the archive; preserve its locator for
-        # fresh admission when a real sibling plan is requested.
-        self.archive = Path(archive).resolve()
+        # verify_files already admitted the archive/prefix; preserve its locator
+        # for fresh admission when a real sibling plan is requested.
+        self.archive = None if archive is None else Path(archive).resolve()
         self.proof["cuda_manifest_sha256"] = cuda_manifest_sha256
-        self.native, _ = library(self.proof["native_path"],identity.NATIVE_SHA256,**options)
+        self.native, _ = library(self.proof["native_path"],identity.expected_native_sha256(self.proof),**options)
         identity.configure_abi(self.native)
         self.handle, self.plan = handle, plan
         self.primary_basis, self.auxiliary_basis = primary_basis, auxiliary_basis
@@ -140,11 +140,31 @@ class CuESTDFMOProvider:
         owner = getattr(self.session,"identity_owner",None)
         options = {"owner":owner} if owner is not None else {}
         self.maps = identity.audit_maps(self.native,self.proof,self.cuda_manifest,**options)
-        self.version = identity.native_version(self.native,self.handle)
+        self.version = identity.native_version(
+            self.native,self.handle,expected=identity.expected_sdk_version(self.proof))
         self.math_mode = identity.native_math_mode(self.native,self.handle)
         expected = self.maps["cuda_mapped_sha256"].get(self.session.blas_path)
         if expected != self.session.blas_sha256:
             raise RuntimeError("DFMO and cuBLAS session do not share the admitted CUDA closure")
+
+    def _configure_dfmo_parameters(self, parameters):
+        if self.proof.get("sdk_version") != identity.SDK_0301_PACKAGE_VERSION:
+            return
+        owner = getattr(self.session,"identity_owner",None)
+        names = ("cuestParametersConfigure","cuestParametersQuery")
+        identity.audit_symbol_owners(self.native,self.proof["native_path"],names,owner=owner)
+        for fn_name in names:
+            fn = getattr(self.native,fn_name)
+            fn.argtypes = [ct.c_int,ct.c_void_p,ct.c_int,ct.c_void_p,ct.c_size_t]
+            fn.restype = ct.c_int
+        # Explicit cuEST 0.3.0.1 DFMO full-operator weighting (attr 0 = FULL = 0).
+        val, obs = ct.c_int(0), ct.c_int(-1)
+        self.status("DFMO parameters configure",self.native.cuestParametersConfigure(
+            49,parameters,0,ct.byref(val),ct.sizeof(val)))
+        self.status("DFMO parameters query",self.native.cuestParametersQuery(
+            49,parameters,0,ct.byref(obs),ct.sizeof(obs)))
+        if obs.value != 0:
+            raise RuntimeError(f"cuEST 0.3.0.1 DFMO operator weighting readback differs: {obs.value}")
 
     def validate_basis(self, primary, auxiliary):
         if self.closed or self.failed:
@@ -189,10 +209,11 @@ class CuESTDFMOProvider:
             cr = self.session.upload(np.concatenate(right,axis=0))
             self.session.synchronize_device()
             parameters = ct.c_void_p()
-            # Exact0.2.50 cuest_parameter_types.h: DFMO parameters kind49.
+            # Exact cuest_parameter_types.h: DFMO parameters kind 49 (0.2.50 & 0.3.0.1).
             self.status("parameters create",self.native.cuestParametersCreate(49,ct.byref(parameters)))
             primary = None
             try:
+                self._configure_dfmo_parameters(parameters)
                 variable = _Descriptor(0,self.variable_bytes)
                 temporary = _Descriptor()
                 nl_values, nr_values = (ct.c_uint64*len(nl))(*nl),(ct.c_uint64*len(nr))(*nr)
@@ -258,6 +279,7 @@ class CuESTDFMOProvider:
             if not self._device_parameters.value:
                 self._device_ambiguous = True
                 raise RuntimeError("Successful DFMO parameter creation returned null")
+            self._configure_dfmo_parameters(self._device_parameters)
             self.session.synchronize_device()
         except BaseException:
             if not observed:
@@ -362,7 +384,8 @@ class CuESTDFMOProvider:
     def report(self):
         # Reaudit after native work to catch late-loaded wrong CUDA libraries.
         self.assert_identity()
-        return {"producer":"cuEST0.2.50 C-ABI; Python-owned CUDA buffers", "calls":self.calls,
+        sdk_ver = self.proof.get("sdk_version", "0.2.50")
+        return {"producer":f"cuEST{sdk_ver} C-ABI; Python-owned CUDA buffers", "calls":self.calls,
                 "coefficient_h2d_bytes":self.input_bytes,"device_factor_bytes":self.output_bytes,
                 "device_coefficient_bytes":self.device_input_bytes,
                 "producer_seconds":self.elapsed,"sdk_file_proof":self.proof,
