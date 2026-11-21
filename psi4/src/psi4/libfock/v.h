@@ -94,6 +94,10 @@ class PSI_API VBase {
     // GRAC data
     bool grac_initialized_;
 
+    // Cached nonlocal VV10 grid and point workers (geometry/basis invariant across SCF iterations)
+    std::shared_ptr<DFTGrid> vv10_nlgrid_;
+    std::vector<std::shared_ptr<PointFunctions>> vv10_point_workers_;
+
     // VV10 dispersion, return vv10_nlc energy
     void prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
                             std::vector<std::map<std::string, SharedVector>>& vv10_cache,

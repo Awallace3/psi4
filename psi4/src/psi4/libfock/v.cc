@@ -174,6 +174,8 @@ void VBase::set_D(std::vector<SharedMatrix> Dvec) {
     }
 }
 void VBase::initialize() {
+    vv10_point_workers_.clear();
+    vv10_nlgrid_.reset();
     timer_on("V: Grid");
     grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, options_);
     timer_off("V: Grid");
@@ -733,7 +735,11 @@ void VBase::print_header() const {
 }
 std::shared_ptr<BlockOPoints> VBase::get_block(int block) { return grid_->blocks()[block]; }
 size_t VBase::nblocks() { return grid_->blocks().size(); }
-void VBase::finalize() { grid_.reset(); }
+void VBase::finalize() {
+    grid_.reset();
+    vv10_nlgrid_.reset();
+    vv10_point_workers_.clear();
+}
 void VBase::build_collocation_cache(size_t memory) {
     // Figure out many blocks to skip
 
@@ -817,34 +823,37 @@ void VBase::prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
     // Densities should be set by the calling functional
     int rank = 0;
 
-    // Build local points workers as they max_points/max_funcs may differ
+    // Build or reuse local points workers as max_points/max_funcs may differ from XC grid
     const int max_points = nlgrid.max_points();
     const int max_functions = nlgrid.max_functions();
 
-    for (size_t i = 0; i < num_threads_; i++) {
-        // Need a points worker per thread, only need RKS-like terms
-        auto point_tmp = std::make_shared<RKSFunctions>(primary_, max_points, max_functions);
-        point_tmp->set_ansatz(ansatz);
-        point_tmp->set_pointers(D);
-        nl_point_workers.push_back(point_tmp);
+    if (nl_point_workers.size() != static_cast<size_t>(num_threads_)) {
+        nl_point_workers.clear();
+        nl_point_workers.reserve(num_threads_);
+        for (size_t i = 0; i < static_cast<size_t>(num_threads_); i++) {
+            auto point_tmp = std::make_shared<RKSFunctions>(primary_, max_points, max_functions);
+            point_tmp->set_ansatz(ansatz);
+            point_tmp->set_pointers(D);
+            nl_point_workers.push_back(point_tmp);
+        }
+    } else {
+        for (size_t i = 0; i < static_cast<size_t>(num_threads_); i++) {
+            nl_point_workers[i]->set_ansatz(ansatz);
+            nl_point_workers[i]->set_pointers(D);
+        }
     }
 
     // => Make the return and "interior" cache <=
-    std::vector<std::map<std::string, SharedVector>> vv10_tmp_cache;
-    vv10_tmp_cache.resize(nlgrid.blocks().size());
+    std::vector<std::map<std::string, SharedVector>> vv10_tmp_cache(nlgrid.blocks().size());
 
 #pragma omp parallel for private(rank) schedule(guided) num_threads(num_threads_)
     for (size_t Q = 0; Q < nlgrid.blocks().size(); Q++) {
-// Get thread info
 #ifdef _OPENMP
         rank = omp_get_thread_num();
 #endif
-
-        // Get workers and compute data
         std::shared_ptr<SuperFunctional> fworker = functional_workers_[rank];
         std::shared_ptr<PointFunctions> pworker = nl_point_workers[rank];
         std::shared_ptr<BlockOPoints> block = nlgrid.blocks()[Q];
-        // printf("Block %zu\n", Q);
 
         pworker->compute_points(block);
         vv10_tmp_cache[Q] =
@@ -895,18 +904,30 @@ double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
     timer_on("V: VV10");
     timer_on("Setup");
 
-    // => VV10 Grid and Cache <=
-    std::map<std::string, std::string> opt_map;
-    opt_map["DFT_PRUNING_SCHEME"] = "FLAT";
+    // => Reuse geometry/basis-invariant VV10 Grid and PointWorkers across SCF iterations <=
+    if (!vv10_nlgrid_) {
+        std::map<std::string, std::string> opt_map;
+        opt_map["DFT_PRUNING_SCHEME"] = "FLAT";
 
-    std::map<std::string, int> opt_int_map;
-    opt_int_map["DFT_RADIAL_POINTS"] = options_.get_int("DFT_VV10_RADIAL_POINTS");
-    opt_int_map["DFT_SPHERICAL_POINTS"] = options_.get_int("DFT_VV10_SPHERICAL_POINTS");
+        std::map<std::string, int> opt_int_map;
+        opt_int_map["DFT_RADIAL_POINTS"] = options_.get_int("DFT_VV10_RADIAL_POINTS");
+        opt_int_map["DFT_SPHERICAL_POINTS"] = options_.get_int("DFT_VV10_SPHERICAL_POINTS");
 
-    DFTGrid nlgrid = DFTGrid(primary_->molecule(), primary_, opt_int_map, opt_map, options_);
+        vv10_nlgrid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, opt_int_map, opt_map, options_);
+        vv10_point_workers_.clear();
+    }
+    DFTGrid& nlgrid = *vv10_nlgrid_;
+    if (!functional_workers_.empty() && nlgrid.max_points() > functional_workers_[0]->max_points()) {
+        for (auto& fw : functional_workers_) {
+            fw->set_lock(false);
+            fw->set_max_points(nlgrid.max_points());
+            fw->allocate();
+            fw->set_lock(true);
+        }
+    }
+
     std::vector<std::map<std::string, SharedVector>> vv10_cache;
-    std::vector<std::shared_ptr<PointFunctions>> nl_point_workers;
-    prepare_vv10_cache(nlgrid, D, vv10_cache, nl_point_workers);
+    prepare_vv10_cache(nlgrid, D, vv10_cache, vv10_point_workers_);
 
     timer_off("Setup");
 
@@ -936,7 +957,7 @@ double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
         // Get per rank-workers
         std::shared_ptr<BlockOPoints> block = nlgrid.blocks()[Q];
         std::shared_ptr<SuperFunctional> fworker = functional_workers_[rank];
-        std::shared_ptr<PointFunctions> pworker = nl_point_workers[rank];
+        std::shared_ptr<PointFunctions> pworker = vv10_point_workers_[rank];
 
         // Compute Rho, Phi, etc
         pworker->compute_points(block);
