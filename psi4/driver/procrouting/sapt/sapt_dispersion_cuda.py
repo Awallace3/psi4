@@ -394,8 +394,10 @@ def _factorized_device_dispersion(provider, spaces, corrections, energies, *,
             var_bytes = base_var
         dfmo_reserve = min(var_bytes, headroom // 3) if headroom > 0 else 0
         max_raw_budget = max(0, headroom - dfmo_reserve)
+        min_working_raw = bytes_oo + per_r * min(nr, block_size) + per_s * min(ns, block_size)
         if factor_cache_bytes > 0:
-            raw_budget = min(factor_cache_bytes, max_raw_budget) if max_raw_budget > 0 else factor_cache_bytes
+            requested = max(factor_cache_bytes, min_working_raw)
+            raw_budget = min(requested, max_raw_budget) if max_raw_budget > 0 else requested
         else:
             raw_budget = min(8 * 1024**3, max_raw_budget)
 

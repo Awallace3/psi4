@@ -218,7 +218,7 @@ def run_sanitizer_gate(lib_dir):
                     spaces, corr, eps = prepare_hf(session, d, e, frozen_a=fa, frozen_b=fb)
                     rot = (session.upload(ua), session.upload(ub)) if localized else None
                     fac = blocked_device_dispersion(
-                        prov, spaces, corr, eps, block_size=3, rotations=rot,
+                        prov, spaces, corr, eps, block_size=(1 if cache_cap == 5200 else 3), rotations=rot,
                         factor_cache_bytes=cache_cap, algorithm="factorized")
                     blk = blocked_device_dispersion(
                         prov, spaces, corr, eps, block_size=3, rotations=rot,
@@ -455,6 +455,12 @@ def run_psi4_gate(cuest_root, cuest_archive, runtime_lib, env_lib):
             "sapt_dft_do_disp": True, "sapt_dft_do_dhf": False,
             "sapt_dft_induction_type": "CPHF", "cphf_r_convergence": 1e-10,
             "sapt_dft_grac_compute": "NONE", "sapt_dft_d3_ie": False, "sapt_dft_d4_ie": False,
+            "fisapt_link_assignment": "C",
+            "fisapt_fsapt_ind_response": True,
+            "fisapt_fsapt_exch_scale": True,
+            "fisapt_fsapt_ind_scale": False,
+            "ssapt0_scale": False,
+            "fisapt_exch_parperp": False,
         }
 
     results = {"mode": "psi4-gate", "hardware_note": "RTX 3090 debug only, not speedup", "cases": []}

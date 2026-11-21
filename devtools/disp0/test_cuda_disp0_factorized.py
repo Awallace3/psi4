@@ -188,9 +188,10 @@ class FactorizedDisp0Tests(unittest.TestCase):
                     spaces, corr, eps = setup.prepare_hf(s2, d2, e2, frozen_a=1, frozen_b=0)
                     rot = (s2.upload(ua), s2.upload(ub)) if localized else None
                     # Also force small compute tiles via tight avail in _choose_tile_extents for multi-tile S cache test.
+                    blk_sz = 1 if budget == 4500 else 2
                     with patch.object(backend, "_choose_tile_extents", return_value=(2, 2, 1024)):
                         res = backend.blocked_device_dispersion(
-                            p2, spaces, corr, eps, block_size=2, rotations=rot,
+                            p2, spaces, corr, eps, block_size=blk_sz, rotations=rot,
                             factor_cache_bytes=budget, algorithm="factorized",
                         )
                     info = res["Disp0 execution"]
