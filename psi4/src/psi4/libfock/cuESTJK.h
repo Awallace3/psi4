@@ -36,14 +36,9 @@
 
 #ifdef USING_cuEST
 #include <cuest.h>
-// Older cuEST SDKs still support DF-JK. Detect the actual API, not a version
-// number: the 0.2.50 preview includes APIs documented as "since 0.3.0".
-#ifdef GRID_K_EXCHANGE_COMPUTE_API_H
-#define PSI_CUEST_HAS_GRIDK
-#endif
-#if defined(DIRECT_COULOMB_COMPUTE_API_H) && defined(DIRECT_INTEGRAL_PLAN_API_H)
-#define PSI_CUEST_HAS_DIRECTJ
-#endif
+// PSI_CUEST_HAS_GRIDK / PSI_CUEST_HAS_DIRECTJ come from compiled CMake API
+// probes and are exported with core for plugin ABI consistency. Header
+// presence is insufficient: the 0.2.50 preview and 0.3 release differ.
 #endif
 
 namespace psi {
