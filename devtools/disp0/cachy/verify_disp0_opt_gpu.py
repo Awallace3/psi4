@@ -351,6 +351,7 @@ def run_psi4_gate(cuest_root, cuest_archive, runtime_lib, env_lib):
                     handle=owner.handle, plan=owner.plan, handle_pid=owner.pid,
                     primary_basis=primary, auxiliary_basis=auxiliary,
                     keepalive=(owner,), plan_policy=dict(POLICY),
+                    output_order="C",
                 )
 
     psi4.set_memory("4 GiB")
