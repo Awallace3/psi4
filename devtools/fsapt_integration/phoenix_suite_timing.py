@@ -224,13 +224,18 @@ def execute(manifest_path, root):
                 if instrumented
                 else [str(bootstrap)]
             )
+            # Nanotube jun-cc-pVDZ has min_eig(S)=2.47e-8 (cond(S)~1e9), giving
+            # a ~3e-12 FP64 DIIS Dnorm floor on both CPU MemDFJK and GPU cuESTJK;
+            # match sapt0_timing.py's E10/D10 for nanotube while keeping E10/D12
+            # for peptide, protein83 (frozen CPU48 parity), and fsapt1.
+            scf_dconv = "10" if system == "nanotube" else "12"
             payload = [
                 *entry,
                 "--config", str(config_path), "--config-sha256", config_sha,
                 "--arm", arm, "--scaled", "--benchmark", "--output", str(output),
                 "--inputs", str(inputs), "--inputs-sha256", manifest["inputs_sha256"],
                 "--system", system, "--block-size", "24", "--factor-cache-bytes", "0",
-                "--scf-convergence", "10", "--scf-density-convergence", "12",
+                "--scf-convergence", "10", "--scf-density-convergence", scf_dconv,
             ]
             if oracle is not None:
                 payload += ["--oracle-from", str(oracle)]

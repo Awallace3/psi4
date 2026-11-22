@@ -541,28 +541,6 @@ void reduce_values(long long count, const double* input, double* output) {
     }
     if (threadIdx.x==0) output[0]=sums[0];
 }
-'''
-
-_CORE_CUDA_BODY = r'''
-__global__
-void matrix_error(long long count, const double* input, double* output) {
-    __shared__ double worst[128];
-    double value=0.0;
-    for (long long i=threadIdx.x; i<count; i+=blockDim.x) {
-        double v=input[i];
-        if (v<0.0) v=-v;
-        if (!(v<1.e300)) v=1.e300;
-        if (v>value) value=v;
-    }
-    worst[threadIdx.x]=value;
-    __syncthreads();
-    for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
-        if (threadIdx.x<stride && worst[threadIdx.x+stride]>worst[threadIdx.x])
-            worst[threadIdx.x]=worst[threadIdx.x+stride];
-        __syncthreads();
-    }
-    if (threadIdx.x==0) output[0]=worst[0];
-}
 
 // C-order [r,a,s,b] <-> [r,s,b,a], for occupied-only LO rotations.
 __global__
@@ -661,6 +639,73 @@ void reduce_localized_dispersion(long long A, long long B, long long R, long lon
     }
 }
 
+// Build [O_full, A] matrix with zeros in rows [0, frozen) and ua in [frozen, O_full).
+__global__
+void fill_active_rotation(long long O_full, long long frozen, long long A,
+                          const double* ua, double* output) {
+    const long long total = O_full * A;
+    for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+         idx < total; idx += (long long)blockDim.x * gridDim.x) {
+        const long long row = idx / A, col = idx - row * A;
+        output[idx] = (row < frozen) ? 0.0 : ua[(row - frozen) * A + col];
+    }
+}
+
+__device__ __forceinline__
+double factor(const double* p, long long q, long long v, long long o,
+              long long Q, long long V, long long O, int fortran_order) {
+    return p[fortran_order ? q + Q*(v + V*o) : (q*V + v)*O + o];
+}
+
+// Each factor field has logical shape[Q,V,O]; packed output is C-order[K,V*O].
+// Optional extra fields fuse Dar+Ear / Dbs+Ebs without a full-size temporary.
+__global__
+void pack_factors(long long Q, long long V, long long O, int fortran_order,
+                  const double* first, const double* first_extra,
+                  const double* second, const double* second_extra,
+                  const double* tail1, const double* tail2, double* packed) {
+    const long long columns = V*O;
+    const long long total = (2*Q+2)*columns;
+    for (long long index = (long long)blockIdx.x*blockDim.x + threadIdx.x;
+         index < total; index += (long long)blockDim.x*gridDim.x) {
+        const long long row = index/columns, col = index%columns;
+        const long long v = col/O, o = col%O;
+        double value;
+        if (row < Q) {
+            value = factor(first,row,v,o,Q,V,O,fortran_order);
+            if (first_extra) value += factor(first_extra,row,v,o,Q,V,O,fortran_order);
+        } else if (row < 2*Q) {
+            value = factor(second,row-Q,v,o,Q,V,O,fortran_order);
+            if (second_extra) value += factor(second_extra,row-Q,v,o,Q,V,O,fortran_order);
+        } else {
+            value = (row == 2*Q ? tail1 : tail2)[o*V+v];
+        }
+        packed[index] = value;
+    }
+}
+'''
+
+_CORE_CUDA_BODY = r'''
+__global__
+void matrix_error(long long count, const double* input, double* output) {
+    __shared__ double worst[128];
+    double value=0.0;
+    for (long long i=threadIdx.x; i<count; i+=blockDim.x) {
+        double v=input[i];
+        if (v<0.0) v=-v;
+        if (!(v<1.e300)) v=1.e300;
+        if (v>value) value=v;
+    }
+    worst[threadIdx.x]=value;
+    __syncthreads();
+    for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+        if (threadIdx.x<stride && worst[threadIdx.x+stride]>worst[threadIdx.x])
+            worst[threadIdx.x]=worst[threadIdx.x+stride];
+        __syncthreads();
+    }
+    if (threadIdx.x==0) output[0]=worst[0];
+}
+
 // Transpose an occupied-first factor slice [Q, O_total, V_total] -> [Q, V_count, O_count]
 // with integer sign (+1 or -1) directly into a packed target view.
 __global__
@@ -689,18 +734,6 @@ void pack_factor_tails(long long Q, long long V_total, long long V_start, long l
         const long long which = idx / cols, col = idx - which * cols;
         const long long v = col / O, o = col - v * O;
         packed[base + idx] = (which == 0 ? tail1 : tail2)[o * V_total + (V_start + v)];
-    }
-}
-
-// Build [O_full, A] matrix with zeros in rows [0, frozen) and ua in [frozen, O_full).
-__global__
-void fill_active_rotation(long long O_full, long long frozen, long long A,
-                          const double* ua, double* output) {
-    const long long total = O_full * A;
-    for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-         idx < total; idx += (long long)blockDim.x * gridDim.x) {
-        const long long row = idx / A, col = idx - row * A;
-        output[idx] = (row < frozen) ? 0.0 : ua[(row - frozen) * A + col];
     }
 }
 
@@ -767,39 +800,6 @@ void reduce_components(long long count, const double* disp, const double* exch,
     }
 }
 
-__device__ __forceinline__
-double factor(const double* p, long long q, long long v, long long o,
-              long long Q, long long V, long long O, int fortran_order) {
-    return p[fortran_order ? q + Q*(v + V*o) : (q*V + v)*O + o];
-}
-
-// Each factor field has logical shape[Q,V,O]; packed output is C-order[K,V*O].
-// Optional extra fields fuse Dar+Ear / Dbs+Ebs without a full-size temporary.
-__global__
-void pack_factors(long long Q, long long V, long long O, int fortran_order,
-                  const double* first, const double* first_extra,
-                  const double* second, const double* second_extra,
-                  const double* tail1, const double* tail2, double* packed) {
-    const long long columns = V*O;
-    const long long total = (2*Q+2)*columns;
-    for (long long index = (long long)blockIdx.x*blockDim.x + threadIdx.x;
-         index < total; index += (long long)blockDim.x*gridDim.x) {
-        const long long row = index/columns, col = index%columns;
-        const long long v = col/O, o = col%O;
-        double value;
-        if (row < Q) {
-            value = factor(first,row,v,o,Q,V,O,fortran_order);
-            if (first_extra) value += factor(first_extra,row,v,o,Q,V,O,fortran_order);
-        } else if (row < 2*Q) {
-            value = factor(second,row-Q,v,o,Q,V,O,fortran_order);
-            if (second_extra) value += factor(second_extra,row-Q,v,o,Q,V,O,fortran_order);
-        } else {
-            value = (row == 2*Q ? tail1 : tail2)[o*V+v];
-        }
-        packed[index] = value;
-    }
-}
-
 // Coalesced warp-over-b reduction (TB=32 on GPU, TB=1 on CPU serial shim).
 // V,X are C-order[(r,a),(s,b)], W is C-order[(s,a),(r,b)]. Zero atomics.
 __global__
@@ -855,10 +855,9 @@ void reduce_dispersion(long long A, long long B, long long R, long long S,
 '''
 
 CORE_KERNEL_NAMES = (
-    "matrix_error", "permute_occupied_a", "make_amplitudes", "rotation_error",
-    "reduce_localized_dispersion", "transpose_factor_slab", "pack_factor_tails",
-    "fill_active_rotation", "concat_columns", "matrix_window",
-    "linear_combination", "reduce_components", "pack_factors", "reduce_dispersion",
+    "matrix_error", "transpose_factor_slab", "pack_factor_tails",
+    "concat_columns", "matrix_window", "linear_combination",
+    "reduce_components", "reduce_dispersion",
 )
 
 EXTRA_KERNEL_NAMES = (
@@ -873,6 +872,8 @@ EXTRA_KERNEL_NAMES = (
     "inverse_sqrt_weights", "scale_eigenvector_rows", "gather_indexed_matrix",
     "set_identity", "ibo_objective", "ibo_pair", "ibo_sweep", "ibo_sweep_finish",
     "ibo_fock_diagonal", "ibo_permutation", "ibo_charges", "ibo_population_error",
+    "permute_occupied_a", "make_amplitudes", "rotation_error",
+    "reduce_localized_dispersion", "fill_active_rotation", "pack_factors",
 )
 
 CORE_CUDA_SOURCE = 'extern "C" {\n' + _CORE_CUDA_BODY + '}\n'

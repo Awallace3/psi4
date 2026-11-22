@@ -233,8 +233,7 @@ def run_fsapt1(args, config, build):
 
             if args.arm == "gpu":
                 runtime = AuditedRuntime(args.config, args.config_sha256)
-                from full_observe import observed_factory
-                factory = observed_factory(runtime)
+                factory = runtime.provider
                 original = terms.fisapt_cuda
 
                 def fragment(cache, *positional, **kwargs):
@@ -587,7 +586,6 @@ def run_custom_fsapt(args, config, build):
     import psi4
     from psi4 import core
     from gpu_runtime import AuditedRuntime
-    from full_observe import observed_factory
     import fragment_gate as fg
 
     args.output.mkdir()
@@ -625,7 +623,7 @@ def run_custom_fsapt(args, config, build):
         psi4.set_options(selected)
         molecule = psi4.geometry(case["geometry"])
         runtime = AuditedRuntime(args.config, args.config_sha256)
-        factory = observed_factory(runtime)
+        factory = runtime.provider
         terms = importlib.import_module("psi4.driver.procrouting.sapt.sapt_jk_terms_ein")
         original = terms.fisapt_cuda
 

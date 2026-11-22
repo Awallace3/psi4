@@ -436,7 +436,7 @@ def _factorized_device_dispersion(provider, spaces, corrections, energies, *,
             nonlocal count, t_pack, t_contract
             n_r_tiles = (R_df + R_blk - 1) // R_blk
             packed_s_bytes = 8 * ((2 * q + 2) * (a + b) + (q * b if localized else 0)) * S_df
-            pack_s_limit = min(4 * 1024**3, _available_device_bytes(session) // 2)
+            pack_s_limit = min(12 * 1024**3, _available_device_bytes(session) // 2)
             if factor_cache_bytes > 0:
                 pack_s_limit = min(pack_s_limit, factor_cache_bytes)
             cache_packed_s = n_r_tiles > 1 and packed_s_bytes <= pack_s_limit

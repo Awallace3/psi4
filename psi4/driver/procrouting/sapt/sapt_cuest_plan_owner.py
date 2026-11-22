@@ -179,7 +179,8 @@ class DiagnosticPlanOwner:
         return self._new_native(
             f"parameters{kind}",
             lambda out:native.cuestParametersCreate(kind,out),
-            lambda handle:native.cuestParametersDestroy(kind,handle))
+            lambda handle:native.cuestParametersDestroy(kind,handle),
+            audit_identity=False)
 
     def _workspace(self, label, descriptor, temporary):
         self._check_construction()
@@ -210,10 +211,11 @@ class DiagnosticPlanOwner:
         resource.keepalive += (workspace,)
         return workspace
 
-    def _workspace_object(self, label, query, create, destroy, keepalive=()):
+    def _workspace_object(self, label, query, create, destroy, keepalive=(), *, audit_identity=True):
         with self.timings.measure(label+".query_admission"):
             self._check_construction()
-            self.api.assert_identity()
+            if audit_identity:
+                self.api.assert_identity()
         persistent,temporary = abi._Descriptor(),abi._Descriptor()
         with self.timings.measure(label+".workspace_query"):
             self.api.status(label+" workspace query",query(ct.byref(persistent),ct.byref(temporary)))
@@ -222,7 +224,7 @@ class DiagnosticPlanOwner:
             t = self._workspace(label+" creation temporary",temporary,True)
         return self._new_native(
             label,lambda out:create(ct.byref(p),ct.byref(t),out),
-            destroy,(*keepalive,p,t))
+            destroy,(*keepalive,p,t),audit_identity=False)
 
     def _basis(self, snapshot, shell_parameters, basis_parameters):
         native,context = self.api.native,self._raw(self._context)
@@ -252,7 +254,8 @@ class DiagnosticPlanOwner:
             snapshot.role+" basis",
             lambda p,t:native.cuestAOBasisCreateWorkspaceQuery(*args,p,t,None),
             lambda p,t,out:native.cuestAOBasisCreate(*args,p,t,out),
-            native.cuestAOBasisDestroy,(counts,handles,snapshot))
+            native.cuestAOBasisDestroy,(counts,handles,snapshot),
+            audit_identity=False)
         expected = ((0,ct.c_int32,int(snapshot.shells[0].pure)),
                     (1,ct.c_int32,int(not snapshot.shells[0].pure)),
                     (2,ct.c_int32,0),(3,ct.c_uint64,snapshot.ncenter),
@@ -305,7 +308,8 @@ class DiagnosticPlanOwner:
                 "primary pair list",
                 lambda p,t:native.cuestAOPairListCreateWorkspaceQuery(*pair_args,p,t,None),
                 lambda p,t,out:native.cuestAOPairListCreate(*pair_args,p,t,out),
-                native.cuestAOPairListDestroy,(xyz,))
+                native.cuestAOPairListDestroy,(xyz,),
+                audit_identity=False)
             dp = self._parameters(5)
             with self.timings.measure("plan_configuration"):
                 self.plan_parameters = self.api.configure_df_plan_parameters(self._raw(dp).value)

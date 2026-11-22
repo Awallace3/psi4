@@ -206,6 +206,7 @@ class CUDASession:
             minor = self.rt(runtime.cudaDeviceGetAttribute(
                 runtime.cudaDeviceAttr.cudaDevAttrComputeCapabilityMinor, self.device))
             self.arch = f"compute_{major}{minor}"
+            self._cubin_arch = f"sm_{major}{minor}"
             self._setup_blas()
             self._compile()
             _identity_guard(self)
@@ -421,10 +422,17 @@ class CUDASession:
         major, minor = self.rt(native(nv.nvrtcVersion))
         if (major, minor) != (13, 3):
             raise RuntimeError("NVRTC differs from explicitly selected CUDA13.3")
-        options = [b"--std=c++14", b"--fmad=false", f"--gpu-architecture={self.arch}".encode()]
+        cubin_arch = getattr(self, "_cubin_arch", None)
+        use_cubin = bool(
+            cubin_arch
+            and hasattr(nv, "nvrtcGetCUBINSize")
+            and hasattr(nv, "nvrtcGetCUBIN")
+        )
+        target_arch = cubin_arch if use_cubin else self.arch
+        options = [b"--std=c++14", b"--fmad=false", f"--gpu-architecture={target_arch}".encode()]
         self.options = options
         source_bytes = source.encode()
-        cache_key = (hashlib.sha256(source_bytes).hexdigest(), (major, minor), tuple(options))
+        cache_key = (hashlib.sha256(source_bytes).hexdigest(), (major, minor), tuple(options), use_cubin)
         cached = _NVRTC_PTX_CACHE.get(cache_key)
         if cached is None:
             program = self.rt(native(nv.nvrtcCreateProgram,
@@ -439,12 +447,19 @@ class CUDASession:
                     log = bytearray(length)
                     self.rt(native(nv.nvrtcGetProgramLog, program, log))
                     raise RuntimeError("NVRTC compilation failed: " + bytes(log).decode(errors="replace"))
-                size = self.rt(native(nv.nvrtcGetPTXSize, program))
-                if not 0 < size <= 16 * 1024**2:
-                    raise RuntimeError("Invalid/oversized NVRTC PTX")
-                ptx = bytearray(size)
-                self.rt(native(nv.nvrtcGetPTX, program, ptx))
-                ptx_bytes = bytes(ptx)
+                if use_cubin:
+                    size = self.rt(native(nv.nvrtcGetCUBINSize, program))
+                    if not 0 < size <= 16 * 1024**2:
+                        raise RuntimeError("Invalid/oversized NVRTC CUBIN")
+                    image = bytearray(size)
+                    self.rt(native(nv.nvrtcGetCUBIN, program, image))
+                else:
+                    size = self.rt(native(nv.nvrtcGetPTXSize, program))
+                    if not 0 < size <= 16 * 1024**2:
+                        raise RuntimeError("Invalid/oversized NVRTC PTX")
+                    image = bytearray(size)
+                    self.rt(native(nv.nvrtcGetPTX, program, image))
+                ptx_bytes = bytes(image)
                 ptx_sha256 = hashlib.sha256(ptx_bytes).hexdigest()
                 if len(_NVRTC_PTX_CACHE) >= 16:
                     _NVRTC_PTX_CACHE.clear()

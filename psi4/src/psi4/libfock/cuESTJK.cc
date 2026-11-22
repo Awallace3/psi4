@@ -492,9 +492,12 @@ void cuESTJK::build_cuest_plan(const std::string& key) {
             &fitting_algorithm, sizeof(fitting_algorithm)));
 
         // Psi4 and cuEST both represent exact exchange as alpha / r + beta erf(omega r) / r.
+        // SuperFunctional defaults x_beta_ = 1.0 even when omega_ == 0.0 (non-LRC);
+        // never pass a nonzero LRC fraction with omega == 0 into cuEST, which selects
+        // cuEST's LRC DF path and introduces Coulomb noise on non-LRC SCF/SAPT plans.
         double exchange_fraction = omega_alpha_;
-        double lrc_exchange_fraction = omega_beta_;
-        double lr_exchange_omega = omega_;
+        double lrc_exchange_fraction = (omega_ == 0.0) ? 0.0 : omega_beta_;
+        double lr_exchange_omega = (lrc_exchange_fraction == 0.0 && std::isfinite(omega_)) ? 0.0 : omega_;
 
         // Set omega parameters.
         CHECK_CUEST(cuestParametersConfigure(
@@ -712,12 +715,15 @@ void cuESTJK::build_directj_plan() {
 void cuESTJK::build_gridk_plan() {
     gridk_grid_ = std::make_unique<DFTGrid>(primary_->molecule(), primary_, options_, true);
     PlanParameters<cuestGridKIntPlanParameters_t> params(CUEST_GRIDKINTPLAN_PARAMETERS);
+    double exchange_fraction = omega_alpha_;
+    double lrc_exchange_fraction = (omega_ == 0.0) ? 0.0 : omega_beta_;
+    double lr_exchange_omega = (lrc_exchange_fraction == 0.0 && std::isfinite(omega_)) ? 0.0 : omega_;
     CHECK_CUEST(cuestParametersConfigure(CUEST_GRIDKINTPLAN_PARAMETERS, params.get(),
-                CUEST_GRIDKINTPLAN_PARAMETERS_EXCHANGE_FRACTION, &omega_alpha_, sizeof(double)));
+                CUEST_GRIDKINTPLAN_PARAMETERS_EXCHANGE_FRACTION, &exchange_fraction, sizeof(double)));
     CHECK_CUEST(cuestParametersConfigure(CUEST_GRIDKINTPLAN_PARAMETERS, params.get(),
-                CUEST_GRIDKINTPLAN_PARAMETERS_LRC_EXCHANGE_FRACTION, &omega_beta_, sizeof(double)));
+                CUEST_GRIDKINTPLAN_PARAMETERS_LRC_EXCHANGE_FRACTION, &lrc_exchange_fraction, sizeof(double)));
     CHECK_CUEST(cuestParametersConfigure(CUEST_GRIDKINTPLAN_PARAMETERS, params.get(),
-                CUEST_GRIDKINTPLAN_PARAMETERS_LRC_EXCHANGE_OMEGA, &omega_, sizeof(double)));
+                CUEST_GRIDKINTPLAN_PARAMETERS_LRC_EXCHANGE_OMEGA, &lr_exchange_omega, sizeof(double)));
 
     cuestWorkspaceDescriptor_t persistent{}, temporary{};
     CHECK_CUEST(cuestGridKIntPlanCreateWorkspaceQuery(

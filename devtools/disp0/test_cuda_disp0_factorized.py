@@ -397,6 +397,62 @@ class FactorizedDisp0Tests(unittest.TestCase):
         self.assertGreater(audit.call_count, 0)
         self.assertEqual(session.live_bytes, 0)
 
+    def test_nvrtc_prefers_direct_cubin_when_available_and_falls_back_to_ptx(self):
+        compile_opts = []
+        loaded = []
+
+        class FakeNVCubin:
+            def nvrtcVersion(self):
+                return (0, 13, 3)
+
+            def nvrtcCreateProgram(self, src, name, *_):
+                return (0, 77)
+
+            def nvrtcCompileProgram(self, prog, nopts, opts):
+                compile_opts.append(tuple(opts))
+                return (0,)
+
+            def nvrtcGetCUBINSize(self, prog):
+                return (0, 16)
+
+            def nvrtcGetCUBIN(self, prog, buf):
+                buf[:] = b"CUBIN_0000000077"
+                return (0,)
+
+            def nvrtcDestroyProgram(self, prog):
+                return (0,)
+
+        class FakeDR:
+            def cuModuleLoadData(self, data):
+                loaded.append(data)
+                return (0, len(loaded))
+
+            def cuModuleGetFunction(self, mod, name):
+                return (0, (mod, name.decode()))
+
+            def cuModuleUnload(self, mod):
+                return (0,)
+
+        s = types.SimpleNamespace(
+            nvrtc=FakeNVCubin(), driver=FakeDR(),
+            runtime=types.SimpleNamespace(cudaStreamDestroy=lambda stream: (0,)),
+            arch="compute_90", _cubin_arch="sm_90",
+            functions={}, module=None, _extra_module=None,
+            handle=None, stream=1, allocations=[], native_owners=[],
+            kernel_launches={}, closed=False, failed=False, cleanup_complete=False,
+            identity_owner=None, rt=runtime.CUDASession.rt,
+            check=lambda: None, synchronize_device=lambda: None,
+        )
+        s._compile_unit = types.MethodType(runtime.CUDASession._compile_unit, s)
+        s._compile = types.MethodType(runtime.CUDASession._compile, s)
+        with patch.dict(runtime._NVRTC_PTX_CACHE, {}, clear=True):
+            s._compile()
+            self.assertEqual(compile_opts, [(b"--std=c++14", b"--fmad=false", b"--gpu-architecture=sm_90")])
+            self.assertEqual(loaded, [b"CUBIN_0000000077"])
+            self.assertIn("reduce_dispersion", s.functions)
+            self.assertNotIn("pack_factors", s.functions)
+            self.assertNotIn("fill_active_rotation", s.functions)
+
 
 if __name__ == "__main__":
     unittest.main()

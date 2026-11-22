@@ -436,3 +436,69 @@ def test_cuest_jk_honors_fitting_condition_like_cpu():
                                    err_msg="Matched metric cutoff J: "+label)
         np.testing.assert_allclose(gpu_k, cpu_k, rtol=1e-7, atol=1e-8,
                                    err_msg="Matched metric cutoff K: "+label)
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+def test_cuest_jk_zero_omega_ignores_nonzero_beta():
+    """Regression test: omega=0 with beta=1 must use the full-Coulomb DF path.
+
+    SuperFunctional initializes x_beta_=1.0 even for non-LRC functionals such as
+    HF. Passing lrc_exchange_fraction=1.0 with lrc_exchange_omega=0.0 into cuEST
+    activates its LRC DF path and introduces Coulomb noise on non-LRC SCF plans.
+    """
+    primary, aux = _basis_sets()
+    left = _random_coeffs(primary.nbf(), 5, 421)
+    _, cpu_j, cpu_k = _run_jk(False, primary, aux, [(left, None)])
+
+    def eval_cuest(beta):
+        psi4.set_options({
+            "scf_type": "df",
+            "use_cuest": True,
+            "cuest_mixed_precision": False,
+        })
+        jk = psi4.core.JK.build_JK(primary, aux)
+        jk.set_do_J(True)
+        jk.set_do_K(True)
+        jk.set_do_wK(False)
+        jk.set_omega(0.0)
+        jk.set_omega_alpha(1.0)
+        jk.set_omega_beta(beta)
+        try:
+            jk.initialize()
+            mat = psi4.core.Matrix.from_array(left)
+            js, ks = [], []
+            for _ in range(3):
+                jk.C_clear()
+                jk.C_left_add(mat)
+                jk.compute()
+                js.append(jk.J()[0].np.copy())
+                ks.append(jk.K()[0].np.copy())
+            return js, ks
+        finally:
+            jk.finalize()
+
+    j_zero, k_zero = eval_cuest(0.0)
+    j_one, k_one = eval_cuest(1.0)
+
+    for r in range(3):
+        np.testing.assert_allclose(j_one[r], j_zero[0], rtol=0, atol=1.e-12)
+        np.testing.assert_allclose(k_one[r], k_zero[0], rtol=0, atol=1.e-12)
+    np.testing.assert_allclose(j_one[0], cpu_j[0], rtol=0, atol=1.e-8)
+    np.testing.assert_allclose(k_one[0], cpu_k[0], rtol=0, atol=1.e-8)
+
+    # Also verify non-LRC SCF initializes JK with omega_beta == 0.0.
+    psi4.core.clean()
+    psi4.core.clean_options()
+    mol = psi4.geometry(_water_dimer)
+    psi4.set_options({
+        "basis": "cc-pvdz",
+        "scf_type": "df",
+        "use_cuest": True,
+        "cuest_mixed_precision": False,
+        "save_jk": True,
+    })
+    _, wfn = psi4.energy("hf", molecule=mol, return_wfn=True)
+    assert wfn.jk().get_omega() == 0.0
+    assert wfn.jk().get_omega_beta() == 0.0

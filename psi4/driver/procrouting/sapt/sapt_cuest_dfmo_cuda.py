@@ -57,17 +57,33 @@ class CuESTDFMOProvider:
         self.pid = os.getpid()
         owner = getattr(session,"identity_owner",None)
         options = {"owner":owner} if owner is not None else {}
-        self.proof = identity.verify_files(sdk_root,archive,**options)
-        # verify_files already admitted the archive/prefix; preserve its locator
-        # for fresh admission when a real sibling plan is requested.
         self.archive = None if archive is None else Path(archive).resolve()
+        manifest_obj = json.loads(manifest_data)
+        reused_proof = None
+        from .sapt_cuest_plan_owner import DiagnosticPlanOwner
+        for parent in keepalive:
+            if (isinstance(parent, DiagnosticPlanOwner)
+                    and parent.session is session
+                    and parent.built and not parent.closed and not parent.failed
+                    and parent.handle == handle and parent.plan == plan and parent.pid == self.pid
+                    and parent.primary_snapshot.owner is primary_basis
+                    and parent.auxiliary_snapshot.owner is auxiliary_basis
+                    and parent.api.manifest == manifest_obj):
+                resolved_sdk = str(Path(sdk_root).resolve(strict=True))
+                resolved_archive = None if archive is None else str(Path(archive).resolve(strict=True))
+                if (parent.api.proof.get("sdk_root") == resolved_sdk
+                        and getattr(parent.api, "_archive_path", False) == resolved_archive):
+                    parent.assert_live()
+                    reused_proof = dict(parent.api.proof)
+                    break
+        self.proof = reused_proof if reused_proof is not None else identity.verify_files(sdk_root,archive,**options)
         self.proof["cuda_manifest_sha256"] = cuda_manifest_sha256
         self.native, _ = library(self.proof["native_path"],identity.expected_native_sha256(self.proof),**options)
         identity.configure_abi(self.native)
         self.handle, self.plan = handle, plan
         self.primary_basis, self.auxiliary_basis = primary_basis, auxiliary_basis
         self.keepalive = tuple(keepalive)
-        self.cuda_manifest = json.loads(manifest_data)
+        self.cuda_manifest = manifest_obj
         self.nao, self.naux = int(primary_basis.nbf()), int(auxiliary_basis.nbf())
         if min(self.nao,self.naux) < 1:
             raise ValueError("Nonempty exact AO/RI bases required")

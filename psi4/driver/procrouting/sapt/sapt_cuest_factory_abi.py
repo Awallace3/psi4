@@ -210,4 +210,6 @@ def admit_factory_api(*, session, sdk_root, archive=None, cuda_manifest, cuda_ma
     maps = audit_factory_maps(native,proof,manifest,**options)
     if maps["cuda_mapped_sha256"].get(session.blas_path) != session.blas_sha256:
         raise RuntimeError("Factory and CUDA session use different cuBLAS closure")
-    return _FactoryAPI(session,native,proof,manifest,maps)
+    api = _FactoryAPI(session,native,proof,manifest,maps)
+    api._archive_path = None if archive is None else str(Path(archive).resolve())
+    return api
