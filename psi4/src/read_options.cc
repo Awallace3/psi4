@@ -177,6 +177,57 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     options.add_int("CUEST_DFK_SLICES", 5);
     /*- Tune # of Ozaki Moduli in emulated DF K computations (requires CUDA and cuEST libraries) -*/
     options.add_int("CUEST_DFK_MODULI", 8);
+    /*- How cuEST J/K builds compute Coulomb. DF is density-fitted J with
+    |globals__df_basis_scf|. DIRECT is integral-direct four-center J (cuEST
+    Direct-J), screened with |globals__ints_tolerance|; it is exact for
+    symmetric and nonsymmetric densities. If |globals__cuest_k_build| is also
+    not DF, no DF integral plan is built and the auxiliary basis is unused.
+    DIRECT requires cuEST >= 0.3. Analytic Coulomb gradients are not
+    implemented for DIRECT. No effect unless a cuEST J/K builder is selected. -*/
+    options.add_str("CUEST_J_BUILD", "DF", "DF DIRECT");
+    /*- How cuEST J/K builds compute exchange (alpha K + beta wK, for symmetric
+    SCF densities and the nonsymmetric densities of SAPT and CPHF/CPKS).
+    DF is density-fitted K. GRID and GRID_FIT are seminumerical grid exchange
+    (cuEST Grid-K; Hohenstein, Alkan, Wu and Parrish, arXiv:2611.16420):
+    GRID uses the raw collocation; GRID_FIT dresses it with cuEST's symmetric
+    overlap fit so the quadrature reproduces the analytic overlap matrix.
+    Paper estimates against analytic exchange (SG-0 exchange grid, wB97M-V
+    urea clusters up to 496 atoms): GRID total-energy errors of up to
+    9 uEh/atom in double-zeta and 8-19 uEh/atom in def2-TZVP/def2-QZVP, with
+    up to 1.24 kcal/mol in GMTKN55 relative energies; GRID_FIT 2.9, 1.8, 1.0
+    and 0.6 uEh/atom in def2-SVP, def2-SVPD, def2-TZVP and def2-QZVP and about
+    10x smaller relative-energy errors. The fit helps little in double-zeta
+    basis sets. The paper's full "compensated" recipe also needs an SAD
+    difference density, which is not implemented here. The exchange grid
+    follows the DFT grid options (|globals__dft_grid_name| SG0 or SG1, or
+    |globals__dft_radial_points| and |globals__dft_spherical_points|); errors
+    grow linearly with system size, so converge the grid as needed.
+    Speed caveat: Grid-K pays off only for large systems in larger basis sets
+    on FP64-capable GPUs. On one B200 with SG-0 the paper reports energy plus
+    gradient speedups over integral-direct J/K of about 1.5x in def2-SVP,
+    3.6-3.8x in def2-TZVP and 7.0-7.5x in def2-QZVP (with direct J), and
+    recommends integral-direct methods for def2-SVP and smaller. For small
+    molecules, on consumer GPUs with slow FP64, or on dense grids, DF is
+    usually faster. GRID_FIT costs a few percent more than GRID. Requires
+    cuEST >= 0.3. Analytic exchange gradients are not implemented for GRID or
+    GRID_FIT. No effect unless a cuEST J/K builder is selected. -*/
+    options.add_str("CUEST_K_BUILD", "DF", "DF GRID GRID_FIT");
+    /*- Kernel selection for |globals__cuest_j_build| DIRECT. DEFAULT keeps the cuEST SDK's choice (JIT on
+    CUDA 13+, ahead-of-time kernels otherwise). ON and OFF force JIT or
+    ahead-of-time kernels; neither changes screening or precision. !expert -*/
+    options.add_str("CUEST_DIRECTJ_JIT", "DEFAULT", "DEFAULT ON OFF");
+    /*- Variable device scratch budget for |globals__cuest_k_build| GRID, in decimal MB. Must
+    be positive. Smaller values make cuEST tile more and may run slower; they do
+    not change the result. This is not a cap on total device memory: plans, AO
+    matrices and fixed SDK workspace come on top. !expert -*/
+    options.add_int("CUEST_GRIDK_WORKSPACE_MB", 256);
+    /*- Absolute cutoff on the overlap eigenvalues for the canonical
+    orthogonalization behind |globals__cuest_k_build| GRID_FIT. Must be positive. !expert -*/
+    options.add_double("CUEST_GRIDK_FIT_ORTHO_CUTOFF", 1.0e-6);
+    /*- Cutoff on the eigenvalues of the quadrature overlap in the orthonormalized
+    basis (unity for an exact grid) for |globals__cuest_k_build| GRID_FIT; directions
+    below it are left out of the fit. Must be in (0, 1). !expert -*/
+    options.add_double("CUEST_GRIDK_FIT_CUTOFF", 1.0e-2);
 
     // Note that case-insensitive options are only functional as
     //   globals, not as module-level, and should be defined sparingly

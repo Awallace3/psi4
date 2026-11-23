@@ -36,12 +36,17 @@
 
 #ifdef USING_cuEST
 #include <cuest.h>
+#include <memory>
+// PSI_CUEST_HAS_GRIDK / PSI_CUEST_HAS_DIRECTJ come from compile probes in
+// psi4/src/psi4/CMakeLists.txt and are exported with core for plugin ABI
+// consistency. Both modes need the cuEST 0.3 Grid-K and Direct-J entry points.
 #endif
 
 namespace psi {
 
 class BasisSet;
 class Options;
+class DFTGrid;
 
 #ifdef USING_cuEST
 
@@ -66,8 +71,38 @@ class PSI_API cuESTJK : public JK {
     cuestDFCoulombComputeParameters_t cuest_coulomb_compute_params_;
     cuestDFSymmetricExchangeComputeParameters_t cuest_exchange_compute_params_;
 
-    cuestWorkspace_t* cuest_pair_list_ws_ptr_;
-    cuestWorkspace_t* cuest_dfint_plan_ws_ptr_;
+    cuestWorkspace_t* cuest_pair_list_ws_ptr_ = nullptr;
+    cuestWorkspace_t* cuest_dfint_plan_ws_ptr_ = nullptr;
+
+    /// CUEST_K_BUILD == GRID / CUEST_J_BUILD == DIRECT as read by the last preiterations().
+    bool gridk_ = false;
+    bool directj_ = false;
+#ifdef PSI_CUEST_HAS_DIRECTJ
+    cuestDirectIntPlan_t cuest_directj_plan_ = nullptr;
+    cuestDirectCoulombComputeParameters_t cuest_directj_params_ = nullptr;
+    cuestWorkspace_t* cuest_directj_plan_ws_ = nullptr;
+    void build_directj_plan();
+#endif
+#ifdef PSI_CUEST_HAS_GRIDK
+    // The grid must outlive the Grid-K plan.
+    std::unique_ptr<DFTGrid> gridk_grid_;
+    cuestGridKIntPlan_t cuest_gridk_plan_ = nullptr;
+    cuestGridKSymmetricExchangeComputeParameters_t cuest_gridk_exchange_params_ = nullptr;
+    cuestGridKNonsymmetricExchangeComputeParameters_t cuest_gridk_nonsym_exchange_params_ = nullptr;
+    cuestWorkspace_t* cuest_gridk_plan_ws_ = nullptr;
+    // Grid-K takes its basis, coordinates and AO pairs (and, for the overlap
+    // fit, S) from a one-electron plan; it must outlive the Grid-K plan.
+    cuestOEIntPlan_t cuest_gridk_oeint_plan_ = nullptr;
+    cuestWorkspace_t* cuest_gridk_oeint_plan_ws_ = nullptr;
+    void build_gridk_plan();
+    void compute_gridk_JK();
+#endif
+    /// A DF integral plan is needed unless both J and K come from the direct/grid paths.
+    bool needs_df_plan() const { return (do_J_ && !directj_) || (do_K_ && !gridk_); }
+    /// Variable Grid-K scratch budget from CUEST_GRIDK_WORKSPACE_MB, in bytes.
+    size_t gridk_workspace_bytes() const;
+    void query_coulomb_workspace(cuestWorkspaceDescriptor_t* desc, const double* density, double* coulomb);
+    void compute_coulomb(cuestWorkspace_t* scratch, const double* density, double* coulomb);
 
     std::string name() override { return "cuESTJK"; }
     size_t memory_estimate() override;
@@ -98,6 +133,11 @@ class PSI_API cuESTJK : public JK {
     /// it returns already carries the functional's exchange coefficients and
     /// the long-range term.  See JK::exchange_is_prescaled().
     bool exchange_is_prescaled() const override { return true; }
+
+    /// Is K built by numerical-grid exchange (CUEST_K_BUILD GRID) rather than DF?
+    bool uses_gridk() const { return gridk_; }
+    /// Is J built by integral-direct four-center Coulomb (CUEST_J_BUILD DIRECT) rather than DF?
+    bool uses_directj() const { return directj_; }
 
     cuestDFIntPlan_t cuest_df_plan() { return cuest_df_plan_; }
 };

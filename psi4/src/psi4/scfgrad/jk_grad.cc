@@ -3168,6 +3168,15 @@ void cuESTJKGrad::print_header() const {
 }
 void cuESTJKGrad::compute_gradient() {
     if (!do_J_ && !do_K_ && !do_wK_) return;
+    {
+        auto cuest_jk = std::dynamic_pointer_cast<cuESTJK>(jk_);
+        if (cuest_jk && do_J_ && cuest_jk->uses_directj())
+            throw PSIEXCEPTION("Analytic Coulomb gradients with CUEST_J_BUILD DIRECT are not implemented; "
+                               "set CUEST_J_BUILD DF before the SCF or use numerical derivatives.");
+        if (cuest_jk && (do_K_ || do_wK_) && cuest_jk->uses_gridk())
+            throw PSIEXCEPTION("Analytic exchange gradients with CUEST_K_BUILD GRID or GRID_FIT are not implemented; "
+                               "set CUEST_K_BUILD DF before the SCF or use numerical derivatives.");
+    }
 
     if (!(Ca_ && Cb_ && Da_ && Db_ && Dt_)) throw PSIEXCEPTION("Occupation/Density not set");
 
