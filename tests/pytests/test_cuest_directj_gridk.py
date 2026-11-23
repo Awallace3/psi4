@@ -267,3 +267,28 @@ def test_cuest_gridk_workspace_does_not_change_result(water):
             jk.finalize()
     for small, large in zip(results[0][0] + results[0][1], results[1][0] + results[1][1]):
         np.testing.assert_allclose(small, large, atol=1.e-12, rtol=0)
+
+
+@pytest.mark.parametrize("grid", [
+    {"dft_grid_name": "SG0"},
+    {"dft_grid_name": "SG1"},
+    {"dft_radial_scheme": "BECKE", "dft_pruning_scheme": "TREUTLER"},
+    {"dft_radial_scheme": "EM", "dft_pruning_scheme": "ROBUST"},
+    {"dft_radial_scheme": "TREUTLER", "dft_pruning_scheme": "TREUTLER"},
+], ids=["sg0", "sg1", "becke-treutler", "em-robust", "treutler-treutler"])
+def test_cuest_grid_matches_host_grid(water, grid):
+    """The radial/angular arrays handed to cuEST build the same quadrature as the host grid.
+
+    cuEST always partitions with Stratmann weights, so the host side is pinned to STRATMANN.
+    SG-0 (MultiExp radii, outermost first) and region pruning on nucleus-first radial schemes
+    were assigned angular counts in reverse shell order on the cuEST path.
+    """
+    mol, _, _ = water
+    psi4.set_options({"use_cuest": False, "dft_nuclear_scheme": "stratmann", "e_convergence": 1.e-10,
+                      "d_convergence": 1.e-8, **{k: v for k, v in GRID.items() if k != "dft_pruning_scheme"}, **grid})
+    e_host = psi4.energy("pbe", molecule=mol)
+    psi4.core.clean()
+    psi4.set_options({"use_cuest": True})
+    e_cuest = psi4.energy("pbe", molecule=mol)
+    print(f"{grid}: E(cuEST grid) - E(host grid) = {e_cuest - e_host:+.3e} Eh")
+    assert abs(e_cuest - e_host) < 1.e-8

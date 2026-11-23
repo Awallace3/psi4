@@ -2756,6 +2756,14 @@ void StandardGridMgr::Initialize_SG0() {
             SG0_rparams_[Z].resize(SG0specs[Z].nrad);
             SG0_wparams_[Z].resize(SG0specs[Z].nrad);
             RadialGridMgr::makeRadialGrid(SG0specs[Z].nrad, RadialGridMgr::WhichScheme("MULTIEXP"), SG0_rparams_[Z].data(), SG0_wparams_[Z].data(), SG0specs[Z].rparam);
+            // SG0_npoints_ below follows the Chien-Gill table from the nucleus outward, but MultiExp
+            // emits the outermost shell first. Store the radii innermost-first so the per-shell
+            // angular counts handed to cuEST land on the right shells (as makeCubatureGridFromPruneSpec
+            // does for the host grid).
+            if (RadialGridMgr::isOutermostFirst(SG0specs[Z].nrad, SG0_rparams_[Z].data())) {
+                std::reverse(SG0_rparams_[Z].begin(), SG0_rparams_[Z].end());
+                std::reverse(SG0_wparams_[Z].begin(), SG0_wparams_[Z].end());
+            }
             SG0_npoints_[Z].resize(SG0specs[Z].nrad);
             int count = 0;
             for (int i_grp = 0; SG0specs[Z].group[i_grp].npts != 0; i_grp++) {
@@ -3848,12 +3856,16 @@ void MolecularGrid::buildGridFromOptions(MolecularGridOptions const &opt, bool i
                         wvalues.data(),
                         alpha
                         );
+                    // Region pruning ranks shells from the outermost one; radial schemes differ in
+                    // ordering, so rank by radius (as the host grid does).
+                    const bool outermost_first = RadialGridMgr::isOutermostFirst(opt.nradpts, rvalues.data());
                     for (int i = 0; i < opt.nradpts; i++) {
+                        const int rank_from_outside = outermost_first ? i : opt.nradpts - 1 - i;
                         if (opt.prunetype == "REGION") {
                             if (opt.prunescheme == "TREUTLER") {
-                                nangpts[i] = prune.TreutlerShellPruning(i, Z, opt.nradpts);
+                                nangpts[i] = prune.TreutlerShellPruning(rank_from_outside, Z, opt.nradpts);
                             } else if (opt.prunescheme == "ROBUST") {
-                                nangpts[i] = prune.ShellPruning(i, Z, opt.nradpts);
+                                nangpts[i] = prune.ShellPruning(rank_from_outside, Z, opt.nradpts);
                             }
                         } else if (opt.prunetype == "FUNCTION" || opt.prunescheme == "NONE") {
                             nangpts[i] = prune.GetPrunedNumAngPts(rvalues[i] / alpha);
