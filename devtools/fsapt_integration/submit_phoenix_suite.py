@@ -8,10 +8,8 @@ import subprocess
 from phoenix_timing import clean, digest, save
 
 
-def command(source, root, build_job):
-    if not str(build_job).isdecimal():
-        raise ValueError("Numeric prerequisite job required")
-    return [
+def command(source, root, build_job=None):
+    argv = [
         "sbatch", "--parsable",
         "--job-name=fsapt-suite-h200",
         "--account=gts-cs207-chemx",
@@ -23,8 +21,15 @@ def command(source, root, build_job):
         "--cpus-per-task=8",
         "--mem=160G",
         "--time=08:00:00",
-        "--dependency=afterany:" + str(build_job),
-        "--kill-on-invalid-dep=yes",
+    ]
+    if build_job is not None:
+        if not str(build_job).isdecimal():
+            raise ValueError("Numeric prerequisite job required")
+        argv.extend([
+            "--dependency=afterany:" + str(build_job),
+            "--kill-on-invalid-dep=yes",
+        ])
+    argv.extend([
         "--no-requeue",
         "--signal=TERM@120",
         "--export=ALL",
@@ -32,7 +37,28 @@ def command(source, root, build_job):
         "--output=" + str(root / "logs/%x-%j.out"),
         "--error=" + str(root / "logs/%x-%j.err"),
         str(source / "devtools/fsapt_integration/phoenix_timing.sbatch"),
-    ]
+    ])
+    return argv
+
+
+def _completed_build_verified(build_root, build_job):
+    build_dir = build_root / ("job-" + str(build_job))
+    status_file = build_dir / "job-status.env"
+    result_file = build_dir / "result.json"
+    preflight_file = build_dir / "cpu-sealed-admission/preflight-result.json"
+    config_file = build_dir / "cpu-sealed-admission/runtime-config.json"
+    if not all(p.is_file() for p in (status_file, result_file, preflight_file, config_file)):
+        return False
+    status_lines = set(status_file.read_text().splitlines())
+    if not {"exit_code=0", "term_received=0"} <= status_lines:
+        return False
+    result = json.loads(result_file.read_text())
+    preflight = json.loads(preflight_file.read_text())
+    return (
+        result.get("status") == "PASS"
+        and preflight.get("status") == "PASS"
+        and preflight.get("returncode") == 0
+    )
 
 
 def main():
@@ -94,7 +120,8 @@ def main():
     root.mkdir(mode=0o700)
     (root / "logs").mkdir()
 
-    argv = command(source, root, build_job)
+    dep_job = None if _completed_build_verified(build_root, build_job) else build_job
+    argv = command(source, root, dep_job)
     manifest = {
         "helper_source": str(source),
         "helper_pin": helper_pin,

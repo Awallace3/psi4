@@ -45,6 +45,15 @@ class PhoenixSuiteContracts(unittest.TestCase):
         with self.assertRaises(ValueError):
             submit.command(Path("/source"), Path("/run"), "15960394:999")
 
+    def test_completed_build_omits_purged_dependency(self):
+        argv = submit.command(Path("/source"), Path("/run"), None)
+        joined = " ".join(argv)
+        self.assertNotIn("--dependency", joined)
+        self.assertNotIn("--kill-on-invalid-dep", joined)
+        self.assertIn("--qos=embers", argv)
+        self.assertIn("--partition=gpu-h200", argv)
+        self.assertIn("--time=08:00:00", argv)
+
     def test_compare_fsapt_tables_passes_and_rejects_drift(self):
         base = {
             "charge": {
