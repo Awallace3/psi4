@@ -16,6 +16,12 @@
   [Full timing table and limitations](H200_PEPTIDE_TIMINGS.md).
 - [Algorithm diagnosis and selected protein83 follow-up](GPU_ALGORITHM_DIAGNOSIS.md):
   two clean samples per arm, CPU-only 48-thread references, H200 GPU samples.
+- **2026-11-24 cuEST `0.3.0.1` + factorized `disp0`/`fdisp0` + `cuESTJK` `omega=0` fix (`85d7429837`):**
+  - Cachy RTX 3090 `compute-sanitizer` (`memcheck --leak-check full`, `initcheck`, `racecheck`, `synccheck`): **4/4 clean (0 errors, 0 leaks, 0 hazards)**; `61/61` zero-skip GPU pytests pass; `PASS_PSI4_PHYSICAL_GPU_GATE` & `PASS_CACHY_PARITY`.
+  - Phoenix build **`16056429`** (`85d7429837`, cuEST `0.3.0.1`, 426 CPU guards, `cpu-sealed-admission`) **PASS** (`COMPLETED 0:0` in `10:30`).
+  - Phoenix RTX PRO 6000 Blackwell suite **`16084802`** **PASS (`PASS_SUITE`, `0:0` in `3h39m`)**: `fsapt1` **9.50×** whole / **13.9×** `fdisp0` (`172/172` `fsapt.py` cells `<= 8.22e-9 Eh`), `peptide` F-SAPT **6.75×** whole (`22.90 s` vs old H200 `32.95 s`) / **17.33×** `fdisp0`, `nanotube` F-SAPT **18.14×** whole (`3,393.7 s → 187.1 s`, same-gauge oracle `1.45e-8 Eh`), `protein83` fixed-HF `fdisp0` **`1.74e-14 Eh`** vs CPU48 and `protein83` `SAPT0+δHF` **PASS** (`7.67e-9 Eh`).
+    [Full RTX PRO 6000 Blackwell timings, accuracy tables, and H200 projections](RTX6000_BLACKWELL_TIMINGS.md).
+  - Phoenix H200 `embers` suite **`16057336`** queued on the same build `16056429` for direct H200 FP64 timings and 141 GiB `protein83` full F-SAPT.
 - GPU KS/XC fragment response and larger-system memory/scaling: not qualified.
 
 Production source is pinned at `b025694939`; subsequent commits change only
