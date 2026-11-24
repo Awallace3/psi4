@@ -26,6 +26,9 @@
  * @END LICENSE
  */
 
+// The material adapted from postg in this file is under GPL-3.0-or-later,
+// not the Psi4 LGPL notice above. See THIRD-PARTY-LICENSES, entry 6.
+
 // Hirshfeld partitioning for XDM dispersion.
 // Translates postg's atomin subroutine (wfnmod.f90).
 

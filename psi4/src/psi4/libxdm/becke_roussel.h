@@ -26,6 +26,9 @@
  * @END LICENSE
  */
 
+// The xfuncs routine adapted from postg is under GPL-3.0-or-later,
+// not the Psi4 LGPL notice above. See THIRD-PARTY-LICENSES, entry 6.
+
 #ifndef PSI4_SRC_PSI4_LIBXDM_BECKE_ROUSSEL_H
 #define PSI4_SRC_PSI4_LIBXDM_BECKE_ROUSSEL_H
 

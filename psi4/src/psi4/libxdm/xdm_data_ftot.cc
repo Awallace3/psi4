@@ -26,6 +26,9 @@
  * @END LICENSE
  */
 
+// The proatom table from postg is under GPL-3.0-or-later,
+// not the Psi4 LGPL notice above. See THIRD-PARTY-LICENSES, entry 6.
+
 // Auto-generated from postg atomicdata.f90
 // Proatom density table: ftot[j][Z-1] for j=0..1400, Z=1..94
 // Stores r^2 * rho_atom(r) on transformed radial grid q = j*h, r = rmid*q/(1-q)

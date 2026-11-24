@@ -26,6 +26,9 @@
  * @END LICENSE
  */
 
+// The bhole routine adapted from postg is under GPL-3.0-or-later,
+// not the Psi4 LGPL notice above. See THIRD-PARTY-LICENSES, entry 6.
+
 #include "becke_roussel.h"
 
 #include <cmath>

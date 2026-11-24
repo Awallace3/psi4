@@ -435,3 +435,22 @@ FAILURE OF THE LIBRARY TO OPERATE WITH ANY OTHER SOFTWARE), EVEN IF
 SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH
 DAMAGES.
 
+
+<< 6 >> psi4/src/psi4/libxdm/xdm.cc              (wfnmod.f90: evalwfn, propts, edisp)
+        psi4/src/psi4/libxdm/hirshfeld.cc        (wfnmod.f90: atomin; tools_math.f90: spline)
+        psi4/src/psi4/libxdm/becke_roussel.cc    (wfnmod.f90: bhole)
+        psi4/src/psi4/libxdm/becke_roussel.h     (wfnmod.f90: xfuncs)
+        psi4/src/psi4/libxdm/xdm_data.cc         (param.f90: atomic reference data)
+        psi4/src/psi4/libxdm/xdm_data_ftot.cc    (atomicdata.f90: proatom density table)
+
+These files contain routines or data adapted from postg:
+https://github.com/aoterodelaroza/postg
+
+Copyright (c) 2013-2025 Alberto Otero de la Roza <aoterodelaroza@gmail.com>,
+Kyle R. Bryenton <kyle.bryenton@gmail.com>, Felix Kannemann <felix.kannemann@dal.ca>,
+Erin R. Johnson <erin.johnson@dal.ca>, Ross M. Dickson <ross.dickson@dal.ca>,
+Hartmut Schmider <hs7@post.queensu.ca>, and Axel D. Becke <axel.becke@dal.ca>
+
+The postg material is licensed under the GNU General Public License,
+version 3 or (at your option) any later version (GPL-3.0-or-later).
+See file COPYING for the GPL version 3 text, including the disclaimer of warranty.

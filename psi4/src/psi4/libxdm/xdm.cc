@@ -26,6 +26,9 @@
  * @END LICENSE
  */
 
+// The material adapted from postg in this file is under GPL-3.0-or-later,
+// not the Psi4 LGPL notice above. See THIRD-PARTY-LICENSES, entry 6.
+
 // XDM dispersion correction — main driver.
 // Translates postg's evalwfn + propts + edisp subroutines (wfnmod.f90).
 

@@ -26,6 +26,9 @@
  * @END LICENSE
  */
 
+// The data transcribed from postg in this file are under GPL-3.0-or-later,
+// not the Psi4 LGPL notice above. See THIRD-PARTY-LICENSES, entry 6.
+
 // XDM static reference data: free-atom polarizabilities, free-atom volumes,
 // and BJ damping parameters. Transcribed from postg param.f90.
 //

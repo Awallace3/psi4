@@ -205,8 +205,9 @@ density-derived, :math:`(a_1, a_2)` vary with both functional and basis set.
 The KB49 parameters minimize the root-mean-square percent error of the
 interaction energies of the 49 KB49 dimers, computed with |PSIfour| 1.12
 (density fitting, frozen core, a (99, 590) DFT grid). The no-CP set was fitted
-with |scf__dft_grid_orientation| ``INPUT``; the counterpoise set superposes
-ghost-centre moments (see **Ghost Atoms**). The RMSP and MAE of every fit are
+with |scf__dft_grid_orientation| ``INPUT``. Set this explicitly to reproduce the
+fit conditions; no-CP jobs retain the usual ``STANDARD`` default. The counterpoise
+set superposes ghost-centre moments (see **Ghost Atoms**). The RMSP and MAE of every fit are
 recorded next to its entry in ``psi4/driver/procrouting/xdm_params.py``.
 
 .. warning:: No-CP interaction energies in cc-pVDZ and cc-pVTZ are not
@@ -486,8 +487,7 @@ Keywords summarized:
    | |scf__xdm_counterpoise|          | Use the counterpoise damping fit. Set automatically on every task of ``bsse_type='cp'`` or    |
    |                                  | ``'vmfc'``; set by hand only for counterpoise subsystem jobs run outside the many-body driver.|
    +----------------------------------+-----------------------------------------------------------------------------------------------+
-   | |scf__dft_grid_orientation|      | ``STANDARD`` or ``INPUT`` axes for the DFT grid. Set to ``INPUT`` automatically on every task |
-   |                                  | of ``bsse_type='nocp'`` (any DFT functional) so subsystems share grid points.                 |
+   | |scf__dft_grid_orientation|      | ``STANDARD`` by default. Select ``INPUT`` to keep subsystem grids on the same input axes.     |
    +----------------------------------+-----------------------------------------------------------------------------------------------+
 
 

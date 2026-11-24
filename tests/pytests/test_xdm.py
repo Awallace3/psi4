@@ -157,7 +157,8 @@ units angstrom
     with pytest.raises(NotImplementedError, match="through composite \\(CBS\\) methods are not implemented"):
         planner.task_planner("energy", "b3lyp-xdm/cc-pv[d,t]z", dimer, bsse_type="cp")
 
-    # No-CP subsystems integrate on input-frame grids (DFT_GRID_ORIENTATION=INPUT, set by the planner).
+    # Match the input-frame grids used for these reference energies and the KB49 no-CP fit.
+    psi4.set_options({"dft_grid_orientation": "input"})
     e_kb49 = psi4.energy("b3lyp-xdm", molecule=dimer, bsse_type="nocp")
     assert psi4.compare_values(e_kb49, -0.002128165643654256, 8, "No-CP XDM/cc-pVDZ energy")
 
