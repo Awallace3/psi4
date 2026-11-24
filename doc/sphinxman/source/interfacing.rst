@@ -63,6 +63,7 @@ platform capabilities, *etc*.
    molden
    mrcc
    ooo
+   otr
    pcmsolver
    simint
    plugin_snsmp2

@@ -38,7 +38,6 @@
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/integral.h"
-#include "psi4/libmints/matrix.h"
 #include "psi4/libmints/mintshelper.h"
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/vector.h"
@@ -736,7 +735,6 @@ void DFJKGrad::build_UV_terms() {
     // => Memory Constraints <= //
 
     int max_rows;
-    size_t effective_memory = memory_ - 1L * naux * naux;
     size_t row_cost = 2L * na * (size_t)na;
     size_t rows = memory_ / row_cost;
     rows = (rows > naux ? naux : rows);
@@ -2422,7 +2420,6 @@ std::map<std::string, std::shared_ptr<Matrix>> DirectJKGrad::compute1(
     double** Dap = Da_->pointer();
     double** Dbp = Db_->pointer();
 
-    size_t computed_shells = 0L;
     // shell pair blocks
     auto blocksPQ = ints[0]->get_blocks12();
     auto blocksRS = ints[0]->get_blocks34();
@@ -2730,7 +2727,6 @@ std::map<std::string, std::shared_ptr<Matrix>> DirectJKGrad::compute2(
     double** Dap = Da_->pointer();
     double** Dbp = Db_->pointer();
 
-    size_t computed_shells = 0L;
     // shell pair blocks
     auto blocksPQ = ints[0]->get_blocks12();
     auto blocksRS = ints[0]->get_blocks34();
