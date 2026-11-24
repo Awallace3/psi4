@@ -8,20 +8,49 @@ import subprocess
 from phoenix_timing import clean, digest, save
 
 
-def command(source, root, build_job=None):
+DEVICE_PROFILES = {
+    "H200": {
+        "job_name": "fsapt-suite-h200",
+        "partition": "gpu-h200",
+        "constraint": "H200",
+        "gres": "gpu:h200:1",
+    },
+    "RTX_PRO_BLACKWELL": {
+        "job_name": "fsapt-suite-rtx6000",
+        "partition": "gpu-rtxpro-blackwell",
+        "constraint": None,
+        "gres": "gpu:rtx_pro_6000_blackwell:1",
+    },
+}
+
+
+def command(source, root, build_job=None, *, device_family="H200", qos="embers",
+            account="gts-cs207-chemx", hours=8):
+    if device_family not in DEVICE_PROFILES:
+        raise ValueError("Unsupported device family: " + str(device_family))
+    if qos not in ("embers", "inferno"):
+        raise ValueError("Unsupported QoS: " + str(qos))
+    if account not in ("gts-cs207", "gts-cs207-chemx"):
+        raise ValueError("Unsupported account: " + str(account))
+    if type(hours) is not int or not 1 <= hours <= 8:
+        raise ValueError("Hours must be integer in [1, 8]")
+    profile = DEVICE_PROFILES[device_family]
     argv = [
         "sbatch", "--parsable",
-        "--job-name=fsapt-suite-h200",
-        "--account=gts-cs207-chemx",
-        "--qos=embers",
-        "--partition=gpu-h200",
-        "--constraint=H200",
-        "--gres=gpu:h200:1",
+        "--job-name=" + profile["job_name"],
+        "--account=" + account,
+        "--qos=" + qos,
+        "--partition=" + profile["partition"],
+    ]
+    if profile["constraint"]:
+        argv.append("--constraint=" + profile["constraint"])
+    argv.extend([
+        "--gres=" + profile["gres"],
         "--nodes=1", "--ntasks=1",
         "--cpus-per-task=8",
         "--mem=160G",
-        "--time=08:00:00",
-    ]
+        f"--time={hours:02d}:00:00",
+    ])
     if build_job is not None:
         if not str(build_job).isdecimal():
             raise ValueError("Numeric prerequisite job required")
@@ -73,7 +102,14 @@ def main():
     parser.add_argument("--protein83-svp-inputs", type=Path, required=True)
     parser.add_argument("--protein83-svp-inputs-sha256", required=True)
     parser.add_argument("--run-root", type=Path, required=True)
+    parser.add_argument("--device-family", choices=tuple(DEVICE_PROFILES), default="H200")
+    parser.add_argument("--qos", choices=("embers", "inferno"), default="embers")
+    parser.add_argument("--account", choices=("gts-cs207", "gts-cs207-chemx"), default="gts-cs207-chemx")
+    parser.add_argument("--hours", type=int, choices=(2, 4, 6, 8), default=8)
+    parser.add_argument("--inferno-approved", action="store_true")
     args = parser.parse_args()
+    if args.qos == "inferno" and not args.inferno_approved:
+        raise RuntimeError("Explicit user approval (--inferno-approved) required for inferno QoS")
 
     source = Path(__file__).resolve().parents[2]
     helper_pin = subprocess.check_output(
@@ -121,7 +157,14 @@ def main():
     (root / "logs").mkdir()
 
     dep_job = None if _completed_build_verified(build_root, build_job) else build_job
-    argv = command(source, root, dep_job)
+    argv = command(
+        source, root, dep_job,
+        device_family=args.device_family,
+        qos=args.qos,
+        account=args.account,
+        hours=args.hours,
+    )
+    profile = DEVICE_PROFILES[args.device_family]
     manifest = {
         "helper_source": str(source),
         "helper_pin": helper_pin,
@@ -153,16 +196,19 @@ def main():
             },
         },
         "kind": "gpu",
-        "account": "gts-cs207-chemx",
-        "qos": "embers",
-        "allocation_wall_seconds": 28800,
+        "device_family": args.device_family,
+        "account": args.account,
+        "qos": args.qos,
+        "allocation_wall_seconds": args.hours * 3600,
         "command": argv,
         "basis": "jun-cc-pvdz",
         "scf_E": 10,
         "scf_D": 12,
         "threads_both_arms": 8,
         "factor_cache_bytes": 0,
-        "authorization": "User requested full timing_test_suite + fsapt1 in one H200 embers job",
+        "authorization": (
+            f"User requested {args.device_family} {args.qos} suite verification"
+        ),
     }
     save(root / "manifest.json", manifest)
 
@@ -178,8 +224,8 @@ def main():
                           text=True, capture_output=True, timeout=60)
     save(root / "test-only.json", vars(test))
     print(test.stdout + test.stderr, flush=True)
-    if test.returncode or "gpu-h200" not in test.stdout + test.stderr:
-        raise RuntimeError("Exact H200 route test failed")
+    if test.returncode or profile["partition"] not in test.stdout + test.stderr:
+        raise RuntimeError(f"Exact {profile['partition']} route test failed")
 
     (root / "SUBMISSION_ATTEMPTED").write_text("Single call; no automatic retry.\n")
     result = subprocess.run(argv, env=env, text=True, capture_output=True, timeout=60)

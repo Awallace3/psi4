@@ -94,18 +94,25 @@ def execute(manifest_path, root):
     from repeat_gauge import compare_repeat
     from full_inputs import load_point
     from prepare_inputs import input_basis_profile
+    from sapt0_hardware import PROFILES
     from sealed_h200 import step_scratch
     from split_jobs import validate_allocation
-    from validate_cpu_allocation import fields
+    from validate_cpu_allocation import fields, memory_bytes, seconds
+
+    device_family = manifest.get("device_family", "H200")
+    if device_family not in PROFILES:
+        raise RuntimeError("Unsupported device family: " + str(device_family))
+    profile = PROFILES[device_family]
 
     os.environ.update(DISP0_SOURCE=str(source), DISP0_PIN=manifest["science_pin"])
     report = {
         "status": "STARTED",
         "manifest_sha256": digest(manifest_path),
         "manifest": manifest,
+        "device_family": device_family,
         "stages": {},
         "processes": [],
-        "scope": "SINGLE_JOB_H200_EMBERS_FSAPT_AND_SAPT0_TIMING_SUITE",
+        "scope": f"SINGLE_JOB_{device_family}_{manifest['qos'].upper()}_FSAPT_AND_SAPT0_TIMING_SUITE",
     }
     checkpoint = lambda: save(root / "suite-result.json", report)
     groups, owner = set(), None
@@ -115,7 +122,27 @@ def execute(manifest_path, root):
             ["/opt/slurm/current/bin/scontrol", "show", "job", "-o", os.environ["SLURM_JOB_ID"]],
             text=True, timeout=30,
         )
-        validate_allocation(fields(raw), manifest)
+        job_fields = fields(raw)
+        if device_family == "H200":
+            validate_allocation(job_fields, manifest)
+        else:
+            partitions = set(job_fields.get("Partition", "").split(","))
+            allocated = job_fields.get("AllocTRES", "").split(",")
+            gres_token = "gres/" + profile["gres"].rsplit(":", 1)[0] + "=1"
+            if (
+                job_fields.get("Account") != manifest["account"]
+                or job_fields.get("QOS") != manifest["qos"]
+                or profile["partition"] not in partitions
+                or not (partitions <= {profile["partition"], "gpu-v100"})
+                or job_fields.get("NumNodes") != "1"
+                or job_fields.get("NumCPUs") != "8"
+                or job_fields.get("CPUs/Task") != "8"
+                or job_fields.get("NumTasks") != "1"
+                or seconds(job_fields["TimeLimit"]) != manifest.get("allocation_wall_seconds", 28800)
+                or memory_bytes(job_fields["MinMemoryNode"]) != 160 * 1024**3
+                or gres_token not in allocated
+            ):
+                raise RuntimeError(f"{device_family} allocation differs from manifest: {raw}")
         report["scheduler_job"] = raw
         report["node"] = os.uname().nodename
         report["cpu_affinity"] = sorted(os.sched_getaffinity(0))
@@ -125,8 +152,8 @@ def execute(manifest_path, root):
             ["nvidia-smi", "--query-gpu=name,uuid,driver_version,memory.total", "--format=csv,noheader"],
             text=True, timeout=30,
         )
-        if "H200" not in report["gpu_hardware"]:
-            raise RuntimeError("H200 required")
+        if profile["name"] not in report["gpu_hardware"]:
+            raise RuntimeError(f"{profile['name']} required; got {report['gpu_hardware']!r}")
 
         if digest(Path(manifest["build_root"]) / "manifest.json") != manifest["build_manifest_sha256"]:
             raise RuntimeError("Prerequisite build manifest changed")
@@ -139,10 +166,22 @@ def execute(manifest_path, root):
         report["cpu_runtime_admission"] = require_cpu_runtime_admission(base)
         aliases = root / "sealed-workers"
         aliases.mkdir(mode=0o700)
-        save(config_path, {**base, "sealed_alias_parent": str(aliases)})
+        derived = {**base, "sealed_alias_parent": str(aliases)}
+        if device_family != "H200":
+            derived["device_family"] = device_family
+            derived["device_memory_limit_bytes"] = profile["budget_gib"] * 1024**3
+            derived["native_persistent_bytes"] = min(base["native_persistent_bytes"], 8 * 1024**3)
+        save(config_path, derived)
         config_sha = digest(config_path)
         config, _ = read_config(config_path, config_sha)
-        require_cpu_runtime_admission(config)
+        if device_family == "H200":
+            require_cpu_runtime_admission(config)
+        else:
+            ignored = {"sealed_alias_parent", "device_family", "device_memory_limit_bytes", "native_persistent_bytes"}
+            if {k: v for k, v in config.items() if k not in ignored} != {
+                k: v for k, v in base.items() if k not in ignored
+            }:
+                raise RuntimeError("Derived GPU runtime closure diverged from CPU-admitted base")
 
         inputs = Path(manifest["inputs"])
         if input_basis_profile(json.loads(inputs.read_text())) != "jun-cc-pvdz":

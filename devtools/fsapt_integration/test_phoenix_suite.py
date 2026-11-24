@@ -54,6 +54,20 @@ class PhoenixSuiteContracts(unittest.TestCase):
         self.assertIn("--partition=gpu-h200", argv)
         self.assertIn("--time=08:00:00", argv)
 
+    def test_blackwell_inferno_command(self):
+        argv = submit.command(
+            Path("/source"), Path("/run"), None,
+            device_family="RTX_PRO_BLACKWELL", qos="inferno", account="gts-cs207", hours=8,
+        )
+        joined = " ".join(argv)
+        self.assertIn("--job-name=fsapt-suite-rtx6000", argv)
+        self.assertIn("--account=gts-cs207", argv)
+        self.assertIn("--qos=inferno", argv)
+        self.assertIn("--partition=gpu-rtxpro-blackwell", argv)
+        self.assertIn("--gres=gpu:rtx_pro_6000_blackwell:1", argv)
+        self.assertNotIn("--constraint=", joined)
+        self.assertNotIn("--dependency", joined)
+
     def test_compare_fsapt_tables_passes_and_rejects_drift(self):
         base = {
             "charge": {
