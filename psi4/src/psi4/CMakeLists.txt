@@ -101,8 +101,9 @@ int main() {
     auto sym = &cuestGridKSymmetricExchangeCompute;
     auto nonsym = &cuestGridKNonsymmetricExchangeCompute;
     const auto fit = CUEST_GRIDKINTPLAN_PARAMETERS_FITTING_ALGORITHM_OVERLAP_SYMMETRIC;
+    const auto threshold = CUEST_GRIDKINTPLAN_PARAMETERS_THRESHOLD_COLLOCATION;
     const auto nmo = CUEST_GRIDKINTPLAN_FITTING_NUM_MO;
-    return (sym && nonsym && fit >= 0 && nmo >= 0) ? 0 : 1;
+    return (sym && nonsym && fit >= 0 && nmo >= 0 && threshold >= 0) ? 0 : 1;
 }
 " PSI4_CUEST_HAS_GRIDK_API)
   check_cxx_source_compiles("

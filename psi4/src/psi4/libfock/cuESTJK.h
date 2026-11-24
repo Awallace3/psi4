@@ -101,6 +101,8 @@ class PSI_API cuESTJK : public JK {
     bool needs_df_plan() const { return (do_J_ && !directj_) || (do_K_ && !gridk_); }
     /// Variable Grid-K scratch budget from CUEST_GRIDK_WORKSPACE_MB, in bytes.
     size_t gridk_workspace_bytes() const;
+    double directj_density_threshold() const;
+    void prepare_auxiliary_basis();
     void query_coulomb_workspace(cuestWorkspaceDescriptor_t* desc, const double* density, double* coulomb);
     void compute_coulomb(cuestWorkspace_t* scratch, const double* density, double* coulomb);
 

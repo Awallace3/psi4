@@ -167,12 +167,14 @@ def test_cuest_directj_gridk_single_task(water, do_j, do_k):
         coulomb, exchange = _compute(jk, pairs)
     finally:
         jk.finalize()
-    for (left, right), got_j, got_k in zip(pairs, coulomb, exchange):
+    active = coulomb if do_j else exchange
+    assert len(active) == len(pairs)
+    for (left, right), got in zip(pairs, active):
         density = _density(left, right)
         if do_j:
-            np.testing.assert_allclose(got_j, np.einsum("pqrs,rs->pq", eri, density), atol=1.e-10, rtol=0)
+            np.testing.assert_allclose(got, np.einsum("pqrs,rs->pq", eri, density), atol=1.e-10, rtol=0)
         if do_k:
-            np.testing.assert_allclose(got_k, np.einsum("prqs,rs->pq", eri, density), atol=GRIDK_ATOL["grid_fit"], rtol=0)
+            np.testing.assert_allclose(got, np.einsum("prqs,rs->pq", eri, density), atol=GRIDK_ATOL["grid"], rtol=0)
 
 
 # Worst |E - E(PK)| allowed per Grid-K variant, in Eh.
@@ -217,6 +219,50 @@ def test_cuest_directj_gridk_ignores_auxiliary_basis(water):
         psi4.set_options({"df_basis_scf": df_basis})
         energies[df_basis] = psi4.energy("hf", molecule=mol)
     assert energies["cc-pvdz-jkfit"] == pytest.approx(energies["def2-universal-jkfit"], abs=1.e-10)
+
+
+@pytest.mark.parametrize("jit", ["on", "off"])
+def test_cuest_directj_kernel_policy(water, jit):
+    _, primary, aux = water
+    psi4.set_options({"cuest_j_build": "direct", "cuest_directj_jit": jit,
+                      "cuest_directj_density_threshold": 0.0})
+    eri = np.asarray(psi4.core.MintsHelper(primary).ao_eri()).reshape((primary.nbf(),) * 4)
+    pairs = _pairs(primary.nbf(), True)
+    jk = _builder(primary, aux)  # mixed Direct-J + default DF-K
+    try:
+        j, k = _compute(jk, pairs)
+    finally:
+        jk.finalize()
+    np.testing.assert_allclose(j[0], np.einsum("pqrs,rs->pq", eri, _density(*pairs[0])), atol=1.e-10, rtol=0)
+    np.testing.assert_allclose(k[0], np.einsum("prqs,rs->pq", eri, _density(*pairs[0])), atol=5.e-4, rtol=0)
+
+
+@pytest.mark.parametrize("grid", [{"dft_grid_name": "sg0"},
+                                  {"dft_radial_scheme": "em", "dft_pruning_scheme": "robust"}])
+def test_cuest_gridk_pruned_exchange(water, grid):
+    """Check the cuEST shell ordering against analytic exchange, not a second copy of the grid."""
+    _, primary, aux = water
+    psi4.set_options({"cuest_k_build": "grid_fit", "cuest_gridk_collocation_threshold": 1.e-16,
+                      "cuest_gridk_fit_ortho_cutoff": 1.e-7, "cuest_gridk_fit_cutoff": 1.e-3, **grid})
+    eri = np.asarray(psi4.core.MintsHelper(primary).ao_eri()).reshape((primary.nbf(),) * 4)
+    pairs = _pairs(primary.nbf(), True)
+    jk = _builder(primary, aux, do_j=False)
+    try:
+        _, k = _compute(jk, pairs)
+    finally:
+        jk.finalize()
+    np.testing.assert_allclose(k[1], np.einsum("prqs,rs->pq", eri, _density(*pairs[1])), atol=5.e-4, rtol=0)
+
+
+@pytest.mark.parametrize("option,selection", [
+    ("cuest_gridk_collocation_threshold", {"cuest_k_build": "grid"}),
+    ("cuest_directj_density_threshold", {"cuest_j_build": "direct"}),
+])
+def test_cuest_rejects_negative_screening(water, option, selection):
+    _, primary, aux = water
+    psi4.set_options({option: -1.0, **selection})
+    with pytest.raises(RuntimeError, match=option.upper() + " must be nonnegative"):
+        _builder(primary, aux)
 
 
 @pytest.mark.parametrize("option,value,message", [

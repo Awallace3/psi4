@@ -43,6 +43,7 @@
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/matrix.h"
 
+#include <algorithm>
 #include <vector>
 #include <string>
 #include <sstream>
@@ -3827,10 +3828,12 @@ void MolecularGrid::buildGridFromOptions(MolecularGridOptions const &opt, bool i
                         );
                     for (int i = 0; i < opt.nradpts; i++) {
                         if (opt.prunetype == "REGION") {
+                            // Region boundaries are counted from the outside, independent of radial scheme.
+                            const int rank = rvalues.front() < rvalues.back() ? opt.nradpts - 1 - i : i;
                             if (opt.prunescheme == "TREUTLER") {
-                                nangpts[i] = prune.TreutlerShellPruning(i, Z, opt.nradpts);
+                                nangpts[i] = prune.TreutlerShellPruning(rank, Z, opt.nradpts);
                             } else if (opt.prunescheme == "ROBUST") {
-                                nangpts[i] = prune.ShellPruning(i, Z, opt.nradpts);
+                                nangpts[i] = prune.ShellPruning(rank, Z, opt.nradpts);
                             }
                         } else if (opt.prunetype == "FUNCTION" || opt.prunescheme == "NONE") {
                             nangpts[i] = prune.GetPrunedNumAngPts(rvalues[i] / alpha);
@@ -3841,6 +3844,11 @@ void MolecularGrid::buildGridFromOptions(MolecularGridOptions const &opt, bool i
                     rvalues = StandardGridMgr::GetSG0rparams(Z);
                     wvalues = StandardGridMgr::GetSG0wparams(Z);
                     nangpts = StandardGridMgr::GetSG0npoints(Z);
+                    // SG-0 angular counts start at the nucleus, but MultiExp radii start outside.
+                    if (!rvalues.empty() && rvalues.front() > rvalues.back()) {
+                        std::reverse(rvalues.begin(), rvalues.end());
+                        std::reverse(wvalues.begin(), wvalues.end());
+                    }
                     break;
                 case 1:
                     rvalues = StandardGridMgr::GetSG1rparams(Z);

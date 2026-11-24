@@ -74,25 +74,25 @@ cuESTJK::cuESTJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> au
 {
     cuest_common::ensure_cuest_initialized();
 
-    // cuEST's density-fitting integral plan requires a spherical-harmonic
-    // auxiliary basis; the orbital (primary) basis may be Cartesian. Without
-    // this check, a Cartesian aux basis fails deep inside cuEST with an
-    // opaque "status code" error out of preiterations()/cuestDFIntPlan*.
-    if (!auxiliary->has_puream()) {
-        throw PSIEXCEPTION("cuESTJK requires a spherical-harmonic auxiliary (DF) basis set; "
-                           "the auxiliary basis set '" + auxiliary->name() +
-                           "' is Cartesian. Set DF_BASIS_SCF/DF_BASIS_MP2 to a basis with spherical "
-                           "harmonics, or add 'puream true' scoped to the auxiliary basis if supported; "
-                           "the orbital (primary) basis may remain Cartesian.");
-    }
-
     cuest_primary_basis_ = primary->cuest_basis();
-    cuest_auxiliary_basis_ = auxiliary->cuest_basis();
 
     condition_ = options.get_double("DF_FITTING_CONDITION");
     pq_threshold_ = options.get_double("INTS_TOLERANCE");
     dfk_slices_ = options.get_int("CUEST_DFK_SLICES");
     dfk_moduli_ = options.get_int("CUEST_DFK_MODULI");
+}
+
+void cuESTJK::prepare_auxiliary_basis() {
+    // Only a tasked DF builder needs a spherical-harmonic auxiliary basis.
+    if (!auxiliary_->has_puream()) {
+        throw PSIEXCEPTION("cuESTJK requires a spherical-harmonic auxiliary (DF) basis set; "
+                           "the auxiliary basis set '" + auxiliary_->name() +
+                           "' is Cartesian. Set DF_BASIS_SCF/DF_BASIS_MP2 to a basis with spherical "
+                           "harmonics, or add 'puream true' scoped to the auxiliary basis if supported; "
+                           "the orbital (primary) basis may remain Cartesian.");
+    }
+
+    cuest_auxiliary_basis_ = auxiliary_->cuest_basis();
 }
 
 cuESTJK::~cuESTJK() {
@@ -113,7 +113,20 @@ void cuESTJK::preiterations()
         throw PSIEXCEPTION("CUEST_J_BUILD DIRECT requires cuEST's Direct-J API (cuEST >= 0.3), which the cuEST this "
                            "Psi4 was built against does not provide. DF-J remains available.");
 #endif
-    if (gridk_) (void)gridk_workspace_bytes();  // Validate before allocating any plan.
+    if (needs_df_plan()) prepare_auxiliary_basis();
+    if (directj_ && do_J_ && !(directj_density_threshold() >= 0.0))
+        throw PSIEXCEPTION("CUEST_DIRECTJ_DENSITY_THRESHOLD must be nonnegative.");
+    if (gridk_ && do_K_) {
+        (void)gridk_workspace_bytes();  // Validate before allocating any plan.
+        if (!(options_.get_double("CUEST_GRIDK_COLLOCATION_THRESHOLD") >= 0.0))
+            throw PSIEXCEPTION("CUEST_GRIDK_COLLOCATION_THRESHOLD must be nonnegative.");
+        if (options_.get_str("CUEST_K_BUILD") == "GRID_FIT") {
+            const auto cutoff = options_.get_double("CUEST_GRIDK_FIT_CUTOFF");
+            if (!(cutoff > 0.0 && cutoff < 1.0)) throw PSIEXCEPTION("CUEST_GRIDK_FIT_CUTOFF must be in (0, 1).");
+            if (!(options_.get_double("CUEST_GRIDK_FIT_ORTHO_CUTOFF") > 0.0))
+                throw PSIEXCEPTION("CUEST_GRIDK_FIT_ORTHO_CUTOFF must be positive.");
+        }
+    }
 
     auto mol = primary_->molecule();
     size_t natom = mol->natom();
@@ -295,6 +308,11 @@ void cuESTJK::destroy_cuest_objects() {
     }
 }
 
+double cuESTJK::directj_density_threshold() const {
+    return options_["CUEST_DIRECTJ_DENSITY_THRESHOLD"].has_changed() ?
+        options_.get_double("CUEST_DIRECTJ_DENSITY_THRESHOLD") : pq_threshold_;
+}
+
 size_t cuESTJK::gridk_workspace_bytes() const {
     const auto mb = options_.get_int("CUEST_GRIDK_WORKSPACE_MB");
     if (mb <= 0) throw PSIEXCEPTION("CUEST_GRIDK_WORKSPACE_MB must be positive.");
@@ -362,8 +380,9 @@ void cuESTJK::build_directj_plan() {
                                              CUEST_DIRECTCOULOMBCOMPUTE_PARAMETERS_JIT_USAGE_MODE, &jit,
                                              sizeof(jit)));
     }
+    const double threshold = directj_density_threshold();
     CHECK_CUEST(cuestParametersConfigure(CUEST_DIRECTCOULOMBCOMPUTE_PARAMETERS, cuest_directj_params_,
-                                         CUEST_DIRECTCOULOMBCOMPUTE_PARAMETERS_DENSITY_SCHWARZ_THRESHOLD, &pq_threshold_,
+                                         CUEST_DIRECTCOULOMBCOMPUTE_PARAMETERS_DENSITY_SCHWARZ_THRESHOLD, &threshold,
                                          sizeof(double)));
 }
 #endif
@@ -383,6 +402,9 @@ void cuESTJK::build_gridk_plan() {
 
     cuestGridKIntPlanParameters_t params = nullptr;
     CHECK_CUEST(cuestParametersCreate(CUEST_GRIDKINTPLAN_PARAMETERS, reinterpret_cast<void**>(&params)));
+    const double collocation = options_.get_double("CUEST_GRIDK_COLLOCATION_THRESHOLD");
+    CHECK_CUEST(cuestParametersConfigure(CUEST_GRIDKINTPLAN_PARAMETERS, params,
+                                         CUEST_GRIDKINTPLAN_PARAMETERS_THRESHOLD_COLLOCATION, &collocation, sizeof(double)));
     CHECK_CUEST(cuestParametersConfigure(CUEST_GRIDKINTPLAN_PARAMETERS, params,
                                          CUEST_GRIDKINTPLAN_PARAMETERS_EXCHANGE_FRACTION, &alpha, sizeof(double)));
     CHECK_CUEST(cuestParametersConfigure(CUEST_GRIDKINTPLAN_PARAMETERS, params,
@@ -398,8 +420,6 @@ void cuESTJK::build_gridk_plan() {
             CUEST_GRIDKINTPLAN_PARAMETERS_FITTING_ALGORITHM_OVERLAP_SYMMETRIC;
         const double ortho_cutoff = options_.get_double("CUEST_GRIDK_FIT_ORTHO_CUTOFF");
         const double fit_cutoff = options_.get_double("CUEST_GRIDK_FIT_CUTOFF");
-        if (!(ortho_cutoff > 0.0)) throw PSIEXCEPTION("CUEST_GRIDK_FIT_ORTHO_CUTOFF must be positive.");
-        if (!(fit_cutoff > 0.0 && fit_cutoff < 1.0)) throw PSIEXCEPTION("CUEST_GRIDK_FIT_CUTOFF must be in (0, 1).");
         CHECK_CUEST(cuestParametersConfigure(CUEST_GRIDKINTPLAN_PARAMETERS, params,
                                              CUEST_GRIDKINTPLAN_PARAMETERS_FITTING_ALGORITHM, &algorithm,
                                              sizeof(algorithm)));
@@ -479,7 +499,7 @@ void cuESTJK::compute_gridk_JK() {
     auto d_K = do_K_ ? reinterpret_cast<double*>(exchange->deviceBuffer) : nullptr;
 
     cuestWorkspaceDescriptor_t j_desc{}, k_desc{}, variable{};
-    variable.deviceBufferSizeInBytes = gridk_workspace_bytes();
+    if (do_K_) variable.deviceBufferSizeInBytes = gridk_workspace_bytes();
     if (do_J_) query_coulomb_workspace(&j_desc, d_D, d_J);
     if (do_K_) {
         if (lr_symmetric_) {

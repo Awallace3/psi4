@@ -191,24 +191,10 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     (cuEST Grid-K; Hohenstein, Alkan, Wu and Parrish, arXiv:2611.16420):
     GRID uses the raw collocation; GRID_FIT dresses it with cuEST's symmetric
     overlap fit so the quadrature reproduces the analytic overlap matrix.
-    Paper estimates against analytic exchange (SG-0 exchange grid, wB97M-V
-    urea clusters up to 496 atoms): GRID total-energy errors of up to
-    9 uEh/atom in double-zeta and 8-19 uEh/atom in def2-TZVP/def2-QZVP, with
-    up to 1.24 kcal/mol in GMTKN55 relative energies; GRID_FIT 2.9, 1.8, 1.0
-    and 0.6 uEh/atom in def2-SVP, def2-SVPD, def2-TZVP and def2-QZVP and about
-    10x smaller relative-energy errors. The fit helps little in double-zeta
-    basis sets. The paper's full "compensated" recipe also needs an SAD
-    difference density, which is not implemented here. The exchange grid
+    This is the overlap fit only, not an SAD difference-density correction. The exchange grid
     follows the DFT grid options (|globals__dft_grid_name| SG0 or SG1, or
-    |globals__dft_radial_points| and |globals__dft_spherical_points|); errors
-    grow linearly with system size, so converge the grid as needed.
-    Speed caveat: Grid-K pays off only for large systems in larger basis sets
-    on FP64-capable GPUs. On one B200 with SG-0 the paper reports energy plus
-    gradient speedups over integral-direct J/K of about 1.5x in def2-SVP,
-    3.6-3.8x in def2-TZVP and 7.0-7.5x in def2-QZVP (with direct J), and
-    recommends integral-direct methods for def2-SVP and smaller. For small
-    molecules, on consumer GPUs with slow FP64, or on dense grids, DF is
-    usually faster. GRID_FIT costs a few percent more than GRID. Requires
+    |globals__dft_radial_points| and |globals__dft_spherical_points|); converge
+    the exchange quadrature for the property of interest. Requires
     cuEST >= 0.3. Analytic exchange gradients are not implemented for GRID or
     GRID_FIT. No effect unless a cuEST J/K builder is selected. -*/
     options.add_str("CUEST_K_BUILD", "DF", "DF GRID GRID_FIT");
@@ -216,7 +202,13 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     CUDA 13+, ahead-of-time kernels otherwise). ON and OFF force JIT or
     ahead-of-time kernels; neither changes screening or precision. !expert -*/
     options.add_str("CUEST_DIRECTJ_JIT", "DEFAULT", "DEFAULT ON OFF");
-    /*- Variable device scratch budget for |globals__cuest_k_build| GRID, in decimal MB. Must
+    /*- Density-weighted Schwarz threshold for DIRECT Coulomb. When not set,
+    follows INTS_TOLERANCE, which still controls the AO pair list. Zero disables
+    the additional density-weighted screening. !expert -*/
+    options.add_double("CUEST_DIRECTJ_DENSITY_THRESHOLD", 1.0e-14);
+    /*- AO collocation screening threshold for GRID and GRID_FIT. !expert -*/
+    options.add_double("CUEST_GRIDK_COLLOCATION_THRESHOLD", 1.0e-18);
+    /*- Variable device scratch budget for |globals__cuest_k_build| GRID or GRID_FIT, in decimal MB. Must
     be positive. Smaller values make cuEST tile more and may run slower; they do
     not change the result. This is not a cap on total device memory: plans, AO
     matrices and fixed SDK workspace come on top. !expert -*/
