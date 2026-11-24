@@ -36,6 +36,7 @@
 
 #ifdef USING_cuEST
 #include <cuest.h>
+#include <functional>
 // PSI_CUEST_HAS_GRIDK / PSI_CUEST_HAS_DIRECTJ come from compiled CMake API
 // probes and are exported with core for plugin ABI consistency. Header
 // presence is insufficient: the 0.2.50 preview and 0.3 release differ.
@@ -63,6 +64,8 @@ class PSI_API cuESTJK : public JK {
     uint64_t dfk_moduli_;
 
     bool initialized_;
+    bool force_integral_direct_ = false;
+    bool integral_direct() const;
     // One live plan only. The key contains values, never pointer identity.
     std::string plan_key_;
     // cuEST receives Molecule geometry, not independent BasisSet::move_atom
@@ -133,6 +136,7 @@ class PSI_API cuESTJK : public JK {
     bool C1() const override { return true; }
     void preiterations() override;
     void compute_JK() override;
+    void compute_df_jk(cuESTJK& plan);
     void postiterations() override;
 
     void build_cuest_basis(const std::shared_ptr<BasisSet>& basis, cuestAOBasis_t& result,
@@ -140,6 +144,7 @@ class PSI_API cuESTJK : public JK {
     bool destroy_cuest_objects() noexcept;
     std::string current_plan_key() const;
     void build_cuest_plan(const std::string& key);
+    void compute_integral_direct_k(size_t nocc, const double* left, const double* right, double* exchange);
     bool needs_df_plan() const { return (do_J_ && !directj_) || ((do_K_ || do_wK_) && !gridk_); }
     void query_coulomb_workspace(cuestWorkspaceDescriptor_t* desc, const double* density, double* coulomb);
     void compute_coulomb(cuestWorkspace_t* scratch, const double* density, double* coulomb);
@@ -156,6 +161,8 @@ class PSI_API cuESTJK : public JK {
     cuESTJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary, Options& options);
     ~cuESTJK() noexcept override;
 
+    /// Request an integral-direct DF plan on this builder only.
+    void enable_integral_direct();
     void set_condition(double condition) { condition_ = condition; }
     // An explicit setter takes precedence over the live INTS_TOLERANCE option.
     void set_cutoff(double cutoff) override;
@@ -179,6 +186,13 @@ class PSI_API cuESTJK : public JK {
     bool uses_directj() const { return directj_; }
     bool has_initialized_plan() const { return initialized_; }
     void print_header() const override;
+
+    bool matches_fragment_plan(const std::shared_ptr<BasisSet>& primary,
+                               const std::shared_ptr<BasisSet>& auxiliary) const;
+    void with_fragment_task(bool exchange, const std::function<void(JK&)>& visit);
+    /// For each (a,b), dot the two fitted orbital-pair factors over the auxiliary index.
+    SharedMatrix df_pair_dots(const SharedMatrix& left1, const SharedMatrix& right1,
+                              const SharedMatrix& left2, const SharedMatrix& right2);
 
     cuestDFIntPlan_t cuest_df_plan() { return cuest_df_plan_; }
 };

@@ -34,6 +34,7 @@
 #include <set>
 #include "psi4/mcscf/block_matrix.h"
 #include "psi4/libscf_solver/rhf.h"
+#include "psi4/libscf_solver/cpscf_gemm.h"
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -45,6 +46,9 @@
 #include "psi4/libcubeprop/csg.h"
 #include "psi4/libdiis/diismanager.h"
 #include "psi4/libfock/jk.h"
+#ifdef USING_cuEST
+#include "psi4/libfock/cuESTJK.h"
+#endif
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/extern.h"
 #include "psi4/libmints/factory.h"
@@ -5415,6 +5419,110 @@ void FISAPT::flocalize() {
     }
 }
 
+namespace {
+bool use_orbital_jk(Options& options, size_t nao, size_t na, size_t nb, size_t naux, size_t memory) {
+    auto algorithm = options.get_str("FISAPT_FSAPT_INTEGRAL_ALGORITHM");
+    bool available = false;
+#ifdef USING_cuEST
+    available = options.get_bool("USE_CUEST") && options.get_str("FISAPT_LINK_ASSIGNMENT") == "C" &&
+                !options.get_bool("CUEST_DIRECTJ") && !options.get_bool("CUEST_GRIDK");
+#endif
+    const bool explicit_gpu = algorithm == "CUEST_JK" || algorithm == "CUEST_DFMO" || algorithm == "CUEST_DFMO_DIRECT";
+    if (explicit_gpu && !available)
+        throw PSIEXCEPTION("FISAPT CUEST_JK requires DF Coulomb and exchange on cuEST with C link assignment.");
+    return available && (explicit_gpu ||
+                         (algorithm == "AUTO" && na * (nao - na) + nb * (nao - nb) > memory / naux));
+}
+
+std::shared_ptr<JK> orbital_jk_plan(const std::shared_ptr<BasisSet>& primary, const std::shared_ptr<BasisSet>& auxiliary,
+                                    Options& options, size_t memory, bool exchange) {
+    auto jk = JK::build_JK(primary, auxiliary, options, std::string("DISK_DF"));
+    jk->set_memory(memory);
+#ifdef USING_cuEST
+    if (options.get_str("FISAPT_FSAPT_INTEGRAL_ALGORITHM") == "CUEST_DFMO_DIRECT") {
+        auto gpu = std::dynamic_pointer_cast<cuESTJK>(jk);
+        if (!gpu) throw PSIEXCEPTION("F-SAPT integral-direct DFMO requires cuEST JK.");
+        gpu->enable_integral_direct();
+    }
+#endif
+    jk->set_do_J(!exchange);
+    jk->set_do_K(exchange);
+    jk->initialize();
+    return jk;
+}
+
+void with_orbital_jk(const std::shared_ptr<cuESTJK>& cached, const std::shared_ptr<BasisSet>& primary,
+                     const std::shared_ptr<BasisSet>& auxiliary, Options& options, size_t memory,
+                     bool exchange, const std::function<void(JK&)>& visit) {
+#ifdef USING_cuEST
+    if (cached) {
+        cached->with_fragment_task(exchange, visit);
+        return;
+    }
+#endif
+    auto jk = orbital_jk_plan(primary, auxiliary, options, memory, exchange);
+    visit(*jk);
+    jk->finalize();
+}
+
+// J[L_i L_i^T] gives the orbital Coulomb potential. With right coefficients,
+// K[L_i R_i^T] gives the mixed exchange operator for this single orbital pair.
+void visit_orbital_jk(JK& jk, const SharedMatrix& left, const SharedMatrix& right,
+                      const std::function<void(int, SharedMatrix)>& consume) {
+    jk.C_left().clear();
+    jk.C_right().clear();
+    auto column = std::make_shared<Matrix>("Left orbital", left->nrow(), 1);
+    jk.C_left().push_back(column);
+    SharedMatrix rcolumn;
+    if (right) {
+        rcolumn = std::make_shared<Matrix>("Right orbital", right->nrow(), 1);
+        jk.C_right().push_back(rcolumn);
+    }
+    for (int i = 0; i < left->ncol(); ++i) {
+        C_DCOPY(left->nrow(), &left->pointer()[0][i], left->ncol(), column->pointer()[0], 1);
+        if (right) C_DCOPY(right->nrow(), &right->pointer()[0][i], right->ncol(), rcolumn->pointer()[0], 1);
+        jk.compute();
+        consume(i, right ? jk.K().front() : jk.J().front());
+    }
+}
+
+// Reuse the one-electron plan while visiting the nuclei of both fragments.
+std::function<void(SharedMatrix, double, size_t)> nuclear_potential(const std::shared_ptr<BasisSet>& basis,
+                                                                   Options& options) {
+    auto mol = basis->molecule();
+#ifdef USING_cuEST
+    if (options.get_bool("USE_CUEST")) {
+        auto mints = std::make_shared<MintsHelper>(basis, options, 0);
+        return [mol, mints](SharedMatrix target, double charge, size_t i) {
+            mints->form_V_cuest_charges(target, {{charge, mol->x(i), mol->y(i), mol->z(i)}});
+        };
+    }
+#endif
+    auto factory = std::make_shared<IntegralFactory>(basis);
+    std::shared_ptr<PotentialInt> potential(static_cast<PotentialInt*>(factory->ao_potential().release()));
+    return [mol, factory, potential](SharedMatrix target, double charge, size_t i) {
+        target->zero();
+        potential->set_charge_field({{charge, {mol->x(i), mol->y(i), mol->z(i)}}});
+        potential->compute(target);
+    };
+}
+}  // namespace
+
+bool FISAPT::reuse_sapt_jk(std::shared_ptr<JK> jk) {
+    fragment_plan_.reset();
+#ifdef USING_cuEST
+    const auto algorithm = options_.get_str("FISAPT_FSAPT_INTEGRAL_ALGORITHM");
+    auto plan = std::dynamic_pointer_cast<cuESTJK>(jk);
+    if (plan && options_.get_str("FISAPT_LINK_ASSIGNMENT") == "C" &&
+        (algorithm == "AUTO" || algorithm == "CUEST_JK" || algorithm == "CUEST_DFMO") &&
+        plan->matches_fragment_plan(primary_, reference_->get_basisset("DF_BASIS_SCF"))) {
+        fragment_plan_ = std::move(plan);
+        outfile->Printf("    F-SAPT reusing scalar cuEST DF integrals for electrostatics, exchange and induction.\n");
+    }
+#endif
+    return static_cast<bool>(fragment_plan_);
+}
+
 // Compute fragment-fragment partitioning of electrostatic contribution
 void FISAPT::felst() {
     outfile->Printf("  ==> F-SAPT Electrostatics <==\n\n");
@@ -5536,31 +5644,50 @@ void FISAPT::felst() {
     dfh_->set_memory(doubles_);
     dfh_->set_method("DIRECT_iaQ");
     dfh_->set_nthreads(nT);
-    dfh_->initialize();
-    dfh_->print_header();
-
-    dfh_->add_space("a", L0A);
-    dfh_->add_space("b", L0B);
-
-    dfh_->add_transformation("Aaa", "a", "a");
-    dfh_->add_transformation("Abb", "b", "b");
-
-    dfh_->transform();
-
     size_t nQ = dfh_->get_naux();
-    auto QaC = std::make_shared<Matrix>("QaC", na, nQ);
-    double** QaCp = QaC->pointer();
-    for (size_t a = 0; a < na; a++) {
-        dfh_->fill_tensor("Aaa", QaCp[a], {a, a + 1}, {a, a + 1});
-    }
+    SharedMatrix Elst10_3;
+    if (fragment_plan_ || use_orbital_jk(options_, nn, na, nb, nQ, doubles_)) {
+        outfile->Printf("    F-SAPT electrostatics: cuEST localized-orbital Coulomb potentials\n");
+        Elst10_3 = std::make_shared<Matrix>("Orbital Coulomb interactions", na, nb);
+        bool from_a = na <= nb;
+        const auto& target = from_a ? L0B : L0A;
+        with_orbital_jk(fragment_plan_, primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_,
+                        false, [&](JK& jk) {
+            visit_orbital_jk(jk, from_a ? L0A : L0B, nullptr, [&](int i, SharedMatrix j) {
+                auto jl = scf::cpscf::doublet(options_, j, target, false, false);
+                for (int k = 0; k < target->ncol(); ++k) {
+                    double e = C_DDOT(nn, &target->pointer()[0][k], target->ncol(), &jl->pointer()[0][k], target->ncol());
+                    Elst10_3->set(from_a ? i : k, from_a ? k : i, e);
+                }
+            });
+        });
+    } else {
+        dfh_->initialize();
+        dfh_->print_header();
+        dfh_->add_space("a", L0A);
+        dfh_->add_space("b", L0B);
 
-    auto QbC = std::make_shared<Matrix>("QbC", nb, nQ);
-    double** QbCp = QbC->pointer();
-    for (size_t b = 0; b < nb; b++) {
-        dfh_->fill_tensor("Abb", QbCp[b], {b, b + 1}, {b, b + 1});
-    }
+        dfh_->add_transformation("Aaa", "a", "a");
+        dfh_->add_transformation("Abb", "b", "b");
 
-    std::shared_ptr<Matrix> Elst10_3 = linalg::doublet(QaC, QbC, false, true);
+        dfh_->transform();
+
+        auto QaC = std::make_shared<Matrix>("QaC", na, nQ);
+        double** QaCp = QaC->pointer();
+        for (size_t a = 0; a < na; a++) {
+            dfh_->fill_tensor("Aaa", QaCp[a], {a, a + 1}, {a, a + 1});
+        }
+
+        auto QbC = std::make_shared<Matrix>("QbC", nb, nQ);
+        double** QbCp = QbC->pointer();
+        for (size_t b = 0; b < nb; b++) {
+            dfh_->fill_tensor("Abb", QbCp[b], {b, b + 1}, {b, b + 1});
+        }
+
+        Elst10_3 = linalg::doublet(QaC, QbC, false, true);
+        matrices_["Vlocc0A"] = QaC;
+        matrices_["Vlocc0B"] = QbC;
+    }
     double** Elst10_3p = Elst10_3->pointer();
     for (int a = 0; a < na; a++) {
         for (int b = 0; b < nb; b++) {
@@ -5570,12 +5697,8 @@ void FISAPT::felst() {
         }
     }
 
-    matrices_["Vlocc0A"] = QaC;
-    matrices_["Vlocc0B"] = QbC;
-
     // => Nuclear Part (PITA) <= //
-    auto Vfact2 = std::make_shared<IntegralFactory>(primary_);
-    std::shared_ptr<PotentialInt> Vint2(static_cast<PotentialInt*>(Vfact2->ao_potential().release()));
+    auto build_potential = nuclear_potential(primary_, options_);
     auto Vtemp2 = std::make_shared<Matrix>("Vtemp2", nn, nn);
 
 
@@ -5583,11 +5706,9 @@ void FISAPT::felst() {
 
     for (int A = 0; A < nA; A++) {
         if (ZAp[A] == 0.0) continue;
-        Vtemp2->zero();
-        Vint2->set_charge_field({{ZAp[A], {mol->x(A), mol->y(A), mol->z(A)}}});
-        Vint2->compute(Vtemp2);
+        build_potential(Vtemp2, ZAp[A], A);
         std::shared_ptr<Matrix> Vbb =
-            linalg::triplet(L0B, Vtemp2, L0B, true, false, false);
+            scf::cpscf::triplet(options_, L0B, Vtemp2, L0B, true, false, false);
         double** Vbbp = Vbb->pointer();
         for (int b = 0; b < nb; b++) {
             double E = 2.0 * Vbbp[b][b];
@@ -5612,11 +5733,9 @@ void FISAPT::felst() {
 
     for (int B = 0; B < nB; B++) {
         if (ZBp[B] == 0.0) continue;
-        Vtemp2->zero();
-        Vint2->set_charge_field({{ZBp[B], {mol->x(B), mol->y(B), mol->z(B)}}});
-        Vint2->compute(Vtemp2);
+        build_potential(Vtemp2, ZBp[B], B);
         std::shared_ptr<Matrix> Vaa =
-            linalg::triplet(L0A, Vtemp2, L0A, true, false, false);
+            scf::cpscf::triplet(options_, L0A, Vtemp2, L0A, true, false, false);
         double** Vaap = Vaa->pointer();
         for (int a = 0; a < na; a++) {
             double E = 2.0 * Vaap[a][a];
@@ -5720,32 +5839,6 @@ void FISAPT::fexch() {
     std::shared_ptr<Matrix> CvirA = matrices_["Cvir0A"];
     std::shared_ptr<Matrix> CvirB = matrices_["Cvir0B"];
 
-    // ==> DF ERI Setup (JKFIT Type, in Full Basis) <== //
-
-    int nT = 1;
-#ifdef _OPENMP
-    nT = Process::environment.get_n_threads();
-#endif
-
-    std::vector<std::shared_ptr<Matrix> > Cs;
-    Cs.push_back(LoccA);
-    Cs.push_back(CvirA);
-    Cs.push_back(LoccB);
-    Cs.push_back(CvirB);
-
-    size_t max_MO = 0;
-    for (auto& mat : Cs) max_MO = std::max(max_MO, (size_t)mat->ncol());
-
-    dfh_->add_space("a", Cs[0]);
-    dfh_->add_space("r", Cs[1]);
-    dfh_->add_space("b", Cs[2]);
-    dfh_->add_space("s", Cs[3]);
-
-    dfh_->add_transformation("Aar", "a", "r");
-    dfh_->add_transformation("Abs", "b", "s");
-
-    dfh_->transform();
-
     // ==> Electrostatic Potentials <== //
 
     std::shared_ptr<Matrix> W_A(J_A->clone());
@@ -5801,39 +5894,62 @@ void FISAPT::fexch() {
     // E_exch2->print();
 
     size_t nQ = dfh_->get_naux();
-    auto TrQ = std::make_shared<Matrix>("TrQ", nr, nQ);
-    double** TrQp = TrQ->pointer();
-    auto TsQ = std::make_shared<Matrix>("TsQ", ns, nQ);
-    double** TsQp = TsQ->pointer();
-    auto TbQ = std::make_shared<Matrix>("TbQ", nb, nQ);
-    double** TbQp = TbQ->pointer();
-    auto TaQ = std::make_shared<Matrix>("TaQ", na, nQ);
-    double** TaQp = TaQ->pointer();
-
-    dfh_->add_disk_tensor("Bab", std::make_tuple(na, nb, nQ));
-
-    for (size_t a = 0; a < na; a++) {
-        dfh_->fill_tensor("Aar", TrQ, {a, a + 1});
-        C_DGEMM('N', 'N', nb, nQ, nr, 1.0, Sbrp[0], nr, TrQp[0], nQ, 0.0, TbQp[0], nQ);
-        dfh_->write_disk_tensor("Bab", TbQ, {a, a + 1});
-    }
-
-    dfh_->add_disk_tensor("Bba", std::make_tuple(nb, na, nQ));
-
-    for (size_t b = 0; b < nb; b++) {
-        dfh_->fill_tensor("Abs", TsQ, {b, b + 1});
-        C_DGEMM('N', 'N', na, nQ, ns, 1.0, Sasp[0], ns, TsQp[0], nQ, 0.0, TaQp[0], nQ);
-        dfh_->write_disk_tensor("Bba", TaQ, {b, b + 1});
-    }
-
     auto E_exch3 = std::make_shared<Matrix>("E_exch [a <x-x> b]", na, nb);
     double** E_exch3p = E_exch3->pointer();
 
-    for (size_t a = 0; a < na; a++) {
-        dfh_->fill_tensor("Bab", TbQ, {a, a + 1});
-        for (size_t b = 0; b < nb; b++) {
-            dfh_->fill_tensor("Bba", TaQ, {b, b + 1}, {a, a + 1});
-            E_exch3p[a][b] -= 2.0 * C_DDOT(nQ, TbQp[b], 1, TaQp[0], 1);
+    auto b_proj = scf::cpscf::doublet(options_, CvirA, Sbr, false, true);
+    auto a_proj = scf::cpscf::doublet(options_, CvirB, Sas, false, true);
+#ifdef USING_cuEST
+    if (!dfh_->is_initialized() && options_.get_str("FISAPT_FSAPT_INTEGRAL_ALGORITHM") != "CUEST_JK") {
+        outfile->Printf("    F-SAPT exchange: tiled cuEST DFMO orbital-pair dots\n");
+        auto gpu = fragment_plan_;
+        if (!gpu) gpu = std::dynamic_pointer_cast<cuESTJK>(
+            orbital_jk_plan(primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_, false));
+        if (!gpu) throw PSIEXCEPTION("F-SAPT DFMO exchange requires a cuEST JK object.");
+        E_exch3 = gpu->df_pair_dots(LoccA, b_proj, a_proj, LoccB);
+        E_exch3->scale(-2.0);
+        E_exch3p = E_exch3->pointer();
+        if (!fragment_plan_) gpu->finalize();
+    } else
+#endif
+    if (!dfh_->is_initialized()) {
+        // b_proj^T K[a a_proj^T] b = sum_Q (a b_proj|Q)(a_proj b|Q).
+        // Exchange the roles of the pairs when B has fewer occupied orbitals.
+        outfile->Printf("    F-SAPT exchange: cuEST localized-orbital exchange potentials\n");
+        bool from_a = na <= nb;
+        const auto& target_l = from_a ? b_proj : LoccA;
+        const auto& target_r = from_a ? LoccB : a_proj;
+        with_orbital_jk(fragment_plan_, primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_,
+                        true, [&](JK& jk) {
+            visit_orbital_jk(jk, from_a ? LoccA : b_proj, from_a ? a_proj : LoccB, [&](int i, SharedMatrix k) {
+                auto kr = scf::cpscf::doublet(options_, k, target_r, false, false);
+                for (int j = 0; j < target_l->ncol(); ++j) {
+                    double value = C_DDOT(target_l->nrow(), &target_l->pointer()[0][j], target_l->ncol(),
+                                          &kr->pointer()[0][j], kr->ncol());
+                    E_exch3p[from_a ? i : j][from_a ? j : i] = -2.0 * value;
+                }
+            });
+        });
+    } else {
+        // Contract the virtual overlaps into the MO coefficients before the DF transform:
+        // Bab(a,b,Q) = sum_r (a r|Q) Sbr(b,r). By AO-pair symmetry the reverse
+        // factor can also be transformed in (a,b,Q) order and read a row at a time.
+        dfh_->add_space("a", LoccA);
+        dfh_->add_space("b", LoccB);
+        dfh_->add_space("b_proj", b_proj);
+        dfh_->add_space("a_proj", a_proj);
+        dfh_->add_transformation("Bab", "a", "b_proj");
+        dfh_->add_transformation("Bba", "a_proj", "b");
+        dfh_->transform();
+        auto forward = std::make_shared<Matrix>("Bab row", nb, nQ);
+        auto reverse = std::make_shared<Matrix>("Bba row", nb, nQ);
+
+        for (size_t a = 0; a < na; a++) {
+            dfh_->fill_tensor("Bab", forward, {a, a + 1});
+            dfh_->fill_tensor("Bba", reverse, {a, a + 1});
+            for (size_t b = 0; b < nb; b++) {
+                E_exch3p[a][b] -= 2.0 * C_DDOT(nQ, forward->pointer()[b], 1, reverse->pointer()[b], 1);
+            }
         }
     }
 
@@ -5964,76 +6080,78 @@ void FISAPT::find() {
 
     // => Nuclear Part (PITA) <= //
 
-    auto Vfact2 = std::make_shared<IntegralFactory>(primary_);
-    std::shared_ptr<PotentialInt> Vint2(static_cast<PotentialInt*>(Vfact2->ao_potential().release()));
-    auto Vtemp2 = std::make_shared<Matrix>("Vtemp2", nn, nn);
-
-    double* ZAp = vectors_["ZA"]->pointer();
-    for (size_t A = 0; A < nA; A++) {
-        Vtemp2->zero();
-        Vint2->set_charge_field({{ZAp[A], {mol->x(A), mol->y(A), mol->z(A)}}});
-        Vint2->compute(Vtemp2);
-        std::shared_ptr<Matrix> Vbs = linalg::triplet(Cocc_B, Vtemp2, Cvir_B, true, false, false);
-        dfh_->write_disk_tensor("WAbs", Vbs, {A, A + 1});
+    {
+        auto build_potential = nuclear_potential(primary_, options_);
+        auto ao = std::make_shared<Matrix>("Nuclear potential", nn, nn);
+        auto write_nuclear_terms = [&](const char* tensor, size_t ncenter, const SharedVector& charges,
+                                       const SharedMatrix& occ, const SharedMatrix& vir) {
+            auto zero = std::make_shared<Matrix>("Zero potential", occ->ncol(), vir->ncol());
+            for (size_t i = 0; i < ncenter; ++i) {
+                SharedMatrix term = zero;
+                if (double charge = charges->get(i)) {
+                    build_potential(ao, charge, i);
+                    term = scf::cpscf::triplet(options_, occ, ao, vir, true, false, false);
+                }
+                dfh_->write_disk_tensor(tensor, term, {i, i + 1});
+            }
+        };
+        write_nuclear_terms("WAbs", nA, vectors_["ZA"], Cocc_B, Cvir_B);
+        write_nuclear_terms("WBar", nB, vectors_["ZB"], Cocc_A, Cvir_A);
     }
 
-    double* ZBp = vectors_["ZB"]->pointer();
-    for (size_t B = 0; B < nB; B++) {
-        Vtemp2->zero();
-        Vint2->set_charge_field({{ZBp[B], {mol->x(B), mol->y(B), mol->z(B)}}});
-        Vint2->compute(Vtemp2);
-        std::shared_ptr<Matrix> Var = linalg::triplet(Cocc_A, Vtemp2, Cvir_A, true, false, false);
-        dfh_->write_disk_tensor("WBar", Var, {B, B + 1});
-    }
+    if (!dfh_->is_initialized()) {
+        outfile->Printf("    F-SAPT induction: cuEST localized-orbital Coulomb potentials\n");
+        with_orbital_jk(fragment_plan_, primary_, reference_->get_basisset("DF_BASIS_SCF"), options_, doubles_,
+                        false, [&](JK& jk) {
+            auto write_sources = [&](const char* tensor, size_t offset, const SharedMatrix& source,
+                                     const SharedMatrix& occ, const SharedMatrix& vir) {
+                visit_orbital_jk(jk, source, nullptr, [&](int i, SharedMatrix j) {
+                    auto esp = scf::cpscf::triplet(options_, occ, j, vir, true, false, false);
+                    esp->scale(2.0);
+                    dfh_->write_disk_tensor(tensor, esp, {offset + i, offset + i + 1});
+                });
+            };
+            write_sources("WAbs", nA, Locc_A, Cocc_B, Cvir_B);
+            write_sources("WBar", nB, Locc_B, Cocc_A, Cvir_A);
+        });
+    } else {
+        dfh_->add_space("a", Cocc_A);
+        dfh_->add_space("r", Cvir_A);
+        dfh_->add_space("b", Cocc_B);
+        dfh_->add_space("s", Cvir_B);
+        dfh_->add_transformation("Aar", "a", "r");
+        dfh_->add_transformation("Abs", "b", "s");
 
-    // ==> DFHelper Setup (JKFIT Type, in Full Basis) <== //
+        dfh_->transform();
 
-    std::vector<std::shared_ptr<Matrix> > Cs;
-    Cs.push_back(Cocc_A);
-    Cs.push_back(Cvir_A);
-    Cs.push_back(Cocc_B);
-    Cs.push_back(Cvir_B);
+        // => Electronic Part (Massive PITA) <= //
 
-    size_t max_MO = 0;
-    for (auto& mat : Cs) max_MO = std::max(max_MO, (size_t)mat->ncol());
+        double** RaCp = matrices_["Vlocc0A"]->pointer();
+        double** RbDp = matrices_["Vlocc0B"]->pointer();
+        // for SAOn/SIAOn, the above two matrices contain the link orbital contribution
 
-    dfh_->add_space("a", Cs[0]);
-    dfh_->add_space("r", Cs[1]);
-    dfh_->add_space("b", Cs[2]);
-    dfh_->add_space("s", Cs[3]);
-
-    dfh_->add_transformation("Aar", "a", "r");
-    dfh_->add_transformation("Abs", "b", "s");
-
-    dfh_->transform();
-
-    // => Electronic Part (Massive PITA) <= //
-
-    double** RaCp = matrices_["Vlocc0A"]->pointer();
-    double** RbDp = matrices_["Vlocc0B"]->pointer();
-    // for SAOn/SIAOn, the above two matrices contain the link orbital contribution
-
-    auto TsQ = std::make_shared<Matrix>("TsQ", ns, nQ);
-    auto T1As = std::make_shared<Matrix>("T1As", na1, ns);
-    double** TsQp = TsQ->pointer();
-    double** T1Asp = T1As->pointer();
-    for (size_t b = 0; b < nb; b++) {
-        dfh_->fill_tensor("Abs", TsQ, {b, b + 1});
-        C_DGEMM('N', 'T', na1, ns, nQ, 2.0, RaCp[0], nQ, TsQp[0], nQ, 0.0, T1Asp[0], ns);
-        for (size_t a = 0; a < na1; a++) {
-            dfh_->write_disk_tensor("WAbs", T1Asp[a], {nA + a, nA + a + 1}, {b, b + 1});
+        auto TsQ = std::make_shared<Matrix>("TsQ", ns, nQ);
+        auto T1As = std::make_shared<Matrix>("T1As", na1, ns);
+        double** TsQp = TsQ->pointer();
+        double** T1Asp = T1As->pointer();
+        for (size_t b = 0; b < nb; b++) {
+            dfh_->fill_tensor("Abs", TsQ, {b, b + 1});
+            C_DGEMM('N', 'T', na1, ns, nQ, 2.0, RaCp[0], nQ, TsQp[0], nQ, 0.0, T1Asp[0], ns);
+            for (size_t a = 0; a < na1; a++) {
+                dfh_->write_disk_tensor("WAbs", T1Asp[a], {nA + a, nA + a + 1}, {b, b + 1});
+            }
         }
-    }
 
-    auto TrQ = std::make_shared<Matrix>("TrQ", nr, nQ);
-    auto T1Br = std::make_shared<Matrix>("T1Br", nb1, nr);
-    double** TrQp = TrQ->pointer();
-    double** T1Brp = T1Br->pointer();
-    for (size_t a = 0; a < na; a++) {
-        dfh_->fill_tensor("Aar", TrQ, {a, a + 1});
-        C_DGEMM('N', 'T', nb1, nr, nQ, 2.0, RbDp[0], nQ, TrQp[0], nQ, 0.0, T1Brp[0], nr);
-        for (size_t b = 0; b < nb1; b++) {
-            dfh_->write_disk_tensor("WBar", T1Brp[b], {nB + b, nB + b + 1}, {a, a + 1});
+        auto TrQ = std::make_shared<Matrix>("TrQ", nr, nQ);
+        auto T1Br = std::make_shared<Matrix>("T1Br", nb1, nr);
+        double** TrQp = TrQ->pointer();
+        double** T1Brp = T1Br->pointer();
+        for (size_t a = 0; a < na; a++) {
+            dfh_->fill_tensor("Aar", TrQ, {a, a + 1});
+            C_DGEMM('N', 'T', nb1, nr, nQ, 2.0, RbDp[0], nQ, TrQp[0], nQ, 0.0, T1Brp[0], nr);
+            for (size_t b = 0; b < nb1; b++) {
+                dfh_->write_disk_tensor("WBar", T1Brp[b], {nB + b, nB + b + 1}, {a, a + 1});
+            }
         }
     }
 

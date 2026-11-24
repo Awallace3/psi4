@@ -661,23 +661,22 @@ def fragment_d3_disp(
     D3pairs : Dict[str, Dict[str, float]]
         Dictionary containing reduced order-2 dispersion interactions between fragments
     """
-    # Iterate over fragments, pull out relevant contributions to each
-    D3frags = {}
-    for fA, idA in frags["A"].items():
-        if "Link" in fA:
+    pairs = np.asarray(d3disp)
+    values = {}
+    for name_a, atoms_a in frags["A"].items():
+        if "Link" in name_a:
             continue
-        idA = np.array(idA)
-        D3frags[fA] = {}
-        for fB, idB in frags["B"].items():
-            if "Link" in fB:
+        values[name_a] = {}
+        for name_b, atoms_b in frags["B"].items():
+            if "Link" in name_b:
                 continue
-            fe = 0.0
-            for i in idA:
-                for j in idB:
-                    fe += d3disp[i][j] + d3disp[j][i]
-            # Energies read are already in kcal/mol!
-            D3frags[fA][fB] = fe
-    return D3frags
+            # External sites have an electrostatic/induction slot but no D4 atom.
+            if name_a == "Extern-A" or name_b == "Extern-B":
+                value = 0.0
+            else:
+                value = pairs[np.ix_(atoms_a, atoms_b)].sum() + pairs[np.ix_(atoms_b, atoms_a)].sum()
+            values[name_a][name_b] = value
+    return values
 
 
 def extract_order2_fsapt(osapt, wsA, wsB, frags):
@@ -1344,7 +1343,7 @@ def compute_fsapt_qcvars(
         fragkeys["B"].append("Extern-B")
         fragkeysr["B"].append("Extern-B")
         orbital_ws["B"]["Extern-B"] = [0.0 for i in range(len(Qs["B"]))]
-        total_ws["B"]["Extern-B"] = [0.0 for i in range(len(osapt["Elst"]))]
+        total_ws["B"]["Extern-B"] = [0.0] * len(osapt["Elst"][0])
         total_ws["B"]["Extern-B"][-1] = 1.0
         for b in geom_extern_B:
             geom.append(b)
@@ -1856,51 +1855,26 @@ def run_fsapt_analysis(
             (0, molecule.fragments_[1][0]),
             (molecule.fragments_[1][0], molecule.fragments_[1][-1] + 1),
         ]
-        # When running atomic_result directly from psi4, we have the right
-        # shape already for Felst, Fexch, etc... QCFractal flattens them.
-        fsapt_vars = {}
-        if "qcvars" in atomic_results.extras:
-            qcvars = atomic_results.extras["qcvars"]
-            for key, value in qcvars.items():
-                if "fsapt" not in key.lower():
-                    continue
-                fsapt_vars[key.upper()] = value
-        else:
-            qcvars = atomic_results.extras["extra_properties"]
-            # atomic_results back from QCFractal are stored in 1D array, so we
-            # need to reshape them properly. This is (nA_atoms + na + 1,
-            # nB_atoms + nb + 1) where na are from L0A/L0B, so we cannot
-            # directly infer the right shape without knowing some additional
-            # information from the calculation itself.
-            fsapt_AB_array_shape = np.array(qcvars["fsapt_ab_size"], dtype=np.int32)
-            for key, value in qcvars.items():
-                if "fsapt" not in key.lower() or key.lower() in ["fsapt_ab_size"]:
-                    continue
-                v = np.array(value)
-                if key in ["fsapt_qa", "fsapt_qb"]:
-                    v = v.reshape(len(Z), -1)
-                elif key in ["fsapt_empirical_disp"]:
-                    # need NA * NB from molecule
-                    v = v.reshape(len(Z), len(Z))
-                else:
-                    v = v.reshape(fsapt_AB_array_shape)
-                fsapt_vars[key.upper()] = v
-        osapt, Qs = extract_osapt_data_from_fsapt_vars(
-            fsapt_vars, print_output=print_output
-        )
-        external_potentials = {}
-        if "FSAPT_EXTERN_POTENTIAL_A" in qcvars:
-            external_potentials["FSAPT_EXTERN_POTENTIAL_A"] = qcvars.get(
-                "FSAPT_EXTERN_POTENTIAL_A"
-            )
-        if "FSAPT_EXTERN_POTENTIAL_B" in qcvars:
-            external_potentials["FSAPT_EXTERN_POTENTIAL_B"] = qcvars.get(
-                "FSAPT_EXTERN_POTENTIAL_B"
-            )
-        if "FSAPT_EXTERN_POTENTIAL_C" in qcvars:
-            external_potentials["FSAPT_EXTERN_POTENTIAL_C"] = qcvars.get(
-                "FSAPT_EXTERN_POTENTIAL_C"
-            )
+        # QCFractal can flatten the arrays and lowercase the names. External
+        # centers and orbital populations have shapes independent of the energy matrix.
+        extras = atomic_results.extras
+        qcvars = extras["qcvars"] if "qcvars" in extras else extras["extra_properties"]
+        fsapt_vars = {key.upper(): np.asarray(value) for key, value in qcvars.items()
+                      if key.upper().startswith("FSAPT_")}
+        if "FSAPT_AB_SIZE" in fsapt_vars:
+            shape = tuple(fsapt_vars["FSAPT_AB_SIZE"].astype(int).ravel())
+            for suffix in ("ELST_AB", "EXCH_AB", "INDAB_AB", "INDBA_AB", "DISP_AB"):
+                key = "FSAPT_" + suffix
+                if key in fsapt_vars:
+                    fsapt_vars[key] = fsapt_vars[key].reshape(shape)
+        for key in ("FSAPT_QA", "FSAPT_QB"):
+            fsapt_vars[key] = fsapt_vars[key].reshape(len(Z), -1)
+        if "FSAPT_EMPIRICAL_DISP" in fsapt_vars:
+            fsapt_vars["FSAPT_EMPIRICAL_DISP"] = fsapt_vars["FSAPT_EMPIRICAL_DISP"].reshape(len(Z), len(Z))
+        osapt, Qs = extract_osapt_data_from_fsapt_vars(fsapt_vars, print_output=print_output)
+        external_potentials = {key: value.reshape(-1, 3) for key, value in fsapt_vars.items()
+                               if key in ("FSAPT_EXTERN_POTENTIAL_A", "FSAPT_EXTERN_POTENTIAL_B",
+                                          "FSAPT_EXTERN_POTENTIAL_C")}
     else:
         mol = wfn.molecule()
         monomer_slices = mol.get_fragments()
@@ -1920,10 +1894,8 @@ def run_fsapt_analysis(
 'fragment_a' should be a dictionary of the form {'fragment_name': [atom_indices], ...} where atom_indices are 1-indexed.
 """
         )
-    for key, value in fragments_a.items():
-        fragments_a[key] = [x - 1 for x in value]
-    for key, value in fragments_b.items():
-        fragments_b[key] = [x - 1 for x in value]
+    fragments_a = {key: [index - 1 for index in atoms] for key, atoms in fragments_a.items()}
+    fragments_b = {key: [index - 1 for index in atoms] for key, atoms in fragments_b.items()}
     holder = {
         "A": [fragments_a, list(fragments_a.keys())],
         "B": [fragments_b, list(fragments_b.keys())],

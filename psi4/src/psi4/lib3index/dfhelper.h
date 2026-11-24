@@ -340,6 +340,8 @@ class PSI_API DFHelper {
     size_t get_tensor_size(std::string key);
     std::tuple<size_t, size_t, size_t> get_tensor_shape(std::string key);
     size_t get_naux() { return naux_; }
+    /// True after preparing AO integrals and the Coulomb metric for MO transformations.
+    bool is_initialized() const { return built_; }
 
     /// builds J/K
     void build_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright, std::vector<SharedMatrix> D,

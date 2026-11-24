@@ -113,26 +113,30 @@ def _sapt_dft_dispersion_interaction_energy(
         data['FSAPT_EMPIRICAL_DISP'] = dimer_wfn.variable("PAIRWISE DISPERSION CORRECTION ANALYSIS")
         _disp_functor.print_out()
     elif d_type == "intermolecular":
-        monAs = np.array([i for i in range(monomerA.natom()) if monomerA.Z(i) > 0])
-        monBs = np.array([i for i in range(monomerB.natom()) if monomerB.Z(i) > 0])
+        monAs = np.array([i for i in range(monomerA.natom()) if monomerA.Z(i) > 0], dtype=int)
+        monBs = np.array([i for i in range(monomerB.natom()) if monomerB.Z(i) > 0], dtype=int)
         _disp_functor = empirical_dispersion.EmpiricalDispersion(
             name_hint=functional_name,
             level_hint=two_body_level_hint,
             param_tweaks=modified_disp_params,
             save_pairwise_disp=True,
         )
-        E_disp = 0.0
         _ = _disp_functor.compute_energy(sapt_dimer, dimer_wfn)
         pairwise_energies = dimer_wfn.variable("PAIRWISE DISPERSION CORRECTION ANALYSIS").np
-        FSAPT_EMPIRICAL_DISP = np.zeros_like(pairwise_energies)
-        for A in monAs:
-            for B in monBs:
-                # account for A-B and B-A with factor of 2
-                E_disp += 2 * pairwise_energies[A, B]
-                FSAPT_EMPIRICAL_DISP[A, B] = pairwise_energies[A, B]
-                FSAPT_EMPIRICAL_DISP[B, A] = pairwise_energies[A, B]
-        data[f"{disp_label} IE"] = E_disp
-        data['FSAPT_EMPIRICAL_DISP'] = FSAPT_EMPIRICAL_DISP
+        # Each symmetric half of an interfragment pair carries half its energy.
+        # The scalar and the F-SAPT atom-pair matrix share this one D4/D3 evaluation.
+        timer = f"SAPT(DFT):{disp_label} intermolecular pairs"
+        core.timer_on(timer)
+        try:
+            ab = np.ix_(monAs, monBs)
+            pairs = pairwise_energies[ab]
+            partition = np.zeros_like(pairwise_energies)
+            partition[ab] = pairs
+            partition[np.ix_(monBs, monAs)] = pairs.T
+            data[f"{disp_label} IE"] = 2.0 * pairs.sum()
+            data["FSAPT_EMPIRICAL_DISP"] = partition
+        finally:
+            core.timer_off(timer)
         _disp_functor.print_out()
     elif d_type == gd_type:
         # This uses the default Grimme parameters for the given

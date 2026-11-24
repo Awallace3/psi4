@@ -51,6 +51,7 @@ from .sapt_util import (
     print_sapt_dft_summary,
     print_sapt_hf_induction_summary,
     print_sapt_hf_summary,
+    sapt_hf_segment_variables,
     print_sapt_var,
 )
 import qcelemental as qcel
@@ -768,6 +769,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             )
             if do_delta_hf:
                 data["DHF VALUE"] = dhf_value
+            # The DFT segment reuses these term names, so keep the HF values.
+            data.update(sapt_hf_segment_variables(hf_data))
 
             core.print_out("\n")
             if induction_type == "NONE":
@@ -1805,18 +1808,28 @@ def sapt_dft(
         )
         core.timer_off("SAPT(DFT): F-SAPT Setup + Localization (IBO)")
 
-        core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
-        FISAPT_obj.felst()
-        core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
-        core.timer_on("SAPT(DFT): F-SAPT Exchange")
-        FISAPT_obj.fexch()
-        core.timer_off("SAPT(DFT): F-SAPT Exchange")
-        core.timer_on("SAPT(DFT): F-SAPT Induction")
-        if induction_matrices is None:
-            FISAPT_obj.find()
-        else:
-            FISAPT_obj.set_matrix(induction_matrices)
-        core.timer_off("SAPT(DFT): F-SAPT Induction")
+        empirical_fragments = (not do_disp and core.get_global_option("USE_CUEST")
+                               and not core.get_option("FISAPT", "FISAPT_FSAPT_IND_RESPONSE"))
+        reuse_jk = empirical_fragments and FISAPT_obj.reuse_sapt_jk(sapt_jk)
+        if empirical_fragments and cleanup_jk and not reuse_jk:
+            sapt_jk.finalize()
+            core.release_freed_memory()
+            cleanup_jk = False
+        try:
+            with p4util.timer("SAPT(DFT): F-SAPT Electrostatics"):
+                FISAPT_obj.felst()
+            with p4util.timer("SAPT(DFT): F-SAPT Exchange"):
+                FISAPT_obj.fexch()
+            with p4util.timer("SAPT(DFT): F-SAPT Induction"):
+                if induction_matrices is None:
+                    FISAPT_obj.find()
+                else:
+                    FISAPT_obj.set_matrix(induction_matrices)
+        finally:
+            if reuse_jk and cleanup_jk:
+                sapt_jk.finalize()
+                core.release_freed_memory()
+                cleanup_jk = False
         matrices = FISAPT_obj.matrices()
         for k, v in matrices.items():
             cache[k] = v
@@ -2043,6 +2056,14 @@ def sapt_dft(
             _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
         if use_cuda_dispersion and core.get_option("FISAPT","FISAPT_FSAPT_FILEPATH").upper()!="NONE":
             jk_terms.fisapt_cuda_drop(cache,dimer_wfn)
+    if do_fsapt and external_potentials:
+        # The fragment analysis uses these centers to include the external
+        # row/column in its functional-group totals. Coordinates are in bohr.
+        for side, field in external_potentials.items():
+            if field:
+                centers = [row[1:4] for kind in ("points", "diffuse") for row in field.get(kind, [])]
+                if centers:
+                    dimer_wfn.set_variable(f"FSAPT_EXTERN_POTENTIAL_{side}", np.asarray(centers))
     return data
 
 

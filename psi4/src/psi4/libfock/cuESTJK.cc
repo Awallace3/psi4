@@ -43,9 +43,11 @@
 #include "psi4/libpsi4util/PsiOutStream.h"
 #include "psi4/libpsi4util/process.h"
 #include "psi4/liboptions/liboptions.h"
+#include "psi4/libqt/qt.h"
 #include "psi4/libpsi4util/exception.h"
 #include "psi4/psi4-dec.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -190,7 +192,7 @@ std::string molecular_frame_key(const std::shared_ptr<BasisSet>& primary,
     return key;
 }
 
-void basis_key(std::string& key, const std::shared_ptr<BasisSet>& basis) {
+void basis_key(std::string& key, const std::shared_ptr<BasisSet>& basis, bool include_charges = true) {
     const auto mol = basis->molecule();
     key_value(key, mol->natom());
     key_value(key, basis->nbf());
@@ -198,8 +200,10 @@ void basis_key(std::string& key, const std::shared_ptr<BasisSet>& basis) {
     key_value(key, basis->has_puream());
     const auto xyz = mol->geometry();
     for (int a = 0; a < mol->natom(); ++a) {
-        key_double(key, mol->Z(a));  // includes the current ghost mask
-        key_value(key, mol->true_atomic_number(a));
+        if (include_charges) {
+            key_double(key, mol->Z(a));
+            key_value(key, mol->true_atomic_number(a));
+        }
         for (int k = 0; k < 3; ++k) key_double(key, xyz.get(a, k));
         key_value(key, basis->nshell_on_center(a));
         for (int q = 0; q < basis->nshell_on_center(a); ++q) {
@@ -313,6 +317,7 @@ std::string cuESTJK::current_plan_key() const {
     key_value(key, do_J_);
     key_value(key, do_K_);
     key_value(key, do_wK_);
+    key_value(key, integral_direct());
     key_value(key, options_.get_bool("CUEST_MIXED_PRECISION"));
     key_value(key, options_.get_int("CUEST_DFK_SLICES"));
     key_value(key, options_.get_int("CUEST_DFK_MODULI"));
@@ -474,6 +479,18 @@ void cuESTJK::build_cuest_plan(const std::string& key) {
         // DF Int Plan List
         PlanParameters<cuestDFIntPlanParameters_t> dfint_params(CUEST_DFINTPLAN_PARAMETERS);
 
+        if (integral_direct()) {
+#if CUEST_VERSION >= 300
+            if (options_.get_bool("CUEST_DEVICE_CG") || gridk_ || directj_)
+                throw PSIEXCEPTION("CUEST_DF_INTEGRAL_DIRECT requires DF-JK and host-driven response.");
+            const int32_t direct = 1;
+            CHECK_CUEST(cuestParametersConfigure(CUEST_DFINTPLAN_PARAMETERS, dfint_params.get(),
+                CUEST_DFINTPLAN_PARAMETERS_THREE_INDEX_INTEGRAL_DIRECT, &direct, sizeof(direct)));
+#else
+            throw PSIEXCEPTION("CUEST_DF_INTEGRAL_DIRECT requires cuEST 0.3 or later.");
+#endif
+        }
+
         // Match DFHelper's conditioned metric power, including its relative
         // eigenvalue cutoff. SDK defaults (QR and 1e-12) do not implement
         // DF_FITTING_CONDITION and can retain different auxiliary modes.
@@ -539,6 +556,11 @@ void cuESTJK::build_cuest_plan(const std::string& key) {
 
         dfint_plan_device_bytes_ = persistentWorkspaceDescriptor.deviceBufferSizeInBytes;
 
+        if (print_ >= 3 || force_integral_direct_) {
+            outfile->Printf("    cuEST DF plan (%s): persistent %zu bytes, creation scratch %zu bytes\n",
+                            integral_direct() ? "integral-direct" : "cached", dfint_plan_device_bytes_,
+                            static_cast<size_t>(temporaryWorkspaceDescriptor.deviceBufferSizeInBytes));
+        }
         phase.next("cuEST JK DF workspace alloc");
         cuest_dfint_plan_ws_ptr_ = plan_workspace(persistentWorkspaceDescriptor).release();
         auto temporaryDFIntPlanWorkspace = plan_workspace(temporaryWorkspaceDescriptor);
@@ -833,6 +855,151 @@ void cuESTJK::compute_gridk_JK() {
 }
 #endif
 
+SharedMatrix cuESTJK::df_pair_dots(const SharedMatrix& left1, const SharedMatrix& right1,
+                                   const SharedMatrix& left2, const SharedMatrix& right2) {
+    const size_t nao = primary_->nbf(), nq = auxiliary_->nbf();
+    const size_t na = left1->ncol(), nb = right1->ncol();
+    if (!cuest_df_plan_ || omega_alpha_ != 1.0 || omega_beta_ != 0.0)
+        throw PSIEXCEPTION("DF orbital-pair dots require an initialized full Coulomb plan.");
+    for (const auto& c : {left1, right1, left2, right2})
+        if (c->nirrep() != 1 || c->nrow() != nao) throw PSIEXCEPTION("Invalid DFMO orbital coefficients.");
+    if (left2->ncol() != na || right2->ncol() != nb)
+        throw PSIEXCEPTION("DFMO pair factors must have the same shape.");
+    auto result = std::make_shared<Matrix>("DF orbital-pair dots", na, nb);
+    if (!na || !nb) return result;
+
+    configure_math_mode();
+    size_t free = 0, total = 0;
+    if (!cuest_common::device_memory(&free, &total)) throw PSIEXCEPTION("Cannot size the DFMO exchange tile.");
+    const size_t budget = std::min({size_t(1) << 30, free / 8, memory_ * sizeof(double) / 4});
+    const size_t pairs = std::max<size_t>(1, budget / (2 * nq * sizeof(double)));
+    const size_t bblock = std::min(nb, pairs);
+    const size_t ablock = std::min(na, pairs / bblock);
+    cuestWorkspaceDescriptor_t buffers{}, variable{};
+    buffers.deviceBufferSizeInBytes = sizeof(double) * (2 * (ablock + bblock) * nao + (2 * nq + 1) * ablock * bblock);
+    auto storage = plan_workspace(buffers);
+    auto dl = reinterpret_cast<double*>(storage->deviceBuffer);
+    auto dr = dl + 2 * ablock * nao;
+    auto factors = dr + 2 * bblock * nao;
+    auto dots = factors + 2 * nq * ablock * bblock;
+    variable.deviceBufferSizeInBytes = std::min(size_t(2) << 30, free / 4);
+
+    auto check = [](cudaError_t status) {
+        if (status != cudaSuccess) throw PSIEXCEPTION(std::string("DFMO exchange: ") + cudaGetErrorString(status));
+    };
+    std::vector<double> packed(2 * nao * std::max(ablock, bblock));
+    auto upload = [&](const SharedMatrix& first, const SharedMatrix& second, size_t offset, size_t count, double* target) {
+        size_t row = 0;
+        for (const auto& c : {first, second})
+            for (size_t i = offset; i < offset + count; ++i, ++row)
+                C_DCOPY(nao, &c->pointer()[0][i], c->ncol(), &packed[row * nao], 1);
+        check(cudaMemcpy(target, packed.data(), row * nao * sizeof(double), cudaMemcpyHostToDevice));
+    };
+
+    PlanParameters<cuestDFMOIntegralsComputeParameters_t> params(CUEST_DFMOINTEGRALSCOMPUTE_PARAMETERS);
+    const double one = 1.0, zero = 0.0;
+    for (size_t a = 0; a < na; a += ablock) {
+        const uint64_t nl[2] = {std::min(ablock, na - a), std::min(ablock, na - a)};
+        upload(left1, left2, a, nl[0], dl);
+        for (size_t b = 0; b < nb; b += bblock) {
+            const uint64_t nr[2] = {std::min(bblock, nb - b), std::min(bblock, nb - b)};
+            upload(right1, right2, b, nr[0], dr);
+            cuestWorkspaceDescriptor_t temp{};
+            CHECK_CUEST(cuestDFMOIntegralsComputeWorkspaceQuery(cuest_handle, cuest_df_plan_, params.get(), &variable,
+                                                                &temp, 2, nl, nr, dl, dr, factors));
+            auto scratch = plan_workspace(temp);
+            CHECK_CUEST(cuestDFMOIntegralsCompute(cuest_handle, cuest_df_plan_, params.get(), &variable,
+                                                  scratch.get(), 2, nl, nr, dl, dr, factors));
+            check(cudaDeviceSynchronize());
+            // Both tensors have layout [Q,a,b]. Each batch reads one strided Q vector
+            // from each factor. Only the resulting [a,b] dots cross back to the host.
+            const int stride = static_cast<int>(nl[0] * nr[0]);
+            if (cublasDgemmStridedBatched(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, 1, 1, nq, &one, factors,
+                                          stride, 1, factors + nq * stride, stride, 1, &zero, dots, 1, 1,
+                                          stride) != CUBLAS_STATUS_SUCCESS)
+                throw PSIEXCEPTION("cuBLAS DFMO orbital-pair reduction failed.");
+            check(cudaDeviceSynchronize());
+            check(cudaMemcpy2D(&result->pointer()[a][b], nb * sizeof(double), dots, nr[0] * sizeof(double),
+                               nr[0] * sizeof(double), nl[0], cudaMemcpyDeviceToHost));
+        }
+    }
+    return result;
+}
+
+void cuESTJK::compute_integral_direct_k(size_t nocc, const double* left, const double* right, double* exchange) {
+    // A fitted DFMO tensor B[Q,i,mu] is a column-major matrix with nao rows.
+    // Sum K(mu,nu) = B_left(Q,i,mu) B_right(Q,i,nu) in occupied tiles.
+    const size_t nao = primary_->nbf(), nq = auxiliary_->nbf();
+    const size_t count = lr_symmetric_ ? 1 : 2;
+    const uint64_t nr[2] = {nao, nao};
+    size_t free_bytes = 0, total_bytes = 0;
+    if (!cuest_common::device_memory(&free_bytes, &total_bytes))
+        throw PSIEXCEPTION("Cannot size the cuEST integral-direct exchange workspace.");
+    const size_t fixed = sizeof(double) * count * nao * nao;
+    const size_t per_occ = sizeof(double) * count * nao * (nq + 1);
+    // Leave room for concurrent SDK allocations and include the queried scratch.
+    const size_t budget = free_bytes - free_bytes / 8;
+    if (budget <= fixed || per_occ > budget - fixed)
+        throw PSIEXCEPTION("Insufficient device memory for one occupied DFMO exchange tile.");
+    size_t block = std::min({nocc, (budget - fixed) / per_occ,
+                             static_cast<size_t>(std::numeric_limits<int>::max()) / nq});
+    PlanParameters<cuestDFMOIntegralsComputeParameters_t> params(CUEST_DFMOINTEGRALSCOMPUTE_PARAMETERS);
+    cuestWorkspaceDescriptor_t variable{}, scratch_size{};
+    variable.deviceBufferSizeInBytes = std::min(size_t(2000000000), budget / 8);
+    auto query = [&](size_t occupied) {
+        const uint64_t nl[2] = {occupied, occupied};
+        cuestWorkspaceDescriptor_t desc{};
+        CHECK_CUEST(cuestDFMOIntegralsComputeWorkspaceQuery(cuest_handle, cuest_df_plan_, params.get(), &variable,
+                                                            &desc, count, nl, nr, nullptr, nullptr, nullptr));
+        return desc;
+    };
+    while (block) {
+        scratch_size = query(block);
+        if (nocc % block) {
+            auto last = query(nocc % block);
+            scratch_size.deviceBufferSizeInBytes = std::max(scratch_size.deviceBufferSizeInBytes, last.deviceBufferSizeInBytes);
+            scratch_size.hostBufferSizeInBytes = std::max(scratch_size.hostBufferSizeInBytes, last.hostBufferSizeInBytes);
+        }
+        if (scratch_size.deviceBufferSizeInBytes <= budget - fixed - block * per_occ) break;
+        block /= 2;
+    }
+    if (!block) throw PSIEXCEPTION("Insufficient GPU space for integral-direct DFMO exchange and SDK scratch.");
+    auto scratch = plan_workspace(scratch_size);
+    cuestWorkspaceDescriptor_t data_size{};
+    data_size.deviceBufferSizeInBytes = fixed + block * per_occ;
+    auto data = plan_workspace(data_size);
+    auto identity = reinterpret_cast<double*>(data->deviceBuffer);
+    auto packed = identity + count * nao * nao;
+    auto factors = packed + count * nao * block;
+    auto check = [](cudaError_t error) {
+        if (error != cudaSuccess) throw PSIEXCEPTION(std::string("Integral-direct exchange: ") + cudaGetErrorString(error));
+    };
+    check(cudaMemset(identity, 0, nao * nao * sizeof(double)));
+    std::vector<double> ones(nao, 1.0);
+    check(cudaMemcpy2D(identity, (nao + 1) * sizeof(double), ones.data(), sizeof(double),
+                       sizeof(double), nao, cudaMemcpyHostToDevice));
+    if (count == 2) check(cudaMemcpy(identity + nao * nao, identity, nao * nao * sizeof(double), cudaMemcpyDeviceToDevice));
+    const double one = 1.0;
+    for (size_t start = 0; start < nocc; start += block) {
+        const size_t n = std::min(block, nocc - start);
+        const uint64_t nl[2] = {n, n};
+        const size_t elements = n * nao;
+        check(cudaMemcpy(packed, left + start * nao, elements * sizeof(double), cudaMemcpyDeviceToDevice));
+        if (count == 2)
+            check(cudaMemcpy(packed + elements, right + start * nao, elements * sizeof(double), cudaMemcpyDeviceToDevice));
+        CHECK_CUEST(cuestDFMOIntegralsCompute(cuest_handle, cuest_df_plan_, params.get(), &variable, scratch.get(),
+                                              count, nl, nr, packed, identity, factors));
+        check(cudaDeviceSynchronize());
+        const double* right_factor = count == 2 ? factors + nq * elements : factors;
+        const double beta = start ? 1.0 : 0.0;
+        // cuBLAS writes column-major. Transpose the product for Psi4's row-major K.
+        if (cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, nao, nao, nq * n, &one, right_factor, nao,
+                        factors, nao, &beta, exchange, nao) != CUBLAS_STATUS_SUCCESS)
+            throw PSIEXCEPTION("cuBLAS integral-direct exchange reduction failed.");
+        check(cudaDeviceSynchronize());
+    }
+}
+
 void cuESTJK::configure_math_mode() {
     // The handle outlives individual JK objects. Always set both directions:
     // allowing emulation must undo native FP64 selected by an earlier build.
@@ -937,6 +1104,15 @@ bool cuESTJK::destroy_cuest_objects() noexcept {
     return !cleanup_failed_;
 }
 
+bool cuESTJK::integral_direct() const {
+    return force_integral_direct_ || options_.get_bool("CUEST_DF_INTEGRAL_DIRECT");
+}
+
+void cuESTJK::enable_integral_direct() {
+    force_integral_direct_ = true;
+    rebuild_cuest_plan();
+}
+
 void cuESTJK::rebuild_cuest_plan() {
     // Before initialize() the plan does not exist yet and preiterations() will
     // pick the new fractions up on its own.
@@ -1004,6 +1180,7 @@ void cuESTJK::print_header() const {
                         options_.get_bool("CUEST_DIRECTJ")
                             ? (options_.get_bool("CUEST_GRIDK") ? "Direct-J + Grid-K" : "Direct-J + DF-K")
                             : (options_.get_bool("CUEST_GRIDK") ? "DF-J + Grid-K" : "Density-Fitted J/K"));
+        if (integral_direct()) outfile->Printf("    Integral-direct DF-J and tiled DFMO exchange\n");
         outfile->Printf("    J tasked:              %11s\n", (do_J_ ? "Yes" : "No"));
         outfile->Printf("    K tasked:              %11s\n", (do_K_ ? "Yes" : "No"));
         outfile->Printf("    wK tasked:             %11s\n", (do_wK_ ? "Yes" : "No"));
@@ -1017,6 +1194,47 @@ void cuESTJK::print_header() const {
                                                                : "Default (mixed precision permitted)");
         outfile->Printf("\n");
     }
+}
+
+bool cuESTJK::matches_fragment_plan(const std::shared_ptr<BasisSet>& primary,
+                                    const std::shared_ptr<BasisSet>& auxiliary) const {
+    if (!initialized_ || !cuest_df_plan_ || gridk_ || directj_ || integral_direct() ||
+        omega_alpha_ != 1.0 || omega_beta_ != 0.0 || current_plan_key() != plan_key_)
+        return false;
+    const double threshold = options_.get_str("SCREENING") == "NONE" ? 0.0 : options_.get_double("INTS_TOLERANCE");
+    // FISAPT historically defaults to unscreened separate integrals. For an
+    // inherited plan, use the scalar screening unless explicitly overridden.
+    if ((options_["INTS_TOLERANCE"].has_changed() || options_.get_str("SCREENING") == "NONE") &&
+        pq_threshold_ != threshold) return false;
+    // A ghost label changes nuclear attraction, but not the two-electron integrals.
+    // Compare the ordered shells and centers actually submitted to cuEST.
+    std::string source, target;
+    basis_key(source, primary_, false);
+    basis_key(source, auxiliary_, false);
+    basis_key(target, primary, false);
+    basis_key(target, auxiliary, false);
+    return source == target && shell_centers_key(primary, auxiliary) == shell_centers_;
+}
+
+void cuESTJK::with_fragment_task(bool exchange, const std::function<void(JK&)>& visit) {
+    if (!initialized_ || !cuest_df_plan_ || current_plan_key() != plan_key_ ||
+        integral_direct() || gridk_ || directj_ || omega_alpha_ != 1.0 || omega_beta_ != 0.0)
+        throw PSIEXCEPTION("The cached scalar DF plan changed before the F-SAPT orbital build.");
+    configure_math_mode();
+    // Each visit has its own coefficients, densities and results. In particular it
+    // cannot overwrite a JK matrix retained by scalar SAPT or change its task flags.
+    class OrbitalTask final : public cuESTJK {
+        cuESTJK& plan_;
+        void compute_JK() override { compute_df_jk(plan_); }
+      public:
+        OrbitalTask(cuESTJK& plan, bool exchange)
+            : cuESTJK(plan.primary_, plan.auxiliary_, plan.options_), plan_(plan) {
+            set_do_J(!exchange);
+            set_do_K(exchange);
+        }
+    };
+    OrbitalTask task(*this, exchange);
+    visit(task);
 }
 
 void cuESTJK::compute_JK() {
@@ -1041,6 +1259,10 @@ void cuESTJK::compute_JK() {
     }
 #endif
 
+    compute_df_jk(*this);
+}
+
+void cuESTJK::compute_df_jk(cuESTJK& plan) {
     using clock = std::chrono::high_resolution_clock;
     auto t_total_start = clock::now();
  
@@ -1067,40 +1289,34 @@ void cuESTJK::compute_JK() {
     std::vector<double> C_right_row_major(lr_symmetric_ ? 0 : max_coeffs);
  
     auto t0 = clock::now();
-    double* d_D = nullptr;
-    double* d_J = nullptr;
-    double* d_K = nullptr;
-    double* d_C = nullptr;
-    double* d_C_right = nullptr;
- 
-    if (do_J_) {
-        cudaMalloc(reinterpret_cast<void**>(&d_D), nbf2_bytes);
-        cudaMalloc(reinterpret_cast<void**>(&d_J), nbf2_bytes);
-    }
-    if (do_K_) cudaMalloc(reinterpret_cast<void**>(&d_K), nbf2_bytes);
-    if (max_coeffs) {
-        cudaMalloc(reinterpret_cast<void**>(&d_C), max_coeffs * sizeof(double));
-        if (!lr_symmetric_)
-            cudaMalloc(reinterpret_cast<void**>(&d_C_right), max_coeffs * sizeof(double));
-    }
+    if ((!do_J_ && !do_K_) || D_ao_.empty()) return;
+    const size_t nao2 = static_cast<size_t>(nbf) * nbf;
+    cuestWorkspaceDescriptor_t buffers{};
+    buffers.deviceBufferSizeInBytes = sizeof(double) * ((2 * do_J_ + do_K_) * nao2 +
+                                                        (lr_symmetric_ ? 1 : 2) * max_coeffs);
+    auto matrices = plan_workspace(buffers);
+    auto base = reinterpret_cast<double*>(matrices->deviceBuffer);
+    auto d_D = do_J_ ? base : nullptr;
+    auto d_J = do_J_ ? base + nao2 : nullptr;
+    auto d_K = do_K_ ? base + 2 * do_J_ * nao2 : nullptr;
+    auto d_C = max_coeffs ? d_K + nao2 : nullptr;
+    auto d_C_right = max_coeffs && !lr_symmetric_ ? d_C + max_coeffs : nullptr;
     auto t_alloc = clock::now();
- 
-    cuestWorkspaceDescriptor_t* j_temp_desc = (cuestWorkspaceDescriptor_t*) malloc(sizeof(cuestWorkspaceDescriptor_t));
-    cuestWorkspaceDescriptor_t* k_temp_desc = (cuestWorkspaceDescriptor_t*) malloc(sizeof(cuestWorkspaceDescriptor_t));
 
-    cuestWorkspaceDescriptor_t* variableBufferSize = (cuestWorkspaceDescriptor_t*) malloc(sizeof(cuestWorkspaceDescriptor_t));
-    variableBufferSize->hostBufferSizeInBytes = 0;
-    variableBufferSize->deviceBufferSizeInBytes = 8000000000;
-    
+    cuestWorkspaceDescriptor_t j_temp_desc{}, k_temp_desc{}, variable{};
+    size_t free_bytes = 0, total_bytes = 0;
+    variable.deviceBufferSizeInBytes = cuest_common::device_memory(&free_bytes, &total_bytes)
+        ? std::min(size_t(8000000000), free_bytes / 2) : size_t(8000000000);
     size_t max_host = 0, max_device = 0;
  
     if (do_J_) {
-        query_coulomb_workspace(j_temp_desc, d_D, d_J);
-        max_host = std::max(max_host, j_temp_desc->hostBufferSizeInBytes);
-        max_device = std::max(max_device, j_temp_desc->deviceBufferSizeInBytes);
+        plan.query_coulomb_workspace(&j_temp_desc, d_D, d_J);
+        max_host = std::max(max_host, j_temp_desc.hostBufferSizeInBytes);
+        max_device = std::max(max_device, j_temp_desc.deviceBufferSizeInBytes);
     }
  
-    if (do_K_) {
+    const bool direct_df = integral_direct();
+    if (do_K_ && !direct_df) {
         for (size_t N = 0; N < D_ao_.size(); N++) {
             int nocc = C_left_ao_[N]->ncol();
             if (nocc == 0) continue;
@@ -1108,35 +1324,35 @@ void cuESTJK::compute_JK() {
             if (lr_symmetric_) {
                 CHECK_CUEST(cuestDFSymmetricExchangeComputeWorkspaceQuery(
                     cuest_handle,
-                    cuest_df_plan_,
-                    cuest_exchange_compute_params_,
-                    variableBufferSize,
-                    k_temp_desc,
+                    plan.cuest_df_plan_,
+                    plan.cuest_exchange_compute_params_,
+                    &variable,
+                    &k_temp_desc,
                     static_cast<uint64_t>(nocc),
                     nullptr,
                     d_K));
             } else {
                 CHECK_CUEST(cuestDFNonsymmetricExchangeComputeWorkspaceQuery(
                     cuest_handle,
-                    cuest_df_plan_,
-                    cuest_nonsym_exchange_compute_params_,
-                    variableBufferSize,
-                    k_temp_desc,
+                    plan.cuest_df_plan_,
+                    plan.cuest_nonsym_exchange_compute_params_,
+                    &variable,
+                    &k_temp_desc,
                     1,
                     static_cast<uint64_t>(nocc),
                     nullptr,
                     nullptr,
                     d_K));
             }
-            max_host = std::max(max_host, k_temp_desc->hostBufferSizeInBytes);
-            max_device = std::max(max_device, k_temp_desc->deviceBufferSizeInBytes);
+            max_host = std::max(max_host, k_temp_desc.hostBufferSizeInBytes);
+            max_device = std::max(max_device, k_temp_desc.deviceBufferSizeInBytes);
         }
     }
  
-    cuestWorkspaceDescriptor_t* total_desc = (cuestWorkspaceDescriptor_t*) malloc(sizeof(cuestWorkspaceDescriptor_t));
-    total_desc->hostBufferSizeInBytes = max_host;
-    total_desc->deviceBufferSizeInBytes = max_device;
- 
+    cuestWorkspaceDescriptor_t total_desc{};
+    total_desc.hostBufferSizeInBytes = max_host;
+    total_desc.deviceBufferSizeInBytes = max_device;
+
     // The temporary workspace is re-queried on every build because it depends on
     // how many densities and occupied columns this build carries.  Report it the
     // first time only: it is the peak the card has to absorb on top of the two
@@ -1149,7 +1365,7 @@ void cuESTJK::compute_JK() {
                         jk_temp_device_bytes_ * cuest_common::to_gib);
     }
 
-    cuestWorkspace_t* temporaryJKWorkspace = cuest_common::allocateWorkspace(total_desc);
+    auto temporaryJKWorkspace = plan_workspace(total_desc);
 
     auto t_ws = clock::now();
     double ms_J_compute = 0.0, ms_K_compute = 0.0;
@@ -1161,7 +1377,7 @@ void cuESTJK::compute_JK() {
             auto tc0 = clock::now();
             cudaMemcpy(d_D, D_ao_[N]->get_pointer(), nbf2_bytes, cudaMemcpyHostToDevice);
             auto tc1 = clock::now();
-            compute_coulomb(temporaryJKWorkspace, d_D, d_J);
+            plan.compute_coulomb(temporaryJKWorkspace.get(), d_D, d_J);
             cudaDeviceSynchronize();
             auto tc2 = clock::now();
             cudaMemcpy(J_ao_[N]->get_pointer(), d_J, nbf2_bytes, cudaMemcpyDeviceToHost);
@@ -1209,23 +1425,25 @@ void cuESTJK::compute_JK() {
                 auto tk1 = clock::now();
  
                 CuestResponseProfile profile(options_.get_bool("CUEST_RESPONSE_PROFILE"), "cuEST response: K");
-                if (lr_symmetric_) {
+                if (direct_df) {
+                    compute_integral_direct_k(nocc, d_C, d_C_right, d_K);
+                } else if (lr_symmetric_) {
                     CHECK_CUEST(cuestDFSymmetricExchangeCompute(
                         cuest_handle,
-                        cuest_df_plan_,
-                        cuest_exchange_compute_params_,
-                        variableBufferSize,
-                        temporaryJKWorkspace,
+                        plan.cuest_df_plan_,
+                        plan.cuest_exchange_compute_params_,
+                        &variable,
+                        temporaryJKWorkspace.get(),
                         static_cast<uint64_t>(nocc),
                         d_C,
                         d_K));
                 } else {
                     CHECK_CUEST(cuestDFNonsymmetricExchangeCompute(
                         cuest_handle,
-                        cuest_df_plan_,
-                        cuest_nonsym_exchange_compute_params_,
-                        variableBufferSize,
-                        temporaryJKWorkspace,
+                        plan.cuest_df_plan_,
+                        plan.cuest_nonsym_exchange_compute_params_,
+                        &variable,
+                        temporaryJKWorkspace.get(),
                         1,
                         static_cast<uint64_t>(nocc),
                         d_C,
@@ -1250,19 +1468,9 @@ void cuESTJK::compute_JK() {
         }
     }
  
-    free(j_temp_desc);
-    free(k_temp_desc);
-    free(total_desc);
-    free(variableBufferSize);
-
-    cuest_common::freeWorkspace(temporaryJKWorkspace);
-
     auto t_free_start = clock::now();
-    cudaFree(d_D);
-    cudaFree(d_J);
-    cudaFree(d_K);
-    if (d_C) cudaFree(d_C);
-    if (d_C_right) cudaFree(d_C_right);
+    release_plan_scratch(temporaryJKWorkspace);
+    release_plan_scratch(matrices);
     auto t_free_end = clock::now();
  
     double ms_alloc = std::chrono::duration<double, std::milli>(t_alloc - t0).count();

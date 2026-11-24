@@ -5,11 +5,141 @@ from psi4 import compare_values
 from psi4 import core
 import numpy as np
 from pprint import pprint as pp
-from addons import uusing
+from addons import using, uusing
 import os
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@uusing("dftd4")
+@pytest.mark.parametrize("functional", ["HF", "PBE0"])
+@pytest.mark.parametrize("integrals", ["DF", pytest.param("AUTO", marks=using("cuest")),
+                                      pytest.param("CUEST_JK", marks=using("cuest")),
+                                      pytest.param("CUEST_DFMO", marks=using("cuest")),
+                                      pytest.param("CUEST_DFMO_DIRECT", marks=using("cuest")),
+                                      pytest.param("CUEST_DFMO_UNSCREENED", marks=using("cuest"))])
+def test_fsapt_d4i_external_fragment(functional, integrals, monkeypatch):
+    explicit_unscreened = integrals == "CUEST_DFMO_UNSCREENED"
+    if explicit_unscreened:
+        integrals = "CUEST_DFMO"
+        core.set_local_option("FISAPT", "INTS_TOLERANCE", 0.0)
+    use_gpu = integrals != "DF"
+    mol = psi4.geometry("""
+        0 1
+        O -0.702196054 -0.056060256  0.009942262
+        H -1.022193224  0.846775782 -0.011488714
+        H  0.257521062  0.042121496 -0.005218999
+        --
+        0 1
+        O  2.268880784  0.026340101 -0.000508029
+        H  2.645502399 -0.412039965  0.766632411
+        H  2.641145101 -0.449872874 -0.744894473
+        symmetry c1
+        units angstrom
+        no_reorient
+        no_com
+    """)
+    psi4.set_options({
+        "basis": "cc-pvdz", "scf_type": "df", "freeze_core": True, "use_cuest": use_gpu,
+        "fisapt_fsapt_integral_algorithm": integrals,
+        "sapt_dft_functional": functional, "sapt_dft_do_dhf": True,
+        "sapt_dft_grac_compute": "ITERATIVE" if functional == "PBE0" else "NONE",
+        "sapt_dft_do_fsapt": "FISAPT", "sapt_dft_use_einsums": False,
+        "fisapt_fsapt_filepath": "none", "orbital_optimizer_package": "internal",
+    })
+    charges = {"B": [[0.1, 8, 1, 1], [-0.1, 8, -1, 0]]}
+    accepted = []
+    reuse = core.FISAPT.reuse_sapt_jk
+
+    def record_reuse(fisapt, jk):
+        accepted.append(reuse(fisapt, jk))
+        return accepted[-1]
+
+    monkeypatch.setattr(core.FISAPT, "reuse_sapt_jk", record_reuse)
+    monkeypatch.setenv("PSI4_CUEST_SCF_TIMERS", "1")
+    core.clean_timers()
+    try:
+        _, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=mol, external_potentials=charges, return_wfn=True)
+    except RuntimeError as err:
+        if integrals == "CUEST_DFMO_DIRECT" and "requires cuEST 0.3 or later" in str(err):
+            pytest.skip(str(err))
+        raise
+    if use_gpu:
+        cached = integrals != "CUEST_DFMO_DIRECT" and not explicit_unscreened
+        assert accepted == [cached]
+        creations = [r for r in core.get_timer_records().values() if r["timer_name"] == "cuEST JK DF plan create"]
+        assert creations
+        fragment_creations = sum(r["n_calls"] for r in creations
+                                 if any("F-SAPT " in part for part in r["timer_path"]))
+        assert fragment_creations == (0 if cached else 3)
+    elst = np.asarray(wfn.variable("FSAPT_ELST_AB"))
+    ind_ab = np.asarray(wfn.variable("FSAPT_INDAB_AB"))
+    ind_ba = np.asarray(wfn.variable("FSAPT_INDBA_AB"))
+    np.testing.assert_allclose(wfn.variable("FSAPT_EXTERN_POTENTIAL_B").np, np.asarray(charges["B"])[:, 1:])
+    assert np.max(np.abs(elst[:, -1])) > 1.e-5
+    assert np.max(np.abs(ind_ab[:, -1])) > 1.e-8
+    for term, total in {
+        "ELST": elst.sum(), "EXCH": wfn.variable("FSAPT_EXCH_AB").np.sum(),
+        "IND": ind_ab.sum() + ind_ba.sum(), "DISP": wfn.variable("FSAPT_EMPIRICAL_DISP").np.sum(),
+    }.items():
+        assert total == pytest.approx(wfn.variable(f"SAPT {term} ENERGY"), abs=1.e-8, rel=0)
+
+    if use_gpu:
+        psi4.set_options({"fisapt_fsapt_integral_algorithm": "DF"})
+        _, reference = psi4.energy("sapt(dft)-d4(i)", molecule=mol, external_potentials=charges, return_wfn=True)
+        for term in ("ELST_AB", "EXCH_AB", "INDAB_AB", "INDBA_AB"):
+            key = "FSAPT_" + term
+            np.testing.assert_allclose(wfn.variable(key).np, reference.variable(key).np, atol=2.e-7, rtol=0)
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@uusing("dftd4")
+def test_fsapt_d4i_external_groups_from_wfn_and_flat_qcvars():
+    from qcelemental.models import v1
+
+    mol = psi4.geometry("""
+        0 1
+        O 0 0 0
+        H 0 0 0.96
+        H 0.93 0 -0.24
+        --
+        0 1
+        H 3.1 0 0
+        H 3.84 0 0
+        symmetry c1
+        no_reorient
+        no_com
+    """)
+    psi4.set_options({"basis": "cc-pvdz", "scf_type": "df", "use_cuest": False,
+                      "sapt_dft_functional": "HF", "sapt_dft_do_fsapt": "FISAPT",
+                      "fisapt_fsapt_filepath": "none", "sapt_dft_use_einsums": False})
+    energy, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=mol, return_wfn=True,
+                              external_potentials={"B": [[0.1, 8, 1, 0], [-0.1, 9, 2, 0]]})
+    elst = wfn.variable("FSAPT_ELST_AB").np
+    assert elst.shape[0] != elst.shape[1]
+    groups = dict(fragments_a={"Water": [1, 2, 3]}, fragments_b={"Hydrogen": [4, 5]},
+                  print_output=False)
+    grouped = psi4.fsapt_analysis(source=wfn, **groups)
+    fields = {key.lower(): value.np.ravel().tolist() for key, value in wfn.array_variables().items()
+              if key.startswith("FSAPT_")}
+    record = v1.AtomicResult(molecule=mol.to_schema(dtype=2), driver="energy",
+                             model={"method": "sapt(dft)-d4(i)", "basis": "cc-pvdz"}, properties={},
+                             provenance={"creator": "Psi4", "version": psi4.__version__, "routine": "energy"},
+                             return_result=energy, success=True, extras={"extra_properties": fields})
+    stored = psi4.fsapt_analysis(source=record, **groups)
+    pairs = list(zip(grouped["Frag1"], grouped["Frag2"]))
+    external = pairs.index(("Water", "Extern-B"))
+    total = pairs.index(("All", "All"))
+    assert grouped["EDisp"][external] == 0.0
+    assert grouped["Elst"][external] == pytest.approx(elst[:, -1].sum() * constants.hartree2kcalmol, abs=1e-6)
+    assert grouped["Total"][total] == pytest.approx(energy * constants.hartree2kcalmol, abs=1e-5)
+    assert list(zip(stored["Frag1"], stored["Frag2"])) == pairs
+    for key in ("Elst", "Exch", "IndAB", "IndBA", "EDisp", "Total"):
+        np.testing.assert_allclose(stored[key], grouped[key], atol=1e-9, rtol=0)
 
 
 @pytest.mark.saptdft

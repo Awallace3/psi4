@@ -1663,6 +1663,61 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
 
 
 @pytest.mark.saptdft
+@pytest.mark.parametrize(
+    "induction_type, delta_hf",
+    [(None, True), ("CPHF", True), ("CPHF", False), ("NONE", True), ("NONE", False)],
+)
+def test_saptdft_keeps_sapt_hf_terms(induction_type, delta_hf):
+    """The HF segment's terms survive the DFT segment under a SAPT(HF) prefix."""
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    options = {
+        "basis": "sto-3g",
+        "scf_type": "df",
+        "sapt_dft_grac_shift_a": 0.203293,
+        "sapt_dft_grac_shift_b": 0.203293,
+        "sapt_dft_do_dhf": delta_hf,
+        "sapt_dft_do_hybrid": False,
+        "sapt_dft_use_einsums": False,
+        "orbital_optimizer_package": "internal",
+    }
+    if induction_type is not None:
+        options["sapt_dft_induction_type"] = induction_type
+    psi4.set_options(options)
+    _, wfn = psi4.energy("sapt(dft)", molecule=mol, return_wfn=True)
+
+    mode = induction_type or "CPKS"
+    hf_segment = delta_hf or mode == "CPHF"
+    hf_induction = hf_segment and mode != "NONE"
+    for store in (psi4.core, wfn):
+        assert store.has_variable("SAPT(HF) ELST10,R") is hf_segment
+        assert store.has_variable("SAPT(HF) EXCH10") is hf_segment
+        assert store.has_variable("SAPT(HF) IND20,R") is hf_induction
+        assert not store.has_variable("SAPT(HF) HF DIMER")
+    if not hf_segment:
+        return
+
+    var = wfn.variable
+    assert compare_values(var("SAPT(HF) ELST10,R"), var("SAPT(HF) ELST ENERGY"), 12, "HF elst total")
+    assert compare_values(var("SAPT(HF) EXCH10"), var("SAPT(HF) EXCH ENERGY"), 12, "HF exch total")
+    # SAPT(DFT) electrostatics uses the DFT monomers, so it differs from Elst10,r(HF).
+    assert abs(var("SAPT(HF) ELST10,R") - var("SAPT ELST ENERGY")) > 1e-8
+    if hf_induction:
+        hf_ind = var("SAPT(HF) IND20,R") + var("SAPT(HF) EXCH-IND20,R")
+        assert compare_values(hf_ind, var("SAPT(HF) IND ENERGY"), 12, "HF ind total (no dHF)")
+    if delta_hf and hf_induction:
+        # dHF induction identity: dHF - Elst10,r - Exch10 = Ind20,r + Exch-Ind20,r + delta HF
+        dhf_ind = var("DHF VALUE") - var("SAPT(HF) ELST10,R") - var("SAPT(HF) EXCH10")
+        # SAPT(DFT) DELTA HF is stored on psi4.core only, not on the dimer wavefunction.
+        delta_hf_value = psi4.variable("SAPT(DFT) DELTA HF")
+        assert compare_values(dhf_ind, hf_ind + delta_hf_value, 12, "dHF induction identity")
+
+
+@pytest.mark.saptdft
 def test_saptdft_none_delta_hf_matches_cphf_total_induction():
     mol = psi4.geometry("""
   Ne

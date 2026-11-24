@@ -219,6 +219,11 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     False forces native FP64; true restores cuEST's default math mode, which permits
     emulation but may select native FP64 for a particular operation. -*/
     options.add_bool("CUEST_MIXED_PRECISION", true);
+    /*- Use an integral-direct density-fitting plan for energy calculations on cuEST 0.3+.
+        Recompute fitted integrals in occupied tiles for symmetric and nonsymmetric
+        exchange. Saves device memory when the screened three-index AO cache would
+        exceed the device capacity. Requires host-driven CPHF/CPKS. -*/
+    options.add_bool("CUEST_DF_INTEGRAL_DIRECT", false);
     /*- Use numerical grid-based exchange (Grid-K) instead of density-fitted
     exchange in cuEST J/K builds, including nonsymmetric SAPT and CPHF/CPKS
     densities. Coulomb remains density-fitted (DF-J + Grid-K). The exchange
@@ -1458,7 +1463,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("CPHF_R_CONVERGENCE", 1E-8);
         /*- Maximum number of iterations for CPHF -*/
         options.add_int("MAXITER", 50);
-        /*- Schwarz screening threshold. Mininum absolute value below which TEI are neglected. -*/
+        /*- Schwarz screening threshold for FISAPT integral builds. When empirical F-SAPT
+        reuses cached scalar cuEST integrals it inherits their screening by default.
+        Set this option explicitly to require a particular fragment threshold. -*/
         options.add_double("INTS_TOLERANCE", 0.0);
 
         // => ISAPT Zero-th Order Wavefunction Options <= //
@@ -1503,6 +1510,16 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_str_i("FISAPT_FSAPT_FILEPATH", "fsapt/"); 
         /*- Do F-SAPT exchange scaling? (ratio of S^\infty to S^2) -*/
         options.add_bool("FISAPT_FSAPT_EXCH_SCALE", true);
+        /*- Algorithm for the three-index contributions to F-SAPT electrostatics,
+        exchange, and induction. DF transforms MO tensors. CUEST_JK builds Coulomb
+        and exchange operators one localized orbital at a time. CUEST_DFMO uses tiled cuEST DFMO
+        integrals for exchange and orbital Coulomb potentials for the other terms.
+        CUEST_DFMO_DIRECT recomputes the three-index integrals for these fragment
+        builds. SCF and scalar SAPT retain their configured DF plans.
+        With C link assignment, AUTO uses CUEST_DFMO when empirical SAPT can
+        reuse its cached scalar DF integrals or the occupied-virtual DF storage
+        exceeds the FISAPT memory budget on cuEST. -*/
+        options.add_str("FISAPT_FSAPT_INTEGRAL_ALGORITHM", "AUTO", "AUTO DF CUEST_JK CUEST_DFMO CUEST_DFMO_DIRECT");
         /*- Do F-SAPT induction scaling? (ratio of HF induction to F-SAPT induction) -*/
         options.add_bool("FISAPT_FSAPT_IND_SCALE", true);
         /*- Do F-SAPT coupled response? Uses the HF-like gap + 4J - K - K^T Hessian
