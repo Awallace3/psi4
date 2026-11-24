@@ -32,8 +32,11 @@ mkdir -p "$(dirname "$run")"
 mkdir "$run"
 cd "$run"
 sha256sum "$input"/{dimer.geometry,field.json,groups.json,meta.json} > inputs.sha256
-export TMPDIR=/storage/scratch1/3/awallace43/cdk2-fsapt-$SLURM_JOB_ID
+local_base="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
+[[ "$local_base" != /storage/* && -d "$local_base" ]] || local_base=/tmp
+export TMPDIR="$local_base/cdk2-fsapt-$SLURM_JOB_ID"
 mkdir -m 700 "$TMPDIR"
+[[ "$(stat -f -c %T "$TMPDIR")" =~ ^(xfs|ext2/ext3|ext4|tmpfs|btrfs)$ ]]
 export PSI_SCRATCH="$TMPDIR" SCRATCH="$TMPDIR"
 export PATH="$envp/bin:$cuda/bin:/usr/bin:/bin"
 export LD_LIBRARY_PATH="$cuda/lib:$cuda/targets/x86_64-linux/lib:$(dirname "$xc"):$envp/lib"

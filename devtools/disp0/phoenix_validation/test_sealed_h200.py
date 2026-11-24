@@ -217,6 +217,27 @@ class SealedH200Contracts(unittest.TestCase):
                 self.assertTrue(owner.cleanup(set())["complete"])
             self.assertTrue(scheduler.is_dir())  # Never delete scheduler-owned scratch.
 
+    def test_step_scratch_defaults_to_node_local_and_rejects_lustre(self):
+        with tempfile.TemporaryDirectory() as temp:
+            local = Path(temp).resolve()
+            root = local/"output"
+            root.mkdir()
+            with patch.object(sealed_h200, "STEP_SCRATCH_PARENT", None), \
+                    patch.dict(os.environ, {"SLURM_TMPDIR": str(local), "TMPDIR": "/storage/scratch1/3/awallace43",
+                                            "SLURM_JOB_ID": "789"}), \
+                    patch("sealed_h200.subprocess.check_output", return_value="xfs\n"):
+                owner = sealed_h200.step_scratch(root)
+                self.assertEqual(os.environ["PSI_SCRATCH"], str(local/"disp0-sealed-h200-789"))
+                self.assertTrue(owner.cleanup(set())["complete"])
+            with patch.object(sealed_h200, "STEP_SCRATCH_PARENT", None), \
+                    patch.dict(os.environ, {"TMPDIR": "/storage/scratch1/3/awallace43", "SLURM_JOB_ID": "790"},
+                               clear=False):
+                os.environ.pop("SLURM_TMPDIR", None)
+                self.assertEqual(sealed_h200._node_local_scratch_parent(), Path("/tmp"))
+            with patch("sealed_h200.subprocess.check_output", return_value="lustre\n"):
+                with self.assertRaisesRegex(RuntimeError, "Node-local scratch required"):
+                    sealed_h200._require_local_scratch_fstype(local)
+
     def test_only_explicit_embers_h200_afterany_with_fixed_caps(self):
         argv = sealed_h200.command(Path("/source"), Path("/fresh"), "123")
         for option in ("--qos=embers", "--account=gts-cs207-chemx",

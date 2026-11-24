@@ -9,8 +9,11 @@ env="$DISP0_DEPENDENCIES"
 [[ "$(git -C "$source_root" rev-parse HEAD)" == "$DISP0_PIN" ]]
 [[ -z "$(git -C "$source_root" status --porcelain)" ]]
 [[ "${SLURM_CPUS_PER_TASK:?}" == 8 && -z "${SLURM_JOB_GPUS:-}" ]]
-export TMPDIR="/storage/scratch1/3/awallace43/disp0-phoenix-validation-$SLURM_JOB_ID"
+local_base="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
+[[ "$local_base" != /storage/* && -d "$local_base" ]] || local_base=/tmp
+export TMPDIR="$local_base/disp0-phoenix-validation-$SLURM_JOB_ID"
 mkdir -m 0700 "$TMPDIR"
+[[ "$(stat -f -c %T "$TMPDIR")" =~ ^(xfs|ext2/ext3|ext4|tmpfs|btrfs)$ ]]
 export SCRATCH="$TMPDIR" PSI_SCRATCH="$TMPDIR"
 source /etc/profile.d/z00_lmod_pace.sh
 module load gcc/12.3.0 cuda/12.6.1

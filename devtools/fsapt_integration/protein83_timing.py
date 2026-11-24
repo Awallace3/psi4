@@ -139,11 +139,9 @@ def execute(manifest_path, root):
         _, dimensions = load_point(inputs, manifest["inputs_sha256"], "protein83")
         if input_basis_profile(json.loads(inputs.read_text())) != "jun-cc-pvdz":
             raise RuntimeError("Matched jun-cc-pVDZ profile required")
-        if role == "gpu":
-            parent = Path("/storage/scratch1/3/awallace43")
-        else:
-            selected = os.environ.get("SLURM_TMPDIR") or os.environ.get("TMPDIR")
-            parent = Path(selected) if selected and Path(selected).is_dir() else Path("/scratch")
+        selected = os.environ.get("SLURM_TMPDIR") or os.environ.get("TMPDIR")
+        parent = Path(selected) if (selected and not str(selected).startswith("/storage/")
+                                    and Path(selected).is_dir()) else Path("/tmp")
         parent = parent.resolve(strict=True)
         scratch = parent / ("fsapt-protein83-" + os.environ["SLURM_JOB_ID"])
         scratch.mkdir(mode=0o700)
@@ -153,8 +151,8 @@ def execute(manifest_path, root):
             ["findmnt", "-T", str(scratch), "-n", "-P", "-o", "SOURCE,FSTYPE,TARGET"],
             text=True, timeout=30))
         report["scratch_mount"] = mount
-        if role != "gpu" and mount.get("FSTYPE") not in ("xfs", "ext4", "ext3", "btrfs"):
-            raise RuntimeError("CPU baseline requires actual node-local scratch")
+        if mount.get("FSTYPE") not in ("xfs", "ext4", "ext3", "btrfs", "tmpfs"):
+            raise RuntimeError("Protein83 run requires actual node-local scratch, got " + repr(mount))
         disk = os.statvfs(scratch)
         report["scratch_free_bytes"] = disk.f_bavail * disk.f_frsize
         if report["scratch_free_bytes"] < 256 * 1024**3:
