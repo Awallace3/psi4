@@ -58,6 +58,27 @@ def print_sapt_var(name, value, short=False, start_spacer="    "):
         return start_spacer + "%-28s % 15.8f [mEh] % 15.8f [kcal/mol] % 15.8f [kJ/mol]" % vals
 
 
+# Totals of an HF segment that are not SAPT(HF) interaction terms.
+_SAPT_HF_NON_TERMS = ("HF DIMER", "HF MONOMER A", "HF MONOMER B", "extern_extern_IE")
+
+
+def sapt_hf_segment_variables(hf_data):
+    """SAPT(HF) terms of the HF segment of a SAPT(DFT) run, as named variables.
+
+    The SAPT(DFT) segment reports its own terms under the same names (Elst10,r,
+    Exch10, ...), so the HF-level values of a delta-HF or SAPT0-induction segment
+    are kept under a ``SAPT(HF) `` prefix, together with the HF component totals.
+    ``SAPT(HF) IND ENERGY`` is Ind20,r + Exch-Ind20,r without the delta-HF term.
+    """
+    out = {f"SAPT(HF) {key}": value for key, value in hf_data.items()
+           if key not in _SAPT_HF_NON_TERMS and isinstance(value, (int, float))}
+    out["SAPT(HF) ELST ENERGY"] = hf_data["Elst10,r"]
+    out["SAPT(HF) EXCH ENERGY"] = hf_data["Exch10"]
+    if "Ind20,r" in hf_data:
+        out["SAPT(HF) IND ENERGY"] = hf_data["Ind20,r"] + hf_data["Exch-Ind20,r"]
+    return out
+
+
 def print_sapt_hf_induction_summary(data, name):
 
     ind = data["Ind20,r"] + data["Exch-Ind20,r"]
@@ -84,14 +105,16 @@ def print_sapt_hf_summary(data, name, dimer_wfn, short=False, delta_hf=False):
     ret += print_sapt_var("Electrostatics", data["Elst10,r"]) + "\n"
     ret += print_sapt_var("  Elst10,r", data["Elst10,r"]) + "\n"
     ret += "\n"
-    core.set_variable("SAPT ELST ENERGY", data["Elst10,r"])
+    if not delta_hf:  # with delta HF the DFT segment reports the totals
+        core.set_variable("SAPT ELST ENERGY", data["Elst10,r"])
 
     # Exchange
     ret += print_sapt_var("Exchange", data["Exch10"]) + "\n"
     ret += print_sapt_var("  Exch10", data["Exch10"]) + "\n"
     ret += print_sapt_var("  Exch10(S^2)", data["Exch10(S^2)"]) + "\n"
     ret += "\n"
-    core.set_variable("SAPT EXCH ENERGY", data["Exch10"])
+    if not delta_hf:  # with delta HF the DFT segment reports the totals
+        core.set_variable("SAPT EXCH ENERGY", data["Exch10"])
 
     # Induction (no dHF)
     ind = data["Ind20,r"] + data["Exch-Ind20,r"]
@@ -104,7 +127,8 @@ def print_sapt_hf_summary(data, name, dimer_wfn, short=False, delta_hf=False):
     ret += print_sapt_var("  Induction (A<-B) (no dHF)", ind_ab) + "\n"
     ret += print_sapt_var("  Induction (A->B) (no dHF)", ind_ba) + "\n"
     ret += "\n"
-    core.set_variable("SAPT IND ENERGY", ind)
+    if not delta_hf:  # with delta HF the DFT segment reports the totals
+        core.set_variable("SAPT IND ENERGY", ind)
 
     if delta_hf:
         total_sapt = (data["Elst10,r"] + data["Exch10"] + ind)

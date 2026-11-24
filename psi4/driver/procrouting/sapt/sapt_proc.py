@@ -51,6 +51,7 @@ from .sapt_util import (
     print_sapt_dft_summary,
     print_sapt_hf_induction_summary,
     print_sapt_hf_summary,
+    sapt_hf_segment_variables,
     print_sapt_var,
 )
 import qcelemental as qcel
@@ -768,6 +769,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             )
             if do_delta_hf:
                 data["DHF VALUE"] = dhf_value
+            # The DFT segment reuses these term names, so keep the HF values.
+            data.update(sapt_hf_segment_variables(hf_data))
 
             core.print_out("\n")
             if induction_type == "NONE":
