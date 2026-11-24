@@ -1712,7 +1712,9 @@ def test_saptdft_keeps_sapt_hf_terms(induction_type, delta_hf):
     if delta_hf and hf_induction:
         # dHF induction identity: dHF - Elst10,r - Exch10 = Ind20,r + Exch-Ind20,r + delta HF
         dhf_ind = var("DHF VALUE") - var("SAPT(HF) ELST10,R") - var("SAPT(HF) EXCH10")
-        assert compare_values(dhf_ind, hf_ind + var("SAPT(DFT) DELTA HF"), 12, "dHF induction identity")
+        # SAPT(DFT) DELTA HF is stored on psi4.core only, not on the dimer wavefunction.
+        delta_hf_value = psi4.variable("SAPT(DFT) DELTA HF")
+        assert compare_values(dhf_ind, hf_ind + delta_hf_value, 12, "dHF induction identity")
 
 
 @pytest.mark.saptdft
