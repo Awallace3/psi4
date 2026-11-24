@@ -68,6 +68,14 @@ class PhoenixSuiteContracts(unittest.TestCase):
         self.assertNotIn("--constraint=", joined)
         self.assertNotIn("--dependency", joined)
 
+    def test_summarize_stage_status_preserves_skipped(self):
+        summary = suite.summarize_stage_status({
+            "stage1_small_gate": {"status": "PASS"},
+            "stage6_protein157_gpu_probe": {"status": "SKIPPED_BY_MANIFEST"},
+        })
+        self.assertEqual(summary["stage1_small_gate"], "PASS")
+        self.assertEqual(summary["stage6_protein157_gpu_probe"], "SKIPPED_BY_MANIFEST")
+
     def test_compare_fsapt_tables_passes_and_rejects_drift(self):
         base = {
             "charge": {

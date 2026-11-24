@@ -327,7 +327,14 @@ def execute(manifest_path, root):
         checkpoint()
 
         # Helper to isolate stages 2..7 so a later failure never discards earlier passes.
+        skip_stages = set(manifest.get("skip_stages", ()))
+
         def run_stage(name, fn):
+            if name in skip_stages:
+                report["stages"][name] = {"status": "SKIPPED_BY_MANIFEST"}
+                print(f"STAGE_SKIPPED {name}", flush=True)
+                checkpoint()
+                return
             stage_box = {"status": "STARTED"}
             report["stages"][name] = stage_box
             checkpoint()

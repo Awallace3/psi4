@@ -7,7 +7,7 @@ PROFILES = {
     },
     "RTX_PRO_BLACKWELL": {
         "partition": "gpu-rtxpro-blackwell", "gres": "gpu:rtx_pro_6000_blackwell:1",
-        "name": "RTX PRO 6000 Blackwell", "architecture": "compute_120", "budget_gib": 80,
+        "name": "RTX PRO 6000 Blackwell", "architecture": "compute_120", "budget_gib": 86,
     },
 }
 

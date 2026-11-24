@@ -106,10 +106,13 @@ def main():
     parser.add_argument("--qos", choices=("embers", "inferno"), default="embers")
     parser.add_argument("--account", choices=("gts-cs207", "gts-cs207-chemx"), default="gts-cs207-chemx")
     parser.add_argument("--hours", type=int, choices=(2, 4, 6, 8), default=8)
+    parser.add_argument("--skip-stages", default="",
+                        help="Comma-separated optional stage names to skip (e.g. stage6_protein157_gpu_probe)")
     parser.add_argument("--inferno-approved", action="store_true")
     args = parser.parse_args()
     if args.qos == "inferno" and not args.inferno_approved:
         raise RuntimeError("Explicit user approval (--inferno-approved) required for inferno QoS")
+    skip_stages = [s.strip() for s in args.skip_stages.split(",") if s.strip()]
 
     source = Path(__file__).resolve().parents[2]
     helper_pin = subprocess.check_output(
@@ -206,6 +209,7 @@ def main():
         "scf_D": 12,
         "threads_both_arms": 8,
         "factor_cache_bytes": 0,
+        "skip_stages": skip_stages,
         "authorization": (
             f"User requested {args.device_family} {args.qos} suite verification"
         ),
