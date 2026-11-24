@@ -1,7 +1,7 @@
 """cuEST Direct-J (four-center Coulomb) and Grid-K (numerical-grid exchange) in cuESTJK.
 
-Every J/K check is against exact four-center AO integrals from MintsHelper, never
-against another cuEST call, and covers symmetric SCF-like densities as well as
+Direct-J and Grid-K are checked against exact four-center AO integrals from
+MintsHelper, never against another cuEST call. Coverage includes SCF densities and
 signed, nonsymmetric densities of the kind SAPT and CPHF/CPKS hand to JK.
 """
 
@@ -234,7 +234,15 @@ def test_cuest_directj_kernel_policy(water, jit):
     finally:
         jk.finalize()
     np.testing.assert_allclose(j[0], np.einsum("pqrs,rs->pq", eri, _density(*pairs[0])), atol=1.e-10, rtol=0)
-    np.testing.assert_allclose(k[0], np.einsum("prqs,rs->pq", eri, _density(*pairs[0])), atol=5.e-4, rtol=0)
+    # This K is deliberately DF, not four-center. Contract the fitted integrals
+    # independently so the reference tests the chosen algorithm, not its fitting error.
+    mints = psi4.core.MintsHelper(primary)
+    zero = psi4.core.BasisSet.zero_ao_basis_set()
+    three = np.asarray(mints.ao_eri(aux, zero, primary, primary)).reshape(aux.nbf(), primary.nbf(), primary.nbf())
+    metric = np.asarray(mints.ao_eri(aux, zero, aux, zero)).reshape(aux.nbf(), aux.nbf())
+    occupied = np.einsum("Ppr,ri->Ppi", three, pairs[0][0])
+    k_df = np.einsum("Ppi,PQ,Qqi->pq", occupied, np.linalg.pinv(metric), occupied, optimize=True)
+    np.testing.assert_allclose(k[0], k_df, atol=1.e-9, rtol=0)
 
 
 @pytest.mark.parametrize("grid", [{"dft_grid_name": "sg0"},
