@@ -126,10 +126,15 @@ def _reduce_grid(a, b):
 
 
 def _available_device_bytes(session):
-    declared = session.limit - session.live_bytes - session.native_bytes
+    free = None
     if hasattr(session, "runtime") and hasattr(session.runtime, "cudaMemGetInfo"):
-        free, _ = session.rt(session.runtime.cudaMemGetInfo())
-        return max(0, min(declared, int(free)))
+        raw_free, _ = session.rt(session.runtime.cudaMemGetInfo())
+        free = int(raw_free)
+    if session.limit is None:
+        return max(0, free) if free is not None else 0
+    declared = session.limit - session.live_bytes - session.native_bytes
+    if free is not None:
+        return max(0, min(declared, free))
     return max(0, declared)
 
 

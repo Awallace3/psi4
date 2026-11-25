@@ -165,14 +165,17 @@ class CUDASession:
     The caller supplies exact cuBLAS path/hash. CUDA runtime/NVRTC13.3 checks
     are ABI/preparation evidence only, not numerical/device-execution proof.
     """
-    def __init__(self, *, cublas_library, cublas_sha256, memory_limit_bytes,
-                 native_persistent_bytes, expected_cudart=13030):
+    def __init__(self, *, cublas_library, cublas_sha256, memory_limit_bytes=None,
+                 native_persistent_bytes=0, expected_cudart=13030):
         try:
             from cuda.bindings import runtime, driver, nvrtc
         except ImportError as error:
             raise RuntimeError("Optional cuda-bindings is required; CuPy is not used") from error
-        if (isinstance(memory_limit_bytes, bool) or not isinstance(memory_limit_bytes, int)
-                or memory_limit_bytes <= 0 or not isinstance(native_persistent_bytes, int)
+        if (isinstance(memory_limit_bytes, bool)
+                or (memory_limit_bytes is not None
+                    and (not isinstance(memory_limit_bytes, int) or memory_limit_bytes <= 0))
+                or isinstance(native_persistent_bytes, bool)
+                or not isinstance(native_persistent_bytes, int)
                 or native_persistent_bytes < 0):
             raise ValueError("Explicit live-buffer/native allocation budgets required")
         self.runtime, self.driver, self.nvrtc = runtime, driver, nvrtc
@@ -232,10 +235,19 @@ class CUDASession:
 
     def check_memory(self, requested):
         self.check()
+        if requested < 0:
+            free = -1
+            if hasattr(self, "runtime") and hasattr(self.runtime, "cudaMemGetInfo"):
+                free, _ = self.rt(self.runtime.cudaMemGetInfo())
+            raise MemoryError(
+                "Explicit CUDA live-buffer estimate exceeded: "
+                f"requested_bytes={requested}, explicit_live_bytes={self.live_bytes}, "
+                f"native_reserved_bytes={self.native_bytes}, limit_bytes={self.limit}, "
+                f"cuda_free_bytes={free}, rejected_by=negative_request")
+        if self.limit is None:
+            return
         free, _ = self.rt(self.runtime.cudaMemGetInfo())
         reasons = []
-        if requested < 0:
-            reasons.append("negative_request")
         if self.live_bytes + self.native_bytes + requested > self.limit:
             reasons.append("declared_budget")
         if requested > free:
@@ -256,7 +268,15 @@ class CUDASession:
         if size < 1:
             raise ValueError("Empty device allocations are not supported")
         try:
-            allocation = _Allocation(self, self.rt(self.runtime.cudaMalloc(size)), size)
+            malloc_result = self.runtime.cudaMalloc(size)
+            if int(malloc_result[0]) == 2:  # cudaErrorMemoryAllocation
+                info = self.runtime.cudaMemGetInfo()
+                free, total = (int(info[1]), int(info[2])) if int(info[0]) == 0 else (-1, -1)
+                raise MemoryError(
+                    "Physical CUDA allocation failed (cudaErrorMemoryAllocation): "
+                    f"requested_bytes={size}, explicit_live_bytes={self.live_bytes}, "
+                    f"cuda_free_bytes={free}, cuda_total_bytes={total}")
+            allocation = _Allocation(self, self.rt(malloc_result), size)
             self.allocations.append(allocation)
             self.live_bytes += size
             self.peak_live_bytes = max(self.peak_live_bytes, self.live_bytes)

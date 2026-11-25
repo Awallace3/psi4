@@ -107,13 +107,17 @@ class Native(api_fakes.Native):
         for ref in self.objects[value]["input_refs"]:
             assert ref() is not None, "native host input released before destruction"
         workspaces = self.objects[value]["workspace"]
-        for workspace in workspaces or ():
-            if workspace.device_bytes:
-                assert any(a.pointer == workspace.device and not a.freed for a in self.session.allocations), \
-                    "persistent/creation-temporary device workspace freed before native destruction"
-            if workspace.host_bytes:
-                assert self.host_workspace_refs[workspace.host]() is not None, \
-                    "persistent/creation-temporary host workspace freed before native destruction"
+        if workspaces:
+            persistent, temporary = workspaces
+            if persistent.device_bytes:
+                assert any(a.pointer == persistent.device and not a.freed for a in self.session.allocations), \
+                    "persistent device workspace freed before native destruction"
+            if persistent.host_bytes:
+                assert self.host_workspace_refs[persistent.host]() is not None, \
+                    "persistent host workspace freed before native destruction"
+            if temporary.device_bytes:
+                assert any(a.pointer == temporary.device and a.freed for a in self.session.allocations), \
+                    "creation-temporary device workspace was not released after creation sync"
         del self.objects[value]
         return 0
     def shell(self,context,pure,am,nprimitive,exps,coefficients,params,out):
@@ -267,9 +271,9 @@ class PlanOwner(unittest.TestCase):
             self.assertFalse(report["basis_layout_metric_rank_admitted"])
             self.assertFalse(report["opaque_native_internals_measured"])
             self.assertEqual(report["known_persistent_device_workspace_bytes"],64)
-            self.assertEqual(report["known_retained_creation_temporary_device_bytes"],32)
-            self.assertEqual(report["known_host_workspace_bytes"],48)
-            self.assertEqual(session.live_bytes,96)
+            self.assertEqual(report["known_retained_creation_temporary_device_bytes"],0)
+            self.assertEqual(report["known_host_workspace_bytes"],32)
+            self.assertEqual(session.live_bytes,64)
             self.assertEqual(report["plan_parameter_readback"]["fitting_algorithm"],1)
             np.testing.assert_array_equal(native.shell_inputs[0][3],[.31,-.8])
             native.cuestDFMOIntegralsCompute.assert_not_called()
@@ -465,7 +469,7 @@ class PlanOwner(unittest.TestCase):
     def test_workspace_free_failure_retains_parents_without_redestroying_finished_child(self):
         owner,session,native,*_ = self.fixture()
         owner.build()
-        allocation = session.allocations[-1]
+        allocation = [item for item in session.allocations if not item.freed][-1]
         original = allocation.free
         allocation.free = Mock(side_effect=RuntimeError("workspace free failure"))
         with self.assertRaisesRegex(RuntimeError,"workspace free failure"): owner.close()

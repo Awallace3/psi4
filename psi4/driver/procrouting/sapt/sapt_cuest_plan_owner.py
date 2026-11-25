@@ -50,8 +50,8 @@ def _cleanup_admission(api):
 class DiagnosticPlanOwner:
     """One explicit diagnostic plan; native owners precede borrowed CUDA release.
 
-    Creation temporaries are conservatively retained for this initial small-case
-    diagnostic implementation. Reverse registration order encodes dependencies:
+    Creation temporaries are released immediately after native creation and
+    device synchronization complete. Reverse registration order encodes dependencies:
     each native child is registered AFTER its parents, inputs and workspaces.
     Cleanup stops at the first failure, retaining that resource and every parent.
     A second automatic close cannot retry failed native destruction: callers must
@@ -81,7 +81,8 @@ class DiagnosticPlanOwner:
         with self.timings.measure("basis_snapshot"):
             p,a = snapshot_pair(primary,auxiliary)
         allowance = api.session.native_bytes
-        if isinstance(allowance,bool) or not isinstance(allowance,int) or allowance <= 0:
+        if (isinstance(allowance,bool) or not isinstance(allowance,int)
+                or allowance < 0 or (getattr(api.session,"limit",1) is not None and allowance <= 0)):
             raise ValueError("Declare an opaque-native memory allowance; workspaces alone are not total VRAM")
         self.api,self.session,self.pid = api,api.session,os.getpid()
         self.primary_snapshot,self.auxiliary_snapshot = p,a
@@ -182,7 +183,7 @@ class DiagnosticPlanOwner:
             lambda handle:native.cuestParametersDestroy(kind,handle),
             audit_identity=False)
 
-    def _workspace(self, label, descriptor, temporary):
+    def _workspace(self, label, descriptor, temporary, *, return_resource=False):
         self._check_construction()
         host_bytes,device_bytes = int(descriptor.host_bytes),int(descriptor.device_bytes)
         known_host = sum(r.stats.get("host_bytes",0) for r in self.resources)
@@ -209,7 +210,7 @@ class DiagnosticPlanOwner:
             holder["host"].ctypes.data if host_bytes else 0,host_bytes,
             holder["device"].pointer if device_bytes else 0,device_bytes)
         resource.keepalive += (workspace,)
-        return workspace
+        return (resource, workspace) if return_resource else workspace
 
     def _workspace_object(self, label, query, create, destroy, keepalive=(), *, audit_identity=True):
         with self.timings.measure(label+".query_admission"):
@@ -221,10 +222,22 @@ class DiagnosticPlanOwner:
             self.api.status(label+" workspace query",query(ct.byref(persistent),ct.byref(temporary)))
         with self.timings.measure(label+".workspace_allocation"):
             p = self._workspace(label+" persistent",persistent,False)
-            t = self._workspace(label+" creation temporary",temporary,True)
-        return self._new_native(
+            t_res, t = self._workspace(label+" creation temporary",temporary,True,return_resource=True)
+        created = self._new_native(
             label,lambda out:create(ct.byref(p),ct.byref(t),out),
-            destroy,(*keepalive,p,t),audit_identity=False)
+            destroy,(*keepalive,p),audit_identity=False)
+        # _new_native synchronized the device after native creation completed;
+        # release creation-only temporary workspace immediately so large plans
+        # do not hold tens of GiB of finished scratch across downstream work.
+        try:
+            t_res.destroy()
+        except BaseException:
+            self._invalidate()
+            raise
+        self.resources[:] = [item for item in self.resources if item is not t_res]
+        t_res.keepalive = ()
+        t_res.destroy = None
+        return created
 
     def _basis(self, snapshot, shell_parameters, basis_parameters):
         native,context = self.api.native,self._raw(self._context)

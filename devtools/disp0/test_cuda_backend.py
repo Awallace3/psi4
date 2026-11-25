@@ -311,6 +311,23 @@ class Kernels(unittest.TestCase):
         session.runtime=types.SimpleNamespace(cudaMemGetInfo=lambda:(0,80,2000))
         runtime.CUDASession.check_memory(session,80)  # Both exact bounds fit.
 
+    def test_unbounded_memory_limit_skips_estimate_rejection_and_reports_physical_oom(self):
+        session=CPUSession(self.lib)
+        session.live_bytes=100;session.native_bytes=0;session.limit=None
+        session.rt=runtime.CUDASession.rt
+        session.check_memory=types.MethodType(runtime.CUDASession.check_memory,session)
+        session.runtime=types.SimpleNamespace(
+            cudaMemGetInfo=lambda:(0,50,2000),
+            cudaMalloc=lambda size:(2,0))
+        # Large upfront estimate must not be blocked when memory_limit_bytes is None.
+        runtime.CUDASession.check_memory(session,10**12)
+        with self.assertRaisesRegex(MemoryError,"rejected_by=negative_request"):
+            runtime.CUDASession.check_memory(session,-1)
+        # Actual cudaErrorMemoryAllocation (2) surfaces as MemoryError.
+        with self.assertRaisesRegex(MemoryError,"cudaErrorMemoryAllocation"):
+            runtime.CUDASession.empty(session,(16,))
+        self.assertTrue(session.failed)
+
     def test_cleanup_inside_unrelated_except_preserves_local_failures(self):
         def fail():raise RuntimeError("local cleanup")
         try:raise ValueError("outer")
