@@ -3125,6 +3125,8 @@ class OrientationMgr {
     // Use the constructor to determine the standard orientation, and use `MoveIntoPosition' to apply it to a
     // mass-point.
     OrientationMgr(std::shared_ptr<Molecule> mol);
+    // Discard the standard orientation and keep atomic grids aligned with the input axes.
+    void UseInputFrame() { rotation_ = lIdentityMatrix; }
     inline MassPoint MoveIntoPosition(MassPoint mp, int A) {
         LVector oldpos = {mp.x, mp.y, mp.z};
         LVector rotated = mvtimes(rotation_, oldpos);
@@ -3727,6 +3729,7 @@ void MolecularGrid::buildGridFromOptions(MolecularGridOptions const &opt) {
     atomic_grids_.resize(molecule_->natom());
 
     OrientationMgr std_orientation(molecule_);
+    if (opt.input_orientation) std_orientation.UseInputFrame();
     RadialPruneMgr prune(opt);
     NuclearWeightMgr nuc(molecule_, opt.nucscheme);
     double weightcut = opt.weights_cutoff;
@@ -4202,51 +4205,65 @@ DFTGrid::DFTGrid(std::shared_ptr<Molecule> molecule, std::shared_ptr<BasisSet> p
 }
 DFTGrid::~DFTGrid() {}
 
+namespace {
+// Every option a DFTGrid's points, weights and blocks are built from, with the caller's overrides applied.
+struct ResolvedGridOptions {
+    std::map<std::string, std::string> str;
+    std::map<std::string, int> ints;
+    std::map<std::string, double> floats;
+    bool remove_distant_points;
+};
+
+ResolvedGridOptions resolve_grid_options(Options &options, const std::map<std::string, int> &int_opts_map,
+                                         const std::map<std::string, std::string> &str_opts_map,
+                                         const std::map<std::string, double> &float_opts_map) {
+    ResolvedGridOptions r;
+    for (const char *key : {"DFT_RADIAL_SCHEME", "DFT_PRUNING_SCHEME", "DFT_NUCLEAR_SCHEME", "DFT_GRID_NAME",
+                            "DFT_BLOCK_SCHEME", "DFT_GRID_ORIENTATION"}) {
+        auto it = str_opts_map.find(key);
+        r.str[key] = it != str_opts_map.end() ? it->second : options.get_str(key);
+    }
+    for (const char *key : {"DFT_BLOCK_MAX_POINTS", "DFT_BLOCK_MIN_POINTS", "DFT_SPHERICAL_POINTS",
+                            "DFT_RADIAL_POINTS", "PRINT", "DEBUG", "BENCH"}) {
+        auto it = int_opts_map.find(key);
+        r.ints[key] = it != int_opts_map.end() ? it->second : options.get_int(key);
+    }
+    for (const char *key : {"DFT_BS_RADIUS_ALPHA", "DFT_PRUNING_ALPHA", "DFT_WEIGHTS_TOLERANCE",
+                            "DFT_BLOCK_MAX_RADIUS", "DFT_BASIS_TOLERANCE"}) {
+        auto it = float_opts_map.find(key);
+        r.floats[key] = it != float_opts_map.end() ? it->second : options.get_double(key);
+    }
+    r.remove_distant_points = options.get_bool("DFT_REMOVE_DISTANT_POINTS");
+    return r;
+}
+
+// PRINT, DEBUG and BENCH change only what is printed, so they are left out.
+std::string grid_spec(const ResolvedGridOptions &r) {
+    std::ostringstream spec;
+    spec.precision(17);
+    for (const auto &[key, value] : r.str) spec << key << '=' << value << ';';
+    for (const auto &[key, value] : r.ints)
+        if (key != "PRINT" && key != "DEBUG" && key != "BENCH") spec << key << '=' << value << ';';
+    for (const auto &[key, value] : r.floats) spec << key << '=' << value << ';';
+    spec << "DFT_REMOVE_DISTANT_POINTS=" << r.remove_distant_points;
+    return spec.str();
+}
+}  // namespace
+
+std::string DFTGrid::spec_for(Options &options, const std::map<std::string, int> &int_opts_map,
+                              const std::map<std::string, std::string> &str_opts_map,
+                              const std::map<std::string, double> &float_opts_map) {
+    return grid_spec(resolve_grid_options(options, int_opts_map, str_opts_map, float_opts_map));
+}
+
 void DFTGrid::buildGridFromOptions(std::map<std::string, int> int_opts_map,
                                    std::map<std::string, std::string> str_opts_map,
                                    std::map<std::string, double> float_opts_map) {
-    std::map<std::string, std::string> full_str_options;
-    std::vector<std::string> str_keys = {"DFT_RADIAL_SCHEME", "DFT_PRUNING_SCHEME", "DFT_NUCLEAR_SCHEME",
-                                         "DFT_GRID_NAME", "DFT_BLOCK_SCHEME"};
-    for (auto key : str_keys) {
-        if (str_opts_map.find(key) != str_opts_map.end()) {
-            full_str_options[key] = str_opts_map[key];
-        } else {
-            full_str_options[key] = options_.get_str(key);
-        }
-        // printf("%s : %s\n", key.c_str(), full_str_options[key].c_str());
-    }
-
-    std::map<std::string, int> full_int_options;
-    std::vector<std::string> int_keys = {"DFT_BLOCK_MAX_POINTS",
-                                         "DFT_BLOCK_MIN_POINTS",
-                                         "DFT_SPHERICAL_POINTS",
-                                         "DFT_RADIAL_POINTS",
-                                         "PRINT",
-                                         "DEBUG",
-                                         "BENCH"};
-    for (auto key : int_keys) {
-        if (int_opts_map.find(key) != int_opts_map.end()) {
-            full_int_options[key] = int_opts_map[key];
-        } else {
-            full_int_options[key] = options_.get_int(key);
-        }
-        // printf("%s : %d\n", key.c_str(), full_int_options[key]);
-    }
-
-    std::map<std::string, double> full_float_options;
-    std::vector<std::string> float_keys = {"DFT_BS_RADIUS_ALPHA",
-                                           "DFT_PRUNING_ALPHA",
-                                           "DFT_WEIGHTS_TOLERANCE",
-                                           "DFT_BLOCK_MAX_RADIUS",
-                                           "DFT_BASIS_TOLERANCE"};
-    for (const auto& key : float_keys) {
-        if (float_opts_map.find(key) != float_opts_map.end()) {
-            full_float_options[key] = float_opts_map[key];
-        } else {
-            full_float_options[key] = options_.get_double(key);
-        }
-    }
+    auto resolved = resolve_grid_options(options_, int_opts_map, str_opts_map, float_opts_map);
+    spec_ = grid_spec(resolved);
+    auto &full_str_options = resolved.str;
+    auto &full_int_options = resolved.ints;
+    auto &full_float_options = resolved.floats;
 
     // TODO: Move both the double and bool parts from a global to a grid specific option.
     //  possibly via an approach listed here:
@@ -4261,7 +4278,8 @@ void DFTGrid::buildGridFromOptions(std::map<std::string, int> int_opts_map,
     opt.nangpts = full_int_options["DFT_SPHERICAL_POINTS"];
     opt.weights_cutoff = full_float_options["DFT_WEIGHTS_TOLERANCE"];
     opt.blockscheme = full_str_options["DFT_BLOCK_SCHEME"];
-    opt.remove_distant_points = options_.get_bool("DFT_REMOVE_DISTANT_POINTS");
+    opt.input_orientation = (full_str_options["DFT_GRID_ORIENTATION"] == "INPUT");
+    opt.remove_distant_points = resolved.remove_distant_points;
 
     // printing and debug options
     opt.print = full_int_options["PRINT"];
@@ -4459,6 +4477,7 @@ void MolecularGrid::print(std::string out, int /*print*/) const {
         printer->Printf("    Pruning Type           = %14s\n", options_.prunetype.c_str());
     }
     printer->Printf("    Nuclear Scheme         = %14s\n", NuclearWeightMgr::SchemeName(options_.nucscheme));
+    printer->Printf("    Grid Orientation       = %14s\n", options_.input_orientation ? "INPUT" : "STANDARD");
     printer->Printf("\n");
     printer->Printf("    Blocking Scheme        = %14s\n", options_.blockscheme.c_str());
     printer->Printf("    BS radius alpha        = %14g\n", options_.bs_radius_alpha);
