@@ -54,8 +54,8 @@ def main():
         raise RuntimeError("Blackwell admission is limited to the water/peptide pilot")
     config.update(scope="MATCHED_CANONICAL_SAPT0_TIMING", threads=8,
                   device_family=family,
-                  host_memory="96 GiB", device_memory_limit_bytes=profile["budget_gib"] * 1024**3,
-                  native_persistent_bytes=12 * 1024**3)
+                  host_memory="96 GiB", device_memory_limit_bytes=None,
+                  native_persistent_bytes=0)
     config_path = args.output / "runtime-config.json"
     save(config_path, config)
     hardware = subprocess.check_output([

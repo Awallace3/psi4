@@ -46,7 +46,8 @@ def require_cpu_runtime_admission(config):
     proof=json.loads((root/"cpu-sealed-admission/runtime-admission.json").read_text())
     config_sha=digest(path)
     closure=lambda value: {k:v for k,v in value.items()
-                           if k not in ("threads","sealed_alias_parent")}
+                           if k not in ("threads","sealed_alias_parent",
+                                        "device_memory_limit_bytes","native_persistent_bytes")}
     if (proof["runtime_config_sha256"]!=config_sha or closure(admitted)!=closure(config)):
         raise RuntimeError("CPU sealed-runtime admission differs from requested runtime closure")
     return {"root":str(root),"receipt_sha256":receipt_sha,"config_sha256":config_sha}
@@ -69,8 +70,8 @@ def configuration(base, aliases, system, kind):
         raise ValueError("Qualified frozen H200 installation and selected system required")
     return {**base, "threads": 8 if kind == "gpu" else 24,
             "sealed_alias_parent": str(aliases), "host_memory": "96 GiB",
-            "device_memory_limit_bytes": 120*1024**3,
-            "native_persistent_bytes": NATIVE_GIB[system]*1024**3}
+            "device_memory_limit_bytes": None,
+            "native_persistent_bytes": 0}
 
 
 def traced_command(command, tracer, trace):

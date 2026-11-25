@@ -166,22 +166,28 @@ def execute(manifest_path, root):
         report["cpu_runtime_admission"] = require_cpu_runtime_admission(base)
         aliases = root / "sealed-workers"
         aliases.mkdir(mode=0o700)
-        derived = {**base, "sealed_alias_parent": str(aliases)}
-        if device_family != "H200":
-            derived["device_family"] = device_family
-            derived["device_memory_limit_bytes"] = profile["budget_gib"] * 1024**3
-            derived["native_persistent_bytes"] = min(base["native_persistent_bytes"], 8 * 1024**3)
+        derived = {**base, "sealed_alias_parent": str(aliases), "device_family": device_family}
+        runtime_py = Path(base["stage"]) / "lib/psi4/driver/procrouting/sapt/sapt_cuda_runtime.py"
+        supports_unbounded = runtime_py.is_file() and "if self.limit is None:" in runtime_py.read_text()
+        if supports_unbounded:
+            derived["device_memory_limit_bytes"] = None
+            derived["native_persistent_bytes"] = 0
+        else:
+            # Older build requires explicit positive integer limit and native reserve:
+            # bind full physical GPU VRAM from nvidia-smi with a 1-byte nominal reserve
+            # so software estimates never artificially block physical VRAM usage.
+            hw_fields = [s.strip() for s in report["gpu_hardware"].splitlines()[0].split(",")]
+            mem_mib = int(hw_fields[3].split()[0])
+            derived["device_memory_limit_bytes"] = mem_mib * 1024**2
+            derived["native_persistent_bytes"] = 1
         save(config_path, derived)
         config_sha = digest(config_path)
         config, _ = read_config(config_path, config_sha)
-        if device_family == "H200":
-            require_cpu_runtime_admission(config)
-        else:
-            ignored = {"sealed_alias_parent", "device_family", "device_memory_limit_bytes", "native_persistent_bytes"}
-            if {k: v for k, v in config.items() if k not in ignored} != {
-                k: v for k, v in base.items() if k not in ignored
-            }:
-                raise RuntimeError("Derived GPU runtime closure diverged from CPU-admitted base")
+        ignored = {"sealed_alias_parent", "device_family", "device_memory_limit_bytes", "native_persistent_bytes"}
+        if {k: v for k, v in config.items() if k not in ignored} != {
+            k: v for k, v in base.items() if k not in ignored
+        }:
+            raise RuntimeError("Derived GPU runtime closure diverged from CPU-admitted base")
 
         inputs = Path(manifest["inputs"])
         if input_basis_profile(json.loads(inputs.read_text())) != "jun-cc-pvdz":

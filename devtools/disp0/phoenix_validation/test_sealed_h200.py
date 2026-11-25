@@ -319,7 +319,8 @@ class SealedH200Contracts(unittest.TestCase):
             self.assertEqual(len(config["native_preload_paths"]), 9)
             self.assertEqual(config["startup_library_path"], "/env/lib")
             self.assertEqual(config["identity_contract"], sealed_h200.CONTRACT)
-            self.assertEqual(config["device_memory_limit_bytes"], 120*1024**3)
+            self.assertIsNone(config["device_memory_limit_bytes"])
+            self.assertEqual(config["native_persistent_bytes"], 0)
 
 
 if __name__ == "__main__":

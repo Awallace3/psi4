@@ -15,6 +15,8 @@ class HardwareContracts(unittest.TestCase):
             p = PROFILES[family]
             validate_device(family, "NVIDIA " + p["name"], p["architecture"],
                             memory, p["budget_gib"] * 1024**3)
+            validate_device(family, "NVIDIA " + p["name"], p["architecture"],
+                            memory, None)
 
     def test_wrong_name_architecture_and_insufficient_memory_fail_closed(self):
         for name, arch, mem in (("NVIDIA H200", "compute_120", 97887),

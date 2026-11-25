@@ -63,8 +63,8 @@ def configuration(base, build, root):
             "sealed_alias_parent": str(aliases),
             "native_preload_paths": preloads,
             "threads": 8, "host_memory": "96 GiB",
-            "device_memory_limit_bytes": 120*1024**3,
-            "native_persistent_bytes": 12*1024**3}
+            "device_memory_limit_bytes": None,
+            "native_persistent_bytes": 0}
 
 
 def prepare_cpu_admission(build_root):

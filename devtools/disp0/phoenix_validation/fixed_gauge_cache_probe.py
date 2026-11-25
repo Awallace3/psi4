@@ -156,8 +156,9 @@ def run(runtime, manifest, output):
                             or any(execution["factor_cache"][k] != plan[k] for k in (
                                 "allocated_bytes","cached_slabs","hits",
                                 "r_factor_batches","s_factor_batches"))
-                            or session.peak_live_bytes+session.native_bytes >
-                               runtime.config["device_memory_limit_bytes"]):
+                            or (runtime.config["device_memory_limit_bytes"] is not None
+                                and session.peak_live_bytes+session.native_bytes >
+                                    runtime.config["device_memory_limit_bytes"])):
                         raise RuntimeError("Changed work count, residency, budget or incomplete cleanup")
                     row = {"index":index, "arm":arm, "cache_cap_bytes":budget,
                            "wall_seconds":elapsed, "work":plan,

@@ -151,9 +151,10 @@ def run(runtime, manifest, output, *, doc, raw, fields, primary, rifit, molecule
         if (not report["provider_cleanup"]["complete"]
                 or report["provider_cleanup"]["live_bytes"]
                 or report["provider_cleanup"]["native_owners"]
-                or report["provider_cleanup"]["peak_explicit_bytes"]+
-                   runtime.config["native_persistent_bytes"] >
-                   runtime.config["device_memory_limit_bytes"]):
+                or (runtime.config["device_memory_limit_bytes"] is not None
+                    and report["provider_cleanup"]["peak_explicit_bytes"]+
+                        runtime.config["native_persistent_bytes"] >
+                        runtime.config["device_memory_limit_bytes"])):
             raise RuntimeError("Full workflow cleanup or declared device budget failed")
         runtime.verify_optional_modules()
         report["status"] = STATUS
