@@ -20,8 +20,13 @@
   - Cachy RTX 3090 `compute-sanitizer` (`memcheck --leak-check full`, `initcheck`, `racecheck`, `synccheck`): **4/4 clean (0 errors, 0 leaks, 0 hazards)**; `61/61` zero-skip GPU pytests pass; `PASS_PSI4_PHYSICAL_GPU_GATE` & `PASS_CACHY_PARITY`.
   - Phoenix build **`16056429`** (`85d7429837`, cuEST `0.3.0.1`, 426 CPU guards, `cpu-sealed-admission`) **PASS** (`COMPLETED 0:0` in `10:30`).
   - Phoenix RTX PRO 6000 Blackwell suite **`16084802`** **PASS (`PASS_SUITE`, `0:0` in `3h39m`)**: `fsapt1` **9.50×** whole / **13.9×** `fdisp0` (`172/172` `fsapt.py` cells `<= 8.22e-9 Eh`), `peptide` F-SAPT **6.75×** whole (`22.90 s` vs old H200 `32.95 s`) / **17.33×** `fdisp0`, `nanotube` F-SAPT **18.14×** whole (`3,393.7 s → 187.1 s`, same-gauge oracle `1.45e-8 Eh`), `protein83` fixed-HF `fdisp0` **`1.74e-14 Eh`** vs CPU48 and `protein83` `SAPT0+δHF` **PASS** (`7.67e-9 Eh`).
-    [Full RTX PRO 6000 Blackwell timings, accuracy tables, and H200 projections](RTX6000_BLACKWELL_TIMINGS.md).
-  - Phoenix H200 `embers` suite **`16057336`** queued on the same build `16056429` for direct H200 FP64 timings and 141 GiB `protein83` full F-SAPT.
+  - **Merged `origin/saptdft_cuest` (`2cd959b9ae`) into `saptdft_cuest_disp0` (`8ee9cbe8d2` / `a6ce45a6bc` / `939bf919f6`):**
+    - Cachy RTX 3090 merged gates: `compute-sanitizer` **4/4 clean**, `65/65` zero-skip core GPU pytests, `21/21` `test_fsaptdft.py` (all 12 GPU/CPU `sapt(dft)-d4(i)` modes + `FISAPT.reuse_sapt_jk`), `5/5` `sapt_hf`, `21/21` probe tests, `PASS_PSI4_PHYSICAL_GPU_GATE`.
+    - Phoenix RTX PRO 6000 Blackwell merged **`F-SAPT(HF/PBE0)-D4(I)` suite `16098082`** (`COMPLETED 0:0` in `49:24`, **20/20 PASS**, `0` fragment DF plan creations, closure `<= 4.79e-10 Eh`): `protein83` HF **9.49×** vs CPU8 (`36.62 s`), `cdk2_c2` HF **9.10×** / PBE0 **7.52×** vs CPU16 (`74.48 s` / `217.83 s`, residue parity `1.58e-5` / `2.91e-3 kcal/mol`), `protein157` (1,478 AO) fits at `44.4–45.7 GiB` peak.
+    - Phoenix RTX PRO 6000 Blackwell merged **ab initio `disp0`/`fdisp0` suite `16099563`** (`PASS_SUITE`, `0:0` in `2h47m`, `stage6` skipped): `fsapt1` **9.98×** (`39.82 s`), `peptide` F-SAPT **7.32×** (`22.34 s`), `nanotube` F-SAPT **17.59×** (`187.53 s`), `protein83` `SAPT0+δHF` **3.09×** (`263.89 s`), `protein83` fixed-HF `fdisp0` **1.17×** vs CPU48 (`59.49 s`); `stage5c` `protein83` full coupled F-SAPT confirmed H200-limited (`89.54 GiB` needed in `coupled_find_device` while JKFIT & RIFIT plans stay live concurrently).
+    - Diagnosed Lustre `/storage/scratch1` `Post-SCF` checkpoint stalls (`36.84 s` on H200 `15825734`, `94.63 s` on `16098082`) and enforced node-local NVMe scratch across Phoenix runners in `939bf919f6`.
+    - [Full RTX PRO 6000 Blackwell timings, merged D4(I) & ab initio tables, and H200 projections](RTX6000_BLACKWELL_TIMINGS.md).
+  - Phoenix H200 `embers` suite **`16057336`** queued on build `16056429` for direct H200 FP64 timings and 141 GiB `protein83` full F-SAPT.
 - GPU KS/XC fragment response and larger-system memory/scaling: not qualified.
 
 Production source is pinned at `b025694939`; subsequent commits change only
