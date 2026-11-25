@@ -85,7 +85,7 @@ def execute(manifest_path, root):
          "psi4", "psi4_runtime_support"],
         check=True,
     )
-    helper = source / "devtools/disp0/phoenix_validation"
+    helper = outer / "devtools/disp0/phoenix_validation"
     sys.path.insert(0, str(helper))
     from gpu_runtime import read_config, retirement_channel
     from stage_scaling import require_cpu_runtime_admission
@@ -194,6 +194,10 @@ def execute(manifest_path, root):
 
         owner = step_scratch(root)
         scratch = Path(os.environ["TMPDIR"])
+        report["scratch_mount"] = fields(subprocess.check_output(
+            ["findmnt", "-T", str(scratch), "-n", "-P", "-o", "SOURCE,FSTYPE,TARGET"],
+            text=True, timeout=30,
+        ))
         disk = os.statvfs(scratch)
         report["scratch_free_bytes"] = disk.f_bavail * disk.f_frsize
         if report["scratch_free_bytes"] < 32 * 1024**3:
@@ -743,7 +747,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
-    sys.path.insert(0, str(Path(manifest["science_source"]) / "devtools/disp0/phoenix_validation"))
+    sys.path.insert(0, str(Path(manifest["helper_source"]) / "devtools/disp0/phoenix_validation"))
     from owned_process import termination_signals
     with termination_signals():
         execute(args.manifest, args.output)
