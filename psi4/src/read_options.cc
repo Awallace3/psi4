@@ -219,6 +219,10 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     False forces native FP64; true restores cuEST's default math mode, which permits
     emulation but may select native FP64 for a particular operation. -*/
     options.add_bool("CUEST_MIXED_PRECISION", true);
+    /*- Center the cuEST XC grid on ghost atoms as well as real ones. cuEST uses its own nuclear
+    weights without Bragg-radius size adjustment, so a ghost H close to a heavy atom can mis-integrate
+    that atom's density; false builds the grid on real atoms only. No effect without USE_CUEST. -*/
+    options.add_bool("CUEST_GRID_GHOST_ATOMS", true);
     /*- Use an integral-direct density-fitting plan for energy calculations on cuEST 0.3+.
         Recompute fitted integrals in occupied tiles for symmetric and nonsymmetric
         exchange. Saves device memory when the screened three-index AO cache would
