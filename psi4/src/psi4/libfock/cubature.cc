@@ -3801,27 +3801,21 @@ void MolecularGrid::buildGridFromOptions(MolecularGridOptions const &opt, bool i
         cuest_common::ensure_cuest_initialized();
         cuestAtomGridParameters_t atom_grid_params;
         CHECK_CUEST(cuestParametersCreate(CUEST_ATOMGRID_PARAMETERS, &atom_grid_params));
-        // cuEST partitions with its own nuclear weights (Stratmann-like, no Bragg-radius size
-        // adjustment; DFT_NUCLEAR_SCHEME is not honoured). A ghost H next to a heavy atom then owns a
-        // large cell of that atom's density on a compact grid, and the integrated electron count
-        // drifts by ~1e-3 (OMol25 Zn entry data0078_339471). CUEST_GRID_GHOST_ATOMS false keeps
-        // the grid on real atoms only; the basis functions on ghosts are unaffected.
-        const bool ghost_centers = Process::environment.options.get_bool("CUEST_GRID_GHOST_ATOMS");
-        std::vector<int> centers;
-        for (int A = 0; A < molecule_->natom(); A++) {
-            if (ghost_centers || molecule_->Z(A) != 0.0) centers.push_back(A);
-        }
-        if (centers.empty()) throw PSIEXCEPTION("cuEST grid: no real atoms to center the grid on.");
-        uint64_t natom = centers.size();
-        Matrix full_geom = molecule_->geometry();
-        Matrix geom("cuEST grid centers", natom, 3);
-        for (size_t i = 0; i < natom; i++)
-            for (int k = 0; k < 3; k++) geom.set(i, k, full_geom.get(centers[i], k));
+        uint64_t natom = molecule_->natom();
+        Matrix geom = molecule_->geometry();
         RadialPruneMgr prune(opt);
 
         std::vector<cuestAtomGrid_t> atom_grids(natom);
+        // cuEST partitions with its own nuclear weights (Stratmann-like, no Bragg-radius size
+        // adjustment; DFT_NUCLEAR_SCHEME is not honoured), and its XC plan needs one grid center per
+        // basis atom, so ghosts cannot be dropped. A ghost H next to a heavy atom then owns a large
+        // cell of that atom's density but carries a compact, pruned H grid: Ntotal drifts by ~1e-3
+        // (OMol25 Zn data0078_339471). CUEST_GRID_GHOST_Z > 0 builds every ghost's radial grid and
+        // pruning as if it were element Z, leaving real atoms untouched.
+        const int ghost_Z = Process::environment.options.get_int("CUEST_GRID_GHOST_Z");
         for (int A = 0; A < natom; A++) {
-            int Z = molecule_->true_atomic_number(centers[A]);
+            int Z = molecule_->true_atomic_number(A);
+            if (ghost_Z > 0 && molecule_->Z(A) == 0.0) Z = ghost_Z;
             std::vector<double> rvalues;
             std::vector<double> wvalues;
             std::vector<uint64_t> nangpts;
