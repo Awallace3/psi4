@@ -3174,7 +3174,7 @@ void cuESTJKGrad::compute_gradient() {
             throw PSIEXCEPTION("Analytic Coulomb gradients with CUEST_J_BUILD DIRECT are not implemented; "
                                "set CUEST_J_BUILD DF before the SCF or use numerical derivatives.");
         if (cuest_jk && (do_K_ || do_wK_) && cuest_jk->uses_gridk())
-            throw PSIEXCEPTION("Analytic exchange gradients with CUEST_K_BUILD GRID or GRID_FIT are not implemented; "
+            throw PSIEXCEPTION("Analytic exchange gradients with CUEST_K_BUILD GRID, GRID_FIT or GRID_RAW are not implemented; "
                                "set CUEST_K_BUILD DF before the SCF or use numerical derivatives.");
     }
 

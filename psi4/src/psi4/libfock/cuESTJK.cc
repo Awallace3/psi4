@@ -58,6 +58,10 @@ extern cublasHandle_t cublas_handle;
 
 namespace psi {
 
+static bool uses_overlap_fit(const std::string& k_build) {
+    return k_build == "GRID" || k_build == "GRID_FIT";
+}
+
 cuESTJK::cuESTJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary, Options& options)
     : JK(primary),
       options_(options),
@@ -101,7 +105,7 @@ cuESTJK::~cuESTJK() {
 
 void cuESTJK::preiterations()
 {
-    gridk_ = options_.get_str("CUEST_K_BUILD").rfind("GRID", 0) == 0;  // GRID or GRID_FIT
+    gridk_ = options_.get_str("CUEST_K_BUILD") != "DF";
     directj_ = options_.get_str("CUEST_J_BUILD") == "DIRECT";
 #ifndef PSI_CUEST_HAS_GRIDK
     if (gridk_)
@@ -120,7 +124,7 @@ void cuESTJK::preiterations()
         (void)gridk_workspace_bytes();  // Validate before allocating any plan.
         if (!(options_.get_double("CUEST_GRIDK_COLLOCATION_THRESHOLD") >= 0.0))
             throw PSIEXCEPTION("CUEST_GRIDK_COLLOCATION_THRESHOLD must be nonnegative.");
-        if (options_.get_str("CUEST_K_BUILD") == "GRID_FIT") {
+        if (uses_overlap_fit(options_.get_str("CUEST_K_BUILD"))) {
             const auto cutoff = options_.get_double("CUEST_GRIDK_FIT_CUTOFF");
             if (!(cutoff > 0.0 && cutoff < 1.0)) throw PSIEXCEPTION("CUEST_GRIDK_FIT_CUTOFF must be in (0, 1).");
             if (!(options_.get_double("CUEST_GRIDK_FIT_ORTHO_CUTOFF") > 0.0))
@@ -414,7 +418,7 @@ void cuESTJK::build_gridk_plan() {
 
     // Overlap fit: dress the collocation so the quadrature reproduces the
     // analytic overlap on the retained subspace, removing most of the grid error.
-    const bool fit = options_.get_str("CUEST_K_BUILD") == "GRID_FIT";
+    const bool fit = uses_overlap_fit(options_.get_str("CUEST_K_BUILD"));
     if (fit) {
         const cuestGridKIntPlanParametersFittingAlgorithm_t algorithm =
             CUEST_GRIDKINTPLAN_PARAMETERS_FITTING_ALGORITHM_OVERLAP_SYMMETRIC;
@@ -558,7 +562,7 @@ void cuESTJK::print_header() const {
         const bool gridk = k_build != "DF";
         outfile->Printf("  ==> cuESTJK: GPU-Accelerated J/K Matrices <==\n\n");
         outfile->Printf("    J algorithm:           %11s\n", (directj ? "Direct" : "DF"));
-        outfile->Printf("    K algorithm:           %11s\n", (k_build == "GRID_FIT" ? "Grid (fit)" : gridk ? "Grid" : "DF"));
+        outfile->Printf("    K algorithm:           %11s\n", (uses_overlap_fit(k_build) ? "Grid (fit)" : gridk ? "Grid (raw)" : "DF"));
         outfile->Printf("    J tasked:              %11s\n", (do_J_ ? "Yes" : "No"));
         outfile->Printf("    K tasked:              %11s\n", (do_K_ ? "Yes" : "No"));
         outfile->Printf("    wK tasked:             %11s\n", (do_wK_ ? "Yes" : "No"));

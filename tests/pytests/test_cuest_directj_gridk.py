@@ -108,10 +108,10 @@ def test_cuest_directj_matches_four_center_coulomb(water, symmetric):
 
 
 # Worst |K - K_4c| allowed per Grid-K variant.
-GRIDK_ATOL = {"grid_fit": 2.e-5, "grid": 2.e-5}
+GRIDK_ATOL = {"grid_raw": 2.e-5, "grid": 2.e-5}
 
 
-@pytest.mark.parametrize("k_build", ["grid_fit", "grid"])
+@pytest.mark.parametrize("k_build", ["grid_raw", "grid"])
 @pytest.mark.parametrize("symmetric", [True, False], ids=["sym", "nonsym"])
 @pytest.mark.parametrize("directj", [False, True], ids=["dfj", "directj"])
 @pytest.mark.parametrize("operator", [
@@ -178,11 +178,11 @@ def test_cuest_directj_gridk_single_task(water, do_j, do_k):
 
 
 # Worst |E - E(PK)| allowed per Grid-K variant, in Eh.
-SCF_ATOL = {"grid_fit": 1.e-5, "grid": 1.e-5}
+SCF_ATOL = {"grid_raw": 1.e-5, "grid": 1.e-5}
 
 
 # Reference energies are CPU SCF_TYPE PK on the same geometry and basis.
-@pytest.mark.parametrize("k_build", ["grid_fit", "grid"])
+@pytest.mark.parametrize("k_build", ["grid_raw", "grid"])
 @pytest.mark.parametrize("method,reference", [
     ("hf", "rhf"), ("hf", "uhf"), ("pbe0", "rks"), ("wb97x", "rks"),
 ])
@@ -205,6 +205,26 @@ def test_cuest_directj_gridk_scf_energy(water, method, reference, k_build):
 
     print(f"{method}/{reference} {k_build}: E(Direct-J+Grid-K) - E(PK) = {e_gpu - e_ref:+.3e} Eh")
     assert abs(e_gpu - e_ref) < SCF_ATOL[k_build]
+
+
+def test_cuest_automatic_scf_grid_alias(water):
+    """Without an explicit SCF_TYPE the energy driver must select cuESTJK, with GRID fitted."""
+    mol, primary, aux = water
+    psi4.set_options({"cuest_j_build": "direct", "cuest_k_build": "grid"})
+    _builder(primary, aux).finalize()  # capability check for older SDKs
+    energies = {}
+    for selector in ("grid", "grid_fit", "grid_raw"):
+        psi4.core.clean()
+        psi4.core.clean_options()
+        psi4.set_options({"basis": "cc-pvdz", "use_cuest": True, "cuest_j_build": "direct",
+                          "cuest_k_build": selector, "save_jk": True, "dft_grid_name": "sg1",
+                          "cuest_mixed_precision": False, "e_convergence": 1.e-10})
+        assert not psi4.core.has_global_option_changed("SCF_TYPE")
+        energies[selector], wfn = psi4.energy("hf", molecule=mol, return_wfn=True)
+        assert wfn.jk().name() == "cuESTJK"
+        del wfn
+    assert abs(energies["grid"] - energies["grid_fit"]) < 1.e-10
+    assert abs(energies["grid"] - energies["grid_raw"]) > 1.e-8
 
 
 def test_cuest_directj_gridk_ignores_auxiliary_basis(water):

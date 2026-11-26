@@ -187,17 +187,17 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     options.add_str("CUEST_J_BUILD", "DF", "DF DIRECT");
     /*- How cuEST J/K builds compute exchange (alpha K + beta wK, for symmetric
     SCF densities and the nonsymmetric densities of SAPT and CPHF/CPKS).
-    DF is density-fitted K. GRID and GRID_FIT are seminumerical grid exchange
+    DF is density-fitted K. GRID, GRID_FIT and GRID_RAW are seminumerical grid exchange
     (cuEST Grid-K; Hohenstein, Alkan, Wu and Parrish, arXiv:2611.16420):
-    GRID uses the raw collocation; GRID_FIT dresses it with cuEST's symmetric
-    overlap fit so the quadrature reproduces the analytic overlap matrix.
+    GRID (alias GRID_FIT) uses cuEST's symmetric overlap fit so the quadrature
+    reproduces the analytic overlap on the retained subspace. GRID_RAW uses unfitted collocation.
     This is the overlap fit only, not an SAD difference-density correction. The exchange grid
     follows the DFT grid options (|globals__dft_grid_name| SG0 or SG1, or
     |globals__dft_radial_points| and |globals__dft_spherical_points|); converge
     the exchange quadrature for the property of interest. Requires
-    cuEST >= 0.3. Analytic exchange gradients are not implemented for GRID or
-    GRID_FIT. No effect unless a cuEST J/K builder is selected. -*/
-    options.add_str("CUEST_K_BUILD", "DF", "DF GRID GRID_FIT");
+    cuEST >= 0.3. Analytic exchange gradients are not implemented for any grid
+    mode. No effect unless a cuEST J/K builder is selected. -*/
+    options.add_str("CUEST_K_BUILD", "DF", "DF GRID GRID_FIT GRID_RAW");
     /*- Kernel selection for |globals__cuest_j_build| DIRECT. DEFAULT keeps the cuEST SDK's choice (JIT on
     CUDA 13+, ahead-of-time kernels otherwise). ON and OFF force JIT or
     ahead-of-time kernels; neither changes screening or precision. !expert -*/
@@ -206,9 +206,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     follows INTS_TOLERANCE, which still controls the AO pair list. Zero disables
     the additional density-weighted screening. !expert -*/
     options.add_double("CUEST_DIRECTJ_DENSITY_THRESHOLD", 1.0e-14);
-    /*- AO collocation screening threshold for GRID and GRID_FIT. !expert -*/
+    /*- AO collocation screening threshold for all Grid-K modes. !expert -*/
     options.add_double("CUEST_GRIDK_COLLOCATION_THRESHOLD", 1.0e-18);
-    /*- Variable device scratch budget for |globals__cuest_k_build| GRID or GRID_FIT, in decimal MB. Must
+    /*- Variable device scratch budget for all Grid-K modes, in decimal MB. Must
     be positive. Smaller values make cuEST tile more and may run slower; they do
     not change the result. This is not a cap on total device memory: plans, AO
     matrices and fixed SDK workspace come on top. !expert -*/
