@@ -881,7 +881,6 @@ void VBase::prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
     vv10_cache[0]["RHO"] = std::make_shared<Vector>("RHO Grid points", total_size);
     vv10_cache[0]["W0"] = std::make_shared<Vector>("W0 Grid points", total_size);
     vv10_cache[0]["KAPPA"] = std::make_shared<Vector>("KAPPA Grid points", total_size);
-    vv10_cache[0]["PREF"] = std::make_shared<Vector>("PREF Grid points", total_size);
 
     double* w_vecp = vv10_cache[0]["W"]->pointer();
     double* x_vecp = vv10_cache[0]["X"]->pointer();
@@ -890,7 +889,6 @@ void VBase::prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
     double* rho_vecp = vv10_cache[0]["RHO"]->pointer();
     double* w0_vecp = vv10_cache[0]["W0"]->pointer();
     double* kappa_vecp = vv10_cache[0]["KAPPA"]->pointer();
-    double* pref_vecp = vv10_cache[0]["PREF"]->pointer();
 
     size_t offset = 0;
     for (const auto& cache : vv10_tmp_cache) {
@@ -904,10 +902,6 @@ void VBase::prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
         C_DCOPY(csize, cache.at("W0")->pointer(), 1, (w0_vecp + offset), 1);
         C_DCOPY(csize, cache.at("KAPPA")->pointer(), 1, (kappa_vecp + offset), 1);
         offset += csize;
-    }
-#pragma omp simd
-    for (size_t j = 0; j < total_size; ++j) {
-        pref_vecp[j] = -1.5 * w_vecp[j] * rho_vecp[j];
     }
 }
 double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
