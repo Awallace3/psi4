@@ -172,3 +172,74 @@ After merging `origin/saptdft_cuest` (`2cd959b9ae`) into `saptdft_cuest_disp0` (
 | `protein157` (`1,478`) | PBE0 | `627.17`\* | `627.52` | `188.03` | `45.73` / `42.23` | `4.26` / `11.88` / `15.91` |
 
 *\*Lustre `/storage/scratch1` `Post-SCF` checkpoint stalls (`94.63 s` in `protein157-HF-plain`, `41.22 s` + `7.67 s` in `protein157-HF-fragment`, `22.51 s` + `10.84 s` in `protein157-PBE0-plain`) and disk-backed `find` contention (`128.2 s` vs `15.91 s` in PBE0) motivated enforcing node-local NVMe scratch across all Phoenix runners in commit `939bf919f6`.*
+
+---
+
+## H200 SXM (`141 GiB`, node-local NVMe `xfs`) & Unified `CPU16` Measured Timings (`436ed46555` / `a6ce45a6bc`, 2026-11-27–28)
+
+### Provenance
+
+- **Unbounded physical VRAM + ~56 GiB VRAM reclaim (`5e5acaacc3`, `c47ecd4f1f`, `436ed46555`):**
+  - Removed artificial upfront VRAM budget blocking (`CUDASession(memory_limit_bytes=None, native_persistent_bytes=0)` runs directly to physical `cudaMalloc`, raising `MemoryError` only on real `cudaErrorMemoryAllocation`).
+  - Released cuEST creation-temporary workspaces immediately after `cuest*Create` + `synchronize_device()` in `DiagnosticPlanOwner` (~56 GiB reclaimed on `protein83`).
+  - Deferred `RIFIT` `sibling_provider` construction in `sapt_fisapt_workflow_cuda.py` until after `coupled_find_device` releases `HFResponseOperator` (~28 GiB), cutting `protein83` full coupled F-SAPT0 peak VRAM from `~109 GiB` → **`53.59 GiB`** (fits comfortably on both 96 GiB RTX PRO 6000 Blackwell and 141 GiB H200 SXM).
+- **Phoenix CPU builds (`COMPLETED 0:0`, cuEST `0.3.0.1`):**
+  - Build `16152230` (`c47ecd4f1f`, `cpu-small / inferno`, `15:38`, `cpu-sealed-admission` `PASS`).
+  - Build **`16270782`** (`436ed46555`, `cpu-small / embers`, `10:03`, `441` CPU guards, `result.json` `PASS`, `cpu-sealed-admission` `PASS` with `device_memory_limit_bytes=None`, `native_persistent_bytes=0`).
+- **Node-local NVMe `CPU16` baselines (`COMPLETED 0:0`, `FSTYPE=xfs`):**
+  - Ab initio `CPU16` **`16260393`** (`cpu-small / embers`, `atl1-1-01-003-12-2`, `01:22:23`, Build `16152230`, `879 GB` free `/tmp`).
+  - `D4(I)` `CPU16` **`16112589`** (`cpu-small / embers`, `atl1-1-02-009-7-1`, `09:10`, Build B `16096766`; combined with `15801202` `protein83` PBE0, `15801531` `cdk2_c2` HF, `15826017` `cdk2_c2` PBE0).
+- **Node-local NVMe H200 SXM (`143,771 MiB`) GPU runs (`FSTYPE=xfs`):**
+  - **Ab initio `disp0`/`fdisp0` + coupled F-SAPT0 suite `16272610`** (`gpu-h200 / embers`, `atl1-1-03-020-18-0`, Build **`16270782`** `436ed46555`, **`PASS_SUITE`**, `exit_code=0`, `scratch_cleanup.complete=True`; `stage1`, `stage2`, `stage3a`, `stage3b`, `stage4b`, `stage5a`, `stage5b`, `stage5c` all **`PASS`**; `embers` preempted at `01:59:33` during `stage7` CPU8 nanotube, superseded by `CPU16` `16260393`).
+    - Manifest SHA256: `69744670998f5523f04856a73cfe56cb19a177aa1a2a691bc58a66bb1e988b3a`
+    - `suite-result.json` SHA256: `e56968ac4375796600f345cd2111618b94876c55b2104a332f2d2d9aa5439e0a`
+    - Remote artifact directory: `/storage/project/r-cs207-0/awallace43/runs/saptdft-cuest-fsapt/disp0-0301-suite-436ed46555-01/job-16272610`
+  - **Merged `F-SAPT(HF/PBE0)-D4(I)/cc-pVDZ` suite `16112597`** (`gpu-h200 / embers`, `atl1-1-02-014-16-0`, Build B `16096766`, **`COMPLETED 0:0`** in `14:57`, **`20/20 PASS`**, `reused_scalar_plan=True`, `0` fragment DF plans, closure `<= 4.79e-10 Eh`, plain-vs-fragment `<= 4.72e-8 Eh`, `cdk2_c2` residue parity vs CPU16: HF `1.67e-5 kcal/mol`, PBE0 `2.89e-3 kcal/mol`).
+
+### C1. Ab Initio `SAPT0+δHF` & Coupled `F-SAPT0` — Consistent `CPU16` (`16260393`, NVMe) vs. RTX 6000 & H200 (`16272610`, NVMe, spherical `jun-cc-pVDZ`, native FP64)
+
+| System (`nbf`) | Mode | CPU16 `16260393` (s) | RTX 6000 (s) | RTX 6000 vs CPU16 | **H200 `16272610` (s)** | **H200 vs CPU16** | `disp`/`fdisp0` CPU16 → H200 | H200 Peak VRAM (GiB) | Numerical parity (`16272610`) |
+|---|---|---:|---:|---:|---:|---:|---|---:|---|
+| `fsapt1` (`312`, `E10/D12`) | Full F-SAPT0 + `fsapt.py` | `404.96` | `39.82` (`16099563`) | `10.17×` | **`21.25`** (`22.25`, `20.25`) | **`19.06×`** | `4.33 s → 0.0392 s` (**`110.5×`**) | `2.94` | **PASS**: `\|ΔE\| 6.34e-9`, oracle `1.78e-10`, **172/172** cells `<= 9.58e-10 Eh` (`6.01e-7 kcal/mol`), repeat `7.67e-12 Eh` |
+| `peptide` (`250`, `E10/D10`) | `SAPT0+δHF` | `16.23` | `13.74` (`16084802`) | `1.18×` | **`6.14`** (`7.42`, `6.14`, `5.09`) | **`2.64×`** | `6.22 s → 0.957 s` (**`6.50×`**) | — | **PASS**: `\|ΔE\| 2.57e-10 Eh`, `Disp20,u` `3.91e-13 Eh`, `δHF` `9.47e-13 Eh` |
+| `peptide` (`250`, `E10/D12`) | Full F-SAPT0 | `195.31` | `22.34` (`16099563`) | `8.74×` | **`15.48`** (`14.85`, `15.48`, `16.46`) | **`12.61×`** | `2.39 s → 0.0439 s` (**`54.4×`**) | `2.00` | **PASS**: same-gauge oracle **`1.44e-11 Eh`**, all 3 repeats pass |
+| `nanotube` (`548`, `E10/D10`) | `SAPT0+δHF` | `126.03` | `41.73` (`16084802`) | `3.02×` | **`10.33`** (`8.06` warm)\* | **`12.20×`** (`15.64×` warm) | `51.26 s → 1.25 s` (**`41.1×`**, `56.7×` warm) | — | 8/8 workers `PASS`; 6/7 terms `<= 6.2e-9 Eh`; known `cond(S)~1e9` `D10` `Elst10,r` floor `1.18e-7 Eh` |
+| `nanotube` (`548`, `E10/D10`) | Full F-SAPT0 | `3,366.92` | `187.53` (`16099563`) | `17.95×` | **`37.09`** (`37.15`, `37.04`) | **`90.77×`** | `20.86 s → 0.150 s` (**`139.0×`**) | `11.51` | **PASS** (`1` DFMO call; `fragment_ind` `3,256.33 s → 35.69 s` = **`91.23×`**) |
+| `protein83` (`922`, `E10/D10`) | `SAPT0+δHF` | `724.14` | `263.89` (`16099563`) | `2.74×` | **`28.85`** | **`25.10×`** | `321.46 s → 5.45 s` (**`58.95×`**) | — | **PASS**: `\|ΔE\| 7.99e-8 Eh`, `Disp20,u` `4.89e-10 Eh`, `δHF` `1.56e-11 Eh` |
+
+*\*`fdisp0` values for F-SAPT0 rows report pure `blocked_execution_seconds` (`1` DFMO call); instrumented `fragment_disp` windows including deferred RIFIT plan creation/teardown are `0.746 s` (`peptide`), `1.54 s` (`nanotube`), and `5.52 s` (`protein83`). Same-host H200 `CPU8` ratios inside `16272610`: `fsapt1` `36.14×` (`767.79 → 21.25 s`), `peptide` F-SAPT `14.04×` (`217.39 → 15.48 s`), `protein83` `SAPT0+δHF` `33.44×` (`964.85 → 28.85 s`, `disp` `66.50×`).*
+
+**`protein83` `SAPT0+δHF` per-term H200 (`16272610`) vs. `CPU16` (`16260393`):** `disp` `321.46 → 5.45 s` (**`58.95×`**), `ind` `166.44 → 6.65 s` (**`25.03×`**), `exch` `8.47 → 0.420 s` (**`20.17×`**), `delta_hf` `123.13 → 7.66 s` (**`16.07×`**), `shared_setup_other` `104.63 → 8.66 s` (**`12.08×`**).
+
+### C2. Separate `CPU48` Baseline Table (`15474909`/`15474910`, `cpu-gnr`, `jun-cc-pVDZ`) vs. RTX 6000 & H200 (`16272610`)
+
+| System (`nbf`) | Mode | CPU48 (s) | RTX 6000 `16099563` (s) | **H200 `16272610` (s)** | **H200 vs CPU48** | H200 Peak VRAM (GiB) | Numerical parity & Notes |
+|---|---|---:|---:|---:|---:|---:|---|
+| `protein83` (`922`) | Fixed-HF `fdisp0` | `69.51` | `59.49` (`1.17×`, `46.26 GiB`) | **`2.55`** (`2.54` blocked, `0.352 s` DFMO) | **`27.21×`** | **`31.61`** | **PASS**: `Disp20` pairs **`1.53e-14 Eh`**, `Exch-Disp20` **`4.89e-14 Eh`**, repeat **`3.79e-19 Eh`** (`def2-SVP` 561 AO: `1.11 s`, `14.46 GiB`, err `2.76e-16 Eh`) |
+| `protein83` (`922`, `E10/D12`) | **Full Coupled F-SAPT0** | **`11,456.28`** (`3h 11m`) | *(pre-fix 86 GiB cap; now fits)* | **`277.99`** (`277.74`, `278.24`; `4m 38s`) | **`41.21×`** | **`53.59`** | **PASS** vs both frozen CPU48 refs: `\|ΔE\| 5.01e-9 Eh`, `Disp20,u` `8.03e-11 Eh`, `Exch_AB` `2.11e-12 Eh`, `IndAB_AB` `2.23e-11 Eh`, `IndBA_AB` `1.94e-10 Eh`, `Elst_AB` `-1.44e-7 Eh` |
+
+- `protein83` full F-SAPT0 H200 instrumented breakdown (`352.26 s` traced): `scf_dimer` `9.72 s`, `scf_A` `6.02 s`, `scf_B` `6.16 s`, `canonical_ind` `5.50 s`, `fragment_localization` `2.64 s`, `fragment_elst` `33.40 s`, `fragment_exch` `0.425 s`, `fragment_ind` `274.89 s`, `fragment_disp` `5.52 s` (`2.56 s` blocked, `0.353 s` 1-call DFMO).
+- `stage6` `protein157` (`1,786` AO `jun-cc-pVDZ`) unbounded physical VRAM probe: allocated `88.54 GiB` persistent `RIFIT` DF plan directly on H200 and raised clean `MemoryError` (`cudaErrorMemoryAllocation`) only when cuEST `RIFIT` plan creation requested `137.45 GiB` creation-temp with `50.22 GiB` physically free (`226 GiB > 140 GiB` physical H200 VRAM), confirming zero artificial software blocking.
+
+### C3. Unified `CPU16` vs. RTX 6000 (`16098082`) & H200 (`16112597`, NVMe `xfs`) `F-SAPT(HF/PBE0)-D4(I)/cc-pVDZ`
+
+*Consistent `CPU16` baseline: `water`, `peptide`, `protein83` HF from `16112589` (NVMe `xfs`); `protein83` PBE0 from `15801202`; `cdk2_c2` HF from `15801531`; `cdk2_c2` PBE0 from `15826017`.*
+
+| System (`nbf`) | Method | CPU16 (s) | RTX 6000 `16098082` (s) | RTX 6000 vs CPU16 | **H200 `16112597` (s)** | **H200 vs CPU16** |
+|---|---|---:|---:|---:|---:|---:|
+| `water` (`48`, embedded) | HF F-SAPT | `3.85` | `3.56` | `1.08×` | **`3.66`** | **`1.05×`** |
+| `water` (`48`, embedded) | PBE0 F-SAPT | `7.78` | `6.73` | `1.16×` | **`5.87`** | **`1.33×`** |
+| `peptide` (`210`) | HF F-SAPT | `10.59` | `5.42` | `1.95×` | **`4.86`** | **`2.18×`** |
+| `peptide` (`210`) | PBE0 F-SAPT | `50.73` | `21.01` | `2.41×` | **`11.90`** | **`4.26×`** |
+| `protein83` (`766`) | HF F-SAPT | `196.38` | `36.62` | `5.36×` | **`16.02`** | **`12.26×`** |
+| `protein83` (`766`) | PBE0 F-SAPT | `602.99` | `119.24` | `5.06×` | **`44.99`** | **`13.40×`** |
+| `cdk2_c2` (`995`, +8,977 MM) | HF F-SAPT | `677.47` | `74.48` | `9.10×` | **`28.27`** | **`23.96×`** |
+| `cdk2_c2` (`995`, +8,977 MM) | PBE0 F-SAPT | `1,638.12` | `217.83` | `7.52×` | **`72.55`** | **`22.58×`** |
+
+**GPU-only `protein157` (`1,478` AO, `cc-pVDZ`, `F-SAPT-D4(I)`):**
+- HF F-SAPT: RTX 6000 `16098082` `374.64 s`\* vs. **H200 `16112597` `63.42 s`** (`5.91×` faster than RTX 6000).
+- PBE0 F-SAPT: RTX 6000 `16098082` `627.52 s` vs. **H200 `16112597` `184.77 s`** (`3.40×` faster than RTX 6000).
+
+**`cdk2_c2` (`995` AO + `8,977` MM) per-term H200 (`16112597`, NVMe) vs. `CPU16`:**
+- **HF (`27.94 s` vs `676.97 s`, `24.23×`):** Dimer SCF `5.91 s` (`29.85×`), MonA/B SCF `3.71/3.54 s` (`13.96×`/`25.51×`), Build JK `0.72 s` (`71.52×`), `exch` `0.35 s` (`28.85×`), `ind` `5.82 s` (`33.30×`), F-SAPT Elst/Exch/Ind `1.29/0.14/2.96 s` (`39.24×`/`56.31×`/`13.19×`), D4 `2.12 s` (`1.37×`).
+- **PBE0 (`72.23 s` vs `1,637.62 s`, `22.67×`):** GRAC MonA `8.60 s` (`9.36×`, down from `45.20 s` on Lustre `15825734`), GRAC MonB `11.01 s` (`11.75×`), Dimer SCF `5.57 s` (`32.10×`), MonA/B SCF `3.61/4.29 s` (`15.04×`/`21.42×`), SAPT(HF):`exch`/`ind` `0.35/5.76 s` (`28.90×`/`34.33×`), MonA/B DFT `6.70/6.12 s` (`21.40×`/`23.92×`), Build JK `1.56 s` (`33.60×`), `exch`/`ind` `0.35/9.79 s` (`29.82×`/`39.42×`), F-SAPT Elst/Exch/Ind `1.28/0.14/2.95 s` (`40.11×`/`55.49×`/`13.48×`), D4 `1.95 s` (`1.24×`).
