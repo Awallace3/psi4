@@ -32,6 +32,32 @@ REQUIRED_HEADERS = {
     "include/cuest/integral_plans/density_fitted_integral_plan_api.h":
         "ceed60c3c738603eec85b9c1a8ef87110d24424ed78e9a93cb7f7f584f8f88fa",
 }
+# Authenticated conda-forge CUDA13 cuEST 0.3.0.1 profile (h345135a_0).
+# Native cuestGet{Major,Minor,Patch}Version returns (0, 3, 0).
+SDK_0301_VERSION = (0, 3, 0)
+SDK_0301_PACKAGE_VERSION = "0.3.0.1"
+SDK_0301_PACKAGE_BUILD = "h345135a_0"
+SDK_0301_PACKAGES = {
+    "libcuest": "b766bf75603dc25162907b3ed8d29d72ebaebded067ee1a6afd8eb174628d1be",
+    "libcuest-dev": "0159f8dcf95b2207946a9f5bfd2892b2b9d8200685032e1ae8c29d1ad2eb4d85",
+}
+NATIVE_0301_RELPATH = "lib/libcuest.so.0.3.0"
+NATIVE_0301_BYTES = 44057121
+NATIVE_0301_SHA256 = "cb810a15dff2d0c9c0c83cb56336bf80d77a74ace53f6e4d30921726679fc221"
+HEADER_0301_COUNT = 60
+HEADER_0301_JSON_SHA256 = "6c1975e9a7ceb55d6ef651a8d2dc97f6635ab65a615c4801a33a6aa4439d83bb"
+HEADER_0301_NUL_SHA256 = "f6efa55e4c3338177be95534aa1b598e7da2c37febbc2ca517a857b0c2405ca5"
+REQUIRED_HEADERS_0301 = {
+    "include/cuest.h": "70d6ff72cd444e1715d92ab4a34da7033962a0bf4cc8a273bf85bc70559ad769",
+    "include/cuest/context/context_api.h": "9860118c37501078c59b583d61bb3e2a7dd31f7e865862b48099ccc5a9f16d2b",
+    "include/cuest/types/cuest_parameter_types.h": "2871edd9259a563a918506666d3741c91032b15f0b69c8f245524498cd870ebe",
+    "include/cuest/types/workspace_api.h": "a413ae8984034467cc0b8271b2d0b3cefbd3d23cf62706c7ddb0fe531eb8d1e1",
+    "include/cuest/parameters/parameter_api.h": "1c32d0ea8d3e020c1a7663fa96f66b29d9de5f8b6c54dd785ec86b33c5533781",
+    "include/cuest/density_fitted_integrals/density_fitted_mo_integrals_compute_api.h":
+        "0d105b3c22cea22c72a8e33c24151e78d75bcce66bf977233b70f4c426ff7368",
+    "include/cuest/integral_plans/density_fitted_integral_plan_api.h":
+        "40e3bebf952745dfe305eeeb2ccbf1d60f7f89eca251679cf0101fa620e75c56",
+}
 CUDA_PREFIXES = ("libcudart", "libcublas", "libcusolver", "libcusparse", "libnvJitLink",
                  "libnvrtc", "libcufft", "libcurand", "libcutensor", "libcupti",
                  "libnvfatbin", "libnvvm", "libnvptxcompiler", "libcudnn",
@@ -67,6 +93,26 @@ def header_digests(records):
     nul_bytes="".join(name.removeprefix("include/")+"\0"+records[name]["sha256"].lower()+"\n"
                       for name in sorted(records)).encode()
     return hashlib.sha256(json_bytes).hexdigest(),hashlib.sha256(nul_bytes).hexdigest()
+
+
+def header_digests_0301(records):
+    package_records={f"cuest_0.3.0.1/{name}":record for name,record in records.items()}
+    json_bytes=json.dumps(package_records,sort_keys=True,separators=(",",":")).encode()
+    nul_bytes="".join(name.removeprefix("include/")+"\0"+records[name]["sha256"].lower()+"\n"
+                      for name in sorted(records)).encode()
+    return hashlib.sha256(json_bytes).hexdigest(),hashlib.sha256(nul_bytes).hexdigest()
+
+
+def expected_native_sha256(proof):
+    if proof.get("sdk_version") == SDK_0301_PACKAGE_VERSION:
+        return NATIVE_0301_SHA256
+    return NATIVE_SHA256
+
+
+def expected_sdk_version(proof):
+    if proof.get("sdk_version") == SDK_0301_PACKAGE_VERSION:
+        return SDK_0301_VERSION
+    return SDK_VERSION
 
 
 def mapped_file_digest(path, mappings):
@@ -124,8 +170,93 @@ def canonical_headers(archive):
     return records
 
 
-def verify_files(sdk_root, archive, *, owner=None):
+def _verify_files_0301(root, *, owner=None):
+    """Fail-closed file admission for pinned conda-forge cuEST 0.3.0.1 CUDA13.
+
+    Verifies only cuEST SDK-owned headers (include/cuest.h and include/cuest/**)
+    and pinned conda-meta package receipts, never unrelated prefix headers.
+    """
+    owned_headers = set()
+    native_declared = False
+    for pkg_name, pkg_sha in SDK_0301_PACKAGES.items():
+        meta_path = (
+            root / "conda-meta" / f"{pkg_name}-{SDK_0301_PACKAGE_VERSION}-{SDK_0301_PACKAGE_BUILD}.json"
+        ).resolve(strict=True)
+        require(meta_path.is_relative_to(root), f"cuEST 0.3.0.1 conda-meta escapes prefix: {pkg_name}")
+        meta = json.loads(meta_path.read_text())
+        expected_url = (
+            f"https://conda.anaconda.org/conda-forge/linux-64/"
+            f"{pkg_name}-{SDK_0301_PACKAGE_VERSION}-{SDK_0301_PACKAGE_BUILD}.conda"
+        )
+        require(
+            meta.get("name") == pkg_name
+            and meta.get("version") == SDK_0301_PACKAGE_VERSION
+            and meta.get("build") == SDK_0301_PACKAGE_BUILD
+            and meta.get("subdir") == "linux-64"
+            and meta.get("sha256") == pkg_sha
+            and meta.get("url") == expected_url,
+            f"Unexpected conda-forge cuEST 0.3.0.1 package receipt: {pkg_name}",
+        )
+        for rel in meta.get("files", ()):
+            require(".." not in Path(rel).parts, f"Unsafe SDK package file path: {rel}")
+            if rel == "include/cuest.h" or rel.startswith("include/cuest/"):
+                owned_headers.add(rel)
+            if rel == NATIVE_0301_RELPATH:
+                native_declared = True
+    require(native_declared, "conda-forge cuEST 0.3.0.1 receipt missing lib/libcuest.so.0.3.0")
+    # Ensure no foreign/untracked files exist inside include/cuest/ or include/cuest.h.
+    actual_headers = set()
+    cuest_h = root / "include/cuest.h"
+    if cuest_h.is_file():
+        actual_headers.add("include/cuest.h")
+    cuest_dir = root / "include/cuest"
+    if cuest_dir.is_dir():
+        for path in cuest_dir.rglob("*"):
+            if path.is_file():
+                actual_headers.add(path.relative_to(root).as_posix())
+    require(actual_headers == owned_headers,
+            "cuEST 0.3.0.1 SDK-owned header inventory differs from pinned conda-forge receipt")
+    records = {}
+    for name in sorted(owned_headers):
+        path = (root / name).resolve(strict=True)
+        require(path.is_relative_to(root), f"cuEST 0.3.0.1 header escapes prefix: {name}")
+        records[name] = {"bytes": path.stat().st_size, "sha256": file_digest(path)}
+    require(all(records.get(path, {}).get("sha256") == sha
+                for path, sha in REQUIRED_HEADERS_0301.items()),
+            "Canonical cuEST 0.3.0.1 required header signatures differ")
+    tree_sha, nul_sha = header_digests_0301(records)
+    require(len(records) == HEADER_0301_COUNT
+            and (tree_sha, nul_sha) == (HEADER_0301_JSON_SHA256, HEADER_0301_NUL_SHA256),
+            "Canonical cuEST 0.3.0.1 60-header tree identity differs")
+    native = (root / NATIVE_0301_RELPATH).resolve(strict=True)
+    require(native.is_relative_to(root) and native.stat().st_size == NATIVE_0301_BYTES,
+            "cuEST CUDA13 native bytes are not canonical conda-forge 0.3.0.1")
+    native_sha = (file_digest(native) if owner is None
+                  else owner.require_library(native, NATIVE_0301_SHA256))
+    require(native_sha == NATIVE_0301_SHA256,
+            "cuEST CUDA13 native bytes are not canonical conda-forge 0.3.0.1")
+    return {
+        "sdk_version": SDK_0301_PACKAGE_VERSION,
+        "sdk_profile": "conda-forge-0.3.0.1-cuda13",
+        "sdk_root": str(root),
+        "archive_sha256": None,
+        "conda_packages": dict(SDK_0301_PACKAGES),
+        "header_tree_manifest_sha256": tree_sha,
+        "header_tree_include_relative_nul_sha256": nul_sha,
+        "header_tree_manifest_schema": "SDK-owned conda-forge 0.3.0.1 headers -> {bytes,sha256}; compact sorted JSON",
+        "header_files": {f"cuest_0.3.0.1/{name}": value for name, value in records.items()},
+        "native_path": str(native),
+        "native_sha256": NATIVE_0301_SHA256,
+        "binding": "checked-in ctypes C-ABI verified against conda-forge 0.3.0.1 headers",
+        "binding_source_sha256": file_digest(__file__),
+        "scope": "File identity only; native handle/version/maps still require admission",
+    }
+
+
+def verify_files(sdk_root, archive=None, *, owner=None):
     root = Path(sdk_root).resolve(strict=True)
+    if archive is None:
+        return _verify_files_0301(root, owner=owner)
     records = canonical_headers(archive)
     actual = {str(path.relative_to(root)) for path in (root/"include").rglob("*") if path.is_file()}
     require(actual == set(records), "cuEST header-tree inventory differs from canonical0.2.50")
@@ -175,16 +306,23 @@ def configure_abi(native):
     return specs
 
 
-def native_version(native, handle):
+def native_version(native, handle, *, expected=None):
     require(isinstance(handle,int) and not isinstance(handle,bool) and 0 < handle < 2**64,
             "A valid nonnull admitted cuEST handle is required")
+    target = SDK_VERSION if expected is None else tuple(expected)
+    require(target in (SDK_VERSION, SDK_0301_VERSION),
+            f"Unsupported expected native cuEST version tuple: {target}")
     version = []
     for name in ("Major","Minor","Patch"):
         value = ct.c_uint32()
         status = getattr(native,f"cuestGet{name}Version")(ct.c_void_p(handle),ct.byref(value))
         require(status == 0, f"Native cuEST {name} version query failed: {status}")
         version.append(value.value)
-    require(tuple(version) == SDK_VERSION, f"Native cuEST must be0.2.50, not {version}")
+    if target == SDK_VERSION:
+        require(tuple(version) == SDK_VERSION, f"Native cuEST must be0.2.50, not {version}")
+    else:
+        require(tuple(version) == SDK_0301_VERSION,
+                f"Native cuEST must be 0.3.0 (conda-forge 0.3.0.1), not {version}")
     return tuple(version)
 
 
@@ -322,15 +460,17 @@ def _audit_maps(native, proof, cuda_manifest, *, text=None, owner=None, extra_sy
         basename=lambda path:Path(path).name
     paths = {name for _,_,name,_,_ in rows}
     expected = proof["native_path"]
+    expected_sha = expected_native_sha256(proof)
+    sdk_label = proof.get("sdk_version", "0.2.50")
     native_paths = {name for name in paths if basename(name).startswith("libcuest.so")}
     prove = (lambda path:owner.mapped_sha256(path,rows)) if owner is not None else (
         lambda path:mapped_file_digest(path,rows))
-    require(native_paths == {expected} and prove(expected) == NATIVE_SHA256,
+    require(native_paths == {expected} and prove(expected) == expected_sha,
             "Missing/foreign/duplicate actual cuEST native world (including0.2.2)")
     for name in (*configure_abi(native),*extra_symbols):
         address = ct.cast(getattr(native,name),ct.c_void_p).value
         owners = {path for lo,hi,path,_,_ in rows if lo <= address < hi}
-        require(owners == {expected}, f"cuEST symbol resolved outside canonical0.2.50: {name}")
+        require(owners == {expected}, f"cuEST symbol resolved outside canonical{sdk_label}: {name}")
     root = Path(cuda_manifest["cuda_root"])
     require(root.is_absolute(), "Explicit same-CUDA root required")
     allowed = {}

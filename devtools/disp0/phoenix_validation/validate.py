@@ -12,6 +12,8 @@ import sys
 E2_PIN = "06404fa69ce9346443d7d4f19a250f6db9f0f62c"
 CUEST_SHA = "65c9e559201ee589cb742b919cc1c5d80c45aa480b64aede17ac96aff9e4963c"
 HEADERS_SHA = "3d26a7ef607d02ee294f66f11f1374f3badbd83430f5be28ed0a05e6c8d73d18"
+CUEST_0301_SHA = "cb810a15dff2d0c9c0c83cb56336bf80d77a74ace53f6e4d30921726679fc221"
+HEADERS_0301_SHA = "f6efa55e4c3338177be95534aa1b598e7da2c37febbc2ca517a857b0c2405ca5"
 
 
 def require(condition, message):
@@ -48,11 +50,31 @@ def prepare(source, run, dependencies, e2, cuda, cuest):
 
     require((dependencies / "bin/python").is_file(), "Missing dependency interpreter")
     require((e2 / "lib/einsums").is_dir(), "Missing read-only Python E2 stage")
-    native = cuest / "lib/13/libcuest.so.0.2.50"
-    require(digest(native) == CUEST_SHA, "Wrong canonical cuEST native input")
-    count, headers_sha = header_identity(cuest / "include")
-    require(count == 59 and headers_sha == HEADERS_SHA,
-            f"cuEST canonical whole-header identity mismatch: count={count}, sha256={headers_sha}")
+    is_0301 = (cuest / "lib/libcuest.so.0.3.0").is_file()
+    if is_0301:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "phoenix_cuest_identity_prepare",
+            source / "psi4/driver/procrouting/sapt/sapt_cuest250_identity.py")
+        ident = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ident)
+        proof = ident.verify_files(cuest, None)
+        require(proof["sdk_version"] == "0.3.0.1"
+                and proof["native_sha256"] == CUEST_0301_SHA
+                and proof["header_tree_include_relative_nul_sha256"] == HEADERS_0301_SHA,
+                "Wrong canonical conda-forge cuEST 0.3.0.1 input")
+        cuest_sdk_version = "0.3.0.1"
+        cuest_sha = CUEST_0301_SHA
+        cuest_headers_sha = HEADERS_0301_SHA
+    else:
+        native = cuest / "lib/13/libcuest.so.0.2.50"
+        require(digest(native) == CUEST_SHA, "Wrong canonical cuEST native input")
+        count, headers_sha = header_identity(cuest / "include")
+        require(count == 59 and headers_sha == HEADERS_SHA,
+                f"cuEST canonical whole-header identity mismatch: count={count}, sha256={headers_sha}")
+        cuest_sdk_version = "0.2.50"
+        cuest_sha = CUEST_SHA
+        cuest_headers_sha = HEADERS_SHA
     manifest = inspect_sdk(cuda)
     save(run / "cuda-inputs.json", manifest)
     prepare_sdk(cuda, run / "cuda13", manifest)
@@ -60,8 +82,10 @@ def prepare(source, run, dependencies, e2, cuda, cuest):
     save(run / "dependency-inputs.json", {
         "scope": "Read-only dependency reuse, NOT adoption of failed old Psi4",
         "environment": str(dependencies), "einsums_prefix": str(e2),
-        "old_psi4_core_is_forbidden": True, "cuest_native_sha256": CUEST_SHA,
-        "cuest_headers_sha256": HEADERS_SHA,
+        "old_psi4_core_is_forbidden": True,
+        "cuest_sdk_version": cuest_sdk_version,
+        "cuest_native_sha256": cuest_sha,
+        "cuest_headers_sha256": cuest_headers_sha,
         "conda_records": {p.name: digest(p) for p in records},
         "einsums_source_pin_required": E2_PIN,
     })
@@ -126,8 +150,15 @@ def validate_installed(source, run, dependencies, e2):
         for path in mapped:
             if Path(path).name.startswith("lib" + family + ".so"):
                 require(digest(path) == record["sha256"], "Foreign CUDA component: " + path)
-    require(any(Path(p).name == "libcuest.so.0.2.50" and digest(p) == CUEST_SHA
-                for p in mapped), "Canonical cuEST is not mapped by the new native core")
+    dep_inputs = json.loads((run / "dependency-inputs.json").read_text())
+    expected_cuest_name = (
+        "libcuest.so.0.3.0" if dep_inputs.get("cuest_sdk_version") == "0.3.0.1"
+        else "libcuest.so.0.2.50"
+    )
+    expected_cuest_sha = dep_inputs["cuest_native_sha256"]
+    require(any(Path(p).name == expected_cuest_name and digest(p) == expected_cuest_sha
+                for p in mapped),
+            f"Canonical cuEST ({expected_cuest_name}) is not mapped by the new native core")
     binaries = (Path(core.__file__).resolve(), Path(ein._core.__file__).resolve(), native,
                 Path(waggle._core.__file__).resolve())
     for binary in binaries[1:]:

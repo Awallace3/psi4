@@ -12,12 +12,13 @@ from pathlib import Path
 import subprocess
 import sys
 
-from gpu_runtime import digest, read_config, require_cuda_manifest, retirement_channel
+from gpu_runtime import cuest_native_spec, digest, read_config, require_cuda_manifest, retirement_channel
 from owned_process import termination_signals
 from submit_split import save_new, source_pin
 
 CONTRACT = "process-owned-kernel-sealed-snapshots-v1"
-STEP_SCRATCH_PARENT = Path("/storage/scratch1/3/awallace43")
+STEP_SCRATCH_PARENT = None  # None -> resolve node-local SLURM_TMPDIR / TMPDIR / /tmp
+LOCAL_SCRATCH_FSTYPES = frozenset({"xfs", "ext4", "ext3", "ext2", "btrfs", "tmpfs"})
 PRELOAD = ("libcudart.so.13", "libnvJitLink.so.13", "libcublasLt.so.13",
            "libcublas.so.13", "libcusparse.so.12", "libcusolver.so.12",
            "libnvrtc-builtins.so.13.3", "libnvrtc.so.13", "libcuest.so.0.2.50")
@@ -46,11 +47,10 @@ def configuration(base, build, root):
         raise RuntimeError("Exact whole Phoenix CPU build required")
     rows = require_cuda_manifest(base)["components"]
     paths = [str(Path(row["path"]).resolve(strict=True)) for row in rows]
-    native = str((Path(base["cuest_root"])/
-                  "lib/13/libcuest.so.0.2.50").resolve(strict=True))
+    native, _ = cuest_native_spec(base)
     paths.append(native)
     preloads = []
-    for name in PRELOAD:
+    for name in (*PRELOAD[:-1], Path(native).name):
         matches = [p for p in paths if Path(p).name == name
                    or Path(p).name.startswith(name+".")]
         if len(matches) != 1:
@@ -63,8 +63,8 @@ def configuration(base, build, root):
             "sealed_alias_parent": str(aliases),
             "native_preload_paths": preloads,
             "threads": 8, "host_memory": "96 GiB",
-            "device_memory_limit_bytes": 120*1024**3,
-            "native_persistent_bytes": 12*1024**3}
+            "device_memory_limit_bytes": None,
+            "native_persistent_bytes": 0}
 
 
 def prepare_cpu_admission(build_root):
@@ -137,15 +137,40 @@ def require_cpu_admission(build_root, pin):
     return digest(folder/"preflight-result.json")
 
 
+def _node_local_scratch_parent():
+    """Resolve node-local scratch (SLURM_TMPDIR / TMPDIR / /tmp), rejecting /storage/*."""
+    if STEP_SCRATCH_PARENT is not None:
+        return Path(STEP_SCRATCH_PARENT)
+    for key in ("SLURM_TMPDIR", "TMPDIR"):
+        val = os.environ.get(key)
+        if val and not str(val).startswith("/storage/") and Path(val).is_dir():
+            return Path(val)
+    return Path("/tmp")
+
+
+def _require_local_scratch_fstype(path):
+    """Fail closed if scratch resolves to a shared network filesystem (Lustre/GPFS/NFS)."""
+    out = subprocess.check_output(
+        ["findmnt", "--first-only", "-T", str(path), "-n", "-o", "FSTYPE"], text=True, timeout=30
+    ).strip()
+    fstypes = [line.strip() for line in out.splitlines() if line.strip()]
+    if not fstypes or any(fs not in LOCAL_SCRATCH_FSTYPES for fs in fstypes):
+        raise RuntimeError(f"Node-local scratch required; {path} is on filesystem type {out!r}")
+    return fstypes[0]
+
+
 def step_scratch(root):
-    """Create/bind private scratch AFTER srun's step-environment rewriting."""
+    """Create/bind private node-local scratch AFTER srun's step-environment rewriting."""
     from split_scratch import OwnedScratch
     job = os.environ["SLURM_JOB_ID"]
     if not job.isdecimal():
         raise RuntimeError("Explicit numeric scheduler job ID required")
-    path = STEP_SCRATCH_PARENT/("disp0-sealed-h200-"+job)
+    parent = _node_local_scratch_parent()
+    path = parent/("disp0-sealed-h200-"+job)
     path.mkdir(mode=0o700)  # Never adopt an existing directory or inherited TMPDIR.
     path = path.resolve(strict=True)
+    if STEP_SCRATCH_PARENT is None:
+        _require_local_scratch_fstype(path)
     owner = OwnedScratch(path, str(path), root)
     for key in ("TMPDIR", "SCRATCH", "PSI_SCRATCH", "DISP0_SPLIT_SCRATCH_CREATED"):
         os.environ[key] = str(path)

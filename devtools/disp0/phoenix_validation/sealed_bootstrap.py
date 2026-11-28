@@ -6,7 +6,7 @@ from pathlib import Path
 import runpy
 import sys
 
-from gpu_runtime import AuditedRuntime, read_config, require_cuda_manifest, verify_qualified_imports
+from gpu_runtime import AuditedRuntime, cuest_native_spec, read_config, require_cuda_manifest, verify_qualified_imports
 
 
 def import_fresh_control(config):
@@ -89,8 +89,7 @@ def bootstrap(config, build):
         if not observer.configured:
             raise RuntimeError("Einsums CPU-only upstream policy was not configured")
         verify_qualified_imports(config, build)
-        native = str((Path(config["cuest_root"]) /
-                      "lib/13/libcuest.so.0.2.50").resolve(strict=True))
+        native, _ = cuest_native_spec(config)
         owner.verify_symbols(native, native_symbols(build["python_package"]))
     except BaseException:
         owner.invalidate("Phoenix sealed bootstrap import/admission failed")

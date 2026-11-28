@@ -3,8 +3,7 @@
 No CUDA work occurs at import. No fast-math, denominator clamp or atomics.
 """
 
-CUDA_SOURCE = r'''
-extern "C" {
+_EXTRA_CUDA_BODY = r'''
 // Native FISAPT exchange normalization or coupled-response delta-HF scaling.
 // Only final scalar inputs cross the host boundary; the ratio is computed here.
 __global__
@@ -392,26 +391,6 @@ void trace_factors(long long Q, long long O, const double* factors, double* outp
 }
 
 __global__
-void matrix_error(long long count, const double* input, double* output) {
-    __shared__ double worst[128];
-    double value=0.0;
-    for (long long i=threadIdx.x; i<count; i+=blockDim.x) {
-        double v=input[i];
-        if (v<0.0) v=-v;
-        if (!(v<1.e300)) v=1.e300;
-        if (v>value) value=v;
-    }
-    worst[threadIdx.x]=value;
-    __syncthreads();
-    for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
-        if (threadIdx.x<stride && worst[threadIdx.x+stride]>worst[threadIdx.x])
-            worst[threadIdx.x]=worst[threadIdx.x+stride];
-        __syncthreads();
-    }
-    if (threadIdx.x==0) output[0]=worst[0];
-}
-
-__global__
 void single_gap_error(long long O, long long V, const double* occupied,
                       const double* virtuals, double* output) {
     __shared__ double bad[128];
@@ -582,10 +561,13 @@ void make_amplitudes(long long A, long long B, long long R, long long S,
                      long long r0, long long s0,
                      const double* ea, const double* eb, const double* er,
                      const double* es, const double* V, double* T) {
+    const long long total = R*A*S*B;
     for (long long i = (long long)blockIdx.x*blockDim.x+threadIdx.x;
-         i < R*A*S*B; i += (long long)blockDim.x*gridDim.x) {
-        const long long b=i%B, s=(i/B)%S, a=(i/(B*S))%A, r=i/(B*S*A);
-        T[i]=V[i]/(ea[a]+eb[b]-er[r0+r]-es[s0+s]);
+         i < total; i += (long long)blockDim.x*gridDim.x) {
+        const long long q1 = i / B, b = i - q1 * B;
+        const long long q2 = q1 / S, s = q1 - q2 * S;
+        const long long r = q2 / A, a = q2 - r * A;
+        T[i] = V[i] / (ea[a] + eb[b] - er[r0 + r] - es[s0 + s]);
     }
 }
 
@@ -609,33 +591,162 @@ void rotation_error(long long N, const double* gram, double* error) {
     if (threadIdx.x==0) error[0]=worst[0];
 }
 
+// Coalesced warp-over-b reduction (TB=32 on GPU, TB=1 on CPU serial shim).
+// Zero atomics; deterministic accumulation across R*S.
 __global__
 void reduce_localized_dispersion(long long A, long long B, long long R, long long S,
                                 const double* T, const double* V, const double* X,
                                 const double* W, double* disp, double* exch) {
-    __shared__ double ds[128];
-    __shared__ double xs[128];
-    for (long long pair=blockIdx.x; pair<A*B; pair+=gridDim.x) {
-        const long long a=pair/B, b=pair%B;
-        double d=0.0, x=0.0;
-        for (long long rs=threadIdx.x; rs<R*S; rs+=blockDim.x) {
-            const long long r=rs/S, s=rs%S;
-            const long long i=(r*A+a)*(S*B)+s*B+b;
-            const long long j=(s*A+a)*(R*B)+r*B+b;
-            d+=4.0*T[i]*V[i];
-            x-=2.0*T[i]*(X[i]+W[j]);
+    __shared__ double ds[256];
+    __shared__ double xs[256];
+    const int TB = (blockDim.x >= 32) ? 32 : 1;
+    const int TY = blockDim.x / TB;
+    const int tx = threadIdx.x % TB;
+    const int ty = threadIdx.x / TB;
+    const long long b_tiles = (B + TB - 1) / TB;
+    const long long SB = S * B;
+    const long long RB = R * B;
+    const long long RS = R * S;
+    for (long long tile = blockIdx.x; tile < A * b_tiles; tile += gridDim.x) {
+        const long long a = tile / b_tiles;
+        const long long b = (tile - a * b_tiles) * TB + tx;
+        double d = 0.0, x = 0.0;
+        if (b < B) {
+            for (long long rs = ty; rs < RS; rs += TY) {
+                const long long r = rs / S, s = rs - r * S;
+                const long long i = (r * A + a) * SB + s * B + b;
+                const long long j = (s * A + a) * RB + r * B + b;
+                const double t = T[i];
+                d += 4.0 * t * V[i];
+                x -= 2.0 * t * (X[i] + W[j]);
+            }
         }
-        ds[threadIdx.x]=d; xs[threadIdx.x]=x;
+        ds[ty * TB + tx] = d;
+        xs[ty * TB + tx] = x;
         __syncthreads();
-        for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
-            if (threadIdx.x<stride) {
-                ds[threadIdx.x]+=ds[threadIdx.x+stride];
-                xs[threadIdx.x]+=xs[threadIdx.x+stride];
+        for (int stride = TY / 2; stride > 0; stride /= 2) {
+            if (ty < stride) {
+                ds[ty * TB + tx] += ds[(ty + stride) * TB + tx];
+                xs[ty * TB + tx] += xs[(ty + stride) * TB + tx];
             }
             __syncthreads();
         }
-        if (threadIdx.x==0) { disp[pair]+=ds[0]; exch[pair]+=xs[0]; }
+        if (ty == 0 && b < B) {
+            disp[a * B + b] += ds[tx];
+            exch[a * B + b] += xs[tx];
+        }
         __syncthreads();
+    }
+}
+
+// Build [O_full, A] matrix with zeros in rows [0, frozen) and ua in [frozen, O_full).
+__global__
+void fill_active_rotation(long long O_full, long long frozen, long long A,
+                          const double* ua, double* output) {
+    const long long total = O_full * A;
+    for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+         idx < total; idx += (long long)blockDim.x * gridDim.x) {
+        const long long row = idx / A, col = idx - row * A;
+        output[idx] = (row < frozen) ? 0.0 : ua[(row - frozen) * A + col];
+    }
+}
+
+__device__ __forceinline__
+double factor(const double* p, long long q, long long v, long long o,
+              long long Q, long long V, long long O, int fortran_order) {
+    return p[fortran_order ? q + Q*(v + V*o) : (q*V + v)*O + o];
+}
+
+// Each factor field has logical shape[Q,V,O]; packed output is C-order[K,V*O].
+// Optional extra fields fuse Dar+Ear / Dbs+Ebs without a full-size temporary.
+__global__
+void pack_factors(long long Q, long long V, long long O, int fortran_order,
+                  const double* first, const double* first_extra,
+                  const double* second, const double* second_extra,
+                  const double* tail1, const double* tail2, double* packed) {
+    const long long columns = V*O;
+    const long long total = (2*Q+2)*columns;
+    for (long long index = (long long)blockIdx.x*blockDim.x + threadIdx.x;
+         index < total; index += (long long)blockDim.x*gridDim.x) {
+        const long long row = index/columns, col = index%columns;
+        const long long v = col/O, o = col%O;
+        double value;
+        if (row < Q) {
+            value = factor(first,row,v,o,Q,V,O,fortran_order);
+            if (first_extra) value += factor(first_extra,row,v,o,Q,V,O,fortran_order);
+        } else if (row < 2*Q) {
+            value = factor(second,row-Q,v,o,Q,V,O,fortran_order);
+            if (second_extra) value += factor(second_extra,row-Q,v,o,Q,V,O,fortran_order);
+        } else {
+            value = (row == 2*Q ? tail1 : tail2)[o*V+v];
+        }
+        packed[index] = value;
+    }
+}
+'''
+
+_CORE_CUDA_BODY = r'''
+__global__
+void matrix_error(long long count, const double* input, double* output) {
+    __shared__ double worst[128];
+    double value=0.0;
+    for (long long i=threadIdx.x; i<count; i+=blockDim.x) {
+        double v=input[i];
+        if (v<0.0) v=-v;
+        if (!(v<1.e300)) v=1.e300;
+        if (v>value) value=v;
+    }
+    worst[threadIdx.x]=value;
+    __syncthreads();
+    for (unsigned int stride=blockDim.x/2; stride; stride/=2) {
+        if (threadIdx.x<stride && worst[threadIdx.x+stride]>worst[threadIdx.x])
+            worst[threadIdx.x]=worst[threadIdx.x+stride];
+        __syncthreads();
+    }
+    if (threadIdx.x==0) output[0]=worst[0];
+}
+
+// Transpose an occupied-first factor slice [Q, O_total, V_total] -> [Q, V_count, O_count]
+// with integer sign (+1 or -1) directly into a packed target view.
+__global__
+void transpose_factor_slab(long long Q, long long O_total, long long O_start, long long O_count,
+                           long long V_total, long long V_start, long long V_count,
+                           long long sign, const double* input, double* output) {
+    const long long total = Q * V_count * O_count;
+    const double scale = (double)sign;
+    for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+         idx < total; idx += (long long)blockDim.x * gridDim.x) {
+        const long long q1 = idx / O_count, o = idx - q1 * O_count;
+        const long long q = q1 / V_count, v = q1 - q * V_count;
+        output[idx] = scale * input[(q * O_total + (O_start + o)) * V_total + (V_start + v)];
+    }
+}
+
+// Write the two rank-one correction rows (2Q and 2Q+1) of packed[2Q+2, V_count*O].
+__global__
+void pack_factor_tails(long long Q, long long V_total, long long V_start, long long V_count,
+                       long long O, const double* tail1, const double* tail2, double* packed) {
+    const long long cols = V_count * O;
+    const long long base = 2 * Q * cols;
+    const long long total = 2 * cols;
+    for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+         idx < total; idx += (long long)blockDim.x * gridDim.x) {
+        const long long which = idx / cols, col = idx - which * cols;
+        const long long v = col / O, o = col - v * O;
+        packed[base + idx] = (which == 0 ? tail1 : tail2)[o * V_total + (V_start + v)];
+    }
+}
+
+// Concatenate [rows, cols1] and [rows, cols2] horizontally into [rows, cols1+cols2].
+__global__
+void concat_columns(long long rows, long long cols1, long long cols2,
+                    const double* left, const double* right, double* output) {
+    const long long cols = cols1 + cols2;
+    const long long total = rows * cols;
+    for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+         idx < total; idx += (long long)blockDim.x * gridDim.x) {
+        const long long row = idx / cols, col = idx - row * cols;
+        output[idx] = (col < cols1) ? left[row * cols1 + col] : right[row * cols2 + (col - cols1)];
     }
 }
 
@@ -689,41 +800,8 @@ void reduce_components(long long count, const double* disp, const double* exch,
     }
 }
 
-__device__ __forceinline__
-double factor(const double* p, long long q, long long v, long long o,
-              long long Q, long long V, long long O, int fortran_order) {
-    return p[fortran_order ? q + Q*(v + V*o) : (q*V + v)*O + o];
-}
-
-// Each factor field has logical shape[Q,V,O]; packed output is C-order[K,V*O].
-// Optional extra fields fuse Dar+Ear / Dbs+Ebs without a full-size temporary.
-__global__
-void pack_factors(long long Q, long long V, long long O, int fortran_order,
-                  const double* first, const double* first_extra,
-                  const double* second, const double* second_extra,
-                  const double* tail1, const double* tail2, double* packed) {
-    const long long columns = V*O;
-    const long long total = (2*Q+2)*columns;
-    for (long long index = (long long)blockIdx.x*blockDim.x + threadIdx.x;
-         index < total; index += (long long)blockDim.x*gridDim.x) {
-        const long long row = index/columns, col = index%columns;
-        const long long v = col/O, o = col%O;
-        double value;
-        if (row < Q) {
-            value = factor(first,row,v,o,Q,V,O,fortran_order);
-            if (first_extra) value += factor(first_extra,row,v,o,Q,V,O,fortran_order);
-        } else if (row < 2*Q) {
-            value = factor(second,row-Q,v,o,Q,V,O,fortran_order);
-            if (second_extra) value += factor(second_extra,row-Q,v,o,Q,V,O,fortran_order);
-        } else {
-            value = (row == 2*Q ? tail1 : tail2)[o*V+v];
-        }
-        packed[index] = value;
-    }
-}
-
-// One block owns an occupied pair. r/s block launches are ordered on one stream.
-// V,X are C-order[(r,a),(s,b)], W is C-order[(s,a),(r,b)].
+// Coalesced warp-over-b reduction (TB=32 on GPU, TB=1 on CPU serial shim).
+// V,X are C-order[(r,a),(s,b)], W is C-order[(s,a),(r,b)]. Zero atomics.
 __global__
 void reduce_dispersion(long long A, long long B, long long R, long long S,
                        long long r0, long long s0,
@@ -731,35 +809,73 @@ void reduce_dispersion(long long A, long long B, long long R, long long S,
                        const double* er, const double* es,
                        const double* V, const double* X, const double* W,
                        double* disp, double* exch) {
-    __shared__ double ds[128];
-    __shared__ double xs[128];
-    for (long long pair = blockIdx.x; pair < A*B; pair += gridDim.x) {
-        const long long a = pair/B, b = pair%B;
+    __shared__ double ds[256];
+    __shared__ double xs[256];
+    const int TB = (blockDim.x >= 32) ? 32 : 1;
+    const int TY = blockDim.x / TB;
+    const int tx = threadIdx.x % TB;
+    const int ty = threadIdx.x / TB;
+    const long long b_tiles = (B + TB - 1) / TB;
+    const long long SB = S * B;
+    const long long RB = R * B;
+    const long long RS = R * S;
+    for (long long tile = blockIdx.x; tile < A * b_tiles; tile += gridDim.x) {
+        const long long a = tile / b_tiles;
+        const long long b = (tile - a * b_tiles) * TB + tx;
         double d = 0.0, x = 0.0;
-        for (long long rs = threadIdx.x; rs < R*S; rs += blockDim.x) {
-            const long long r = rs/S, s = rs%S;
-            const long long i = (r*A+a)*(S*B) + s*B+b;
-            const long long j = (s*A+a)*(R*B) + r*B+b;
-            const double t = V[i]/(ea[a]+eb[b]-er[r0+r]-es[s0+s]);
-            d += 4.0*t*V[i];
-            x -= 2.0*t*(X[i]+W[j]);
+        if (b < B) {
+            const double eab = ea[a] + eb[b];
+            for (long long rs = ty; rs < RS; rs += TY) {
+                const long long r = rs / S, s = rs - r * S;
+                const long long i = (r * A + a) * SB + s * B + b;
+                const long long j = (s * A + a) * RB + r * B + b;
+                const double v = V[i];
+                const double t = v / (eab - er[r0 + r] - es[s0 + s]);
+                d += 4.0 * t * v;
+                x -= 2.0 * t * (X[i] + W[j]);
+            }
         }
-        ds[threadIdx.x] = d;
-        xs[threadIdx.x] = x;
+        ds[ty * TB + tx] = d;
+        xs[ty * TB + tx] = x;
         __syncthreads();
-        for (unsigned int stride = blockDim.x/2; stride; stride /= 2) {
-            if (threadIdx.x < stride) {
-                ds[threadIdx.x] += ds[threadIdx.x+stride];
-                xs[threadIdx.x] += xs[threadIdx.x+stride];
+        for (int stride = TY / 2; stride > 0; stride /= 2) {
+            if (ty < stride) {
+                ds[ty * TB + tx] += ds[(ty + stride) * TB + tx];
+                xs[ty * TB + tx] += xs[(ty + stride) * TB + tx];
             }
             __syncthreads();
         }
-        if (threadIdx.x == 0) {
-            disp[pair] += ds[0];
-            exch[pair] += xs[0];
+        if (ty == 0 && b < B) {
+            disp[a * B + b] += ds[tx];
+            exch[a * B + b] += xs[tx];
         }
         __syncthreads();
     }
 }
-}
 '''
+
+CORE_KERNEL_NAMES = (
+    "matrix_error", "transpose_factor_slab", "pack_factor_tails",
+    "concat_columns", "matrix_window", "linear_combination",
+    "reduce_components", "reduce_dispersion",
+)
+
+EXTRA_KERNEL_NAMES = (
+    "fragment_scale_factor", "apply_fragment_scale",
+    "diagonal_factors", "scatter_matrix", "fragment_nuclear", "reduce_values",
+    "fragment_charge_mask_error", "reduce_fragment_exchange",
+    "make_single_amplitudes", "reduce_induction_source",
+    "single_gap_error", "trace_factors",
+    "rhf_response_product", "response_dot", "response_precondition",
+    "response_accumulate_exchange", "response_finish",
+    "response_step", "response_direction", "response_metrics",
+    "inverse_sqrt_weights", "scale_eigenvector_rows", "gather_indexed_matrix",
+    "set_identity", "ibo_objective", "ibo_pair", "ibo_sweep", "ibo_sweep_finish",
+    "ibo_fock_diagonal", "ibo_permutation", "ibo_charges", "ibo_population_error",
+    "permute_occupied_a", "make_amplitudes", "rotation_error",
+    "reduce_localized_dispersion", "fill_active_rotation", "pack_factors",
+)
+
+CORE_CUDA_SOURCE = 'extern "C" {\n' + _CORE_CUDA_BODY + '}\n'
+EXTRA_CUDA_SOURCE = 'extern "C" {\n' + _EXTRA_CUDA_BODY + '}\n'
+CUDA_SOURCE = 'extern "C" {\n' + _EXTRA_CUDA_BODY + _CORE_CUDA_BODY + '}\n'

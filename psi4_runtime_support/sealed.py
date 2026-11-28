@@ -222,7 +222,7 @@ class _SealedRuntime:
                   "identity": _identity(info), "kernel_path": kernel_path, "seals": seals}
         self._files[path] = record
         names = [Path(path).name]
-        if names[0] == "libcuest.so.0.2.50":
+        if names[0] in ("libcuest.so.0.2.50", "libcuest.so.0.3.0"):
             names.append("libcuest.so.0")  # Psi4 core's canonical DT_NEEDED.
         for name in names:
             alias = directory / name

@@ -17,10 +17,11 @@ class StageScalingTests(unittest.TestCase):
                 "stage": "/unchanged/stage", "immutable": {"native": "original"}}
 
     def test_selected_sizes_and_case_memory_policy_without_science_change(self):
-        for case, native in (("peptide", 12), ("nanotube", 12), ("protein83", 12)):
+        for case in ("peptide", "nanotube", "protein83"):
             base = self.base()
             gpu = configuration(base, Path("/new/aliases"), case, "gpu")
-            self.assertEqual(gpu["native_persistent_bytes"], native*1024**3)
+            self.assertIsNone(gpu["device_memory_limit_bytes"])
+            self.assertEqual(gpu["native_persistent_bytes"], 0)
             self.assertEqual(gpu["stage"], base["stage"])
             self.assertEqual(gpu["immutable"], base["immutable"])
             self.assertNotIn("host_memory", base)
@@ -35,8 +36,8 @@ class StageScalingTests(unittest.TestCase):
         base = {**self.base(), "source_pin": "a"*40}
         config = configuration(base, Path("/new/aliases"), "protein83", "gpu")
         self.assertEqual(config["source_pin"], "a"*40)
-        self.assertEqual(config["device_memory_limit_bytes"], 120*1024**3)
-        self.assertEqual(config["native_persistent_bytes"], 12*1024**3)
+        self.assertIsNone(config["device_memory_limit_bytes"])
+        self.assertEqual(config["native_persistent_bytes"], 0)
         for pin in ("main", "927283f8ed", "", None):
             with self.assertRaises(ValueError):
                 configuration({**base,"source_pin":pin}, Path("/aliases"), "protein83", "gpu")

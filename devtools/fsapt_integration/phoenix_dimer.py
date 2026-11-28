@@ -125,8 +125,9 @@ def execute(path, root, worker=False):
         report.update(node=os.uname().nodename, affinity=sorted(os.sched_getaffinity(0)))
         if len(report["affinity"]) < policy["threads"]:
             raise RuntimeError("Insufficient CPU affinity")
-        parent = Path("/storage/scratch1/3/awallace43") if gpu else Path(
-            os.environ.get("SLURM_TMPDIR") or os.environ.get("TMPDIR") or "/scratch")
+        selected = os.environ.get("SLURM_TMPDIR") or os.environ.get("TMPDIR")
+        parent = Path(selected) if (selected and not str(selected).startswith("/storage/")
+                                    and Path(selected).is_dir()) else Path("/tmp")
         parent = parent.resolve(strict=True)
         scratch = parent / ("dimer-energy-" + os.environ["SLURM_JOB_ID"])
         scratch.mkdir(mode=0o700)
@@ -135,8 +136,8 @@ def execute(path, root, worker=False):
             ["findmnt", "-T", str(scratch), "-n", "-P", "-o", "SOURCE,FSTYPE,TARGET"],
             text=True, timeout=30))
         report["scratch_mount"] = mount
-        if not gpu and mount.get("FSTYPE") not in ("xfs", "ext4", "ext3", "btrfs"):
-            raise RuntimeError("CPU control requires node-local scratch")
+        if mount.get("FSTYPE") not in ("xfs", "ext4", "ext3", "btrfs", "tmpfs"):
+            raise RuntimeError("Dimer run requires node-local scratch, got " + repr(mount))
         stat = os.statvfs(scratch)
         if stat.f_bavail * stat.f_frsize < 64 * 1024**3:
             raise RuntimeError("Insufficient dimer scratch headroom")

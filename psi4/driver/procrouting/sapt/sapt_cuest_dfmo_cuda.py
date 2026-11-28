@@ -34,7 +34,7 @@ POLICY = {"operator":"coulomb", "exchange_fraction":1.0, "lrc_exchange_fraction"
 
 
 class CuESTDFMOProvider:
-    def __init__(self, *, session, sdk_root, archive, cuda_manifest, cuda_manifest_sha256,
+    def __init__(self, *, session, sdk_root, archive=None, cuda_manifest, cuda_manifest_sha256,
                  handle, plan, handle_pid,
                  primary_basis, auxiliary_basis, keepalive, plan_policy,
                  output_order, variable_bytes=256*1024**2):
@@ -57,17 +57,33 @@ class CuESTDFMOProvider:
         self.pid = os.getpid()
         owner = getattr(session,"identity_owner",None)
         options = {"owner":owner} if owner is not None else {}
-        self.proof = identity.verify_files(sdk_root,archive,**options)
-        # verify_files already admitted the archive; preserve its locator for
-        # fresh admission when a real sibling plan is requested.
-        self.archive = Path(archive).resolve()
+        self.archive = None if archive is None else Path(archive).resolve()
+        manifest_obj = json.loads(manifest_data)
+        reused_proof = None
+        from .sapt_cuest_plan_owner import DiagnosticPlanOwner
+        for parent in keepalive:
+            if (isinstance(parent, DiagnosticPlanOwner)
+                    and parent.session is session
+                    and parent.built and not parent.closed and not parent.failed
+                    and parent.handle == handle and parent.plan == plan and parent.pid == self.pid
+                    and parent.primary_snapshot.owner is primary_basis
+                    and parent.auxiliary_snapshot.owner is auxiliary_basis
+                    and parent.api.manifest == manifest_obj):
+                resolved_sdk = str(Path(sdk_root).resolve(strict=True))
+                resolved_archive = None if archive is None else str(Path(archive).resolve(strict=True))
+                if (parent.api.proof.get("sdk_root") == resolved_sdk
+                        and getattr(parent.api, "_archive_path", False) == resolved_archive):
+                    parent.assert_live()
+                    reused_proof = dict(parent.api.proof)
+                    break
+        self.proof = reused_proof if reused_proof is not None else identity.verify_files(sdk_root,archive,**options)
         self.proof["cuda_manifest_sha256"] = cuda_manifest_sha256
-        self.native, _ = library(self.proof["native_path"],identity.NATIVE_SHA256,**options)
+        self.native, _ = library(self.proof["native_path"],identity.expected_native_sha256(self.proof),**options)
         identity.configure_abi(self.native)
         self.handle, self.plan = handle, plan
         self.primary_basis, self.auxiliary_basis = primary_basis, auxiliary_basis
         self.keepalive = tuple(keepalive)
-        self.cuda_manifest = json.loads(manifest_data)
+        self.cuda_manifest = manifest_obj
         self.nao, self.naux = int(primary_basis.nbf()), int(auxiliary_basis.nbf())
         if min(self.nao,self.naux) < 1:
             raise ValueError("Nonempty exact AO/RI bases required")
@@ -140,11 +156,31 @@ class CuESTDFMOProvider:
         owner = getattr(self.session,"identity_owner",None)
         options = {"owner":owner} if owner is not None else {}
         self.maps = identity.audit_maps(self.native,self.proof,self.cuda_manifest,**options)
-        self.version = identity.native_version(self.native,self.handle)
+        self.version = identity.native_version(
+            self.native,self.handle,expected=identity.expected_sdk_version(self.proof))
         self.math_mode = identity.native_math_mode(self.native,self.handle)
         expected = self.maps["cuda_mapped_sha256"].get(self.session.blas_path)
         if expected != self.session.blas_sha256:
             raise RuntimeError("DFMO and cuBLAS session do not share the admitted CUDA closure")
+
+    def _configure_dfmo_parameters(self, parameters):
+        if self.proof.get("sdk_version") != identity.SDK_0301_PACKAGE_VERSION:
+            return
+        owner = getattr(self.session,"identity_owner",None)
+        names = ("cuestParametersConfigure","cuestParametersQuery")
+        identity.audit_symbol_owners(self.native,self.proof["native_path"],names,owner=owner)
+        for fn_name in names:
+            fn = getattr(self.native,fn_name)
+            fn.argtypes = [ct.c_int,ct.c_void_p,ct.c_int,ct.c_void_p,ct.c_size_t]
+            fn.restype = ct.c_int
+        # Explicit cuEST 0.3.0.1 DFMO full-operator weighting (attr 0 = FULL = 0).
+        val, obs = ct.c_int(0), ct.c_int(-1)
+        self.status("DFMO parameters configure",self.native.cuestParametersConfigure(
+            49,parameters,0,ct.byref(val),ct.sizeof(val)))
+        self.status("DFMO parameters query",self.native.cuestParametersQuery(
+            49,parameters,0,ct.byref(obs),ct.sizeof(obs)))
+        if obs.value != 0:
+            raise RuntimeError(f"cuEST 0.3.0.1 DFMO operator weighting readback differs: {obs.value}")
 
     def validate_basis(self, primary, auxiliary):
         if self.closed or self.failed:
@@ -189,10 +225,11 @@ class CuESTDFMOProvider:
             cr = self.session.upload(np.concatenate(right,axis=0))
             self.session.synchronize_device()
             parameters = ct.c_void_p()
-            # Exact0.2.50 cuest_parameter_types.h: DFMO parameters kind49.
+            # Exact cuest_parameter_types.h: DFMO parameters kind 49 (0.2.50 & 0.3.0.1).
             self.status("parameters create",self.native.cuestParametersCreate(49,ct.byref(parameters)))
             primary = None
             try:
+                self._configure_dfmo_parameters(parameters)
                 variable = _Descriptor(0,self.variable_bytes)
                 temporary = _Descriptor()
                 nl_values, nr_values = (ct.c_uint64*len(nl))(*nl),(ct.c_uint64*len(nr))(*nr)
@@ -258,6 +295,7 @@ class CuESTDFMOProvider:
             if not self._device_parameters.value:
                 self._device_ambiguous = True
                 raise RuntimeError("Successful DFMO parameter creation returned null")
+            self._configure_dfmo_parameters(self._device_parameters)
             self.session.synchronize_device()
         except BaseException:
             if not observed:
@@ -265,7 +303,7 @@ class CuESTDFMOProvider:
             self.failed = True
             raise
 
-    def compute_device(self, pairs):
+    def compute_device(self, pairs, *, variable_bytes=None):
         """DFMO from this session's device AO coefficients, with no host staging.
 
         Only metadata/descriptors and native host workspace live on the host.
@@ -273,13 +311,19 @@ class CuESTDFMOProvider:
         native parameter teardown after a failed call. No execution retry.
         """
         with self.device_timings.measure("call_total"):
-            return self._compute_device(pairs)
+            return self._compute_device(pairs, variable_bytes=variable_bytes)
 
-    def _compute_device(self, pairs):
+    def _compute_device(self, pairs, *, variable_bytes=None):
         from .sapt_dispersion_cuda_setup import DeviceMath
         if (self.closed or self.failed or self.pid != os.getpid() or not self._device_owner
                 or self._device_parameters is None or self._device_ambiguous):
             raise RuntimeError("Device DFMO requires a prepared live owned parameter object")
+        if variable_bytes is None:
+            var_bytes = self.variable_bytes
+        else:
+            if isinstance(variable_bytes, bool) or not isinstance(variable_bytes, int) or variable_bytes < 0:
+                raise ValueError("DFMO variable_bytes override must be a nonnegative integer")
+            var_bytes = variable_bytes
         self.session.check()
         if not pairs or len(pairs) > 10 or self.order != "C":
             raise ValueError("Device DFMO requires1..10 C-order output pairs")
@@ -312,7 +356,7 @@ class CuESTDFMOProvider:
                 pending["packed"] = (cl,cr)
                 nl_values = (ct.c_uint64*len(nl))(*nl)
                 nr_values = (ct.c_uint64*len(nr))(*nr)
-                variable,temporary = _Descriptor(0,self.variable_bytes),_Descriptor()
+                variable,temporary = _Descriptor(0,var_bytes),_Descriptor()
                 pending["descriptors"] = (nl_values,nr_values,variable,temporary)
                 with self.device_timings.measure("pre_query_synchronize"):
                     self.session.synchronize_device()
@@ -356,7 +400,8 @@ class CuESTDFMOProvider:
     def report(self):
         # Reaudit after native work to catch late-loaded wrong CUDA libraries.
         self.assert_identity()
-        return {"producer":"cuEST0.2.50 C-ABI; Python-owned CUDA buffers", "calls":self.calls,
+        sdk_ver = self.proof.get("sdk_version", "0.2.50")
+        return {"producer":f"cuEST{sdk_ver} C-ABI; Python-owned CUDA buffers", "calls":self.calls,
                 "coefficient_h2d_bytes":self.input_bytes,"device_factor_bytes":self.output_bytes,
                 "device_coefficient_bytes":self.device_input_bytes,
                 "producer_seconds":self.elapsed,"sdk_file_proof":self.proof,

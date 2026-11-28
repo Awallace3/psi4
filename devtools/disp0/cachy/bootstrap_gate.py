@@ -13,11 +13,13 @@ import sys
 
 HERE=Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE.parent/"phoenix_validation"))
-from gpu_runtime import (digest,read_config,require_local_lease,require_cuda_manifest,
-    verify_qualified_imports,require_runtime_support,sealed_startup_path,verify_modules)
+from gpu_runtime import (cuest_native_spec,digest,read_config,require_local_lease,
+    require_cuda_manifest,verify_qualified_imports,require_runtime_support,
+    sealed_startup_path,verify_modules)
 
 SEALED = "process-owned-kernel-sealed-snapshots-v1"
 NATIVE_SHA = "65c9e559201ee589cb742b919cc1c5d80c45aa480b64aede17ac96aff9e4963c"
+NATIVE_0301_SHA = "cb810a15dff2d0c9c0c83cb56336bf80d77a74ace53f6e4d30921726679fc221"
 
 
 def native_symbols(package):
@@ -53,8 +55,9 @@ def prepare_sealed_owner(config,build,manifest):
     finally:
         sys.path.pop(0)
     verify_modules(("psi4_runtime_support",),root,build["runtime_support_sha256"])
-    native=str((Path(config["cuest_root"])/"lib/13/libcuest.so.0.2.50").resolve(strict=True))
-    pins={native:NATIVE_SHA}
+    native, _ = cuest_native_spec(config)
+    native_sha = NATIVE_0301_SHA if Path(native).name == "libcuest.so.0.3.0" else NATIVE_SHA
+    pins={native:native_sha}
     for row in manifest["components"]:
         path=str(Path(row["path"]).resolve(strict=True))
         if path in pins:raise RuntimeError("Duplicate sealed input locator")
@@ -144,7 +147,7 @@ def bootstrap(config,build):
     if not observer.configured:raise RuntimeError("E2 pre-lookup policy was not executed")
     verify_qualified_imports(config,build)
     if sealed:
-        native=str((Path(config["cuest_root"])/"lib/13/libcuest.so.0.2.50").resolve(strict=True))
+        native, _ = cuest_native_spec(config)
         owner.verify_symbols(native,native_symbols(build["python_package"]))
     # Keep every preload alive through scientific execution and teardown.
     return owners,events

@@ -76,70 +76,97 @@ def fragment_terms(provider, rifit, minimal, matrices, energies, xyz, za, zb, *,
     overlap=CuESTOverlapBlocks(owner,minimal)
     power=CuSolverSymmetricPower(owner)
     atoms=np.array(overlap.local_atom_indices,dtype=np.int64)
+    from .sapt_cuda_runtime import cleanup as _cleanup
     provider.prepare_device_compute()
-    with provider.sibling_provider(rifit) as ri:
-        if ri.session is not session:
-            raise RuntimeError("JKFIT/RIFIT must share the original GPU session")
-        with session.scope():
-            m=DeviceMath(session)
-            raw={name:session.upload(value) for name,value in matrices.items()}
-            ed={name:session.upload(value) for name,value in energies.items()}
-            coords,charges_a,charges_b=(session.upload(v) for v in (xyz,za,zb))
-            metrics=prepare_iao_metrics(overlap.compute(),power,condition=1e-7)
-            ibos={}
-            for side,key,nf in zip(("A","B"),"ab",frozen):
-                iao=build_iao_device(raw["Cocc_"+side],metrics)
-                ibos[side]=localize_iao_device(iao,ed[key],atoms,nfrozen=nf,
-                    power=4,convergence=1e-12,max_iterations=50)
-            la,lb=ibos["A"].l,ibos["B"].l
-            state=felst_device(provider,potential,la,lb,coords,charges_a,charges_b,
-                               jkfit_basis=provider.auxiliary_basis,
-                               active_atoms=(tuple(np.flatnonzero(za).tolist()),
-                                             tuple(np.flatnonzero(zb).tolist())))
-            exch=fexch_device(state,la,lb,raw["Cvir_A"],raw["Cvir_B"],
-                {n:raw[n] for n in ("S","V_A","J_A","V_B","J_B")},natoms=N)
-            induction=coupled_find_device(state,potential,
-                {s:raw["Cocc_"+s] for s in ("A","B")},
-                {s:raw["Cvir_"+s] for s in ("A","B")},ed,
-                {n:raw[n] for n in IND_FIELDS},coords,charges_a,charges_b)
-            rotations=[]
-            for side,nf in zip(("A","B"),frozen):
-                u=ibos[side].u;O=u.shape[0];active=O-nf
-                rotations.append(m.window(u.view((active,O),offset=nf*O*8),nf,active))
-            spaces,corrections,eps=prepare_hf(session,{n:matrices[n] for n in HF_FIELDS},
-                energies,frozen_a=frozen[0],frozen_b=frozen[1])
-            dispersion=blocked_device_dispersion(ri,spaces,corrections,eps,
-                block_size=block_size,rotations=tuple(rotations),
-                factor_cache_bytes=factor_cache_bytes)
-            device_outputs={"Elst_AB":state.matrix,"Exch_AB":exch.matrix,
-                "ExchS2_AB":exch.matrix,
-                "IndAB_AB":induction.coupled.combined_ab,"IndBA_AB":induction.coupled.combined_ba}
-            from .sapt_fisapt_scaling_cuda import scale_factor,apply_scale
-            scale_reports={}
-            for kind,values in scaling.items():
-                factor=scale_factor(session,values,total=exch.total if kind=="exchange" else None)
-                for name in (("Exch_AB",) if kind=="exchange" else ("IndAB_AB","IndBA_AB")):
-                    device_outputs[name]=apply_scale(session,device_outputs[name],factor)
-                scale_reports[kind]={"factor":float(session.download(factor)[0]),
-                    "raw_final_scalar_inputs":values.tolist(),
-                    "numerics":"FP64 GPU ratio and matrix application"}
-            for prefix,value in (("Ind20u",induction.uncoupled.ind20u),
-                                 ("ExchInd20u",induction.uncoupled.exch_ind20u),
-                                 ("Ind20r",induction.coupled.induction),
-                                 ("ExchInd20r",induction.coupled.exchange_induction)):
-                device_outputs[prefix+"_AB"]=value.ab
-                device_outputs[prefix+"_BA"]=value.ba
-            for side in ("A","B"):
-                device_outputs["Qocc0"+side]=ibos[side].q
-                device_outputs["Uocc0"+side]=ibos[side].u
-                device_outputs["Locc_"+side]=ibos[side].l
-            outputs={name:session.download(value) for name,value in device_outputs.items()}
-            localization={s:{"iterations":ibos[s].jacobi.iterations,
-                             "converged":ibos[s].jacobi.converged,
-                             "jacobi_work_plan":ibos[s].jacobi.work_plan,
-                             "iao_work_plan":ibos[s].iao.work_plan} for s in ("A","B")}
-            response=induction.response_diagnostics
-        ri_report=ri.report()
+    start_alloc=len(session.allocations)
+    pre_ri_end=post_ri_start=None
+    primary_error=None
+    try:
+        m=DeviceMath(session)
+        raw={name:session.upload(value) for name,value in matrices.items()}
+        ed={name:session.upload(value) for name,value in energies.items()}
+        coords,charges_a,charges_b=(session.upload(v) for v in (xyz,za,zb))
+        metrics=prepare_iao_metrics(overlap.compute(),power,condition=1e-7)
+        ibos={}
+        for side,key,nf in zip(("A","B"),"ab",frozen):
+            iao=build_iao_device(raw["Cocc_"+side],metrics)
+            ibos[side]=localize_iao_device(iao,ed[key],atoms,nfrozen=nf,
+                power=4,convergence=1e-12,max_iterations=50)
+        la,lb=ibos["A"].l,ibos["B"].l
+        state=felst_device(provider,potential,la,lb,coords,charges_a,charges_b,
+                           jkfit_basis=provider.auxiliary_basis,
+                           active_atoms=(tuple(np.flatnonzero(za).tolist()),
+                                         tuple(np.flatnonzero(zb).tolist())))
+        exch=fexch_device(state,la,lb,raw["Cvir_A"],raw["Cvir_B"],
+            {n:raw[n] for n in ("S","V_A","J_A","V_B","J_B")},natoms=N)
+        induction=coupled_find_device(state,potential,
+            {s:raw["Cocc_"+s] for s in ("A","B")},
+            {s:raw["Cvir_"+s] for s in ("A","B")},ed,
+            {n:raw[n] for n in IND_FIELDS},coords,charges_a,charges_b)
+        rotations=[]
+        for side,nf in zip(("A","B"),frozen):
+            u=ibos[side].u;O=u.shape[0];active=O-nf
+            rotations.append(m.window(u.view((active,O),offset=nf*O*8),nf,active))
+        # Defer RIFIT sibling construction until coupled_find_device has released
+        # HFResponseOperator buffers so JKFIT response and RIFIT never overlap.
+        pre_ri_end=len(session.allocations)
+        with provider.sibling_provider(rifit) as ri:
+            if ri.session is not session:
+                raise RuntimeError("JKFIT/RIFIT must share the original GPU session")
+            with session.scope():
+                spaces,corrections,eps=prepare_hf(session,{n:matrices[n] for n in HF_FIELDS},
+                    energies,frozen_a=frozen[0],frozen_b=frozen[1])
+                dispersion=blocked_device_dispersion(ri,spaces,corrections,eps,
+                    block_size=block_size,rotations=tuple(rotations),
+                    factor_cache_bytes=factor_cache_bytes)
+            ri_report=ri.report()
+        post_ri_start=len(session.allocations)
+        device_outputs={"Elst_AB":state.matrix,"Exch_AB":exch.matrix,
+            "ExchS2_AB":exch.matrix,
+            "IndAB_AB":induction.coupled.combined_ab,"IndBA_AB":induction.coupled.combined_ba}
+        from .sapt_fisapt_scaling_cuda import scale_factor,apply_scale
+        scale_reports={}
+        for kind,values in scaling.items():
+            factor=scale_factor(session,values,total=exch.total if kind=="exchange" else None)
+            for name in (("Exch_AB",) if kind=="exchange" else ("IndAB_AB","IndBA_AB")):
+                device_outputs[name]=apply_scale(session,device_outputs[name],factor)
+            scale_reports[kind]={"factor":float(session.download(factor)[0]),
+                "raw_final_scalar_inputs":values.tolist(),
+                "numerics":"FP64 GPU ratio and matrix application"}
+        for prefix,value in (("Ind20u",induction.uncoupled.ind20u),
+                             ("ExchInd20u",induction.uncoupled.exch_ind20u),
+                             ("Ind20r",induction.coupled.induction),
+                             ("ExchInd20r",induction.coupled.exchange_induction)):
+            device_outputs[prefix+"_AB"]=value.ab
+            device_outputs[prefix+"_BA"]=value.ba
+        for side in ("A","B"):
+            device_outputs["Qocc0"+side]=ibos[side].q
+            device_outputs["Uocc0"+side]=ibos[side].u
+            device_outputs["Locc_"+side]=ibos[side].l
+        outputs={name:session.download(value) for name,value in device_outputs.items()}
+        localization={s:{"iterations":ibos[s].jacobi.iterations,
+                         "converged":ibos[s].jacobi.converged,
+                         "jacobi_work_plan":ibos[s].jacobi.work_plan,
+                         "iao_work_plan":ibos[s].iao.work_plan} for s in ("A","B")}
+        response=induction.response_diagnostics
+    except BaseException as error:
+        primary_error=error
+        session.failed=True
+        raise
+    finally:
+        owned=list(session.allocations[start_alloc:pre_ri_end])
+        if post_ri_start is not None:
+            owned.extend(session.allocations[post_ri_start:])
+        pending=[item for item in owned if not item.freed]
+        try:
+            def _release_workflow():
+                session.synchronize_device()
+                _cleanup(None,[item.free for item in reversed(pending)])
+            if pending:
+                _cleanup(primary_error,[_release_workflow])
+        finally:
+            session.allocations[start_alloc:]=[
+                item for item in session.allocations[start_alloc:] if not item.freed]
     # Final output layout only; pair combination and all sums already ran on GPU.
     full=np.zeros((N+A+1,N+B+1),dtype=np.float64)
     pairs=dispersion["Disp0 occupied pairs"]

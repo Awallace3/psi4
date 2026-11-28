@@ -132,7 +132,19 @@ int main() {
     return (create && compute && query && threshold >= 0 && jit >= 0) ? 0 : 1;
 }
 " PSI4_CUEST_HAS_PREVIEW_DIRECTJ)
+  check_cxx_source_compiles("
+#include <cuest.h>
+int main() {
+    const auto attr = CUEST_DFINTPLAN_PARAMETERS_DETAIL_THREE_INDEX_FITTING_FIXEDPOINT_EMULATION_USAGE_MODE;
+    const auto off = CUEST_EMULATION_USAGE_MODE_OFF;
+    return (attr >= 0 && off >= 0) ? 0 : 1;
+}
+" PSI4_CUEST_HAS_DF_EMULATION_MODE)
   unset(CMAKE_REQUIRED_LIBRARIES)
+  if(PSI4_CUEST_HAS_DF_EMULATION_MODE)
+    target_compile_definitions(psi4_optional_deps INTERFACE PSI_CUEST_HAS_DF_EMULATION_MODE)
+    message(STATUS "cuEST DF three-index fitting emulation control detected")
+  endif()
   foreach(_mode GRIDK DIRECTJ)
     if(PSI4_CUEST_HAS_PREVIEW_${_mode})
       target_compile_definitions(psi4_optional_deps INTERFACE PSI_CUEST_HAS_${_mode})

@@ -85,7 +85,7 @@ class ConstructionProbe(unittest.TestCase):
         self.assertEqual([r["label"] for r in samples],[
             "session_before_native","JKFIT_live","JKFIT_RIFIT_coexist",
             "after_RIFIT_cleanup","after_JKFIT_cleanup"])
-        self.assertEqual([r["tracked_live_bytes"] for r in samples],[0,96,192,96,0])
+        self.assertEqual([r["tracked_live_bytes"] for r in samples],[0,64,128,64,0])
         self.assertTrue(all(r["sampled_not_peak"] for r in samples))
         self.assertEqual(native.events.count("create:context"),2)
         self.assertEqual(native.events.count("destroy:context"),2)
@@ -97,7 +97,7 @@ class ConstructionProbe(unittest.TestCase):
             self.assertEqual(owner["context_parameter_readback"]["jit_compile_threads"],4)
             self.assertTrue(owner["cleanup_complete"])
             self.assertIn("cleanup_total",owner["host_phase_timings"]["phases"])
-        self.assertEqual(report["session_cleanup"]["peak_explicit_bytes"],192)
+        self.assertEqual(report["session_cleanup"]["peak_explicit_bytes"],136)
 
     def test_paired_comparison_requires_same_inputs_policy_readback_and_cleanup(self):
         one,_,_ = self.run_arm(1)

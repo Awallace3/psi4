@@ -50,8 +50,8 @@ def _cleanup_admission(api):
 class DiagnosticPlanOwner:
     """One explicit diagnostic plan; native owners precede borrowed CUDA release.
 
-    Creation temporaries are conservatively retained for this initial small-case
-    diagnostic implementation. Reverse registration order encodes dependencies:
+    Creation temporaries are released immediately after native creation and
+    device synchronization complete. Reverse registration order encodes dependencies:
     each native child is registered AFTER its parents, inputs and workspaces.
     Cleanup stops at the first failure, retaining that resource and every parent.
     A second automatic close cannot retry failed native destruction: callers must
@@ -81,7 +81,8 @@ class DiagnosticPlanOwner:
         with self.timings.measure("basis_snapshot"):
             p,a = snapshot_pair(primary,auxiliary)
         allowance = api.session.native_bytes
-        if isinstance(allowance,bool) or not isinstance(allowance,int) or allowance <= 0:
+        if (isinstance(allowance,bool) or not isinstance(allowance,int)
+                or allowance < 0 or (getattr(api.session,"limit",1) is not None and allowance <= 0)):
             raise ValueError("Declare an opaque-native memory allowance; workspaces alone are not total VRAM")
         self.api,self.session,self.pid = api,api.session,os.getpid()
         self.primary_snapshot,self.auxiliary_snapshot = p,a
@@ -137,12 +138,15 @@ class DiagnosticPlanOwner:
             raise RuntimeError("Diagnostic native plan construction is incomplete")
         return self._raw(self._plan).value
 
-    def _new_native(self, label, create, destroy, keepalive=()):
+    def _new_native(self, label, create, destroy, keepalive=(), *, audit_identity=True):
         # Aggregate shell calls by role rather than growing one row per shell.
         phase = label.split(" shell",1)[0]+" shells" if " shell" in label else label
-        with self.timings.measure(phase+".admission"):
+        if audit_identity:
+            with self.timings.measure(phase+".admission"):
+                self._check_construction()
+                self.api.assert_identity()
+        else:
             self._check_construction()
-            self.api.assert_identity()
         resource = _Resource(label,handle=ct.c_void_p(),keepalive=tuple(keepalive))
         resource.destroy = lambda:destroy(resource.handle)
         self.resources.append(resource)  # Retain the output slot BEFORE the call.
@@ -176,9 +180,10 @@ class DiagnosticPlanOwner:
         return self._new_native(
             f"parameters{kind}",
             lambda out:native.cuestParametersCreate(kind,out),
-            lambda handle:native.cuestParametersDestroy(kind,handle))
+            lambda handle:native.cuestParametersDestroy(kind,handle),
+            audit_identity=False)
 
-    def _workspace(self, label, descriptor, temporary):
+    def _workspace(self, label, descriptor, temporary, *, return_resource=False):
         self._check_construction()
         host_bytes,device_bytes = int(descriptor.host_bytes),int(descriptor.device_bytes)
         known_host = sum(r.stats.get("host_bytes",0) for r in self.resources)
@@ -205,24 +210,43 @@ class DiagnosticPlanOwner:
             holder["host"].ctypes.data if host_bytes else 0,host_bytes,
             holder["device"].pointer if device_bytes else 0,device_bytes)
         resource.keepalive += (workspace,)
-        return workspace
+        return (resource, workspace) if return_resource else workspace
 
-    def _workspace_object(self, label, query, create, destroy, keepalive=()):
+    def _workspace_object(self, label, query, create, destroy, keepalive=(), *, audit_identity=True):
         with self.timings.measure(label+".query_admission"):
             self._check_construction()
-            self.api.assert_identity()
+            if audit_identity:
+                self.api.assert_identity()
         persistent,temporary = abi._Descriptor(),abi._Descriptor()
         with self.timings.measure(label+".workspace_query"):
             self.api.status(label+" workspace query",query(ct.byref(persistent),ct.byref(temporary)))
         with self.timings.measure(label+".workspace_allocation"):
             p = self._workspace(label+" persistent",persistent,False)
-            t = self._workspace(label+" creation temporary",temporary,True)
-        return self._new_native(
+            t_res, t = self._workspace(label+" creation temporary",temporary,True,return_resource=True)
+        created = self._new_native(
             label,lambda out:create(ct.byref(p),ct.byref(t),out),
-            destroy,(*keepalive,p,t))
+            destroy,(*keepalive,p),audit_identity=False)
+        # _new_native synchronized the device after native creation completed;
+        # release creation-only temporary workspace immediately so large plans
+        # do not hold tens of GiB of finished scratch across downstream work.
+        try:
+            t_res.destroy()
+        except BaseException:
+            self._invalidate()
+            raise
+        self.resources[:] = [item for item in self.resources if item is not t_res]
+        t_res.keepalive = ()
+        t_res.destroy = None
+        return created
 
     def _basis(self, snapshot, shell_parameters, basis_parameters):
         native,context = self.api.native,self._raw(self._context)
+        # Fresh map/symbol admission precedes the shell batch and runs again
+        # immediately afterward inside _workspace_object; each shell call still
+        # verifies live session/owner/device/pid/scope state in O(1).
+        with self.timings.measure(f"{snapshot.role} shells.admission"):
+            self._check_construction()
+            self.api.assert_identity()
         shells = []
         for shell in snapshot.shells:
             exps = np.asarray(shell.exponents,dtype=np.float64)
@@ -234,7 +258,8 @@ class DiagnosticPlanOwner:
                     context,int(s.pure),s.am,len(s.exponents),
                     e.ctypes.data_as(abi.PD),c.ctypes.data_as(abi.PD),
                     self._raw(shell_parameters),out),
-                native.cuestAOShellDestroy,(exps,coefficients)))
+                native.cuestAOShellDestroy,(exps,coefficients),
+                audit_identity=False))
         counts = (ct.c_uint64*snapshot.ncenter)(*snapshot.shells_per_center)
         handles = (ct.c_void_p*len(shells))(*(self._raw(s).value for s in shells))
         args = (context,snapshot.ncenter,counts,handles,self._raw(basis_parameters))
@@ -242,7 +267,8 @@ class DiagnosticPlanOwner:
             snapshot.role+" basis",
             lambda p,t:native.cuestAOBasisCreateWorkspaceQuery(*args,p,t,None),
             lambda p,t,out:native.cuestAOBasisCreate(*args,p,t,out),
-            native.cuestAOBasisDestroy,(counts,handles,snapshot))
+            native.cuestAOBasisDestroy,(counts,handles,snapshot),
+            audit_identity=False)
         expected = ((0,ct.c_int32,int(snapshot.shells[0].pure)),
                     (1,ct.c_int32,int(not snapshot.shells[0].pure)),
                     (2,ct.c_int32,0),(3,ct.c_uint64,snapshot.ncenter),
@@ -278,7 +304,9 @@ class DiagnosticPlanOwner:
                 "context",lambda out:native.cuestCreate(self._raw(hp),out),native.cuestDestroy)
             with self.timings.measure("context_identity_and_fp64"):
                 self.api.assert_identity()  # Include any lazy constructor-loaded libraries.
-                self.version = abi.identity.native_version(native,self._raw(self._context).value)
+                self.version = abi.identity.native_version(
+                    native,self._raw(self._context).value,
+                    expected=abi.identity.expected_sdk_version(self.api.proof))
                 self.math_mode = self.api.set_owned_context_fp64(self._raw(self._context).value,handle_pid=self.pid)
             sp,bp = self._parameters(1),self._parameters(2)
             with self.timings.measure("primary_basis_total"):
@@ -293,7 +321,8 @@ class DiagnosticPlanOwner:
                 "primary pair list",
                 lambda p,t:native.cuestAOPairListCreateWorkspaceQuery(*pair_args,p,t,None),
                 lambda p,t,out:native.cuestAOPairListCreate(*pair_args,p,t,out),
-                native.cuestAOPairListDestroy,(xyz,))
+                native.cuestAOPairListDestroy,(xyz,),
+                audit_identity=False)
             dp = self._parameters(5)
             with self.timings.measure("plan_configuration"):
                 self.plan_parameters = self.api.configure_df_plan_parameters(self._raw(dp).value)

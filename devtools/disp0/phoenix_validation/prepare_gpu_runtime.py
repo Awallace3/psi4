@@ -93,7 +93,7 @@ def prepare(source, run):
     try:
         identity = identity_module(source)
         sdk = Path(os.environ["DISP0_CUEST_ROOT"]).resolve()
-        archive = sdk / "cuest_v0.2.50.tar.gz"
+        archive = None if (sdk / "lib/libcuest.so.0.3.0").is_file() else (sdk / "cuest_v0.2.50.tar.gz")
         result["cuest_files"] = identity.verify_files(sdk, archive)
         wheels = root / "wheels"
         wheels.mkdir()
@@ -148,7 +148,8 @@ def prepare(source, run):
             "wheel_lock": str(root / "wheel-lock.json"),
             "wheel_lock_sha256": digest(root / "wheel-lock.json"),
             "cuda_manifest": str(manifest_path), "cuda_manifest_sha256": canonical_sha(manifest),
-            "cuest_root": str(sdk), "cuest_archive": str(archive),
+            "cuest_root": str(sdk), "cuest_archive": None if archive is None else str(archive),
+            "cuest_sdk_version": result["cuest_files"]["sdk_version"],
             "device_family": "H200", "threads": 4, "host_memory": "8 GiB",
             "device_memory_limit_bytes": 8*1024**3, "native_persistent_bytes": 512*1024**2}
         config_path = root / "runtime-config.json"
