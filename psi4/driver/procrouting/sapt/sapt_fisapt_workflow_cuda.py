@@ -119,7 +119,7 @@ def fragment_terms(provider, rifit, minimal, matrices, energies, xyz, za, zb, *,
                 dispersion=blocked_device_dispersion(ri,spaces,corrections,eps,
                     block_size=block_size,rotations=tuple(rotations),
                     factor_cache_bytes=factor_cache_bytes)
-        ri_report=ri.report()
+            ri_report=ri.report()
         post_ri_start=len(session.allocations)
         device_outputs={"Elst_AB":state.matrix,"Exch_AB":exch.matrix,
             "ExchS2_AB":exch.matrix,

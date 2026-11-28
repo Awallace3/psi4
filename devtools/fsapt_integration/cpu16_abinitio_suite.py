@@ -166,8 +166,10 @@ def execute(args):
             report["stages"][name] = box
             checkpoint()
             try:
-                box.update(fn())
-                box.setdefault("status", "PASS")
+                out = fn()
+                box.update(out)
+                if "status" not in out:
+                    box["status"] = "PASS"
             except BaseException as err:
                 box["status"] = "FAILED"
                 box["error"] = f"{type(err).__name__}: {err}"
