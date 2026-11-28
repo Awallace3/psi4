@@ -764,7 +764,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
-    sys.path.insert(0, str(Path(manifest["helper_source"]) / "devtools/disp0/phoenix_validation"))
+    sys.path.insert(0, str(Path(manifest["science_source"]) / "devtools/disp0/phoenix_validation"))
     from owned_process import termination_signals
     with termination_signals():
         execute(args.manifest, args.output)

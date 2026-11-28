@@ -134,6 +134,17 @@ class PhoenixSuiteContracts(unittest.TestCase):
         self.assertAlmostEqual(out["fragment_disp"], 0.4)
         self.assertIsNone(out["gpu_fsapt_total"])
 
+    def test_suite_main_imports_owned_process_from_science_source(self):
+        text = (HERE / "phoenix_suite_timing.py").read_text()
+        self.assertIn(
+            'sys.path.insert(0, str(Path(manifest["science_source"]) / "devtools/disp0/phoenix_validation"))',
+            text,
+        )
+        self.assertNotIn(
+            'sys.path.insert(0, str(Path(manifest["helper_source"]) / "devtools/disp0/phoenix_validation"))',
+            text,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
