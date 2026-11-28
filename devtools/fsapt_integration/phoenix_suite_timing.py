@@ -6,6 +6,7 @@ inside ONE 8-hour H200 embers allocation with incremental checkpointing and per-
 error isolation after the required small H200 gate.
 """
 import argparse
+import importlib.util
 import json
 import math
 import os
@@ -71,6 +72,13 @@ def summarize_stage_status(stages):
     return {name: stage.get("status", "UNKNOWN") for name, stage in stages.items()}
 
 
+def _load_outer_module(directory, name):
+    spec = importlib.util.spec_from_file_location("_outer_" + name, directory / (name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def execute(manifest_path, root):
     manifest = json.loads(manifest_path.read_text())
     if digest(manifest_path) != os.environ["FSAPT_MANIFEST_SHA256"]:
@@ -85,19 +93,22 @@ def execute(manifest_path, root):
          "psi4", "psi4_runtime_support"],
         check=True,
     )
-    helper = outer / "devtools/disp0/phoenix_validation"
+    helper = source / "devtools/disp0/phoenix_validation"
+    outer_helper = outer / "devtools/disp0/phoenix_validation"
     sys.path.insert(0, str(helper))
     from gpu_runtime import read_config, retirement_channel
-    from stage_scaling import require_cpu_runtime_admission
     from run_gate import environment, compare
     from run_full import execute_owned, compare_energy
     from repeat_gauge import compare_repeat
     from full_inputs import load_point
     from prepare_inputs import input_basis_profile
-    from sapt0_hardware import PROFILES
-    from sealed_h200 import step_scratch
     from split_jobs import validate_allocation
     from validate_cpu_allocation import fields, memory_bytes, seconds
+    PROFILES = _load_outer_module(outer_helper, "sapt0_hardware").PROFILES
+    step_scratch = _load_outer_module(outer_helper, "sealed_h200").step_scratch
+    require_cpu_runtime_admission = _load_outer_module(
+        outer_helper, "stage_scaling"
+    ).require_cpu_runtime_admission
 
     device_family = manifest.get("device_family", "H200")
     if device_family not in PROFILES:
@@ -201,7 +212,7 @@ def execute(manifest_path, root):
         owner = step_scratch(root)
         scratch = Path(os.environ["TMPDIR"])
         report["scratch_mount"] = fields(subprocess.check_output(
-            ["findmnt", "-T", str(scratch), "-n", "-P", "-o", "SOURCE,FSTYPE,TARGET"],
+            ["findmnt", "--first-only", "-T", str(scratch), "-n", "-P", "-o", "SOURCE,FSTYPE,TARGET"],
             text=True, timeout=30,
         ))
         disk = os.statvfs(scratch)

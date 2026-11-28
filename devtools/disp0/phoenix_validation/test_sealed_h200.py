@@ -234,9 +234,12 @@ class SealedH200Contracts(unittest.TestCase):
                                clear=False):
                 os.environ.pop("SLURM_TMPDIR", None)
                 self.assertEqual(sealed_h200._node_local_scratch_parent(), Path("/tmp"))
-            with patch("sealed_h200.subprocess.check_output", return_value="lustre\n"):
-                with self.assertRaisesRegex(RuntimeError, "Node-local scratch required"):
-                    sealed_h200._require_local_scratch_fstype(local)
+            with patch("sealed_h200.subprocess.check_output", return_value="xfs\nxfs\n"):
+                self.assertEqual(sealed_h200._require_local_scratch_fstype(local), "xfs")
+            for bad_fs in ("lustre\n", "xfs\nlustre\n", ""):
+                with patch("sealed_h200.subprocess.check_output", return_value=bad_fs):
+                    with self.assertRaisesRegex(RuntimeError, "Node-local scratch required"):
+                        sealed_h200._require_local_scratch_fstype(local)
 
     def test_only_explicit_embers_h200_afterany_with_fixed_caps(self):
         argv = sealed_h200.command(Path("/source"), Path("/fresh"), "123")

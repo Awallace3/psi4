@@ -6,6 +6,7 @@ and protein83 (canonical SAPT0+dHF and instrumented F-SAPT0), writing
 incremental checkpoints to cpu16-result.json.
 """
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -34,14 +35,20 @@ def execute(args):
         check=True,
     )
 
-    helper = outer / "devtools/disp0/phoenix_validation"
+    helper = source / "devtools/disp0/phoenix_validation"
+    outer_helper = outer / "devtools/disp0/phoenix_validation"
     sys.path.insert(0, str(helper))
     from gpu_runtime import read_config, retirement_channel
-    from stage_scaling import require_cpu_runtime_admission
     from run_gate import environment
     from run_full import execute_owned
-    from sealed_h200 import step_scratch
     from validate_cpu_allocation import fields
+    def _load_outer(name):
+        spec = importlib.util.spec_from_file_location("_outer_" + name, outer_helper / (name + ".py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    require_cpu_runtime_admission = _load_outer("stage_scaling").require_cpu_runtime_admission
+    step_scratch = _load_outer("sealed_h200").step_scratch
 
     if os.environ.get("SLURM_JOB_GPUS"):
         raise RuntimeError("CPU16 reference suite must not allocate a GPU")
@@ -89,7 +96,7 @@ def execute(args):
         owner = step_scratch(root)
         scratch = Path(os.environ["TMPDIR"])
         report["scratch_mount"] = fields(subprocess.check_output(
-            ["findmnt", "-T", str(scratch), "-n", "-P", "-o", "SOURCE,FSTYPE,TARGET"],
+            ["findmnt", "--first-only", "-T", str(scratch), "-n", "-P", "-o", "SOURCE,FSTYPE,TARGET"],
             text=True, timeout=30,
         ))
         disk = os.statvfs(scratch)

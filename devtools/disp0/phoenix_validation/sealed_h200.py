@@ -151,11 +151,12 @@ def _node_local_scratch_parent():
 def _require_local_scratch_fstype(path):
     """Fail closed if scratch resolves to a shared network filesystem (Lustre/GPFS/NFS)."""
     out = subprocess.check_output(
-        ["findmnt", "-T", str(path), "-n", "-o", "FSTYPE"], text=True, timeout=30
+        ["findmnt", "--first-only", "-T", str(path), "-n", "-o", "FSTYPE"], text=True, timeout=30
     ).strip()
-    if out not in LOCAL_SCRATCH_FSTYPES:
+    fstypes = [line.strip() for line in out.splitlines() if line.strip()]
+    if not fstypes or any(fs not in LOCAL_SCRATCH_FSTYPES for fs in fstypes):
         raise RuntimeError(f"Node-local scratch required; {path} is on filesystem type {out!r}")
-    return out
+    return fstypes[0]
 
 
 def step_scratch(root):
